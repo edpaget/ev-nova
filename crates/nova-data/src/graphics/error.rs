@@ -96,6 +96,9 @@ pub enum GraphicsError {
         /// Where the row (its byte count) starts.
         offset: usize,
     },
+    /// A `cicn` whose mask bounds differ from its `PixMap` bounds.
+    #[error("the icon mask's bounds differ from its PixMap's")]
+    MaskMismatch,
     /// A pixel value has no entry in its colour table.
     #[error("pixel value {index} is not in the colour table")]
     MissingColour {
@@ -177,6 +180,10 @@ mod tests {
                     offset: 0x60,
                 },
                 "bad packed row 3 at byte 0x60",
+            ),
+            (
+                GraphicsError::MaskMismatch,
+                "the icon mask's bounds differ from its PixMap's",
             ),
             (
                 GraphicsError::MissingColour { index: 9 },

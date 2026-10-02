@@ -8,6 +8,7 @@
 mod budget;
 mod color;
 mod error;
+mod icon;
 mod image;
 mod packbits;
 mod pict;
@@ -19,5 +20,6 @@ pub mod fixture;
 
 pub use budget::{MAX_PIXELS, MAX_PIXELS_PER_INPUT_BYTE};
 pub use error::GraphicsError;
+pub use icon::decode_cicn;
 pub use image::Image;
 pub use pict::decode_pict;

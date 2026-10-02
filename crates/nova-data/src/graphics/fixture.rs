@@ -432,3 +432,93 @@ fn index_row(indices: &[u8], bits: u16, row_bytes: u16) -> Vec<u8> {
     }
     row
 }
+
+/// A `cicn` colour icon: an indexed `PixMap`, a mask and a 1-bit icon.
+/// `new` fills in the fewest row bytes; tests change fields to make
+/// variants.
+#[derive(Clone, Debug)]
+pub struct Cicn {
+    /// Width in pixels.
+    pub width: u16,
+    /// Height in pixels.
+    pub height: u16,
+    /// Bits per pixel (`pixelSize`).
+    pub bits: u16,
+    /// The `PixMap`'s `rowBytes`.
+    pub row_bytes: u16,
+    /// The mask's `rowBytes`.
+    pub mask_row_bytes: u16,
+    /// The 1-bit icon's `rowBytes`.
+    pub icon_row_bytes: u16,
+    /// The colour table.
+    pub ctab: Ctab,
+    /// Row-major pixel values.
+    pub indices: Vec<u8>,
+    /// Row-major mask: `true` is opaque.
+    pub mask: Vec<bool>,
+}
+
+impl Cicn {
+    /// A `width` x `height` icon of `bits`-per-pixel `indices`.
+    #[must_use]
+    pub fn new(
+        width: u16,
+        height: u16,
+        bits: u16,
+        ctab: &Ctab,
+        indices: &[u8],
+        mask: &[bool],
+    ) -> Self {
+        let mask_row_bytes = min_row_bytes(usize::from(width), 1);
+        Self {
+            width,
+            height,
+            bits,
+            row_bytes: min_row_bytes(usize::from(width), bits),
+            mask_row_bytes,
+            icon_row_bytes: mask_row_bytes,
+            ctab: ctab.clone(),
+            indices: indices.to_vec(),
+            mask: mask.to_vec(),
+        }
+    }
+
+    /// The resource bytes: `PixMap`, mask and icon `BitMap`s, `iconData`
+    /// handle, then mask bits, icon bits (the inverse of the mask), colour
+    /// table and pixel rows.
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        let bounds = [0, 0, self.height as i16, self.width as i16];
+        let mut out = vec![0; 4]; // baseAddr
+        out.extend(pixmap_bytes(&PixMapSpec {
+            row_bytes: self.row_bytes,
+            bounds,
+            pack_type: 0,
+            pixel_type: 0,
+            pixel_size: self.bits,
+            cmp_count: 1,
+            cmp_size: self.bits,
+            pm_table: 0,
+        }));
+        for row_bytes in [self.mask_row_bytes, self.icon_row_bytes] {
+            out.extend([0; 4]); // baseAddr
+            out.extend(row_bytes.to_be_bytes());
+            out.extend(rect_bytes(bounds));
+        }
+        out.extend([0; 4]); // iconData
+        let width = usize::from(self.width);
+        let mask: Vec<u8> = self.mask.iter().map(|&m| u8::from(m)).collect();
+        for row in mask.chunks(width) {
+            out.extend(index_row(row, 1, self.mask_row_bytes));
+        }
+        for row in mask.chunks(width) {
+            let inverse: Vec<u8> = row.iter().map(|m| 1 - m).collect();
+            out.extend(index_row(&inverse, 1, self.icon_row_bytes));
+        }
+        out.extend(self.ctab.bytes());
+        for row in self.indices.chunks(width) {
+            out.extend(index_row(row, self.bits, self.row_bytes));
+        }
+        out
+    }
+}
