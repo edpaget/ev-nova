@@ -162,8 +162,12 @@ impl PictBuilder {
         data.extend(rect_bytes(bits.src));
         data.extend(rect_bytes(bits.dst));
         data.extend(bits.mode.to_be_bytes());
+        let unit = match bits.pixels {
+            DirectPixels::Rgb555(_) => 2,
+            DirectPixels::Rgb888(_) => 1,
+        };
         for row in bits.rows() {
-            data.extend(pack_row(&row, bits.row_bytes, 2));
+            data.extend(pack_row(&row, bits.row_bytes, unit));
         }
         self.raw(0x009A, &data)
     }
@@ -210,7 +214,18 @@ pub struct DirectBits {
     /// `cmpSize`.
     pub cmp_size: u16,
     /// Row-major pixels covering `bounds`.
-    pub pixels: Vec<u16>,
+    pub pixels: DirectPixels,
+}
+
+/// The pixels of a [`DirectBits`], which also choose how rows are stored.
+#[derive(Clone, Debug)]
+pub enum DirectPixels {
+    /// 16-bit `xRRRRRGGGGGBBBBB`, packed by 16-bit words into `rowBytes`.
+    Rgb555(Vec<u16>),
+    /// 8-bit red, green, blue: packed by bytes as planes (all red, then all
+    /// green, then all blue), or chunky `xRGB` padded to `rowBytes` when
+    /// `rowBytes` < 8 (rows stored unpacked).
+    Rgb888(Vec<[u8; 3]>),
 }
 
 impl DirectBits {
@@ -228,21 +243,55 @@ impl DirectBits {
             pixel_size: 16,
             cmp_count: 3,
             cmp_size: 5,
-            pixels: pixels.to_vec(),
+            pixels: DirectPixels::Rgb555(pixels.to_vec()),
         }
     }
 
-    /// Each row's unpacked bytes, padded or cut to `rowBytes`.
+    /// 32-bit pixels with three 8-bit components, packed by component
+    /// (`packType` 4) with `rowBytes` four times the width.
+    #[must_use]
+    pub fn rgb888(bounds: [i16; 4], pixels: &[[u8; 3]]) -> Self {
+        Self {
+            bounds,
+            src: bounds,
+            dst: bounds,
+            mode: 0,
+            row_bytes: 4 * rect_width(bounds) as u16,
+            pack_type: 4,
+            pixel_size: 32,
+            cmp_count: 3,
+            cmp_size: 8,
+            pixels: DirectPixels::Rgb888(pixels.to_vec()),
+        }
+    }
+
+    /// Each row's unpacked bytes.
     fn rows(&self) -> Vec<Vec<u8>> {
         let width = rect_width(self.bounds);
-        self.pixels
-            .chunks(width)
-            .map(|row| {
-                let mut bytes: Vec<u8> = row.iter().flat_map(|p| p.to_be_bytes()).collect();
-                bytes.resize(usize::from(self.row_bytes), 0);
-                bytes
-            })
-            .collect()
+        let row_bytes = usize::from(self.row_bytes);
+        match &self.pixels {
+            DirectPixels::Rgb555(pixels) => pixels
+                .chunks(width)
+                .map(|row| {
+                    let mut bytes: Vec<u8> = row.iter().flat_map(|p| p.to_be_bytes()).collect();
+                    bytes.resize(row_bytes, 0);
+                    bytes
+                })
+                .collect(),
+            DirectPixels::Rgb888(pixels) if row_bytes < 8 => pixels
+                .chunks(width)
+                .map(|row| {
+                    let mut bytes: Vec<u8> =
+                        row.iter().flat_map(|&[r, g, b]| [0, r, g, b]).collect();
+                    bytes.resize(row_bytes, 0);
+                    bytes
+                })
+                .collect(),
+            DirectPixels::Rgb888(pixels) => pixels
+                .chunks(width)
+                .map(|row| (0..3).flat_map(|c| row.iter().map(move |p| p[c])).collect())
+                .collect(),
+        }
     }
 }
 

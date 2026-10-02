@@ -82,8 +82,10 @@ fn skip_region(r: &mut Reader<'_>) -> Result<(), GraphicsError> {
 fn direct_bits(r: &mut Reader<'_>, frame: QdRect, canvas: &mut Image) -> Result<(), GraphicsError> {
     r.skip(4)?; // baseAddr
     let pm = PixMap::read(r)?;
-    let format = match (pm.pixel_size, pm.pack_type) {
-        (16, 0 | 3) => RowFormat::Rgb555,
+    let format = match (pm.pixel_size, pm.cmp_count, pm.pack_type) {
+        (16, _, 0 | 3) => RowFormat::Rgb555,
+        (32, 3, 0 | 4) if pm.row_bytes < MIN_PACKED_ROW_BYTES => RowFormat::ChunkyXrgb,
+        (32, 3, 0 | 4) => RowFormat::PlanarRgb,
         _ => {
             return Err(GraphicsError::UnsupportedPixMap {
                 pixel_size: pm.pixel_size,
@@ -108,6 +110,11 @@ const MAX_BYTE_COUNT_ROW_BYTES: u16 = 250;
 enum RowFormat {
     /// 16-bit `xRRRRRGGGGGBBBBB`, packed by 16-bit words.
     Rgb555,
+    /// 32-bit pixels packed by component: each row unpacks to a plane of
+    /// red bytes, then green, then blue.
+    PlanarRgb,
+    /// 32-bit `xRGB` pixels, in rows too short to be packed.
+    ChunkyXrgb,
 }
 
 impl RowFormat {
@@ -115,6 +122,7 @@ impl RowFormat {
     fn needed(&self, width: u32) -> u32 {
         match self {
             Self::Rgb555 => 2 * width,
+            Self::PlanarRgb | Self::ChunkyXrgb => 4 * width,
         }
     }
 
@@ -122,6 +130,16 @@ impl RowFormat {
     fn unit(&self) -> usize {
         match self {
             Self::Rgb555 => 2,
+            Self::PlanarRgb | Self::ChunkyXrgb => 1,
+        }
+    }
+
+    /// Bytes one packed row unpacks to: three planes for component
+    /// packing, otherwise all of `rowBytes`.
+    fn expected(&self, row_bytes: u16, width: u32) -> usize {
+        match self {
+            Self::PlanarRgb => 3 * width as usize,
+            Self::Rgb555 | Self::ChunkyXrgb => usize::from(row_bytes),
         }
     }
 
@@ -134,6 +152,20 @@ impl RowFormat {
                 .iter()
                 .take(width as usize)
                 .map(|&word| rgb555(u16::from_be_bytes(word)))
+                .collect(),
+            Self::PlanarRgb => {
+                let width = width as usize;
+                let plane = |c: usize, x: usize| row.get(c * width + x).copied().unwrap_or(0);
+                (0..width)
+                    .map(|x| [plane(0, x), plane(1, x), plane(2, x), 255])
+                    .collect()
+            }
+            Self::ChunkyXrgb => row
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .take(width as usize)
+                .map(|&[_, r, g, b]| [r, g, b, 255])
                 .collect(),
         }
     }
@@ -167,7 +199,7 @@ fn copy_rows(
             needed,
         });
     }
-    let expected = usize::from(pm.row_bytes);
+    let expected = format.expected(pm.row_bytes, width);
     for row in 0..height {
         let bytes = read_row(r, pm.row_bytes, format.unit(), expected, row)?;
         let y = i32::from(pm.bounds.top) + row as i32;
@@ -817,5 +849,135 @@ mod tests {
             decode_pict(&pict),
             Err(GraphicsError::NotAPixMap { offset: 20 })
         );
+    }
+
+    fn opaque888(pixels: &[[u8; 3]]) -> Vec<[u8; 4]> {
+        pixels.iter().map(|&[r, g, b]| [r, g, b, 255]).collect()
+    }
+
+    /// Six distinct 24-bit colours.
+    const SIX_888: [[u8; 3]; 6] = [
+        [1, 2, 3],
+        [250, 0, 7],
+        [9, 200, 11],
+        [12, 13, 255],
+        [0, 0, 0],
+        [255, 255, 255],
+    ];
+
+    #[test]
+    fn rows_of_32_bit_pixels_are_packed_as_red_green_and_blue_planes() {
+        let bits = DirectBits::rgb888([0, 0, 1, 2], &[[1, 2, 3], [4, 5, 6]]);
+        assert_eq!(bits.row_bytes, 8);
+        let pict = PictBuilder::new([0, 0, 1, 2])
+            .direct_bits(&bits)
+            .end()
+            .build();
+        // One count byte, then a literal run of six bytes: R R G G B B.
+        assert_eq!(pict[FIRST_ROW..FIRST_ROW + 8], [7, 5, 1, 4, 2, 5, 3, 6]);
+        assert_eq!(
+            rgba(&decode_pict(&pict).unwrap()),
+            opaque888(&[[1, 2, 3], [4, 5, 6]])
+        );
+    }
+
+    #[test]
+    fn planar_32_bit_rows_decode_opaque() {
+        let pict = PictBuilder::new([0, 0, 2, 3])
+            .direct_bits(&DirectBits::rgb888([0, 0, 2, 3], &SIX_888))
+            .end()
+            .build();
+        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque888(&SIX_888));
+    }
+
+    #[test]
+    fn pack_type_0_is_treated_as_component_packing() {
+        let mut bits = DirectBits::rgb888([0, 0, 2, 3], &SIX_888);
+        bits.pack_type = 0;
+        let pict = PictBuilder::new([0, 0, 2, 3])
+            .direct_bits(&bits)
+            .end()
+            .build();
+        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque888(&SIX_888));
+    }
+
+    #[test]
+    fn narrow_32_bit_rows_are_stored_unpacked_as_xrgb() {
+        let pixels = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+        let bits = DirectBits::rgb888([0, 0, 3, 1], &pixels);
+        assert_eq!(bits.row_bytes, 4);
+        let pict = PictBuilder::new([0, 0, 3, 1])
+            .direct_bits(&bits)
+            .end()
+            .build();
+        assert_eq!(pict[FIRST_ROW..FIRST_ROW + 4], [0, 1, 2, 3]);
+        assert_eq!(rgba(&decode_pict(&pict).unwrap()), opaque888(&pixels));
+    }
+
+    #[test]
+    fn row_counts_switch_to_words_above_250_row_bytes_for_32_bit_rows() {
+        let pixels: Vec<[u8; 3]> = (0..124).map(|i| [i as u8, 0, 0]).collect();
+        for (row_bytes, count) in [(250, &[65][..]), (251, &[0, 65][..])] {
+            let mut bits = DirectBits::rgb888([0, 0, 2, 62], &pixels);
+            bits.row_bytes = row_bytes;
+            let pict = PictBuilder::new([0, 0, 2, 62])
+                .direct_bits(&bits)
+                .end()
+                .build();
+            // A literal run of 62 reds (63 bytes) and one repeat run of 124
+            // zero greens and blues (2 bytes).
+            assert_eq!(
+                &pict[FIRST_ROW..FIRST_ROW + count.len()],
+                count,
+                "{row_bytes}"
+            );
+            assert_eq!(
+                rgba(&decode_pict(&pict).unwrap()),
+                opaque888(&pixels),
+                "{row_bytes}"
+            );
+        }
+    }
+
+    #[test]
+    fn rows_narrower_than_32_bit_pixels_are_rejected() {
+        let mut bits = DirectBits::rgb888([0, 0, 2, 3], &SIX_888);
+        bits.row_bytes = 11;
+        let pict = PictBuilder::new([0, 0, 2, 3])
+            .direct_bits(&bits)
+            .end()
+            .build();
+        assert_eq!(
+            decode_pict(&pict),
+            Err(GraphicsError::BadRowBytes {
+                row_bytes: 11,
+                needed: 12
+            })
+        );
+    }
+
+    #[test]
+    fn unsupported_32_bit_pixmaps_are_named() {
+        let unsupported = |change: fn(&mut DirectBits)| {
+            let mut bits = DirectBits::rgb888([0, 0, 2, 3], &SIX_888);
+            change(&mut bits);
+            let pict = PictBuilder::new([0, 0, 2, 3])
+                .direct_bits(&bits)
+                .end()
+                .build();
+            decode_pict(&pict)
+        };
+        let error = |pixel_size, pack_type, cmp_count| {
+            Err(GraphicsError::UnsupportedPixMap {
+                pixel_size,
+                pack_type,
+                cmp_count,
+            })
+        };
+        assert_eq!(unsupported(|b| b.cmp_count = 4), error(32, 4, 4));
+        assert_eq!(unsupported(|b| b.cmp_count = 1), error(32, 4, 1));
+        assert_eq!(unsupported(|b| b.pack_type = 1), error(32, 1, 3));
+        assert_eq!(unsupported(|b| b.pack_type = 2), error(32, 2, 3));
+        assert_eq!(unsupported(|b| b.pack_type = 3), error(32, 3, 3));
     }
 }
