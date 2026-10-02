@@ -114,14 +114,14 @@ mod tests {
     const CLEAR: [u8; 4] = [0; 4];
 
     /// A 2x2 2-bit icon, written out by hand.
-    #[test]
-    fn decodes_a_hand_written_icon() {
-        let bytes = [
+    fn hand_written() -> Vec<u8> {
+        [
             &[0x00; 4][..],                                    // baseAddr
             &[0x80, 0x01],                                     // rowBytes 1, PixMap
             &[0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02], // bounds 2x2
             &[0x00; 4],                                        // pmVersion, packType
-            &[0x00; 12],                                       // packSize, hRes, vRes
+            &[0x00; 4],                                        // packSize
+            &[0x00, 0x48, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00], // hRes, vRes
             &[0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x02], // pixelType, size 2
             &[0x00; 12],                                       // planeBytes .. pmReserved
             &[0x00, 0x00, 0x00, 0x00, 0x00, 0x01],             // mask: baseAddr, rowBytes 1
@@ -130,18 +130,34 @@ mod tests {
             &[0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02], // icon bounds
             &[0x00; 4],                                        // iconData
             &[0x80, 0xC0],                                     // mask rows
-            &[0xFF, 0xFF],                                     // icon rows
+            &[0x40, 0x00],                                     // icon rows
             &[0x00; 6],                                        // ctSeed, ctFlags
             &[0x00, 0x01],                                     // ctSize: two entries
             &[0x00, 0x03, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00], // 3: green
             &[0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], // 1: white
             &[0xD0, 0x70],                                     // pixels 3 1 / 1 3
         ]
-        .concat();
+        .concat()
+    }
+
+    #[test]
+    fn decodes_a_hand_written_icon() {
         let (green, white) = ([0, 255, 0, 255], [255, 255, 255, 255]);
-        let image = decode_cicn(&bytes).unwrap();
+        let image = decode_cicn(&hand_written()).unwrap();
         assert_eq!((image.width(), image.height()), (2, 2));
         assert_eq!(rgba(&image), [green, CLEAR, white, green]);
+    }
+
+    /// The fixture writes the same bytes, including the icon rows (the
+    /// inverse of the mask), which the decoder skips.
+    #[test]
+    fn the_fixture_writes_the_hand_written_layout() {
+        let ctab = Ctab {
+            device: false,
+            entries: vec![(3, [0, 0xFFFF, 0]), (1, [0xFFFF; 3])],
+        };
+        let cicn = Cicn::new(2, 2, 2, &ctab, &[3, 1, 1, 3], &[true, false, true, true]);
+        assert_eq!(cicn.bytes(), hand_written());
     }
 
     fn ctab() -> Ctab {

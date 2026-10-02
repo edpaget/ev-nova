@@ -17,7 +17,8 @@ const DEVICE_FLAG: u16 = 0x8000;
 pub(crate) fn rgb555(value: u16) -> [u8; 4] {
     let widen = |shift: u16| {
         let five = ((value >> shift) & 0x1F) as u8;
-        (five << 3) | (five >> 2)
+        // The two halves share no bits, so `+` is the same as `|`.
+        (five << 3) + (five >> 2)
     };
     [widen(10), widen(5), widen(0), 255]
 }

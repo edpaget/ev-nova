@@ -335,9 +335,10 @@ struct PixMapSpec {
     pm_table: u32,
 }
 
-/// A `PixMap` record from `rowBytes` to `pmReserved` (46 bytes).
+/// A `PixMap` record from `rowBytes` to `pmReserved` (46 bytes). The
+/// `PixMap` flag is added to `rowBytes`, which must not already carry it.
 fn pixmap_bytes(pm: &PixMapSpec) -> Vec<u8> {
-    let mut out = (pm.row_bytes | 0x8000).to_be_bytes().to_vec();
+    let mut out = (pm.row_bytes + 0x8000).to_be_bytes().to_vec();
     out.extend(rect_bytes(pm.bounds));
     out.extend([0, 0]); // pmVersion
     out.extend(pm.pack_type.to_be_bytes());
@@ -717,5 +718,6 @@ impl RledFrame {
 
 /// An `rlëD` token: the opcode in the top byte, a 24-bit count below.
 fn token(op: u8, count: u32) -> [u8; 4] {
-    ((u32::from(op) << 24) | count).to_be_bytes()
+    // The count fits in 24 bits, so `+` is the same as `|`.
+    ((u32::from(op) << 24) + count).to_be_bytes()
 }
