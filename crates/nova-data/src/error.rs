@@ -299,6 +299,20 @@ mod tests {
     }
 
     #[test]
+    fn only_bracketed_digits_are_index_frames() {
+        for message in ["[]", "[x]", "[2", "2]"] {
+            let err = eof()
+                .with_context(BacktraceFrame::Message(message.into()))
+                .with_context(field_frame("items", "Outer"));
+            assert_eq!(
+                field_error(err, 0).path,
+                path(&["Outer", "items", message]),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
     fn an_index_frame_with_nothing_before_it_is_its_own_segment() {
         let err = eof().with_context(BacktraceFrame::Message("[0]".into()));
         assert_eq!(field_error(err, 0).path, path(&["[0]"]));
