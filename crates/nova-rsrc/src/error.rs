@@ -41,6 +41,16 @@ pub enum ParseError {
         /// The type whose list is out of bounds.
         ty: ResType,
     },
+    /// Two types' reference lists overlap. Real forks never share reference
+    /// lists, and allowing it would let a small fork declare far more
+    /// resources than it holds.
+    OverlappingReferenceLists {
+        /// The type whose list starts later in the map (or, at the same
+        /// start, comes later in the type list).
+        ty: ResType,
+        /// The type whose list it overlaps.
+        other: ResType,
+    },
     /// A type appears twice in the type list.
     DuplicateType {
         /// The repeated type.
@@ -131,6 +141,10 @@ impl fmt::Display for ParseError {
             Self::ReferenceListOutOfBounds { ty } => write!(
                 f,
                 "reference list for type '{ty}' extends past the end of the resource map"
+            ),
+            Self::OverlappingReferenceLists { ty, other } => write!(
+                f,
+                "reference list for type '{ty}' overlaps the reference list for type '{other}'"
             ),
             Self::DuplicateType { ty } => {
                 write!(f, "type '{ty}' appears more than once in the type list")
@@ -254,6 +268,13 @@ mod tests {
             (
                 ParseError::ReferenceListOutOfBounds { ty: SHIP },
                 "reference list for type 'shïp' extends past the end of the resource map",
+            ),
+            (
+                ParseError::OverlappingReferenceLists {
+                    ty: SHIP,
+                    other: ResType(*b"PICT"),
+                },
+                "reference list for type 'shïp' overlaps the reference list for type 'PICT'",
             ),
             (
                 ParseError::DuplicateType { ty: SHIP },

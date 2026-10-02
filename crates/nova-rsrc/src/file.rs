@@ -1,6 +1,7 @@
 //! An owned, validated resource file and borrowed views of its resources.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use crate::parse::{self, Entry, TypeEntry};
 use crate::{Fork, ForkReader, LoadError, ParseError, ResType, StdForkReader};
@@ -112,7 +113,7 @@ impl ResourceFile {
         Resource {
             ty,
             id: entry.id,
-            name: entry.name.as_deref(),
+            name: &entry.name,
             name_bytes: entry.name_bytes.clone().map(|r| &self.bytes[r]),
             attributes: entry.attributes,
             data: &self.bytes[entry.data.clone()],
@@ -125,7 +126,8 @@ impl ResourceFile {
 pub struct Resource<'a> {
     ty: ResType,
     id: i16,
-    name: Option<&'a str>,
+    /// Cache for the decoded name, shared with the file's index.
+    name: &'a OnceLock<String>,
     name_bytes: Option<&'a [u8]>,
     attributes: u8,
     data: &'a [u8],
@@ -145,9 +147,13 @@ impl<'a> Resource<'a> {
     }
 
     /// The name, decoded from Mac Roman; `None` if unnamed.
+    ///
+    /// Decoded on first use and cached in the [`ResourceFile`].
     #[must_use]
     pub fn name(&self) -> Option<&'a str> {
-        self.name
+        let name = self.name;
+        self.name_bytes
+            .map(|bytes| name.get_or_init(|| parse::decode_name(bytes)).as_str())
     }
 
     /// The raw (Mac Roman) name bytes; `None` if unnamed.
@@ -227,6 +233,28 @@ mod tests {
         let res = file.get(PICT, 1).expect("present");
         assert_eq!(res.name(), Some("Käse"));
         assert_eq!(res.name_bytes(), Some(&b"K\x8Ase"[..]));
+    }
+
+    #[test]
+    fn name_is_decoded_once_on_first_use() {
+        let file = parse(&ForkBuilder::new().resource(PICT, 1, Some(b"K\x8Ase"), b""));
+        let cell = &file.types[0].entries[0].name;
+        assert_eq!(cell.get(), None, "not decoded by parsing");
+        let first = file.get(PICT, 1).expect("present").name();
+        assert_eq!(cell.get().map(String::as_str), Some("Käse"));
+        let second = file.get(PICT, 1).expect("present").name();
+        assert_eq!(
+            first.map(str::as_ptr),
+            second.map(str::as_ptr),
+            "decoded once"
+        );
+    }
+
+    #[test]
+    fn resource_file_can_be_shared_across_threads() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<ResourceFile>();
+        assert_send_sync::<Resource<'_>>();
     }
 
     #[test]

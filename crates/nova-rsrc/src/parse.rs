@@ -3,7 +3,9 @@
 //! Nothing here does I/O. Every offset is bounds-checked and every declared
 //! entry is read, so a fork either parses completely or is rejected.
 
+use std::collections::HashSet;
 use std::ops::Range;
+use std::sync::OnceLock;
 
 use encoding_rs::MACINTOSH;
 
@@ -26,7 +28,9 @@ pub(crate) struct TypeEntry {
 #[derive(Debug)]
 pub(crate) struct Entry {
     pub(crate) id: i16,
-    pub(crate) name: Option<String>,
+    /// The decoded name, filled on first use: decoding while parsing would
+    /// let many references to one long name multiply its size.
+    pub(crate) name: OnceLock<String>,
     pub(crate) name_bytes: Option<Range<usize>>,
     pub(crate) attributes: u8,
     pub(crate) data: Range<usize>,
@@ -134,23 +138,34 @@ impl Fork<'_> {
             .get(entries_start..entries_start + TYPE_ENTRY_LEN * type_count)
             .ok_or(ParseError::TypeListOutOfBounds)?;
 
-        let mut types: Vec<TypeEntry> = Vec::with_capacity(type_count);
+        // First every type's reference list, so that lists sharing bytes are
+        // rejected before any reference is read: disjoint lists bound the
+        // total number of references by the map's size.
+        let mut seen = HashSet::with_capacity(type_count);
+        let mut lists: Vec<(ResType, Range<usize>)> = Vec::with_capacity(type_count);
         for &[t0, t1, t2, t3, c0, c1, r0, r1] in type_entries.as_chunks::<TYPE_ENTRY_LEN>().0 {
             let ty = ResType([t0, t1, t2, t3]);
-            if types.iter().any(|t| t.ty == ty) {
+            if !seen.insert(ty) {
                 return Err(ParseError::DuplicateType { ty });
             }
             // Also stored minus one.
             let count = usize::from(u16::from_be_bytes([c0, c1])) + 1;
             let refs_start = type_list + usize::from(u16::from_be_bytes([r0, r1]));
-            let refs = map
-                .get(refs_start..refs_start + REF_ENTRY_LEN * count)
-                .ok_or(ParseError::ReferenceListOutOfBounds { ty })?;
+            let refs = refs_start..refs_start + REF_ENTRY_LEN * count;
+            if map.get(refs.clone()).is_none() {
+                return Err(ParseError::ReferenceListOutOfBounds { ty });
+            }
+            lists.push((ty, refs));
+        }
+        reject_overlaps(&lists)?;
 
-            let mut entries: Vec<Entry> = Vec::with_capacity(count);
-            for reference in refs.as_chunks::<REF_ENTRY_LEN>().0 {
+        let mut types: Vec<TypeEntry> = Vec::with_capacity(type_count);
+        for (ty, refs) in lists {
+            let mut ids = HashSet::with_capacity(refs.len() / REF_ENTRY_LEN);
+            let mut entries: Vec<Entry> = Vec::with_capacity(refs.len() / REF_ENTRY_LEN);
+            for reference in map[refs].as_chunks::<REF_ENTRY_LEN>().0 {
                 let entry = self.parse_reference(ty, reference, names, names_start)?;
-                if entries.iter().any(|e| e.id == entry.id) {
+                if !ids.insert(entry.id) {
                     return Err(ParseError::DuplicateId { ty, id: entry.id });
                 }
                 entries.push(entry);
@@ -176,15 +191,9 @@ impl Fork<'_> {
         let data = self.data_range(ty, id, u32::from_be_bytes([0, o0, o1, o2]))?;
         let name_bytes = name_range(ty, id, u16::from_be_bytes([n0, n1]), names)?
             .map(|r| names_start + r.start..names_start + r.end);
-        let name = name_bytes.clone().map(|r| {
-            MACINTOSH
-                .decode_without_bom_handling(&self.bytes[r])
-                .0
-                .into_owned()
-        });
         Ok(Entry {
             id,
-            name,
+            name: OnceLock::new(),
             name_bytes,
             attributes,
             data,
@@ -206,6 +215,27 @@ impl Fork<'_> {
     }
 }
 
+/// Fails if any two types' reference lists share a byte.
+///
+/// Sorting by start (stably, so ties keep type-list order) puts any overlap
+/// between neighbours; the later one is named.
+fn reject_overlaps(lists: &[(ResType, Range<usize>)]) -> Result<(), ParseError> {
+    let mut by_start: Vec<&(ResType, Range<usize>)> = lists.iter().collect();
+    by_start.sort_by_key(|(_, refs)| refs.start);
+    for pair in by_start.windows(2) {
+        let [(other, earlier), (ty, later)] = pair else {
+            unreachable!("windows(2) yields pairs")
+        };
+        if later.start < earlier.end {
+            return Err(ParseError::OverlappingReferenceLists {
+                ty: *ty,
+                other: *other,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A name's range within the name list, or `None` if unnamed.
 fn name_range(
     ty: ResType,
@@ -225,6 +255,11 @@ fn name_range(
         return Err(ParseError::NameLengthOutOfBounds { ty, id });
     }
     Ok(Some(body))
+}
+
+/// Decodes a Mac Roman name.
+pub(crate) fn decode_name(bytes: &[u8]) -> String {
+    MACINTOSH.decode_without_bom_handling(bytes).0.into_owned()
 }
 
 /// `N` bytes at `pos`, or `None` if they run past the end.
@@ -454,6 +489,122 @@ mod tests {
     }
 
     #[test]
+    fn rejects_two_types_sharing_one_reference_list() {
+        let mut built = sample();
+        let ship = built.layout.type_entry(SHIP) + REF_LIST_OFFSET_FIELD;
+        let shared = u16_at(&built.bytes, ship).expect("in bounds");
+        built.put_u16(
+            built.layout.type_entry(PICT) + REF_LIST_OFFSET_FIELD,
+            shared,
+        );
+        assert_eq!(
+            err(&built),
+            ParseError::OverlappingReferenceLists {
+                ty: PICT,
+                other: SHIP
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_reference_lists_overlapping_by_one_byte() {
+        // SHIP's two references are directly followed by PICT's one. Moving
+        // PICT's list back one byte overlaps SHIP's last byte; moving it
+        // forward is still disjoint (and lands in garbage that fails later).
+        let mut built = sample();
+        let field = built.layout.type_entry(PICT) + REF_LIST_OFFSET_FIELD;
+        let adjacent = u16_at(&built.bytes, field).expect("in bounds");
+        built.put_u16(field, adjacent - 1);
+        assert_eq!(
+            err(&built),
+            ParseError::OverlappingReferenceLists {
+                ty: PICT,
+                other: SHIP
+            }
+        );
+        built.put_u16(field, adjacent + 1);
+        assert!(!matches!(
+            parse(&built.bytes),
+            Err(ParseError::OverlappingReferenceLists { .. })
+        ));
+    }
+
+    #[test]
+    fn overlap_is_found_whatever_the_map_order() {
+        // The later list in byte order is named, even when it comes first in
+        // the type list.
+        let mut built = sample();
+        let pict = built.layout.type_entry(PICT) + REF_LIST_OFFSET_FIELD;
+        let ship = built.layout.type_entry(SHIP) + REF_LIST_OFFSET_FIELD;
+        let pict_list = u16_at(&built.bytes, pict).expect("in bounds");
+        // SHIP's two-entry list now starts 12 bytes before PICT's and so
+        // covers it.
+        built.put_u16(ship, pict_list - 12);
+        assert_eq!(
+            err(&built),
+            ParseError::OverlappingReferenceLists {
+                ty: PICT,
+                other: SHIP
+            }
+        );
+    }
+
+    /// The denial-of-service shape: `types` distinct types all sharing one
+    /// reference list of 65,536 distinct IDs, each with the same empty data
+    /// and the same 255-byte name.
+    fn shared_list_bomb(types: u16) -> Vec<u8> {
+        // One empty data entry, shared by every reference.
+        let data = [0u8; 4];
+        let type_list_len = 2 + TYPE_ENTRY_LEN * usize::from(types);
+        // The name list starts at the map itself (offset 0), whose first
+        // (reserved) byte is the length of a 255-byte name: every reference
+        // names it with offset 0.
+        let mut map = vec![0; TYPE_LIST_OFFSET_FIELD];
+        map[0] = 0xFF;
+        map.extend(u16_of(MAP_HEADER_LEN).to_be_bytes());
+        map.extend(0u16.to_be_bytes());
+        map.extend((types - 1).to_be_bytes());
+        for t in 0..types {
+            map.extend(u32::from(t).to_be_bytes());
+            // 65,536 references (stored minus one), all in one list.
+            map.extend(0xFFFFu16.to_be_bytes());
+            map.extend(u16_of(type_list_len).to_be_bytes());
+        }
+        for id in 0..=u16::MAX {
+            map.extend(id.to_be_bytes());
+            map.extend([0, 0]); // name offset
+            map.extend([0; 4]); // attributes and data offset
+            map.extend([0; 4]); // reserved handle
+        }
+        let mut bytes = Vec::new();
+        bytes.extend(16u32.to_be_bytes());
+        bytes.extend(u32_of(16 + data.len()).to_be_bytes());
+        bytes.extend(u32_of(data.len()).to_be_bytes());
+        bytes.extend(u32_of(map.len()).to_be_bytes());
+        bytes.extend(data);
+        bytes.extend(map);
+        bytes
+    }
+
+    #[test]
+    fn a_shared_reference_list_bomb_is_rejected_cheaply() {
+        let bytes = shared_list_bomb(8000);
+        assert!(bytes.len() < 900_000);
+        // One type alone is a legitimate 65,536-resource fork...
+        let one = parse(&shared_list_bomb(1)).expect("one type is valid");
+        assert_eq!(one.types[0].entries.len(), 0x1_0000);
+        // ...but thousands sharing its list are rejected before any
+        // reference is read.
+        assert_eq!(
+            parse(&bytes).err(),
+            Some(ParseError::OverlappingReferenceLists {
+                ty: ResType([0, 0, 0, 1]),
+                other: ResType([0, 0, 0, 0]),
+            })
+        );
+    }
+
+    #[test]
     fn reads_every_declared_reference() {
         // Declaring one fewer entry is still structurally valid; the parsed
         // count always equals the declared count.
@@ -543,7 +694,6 @@ mod tests {
     fn unnamed_sentinel_is_not_an_error() {
         let index = ok(&sample());
         let pict = &index.types[1].entries[0];
-        assert_eq!(pict.name, None);
         assert_eq!(pict.name_bytes, None);
     }
 
@@ -604,11 +754,21 @@ mod tests {
     fn names_are_read_relative_to_the_name_list() {
         let index = ok(&sample());
         let ship = &index.types[0].entries;
-        assert_eq!(ship[0].name.as_deref(), Some("Shuttle"));
-        assert_eq!(ship[1].name.as_deref(), Some("äa"));
         let built = sample();
+        let pos = built.layout.name(SHIP, 128);
+        assert_eq!(ship[0].name_bytes, Some(pos + 1..pos + 8));
         let pos = built.layout.name(SHIP, 129);
         assert_eq!(ship[1].name_bytes, Some(pos + 1..pos + 3));
+    }
+
+    #[test]
+    fn names_are_not_decoded_while_parsing() {
+        // Decoding (and allocating) every name up front would let many
+        // references naming one long name multiply its size.
+        let index = ok(&sample());
+        for entry in index.types.iter().flat_map(|t| &t.entries) {
+            assert_eq!(entry.name.get(), None);
+        }
     }
 
     #[test]
