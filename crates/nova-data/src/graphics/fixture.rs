@@ -172,6 +172,34 @@ impl PictBuilder {
         self.raw(0x009A, &data)
     }
 
+    /// `0098` PackBitsRect.
+    #[must_use]
+    pub fn packbits_rect(self, bits: &IndexedBits) -> Self {
+        let mut data = pixmap_bytes(&PixMapSpec {
+            row_bytes: bits.row_bytes,
+            bounds: bits.bounds,
+            pack_type: 0,
+            pixel_type: 0,
+            pixel_size: bits.bits,
+            cmp_count: 1,
+            cmp_size: bits.bits,
+            pm_table: 0,
+        });
+        data.extend(bits.ctab.bytes());
+        data.extend(rect_bytes(bits.src));
+        data.extend(rect_bytes(bits.dst));
+        data.extend(bits.mode.to_be_bytes());
+        let width = rect_width(bits.bounds);
+        for row in bits.indices.chunks(width) {
+            data.extend(pack_row(
+                &index_row(row, bits.bits, bits.row_bytes),
+                bits.row_bytes,
+                1,
+            ));
+        }
+        self.raw(0x0098, &data)
+    }
+
     /// `00FF` EndPic.
     #[must_use]
     pub fn end(self) -> Self {
@@ -343,4 +371,64 @@ fn pack_row(row: &[u8], row_bytes: u16, unit: usize) -> Vec<u8> {
 
 fn rect_width(rect: [i16; 4]) -> usize {
     (i32::from(rect[3]) - i32::from(rect[1])) as usize
+}
+
+/// A `PackBitsRect` (`0098`) pixel opcode: indexed pixels with a colour
+/// table, copying the whole of `bounds` to the same rectangle.
+#[derive(Clone, Debug)]
+pub struct IndexedBits {
+    /// The `PixMap` bounds, `[top, left, bottom, right]`.
+    pub bounds: [i16; 4],
+    /// The source rectangle, within `bounds`.
+    pub src: [i16; 4],
+    /// The destination rectangle, within the picture frame.
+    pub dst: [i16; 4],
+    /// The transfer mode.
+    pub mode: u16,
+    /// `rowBytes`: by default the fewest bytes that hold a row.
+    pub row_bytes: u16,
+    /// Bits per pixel (`pixelSize`).
+    pub bits: u16,
+    /// The colour table.
+    pub ctab: Ctab,
+    /// Row-major pixel values covering `bounds`.
+    pub indices: Vec<u8>,
+}
+
+impl IndexedBits {
+    /// `bits`-per-pixel `indices` covering `bounds`, looked up in `ctab`.
+    #[must_use]
+    pub fn new(bounds: [i16; 4], bits: u16, ctab: &Ctab, indices: &[u8]) -> Self {
+        Self {
+            bounds,
+            src: bounds,
+            dst: bounds,
+            mode: 0,
+            row_bytes: min_row_bytes(rect_width(bounds), bits),
+            bits,
+            ctab: ctab.clone(),
+            indices: indices.to_vec(),
+        }
+    }
+}
+
+/// The fewest bytes that hold `width` pixels of `bits` bits.
+fn min_row_bytes(width: usize, bits: u16) -> u16 {
+    (width * usize::from(bits)).div_ceil(8) as u16
+}
+
+/// Packs pixel values `bits` bits each, leftmost pixel in the high bits,
+/// into `row_bytes` bytes.
+fn index_row(indices: &[u8], bits: u16, row_bytes: u16) -> Vec<u8> {
+    let bits = usize::from(bits);
+    let mut row = vec![0; usize::from(row_bytes)];
+    for (x, &index) in indices.iter().enumerate() {
+        let bit = x * bits;
+        // Depths over 8 bits write nothing: decoders reject them unread.
+        let shift = 8usize.checked_sub(bits + bit % 8);
+        if let (Some(byte), Some(shift)) = (row.get_mut(bit / 8), shift) {
+            *byte |= (u16::from(index) << shift) as u8;
+        }
+    }
+    row
 }

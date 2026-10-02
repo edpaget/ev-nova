@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use super::GraphicsError;
 use super::budget::check_budget;
-use super::color::rgb555;
+use super::color::{ColorTable, indices, rgb555};
 use super::image::Image;
 use super::packbits::unpack;
 use super::pixmap::{PixMap, QdRect};
@@ -48,6 +48,7 @@ pub fn decode_pict(data: &[u8]) -> Result<Image, GraphicsError> {
             HEADER_OP => r.skip(24)?,
             CLIP => skip_region(&mut r)?,
             DIRECT_BITS_RECT => direct_bits(&mut r, frame, &mut canvas)?,
+            PACK_BITS_RECT => packbits_rect(&mut r, frame, &mut canvas)?,
             END_PIC => return Ok(canvas),
             opcode => return Err(GraphicsError::UnsupportedOpcode { opcode, offset }),
         }
@@ -62,6 +63,7 @@ const SHORT_COMMENT: u16 = 0x00A0;
 const LONG_COMMENT: u16 = 0x00A1;
 const END_PIC: u16 = 0x00FF;
 const HEADER_OP: u16 = 0x0C00;
+const PACK_BITS_RECT: u16 = 0x0098;
 const DIRECT_BITS_RECT: u16 = 0x009A;
 
 /// The smallest region: its size word and bounding rectangle.
@@ -97,6 +99,29 @@ fn direct_bits(r: &mut Reader<'_>, frame: QdRect, canvas: &mut Image) -> Result<
     copy_rows(r, &pm, &format, frame, canvas)
 }
 
+/// `0098` PackBitsRect: an indexed `PixMap` (with no `baseAddr`), its
+/// colour table, the copy rectangles and mode, then the pixel rows.
+fn packbits_rect(
+    r: &mut Reader<'_>,
+    frame: QdRect,
+    canvas: &mut Image,
+) -> Result<(), GraphicsError> {
+    let pm = PixMap::read(r)?;
+    if !matches!(pm.pixel_size, 1 | 2 | 4 | 8) {
+        return Err(GraphicsError::UnsupportedPixMap {
+            pixel_size: pm.pixel_size,
+            pack_type: pm.pack_type,
+            cmp_count: pm.cmp_count,
+        });
+    }
+    let ctab = ColorTable::read(r)?;
+    let format = RowFormat::Indexed {
+        bits: pm.pixel_size,
+        ctab: &ctab,
+    };
+    copy_rows(r, &pm, &format, frame, canvas)
+}
+
 /// srcCopy and ditherCopy, which both copy pixels unchanged.
 const SRC_COPY: u16 = 0;
 const DITHER_COPY: u16 = 64;
@@ -107,7 +132,7 @@ const MIN_PACKED_ROW_BYTES: u16 = 8;
 const MAX_BYTE_COUNT_ROW_BYTES: u16 = 250;
 
 /// How a pixel map's rows are stored and turned into pixels.
-enum RowFormat {
+enum RowFormat<'a> {
     /// 16-bit `xRRRRRGGGGGBBBBB`, packed by 16-bit words.
     Rgb555,
     /// 32-bit pixels packed by component: each row unpacks to a plane of
@@ -115,14 +140,17 @@ enum RowFormat {
     PlanarRgb,
     /// 32-bit `xRGB` pixels, in rows too short to be packed.
     ChunkyXrgb,
+    /// 1, 2, 4 or 8-bit pixel values looked up in a colour table.
+    Indexed { bits: u16, ctab: &'a ColorTable },
 }
 
-impl RowFormat {
+impl RowFormat<'_> {
     /// Bytes one row of `width` pixels needs within `rowBytes`.
     fn needed(&self, width: u32) -> u32 {
         match self {
             Self::Rgb555 => 2 * width,
             Self::PlanarRgb | Self::ChunkyXrgb => 4 * width,
+            Self::Indexed { bits, .. } => (width * u32::from(*bits)).div_ceil(8),
         }
     }
 
@@ -130,7 +158,7 @@ impl RowFormat {
     fn unit(&self) -> usize {
         match self {
             Self::Rgb555 => 2,
-            Self::PlanarRgb | Self::ChunkyXrgb => 1,
+            Self::PlanarRgb | Self::ChunkyXrgb | Self::Indexed { .. } => 1,
         }
     }
 
@@ -139,13 +167,13 @@ impl RowFormat {
     fn expected(&self, row_bytes: u16, width: u32) -> usize {
         match self {
             Self::PlanarRgb => 3 * width as usize,
-            Self::Rgb555 | Self::ChunkyXrgb => usize::from(row_bytes),
+            Self::Rgb555 | Self::ChunkyXrgb | Self::Indexed { .. } => usize::from(row_bytes),
         }
     }
 
     /// The pixels of one unpacked row.
-    fn pixels(&self, row: &[u8], width: u32) -> Vec<[u8; 4]> {
-        match self {
+    fn pixels(&self, row: &[u8], width: u32) -> Result<Vec<[u8; 4]>, GraphicsError> {
+        Ok(match self {
             Self::Rgb555 => row
                 .as_chunks::<2>()
                 .0
@@ -167,7 +195,12 @@ impl RowFormat {
                 .take(width as usize)
                 .map(|&[_, r, g, b]| [r, g, b, 255])
                 .collect(),
-        }
+            Self::Indexed { bits, ctab } => indices(row, *bits, width as usize)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|index| ctab.rgba(index))
+                .collect::<Result<_, _>>()?,
+        })
     }
 }
 
@@ -176,7 +209,7 @@ impl RowFormat {
 fn copy_rows(
     r: &mut Reader<'_>,
     pm: &PixMap,
-    format: &RowFormat,
+    format: &RowFormat<'_>,
     frame: QdRect,
     canvas: &mut Image,
 ) -> Result<(), GraphicsError> {
@@ -206,7 +239,7 @@ fn copy_rows(
         if y < i32::from(src.top) || y >= i32::from(src.bottom) {
             continue;
         }
-        let pixels = format.pixels(&bytes, width);
+        let pixels = format.pixels(&bytes, width)?;
         let canvas_y = y - i32::from(src.top) + i32::from(dst.top) - i32::from(frame.top);
         for x in i32::from(src.left)..i32::from(src.right) {
             let canvas_x = x - i32::from(src.left) + i32::from(dst.left) - i32::from(frame.left);
@@ -247,7 +280,7 @@ fn read_row<'a>(
 mod tests {
     use super::*;
     use crate::graphics::color::rgb555;
-    use crate::graphics::fixture::{DirectBits, PictBuilder};
+    use crate::graphics::fixture::{Ctab, DirectBits, IndexedBits, PictBuilder};
 
     const FRAME: [i16; 4] = [0, 0, 3, 5];
 
@@ -979,5 +1012,167 @@ mod tests {
         assert_eq!(unsupported(|b| b.pack_type = 1), error(32, 1, 3));
         assert_eq!(unsupported(|b| b.pack_type = 2), error(32, 2, 3));
         assert_eq!(unsupported(|b| b.pack_type = 3), error(32, 3, 3));
+    }
+
+    /// A sparse table: values 0, 1, 3 and 255 (not 2) map to colours whose
+    /// components are distinct.
+    fn sparse_ctab() -> Ctab {
+        Ctab {
+            device: false,
+            entries: vec![
+                (255, [0x1100, 0x2200, 0x3300]),
+                (3, [0x4400, 0x5500, 0x6600]),
+                (0, [0x7700, 0x8800, 0x9900]),
+                (1, [0xAA00, 0xBB00, 0xCC00]),
+            ],
+        }
+    }
+
+    fn colour(index: u8) -> [u8; 4] {
+        match index {
+            255 => [0x11, 0x22, 0x33, 255],
+            3 => [0x44, 0x55, 0x66, 255],
+            0 => [0x77, 0x88, 0x99, 255],
+            1 => [0xAA, 0xBB, 0xCC, 255],
+            _ => unreachable!(),
+        }
+    }
+
+    fn indexed_pict(bits: &IndexedBits) -> Vec<u8> {
+        let [top, left, bottom, right] = bits.bounds;
+        PictBuilder::new([top, left, bottom, right])
+            .header_op()
+            .packbits_rect(bits)
+            .end()
+            .build()
+    }
+
+    #[test]
+    fn indexed_pixels_are_looked_up_by_value_at_every_depth() {
+        let cases: [(u16, &[u8]); 4] = [
+            (1, &[1, 0, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0]),
+            (2, &[3, 0, 1, 3, 3, 1, 0, 0, 1, 3, 1, 0]),
+            (4, &[3, 0, 1, 3, 3, 1, 0, 0, 1, 3, 1, 0]),
+            (8, &[255, 0, 1, 3, 3, 1, 255, 0, 1, 3, 1, 0]),
+        ];
+        for (depth, indices) in cases {
+            // 3 pixels wide: never a whole number of bytes below 8 bits.
+            for bounds in [[0, 0, 4, 3], [0, 0, 2, 6]] {
+                let bits = IndexedBits::new(bounds, depth, &sparse_ctab(), indices);
+                let image = decode_pict(&indexed_pict(&bits)).unwrap();
+                let expected: Vec<[u8; 4]> = indices.iter().map(|&i| colour(i)).collect();
+                assert_eq!(rgba(&image), expected, "{depth}-bit {bounds:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn wide_indexed_rows_are_packed() {
+        let indices: Vec<u8> = (0..40)
+            .map(|i| [0, 1, 3, 255][i % 4 / 2 * 2 + i / 20])
+            .collect();
+        let bits = IndexedBits::new([0, 0, 2, 20], 8, &sparse_ctab(), &indices);
+        assert_eq!(bits.row_bytes, 20);
+        let image = decode_pict(&indexed_pict(&bits)).unwrap();
+        let expected: Vec<[u8; 4]> = indices.iter().map(|&i| colour(i)).collect();
+        assert_eq!(rgba(&image), expected);
+    }
+
+    /// A 2x2 4-bit picture, written out by hand.
+    #[test]
+    fn decodes_a_hand_written_indexed_picture() {
+        let bytes = [
+            &[0x00, 0x00][..],                                 // picSize
+            &[0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02], // picFrame 2x2
+            &[0x00, 0x11, 0x02, 0xFF],                         // version 2
+            &[0x00, 0x98],                                     // PackBitsRect
+            &[0x80, 0x01],                                     // rowBytes 1
+            &[0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02], // bounds
+            &[0x00; 4],                                        // pmVersion, packType
+            &[0x00; 12],                                       // packSize, hRes, vRes
+            &[0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x00, 0x04], // pixelType, size 4
+            &[0x00; 12],                                       // planeBytes, pmTable, reserved
+            &[0x00; 6],                                        // ctSeed, ctFlags
+            &[0x00, 0x01],                                     // ctSize: two entries
+            &[0x00, 0x0F, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00], // 15: red
+            &[0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF], // 2: blue
+            &[0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02], // srcRect
+            &[0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02], // dstRect
+            &[0x00, 0x00],                                     // mode: srcCopy
+            &[0xF2, 0x2F],                                     // rows, unpacked
+            &[0x00, 0xFF],                                     // EndPic
+        ]
+        .concat();
+        let (red, blue) = ([255, 0, 0, 255], [0, 0, 255, 255]);
+        assert_eq!(rgba(&decode_pict(&bytes).unwrap()), [red, blue, blue, red]);
+    }
+
+    #[test]
+    fn a_pixel_missing_from_the_table_is_named() {
+        let bits = IndexedBits::new([0, 0, 1, 3], 4, &sparse_ctab(), &[0, 2, 1]);
+        assert_eq!(
+            decode_pict(&indexed_pict(&bits)),
+            Err(GraphicsError::MissingColour { index: 2 })
+        );
+    }
+
+    #[test]
+    fn an_indexed_bitmap_is_not_a_pixmap() {
+        let bits = IndexedBits::new([0, 0, 1, 3], 4, &sparse_ctab(), &[0, 3, 1]);
+        let mut pict = PictBuilder::new([0, 0, 1, 3])
+            .packbits_rect(&bits)
+            .end()
+            .build();
+        pict[16] &= 0x7F;
+        assert_eq!(
+            decode_pict(&pict),
+            Err(GraphicsError::NotAPixMap { offset: 16 })
+        );
+    }
+
+    #[test]
+    fn indexed_depths_other_than_1_2_4_and_8_are_unsupported() {
+        for depth in [0, 3, 16, 32] {
+            let mut bits = IndexedBits::new([0, 0, 1, 3], 8, &sparse_ctab(), &[0, 3, 1]);
+            bits.bits = depth;
+            assert_eq!(
+                decode_pict(&indexed_pict(&bits)),
+                Err(GraphicsError::UnsupportedPixMap {
+                    pixel_size: depth,
+                    pack_type: 0,
+                    cmp_count: 1
+                }),
+                "{depth}"
+            );
+        }
+    }
+
+    #[test]
+    fn indexed_rows_must_hold_every_pixel() {
+        let mut bits = IndexedBits::new([0, 0, 1, 17], 4, &sparse_ctab(), &[0; 17]);
+        assert_eq!(bits.row_bytes, 9);
+        bits.row_bytes = 8;
+        assert_eq!(
+            decode_pict(&indexed_pict(&bits)),
+            Err(GraphicsError::BadRowBytes {
+                row_bytes: 8,
+                needed: 9
+            })
+        );
+    }
+
+    #[test]
+    fn indexed_copies_follow_the_copy_rules() {
+        let mut bits = IndexedBits::new([0, 0, 2, 2], 8, &sparse_ctab(), &[0, 1, 3, 255]);
+        bits.mode = 1;
+        assert_eq!(
+            decode_pict(&indexed_pict(&bits)),
+            Err(GraphicsError::UnsupportedTransferMode { mode: 1 })
+        );
+        bits.mode = 0;
+        bits.src = [0, 0, 1, 1];
+        bits.dst = [1, 1, 2, 2];
+        let image = decode_pict(&indexed_pict(&bits)).unwrap();
+        assert_eq!(rgba(&image), [[0; 4], [0; 4], [0; 4], colour(0)]);
     }
 }
