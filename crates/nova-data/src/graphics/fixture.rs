@@ -522,3 +522,71 @@ impl Cicn {
         out
     }
 }
+
+/// A `ppat` full-colour pixel pattern (`patType` 1): header, `PixMap`,
+/// pixel rows, then the colour table, as in the stock resources.
+#[derive(Clone, Debug)]
+pub struct Ppat {
+    /// `patType`.
+    pub pat_type: u16,
+    /// Width in pixels.
+    pub width: u16,
+    /// Height in pixels.
+    pub height: u16,
+    /// Bits per pixel (`pixelSize`).
+    pub bits: u16,
+    /// The `PixMap`'s `rowBytes`.
+    pub row_bytes: u16,
+    /// The colour table.
+    pub ctab: Ctab,
+    /// Row-major pixel values.
+    pub indices: Vec<u8>,
+}
+
+impl Ppat {
+    /// A `width` x `height` pattern of `bits`-per-pixel `indices`.
+    #[must_use]
+    pub fn new(width: u16, height: u16, bits: u16, ctab: &Ctab, indices: &[u8]) -> Self {
+        Self {
+            pat_type: 1,
+            width,
+            height,
+            bits,
+            row_bytes: min_row_bytes(usize::from(width), bits),
+            ctab: ctab.clone(),
+            indices: indices.to_vec(),
+        }
+    }
+
+    /// The resource bytes.
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        const PAT_MAP: u32 = 28;
+        const PAT_DATA: u32 = PAT_MAP + 50;
+        let pm_table = PAT_DATA + u32::from(self.row_bytes) * u32::from(self.height);
+        let mut out = self.pat_type.to_be_bytes().to_vec();
+        out.extend(PAT_MAP.to_be_bytes());
+        out.extend(PAT_DATA.to_be_bytes());
+        out.extend([0; 4]); // patXData
+        out.extend([0xFF, 0xFF]); // patXValid
+        out.extend([0; 4]); // patXMap
+        out.extend([0xAA; 8]); // pat1Data
+        out.extend([0; 4]); // baseAddr
+        out.extend(pixmap_bytes(&PixMapSpec {
+            row_bytes: self.row_bytes,
+            bounds: [0, 0, self.height as i16, self.width as i16],
+            pack_type: 0,
+            pixel_type: 0,
+            pixel_size: self.bits,
+            cmp_count: 1,
+            cmp_size: self.bits,
+            pm_table,
+        }));
+        // A zero width still writes its (empty) rows.
+        for row in self.indices.chunks(usize::from(self.width).max(1)) {
+            out.extend(index_row(row, self.bits, self.row_bytes));
+        }
+        out.extend(self.ctab.bytes());
+        out
+    }
+}

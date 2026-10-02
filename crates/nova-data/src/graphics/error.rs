@@ -99,6 +99,12 @@ pub enum GraphicsError {
     /// A `cicn` whose mask bounds differ from its `PixMap` bounds.
     #[error("the icon mask's bounds differ from its PixMap's")]
     MaskMismatch,
+    /// A `ppat` other than a full-colour pixel pattern (`patType` 1).
+    #[error("unsupported ppat pattern type {pat_type}")]
+    UnsupportedPatternType {
+        /// `patType`.
+        pat_type: u16,
+    },
     /// A pixel value has no entry in its colour table.
     #[error("pixel value {index} is not in the colour table")]
     MissingColour {
@@ -184,6 +190,10 @@ mod tests {
             (
                 GraphicsError::MaskMismatch,
                 "the icon mask's bounds differ from its PixMap's",
+            ),
+            (
+                GraphicsError::UnsupportedPatternType { pat_type: 2 },
+                "unsupported ppat pattern type 2",
             ),
             (
                 GraphicsError::MissingColour { index: 9 },
