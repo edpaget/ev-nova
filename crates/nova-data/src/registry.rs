@@ -125,10 +125,15 @@ use sample_bytes;
 records! {
     Boom = crate::records::boom::Boom, "bööm";
     Checksum = crate::records::checksum::Checksum, "csüm", sample = [0x91, 0x84, 0xEE, 0xB0];
+    Cron = crate::records::cron::Cron, "crön";
     Desc = crate::records::desc::Desc, "dësc", sample = crate::records::desc::tests::SAMPLE;
+    Dude = crate::records::dude::Dude, "düde";
+    Fleet = crate::records::fleet::Fleet, "flët";
     Govt = crate::records::govt::Govt, "gövt";
+    Junk = crate::records::junk::Junk, "jünk";
     Nebula = crate::records::nebula::Nebula, "nëbu";
     Outfit = crate::records::outfit::Outfit, "oütf";
+    Person = crate::records::person::Person, "përs";
     Rank = crate::records::rank::Rank, "ränk";
     Roid = crate::records::roid::Roid, "röid";
     Ship = crate::records::ship::Ship, "shïp";

@@ -2,10 +2,15 @@
 
 pub mod boom;
 pub mod checksum;
+pub mod cron;
 pub mod desc;
+pub mod dude;
+pub mod fleet;
 pub mod govt;
+pub mod junk;
 pub mod nebula;
 pub mod outfit;
+pub mod person;
 pub mod rank;
 pub mod roid;
 pub mod ship;
