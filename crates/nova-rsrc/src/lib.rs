@@ -27,8 +27,13 @@
 //! upstream to `macbinary` remains possible future work; if that lands, this
 //! crate could switch to it behind the same public API.
 
+mod error;
+mod file;
+mod parse;
 mod res_type;
 
+pub use error::ParseError;
+pub use file::{Resource, ResourceFile};
 pub use res_type::ResType;
 
 #[cfg(any(test, feature = "fixture"))]
