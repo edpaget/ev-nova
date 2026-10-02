@@ -7,5 +7,16 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[dependencies]
+encoding_rs.workspace = true
+
+[dev-dependencies]
+macbinary.workspace = true
+tempfile.workspace = true
+
+[features]
+# Exposes the synthetic resource-fork builder to other crates' tests.
+fixture = []
+
 [lints]
 workspace = true

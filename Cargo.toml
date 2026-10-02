@@ -12,6 +12,9 @@ publish = false
 [workspace.dependencies]
 nova-rsrc = { path = "crates/nova-rsrc" }
 nova-data = { path = "crates/nova-data" }
+encoding_rs = "0.8"
+macbinary = "0.2.1"
+tempfile = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
