@@ -104,3 +104,29 @@ fn open_reads_a_real_resource_fork() {
 fn write_named_fork(path: &Path, bytes: &[u8]) -> io::Result<()> {
     std::fs::write(path.join("..namedfork/rsrc"), bytes)
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn resource_fork_errors_other_than_not_found_are_reported() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // An unreadable resource fork must not be mistaken for an absent one.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("Locked Plug-in");
+    std::fs::write(&path, b"").expect("create file");
+    if let Err(error) = write_named_fork(&path, &fixture_bytes()) {
+        eprintln!("skipping: cannot write a resource fork here: {error}");
+        return;
+    }
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+
+    let enforced = std::fs::read(&path).is_err();
+    let result = StdForkReader.read_fork(&path, Fork::Resource);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod back");
+    if !enforced {
+        eprintln!("skipping: permissions are not enforced (running as root?)");
+        return;
+    }
+    let error = result.expect_err("unreadable resource fork");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+}

@@ -31,7 +31,10 @@ impl ForkReader for StdForkReader {
     fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
         match fork {
             Fork::Data => std::fs::read(path).map(Some),
+            #[cfg(target_os = "macos")]
             Fork::Resource => read_resource_fork(path),
+            #[cfg(not(target_os = "macos"))]
+            Fork::Resource => no_resource_fork(path),
         }
     }
 }
@@ -45,8 +48,9 @@ fn read_resource_fork(path: &Path) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
+/// Resource forks exist only on macOS.
 #[cfg(not(target_os = "macos"))]
 #[allow(clippy::unnecessary_wraps)]
-fn read_resource_fork(_path: &Path) -> io::Result<Option<Vec<u8>>> {
+fn no_resource_fork(_path: &Path) -> io::Result<Option<Vec<u8>>> {
     Ok(None)
 }

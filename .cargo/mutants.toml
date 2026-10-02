@@ -2,3 +2,10 @@
 test_tool = "nextest"
 # Crates with no tests yet must not fail the unmutated baseline run.
 additional_cargo_test_args = ["--no-tests=pass"]
+
+exclude_re = [
+    # Compiled only on non-macOS targets, so on the macOS development host a
+    # mutated body is never built into the tests and cannot be observed. It
+    # is a one-line `Ok(None)`.
+    "no_resource_fork",
+]
