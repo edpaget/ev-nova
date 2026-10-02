@@ -110,6 +110,7 @@ pub mod file;
 pub mod graphics;
 pub mod records;
 pub mod registry;
+pub mod sound;
 pub mod wire;
 
 #[cfg(test)]
