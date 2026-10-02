@@ -10,6 +10,7 @@ mod color;
 mod error;
 mod image;
 mod packbits;
+mod pict;
 mod pixmap;
 mod reader;
 
@@ -19,3 +20,4 @@ pub mod fixture;
 pub use budget::{MAX_PIXELS, MAX_PIXELS_PER_INPUT_BYTE};
 pub use error::GraphicsError;
 pub use image::Image;
+pub use pict::decode_pict;

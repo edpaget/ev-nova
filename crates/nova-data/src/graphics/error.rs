@@ -33,6 +33,28 @@ pub enum GraphicsError {
         /// Where the `rowBytes` field starts.
         offset: usize,
     },
+    /// A `PICT` that is not version 2 (offset 10 is not `0x0011 0x02FF`).
+    #[error("unsupported PICT version at byte {offset:#x}: only version 2 is decoded")]
+    UnsupportedVersion {
+        /// Where the version opcode starts.
+        offset: usize,
+    },
+    /// A `PICT` opcode this decoder does not implement.
+    #[error("unsupported PICT opcode {opcode:#06x} at byte {offset:#x}")]
+    UnsupportedOpcode {
+        /// The opcode.
+        opcode: u16,
+        /// Where the opcode starts.
+        offset: usize,
+    },
+    /// A region whose size is too small to hold its bounding rectangle.
+    #[error("bad region size {size} at byte {offset:#x}")]
+    BadRegion {
+        /// The region's size field.
+        size: u16,
+        /// Where the region starts.
+        offset: usize,
+    },
     /// A pixel value has no entry in its colour table.
     #[error("pixel value {index} is not in the colour table")]
     MissingColour {
@@ -69,6 +91,21 @@ mod tests {
             (
                 GraphicsError::NotAPixMap { offset: 0x30 },
                 "expected a PixMap at byte 0x30, found a BitMap",
+            ),
+            (
+                GraphicsError::UnsupportedVersion { offset: 10 },
+                "unsupported PICT version at byte 0xa: only version 2 is decoded",
+            ),
+            (
+                GraphicsError::UnsupportedOpcode {
+                    opcode: 0x9B,
+                    offset: 0x100,
+                },
+                "unsupported PICT opcode 0x009b at byte 0x100",
+            ),
+            (
+                GraphicsError::BadRegion { size: 4, offset: 6 },
+                "bad region size 4 at byte 0x6",
             ),
             (
                 GraphicsError::MissingColour { index: 9 },

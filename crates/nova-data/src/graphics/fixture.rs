@@ -69,3 +69,96 @@ impl Ctab {
         out
     }
 }
+
+/// Builds a version 2 `PICT` from opcodes. `frame` and other rectangles are
+/// `[top, left, bottom, right]`.
+#[derive(Clone, Debug)]
+pub struct PictBuilder {
+    frame: [i16; 4],
+    bytes: Vec<u8>,
+}
+
+impl PictBuilder {
+    /// The 14-byte header: `picSize` 0 (decoders ignore it), `picFrame`,
+    /// and the version 2 opcode `0x0011 0x02FF`.
+    #[must_use]
+    pub fn new(frame: [i16; 4]) -> Self {
+        let mut bytes = vec![0, 0];
+        bytes.extend(rect_bytes(frame));
+        bytes.extend([0x00, 0x11, 0x02, 0xFF]);
+        Self { frame, bytes }
+    }
+
+    /// Any opcode and its data, after a pad byte if needed to reach an even
+    /// offset.
+    #[must_use]
+    pub fn raw(mut self, opcode: u16, data: &[u8]) -> Self {
+        if self.bytes.len() % 2 == 1 {
+            self.bytes.push(0);
+        }
+        self.bytes.extend(opcode.to_be_bytes());
+        self.bytes.extend_from_slice(data);
+        self
+    }
+
+    /// `0C00` HeaderOp: an extended version 2 header at 72 dpi.
+    #[must_use]
+    pub fn header_op(self) -> Self {
+        let mut data = vec![0xFF, 0xFE, 0, 0, 0, 0x48, 0, 0, 0, 0x48, 0, 0];
+        data.extend(rect_bytes(self.frame));
+        data.extend([0; 4]);
+        self.raw(0x0C00, &data)
+    }
+
+    /// `001E` DefHilite.
+    #[must_use]
+    pub fn def_hilite(self) -> Self {
+        self.raw(0x001E, &[])
+    }
+
+    /// `0000` NOP.
+    #[must_use]
+    pub fn nop(self) -> Self {
+        self.raw(0x0000, &[])
+    }
+
+    /// `0001` Clip to a rectangular region.
+    #[must_use]
+    pub fn clip_rect(self, rect: [i16; 4]) -> Self {
+        let mut data = vec![0, 10];
+        data.extend(rect_bytes(rect));
+        self.raw(0x0001, &data)
+    }
+
+    /// `00A0` ShortComment.
+    #[must_use]
+    pub fn short_comment(self, kind: u16) -> Self {
+        self.raw(0x00A0, &kind.to_be_bytes())
+    }
+
+    /// `00A1` LongComment.
+    #[must_use]
+    pub fn long_comment(self, kind: u16, data: &[u8]) -> Self {
+        let mut op = kind.to_be_bytes().to_vec();
+        op.extend((data.len() as u16).to_be_bytes());
+        op.extend_from_slice(data);
+        self.raw(0x00A1, &op)
+    }
+
+    /// `00FF` EndPic.
+    #[must_use]
+    pub fn end(self) -> Self {
+        self.raw(0x00FF, &[])
+    }
+
+    /// The picture's bytes.
+    #[must_use]
+    pub fn build(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+/// A QuickDraw rectangle's 8 bytes.
+fn rect_bytes(rect: [i16; 4]) -> Vec<u8> {
+    rect.iter().flat_map(|v| v.to_be_bytes()).collect()
+}
