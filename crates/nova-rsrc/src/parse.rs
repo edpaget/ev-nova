@@ -549,11 +549,16 @@ mod tests {
         );
     }
 
-    /// The denial-of-service shape: `types` distinct types all sharing one
-    /// reference list of 65,536 distinct IDs, each with the same empty data
-    /// and the same 255-byte name.
-    fn shared_list_bomb(types: u16) -> Vec<u8> {
-        // One empty data entry, shared by every reference.
+    /// The data offset of a reference that points past the 4-byte data
+    /// section, so reading that reference fails.
+    const BAD_DATA_OFFSET: u32 = 0x00FF_FFFF;
+
+    /// `types` distinct types all sharing one reference list of the IDs
+    /// `0..=last_id`, each with the same empty data and the same 255-byte
+    /// name. The first reference's data offset is `first_data_offset`; the
+    /// rest point at the empty data.
+    fn shared_list(types: u16, last_id: u16, first_data_offset: u32) -> Vec<u8> {
+        // One empty data entry, shared by every other reference.
         let data = [0u8; 4];
         let type_list_len = 2 + TYPE_ENTRY_LEN * usize::from(types);
         // The name list starts at the map itself (offset 0), whose first
@@ -566,14 +571,15 @@ mod tests {
         map.extend((types - 1).to_be_bytes());
         for t in 0..types {
             map.extend(u32::from(t).to_be_bytes());
-            // 65,536 references (stored minus one), all in one list.
-            map.extend(0xFFFFu16.to_be_bytes());
+            // `last_id + 1` references (stored minus one), all in one list.
+            map.extend(last_id.to_be_bytes());
             map.extend(u16_of(type_list_len).to_be_bytes());
         }
-        for id in 0..=u16::MAX {
+        for id in 0..=last_id {
+            let offset = if id == 0 { first_data_offset } else { 0 };
             map.extend(id.to_be_bytes());
             map.extend([0, 0]); // name offset
-            map.extend([0; 4]); // attributes and data offset
+            map.extend(offset.to_be_bytes()); // attributes (0) and data offset
             map.extend([0; 4]); // reserved handle
         }
         let mut bytes = Vec::new();
@@ -587,14 +593,38 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_reference_list_is_rejected_before_any_reference_is_read() {
+        // Alone, the list's corrupt first reference is what fails...
+        assert_eq!(
+            parse(&shared_list(1, 1, BAD_DATA_OFFSET)).err(),
+            Some(ParseError::DataOffsetOutOfBounds {
+                ty: ResType([0, 0, 0, 0]),
+                id: 0,
+                offset: BAD_DATA_OFFSET,
+            })
+        );
+        // ...but once two types share it, the overlap is found first.
+        assert_eq!(
+            parse(&shared_list(2, 1, BAD_DATA_OFFSET)).err(),
+            Some(ParseError::OverlappingReferenceLists {
+                ty: ResType([0, 0, 0, 1]),
+                other: ResType([0, 0, 0, 0]),
+            })
+        );
+    }
+
+    #[test]
     fn a_shared_reference_list_bomb_is_rejected_cheaply() {
-        let bytes = shared_list_bomb(8000);
-        assert!(bytes.len() < 900_000);
-        // One type alone is a legitimate 65,536-resource fork...
-        let one = parse(&shared_list_bomb(1)).expect("one type is valid");
+        // The denial-of-service shape: thousands of types sharing one list
+        // of 65,536 references. One type alone is a legitimate fork...
+        let one = parse(&shared_list(1, u16::MAX, 0)).expect("one type is valid");
         assert_eq!(one.types[0].entries.len(), 0x1_0000);
-        // ...but thousands sharing its list are rejected before any
-        // reference is read.
+        // ...but thousands sharing its list are rejected. The first reference
+        // is corrupt, so a parser that read references before checking for
+        // overlap would fail fast with the wrong error instead of
+        // materialising every type's copy.
+        let bytes = shared_list(8000, u16::MAX, BAD_DATA_OFFSET);
+        assert!(bytes.len() < 900_000);
         assert_eq!(
             parse(&bytes).err(),
             Some(ParseError::OverlappingReferenceLists {
