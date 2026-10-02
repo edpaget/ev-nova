@@ -31,6 +31,21 @@ impl Buf {
         self.bytes(offset, &value.to_be_bytes())
     }
 
+    /// Writes a big-endian `u16` at `offset`.
+    pub fn u16(self, offset: usize, value: u16) -> Self {
+        self.bytes(offset, &value.to_be_bytes())
+    }
+
+    /// Writes a big-endian `i32` at `offset`.
+    pub fn i32(self, offset: usize, value: i32) -> Self {
+        self.bytes(offset, &value.to_be_bytes())
+    }
+
+    /// Writes a big-endian `u64` at `offset`.
+    pub fn u64(self, offset: usize, value: u64) -> Self {
+        self.bytes(offset, &value.to_be_bytes())
+    }
+
     /// Writes a big-endian `u32` at `offset`.
     pub fn u32(self, offset: usize, value: u32) -> Self {
         self.bytes(offset, &value.to_be_bytes())

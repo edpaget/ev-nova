@@ -123,10 +123,15 @@ records! {
     Boom = crate::records::boom::Boom, "bööm";
     Checksum = crate::records::checksum::Checksum, "csüm", sample = [0x91, 0x84, 0xEE, 0xB0];
     Desc = crate::records::desc::Desc, "dësc", sample = crate::records::desc::tests::SAMPLE;
+    Govt = crate::records::govt::Govt, "gövt";
+    Nebula = crate::records::nebula::Nebula, "nëbu";
+    Rank = crate::records::rank::Rank, "ränk";
     Roid = crate::records::roid::Roid, "röid";
     Spin = crate::records::spin::Spin, "spïn";
+    Stellar = crate::records::stellar::Stellar, "spöb";
     StrList = crate::records::string_list::StrList, "STR#", sample = crate::records::string_list::tests::SAMPLE;
     StrResource = crate::records::string::StrResource, "STR ", sample = crate::records::string::tests::SAMPLE;
+    System = crate::records::system::System, "sÿst";
     Version = crate::records::version::Version, "vers", sample = [1, 0, 0x80, 0];
 }
 
