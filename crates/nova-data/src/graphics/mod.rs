@@ -2,9 +2,6 @@
 //!
 //! (Module documentation is completed once the decoders are in place.)
 
-// The decoders that use these building blocks land in later commits.
-#![allow(dead_code)]
-
 mod budget;
 mod color;
 mod error;
@@ -15,6 +12,8 @@ mod pattern;
 mod pict;
 mod pixmap;
 mod reader;
+mod rled;
+mod sheet;
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -25,3 +24,5 @@ pub use icon::decode_cicn;
 pub use image::Image;
 pub use pattern::decode_ppat;
 pub use pict::decode_pict;
+pub use rled::decode_rled;
+pub use sheet::{SheetLayout, SpriteSheet};

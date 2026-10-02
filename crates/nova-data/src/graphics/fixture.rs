@@ -590,3 +590,132 @@ impl Ppat {
         out
     }
 }
+
+/// Builds an `rlëD` sprite sheet from frames of tokens.
+#[derive(Clone, Debug)]
+pub struct RledBuilder {
+    width: u16,
+    height: u16,
+    depth: u16,
+    frame_count: Option<u16>,
+    frames: u16,
+    tokens: Vec<u8>,
+}
+
+impl RledBuilder {
+    /// A 16-bit sheet of `width` x `height` frames.
+    #[must_use]
+    pub fn new(width: u16, height: u16) -> Self {
+        Self {
+            width,
+            height,
+            depth: 16,
+            frame_count: None,
+            frames: 0,
+            tokens: Vec::new(),
+        }
+    }
+
+    /// Overrides the header's depth.
+    #[must_use]
+    pub fn depth(mut self, depth: u16) -> Self {
+        self.depth = depth;
+        self
+    }
+
+    /// Overrides the header's frame count (by default, the frames added).
+    #[must_use]
+    pub fn frame_count(mut self, count: u16) -> Self {
+        self.frame_count = Some(count);
+        self
+    }
+
+    /// Adds a frame built by `f`, then its frame-end token.
+    #[must_use]
+    pub fn frame(mut self, f: impl FnOnce(RledFrame) -> RledFrame) -> Self {
+        self.tokens.extend(f(RledFrame::default()).bytes);
+        self.tokens.extend([0; 4]);
+        self.frames += 1;
+        self
+    }
+
+    /// Adds one raw token.
+    #[must_use]
+    pub fn token(mut self, op: u8, count: u32) -> Self {
+        self.tokens.extend(token(op, count));
+        self
+    }
+
+    /// The sheet's bytes: the 16-byte header, then the tokens.
+    #[must_use]
+    pub fn build(self) -> Vec<u8> {
+        let count = self.frame_count.unwrap_or(self.frames);
+        let mut out = Vec::new();
+        for field in [self.width, self.height, self.depth, 0, count, 0, 0, 0] {
+            out.extend(field.to_be_bytes());
+        }
+        out.extend(self.tokens);
+        out
+    }
+}
+
+/// The tokens of one `rlëD` frame.
+#[derive(Clone, Debug, Default)]
+pub struct RledFrame {
+    bytes: Vec<u8>,
+}
+
+impl RledFrame {
+    /// Starts the next line. The count is left 0: decoders ignore it.
+    #[must_use]
+    pub fn line(self) -> Self {
+        self.token(1, 0)
+    }
+
+    /// Opaque 16-bit pixels, padded to a 4-byte boundary.
+    #[must_use]
+    pub fn pixels(mut self, pixels: &[u16]) -> Self {
+        self.bytes.extend(token(2, 2 * pixels.len() as u32));
+        for pixel in pixels {
+            self.bytes.extend(pixel.to_be_bytes());
+        }
+        if pixels.len() % 2 == 1 {
+            self.bytes.extend([0, 0]);
+        }
+        self
+    }
+
+    /// `n` transparent pixels.
+    #[must_use]
+    pub fn skip(self, n: u32) -> Self {
+        self.token(3, 2 * n)
+    }
+
+    /// A run of `n` pixels with the colour pair `a`, `b`.
+    #[must_use]
+    pub fn run(mut self, n: u32, a: u16, b: u16) -> Self {
+        self.bytes.extend(token(4, 2 * n));
+        self.bytes.extend(a.to_be_bytes());
+        self.bytes.extend(b.to_be_bytes());
+        self
+    }
+
+    /// One raw token.
+    #[must_use]
+    pub fn token(mut self, op: u8, count: u32) -> Self {
+        self.bytes.extend(token(op, count));
+        self
+    }
+
+    /// Raw bytes.
+    #[must_use]
+    pub fn raw(mut self, bytes: &[u8]) -> Self {
+        self.bytes.extend_from_slice(bytes);
+        self
+    }
+}
+
+/// An `rlëD` token: the opcode in the top byte, a 24-bit count below.
+fn token(op: u8, count: u32) -> [u8; 4] {
+    ((u32::from(op) << 24) | count).to_be_bytes()
+}

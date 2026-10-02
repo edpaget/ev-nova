@@ -105,6 +105,53 @@ pub enum GraphicsError {
         /// `patType`.
         pat_type: u16,
     },
+    /// An `rlëD` sheet with a depth other than 16 bits.
+    #[error("unsupported rlëD depth {depth}")]
+    UnsupportedDepth {
+        /// The header's depth.
+        depth: u16,
+    },
+    /// An `rlëD` sheet whose header claims no frames.
+    #[error("the rlëD sheet has no frames")]
+    NoFrames,
+    /// An `rlëD` token this decoder does not know.
+    #[error("unsupported rlëD token {token} at byte {offset:#x}")]
+    UnsupportedToken {
+        /// The token's opcode (its top byte).
+        token: u8,
+        /// Where the token starts.
+        offset: usize,
+    },
+    /// An `rlëD` drawing token before the frame's first line start.
+    #[error("rlëD drawing token outside a line at byte {offset:#x}")]
+    TokenOutsideLine {
+        /// Where the token starts.
+        offset: usize,
+    },
+    /// An `rlëD` token that draws past the end of its line.
+    #[error("rlëD frame {frame} line {line} overflows at byte {offset:#x}")]
+    LineOverflow {
+        /// The frame, counting from 0.
+        frame: u32,
+        /// The line, counting from 0.
+        line: u32,
+        /// Where the token starts.
+        offset: usize,
+    },
+    /// An `rlëD` frame with more line starts than the frame height.
+    #[error("rlëD frame {frame} has too many lines at byte {offset:#x}")]
+    TooManyLines {
+        /// The frame, counting from 0.
+        frame: u32,
+        /// Where the extra line start is.
+        offset: usize,
+    },
+    /// `rlëD` pixel data whose byte count is not a whole number of pixels.
+    #[error("odd rlëD pixel byte count at byte {offset:#x}")]
+    OddByteCount {
+        /// Where the token starts.
+        offset: usize,
+    },
     /// A pixel value has no entry in its colour table.
     #[error("pixel value {index} is not in the colour table")]
     MissingColour {
@@ -118,6 +165,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one case per variant
     fn messages_name_the_problem_and_its_offset() {
         let cases = [
             (
@@ -194,6 +242,41 @@ mod tests {
             (
                 GraphicsError::UnsupportedPatternType { pat_type: 2 },
                 "unsupported ppat pattern type 2",
+            ),
+            (
+                GraphicsError::UnsupportedDepth { depth: 8 },
+                "unsupported rlëD depth 8",
+            ),
+            (GraphicsError::NoFrames, "the rlëD sheet has no frames"),
+            (
+                GraphicsError::UnsupportedToken {
+                    token: 5,
+                    offset: 0x14,
+                },
+                "unsupported rlëD token 5 at byte 0x14",
+            ),
+            (
+                GraphicsError::TokenOutsideLine { offset: 0x10 },
+                "rlëD drawing token outside a line at byte 0x10",
+            ),
+            (
+                GraphicsError::LineOverflow {
+                    frame: 2,
+                    line: 7,
+                    offset: 0x40,
+                },
+                "rlëD frame 2 line 7 overflows at byte 0x40",
+            ),
+            (
+                GraphicsError::TooManyLines {
+                    frame: 1,
+                    offset: 0x24,
+                },
+                "rlëD frame 1 has too many lines at byte 0x24",
+            ),
+            (
+                GraphicsError::OddByteCount { offset: 0x18 },
+                "odd rlëD pixel byte count at byte 0x18",
             ),
             (
                 GraphicsError::MissingColour { index: 9 },
