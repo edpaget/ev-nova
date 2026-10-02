@@ -154,6 +154,68 @@ mod tests {
     }
 
     #[test]
+    fn raw_bytes_mid_stream_reads_only_the_tail_and_ends_at_the_end() {
+        let mut cursor = Cursor::new([1, 2, 3, 4, 5]);
+        cursor.set_position(2);
+        assert_eq!(
+            RawBytes::read_be(&mut cursor).expect("decodes"),
+            RawBytes(vec![3, 4, 5])
+        );
+        assert_eq!(cursor.position(), 5);
+    }
+
+    /// Calls to `read` past this many fail, so a reader that loops errors
+    /// out instead of hanging.
+    const READ_LIMIT: usize = 8;
+
+    /// A reader whose `read` reports the bytes after its position but never
+    /// advances, so it never reaches end-of-file. Seeking works normally.
+    struct StuckReader {
+        data: Vec<u8>,
+        pos: usize,
+        reads: usize,
+    }
+
+    impl Read for StuckReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            if self.reads > READ_LIMIT {
+                return Err(std::io::Error::other("read called too many times"));
+            }
+            let rest = &self.data[self.pos..];
+            let n = buf.len().min(rest.len());
+            buf[..n].copy_from_slice(&rest[..n]);
+            Ok(n)
+        }
+    }
+
+    impl Seek for StuckReader {
+        fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+            self.pos = match to {
+                SeekFrom::Start(n) => usize::try_from(n).expect("small offset"),
+                SeekFrom::End(0) => self.data.len(),
+                SeekFrom::Current(0) => self.pos,
+                other => unimplemented!("{other:?}"),
+            };
+            Ok(u64::try_from(self.pos).expect("small position"))
+        }
+    }
+
+    #[test]
+    fn raw_bytes_reads_a_reader_that_never_advances_in_one_bounded_read() {
+        let mut reader = StuckReader {
+            data: vec![1, 2, 3, 4, 5],
+            pos: 2,
+            reads: 0,
+        };
+        assert_eq!(
+            RawBytes::read_be(&mut reader).expect("decodes"),
+            RawBytes(vec![3, 4, 5])
+        );
+        assert_eq!(reader.reads, 1);
+    }
+
+    #[test]
     fn raw_bytes_may_be_empty() {
         let tail = Tail::read_be(&mut Cursor::new([7])).expect("decodes");
         assert_eq!(tail.rest, RawBytes::default());
