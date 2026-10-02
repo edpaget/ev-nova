@@ -55,6 +55,47 @@ pub enum GraphicsError {
         /// Where the region starts.
         offset: usize,
     },
+    /// A `PixMap` whose pixel format this decoder does not implement.
+    #[error(
+        "unsupported PixMap: pixelSize {pixel_size}, packType {pack_type}, cmpCount {cmp_count}"
+    )]
+    UnsupportedPixMap {
+        /// `pixelSize`.
+        pixel_size: u16,
+        /// `packType`.
+        pack_type: u16,
+        /// `cmpCount`.
+        cmp_count: u16,
+    },
+    /// A `rowBytes` too small to hold one row of pixels.
+    #[error("rowBytes {row_bytes} cannot hold a row of {needed} bytes")]
+    BadRowBytes {
+        /// `rowBytes`, without its flag bits.
+        row_bytes: u16,
+        /// Bytes one row of pixels needs.
+        needed: u32,
+    },
+    /// A transfer mode other than srcCopy (0) or ditherCopy (64).
+    #[error("unsupported transfer mode {mode}")]
+    UnsupportedTransferMode {
+        /// The mode.
+        mode: u16,
+    },
+    /// A copy whose source leaves the pixel map, whose destination leaves
+    /// the picture frame, or which would scale.
+    #[error("bad copy rectangles at byte {offset:#x}")]
+    BadCopyRect {
+        /// Where the source rectangle starts.
+        offset: usize,
+    },
+    /// A packed row that does not unpack to exactly one row.
+    #[error("bad packed row {row} at byte {offset:#x}")]
+    BadPackedRow {
+        /// The row, counting from 0.
+        row: u32,
+        /// Where the row (its byte count) starts.
+        offset: usize,
+    },
     /// A pixel value has no entry in its colour table.
     #[error("pixel value {index} is not in the colour table")]
     MissingColour {
@@ -106,6 +147,36 @@ mod tests {
             (
                 GraphicsError::BadRegion { size: 4, offset: 6 },
                 "bad region size 4 at byte 0x6",
+            ),
+            (
+                GraphicsError::UnsupportedPixMap {
+                    pixel_size: 32,
+                    pack_type: 2,
+                    cmp_count: 4,
+                },
+                "unsupported PixMap: pixelSize 32, packType 2, cmpCount 4",
+            ),
+            (
+                GraphicsError::BadRowBytes {
+                    row_bytes: 8,
+                    needed: 12,
+                },
+                "rowBytes 8 cannot hold a row of 12 bytes",
+            ),
+            (
+                GraphicsError::UnsupportedTransferMode { mode: 36 },
+                "unsupported transfer mode 36",
+            ),
+            (
+                GraphicsError::BadCopyRect { offset: 0x50 },
+                "bad copy rectangles at byte 0x50",
+            ),
+            (
+                GraphicsError::BadPackedRow {
+                    row: 3,
+                    offset: 0x60,
+                },
+                "bad packed row 3 at byte 0x60",
             ),
             (
                 GraphicsError::MissingColour { index: 9 },

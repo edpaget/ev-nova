@@ -145,6 +145,29 @@ impl PictBuilder {
         self.raw(0x00A1, &op)
     }
 
+    /// `009A` DirectBitsRect.
+    #[must_use]
+    pub fn direct_bits(self, bits: &DirectBits) -> Self {
+        let mut data = vec![0, 0, 0, 0xFF]; // baseAddr
+        data.extend(pixmap_bytes(&PixMapSpec {
+            row_bytes: bits.row_bytes,
+            bounds: bits.bounds,
+            pack_type: bits.pack_type,
+            pixel_type: 16,
+            pixel_size: bits.pixel_size,
+            cmp_count: bits.cmp_count,
+            cmp_size: bits.cmp_size,
+            pm_table: 0,
+        }));
+        data.extend(rect_bytes(bits.src));
+        data.extend(rect_bytes(bits.dst));
+        data.extend(bits.mode.to_be_bytes());
+        for row in bits.rows() {
+            data.extend(pack_row(&row, bits.row_bytes, 2));
+        }
+        self.raw(0x009A, &data)
+    }
+
     /// `00FF` EndPic.
     #[must_use]
     pub fn end(self) -> Self {
@@ -161,4 +184,114 @@ impl PictBuilder {
 /// A QuickDraw rectangle's 8 bytes.
 fn rect_bytes(rect: [i16; 4]) -> Vec<u8> {
     rect.iter().flat_map(|v| v.to_be_bytes()).collect()
+}
+
+/// A `DirectBitsRect` (`009A`) pixel opcode. The constructors fill in a
+/// valid `PixMap` and copy the whole of `bounds` to the same rectangle;
+/// tests change fields to make variants.
+#[derive(Clone, Debug)]
+pub struct DirectBits {
+    /// The `PixMap` bounds, `[top, left, bottom, right]`.
+    pub bounds: [i16; 4],
+    /// The source rectangle, within `bounds`.
+    pub src: [i16; 4],
+    /// The destination rectangle, within the picture frame.
+    pub dst: [i16; 4],
+    /// The transfer mode.
+    pub mode: u16,
+    /// `rowBytes`, without the `PixMap` flag (which is always written).
+    pub row_bytes: u16,
+    /// `packType`.
+    pub pack_type: u16,
+    /// `pixelSize`.
+    pub pixel_size: u16,
+    /// `cmpCount`.
+    pub cmp_count: u16,
+    /// `cmpSize`.
+    pub cmp_size: u16,
+    /// Row-major pixels covering `bounds`.
+    pub pixels: Vec<u16>,
+}
+
+impl DirectBits {
+    /// 16-bit `xRRRRRGGGGGBBBBB` pixels, packed by 16-bit words
+    /// (`packType` 3) with `rowBytes` twice the width.
+    #[must_use]
+    pub fn rgb555(bounds: [i16; 4], pixels: &[u16]) -> Self {
+        Self {
+            bounds,
+            src: bounds,
+            dst: bounds,
+            mode: 0,
+            row_bytes: 2 * rect_width(bounds) as u16,
+            pack_type: 3,
+            pixel_size: 16,
+            cmp_count: 3,
+            cmp_size: 5,
+            pixels: pixels.to_vec(),
+        }
+    }
+
+    /// Each row's unpacked bytes, padded or cut to `rowBytes`.
+    fn rows(&self) -> Vec<Vec<u8>> {
+        let width = rect_width(self.bounds);
+        self.pixels
+            .chunks(width)
+            .map(|row| {
+                let mut bytes: Vec<u8> = row.iter().flat_map(|p| p.to_be_bytes()).collect();
+                bytes.resize(usize::from(self.row_bytes), 0);
+                bytes
+            })
+            .collect()
+    }
+}
+
+/// The `PixMap` fields a builder writes.
+struct PixMapSpec {
+    row_bytes: u16,
+    bounds: [i16; 4],
+    pack_type: u16,
+    pixel_type: u16,
+    pixel_size: u16,
+    cmp_count: u16,
+    cmp_size: u16,
+    pm_table: u32,
+}
+
+/// A `PixMap` record from `rowBytes` to `pmReserved` (46 bytes).
+fn pixmap_bytes(pm: &PixMapSpec) -> Vec<u8> {
+    let mut out = (pm.row_bytes | 0x8000).to_be_bytes().to_vec();
+    out.extend(rect_bytes(pm.bounds));
+    out.extend([0, 0]); // pmVersion
+    out.extend(pm.pack_type.to_be_bytes());
+    out.extend([0; 4]); // packSize
+    out.extend([0, 0x48, 0, 0, 0, 0x48, 0, 0]); // hRes, vRes: 72 dpi
+    out.extend(pm.pixel_type.to_be_bytes());
+    out.extend(pm.pixel_size.to_be_bytes());
+    out.extend(pm.cmp_count.to_be_bytes());
+    out.extend(pm.cmp_size.to_be_bytes());
+    out.extend([0; 4]); // planeBytes
+    out.extend(pm.pm_table.to_be_bytes());
+    out.extend([0; 4]); // pmReserved
+    out
+}
+
+/// One stored row: raw when `rowBytes` < 8, otherwise a byte count (a
+/// `u16` when `rowBytes` > 250, else a `u8`) and the PackBits data.
+fn pack_row(row: &[u8], row_bytes: u16, unit: usize) -> Vec<u8> {
+    if row_bytes < 8 {
+        return row.to_vec();
+    }
+    let packed = pack_bits(row, unit);
+    let mut out = if row_bytes > 250 {
+        (packed.len() as u16).to_be_bytes().to_vec()
+    } else {
+        vec![packed.len() as u8]
+    };
+    out.extend(packed);
+    out
+}
+
+fn rect_width(rect: [i16; 4]) -> usize {
+    (i32::from(rect[3]) - i32::from(rect[1])) as usize
 }
