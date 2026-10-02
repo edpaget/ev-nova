@@ -18,7 +18,14 @@ thiserror.workspace = true
 encoding_rs.workspace = true
 # Synthetic forks for the decode-file and wiring tests.
 nova-rsrc = { workspace = true, features = ["fixture"] }
+# Integration tests build synthetic pictures and sprites with the `fixture`
+# builders.
+nova-data = { workspace = true, features = ["fixture"] }
 serde_json.workspace = true
+
+[features]
+# Exposes the synthetic picture and sprite builders to other crates' tests.
+fixture = []
 
 [lints]
 workspace = true

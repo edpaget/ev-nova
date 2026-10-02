@@ -101,6 +101,7 @@
 pub mod decode;
 pub mod error;
 pub mod file;
+pub mod graphics;
 pub mod records;
 pub mod registry;
 pub mod wire;

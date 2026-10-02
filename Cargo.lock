@@ -216,6 +216,7 @@ version = "0.1.0"
 dependencies = [
  "binrw",
  "encoding_rs",
+ "nova-data",
  "nova-rsrc",
  "serde",
  "serde_json",
