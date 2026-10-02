@@ -1,13 +1,17 @@
 //! Sound headers: standard, extended and compressed, to PCM.
 
 use super::SoundError;
-use super::bytes::{u8_at, u32_at};
+use super::bytes::{u8_at, u16_at, u32_at};
 use super::pcm::{Pcm, SampleRate};
 
 /// `encode` of a standard header: 8-bit mono samples.
 const STANDARD: u8 = 0x00;
 /// Bytes of a standard header before its samples.
 const STANDARD_LEN: usize = 22;
+/// `encode` of an extended header: 8 or 16-bit samples, 1 or 2 channels.
+const EXTENDED: u8 = 0xFF;
+/// Bytes of an extended or compressed header before its samples.
+const LONG_HEADER_LEN: usize = 64;
 
 /// Decodes the sound header at `at` and the samples that follow it.
 pub(super) fn decode_header(data: &[u8], at: usize) -> Result<Pcm, SoundError> {
@@ -21,6 +25,23 @@ pub(super) fn decode_header(data: &[u8], at: usize) -> Result<Pcm, SoundError> {
         STANDARD => {
             let samples = sample_data(data, at + STANDARD_LEN, u64::from(count))?;
             (1, samples.iter().map(|&b| offset_binary(b)).collect())
+        }
+        EXTENDED => {
+            let channels = channel_count(count)?;
+            let frames = u32_at(data, at + 22)?;
+            let bits = u16_at(data, at + 48)?;
+            if bits != 8 && bits != 16 {
+                return Err(SoundError::UnsupportedSampleSize { bits });
+            }
+            let needed = u64::from(frames) * u64::from(channels) * u64::from(bits / 8);
+            let bytes = sample_data(data, at + LONG_HEADER_LEN, needed)?;
+            let samples = if bits == 8 {
+                bytes.iter().map(|&b| offset_binary(b)).collect()
+            } else {
+                let (pairs, _) = bytes.as_chunks::<2>();
+                pairs.iter().map(|&pair| i16::from_be_bytes(pair)).collect()
+            };
+            (channels, samples)
         }
         _ => return Err(SoundError::UnsupportedHeader { encode, offset: at }),
     };
@@ -46,13 +67,21 @@ fn sample_data(data: &[u8], offset: usize, needed: u64) -> Result<&[u8], SoundEr
         })
 }
 
+/// `numChannels` of an extended or compressed header, if 1 or 2.
+fn channel_count(channels: u32) -> Result<u16, SoundError> {
+    match channels {
+        1 | 2 => Ok(channels as u16),
+        _ => Err(SoundError::UnsupportedChannels { channels }),
+    }
+}
+
 /// An unsigned 8-bit sample (silence at `0x80`) as a 16-bit one.
 fn offset_binary(byte: u8) -> i16 {
     (i16::from(byte) - 128) << 8
 }
 
 #[cfg(test)]
-mod tests {
+mod standard_tests {
     use super::super::decode_snd;
     use super::super::fixture::{Header, SndBuilder, SndFormat};
     use super::*;
@@ -182,5 +211,131 @@ mod tests {
                 Err(SoundError::UnsupportedHeader { encode, offset: 20 })
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod extended_tests {
+    use super::super::decode_snd;
+    use super::super::fixture::{Header, SndBuilder, SndFormat};
+    use super::*;
+
+    const RATE: u32 = 0xAC44_0000;
+
+    fn extended(channels: u32, sample_size: u16, data: Vec<u8>) -> Header {
+        Header::Extended {
+            channels,
+            rate: RATE,
+            sample_size,
+            data,
+        }
+    }
+
+    fn bytes(header: Header) -> Vec<u8> {
+        SndBuilder::new(SndFormat::Two, header).bytes()
+    }
+
+    fn decode(header: Header) -> Result<Pcm, SoundError> {
+        decode_snd(&bytes(header))
+    }
+
+    #[test]
+    fn eight_bit_extended_samples_are_offset_binary() {
+        let pcm = decode(extended(1, 8, vec![0x00, 0x80, 0xFF])).unwrap();
+        assert_eq!(pcm.samples(), [-32768, 0, 32512]);
+        assert_eq!((pcm.channels(), pcm.frames()), (1, 3));
+        assert_eq!(pcm.sample_rate(), SampleRate::from_fixed(RATE));
+        assert_eq!(pcm.base_note(), 60);
+        assert_eq!(pcm.loop_points(), None);
+    }
+
+    #[test]
+    fn eight_bit_stereo_stays_interleaved() {
+        let pcm = decode(extended(2, 8, vec![0x00, 0xFF, 0x80, 0x81])).unwrap();
+        assert_eq!(pcm.samples(), [-32768, 32512, 0, 256]);
+        assert_eq!((pcm.channels(), pcm.frames()), (2, 2));
+    }
+
+    #[test]
+    fn sixteen_bit_samples_are_big_endian_twos_complement() {
+        let pcm = decode(extended(1, 16, vec![0x12, 0x34, 0xFF, 0xFE, 0x80, 0x00])).unwrap();
+        assert_eq!(pcm.samples(), [0x1234, -2, -32768]);
+        assert_eq!((pcm.channels(), pcm.frames()), (1, 3));
+        let stereo = decode(extended(2, 16, vec![0, 1, 0, 2, 0, 3, 0, 4])).unwrap();
+        assert_eq!(stereo.samples(), [1, 2, 3, 4]);
+        assert_eq!((stereo.channels(), stereo.frames()), (2, 2));
+    }
+
+    #[test]
+    fn extended_loop_points_are_kept() {
+        let mut bytes = bytes(extended(1, 8, vec![0x80; 4]));
+        bytes[14 + 15] = 1;
+        bytes[14 + 19] = 3;
+        assert_eq!(decode_snd(&bytes).unwrap().loop_points(), Some((1, 3)));
+    }
+
+    #[test]
+    fn other_sample_sizes_are_unsupported() {
+        for bits in [0, 4, 12, 24, 32] {
+            assert_eq!(
+                decode(extended(1, bits, vec![0; 8])),
+                Err(SoundError::UnsupportedSampleSize { bits }),
+                "{bits}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_mono_and_stereo_are_supported() {
+        for channels in [0, 3, 0x1_0001, u32::MAX] {
+            assert_eq!(
+                decode(extended(channels, 8, vec![0; 6])),
+                Err(SoundError::UnsupportedChannels { channels }),
+                "{channels}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_extended_samples_are_truncated() {
+        // Stereo 16-bit: 2 frames of 4 bytes. Claim 3 frames.
+        let mut bytes = bytes(extended(2, 16, vec![0; 8]));
+        bytes[14 + 25] = 3;
+        assert_eq!(
+            decode_snd(&bytes),
+            Err(SoundError::SamplesTruncated {
+                offset: 14 + 64,
+                needed: 12,
+                available: 8
+            })
+        );
+        let mut eight = self::bytes(extended(2, 8, vec![0; 4]));
+        eight[14 + 25] = 3;
+        assert_eq!(
+            decode_snd(&eight),
+            Err(SoundError::SamplesTruncated {
+                offset: 14 + 64,
+                needed: 6,
+                available: 4
+            })
+        );
+    }
+
+    #[test]
+    fn extended_trailing_bytes_are_ignored() {
+        let mut bytes = bytes(extended(1, 16, vec![0, 7]));
+        bytes.extend([0xAB; 3]);
+        assert_eq!(decode_snd(&bytes).unwrap().samples(), [7]);
+    }
+
+    #[test]
+    fn a_zero_extended_rate_is_bad() {
+        let header = Header::Extended {
+            channels: 1,
+            rate: 0,
+            sample_size: 8,
+            data: vec![0x80],
+        };
+        assert_eq!(decode(header), Err(SoundError::BadSampleRate));
     }
 }
