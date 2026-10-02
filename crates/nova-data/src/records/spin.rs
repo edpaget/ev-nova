@@ -8,6 +8,7 @@ use binrw::BinRead;
 use serde::{Deserialize, Serialize};
 
 use crate::decode::Record;
+use crate::graphics::SheetLayout;
 use crate::wire::id::{PictId, id};
 use nova_rsrc::ResType;
 
@@ -29,6 +30,17 @@ pub struct Spin {
     pub x_tiles: i16,
     /// Bible `yTiles` (offset 0x0A, i16): grid rows.
     pub y_tiles: i16,
+}
+
+impl Spin {
+    /// The sprite sheet layout this record gives: `x_tiles` columns, or
+    /// `None` unless it is positive. The Bible calls `xTiles` the
+    /// "Horizontal grid dimension"; stock `x_tiles · y_tiles` always equals
+    /// the frame count, so the rows follow.
+    #[must_use]
+    pub fn sheet_layout(&self) -> Option<SheetLayout> {
+        u16::try_from(self.x_tiles).ok().and_then(SheetLayout::new)
+    }
 }
 
 impl Record for Spin {
@@ -68,5 +80,17 @@ mod tests {
     fn missing_mask_is_none() {
         let spin: Spin = buf::<Spin>().i16(0x02, -1).decode();
         assert_eq!(spin.masks_id, None);
+    }
+
+    #[test]
+    fn the_sheet_layout_has_x_tiles_columns() {
+        let spin = |x_tiles| Spin {
+            x_tiles,
+            ..buf::<Spin>().decode()
+        };
+        assert_eq!(spin(6).sheet_layout(), SheetLayout::new(6));
+        assert_eq!(spin(1).sheet_layout(), SheetLayout::new(1));
+        assert_eq!(spin(0).sheet_layout(), None);
+        assert_eq!(spin(-1).sheet_layout(), None);
     }
 }

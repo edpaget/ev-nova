@@ -77,6 +77,18 @@ impl Image {
         }
     }
 
+    /// Copies `src` onto this image with its top-left corner at (`x`, `y`);
+    /// callers keep it inside the image.
+    pub(crate) fn blit(&mut self, src: &Image, x: u32, y: u32) {
+        let len = src.width as usize * 4;
+        for (row, line) in (0..src.height).zip(src.pixels.chunks(len)) {
+            let start = self.index(x, y + row);
+            if let Some(dst) = self.pixels.get_mut(start..start + len) {
+                dst.copy_from_slice(line);
+            }
+        }
+    }
+
     fn index(&self, x: u32, y: u32) -> usize {
         (y as usize * self.width as usize + x as usize) * 4
     }
@@ -142,6 +154,23 @@ mod tests {
         assert_eq!(image.pixel(0, 1), Some([5, 6, 7, 8]));
         assert_eq!(image.pixel(1, 1), Some([0; 4]));
         assert_eq!(image.pixels().iter().filter(|&&b| b != 0).count(), 8);
+    }
+
+    #[test]
+    fn blit_copies_every_row_to_its_place() {
+        let src = Image::from_rgba(2, 2, (1..=16).collect()).unwrap();
+        let mut dst = Image::transparent(4, 3);
+        dst.blit(&src, 1, 1);
+        assert_eq!(dst.pixel(0, 1), Some([0; 4]));
+        assert_eq!(dst.pixel(1, 1), Some([1, 2, 3, 4]));
+        assert_eq!(dst.pixel(2, 1), Some([5, 6, 7, 8]));
+        assert_eq!(dst.pixel(1, 2), Some([9, 10, 11, 12]));
+        assert_eq!(dst.pixel(2, 2), Some([13, 14, 15, 16]));
+        assert_eq!(dst.pixel(3, 2), Some([0; 4]));
+        assert_eq!(dst.pixels().iter().filter(|&&b| b != 0).count(), 16);
+        let mut corner = Image::transparent(2, 2);
+        corner.blit(&src, 0, 0);
+        assert_eq!(corner, src);
     }
 
     #[test]

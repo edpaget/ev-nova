@@ -12,6 +12,7 @@ use nova_rsrc::ResType;
 use serde::{Deserialize, Serialize};
 
 use crate::decode::Record;
+use crate::graphics::SheetLayout;
 use crate::wire::flags::Flags16;
 use crate::wire::raw::RawArray;
 
@@ -127,6 +128,22 @@ pub struct ShipAnim {
     /// Offset 0xB0, 16 bytes: undocumented (the Bible is silent; the
     /// template marks them unused).
     pub unknown_0xb0: RawArray<16>,
+}
+
+impl ShipAnim {
+    /// The sprite sheet layout for this ship's layers: `frames_per`
+    /// columns, so each row is one sprite set, or `None` unless it is
+    /// positive. The Bible gives `FramesPer` as "The number of frames for
+    /// one rotation of this ship" and `BaseSetCount` as "The number of
+    /// sprite sets for the basic sprite images"; every layer shares
+    /// `frames_per`. This is an export arrangement: the game itself reads
+    /// frames by index.
+    #[must_use]
+    pub fn sheet_layout(&self) -> Option<SheetLayout> {
+        u16::try_from(self.frames_per)
+            .ok()
+            .and_then(SheetLayout::new)
+    }
 }
 
 impl Record for ShipAnim {
@@ -263,5 +280,17 @@ mod tests {
         assert_eq!(z, [1, -1, 2, -2]);
         assert_eq!(shan.beam_pos_z[3], 9);
         assert_eq!(shan.unknown_0xb0, RawArray([0x66; 16]));
+    }
+
+    #[test]
+    fn the_sheet_layout_has_one_rotation_per_row() {
+        let shan = |frames_per| ShipAnim {
+            frames_per,
+            ..buf::<ShipAnim>().decode()
+        };
+        assert_eq!(shan(36).sheet_layout(), SheetLayout::new(36));
+        assert_eq!(shan(1).sheet_layout(), SheetLayout::new(1));
+        assert_eq!(shan(0).sheet_layout(), None);
+        assert_eq!(shan(-36).sheet_layout(), None);
     }
 }
