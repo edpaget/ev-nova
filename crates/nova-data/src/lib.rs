@@ -90,12 +90,18 @@
 //!   holds one 4-byte resource that looks like a checksum.
 //! - `vers`: Mac OS version information, absent from the stock data.
 //!
+//! # Pictures and sprites
+//!
+//! [`graphics`] decodes `PICT`, `rlëD`, `cicn` and `ppat` resources to RGBA
+//! images, one resource at a time.
+//!
 //! # Out of scope
 //!
-//! [`OUT_OF_SCOPE`] lists the media types other phases own; [`decode_file`]
-//! skips them (and unknown types) without error:
+//! [`OUT_OF_SCOPE`] lists the media types [`decode_file`] skips (as it does
+//! unknown types) without error:
 //!
-//! - `PICT`, `rlëD`, `cicn`, `ppat`: pictures and sprites (phase 3).
+//! - `PICT`, `rlëD`, `cicn`, `ppat`: pictures and sprites, decoded by
+//!   [`graphics`] instead.
 //! - `snd `: sounds (phase 4).
 
 pub mod decode;

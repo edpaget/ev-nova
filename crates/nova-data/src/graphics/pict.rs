@@ -20,6 +20,44 @@ const VERSION_OFFSET: usize = 10;
 const VERSION_2: [u16; 2] = [0x0011, 0x02FF];
 
 /// Decodes a version 2 `PICT` to an image the size of its `picFrame`.
+///
+/// The `picSize` word and the HeaderOp's rectangle are ignored. Opcodes
+/// start at even offsets; bytes after EndPic are ignored.
+///
+/// # Example
+///
+/// ```
+/// use nova_data::graphics::{GraphicsError, decode_pict};
+///
+/// // A 1x1 picture: one unpacked 16-bit red pixel, copied unchanged.
+/// let pict: Vec<u8> = [
+///     &[0, 0, 0, 0, 0, 0, 0, 1, 0, 1][..],   // picSize, picFrame
+///     &[0x00, 0x11, 0x02, 0xFF],             // version 2
+///     &[0x00, 0x9A, 0, 0, 0, 0xFF],          // DirectBitsRect, baseAddr
+///     &[0x80, 0x02, 0, 0, 0, 0, 0, 1, 0, 1], // rowBytes 2, bounds
+///     &[0, 0, 0, 3, 0, 0, 0, 0],             // pmVersion, packType 3, packSize
+///     &[0; 8],                               // hRes, vRes
+///     &[0, 16, 0, 16, 0, 3, 0, 5],           // pixelType, pixelSize 16, 3x5 bits
+///     &[0; 12],                              // planeBytes, pmTable, pmReserved
+///     &[0, 0, 0, 0, 0, 1, 0, 1],             // srcRect
+///     &[0, 0, 0, 0, 0, 1, 0, 1],             // dstRect
+///     &[0, 0],                               // mode: srcCopy
+///     &[0x7C, 0x00],                         // the pixel (rowBytes < 8: unpacked)
+///     &[0x00, 0xFF],                         // EndPic
+/// ]
+/// .concat();
+/// let image = decode_pict(&pict)?;
+/// assert_eq!(image.pixel(0, 0), Some([255, 0, 0, 255]));
+///
+/// // QuickTime-compressed pictures are not decoded; the error says so.
+/// let mut quicktime = pict.clone();
+/// quicktime[14..16].copy_from_slice(&[0x82, 0x00]);
+/// assert_eq!(
+///     decode_pict(&quicktime).unwrap_err().to_string(),
+///     "unsupported PICT opcode 0x8200 at byte 0xe"
+/// );
+/// # Ok::<(), GraphicsError>(())
+/// ```
 pub fn decode_pict(data: &[u8]) -> Result<Image, GraphicsError> {
     let mut r = Reader::new(data);
     r.skip(2)?; // picSize: meaningless for pictures over 32 KB
@@ -1174,5 +1212,27 @@ mod tests {
         bits.dst = [1, 1, 2, 2];
         let image = decode_pict(&indexed_pict(&bits)).unwrap();
         assert_eq!(rgba(&image), [[0; 4], [0; 4], [0; 4], colour(0)]);
+    }
+
+    #[test]
+    fn corrupt_pictures_never_panic() {
+        let pict = PictBuilder::new([0, 0, 3, 3])
+            .header_op()
+            .def_hilite()
+            .clip_rect([0, 0, 3, 3])
+            .long_comment(498, &[1, 2, 3])
+            .short_comment(7)
+            .direct_bits(&DirectBits::rgb555([0, 0, 1, 3], &[RED, GREEN, BLUE]))
+            .direct_bits(&DirectBits::rgb888([1, 0, 2, 3], &SIX_888[..3]))
+            .packbits_rect(&IndexedBits::new(
+                [2, 0, 3, 3],
+                2,
+                &sparse_ctab(),
+                &[0, 1, 3],
+            ))
+            .end()
+            .build();
+        assert!(pict.len() < 1024);
+        crate::graphics::sweep::assert_never_panics(&pict, decode_pict);
     }
 }

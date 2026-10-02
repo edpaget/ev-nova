@@ -495,4 +495,21 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn corrupt_sheets_never_panic() {
+        let bytes = RledBuilder::new(4, 3)
+            .frame(|f| {
+                f.line()
+                    .pixels(&[RED, GREEN, BLUE])
+                    .line()
+                    .skip(1)
+                    .run(2, WHITE, RED)
+                    .line()
+            })
+            .frame(|f| f.line().pixels(&[RED, RED]).line())
+            .build();
+        assert!(bytes.len() < 1024);
+        crate::graphics::sweep::assert_never_panics(&bytes, decode);
+    }
 }

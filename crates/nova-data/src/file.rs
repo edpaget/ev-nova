@@ -6,8 +6,9 @@ use crate::decode::Entry;
 use crate::error::{DecodeError, DecodeWarning};
 use crate::registry::{AnyRecord, decode_any};
 
-/// Resource types this crate deliberately leaves to other phases: pictures
-/// and sprites (`PICT`, `rlëD`, `cicn`, `ppat`) and sounds (`snd `).
+/// Resource types [`decode_file`] skips: pictures and sprites (`PICT`,
+/// `rlëD`, `cicn`, `ppat`), which [`crate::graphics`] decodes, and sounds
+/// (`snd `), left to a later phase.
 pub const OUT_OF_SCOPE: &[ResType] = &[
     ResType::new(*b"PICT"),
     ResType::new([b'r', b'l', 0x91, b'D']),

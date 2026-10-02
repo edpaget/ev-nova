@@ -258,4 +258,10 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn corrupt_patterns_never_panic() {
+        let ppat = Ppat::new(3, 2, 2, &ctab(), &[0, 1, 3, 3, 1, 0]);
+        crate::graphics::sweep::assert_never_panics(&ppat.bytes(), decode_ppat);
+    }
 }
