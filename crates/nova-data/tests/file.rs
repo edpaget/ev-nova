@@ -58,20 +58,20 @@ fn good_records_decode_in_map_order() {
     );
     assert_eq!(
         report.records[0].record,
-        AnyRecord::Spin(Spin {
+        AnyRecord::Spin(Box::new(Spin {
             sprites_id: 1000,
             masks_id: Some(PictId(1001)),
             x_size: 48,
             y_size: 48,
             x_tiles: 6,
             y_tiles: 6,
-        })
+        }))
     );
     assert_eq!(
         report.records[1].record,
-        AnyRecord::StrList(StrList {
+        AnyRecord::StrList(Box::new(StrList {
             strings: vec![MacString::from("\u{201C}\u{201D}")],
-        })
+        }))
     );
 }
 

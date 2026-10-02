@@ -17,14 +17,15 @@ pub type AnyDecoded = Result<(Entry<AnyRecord>, Option<DecodeWarning>), DecodeEr
 
 macro_rules! records {
     ($($variant:ident = $ty:ty, $code:literal $(, sample = $sample:expr)?;)*) => {
-        /// A decoded record of any registered type. JSON:
+        /// A decoded record of any registered type, boxed so small records
+        /// do not take a ship's space. JSON:
         /// `{"type": "Ship", "record": {...}}`.
         #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
         #[serde(tag = "type", content = "record")]
         pub enum AnyRecord {
             $(
                 #[doc = concat!("A `", $code, "` record.")]
-                $variant($ty),
+                $variant(Box<$ty>),
             )*
         }
 
@@ -50,7 +51,9 @@ macro_rules! records {
                 if ty == <$ty as Record>::TYPE {
                     return Some(
                         decode::<$ty>(res)
-                            .map(|(entry, warning)| (entry.map(AnyRecord::$variant), warning)),
+                            .map(|(entry, warning)| {
+                                (entry.map(|r| AnyRecord::$variant(Box::new(r))), warning)
+                            }),
                     );
                 }
             )*
@@ -125,14 +128,18 @@ records! {
     Desc = crate::records::desc::Desc, "dësc", sample = crate::records::desc::tests::SAMPLE;
     Govt = crate::records::govt::Govt, "gövt";
     Nebula = crate::records::nebula::Nebula, "nëbu";
+    Outfit = crate::records::outfit::Outfit, "oütf";
     Rank = crate::records::rank::Rank, "ränk";
     Roid = crate::records::roid::Roid, "röid";
+    Ship = crate::records::ship::Ship, "shïp";
+    ShipAnim = crate::records::ship_anim::ShipAnim, "shän";
     Spin = crate::records::spin::Spin, "spïn";
     Stellar = crate::records::stellar::Stellar, "spöb";
     StrList = crate::records::string_list::StrList, "STR#", sample = crate::records::string_list::tests::SAMPLE;
     StrResource = crate::records::string::StrResource, "STR ", sample = crate::records::string::tests::SAMPLE;
     System = crate::records::system::System, "sÿst";
     Version = crate::records::version::Version, "vers", sample = [1, 0, 0x80, 0];
+    Weapon = crate::records::weapon::Weapon, "wëap";
 }
 
 #[cfg(test)]
