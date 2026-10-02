@@ -12,6 +12,8 @@ encoding_rs.workspace = true
 
 [dev-dependencies]
 macbinary.workspace = true
+# Integration tests build synthetic forks with the `fixture` builder.
+nova-rsrc = { workspace = true, features = ["fixture"] }
 tempfile.workspace = true
 
 [features]

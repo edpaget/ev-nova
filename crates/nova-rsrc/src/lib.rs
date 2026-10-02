@@ -30,3 +30,6 @@
 mod res_type;
 
 pub use res_type::ResType;
+
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
