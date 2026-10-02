@@ -1,7 +1,9 @@
 //! An owned, validated resource file and borrowed views of its resources.
 
+use std::path::Path;
+
 use crate::parse::{self, Entry, TypeEntry};
-use crate::{ParseError, ResType};
+use crate::{Fork, ForkReader, LoadError, ParseError, ResType, StdForkReader};
 
 /// A resource fork held in memory: the raw bytes plus a validated index.
 ///
@@ -23,6 +25,38 @@ impl ResourceFile {
             bytes,
             types: index.types,
         })
+    }
+
+    /// Loads a resource file through `reader`.
+    ///
+    /// A flattened fork in the data fork (an `.ndat` file) wins; if the data
+    /// fork is missing or empty, the file's real resource fork is read
+    /// instead.
+    pub fn load(reader: &impl ForkReader, path: &Path) -> Result<Self, LoadError> {
+        let read = |fork| {
+            reader
+                .read_fork(path, fork)
+                .map(|bytes| bytes.filter(|b| !b.is_empty()))
+                .map_err(|source| LoadError::Io {
+                    path: path.to_path_buf(),
+                    source,
+                })
+        };
+        let bytes = match read(Fork::Data)? {
+            Some(bytes) => bytes,
+            None => read(Fork::Resource)?.ok_or_else(|| LoadError::NoResourceFork {
+                path: path.to_path_buf(),
+            })?,
+        };
+        Self::from_bytes(bytes).map_err(|source| LoadError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+
+    /// Loads a resource file from disk; see [`ResourceFile::load`].
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, LoadError> {
+        Self::load(&StdForkReader, path.as_ref())
     }
 
     /// Every resource type, in map order.
@@ -139,6 +173,10 @@ impl<'a> Resource<'a> {
 mod tests {
     use super::*;
     use crate::fixture::ForkBuilder;
+    use crate::{Fork, ForkReader, LoadError};
+    use std::cell::RefCell;
+    use std::io;
+    use std::path::{Path, PathBuf};
 
     const PICT: ResType = ResType(*b"PICT");
     const SHIP: ResType = ResType([b's', b'h', 0x95, b'p']);
@@ -285,5 +323,129 @@ mod tests {
             ResourceFile::from_bytes(vec![0; 3]).err(),
             Some(ParseError::HeaderTruncated)
         );
+    }
+
+    /// What the mock returns for one fork.
+    enum Canned {
+        Bytes(Vec<u8>),
+        Missing,
+        Fails,
+    }
+
+    /// Canned forks; records every `(path, fork)` it is asked for.
+    struct MockForkReader {
+        data: Canned,
+        resource: Canned,
+        calls: RefCell<Vec<(PathBuf, Fork)>>,
+    }
+
+    impl MockForkReader {
+        fn new(data: Canned, resource: Canned) -> Self {
+            Self {
+                data,
+                resource,
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn forks_read(&self) -> Vec<Fork> {
+            self.calls.borrow().iter().map(|(_, fork)| *fork).collect()
+        }
+    }
+
+    impl ForkReader for MockForkReader {
+        fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
+            self.calls.borrow_mut().push((path.to_path_buf(), fork));
+            match match fork {
+                Fork::Data => &self.data,
+                Fork::Resource => &self.resource,
+            } {
+                Canned::Bytes(bytes) => Ok(Some(bytes.clone())),
+                Canned::Missing => Ok(None),
+                Canned::Fails => Err(io::Error::other("disk on fire")),
+            }
+        }
+    }
+
+    fn fork_with(id: i16) -> Vec<u8> {
+        ForkBuilder::new()
+            .resource(PICT, id, None, b"x")
+            .build()
+            .bytes
+    }
+
+    fn path() -> &'static Path {
+        Path::new("plug-ins/Example.ndat")
+    }
+
+    #[test]
+    fn load_parses_a_flattened_data_fork_without_reading_the_resource_fork() {
+        let reader = MockForkReader::new(Canned::Bytes(fork_with(1)), Canned::Fails);
+        let file = ResourceFile::load(&reader, path()).expect("loads");
+        assert!(file.get(PICT, 1).is_some());
+        assert_eq!(
+            *reader.calls.borrow(),
+            vec![(path().to_path_buf(), Fork::Data)]
+        );
+    }
+
+    #[test]
+    fn load_falls_back_to_the_resource_fork_when_the_data_fork_is_empty() {
+        let reader = MockForkReader::new(Canned::Bytes(Vec::new()), Canned::Bytes(fork_with(2)));
+        let file = ResourceFile::load(&reader, path()).expect("loads");
+        assert!(file.get(PICT, 2).is_some());
+        assert_eq!(reader.forks_read(), vec![Fork::Data, Fork::Resource]);
+        assert!(reader.calls.borrow().iter().all(|(p, _)| p == path()));
+    }
+
+    #[test]
+    fn load_falls_back_to_the_resource_fork_when_the_data_fork_is_missing() {
+        let reader = MockForkReader::new(Canned::Missing, Canned::Bytes(fork_with(3)));
+        let file = ResourceFile::load(&reader, path()).expect("loads");
+        assert!(file.get(PICT, 3).is_some());
+    }
+
+    #[test]
+    fn load_reports_no_resource_fork_when_both_are_empty_or_missing() {
+        for (data, resource) in [
+            (Canned::Missing, Canned::Missing),
+            (Canned::Bytes(Vec::new()), Canned::Bytes(Vec::new())),
+            (Canned::Missing, Canned::Bytes(Vec::new())),
+            (Canned::Bytes(Vec::new()), Canned::Missing),
+        ] {
+            let reader = MockForkReader::new(data, resource);
+            match ResourceFile::load(&reader, path()) {
+                Err(LoadError::NoResourceFork { path: p }) => assert_eq!(p, path()),
+                other => panic!("expected NoResourceFork, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn load_wraps_io_errors_with_the_path() {
+        for reader in [
+            MockForkReader::new(Canned::Fails, Canned::Missing),
+            MockForkReader::new(Canned::Missing, Canned::Fails),
+        ] {
+            match ResourceFile::load(&reader, path()) {
+                Err(LoadError::Io { path: p, source }) => {
+                    assert_eq!(p, path());
+                    assert_eq!(source.to_string(), "disk on fire");
+                }
+                other => panic!("expected Io, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn load_wraps_parse_errors_with_the_path() {
+        let reader = MockForkReader::new(Canned::Bytes(vec![1, 2, 3]), Canned::Missing);
+        match ResourceFile::load(&reader, path()) {
+            Err(LoadError::Parse { path: p, source }) => {
+                assert_eq!(p, path());
+                assert_eq!(source, ParseError::HeaderTruncated);
+            }
+            other => panic!("expected Parse, got {other:?}"),
+        }
     }
 }

@@ -29,11 +29,13 @@
 
 mod error;
 mod file;
+mod fs;
 mod parse;
 mod res_type;
 
-pub use error::{ParseError, Section};
+pub use error::{LoadError, ParseError, Section};
 pub use file::{Resource, ResourceFile};
+pub use fs::{Fork, ForkReader, StdForkReader};
 pub use res_type::ResType;
 
 #[cfg(any(test, feature = "fixture"))]

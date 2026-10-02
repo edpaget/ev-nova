@@ -1,6 +1,7 @@
 //! Errors from parsing and loading resource forks.
 
-use std::fmt;
+use std::path::PathBuf;
+use std::{fmt, io};
 
 use crate::ResType;
 
@@ -163,6 +164,50 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// Why a resource file could not be loaded from disk.
+#[derive(Debug)]
+pub enum LoadError {
+    /// Reading a fork failed.
+    Io {
+        /// The file being loaded.
+        path: PathBuf,
+        /// The underlying I/O error.
+        source: io::Error,
+    },
+    /// The fork's bytes are not a valid resource fork.
+    Parse {
+        /// The file being loaded.
+        path: PathBuf,
+        /// What is wrong with the fork.
+        source: ParseError,
+    },
+    /// Neither the data fork nor the resource fork holds any bytes.
+    NoResourceFork {
+        /// The file being loaded.
+        path: PathBuf,
+    },
+}
+
+impl fmt::Display for LoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io { path, source } => write!(f, "reading {}: {source}", path.display()),
+            Self::Parse { path, source } => write!(f, "parsing {}: {source}", path.display()),
+            Self::NoResourceFork { path } => write!(f, "{} has no resource fork", path.display()),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            Self::Parse { source, .. } => Some(source),
+            Self::NoResourceFork { .. } => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +305,42 @@ mod tests {
     fn parse_error_is_a_std_error() {
         let error: Box<dyn std::error::Error> = Box::new(ParseError::MapTruncated);
         assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn load_errors_name_the_path_and_chain_their_source() {
+        use std::error::Error as _;
+        let path = std::path::PathBuf::from("Nova Files/Nova Data 1.ndat");
+
+        let io = LoadError::Io {
+            path: path.clone(),
+            source: std::io::Error::other("denied"),
+        };
+        assert_eq!(
+            io.to_string(),
+            "reading Nova Files/Nova Data 1.ndat: denied"
+        );
+        assert_eq!(io.source().expect("has source").to_string(), "denied");
+
+        let parse = LoadError::Parse {
+            path: path.clone(),
+            source: ParseError::MapTruncated,
+        };
+        assert_eq!(
+            parse.to_string(),
+            "parsing Nova Files/Nova Data 1.ndat: resource map is shorter than its 30-byte header"
+        );
+        let source = parse.source().expect("has source");
+        assert_eq!(
+            source.downcast_ref::<ParseError>(),
+            Some(&ParseError::MapTruncated)
+        );
+
+        let none = LoadError::NoResourceFork { path };
+        assert_eq!(
+            none.to_string(),
+            "Nova Files/Nova Data 1.ndat has no resource fork"
+        );
+        assert!(none.source().is_none());
     }
 }
