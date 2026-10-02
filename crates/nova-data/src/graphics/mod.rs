@@ -6,9 +6,11 @@
 #![allow(dead_code)]
 
 mod budget;
+mod color;
 mod error;
 mod image;
 mod packbits;
+mod pixmap;
 mod reader;
 
 #[cfg(any(test, feature = "fixture"))]

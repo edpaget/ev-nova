@@ -26,6 +26,19 @@ pub enum GraphicsError {
         /// Length of the input.
         input_len: usize,
     },
+    /// A `rowBytes` field without the `PixMap` flag (bit 15): a plain
+    /// `BitMap`, which carries no colour.
+    #[error("expected a PixMap at byte {offset:#x}, found a BitMap")]
+    NotAPixMap {
+        /// Where the `rowBytes` field starts.
+        offset: usize,
+    },
+    /// A pixel value has no entry in its colour table.
+    #[error("pixel value {index} is not in the colour table")]
+    MissingColour {
+        /// The pixel value.
+        index: u8,
+    },
 }
 
 #[cfg(test)]
@@ -52,6 +65,14 @@ mod tests {
                     input_len: 3,
                 },
                 "4096 pixels is too large to decode from 3 bytes",
+            ),
+            (
+                GraphicsError::NotAPixMap { offset: 0x30 },
+                "expected a PixMap at byte 0x30, found a BitMap",
+            ),
+            (
+                GraphicsError::MissingColour { index: 9 },
+                "pixel value 9 is not in the colour table",
             ),
         ];
         for (error, message) in cases {

@@ -41,3 +41,31 @@ pub fn pack_bits(data: &[u8], unit: usize) -> Vec<u8> {
     }
     out
 }
+
+/// A colour table: entries of (`value`, 16-bit red, green, blue). A device
+/// table is looked up by entry position instead of `value`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Ctab {
+    /// Sets the device flag (bit 15 of `ctFlags`).
+    pub device: bool,
+    /// (`value`, [red, green, blue]) in table order.
+    pub entries: Vec<(u16, [u16; 3])>,
+}
+
+impl Ctab {
+    /// The `ColorTable` record: `ctSeed` 0, `ctFlags`, `ctSize` (entries
+    /// minus one), then the entries.
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        let mut out = vec![0; 4];
+        out.extend(u16::from(self.device).wrapping_shl(15).to_be_bytes());
+        out.extend((self.entries.len() as u16).wrapping_sub(1).to_be_bytes());
+        for (value, rgb) in &self.entries {
+            out.extend(value.to_be_bytes());
+            for component in rgb {
+                out.extend(component.to_be_bytes());
+            }
+        }
+        out
+    }
+}
