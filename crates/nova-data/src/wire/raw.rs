@@ -197,9 +197,10 @@ mod tests {
             "not hex"
         );
         assert!(serde_json::from_str::<RawBytes>("\"+1\"").is_err(), "sign");
+        let err = serde_json::from_str::<RawBytes>("12").expect_err("not a string");
         assert!(
-            serde_json::from_str::<RawBytes>("12").is_err(),
-            "not a string"
+            err.to_string().contains("expected a lowercase hex string"),
+            "{err}"
         );
         assert!(
             serde_json::from_str::<RawArray<2>>("\"ab\"").is_err(),
