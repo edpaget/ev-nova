@@ -32,7 +32,7 @@ mod file;
 mod parse;
 mod res_type;
 
-pub use error::ParseError;
+pub use error::{ParseError, Section};
 pub use file::{Resource, ResourceFile};
 pub use res_type::ResType;
 
