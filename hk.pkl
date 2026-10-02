@@ -1,0 +1,20 @@
+amends "package://github.com/jdx/hk/releases/download/v2.4.0/hk@2.4.0#/Config.pkl"
+
+// One step: the same gate CI runs, defined once in mise.toml's `ci` task.
+local ci = new Mapping<String, Step> {
+    ["mise_ci"] {
+        glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock", "mise.toml", "clippy.toml", ".config/nextest.toml")
+        check = "mise run ci"
+        exclusive = true
+    }
+}
+
+// Check-only: the hook reports problems but never rewrites staged files.
+hooks {
+    ["pre-commit"] {
+        steps = ci
+    }
+    ["check"] {
+        steps = ci
+    }
+}

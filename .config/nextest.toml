@@ -1,0 +1,6 @@
+[profile.default]
+# A hung test fails the run instead of hanging it.
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[profile.ci]
+fail-fast = false

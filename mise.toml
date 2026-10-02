@@ -1,0 +1,29 @@
+[tools]
+rust = { version = "1.98.1", components = "rustfmt,clippy" }
+"cargo:cargo-workspaces" = "0.4.2"
+"cargo:cargo-nextest" = "0.9.146"
+hk = "2.4.0"
+pkl = "0.32.1"
+
+[env]
+RDM_ROOT = "{{env.HOME}}/Projects/rdm-atlas-repo"
+RDM_PROJECT = "ev-nova"
+
+[tasks.fmt]
+description = "Check formatting"
+run = "cargo fmt --all --check"
+
+[tasks.lint]
+description = "Clippy over every crate and target, warnings are errors"
+run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
+
+[tasks.test]
+description = "Unit/integration tests (nextest) plus doctests"
+run = [
+  "cargo nextest run --workspace --locked --no-tests=pass",
+  "cargo test --doc --workspace --locked",
+]
+
+[tasks.ci]
+description = "Everything CI would run; the pre-commit hook runs this"
+depends = ["fmt", "lint", "test"]

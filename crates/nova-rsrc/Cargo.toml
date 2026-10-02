@@ -1,0 +1,11 @@
+[package]
+name = "nova-rsrc"
+description = "Reader for classic Mac OS resource forks (flattened .ndat / .rsrc files)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

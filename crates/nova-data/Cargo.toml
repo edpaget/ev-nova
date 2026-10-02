@@ -1,0 +1,14 @@
+[package]
+name = "nova-data"
+description = "Typed EV Nova game records (ships, missions, systems, ...) decoded from resources"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nova-rsrc.workspace = true
+
+[lints]
+workspace = true
