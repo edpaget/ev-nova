@@ -8,7 +8,11 @@
 mod budget;
 mod error;
 mod image;
+mod packbits;
 mod reader;
+
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 
 pub use budget::{MAX_PIXELS, MAX_PIXELS_PER_INPUT_BYTE};
 pub use error::GraphicsError;

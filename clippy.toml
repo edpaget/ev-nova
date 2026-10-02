@@ -1,4 +1,4 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 # Product names that appear in doc comments; ".." keeps clippy's defaults.
-doc-valid-idents = ["ResForge", "QuickTime", "QuickDraw", ".."]
+doc-valid-idents = ["ResForge", "QuickTime", "QuickDraw", "PackBits", ".."]
