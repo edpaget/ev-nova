@@ -124,13 +124,18 @@ use sample_bytes;
 
 records! {
     Boom = crate::records::boom::Boom, "bööm";
+    Character = crate::records::character::Character, "chär";
     Checksum = crate::records::checksum::Checksum, "csüm", sample = [0x91, 0x84, 0xEE, 0xB0];
+    Colors = crate::records::colors::Colors, "cölr";
     Cron = crate::records::cron::Cron, "crön";
     Desc = crate::records::desc::Desc, "dësc", sample = crate::records::desc::tests::SAMPLE;
+    Disaster = crate::records::disaster::Disaster, "öops";
     Dude = crate::records::dude::Dude, "düde";
     Fleet = crate::records::fleet::Fleet, "flët";
     Govt = crate::records::govt::Govt, "gövt";
+    Interface = crate::records::interface::Interface, "ïntf";
     Junk = crate::records::junk::Junk, "jünk";
+    Mission = crate::records::mission::Mission, "mïsn";
     Nebula = crate::records::nebula::Nebula, "nëbu";
     Outfit = crate::records::outfit::Outfit, "oütf";
     Person = crate::records::person::Person, "përs";

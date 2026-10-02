@@ -1,13 +1,18 @@
 //! One module per record type.
 
 pub mod boom;
+pub mod character;
 pub mod checksum;
+pub mod colors;
 pub mod cron;
 pub mod desc;
+pub mod disaster;
 pub mod dude;
 pub mod fleet;
 pub mod govt;
+pub mod interface;
 pub mod junk;
+pub mod mission;
 pub mod nebula;
 pub mod outfit;
 pub mod person;

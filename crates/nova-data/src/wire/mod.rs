@@ -2,6 +2,7 @@
 //! and offsets. Record structs are plain `binrw` derives built from these.
 
 pub mod flags;
+pub mod geometry;
 pub mod id;
 pub mod list;
 pub mod raw;
