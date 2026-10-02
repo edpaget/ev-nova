@@ -45,6 +45,17 @@ pub struct Entry<T> {
     pub record: T,
 }
 
+impl<T> Entry<T> {
+    /// Converts the record, keeping the ID and name.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Entry<U> {
+        Entry {
+            id: self.id,
+            name: self.name,
+            record: f(self.record),
+        }
+    }
+}
+
 /// Every resource of one type in a file: the records that decoded, warnings
 /// about them, and every failure.
 #[derive(Clone, Debug, PartialEq)]
@@ -59,7 +70,7 @@ pub struct TypedReport<T> {
 
 /// The struct's own name, e.g. `Ship`, for errors that `binrw` gives no
 /// field context.
-fn struct_name<T>() -> &'static str {
+pub(crate) fn struct_name<T>() -> &'static str {
     let full = std::any::type_name::<T>();
     full.rsplit("::").next().unwrap_or(full)
 }
