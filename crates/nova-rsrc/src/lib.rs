@@ -26,3 +26,7 @@
 //! than dropped, and the format is small. Sending the `.ok() // FIXME` fixes
 //! upstream to `macbinary` remains possible future work; if that lands, this
 //! crate could switch to it behind the same public API.
+
+mod res_type;
+
+pub use res_type::ResType;
