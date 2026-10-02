@@ -1,0 +1,84 @@
+Nova Data 1.ndat	chär	1
+Nova Data 1.ndat	csüm	1
+Nova Data 1.ndat	gövt	68
+Nova Data 1.ndat	jünk	23
+Nova Data 1.ndat	mïsn	791
+Nova Data 1.ndat	shïp	288
+Nova Data 2.ndat	düde	147
+Nova Data 2.ndat	ränk	31
+Nova Data 2.ndat	spöb	411
+Nova Data 2.ndat	sÿst	545
+Nova Data 2.ndat	öops	19
+Nova Data 3.ndat	crön	125
+Nova Data 3.ndat	dësc	825
+Nova Data 4.ndat	PICT	1
+Nova Data 4.ndat	oütf	242
+Nova Data 4.ndat	përs	516
+Nova Data 4.ndat	wëap	81
+Nova Data 5.ndat	STR#	226
+Nova Data 5.ndat	dësc	709
+Nova Data 5.ndat	nëbu	4
+Nova Data 6.ndat	bööm	15
+Nova Data 6.ndat	dësc	1314
+Nova Data 6.ndat	flët	128
+Nova Data 6.ndat	röid	16
+Nova Graphics 1.ndat	PICT	251
+Nova Graphics 1.ndat	cicn	29
+Nova Graphics 1.ndat	ppat	10
+Nova Graphics 2.ndat	rlëD	123
+Nova Graphics 2.ndat	spïn	124
+Nova Graphics 3.ndat	PICT	81
+Nova Graphics 3.ndat	STR#	1
+Nova Graphics 3.ndat	cölr	1
+Nova Graphics 3.ndat	rlëD	8
+Nova Graphics 3.ndat	spïn	12
+Nova Graphics 3.ndat	ïntf	7
+Nova Ships 1.ndat	rlëD	41
+Nova Ships 1.ndat	shän	16
+Nova Ships 2.ndat	rlëD	37
+Nova Ships 2.ndat	shän	17
+Nova Ships 3.ndat	rlëD	30
+Nova Ships 3.ndat	shän	10
+Nova Ships 4.ndat	rlëD	43
+Nova Ships 4.ndat	shän	22
+Nova Ships 5.ndat	PICT	30
+Nova Ships 6.ndat	PICT	33
+Nova Ships 7.ndat	PICT	130
+Nova Ships 7.ndat	dësc	184
+Nova Ships 7.ndat	shän	223
+Nova Sounds.ndat	snd 	227
+Nova Titles 1.ndat	PICT	36
+Nova Titles 2.ndat	PICT	43
+Nova Titles 3.ndat	PICT	43
+Nova Titles 4.ndat	PICT	23
+TOTAL	PICT	671
+TOTAL	STR#	227
+TOTAL	bööm	15
+TOTAL	chär	1
+TOTAL	cicn	29
+TOTAL	crön	125
+TOTAL	csüm	1
+TOTAL	cölr	1
+TOTAL	dësc	3032
+TOTAL	düde	147
+TOTAL	flët	128
+TOTAL	gövt	68
+TOTAL	jünk	23
+TOTAL	mïsn	791
+TOTAL	nëbu	4
+TOTAL	oütf	242
+TOTAL	ppat	10
+TOTAL	përs	516
+TOTAL	rlëD	282
+TOTAL	ränk	31
+TOTAL	röid	16
+TOTAL	shän	288
+TOTAL	shïp	288
+TOTAL	snd 	227
+TOTAL	spïn	136
+TOTAL	spöb	411
+TOTAL	sÿst	545
+TOTAL	wëap	81
+TOTAL	ïntf	7
+TOTAL	öops	19
+TOTAL	30 types	8362
