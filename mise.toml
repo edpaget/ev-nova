@@ -2,6 +2,7 @@
 rust = { version = "1.98.1", components = "rustfmt,clippy" }
 "cargo:cargo-workspaces" = "0.4.2"
 "cargo:cargo-nextest" = "0.9.146"
+"cargo:cargo-mutants" = "27.1.0"
 hk = "2.4.0"
 pkl = "0.32.1"
 
@@ -23,6 +24,10 @@ run = [
   "cargo nextest run --workspace --locked --no-tests=pass",
   "cargo test --doc --workspace --locked",
 ]
+
+[tasks.mutants]
+description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"
+run = "cargo mutants --workspace"
 
 [tasks.ci]
 description = "Everything CI would run; the pre-commit hook runs this"
