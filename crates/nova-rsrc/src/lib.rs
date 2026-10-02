@@ -1,5 +1,54 @@
 //! Reader for classic Mac OS resource forks, as stored in EV Nova's `.ndat` files.
 //!
+//! This crate knows the resource fork format, not EV Nova: it hands out raw
+//! type codes, IDs, names and data, and leaves their meaning to callers.
+//!
+//! # Format
+//!
+//! A flattened fork is a 16-byte header (data offset, map offset, data
+//! length, map length; all big-endian `u32`), a data section of
+//! length-prefixed blobs, and a resource map. The map holds a type list
+//! (each type with its resource count and the offset of its reference list),
+//! the reference lists (ID, name offset, attributes, 24-bit data offset) and
+//! a name list of length-prefixed Mac Roman strings. Counts are stored minus
+//! one. Bytes outside the header's two sections are ignored.
+//!
+//! [`ResourceFile::from_bytes`] validates all of it up front: any
+//! out-of-bounds offset, duplicate type or ID, or compressed resource is a
+//! [`ParseError`], never a panic or a silently dropped resource.
+//!
+//! # Example
+//!
+//! ```
+//! use nova_rsrc::{ResType, ResourceFile};
+//!
+//! // One 'TEXT' resource, ID 128, unnamed, holding "hi".
+//! let fork: Vec<u8> = [
+//!     &[0, 0, 0, 16, 0, 0, 0, 22, 0, 0, 0, 6, 0, 0, 0, 50][..], // header
+//!     &[0, 0, 0, 2, b'h', b'i'],                                 // data
+//!     &[0; 24],                                                  // map header
+//!     &[0, 28, 0, 50],          // type list and name list offsets
+//!     &[0, 0],                  // one type (stored minus one)
+//!     b"TEXT",
+//!     &[0, 0, 0, 10],           // one resource; references at +10
+//!     &[0, 128, 0xFF, 0xFF, 0], // ID 128, no name, no attributes
+//!     &[0, 0, 0, 0, 0, 0, 0],   // data offset 0, reserved handle
+//! ]
+//! .concat();
+//!
+//! let file = ResourceFile::from_bytes(fork)?;
+//! let text = ResType::from_mac_roman("TEXT").unwrap();
+//! let resource = file.get(text, 128).unwrap();
+//! assert_eq!(resource.data(), b"hi");
+//! assert_eq!(resource.name(), None);
+//! assert_eq!(file.types().collect::<Vec<_>>(), vec![text]);
+//! # Ok::<(), nova_rsrc::ParseError>(())
+//! ```
+//!
+//! Files on disk are opened with [`ResourceFile::open`], which reads through
+//! the [`ForkReader`] port's [`StdForkReader`] adapter and also accepts a
+//! real macOS resource fork (`..namedfork/rsrc`).
+//!
 //! # Design decision
 //!
 //! This crate parses resource forks with a small in-house strict parser
