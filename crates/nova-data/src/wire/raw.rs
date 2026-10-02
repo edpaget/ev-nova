@@ -6,7 +6,7 @@
 //! keeps every byte.
 
 use std::fmt;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, SeekFrom};
 
 use binrw::{BinRead, BinResult, Endian};
 use serde::de::{self, Deserializer, Visitor};
@@ -23,9 +23,15 @@ pub struct RawArray<const N: usize>(pub [u8; N]);
 impl BinRead for RawBytes {
     type Args<'a> = ();
 
+    /// Reads everything after the current position in one bounded read, so
+    /// a misbehaving reader can never make it loop.
     fn read_options<R: Read + Seek>(reader: &mut R, _: Endian, (): ()) -> BinResult<Self> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes)?;
+        let start = reader.stream_position()?;
+        let end = reader.seek(SeekFrom::End(0))?;
+        reader.seek(SeekFrom::Start(start))?;
+        let len = usize::try_from(end.saturating_sub(start)).unwrap_or(usize::MAX);
+        let mut bytes = vec![0; len];
+        reader.read_exact(&mut bytes)?;
         Ok(Self(bytes))
     }
 }
@@ -135,6 +141,16 @@ mod tests {
         assert_eq!(tail.head, 1);
         assert_eq!(tail.rest, RawBytes(vec![0x91, 0x84, 0xEE, 0xB0]));
         assert_eq!(cursor.position(), 5);
+    }
+
+    #[test]
+    fn raw_bytes_past_the_end_is_empty() {
+        let mut cursor = Cursor::new([1, 2]);
+        cursor.set_position(5);
+        assert_eq!(
+            RawBytes::read_be(&mut cursor).expect("decodes"),
+            RawBytes::default()
+        );
     }
 
     #[test]
