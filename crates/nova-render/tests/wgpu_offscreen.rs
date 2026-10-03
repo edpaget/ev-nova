@@ -13,15 +13,45 @@ use nova_view::{Color, DrawList, ImageKey, ImageKind, Point};
 const LOGICAL: LogicalSize = LogicalSize { w: 32, h: 24 };
 const SIZE: u32 = 64;
 
-/// A red 4x4 picture (`PICT` 1) and a white 4x4 sprite (`rlëD` 2).
+/// Eight distinct opaque colours.
+const PALETTE: [[u8; 4]; 8] = [
+    [255, 0, 0, 255],
+    [0, 255, 0, 255],
+    [0, 0, 255, 255],
+    [255, 255, 0, 255],
+    [0, 255, 255, 255],
+    [255, 0, 255, 255],
+    [255, 255, 255, 255],
+    [255, 128, 0, 255],
+];
+
+/// The colour of texel (`x`, `y`) in a [`patterned`] image `w` wide.
+fn texel(w: u32, x: u32, y: u32) -> [u8; 4] {
+    PALETTE[(y * w + x) as usize]
+}
+
+/// A `w` x `h` image (at most eight texels) whose every texel is a
+/// different colour, so a flip, a transpose or a wrong row stride moves
+/// some colour.
+fn patterned(w: u32, h: u32) -> Image {
+    let pixels = (0..h)
+        .flat_map(|y| (0..w).map(move |x| texel(w, x, y)))
+        .flatten()
+        .collect();
+    Image::from_rgba(w, h, pixels).expect("w x h")
+}
+
+/// A patterned 4x2 picture (`PICT` 1), a white 4x4 sprite (`rlëD` 2) and
+/// a patterned 2x4 sprite (`rlëD` 3).
 struct Images;
 
 impl ImageSource for Images {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
         let solid = |rgba: [u8; 4]| Image::from_rgba(4, 4, rgba.repeat(16)).expect("4x4");
         match (kind, id) {
-            (ImageKind::Pict, 1) => Ok(vec![solid([255, 0, 0, 255])]),
+            (ImageKind::Pict, 1) => Ok(vec![patterned(4, 2)]),
             (ImageKind::Rled, 2) => Ok(vec![solid([255, 255, 255, 255])]),
+            (ImageKind::Rled, 3) => Ok(vec![patterned(2, 4)]),
             _ => Err(ImageError::Missing),
         }
     }
@@ -59,6 +89,20 @@ fn assert_near(pixels: &[u8], (x, y): (u32, u32), want: [u8; 4], tolerance: u8) 
 
 const BLACK: [u8; 4] = [0, 0, 0, 255];
 
+/// Asserts a [`patterned`] `w` x `h` image is drawn upright at scale 2
+/// with its top-left corner at pixel (`left`, `top`): every pixel of each
+/// texel's 2x2 block is that texel's colour.
+fn assert_patterned(pixels: &[u8], (left, top): (u32, u32), (w, h): (u32, u32)) {
+    for y in 0..h {
+        for x in 0..w {
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let at = (left + 2 * x + dx, top + 2 * y + dy);
+                assert_near(pixels, at, texel(w, x, y), 0);
+            }
+        }
+    }
+}
+
 #[test]
 fn a_known_frame_draws_the_expected_pixels() {
     let Some(mut gpu) = gpu() else {
@@ -77,7 +121,8 @@ fn a_known_frame_draws_the_expected_pixels() {
             2.0,
             Color::rgba(0, 0, 255, 255),
         )
-        .dot(Point::new(28.0, 4.0), 4.0, Color::rgba(255, 255, 0, 255));
+        .dot(Point::new(28.0, 4.0), 4.0, Color::rgba(255, 255, 0, 255))
+        .sprite(ImageKey::sprite(3, 0), Point::new(24.0, 12.0), Color::WHITE);
     let mut renderer = Renderer::new(Images);
 
     let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
@@ -85,10 +130,13 @@ fn a_known_frame_draws_the_expected_pixels() {
 
     assert_eq!(report.new_failures, vec![]);
     assert_eq!(pixels.len(), (SIZE * SIZE * 4) as usize);
-    // The picture: logical (2..6, 2..6) is pixels (4..12, 12..20).
-    assert_near(&pixels, (5, 13), [255, 0, 0, 255], 0);
-    assert_near(&pixels, (10, 18), [255, 0, 0, 255], 0);
-    // The sprite: green at half alpha over black, pixels (28..36, 16..24).
+    // The 4x2 picture: logical (2..6, 2..4) is pixels (4..12, 12..16),
+    // each texel a 2x2 block, upright and unmirrored.
+    assert_patterned(&pixels, (4, 12), (4, 2));
+    // The 2x4 sprite centred on (24, 12): logical (23..25, 10..14) is
+    // pixels (46..50, 28..36).
+    assert_patterned(&pixels, (46, 28), (2, 4));
+    // The white sprite: green at half alpha over black, pixels (28..36, 16..24).
     assert_near(&pixels, (29, 17), [0, 128, 0, 255], 3);
     assert_near(&pixels, (34, 22), [0, 128, 0, 255], 3);
     // The line: logical y 19..21 is pixels 46..50, x 4..60.
@@ -107,6 +155,12 @@ fn a_known_frame_draws_the_expected_pixels() {
     // Just outside the shapes' edges.
     assert_near(&pixels, (3, 13), BLACK, 0);
     assert_near(&pixels, (12, 13), BLACK, 0);
+    assert_near(&pixels, (5, 11), BLACK, 0);
+    assert_near(&pixels, (5, 16), BLACK, 0);
+    assert_near(&pixels, (45, 30), BLACK, 0);
+    assert_near(&pixels, (50, 30), BLACK, 0);
+    assert_near(&pixels, (47, 27), BLACK, 0);
+    assert_near(&pixels, (47, 36), BLACK, 0);
     assert_near(&pixels, (5, 45), BLACK, 0);
     assert_near(&pixels, (5, 50), BLACK, 0);
 }
