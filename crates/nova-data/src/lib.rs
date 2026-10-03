@@ -108,6 +108,15 @@
 //! and its description, and resolves a stellar object to its sprite sheet. See [`store`] for the load order and its
 //! assumptions.
 //!
+//! # Interface resources
+//!
+//! The dialogs live in a separate interface file (`Nova-DF.rsrc`, or the
+//! Windows `Nova.rez`), not in `Nova Files`. [`records::dialog`] decodes
+//! its `DLOG` window templates and [`records::dialog_items`] its `DITL`
+//! item lists; [`store::InterfaceData`] opens the file and looks them up,
+//! with their pictures, apart from the game data. They are not registered
+//! record types, so [`decode_file`] skips them.
+//!
 //! # Out of scope
 //!
 //! [`OUT_OF_SCOPE`] lists the media types [`decode_file`] skips (as it does
@@ -137,9 +146,9 @@ pub use error::{Cause, DecodeError, DecodeWarning, FieldError, FieldPath};
 pub use file::{FileReport, OUT_OF_SCOPE, decode_file};
 pub use registry::{AnyDecoded, AnyRecord, Registered, TYPES, decode_any};
 pub use store::{
-    FailedFile, GameData, IgnoredEntry, LayerError, LayerSprite, OpenError, Origin, Provenance,
-    ShipLayer, ShipLayers, ShipSprite, SourceFile, SpriteError, StellarSprite, StellarSpriteError,
-    StoreEntry, StoreResource, ship_desc_id, stellar_spin_id,
+    FailedFile, GameData, IgnoredEntry, InterfaceData, LayerError, LayerSprite, OpenError, Origin,
+    Provenance, ShipLayer, ShipLayers, ShipSprite, SourceFile, SpriteError, StellarSprite,
+    StellarSpriteError, StoreEntry, StoreResource, ship_desc_id, stellar_spin_id,
 };
 pub use wire::flags::{Flags16, Flags32, Flags64};
 pub use wire::geometry::{Point, Rect};

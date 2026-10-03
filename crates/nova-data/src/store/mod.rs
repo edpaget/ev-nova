@@ -56,6 +56,10 @@
 //! # Ok::<(), nova_data::store::OpenError>(())
 //! ```
 //!
+//! The interface file (`Nova-DF.rsrc` or `Nova.rez`), which sits beside
+//! `Nova Files`, is not part of this store: [`InterfaceData`] opens it on
+//! its own, so its `PICT` IDs never collide with the game data's.
+//!
 //! # Load order
 //!
 //! The data directory's files load first (its top level only: sub-folders
@@ -178,6 +182,7 @@ use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 #[cfg(test)]
 mod fake;
 pub mod fs;
+mod interface;
 pub mod order;
 mod ship_desc;
 mod sprite;
@@ -186,6 +191,7 @@ mod stellar_sprite;
 mod tests;
 mod walk;
 
+pub use self::interface::InterfaceData;
 pub use self::ship_desc::ship_desc_id;
 pub use self::sprite::{LayerError, LayerSprite, ShipLayer, ShipLayers, ShipSprite, SpriteError};
 pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};
