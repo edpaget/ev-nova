@@ -2,6 +2,89 @@
 
 use std::cmp::Ordering;
 use std::ffi::OsStr;
+use std::path::Path;
+
+use super::Origin;
+use super::fs::EntryKind;
+
+/// Why a directory entry was not loaded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IgnoreReason {
+    /// Its name starts with `.` (`.DS_Store`, `AppleDouble` `._x` files).
+    Hidden,
+    /// A symbolic link; links are never followed.
+    Symlink,
+    /// Neither a regular file nor a directory.
+    NotAFile,
+    /// A folder inside the data directory; only the plug-ins directory is
+    /// walked recursively.
+    DataSubFolder,
+    /// A plug-ins sub-folder nested deeper than [`MAX_PLUGIN_DEPTH`].
+    TooDeep,
+    /// A file whose extension marks it as something other than game data
+    /// (music, movies, documents, images). Holds the lower-cased extension.
+    NotGameData(String),
+    /// A Windows `.rez` plug-in, which is a different container format
+    /// (task `rez-plugin-support`).
+    RezUnsupported,
+}
+
+/// What to do with one directory entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Classified {
+    /// A file to try loading as a resource file.
+    Candidate,
+    /// A plug-ins sub-folder to walk, at its position in the order.
+    Descend,
+    /// Skipped, for a reason that is reported.
+    Ignored(IgnoreReason),
+}
+
+/// The deepest plug-ins sub-folder level that is walked. The plug-ins
+/// directory itself is level 0; its sub-folders are level 1.
+pub const MAX_PLUGIN_DEPTH: usize = 16;
+
+/// Lower-cased extensions of files that are never game data.
+const NOT_GAME_DATA: &[&str] = &[
+    "mp3", "mov", "txt", "rtf", "md", "pdf", "htm", "html", "jpg", "jpeg", "png", "gif",
+];
+
+/// Decides what to do with the entry `name` of kind `kind` found in a
+/// folder of `origin`.
+///
+/// Hidden names (starting with `.`), symbolic links and entries that are
+/// neither files nor folders are ignored. A folder is walked in the plug-ins
+/// tree and ignored in the data directory. A file is ignored when its
+/// lower-cased extension is in the skip list (music, movies, documents,
+/// images) or is `rez`; every other file is a candidate, including `.ndat`,
+/// `.npif`, files with no extension and names such as `Foo v1.2`, because
+/// classic plug-ins often have no extension or a dotted name.
+#[must_use]
+pub fn classify(name: &OsStr, kind: EntryKind, origin: Origin) -> Classified {
+    if name.as_encoded_bytes().starts_with(b".") {
+        return Classified::Ignored(IgnoreReason::Hidden);
+    }
+    match (kind, origin) {
+        (EntryKind::Symlink, _) => Classified::Ignored(IgnoreReason::Symlink),
+        (EntryKind::Other, _) => Classified::Ignored(IgnoreReason::NotAFile),
+        (EntryKind::Dir, Origin::Data) => Classified::Ignored(IgnoreReason::DataSubFolder),
+        (EntryKind::Dir, Origin::PlugIn) => Classified::Descend,
+        (EntryKind::File, _) => classify_file(name),
+    }
+}
+
+fn classify_file(name: &OsStr) -> Classified {
+    let extension = Path::new(name)
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase());
+    match extension {
+        Some(ext) if ext == "rez" => Classified::Ignored(IgnoreReason::RezUnsupported),
+        Some(ext) if NOT_GAME_DATA.contains(&ext.as_str()) => {
+            Classified::Ignored(IgnoreReason::NotGameData(ext))
+        }
+        _ => Classified::Candidate,
+    }
+}
 
 /// Compares two file names the way the classic Mac Finder sorted them:
 /// case-insensitively, character by character.
@@ -92,6 +175,53 @@ mod tests {
                 "a", "Alpha", "B", "beta", "charlie", "Plug 10", "Plug 2", "Éclair", "éclair"
             ]
         );
+    }
+
+    #[test]
+    fn classify_decides_every_kind_of_entry() {
+        use Classified::{Candidate, Descend, Ignored};
+        use EntryKind::{Dir, File, Other, Symlink};
+        use IgnoreReason as R;
+        use Origin::{Data, PlugIn};
+
+        let not_game_data = |ext: &str| Ignored(R::NotGameData(ext.to_owned()));
+        let cases = [
+            (".DS_Store", File, Data, Ignored(R::Hidden)),
+            ("._Nova Data 1.ndat", File, PlugIn, Ignored(R::Hidden)),
+            (".hidden folder", Dir, PlugIn, Ignored(R::Hidden)),
+            ("Nova Music.mp3", File, Data, not_game_data("mp3")),
+            ("Race 1.MOV", File, Data, not_game_data("mov")),
+            ("readme.txt", File, PlugIn, not_game_data("txt")),
+            ("Read Me.RTF", File, PlugIn, not_game_data("rtf")),
+            ("notes.md", File, PlugIn, not_game_data("md")),
+            ("Manual.pdf", File, PlugIn, not_game_data("pdf")),
+            ("index.htm", File, PlugIn, not_game_data("htm")),
+            ("index.html", File, PlugIn, not_game_data("html")),
+            ("shot.jpg", File, PlugIn, not_game_data("jpg")),
+            ("shot.jpeg", File, PlugIn, not_game_data("jpeg")),
+            ("shot.png", File, PlugIn, not_game_data("png")),
+            ("shot.gif", File, PlugIn, not_game_data("gif")),
+            ("x.rez", File, PlugIn, Ignored(R::RezUnsupported)),
+            ("X.REZ", File, Data, Ignored(R::RezUnsupported)),
+            ("Link", Symlink, PlugIn, Ignored(R::Symlink)),
+            ("Link.ndat", Symlink, Data, Ignored(R::Symlink)),
+            ("fifo", Other, PlugIn, Ignored(R::NotAFile)),
+            ("Extras", Dir, Data, Ignored(R::DataSubFolder)),
+            ("Extras", Dir, PlugIn, Descend),
+            ("Docs.txt", Dir, PlugIn, Descend),
+            ("Nova Data 1.ndat", File, Data, Candidate),
+            ("Foo.npif", File, PlugIn, Candidate),
+            ("Foo", File, PlugIn, Candidate),
+            ("Foo v1.2", File, PlugIn, Candidate),
+            ("mp3", File, PlugIn, Candidate),
+        ];
+        for (name, kind, origin, expected) in cases {
+            assert_eq!(
+                classify(OsStr::new(name), kind, origin),
+                expected,
+                "{name} {kind:?} in {origin:?}"
+            );
+        }
     }
 
     #[cfg(unix)]
