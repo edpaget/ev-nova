@@ -16,6 +16,14 @@ nova-view.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 
+[dev-dependencies]
+# Synthetic pictures and sprites for the GameData source tests.
+nova-data = { workspace = true, features = ["fixture"] }
+# Synthetic resource forks for in-memory stores.
+nova-rsrc = { workspace = true, features = ["fixture"] }
+# Integration tests record Gpu calls with the `recording` mock.
+nova-render = { workspace = true, features = ["recording"] }
+
 [features]
 # Exposes the recording Gpu mock to other crates' tests.
 recording = []

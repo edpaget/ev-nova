@@ -12,6 +12,8 @@
 //! - [`gpu`]: the [`Gpu`] port and the [`Frame`]s handed to it.
 //! - [`batch`]: the [`Renderer`], which packs images into the atlas lazily
 //!   and turns a draw list into batches in draw order.
+//! - [`source`]: [`ImageSource`] for `nova_data`'s `GameData`, a thin
+//!   adapter over the picture and sprite decoders that needs no GPU.
 //!
 //! `recording::RecordingGpu` (this crate's tests, or the `recording`
 //! feature) is a [`Gpu`] that records its calls.
@@ -22,6 +24,7 @@ pub mod gpu;
 pub mod images;
 #[cfg(any(test, feature = "recording"))]
 pub mod recording;
+pub mod source;
 pub mod viewport;
 
 pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPacker, Uv};

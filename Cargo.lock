@@ -1156,6 +1156,7 @@ dependencies = [
  "bytemuck",
  "glyphon",
  "nova-data",
+ "nova-render",
  "nova-rsrc",
  "nova-view",
  "thiserror 2.0.21",
