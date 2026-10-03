@@ -9,9 +9,13 @@
 //!
 //! - [`ships`]: the ship browser, which pages through every `shïp` and
 //!   reads the game data through its [`ships::ShipCatalog`] port.
+//! - [`galaxy`]: the galaxy map, which draws every system, hyperlink and
+//!   nebula and reads the game data through its
+//!   [`galaxy::GalaxyCatalog`] port.
 
 pub mod color;
 pub mod draw;
+pub mod galaxy;
 pub mod geometry;
 pub mod image;
 pub mod input;

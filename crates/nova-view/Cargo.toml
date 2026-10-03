@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 # The game data the screens show, read through each screen's own port.
 nova-data.workspace = true
+# The `PICT` resource type, for the galaxy adapter's nebula pictures.
+nova-rsrc.workspace = true
 
 [dev-dependencies]
 # Synthetic sprite sheets for the GameData adapter tests.
