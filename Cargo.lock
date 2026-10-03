@@ -1373,6 +1373,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-sim"
+version = "0.1.0"
+dependencies = [
+ "nova-data",
+ "nova-rsrc",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "nova-view"
 version = "0.1.0"
 dependencies = [

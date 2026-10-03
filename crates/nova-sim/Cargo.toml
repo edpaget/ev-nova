@@ -1,0 +1,22 @@
+[package]
+name = "nova-sim"
+description = "EV Nova's game state and rules, headless: no rendering, windowing or audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The chär and shïp records a flight session starts from, read through the
+# sim's own port.
+nova-data.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Synthetic resource forks for the GameData adapter tests.
+nova-data = { workspace = true, features = ["fixture"] }
+nova-rsrc = { workspace = true, features = ["fixture"] }
+
+[lints]
+workspace = true

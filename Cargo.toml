@@ -14,6 +14,7 @@ nova-rsrc = { path = "crates/nova-rsrc" }
 nova-data = { path = "crates/nova-data" }
 nova-view = { path = "crates/nova-view" }
 nova-render = { path = "crates/nova-render" }
+nova-sim = { path = "crates/nova-sim" }
 encoding_rs = "0.8"
 macbinary = "0.2.1"
 png = "0.18"
