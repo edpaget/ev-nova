@@ -40,6 +40,7 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
             button: map_button(*button),
             pressed: state.is_pressed(),
         },
+        WinitEvent::Focused(false) => WindowEvent::FocusLost,
         WinitEvent::CloseRequested => WindowEvent::CloseRequested,
         _ => return None,
     })
@@ -249,6 +250,15 @@ mod tests {
             translate(&WinitEvent::CloseRequested, &Window),
             Some(WindowEvent::CloseRequested)
         );
+    }
+
+    #[test]
+    fn losing_focus_is_focus_lost_and_gaining_it_is_nothing() {
+        assert_eq!(
+            translate(&WinitEvent::Focused(false), &Window),
+            Some(WindowEvent::FocusLost)
+        );
+        assert_eq!(translate(&WinitEvent::Focused(true), &Window), None);
     }
 
     #[test]

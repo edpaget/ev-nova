@@ -64,6 +64,9 @@ pub enum WindowEvent {
         /// Time since the app started.
         elapsed: Duration,
     },
+    /// The window stopped receiving keyboard input; the releases of any
+    /// keys held down will not arrive.
+    FocusLost,
     /// The user asked to close the window.
     CloseRequested,
 }
@@ -122,7 +125,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// Handles one window event.
     ///
     /// A resize refits the viewport. Keys go to the screen, except that
-    /// pressing Escape quits. Pointer events go to the screen in logical
+    /// pressing Escape quits. Losing focus tells the screen to let go of
+    /// the keys it holds down, since their releases will not arrive. Pointer events go to the screen in logical
     /// units, and are dropped in the bars. A redraw ticks the screen by the
     /// time since the last redraw, renders its draw list through `gpu` and
     /// asks the window for the next redraw. Closing the window, or a screen
@@ -147,6 +151,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 ..
             }
             | WindowEvent::CloseRequested => Control::Exit,
+            WindowEvent::FocusLost => {
+                self.screen.release_keys();
+                Control::Continue
+            }
             WindowEvent::Key {
                 key,
                 pressed,
@@ -262,6 +270,7 @@ mod tests {
         inputs: Vec<Input>,
         ticks: Vec<Duration>,
         quit_on: Option<Key>,
+        releases: usize,
     }
 
     impl Screen for RecordingScreen {
@@ -279,6 +288,10 @@ mod tests {
 
         fn draw(&self, list: &mut DrawList) {
             list.sprite(ImageKey::sprite(1, 0), Point::new(0.0, 0.0), Color::WHITE);
+        }
+
+        fn release_keys(&mut self) {
+            self.releases += 1;
         }
     }
 
@@ -397,6 +410,20 @@ mod tests {
             handle(&mut app, &mut window, key(Key::Enter, true)),
             Control::Exit
         );
+    }
+
+    #[test]
+    fn losing_focus_releases_the_screens_keys_and_carries_on() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        handle(&mut app, &mut window, key(Key::Right, true));
+        assert_eq!(app.screen().releases, 0);
+        assert_eq!(
+            handle(&mut app, &mut window, WindowEvent::FocusLost),
+            Control::Continue
+        );
+        assert_eq!(app.screen().releases, 1);
+        assert_eq!(app.screen().inputs.len(), 1, "no input for it");
     }
 
     #[test]
