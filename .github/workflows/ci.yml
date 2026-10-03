@@ -23,6 +23,8 @@ jobs:
       # Never auto-install the other mise.toml tools: shims would build them
       # from source (and on Windows each shim call re-enters mise to do it).
       MISE_AUTO_INSTALL: "false"
+      # Report every failing test, not just the first (.config/nextest.toml).
+      NEXTEST_PROFILE: ci
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v5
