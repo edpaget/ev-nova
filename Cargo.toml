@@ -21,6 +21,25 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 
+# The PNG encoder and its compression and checksum crates run tens of
+# times slower unoptimised, and nova-dump's stock test (a debug build)
+# encodes about a thousand images: optimise just them in dev and test
+# builds.
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.simd-adler32]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.adler2]
+opt-level = 3
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
