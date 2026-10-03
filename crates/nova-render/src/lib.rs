@@ -39,5 +39,5 @@ pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPa
 pub use batch::{RenderReport, Renderer};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
 pub use images::{ImageError, ImageSource};
-pub use present::{AcquireOutcome, SurfaceAction, surface_action};
+pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
 pub use viewport::{LOGICAL, Letterbox, LogicalSize, PixelRect, Viewport};

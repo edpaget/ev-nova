@@ -5,12 +5,15 @@ use nova_data::graphics::Image;
 use super::data::surface_format;
 use super::{InitError, WgpuRenderer, acquire};
 use crate::gpu::{Frame, Gpu, PageId};
-use crate::present::{AcquireOutcome, SurfaceAction, surface_action};
+use crate::present::{
+    AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action,
+};
 use crate::viewport::PixelRect;
 
 /// Draws frames into a window. Before each frame it asks
-/// [`surface_action`] whether to reconfigure, draw or skip, and only
-/// performs the wgpu calls.
+/// [`surface_action`] whether to reconfigure, draw or skip, and
+/// [`acquire_outcome`] what the texture it got means; it only performs the
+/// wgpu calls.
 pub struct SurfaceGpu {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -81,21 +84,7 @@ impl Gpu for SurfaceGpu {
             }
             SurfaceAction::Render => {}
         }
-        let (texture, outcome) = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture) => {
-                (Some(texture), AcquireOutcome::Acquired)
-            }
-            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-                (Some(texture), AcquireOutcome::Suboptimal)
-            }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                (None, AcquireOutcome::Skipped)
-            }
-            wgpu::CurrentSurfaceTexture::Outdated => (None, AcquireOutcome::Outdated),
-            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Validation => {
-                (None, AcquireOutcome::Lost)
-            }
-        };
+        let (texture, outcome) = acquire_outcome(mirror(self.surface.get_current_texture()));
         self.last_acquire = outcome;
         let Some(texture) = texture else {
             return;
@@ -105,5 +94,19 @@ impl Gpu for SurfaceGpu {
             .create_view(&wgpu::TextureViewDescriptor::default());
         self.renderer.draw(frame, &view);
         self.queue.present(texture);
+    }
+}
+
+/// wgpu's acquire result as the core's [`AcquireResult`], variant for
+/// variant.
+fn mirror(current: wgpu::CurrentSurfaceTexture) -> AcquireResult<wgpu::SurfaceTexture> {
+    match current {
+        wgpu::CurrentSurfaceTexture::Success(texture) => AcquireResult::Success(texture),
+        wgpu::CurrentSurfaceTexture::Suboptimal(texture) => AcquireResult::Suboptimal(texture),
+        wgpu::CurrentSurfaceTexture::Timeout => AcquireResult::Timeout,
+        wgpu::CurrentSurfaceTexture::Occluded => AcquireResult::Occluded,
+        wgpu::CurrentSurfaceTexture::Outdated => AcquireResult::Outdated,
+        wgpu::CurrentSurfaceTexture::Lost => AcquireResult::Lost,
+        wgpu::CurrentSurfaceTexture::Validation => AcquireResult::Validation,
     }
 }

@@ -1,7 +1,8 @@
 //! What a window surface should do before each frame.
 //!
 //! The surface adapter makes no decisions of its own: before each submit
-//! it asks [`surface_action`], then performs the raw calls.
+//! it asks [`surface_action`], then performs the raw calls, and
+//! [`acquire_outcome`] decides what the texture it got means.
 
 /// How the last attempt to get a surface texture went.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +19,41 @@ pub enum AcquireOutcome {
     Outdated,
     /// The surface was lost.
     Lost,
+}
+
+/// What asking a window surface for its next texture gave: wgpu's
+/// `CurrentSurfaceTexture`, variant for variant, with the texture as `T`
+/// so the mapping in [`acquire_outcome`] can be tested without a window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcquireResult<T> {
+    /// A texture, matching the surface.
+    Success(T),
+    /// A texture, but the surface no longer matches it.
+    Suboptimal(T),
+    /// Timed out waiting for a texture.
+    Timeout,
+    /// The window is hidden.
+    Occluded,
+    /// The surface no longer matches the window.
+    Outdated,
+    /// The surface was lost.
+    Lost,
+    /// wgpu raised a validation error.
+    Validation,
+}
+
+/// The texture to draw into, if any, and the outcome to remember for the
+/// next [`surface_action`]. A validation error is treated as a lost
+/// surface, so the next frame reconfigures it.
+#[must_use]
+pub fn acquire_outcome<T>(result: AcquireResult<T>) -> (Option<T>, AcquireOutcome) {
+    match result {
+        AcquireResult::Success(texture) => (Some(texture), AcquireOutcome::Acquired),
+        AcquireResult::Suboptimal(texture) => (Some(texture), AcquireOutcome::Suboptimal),
+        AcquireResult::Timeout | AcquireResult::Occluded => (None, AcquireOutcome::Skipped),
+        AcquireResult::Outdated => (None, AcquireOutcome::Outdated),
+        AcquireResult::Lost | AcquireResult::Validation => (None, AcquireOutcome::Lost),
+    }
 }
 
 /// What to do with the surface before drawing a frame.
@@ -60,6 +96,48 @@ pub fn surface_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_acquired_texture_is_drawn_into() {
+        assert_eq!(
+            acquire_outcome(AcquireResult::Success("texture")),
+            (Some("texture"), AcquireOutcome::Acquired)
+        );
+        assert_eq!(
+            acquire_outcome(AcquireResult::Suboptimal("texture")),
+            (Some("texture"), AcquireOutcome::Suboptimal)
+        );
+    }
+
+    #[test]
+    fn a_timeout_or_hidden_window_skips_the_frame() {
+        for result in [AcquireResult::Timeout, AcquireResult::Occluded] {
+            assert_eq!(
+                acquire_outcome::<()>(result),
+                (None, AcquireOutcome::Skipped),
+                "{result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_outdated_surface_is_outdated() {
+        assert_eq!(
+            acquire_outcome::<()>(AcquireResult::Outdated),
+            (None, AcquireOutcome::Outdated)
+        );
+    }
+
+    #[test]
+    fn a_lost_surface_or_validation_error_is_lost() {
+        for result in [AcquireResult::Lost, AcquireResult::Validation] {
+            assert_eq!(
+                acquire_outcome::<()>(result),
+                (None, AcquireOutcome::Lost),
+                "{result:?}"
+            );
+        }
+    }
 
     #[test]
     fn a_configured_surface_of_the_right_size_renders() {

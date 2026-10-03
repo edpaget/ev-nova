@@ -25,11 +25,13 @@ exclude_re = [
     # tests cannot build these events. Each arm only delegates (to the
     # tested `key_event`, or reads the window port).
     "delete match arm WinitEvent::(KeyboardInput|ScaleFactorChanged)\\{.*\\} in translate",
-    # The surface adapter's raw calls: it delegates pages and uploads to
-    # `WgpuRenderer` (tested offscreen) and presents to a window surface,
-    # which needs a display. What it does before each frame is decided by
-    # the tested `surface_action`.
-    "impl Gpu for SurfaceGpu>::(create_page|upload|submit)",
+    # The surface adapter's raw calls, as whole bodies only: pages and
+    # uploads delegate to `WgpuRenderer` (tested offscreen), and `submit`
+    # is the raw configure / get_current_texture / present calls on a
+    # window surface, which needs a display. Its decisions are the tested
+    # `surface_action` and `acquire_outcome`; any other mutant inside these
+    # bodies is still run.
+    "replace <impl Gpu for SurfaceGpu>::(create_page|upload|submit) with \\(\\)$",
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour.
     "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::create_page)",
