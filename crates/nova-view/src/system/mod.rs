@@ -9,11 +9,14 @@
 //! - [`starfield`]: the parallax starfield behind the stellars.
 //! - [`animation`]: the [`Animation`], which frame of a stellar's sheet
 //!   shows when, from its `spöb`'s animation fields.
+//! - [`scene`]: the [`SystemScene`], the system read once and laid out:
+//!   each stellar's world position, sheet and animation.
 
 pub mod animation;
 pub mod camera;
 pub mod catalog;
 pub mod data;
+pub mod scene;
 pub mod starfield;
 
 pub use animation::Animation;
@@ -22,3 +25,4 @@ pub use catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
+pub use scene::{SceneStellar, SystemScene};
