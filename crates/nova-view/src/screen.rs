@@ -28,6 +28,12 @@ pub trait Screen {
     /// since the button's release will then go elsewhere. Does nothing by
     /// default.
     fn cancel_pointer(&mut self) {}
+    /// Forgets every key it holds as down, as if each had been released.
+    /// Called when the screen stops receiving input (the app hides it, or
+    /// the window loses focus), since the keys' releases will not reach
+    /// it. A screen that acts on held keys over time stops acting on them.
+    /// Does nothing by default.
+    fn release_keys(&mut self) {}
 }
 
 #[cfg(test)]
@@ -91,6 +97,17 @@ mod tests {
         let mut counter = Counter::default();
         let screen: &mut dyn Screen = &mut counter;
         screen.cancel_pointer();
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn releasing_the_keys_does_nothing_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        screen.release_keys();
         let mut list = DrawList::new();
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);
