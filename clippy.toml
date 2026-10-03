@@ -3,7 +3,7 @@ allow-expect-in-tests = true
 # Product and QuickDraw format names that appear in doc comments; ".." keeps
 # clippy's defaults.
 doc-valid-idents = [
-    "ResForge", "QuickTime", "QuickDraw", "PackBits", "PixMap", "BitMap",
+    "ResForge", "FFmpeg", "QuickTime", "QuickDraw", "PackBits", "PixMap", "BitMap",
     "ColorTable", "HeaderOp", "DefHilite", "ShortComment", "LongComment",
     "EndPic", "DirectBitsRect", "PackBitsRect", "BitsRect", "CompressedQuickTime",
     "..",

@@ -71,6 +71,11 @@
 //!   Practices for Enhancing Digital Audio Compatibility in Multimedia
 //!   Systems" (1992). The IMA4 unit-test vectors are worked by hand from
 //!   that algorithm.
+//! - Continuing a channel's full-precision predictor into its next packet
+//!   when that packet's header agrees (same step index, predictor within
+//!   0x7F): Apple's own decoder, observed through macOS `afconvert` on the
+//!   stock sounds, and FFmpeg's QuickTime IMA decoder as a second reading.
+//!   Restarting every packet from its header instead is off by up to 127.
 //!
 //! No code was copied.
 //!
@@ -86,7 +91,9 @@
 //!   `0x2B770000`, `0x2B7745D1` and `0x2B7745D0`). Nine have loop points,
 //!   seven of them past the last sample.
 //! - 178 compressed headers: `ima4`, `compressionID` -1, mono, 22050 Hz
-//!   (one at 44100 Hz). No packet's step index exceeds 88.
+//!   (one at 44100 Hz). No packet's step index exceeds 88. All of them
+//!   decode bit-exactly as `afconvert` decodes the same packets; the stock
+//!   test checks digests of its output.
 //! - No extended headers, no other compressions, and no bytes after the
 //!   sample data.
 //!

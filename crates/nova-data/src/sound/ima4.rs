@@ -1,8 +1,10 @@
-//! Apple IMA4: IMA ADPCM in self-contained 34-byte packets.
+//! Apple IMA4: IMA ADPCM in 34-byte packets.
 //!
 //! Each packet holds one channel's 64 samples: a big-endian header word
 //! (the predictor's top 9 bits, then a 7-bit step index) and 32 bytes of
-//! four-bit codes, low nibble first. Packets share no state.
+//! four-bit codes, low nibble first. A packet whose header agrees with the
+//! state the channel's previous packet ended in continues from that state
+//! at full precision ([`Channel::decode`]), as Apple's decoder does.
 
 /// Bytes in one packet.
 pub(super) const PACKET_LEN: usize = 34;
@@ -29,14 +31,53 @@ const STEP: [i32; MAX_INDEX + 1] = [
 /// How each code's magnitude (its low three bits) moves the step index.
 const INDEX_MOVE: [isize; 8] = [-1, -1, -1, -1, 2, 4, 6, 8];
 
-/// Decodes one packet to its 64 samples.
-///
-/// A header step index above 88 is clamped to 88, as lenient decoders do;
-/// stock sounds never have one.
-pub(super) fn decode_packet(packet: &[u8; PACKET_LEN]) -> [i16; PACKET_SAMPLES] {
-    let header = u16::from_be_bytes([packet[0], packet[1]]);
-    let mut predictor = i32::from((header & 0xFF80) as i16);
-    let mut index = usize::from(header & 0x7F).min(MAX_INDEX);
+/// How far a header's predictor may be from the running one and still
+/// continue it: the header keeps only the top 9 bits.
+const CARRY_RANGE: i32 = 0x7F;
+
+/// One channel's decoder, fed that channel's packets in order.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Channel {
+    /// The predictor and step index the previous packet ended with.
+    state: Option<(i32, usize)>,
+}
+
+impl Channel {
+    /// Decodes the channel's next packet to its 64 samples.
+    ///
+    /// A packet starts from its header's predictor and step index, unless
+    /// the index equals the one the previous packet ended with and the
+    /// predictor is within 0x7F of the previous one: then it continues
+    /// from the previous packet's full-precision predictor. A header step
+    /// index above 88 is clamped to 88, as lenient decoders do; stock
+    /// sounds never have one.
+    pub(super) fn decode(&mut self, packet: &[u8; PACKET_LEN]) -> [i16; PACKET_SAMPLES] {
+        let header = u16::from_be_bytes([packet[0], packet[1]]);
+        let start = (
+            i32::from((header & 0xFF80) as i16),
+            usize::from(header & 0x7F),
+        );
+        let (predictor, index) = match self.state {
+            Some((predictor, index))
+                if index == start.1 && (predictor - start.0).abs() <= CARRY_RANGE =>
+            {
+                (predictor, index)
+            }
+            _ => (start.0, start.1.min(MAX_INDEX)),
+        };
+        let (samples, end) = decode_codes(packet, predictor, index);
+        self.state = Some(end);
+        samples
+    }
+}
+
+/// Decodes a packet's 64 codes from `predictor` and step `index`, returning
+/// the samples and the predictor and index they end with.
+fn decode_codes(
+    packet: &[u8; PACKET_LEN],
+    mut predictor: i32,
+    mut index: usize,
+) -> ([i16; PACKET_SAMPLES], (i32, usize)) {
     let mut samples = [0; PACKET_SAMPLES];
     let codes = packet[2..]
         .iter()
@@ -64,7 +105,7 @@ pub(super) fn decode_packet(packet: &[u8; PACKET_LEN]) -> [i16; PACKET_SAMPLES] 
             .saturating_add_signed(INDEX_MOVE[usize::from(code & 7)])
             .min(MAX_INDEX);
     }
-    samples
+    (samples, (predictor, index))
 }
 
 #[cfg(test)]
@@ -78,6 +119,51 @@ mod tests {
         packet[..2].copy_from_slice(&header.to_be_bytes());
         packet[2..2 + bytes.len()].copy_from_slice(bytes);
         packet
+    }
+
+    /// One packet decoded by a fresh channel.
+    fn decode_packet(packet: &[u8; PACKET_LEN]) -> [i16; PACKET_SAMPLES] {
+        Channel::default().decode(packet)
+    }
+
+    /// The first sample of `next`, decoded after `first` on one channel.
+    fn after(first: &[u8; PACKET_LEN], next: &[u8; PACKET_LEN]) -> i16 {
+        let mut channel = Channel::default();
+        channel.decode(first);
+        channel.decode(next)[0]
+    }
+
+    #[test]
+    fn a_close_header_continues_from_the_running_predictor() {
+        // Codes 0, 4, 0xC from 0 at index 0 end at predictor 1, index 0.
+        let ends_at_1 = packet(0x0000, &[0x40, 0x0C]);
+        assert_eq!(decode_packet(&ends_at_1)[63], 1);
+        // Header predictor 0 or 128 (within 0x7F of 1), index 0: carry on
+        // from 1 rather than restart at the header's predictor.
+        assert_eq!(after(&ends_at_1, &packet(0x0000, &[])), 1);
+        assert_eq!(after(&ends_at_1, &packet(0x0080, &[])), 1);
+        // Header predictor -128 is 129 away: restart from it.
+        assert_eq!(after(&ends_at_1, &packet(0xFF80, &[])), -128);
+        // A different index restarts too: index 1 (step 8), code 4 adds 9.
+        assert_eq!(after(&ends_at_1, &packet(0x0001, &[0x04])), 9);
+    }
+
+    #[test]
+    fn a_header_exactly_0x80_away_restarts() {
+        // Codes 6, 7, 6 from 0 at index 0 end at predictor 128, index 0.
+        let ends_at_128 = packet(0x0000, &[0x76, 0x06]);
+        assert_eq!(decode_packet(&ends_at_128)[63], 128);
+        assert_eq!(after(&ends_at_128, &packet(0x0000, &[])), 0);
+        assert_eq!(after(&ends_at_128, &packet(0x0080, &[0x04])), 135);
+    }
+
+    #[test]
+    fn the_carried_index_is_the_running_one() {
+        // Code 4 then zeros from index 0 ends at index 0, predictor 9; the
+        // next packet's code 4 at the carried index 0 adds 7.
+        let first = packet(0x0000, &[0x04]);
+        assert_eq!(decode_packet(&first)[63], 9);
+        assert_eq!(after(&first, &packet(0x0000, &[0x04])), 16);
     }
 
     #[test]

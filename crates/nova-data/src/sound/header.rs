@@ -2,7 +2,7 @@
 
 use super::SoundError;
 use super::bytes::{array_at, i16_at, u8_at, u16_at, u32_at};
-use super::ima4::{PACKET_LEN, PACKET_SAMPLES, decode_packet};
+use super::ima4::{Channel, PACKET_LEN, PACKET_SAMPLES};
 use super::pcm::{Pcm, SampleRate};
 
 /// `encode` of a standard header: 8-bit mono samples.
@@ -90,17 +90,20 @@ fn sample_data(data: &[u8], offset: usize, needed: u64) -> Result<&[u8], SoundEr
         })
 }
 
-/// IMA4 packets, `channels` per frame of 64, to interleaved samples.
+/// IMA4 packets, `channels` (1 or 2) per frame of 64, to interleaved
+/// samples. Each channel's packets go through that channel's decoder.
 fn decode_ima4(bytes: &[u8], channels: u16) -> Vec<i16> {
     let channels = usize::from(channels);
     let (packets, _) = bytes.as_chunks::<PACKET_LEN>();
     let mut samples = vec![0; packets.len() * PACKET_SAMPLES];
+    let mut decoders = [Channel::default(); 2];
     let frames = packets
         .chunks_exact(channels)
         .zip(samples.chunks_exact_mut(PACKET_SAMPLES * channels));
     for (frame_packets, out) in frames {
-        for (channel, packet) in frame_packets.iter().enumerate() {
-            let decoded = decode_packet(packet);
+        let channel_packets = frame_packets.iter().zip(&mut decoders).enumerate();
+        for (channel, (packet, decoder)) in channel_packets {
+            let decoded = decoder.decode(packet);
             for (slot, sample) in out.iter_mut().skip(channel).step_by(channels).zip(decoded) {
                 *slot = sample;
             }
@@ -448,6 +451,28 @@ mod compressed_tests {
         assert_eq!(left[64..], [256; 64]);
         assert_eq!(right[..64], [-128; 64]);
         assert_eq!(right[64..], [-256; 64]);
+    }
+
+    #[test]
+    fn each_channel_carries_its_own_state_between_packets() {
+        // The left channel ends its first packet at predictor 1, index 0,
+        // so its second packet (header 128, index 0) carries on from 1. A
+        // state shared with the right channel (at -1280) would restart it
+        // at 128.
+        let mut codes = [0; 64];
+        codes[1] = 4;
+        codes[2] = 0xC;
+        let packets = vec![
+            ima4_packet(0, 0, codes),
+            flat(-1280),
+            flat(128),
+            flat(-1280),
+        ];
+        let pcm = decode(compressed(2, packets)).unwrap();
+        let left: Vec<i16> = pcm.samples().iter().step_by(2).copied().collect();
+        assert_eq!(left[63..], [1; 65]);
+        assert_eq!(pcm.samples()[1..2], [-1280]);
+        assert_eq!(pcm.samples()[255], -1280);
     }
 
     #[test]
