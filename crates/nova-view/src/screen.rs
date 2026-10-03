@@ -22,6 +22,12 @@ pub trait Screen {
     fn tick(&mut self, dt: Duration);
     /// Draws the screen into `list`, in logical coordinates.
     fn draw(&self, list: &mut DrawList);
+    /// Abandons any pointer gesture in progress (a held button, a drag)
+    /// without completing it: what follows is not a click or a drop. Called
+    /// when the screen stops receiving input, such as when the app hides it,
+    /// since the button's release will then go elsewhere. Does nothing by
+    /// default.
+    fn cancel_pointer(&mut self) {}
 }
 
 #[cfg(test)]
@@ -75,5 +81,16 @@ mod tests {
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);
         assert_eq!(counter.elapsed, Duration::from_millis(5));
+    }
+
+    #[test]
+    fn cancelling_the_pointer_does_nothing_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        screen.cancel_pointer();
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
     }
 }

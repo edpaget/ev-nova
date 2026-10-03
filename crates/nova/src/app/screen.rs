@@ -92,8 +92,10 @@ pub fn start_screen(data: Rc<GameData>) -> AppScreen {
 }
 
 impl Screen for AppScreen {
-    /// A Tab press switches screens; Tab's release is consumed too.
-    /// Everything else goes to the screen shown.
+    /// A Tab press switches screens, first cancelling any pointer gesture on
+    /// the screen it hides (whose button release will now go to the other
+    /// screen); Tab's release is consumed too. Everything else goes to the
+    /// screen shown.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
             key: Key::Tab,
@@ -101,6 +103,7 @@ impl Screen for AppScreen {
         } = *input
         {
             if pressed {
+                self.shown_mut().cancel_pointer();
                 self.showing = match self.showing {
                     Showing::ShipBrowser => Showing::GalaxyMap,
                     Showing::GalaxyMap => Showing::ShipBrowser,
@@ -285,6 +288,34 @@ mod tests {
         screen.input(&key(Key::Tab, true));
         assert_eq!(*screen.galaxy_map().view(), view);
         assert_eq!(screen.galaxy_map().selected(), selected);
+    }
+
+    #[test]
+    fn switching_away_cancels_a_drag_whose_release_the_other_screen_gets() {
+        let mut screen = AppScreen::new(data());
+        screen.input(&key(Key::Tab, true));
+        let map = screen.galaxy_map();
+        let view = *map.view();
+        let at = map.view().world_to_screen(
+            map.model()
+                .system(SystemId(129))
+                .expect("a system")
+                .position(),
+        );
+        let left = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+
+        screen.input(&left(true));
+        screen.input(&key(Key::Tab, true));
+        screen.input(&left(false));
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(screen.showing(), Showing::GalaxyMap);
+        screen.input(&Input::PointerMoved(Point::new(at.x + 50.0, at.y)));
+        assert_eq!(*screen.galaxy_map().view(), view, "no drag");
+        assert_eq!(screen.galaxy_map().selected(), None);
     }
 
     #[test]

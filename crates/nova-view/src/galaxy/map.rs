@@ -355,6 +355,12 @@ impl Screen for GalaxyMap {
         self.draw_map(list);
         self.draw_panel(list);
     }
+
+    /// Forgets the left-button press, if any: the map stops dragging and the
+    /// release, wherever it ends up, is not a click.
+    fn cancel_pointer(&mut self) {
+        self.press = None;
+    }
 }
 
 #[cfg(test)]
@@ -839,6 +845,23 @@ mod tests {
         map.input(&Input::PointerMoved(at(beta.x - 50.0, beta.y)));
         // The release happened outside the window.
         let beta = dot(&map, 129);
+        click(&mut map, beta);
+        assert_eq!(map.selected(), Some(SystemId(129)));
+    }
+
+    #[test]
+    fn cancelling_the_pointer_forgets_the_press_without_a_click() {
+        let mut map = map();
+        let view = *map.view();
+        let beta = dot(&map, 129);
+        map.input(&button(MouseButton::Left, true, beta));
+        map.cancel_pointer();
+        map.input(&Input::PointerMoved(at(beta.x + 50.0, beta.y)));
+        assert_eq!(*map.view(), view, "no drag");
+        map.input(&button(MouseButton::Left, false, beta));
+        assert_eq!(map.selected(), None, "no click");
+
+        // The next press starts afresh.
         click(&mut map, beta);
         assert_eq!(map.selected(), Some(SystemId(129)));
     }
