@@ -21,6 +21,7 @@ pub mod image;
 pub mod input;
 pub mod screen;
 pub mod ships;
+pub mod system;
 mod time;
 
 pub use color::Color;
