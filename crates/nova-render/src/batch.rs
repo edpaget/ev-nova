@@ -68,7 +68,8 @@ impl<S: ImageSource> Renderer<S> {
 
     /// Draws `list` into `viewport` through `gpu`: uploads images seen for
     /// the first time, then submits one frame. A zero-area viewport draws
-    /// nothing.
+    /// nothing. Text that is empty, or whose size is not a positive, finite
+    /// number of pixels, is skipped.
     pub fn render(
         &mut self,
         list: &DrawList,
@@ -117,6 +118,14 @@ impl<S: ImageSource> Renderer<S> {
                     color,
                 } => {
                     let size_px = size * scale;
+                    let line_height_px = LINE_HEIGHT * size_px;
+                    // Text with nothing in it draws nothing. Nor does text
+                    // whose size is zero, negative, NaN or too big to give
+                    // a finite line height in pixels, and the text shaper
+                    // would panic on some of those, so skip both.
+                    if text.is_empty() || !(line_height_px.is_finite() && line_height_px > 0.0) {
+                        continue;
+                    }
                     let run = TextRun {
                         text: text.clone(),
                         origin_px: (
@@ -124,7 +133,7 @@ impl<S: ImageSource> Renderer<S> {
                             rect.y as f32 + origin.y * scale,
                         ),
                         size_px,
-                        line_height_px: LINE_HEIGHT * size_px,
+                        line_height_px,
                         wrap_px: wrap_width.map(|w| w * scale),
                         color,
                         clip: rect,
@@ -701,6 +710,51 @@ mod tests {
                     clip: rect(0, 0, 128, 96),
                 },
             ])]
+        );
+    }
+
+    #[test]
+    fn text_with_no_drawable_size_or_no_characters_is_skipped() {
+        let white = Color::WHITE;
+        let dot = SolidQuad {
+            corners: [at(0.5, 0.5), at(1.5, 0.5), at(1.5, 1.5), at(0.5, 1.5)],
+            color: WHITE,
+        };
+        let line = SolidQuad {
+            corners: [at(0.0, 2.5), at(4.0, 2.5), at(4.0, 1.5), at(0.0, 1.5)],
+            color: WHITE,
+        };
+        let mut list = DrawList::new();
+        list.text("zero", at(0.0, 0.0), 0.0, None, white)
+            .dot(at(1.0, 1.0), 1.0, white)
+            .text("negative", at(0.0, 0.0), -8.0, None, white)
+            .text("nan", at(0.0, 0.0), f32::NAN, None, white)
+            .text("infinite", at(0.0, 0.0), f32::INFINITY, None, white)
+            // Finite, but infinite once scaled to pixels.
+            .text("huge", at(0.0, 0.0), f32::MAX, None, white)
+            // Finite in pixels, but its line height is not.
+            .text("tall", at(0.0, 0.0), f32::MAX / 2.2, None, white)
+            .text("", at(0.0, 0.0), 8.0, None, white)
+            .line(at(0.0, 2.0), at(4.0, 2.0), 1.0, white)
+            .text("ok", at(0.0, 0.0), 8.0, None, white);
+
+        let frame = render_one(&list, &viewport());
+
+        // The skipped runs leave no text batch, nor split the solid one.
+        assert_eq!(
+            frame.batches,
+            vec![
+                Batch::Solid(vec![dot, line]),
+                Batch::Text(vec![TextRun {
+                    text: "ok".to_owned(),
+                    origin_px: (0.0, 0.0),
+                    size_px: 16.0,
+                    line_height_px: 1.2 * 16.0,
+                    wrap_px: None,
+                    color: white,
+                    clip: rect(0, 0, 128, 96),
+                }]),
+            ]
         );
     }
 

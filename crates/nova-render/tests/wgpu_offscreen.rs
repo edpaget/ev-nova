@@ -241,6 +241,24 @@ fn text_draws_inside_its_clip_box() {
 }
 
 #[test]
+fn zero_size_text_draws_nothing_and_the_frame_goes_on() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let mut list = DrawList::new();
+    list.text("EV Nova", Point::new(2.0, 2.0), 0.0, None, Color::WHITE)
+        .dot(Point::new(16.0, 12.0), 2.0, Color::rgba(255, 0, 0, 255));
+    let mut renderer = Renderer::new(Images);
+
+    renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    // The dot: logical (15..17, 11..13) is pixels (30..34, 30..34).
+    assert_near(&pixels, (31, 31), [255, 0, 0, 255], 2);
+    assert_near(&pixels, (31, 29), BLACK, 0);
+}
+
+#[test]
 fn the_font_count_is_the_systems() {
     let Some(gpu) = gpu() else {
         return;
