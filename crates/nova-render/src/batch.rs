@@ -3,12 +3,15 @@
 
 use std::collections::{HashMap, HashSet};
 
-use nova_view::{Color, DrawCommand, DrawList, ImageKey, ImageKind};
+use nova_view::{Color, DrawCommand, DrawList, ImageKey, ImageKind, Point};
 
 use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE};
-use crate::gpu::{Batch, Frame, Gpu, QuadInstance, Rect};
+use crate::gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
 use crate::images::{ImageError, ImageSource};
 use crate::viewport::Viewport;
+
+/// Line spacing as a multiple of the font size.
+const LINE_HEIGHT: f32 = 1.2;
 
 /// What went wrong while rendering one frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -73,7 +76,7 @@ impl<S: ImageSource> Renderer<S> {
         gpu: &mut impl Gpu,
     ) -> RenderReport {
         let mut report = RenderReport::default();
-        let Some((rect, _scale)) = viewport.content() else {
+        let Some((rect, scale)) = viewport.content() else {
             return report;
         };
         let mut batches: Vec<Batch> = Vec::new();
@@ -106,7 +109,43 @@ impl<S: ImageSource> Renderer<S> {
                         push_quad(&mut batches, &entry, dest, rgba(Color::WHITE));
                     }
                 }
-                _ => {}
+                DrawCommand::Text {
+                    ref text,
+                    origin,
+                    size,
+                    wrap_width,
+                    color,
+                } => {
+                    let size_px = size * scale;
+                    let run = TextRun {
+                        text: text.clone(),
+                        origin_px: (
+                            rect.x as f32 + origin.x * scale,
+                            rect.y as f32 + origin.y * scale,
+                        ),
+                        size_px,
+                        line_height_px: LINE_HEIGHT * size_px,
+                        wrap_px: wrap_width.map(|w| w * scale),
+                        color,
+                        clip: rect,
+                    };
+                    if let Some(Batch::Text(runs)) = batches.last_mut() {
+                        runs.push(run);
+                    } else {
+                        batches.push(Batch::Text(vec![run]));
+                    }
+                }
+                DrawCommand::Line {
+                    from,
+                    to,
+                    width,
+                    color,
+                } => push_solid(&mut batches, line_corners(from, to, width), color),
+                DrawCommand::Dot {
+                    center,
+                    size,
+                    color,
+                } => push_solid(&mut batches, square(center, size), color),
             }
         }
         gpu.submit(&Frame {
@@ -197,6 +236,48 @@ fn push_quad(batches: &mut Vec<Batch>, entry: &AtlasEntry, dest: Rect, tint: [f3
     });
 }
 
+/// Appends an untextured quad, extending the last batch when it is solid.
+fn push_solid(batches: &mut Vec<Batch>, corners: [Point; 4], color: Color) {
+    let quad = SolidQuad {
+        corners,
+        color: rgba(color),
+    };
+    if let Some(Batch::Solid(quads)) = batches.last_mut() {
+        quads.push(quad);
+    } else {
+        batches.push(Batch::Solid(vec![quad]));
+    }
+}
+
+/// The corners of a line `width` thick: the segment offset half the width
+/// either side along its normal. A zero-length line is a square.
+fn line_corners(from: Point, to: Point, width: f32) -> [Point; 4] {
+    let (dx, dy) = (to.x - from.x, to.y - from.y);
+    let length = dx.hypot(dy);
+    if length == 0.0 {
+        return square(from, width);
+    }
+    let half = width / 2.0;
+    let (nx, ny) = (-dy * half / length, dx * half / length);
+    [
+        Point::new(from.x + nx, from.y + ny),
+        Point::new(to.x + nx, to.y + ny),
+        Point::new(to.x - nx, to.y - ny),
+        Point::new(from.x - nx, from.y - ny),
+    ]
+}
+
+/// The corners of a `size`-wide square centred on `center`.
+fn square(center: Point, size: f32) -> [Point; 4] {
+    let half = size / 2.0;
+    [
+        Point::new(center.x - half, center.y - half),
+        Point::new(center.x + half, center.y - half),
+        Point::new(center.x + half, center.y + half),
+        Point::new(center.x - half, center.y + half),
+    ]
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -207,7 +288,7 @@ mod tests {
     use nova_view::{Color, DrawList, ImageKey, ImageKind, Point};
 
     use super::*;
-    use crate::gpu::{Batch, Frame, QuadInstance, Rect};
+    use crate::gpu::{Batch, Frame, QuadInstance, Rect, SolidQuad, TextRun};
     use crate::recording::{GpuCall, RecordingGpu};
     use crate::viewport::{LogicalSize, PixelRect, Viewport};
     use crate::{PackError, PageId, Uv};
@@ -567,5 +648,169 @@ mod tests {
         assert_eq!(frames(&images, 128), Ok(vec![red_picture()]));
         assert_eq!(frames(&images, 1), Err(ImageError::Missing));
         assert_eq!(images.calls().len(), 2);
+    }
+
+    fn solid_quads(frame: &Frame) -> Vec<SolidQuad> {
+        frame
+            .batches
+            .iter()
+            .flat_map(|batch| match batch {
+                Batch::Solid(quads) => quads.clone(),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    fn render_one(list: &DrawList, viewport: &Viewport) -> Frame {
+        let mut renderer = renderer(images());
+        let mut gpu = RecordingGpu::new();
+        renderer.render(list, viewport, &mut gpu);
+        let submits = gpu.submits();
+        assert_eq!(submits.len(), 1);
+        submits[0].clone()
+    }
+
+    #[test]
+    fn text_is_converted_to_physical_pixels() {
+        let color = Color::rgba(1, 2, 3, 4);
+        let mut list = DrawList::new();
+        list.text("Hello", at(1.5, 2.0), 10.0, Some(20.0), color)
+            .text("Unwrapped", at(0.0, 0.0), 8.0, None, Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            frame.batches,
+            vec![Batch::Text(vec![
+                TextRun {
+                    text: "Hello".to_owned(),
+                    origin_px: (3.0, 4.0),
+                    size_px: 20.0,
+                    line_height_px: 1.2 * 20.0,
+                    wrap_px: Some(40.0),
+                    color,
+                    clip: rect(0, 0, 128, 96),
+                },
+                TextRun {
+                    text: "Unwrapped".to_owned(),
+                    origin_px: (0.0, 0.0),
+                    size_px: 16.0,
+                    line_height_px: 1.2 * 16.0,
+                    wrap_px: None,
+                    color: Color::WHITE,
+                    clip: rect(0, 0, 128, 96),
+                },
+            ])]
+        );
+    }
+
+    #[test]
+    fn text_in_a_pillarboxed_window_is_offset_by_the_bar() {
+        let mut list = DrawList::new();
+        list.text("Hi", at(1.0, 2.0), 10.0, None, Color::WHITE);
+        let frame = render_one(&list, &Viewport::new(SMALL, (160, 96), 2.0));
+        let Batch::Text(runs) = &frame.batches[0] else {
+            panic!("{frame:?}");
+        };
+        // 64x48 at scale 2 is 128x96, centred in 160x96.
+        assert_eq!(runs[0].origin_px, (18.0, 4.0));
+        assert_eq!(runs[0].clip, rect(16, 0, 128, 96));
+        let letterboxed = render_one(&list, &Viewport::new(SMALL, (128, 128), 2.0));
+        let Batch::Text(runs) = &letterboxed.batches[0] else {
+            panic!("{letterboxed:?}");
+        };
+        assert_eq!(runs[0].origin_px, (2.0, 20.0));
+    }
+
+    #[test]
+    fn a_horizontal_line_is_a_quad_its_width_tall() {
+        let blue = Color::rgba(0, 0, 255, 255);
+        let mut list = DrawList::new();
+        list.line(at(2.0, 10.0), at(6.0, 10.0), 2.0, blue);
+        assert_eq!(
+            solid_quads(&render_one(&list, &viewport())),
+            vec![SolidQuad {
+                corners: [at(2.0, 11.0), at(6.0, 11.0), at(6.0, 9.0), at(2.0, 9.0)],
+                color: [0.0, 0.0, 1.0, 1.0],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_vertical_line_is_a_quad_its_width_wide() {
+        let mut list = DrawList::new();
+        list.line(at(5.0, 1.0), at(5.0, 9.0), 4.0, Color::WHITE);
+        assert_eq!(
+            solid_quads(&render_one(&list, &viewport()))[0].corners,
+            [at(3.0, 1.0), at(3.0, 9.0), at(7.0, 9.0), at(7.0, 1.0)]
+        );
+    }
+
+    #[test]
+    fn a_diagonal_line_is_offset_along_its_normal() {
+        // A 3-4-5 line: the unit normal is (-0.8, 0.6), half-width 2.5.
+        let mut list = DrawList::new();
+        list.line(at(0.0, 0.0), at(3.0, 4.0), 5.0, Color::WHITE);
+        assert_eq!(
+            solid_quads(&render_one(&list, &viewport()))[0].corners,
+            [at(-2.0, 1.5), at(1.0, 5.5), at(5.0, 2.5), at(2.0, -1.5)]
+        );
+    }
+
+    #[test]
+    fn a_zero_length_line_is_a_square_its_width_wide() {
+        let mut list = DrawList::new();
+        list.line(at(4.0, 4.0), at(4.0, 4.0), 2.0, Color::WHITE);
+        assert_eq!(
+            solid_quads(&render_one(&list, &viewport()))[0].corners,
+            [at(3.0, 3.0), at(5.0, 3.0), at(5.0, 5.0), at(3.0, 5.0)]
+        );
+    }
+
+    #[test]
+    fn a_dot_is_a_square_centred_on_its_point() {
+        let mut list = DrawList::new();
+        list.dot(at(10.0, 20.0), 3.0, Color::rgba(255, 255, 0, 0));
+        assert_eq!(
+            solid_quads(&render_one(&list, &viewport())),
+            vec![SolidQuad {
+                corners: [at(8.5, 18.5), at(11.5, 18.5), at(11.5, 21.5), at(8.5, 21.5)],
+                color: [1.0, 1.0, 0.0, 0.0],
+            }]
+        );
+    }
+
+    #[test]
+    fn different_kinds_interleave_in_draw_order() {
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(200, 0), at(10.0, 10.0), Color::WHITE)
+            .line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+            .dot(at(1.0, 1.0), 1.0, Color::WHITE)
+            .text("a", at(0.0, 0.0), 8.0, None, Color::WHITE)
+            .text("b", at(0.0, 0.0), 8.0, None, Color::WHITE)
+            .line(at(0.0, 0.0), at(4.0, 0.0), 1.0, Color::WHITE)
+            .sprite(ImageKey::sprite(200, 1), at(10.0, 10.0), Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        let shape: Vec<(&str, usize)> = frame
+            .batches
+            .iter()
+            .map(|batch| match batch {
+                Batch::Sprites { quads, .. } => ("sprites", quads.len()),
+                Batch::Solid(quads) => ("solid", quads.len()),
+                Batch::Text(runs) => ("text", runs.len()),
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("sprites", 1),
+                ("solid", 2),
+                ("text", 2),
+                ("solid", 1),
+                ("sprites", 1)
+            ]
+        );
     }
 }
