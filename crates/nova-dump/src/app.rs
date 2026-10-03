@@ -154,7 +154,7 @@ mod tests {
     use super::*;
     use crate::cli::USAGE;
     use crate::ports::{DataSource, OutputRoot};
-    use crate::testutil::{MemFs, MemSink, fork, record};
+    use crate::testutil::{MemFs, MemSink, fork, native, record};
 
     /// What the fake output directory holds before the run.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -390,10 +390,14 @@ mod tests {
         assert_eq!(run.code, 2);
         assert_eq!(
             run.stderr,
-            "nova-dump: no game data found in /data; pass the 'Nova Files' directory \
-             (2 entries ignored)\n  \
-             /data/.DS_Store: hidden\n  \
-             /data/Nova Files: folder inside the data directory\n"
+            format!(
+                "nova-dump: no game data found in /data; pass the 'Nova Files' directory \
+                 (2 entries ignored)\n  \
+                 {}: hidden\n  \
+                 {}: folder inside the data directory\n",
+                native("/data/.DS_Store"),
+                native("/data/Nova Files"),
+            )
         );
     }
 
@@ -432,7 +436,10 @@ mod tests {
             panic!("{}", run.stdout)
         };
         assert!(
-            file.starts_with("  file /data/Nova Data: not a valid resource fork: "),
+            file.starts_with(&format!(
+                "  file {}: not a valid resource fork: ",
+                native("/data/Nova Data")
+            )),
             "{file}"
         );
         assert_eq!(*total, "failures: 1");
@@ -453,7 +460,7 @@ mod tests {
             );
             assert!(run.stdout.ends_with("\nfailures: 0\n"), "{}", run.stdout);
             assert_eq!(root.calls(), ["create /out", "is_empty /out", "sink /out"]);
-            assert_eq!(root.files(), ["json/spïn.json"]);
+            assert_eq!(root.files(), [native("json/spïn.json")]);
         }
     }
 
@@ -499,7 +506,13 @@ mod tests {
         let run = run_with(&["/data", "/out"], &good_data(), &root);
         assert_eq!(run.code, 2);
         assert_eq!(run.stdout, "");
-        assert_eq!(run.stderr, "nova-dump: writing json/spïn.json: disk full\n");
+        assert_eq!(
+            run.stderr,
+            format!(
+                "nova-dump: writing {}: disk full\n",
+                native("json/spïn.json")
+            )
+        );
     }
 
     #[test]
@@ -554,9 +567,10 @@ mod tests {
             panic!("{}", run.stdout)
         };
         assert!(
-            ship.starts_with(
-                "  shïp 128 \"Shuttle\" in /plugins/Bad Ship: unexpected end of data at byte 0x"
-            ),
+            ship.starts_with(&format!(
+                "  shïp 128 \"Shuttle\" in {}: unexpected end of data at byte 0x",
+                native("/plugins/Bad Ship")
+            )),
             "{ship}"
         );
         assert!(
@@ -564,12 +578,18 @@ mod tests {
             "{ship}"
         );
         assert!(
-            file.starts_with("  file /plugins/Broken: not a valid resource fork: "),
+            file.starts_with(&format!(
+                "  file {}: not a valid resource fork: ",
+                native("/plugins/Broken")
+            )),
             "{file}"
         );
         assert_eq!(*total, "failures: 2");
         // The rest is still written: both good spïns and the (empty) shïp file.
-        assert_eq!(root.files(), ["json/shïp.json", "json/spïn.json"]);
+        assert_eq!(
+            root.files(),
+            [native("json/shïp.json"), native("json/spïn.json")]
+        );
         assert!(run.stdout.starts_with("records: 2 in 2 JSON files\n"));
     }
 
@@ -601,15 +621,18 @@ mod tests {
         assert_eq!(
             lines[at + 1..],
             [
-                "  snd  500 \"drone\" in /plugins/Slow: sample rate 0x00000001 (16.16) is below \
-                 0.5 Hz, too low for a WAV file",
-                "failures: 1",
+                format!(
+                    "  snd  500 \"drone\" in {}: sample rate 0x00000001 (16.16) is below \
+                     0.5 Hz, too low for a WAV file",
+                    native("/plugins/Slow")
+                ),
+                "failures: 1".to_owned(),
             ],
             "{}",
             run.stdout
         );
         assert!(run.stdout.contains("sounds: 0 snd\n"), "{}", run.stdout);
-        assert_eq!(root.files(), ["json/spïn.json"]);
+        assert_eq!(root.files(), [native("json/spïn.json")]);
     }
 
     #[test]
@@ -643,7 +666,7 @@ mod tests {
         assert!(
             lines[at + 3..]
                 .iter()
-                .any(|l| l.starts_with("  file /plugins/Broken: ")),
+                .any(|l| l.starts_with(&format!("  file {}: ", native("/plugins/Broken")))),
             "{}",
             run.stdout
         );

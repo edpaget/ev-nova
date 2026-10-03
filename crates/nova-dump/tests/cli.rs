@@ -94,8 +94,9 @@ fn stdout(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("UTF-8")
 }
 
-/// Every file under `dir`, relative to it, sorted.
-fn files(dir: &Path) -> Vec<String> {
+/// Every file under `dir`, relative to it, sorted. Paths compare component
+/// by component, so `/`-written expectations hold on every platform.
+fn files(dir: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
     while let Some(next) = pending.pop() {
@@ -105,7 +106,7 @@ fn files(dir: &Path) -> Vec<String> {
                 pending.push(path);
             } else {
                 let rel = path.strip_prefix(dir).expect("under dir");
-                found.push(rel.to_string_lossy().into_owned());
+                found.push(rel.to_path_buf());
             }
         }
     }
@@ -128,8 +129,9 @@ fn a_clean_run_exits_0_and_writes_every_kind() {
             "png/rlëD/1000.png",
             "wav/200 zap.wav",
         ]
+        .map(PathBuf::from)
     );
-    let wav = std::fs::read(tree.path("out/wav/200 zap.wav")).expect("written");
+    let wav = std::fs::read(tree.path("out").join("wav").join("200 zap.wav")).expect("written");
     assert_eq!(&wav[..4], b"RIFF");
     assert_eq!(wav.len(), 44 + 16);
 }
@@ -145,8 +147,8 @@ fn a_corrupt_record_and_an_unreadable_plug_in_exit_1_and_are_both_listed() {
         .skip_while(|line| *line != "Failures:")
         .skip(1)
         .collect();
-    let bad_ship = tree.path("plugins/Bad Ship");
-    let broken = tree.path("plugins/Broken");
+    let bad_ship = tree.path("plugins").join("Bad Ship");
+    let broken = tree.path("plugins").join("Broken");
     assert_eq!(failures.len(), 3, "{text}");
     assert!(
         failures[0].starts_with(&format!(

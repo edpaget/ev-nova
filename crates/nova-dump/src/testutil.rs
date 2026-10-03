@@ -18,6 +18,20 @@ pub const DATA: &str = "/data";
 /// The plug-ins directory a [`MemFs`] store opens when it has plug-ins.
 pub const PLUGINS: &str = "/plugins";
 
+/// `path`, written with `/` in a test, as the program displays it: rebuilt
+/// with [`Path::join`] one segment at a time, so it carries the platform's
+/// separator (`/data\Nova Data` on Windows). A leading `/` is kept.
+pub fn native(path: &str) -> String {
+    let (start, rest) = match path.strip_prefix('/') {
+        Some(rest) => ("/", rest),
+        None => ("", path),
+    };
+    rest.split('/')
+        .fold(PathBuf::from(start), |joined, segment| joined.join(segment))
+        .display()
+        .to_string()
+}
+
 /// An in-memory file tree: each file's flattened fork is its data fork.
 /// Directories are implied by the files under them; `/data` always exists.
 #[derive(Default)]
@@ -160,5 +174,30 @@ impl Sink for MemSink {
 impl Sink for Rc<RefCell<MemSink>> {
     fn write(&mut self, rel: &Path, bytes: &[u8]) -> io::Result<()> {
         self.borrow_mut().write(rel, bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_joins_each_segment_like_the_program_does() {
+        assert_eq!(
+            native("/data/Nova Files"),
+            Path::new("/data").join("Nova Files").display().to_string()
+        );
+        assert_eq!(
+            native("json/spïn.json"),
+            Path::new("json").join("spïn.json").display().to_string()
+        );
+        assert_eq!(native("/data"), "/data");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_is_the_identity_on_unix() {
+        assert_eq!(native("/plugins/Bad Ship"), "/plugins/Bad Ship");
+        assert_eq!(native("png/PICT/128.png"), "png/PICT/128.png");
     }
 }

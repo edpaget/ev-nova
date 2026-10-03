@@ -94,22 +94,24 @@ mod tests {
         load_order(tree, Path::new("/d"), plugins.map(Path::new)).expect("walks")
     }
 
-    fn paths(walk: &Walk) -> Vec<(String, Origin)> {
-        walk.candidates
-            .iter()
-            .map(|(path, origin)| (path.display().to_string(), *origin))
-            .collect()
+    // Paths compare as `PathBuf`s, component by component, so a `/`-written
+    // expectation matches the walk's native separators on every platform.
+    fn paths(walk: &Walk) -> Vec<(PathBuf, Origin)> {
+        walk.candidates.clone()
     }
 
-    fn ignored(walk: &Walk) -> Vec<(String, IgnoreReason)> {
+    fn ignored(walk: &Walk) -> Vec<(PathBuf, IgnoreReason)> {
         walk.ignored
             .iter()
-            .map(|entry| (entry.path.display().to_string(), entry.reason.clone()))
+            .map(|entry| (entry.path.clone(), entry.reason.clone()))
             .collect()
     }
 
-    fn owned(items: &[(&str, Origin)]) -> Vec<(String, Origin)> {
-        items.iter().map(|(p, o)| ((*p).to_owned(), *o)).collect()
+    fn owned<T: Clone>(items: &[(&str, T)]) -> Vec<(PathBuf, T)> {
+        items
+            .iter()
+            .map(|(p, t)| (PathBuf::from(p), t.clone()))
+            .collect()
     }
 
     #[test]
@@ -193,7 +195,7 @@ mod tests {
         assert_eq!(paths(&walk), owned(&[("/d/f", Origin::Data)]));
         assert_eq!(
             ignored(&walk),
-            [("/d/Sub".to_owned(), IgnoreReason::DataSubFolder)]
+            owned(&[("/d/Sub", IgnoreReason::DataSubFolder)])
         );
         assert_eq!(tree.listed(), [PathBuf::from("/d")]);
     }
@@ -214,15 +216,12 @@ mod tests {
         );
         assert_eq!(
             ignored(&walk),
-            [
-                ("/d/.DS_Store".to_owned(), IgnoreReason::Hidden),
-                (
-                    "/d/Music.mp3".to_owned(),
-                    IgnoreReason::NotGameData("mp3".to_owned())
-                ),
-                ("/p/fifo".to_owned(), IgnoreReason::NotAFile),
-                ("/p/L".to_owned(), IgnoreReason::Symlink),
-            ]
+            owned(&[
+                ("/d/.DS_Store", IgnoreReason::Hidden),
+                ("/d/Music.mp3", IgnoreReason::NotGameData("mp3".to_owned())),
+                ("/p/fifo", IgnoreReason::NotAFile),
+                ("/p/L", IgnoreReason::Symlink),
+            ])
         );
         assert_eq!(tree.listed(), [PathBuf::from("/d"), PathBuf::from("/p")]);
     }

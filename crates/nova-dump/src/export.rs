@@ -306,7 +306,7 @@ mod tests {
 
     use super::*;
     use crate::names::type_component;
-    use crate::testutil::{MemFs, MemSink, fork, record, store};
+    use crate::testutil::{MemFs, MemSink, fork, native, record, store};
 
     const PICT: ResType = ResType::new(*b"PICT");
     const CICN: ResType = ResType::new(*b"cicn");
@@ -382,12 +382,21 @@ mod tests {
         ]
     }
 
+    // Output paths as the sink sees them, joined with the platform's
+    // separator, displayed.
     fn png_path(ty: ResType, stem: &str) -> String {
-        format!("png/{}/{stem}.png", type_component(ty))
+        Path::new("png")
+            .join(type_component(ty))
+            .join(format!("{stem}.png"))
+            .display()
+            .to_string()
     }
 
     fn json_path(ty: ResType) -> String {
-        format!("json/{}.json", type_component(ty))
+        Path::new("json")
+            .join(format!("{}.json", type_component(ty)))
+            .display()
+            .to_string()
     }
 
     fn json(sink: &MemSink, ty: ResType) -> Value {
@@ -404,18 +413,22 @@ mod tests {
         let mut sink = MemSink::default();
         let outcome = export(&data, &mut sink).expect("writes");
 
-        let mut expected = vec![
+        // Sorted as paths, like the sink's keys: a string sort can order a
+        // separator differently from a component-wise one.
+        let mut expected: Vec<PathBuf> = [
             png_path(PICT, "128 Land_scape"),
             png_path(CICN, "200"),
             png_path(PPAT, "300 Tile"),
             png_path(RLED, "1000 Shuttle"),
             png_path(RLED, "1001"),
-            "wav/500 zap.wav".to_owned(),
+            native("wav/500 zap.wav"),
             json_path(ShipAnim::TYPE),
             json_path(Spin::TYPE),
-        ];
+        ]
+        .map(PathBuf::from)
+        .into();
         expected.sort();
-        assert_eq!(sink.paths(), expected);
+        assert_eq!(sink.files.keys().cloned().collect::<Vec<_>>(), expected);
         assert_eq!(
             outcome.counts,
             Counts {
@@ -447,7 +460,7 @@ mod tests {
         assert_eq!(sink.get(&png_path(PPAT, "300 Tile")), png_of(&ppat));
         let pcm = decode_snd(&snd()).expect("decodes");
         let wav = crate::wav::encode(&pcm).expect("small");
-        assert_eq!(sink.get("wav/500 zap.wav"), wav);
+        assert_eq!(sink.get(&native("wav/500 zap.wav")), wav);
     }
 
     #[test]
@@ -507,14 +520,14 @@ mod tests {
                 {
                     "id": 200,
                     "name": null,
-                    "source": "/data/Nova Data",
+                    "source": native("/data/Nova Data"),
                     "warning": warning,
                     "record": any(&padded),
                 },
                 {
                     "id": 201,
                     "name": "Rock",
-                    "source": "/data/Nova Data",
+                    "source": native("/data/Nova Data"),
                     "record": any(&spin(5)),
                 },
             ])
@@ -585,10 +598,7 @@ mod tests {
         let mut sink = MemSink::default();
         let outcome = export(&data, &mut sink).expect("writes");
 
-        assert_eq!(
-            sink.paths(),
-            [png_path(PICT, "129"), "wav/501.wav".to_owned()]
-        );
+        assert_eq!(sink.paths(), [png_path(PICT, "129"), native("wav/501.wav")]);
         let failed: Vec<FailedRow> = outcome
             .failures
             .iter()
@@ -716,7 +726,7 @@ mod tests {
         export(&data, &mut sink).expect("writes");
         let spins = json(&sink, Spin::TYPE);
         assert_eq!(spins[0]["name"], "New");
-        assert_eq!(spins[0]["source"], "/plugins/Better Rocks");
+        assert_eq!(spins[0]["source"], native("/plugins/Better Rocks"));
         assert_eq!(spins[0]["record"]["sprites_id"], 2);
         assert_eq!(spins.as_array().map(Vec::len), Some(1));
     }
