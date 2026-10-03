@@ -1,11 +1,12 @@
 //! The game data store over the stock EV Nova data files.
 //!
 //! The game data is copyrighted and never committed, so these tests get its
-//! location from `common`, the only place `NOVA_DATA` (the `Nova Files`
-//! directory) is read, and skip, passing, when it is unset. Expected
-//! contents come from an independent later-wins union of the stock files,
-//! opened one by one in sorted order. Each test collects every failure
-//! before asserting.
+//! location from `common`, the only place `NOVA_DATA` (the Mac `Nova Files`
+//! directory) and `NOVA_DATA_REZ` (the Windows one) are read, and skip,
+//! passing, when a variable they need is unset. Expected contents come from
+//! an independent later-wins union of the stock files, opened one by one in
+//! sorted order, and the Windows store must equal the Mac one. Each test
+//! collects every failure before asserting.
 
 mod common;
 
@@ -15,13 +16,14 @@ use std::path::Path;
 use nova_data::records::mission::Mission;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
+use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::order::IgnoreReason;
 use nova_data::store::{GameData, Origin};
 use nova_data::{AnyRecord, Record, Registered, ShipId, TYPES, decode_any};
 use nova_rsrc::{ResType, ResourceFile};
 
-use common::{ndat_files, nova_data};
+use common::{ndat_files, nova_data, nova_data_rez, rez_files};
 
 fn name(path: &Path) -> String {
     path.file_name()
@@ -34,13 +36,30 @@ fn open(dir: &Path) -> GameData {
     GameData::open(dir, None).expect("the stock data opens")
 }
 
+fn stem(path: &Path) -> String {
+    path.file_stem()
+        .expect("file name")
+        .to_string_lossy()
+        .into_owned()
+}
+
 #[test]
 fn the_stock_folder_loads_every_data_file_and_ignores_the_media() {
     let Some(dir) = nova_data() else { return };
-    let data = open(&dir);
+    assert_loads(&open(&dir), &ndat_files(&dir));
+}
 
+#[test]
+fn the_windows_stock_folder_loads_every_rez_file_and_ignores_the_media() {
+    let Some(dir) = nova_data_rez() else { return };
+    assert_loads(&open(&dir), &rez_files(&dir));
+}
+
+/// The store loaded exactly the 21 `files`, with no failures, and ignored
+/// only the music and the four race movies.
+fn assert_loads(data: &GameData, files: &[std::path::PathBuf]) {
     let loaded: Vec<String> = data.files().iter().map(|f| name(&f.path)).collect();
-    let expected: Vec<String> = ndat_files(&dir).iter().map(|p| name(p)).collect();
+    let expected: Vec<String> = files.iter().map(|p| name(p)).collect();
     assert_eq!(loaded, expected);
     assert_eq!(loaded.len(), 21);
     assert!(data.files().iter().all(|f| f.origin == Origin::Data));
@@ -155,15 +174,56 @@ fn typed_count<T: Registered>(data: &GameData) -> usize {
         .count()
 }
 
+/// The stock survey's counts, and the shuttle's source file.
+fn assert_survey_counts(data: &GameData, shuttle_file: &str) {
+    assert_eq!(typed_count::<Ship>(data), 288);
+    assert_eq!(typed_count::<System>(data), 545);
+    assert_eq!(typed_count::<Mission>(data), 791);
+    assert_eq!(typed_count::<Stellar>(data), 411);
+    let shuttle = data.get::<Ship>(128).expect("present").expect("decodes");
+    assert_eq!(name(&shuttle.source.path), shuttle_file);
+}
+
 #[test]
 fn typed_iteration_counts_match_the_stock_survey() {
     let Some(dir) = nova_data() else { return };
-    let data = open(&dir);
-    assert_eq!(typed_count::<Ship>(&data), 288);
-    assert_eq!(typed_count::<System>(&data), 545);
-    assert_eq!(typed_count::<Mission>(&data), 791);
-    let shuttle = data.get::<Ship>(128).expect("present").expect("decodes");
-    assert_eq!(name(&shuttle.source.path), "Nova Data 1.ndat");
+    assert_survey_counts(&open(&dir), "Nova Data 1.ndat");
+}
+
+#[test]
+fn windows_typed_iteration_counts_match_the_stock_survey() {
+    let Some(dir) = nova_data_rez() else { return };
+    assert_survey_counts(&open(&dir), "Nova Data 1.rez");
+}
+
+#[test]
+fn the_windows_store_equals_the_mac_store() {
+    let (Some(mac), Some(windows)) = (nova_data(), nova_data_rez()) else {
+        return;
+    };
+    let (mac, windows) = (open(&mac), open(&windows));
+
+    let mut problems = Vec::new();
+    let mut records = 0;
+    for &ty in TYPES {
+        if windows.ids(ty) != mac.ids(ty) {
+            problems.push(format!("{ty}: ids differ"));
+            continue;
+        }
+        for &id in mac.ids(ty) {
+            records += 1;
+            match (windows.get_any(ty, id), mac.get_any(ty, id)) {
+                (Some(Ok(w)), Some(Ok(m))) => {
+                    if w.record != m.record || stem(&w.source.path) != stem(&m.source.path) {
+                        problems.push(format!("{ty} {id}: differs"));
+                    }
+                }
+                other => problems.push(format!("{ty} {id}: {other:?}")),
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    assert_eq!(records, 7143);
 }
 
 #[test]
