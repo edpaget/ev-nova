@@ -14,10 +14,14 @@
 //! - [`data`]: the port's adapter over `nova_data`'s `GameData`.
 //! - [`preview`]: the [`Preview`] of a picture or sprite sheet.
 //! - [`search`]: [`fold`] and the [`Query`], searching by type, ID or name.
+//! - [`browser`]: the [`ResourceBrowser`], the index read once, searched,
+//!   and the [`Selection`] with its record, files, preview and the text
+//!   the panel shows for them.
 //!
 //! egui draws the overlay only in the `nova` crate's `dev-tools` build,
 //! and only renders this model's strings and images.
 
+pub mod browser;
 pub mod catalog;
 pub mod data;
 pub mod frame_time;
@@ -25,6 +29,7 @@ pub mod overlay;
 pub mod preview;
 pub mod search;
 
+pub use browser::{ResourceBrowser, Selection};
 pub use catalog::{
     Origin, RecordView, ResType, ResourceCatalog, ResourceDetail, ResourceSummary, SourceInfo,
     type_code,
