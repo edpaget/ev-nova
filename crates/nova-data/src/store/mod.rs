@@ -145,6 +145,12 @@
 //! resolves or fails ([`LayerError`]) on its own. A layer frame is usually
 //! larger than a base frame (the `shän`'s `GlowXSize` and `LightXSize`), so
 //! it lines up with the base by sharing its centre.
+//!
+//! # Ship descriptions
+//!
+//! [`GameData::ship_description`] finds a ship's `dësc` by the Bible's
+//! convention, [`ship_desc_id`]: `dësc` 13000 to 13767 describe `shïp` 128
+//! to 895. Many ships (mostly variants) have none, which is not an error.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -162,11 +168,13 @@ use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 mod fake;
 pub mod fs;
 pub mod order;
+mod ship_desc;
 mod sprite;
 #[cfg(test)]
 mod tests;
 mod walk;
 
+pub use self::ship_desc::ship_desc_id;
 pub use self::sprite::{LayerError, LayerSprite, ShipLayer, ShipLayers, ShipSprite, SpriteError};
 
 /// Why the store could not be opened at all.
