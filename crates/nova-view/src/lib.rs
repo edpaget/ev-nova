@@ -18,8 +18,14 @@
 //!   [`system::SystemCatalog`] port.
 //! - [`navigator`]: the [`Navigator`], which shows the galaxy map and the
 //!   system view opened from it, and goes back to the map on Escape.
+//!
+//! # Developer tools
+//!
+//! - [`devtools`]: the developer tools overlay's model, which `nova`
+//!   draws with egui only in its `dev-tools` build.
 
 pub mod color;
+pub mod devtools;
 pub mod draw;
 pub mod galaxy;
 pub mod geometry;
