@@ -6,6 +6,8 @@
 
 use std::borrow::Cow;
 
+use nova_rsrc::ResType;
+
 use super::GraphicsError;
 use super::budget::check_budget;
 use super::color::{ColorTable, indices, rgb555};
@@ -13,6 +15,9 @@ use super::image::Image;
 use super::packbits::unpack;
 use super::pixmap::{PixMap, QdRect};
 use super::reader::Reader;
+
+/// The `PICT` resource type.
+pub const PICT: ResType = ResType::new(*b"PICT");
 
 /// Offset of the version opcode, after `picSize` and `picFrame`.
 const VERSION_OFFSET: usize = 10;
@@ -324,6 +329,13 @@ mod tests {
 
     fn transparent(width: u32, height: u32) -> Image {
         Image::from_rgba(width, height, vec![0; (width * height * 4) as usize]).unwrap()
+    }
+
+    #[test]
+    fn the_resource_type_is_pict_in_mac_roman() {
+        let mac_roman = nova_rsrc::ResType::from_mac_roman("PICT").expect("Mac Roman type");
+        assert_eq!(PICT, mac_roman);
+        assert_eq!(PICT.bytes(), *b"PICT");
     }
 
     /// The smallest valid picture, written out by hand.

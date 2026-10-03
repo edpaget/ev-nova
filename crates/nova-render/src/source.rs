@@ -2,14 +2,10 @@
 //! request.
 
 use nova_data::GameData;
-use nova_data::graphics::{Image, RLED, decode_pict, decode_rled};
-use nova_rsrc::ResType;
+use nova_data::graphics::{Image, PICT, RLED, decode_pict, decode_rled};
 use nova_view::ImageKind;
 
 use crate::images::{ImageError, ImageSource};
-
-/// The `PICT` resource type.
-const PICT: ResType = ResType::new(*b"PICT");
 
 /// Looks resources up in the store (later files winning) and decodes them
 /// on every call; the renderer keeps what it needs in the atlas.
@@ -40,7 +36,7 @@ mod tests {
     use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader};
+    use nova_rsrc::{Fork, ForkReader, ResType};
 
     use super::*;
 
@@ -138,10 +134,5 @@ mod tests {
             data.frames(ImageKind::Rled, 200),
             Err(ImageError::Decode(_))
         ));
-    }
-
-    #[test]
-    fn pict_is_the_picture_type() {
-        assert_eq!(PICT, ResType::new(*b"PICT"));
     }
 }

@@ -6,7 +6,7 @@
 //!
 //! | Type | Decoder | Output |
 //! |------|---------|--------|
-//! | `PICT` | [`decode_pict`] | one image the size of `picFrame` |
+//! | `PICT` ([`PICT`]) | [`decode_pict`] | one image the size of `picFrame` |
 //! | `cicn` | [`decode_cicn`] | one image, the mask as alpha |
 //! | `ppat` | [`decode_ppat`] | one opaque image |
 //! | `rlëD` ([`RLED`]) | [`decode_rled`] | a [`SpriteSheet`] of equal-sized frames |
@@ -105,6 +105,6 @@ pub use error::GraphicsError;
 pub use icon::decode_cicn;
 pub use image::Image;
 pub use pattern::decode_ppat;
-pub use pict::decode_pict;
+pub use pict::{PICT, decode_pict};
 pub use rled::{RLED, decode_rled};
 pub use sheet::{SheetLayout, SpriteSheet};

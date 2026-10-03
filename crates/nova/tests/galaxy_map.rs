@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova_data::graphics::PICT;
 use nova_data::graphics::fixture::{DirectBits, PictBuilder};
 use nova_data::records::govt::Govt;
 use nova_data::records::nebula::Nebula;
@@ -20,12 +21,11 @@ use nova_data::{GameData, Record, SystemId};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, Rect, SolidQuad};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader, ResType};
+use nova_rsrc::{Fork, ForkReader};
 use nova_view::galaxy::NEUTRAL;
 use nova_view::galaxy::map::DOT_SIZE;
 use nova_view::{Key, MouseButton, Point};
 
-const PICT: ResType = ResType::new(*b"PICT");
 const BLUE: u32 = 0x002C_2CAF;
 
 /// A 1024x768 window at scale 1: window pixels are logical units.

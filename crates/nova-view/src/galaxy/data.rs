@@ -3,21 +3,18 @@
 
 use std::collections::BTreeMap;
 
-use nova_data::graphics::decode_pict;
+use nova_data::graphics::{PICT, decode_pict};
 use nova_data::records::govt::Govt;
 use nova_data::records::nebula::Nebula;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, Record, StoreEntry};
-use nova_rsrc::ResType;
 
 use super::catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, SystemEntry,
     SystemId,
 };
 
-/// The `PICT` resource type.
-const PICT: ResType = ResType::new(*b"PICT");
 /// The nebulae that have pictures, by the Bible: `nëbu` 128 to 159.
 const PICTURED_NEBULAE: std::ops::RangeInclusive<i16> = 128..=159;
 /// The first nebula's first `PICT`. Nebula N's pictures are `PICT`
@@ -169,8 +166,6 @@ mod tests {
         GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId, SystemEntry,
         SystemId,
     };
-
-    const PICT: ResType = ResType::new(*b"PICT");
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);

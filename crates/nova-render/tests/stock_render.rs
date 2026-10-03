@@ -4,12 +4,11 @@
 mod common;
 
 use nova_data::GameData;
+use nova_data::graphics::PICT;
 use nova_render::recording::{GpuCall, RecordingGpu};
 use nova_render::{Batch, ImageSource, LOGICAL, PAGE_SIZE, PageId, Renderer, Viewport};
 use nova_rsrc::ResType;
 use nova_view::{Color, DrawList, ImageKey, ImageKind, Point};
-
-const PICT: ResType = ResType::new(*b"PICT");
 
 /// The first resource of `kind` whose frames decode, with its frames,
 /// needing at least `min_frames`.
