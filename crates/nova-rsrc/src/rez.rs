@@ -155,10 +155,9 @@ impl Rez<'_> {
 
         let mut types: Vec<TypeEntry> = Vec::with_capacity(lists.len());
         for (ty, list) in lists {
-            let count = list.len() / RESOURCE_ENTRY_LEN;
-            let mut ids = HashSet::with_capacity(count);
-            let mut entries: Vec<Entry> = Vec::with_capacity(count);
             let resources = map[list.clone()].as_chunks::<RESOURCE_ENTRY_LEN>().0;
+            let mut ids = HashSet::with_capacity(resources.len());
+            let mut entries: Vec<Entry> = Vec::with_capacity(resources.len());
             for (i, resource) in resources.iter().enumerate() {
                 let pos = self.map_start + list.start + RESOURCE_ENTRY_LEN * i;
                 let entry = self.parse_resource(ty, resource, pos)?;
@@ -214,7 +213,6 @@ impl Rez<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ResType;
     use crate::fixture::{
         BuiltRez, REZ_BASE_INDEX_FIELD, REZ_ENTRY_COUNT_FIELD, REZ_ENTRY_NAME_FIELD,
         REZ_ENTRY_OFFSET_FIELD, REZ_ENTRY_SIZE_FIELD, REZ_GROUP_COUNT_FIELD, REZ_GROUP_TYPE_FIELD,
@@ -545,6 +543,23 @@ mod tests {
             built.put_u32_le(field, offset);
             assert_eq!(err(&built), ParseError::RezMapNotNamed, "offset {offset}");
         }
+    }
+
+    #[test]
+    fn a_name_must_start_in_the_name_table() {
+        // Twelve root-header bytes, a 13-byte "entry table" holding a valid
+        // name, then the name table proper.
+        let header = [&[0; 12][..], b"resource.map\0", b"resource.map\0"].concat();
+        let table_end = 25;
+        assert_eq!(name_in_table(&header, table_end, 13), Some(MAP_NAME));
+        assert_eq!(
+            name_in_table(&header, table_end, 14),
+            Some(&b"esource.map"[..])
+        );
+        assert_eq!(name_in_table(&header, table_end, 0), None);
+        assert_eq!(name_in_table(&header, table_end, 12), None);
+        assert_eq!(name_in_table(&header, table_end, 26), None);
+        assert_eq!(name_in_table(&header, table_end, u32::MAX), None);
     }
 
     #[test]
