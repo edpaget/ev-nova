@@ -11,6 +11,17 @@ const MAX_NAME_CHARS: usize = 64;
 ///
 /// Every type `nova-dump` exports gets a distinct name this way; the tests
 /// check it.
+///
+/// ```
+/// use nova_dump::names::{file_stem, type_component};
+/// use nova_rsrc::ResType;
+///
+/// let ship = ResType::from_mac_roman("shïp").expect("Mac Roman");
+/// assert_eq!(type_component(ship), "shïp");
+/// assert_eq!(type_component(ResType::new(*b"snd ")), "snd_");
+/// assert_eq!(file_stem(128, Some("Shuttle")), "128 Shuttle");
+/// assert_eq!(file_stem(129, Some("A/B")), "129 A_B");
+/// ```
 #[must_use]
 pub fn type_component(ty: ResType) -> String {
     ty.to_string()
