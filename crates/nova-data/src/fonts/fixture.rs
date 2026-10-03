@@ -101,6 +101,12 @@ pub const BLOCK_UNITS_PER_EM: u16 = 1000;
 /// it draws as solid blocks, unlike any real font.
 #[must_use]
 pub fn block_font(family: &str) -> Vec<u8> {
+    block_sfnt(family).build()
+}
+
+/// [`block_font`]'s tables, to add to, replace or remove before building.
+#[must_use]
+pub fn block_sfnt(family: &str) -> SfntBuilder {
     let mut glyf = block_glyph();
     glyf.resize(glyf.len().next_multiple_of(4), 0);
     let loca = [0u16, 0, (glyf.len() / 2) as u16];
@@ -114,7 +120,6 @@ pub fn block_font(family: &str) -> Vec<u8> {
         .table(b"maxp", block_maxp())
         .table(b"name", block_name(family))
         .table(b"post", block_post())
-        .build()
 }
 
 /// Big-endian `u16`s.

@@ -16,6 +16,10 @@ serde.workspace = true
 # developer tools' record view.
 serde_json.workspace = true
 thiserror.workspace = true
+# `check_sfnt` parses Charcoal as the renderer's font stack (fontdb,
+# cosmic-text) will, so a font it cannot use is reported, not silently
+# replaced.
+ttf-parser.workspace = true
 
 [dev-dependencies]
 encoding_rs.workspace = true
@@ -26,8 +30,6 @@ nova-rsrc = { workspace = true, features = ["fixture"] }
 nova-data = { workspace = true, features = ["fixture"] }
 # Real folders for the directory-listing adapter and store wiring tests.
 tempfile.workspace = true
-# Reads the synthetic block font back, as a renderer would.
-ttf-parser.workspace = true
 
 [features]
 # Exposes the synthetic picture, sprite and sound builders to other crates'

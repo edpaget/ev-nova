@@ -14,7 +14,9 @@
 //! So "extracting" Charcoal means finding the player's own
 //! `<Nova Files>/../Fonts/Charcoal.ttf` ([`charcoal_path`]), reading it
 //! ([`load_charcoal`]) and checking it is a usable outline font
-//! ([`check_sfnt`]); its bytes go to the renderer unchanged. There is no
+//! ([`check_sfnt`]): one the renderer's font stack will load, so a file
+//! that is there but unusable is reported, not silently replaced. Its
+//! bytes go to the renderer unchanged. There is no
 //! suitcase parser or bitmap-font converter, because no stock data has a
 //! suitcase to feed one. When the file is missing or fails the check, the
 //! renderer draws Charcoal text in its bundled substitute font instead.
@@ -28,6 +30,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use nova_rsrc::{Fork, ForkReader, StdForkReader};
+use ttf_parser::name::Name;
+use ttf_parser::{Face, PlatformId, name_id};
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
@@ -66,6 +70,13 @@ pub enum SfntError {
     /// Neither `glyf`/`loca` nor `CFF `/`CFF2` outlines: a bitmap-only font.
     #[error("the font has no outlines")]
     NoOutlines,
+    /// The tables are in place but a font reader cannot parse them.
+    #[error("the font's tables do not parse: {0}")]
+    Malformed(ttf_parser::FaceParsingError),
+    /// No family or PostScript name a font reader can decode, so the
+    /// renderer's font database will not load the font.
+    #[error("the font has no family or PostScript name")]
+    Unnamed,
 }
 
 /// Why Charcoal could not be loaded.
@@ -126,7 +137,9 @@ pub fn load_charcoal(forks: &impl ForkReader, data_dir: &Path) -> Result<Vec<u8>
 }
 
 /// Checks `bytes` is a single TrueType or OpenType font with outlines and
-/// every table a renderer needs, each inside the file.
+/// every table a renderer needs, each inside the file, that a font reader
+/// (`ttf-parser`, as the renderer's font stack uses) parses and that has
+/// the family and PostScript names the renderer's font database needs.
 pub fn check_sfnt(bytes: &[u8]) -> Result<(), SfntError> {
     let scaler: [u8; 4] = take(bytes, 0)?;
     match &scaler {
@@ -156,7 +169,35 @@ pub fn check_sfnt(bytes: &[u8]) -> Result<(), SfntError> {
     if !((has(b"glyf") && has(b"loca")) || has(b"CFF ") || has(b"CFF2")) {
         return Err(SfntError::NoOutlines);
     }
+    let face = Face::parse(bytes, 0).map_err(SfntError::Malformed)?;
+    if !named(&face) {
+        return Err(SfntError::Unnamed);
+    }
     Ok(())
+}
+
+/// Whether `face` has the names fontdb, the renderer's font database,
+/// needs to load it: a family (or typographic family) name, and a
+/// PostScript name, decoded as fontdb decodes them. fontdb reads only the
+/// first PostScript name in an encoding it supports.
+fn named(face: &Face<'_>) -> bool {
+    let names = face.names();
+    let supported = |name: &Name<'_>| name.is_unicode() || is_mac_roman(name);
+    // Mac Roman maps every byte, so only UTF-16 can fail to decode.
+    let readable = |name: &Name<'_>| name.to_string().is_some() || is_mac_roman(name);
+    let family = names.into_iter().any(|name| {
+        matches!(name.name_id, name_id::FAMILY | name_id::TYPOGRAPHIC_FAMILY) && readable(&name)
+    });
+    let postscript = names
+        .into_iter()
+        .find(|name| name.name_id == name_id::POST_SCRIPT_NAME && supported(name))
+        .is_some_and(|name| readable(&name));
+    family && postscript
+}
+
+/// Whether `name` is in the Macintosh Roman encoding.
+fn is_mac_roman(name: &Name<'_>) -> bool {
+    name.platform_id == PlatformId::Macintosh && name.encoding_id == 0
 }
 
 /// The tables every font must have to be shaped and drawn.
@@ -174,25 +215,28 @@ fn take<const N: usize>(bytes: &[u8], at: usize) -> Result<[u8; N], SfntError> {
 mod tests {
     use std::cell::RefCell;
 
-    use super::fixture::{REQUIRED, SfntBuilder, block_font};
+    use ttf_parser::FaceParsingError;
+
+    use super::fixture::{REQUIRED, SfntBuilder, block_font, block_sfnt};
     use super::*;
 
     #[test]
     fn truetype_apple_truetype_and_opentype_scalers_are_accepted() {
-        let truetype = SfntBuilder::truetype();
-        assert_eq!(check_sfnt(&truetype.build()), Ok(()));
-        let mut apple = truetype.build();
+        let truetype = block_font("Charcoal");
+        assert_eq!(check_sfnt(&truetype), Ok(()));
+        let mut apple = truetype.clone();
         apple[..4].copy_from_slice(b"true");
         assert_eq!(check_sfnt(&apple), Ok(()));
-        let opentype = REQUIRED
-            .into_iter()
-            .fold(SfntBuilder::new(b"OTTO"), |sfnt, tag| {
-                sfnt.table(tag, [0; 4])
-            })
+        let cff = block_sfnt("Charcoal")
+            .without(b"glyf")
+            .without(b"loca")
             .table(b"CFF ", [0; 4]);
-        assert_eq!(check_sfnt(&opentype.build()), Ok(()));
-        let cff2 = opentype.without(b"CFF ").table(b"CFF2", [0; 4]);
-        assert_eq!(check_sfnt(&cff2.build()), Ok(()));
+        let mut opentype = cff.build();
+        opentype[..4].copy_from_slice(b"OTTO");
+        assert_eq!(check_sfnt(&opentype), Ok(()));
+        let mut cff2 = cff.without(b"CFF ").table(b"CFF2", [0; 4]).build();
+        cff2[..4].copy_from_slice(b"OTTO");
+        assert_eq!(check_sfnt(&cff2), Ok(()));
     }
 
     #[test]
@@ -255,17 +299,16 @@ mod tests {
 
     #[test]
     fn a_table_past_the_end_is_rejected() {
-        let mut bytes = SfntBuilder::truetype().build();
-        // Sorted by tag, the last table is `name`, ending flush with the file.
+        let mut bytes = block_font("Charcoal");
+        // Sorted by tag, the last table is `post`, ending flush with the file.
         let len = bytes.len() as u32;
-        let last = 7;
-        assert_eq!(&bytes[12 + 16 * last..][..4], b"name");
-        set_length(&mut bytes, last, 4);
+        let last = 8;
+        assert_eq!(&bytes[12 + 16 * last..][..4], b"post");
         assert_eq!(check_sfnt(&bytes), Ok(()), "flush with the end");
-        set_length(&mut bytes, last, 5);
+        set_length(&mut bytes, last, 33);
         assert_eq!(
             check_sfnt(&bytes),
-            Err(SfntError::TableOutOfBounds(Tag(*b"name")))
+            Err(SfntError::TableOutOfBounds(Tag(*b"post")))
         );
         // An offset and length that overflow `u32` still fail cleanly.
         set_length(&mut bytes, 0, u32::MAX);
@@ -275,6 +318,147 @@ mod tests {
         );
         set_length(&mut bytes, 0, len);
         assert!(check_sfnt(&bytes).is_err());
+    }
+
+    #[test]
+    fn tables_in_place_that_do_not_parse_are_malformed() {
+        // Every table is there and inside the file, but each is four zero
+        // bytes: no `head` a reader can use.
+        let zeroed = SfntBuilder::truetype().build();
+        assert_eq!(
+            check_sfnt(&zeroed),
+            Err(SfntError::Malformed(FaceParsingError::NoHeadTable))
+        );
+        for (tag, error) in [
+            (b"hhea", FaceParsingError::NoHheaTable),
+            (b"maxp", FaceParsingError::NoMaxpTable),
+        ] {
+            let bytes = block_sfnt("Charcoal").table(tag, [0; 4]).build();
+            assert_eq!(check_sfnt(&bytes), Err(SfntError::Malformed(error)));
+        }
+        assert_eq!(
+            SfntError::Malformed(FaceParsingError::NoHeadTable).to_string(),
+            "the font's tables do not parse: the head table is missing or malformed"
+        );
+    }
+
+    /// A `name` record: platform, encoding, name ID and string bytes.
+    type Record<'a> = (u16, u16, u16, &'a [u8]);
+
+    /// A `name` table holding `records`, in US English.
+    fn name_table(records: &[Record<'_>]) -> Vec<u8> {
+        let count = records.len() as u16;
+        let mut name = be16(&[0, count, 6 + 12 * count]);
+        let mut storage: Vec<u8> = Vec::new();
+        for &(platform, encoding, id, string) in records {
+            let language = if platform == 1 { 0 } else { 0x0409 };
+            name.extend(be16(&[
+                platform,
+                encoding,
+                language,
+                id,
+                string.len() as u16,
+                storage.len() as u16,
+            ]));
+            storage.extend(string);
+        }
+        name.extend(storage);
+        name
+    }
+
+    fn be16(words: &[u16]) -> Vec<u8> {
+        words.iter().flat_map(|w| w.to_be_bytes()).collect()
+    }
+
+    /// `text` as UTF-16BE.
+    fn utf16(text: &str) -> Vec<u8> {
+        text.encode_utf16().flat_map(u16::to_be_bytes).collect()
+    }
+
+    /// The block font with `name` as its `name` table.
+    fn named(records: &[Record<'_>]) -> Vec<u8> {
+        block_sfnt("Charcoal")
+            .table(b"name", name_table(records))
+            .build()
+    }
+
+    const WINDOWS: (u16, u16) = (3, 1);
+    const MAC_ROMAN: (u16, u16) = (1, 0);
+    const FAMILY: u16 = 1;
+    const POSTSCRIPT: u16 = 6;
+    const TYPOGRAPHIC_FAMILY: u16 = 16;
+
+    #[test]
+    fn a_font_needs_a_family_and_a_postscript_name() {
+        let family = utf16("Charcoal");
+        let windows = |id| (WINDOWS.0, WINDOWS.1, id, family.as_slice());
+        let mac = |id| (MAC_ROMAN.0, MAC_ROMAN.1, id, b"Charcoal".as_slice());
+        let cases: [(&str, &[Record<'_>], _); 6] = [
+            ("both", &[windows(FAMILY), windows(POSTSCRIPT)], Ok(())),
+            (
+                "typographic family",
+                &[windows(TYPOGRAPHIC_FAMILY), windows(POSTSCRIPT)],
+                Ok(()),
+            ),
+            ("Mac Roman names", &[mac(FAMILY), mac(POSTSCRIPT)], Ok(())),
+            ("no names", &[], Err(SfntError::Unnamed)),
+            ("no family", &[windows(POSTSCRIPT)], Err(SfntError::Unnamed)),
+            (
+                "no PostScript name",
+                &[windows(FAMILY)],
+                Err(SfntError::Unnamed),
+            ),
+        ];
+        for (case, records, want) in cases {
+            assert_eq!(check_sfnt(&named(records)), want, "{case}");
+        }
+        assert_eq!(
+            SfntError::Unnamed.to_string(),
+            "the font has no family or PostScript name"
+        );
+    }
+
+    #[test]
+    fn names_in_an_encoding_a_reader_cannot_decode_do_not_count() {
+        let family = utf16("Charcoal");
+        // A lone surrogate is not UTF-16; Mac Japanese is not Mac Roman.
+        let lone_surrogate = [0xD8, 0x00];
+        for (platform, encoding, string) in [
+            (WINDOWS.0, WINDOWS.1, &lone_surrogate[..]),
+            (1, 1, b"Charcoal"),
+        ] {
+            let family_unreadable = named(&[
+                (platform, encoding, FAMILY, string),
+                (WINDOWS.0, WINDOWS.1, POSTSCRIPT, &family),
+            ]);
+            assert_eq!(check_sfnt(&family_unreadable), Err(SfntError::Unnamed));
+            let postscript_unreadable = named(&[
+                (WINDOWS.0, WINDOWS.1, FAMILY, &family),
+                (platform, encoding, POSTSCRIPT, string),
+            ]);
+            assert_eq!(check_sfnt(&postscript_unreadable), Err(SfntError::Unnamed));
+        }
+        // As fontdb does, only the first PostScript name in a supported
+        // encoding is read: an unreadable one hides a good one after it.
+        let hidden = named(&[
+            (WINDOWS.0, WINDOWS.1, FAMILY, &family),
+            (WINDOWS.0, WINDOWS.1, POSTSCRIPT, &lone_surrogate),
+            (MAC_ROMAN.0, MAC_ROMAN.1, POSTSCRIPT, b"Charcoal"),
+        ]);
+        assert_eq!(check_sfnt(&hidden), Err(SfntError::Unnamed));
+        // One in an unsupported encoding is skipped over.
+        let skipped = named(&[
+            (WINDOWS.0, WINDOWS.1, FAMILY, &family),
+            (1, 1, POSTSCRIPT, b"Charcoal"),
+            (MAC_ROMAN.0, MAC_ROMAN.1, POSTSCRIPT, b"Charcoal"),
+        ]);
+        assert_eq!(check_sfnt(&skipped), Ok(()));
+    }
+
+    #[test]
+    fn a_name_table_that_does_not_parse_is_unnamed() {
+        let bytes = block_sfnt("Charcoal").table(b"name", [0; 4]).build();
+        assert_eq!(check_sfnt(&bytes), Err(SfntError::Unnamed));
     }
 
     #[test]
@@ -382,6 +566,22 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!("reading the font {CHARCOAL}: disk on fire")
+        );
+    }
+
+    #[test]
+    fn a_font_whose_tables_do_not_parse_is_invalid() {
+        let forks = OneFile::new(|| Ok(Some(SfntBuilder::truetype().build())));
+        let err = load_charcoal(&forks, Path::new(DATA_DIR)).expect_err("fails");
+        assert!(
+            matches!(
+                &err,
+                FontError::Invalid {
+                    source: SfntError::Malformed(FaceParsingError::NoHeadTable),
+                    ..
+                }
+            ),
+            "{err:?}"
         );
     }
 

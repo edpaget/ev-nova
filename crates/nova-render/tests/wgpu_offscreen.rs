@@ -2,7 +2,8 @@
 //! back and checked pixel by pixel. Needs a GPU adapter; skips, passing,
 //! without one.
 
-use nova_data::fonts::fixture::block_font;
+use nova_data::fonts::check_sfnt;
+use nova_data::fonts::fixture::{SfntBuilder, block_font, block_sfnt};
 use nova_data::graphics::Image;
 use nova_render::fonts::FontFaces;
 use nova_render::wgpu::{
@@ -294,6 +295,33 @@ fn charcoal_bytes_that_load_no_face_are_not_loaded() {
     };
     assert_eq!(gpu.font_faces(), 1);
     assert!(!gpu.charcoal_loaded());
+}
+
+#[test]
+fn charcoal_loads_exactly_when_its_check_passes() {
+    // What `nova_data` accepts as Charcoal is what the font stack loads, so
+    // an unusable file is reported rather than silently replaced.
+    let cases = [
+        ("the block font", block_font("Charcoal")),
+        ("zeroed tables", SfntBuilder::truetype().build()),
+        (
+            "an empty name table",
+            block_sfnt("Charcoal").table(b"name", [0; 4]).build(),
+        ),
+        ("not a font", b"not a font".to_vec()),
+    ];
+    for (case, bytes) in cases {
+        let faces = FontFaces::bundled().with_charcoal(bytes.clone());
+        let Some(gpu) = gpu_with(SIZE, SIZE, &faces) else {
+            return;
+        };
+        assert_eq!(
+            gpu.charcoal_loaded(),
+            check_sfnt(&bytes).is_ok(),
+            "{case}: {:?}",
+            check_sfnt(&bytes)
+        );
+    }
 }
 
 /// The logical space of the font tests: one line of text.
