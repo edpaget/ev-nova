@@ -12,12 +12,16 @@ concurrency:
 jobs:
   ci:
     # macOS covers the resource-fork (`..namedfork/rsrc`) adapter tests,
-    # which are compiled only on that target.
+    # which are compiled only on that target; Windows covers the non-unix
+    # paths.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # Don't let `mise run` build the other mise.toml tools from source.
+      MISE_TASK_RUN_AUTO_INSTALL: "false"
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
@@ -26,6 +30,9 @@ jobs:
       # Only what `mise run ci` needs; cargo-binstall first so the
       # cargo-backed tools install as prebuilt binaries.
       - run: mise use -g cargo-binstall
+        shell: bash
       - run: mise install rust cargo:cargo-nextest
+        shell: bash
       - uses: Swatinem/rust-cache@v2
       - run: mise run ci
+        shell: bash
