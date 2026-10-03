@@ -23,6 +23,12 @@
 //!   default keys, the camera following the ship, and reads the ship's
 //!   sprite through its [`flight::ShipSprites`] port.
 //!
+//! # Text
+//!
+//! Each [`DrawCommand::Text`] names its [`Font`], one of the game's two
+//! interface fonts (Geneva or Charcoal); the renderer picks the face that
+//! draws it.
+//!
 //! # Developer tools
 //!
 //! - [`devtools`]: the developer tools overlay's model, which `nova`
@@ -32,6 +38,7 @@ pub mod color;
 pub mod devtools;
 pub mod draw;
 pub mod flight;
+pub mod font;
 pub mod galaxy;
 pub mod geometry;
 pub mod image;
@@ -44,6 +51,7 @@ mod time;
 
 pub use color::Color;
 pub use draw::{DrawCommand, DrawList};
+pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
 pub use input::{Input, Key, MouseButton};

@@ -195,7 +195,7 @@ mod tests {
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
     };
     use crate::system::scene::PLACEHOLDER;
-    use crate::{DrawCommand, MouseButton};
+    use crate::{DrawCommand, Font, MouseButton};
 
     /// Canned systems.
     struct FakeCatalog(Vec<SystemContents>);
@@ -517,6 +517,7 @@ mod tests {
     fn overlay(text: &str, origin: Point, size: f32, color: Color) -> DrawCommand {
         DrawCommand::Text {
             text: text.to_owned(),
+            font: Font::Geneva,
             origin,
             size,
             wrap_width: None,
@@ -690,6 +691,7 @@ mod tests {
             text(&list, "2 problem"),
             DrawCommand::Text {
                 text: "2 problem(s) reading the system: sÿst 132: no spöb 150".to_owned(),
+                font: Font::Geneva,
                 origin: at(16.0, 98.0),
                 size: 14.0,
                 wrap_width: Some(PROBLEMS_WRAP),

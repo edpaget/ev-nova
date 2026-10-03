@@ -451,7 +451,7 @@ mod tests {
     };
     use crate::galaxy::model::{NEUTRAL, placement};
     use crate::galaxy::view::{MAP_CENTER, SCALES};
-    use crate::{DrawCommand, ImageKey, Key, MouseButton};
+    use crate::{DrawCommand, Font, ImageKey, Key, MouseButton};
 
     /// A canned galaxy; counts how often it is read.
     struct FakeCatalog {
@@ -1153,6 +1153,7 @@ mod tests {
             text(&list, "Click a system"),
             DrawCommand::Text {
                 text: "Click a system to see its stellars".to_owned(),
+                font: Font::Geneva,
                 origin: at(LEFT, TITLE_TOP),
                 size: STELLAR_SIZE,
                 wrap_width: Some(LEFT_WRAP),
@@ -1163,6 +1164,7 @@ mod tests {
             text(&list, "Arrows"),
             DrawCommand::Text {
                 text: HELP.to_owned(),
+                font: Font::Geneva,
                 origin: at(RIGHT, HELP_TOP),
                 size: RIGHT_SIZE,
                 wrap_width: Some(RIGHT_WRAP),
@@ -1181,6 +1183,7 @@ mod tests {
             text(&list, "Alpha"),
             DrawCommand::Text {
                 text: "Alpha (sÿst 128)".to_owned(),
+                font: Font::Geneva,
                 origin: at(LEFT, TITLE_TOP),
                 size: TITLE_SIZE,
                 wrap_width: Some(LEFT_WRAP),
@@ -1191,6 +1194,7 @@ mod tests {
             text(&list, "Alpha Station"),
             DrawCommand::Text {
                 text: "Alpha Station".to_owned(),
+                font: Font::Geneva,
                 origin: at(LEFT, STELLARS_TOP + STELLAR_SPACING),
                 size: STELLAR_SIZE,
                 wrap_width: Some(LEFT_WRAP),
@@ -1224,6 +1228,7 @@ mod tests {
             text(&list, "1 of 2"),
             DrawCommand::Text {
                 text: line.to_owned(),
+                font: Font::Geneva,
                 origin: at(RIGHT, STACK_TOP),
                 size: RIGHT_SIZE,
                 wrap_width: Some(RIGHT_WRAP),
@@ -1277,6 +1282,7 @@ mod tests {
             text(&list, "2 problem"),
             DrawCommand::Text {
                 text: "2 problem(s) reading the map data: sÿst 140: bad".to_owned(),
+                font: Font::Geneva,
                 origin: at(RIGHT, PROBLEMS_TOP),
                 size: RIGHT_SIZE,
                 wrap_width: Some(RIGHT_WRAP),
@@ -1362,6 +1368,7 @@ mod tests {
             text(&list, "Enter system"),
             DrawCommand::Text {
                 text: "Enter system (Return)".to_owned(),
+                font: Font::Geneva,
                 origin: at(540.0, 720.0),
                 size: 14.0,
                 wrap_width: None,

@@ -124,6 +124,7 @@ impl<S: ImageSource> Renderer<S> {
                     size,
                     wrap_width,
                     color,
+                    ..
                 } => {
                     let size_px = size * scale;
                     let line_height_px = LINE_HEIGHT * size_px;

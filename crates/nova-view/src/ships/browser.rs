@@ -1,7 +1,7 @@
 //! The ship browser screen: pages through every ship by keyboard, drawing
 //! the selected ship rotating through every frame of its sheet with its
-//! glow and lights layers on top, and its name, stats and description in a
-//! column beside it.
+//! glow and lights layers on top, and its name (in Charcoal), stats and
+//! description in a column beside it.
 //!
 //! The screen reads ships only through the [`ShipCatalog`] port, once at
 //! start-up and once per selection; drawing never resolves anything.
@@ -11,7 +11,7 @@ use std::time::Duration;
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
 use crate::draw::crossed_box;
 use crate::time::ticks;
-use crate::{Color, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction};
+use crate::{Color, DrawList, Font, ImageKey, Input, Key, Point, Screen, ScreenAction};
 
 /// Where the ship's centre goes, in the 1024x768 logical space. The base,
 /// glow and lights frames are all centred here: a layer frame is often
@@ -163,7 +163,8 @@ fn draw_placeholder(message: &str, list: &mut DrawList) {
 
 /// The name, the stats (or why not), any layer errors and the description.
 fn draw_text(ship: &ShipEntry, list: &mut DrawList) {
-    list.text(
+    list.text_in(
+        Font::Charcoal,
         ship.name.clone(),
         Point::new(TEXT_LEFT, NAME_TOP),
         NAME_SIZE,
@@ -271,7 +272,7 @@ mod tests {
     use super::*;
     use crate::ships::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
     use crate::{
-        Color, DrawCommand, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen,
+        Color, DrawCommand, DrawList, Font, ImageKey, Input, Key, MouseButton, Point, Screen,
         ScreenAction,
     };
 
@@ -645,6 +646,29 @@ mod tests {
             "{texts:?}"
         );
         assert!(texts.contains(&"Ship 130".to_owned()), "{texts:?}");
+    }
+
+    #[test]
+    fn the_name_is_in_charcoal_and_everything_else_in_geneva() {
+        let ship = ShipEntry {
+            description: Ok(Some("A small ship.".to_owned())),
+            ..entry(128)
+        };
+        let catalog = FakeCatalog::with(vec![ship]);
+        let fonts: Vec<(String, Font)> = drawn(&ShipBrowser::new(&catalog))
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, font, .. } => Some((text.clone(), *font)),
+                _ => None,
+            })
+            .collect();
+        let (name, rest) = fonts.split_first().expect("text");
+        assert_eq!(name, &("Ship 128".to_owned(), Font::Charcoal));
+        assert_eq!(rest.len(), 6, "{rest:?}");
+        assert!(
+            rest.iter().all(|(_, font)| *font == Font::Geneva),
+            "{rest:?}"
+        );
     }
 
     #[test]

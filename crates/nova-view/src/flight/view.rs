@@ -271,11 +271,11 @@ mod tests {
     };
 
     use super::*;
-    use crate::DrawCommand;
     use crate::system::camera::VIEW_CENTER;
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
     };
+    use crate::{DrawCommand, Font};
 
     /// The first `chär` flies ship 128 (an average ship that turns 3° a
     /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system
@@ -459,6 +459,7 @@ mod tests {
             [
                 DrawCommand::Text {
                     text: "Cannot start flight: no chär to start from".to_owned(),
+                    font: Font::Geneva,
                     origin: TITLE,
                     size: TITLE_SIZE,
                     wrap_width: None,
@@ -677,6 +678,7 @@ mod tests {
     fn overlay(text: &str, origin: Point, size: f32, color: Color) -> DrawCommand {
         DrawCommand::Text {
             text: text.to_owned(),
+            font: Font::Geneva,
             origin,
             size,
             wrap_width: None,

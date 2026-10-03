@@ -277,7 +277,7 @@ mod tests {
     use nova_view::galaxy::GalaxyMap;
     use nova_view::galaxy::map::ENTER_BUTTON;
     use nova_view::ships::{ShipBrowser, ShipId};
-    use nova_view::{DrawCommand, Key, MouseButton, Point};
+    use nova_view::{DrawCommand, Font, Key, MouseButton, Point};
 
     use super::*;
 
@@ -723,6 +723,7 @@ mod tests {
     fn hint() -> DrawCommand {
         DrawCommand::Text {
             text: HINT.to_owned(),
+            font: Font::Geneva,
             origin: HINT_AT,
             size: HINT_SIZE,
             wrap_width: None,

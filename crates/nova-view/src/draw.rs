@@ -1,6 +1,7 @@
 //! Draw commands and draw lists.
 
 use crate::color::Color;
+use crate::font::Font;
 use crate::geometry::Point;
 use crate::image::ImageKey;
 
@@ -42,6 +43,8 @@ pub enum DrawCommand {
     Text {
         /// The text.
         text: String,
+        /// The font it is drawn in.
+        font: Font,
         /// The top-left corner of its first line.
         origin: Point,
         /// The font size.
@@ -139,7 +142,7 @@ impl DrawList {
         })
     }
 
-    /// Appends a [`DrawCommand::Text`].
+    /// Appends a [`DrawCommand::Text`] in [`Font::Geneva`].
     pub fn text(
         &mut self,
         text: impl Into<String>,
@@ -148,8 +151,22 @@ impl DrawList {
         wrap_width: Option<f32>,
         color: Color,
     ) -> &mut Self {
+        self.text_in(Font::Geneva, text, origin, size, wrap_width, color)
+    }
+
+    /// Appends a [`DrawCommand::Text`] in `font`.
+    pub fn text_in(
+        &mut self,
+        font: Font,
+        text: impl Into<String>,
+        origin: Point,
+        size: f32,
+        wrap_width: Option<f32>,
+        color: Color,
+    ) -> &mut Self {
         self.push(DrawCommand::Text {
             text: text.into(),
+            font,
             origin,
             size,
             wrap_width,
@@ -258,6 +275,7 @@ mod tests {
             *commands[2],
             DrawCommand::Text {
                 text: "Hi".to_owned(),
+                font: Font::Geneva,
                 origin: at(1.0, 2.0),
                 size: 12.0,
                 wrap_width: Some(100.0),
@@ -288,6 +306,43 @@ mod tests {
                 size: 1.0,
                 color: red
             }
+        );
+    }
+
+    #[test]
+    fn text_in_records_its_font() {
+        let red = Color::rgba(255, 0, 0, 255);
+        let mut list = DrawList::new();
+        list.text_in(Font::Charcoal, "Kestrel", at(3.0, 4.0), 18.0, None, red)
+            .text_in(
+                Font::Geneva,
+                "Cost",
+                at(5.0, 6.0),
+                9.0,
+                Some(50.0),
+                Color::WHITE,
+            );
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        assert_eq!(
+            commands,
+            [
+                &DrawCommand::Text {
+                    text: "Kestrel".to_owned(),
+                    font: Font::Charcoal,
+                    origin: at(3.0, 4.0),
+                    size: 18.0,
+                    wrap_width: None,
+                    color: red
+                },
+                &DrawCommand::Text {
+                    text: "Cost".to_owned(),
+                    font: Font::Geneva,
+                    origin: at(5.0, 6.0),
+                    size: 9.0,
+                    wrap_width: Some(50.0),
+                    color: Color::WHITE
+                },
+            ]
         );
     }
 
