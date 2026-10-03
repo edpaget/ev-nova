@@ -69,6 +69,7 @@ fn a_store_opens_from_real_data_and_plugin_folders() {
         [Origin::Data, Origin::Data, Origin::PlugIn, Origin::PlugIn]
     );
 
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut expected_ignored = vec![IgnoredEntry {
         path: data_dir.join("Nova Music.mp3"),
         reason: IgnoreReason::NotGameData("mp3".to_owned()),

@@ -180,6 +180,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn non_utf8_paths_survive() {
         use std::os::unix::ffi::OsStringExt;

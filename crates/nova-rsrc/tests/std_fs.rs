@@ -2,7 +2,6 @@
 //! directory owned by each test.
 
 use std::io;
-use std::path::Path;
 
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, LoadError, ResType, ResourceFile, StdForkReader};
@@ -101,7 +100,7 @@ fn open_reads_a_real_resource_fork() {
 }
 
 #[cfg(target_os = "macos")]
-fn write_named_fork(path: &Path, bytes: &[u8]) -> io::Result<()> {
+fn write_named_fork(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     std::fs::write(path.join("..namedfork/rsrc"), bytes)
 }
 
