@@ -8,10 +8,21 @@
 //! (every key, Escape included, is the screen's to act on),
 //! ticks and draws the screen, and renders each frame through
 //! `nova-render`. It never blocks and never names a winit or wgpu type.
+//!
+//! # The developer overlay
+//!
+//! An app built [`App::with_dev_overlay`] holds a [`DevOverlay`]. Its
+//! toggle key (backquote) shows and hides it; while it shows, it takes
+//! every key and pointer event, and the screen sees none of them.
+//! [`App::handle_routed`] says where each event went, and
+//! [`App::overlay_wants`] whether the overlay's drawing (egui, in the
+//! `dev-tools` build) should see the raw event too. Without an overlay,
+//! every event goes to the game as before.
 
 use std::time::Duration;
 
 use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
+use nova_view::devtools::{DevOverlay, Routing};
 use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
 
 pub mod screen;
@@ -81,6 +92,17 @@ pub enum Control {
     Exit,
 }
 
+/// What handling one window event did: whether the app goes on, and where
+/// the event went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Handled {
+    /// Whether the app goes on.
+    pub control: Control,
+    /// Where the event went: [`Routing::Game`] for every event without an
+    /// overlay, and for events that are not input.
+    pub routing: Routing,
+}
+
 /// The app: routes window events to the current screen and draws it.
 ///
 /// The program runs `App<S>`, whose screen is the [`AppScreen`] router.
@@ -93,6 +115,7 @@ pub struct App<S, C = AppScreen> {
     last_redraw: Duration,
     pointer: Option<(f64, f64)>,
     failures: Vec<(ImageKey, ImageError)>,
+    overlay: Option<DevOverlay>,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -105,7 +128,28 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             last_redraw: Duration::ZERO,
             pointer: None,
             failures: Vec::new(),
+            overlay: None,
         }
+    }
+
+    /// The app with a developer overlay, hidden until its toggle key.
+    #[must_use]
+    pub fn with_dev_overlay(mut self) -> Self {
+        self.overlay = Some(DevOverlay::new());
+        self
+    }
+
+    /// The developer overlay, if the app has one.
+    pub fn dev_overlay(&self) -> Option<&DevOverlay> {
+        self.overlay.as_ref()
+    }
+
+    /// Whether the overlay's drawing should see the raw window event that
+    /// was `handled` as given, or `None` for one the app does not take: true
+    /// while the overlay shows, unless the event was its toggle key's.
+    pub fn overlay_wants(&self, handled: Option<&Handled>) -> bool {
+        self.overlay.as_ref().is_some_and(DevOverlay::visible)
+            && handled.is_none_or(|handled| handled.routing != Routing::Toggle)
     }
 
     /// The current screen.
@@ -132,55 +176,98 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// time since the last redraw, renders its draw list through `gpu` and
     /// asks the window for the next redraw. Closing the window, or a screen
     /// asking to quit, exits.
+    ///
+    /// With a developer overlay, see [`App::handle_routed`].
     pub fn handle(
         &mut self,
         event: WindowEvent,
         window: &mut impl WindowPort,
         gpu: &mut impl Gpu,
     ) -> Control {
+        self.handle_routed(event, window, gpu).control
+    }
+
+    /// Handles one window event as [`App::handle`] does, and says where it
+    /// went.
+    ///
+    /// With a developer overlay, keys go through it first: its toggle key
+    /// shows or hides it and goes nowhere else, and opening it makes the
+    /// screen abandon its pointer gesture and let go of its keys. While it
+    /// shows, every other key and pointer event goes to it alone, wherever
+    /// the pointer is, though the pointer's position is still recorded. Every
+    /// redraw also gives the overlay its time.
+    pub fn handle_routed(
+        &mut self,
+        event: WindowEvent,
+        window: &mut impl WindowPort,
+        gpu: &mut impl Gpu,
+    ) -> Handled {
+        let game = |control| Handled {
+            control,
+            routing: Routing::Game,
+        };
+        let overlay = Handled {
+            control: Control::Continue,
+            routing: Routing::Overlay,
+        };
         match event {
             WindowEvent::Resized {
                 size_px,
                 scale_factor,
             } => {
                 self.viewport = Viewport::new(LOGICAL, size_px, scale_factor);
-                Control::Continue
+                game(Control::Continue)
             }
-            WindowEvent::CloseRequested => Control::Exit,
+            WindowEvent::CloseRequested => game(Control::Exit),
             WindowEvent::FocusLost => {
                 self.screen.release_keys();
-                Control::Continue
+                game(Control::Continue)
             }
             WindowEvent::Key {
                 key,
                 pressed,
                 repeat,
-            } => self.route(Input::Key {
-                key,
-                pressed,
-                repeat,
-            }),
+            } => match self.route_key(key, pressed, repeat) {
+                Routing::Game => game(self.route(Input::Key {
+                    key,
+                    pressed,
+                    repeat,
+                })),
+                routing => Handled {
+                    control: Control::Continue,
+                    routing,
+                },
+            },
             WindowEvent::PointerMoved { px } => {
                 self.pointer = Some(px);
-                match self.viewport.window_to_logical(px) {
+                if self.pointer_routing() == Routing::Overlay {
+                    return overlay;
+                }
+                game(match self.viewport.window_to_logical(px) {
                     Some(at) => self.route(Input::PointerMoved(at)),
                     None => Control::Continue,
-                }
+                })
             }
             WindowEvent::PointerButton { button, pressed } => {
+                if self.pointer_routing() == Routing::Overlay {
+                    return overlay;
+                }
                 let at = self
                     .pointer
                     .and_then(|px| self.viewport.window_to_logical(px));
-                match at {
+                game(match at {
                     Some(at) => self.route(Input::PointerButton {
                         button,
                         pressed,
                         at,
                     }),
                     None => Control::Continue,
-                }
+                })
             }
             WindowEvent::Redraw { elapsed } => {
+                if let Some(overlay) = &mut self.overlay {
+                    overlay.frame(elapsed);
+                }
                 self.screen.tick(elapsed.saturating_sub(self.last_redraw));
                 self.last_redraw = self.last_redraw.max(elapsed);
                 let mut list = DrawList::new();
@@ -188,9 +275,29 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 let report = self.renderer.render(&list, &self.viewport, gpu);
                 self.failures.extend(report.new_failures);
                 window.request_redraw();
-                Control::Continue
+                game(Control::Continue)
             }
         }
+    }
+
+    /// Where a key goes; opening the overlay lets go of the screen.
+    fn route_key(&mut self, key: Key, pressed: bool, repeat: bool) -> Routing {
+        let Some(overlay) = &mut self.overlay else {
+            return Routing::Game;
+        };
+        let was_visible = overlay.visible();
+        let routing = overlay.key(key, pressed, repeat);
+        if overlay.visible() && !was_visible {
+            self.screen.cancel_pointer();
+            self.screen.release_keys();
+        }
+        routing
+    }
+
+    fn pointer_routing(&self) -> Routing {
+        self.overlay
+            .as_ref()
+            .map_or(Routing::Game, DevOverlay::pointer)
     }
 
     /// The image failures reported since the last call, each once.
@@ -267,6 +374,7 @@ mod tests {
         ticks: Vec<Duration>,
         quit_on: Option<Key>,
         releases: usize,
+        cancels: usize,
     }
 
     impl Screen for RecordingScreen {
@@ -288,6 +396,10 @@ mod tests {
 
         fn release_keys(&mut self) {
             self.releases += 1;
+        }
+
+        fn cancel_pointer(&mut self) {
+            self.cancels += 1;
         }
     }
 
@@ -548,5 +660,246 @@ mod tests {
         app.handle(redraw, &mut window, &mut gpu);
         assert_eq!(gpu.submits().len(), 2);
         assert_eq!(app.take_failures(), []);
+    }
+
+    fn overlay_app(window: &FakeWindow) -> TestApp {
+        let screen = RecordingScreen {
+            quit_on: Some(Key::Escape),
+            ..RecordingScreen::default()
+        };
+        App::new(window, NoImages, screen).with_dev_overlay()
+    }
+
+    fn routed(app: &mut TestApp, window: &mut FakeWindow, event: WindowEvent) -> Handled {
+        app.handle_routed(event, window, &mut RecordingGpu::new())
+    }
+
+    fn handled(control: Control, routing: Routing) -> Handled {
+        Handled { control, routing }
+    }
+
+    const BACKQUOTE: Key = Key::Char('`');
+
+    fn visible(app: &TestApp) -> bool {
+        app.dev_overlay().expect("an overlay").visible()
+    }
+
+    #[test]
+    fn without_an_overlay_backquote_reaches_the_screen() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        assert!(app.dev_overlay().is_none());
+        assert_eq!(
+            routed(&mut app, &mut window, key(BACKQUOTE, true)),
+            handled(Control::Continue, Routing::Game)
+        );
+        assert_eq!(app.screen().inputs.len(), 1);
+        assert!(!app.overlay_wants(None));
+        let game = handled(Control::Continue, Routing::Game);
+        assert!(!app.overlay_wants(Some(&game)));
+    }
+
+    #[test]
+    fn handle_gives_the_routed_control() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        assert_eq!(
+            handle(&mut app, &mut window, key(Key::Escape, true)),
+            Control::Exit
+        );
+    }
+
+    #[test]
+    fn the_toggle_key_opens_the_overlay_and_lets_go_of_the_screen() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        assert!(!visible(&app), "starts hidden");
+        assert_eq!(
+            routed(&mut app, &mut window, key(BACKQUOTE, true)),
+            handled(Control::Continue, Routing::Toggle)
+        );
+        assert!(visible(&app));
+        assert_eq!(app.screen().inputs, []);
+        assert_eq!((app.screen().cancels, app.screen().releases), (1, 1));
+    }
+
+    #[test]
+    fn the_toggle_keys_repeat_and_release_touch_nothing() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        let repeat = WindowEvent::Key {
+            key: BACKQUOTE,
+            pressed: true,
+            repeat: true,
+        };
+        for event in [repeat, key(BACKQUOTE, false)] {
+            assert_eq!(
+                routed(&mut app, &mut window, event),
+                handled(Control::Continue, Routing::Toggle)
+            );
+        }
+        assert!(visible(&app));
+        assert_eq!(app.screen().inputs, []);
+        assert_eq!((app.screen().cancels, app.screen().releases), (1, 1));
+    }
+
+    #[test]
+    fn keys_go_to_the_overlay_alone_while_it_shows() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        for k in [Key::Escape, Key::Tab, Key::Right, Key::Char('d')] {
+            for pressed in [true, false] {
+                assert_eq!(
+                    routed(&mut app, &mut window, key(k, pressed)),
+                    handled(Control::Continue, Routing::Overlay),
+                    "{k:?}"
+                );
+            }
+        }
+        assert_eq!(app.screen().inputs, []);
+        assert!(visible(&app), "Escape does not close it");
+    }
+
+    #[test]
+    fn closing_the_overlay_releases_nothing_and_gives_keys_back() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        routed(&mut app, &mut window, key(BACKQUOTE, false));
+        assert_eq!(
+            routed(&mut app, &mut window, key(BACKQUOTE, true)),
+            handled(Control::Continue, Routing::Toggle)
+        );
+        assert!(!visible(&app));
+        assert_eq!((app.screen().cancels, app.screen().releases), (1, 1));
+        assert_eq!(
+            routed(&mut app, &mut window, key(Key::Tab, true)),
+            handled(Control::Continue, Routing::Game)
+        );
+        assert_eq!(
+            routed(&mut app, &mut window, key(Key::Escape, true)),
+            handled(Control::Exit, Routing::Game)
+        );
+        assert_eq!(app.screen().inputs.len(), 2);
+    }
+
+    #[test]
+    fn the_pointer_goes_to_the_overlay_alone_while_it_shows_even_in_the_bars() {
+        let mut window = FakeWindow::new((2560, 1536), 2.0);
+        let mut app = overlay_app(&window);
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        let click = WindowEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        };
+        for px in [(456.0, 100.0), (10.0, 10.0)] {
+            assert_eq!(
+                routed(&mut app, &mut window, WindowEvent::PointerMoved { px }),
+                handled(Control::Continue, Routing::Overlay)
+            );
+            assert_eq!(
+                routed(&mut app, &mut window, click),
+                handled(Control::Continue, Routing::Overlay)
+            );
+        }
+        assert_eq!(app.screen().inputs, []);
+    }
+
+    #[test]
+    fn after_closing_a_click_lands_where_the_pointer_is() {
+        let mut window = FakeWindow::new((2560, 1536), 2.0);
+        let mut app = overlay_app(&window);
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        routed(
+            &mut app,
+            &mut window,
+            WindowEvent::PointerMoved { px: (456.0, 100.0) },
+        );
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        let click = WindowEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        };
+        assert_eq!(
+            routed(&mut app, &mut window, click),
+            handled(Control::Continue, Routing::Game)
+        );
+        assert_eq!(
+            app.screen().inputs,
+            [Input::PointerButton {
+                button: MouseButton::Left,
+                pressed: true,
+                at: Point::new(100.0, 50.0)
+            }]
+        );
+    }
+
+    #[test]
+    fn redraws_feed_the_overlays_frame_times_hidden_or_visible() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        let redraw = |ms| WindowEvent::Redraw {
+            elapsed: Duration::from_millis(ms),
+        };
+        assert_eq!(
+            routed(&mut app, &mut window, redraw(0)),
+            handled(Control::Continue, Routing::Game)
+        );
+        routed(&mut app, &mut window, redraw(16));
+        let times = app.dev_overlay().expect("an overlay").frame_times();
+        assert_eq!(times.count(), 1);
+        assert_eq!(times.last(), Some(Duration::from_millis(16)));
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        assert_eq!(
+            routed(&mut app, &mut window, redraw(33)),
+            handled(Control::Continue, Routing::Game)
+        );
+        let times = app.dev_overlay().expect("an overlay").frame_times();
+        assert_eq!(times.count(), 2);
+        assert_eq!(times.last(), Some(Duration::from_millis(17)));
+        assert_eq!(app.screen().ticks.len(), 3, "the screen still ticks");
+        assert_eq!(window.redraws, 3);
+    }
+
+    #[test]
+    fn other_events_go_to_the_game() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        let resized = WindowEvent::Resized {
+            size_px: (1280, 768),
+            scale_factor: 1.0,
+        };
+        assert_eq!(
+            routed(&mut app, &mut window, resized),
+            handled(Control::Continue, Routing::Game)
+        );
+        assert_eq!(
+            routed(&mut app, &mut window, WindowEvent::FocusLost),
+            handled(Control::Continue, Routing::Game)
+        );
+        assert_eq!(
+            routed(&mut app, &mut window, WindowEvent::CloseRequested),
+            handled(Control::Exit, Routing::Game)
+        );
+    }
+
+    #[test]
+    fn the_overlay_wants_every_event_but_its_toggle_while_it_shows() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        let overlay = handled(Control::Continue, Routing::Overlay);
+        let game = handled(Control::Continue, Routing::Game);
+        let toggle = handled(Control::Continue, Routing::Toggle);
+        for event in [None, Some(&overlay), Some(&game), Some(&toggle)] {
+            assert!(!app.overlay_wants(event), "hidden: {event:?}");
+        }
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        assert!(app.overlay_wants(None));
+        assert!(app.overlay_wants(Some(&overlay)));
+        assert!(app.overlay_wants(Some(&game)));
+        assert!(!app.overlay_wants(Some(&toggle)));
     }
 }
