@@ -16,5 +16,9 @@ nova-view.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 
+[features]
+# Exposes the recording Gpu mock to other crates' tests.
+recording = []
+
 [lints]
 workspace = true
