@@ -29,7 +29,10 @@ jobs:
           install: false
       # Only what `mise run ci` needs; cargo-binstall first so the
       # cargo-backed tools install as prebuilt binaries.
-      - run: mise use -g cargo-binstall
+      # The real binary goes on PATH because mise's Windows shim can't be exec'd.
+      - run: |
+          mise use -g cargo-binstall
+          dirname "$(mise which cargo-binstall)" >> "$GITHUB_PATH"
         shell: bash
       - run: mise install rust cargo:cargo-nextest
         shell: bash
