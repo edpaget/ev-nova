@@ -125,7 +125,8 @@
 //! result, record or [`DecodeError`], is cached: later calls return
 //! references to the same decode, and a decode error is returned again each
 //! time without affecting anything else. Sprite sheets
-//! ([`GameData::ship_sprite`]) are decoded on every call and not cached.
+//! ([`GameData::ship_sprite`], [`GameData::ship_layers`]) are decoded on
+//! every call and not cached.
 //!
 //! The store is read-only once built (no `&mut self` methods) and
 //! `Send + Sync`.
@@ -137,6 +138,13 @@
 //! by the `shän`'s base image, decoded with the `shän`'s frames per
 //! rotation as the sheet's columns. A base image that is a `PICT` rather
 //! than an `rlëD` is not supported and reports [`SpriteError::NoSheet`].
+//!
+//! [`GameData::ship_layers`] follows the same `shän` to its engine glow and
+//! running lights images, when it defines them (an image ID above 0; stock
+//! data uses -1 for none). Each layer is decoded with the base's layout and
+//! resolves or fails ([`LayerError`]) on its own. A layer frame is usually
+//! larger than a base frame (the `shän`'s `GlowXSize` and `LightXSize`), so
+//! it lines up with the base by sharing its centre.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -159,7 +167,7 @@ mod sprite;
 mod tests;
 mod walk;
 
-pub use self::sprite::{ShipSprite, SpriteError};
+pub use self::sprite::{LayerError, LayerSprite, ShipLayer, ShipLayers, ShipSprite, SpriteError};
 
 /// Why the store could not be opened at all.
 #[derive(Debug, thiserror::Error)]

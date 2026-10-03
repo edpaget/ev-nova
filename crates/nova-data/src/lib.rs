@@ -104,7 +104,8 @@
 //! [`store::GameData`] opens the data directory and the plug-ins tree,
 //! layers every file into one index where later files override earlier
 //! ones, decodes records lazily, reports which file each resource came
-//! from, and resolves a ship to its sprite sheet. See [`store`] for the load
+//! from, and resolves a ship to its sprite sheet and its glow and lights
+//! layers. See [`store`] for the load
 //! order and its assumptions.
 //!
 //! # Out of scope
@@ -136,8 +137,8 @@ pub use error::{Cause, DecodeError, DecodeWarning, FieldError, FieldPath};
 pub use file::{FileReport, OUT_OF_SCOPE, decode_file};
 pub use registry::{AnyDecoded, AnyRecord, Registered, TYPES, decode_any};
 pub use store::{
-    FailedFile, GameData, IgnoredEntry, OpenError, Origin, Provenance, ShipSprite, SourceFile,
-    SpriteError, StoreEntry, StoreResource,
+    FailedFile, GameData, IgnoredEntry, LayerError, LayerSprite, OpenError, Origin, Provenance,
+    ShipLayer, ShipLayers, ShipSprite, SourceFile, SpriteError, StoreEntry, StoreResource,
 };
 pub use wire::flags::{Flags16, Flags32, Flags64};
 pub use wire::geometry::{Point, Rect};
