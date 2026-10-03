@@ -5,7 +5,8 @@
 //! 1. Turns. Left and right turn by the ship's turn rate. Otherwise reverse
 //!    turns towards the heading opposite the ship's velocity, by at most the
 //!    turn rate, landing on it exactly once it is within one tick's turn. A
-//!    ship at rest has no velocity to turn from, so reverse does nothing.
+//!    ship at rest has no velocity to turn from, so reverse does nothing;
+//!    one slower than [`AT_REST_SPEED`] counts as at rest.
 //! 2. Thrusts: thrust adds the ship's acceleration along its new heading to
 //!    its velocity.
 //! 3. Caps the speed at the ship's top speed, keeping the direction. There
@@ -17,7 +18,13 @@
 //! `(sin h, -cos h)`.
 
 use crate::geometry::Vec2;
-use crate::handling::Handling;
+use crate::handling::{ACCEL_PER_PIXEL_PER_TICK_SQUARED, Handling};
+
+/// The speed, in pixels a tick, at or below which reverse treats a ship as
+/// at rest: half of one tick's thrust from the weakest engine (`Accel` 1).
+/// Thrust never changes a speed by less than that, so anything slower is the
+/// rounding left over from braking, whose direction is meaningless.
+pub const AT_REST_SPEED: f32 = 0.5 / ACCEL_PER_PIXEL_PER_TICK_SQUARED;
 
 /// Which way the turn keys turn the ship.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -59,7 +66,7 @@ pub fn step(state: &mut ShipState, handling: &Handling, controls: Controls) {
     state.heading = match controls.turn {
         Turn::Left => normalized(state.heading - rate),
         Turn::Right => normalized(state.heading + rate),
-        Turn::None if controls.reverse && state.velocity != Vec2::ZERO => {
+        Turn::None if controls.reverse && state.velocity.length() > AT_REST_SPEED => {
             let behind = heading_of(state.velocity * -1.0);
             let off = shortest_turn(state.heading, behind);
             if off.abs() <= rate {
@@ -456,5 +463,40 @@ mod tests {
             assert!((state.heading - 180.0).abs() < 1e-3, "{state:?}");
         }
         assert!(state.velocity.length() < 1e-4, "{state:?}");
+    }
+
+    #[test]
+    fn reverse_counts_a_ship_at_or_below_the_rest_speed_as_at_rest() {
+        let creeping = moving(Vec2::new(0.0, AT_REST_SPEED), 90.0);
+        assert_eq!(after(creeping, REVERSE, 1).heading, 90.0);
+        // One tick's thrust from the weakest engine is motion.
+        let weakest = Handling::from_fields(crate::handling::ShipFields {
+            speed: 300,
+            accel: 1,
+            maneuver: 10,
+        });
+        let nudged = moving(Vec2::new(0.0, weakest.accel), 90.0);
+        assert_eq!(after(nudged, REVERSE, 1).heading, 87.0, "towards 0");
+    }
+
+    #[test]
+    fn reverse_after_braking_to_a_stop_leaves_the_heading_alone() {
+        // Braking leaves a rounding error's worth of velocity, pointing
+        // anywhere; reverse treats that as at rest.
+        let mut state = moving(Vec2::new(0.0, -3.0), 0.0);
+        let brake = Controls {
+            thrust: true,
+            ..REVERSE
+        };
+        for _ in 0..60 {
+            step(&mut state, &SHIP, REVERSE);
+        }
+        for _ in 0..30 {
+            step(&mut state, &SHIP, brake);
+        }
+        assert!(state.velocity != Vec2::ZERO, "leftover: {state:?}");
+        let stopped = state.heading;
+        let held = after(state, REVERSE, 10);
+        assert_eq!(held.heading, stopped, "{held:?}");
     }
 }
