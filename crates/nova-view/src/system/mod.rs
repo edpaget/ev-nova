@@ -11,6 +11,7 @@
 //!   shows when, from its `spöb`'s animation fields.
 //! - [`scene`]: the [`SystemScene`], the system read once and laid out:
 //!   each stellar's world position, sheet and animation.
+//! - [`view`]: the [`SystemView`] screen, which only reads the port.
 
 pub mod animation;
 pub mod camera;
@@ -18,6 +19,7 @@ pub mod catalog;
 pub mod data;
 pub mod scene;
 pub mod starfield;
+pub mod view;
 
 pub use animation::Animation;
 pub use camera::Camera;
@@ -26,3 +28,4 @@ pub use catalog::{
     SystemId,
 };
 pub use scene::{SceneStellar, SystemScene};
+pub use view::SystemView;

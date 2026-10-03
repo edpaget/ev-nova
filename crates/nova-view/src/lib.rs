@@ -12,6 +12,10 @@
 //! - [`galaxy`]: the galaxy map, which draws every system, hyperlink and
 //!   nebula and reads the game data through its
 //!   [`galaxy::GalaxyCatalog`] port.
+//! - [`system`]: the system view, which shows one system's stellars at
+//!   their positions over a parallax starfield, through a camera the
+//!   keyboard moves, and reads the game data through its
+//!   [`system::SystemCatalog`] port.
 
 pub mod color;
 pub mod draw;
