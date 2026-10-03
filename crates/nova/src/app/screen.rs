@@ -161,8 +161,8 @@ impl AppScreen {
         self.switch_to(Side::Flight);
     }
 
-    /// Flight's input: an Escape press goes back, Tab does nothing, and
-    /// everything else flies.
+    /// Flight's input: an Escape press goes back, and everything else goes
+    /// to flight (which ignores Tab).
     fn flight_input(&mut self, input: &Input) -> ScreenAction {
         match *input {
             Input::Key {
@@ -175,7 +175,6 @@ impl AppScreen {
                 }
                 ScreenAction::None
             }
-            Input::Key { key: Key::Tab, .. } => ScreenAction::None,
             _ => self.shown_mut().input(input),
         }
     }
@@ -206,8 +205,8 @@ impl Screen for AppScreen {
     ///
     /// In flight, an Escape press goes back to the side flight was entered
     /// from, letting go of the keys held in flight; it never quits, and its
-    /// repeats and release are consumed. Tab does nothing. Everything else
-    /// goes to flight.
+    /// repeats and release are consumed. Everything else goes to flight,
+    /// where Tab does nothing.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.side == Side::Flight {
             return self.flight_input(input);

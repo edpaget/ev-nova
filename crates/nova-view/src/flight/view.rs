@@ -620,6 +620,28 @@ mod tests {
     }
 
     #[test]
+    fn mid_flight_the_ship_is_drawn_between_its_last_two_positions() {
+        let mut view = flight();
+        view.input(&key(Key::Right, true));
+        ticks(&mut view, 15);
+        view.input(&key(Key::Right, false));
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 20);
+        let before = player(&view);
+        ticks(&mut view, 1);
+        let after = player(&view);
+        view.tick(TICK / 4);
+        let shown = view.shown_position();
+        let expected = |from: f32, to: f32| from + (to - from) * view.alpha();
+        assert!(
+            before.position.x > 1.0 && before.position.y < -1.0,
+            "{before:?}"
+        );
+        assert!((shown.x - expected(before.position.x, after.position.x)).abs() < 1e-4);
+        assert!((shown.y - expected(before.position.y, after.position.y)).abs() < 1e-4);
+    }
+
+    #[test]
     fn the_heading_is_drawn_the_short_way_round_across_0() {
         let mut view = flight();
         view.input(&key(Key::Left, true));

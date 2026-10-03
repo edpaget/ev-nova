@@ -23,9 +23,6 @@ pub const TICK: Duration = Duration::from_nanos(1_000_000_000 / TICKS_PER_SECOND
 /// up.
 pub const MAX_STEPS: u32 = TICKS_PER_SECOND;
 
-/// The largest f32 below 1.
-const LAST_BELOW_1: f32 = 1.0 - f32::EPSILON / 2.0;
-
 /// What one frame's time comes to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Steps {
@@ -57,9 +54,9 @@ impl FixedStep {
         let whole = total / tick;
         let left = total % tick;
         self.carry = Duration::from_nanos(left as u64);
-        // In f64, then held below 1: a nanosecond short of a tick rounds to
-        // 1.0 as an f32.
-        let alpha = ((left as f64 / tick as f64) as f32).min(LAST_BELOW_1);
+        // In f64, then to f32: even a nanosecond short of a tick (1 - 3e-8)
+        // rounds down to the f32 below 1, never to 1.
+        let alpha = (left as f64 / tick as f64) as f32;
         Steps {
             steps: whole.min(u128::from(MAX_STEPS)) as u32,
             alpha,
@@ -124,8 +121,7 @@ mod tests {
         let mut clock = FixedStep::new();
         let almost = clock.advance(nanos(TICK_NANOS - 1));
         assert_eq!(almost.steps, 0);
-        assert!(almost.alpha < 1.0, "{almost:?}");
-        assert!(almost.alpha > 0.99, "{almost:?}");
+        assert_eq!(almost.alpha, f32::from_bits(1.0_f32.to_bits() - 1));
     }
 
     #[test]

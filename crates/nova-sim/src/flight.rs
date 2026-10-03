@@ -295,6 +295,27 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_coasting_at_exactly_its_top_speed_keeps_its_velocity() {
+        // Off the axes, rescaling a velocity to its own length can move it
+        // by a rounding step; one exactly at the top speed is left alone.
+        for velocity in [
+            Vec2::new(3.0, -4.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(0.1, 0.7),
+            Vec2::new(1.3, -2.9),
+            Vec2::new(-2.2, 0.35),
+        ] {
+            let at_top = Handling {
+                max_speed: velocity.length(),
+                ..SHIP
+            };
+            let mut state = moving(velocity, 0.0);
+            step(&mut state, &at_top, Controls::default());
+            assert_eq!(state.velocity, velocity, "not rescaled");
+        }
+    }
+
+    #[test]
     fn speed_is_capped_at_the_top_speed_and_reaches_it_exactly() {
         let mut state = heading(0.0);
         for _ in 0..100 {
