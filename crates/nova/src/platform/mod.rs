@@ -81,6 +81,10 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::KeyA) => Key::Char('a'),
         PhysicalKey::Code(KeyCode::KeyS) => Key::Char('s'),
         PhysicalKey::Code(KeyCode::KeyD) => Key::Char('d'),
+        // The developer tools' toggle, by position: the key under Escape on
+        // a US-layout keyboard. Without the developer tools, no screen uses
+        // it.
+        PhysicalKey::Code(KeyCode::Backquote) => Key::Char('`'),
         _ => Key::Other,
     }
 }
@@ -137,6 +141,7 @@ mod tests {
             (KeyCode::KeyA, Key::Char('a')),
             (KeyCode::KeyS, Key::Char('s')),
             (KeyCode::KeyD, Key::Char('d')),
+            (KeyCode::Backquote, Key::Char('`')),
             (KeyCode::KeyQ, Key::Other),
             (KeyCode::F1, Key::Other),
         ];
