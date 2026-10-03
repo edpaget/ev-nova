@@ -115,6 +115,7 @@ pub mod graphics;
 pub mod records;
 pub mod registry;
 pub mod sound;
+pub mod store;
 pub mod wire;
 
 #[cfg(test)]
