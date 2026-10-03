@@ -82,6 +82,12 @@ impl<C: ResourceCatalog> ResourceBrowser<C> {
         self.results.len()
     }
 
+    /// How many resources match the query, out of how many.
+    #[must_use]
+    pub fn count_line(&self) -> String {
+        format!("{} of {} resources", self.result_count(), self.len())
+    }
+
     /// The `i`th result.
     #[must_use]
     pub fn result(&self, i: usize) -> Option<&ResourceSummary> {
@@ -498,6 +504,15 @@ mod tests {
         assert!(browser.set_query("nothing at all"));
         assert_eq!(keys(&browser), []);
         assert_eq!(browser.result_count(), 0);
+    }
+
+    #[test]
+    fn the_count_line_gives_the_results_and_the_index_size() {
+        let catalog = catalog();
+        let mut browser = ResourceBrowser::new(&catalog);
+        assert_eq!(browser.count_line(), "7 of 7 resources");
+        browser.set_query("200");
+        assert_eq!(browser.count_line(), "4 of 7 resources");
     }
 
     #[test]

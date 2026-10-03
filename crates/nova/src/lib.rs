@@ -9,8 +9,13 @@
 //!   window could not be opened.
 //! - [`platform`]: the thin winit adapter: event translation, the window
 //!   port over a real window, and the event-loop runner.
+//!
+//! With the `dev-tools` feature (`mise run dev`), `devtools` draws the
+//! developer tools overlay with egui. Without it, egui is not linked.
 
 pub mod app;
 pub mod cli;
+#[cfg(feature = "dev-tools")]
+pub mod devtools;
 pub mod exit;
 pub mod platform;
