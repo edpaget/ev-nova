@@ -20,6 +20,8 @@ thiserror.workspace = true
 nova-data = { workspace = true, features = ["fixture"] }
 # Synthetic resource forks for in-memory stores.
 nova-rsrc = { workspace = true, features = ["fixture"] }
+# Real folders for the std adapter and binary tests.
+tempfile.workspace = true
 
 [lints]
 workspace = true

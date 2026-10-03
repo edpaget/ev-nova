@@ -3,6 +3,7 @@
 pub mod app;
 pub mod cli;
 pub mod export;
+pub mod fs;
 pub mod hex;
 pub mod layouts;
 pub mod names;
