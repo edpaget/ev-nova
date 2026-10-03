@@ -1,6 +1,6 @@
 //! Resolving a ship to its sprite sheet.
 
-use super::{GameData, SourceFile};
+use super::{GameData, SourceFile, StoreEntry};
 use crate::error::DecodeError;
 use crate::graphics::{GraphicsError, RLED, SpriteSheet, decode_rled};
 use crate::records::ship::Ship;
@@ -60,14 +60,7 @@ impl GameData {
     /// The sheet is decoded on every call and not cached.
     pub fn ship_sprite(&self, ship: ShipId) -> Result<ShipSprite<'_>, SpriteError> {
         let id = ship.0;
-        let ship = self
-            .get::<Ship>(id)
-            .ok_or(SpriteError::NoShip(id))?
-            .map_err(|e| SpriteError::Decode(e.clone()))?;
-        let anim = self
-            .get::<ShipAnim>(id)
-            .ok_or(SpriteError::NoShipAnim(id))?
-            .map_err(|e| SpriteError::Decode(e.clone()))?;
+        let (ship, anim) = self.ship_and_anim(ship)?;
         let image_id = anim.record.base_image_id;
         let found = self
             .resource(RLED, image_id)
@@ -80,6 +73,23 @@ impl GameData {
             anim: anim.source,
             sheet_source: found.source,
         })
+    }
+
+    /// The `shïp` and its `shän` (same ID), both decoded.
+    fn ship_and_anim(
+        &self,
+        ship: ShipId,
+    ) -> Result<(StoreEntry<'_, Ship>, StoreEntry<'_, ShipAnim>), SpriteError> {
+        let id = ship.0;
+        let ship = self
+            .get::<Ship>(id)
+            .ok_or(SpriteError::NoShip(id))?
+            .map_err(|e| SpriteError::Decode(e.clone()))?;
+        let anim = self
+            .get::<ShipAnim>(id)
+            .ok_or(SpriteError::NoShipAnim(id))?
+            .map_err(|e| SpriteError::Decode(e.clone()))?;
+        Ok((ship, anim))
     }
 }
 
