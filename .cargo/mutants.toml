@@ -8,4 +8,28 @@ exclude_re = [
     # mutated body is never built into the tests and cannot be observed. It
     # is a one-line `Ok(None)`.
     "no_resource_fork",
+    # nova's `main` only wires the real adapters together and runs the event
+    # loop, which needs a display; `cli::data_dir` and the app it starts are
+    # tested on their own.
+    "replace main -> ExitCode",
+    # The winit event-loop glue: opening the window and its surface, and
+    # forwarding each event to `App::handle` (including acting on its
+    # `Control`). It needs a real window and display. The decisions it
+    # forwards to (`translate`, `App::handle`) are mutated and tested.
+    "impl ApplicationHandler for Runner<S>>::(resumed|window_event)",
+    # The window port over a real winit window: one-line reads of its size
+    # and scale factor and a redraw request, observable only with a window.
+    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw)",
+    # winit's `KeyEvent` and `ScaleFactorChanged` have private fields, so
+    # tests cannot build these events. Each arm only delegates (to the
+    # tested `key_event`, or reads the window port).
+    "delete match arm WinitEvent::(KeyboardInput|ScaleFactorChanged)\\{.*\\} in translate",
+    # The surface adapter's raw calls: it delegates pages and uploads to
+    # `WgpuRenderer` (tested offscreen) and presents to a window surface,
+    # which needs a display. What it does before each frame is decided by
+    # the tested `surface_action`.
+    "impl Gpu for SurfaceGpu>::(create_page|upload|submit)",
+    # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
+    # same value: these mutants cannot change behaviour.
+    "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::create_page)",
 ]

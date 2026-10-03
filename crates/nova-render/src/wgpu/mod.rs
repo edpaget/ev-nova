@@ -39,8 +39,10 @@ fn acquire(
     surface: Option<&wgpu::Surface<'_>>,
 ) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), InitError> {
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::default(),
+        force_fallback_adapter: false,
         compatible_surface: surface,
-        ..Default::default()
+        apply_limit_buckets: false,
     }))?;
     let (device, queue) =
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
