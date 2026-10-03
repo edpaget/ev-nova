@@ -12,6 +12,9 @@ binrw.workspace = true
 encoding_rs.workspace = true
 nova-rsrc.workspace = true
 serde.workspace = true
+# `AnyRecord::to_json`: a record's fields as JSON, for nova-dump and the
+# developer tools' record view.
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
@@ -21,7 +24,6 @@ nova-rsrc = { workspace = true, features = ["fixture"] }
 # Integration tests build synthetic pictures, sprites and sounds with the
 # `fixture` builders.
 nova-data = { workspace = true, features = ["fixture"] }
-serde_json.workspace = true
 # Real folders for the directory-listing adapter and store wiring tests.
 tempfile.workspace = true
 

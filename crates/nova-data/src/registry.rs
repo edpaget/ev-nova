@@ -194,6 +194,17 @@ records! {
     Weapon = crate::records::weapon::Weapon, "wëap";
 }
 
+impl AnyRecord {
+    /// The record's typed fields as JSON, without the enum's
+    /// `{"type", "record"}` wrapper: what `serde_json::to_value` gives for
+    /// the record struct itself.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut value = serde_json::to_value(self).expect("records serialize");
+        value["record"].take()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +238,27 @@ mod tests {
             kinds,
             vec![Some(spin::Spin::TYPE), Some(roid::Roid::TYPE), None]
         );
+    }
+
+    #[test]
+    fn to_json_is_the_records_fields_without_the_enum_wrapper() {
+        let spin = spin::Spin {
+            sprites_id: 1000,
+            masks_id: Some(crate::PictId(1001)),
+            x_size: 48,
+            y_size: 46,
+            x_tiles: 6,
+            y_tiles: 7,
+        };
+        let json = AnyRecord::Spin(Box::new(spin.clone())).to_json();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "sprites_id": 1000, "masks_id": 1001, "x_size": 48,
+                "y_size": 46, "x_tiles": 6, "y_tiles": 7,
+            })
+        );
+        assert!(json.get("type").is_none());
+        assert_eq!(json, serde_json::to_value(&spin).expect("serializes"));
     }
 }

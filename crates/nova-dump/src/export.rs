@@ -13,7 +13,7 @@ use nova_data::graphics::{
 };
 use nova_data::sound::{SoundError, decode_snd};
 use nova_data::store::{FailedFile, GameData, IgnoredEntry};
-use nova_data::{AnyRecord, DecodeError, DecodeWarning, TYPES};
+use nova_data::{DecodeError, DecodeWarning, TYPES};
 use nova_rsrc::ResType;
 use serde::Serialize;
 
@@ -259,7 +259,7 @@ fn export_records<'a>(
                     name: entry.name,
                     source: entry.source.path.display().to_string(),
                     warning: entry.warning.map(ToString::to_string),
-                    record: record_json(entry.record),
+                    record: entry.record.to_json(),
                 });
             }
             Some(Err(error)) => {
@@ -283,12 +283,6 @@ fn export_records<'a>(
         &Path::new("json").join(format!("{}.json", type_component(ty))),
         &json,
     )
-}
-
-/// The record's typed fields, without the enum's variant wrapper.
-fn record_json(record: &AnyRecord) -> serde_json::Value {
-    let mut value = serde_json::to_value(record).expect("records serialize");
-    value["record"].take()
 }
 
 fn write(sink: &mut impl Sink, path: &Path, bytes: &[u8]) -> Result<(), WriteError> {
