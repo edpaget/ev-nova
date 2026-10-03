@@ -310,9 +310,15 @@ mod tests {
             -view.center().x * view.scale(),
             -view.center().y * view.scale(),
         );
-        while view.zoom() != 3 {
+        // At most one step per scale, so a view that never zooms in fails
+        // the assertion instead of hanging the test.
+        for _ in 0..SCALES.len() {
+            if view.zoom() == 3 {
+                break;
+            }
             view.zoom_in();
         }
+        assert_eq!(view.zoom(), 3, "100%");
         for _ in 0..steps.abs() {
             if steps > 0 {
                 view.zoom_in();
