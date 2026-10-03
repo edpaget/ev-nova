@@ -1179,6 +1179,10 @@ dependencies = [
 [[package]]
 name = "nova-view"
 version = "0.1.0"
+dependencies = [
+ "nova-data",
+ "nova-rsrc",
+]
 
 [[package]]
 name = "num-traits"

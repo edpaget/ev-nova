@@ -4,6 +4,11 @@
 //! [`DrawList`] of [`DrawCommand`]s in logical coordinates, naming images by
 //! [`ImageKey`]. `nova-render` turns draw lists into pixels; this crate knows
 //! nothing about windows or GPUs.
+//!
+//! # Screens
+//!
+//! - [`ships`]: the ship browser, which pages through every `shïp` and
+//!   reads the game data through its [`ships::ShipCatalog`] port.
 
 pub mod color;
 pub mod draw;
@@ -11,6 +16,7 @@ pub mod geometry;
 pub mod image;
 pub mod input;
 pub mod screen;
+pub mod ships;
 
 pub use color::Color;
 pub use draw::{DrawCommand, DrawList};
