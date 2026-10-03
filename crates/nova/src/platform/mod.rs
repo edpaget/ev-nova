@@ -74,6 +74,12 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::Equal) => Key::Char('='),
         PhysicalKey::Code(KeyCode::NumpadAdd) => Key::Char('+'),
         PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => Key::Char('-'),
+        // The system view's movement keys, by position: W, A, S and D on a
+        // US-layout keyboard, wherever another layout puts those letters.
+        PhysicalKey::Code(KeyCode::KeyW) => Key::Char('w'),
+        PhysicalKey::Code(KeyCode::KeyA) => Key::Char('a'),
+        PhysicalKey::Code(KeyCode::KeyS) => Key::Char('s'),
+        PhysicalKey::Code(KeyCode::KeyD) => Key::Char('d'),
         _ => Key::Other,
     }
 }
@@ -126,7 +132,11 @@ mod tests {
             (KeyCode::NumpadAdd, Key::Char('+')),
             (KeyCode::Minus, Key::Char('-')),
             (KeyCode::NumpadSubtract, Key::Char('-')),
-            (KeyCode::KeyA, Key::Other),
+            (KeyCode::KeyW, Key::Char('w')),
+            (KeyCode::KeyA, Key::Char('a')),
+            (KeyCode::KeyS, Key::Char('s')),
+            (KeyCode::KeyD, Key::Char('d')),
+            (KeyCode::KeyQ, Key::Other),
             (KeyCode::F1, Key::Other),
         ];
         for (code, key) in cases {
