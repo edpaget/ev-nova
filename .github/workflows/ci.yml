@@ -22,9 +22,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
         with:
-          # Only what `mise run ci` needs; cargo-binstall first so the
-          # cargo-backed tools install as prebuilt binaries.
-          install_args: cargo-binstall
+          install: false
+      # Only what `mise run ci` needs; cargo-binstall first so the
+      # cargo-backed tools install as prebuilt binaries.
+      - run: mise use -g cargo-binstall
       - run: mise install rust cargo:cargo-nextest
       - uses: Swatinem/rust-cache@v2
       - run: mise run ci
