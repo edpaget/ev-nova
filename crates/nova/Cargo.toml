@@ -13,7 +13,16 @@ nova-render.workspace = true
 nova-rsrc.workspace = true
 nova-view.workspace = true
 pollster.workspace = true
+thiserror.workspace = true
 winit.workspace = true
+
+[dev-dependencies]
+# Synthetic pictures and sprites for the placeholder's content tests.
+nova-data = { workspace = true, features = ["fixture"] }
+# The app tests record Gpu calls with the `recording` mock.
+nova-render = { workspace = true, features = ["recording"] }
+# Synthetic resource forks for in-memory stores.
+nova-rsrc = { workspace = true, features = ["fixture"] }
 
 [lints]
 workspace = true

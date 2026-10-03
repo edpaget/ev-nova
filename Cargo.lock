@@ -1119,6 +1119,7 @@ dependencies = [
  "nova-rsrc",
  "nova-view",
  "pollster",
+ "thiserror 2.0.21",
  "winit",
 ]
 
