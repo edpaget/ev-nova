@@ -1,16 +1,11 @@
 //! Resolving a ship to its sprite sheet.
 
-use nova_rsrc::ResType;
-
 use super::{GameData, SourceFile};
 use crate::error::DecodeError;
-use crate::graphics::{GraphicsError, SpriteSheet, decode_rled};
+use crate::graphics::{GraphicsError, RLED, SpriteSheet, decode_rled};
 use crate::records::ship::Ship;
 use crate::records::ship_anim::ShipAnim;
 use crate::wire::id::ShipId;
-
-/// The `rlëD` resource type.
-pub const RLED: ResType = ResType::new([b'r', b'l', 0x91, b'D']);
 
 /// A ship's base sprite sheet and the files each step came from.
 #[derive(Debug)]
@@ -92,6 +87,7 @@ impl GameData {
 mod tests {
     use std::path::Path;
 
+    use nova_rsrc::ResType;
     use nova_rsrc::fixture::ForkBuilder;
 
     use super::*;

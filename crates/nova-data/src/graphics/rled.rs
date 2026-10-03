@@ -5,12 +5,17 @@
 //! (MIT) `rlëD` decoder, consulted as a second reading for the byte layout
 //! and token semantics. No code was copied.
 
+use nova_rsrc::ResType;
+
 use super::GraphicsError;
 use super::budget::check_budget;
 use super::color::rgb555;
 use super::image::Image;
 use super::reader::Reader;
 use super::sheet::{SheetLayout, SpriteSheet};
+
+/// The `rlëD` resource type: `rl`, Mac Roman `ë` (`0x91`), `D`.
+pub const RLED: ResType = ResType::new([b'r', b'l', 0x91, b'D']);
 
 /// The only depth stock data (and this decoder) uses.
 const DEPTH: u16 = 16;
@@ -145,6 +150,12 @@ mod tests {
     use crate::graphics::color::rgb555;
     use crate::graphics::fixture::{RledBuilder, RledFrame};
     use crate::graphics::image::Image;
+
+    #[test]
+    fn the_resource_type_is_rled_in_mac_roman() {
+        let mac_roman = nova_rsrc::ResType::from_mac_roman("rlëD").expect("Mac Roman type");
+        assert_eq!(RLED, mac_roman);
+    }
 
     const RED: u16 = 0x7C00;
     const GREEN: u16 = 0x03E0;

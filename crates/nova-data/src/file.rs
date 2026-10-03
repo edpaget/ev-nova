@@ -4,6 +4,7 @@ use nova_rsrc::{ResType, ResourceFile};
 
 use crate::decode::Entry;
 use crate::error::{DecodeError, DecodeWarning};
+use crate::graphics::RLED;
 use crate::registry::{AnyRecord, decode_any};
 
 /// Resource types [`decode_file`] skips: pictures and sprites (`PICT`,
@@ -11,7 +12,7 @@ use crate::registry::{AnyRecord, decode_any};
 /// (`snd `), which [`crate::sound`] decodes.
 pub const OUT_OF_SCOPE: &[ResType] = &[
     ResType::new(*b"PICT"),
-    ResType::new([b'r', b'l', 0x91, b'D']),
+    RLED,
     ResType::new(*b"cicn"),
     ResType::new(*b"ppat"),
     ResType::new(*b"snd "),

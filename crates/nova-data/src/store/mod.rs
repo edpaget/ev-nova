@@ -157,7 +157,7 @@ mod sprite;
 mod tests;
 mod walk;
 
-pub use self::sprite::{RLED, ShipSprite, SpriteError};
+pub use self::sprite::{ShipSprite, SpriteError};
 
 /// Why the store could not be opened at all.
 #[derive(Debug, thiserror::Error)]

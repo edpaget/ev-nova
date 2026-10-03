@@ -9,7 +9,7 @@
 //! | `PICT` | [`decode_pict`] | one image the size of `picFrame` |
 //! | `cicn` | [`decode_cicn`] | one image, the mask as alpha |
 //! | `ppat` | [`decode_ppat`] | one opaque image |
-//! | `rlëD` | [`decode_rled`] | a [`SpriteSheet`] of equal-sized frames |
+//! | `rlëD` ([`RLED`]) | [`decode_rled`] | a [`SpriteSheet`] of equal-sized frames |
 //!
 //! A sprite sheet's header gives frame size and count but not how the frames
 //! are arranged. That comes from the `spïn` or `shän` record pointing at the
@@ -106,5 +106,5 @@ pub use icon::decode_cicn;
 pub use image::Image;
 pub use pattern::decode_ppat;
 pub use pict::decode_pict;
-pub use rled::decode_rled;
+pub use rled::{RLED, decode_rled};
 pub use sheet::{SheetLayout, SpriteSheet};
