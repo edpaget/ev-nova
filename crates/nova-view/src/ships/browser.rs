@@ -9,15 +9,8 @@
 use std::time::Duration;
 
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
+use crate::time::ticks;
 use crate::{Color, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction};
-
-/// One animation frame: 1/30 s, Nova's tick, truncated to whole
-/// nanoseconds (33,333,333 ns), which is exactly what
-/// `Duration::from_secs(1) / 30` gives. The frame shown is the time since
-/// the selection divided by this period, rounded down, so every tick of
-/// exactly 1/30 s advances exactly one frame and shorter ticks add up. The
-/// truncation runs the animation 10 ns a second fast.
-const FRAME_PERIOD_NANOS: u128 = 1_000_000_000 / 30;
 
 /// Where the ship's centre goes, in the 1024x768 logical space. The base,
 /// glow and lights frames are all centred here: a layer frame is often
@@ -103,10 +96,10 @@ impl<C: ShipCatalog> ShipBrowser<C> {
         Some(self.frame_of(*sheet))
     }
 
-    /// The frame of `sheet` for the time since the selection.
+    /// The frame of `sheet` for the time since the selection: one frame per
+    /// tick of Nova's 1/30 s clock, wrapping round.
     fn frame_of(&self, sheet: SheetInfo) -> u16 {
-        let ticks = self.elapsed.as_nanos() / FRAME_PERIOD_NANOS;
-        (ticks % u128::from(sheet.frames.get())) as u16
+        (ticks(self.elapsed) % u128::from(sheet.frames.get())) as u16
     }
 
     /// Selects the next ship (or the previous one), wrapping round,

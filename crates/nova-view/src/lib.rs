@@ -21,6 +21,7 @@ pub mod image;
 pub mod input;
 pub mod screen;
 pub mod ships;
+mod time;
 
 pub use color::Color;
 pub use draw::{DrawCommand, DrawList};
