@@ -560,6 +560,7 @@ mod tests {
     fn run(text: &str) -> TextRun {
         TextRun {
             text: text.to_owned(),
+            font: nova_view::Font::Geneva,
             origin_px: (0.0, 0.0),
             size_px: 16.0,
             line_height_px: 19.2,

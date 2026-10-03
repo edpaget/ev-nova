@@ -120,11 +120,11 @@ impl<S: ImageSource> Renderer<S> {
                 }
                 DrawCommand::Text {
                     ref text,
+                    font,
                     origin,
                     size,
                     wrap_width,
                     color,
-                    ..
                 } => {
                     let size_px = size * scale;
                     let line_height_px = LINE_HEIGHT * size_px;
@@ -137,6 +137,7 @@ impl<S: ImageSource> Renderer<S> {
                     }
                     let run = TextRun {
                         text: text.clone(),
+                        font,
                         origin_px: (
                             rect.x as f32 + origin.x * scale,
                             rect.y as f32 + origin.y * scale,
@@ -324,7 +325,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use nova_data::graphics::Image;
-    use nova_view::{Color, DrawList, ImageKey, ImageKind, Point};
+    use nova_view::{Color, DrawList, Font, ImageKey, ImageKind, Point};
 
     use super::*;
     use crate::gpu::{Batch, Frame, QuadInstance, Rect, SolidQuad, TextRun};
@@ -780,8 +781,15 @@ mod tests {
     fn text_is_converted_to_physical_pixels() {
         let color = Color::rgba(1, 2, 3, 4);
         let mut list = DrawList::new();
-        list.text("Hello", at(1.5, 2.0), 10.0, Some(20.0), color)
-            .text("Unwrapped", at(0.0, 0.0), 8.0, None, Color::WHITE);
+        list.text_in(
+            Font::Charcoal,
+            "Hello",
+            at(1.5, 2.0),
+            10.0,
+            Some(20.0),
+            color,
+        )
+        .text("Unwrapped", at(0.0, 0.0), 8.0, None, Color::WHITE);
 
         let frame = render_one(&list, &viewport());
 
@@ -790,6 +798,7 @@ mod tests {
             vec![Batch::Text(vec![
                 TextRun {
                     text: "Hello".to_owned(),
+                    font: Font::Charcoal,
                     origin_px: (3.0, 4.0),
                     size_px: 20.0,
                     line_height_px: 1.2 * 20.0,
@@ -799,6 +808,7 @@ mod tests {
                 },
                 TextRun {
                     text: "Unwrapped".to_owned(),
+                    font: Font::Geneva,
                     origin_px: (0.0, 0.0),
                     size_px: 16.0,
                     line_height_px: 1.2 * 16.0,
@@ -807,6 +817,29 @@ mod tests {
                     clip: rect(0, 0, 128, 96),
                 },
             ])]
+        );
+    }
+
+    #[test]
+    fn runs_in_either_font_share_one_text_batch_in_draw_order() {
+        let mut list = DrawList::new();
+        list.text("a", at(0.0, 0.0), 8.0, None, Color::WHITE)
+            .text_in(Font::Charcoal, "b", at(0.0, 0.0), 8.0, None, Color::WHITE)
+            .text("c", at(0.0, 0.0), 8.0, None, Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        let [Batch::Text(runs)] = frame.batches.as_slice() else {
+            panic!("one text batch: {frame:?}");
+        };
+        let fonts: Vec<(&str, Font)> = runs.iter().map(|r| (r.text.as_str(), r.font)).collect();
+        assert_eq!(
+            fonts,
+            [
+                ("a", Font::Geneva),
+                ("b", Font::Charcoal),
+                ("c", Font::Geneva)
+            ]
         );
     }
 
@@ -844,6 +877,7 @@ mod tests {
                 Batch::Solid(vec![dot, line]),
                 Batch::Text(vec![TextRun {
                     text: "ok".to_owned(),
+                    font: Font::Geneva,
                     origin_px: (0.0, 0.0),
                     size_px: 16.0,
                     line_height_px: 1.2 * 16.0,

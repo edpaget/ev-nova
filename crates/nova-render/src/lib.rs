@@ -9,7 +9,11 @@
 //! - [`viewport`]: the logical-to-window transform and letterbox.
 //! - [`atlas`]: atlas pages and the shelf packer.
 //! - [`images`]: the [`ImageSource`] port, decoded frames by resource.
-//! - [`gpu`]: the [`Gpu`] port and the [`Frame`]s handed to it.
+//! - [`gpu`]: the [`Gpu`] port and the [`Frame`]s handed to it. Each
+//!   [`TextRun`] names its `nova_view` [`Font`](nova_view::Font).
+//! - [`fonts`]: the font files text is drawn in ([`FontFaces`], with the
+//!   bundled [`FALLBACK_FONT`]) and which face draws each font
+//!   ([`face_for`]).
 //! - [`batch`]: the [`Renderer`], which packs images into the atlas lazily
 //!   and turns a draw list into batches in draw order.
 //! - [`source`]: [`ImageSource`] for `nova_data`'s `GameData`, a thin
@@ -33,6 +37,7 @@
 
 pub mod atlas;
 pub mod batch;
+pub mod fonts;
 pub mod gpu;
 pub mod images;
 pub mod present;
@@ -44,6 +49,7 @@ pub mod wgpu;
 
 pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPacker, Uv};
 pub use batch::{RenderReport, Renderer};
+pub use fonts::{FALLBACK_FONT, Face, FontFaces, face_for};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
 pub use images::{ImageError, ImageSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};

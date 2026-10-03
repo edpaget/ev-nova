@@ -6,7 +6,7 @@
 //! projects the logical space onto the viewport rectangle.
 
 use nova_data::graphics::Image;
-use nova_view::{Color, Point};
+use nova_view::{Color, Font, Point};
 
 pub use crate::atlas::{PageId, Uv};
 use crate::viewport::{LogicalSize, PixelRect};
@@ -59,6 +59,8 @@ pub struct SolidQuad {
 pub struct TextRun {
     /// The text.
     pub text: String,
+    /// The font it is drawn in.
+    pub font: Font,
     /// The top-left corner of its first line, in window pixels.
     pub origin_px: (f32, f32),
     /// The font size in pixels.

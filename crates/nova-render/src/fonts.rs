@@ -1,0 +1,115 @@
+//! The font faces text is drawn in, and which face draws each [`Font`].
+//!
+//! The renderer never scans the system's fonts: it draws only the faces
+//! it is handed in [`FontFaces`], so text looks the same on every machine.
+//! [`FALLBACK_FONT`], compiled in, draws Geneva, and Charcoal when the
+//! player's own Charcoal (`nova_data::fonts`) is missing or does not load.
+
+use std::sync::Arc;
+
+use nova_view::Font;
+
+/// The bundled substitute for Geneva (and for a missing Charcoal): Noto Sans
+/// Regular, under the SIL Open Font License 1.1 (`fonts/OFL.txt`).
+pub const FALLBACK_FONT: &[u8] = include_bytes!("../fonts/NotoSans-Regular.ttf");
+
+/// The font files the adapter loads: the fallback face, and Charcoal's when
+/// the game data has it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontFaces {
+    charcoal: Option<Arc<[u8]>>,
+    fallback: Arc<[u8]>,
+}
+
+impl FontFaces {
+    /// Just `fallback`, with no Charcoal.
+    #[must_use]
+    pub fn new(fallback: impl Into<Arc<[u8]>>) -> Self {
+        Self {
+            charcoal: None,
+            fallback: fallback.into(),
+        }
+    }
+
+    /// Just the bundled [`FALLBACK_FONT`].
+    #[must_use]
+    pub fn bundled() -> Self {
+        Self::new(FALLBACK_FONT)
+    }
+
+    /// These faces with Charcoal's font file, `bytes`.
+    #[must_use]
+    pub fn with_charcoal(self, bytes: impl Into<Arc<[u8]>>) -> Self {
+        Self {
+            charcoal: Some(bytes.into()),
+            ..self
+        }
+    }
+
+    /// Charcoal's font file, if there is one.
+    #[must_use]
+    pub fn charcoal(&self) -> Option<&Arc<[u8]>> {
+        self.charcoal.as_ref()
+    }
+
+    /// The fallback font file.
+    #[must_use]
+    pub fn fallback(&self) -> &Arc<[u8]> {
+        &self.fallback
+    }
+}
+
+/// A loaded face.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Face {
+    /// The player's Charcoal.
+    Charcoal,
+    /// The bundled fallback.
+    Fallback,
+}
+
+/// The face that draws `font`: Charcoal draws in its own face when that
+/// face loaded, and everything else in the fallback.
+#[must_use]
+pub fn face_for(font: Font, charcoal_loaded: bool) -> Face {
+    match font {
+        Font::Charcoal if charcoal_loaded => Face::Charcoal,
+        Font::Charcoal | Font::Geneva => Face::Fallback,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nova_data::fonts::check_sfnt;
+
+    use super::*;
+
+    #[test]
+    fn charcoal_draws_in_its_own_face_only_when_it_loaded() {
+        assert_eq!(face_for(Font::Charcoal, true), Face::Charcoal);
+        assert_eq!(face_for(Font::Charcoal, false), Face::Fallback);
+        assert_eq!(face_for(Font::Geneva, true), Face::Fallback);
+        assert_eq!(face_for(Font::Geneva, false), Face::Fallback);
+    }
+
+    #[test]
+    fn the_bundled_faces_are_the_fallback_alone() {
+        let faces = FontFaces::bundled();
+        assert_eq!(&faces.fallback()[..], FALLBACK_FONT);
+        assert_eq!(faces.charcoal(), None);
+        assert_eq!(faces, FontFaces::new(FALLBACK_FONT));
+    }
+
+    #[test]
+    fn the_bundled_fallback_is_a_usable_outline_font() {
+        assert_eq!(check_sfnt(FALLBACK_FONT), Ok(()));
+        assert_eq!(FALLBACK_FONT.len(), 556_216);
+    }
+
+    #[test]
+    fn charcoal_is_added_beside_the_fallback() {
+        let faces = FontFaces::new(&b"fallback"[..]).with_charcoal(&b"charcoal"[..]);
+        assert_eq!(&faces.fallback()[..], b"fallback");
+        assert_eq!(faces.charcoal().map(|c| &c[..]), Some(&b"charcoal"[..]));
+    }
+}

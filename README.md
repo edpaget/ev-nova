@@ -94,3 +94,11 @@ structure, and commit conventions.
 Licensed under the GNU General Public License v3.0 or later
 (GPL-3.0-or-later). See [LICENSE](LICENSE). The license covers the code in this
 repository, not the EV Nova game data.
+
+### Fonts
+
+The font in [`crates/nova-render/fonts/`](crates/nova-render/fonts), Noto
+Sans Regular, is licensed separately under the SIL Open Font License 1.1
+(OFL-1.1); see [its README](crates/nova-render/fonts/README.md) and
+[`OFL.txt`](crates/nova-render/fonts/OFL.txt). The game's own Charcoal font
+is read from your copy of the game data at run time and is never included.
