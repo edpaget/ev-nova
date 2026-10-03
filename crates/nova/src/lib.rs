@@ -5,9 +5,12 @@
 //!   `nova-view` input, routes them to the current screen and hands each
 //!   frame's draw list to `nova-render`. No winit or wgpu types.
 //! - [`cli`]: where the game data is, from the arguments or `NOVA_DATA`.
+//! - [`exit`]: how the program ends: its exit code and message when the
+//!   window could not be opened.
 //! - [`platform`]: the thin winit adapter: event translation, the window
 //!   port over a real window, and the event-loop runner.
 
 pub mod app;
 pub mod cli;
+pub mod exit;
 pub mod platform;

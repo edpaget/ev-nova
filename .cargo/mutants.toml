@@ -12,10 +12,11 @@ exclude_re = [
     # loop, which needs a display; `cli::data_dir` and the app it starts are
     # tested on their own.
     "replace main -> ExitCode",
-    # The winit event-loop glue: opening the window and its surface, and
-    # forwarding each event to `App::handle` (including acting on its
-    # `Control`). It needs a real window and display. The decisions it
-    # forwards to (`translate`, `App::handle`) are mutated and tested.
+    # The winit event-loop glue: opening the window and its surface (or
+    # recording why it could not), and forwarding each event to
+    # `App::handle` (including acting on its `Control`). It needs a real
+    # window and display. The decisions it forwards to (`translate`,
+    # `App::handle`, `gpu_failure`, `exit::exit`) are mutated and tested.
     "impl ApplicationHandler for Runner<S>>::(resumed|window_event)",
     # The window port over a real winit window: one-line reads of its size
     # and scale factor and a redraw request, observable only with a window.

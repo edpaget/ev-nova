@@ -8,8 +8,8 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 
 use nova::app::{Placeholder, PlaceholderContent};
-use nova::cli;
 use nova::platform::Runner;
+use nova::{cli, exit};
 use nova_data::GameData;
 use winit::event_loop::EventLoop;
 
@@ -33,7 +33,13 @@ fn main() -> ExitCode {
     let mut runner = Runner::new(data, Placeholder::new(content));
     let result = EventLoop::new().and_then(|event_loop| event_loop.run_app(&mut runner));
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            let exit = exit::exit(runner.open_failure());
+            if let Some(message) = exit.message {
+                eprintln!("{message}");
+            }
+            ExitCode::from(exit.code)
+        }
         Err(error) => {
             eprintln!("nova: {error}");
             ExitCode::from(1)

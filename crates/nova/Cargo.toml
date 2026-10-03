@@ -23,6 +23,8 @@ nova-data = { workspace = true, features = ["fixture"] }
 nova-render = { workspace = true, features = ["recording"] }
 # Synthetic resource forks for in-memory stores.
 nova-rsrc = { workspace = true, features = ["fixture"] }
+# The runner tests build the wgpu errors a GPU set-up can fail with.
+wgpu.workspace = true
 
 [lints]
 workspace = true

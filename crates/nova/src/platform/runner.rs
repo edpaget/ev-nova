@@ -1,12 +1,11 @@
 //! The winit event loop's handler: opens the window and the GPU surface,
 //! then forwards every event to the [`App`].
 
-use std::error::Error;
 use std::sync::Arc;
 use std::time::Instant;
 
 use nova_render::ImageSource;
-use nova_render::wgpu::SurfaceGpu;
+use nova_render::wgpu::{InitError, SurfaceGpu};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent as WinitEvent;
 use winit::event_loop::ActiveEventLoop;
@@ -15,6 +14,7 @@ use winit::window::{Window, WindowId};
 use super::translate;
 use super::window::WinitWindow;
 use crate::app::{App, Control, Placeholder, WindowEvent};
+use crate::exit::OpenFailure;
 
 /// The window, its GPU surface and the app, once the window is open.
 struct Running<S> {
@@ -28,6 +28,7 @@ struct Running<S> {
 pub struct Runner<S> {
     pending: Option<(S, Placeholder)>,
     running: Option<Running<S>>,
+    failure: Option<OpenFailure>,
     start: Instant,
 }
 
@@ -38,19 +39,39 @@ impl<S: ImageSource> Runner<S> {
         Self {
             pending: Some((images, screen)),
             running: None,
+            failure: None,
             start: Instant::now(),
         }
+    }
+
+    /// Why the window could not be opened, if it could not; the event loop
+    /// exits as soon as that happens.
+    pub fn open_failure(&self) -> Option<&OpenFailure> {
+        self.failure.as_ref()
+    }
+}
+
+/// The open failure for a GPU that could not be set up for the window.
+fn gpu_failure(error: &InitError) -> OpenFailure {
+    let detail = error.to_string();
+    match error {
+        InitError::NoAdapter(_) | InitError::NoDevice(_) => OpenFailure::NoGpu(detail),
+        InitError::Surface(_) | InitError::NoSurfaceFormat => OpenFailure::Surface(detail),
     }
 }
 
 /// Opens the 1024x768-point, resizable "EV Nova" window and its surface.
-fn open(event_loop: &ActiveEventLoop) -> Result<(WinitWindow, SurfaceGpu), Box<dyn Error>> {
+fn open(event_loop: &ActiveEventLoop) -> Result<(WinitWindow, SurfaceGpu), OpenFailure> {
     let attributes = Window::default_attributes()
         .with_title("EV Nova")
         .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0))
         .with_resizable(true);
-    let window = Arc::new(event_loop.create_window(attributes)?);
-    let gpu = SurfaceGpu::new(Box::new(event_loop.owned_display_handle()), window.clone())?;
+    let window = event_loop
+        .create_window(attributes)
+        .map_err(|error| OpenFailure::Window(error.to_string()))?;
+    let window = Arc::new(window);
+    let gpu = SurfaceGpu::new(Box::new(event_loop.owned_display_handle()), window.clone())
+        .map_err(|error| gpu_failure(&error))?;
     Ok((WinitWindow(window), gpu))
 }
 
@@ -65,8 +86,8 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
                 crate::app::WindowPort::request_redraw(&mut window);
                 self.running = Some(Running { app, gpu, window });
             }
-            Err(error) => {
-                eprintln!("nova: opening the window: {error}");
+            Err(failure) => {
+                self.failure = Some(failure);
                 event_loop.exit();
             }
         }
@@ -94,5 +115,48 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
         if control == Control::Exit {
             event_loop.exit();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nova_data::graphics::Image;
+    use nova_render::ImageError;
+    use nova_render::wgpu::InitError;
+    use nova_view::ImageKind;
+
+    use super::*;
+    use crate::app::PlaceholderContent;
+    use crate::exit::OpenFailure;
+
+    struct NoImages;
+
+    impl ImageSource for NoImages {
+        fn frames(&self, _kind: ImageKind, _id: i16) -> Result<Vec<Image>, ImageError> {
+            Err(ImageError::Missing)
+        }
+    }
+
+    #[test]
+    fn a_gpu_with_no_adapter_or_device_is_no_gpu() {
+        let error = InitError::NoAdapter(wgpu::RequestAdapterError::EnvNotSet);
+        assert_eq!(gpu_failure(&error), OpenFailure::NoGpu(error.to_string()));
+    }
+
+    #[test]
+    fn a_gpu_that_cannot_use_the_surface_is_a_surface_failure() {
+        let error = InitError::NoSurfaceFormat;
+        assert_eq!(gpu_failure(&error), OpenFailure::Surface(error.to_string()));
+    }
+
+    #[test]
+    fn the_runner_reports_the_failure_that_stopped_the_window_opening() {
+        let mut runner = Runner::new(NoImages, Placeholder::new(PlaceholderContent::default()));
+        assert_eq!(runner.open_failure(), None);
+        runner.failure = Some(OpenFailure::Window("no display".into()));
+        assert_eq!(
+            runner.open_failure(),
+            Some(&OpenFailure::Window("no display".into()))
+        );
     }
 }
