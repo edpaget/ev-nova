@@ -7,15 +7,29 @@ use nova_data::records::ship::Ship;
 use nova_data::store::order::IgnoreReason;
 use nova_data::store::{GameData, IgnoredEntry, OpenError, Origin};
 use nova_rsrc::LoadError;
-use nova_rsrc::fixture::ForkBuilder;
+use nova_rsrc::fixture::{ForkBuilder, RezBuilder};
 
-/// A fork of ships, each `(id, holds)`, the `holds` field at offset 0.
+/// A ship whose `holds` field (at offset 0) is `holds`.
+fn ship_bytes(holds: i16) -> Vec<u8> {
+    let mut bytes = vec![0; Ship::SIZE.expect("fixed size")];
+    bytes[..2].copy_from_slice(&holds.to_be_bytes());
+    bytes
+}
+
+/// A fork of ships, each `(id, holds)`.
 fn ships(ships: &[(i16, i16)]) -> Vec<u8> {
     let mut builder = ForkBuilder::new();
     for &(id, holds) in ships {
-        let mut bytes = vec![0; Ship::SIZE.expect("fixed size")];
-        bytes[..2].copy_from_slice(&holds.to_be_bytes());
-        builder = builder.resource(Ship::TYPE, id, None, &bytes);
+        builder = builder.resource(Ship::TYPE, id, None, &ship_bytes(holds));
+    }
+    builder.build().bytes
+}
+
+/// A Windows `.rez` file of ships, each `(id, holds)`.
+fn rez_ships(ships: &[(i16, i16)]) -> Vec<u8> {
+    let mut builder = RezBuilder::new();
+    for &(id, holds) in ships {
+        builder = builder.resource(Ship::TYPE, id, None, &ship_bytes(holds));
     }
     builder.build().bytes
 }
@@ -90,6 +104,39 @@ fn a_store_opens_from_real_data_and_plugin_folders() {
         "{:?}",
         failed.error
     );
+}
+
+#[test]
+fn rez_data_files_and_plugins_load_from_real_folders() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let data_dir = tmp.path().join("Nova Files");
+    let plugins = tmp.path().join("Plug-Ins");
+    fs::create_dir_all(&data_dir).expect("mkdir");
+    fs::create_dir_all(plugins.join("Windows")).expect("mkdir");
+
+    fs::write(
+        data_dir.join("Nova Data 1.rez"),
+        rez_ships(&[(128, 1), (129, 1)]),
+    )
+    .expect("write");
+    fs::write(
+        plugins.join("Windows/Override.rez"),
+        rez_ships(&[(129, 20), (131, 5)]),
+    )
+    .expect("write");
+
+    let data = GameData::open(&data_dir, Some(&plugins)).expect("opens");
+    assert!(data.failed().is_empty(), "{:?}", data.failed());
+    assert!(data.ignored().is_empty(), "{:?}", data.ignored());
+    assert_eq!(
+        holds_and_source(&data, 128),
+        (1, "Nova Data 1.rez".to_owned())
+    );
+    assert_eq!(
+        holds_and_source(&data, 129),
+        (20, "Override.rez".to_owned())
+    );
+    assert_eq!(holds_and_source(&data, 131), (5, "Override.rez".to_owned()));
 }
 
 /// A classic plug-in keeps its resources in the file's resource fork.

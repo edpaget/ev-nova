@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use nova_rsrc::fixture::{ForkBuilder, MAP_OFFSET_FIELD};
+use nova_rsrc::fixture::{ForkBuilder, MAP_OFFSET_FIELD, RezBuilder};
 use nova_rsrc::{LoadError, ResType};
 
 use super::fake::{FakeForks, FakeTree};
@@ -23,6 +23,16 @@ fn ship_bytes(holds: i16) -> Vec<u8> {
 /// A fork defining one ship per `(id, holds)`, each named `{tag} {id}`.
 fn ships(tag: &str, ships: &[(i16, i16)]) -> Vec<u8> {
     let mut builder = ForkBuilder::new();
+    for &(id, holds) in ships {
+        let name = format!("{tag} {id}");
+        builder = builder.resource(Ship::TYPE, id, Some(name.as_bytes()), &ship_bytes(holds));
+    }
+    builder.build().bytes
+}
+
+/// The same ships as [`ships`], written as a Windows `.rez` file.
+fn rez_ships(tag: &str, ships: &[(i16, i16)]) -> Vec<u8> {
+    let mut builder = RezBuilder::new();
     for &(id, holds) in ships {
         let name = format!("{tag} {id}");
         builder = builder.resource(Ship::TYPE, id, Some(name.as_bytes()), &ship_bytes(holds));
@@ -70,6 +80,75 @@ fn a_plugin_redefining_one_ship_replaces_only_that_ship() {
         (20, Some("plug 129"), Path::new("/p/Better 129.npif"))
     );
     assert_eq!(ship(&data, 130), (3, Some("data 130"), stock));
+}
+
+/// Writes a file of ships named `{tag} {id}`, one per `(id, holds)`.
+type ShipWriter = fn(&str, &[(i16, i16)]) -> Vec<u8>;
+
+/// One ship as the store resolves it: ID, `holds`, name, source file stem
+/// and shadowed file stems.
+type ResolvedShip = (i16, i16, Option<String>, String, Vec<String>);
+
+/// Every ship from a store whose plug-in `file` is written by `plugin`.
+fn ships_with_override(file: &str, plugin: ShipWriter) -> Vec<ResolvedShip> {
+    let stem = |path: &Path| {
+        path.file_stem()
+            .expect("stem")
+            .to_string_lossy()
+            .into_owned()
+    };
+    let path = format!("/p/{file}");
+    let tree = FakeTree::new()
+        .dir("/d", &[("Nova Data 1.ndat", File)])
+        .dir("/p", &[(file, File), ("Zed.npif", File)]);
+    let forks = FakeForks::new()
+        .file(
+            "/d/Nova Data 1.ndat",
+            ships("data", &[(128, 1), (129, 2), (130, 3)]),
+        )
+        .file(&path, plugin("plug", &[(129, 20), (130, 30), (140, 40)]))
+        // Loads after `Override`, so it wins ship 130 over it.
+        .file("/p/Zed.npif", ships("zed", &[(130, 300)]));
+    let data = open(&tree, &forks, true);
+    assert!(data.failed().is_empty(), "{:?}", data.failed());
+    assert!(data.ignored().is_empty(), "{:?}", data.ignored());
+    data.ids(Ship::TYPE)
+        .iter()
+        .map(|&id| {
+            let (holds, name, source) = ship(&data, id);
+            let provenance = data.provenance(Ship::TYPE, id).expect("present");
+            let shadowed = provenance.shadowed.iter().map(|f| stem(&f.path)).collect();
+            (id, holds, name.map(str::to_owned), stem(source), shadowed)
+        })
+        .collect()
+}
+
+#[test]
+fn a_rez_plugin_overrides_exactly_like_the_same_fork_plugin() {
+    let rez = ships_with_override("Override.rez", rez_ships);
+    assert_eq!(rez, ships_with_override("Override.npif", ships));
+    let s = |text: &str| text.to_owned();
+    assert_eq!(
+        rez,
+        [
+            (128, 1, Some(s("data 128")), s("Nova Data 1"), vec![]),
+            (
+                129,
+                20,
+                Some(s("plug 129")),
+                s("Override"),
+                vec![s("Nova Data 1")]
+            ),
+            (
+                130,
+                300,
+                Some(s("zed 130")),
+                s("Zed"),
+                vec![s("Nova Data 1"), s("Override")]
+            ),
+            (140, 40, Some(s("plug 140")), s("Override"), vec![]),
+        ]
+    );
 }
 
 #[test]

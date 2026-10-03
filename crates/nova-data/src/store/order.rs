@@ -30,9 +30,6 @@ pub enum IgnoreReason {
     /// A file whose extension marks it as something other than game data
     /// (music, movies, documents, images). Holds the lower-cased extension.
     NotGameData(String),
-    /// A Windows `.rez` plug-in, which is a different container format
-    /// (task `rez-plugin-support`).
-    RezUnsupported,
 }
 
 /// What to do with one directory entry.
@@ -62,9 +59,10 @@ const NOT_GAME_DATA: &[&str] = &[
 /// neither files nor folders are ignored. A folder is walked in the plug-ins
 /// tree and ignored in the data directory. A file is ignored when its
 /// lower-cased extension is in the skip list (music, movies, documents,
-/// images) or is `rez`; every other file is a candidate, including `.ndat`,
-/// `.npif`, files with no extension and names such as `Foo v1.2`, because
-/// classic plug-ins often have no extension or a dotted name.
+/// images); every other file is a candidate, including `.ndat`, `.npif`,
+/// Windows `.rez` files, files with no extension and names such as
+/// `Foo v1.2`, because classic plug-ins often have no extension or a dotted
+/// name.
 #[must_use]
 pub fn classify(name: &OsStr, kind: EntryKind, origin: Origin) -> Classified {
     if name.as_encoded_bytes().starts_with(b".") {
@@ -84,7 +82,6 @@ fn classify_file(name: &OsStr) -> Classified {
         .extension()
         .map(|ext| ext.to_string_lossy().to_lowercase());
     match extension {
-        Some(ext) if ext == "rez" => Classified::Ignored(IgnoreReason::RezUnsupported),
         Some(ext) if NOT_GAME_DATA.contains(&ext.as_str()) => {
             Classified::Ignored(IgnoreReason::NotGameData(ext))
         }
@@ -207,8 +204,8 @@ mod tests {
             ("shot.jpeg", File, PlugIn, not_game_data("jpeg")),
             ("shot.png", File, PlugIn, not_game_data("png")),
             ("shot.gif", File, PlugIn, not_game_data("gif")),
-            ("x.rez", File, PlugIn, Ignored(R::RezUnsupported)),
-            ("X.REZ", File, Data, Ignored(R::RezUnsupported)),
+            ("x.rez", File, PlugIn, Candidate),
+            ("X.REZ", File, Data, Candidate),
             ("Link", Symlink, PlugIn, Ignored(R::Symlink)),
             ("Link.ndat", Symlink, Data, Ignored(R::Symlink)),
             ("fifo", Other, PlugIn, Ignored(R::NotAFile)),

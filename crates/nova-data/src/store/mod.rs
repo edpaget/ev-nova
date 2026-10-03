@@ -85,15 +85,17 @@
 //!   `._x`), symbolic links, anything that is neither a file nor a folder,
 //!   folders inside the data directory, files whose lower-cased extension
 //!   is `mp3`, `mov`, `txt`, `rtf`, `md`, `pdf`, `htm`, `html`, `jpg`,
-//!   `jpeg`, `png` or `gif`, and Windows `.rez` plug-ins (reported as
-//!   unsupported; task `rez-plugin-support`).
-//! - Everything else is attempted, including `.ndat`, `.npif`, files with
-//!   no extension and dotted names like `Foo v1.2`: classic plug-ins often
-//!   have no extension. A file's flattened fork in its data fork wins;
-//!   otherwise its real resource fork is read.
+//!   `jpeg`, `png` or `gif`.
+//! - Everything else is attempted, including `.ndat`, `.npif`, Windows
+//!   `.rez` files, files with no extension and dotted names like `Foo v1.2`:
+//!   classic plug-ins often have no extension. A file's data fork (a
+//!   flattened fork or a `.rez` file, told apart by content) wins;
+//!   otherwise its real resource fork is read. A `.rez` file sorts by its
+//!   name like any other file.
 //!
-//! In the stock `Nova Files`, the 21 `.ndat` files load and the music and
-//! four race movies are ignored, so nothing fails.
+//! In the stock Mac `Nova Files`, the 21 `.ndat` files load and the music
+//! and four race movies are ignored, so nothing fails; the same holds for
+//! the 21 `.rez` files of the Windows `Nova Files`.
 //!
 //! # Failures
 //!

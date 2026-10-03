@@ -208,7 +208,10 @@ mod tests {
             .dir("/p", &[("L", Symlink), ("fifo", Other), ("x.rez", File)])
             .dir("/p/L", &[("g", File)]);
         let walk = walk(&tree, Some("/p"));
-        assert_eq!(paths(&walk), owned(&[("/d/a", Origin::Data)]));
+        assert_eq!(
+            paths(&walk),
+            owned(&[("/d/a", Origin::Data), ("/p/x.rez", Origin::PlugIn)])
+        );
         assert_eq!(
             ignored(&walk),
             [
@@ -219,7 +222,6 @@ mod tests {
                 ),
                 ("/p/fifo".to_owned(), IgnoreReason::NotAFile),
                 ("/p/L".to_owned(), IgnoreReason::Symlink),
-                ("/p/x.rez".to_owned(), IgnoreReason::RezUnsupported),
             ]
         );
         assert_eq!(tree.listed(), [PathBuf::from("/d"), PathBuf::from("/p")]);

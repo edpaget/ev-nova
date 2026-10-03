@@ -170,7 +170,6 @@ pub(crate) fn ignore_reason(reason: &IgnoreReason) -> String {
         IgnoreReason::DataSubFolder => "folder inside the data directory".to_owned(),
         IgnoreReason::TooDeep => "plug-ins folder nested too deep".to_owned(),
         IgnoreReason::NotGameData(ext) => format!("not game data (.{ext})"),
-        IgnoreReason::RezUnsupported => "Windows .rez plug-in, not supported".to_owned(),
     }
 }
 
@@ -315,10 +314,6 @@ mod tests {
             (
                 IgnoreReason::NotGameData("mov".to_owned()),
                 "not game data (.mov)",
-            ),
-            (
-                IgnoreReason::RezUnsupported,
-                "Windows .rez plug-in, not supported",
             ),
         ];
         for (reason, words) in cases {
