@@ -10,6 +10,7 @@
 //! - `screen_to_world(s) = center + (s - MAP_CENTER) / scale`
 
 use crate::Point;
+pub use crate::geometry::Bounds;
 
 /// The map area's width, in logical units.
 pub const MAP_WIDTH: f32 = 1024.0;
@@ -34,59 +35,6 @@ const ACTUAL_SIZE: usize = 3;
 pub const FIT_MARGIN: f32 = 24.0;
 /// How far one arrow-key press pans the view, in logical units.
 pub const PAN_STEP: f32 = 64.0;
-
-/// A rectangle of map (world) points.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Bounds {
-    /// The top-left corner: the smallest x and y.
-    pub min: Point,
-    /// The bottom-right corner: the largest x and y.
-    pub max: Point,
-}
-
-impl Bounds {
-    /// The smallest rectangle holding every point, or `None` for none.
-    pub fn around(points: impl IntoIterator<Item = Point>) -> Option<Self> {
-        points.into_iter().fold(None, |bounds, p| {
-            Some(match bounds {
-                None => Self { min: p, max: p },
-                Some(Self { min, max }) => Self {
-                    min: Point::new(min.x.min(p.x), min.y.min(p.y)),
-                    max: Point::new(max.x.max(p.x), max.y.max(p.y)),
-                },
-            })
-        })
-    }
-
-    /// Its width.
-    #[must_use]
-    pub fn width(&self) -> f32 {
-        self.max.x - self.min.x
-    }
-
-    /// Its height.
-    #[must_use]
-    pub fn height(&self) -> f32 {
-        self.max.y - self.min.y
-    }
-
-    /// Its centre.
-    #[must_use]
-    pub fn center(&self) -> Point {
-        Point::new(
-            f32::midpoint(self.min.x, self.max.x),
-            f32::midpoint(self.min.y, self.max.y),
-        )
-    }
-
-    /// The point in the rectangle nearest `p`.
-    fn clamp(&self, p: Point) -> Point {
-        Point::new(
-            p.x.clamp(self.min.x, self.max.x),
-            p.y.clamp(self.min.y, self.max.y),
-        )
-    }
-}
 
 /// What the map area shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -227,20 +175,6 @@ mod tests {
         }
         assert_eq!(SCALES[ACTUAL_SIZE], 1.0);
         assert!(SCALES.windows(2).all(|pair| pair[0] < pair[1]));
-    }
-
-    #[test]
-    fn bounds_hold_every_point() {
-        let points = [at(3.0, -1.0), at(-2.0, 5.0), at(1.0, 0.0)];
-        let around = Bounds::around(points).expect("points");
-        assert_eq!(around, bounds((-2.0, -1.0), (3.0, 5.0)));
-        assert_eq!((around.width(), around.height()), (5.0, 6.0));
-        assert_eq!(around.center(), at(0.5, 2.0));
-        assert_eq!(
-            Bounds::around([at(7.0, 8.0)]),
-            Some(bounds((7.0, 8.0), (7.0, 8.0)))
-        );
-        assert_eq!(Bounds::around([]), None);
     }
 
     #[test]
