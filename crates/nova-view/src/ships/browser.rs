@@ -9,6 +9,7 @@
 use std::time::Duration;
 
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
+use crate::draw::crossed_box;
 use crate::time::ticks;
 use crate::{Color, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction};
 
@@ -149,27 +150,15 @@ impl<C: ShipCatalog> ShipBrowser<C> {
 
 /// A grey box with its diagonals where the ship would be, and why.
 fn draw_placeholder(message: &str, list: &mut DrawList) {
-    let half = PLACEHOLDER_SIZE / 2.0;
-    let (left, right) = (SHIP_CENTER.x - half, SHIP_CENTER.x + half);
-    let (top, bottom) = (SHIP_CENTER.y - half, SHIP_CENTER.y + half);
-    let corners = [
-        Point::new(left, top),
-        Point::new(right, top),
-        Point::new(right, bottom),
-        Point::new(left, bottom),
-    ];
-    for (at, &from) in corners.iter().enumerate() {
-        list.line(from, corners[(at + 1) % 4], 2.0, PLACEHOLDER);
-    }
-    list.line(corners[0], corners[2], 1.0, PLACEHOLDER)
-        .line(corners[1], corners[3], 1.0, PLACEHOLDER)
-        .text(
-            format!("Sprite unavailable: {message}"),
-            Point::new(SPRITE_ERROR_LEFT, bottom + LINE_SPACING),
-            MESSAGE_SIZE,
-            Some(SPRITE_ERROR_WRAP),
-            Color::ERROR,
-        );
+    crossed_box(list, SHIP_CENTER, PLACEHOLDER_SIZE, PLACEHOLDER);
+    let bottom = SHIP_CENTER.y + PLACEHOLDER_SIZE / 2.0;
+    list.text(
+        format!("Sprite unavailable: {message}"),
+        Point::new(SPRITE_ERROR_LEFT, bottom + LINE_SPACING),
+        MESSAGE_SIZE,
+        Some(SPRITE_ERROR_WRAP),
+        Color::ERROR,
+    );
 }
 
 /// The name, the stats (or why not), any layer errors and the description.

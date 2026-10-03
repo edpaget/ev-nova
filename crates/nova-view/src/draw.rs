@@ -177,6 +177,26 @@ impl DrawList {
     }
 }
 
+/// Draws a placeholder where an image cannot be shown: the outline of the
+/// `size` x `size` square centred on `center`, with 2-unit edges, and its
+/// two diagonals, 1 unit wide, all in `color`.
+pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) {
+    let half = size / 2.0;
+    let (left, right) = (center.x - half, center.x + half);
+    let (top, bottom) = (center.y - half, center.y + half);
+    let corners = [
+        Point::new(left, top),
+        Point::new(right, top),
+        Point::new(right, bottom),
+        Point::new(left, bottom),
+    ];
+    for (at, &from) in corners.iter().enumerate() {
+        list.line(from, corners[(at + 1) % 4], 2.0, color);
+    }
+    list.line(corners[0], corners[2], 1.0, color)
+        .line(corners[1], corners[3], 1.0, color);
+}
+
 impl<'a> IntoIterator for &'a DrawList {
     type Item = &'a DrawCommand;
     type IntoIter = std::slice::Iter<'a, DrawCommand>;
@@ -306,5 +326,36 @@ mod tests {
     #[test]
     fn default_is_empty() {
         assert!(DrawList::default().is_empty());
+    }
+
+    #[test]
+    fn a_crossed_box_is_its_four_edges_then_its_diagonals() {
+        let grey = Color::rgba(128, 128, 128, 255);
+        let mut list = DrawList::new();
+        crossed_box(&mut list, at(240.0, 320.0), 128.0, grey);
+        let [top_left, top_right, bottom_right, bottom_left] = [
+            at(176.0, 256.0),
+            at(304.0, 256.0),
+            at(304.0, 384.0),
+            at(176.0, 384.0),
+        ];
+        let line = |from, to, width| DrawCommand::Line {
+            from,
+            to,
+            width,
+            color: grey,
+        };
+        let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+        assert_eq!(
+            commands,
+            [
+                line(top_left, top_right, 2.0),
+                line(top_right, bottom_right, 2.0),
+                line(bottom_right, bottom_left, 2.0),
+                line(bottom_left, top_left, 2.0),
+                line(top_left, bottom_right, 1.0),
+                line(top_right, bottom_left, 1.0),
+            ]
+        );
     }
 }
