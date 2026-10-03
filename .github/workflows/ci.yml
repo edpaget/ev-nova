@@ -27,10 +27,12 @@ jobs:
       - uses: jdx/mise-action@v5
         with:
           install: false
-      # Only what `mise run ci` needs; cargo-binstall first so the
-      # cargo-backed tools install as prebuilt binaries.
-      - run: mise use -g cargo-binstall
-        shell: bash
+      # cargo-binstall on PATH lets mise install the cargo-backed tools as
+      # prebuilt binaries. It's installed outside mise because on Windows the
+      # mise shim for it re-enters mise, which installs every mise.toml tool
+      # and deadlocks on the outer install's lock.
+      - uses: cargo-bins/cargo-binstall@main
+      # Only what `mise run ci` needs.
       - run: mise install rust cargo:cargo-nextest
         shell: bash
       - uses: Swatinem/rust-cache@v2
