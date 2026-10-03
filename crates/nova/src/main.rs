@@ -1,5 +1,6 @@
 //! `nova`: opens the game data and shows it in a window, starting on the
-//! ship browser; Tab switches to the galaxy map and back.
+//! ship browser; Tab switches to the galaxy map and back. On the map,
+//! Return enters the selected system; Escape goes back, or quits.
 //!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window

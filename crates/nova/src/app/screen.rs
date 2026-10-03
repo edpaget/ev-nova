@@ -1,9 +1,11 @@
 //! The screen router: every screen the app can show, as one [`Screen`].
 //!
-//! The router keeps every screen alive and shows one at a time; Tab
-//! switches between them, so each keeps its state (the selected ship, the
-//! map's view and selection) while hidden. The router also decides what
-//! Escape does: it quits.
+//! The router keeps two sides alive, the ship browser and the
+//! [`Navigator`] (the galaxy map and the system opened from it), and shows
+//! one at a time. Tab switches sides, so each keeps its state (the
+//! selected ship; the map's view and selection, and the open system with
+//! its camera) while hidden. The router also decides what Escape does:
+//! back one level, from a system to the map, and quit at the top.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -11,7 +13,8 @@ use std::time::Duration;
 use nova_data::GameData;
 use nova_view::galaxy::GalaxyMap;
 use nova_view::ships::ShipBrowser;
-use nova_view::{Color, DrawList, Input, Key, Point, Screen, ScreenAction};
+use nova_view::system::SystemView;
+use nova_view::{Color, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction};
 
 /// The hint the router draws over every screen, where it goes, its size and
 /// its colour. Every screen leaves that corner free.
@@ -27,18 +30,29 @@ pub enum Showing {
     ShipBrowser,
     /// The galaxy map.
     GalaxyMap,
+    /// A system opened from the galaxy map.
+    System,
 }
 
-/// Every screen the app can show, and which one it is showing. The router
-/// forwards input, ticks and drawing to the screen shown, and switches
-/// screens on a Tab press (not on its key repeats).
+/// The two sides Tab switches between.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Side {
+    Ships,
+    Galaxy,
+}
+
+/// Every screen the app can show, and which side it is showing. The router
+/// forwards input, ticks and drawing to the side shown, switches sides on
+/// a Tab press (not on its key repeats) and decides what an Escape press
+/// does.
 #[derive(Clone, Debug)]
 pub struct AppScreen {
-    showing: Showing,
+    side: Side,
     /// The ship browser, reading the game data the renderer draws from.
     ships: ShipBrowser<Rc<GameData>>,
-    /// The galaxy map, read from the same game data when it was built.
-    map: GalaxyMap,
+    /// The galaxy map and any system opened from it, reading the same game
+    /// data.
+    galaxy: Navigator<Rc<GameData>>,
 }
 
 impl AppScreen {
@@ -46,8 +60,8 @@ impl AppScreen {
     #[must_use]
     pub fn new(data: Rc<GameData>) -> Self {
         Self {
-            showing: Showing::ShipBrowser,
-            map: GalaxyMap::new(&data),
+            side: Side::Ships,
+            galaxy: Navigator::new(Rc::clone(&data)),
             ships: ShipBrowser::new(data),
         }
     }
@@ -55,7 +69,11 @@ impl AppScreen {
     /// Which screen is showing.
     #[must_use]
     pub fn showing(&self) -> Showing {
-        self.showing
+        match self.side {
+            Side::Ships => Showing::ShipBrowser,
+            Side::Galaxy if self.galaxy.system().is_some() => Showing::System,
+            Side::Galaxy => Showing::GalaxyMap,
+        }
     }
 
     /// The ship browser, shown or not.
@@ -67,20 +85,32 @@ impl AppScreen {
     /// The galaxy map, shown or not.
     #[must_use]
     pub fn galaxy_map(&self) -> &GalaxyMap {
-        &self.map
+        self.galaxy.map()
+    }
+
+    /// The open system's view, shown or not, if a system is open.
+    #[must_use]
+    pub fn system_view(&self) -> Option<&SystemView> {
+        self.galaxy.system()
+    }
+
+    /// The galaxy side: the map and any open system.
+    #[must_use]
+    pub fn navigator(&self) -> &Navigator<Rc<GameData>> {
+        &self.galaxy
     }
 
     fn shown(&self) -> &dyn Screen {
-        match self.showing {
-            Showing::ShipBrowser => &self.ships,
-            Showing::GalaxyMap => &self.map,
+        match self.side {
+            Side::Ships => &self.ships,
+            Side::Galaxy => &self.galaxy,
         }
     }
 
     fn shown_mut(&mut self) -> &mut dyn Screen {
-        match self.showing {
-            Showing::ShipBrowser => &mut self.ships,
-            Showing::GalaxyMap => &mut self.map,
+        match self.side {
+            Side::Ships => &mut self.ships,
+            Side::Galaxy => &mut self.galaxy,
         }
     }
 }
@@ -93,44 +123,44 @@ pub fn start_screen(data: Rc<GameData>) -> AppScreen {
 }
 
 impl Screen for AppScreen {
-    /// A Tab press switches screens, first cancelling any pointer gesture on
-    /// the screen it hides (whose button release will now go to the other
-    /// screen). Holding Tab switches once: its key repeats are consumed
-    /// without switching, as is its release. An Escape press quits; its
-    /// repeats and release are consumed. Everything else, repeats
-    /// included, goes to the screen shown.
+    /// A Tab press switches sides, first cancelling any pointer gesture on
+    /// the side it hides and letting go of the keys it holds (their
+    /// releases will now go to the other side). Holding Tab switches once:
+    /// its key repeats are consumed without switching, as is its release.
+    ///
+    /// An Escape press goes back from an open system to the map, and
+    /// otherwise quits; its repeats and release are consumed, so holding
+    /// Escape goes back once and never quits. Everything else, repeats
+    /// included, goes to the side shown.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
-            key: Key::Escape,
+            key: key @ (Key::Tab | Key::Escape),
             pressed,
             repeat,
         } = *input
         {
-            return if pressed && !repeat {
-                ScreenAction::Quit
-            } else {
-                ScreenAction::None
-            };
-        }
-        if let Input::Key {
-            key: Key::Tab,
-            pressed,
-            repeat,
-        } = *input
-        {
-            if pressed && !repeat {
-                self.shown_mut().cancel_pointer();
-                self.showing = match self.showing {
-                    Showing::ShipBrowser => Showing::GalaxyMap,
-                    Showing::GalaxyMap => Showing::ShipBrowser,
+            if !pressed || repeat {
+                return ScreenAction::None;
+            }
+            if key == Key::Escape {
+                return match self.showing() {
+                    Showing::System => self.galaxy.input(input),
+                    Showing::ShipBrowser | Showing::GalaxyMap => ScreenAction::Quit,
                 };
             }
+            let hidden = self.shown_mut();
+            hidden.cancel_pointer();
+            hidden.release_keys();
+            self.side = match self.side {
+                Side::Ships => Side::Galaxy,
+                Side::Galaxy => Side::Ships,
+            };
             return ScreenAction::None;
         }
         self.shown_mut().input(input)
     }
 
-    /// Only the screen shown ticks; a hidden one is paused.
+    /// Only the side shown ticks; a hidden one is paused.
     fn tick(&mut self, dt: Duration) {
         self.shown_mut().tick(dt);
     }
@@ -138,6 +168,14 @@ impl Screen for AppScreen {
     fn draw(&self, list: &mut DrawList) {
         self.shown().draw(list);
         list.text(HINT, HINT_AT, HINT_SIZE, None, HINT_COLOR);
+    }
+
+    fn cancel_pointer(&mut self) {
+        self.shown_mut().cancel_pointer();
+    }
+
+    fn release_keys(&mut self) {
+        self.shown_mut().release_keys();
     }
 }
 
@@ -151,12 +189,15 @@ mod tests {
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
+    use nova_data::records::spin::Spin;
+    use nova_data::records::stellar::Stellar;
     use nova_data::records::system::System;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_data::{GameData, Record, SystemId};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader};
     use nova_view::galaxy::GalaxyMap;
+    use nova_view::galaxy::map::ENTER_BUTTON;
     use nova_view::ships::{ShipBrowser, ShipId};
     use nova_view::{DrawCommand, Key, MouseButton, Point};
 
@@ -180,19 +221,25 @@ mod tests {
         }
     }
 
-    /// An independent `sÿst` at (`x`, 0) with no hyperlinks or stellars.
-    fn system(x: i16) -> Vec<u8> {
+    /// An independent `sÿst` at (`x`, 0) with no hyperlinks and these
+    /// stellars.
+    fn system(x: i16, stellars: &[i16]) -> Vec<u8> {
         let mut bytes = vec![0; System::SIZE.expect("fixed")];
         bytes[0..2].copy_from_slice(&x.to_be_bytes());
         for slot in 0..32 {
             bytes[0x04 + 2 * slot..0x06 + 2 * slot].copy_from_slice(&(-1_i16).to_be_bytes());
+        }
+        for (slot, id) in stellars.iter().enumerate() {
+            bytes[0x24 + 2 * slot..0x26 + 2 * slot].copy_from_slice(&id.to_be_bytes());
         }
         bytes[0x66..0x68].copy_from_slice(&(-1_i16).to_be_bytes());
         bytes
     }
 
     /// Ships 129 and 128, each with a `shän` naming a 4-frame `rlëD` (one
-    /// set of 4 rotations), and systems 128 and 129, 300 apart.
+    /// set of 4 rotations), and systems 128 and 129, 300 apart. System 128
+    /// holds stellar 128 at (0, 0), whose `spïn` 1000 names the same
+    /// `rlëD`.
     fn data() -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
@@ -204,14 +251,23 @@ mod tests {
             })
             .build();
         let ship = vec![0; Ship::SIZE.expect("fixed")];
+        let mut spin = vec![0; Spin::SIZE.expect("fixed")];
+        spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
         let fork = ForkBuilder::new()
             .resource(Ship::TYPE, 129, Some(b"Second"), &ship)
             .resource(Ship::TYPE, 128, Some(b"First"), &ship)
             .resource(ShipAnim::TYPE, 128, None, &anim)
             .resource(ShipAnim::TYPE, 129, None, &anim)
             .resource(RLED, 1000, None, &sheet)
-            .resource(System::TYPE, 128, Some(b"Alpha"), &system(0))
-            .resource(System::TYPE, 129, Some(b"Beta"), &system(300))
+            .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128]))
+            .resource(System::TYPE, 129, Some(b"Beta"), &system(300, &[]))
+            .resource(
+                Stellar::TYPE,
+                128,
+                Some(b"Alpha Prime"),
+                &vec![0; Stellar::SIZE.expect("fixed")],
+            )
+            .resource(Spin::TYPE, 1000, None, &spin)
             .build()
             .bytes;
         let file = OneFile(fork);
@@ -420,6 +476,132 @@ mod tests {
         assert_eq!(screen.showing(), Showing::ShipBrowser);
     }
 
+    /// Opens the map, selects system `id` and enters it with Return.
+    fn enter(screen: &mut AppScreen, id: i16) {
+        screen.input(&key(Key::Tab, true));
+        click_system(screen, id);
+        assert_eq!(screen.input(&key(Key::Enter, true)), ScreenAction::None);
+    }
+
+    fn camera(screen: &AppScreen) -> Point {
+        screen
+            .system_view()
+            .expect("a system open")
+            .camera()
+            .center()
+    }
+
+    #[test]
+    fn return_on_a_selected_system_shows_it() {
+        let mut screen = AppScreen::new(data());
+        assert_eq!(screen.system_view().map(|v| v.scene().id()), None);
+        enter(&mut screen, 128);
+        assert_eq!(screen.showing(), Showing::System);
+        let view = screen.system_view().expect("a system open");
+        assert_eq!(view.scene().id(), SystemId(128));
+        assert_eq!(view.scene().stellars().len(), 1);
+        assert_eq!(
+            screen.navigator().system().map(|v| v.scene().id()),
+            Some(SystemId(128))
+        );
+    }
+
+    #[test]
+    fn the_enter_button_shows_the_selected_system() {
+        let mut screen = AppScreen::new(data());
+        screen.input(&key(Key::Tab, true));
+        click_system(&mut screen, 129);
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: ENTER_BUTTON.center(),
+            });
+        }
+        assert_eq!(screen.showing(), Showing::System);
+    }
+
+    #[test]
+    fn escape_goes_back_to_the_map_then_quits() {
+        let mut screen = AppScreen::new(data());
+        enter(&mut screen, 128);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::GalaxyMap);
+        assert_eq!(screen.galaxy_map().selected(), Some(SystemId(128)));
+        assert!(screen.system_view().is_none());
+        // Holding Escape after going back does not quit.
+        assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
+        assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::GalaxyMap);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+    }
+
+    #[test]
+    fn tab_from_a_system_goes_to_the_ships_and_back_to_it_as_it_was() {
+        let mut screen = AppScreen::new(data());
+        enter(&mut screen, 128);
+        screen.input(&key(Key::Right, true));
+        screen.tick(Duration::from_millis(250));
+        screen.input(&key(Key::Right, false));
+        let moved = camera(&screen);
+        assert_eq!(moved, Point::new(240.0, 0.0));
+
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(screen.showing(), Showing::System);
+        assert_eq!(camera(&screen), moved);
+    }
+
+    #[test]
+    fn a_tab_switch_lets_go_of_the_keys_held_in_a_system() {
+        let mut screen = AppScreen::new(data());
+        enter(&mut screen, 128);
+        screen.input(&key(Key::Down, true));
+        screen.input(&key(Key::Tab, true));
+        // Down's release goes to the ship browser.
+        screen.input(&key(Key::Down, false));
+        screen.input(&key(Key::Tab, true));
+        screen.tick(Duration::from_millis(250));
+        assert_eq!(camera(&screen), Point::new(0.0, 0.0), "no drift");
+    }
+
+    #[test]
+    fn releasing_the_keys_reaches_the_screen_shown() {
+        let mut screen = AppScreen::new(data());
+        enter(&mut screen, 128);
+        screen.input(&key(Key::Up, true));
+        screen.release_keys();
+        screen.tick(Duration::from_millis(250));
+        assert_eq!(camera(&screen), Point::new(0.0, 0.0));
+    }
+
+    #[test]
+    fn cancelling_the_pointer_reaches_the_screen_shown() {
+        let mut screen = AppScreen::new(data());
+        screen.input(&key(Key::Tab, true));
+        let view = *screen.galaxy_map().view();
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: Point::new(100.0, 100.0),
+        });
+        screen.cancel_pointer();
+        screen.input(&Input::PointerMoved(Point::new(150.0, 100.0)));
+        assert_eq!(*screen.galaxy_map().view(), view, "no drag");
+    }
+
+    #[test]
+    fn the_hint_is_drawn_over_the_system() {
+        let data = data();
+        let mut screen = AppScreen::new(Rc::clone(&data));
+        enter(&mut screen, 128);
+        let mut expected = drawn(screen.system_view().expect("open"));
+        expected.push(hint());
+        assert_eq!(drawn(&screen), expected);
+    }
+
     #[test]
     fn only_the_screen_shown_ticks() {
         let mut screen = AppScreen::new(data());
@@ -436,6 +618,14 @@ mod tests {
         screen.input(&key(Key::Tab, true));
         screen.tick(tick);
         assert_eq!(screen.ship_browser().frame(), Some(2));
+
+        // Nor while a system is shown.
+        enter(&mut screen, 128);
+        screen.tick(tick);
+        assert_eq!(screen.ship_browser().frame(), Some(2));
+        screen.input(&key(Key::Tab, true));
+        screen.tick(tick);
+        assert_eq!(screen.ship_browser().frame(), Some(3));
     }
 
     /// The router's hint line.

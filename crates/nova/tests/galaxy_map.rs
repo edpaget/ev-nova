@@ -23,7 +23,7 @@ use nova_render::{Batch, Frame, Rect, SolidQuad};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_view::galaxy::NEUTRAL;
-use nova_view::galaxy::map::DOT_SIZE;
+use nova_view::galaxy::map::{BUTTON, DOT_SIZE, ENTER_BUTTON};
 use nova_view::{Key, MouseButton, Point};
 
 const BLUE: u32 = 0x002C_2CAF;
@@ -368,6 +368,43 @@ fn clicks_reach_the_map_and_select_systems() {
     harness.click(Point::new(alpha.x + 200.0, alpha.y + 100.0));
     let frame = harness.frame();
     assert!(shows(&frame, "Click a system to see its stellars"));
+    assert!(!shows(&frame, "Enter system (Return)"));
+}
+
+#[test]
+fn a_selected_system_shows_the_enter_button_which_opens_it() {
+    let (mut harness, unselected) = Harness::open_map();
+    let button = rgba(BUTTON);
+    let buttons = |frame: &Frame| {
+        solid(frame)
+            .into_iter()
+            .filter(|quad| quad.color == button)
+            .map(|quad| {
+                // The rectangle the quad covers, whatever its corner order.
+                let xs = quad.corners.map(|p| p.x);
+                let ys = quad.corners.map(|p| p.y);
+                let min = |v: [f32; 4]| v.into_iter().fold(f32::INFINITY, f32::min);
+                let max = |v: [f32; 4]| v.into_iter().fold(f32::NEG_INFINITY, f32::max);
+                (Point::new(min(xs), min(ys)), Point::new(max(xs), max(ys)))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(buttons(&unselected).is_empty());
+
+    let beta = harness.system_at(129);
+    harness.click(beta);
+    let frame = harness.frame();
+    assert!(
+        shows(&frame, "Enter system (Return)"),
+        "{:?}",
+        texts(&frame)
+    );
+    assert_eq!(buttons(&frame), [(ENTER_BUTTON.min, ENTER_BUTTON.max)]);
+
+    harness.click(ENTER_BUTTON.center());
+    assert_eq!(harness.app.screen().showing(), Showing::System);
+    let view = harness.app.screen().system_view().expect("open");
+    assert_eq!(view.scene().id(), SystemId(129));
 }
 
 #[test]

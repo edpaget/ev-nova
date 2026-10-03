@@ -1,5 +1,5 @@
-//! App frames of the ship browser and the galaxy map over the stock data,
-//! through the recording Gpu. Skips, passing, when `NOVA_DATA` is unset.
+//! App frames of the ship browser, the galaxy map and a system over the
+//! stock data, through the recording Gpu. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -190,4 +190,87 @@ fn the_galaxy_map_draws_the_stock_galaxy() {
     });
     assert!(shown, "Sol is selected");
     assert_eq!(app.take_failures(), []);
+}
+
+/// Clicking Sol on the map and pressing Return opens it, whose first frame
+/// draws its five stellars, every sheet (the 32-frame Wormhole's included)
+/// decoded and packed without failing, with Earth at the screen's centre.
+/// Escape goes back to the map, and again quits.
+#[test]
+fn sol_opens_from_the_map_and_its_stellars_reach_the_gpu() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let mut app: App<_> = App::new(&Window, Rc::clone(&data), start_screen(data));
+    let mut gpu = RecordingGpu::new();
+    let send = |app: &mut App<Rc<GameData>>, gpu: &mut RecordingGpu, event| {
+        app.handle(event, &mut Window, gpu)
+    };
+    let key = |key, pressed| WindowEvent::Key {
+        key,
+        pressed,
+        repeat: false,
+    };
+    assert_eq!(
+        send(&mut app, &mut gpu, key(Key::Tab, true)),
+        Control::Continue
+    );
+
+    let map = app.screen().galaxy_map();
+    let sol = map.model().system(SystemId(130)).expect("Sol");
+    let at = map.view().world_to_screen(sol.position());
+    let moved = WindowEvent::PointerMoved {
+        px: (f64::from(at.x), f64::from(at.y)),
+    };
+    assert_eq!(send(&mut app, &mut gpu, moved), Control::Continue);
+    for pressed in [true, false] {
+        let event = WindowEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+        };
+        assert_eq!(send(&mut app, &mut gpu, event), Control::Continue);
+    }
+    assert_eq!(app.screen().galaxy_map().selected(), Some(SystemId(130)));
+    assert_eq!(
+        send(&mut app, &mut gpu, key(Key::Enter, true)),
+        Control::Continue
+    );
+    assert_eq!(app.screen().showing(), Showing::System);
+
+    let redraw = WindowEvent::Redraw {
+        elapsed: Duration::from_millis(50),
+    };
+    assert_eq!(send(&mut app, &mut gpu, redraw), Control::Continue);
+    assert_eq!(app.take_failures(), []);
+    let frame = (*gpu.submits().last().expect("a frame")).clone();
+    let quads: Vec<_> = frame
+        .batches
+        .iter()
+        .flat_map(|batch| match batch {
+            Batch::Sprites { quads, .. } => quads.clone(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert_eq!(quads.len(), 5);
+    let centres: Vec<(f32, f32)> = quads
+        .iter()
+        .map(|q| (q.dest.x + q.dest.w / 2.0, q.dest.y + q.dest.h / 2.0))
+        .collect();
+    assert!(centres.contains(&(512.0, 384.0)), "Earth: {centres:?}");
+
+    assert_eq!(
+        send(&mut app, &mut gpu, key(Key::Escape, true)),
+        Control::Continue
+    );
+    assert_eq!(app.screen().showing(), Showing::GalaxyMap);
+    assert_eq!(app.screen().galaxy_map().selected(), Some(SystemId(130)));
+    assert_eq!(
+        send(&mut app, &mut gpu, key(Key::Escape, false)),
+        Control::Continue
+    );
+    assert_eq!(
+        send(&mut app, &mut gpu, key(Key::Escape, true)),
+        Control::Exit
+    );
 }
