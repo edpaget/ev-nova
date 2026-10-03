@@ -14,6 +14,7 @@ nova-rsrc = { path = "crates/nova-rsrc" }
 nova-data = { path = "crates/nova-data" }
 encoding_rs = "0.8"
 macbinary = "0.2.1"
+png = "0.18"
 tempfile = "3"
 binrw = "0.15"
 serde = { version = "1", features = ["derive"] }
