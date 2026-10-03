@@ -1,4 +1,10 @@
-//! Load order: how file names sort.
+//! Load order: how names sort and which directory entries load.
+//!
+//! Both functions here are pure. [`classify`] takes the folder's
+//! [`Origin`] so that one rule covers both roots: a folder is
+//! [`Classified::Descend`] in the plug-ins tree and ignored in the data
+//! directory. The walk applies [`MAX_PLUGIN_DEPTH`] itself, since only it
+//! knows how deep it is.
 
 use std::cmp::Ordering;
 use std::ffi::OsStr;

@@ -1,4 +1,140 @@
-//! The game data store: every data file and plug-in, layered into one view.
+//! The game data store: every data file and plug-in, layered into one
+//! read-only view.
+//!
+//! [`GameData`] opens the data directory (`Nova Files`) and an optional
+//! plug-ins directory, indexes every resource of every file by (type, ID)
+//! with later files overriding earlier ones, and decodes records lazily on
+//! first access. Each resource reports the file it came from, and
+//! [`GameData::provenance`] lists the files it overrode.
+//!
+//! ```
+//! use std::io;
+//! use std::path::Path;
+//!
+//! use nova_data::Record;
+//! use nova_data::records::spin::Spin;
+//! use nova_data::store::GameData;
+//! use nova_data::store::fs::{DirLister, EntryKind, Listing};
+//! use nova_rsrc::fixture::ForkBuilder;
+//! use nova_rsrc::{Fork, ForkReader};
+//!
+//! /// In-memory ports: `/data` holds one file defining spïn 1000.
+//! struct OneFile;
+//!
+//! impl DirLister for OneFile {
+//!     fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
+//!         Ok(vec![Listing { name: "Nova Data".into(), kind: EntryKind::File }])
+//!     }
+//! }
+//!
+//! impl ForkReader for OneFile {
+//!     fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
+//!         let spin = [0x03, 0xE8, 0x03, 0xE9, 0, 48, 0, 48, 0, 6, 0, 6];
+//!         let file = ForkBuilder::new().resource(Spin::TYPE, 1000, None, &spin);
+//!         Ok((fork == Fork::Data).then(|| file.build().bytes))
+//!     }
+//! }
+//!
+//! let data = GameData::load(&OneFile, &OneFile, Path::new("/data"), None)?;
+//! let spin = data.get::<Spin>(1000).expect("present").expect("decodes");
+//! assert_eq!(spin.record.x_tiles, 6);
+//! assert_eq!(spin.source.path, Path::new("/data/Nova Data"));
+//! assert_eq!(data.ids(Spin::TYPE), [1000]);
+//! # Ok::<(), nova_data::store::OpenError>(())
+//! ```
+//!
+//! On disk, [`GameData::open`] wires in the std adapters:
+//!
+//! ```no_run
+//! # use std::path::Path;
+//! use nova_data::store::GameData;
+//!
+//! let data = GameData::open(Path::new("Nova Files"), Some(Path::new("Plug-ins")))?;
+//! for failed in data.failed() {
+//!     eprintln!("skipped {}: {}", failed.path.display(), failed.error);
+//! }
+//! # Ok::<(), nova_data::store::OpenError>(())
+//! ```
+//!
+//! # Load order
+//!
+//! The data directory's files load first (its top level only: sub-folders
+//! are ignored and reported), sorted by name. The plug-ins tree loads next:
+//! at every level, files and folders are sorted together by name, and a
+//! folder's contents load (recursively, by the same rule) at the folder's
+//! position. A resource in a later file replaces the same (type, ID) in an
+//! earlier one.
+//!
+//! This is an assumption: the original engine no longer runs on current
+//! macOS, so its exact order cannot be checked. It is kept in one place,
+//! [`order`] and the private walk over it, so it is easy to revisit.
+//!
+//! Names sort the way the classic Finder sorted them
+//! ([`order::finder_cmp`]): case-insensitively with Unicode case folding,
+//! by folded code point, not numerically (`Plug 10` before `Plug 2`),
+//! without accent stripping or normalization, and with names that fold the
+//! same ordered by their raw bytes so the order is total.
+//!
+//! # Which files load
+//!
+//! [`order::classify`] decides, for each directory entry, whether it is a
+//! candidate file, a plug-ins sub-folder to descend into, or ignored (with
+//! an [`order::IgnoreReason`], listed by [`GameData::ignored`]):
+//!
+//! - Ignored: hidden names (starting with `.`: `.DS_Store`, `AppleDouble`
+//!   `._x`), symbolic links, anything that is neither a file nor a folder,
+//!   folders inside the data directory, files whose lower-cased extension
+//!   is `mp3`, `mov`, `txt`, `rtf`, `md`, `pdf`, `htm`, `html`, `jpg`,
+//!   `jpeg`, `png` or `gif`, and Windows `.rez` plug-ins (reported as
+//!   unsupported; task `rez-plugin-support`).
+//! - Everything else is attempted, including `.ndat`, `.npif`, files with
+//!   no extension and dotted names like `Foo v1.2`: classic plug-ins often
+//!   have no extension. A file's flattened fork in its data fork wins;
+//!   otherwise its real resource fork is read.
+//!
+//! In the stock `Nova Files`, the 21 `.ndat` files load and the music and
+//! four race movies are ignored, so nothing fails.
+//!
+//! # Failures
+//!
+//! A candidate that cannot be loaded (an I/O error, no resource fork, or a
+//! header or map that does not parse) is skipped and listed by
+//! [`GameData::failed`] with its [`LoadError`]; so is a plug-ins sub-folder
+//! that cannot be listed. Opening still succeeds. Only failing to list the
+//! data directory, or the plug-ins directory the caller passed, is an
+//! [`OpenError`].
+//!
+//! # Bounded work
+//!
+//! Symbolic links are never followed (the directory port reports them
+//! without following them), so every step of the walk consumes a real
+//! directory entry. As a guard against directory hard-link cycles (possible
+//! on old HFS+ volumes), plug-ins folders deeper than
+//! [`order::MAX_PLUGIN_DEPTH`] levels are ignored as too deep. Each file is
+//! read once.
+//!
+//! # Index and decoding
+//!
+//! Every resource type is indexed, registered or not (`PICT`, `rlëD`,
+//! `snd `, unknown types), and reachable raw through
+//! [`GameData::resource`], which borrows the winning file's bytes. A
+//! registered record is decoded the first time it is asked for
+//! ([`GameData::get`], [`GameData::get_any`], [`GameData::records`]) and the
+//! result, record or [`DecodeError`], is cached: later calls return
+//! references to the same decode, and a decode error is returned again each
+//! time without affecting anything else. Sprite sheets
+//! ([`GameData::ship_sprite`]) are decoded on every call and not cached.
+//!
+//! The store is read-only once built (no `&mut self` methods) and
+//! `Send + Sync`.
+//!
+//! # Ship sprites
+//!
+//! [`GameData::ship_sprite`] follows a `shïp` to the `shän` with the same
+//! ID (the Bible: a ship's `shän` shares its ID), then to the `rlëD` named
+//! by the `shän`'s base image, decoded with the `shän`'s frames per
+//! rotation as the sheet's columns. A base image that is a `PICT` rather
+//! than an `rlëD` is not supported and reports [`SpriteError::NoSheet`].
 
 use std::collections::BTreeMap;
 use std::io;
