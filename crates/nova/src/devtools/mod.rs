@@ -8,8 +8,12 @@
 //! - [`textures`]: the preview frame as an egui texture.
 //! - [`panel`]: the [`DevPanel`] window, the frame-time readout and the
 //!   resource browser.
+//! - [`layer`]: the [`EguiLayer`], which paints egui's output over each
+//!   frame with egui-wgpu.
 
+pub mod layer;
 pub mod panel;
 pub mod textures;
 
+pub use layer::EguiLayer;
 pub use panel::DevPanel;
