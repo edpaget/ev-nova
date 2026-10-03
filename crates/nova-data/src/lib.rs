@@ -117,6 +117,12 @@
 //! with their pictures, apart from the game data. They are not registered
 //! record types, so [`decode_file`] skips them.
 //!
+//! # Fonts
+//!
+//! [`fonts`] finds the game's own Charcoal font, a loose TrueType file
+//! beside `Nova Files` in the Mac OS X release, and checks it is a usable
+//! outline font; see there for why nothing is extracted from a suitcase.
+//!
 //! # Out of scope
 //!
 //! [`OUT_OF_SCOPE`] lists the media types [`decode_file`] skips (as it does
@@ -129,6 +135,7 @@
 pub mod decode;
 pub mod error;
 pub mod file;
+pub mod fonts;
 pub mod graphics;
 pub mod records;
 pub mod registry;
