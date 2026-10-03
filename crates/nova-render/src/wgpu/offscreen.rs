@@ -6,6 +6,7 @@ use std::time::Duration;
 use nova_data::graphics::Image;
 
 use super::data::{padded_bytes_per_row, strip_padding};
+use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::gpu::{Frame, Gpu, PageId};
 use crate::viewport::PixelRect;
@@ -120,6 +121,20 @@ impl OffscreenGpu {
         buffer.unmap();
         Ok(pixels)
     }
+
+    /// Draws `frame` into the target, then `painter` over it.
+    fn present(&mut self, frame: &Frame, painter: Option<&mut dyn OverlayPainter>) {
+        self.renderer.draw(frame, &self.view);
+        if let Some(painter) = painter {
+            painter.paint(&PaintTarget {
+                device: &self.device,
+                queue: &self.queue,
+                view: &self.view,
+                format: FORMAT,
+                size_px: self.size,
+            });
+        }
+    }
 }
 
 impl Gpu for OffscreenGpu {
@@ -132,6 +147,12 @@ impl Gpu for OffscreenGpu {
     }
 
     fn submit(&mut self, frame: &Frame) {
-        self.renderer.draw(frame, &self.view);
+        self.present(frame, None);
+    }
+}
+
+impl OverlayGpu for OffscreenGpu {
+    fn submit_with(&mut self, frame: &Frame, painter: &mut dyn OverlayPainter) {
+        self.present(frame, Some(painter));
     }
 }

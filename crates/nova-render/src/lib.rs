@@ -21,6 +21,13 @@
 //! reads it back, and [`wgpu::SurfaceGpu`] draws into a window. Both hand
 //! the work to [`wgpu::WgpuRenderer`].
 //!
+//! Both adapters can also draw an overlay over each frame, after the
+//! renderer and before it is presented or read back
+//! ([`wgpu::OverlayGpu`], [`wgpu::OverlayPainter`]): [`wgpu::WithOverlay`]
+//! is a [`Gpu`] that submits every frame with a painter over it. This is
+//! still wgpu glue with no decisions in it, and the [`Gpu`] port is
+//! unchanged.
+//!
 //! `recording::RecordingGpu` (this crate's tests, or the `recording`
 //! feature) is a [`Gpu`] that records its calls.
 

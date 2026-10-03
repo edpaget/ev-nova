@@ -3,6 +3,7 @@
 use nova_data::graphics::Image;
 
 use super::data::surface_format;
+use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
 use super::{InitError, WgpuRenderer, acquire};
 use crate::gpu::{Frame, Gpu, PageId};
 use crate::present::{
@@ -75,6 +76,20 @@ impl Gpu for SurfaceGpu {
     }
 
     fn submit(&mut self, frame: &Frame) {
+        self.present(frame, None);
+    }
+}
+
+impl OverlayGpu for SurfaceGpu {
+    fn submit_with(&mut self, frame: &Frame, painter: &mut dyn OverlayPainter) {
+        self.present(frame, Some(painter));
+    }
+}
+
+impl SurfaceGpu {
+    /// Draws `frame` into the window, `painter` over it, and presents it;
+    /// a dropped frame is neither drawn nor painted.
+    fn present(&mut self, frame: &Frame, painter: Option<&mut dyn OverlayPainter>) {
         match surface_action(self.configured, frame.target, self.last_acquire) {
             SurfaceAction::Drop => return,
             SurfaceAction::Reconfigure => {
@@ -93,6 +108,15 @@ impl Gpu for SurfaceGpu {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         self.renderer.draw(frame, &view);
+        if let Some(painter) = painter {
+            painter.paint(&PaintTarget {
+                device: &self.device,
+                queue: &self.queue,
+                view: &view,
+                format: self.config.format,
+                size_px: frame.target,
+            });
+        }
         self.queue.present(texture);
     }
 }

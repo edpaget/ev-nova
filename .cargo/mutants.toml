@@ -32,6 +32,11 @@ exclude_re = [
     # `surface_action` and `acquire_outcome`; any other mutant inside these
     # bodies is still run.
     "replace <impl Gpu for SurfaceGpu>::(create_page|upload|submit) with \\(\\)$",
+    # The same raw surface calls, now in `SurfaceGpu::present`, which
+    # `submit` and the overlay's `submit_with` call (with a painter or
+    # without): replacing either body is observable only on a window
+    # surface. `OffscreenGpu`'s twin of each is mutated and tested.
+    "replace (SurfaceGpu::present|<impl OverlayGpu for SurfaceGpu>::submit_with) with \\(\\)$",
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour.
     "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::create_page)",

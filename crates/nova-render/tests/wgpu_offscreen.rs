@@ -3,7 +3,9 @@
 //! without one.
 
 use nova_data::graphics::Image;
-use nova_render::wgpu::{InitError, OffscreenGpu};
+use nova_render::wgpu::{
+    InitError, OffscreenGpu, OverlayGpu, OverlayPainter, PaintTarget, WithOverlay,
+};
 use nova_render::{
     Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport,
 };
@@ -103,11 +105,8 @@ fn assert_patterned(pixels: &[u8], (left, top): (u32, u32), (w, h): (u32, u32)) 
     }
 }
 
-#[test]
-fn a_known_frame_draws_the_expected_pixels() {
-    let Some(mut gpu) = gpu() else {
-        return;
-    };
+/// A picture, two sprites, a line and a dot, at known places.
+fn known_list() -> DrawList {
     let mut list = DrawList::new();
     list.picture(ImageKey::picture(1), Point::new(2.0, 2.0))
         .sprite(
@@ -123,6 +122,15 @@ fn a_known_frame_draws_the_expected_pixels() {
         )
         .dot(Point::new(28.0, 4.0), 4.0, Color::rgba(255, 255, 0, 255))
         .sprite(ImageKey::sprite(3, 0), Point::new(24.0, 12.0), Color::WHITE);
+    list
+}
+
+#[test]
+fn a_known_frame_draws_the_expected_pixels() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let list = known_list();
     let mut renderer = Renderer::new(Images);
 
     let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
@@ -290,4 +298,131 @@ fn the_clear_colour_fills_the_target() {
     for at in [(0, 0), (32, 32), (63, 63)] {
         assert_near(&pixels, at, [51, 102, 204, 128], 1);
     }
+}
+
+/// Opens one pass over the target that loads it with `load`, draws
+/// nothing, and submits it.
+fn pass(target: &PaintTarget<'_>, load: wgpu::LoadOp<wgpu::Color>) {
+    let mut encoder = target
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("test overlay"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target.view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    }));
+    target.queue.submit(Some(encoder.finish()));
+}
+
+/// Clears the whole target blue.
+struct ClearBlue;
+
+impl OverlayPainter for ClearBlue {
+    fn paint(&mut self, target: &PaintTarget<'_>) {
+        pass(target, wgpu::LoadOp::Clear(wgpu::Color::BLUE));
+    }
+}
+
+/// Loads the target and draws nothing.
+struct LoadOnly;
+
+impl OverlayPainter for LoadOnly {
+    fn paint(&mut self, target: &PaintTarget<'_>) {
+        pass(target, wgpu::LoadOp::Load);
+    }
+}
+
+/// Records each target's size and format.
+#[derive(Default)]
+struct Recording {
+    targets: Vec<((u32, u32), wgpu::TextureFormat)>,
+}
+
+impl OverlayPainter for Recording {
+    fn paint(&mut self, target: &PaintTarget<'_>) {
+        self.targets.push((target.size_px, target.format));
+    }
+}
+
+fn render_known(gpu: &mut impl nova_render::Gpu) {
+    let report = Renderer::new(Images).render(
+        &known_list(),
+        &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0),
+        gpu,
+    );
+    assert_eq!(report.new_failures, vec![]);
+}
+
+#[test]
+fn an_overlay_paints_over_the_finished_frame() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    render_known(&mut WithOverlay {
+        gpu: &mut gpu,
+        painter: &mut ClearBlue,
+    });
+    let pixels = gpu.read_pixels().expect("read back");
+    assert!(
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [0, 0, 255, 255]),
+        "every pixel blue"
+    );
+}
+
+#[test]
+fn an_overlay_that_draws_nothing_leaves_the_frame_as_it_was() {
+    let (Some(mut plain), Some(mut painted)) = (gpu(), gpu()) else {
+        return;
+    };
+    render_known(&mut plain);
+    render_known(&mut WithOverlay {
+        gpu: &mut painted,
+        painter: &mut LoadOnly,
+    });
+    let expected = plain.read_pixels().expect("read back");
+    let pixels = painted.read_pixels().expect("read back");
+    assert_patterned(&pixels, (4, 12), (4, 2));
+    assert_eq!(pixels, expected);
+}
+
+#[test]
+fn the_painter_runs_once_per_frame_on_the_offscreen_target() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let mut painter = Recording::default();
+    let frame = Frame {
+        target: (SIZE, SIZE),
+        viewport: PixelRect {
+            x: 0,
+            y: 8,
+            w: SIZE,
+            h: 48,
+        },
+        logical: LOGICAL,
+        clear: Color::rgba(0, 0, 0, 255),
+        batches: Vec::new(),
+    };
+    gpu.submit_with(&frame, &mut painter);
+    let target = ((SIZE, SIZE), wgpu::TextureFormat::Rgba8Unorm);
+    assert_eq!(painter.targets, [target]);
+    gpu.submit_with(&frame, &mut painter);
+    assert_eq!(painter.targets, [target, target]);
+    gpu.submit(&frame);
+    assert_eq!(painter.targets.len(), 2, "a plain submit paints nothing");
 }

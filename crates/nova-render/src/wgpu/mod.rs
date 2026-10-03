@@ -5,13 +5,20 @@
 //! no decisions: the core has already chosen every quad, colour and
 //! rectangle, and [`surface_action`](crate::surface_action) decides what a
 //! window surface does before each frame.
+//!
+//! [`OverlayGpu::submit_with`] draws a frame with an [`OverlayPainter`]
+//! over it, which gets the frame's device, queue and target
+//! ([`PaintTarget`]); [`WithOverlay`] turns that into a plain
+//! [`Gpu`](crate::Gpu) for the renderer.
 
 mod data;
 mod offscreen;
+mod overlay;
 mod renderer;
 mod surface;
 
 pub use offscreen::{OffscreenGpu, ReadError};
+pub use overlay::{MAX_TEXTURE_SIDE, OverlayGpu, OverlayPainter, PaintTarget, WithOverlay};
 pub use renderer::WgpuRenderer;
 pub use surface::SurfaceGpu;
 
