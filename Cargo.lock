@@ -220,6 +220,7 @@ dependencies = [
  "nova-rsrc",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

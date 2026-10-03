@@ -22,6 +22,8 @@ nova-rsrc = { workspace = true, features = ["fixture"] }
 # `fixture` builders.
 nova-data = { workspace = true, features = ["fixture"] }
 serde_json.workspace = true
+# Real folders for the directory-listing adapter and store wiring tests.
+tempfile.workspace = true
 
 [features]
 # Exposes the synthetic picture, sprite and sound builders to other crates'
