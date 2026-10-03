@@ -1,5 +1,7 @@
 //! The image source port: decoded frames by resource.
 
+use std::rc::Rc;
+
 use nova_data::graphics::{GraphicsError, Image};
 use nova_view::ImageKind;
 
@@ -38,5 +40,43 @@ pub trait ImageSource {
 impl<S: ImageSource + ?Sized> ImageSource for &S {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
         (**self).frames(kind, id)
+    }
+}
+
+/// A shared source is a source, so a screen and the renderer can read the
+/// same game data.
+impl<S: ImageSource + ?Sized> ImageSource for Rc<S> {
+    fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
+        (**self).frames(kind, id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::*;
+
+    /// One frame `id` pixels wide for a positive `id`; `Missing` otherwise.
+    struct Widths;
+
+    impl ImageSource for Widths {
+        fn frames(&self, _kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
+            let width = u32::try_from(id).map_err(|_| ImageError::Missing)?;
+            let frame = Image::from_rgba(width, 1, vec![0; width as usize * 4]).expect("frame");
+            Ok(vec![frame])
+        }
+    }
+
+    /// Asks `source` through the trait, as the renderer does.
+    fn first_width(source: impl ImageSource, id: i16) -> Result<u32, ImageError> {
+        Ok(source.frames(ImageKind::Rled, id)?[0].width())
+    }
+
+    #[test]
+    fn a_shared_source_is_a_source() {
+        let shared = Rc::new(Widths);
+        assert_eq!(first_width(Rc::clone(&shared), 3), Ok(3));
+        assert_eq!(first_width(shared, -1), Err(ImageError::Missing));
     }
 }
