@@ -125,8 +125,16 @@ mod tests {
     use nova_render::wgpu::InitError;
     use nova_view::ImageKind;
 
+    use std::io;
+    use std::path::Path;
+    use std::rc::Rc;
+
+    use nova_data::GameData;
+    use nova_data::store::fs::{DirLister, Listing};
+    use nova_rsrc::{Fork, ForkReader};
+
     use super::*;
-    use crate::app::{Placeholder, PlaceholderContent};
+    use crate::app::start_screen;
     use crate::exit::OpenFailure;
 
     struct NoImages;
@@ -135,6 +143,25 @@ mod tests {
         fn frames(&self, _kind: ImageKind, _id: i16) -> Result<Vec<Image>, ImageError> {
             Err(ImageError::Missing)
         }
+    }
+
+    /// A data directory with no files in it.
+    struct NoFiles;
+
+    impl DirLister for NoFiles {
+        fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
+            Ok(Vec::new())
+        }
+    }
+
+    impl ForkReader for NoFiles {
+        fn read_fork(&self, _path: &Path, _fork: Fork) -> io::Result<Option<Vec<u8>>> {
+            Ok(None)
+        }
+    }
+
+    fn no_data() -> Rc<GameData> {
+        Rc::new(GameData::load(&NoFiles, &NoFiles, Path::new("/data"), None).expect("opens"))
     }
 
     #[test]
@@ -151,8 +178,7 @@ mod tests {
 
     #[test]
     fn the_runner_reports_the_failure_that_stopped_the_window_opening() {
-        let screen = AppScreen::Placeholder(Placeholder::new(PlaceholderContent::default()));
-        let mut runner = Runner::new(NoImages, screen);
+        let mut runner = Runner::new(NoImages, start_screen(no_data()));
         assert_eq!(runner.open_failure(), None);
         runner.failure = Some(OpenFailure::Window("no display".into()));
         assert_eq!(

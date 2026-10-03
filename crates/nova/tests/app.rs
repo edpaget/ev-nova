@@ -1,20 +1,28 @@
-//! The app layer wired to its screen router showing the placeholder, the
-//! renderer and the recording Gpu, driven by synthetic window events.
+//! The app wired to its screen router over minimal synthetic game data
+//! (one ship and one system), the renderer and the recording Gpu, driven
+//! by synthetic window events.
 
 // Sizes here are small powers of two, exact in floating point.
 #![allow(clippy::float_cmp)]
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::io;
+use std::path::Path;
+use std::rc::Rc;
 use std::time::Duration;
 
-use nova::app::{
-    App, AppScreen, Control, Placeholder, PlaceholderContent, WindowEvent, WindowPort,
-};
-use nova_data::graphics::Image;
+use nova::app::{App, Control, WindowEvent, WindowPort, start_screen};
+use nova_data::graphics::RLED;
+use nova_data::graphics::fixture::RledBuilder;
+use nova_data::records::ship::Ship;
+use nova_data::records::ship_anim::ShipAnim;
+use nova_data::records::system::System;
+use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
-use nova_render::{Batch, Frame, ImageError, ImageSource, PixelRect};
-use nova_view::{ImageKey, ImageKind, Key, MouseButton};
+use nova_render::{Batch, Frame, PixelRect};
+use nova_rsrc::fixture::ForkBuilder;
+use nova_rsrc::{Fork, ForkReader};
+use nova_view::Key;
 
 /// A window of settable size that counts redraw requests.
 struct FakeWindow {
@@ -37,59 +45,78 @@ impl WindowPort for FakeWindow {
     }
 }
 
-/// Canned solid frames by resource; `Missing` otherwise. Records calls.
-#[derive(Default)]
-struct FakeImages {
-    resources: BTreeMap<(ImageKind, i16), Vec<Image>>,
-    calls: RefCell<Vec<(ImageKind, i16)>>,
-}
+/// One data file, `/data/Nova Data`, holding a fork.
+struct OneFile(Vec<u8>);
 
-impl FakeImages {
-    fn with(mut self, kind: ImageKind, id: i16, frames: usize, size: u32) -> Self {
-        let frame = Image::from_rgba(size, size, vec![255; (size * size * 4) as usize])
-            .expect("square frame");
-        self.resources.insert((kind, id), vec![frame; frames]);
-        self
+impl DirLister for OneFile {
+    fn list(&self, _dir: &Path) -> io::Result<Vec<Listing>> {
+        Ok(vec![Listing {
+            name: "Nova Data".into(),
+            kind: EntryKind::File,
+        }])
     }
 }
 
-impl ImageSource for FakeImages {
-    fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
-        self.calls.borrow_mut().push((kind, id));
-        self.resources
-            .get(&(kind, id))
-            .cloned()
-            .ok_or(ImageError::Missing)
+impl ForkReader for OneFile {
+    fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
+        Ok((fork == Fork::Data).then(|| self.0.clone()))
     }
 }
 
-const CONTENT: PlaceholderContent = PlaceholderContent {
-    picture: Some(128),
-    sprite: Some((200, 4)),
-};
+fn put_i16(bytes: &mut [u8], at: usize, value: i16) {
+    bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
+}
 
-fn images() -> FakeImages {
-    FakeImages::default()
-        .with(ImageKind::Pict, 128, 1, 64)
-        .with(ImageKind::Rled, 200, 4, 16)
+/// Ship 128, the Shuttle, whose `shän` names a 4-frame 8x8 `rlëD`, and
+/// system 128, Alpha, alone at (0, 0) with no hyperlinks or stellars.
+fn data() -> Rc<GameData> {
+    let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
+    put_i16(&mut anim, 0x00, 1000);
+    put_i16(&mut anim, 0x04, 1);
+    put_i16(&mut anim, 0x34, 4);
+    let sheet = (0..4)
+        .fold(RledBuilder::new(8, 8), |sheet, _| {
+            sheet.frame(|f| (0..8).fold(f, |f, _| f.line().pixels(&[0x7C00; 8])))
+        })
+        .build();
+    let mut system = vec![0; System::SIZE.expect("fixed")];
+    for slot in 0..32 {
+        // Every hyperlink and stellar slot unused.
+        put_i16(&mut system, 0x04 + 2 * slot, -1);
+    }
+    put_i16(&mut system, 0x66, -1);
+    let fork = ForkBuilder::new()
+        .resource(
+            Ship::TYPE,
+            128,
+            Some(b"Shuttle"),
+            &vec![0; Ship::SIZE.expect("fixed")],
+        )
+        .resource(ShipAnim::TYPE, 128, None, &anim)
+        .resource(RLED, 1000, None, &sheet)
+        .resource(System::TYPE, 128, Some(b"Alpha"), &system)
+        .build()
+        .bytes;
+    let file = OneFile(fork);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
 struct Harness {
-    app: App<FakeImages>,
+    app: App<Rc<GameData>>,
     window: FakeWindow,
     gpu: RecordingGpu,
     clock: Duration,
 }
 
 impl Harness {
-    fn new(images: FakeImages) -> Self {
+    fn new() -> Self {
         let window = FakeWindow {
             size_px: (1024, 768),
             scale_factor: 1.0,
             redraws: 0,
         };
-        let screen = AppScreen::Placeholder(Placeholder::new(CONTENT));
-        let app = App::new(&window, images, screen);
+        let data = data();
+        let app = App::new(&window, Rc::clone(&data), start_screen(data));
         Self {
             app,
             window,
@@ -111,12 +138,10 @@ impl Harness {
         });
         let submits = self.gpu.submits();
         assert_eq!(submits.len(), before + 1, "one submit per redraw");
-        submits[before].clone()
+        let frame = submits[before].clone();
+        assert_eq!(self.app.take_failures(), []);
+        frame
     }
-}
-
-fn images_called(harness: &Harness) -> std::cell::Ref<'_, Vec<(ImageKind, i16)>> {
-    harness.app.images().calls.borrow()
 }
 
 /// The frame's batches as (kind, length).
@@ -144,18 +169,18 @@ fn text_size(frame: &Frame) -> f32 {
 }
 
 #[test]
-fn every_redraw_submits_the_placeholders_batches() {
-    let mut harness = Harness::new(images());
+fn every_redraw_submits_one_frame_and_asks_for_the_next() {
+    let mut harness = Harness::new();
 
     let first = harness.frame();
     let second = harness.frame();
 
-    // The picture and 300 sprites share page 0, then the label, then the
-    // line and four dots.
-    let expected = [("sprites", 301), ("text", 1), ("solid", 5)];
+    // The ship's sprite, then its name, four stats and the footer.
+    let expected = [("sprites", 1), ("text", 6)];
     assert_eq!(shape(&first), expected);
     assert_eq!(shape(&second), expected);
     assert_eq!(harness.window.redraws, 2);
+    assert_eq!(first.target, (1024, 768));
     assert_eq!(
         first.viewport,
         PixelRect {
@@ -165,20 +190,11 @@ fn every_redraw_submits_the_placeholders_batches() {
             h: 768
         }
     );
-    match harness.app.screen() {
-        AppScreen::Placeholder(placeholder) => assert_eq!(placeholder.count(), 300),
-        other @ AppScreen::ShipBrowser(_) => panic!("the placeholder: {other:?}"),
-    }
-    // Each resource decoded once, on the first frame.
-    assert_eq!(
-        *images_called(&harness),
-        [(ImageKind::Pict, 128), (ImageKind::Rled, 200)]
-    );
 }
 
 #[test]
 fn a_resize_updates_the_next_frames_viewport() {
-    let mut harness = Harness::new(images());
+    let mut harness = Harness::new();
     let normal = harness.frame();
 
     harness.send(WindowEvent::Resized {
@@ -208,21 +224,8 @@ fn a_resize_updates_the_next_frames_viewport() {
 }
 
 #[test]
-fn up_doubles_the_sprites_drawn() {
-    let mut harness = Harness::new(images());
-    assert_eq!(
-        harness.send(WindowEvent::Key {
-            key: Key::Up,
-            pressed: true
-        }),
-        Control::Continue
-    );
-    assert_eq!(shape(&harness.frame())[0], ("sprites", 601));
-}
-
-#[test]
 fn escape_and_closing_exit() {
-    let mut harness = Harness::new(images());
+    let mut harness = Harness::new();
     assert_eq!(
         harness.send(WindowEvent::Key {
             key: Key::Escape,
@@ -231,44 +234,4 @@ fn escape_and_closing_exit() {
         Control::Exit
     );
     assert_eq!(harness.send(WindowEvent::CloseRequested), Control::Exit);
-}
-
-#[test]
-fn pointer_events_in_the_bars_change_nothing() {
-    let mut harness = Harness::new(images());
-    harness.send(WindowEvent::Resized {
-        size_px: (1280, 768),
-        scale_factor: 1.0,
-    });
-    let before = harness.frame();
-    assert_eq!(
-        harness.send(WindowEvent::PointerMoved { px: (10.0, 10.0) }),
-        Control::Continue
-    );
-    assert_eq!(
-        harness.send(WindowEvent::PointerButton {
-            button: MouseButton::Left,
-            pressed: true
-        }),
-        Control::Continue
-    );
-    let after = harness.frame();
-    assert_eq!(shape(&after), shape(&before));
-    assert_eq!(after.viewport, before.viewport);
-}
-
-#[test]
-fn a_missing_sprite_is_reported_once() {
-    let mut harness = Harness::new(FakeImages::default().with(ImageKind::Pict, 128, 1, 64));
-
-    let frame = harness.frame();
-
-    assert_eq!(shape(&frame)[0], ("sprites", 1));
-    assert_eq!(
-        harness.app.take_failures(),
-        [(ImageKey::sprite(200, 0), ImageError::Missing)]
-    );
-    assert_eq!(harness.app.take_failures(), []);
-    harness.frame();
-    assert_eq!(harness.app.take_failures(), []);
 }

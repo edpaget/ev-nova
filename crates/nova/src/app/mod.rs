@@ -13,10 +13,8 @@ use std::time::Duration;
 use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
 use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
 
-pub mod placeholder;
 pub mod screen;
 
-pub use placeholder::{Placeholder, PlaceholderContent};
 pub use screen::{AppScreen, start_screen};
 
 /// What the app needs from the window.
