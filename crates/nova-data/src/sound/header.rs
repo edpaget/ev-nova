@@ -1,7 +1,8 @@
 //! Sound headers: standard, extended and compressed, to PCM.
 
 use super::SoundError;
-use super::bytes::{u8_at, u16_at, u32_at};
+use super::bytes::{array_at, i16_at, u8_at, u16_at, u32_at};
+use super::ima4::{PACKET_LEN, PACKET_SAMPLES, decode_packet};
 use super::pcm::{Pcm, SampleRate};
 
 /// `encode` of a standard header: 8-bit mono samples.
@@ -10,6 +11,11 @@ const STANDARD: u8 = 0x00;
 const STANDARD_LEN: usize = 22;
 /// `encode` of an extended header: 8 or 16-bit samples, 1 or 2 channels.
 const EXTENDED: u8 = 0xFF;
+/// `encode` of a compressed header.
+const COMPRESSED: u8 = 0xFE;
+/// `compressionID` values that mean "see the `format` field".
+const FIXED_COMPRESSION: i16 = -1;
+const VARIABLE_COMPRESSION: i16 = -2;
 /// Bytes of an extended or compressed header before its samples.
 const LONG_HEADER_LEN: usize = 64;
 
@@ -43,6 +49,23 @@ pub(super) fn decode_header(data: &[u8], at: usize) -> Result<Pcm, SoundError> {
             };
             (channels, samples)
         }
+        COMPRESSED => {
+            let packets = u32_at(data, at + 22)?;
+            let format = array_at::<4>(data, at + 40)?;
+            let compression_id = i16_at(data, at + 56)?;
+            if &format != b"ima4"
+                || !matches!(compression_id, FIXED_COMPRESSION | VARIABLE_COMPRESSION)
+            {
+                return Err(SoundError::UnsupportedCompression {
+                    format,
+                    compression_id,
+                });
+            }
+            let channels = channel_count(count)?;
+            let needed = u64::from(packets) * u64::from(channels) * PACKET_LEN as u64;
+            let bytes = sample_data(data, at + LONG_HEADER_LEN, needed)?;
+            (channels, decode_ima4(bytes, channels))
+        }
         _ => return Err(SoundError::UnsupportedHeader { encode, offset: at }),
     };
     if rate == 0 {
@@ -65,6 +88,25 @@ fn sample_data(data: &[u8], offset: usize, needed: u64) -> Result<&[u8], SoundEr
             needed,
             available,
         })
+}
+
+/// IMA4 packets, `channels` per frame of 64, to interleaved samples.
+fn decode_ima4(bytes: &[u8], channels: u16) -> Vec<i16> {
+    let channels = usize::from(channels);
+    let (packets, _) = bytes.as_chunks::<PACKET_LEN>();
+    let mut samples = vec![0; packets.len() * PACKET_SAMPLES];
+    let frames = packets
+        .chunks_exact(channels)
+        .zip(samples.chunks_exact_mut(PACKET_SAMPLES * channels));
+    for (frame_packets, out) in frames {
+        for (channel, packet) in frame_packets.iter().enumerate() {
+            let decoded = decode_packet(packet);
+            for (slot, sample) in out.iter_mut().skip(channel).step_by(channels).zip(decoded) {
+                *slot = sample;
+            }
+        }
+    }
+    samples
 }
 
 /// `numChannels` of an extended or compressed header, if 1 or 2.
@@ -335,6 +377,152 @@ mod extended_tests {
             rate: 0,
             sample_size: 8,
             data: vec![0x80],
+        };
+        assert_eq!(decode(header), Err(SoundError::BadSampleRate));
+    }
+}
+
+#[cfg(test)]
+mod compressed_tests {
+    use super::super::decode_snd;
+    use super::super::fixture::{Header, SndBuilder, SndFormat, ima4_packet};
+    use super::*;
+
+    const RATE: u32 = 0x5622_0000;
+
+    /// A packet whose every sample is `level` (a multiple of 128).
+    fn flat(level: i16) -> [u8; 34] {
+        ima4_packet(level, 0, [0; 64])
+    }
+
+    fn compressed(channels: u32, packets: Vec<[u8; 34]>) -> Header {
+        coded(channels, *b"ima4", -1, packets)
+    }
+
+    fn coded(
+        channels: u32,
+        format: [u8; 4],
+        compression_id: i16,
+        packets: Vec<[u8; 34]>,
+    ) -> Header {
+        Header::Compressed {
+            channels,
+            rate: RATE,
+            format,
+            compression_id,
+            packets,
+        }
+    }
+
+    fn bytes(header: Header) -> Vec<u8> {
+        SndBuilder::new(SndFormat::One, header).bytes()
+    }
+
+    fn decode(header: Header) -> Result<Pcm, SoundError> {
+        decode_snd(&bytes(header))
+    }
+
+    #[test]
+    fn mono_ima4_decodes_64_samples_per_packet() {
+        let mut codes = [0; 64];
+        codes[0] = 4;
+        let packets = vec![flat(256), ima4_packet(-512, 0, codes), flat(0)];
+        let pcm = decode(compressed(1, packets)).unwrap();
+        assert_eq!((pcm.channels(), pcm.frames()), (1, 192));
+        assert_eq!(pcm.sample_rate(), SampleRate::from_fixed(RATE));
+        assert_eq!(pcm.base_note(), 60);
+        assert_eq!(pcm.loop_points(), None);
+        assert_eq!(pcm.samples()[..64], [256; 64]);
+        assert_eq!(pcm.samples()[64..66], [-505, -504]);
+        assert_eq!(pcm.samples()[128..], [0; 64]);
+    }
+
+    #[test]
+    fn stereo_packets_alternate_left_and_right() {
+        let packets = vec![flat(128), flat(-128), flat(256), flat(-256)];
+        let pcm = decode(compressed(2, packets)).unwrap();
+        assert_eq!((pcm.channels(), pcm.frames()), (2, 128));
+        let left: Vec<i16> = pcm.samples().iter().step_by(2).copied().collect();
+        let right: Vec<i16> = pcm.samples().iter().skip(1).step_by(2).copied().collect();
+        assert_eq!(left[..64], [128; 64]);
+        assert_eq!(left[64..], [256; 64]);
+        assert_eq!(right[..64], [-128; 64]);
+        assert_eq!(right[64..], [-256; 64]);
+    }
+
+    #[test]
+    fn variable_compression_ima4_decodes_too() {
+        let pcm = decode(coded(1, *b"ima4", -2, vec![flat(384)])).unwrap();
+        assert_eq!(pcm.samples(), [384; 64]);
+    }
+
+    #[test]
+    fn other_compressions_are_unsupported_and_named() {
+        let cases: [([u8; 4], i16, &str); 7] = [
+            ([0; 4], 3, "MACE 3:1"),
+            ([0; 4], 4, "MACE 6:1"),
+            (*b"MAC3", -1, "'MAC3'"),
+            (*b"MAC6", 4, "'MAC6'"),
+            (*b"raw ", 0, "'raw '"),
+            (*b"twos", 0, "'twos'"),
+            (*b"ima4", 3, "'ima4' (compressionID 3)"),
+        ];
+        for (format, compression_id, name) in cases {
+            let error = decode(coded(1, format, compression_id, vec![flat(0)])).unwrap_err();
+            assert_eq!(
+                error,
+                SoundError::UnsupportedCompression {
+                    format,
+                    compression_id
+                }
+            );
+            assert!(error.to_string().contains(name), "{error}");
+        }
+        for compression_id in [0, 1, -3] {
+            assert!(decode(coded(1, *b"ima4", compression_id, vec![flat(0)])).is_err());
+        }
+    }
+
+    #[test]
+    fn compressed_channels_must_be_mono_or_stereo() {
+        for channels in [0, 3] {
+            assert_eq!(
+                decode(compressed(channels, vec![flat(0); 3])),
+                Err(SoundError::UnsupportedChannels { channels })
+            );
+        }
+    }
+
+    #[test]
+    fn missing_packets_are_truncated() {
+        // Stereo, 1 frame (2 packets) present; claim 2 frames.
+        let mut bytes = bytes(compressed(2, vec![flat(0); 2]));
+        bytes[20 + 25] = 2;
+        assert_eq!(
+            decode_snd(&bytes),
+            Err(SoundError::SamplesTruncated {
+                offset: 20 + 64,
+                needed: 136,
+                available: 68
+            })
+        );
+    }
+
+    #[test]
+    fn compressed_trailing_bytes_are_ignored() {
+        let mut bytes = bytes(compressed(1, vec![flat(128)]));
+        bytes.extend([0x12; 33]);
+        assert_eq!(decode_snd(&bytes).unwrap().samples(), [128; 64]);
+    }
+
+    #[test]
+    fn a_zero_compressed_rate_is_bad() {
+        let header = Header::Compressed {
+            channels: 1,
+            rate: 0,
+            format: *b"ima4",
+            compression_id: -1,
+            packets: vec![flat(0)],
         };
         assert_eq!(decode(header), Err(SoundError::BadSampleRate));
     }

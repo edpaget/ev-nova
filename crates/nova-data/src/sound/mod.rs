@@ -3,6 +3,7 @@
 mod bytes;
 mod error;
 mod header;
+mod ima4;
 mod pcm;
 mod snd;
 

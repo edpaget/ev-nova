@@ -16,7 +16,8 @@ pub(super) fn slice_at(data: &[u8], offset: usize, len: usize) -> Result<&[u8], 
         .ok_or(SoundError::UnexpectedEnd { offset })
 }
 
-fn array_at<const N: usize>(data: &[u8], offset: usize) -> Result<[u8; N], SoundError> {
+/// The `N` bytes at `offset`.
+pub(super) fn array_at<const N: usize>(data: &[u8], offset: usize) -> Result<[u8; N], SoundError> {
     slice_at(data, offset, N)?
         .try_into()
         .map_err(|_| SoundError::UnexpectedEnd { offset })
@@ -28,6 +29,10 @@ pub(super) fn u8_at(data: &[u8], offset: usize) -> Result<u8, SoundError> {
 
 pub(super) fn u16_at(data: &[u8], offset: usize) -> Result<u16, SoundError> {
     Ok(u16::from_be_bytes(array_at(data, offset)?))
+}
+
+pub(super) fn i16_at(data: &[u8], offset: usize) -> Result<i16, SoundError> {
+    Ok(i16::from_be_bytes(array_at(data, offset)?))
 }
 
 pub(super) fn u32_at(data: &[u8], offset: usize) -> Result<u32, SoundError> {
@@ -48,6 +53,8 @@ mod tests {
     fn reads_are_big_endian_at_their_offset() {
         assert_eq!(u8_at(&DATA, 5), Ok(0xFF));
         assert_eq!(u16_at(&DATA, 1), Ok(0x3456));
+        assert_eq!(i16_at(&DATA, 4), Ok(-0x6501));
+        assert_eq!(i16_at(&DATA, 0), Ok(0x1234));
         assert_eq!(u32_at(&DATA, 2), Ok(0x5678_9AFF));
         assert_eq!(slice_at(&DATA, 1, 3), Ok(&DATA[1..4]));
         assert_eq!(slice_at(&DATA, 6, 0), Ok(&[][..]));
@@ -57,6 +64,7 @@ mod tests {
     fn a_read_past_the_end_names_its_offset() {
         assert_eq!(u8_at(&DATA, 6), Err(end(6)));
         assert_eq!(u16_at(&DATA, 5), Err(end(5)));
+        assert_eq!(i16_at(&DATA, 5), Err(end(5)));
         assert_eq!(u32_at(&DATA, 3), Err(end(3)));
         assert_eq!(slice_at(&DATA, 2, 5), Err(end(2)));
         assert_eq!(slice_at(&DATA, 7, 0), Err(end(7)));
