@@ -16,12 +16,13 @@ use std::path::Path;
 use nova_data::records::mission::Mission;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
+use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::order::IgnoreReason;
 use nova_data::store::{GameData, Origin};
 use nova_data::{
-    AnyRecord, LayerError, LayerSprite, Record, Registered, ShipId, TYPES, decode_any,
+    AnyRecord, LayerError, LayerSprite, Record, Registered, ShipId, StellarId, TYPES, decode_any,
 };
 use nova_rsrc::{ResType, ResourceFile};
 
@@ -254,6 +255,60 @@ fn every_stock_ship_resolves_to_its_sprite_sheet() {
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
     assert_eq!(resolved, 288);
+}
+
+/// Every stock stellar resolves to the `rlëD` its raw `spïn` names, laid
+/// out with the `spïn`'s columns. Most have one frame; the Wormholes have
+/// 32 and the Hypergates 42. Spöb 472's sheet is larger than its `spïn`
+/// says, and the sheet wins.
+#[test]
+fn every_stock_stellar_resolves_to_its_sprite_sheet() {
+    let Some(dir) = nova_data() else { return };
+    let data = open(&dir);
+
+    let mut problems = Vec::new();
+    let mut frame_counts: BTreeMap<usize, usize> = BTreeMap::new();
+    for &id in data.ids(Stellar::TYPE) {
+        let stellar = data.get::<Stellar>(id).expect("present").expect("decodes");
+        let spin_id = 1000 + stellar.record.graphic_type;
+        let spin = data
+            .get::<Spin>(spin_id)
+            .expect("present")
+            .expect("decodes");
+        match data.stellar_sprite(StellarId(id)) {
+            Ok(sprite) => {
+                if (sprite.spin_id, sprite.image_id) != (spin_id, spin.record.sprites_id) {
+                    problems.push(format!(
+                        "spöb {id}: spïn {} rlëD {}, expected spïn {spin_id} rlëD {}",
+                        sprite.spin_id, sprite.image_id, spin.record.sprites_id
+                    ));
+                }
+                let columns = i32::from(sprite.sheet.layout().columns());
+                if columns != i32::from(spin.record.x_tiles) {
+                    problems.push(format!(
+                        "spöb {id}: {columns} columns, not xTiles {}",
+                        spin.record.x_tiles
+                    ));
+                }
+                *frame_counts.entry(sprite.sheet.frames().len()).or_default() += 1;
+            }
+            Err(err) => problems.push(format!("spöb {id}: {err}")),
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    assert_eq!(frame_counts, BTreeMap::from([(1, 368), (32, 24), (42, 19)]));
+    assert_eq!(frame_counts.values().sum::<usize>(), 411);
+
+    let odd = data.stellar_sprite(StellarId(472)).expect("resolves");
+    assert_eq!(
+        (odd.sheet.frame_width(), odd.sheet.frame_height()),
+        (150, 150)
+    );
+    let spin = data
+        .get::<Spin>(odd.spin_id)
+        .expect("present")
+        .expect("decodes");
+    assert_eq!((spin.record.x_size, spin.record.y_size), (140, 120));
 }
 
 /// Checks one resolved layer against its `shän`: every frame is the
