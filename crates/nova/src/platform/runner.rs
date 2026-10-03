@@ -1,8 +1,20 @@
 //! The winit event loop's handler: opens the window and the GPU surface,
 //! then forwards every event to the [`App`].
+//!
+//! With the `dev-tools` feature and [`Runner::with_dev_tools`], it also
+//! drives the developer tools: while their overlay shows, each redraw runs
+//! the egui panel first and submits the frame with the panel painted over
+//! it, and the raw window events the app says the overlay wants go to egui.
 
+#[cfg(feature = "dev-tools")]
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
+
+#[cfg(feature = "dev-tools")]
+use nova_data::GameData;
+#[cfg(feature = "dev-tools")]
+use nova_render::wgpu::WithOverlay;
 
 use nova_render::ImageSource;
 use nova_render::wgpu::{InitError, SurfaceGpu};
@@ -14,6 +26,8 @@ use winit::window::{Window, WindowId};
 use super::translate;
 use super::window::WinitWindow;
 use crate::app::{App, AppScreen, Control, WindowEvent};
+#[cfg(feature = "dev-tools")]
+use crate::devtools::DevTools;
 use crate::exit::OpenFailure;
 
 /// The window, its GPU surface and the app, once the window is open.
@@ -21,6 +35,8 @@ struct Running<S> {
     app: App<S>,
     // Dropped before the window it draws into.
     gpu: SurfaceGpu,
+    #[cfg(feature = "dev-tools")]
+    dev_tools: Option<DevTools>,
     window: WinitWindow,
 }
 
@@ -30,6 +46,8 @@ pub struct Runner<S> {
     running: Option<Running<S>>,
     failure: Option<OpenFailure>,
     start: Instant,
+    #[cfg(feature = "dev-tools")]
+    dev_catalog: Option<Rc<GameData>>,
 }
 
 impl<S: ImageSource> Runner<S> {
@@ -41,7 +59,18 @@ impl<S: ImageSource> Runner<S> {
             running: None,
             failure: None,
             start: Instant::now(),
+            #[cfg(feature = "dev-tools")]
+            dev_catalog: None,
         }
+    }
+
+    /// The runner with the developer tools, browsing `catalog`; backquote
+    /// shows and hides them.
+    #[cfg(feature = "dev-tools")]
+    #[must_use]
+    pub fn with_dev_tools(mut self, catalog: Rc<GameData>) -> Self {
+        self.dev_catalog = Some(catalog);
+        self
     }
 
     /// Why the window could not be opened, if it could not; the event loop
@@ -83,8 +112,22 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
         match open(event_loop) {
             Ok((mut window, gpu)) => {
                 let app = App::new(&window, images, screen);
+                #[cfg(feature = "dev-tools")]
+                let (app, dev_tools) = match self.dev_catalog.take() {
+                    Some(catalog) => (
+                        app.with_dev_overlay(),
+                        Some(DevTools::new(&window.0, catalog)),
+                    ),
+                    None => (app, None),
+                };
                 crate::app::WindowPort::request_redraw(&mut window);
-                self.running = Some(Running { app, gpu, window });
+                self.running = Some(Running {
+                    app,
+                    gpu,
+                    #[cfg(feature = "dev-tools")]
+                    dev_tools,
+                    window,
+                });
             }
             Err(failure) => {
                 self.failure = Some(failure);
@@ -97,22 +140,44 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
         let Some(running) = &mut self.running else {
             return;
         };
-        let event = match event {
+        let raw = event;
+        let event = match &raw {
             WinitEvent::RedrawRequested => Some(WindowEvent::Redraw {
                 elapsed: self.start.elapsed(),
             }),
-            other => translate(&other, &running.window),
+            other => translate(other, &running.window),
         };
-        let Some(event) = event else {
-            return;
-        };
-        let control = running
-            .app
-            .handle(event, &mut running.window, &mut running.gpu);
+        // A redraw while the developer overlay shows first runs the egui
+        // panel, then submits through a GPU that paints it over the frame.
+        let handled = event.map(|event| {
+            #[cfg(feature = "dev-tools")]
+            if let (WindowEvent::Redraw { .. }, Some(dev_tools), Some(overlay)) =
+                (event, &mut running.dev_tools, running.app.dev_overlay())
+                && overlay.visible()
+            {
+                dev_tools.run_frame(&running.window.0, overlay);
+                let mut gpu = WithOverlay {
+                    gpu: &mut running.gpu,
+                    painter: dev_tools.layer_mut(),
+                };
+                return running
+                    .app
+                    .handle_routed(event, &mut running.window, &mut gpu);
+            }
+            running
+                .app
+                .handle_routed(event, &mut running.window, &mut running.gpu)
+        });
+        #[cfg(feature = "dev-tools")]
+        if let Some(dev_tools) = &mut running.dev_tools
+            && running.app.overlay_wants(handled.as_ref())
+        {
+            dev_tools.on_window_event(&running.window.0, &raw);
+        }
         for (key, error) in running.app.take_failures() {
             eprintln!("nova: image {key:?}: {error}");
         }
-        if control == Control::Exit {
+        if handled.is_some_and(|handled| handled.control == Control::Exit) {
             event_loop.exit();
         }
     }
@@ -184,6 +249,21 @@ mod tests {
         assert_eq!(
             runner.open_failure(),
             Some(&OpenFailure::Window("no display".into()))
+        );
+    }
+
+    #[cfg(feature = "dev-tools")]
+    #[test]
+    fn the_developer_tools_browse_the_data_they_are_given() {
+        let data = no_data();
+        let runner = Runner::new(NoImages, start_screen(no_data()));
+        assert!(runner.dev_catalog.is_none(), "off unless asked for");
+        let runner = runner.with_dev_tools(Rc::clone(&data));
+        assert!(
+            runner
+                .dev_catalog
+                .as_ref()
+                .is_some_and(|catalog| Rc::ptr_eq(catalog, &data))
         );
     }
 }

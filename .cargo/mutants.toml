@@ -29,6 +29,11 @@ exclude_re = [
     # window and display. The decisions it forwards to (`translate`,
     # `App::handle`, `gpu_failure`, `exit::exit`) are mutated and tested.
     "impl ApplicationHandler for Runner<S>>::(resumed|window_event)",
+    # The developer tools' window glue (the `dev-tools` feature): egui-winit's
+    # input state over a real winit window, which tests cannot build. Each
+    # forwards to tested parts: the panel (`DevPanel`), the painter
+    # (`EguiLayer`) and the app's routing (`App::overlay_wants`).
+    "DevTools::(new|on_window_event|run_frame|layer_mut)",
     # The window port over a real winit window: one-line reads of its size
     # and scale factor and a redraw request, observable only with a window.
     "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw)",

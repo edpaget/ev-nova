@@ -2,6 +2,9 @@
 //! ship browser; Tab switches to the galaxy map and back. On the map,
 //! Return enters the selected system; Escape goes back, or quits.
 //!
+//! With `--features dev-tools` (`mise run dev`), `` ` `` toggles the
+//! developer tools.
+//!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
 //! cannot be opened.
@@ -35,7 +38,10 @@ fn main() -> ExitCode {
     // The screens and the renderer read the same game data.
     let data = Rc::new(data);
     let screen = start_screen(Rc::clone(&data));
-    let mut runner = Runner::new(data, screen);
+    let runner = Runner::new(Rc::clone(&data), screen);
+    #[cfg(feature = "dev-tools")]
+    let runner = runner.with_dev_tools(Rc::clone(&data));
+    let mut runner = runner;
     let result = EventLoop::new().and_then(|event_loop| event_loop.run_app(&mut runner));
     match result {
         Ok(()) => {
