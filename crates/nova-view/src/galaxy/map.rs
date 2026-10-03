@@ -21,7 +21,6 @@ use std::time::Duration;
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
 use super::model::{GalaxyModel, placement};
 use super::view::{MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP};
-use crate::ships::browser::ERROR;
 use crate::{Color, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction};
 
 /// How far the pointer may travel between pressing and releasing the left
@@ -69,8 +68,6 @@ const STACK_TOP: f32 = 656.0;
 const PROBLEMS_TOP: f32 = 676.0;
 /// The help line.
 pub const HELP: &str = "Arrows or drag: pan   +/-: zoom   Click: select";
-/// Secondary text's colour.
-const DIM: Color = Color::rgba(160, 160, 160, 255);
 
 // The two columns stay on screen and apart.
 const _: () = assert!(LEFT + LEFT_WRAP <= RIGHT);
@@ -240,7 +237,7 @@ impl GalaxyMap {
                     Point::new(LEFT, TITLE_TOP),
                     STELLAR_SIZE,
                     Some(LEFT_WRAP),
-                    DIM,
+                    Color::DIM,
                 );
             }
         }
@@ -253,9 +250,9 @@ impl GalaxyMap {
                 color,
             );
         };
-        right(list, HELP.to_owned(), HELP_TOP, DIM);
+        right(list, HELP.to_owned(), HELP_TOP, Color::DIM);
         let percent = (self.view.scale() * 100.0).round();
-        right(list, format!("Zoom {percent}%"), ZOOM_TOP, DIM);
+        right(list, format!("Zoom {percent}%"), ZOOM_TOP, Color::DIM);
         if let Some(system) = selected {
             let stack = self.model.stack(system.entry.id);
             if stack.len() > 1 {
@@ -276,7 +273,7 @@ impl GalaxyMap {
                 "{} problem(s) reading the map data: {first}",
                 problems.len()
             );
-            right(list, line, PROBLEMS_TOP, ERROR);
+            right(list, line, PROBLEMS_TOP, Color::ERROR);
         }
     }
 }
@@ -1032,7 +1029,7 @@ mod tests {
                 origin: at(LEFT, TITLE_TOP),
                 size: STELLAR_SIZE,
                 wrap_width: Some(LEFT_WRAP),
-                color: DIM,
+                color: Color::DIM,
             }
         );
         assert_eq!(
@@ -1042,7 +1039,7 @@ mod tests {
                 origin: at(RIGHT, HELP_TOP),
                 size: RIGHT_SIZE,
                 wrap_width: Some(RIGHT_WRAP),
-                color: DIM,
+                color: Color::DIM,
             }
         );
         assert_eq!(texts(&list).len(), 3, "{:?}", texts(&list));
@@ -1155,7 +1152,7 @@ mod tests {
                 origin: at(RIGHT, PROBLEMS_TOP),
                 size: RIGHT_SIZE,
                 wrap_width: Some(RIGHT_WRAP),
-                color: crate::ships::browser::ERROR,
+                color: Color::ERROR,
             }
         );
         assert!(!texts(&drawn(&map())).iter().any(|t| t.contains("problem")));

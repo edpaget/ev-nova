@@ -53,12 +53,8 @@ const FOOTER_SIZE: f32 = 16.0;
 const _: () = assert!(SHIP_CENTER.x + PLACEHOLDER_SIZE < TEXT_LEFT);
 const _: () = assert!(TEXT_LEFT + DESCRIPTION_WRAP <= 1024.0);
 
-/// Error messages' colour.
-pub const ERROR: Color = Color::rgba(255, 96, 96, 255);
 /// The placeholder's colour.
 const PLACEHOLDER: Color = Color::rgba(128, 128, 128, 255);
-/// The footer's colour.
-const FOOTER_COLOR: Color = Color::rgba(160, 160, 160, 255);
 
 /// The ship browser.
 #[derive(Clone, Debug)]
@@ -179,7 +175,7 @@ fn draw_placeholder(message: &str, list: &mut DrawList) {
             Point::new(SPRITE_ERROR_LEFT, bottom + LINE_SPACING),
             MESSAGE_SIZE,
             Some(SPRITE_ERROR_WRAP),
-            ERROR,
+            Color::ERROR,
         );
 }
 
@@ -199,11 +195,11 @@ fn draw_text(ship: &ShipEntry, list: &mut DrawList) {
             (format!("Armour: {}", stats.armor), Color::WHITE),
             (format!("Shields: {}", stats.shield), Color::WHITE),
         ],
-        Err(message) => vec![(format!("Record unavailable: {message}"), ERROR)],
+        Err(message) => vec![(format!("Record unavailable: {message}"), Color::ERROR)],
     };
     for (name, layer) in [("Glow", &ship.glow), ("Lights", &ship.lights)] {
         if let Some(Err(message)) = layer {
-            lines.push((format!("{name} unavailable: {message}"), ERROR));
+            lines.push((format!("{name} unavailable: {message}"), Color::ERROR));
         }
     }
     for (at, (line, color)) in lines.into_iter().enumerate() {
@@ -219,7 +215,7 @@ fn draw_text(ship: &ShipEntry, list: &mut DrawList) {
     let description = match &ship.description {
         Ok(Some(text)) => Some((text.clone(), Color::WHITE)),
         Ok(None) => None,
-        Err(message) => Some((format!("Description unavailable: {message}"), ERROR)),
+        Err(message) => Some((format!("Description unavailable: {message}"), Color::ERROR)),
     };
     if let Some((text, color)) = description {
         list.text(
@@ -274,7 +270,7 @@ impl<C: ShipCatalog> Screen for ShipBrowser<C> {
             FOOTER,
             FOOTER_SIZE,
             None,
-            FOOTER_COLOR,
+            Color::DIM,
         );
     }
 }
@@ -673,7 +669,7 @@ mod tests {
         let list = drawn(&ShipBrowser::new(&catalog));
         assert_eq!(
             text_color(&list, "Description unavailable: dësc 13000: bad"),
-            ERROR
+            Color::ERROR
         );
     }
 
@@ -720,7 +716,7 @@ mod tests {
         );
         assert_eq!(
             text_color(&list, "Sprite unavailable: no shän 128 for shïp 128"),
-            ERROR
+            Color::ERROR
         );
         let message = text_origin(&list, "Sprite unavailable:");
         assert!(message.y > bottom, "the message is under the box");
@@ -740,7 +736,7 @@ mod tests {
         assert_eq!(keys, [ImageKey::sprite(1280, 0), ImageKey::sprite(1200, 0)]);
         assert_eq!(
             text_color(&list, "Glow unavailable: glow rlëD 1100: bad"),
-            ERROR
+            Color::ERROR
         );
 
         let ship = ShipEntry {
@@ -752,7 +748,7 @@ mod tests {
         assert_eq!(sprites(&list).len(), 1);
         assert_eq!(
             text_color(&list, "Lights unavailable: lights rlëD 1200: bad"),
-            ERROR
+            Color::ERROR
         );
     }
 
@@ -797,7 +793,7 @@ mod tests {
         assert!(!texts.iter().any(|t| t.starts_with("Cost:")), "{texts:?}");
         assert_eq!(
             text_color(&list, "Record unavailable: shïp 128: short"),
-            ERROR
+            Color::ERROR
         );
     }
 

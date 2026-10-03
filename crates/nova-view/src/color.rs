@@ -18,6 +18,11 @@ impl Color {
     pub const WHITE: Self = Self::rgba(255, 255, 255, 255);
     /// Opaque black.
     pub const BLACK: Self = Self::rgba(0, 0, 0, 255);
+    /// Error messages' colour, shared by every screen: an opaque light red.
+    pub const ERROR: Self = Self::rgba(255, 96, 96, 255);
+    /// Secondary text's colour (footers, help and hint lines), shared by
+    /// every screen and the app's router: an opaque mid grey.
+    pub const DIM: Self = Self::rgba(160, 160, 160, 255);
 
     /// The colour (`r`, `g`, `b`) with alpha `a`.
     #[must_use]
@@ -58,6 +63,12 @@ mod tests {
                 a: 255
             }
         );
+    }
+
+    #[test]
+    fn the_shared_text_colours_are_opaque_red_and_grey() {
+        assert_eq!(Color::ERROR, Color::rgba(255, 96, 96, 255));
+        assert_eq!(Color::DIM, Color::rgba(160, 160, 160, 255));
     }
 
     #[test]

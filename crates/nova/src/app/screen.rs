@@ -17,7 +17,7 @@ use nova_view::{Color, DrawList, Input, Key, Point, Screen, ScreenAction};
 pub const HINT: &str = "Tab: ships / galaxy map";
 pub const HINT_AT: Point = Point::new(16.0, 8.0);
 pub const HINT_SIZE: f32 = 14.0;
-pub const HINT_COLOR: Color = Color::rgba(160, 160, 160, 255);
+pub const HINT_COLOR: Color = Color::DIM;
 
 /// Which screen the app is showing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
