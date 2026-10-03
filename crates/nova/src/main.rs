@@ -1,4 +1,5 @@
-//! `nova`: opens the game data and shows it in a window.
+//! `nova`: opens the game data and shows it in a window, starting on the
+//! ship browser.
 //!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
@@ -6,8 +7,9 @@
 
 use std::ffi::OsString;
 use std::process::ExitCode;
+use std::rc::Rc;
 
-use nova::app::{AppScreen, Placeholder, PlaceholderContent};
+use nova::app::start_screen;
 use nova::platform::Runner;
 use nova::{cli, exit};
 use nova_data::GameData;
@@ -29,8 +31,9 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let content = PlaceholderContent::from_data(&data);
-    let screen = AppScreen::Placeholder(Placeholder::new(content));
+    // The ship browser and the renderer read the same game data.
+    let data = Rc::new(data);
+    let screen = start_screen(Rc::clone(&data));
     let mut runner = Runner::new(data, screen);
     let result = EventLoop::new().and_then(|event_loop| event_loop.run_app(&mut runner));
     match result {

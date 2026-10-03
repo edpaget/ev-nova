@@ -167,6 +167,7 @@ fn every_redraw_submits_the_placeholders_batches() {
     );
     match harness.app.screen() {
         AppScreen::Placeholder(placeholder) => assert_eq!(placeholder.count(), 300),
+        other @ AppScreen::ShipBrowser(_) => panic!("the placeholder: {other:?}"),
     }
     // Each resource decoded once, on the first frame.
     assert_eq!(

@@ -17,7 +17,7 @@ pub mod placeholder;
 pub mod screen;
 
 pub use placeholder::{Placeholder, PlaceholderContent};
-pub use screen::AppScreen;
+pub use screen::{AppScreen, start_screen};
 
 /// What the app needs from the window.
 pub trait WindowPort {
