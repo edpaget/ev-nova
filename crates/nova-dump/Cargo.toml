@@ -13,5 +13,9 @@ nova-rsrc.workspace = true
 png.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+# Synthetic pictures, sprites and sounds for the encoder and export tests.
+nova-data = { workspace = true, features = ["fixture"] }
+
 [lints]
 workspace = true

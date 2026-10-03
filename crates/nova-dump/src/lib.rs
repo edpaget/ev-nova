@@ -3,3 +3,4 @@
 pub mod cli;
 pub mod names;
 pub mod png;
+pub mod wav;
