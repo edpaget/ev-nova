@@ -12,6 +12,7 @@
 //! - [`catalog`]: the [`ResourceCatalog`] port, every resource and one
 //!   resource's bytes, files and record, owned.
 //! - [`data`]: the port's adapter over `nova_data`'s `GameData`.
+//! - [`search`]: [`fold`] and the [`Query`], searching by type, ID or name.
 //!
 //! egui draws the overlay only in the `nova` crate's `dev-tools` build,
 //! and only renders this model's strings and images.
@@ -20,6 +21,7 @@ pub mod catalog;
 pub mod data;
 pub mod frame_time;
 pub mod overlay;
+pub mod search;
 
 pub use catalog::{
     Origin, RecordView, ResType, ResourceCatalog, ResourceDetail, ResourceSummary, SourceInfo,
@@ -27,3 +29,4 @@ pub use catalog::{
 };
 pub use frame_time::{FRAME_WINDOW, FrameTimes};
 pub use overlay::{DevOverlay, Routing, TOGGLE_KEY};
+pub use search::{Query, fold};
