@@ -12,6 +12,8 @@
 //! A star at layer point `q` is drawn at `VIEW_CENTER + q - offset`, where
 //! the layer's offset is the camera's centre times the layer's factor.
 
+use std::ops::RangeInclusive;
+
 use super::camera::{Camera, VIEW_CENTER, VIEW_SIZE};
 use crate::{Color, DrawList, Point};
 
@@ -53,6 +55,11 @@ pub const LAYERS: [Layer; 3] = [
 /// The side of a layer's square cells, in layer units.
 pub const CELL_SIZE: f32 = 256.0;
 
+/// The most columns and rows of cells that can overlap the screen, which
+/// is 4 x 3 cells: one more each way when it straddles cell edges.
+const MAX_COLUMNS: usize = 5;
+const MAX_ROWS: usize = 4;
+
 /// `SplitMix64`'s increment, the golden gamma.
 const GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
 
@@ -82,17 +89,29 @@ struct Star {
     screen: Point,
 }
 
-/// Every star on screen, layer by layer, far first.
-fn stars(camera: &Camera) -> Vec<Star> {
+/// The columns and rows of the cells overlapping the screen, for a layer
+/// offset by `offset`: at most [`MAX_COLUMNS`] x [`MAX_ROWS`].
+fn visible_cells(offset: Point) -> (RangeInclusive<i32>, RangeInclusive<i32>) {
     let (half_width, half_height) = (VIEW_SIZE.0 / 2.0, VIEW_SIZE.1 / 2.0);
     // The cells from the one holding `low` to the one holding `high`.
     let cells =
         |low: f32, high: f32| (low / CELL_SIZE).floor() as i32..=(high / CELL_SIZE).floor() as i32;
+    (
+        cells(offset.x - half_width, offset.x + half_width),
+        cells(offset.y - half_height, offset.y + half_height),
+    )
+}
+
+/// Every star on screen, layer by layer, far first.
+fn stars(camera: &Camera) -> Vec<Star> {
     let mut stars = Vec::new();
     for (index, layer) in LAYERS.iter().enumerate() {
         let offset = layer_offset(camera, layer);
-        for y in cells(offset.y - half_height, offset.y + half_height) {
-            for x in cells(offset.x - half_width, offset.x + half_width) {
+        let (columns, rows) = visible_cells(offset);
+        // Never more cells than can overlap the screen, so the work per
+        // frame is bounded whatever the camera does.
+        for y in rows.take(MAX_ROWS) {
+            for x in columns.clone().take(MAX_COLUMNS) {
                 for point in cell_stars(index, x, y) {
                     let screen = Point::new(
                         VIEW_CENTER.x + (point.x - offset.x),
@@ -334,6 +353,53 @@ mod tests {
     }
 
     #[test]
+    fn at_most_5_by_4_cells_can_overlap_the_screen() {
+        assert_eq!((MAX_COLUMNS, MAX_ROWS), (5, 4));
+    }
+
+    #[test]
+    fn the_cells_generated_are_exactly_those_overlapping_the_screen() {
+        let offsets = [
+            at(0.0, 0.0),
+            at(128.0, 64.0),
+            at(768.0, -512.0),
+            at(-3750.0, 5832.75),
+            at(-5000.0, -4000.0),
+            at(8250.5, -7124.25),
+        ];
+        for offset in offsets {
+            let (columns, rows) = visible_cells(offset);
+            assert!(
+                columns.clone().count() <= MAX_COLUMNS,
+                "{offset:?}: {columns:?}"
+            );
+            assert!(rows.clone().count() <= MAX_ROWS, "{offset:?}: {rows:?}");
+            // A cell overlaps the window when it starts at or before the
+            // window's far edge and ends after its near edge.
+            let overlaps = |cell: i32, centre: f32, half: f32| {
+                let start = cell as f32 * CELL_SIZE;
+                start <= centre + half && start + CELL_SIZE > centre - half
+            };
+            let near =
+                |range: &std::ops::RangeInclusive<i32>| (range.start() - 3)..=(range.end() + 3);
+            for x in near(&columns) {
+                assert_eq!(
+                    columns.contains(&x),
+                    overlaps(x, offset.x, VIEW_SIZE.0 / 2.0),
+                    "column {x} at {offset:?}"
+                );
+            }
+            for y in near(&rows) {
+                assert_eq!(
+                    rows.contains(&y),
+                    overlaps(y, offset.y, VIEW_SIZE.1 / 2.0),
+                    "row {y} at {offset:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn only_stars_on_screen_are_drawn_and_at_most_the_cells_on_screen_of_them() {
         for (x, y) in [(0.0, 0.0), (128.0, 64.0), (-5000.0, 7777.0)] {
             let camera = camera_at(x, y);
@@ -350,7 +416,7 @@ mod tests {
             for (layer, &n) in per_layer.iter().enumerate() {
                 assert!(n > 0, "layer {layer} at ({x}, {y})");
                 assert!(
-                    n <= 5 * 4 * LAYERS[layer].stars_per_cell,
+                    n <= (MAX_COLUMNS * MAX_ROWS) as u32 * LAYERS[layer].stars_per_cell,
                     "{n} on layer {layer}"
                 );
             }
