@@ -13,12 +13,12 @@ use winit::window::{Window, WindowId};
 
 use super::translate;
 use super::window::WinitWindow;
-use crate::app::{App, Control, Placeholder, WindowEvent};
+use crate::app::{App, AppScreen, Control, WindowEvent};
 use crate::exit::OpenFailure;
 
 /// The window, its GPU surface and the app, once the window is open.
 struct Running<S> {
-    app: App<S, Placeholder>,
+    app: App<S>,
     // Dropped before the window it draws into.
     gpu: SurfaceGpu,
     window: WinitWindow,
@@ -26,7 +26,7 @@ struct Running<S> {
 
 /// Runs the app in a winit event loop.
 pub struct Runner<S> {
-    pending: Option<(S, Placeholder)>,
+    pending: Option<(S, AppScreen)>,
     running: Option<Running<S>>,
     failure: Option<OpenFailure>,
     start: Instant,
@@ -35,7 +35,7 @@ pub struct Runner<S> {
 impl<S: ImageSource> Runner<S> {
     /// A runner that will open a window showing `screen` with images from
     /// `images` when the event loop starts.
-    pub fn new(images: S, screen: Placeholder) -> Self {
+    pub fn new(images: S, screen: AppScreen) -> Self {
         Self {
             pending: Some((images, screen)),
             running: None,
@@ -126,7 +126,7 @@ mod tests {
     use nova_view::ImageKind;
 
     use super::*;
-    use crate::app::PlaceholderContent;
+    use crate::app::{Placeholder, PlaceholderContent};
     use crate::exit::OpenFailure;
 
     struct NoImages;
@@ -151,7 +151,8 @@ mod tests {
 
     #[test]
     fn the_runner_reports_the_failure_that_stopped_the_window_opening() {
-        let mut runner = Runner::new(NoImages, Placeholder::new(PlaceholderContent::default()));
+        let screen = AppScreen::Placeholder(Placeholder::new(PlaceholderContent::default()));
+        let mut runner = Runner::new(NoImages, screen);
         assert_eq!(runner.open_failure(), None);
         runner.failure = Some(OpenFailure::Window("no display".into()));
         assert_eq!(

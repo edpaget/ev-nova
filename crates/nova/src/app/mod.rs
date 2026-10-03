@@ -1,6 +1,8 @@
 //! The app layer: window events in, frames out, through ports.
 //!
-//! [`App`] owns the viewport and the current screen. The platform adapter
+//! [`App`] owns the viewport and the current screen, an [`AppScreen`] that
+//! routes to whichever of the game's screens is showing; new screens are
+//! added there, so the platform adapter never names one. The adapter
 //! hands it [`WindowEvent`]s, already in the core's terms, together with
 //! the [`WindowPort`] and a [`Gpu`]; the app turns them into screen input,
 //! ticks and draws the screen, and renders each frame through
@@ -12,8 +14,10 @@ use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
 use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
 
 pub mod placeholder;
+pub mod screen;
 
 pub use placeholder::{Placeholder, PlaceholderContent};
+pub use screen::AppScreen;
 
 /// What the app needs from the window.
 pub trait WindowPort {
@@ -73,7 +77,11 @@ pub enum Control {
 }
 
 /// The app: routes window events to the current screen and draws it.
-pub struct App<S, C> {
+///
+/// The program runs `App<S>`, whose screen is the [`AppScreen`] router.
+/// The screen stays a type parameter only so the app's own tests can drive
+/// it with a screen that records what reaches it.
+pub struct App<S, C = AppScreen> {
     renderer: Renderer<S>,
     viewport: Viewport,
     screen: C,

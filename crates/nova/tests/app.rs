@@ -1,5 +1,5 @@
-//! The app layer wired to the placeholder screen, the renderer and the
-//! recording Gpu, driven by synthetic window events.
+//! The app layer wired to its screen router showing the placeholder, the
+//! renderer and the recording Gpu, driven by synthetic window events.
 
 // Sizes here are small powers of two, exact in floating point.
 #![allow(clippy::float_cmp)]
@@ -8,7 +8,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use nova::app::{App, Control, Placeholder, PlaceholderContent, WindowEvent, WindowPort};
+use nova::app::{
+    App, AppScreen, Control, Placeholder, PlaceholderContent, WindowEvent, WindowPort,
+};
 use nova_data::graphics::Image;
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, ImageError, ImageSource, PixelRect};
@@ -73,7 +75,7 @@ fn images() -> FakeImages {
 }
 
 struct Harness {
-    app: App<FakeImages, Placeholder>,
+    app: App<FakeImages>,
     window: FakeWindow,
     gpu: RecordingGpu,
     clock: Duration,
@@ -86,7 +88,8 @@ impl Harness {
             scale_factor: 1.0,
             redraws: 0,
         };
-        let app = App::new(&window, images, Placeholder::new(CONTENT));
+        let screen = AppScreen::Placeholder(Placeholder::new(CONTENT));
+        let app = App::new(&window, images, screen);
         Self {
             app,
             window,
@@ -162,7 +165,9 @@ fn every_redraw_submits_the_placeholders_batches() {
             h: 768
         }
     );
-    assert_eq!(harness.app.screen().count(), 300);
+    match harness.app.screen() {
+        AppScreen::Placeholder(placeholder) => assert_eq!(placeholder.count(), 300),
+    }
     // Each resource decoded once, on the first frame.
     assert_eq!(
         *images_called(&harness),

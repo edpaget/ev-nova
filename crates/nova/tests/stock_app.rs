@@ -5,7 +5,7 @@ mod common;
 
 use std::time::Duration;
 
-use nova::app::{App, Placeholder, PlaceholderContent, WindowEvent, WindowPort};
+use nova::app::{App, AppScreen, Placeholder, PlaceholderContent, WindowEvent, WindowPort};
 use nova_data::GameData;
 use nova_render::Batch;
 use nova_render::recording::{GpuCall, RecordingGpu};
@@ -34,7 +34,8 @@ fn the_placeholder_draws_the_stock_data() {
     let (Some(_picture), Some((_sprite, frames))) = (content.picture, content.sprite) else {
         panic!("no picture or sprite in the stock data: {content:?}");
     };
-    let mut app = App::new(&Window, &data, Placeholder::new(content));
+    let screen = AppScreen::Placeholder(Placeholder::new(content));
+    let mut app: App<_> = App::new(&Window, &data, screen);
     let mut gpu = RecordingGpu::new();
 
     app.handle(

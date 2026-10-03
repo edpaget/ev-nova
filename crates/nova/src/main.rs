@@ -7,7 +7,7 @@
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use nova::app::{Placeholder, PlaceholderContent};
+use nova::app::{AppScreen, Placeholder, PlaceholderContent};
 use nova::platform::Runner;
 use nova::{cli, exit};
 use nova_data::GameData;
@@ -30,7 +30,8 @@ fn main() -> ExitCode {
         }
     };
     let content = PlaceholderContent::from_data(&data);
-    let mut runner = Runner::new(data, Placeholder::new(content));
+    let screen = AppScreen::Placeholder(Placeholder::new(content));
+    let mut runner = Runner::new(data, screen);
     let result = EventLoop::new().and_then(|event_loop| event_loop.run_app(&mut runner));
     match result {
         Ok(()) => {
