@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use nova_rsrc::{Fork, ForkReader};
+
 use super::fs::{DirLister, EntryKind, Listing};
 
 /// An in-memory directory tree. Each directory's listing is returned in
@@ -82,5 +84,52 @@ impl DirLister for EndlessTree {
                 kind: EntryKind::File,
             },
         ])
+    }
+}
+
+/// What a fake file holds.
+#[derive(Clone)]
+pub enum FakeFile {
+    /// These data-fork bytes; empty means no fork at all.
+    Bytes(Vec<u8>),
+    /// Reading fails.
+    Unreadable,
+}
+
+/// In-memory forks: each file's data fork. Resource forks are always absent.
+#[derive(Default)]
+pub struct FakeForks {
+    files: HashMap<PathBuf, FakeFile>,
+}
+
+impl FakeForks {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds `path` holding the flattened fork `bytes`.
+    #[must_use]
+    pub fn file(mut self, path: &str, bytes: Vec<u8>) -> Self {
+        self.files
+            .insert(PathBuf::from(path), FakeFile::Bytes(bytes));
+        self
+    }
+
+    /// Adds `path`, which fails to read.
+    #[must_use]
+    pub fn unreadable(mut self, path: &str) -> Self {
+        self.files.insert(PathBuf::from(path), FakeFile::Unreadable);
+        self
+    }
+}
+
+impl ForkReader for FakeForks {
+    fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
+        match (fork, self.files.get(path)) {
+            (Fork::Resource, _) => Ok(None),
+            (Fork::Data, Some(FakeFile::Bytes(bytes))) => Ok(Some(bytes.clone())),
+            (Fork::Data, Some(FakeFile::Unreadable)) => Err(io::Error::other("disk on fire")),
+            (Fork::Data, None) => Err(io::Error::new(io::ErrorKind::NotFound, "no such fake file")),
+        }
     }
 }
