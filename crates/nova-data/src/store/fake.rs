@@ -8,11 +8,14 @@ use std::path::{Path, PathBuf};
 use nova_rsrc::{Fork, ForkReader};
 
 use super::fs::{DirLister, EntryKind, Listing};
+use super::order::finder_cmp;
 
-/// An in-memory directory tree. Each directory's listing is returned in
-/// reverse of the order it was given, so tests that give names in a
-/// scrambled order also see them scrambled differently; a directory that
-/// was never added fails to list. Every listed directory is recorded.
+/// An in-memory directory tree. Each directory's listing is returned
+/// scrambled: put in Finder order and then rotated left by one, so a
+/// listing of two or more entries never comes back already sorted, whatever
+/// order a test gave its names in, and the walk must sort every folder it
+/// lists. A directory that was never added fails to list. Every listed
+/// directory is recorded.
 #[derive(Default)]
 pub struct FakeTree {
     dirs: HashMap<PathBuf, Vec<Listing>>,
@@ -52,7 +55,10 @@ impl DirLister for FakeTree {
             .get(dir)
             .cloned()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such fake directory"))?;
-        listings.reverse();
+        listings.sort_by(|a, b| finder_cmp(&a.name, &b.name));
+        if !listings.is_empty() {
+            listings.rotate_left(1);
+        }
         Ok(listings)
     }
 }
@@ -131,5 +137,36 @@ impl ForkReader for FakeForks {
             (Fork::Data, Some(FakeFile::Unreadable)) => Err(io::Error::other("disk on fire")),
             (Fork::Data, None) => Err(io::Error::new(io::ErrorKind::NotFound, "no such fake file")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::*;
+    use crate::store::fs::EntryKind::File;
+
+    fn names(tree: &FakeTree, dir: &str) -> Vec<OsString> {
+        let listed = tree.list(Path::new(dir)).expect("lists");
+        listed.into_iter().map(|listing| listing.name).collect()
+    }
+
+    #[test]
+    fn listings_come_back_rotated_out_of_finder_order() {
+        let tree = FakeTree::new()
+            .dir("/sorted", &[("a", File), ("B", File), ("c", File)])
+            .dir("/rotated", &[("B", File), ("c", File), ("a", File)])
+            .dir("/one", &[("only", File)])
+            .dir("/none", &[]);
+        assert_eq!(names(&tree, "/sorted"), ["B", "c", "a"]);
+        assert_eq!(names(&tree, "/rotated"), ["B", "c", "a"]);
+        assert_eq!(names(&tree, "/one"), ["only"]);
+        assert!(names(&tree, "/none").is_empty());
+        assert!(tree.list(Path::new("/missing")).is_err());
+        assert_eq!(
+            tree.listed(),
+            ["/sorted", "/rotated", "/one", "/none", "/missing"].map(PathBuf::from)
+        );
     }
 }

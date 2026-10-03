@@ -164,14 +164,21 @@ mod tests {
         let tree = FakeTree::new()
             .dir("/d", &[])
             .dir("/p", &[("c", File), ("A", Dir)])
-            .dir("/p/A", &[("y", File), ("b", Dir)])
-            .dir("/p/A/b", &[("x2", File), ("X1", File)]);
+            .dir("/p/A", &[("y", File), ("b", Dir), ("Z", File), ("a", File)])
+            .dir(
+                "/p/A/b",
+                &[("x2", File), ("X1", File), ("w", File), ("X3", File)],
+            );
         assert_eq!(
             paths(&walk(&tree, Some("/p"))),
             owned(&[
+                ("/p/A/a", Origin::PlugIn),
+                ("/p/A/b/w", Origin::PlugIn),
                 ("/p/A/b/X1", Origin::PlugIn),
                 ("/p/A/b/x2", Origin::PlugIn),
+                ("/p/A/b/X3", Origin::PlugIn),
                 ("/p/A/y", Origin::PlugIn),
+                ("/p/A/Z", Origin::PlugIn),
                 ("/p/c", Origin::PlugIn),
             ])
         );
