@@ -217,10 +217,12 @@ impl SndBuilder {
 #[must_use]
 pub fn ima4_packet(predictor: i16, index: u8, codes: [u8; 64]) -> [u8; 34] {
     let mut packet = [0; 34];
-    let header = (predictor as u16 & 0xFF80) | u16::from(index & 0x7F);
+    // The fields share no bits, so `+` combines them (and, unlike `|`,
+    // cannot be swapped for `^` unnoticed).
+    let header = (predictor as u16 & 0xFF80) + u16::from(index & 0x7F);
     packet[..2].copy_from_slice(&header.to_be_bytes());
     for (byte, pair) in packet[2..].iter_mut().zip(codes.as_chunks::<2>().0) {
-        *byte = (pair[0] & 0x0F) | (pair[1] << 4);
+        *byte = (pair[0] & 0x0F) + (pair[1] << 4);
     }
     packet
 }

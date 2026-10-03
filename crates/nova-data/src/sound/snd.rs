@@ -179,6 +179,14 @@ mod tests {
         assert_eq!(end(15), SoundError::UnexpectedEnd { offset: 4 });
         assert_eq!(end(17), SoundError::UnexpectedEnd { offset: 16 });
         assert_eq!(end(25), SoundError::UnexpectedEnd { offset: 18 });
+        // A list cut inside its second command fails where the list starts.
+        let pair = SndBuilder::new(SndFormat::Two, standard())
+            .commands(vec![(0x002B, 0, 0), (0x8051, 0, 22)])
+            .bytes();
+        assert_eq!(
+            header_offset(&pair[..18]),
+            Err(SoundError::UnexpectedEnd { offset: 6 })
+        );
         let two = SndBuilder::new(SndFormat::Two, standard()).bytes();
         assert_eq!(
             header_offset(&two[..5]),

@@ -120,9 +120,12 @@ fn channel_count(channels: u32) -> Result<u16, SoundError> {
     }
 }
 
-/// An unsigned 8-bit sample (silence at `0x80`) as a 16-bit one.
+/// An unsigned 8-bit sample (silence at `0x80`) as a 16-bit one:
+/// `(byte - 128) << 8`, written as flipping the sign bit into the high
+/// byte. (`(byte + 128) << 8` wraps to the same `i16`, so the subtraction
+/// form would hide a sign mistake from the tests.)
 fn offset_binary(byte: u8) -> i16 {
-    (i16::from(byte) - 128) << 8
+    i16::from_be_bytes([byte ^ 0x80, 0])
 }
 
 #[cfg(test)]
