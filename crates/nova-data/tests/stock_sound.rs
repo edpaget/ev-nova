@@ -14,7 +14,7 @@ use nova_rsrc::{ResType, ResourceFile};
 
 const SND: ResType = ResType::new(*b"snd ");
 
-/// The program edge for this test: the only place `NOVA_DATA` is read.
+/// The program edge for this test: this test binary's only read of `NOVA_DATA`.
 fn nova_data() -> Option<PathBuf> {
     let dir = std::env::var_os("NOVA_DATA").map(PathBuf::from);
     if dir.is_none() {

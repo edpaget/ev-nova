@@ -21,7 +21,7 @@ use nova_data::{
 };
 use nova_rsrc::{ResType, ResourceFile};
 
-/// The program edge for these tests: the only place `NOVA_DATA` is read.
+/// The program edge for these tests: this test binary's only read of `NOVA_DATA`.
 fn nova_data() -> Option<PathBuf> {
     let dir = std::env::var_os("NOVA_DATA").map(PathBuf::from);
     if dir.is_none() {
