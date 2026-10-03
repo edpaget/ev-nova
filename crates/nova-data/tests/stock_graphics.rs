@@ -1,13 +1,16 @@
 //! Picture and sprite decoders against the stock EV Nova data files.
 //!
-//! The game data is copyrighted and never committed, so these tests read its
-//! location from `NOVA_DATA` (the `Nova Files` directory) and skip, passing,
-//! when it is unset. Expected dimensions are read straight from each
-//! resource's bytes here, independently of the decoders. Each test collects
-//! every failure before asserting.
+//! The game data is copyrighted and never committed, so these tests get its
+//! location from `common`, the only place `NOVA_DATA` (the `Nova Files`
+//! directory) is read, and skip, passing, when it is unset. Expected
+//! dimensions are read straight from each resource's bytes here,
+//! independently of the decoders. Each test collects every failure before
+//! asserting.
+
+mod common;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use nova_data::decode_all;
 use nova_data::graphics::{Image, decode_cicn, decode_pict, decode_ppat, decode_rled};
@@ -15,24 +18,11 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_rsrc::{ResType, ResourceFile};
 
-/// The program edge for these tests: this test binary's only read of `NOVA_DATA`.
-fn nova_data() -> Option<PathBuf> {
-    let dir = std::env::var_os("NOVA_DATA").map(PathBuf::from);
-    if dir.is_none() {
-        eprintln!("skipping: NOVA_DATA not set");
-    }
-    dir
-}
+use common::{ndat_files, nova_data};
 
 /// Every stock file, opened, with its name.
 fn stock_files(dir: &Path) -> Vec<(String, ResourceFile)> {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("NOVA_DATA is a readable directory")
-        .map(|entry| entry.expect("directory entry").path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "ndat"))
-        .collect();
-    paths.sort();
-    paths
+    ndat_files(dir)
         .into_iter()
         .map(|path| {
             let name = path

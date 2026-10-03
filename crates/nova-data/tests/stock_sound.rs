@@ -1,37 +1,26 @@
 //! The sound decoder against the stock EV Nova data files.
 //!
-//! The game data is copyrighted and never committed, so this test reads its
-//! location from `NOVA_DATA` (the `Nova Files` directory) and skips,
-//! passing, when it is unset. Expected values are read straight from each
-//! resource's bytes here, independently of the decoder, and every problem
-//! is collected before asserting.
+//! The game data is copyrighted and never committed, so this test gets its
+//! location from `common`, the only place `NOVA_DATA` (the `Nova Files`
+//! directory) is read, and skips, passing, when it is unset. Expected values
+//! are read straight from each resource's bytes here, independently of the
+//! decoder, and every problem is collected before asserting.
+
+mod common;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use nova_data::sound::{Pcm, decode_snd};
 use nova_rsrc::{ResType, ResourceFile};
 
-const SND: ResType = ResType::new(*b"snd ");
+use common::{ndat_files, nova_data};
 
-/// The program edge for this test: this test binary's only read of `NOVA_DATA`.
-fn nova_data() -> Option<PathBuf> {
-    let dir = std::env::var_os("NOVA_DATA").map(PathBuf::from);
-    if dir.is_none() {
-        eprintln!("skipping: NOVA_DATA not set");
-    }
-    dir
-}
+const SND: ResType = ResType::new(*b"snd ");
 
 /// Every stock file, opened, with its name.
 fn stock_files(dir: &Path) -> Vec<(String, ResourceFile)> {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("NOVA_DATA is a readable directory")
-        .map(|entry| entry.expect("directory entry").path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "ndat"))
-        .collect();
-    paths.sort();
-    paths
+    ndat_files(dir)
         .into_iter()
         .map(|path| {
             let name = path

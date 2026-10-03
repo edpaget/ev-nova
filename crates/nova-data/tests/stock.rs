@@ -1,8 +1,10 @@
 //! Tests against the stock EV Nova data files.
 //!
-//! The game data is copyrighted and never committed, so these tests read its
-//! location from `NOVA_DATA` (the `Nova Files` directory) and skip, passing,
-//! when it is unset.
+//! The game data is copyrighted and never committed, so these tests get its
+//! location from `common`, the only place `NOVA_DATA` (the `Nova Files`
+//! directory) is read, and skip, passing, when it is unset.
+
+mod common;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -21,25 +23,7 @@ use nova_data::{
 };
 use nova_rsrc::{ResType, ResourceFile};
 
-/// The program edge for these tests: this test binary's only read of `NOVA_DATA`.
-fn nova_data() -> Option<PathBuf> {
-    let dir = std::env::var_os("NOVA_DATA").map(PathBuf::from);
-    if dir.is_none() {
-        eprintln!("skipping: NOVA_DATA not set");
-    }
-    dir
-}
-
-/// Every `*.ndat` file in the data directory, sorted by name.
-fn ndat_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("NOVA_DATA is a readable directory")
-        .map(|entry| entry.expect("directory entry").path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "ndat"))
-        .collect();
-    files.sort();
-    files
-}
+use common::{ndat_files, nova_data};
 
 /// Every stock file, opened.
 fn stock_files(dir: &Path) -> Vec<(PathBuf, ResourceFile)> {
