@@ -393,6 +393,17 @@ mod tests {
             .unwrap_or_else(|| panic!("no text starting {starting:?}"))
     }
 
+    fn text_origin(list: &DrawList, starting: &str) -> Point {
+        list.iter()
+            .find_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } if text.starts_with(starting) => {
+                    Some(*origin)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no text starting {starting:?}"))
+    }
+
     fn sprites(list: &DrawList) -> Vec<(ImageKey, Point)> {
         list.iter()
             .filter_map(|command| match command {
@@ -420,6 +431,7 @@ mod tests {
         let catalog = three_ships();
         let browser = ShipBrowser::new(&catalog);
         assert_eq!(browser.selected(), Some(ShipId(128)));
+        assert_eq!(browser.current(), Some(&entry(128)));
         assert_eq!(browser.frame(), Some(0));
         assert_eq!(catalog.calls(), [ShipId(128)]);
         drawn(&browser);
@@ -689,12 +701,30 @@ mod tests {
         let half = PLACEHOLDER_SIZE / 2.0;
         let (left, right) = (SHIP_CENTER.x - half, SHIP_CENTER.x + half);
         let (top, bottom) = (SHIP_CENTER.y - half, SHIP_CENTER.y + half);
-        assert!(ends.contains(&(Point::new(left, top), Point::new(right, bottom))));
-        assert!(ends.contains(&(Point::new(right, top), Point::new(left, bottom))));
+        let [top_left, top_right, bottom_right, bottom_left] = [
+            Point::new(left, top),
+            Point::new(right, top),
+            Point::new(right, bottom),
+            Point::new(left, bottom),
+        ];
+        assert_eq!(
+            ends,
+            [
+                (top_left, top_right),
+                (top_right, bottom_right),
+                (bottom_right, bottom_left),
+                (bottom_left, top_left),
+                (top_left, bottom_right),
+                (top_right, bottom_left),
+            ]
+        );
         assert_eq!(
             text_color(&list, "Sprite unavailable: no shän 128 for shïp 128"),
             ERROR
         );
+        let message = text_origin(&list, "Sprite unavailable:");
+        assert!(message.y > bottom, "the message is under the box");
+        assert!(message.y < bottom + 2.0 * LINE_SPACING, "and close to it");
     }
 
     #[test]
@@ -724,6 +754,35 @@ mod tests {
             text_color(&list, "Lights unavailable: lights rlëD 1200: bad"),
             ERROR
         );
+    }
+
+    #[test]
+    fn the_stat_and_layer_lines_are_evenly_spaced_under_the_name() {
+        let ship = ShipEntry {
+            glow: Some(Err("bad glow".to_owned())),
+            lights: Some(Err("bad lights".to_owned())),
+            description: Ok(Some("Text.".to_owned())),
+            ..entry(128)
+        };
+        let catalog = FakeCatalog::with(vec![ship]);
+        let list = drawn(&ShipBrowser::new(&catalog));
+        let tops: Vec<f32> = [
+            "Cost:",
+            "Speed:",
+            "Armour:",
+            "Shields:",
+            "Glow unavailable:",
+            "Lights unavailable:",
+        ]
+        .into_iter()
+        .map(|line| text_origin(&list, line).y)
+        .collect();
+        let expected: Vec<f32> = (0..6u8)
+            .map(|at| STATS_TOP + f32::from(at) * LINE_SPACING)
+            .collect();
+        assert_eq!(tops, expected);
+        assert!(text_origin(&list, "Ship 128").y < STATS_TOP);
+        assert!(text_origin(&list, "Text.").y >= tops[5] + LINE_SPACING);
     }
 
     #[test]
