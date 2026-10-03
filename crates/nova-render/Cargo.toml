@@ -1,6 +1,6 @@
 [package]
-name = "nova"
-description = "EV Nova engine and player"
+name = "nova-render"
+description = "Sprite, picture, text and primitive renderer for EV Nova draw lists"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,12 +8,13 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+bytemuck.workspace = true
+glyphon.workspace = true
 nova-data.workspace = true
-nova-render.workspace = true
 nova-rsrc.workspace = true
 nova-view.workspace = true
-pollster.workspace = true
-winit.workspace = true
+thiserror.workspace = true
+wgpu.workspace = true
 
 [lints]
 workspace = true

@@ -12,6 +12,8 @@ publish = false
 [workspace.dependencies]
 nova-rsrc = { path = "crates/nova-rsrc" }
 nova-data = { path = "crates/nova-data" }
+nova-view = { path = "crates/nova-view" }
+nova-render = { path = "crates/nova-render" }
 encoding_rs = "0.8"
 macbinary = "0.2.1"
 png = "0.18"
@@ -20,6 +22,13 @@ binrw = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+# Rendering and windowing. glyphon 0.12 is built on wgpu 30, so the two move
+# together.
+wgpu = "30.0.1"
+glyphon = "0.12.0"
+winit = "0.30.13"
+pollster = "1.0.1"
+bytemuck = { version = "1.25", features = ["derive"] }
 
 # The PNG encoder and its compression and checksum crates run tens of
 # times slower unoptimised, and nova-dump's stock test (a debug build)
