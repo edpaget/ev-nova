@@ -15,7 +15,7 @@ use wgpu::util::DeviceExt;
 use super::data::{SolidVertex, SpriteInstance, globals, solid_vertices};
 use nova_view::Color;
 
-use crate::fonts::{Face, FontFaces, face_for};
+use crate::fonts::{Face, FontFaces, Loaded, face_for};
 use crate::gpu::{Batch, Frame, PageId, TextRun};
 use crate::viewport::PixelRect;
 
@@ -325,9 +325,15 @@ impl WgpuRenderer {
         }
         let families = &self.families;
         for (renderer, runs) in self.text_renderers.iter_mut().zip(batches) {
-            let buffers: Vec<Buffer> = runs
+            // A run with no face to draw in is skipped (shaping it would
+            // find no font at all).
+            let drawn: Vec<(&TextRun, Family<'_>)> = runs
                 .iter()
-                .map(|run| {
+                .filter_map(|run| Some((run, families.family(run)?)))
+                .collect();
+            let buffers: Vec<Buffer> = drawn
+                .iter()
+                .map(|&(run, family)| {
                     let mut buffer = Buffer::new(
                         &mut self.font_system,
                         Metrics::new(run.size_px, run.line_height_px),
@@ -335,7 +341,7 @@ impl WgpuRenderer {
                     buffer.set_size(run.wrap_px, None);
                     buffer.set_text(
                         &run.text,
-                        &Attrs::new().family(families.family(run)),
+                        &Attrs::new().family(family),
                         Shaping::Advanced,
                         None,
                     );
@@ -343,25 +349,28 @@ impl WgpuRenderer {
                     buffer
                 })
                 .collect();
-            let areas = runs.iter().zip(&buffers).map(|(run, buffer)| TextArea {
-                buffer,
-                left: run.origin_px.0,
-                top: run.origin_px.1,
-                scale: 1.0,
-                bounds: TextBounds {
-                    left: run.clip.x as i32,
-                    top: run.clip.y as i32,
-                    right: (run.clip.x + run.clip.w) as i32,
-                    bottom: (run.clip.y + run.clip.h) as i32,
-                },
-                default_color: glyphon::Color::rgba(
-                    run.color.r,
-                    run.color.g,
-                    run.color.b,
-                    run.color.a,
-                ),
-                custom_glyphs: &[],
-            });
+            let areas = drawn
+                .iter()
+                .zip(&buffers)
+                .map(|(&(run, _), buffer)| TextArea {
+                    buffer,
+                    left: run.origin_px.0,
+                    top: run.origin_px.1,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: run.clip.x as i32,
+                        top: run.clip.y as i32,
+                        right: (run.clip.x + run.clip.w) as i32,
+                        bottom: (run.clip.y + run.clip.h) as i32,
+                    },
+                    default_color: glyphon::Color::rgba(
+                        run.color.r,
+                        run.color.g,
+                        run.color.b,
+                        run.color.a,
+                    ),
+                    custom_glyphs: &[],
+                });
             // A failed prepare draws no text this frame; the frame goes on.
             let _ = renderer.prepare(
                 &self.device,
@@ -395,13 +404,18 @@ struct Families {
 }
 
 impl Families {
-    /// The family that draws `run`, chosen by [`face_for`].
-    fn family(&self, run: &TextRun) -> Family<'_> {
-        let name = match face_for(run.font, self.charcoal.is_some()) {
+    /// The family that draws `run`, chosen by [`face_for`] among the faces
+    /// that loaded; `None` when none did.
+    fn family(&self, run: &TextRun) -> Option<Family<'_>> {
+        let loaded = Loaded {
+            charcoal: self.charcoal.is_some(),
+            fallback: self.fallback.is_some(),
+        };
+        let name = match face_for(run.font, loaded)? {
             Face::Charcoal => &self.charcoal,
             Face::Fallback => &self.fallback,
         };
-        name.as_deref().map_or(Family::SansSerif, Family::Name)
+        name.as_deref().map(Family::Name)
     }
 }
 

@@ -4,6 +4,8 @@
 //! it is handed in [`FontFaces`], so text looks the same on every machine.
 //! [`FALLBACK_FONT`], compiled in, draws Geneva, and Charcoal when the
 //! player's own Charcoal (`nova_data::fonts`) is missing or does not load.
+//! A face that does not load is never drawn in: [`face_for`] picks among
+//! the faces that did.
 
 use std::sync::Arc;
 
@@ -68,13 +70,26 @@ pub enum Face {
     Fallback,
 }
 
-/// The face that draws `font`: Charcoal draws in its own face when that
-/// face loaded, and everything else in the fallback.
+/// Which of the [`FontFaces`] loaded a face.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Loaded {
+    /// Charcoal's font file did.
+    pub charcoal: bool,
+    /// The fallback font file did.
+    pub fallback: bool,
+}
+
+/// The face that draws `font`, given which faces `loaded`: Charcoal draws
+/// in its own face when that face loaded, and everything else in the
+/// fallback. When the fallback did not load, everything draws in Charcoal;
+/// when neither did, nothing draws (`None`).
 #[must_use]
-pub fn face_for(font: Font, charcoal_loaded: bool) -> Face {
+pub fn face_for(font: Font, loaded: Loaded) -> Option<Face> {
     match font {
-        Font::Charcoal if charcoal_loaded => Face::Charcoal,
-        Font::Charcoal | Font::Geneva => Face::Fallback,
+        Font::Charcoal if loaded.charcoal => Some(Face::Charcoal),
+        _ if loaded.fallback => Some(Face::Fallback),
+        _ if loaded.charcoal => Some(Face::Charcoal),
+        _ => None,
     }
 }
 
@@ -86,10 +101,44 @@ mod tests {
 
     #[test]
     fn charcoal_draws_in_its_own_face_only_when_it_loaded() {
-        assert_eq!(face_for(Font::Charcoal, true), Face::Charcoal);
-        assert_eq!(face_for(Font::Charcoal, false), Face::Fallback);
-        assert_eq!(face_for(Font::Geneva, true), Face::Fallback);
-        assert_eq!(face_for(Font::Geneva, false), Face::Fallback);
+        let both = Loaded {
+            charcoal: true,
+            fallback: true,
+        };
+        let fallback_only = Loaded {
+            charcoal: false,
+            fallback: true,
+        };
+        assert_eq!(face_for(Font::Charcoal, both), Some(Face::Charcoal));
+        assert_eq!(
+            face_for(Font::Charcoal, fallback_only),
+            Some(Face::Fallback)
+        );
+        assert_eq!(face_for(Font::Geneva, both), Some(Face::Fallback));
+        assert_eq!(face_for(Font::Geneva, fallback_only), Some(Face::Fallback));
+    }
+
+    #[test]
+    fn with_no_fallback_face_everything_draws_in_charcoal() {
+        let charcoal_only = Loaded {
+            charcoal: true,
+            fallback: false,
+        };
+        assert_eq!(
+            face_for(Font::Charcoal, charcoal_only),
+            Some(Face::Charcoal)
+        );
+        assert_eq!(face_for(Font::Geneva, charcoal_only), Some(Face::Charcoal));
+    }
+
+    #[test]
+    fn with_no_face_at_all_nothing_draws() {
+        let none = Loaded {
+            charcoal: false,
+            fallback: false,
+        };
+        assert_eq!(face_for(Font::Charcoal, none), None);
+        assert_eq!(face_for(Font::Geneva, none), None);
     }
 
     #[test]

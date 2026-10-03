@@ -452,6 +452,46 @@ fn charcoal_falls_back_when_it_did_not_load() {
 }
 
 #[test]
+fn a_fallback_that_loads_no_face_draws_no_text() {
+    let faces = FontFaces::new(&b"not a font"[..]);
+    let Some(gpu) = gpu_with(SIZE, SIZE, &faces) else {
+        return;
+    };
+    assert_eq!(gpu.font_faces(), 0);
+    assert!(!gpu.charcoal_loaded());
+    for font in [Font::Geneva, Font::Charcoal] {
+        let Some(picture) = draw_sample(&faces, font, 12.0, 2) else {
+            return;
+        };
+        assert_eq!(picture.lit(), vec![], "{font:?}");
+    }
+}
+
+#[test]
+fn with_no_fallback_face_both_fonts_draw_in_charcoal() {
+    let faces = FontFaces::new(&b"not a font"[..]).with_charcoal(block_font("Charcoal"));
+    let Some(gpu) = gpu_with(SIZE, SIZE, &faces) else {
+        return;
+    };
+    assert_eq!(gpu.font_faces(), 1);
+    assert!(gpu.charcoal_loaded());
+    let (Some(charcoal), Some(geneva)) = (
+        draw_sample(&faces, Font::Charcoal, 12.0, 2),
+        draw_sample(&faces, Font::Geneva, 12.0, 2),
+    ) else {
+        return;
+    };
+    // Charcoal draws in its own (block) face; Geneva, with no fallback
+    // face, is matched to the only face there is.
+    assert!(
+        charcoal.longest_solid_run() >= 16,
+        "{}",
+        charcoal.longest_solid_run()
+    );
+    assert_eq!(geneva, charcoal);
+}
+
+#[test]
 fn both_fonts_draw_at_the_original_sizes_at_1x_and_2x() {
     let faces = FontFaces::bundled().with_charcoal(block_font("Charcoal"));
     // Nova's interface sizes (`cölr`, `ïntf`): Geneva 9, 10 and 12;

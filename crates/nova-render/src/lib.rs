@@ -54,7 +54,7 @@ pub mod wgpu;
 
 pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPacker, Uv};
 pub use batch::{RenderReport, Renderer};
-pub use fonts::{FALLBACK_FONT, Face, FontFaces, face_for};
+pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, face_for};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
 pub use images::{ImageError, ImageSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
