@@ -175,8 +175,9 @@ fn every_redraw_submits_one_frame_and_asks_for_the_next() {
     let first = harness.frame();
     let second = harness.frame();
 
-    // The ship's sprite, then its name, four stats and the footer.
-    let expected = [("sprites", 1), ("text", 6)];
+    // The ship's sprite, then its name, four stats and the footer, and the
+    // router's hint.
+    let expected = [("sprites", 1), ("text", 7)];
     assert_eq!(shape(&first), expected);
     assert_eq!(shape(&second), expected);
     assert_eq!(harness.window.redraws, 2);
@@ -234,4 +235,41 @@ fn escape_and_closing_exit() {
         Control::Exit
     );
     assert_eq!(harness.send(WindowEvent::CloseRequested), Control::Exit);
+}
+
+fn texts(frame: &Frame) -> Vec<String> {
+    frame
+        .batches
+        .iter()
+        .flat_map(|batch| match batch {
+            Batch::Text(runs) => runs.iter().map(|run| run.text.clone()).collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn tab_switches_between_the_ship_browser_and_the_galaxy_map() {
+    let mut harness = Harness::new();
+    let tab = |pressed| WindowEvent::Key {
+        key: Key::Tab,
+        pressed,
+    };
+    let ships = texts(&harness.frame());
+    assert!(ships.contains(&"Shuttle".to_owned()), "{ships:?}");
+    assert!(ships.contains(&"Tab: ships / galaxy map".to_owned()));
+
+    assert_eq!(harness.send(tab(true)), Control::Continue);
+    assert_eq!(harness.send(tab(false)), Control::Continue);
+    let map = texts(&harness.frame());
+    assert!(
+        map.contains(&"Click a system to see its stellars".to_owned()),
+        "{map:?}"
+    );
+    assert!(!map.contains(&"Shuttle".to_owned()));
+    assert!(map.contains(&"Tab: ships / galaxy map".to_owned()));
+
+    harness.send(tab(true));
+    let back = texts(&harness.frame());
+    assert!(back.contains(&"Shuttle".to_owned()), "{back:?}");
 }

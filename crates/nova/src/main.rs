@@ -1,5 +1,5 @@
 //! `nova`: opens the game data and shows it in a window, starting on the
-//! ship browser.
+//! ship browser; Tab switches to the galaxy map and back.
 //!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
@@ -31,7 +31,7 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    // The ship browser and the renderer read the same game data.
+    // The screens and the renderer read the same game data.
     let data = Rc::new(data);
     let screen = start_screen(Rc::clone(&data));
     let mut runner = Runner::new(data, screen);

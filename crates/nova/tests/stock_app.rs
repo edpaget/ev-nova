@@ -1,17 +1,17 @@
-//! App frames of the ship browser over the stock data, through the
-//! recording Gpu. Skips, passing, when `NOVA_DATA` is unset.
+//! App frames of the ship browser and the galaxy map over the stock data,
+//! through the recording Gpu. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova::app::{App, AppScreen, Control, WindowEvent, WindowPort, start_screen};
-use nova_data::{GameData, ShipId};
+use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova_data::{GameData, ShipId, SystemId};
 use nova_render::Batch;
 use nova_render::recording::RecordingGpu;
-use nova_view::Key;
 use nova_view::ships::ShipCatalog;
+use nova_view::{Key, MouseButton};
 
 struct Window;
 
@@ -30,8 +30,8 @@ impl WindowPort for Window {
 /// The ship browser's selected ship: its ID and how many sprites it draws
 /// (the base, plus each layer the `shän` defines).
 fn selected(app: &App<Rc<GameData>>) -> (ShipId, usize) {
-    let AppScreen::ShipBrowser(browser) = app.screen();
-    let ship = browser.current().expect("a ship");
+    assert_eq!(app.screen().showing(), Showing::ShipBrowser);
+    let ship = app.screen().ship_browser().current().expect("a ship");
     let layers = [&ship.glow, &ship.lights]
         .into_iter()
         .filter(|layer| matches!(layer, Some(Ok(_))))
@@ -114,4 +114,75 @@ fn the_ship_browser_draws_stock_ships() {
     press(&mut app, Key::Left);
     assert_eq!(selected(&app).0, ShipId(895));
     assert_eq!(redraw(&mut app), selected(&app).1);
+}
+
+/// Tab opens the galaxy map, whose first frame draws every nebula picture
+/// (each decoded and packed without failing) before every hyperlink and
+/// system, and a click on Sol selects it.
+#[test]
+fn the_galaxy_map_draws_the_stock_galaxy() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let mut app: App<_> = App::new(&Window, Rc::clone(&data), start_screen(data));
+    let mut gpu = RecordingGpu::new();
+    let send = |app: &mut App<Rc<GameData>>, gpu: &mut RecordingGpu, event| {
+        assert_eq!(app.handle(event, &mut Window, gpu), Control::Continue);
+    };
+    send(
+        &mut app,
+        &mut gpu,
+        WindowEvent::Key {
+            key: Key::Tab,
+            pressed: true,
+        },
+    );
+    assert_eq!(app.screen().showing(), Showing::GalaxyMap);
+    let redraw = WindowEvent::Redraw {
+        elapsed: Duration::from_millis(50),
+    };
+    send(&mut app, &mut gpu, redraw);
+    assert_eq!(app.take_failures(), []);
+    let frame = (*gpu.submits().last().expect("a frame")).clone();
+    let Some(Batch::Sprites { quads: nebulae, .. }) = frame.batches.first() else {
+        panic!("the nebulae first: {:?}", frame.batches.first());
+    };
+    assert_eq!(nebulae.len(), 4);
+    let Some(Batch::Solid(shapes)) = frame.batches.get(1) else {
+        panic!("then the map's shapes: {:?}", frame.batches.get(1));
+    };
+    assert!(shapes.len() >= 930 + 545, "{} solid quads", shapes.len());
+
+    let map = app.screen().galaxy_map();
+    let sol = map.model().system(SystemId(130)).expect("Sol");
+    let at = map.view().world_to_screen(sol.position());
+    send(
+        &mut app,
+        &mut gpu,
+        WindowEvent::PointerMoved {
+            px: (f64::from(at.x), f64::from(at.y)),
+        },
+    );
+    for pressed in [true, false] {
+        let event = WindowEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+        };
+        send(&mut app, &mut gpu, event);
+    }
+    send(
+        &mut app,
+        &mut gpu,
+        WindowEvent::Redraw {
+            elapsed: Duration::from_millis(100),
+        },
+    );
+    let frame = (*gpu.submits().last().expect("a frame")).clone();
+    let shown = frame.batches.iter().any(|batch| match batch {
+        Batch::Text(runs) => runs.iter().any(|run| run.text == "Sol (sÿst 130)"),
+        _ => false,
+    });
+    assert!(shown, "Sol is selected");
+    assert_eq!(app.take_failures(), []);
 }

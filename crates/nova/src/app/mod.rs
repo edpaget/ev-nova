@@ -15,7 +15,7 @@ use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenActio
 
 pub mod screen;
 
-pub use screen::{AppScreen, start_screen};
+pub use screen::{AppScreen, Showing, start_screen};
 
 /// What the app needs from the window.
 pub trait WindowPort {

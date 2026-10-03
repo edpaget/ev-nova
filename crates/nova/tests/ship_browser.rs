@@ -10,7 +10,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova::app::{App, AppScreen, Control, WindowEvent, WindowPort, start_screen};
+use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::RLED;
 use nova_data::graphics::fixture::RledBuilder;
 use nova_data::records::desc::Desc;
@@ -196,7 +196,11 @@ fn shows(frame: &Frame, expected: &str) -> bool {
 #[test]
 fn the_app_opens_on_the_ship_browser() {
     let harness = Harness::new();
-    assert!(matches!(harness.app.screen(), AppScreen::ShipBrowser(_)));
+    assert_eq!(harness.app.screen().showing(), Showing::ShipBrowser);
+    assert_eq!(
+        harness.app.screen().ship_browser().selected(),
+        Some(nova_view::ships::ShipId(128))
+    );
 }
 
 #[test]
