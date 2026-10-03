@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    # macOS covers the resource-fork (`..namedfork/rsrc`) adapter tests,
+    # which are compiled only on that target.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          # Only what `mise run ci` needs; cargo-binstall first so the
+          # cargo-backed tools install as prebuilt binaries.
+          install_args: cargo-binstall
+      - run: mise install rust cargo:cargo-nextest
+      - uses: Swatinem/rust-cache@v2
+      - run: mise run ci
