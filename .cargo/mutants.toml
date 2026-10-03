@@ -2,6 +2,17 @@
 test_tool = "nextest"
 # Crates with no tests yet must not fail the unmutated baseline run.
 additional_cargo_test_args = ["--no-tests=pass"]
+# Build and test every mutant with all of its package's features on, so
+# nova's mutants compile and test the `dev-tools` glue (egui). Each mutant
+# is built and tested with `--package <its package>` alone, and
+# `--all-features` is valid for every package, whereas `--features
+# nova/dev-tools` is rejected for any package but nova, which cargo-mutants
+# then marks unviable and never tests (checked on a scratch two-member
+# workspace). The other features (`fixture`, `recording`) only expose test
+# helpers that the packages' own tests turn on anyway. With `dev-tools` on,
+# `tests/default_build_links_no_egui.rs` is compiled out and its positive
+# control runs instead.
+additional_cargo_args = ["--all-features"]
 
 exclude_re = [
     # Compiled only on non-macOS targets, so on the macOS development host a

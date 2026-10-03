@@ -29,6 +29,13 @@ glyphon = "0.12.0"
 winit = "0.30.13"
 pollster = "1.0.1"
 bytemuck = { version = "1.25", features = ["derive"] }
+# The developer tools overlay (nova's `dev-tools` feature only). egui-wgpu
+# 0.36 is built on wgpu 30 and egui-winit 0.36 on winit 0.30, so the three
+# move with wgpu and winit, as glyphon does. Their default features (WebGL,
+# the clipboard, web links, Wayland and X11 forwarding) are not needed.
+egui = "0.36.2"
+egui-wgpu = { version = "0.36.2", default-features = false }
+egui-winit = { version = "0.36.2", default-features = false }
 
 # The PNG encoder and its compression and checksum crates run tens of
 # times slower unoptimised, and nova-dump's stock test (a debug build)

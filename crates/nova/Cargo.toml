@@ -14,6 +14,11 @@ nova-view.workspace = true
 pollster.workspace = true
 thiserror.workspace = true
 winit.workspace = true
+# The developer tools overlay, only with the `dev-tools` feature.
+egui = { workspace = true, optional = true }
+egui-wgpu = { workspace = true, optional = true }
+egui-winit = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Synthetic sprite sheets and pictures for the screen router and app tests.
@@ -24,6 +29,11 @@ nova-render = { workspace = true, features = ["recording"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
 # The runner tests build the wgpu errors a GPU set-up can fail with.
 wgpu.workspace = true
+
+[features]
+# The developer tools overlay (egui), toggled with the backquote key. Off by
+# default and in release builds; `mise run dev` turns it on.
+dev-tools = ["dep:egui", "dep:egui-wgpu", "dep:egui-winit", "dep:wgpu"]
 
 [lints]
 workspace = true

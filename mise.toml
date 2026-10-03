@@ -25,10 +25,26 @@ run = [
   "cargo test --doc --workspace --locked",
 ]
 
+# The dev-tools tasks build nova with the `dev-tools` feature (egui) into
+# their own target directories, so the default build's `target/debug/nova`,
+# which `tests/default_build_links_no_egui.rs` reads, is never relinked
+# with egui by a parallel task or a running viewer.
+[tasks.lint-dev-tools]
+description = "Clippy over nova with the dev-tools feature, warnings are errors"
+run = "cargo clippy -p nova --all-targets --features dev-tools --target-dir target/dev-tools --locked -- -D warnings"
+
+[tasks.test-dev-tools]
+description = "nova's tests with the dev-tools feature (nextest)"
+run = "cargo nextest run -p nova --features dev-tools --target-dir target/dev-tools --locked --no-tests=pass"
+
+[tasks.dev]
+description = "Run the viewer with the developer tools; backquote (`) shows and hides them. Pass the Nova Files folder after --, or set NOVA_DATA"
+run = "cargo run -p nova --features dev-tools --target-dir target/dev-run --locked --"
+
 [tasks.mutants]
 description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g. -- --file <path>"
 run = "cargo mutants --workspace"
 
 [tasks.ci]
 description = "Everything CI would run; the pre-commit hook runs this"
-depends = ["fmt", "lint", "test"]
+depends = ["fmt", "lint", "test", "lint-dev-tools", "test-dev-tools"]
