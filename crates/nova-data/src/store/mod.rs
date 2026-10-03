@@ -125,8 +125,8 @@
 //! result, record or [`DecodeError`], is cached: later calls return
 //! references to the same decode, and a decode error is returned again each
 //! time without affecting anything else. Sprite sheets
-//! ([`GameData::ship_sprite`], [`GameData::ship_layers`]) are decoded on
-//! every call and not cached.
+//! ([`GameData::ship_sprite`], [`GameData::ship_layers`],
+//! [`GameData::stellar_sprite`]) are decoded on every call and not cached.
 //!
 //! The store is read-only once built (no `&mut self` methods) and
 //! `Send + Sync`.
@@ -145,6 +145,17 @@
 //! resolves or fails ([`LayerError`]) on its own. A layer frame is usually
 //! larger than a base frame (the `shän`'s `GlowXSize` and `LightXSize`), so
 //! it lines up with the base by sharing its centre.
+//!
+//! # Stellar sprites
+//!
+//! [`GameData::stellar_sprite`] follows a `spöb`'s graphic type to `spïn`
+//! 1000 + type ([`stellar_spin_id`]; the Bible gives `spïn` 1000 to 1255 to
+//! stellar objects), then to the `rlëD` named by the `spïn`'s sprites,
+//! decoded with the `spïn`'s `xTiles` as the sheet's columns. Each missing
+//! or bad link is its own [`StellarSpriteError`]; a `PICT` sprite grid is
+//! not supported and reports [`StellarSpriteError::NoSheet`]. The decoded
+//! frames are authoritative: the `spïn`'s frame size is not checked
+//! against them.
 //!
 //! # Ship descriptions
 //!
@@ -170,12 +181,14 @@ pub mod fs;
 pub mod order;
 mod ship_desc;
 mod sprite;
+mod stellar_sprite;
 #[cfg(test)]
 mod tests;
 mod walk;
 
 pub use self::ship_desc::ship_desc_id;
 pub use self::sprite::{LayerError, LayerSprite, ShipLayer, ShipLayers, ShipSprite, SpriteError};
+pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};
 
 /// Why the store could not be opened at all.
 #[derive(Debug, thiserror::Error)]
