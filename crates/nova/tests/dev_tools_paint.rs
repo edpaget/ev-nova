@@ -137,3 +137,63 @@ fn without_the_layer_the_frame_stays_black() {
         "every pixel black"
     );
 }
+
+#[test]
+fn a_texture_uploaded_by_one_painted_frame_is_drawn_by_the_next() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let ctx = Context::default();
+    let mut layer = EguiLayer::default();
+    let red = ColorImage::from_rgba_unmultiplied([2, 2], &[255, 0, 0, 255].repeat(4));
+    let mut texture = None;
+    prepare(&ctx, &mut layer, |ui| {
+        texture = Some(
+            ui.ctx()
+                .load_texture("red", red.clone(), TextureOptions::NEAREST),
+        );
+    });
+    let texture = texture.expect("loaded");
+    submit(&mut gpu, &mut layer);
+    // The texture is on the GPU now; this frame only draws it.
+    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    prepare(&ctx, &mut layer, |ui| {
+        ui.painter()
+            .image(texture.id(), square(), uv, Color32::WHITE);
+    });
+    let pixels = submit(&mut gpu, &mut layer);
+    assert_eq!(pixel(&pixels, 16, 16), [255, 0, 0, 255]);
+}
+
+#[test]
+fn colours_are_painted_without_dithering_noise() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let ctx = Context::default();
+    let mut layer = EguiLayer::default();
+    // Black to white, linearly filtered: a smooth ramp of in-between
+    // values, which dithering would scatter differently on every row.
+    let ramp = ColorImage::from_rgba_unmultiplied([2, 1], &[0, 0, 0, 255, 255, 255, 255, 255]);
+    let mut texture = None;
+    prepare(&ctx, &mut layer, |ui| {
+        let ramp = ui
+            .ctx()
+            .load_texture("ramp", ramp.clone(), TextureOptions::LINEAR);
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(64.0, 16.0));
+        ui.painter().image(ramp.id(), rect, uv, Color32::WHITE);
+        texture = Some(ramp);
+    });
+    let pixels = submit(&mut gpu, &mut layer);
+    let row = |y: u32| -> Vec<[u8; 4]> { (0..SIZE).map(|x| pixel(&pixels, x, y)).collect() };
+    let first = row(0);
+    assert!(
+        first.windows(2).filter(|pair| pair[0] != pair[1]).count() > 10,
+        "a ramp: {first:?}"
+    );
+    for y in 1..16 {
+        assert_eq!(row(y), first, "row {y}");
+    }
+    drop(texture);
+}

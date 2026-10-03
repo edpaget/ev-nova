@@ -219,9 +219,15 @@ impl Selection {
         self.frame
     }
 
+    /// The last frame: one before the count, and 0 without frames.
+    #[must_use]
+    pub fn last_frame(&self) -> usize {
+        self.frame_count().saturating_sub(1)
+    }
+
     /// Shows frame `frame`, clamped to the last.
     pub fn set_frame(&mut self, frame: usize) {
-        self.frame = frame.min(self.frame_count().saturating_sub(1));
+        self.frame = frame.min(self.last_frame());
     }
 
     /// The frame showing, if the preview has frames.
@@ -639,6 +645,15 @@ mod tests {
         selection.set_frame(99);
         assert_eq!(selection.frame(), 2);
         assert_eq!(selection.image(), Some(&frames[2]));
+    }
+
+    #[test]
+    fn the_last_frame_is_one_before_the_count() {
+        let catalog = catalog();
+        let mut browser = ResourceBrowser::new(&catalog);
+        assert_eq!(selected(&mut browser, RLED, 128).last_frame(), 2);
+        assert_eq!(selected(&mut browser, PICT, 128).last_frame(), 0);
+        assert_eq!(selected(&mut browser, SND, 200).last_frame(), 0);
     }
 
     #[test]

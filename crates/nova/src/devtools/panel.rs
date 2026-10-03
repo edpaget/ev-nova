@@ -139,11 +139,10 @@ impl<C: ResourceCatalog> DevPanel<C> {
         if let Some(caption) = selection.preview_caption() {
             ui.label(caption);
         }
-        let frames = selection.frame_count();
-        if frames > 1 {
+        if selection.frame_count() > 1 {
             let mut frame = selection.frame();
             ui.add(
-                Slider::new(&mut frame, 0..=frames - 1)
+                Slider::new(&mut frame, 0..=selection.last_frame())
                     .show_value(false)
                     .text(SLIDER),
             );
@@ -166,7 +165,7 @@ mod tests {
     use std::time::Duration;
 
     use egui::epaint::Shape;
-    use egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect, vec2};
+    use egui::{Color32, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, vec2};
     use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
     use nova_data::graphics::{PICT, RLED};
     use nova_view::devtools::{
@@ -240,9 +239,11 @@ mod tests {
         }
     }
 
-    /// The text drawn in one frame, with where it was drawn.
+    /// The text drawn in one frame, with where it was drawn, and the filled
+    /// rectangles.
     struct Drawn {
         texts: Vec<(String, Rect)>,
+        fills: Vec<(Rect, Color32)>,
     }
 
     impl Drawn {
@@ -267,17 +268,18 @@ mod tests {
         }
     }
 
-    fn collect(shape: &Shape, texts: &mut Vec<(String, Rect)>) {
+    fn collect(shape: &Shape, drawn: &mut Drawn) {
         match shape {
             Shape::Vec(shapes) => {
                 for shape in shapes {
-                    collect(shape, texts);
+                    collect(shape, drawn);
                 }
             }
-            Shape::Text(text) => texts.push((
+            Shape::Text(text) => drawn.texts.push((
                 text.galley.text().to_owned(),
                 text.galley.rect.translate(text.pos.to_vec2()),
             )),
+            Shape::Rect(rect) => drawn.fills.push((rect.rect, rect.fill)),
             _ => {}
         }
     }
@@ -311,12 +313,15 @@ mod tests {
 
         fn frame(&mut self, events: Vec<Event>) -> Drawn {
             let output = self.panel.run(input(events), &self.overlay);
-            let mut texts = Vec::new();
+            let mut drawn = Drawn {
+                texts: Vec::new(),
+                fills: Vec::new(),
+            };
             for clipped in &output.shapes {
-                collect(&clipped.shape, &mut texts);
+                collect(&clipped.shape, &mut drawn);
             }
             output.drop_without_applying_deltas();
-            Drawn { texts }
+            drawn
         }
 
         fn idle(&mut self) -> Drawn {
@@ -381,6 +386,27 @@ mod tests {
         }
         assert!(drawn.has("3 of 3 resources"), "{:?}", drawn.all());
         assert!(drawn.has(HINT), "{:?}", drawn.all());
+    }
+
+    #[test]
+    fn only_the_selected_result_is_highlighted() {
+        let mut harness = Harness::new();
+        harness.click_text("rlëD 200 Shuttle");
+        harness.frame(vec![Event::PointerGone]);
+        let drawn = harness.idle();
+        let labels = ["PICT 128 Planet", "rlëD 200 Shuttle", "spïn 300 Spinner"];
+        let highlighted: Vec<&str> = labels
+            .into_iter()
+            .filter(|label| {
+                let at = drawn.rect(label).center();
+                // A row's own background: one row high, and not
+                // transparent. Nothing is hovered.
+                drawn.fills.iter().any(|(rect, fill)| {
+                    rect.contains(at) && rect.height() < 30.0 && *fill != Color32::TRANSPARENT
+                })
+            })
+            .collect();
+        assert_eq!(highlighted, ["rlëD 200 Shuttle"]);
     }
 
     #[test]
