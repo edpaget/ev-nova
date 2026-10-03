@@ -13,14 +13,18 @@
 //!   click instead: it selects the system under the pointer (clicking again
 //!   cycles through systems that share a position) or, in empty space,
 //!   clears the selection.
-//! - Tab is the app's router's and Escape the app's; Enter is left for
-//!   entering a system.
+//! - Return (a press, not its repeats), or a click on the "Enter system"
+//!   button the panel shows while a system is selected, asks to enter the
+//!   selected system. The map only records the request; its owner takes
+//!   it with [`GalaxyMap::take_entry`]. A click on the button is a press
+//!   and a release both on it.
+//! - Tab is the app's router's and Escape the navigator's.
 
 use std::time::Duration;
 
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
 use super::model::{GalaxyModel, placement};
-use super::view::{MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP};
+use super::view::{Bounds, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP};
 use crate::{Color, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction};
 
 /// How far the pointer may travel between pressing and releasing the left
@@ -67,7 +71,19 @@ const ZOOM_TOP: f32 = 636.0;
 const STACK_TOP: f32 = 656.0;
 const PROBLEMS_TOP: f32 = 676.0;
 /// The help line.
-pub const HELP: &str = "Arrows or drag: pan   +/-: zoom   Click: select";
+pub const HELP: &str = "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter";
+/// The "Enter system" button, in the panel's right column under the
+/// problems line; shown only while a system is selected.
+pub const ENTER_BUTTON: Bounds = Bounds {
+    min: Point::new(528.0, 712.0),
+    max: Point::new(708.0, 744.0),
+};
+/// The button's colour.
+pub const BUTTON: Color = Color::rgba(48, 48, 80, 255);
+/// The button's label, where it goes and its size.
+pub const ENTER_LABEL: &str = "Enter system (Return)";
+const ENTER_LABEL_AT: Point = Point::new(540.0, 720.0);
+const ENTER_LABEL_SIZE: f32 = 14.0;
 
 // The two columns stay on screen and apart.
 const _: () = assert!(LEFT + LEFT_WRAP <= RIGHT);
@@ -90,6 +106,11 @@ pub struct GalaxyMap {
     view: MapView,
     selected: Option<SystemId>,
     press: Option<Press>,
+    /// Whether the left button went down on the "Enter system" button and
+    /// has not been released yet.
+    armed: bool,
+    /// A request to enter a system, not yet taken.
+    entry: Option<SystemId>,
 }
 
 impl GalaxyMap {
@@ -103,6 +124,8 @@ impl GalaxyMap {
             view,
             selected: None,
             press: None,
+            armed: false,
+            entry: None,
         }
     }
 
@@ -124,6 +147,12 @@ impl GalaxyMap {
         &self.model
     }
 
+    /// The system the map has been asked to enter, by Return or the
+    /// "Enter system" button, if any; taking it clears the request.
+    pub fn take_entry(&mut self) -> Option<SystemId> {
+        self.entry.take()
+    }
+
     /// Everything that could not be read or laid out.
     #[must_use]
     pub fn problems(&self) -> &[String] {
@@ -142,6 +171,13 @@ impl GalaxyMap {
             Key::Char('=' | '+') => self.view.zoom_in(),
             Key::Char('-') => self.view.zoom_out(),
             _ => {}
+        }
+    }
+
+    /// Asks to enter the selected system, if there is one.
+    fn enter(&mut self) {
+        if let Some(id) = self.selected {
+            self.entry = Some(id);
         }
     }
 
@@ -221,7 +257,11 @@ impl GalaxyMap {
     }
 
     fn draw_panel(&self, list: &mut DrawList) {
-        fill_rect(list, MAP_HEIGHT, SCREEN_HEIGHT, PANEL);
+        let panel = Bounds {
+            min: Point::new(0.0, MAP_HEIGHT),
+            max: Point::new(MAP_WIDTH, SCREEN_HEIGHT),
+        };
+        fill_rect(list, panel, PANEL);
         list.line(
             Point::new(0.0, MAP_HEIGHT),
             Point::new(MAP_WIDTH, MAP_HEIGHT),
@@ -229,6 +269,9 @@ impl GalaxyMap {
             SEPARATOR,
         );
         let selected = self.selected.and_then(|id| self.model.system(id));
+        if selected.is_some() {
+            fill_rect(list, ENTER_BUTTON, BUTTON);
+        }
         match selected {
             Some(system) => draw_system(&system.entry, list),
             None => {
@@ -275,6 +318,15 @@ impl GalaxyMap {
             );
             right(list, line, PROBLEMS_TOP, Color::ERROR);
         }
+        if selected.is_some() {
+            list.text(
+                ENTER_LABEL,
+                ENTER_LABEL_AT,
+                ENTER_LABEL_SIZE,
+                None,
+                Color::WHITE,
+            );
+        }
     }
 }
 
@@ -309,23 +361,32 @@ fn in_map(at: Point) -> bool {
     at.y < MAP_HEIGHT
 }
 
-/// Fills the full-width band from `top` to `bottom` with `color`. There is
-/// no rectangle command: a horizontal line as thick as the band, along its
-/// middle, is one.
-fn fill_rect(list: &mut DrawList, top: f32, bottom: f32, color: Color) {
-    let middle = f32::midpoint(top, bottom);
+/// Fills `area` with `color`. There is no rectangle command: a horizontal
+/// line as thick as the area, along its middle, is one.
+fn fill_rect(list: &mut DrawList, area: Bounds, color: Color) {
+    let middle = area.center().y;
     list.line(
-        Point::new(0.0, middle),
-        Point::new(MAP_WIDTH, middle),
-        bottom - top,
+        Point::new(area.min.x, middle),
+        Point::new(area.max.x, middle),
+        area.height(),
         color,
     );
 }
 
 impl Screen for GalaxyMap {
-    /// Never quits: Escape is the app's.
+    /// Never quits: Escape is the navigator's.
     fn input(&mut self, input: &Input) -> ScreenAction {
         match *input {
+            // Return enters once, however long it is held.
+            Input::Key {
+                key: Key::Enter,
+                pressed: true,
+                repeat,
+            } => {
+                if !repeat {
+                    self.enter();
+                }
+            }
             // Repeats too: holding a key keeps panning or zooming.
             Input::Key {
                 key, pressed: true, ..
@@ -336,13 +397,23 @@ impl Screen for GalaxyMap {
                 at,
             } => {
                 if !pressed {
+                    // A click on the button: pressed and released on it.
+                    if std::mem::take(&mut self.armed) && ENTER_BUTTON.contains(at) {
+                        self.enter();
+                    }
                     self.release(at);
-                } else if in_map(at) {
-                    // Replaces any press whose release was lost.
-                    self.press = Some(Press {
-                        last: at,
-                        travelled: 0.0,
-                    });
+                } else if self.selected.is_some() && ENTER_BUTTON.contains(at) {
+                    self.armed = true;
+                } else {
+                    // Replaces any button press whose release was lost.
+                    self.armed = false;
+                    if in_map(at) {
+                        // Replaces any press whose release was lost.
+                        self.press = Some(Press {
+                            last: at,
+                            travelled: 0.0,
+                        });
+                    }
                 }
             }
             Input::PointerMoved(to) => self.pointer_moved(to),
@@ -360,9 +431,11 @@ impl Screen for GalaxyMap {
     }
 
     /// Forgets the left-button press, if any: the map stops dragging and the
-    /// release, wherever it ends up, is not a click.
+    /// release, wherever it ends up, is not a click, on the map or on the
+    /// "Enter system" button.
     fn cancel_pointer(&mut self) {
         self.press = None;
+        self.armed = false;
     }
 }
 
@@ -693,7 +766,6 @@ mod tests {
                 pressed: false,
                 repeat: false,
             },
-            press(Key::Enter),
             press(Key::Escape),
             press(Key::Tab),
             press(Key::Space),
@@ -1137,8 +1209,9 @@ mod tests {
         let texts = texts(&list);
         assert!(texts.contains(&"Beta (sÿst 129)".to_owned()), "{texts:?}");
         assert_eq!(origin(&list, "No stellars"), at(LEFT, STELLARS_TOP));
-        // The title, "No stellars", help and zoom: no stack line.
-        assert_eq!(texts.len(), 4, "{texts:?}");
+        // The title, "No stellars", help, zoom and the button's label: no
+        // stack line.
+        assert_eq!(texts.len(), 5, "{texts:?}");
     }
 
     #[test]
@@ -1220,5 +1293,199 @@ mod tests {
         let kinds: Vec<&str> = list.iter().map(kind).collect();
         assert_eq!(kinds, ["line", "line", "text", "text", "text"]);
         assert_eq!(map.view().zoom(), 3);
+    }
+
+    // Entering a system.
+
+    fn release(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: false,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn return_on_a_selected_system_asks_to_enter_it_once() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        let (view, selected) = (*map.view(), map.selected());
+        assert_eq!(map.input(&press(Key::Enter)), ScreenAction::None);
+        assert_eq!(map.take_entry(), Some(SystemId(129)));
+        assert_eq!(map.take_entry(), None, "taken");
+        assert_eq!((*map.view(), map.selected()), (view, selected));
+    }
+
+    #[test]
+    fn return_with_nothing_selected_asks_nothing() {
+        let mut map = map();
+        map.input(&press(Key::Enter));
+        assert_eq!(map.take_entry(), None);
+        click_on(&mut map, 130);
+        map.input(&press(Key::Enter));
+        // The last request is the one taken.
+        click_on(&mut map, 129);
+        map.input(&press(Key::Enter));
+        assert_eq!(map.take_entry(), Some(SystemId(129)));
+    }
+
+    #[test]
+    fn a_return_repeat_or_release_asks_nothing() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        map.input(&held(Key::Enter));
+        map.input(&release(Key::Enter));
+        assert_eq!(map.take_entry(), None);
+    }
+
+    /// The button's centre.
+    fn button_centre() -> Point {
+        ENTER_BUTTON.center()
+    }
+
+    /// The button's quad: a line through its middle as thick as it is.
+    fn button_quad() -> (Point, Point, f32) {
+        (at(528.0, 728.0), at(708.0, 728.0), 32.0)
+    }
+
+    #[test]
+    fn the_enter_button_is_drawn_only_while_a_system_is_selected() {
+        let mut map = map();
+        let list = drawn(&map);
+        assert_eq!(lines(&list, BUTTON), []);
+        assert!(!texts(&list).contains(&ENTER_LABEL.to_owned()));
+
+        click_on(&mut map, 129);
+        let list = drawn(&map);
+        assert_eq!(lines(&list, BUTTON), [button_quad()]);
+        assert_eq!(
+            text(&list, "Enter system"),
+            DrawCommand::Text {
+                text: "Enter system (Return)".to_owned(),
+                origin: at(540.0, 720.0),
+                size: 14.0,
+                wrap_width: None,
+                color: Color::WHITE,
+            }
+        );
+        assert_eq!(
+            ENTER_BUTTON,
+            Bounds {
+                min: at(528.0, 712.0),
+                max: at(708.0, 744.0)
+            }
+        );
+        assert_eq!(BUTTON, Color::rgba(48, 48, 80, 255));
+        // Over the panel, under its text.
+        let quad = list
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Line { color, .. } if *color == BUTTON));
+        let panel = list
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Line { color, .. } if *color == PANEL));
+        let first_text = list
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Text { .. }));
+        assert!(panel < quad && quad < first_text, "{quad:?}");
+    }
+
+    #[test]
+    fn clicking_the_enter_button_asks_to_enter_the_selected_system() {
+        let mut map = map();
+        click_on(&mut map, 130);
+        let (view, selected) = (*map.view(), map.selected());
+        click(&mut map, button_centre());
+        assert_eq!(map.take_entry(), Some(SystemId(130)));
+        assert_eq!((*map.view(), map.selected()), (view, selected));
+        // At its corners too.
+        for corner in [ENTER_BUTTON.min, ENTER_BUTTON.max] {
+            click(&mut map, corner);
+            assert_eq!(map.take_entry(), Some(SystemId(130)), "{corner:?}");
+        }
+    }
+
+    #[test]
+    fn the_enter_button_does_nothing_with_nothing_selected() {
+        let mut map = map();
+        click(&mut map, button_centre());
+        assert_eq!(map.take_entry(), None);
+        assert_eq!(map.selected(), None);
+    }
+
+    #[test]
+    fn a_press_on_the_button_released_off_it_does_not_enter() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        map.input(&button(MouseButton::Left, true, button_centre()));
+        map.input(&button(MouseButton::Left, false, at(720.0, 728.0)));
+        assert_eq!(map.take_entry(), None);
+        // That release disarmed it: a release on the button now is not a
+        // click.
+        map.input(&button(MouseButton::Left, false, button_centre()));
+        assert_eq!(map.take_entry(), None);
+    }
+
+    #[test]
+    fn a_press_elsewhere_released_on_the_button_does_not_enter() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        let view = *map.view();
+        for start in [at(300.0, 728.0), at(512.0, 300.0)] {
+            map.input(&button(MouseButton::Left, true, start));
+            map.input(&button(MouseButton::Left, false, button_centre()));
+            assert_eq!(map.take_entry(), None, "{start:?}");
+        }
+        assert_eq!(map.selected(), Some(SystemId(129)), "nor clears it");
+        assert_eq!(*map.view(), view);
+    }
+
+    #[test]
+    fn a_new_press_off_the_button_disarms_it() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        map.input(&button(MouseButton::Left, true, button_centre()));
+        // Its release was lost; the next press is elsewhere in the panel.
+        map.input(&button(MouseButton::Left, true, at(300.0, 728.0)));
+        map.input(&button(MouseButton::Left, false, button_centre()));
+        assert_eq!(map.take_entry(), None);
+    }
+
+    #[test]
+    fn a_press_on_the_button_starts_no_drag() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        let view = *map.view();
+        map.input(&button(MouseButton::Left, true, button_centre()));
+        map.input(&Input::PointerMoved(at(100.0, 100.0)));
+        assert_eq!(*map.view(), view);
+    }
+
+    #[test]
+    fn other_buttons_on_the_enter_button_do_nothing() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        for other in [MouseButton::Right, MouseButton::Middle, MouseButton::Other] {
+            map.input(&button(other, true, button_centre()));
+            map.input(&button(other, false, button_centre()));
+        }
+        assert_eq!(map.take_entry(), None);
+    }
+
+    #[test]
+    fn cancelling_the_pointer_disarms_the_button() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        map.input(&button(MouseButton::Left, true, button_centre()));
+        map.cancel_pointer();
+        map.input(&button(MouseButton::Left, false, button_centre()));
+        assert_eq!(map.take_entry(), None);
+    }
+
+    #[test]
+    fn the_help_line_mentions_return() {
+        assert_eq!(
+            HELP,
+            "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter"
+        );
     }
 }
