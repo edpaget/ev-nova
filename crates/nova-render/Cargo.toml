@@ -13,10 +13,13 @@ glyphon.workspace = true
 nova-data.workspace = true
 nova-rsrc.workspace = true
 nova-view.workspace = true
+pollster.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]
+# The offscreen test compares the adapter's font count with glyphon's own.
+glyphon.workspace = true
 # Synthetic pictures and sprites for the GameData source tests.
 nova-data = { workspace = true, features = ["fixture"] }
 # Synthetic resource forks for in-memory stores.
