@@ -176,16 +176,20 @@ fn block_glyph() -> Vec<u8> {
 }
 
 /// `cmap`: one Windows Unicode BMP subtable (format 4) mapping `' '` to
-/// `'~'` to glyph 1.
+/// `'~'` to glyph 1, through its glyph ID array.
 fn block_cmap() -> Vec<u8> {
-    let first = u16::from(b' ');
+    let (first, last) = (u16::from(b' '), u16::from(b'~'));
+    let glyphs = vec![1; usize::from(last - first) + 1];
+    let length = 32 + 2 * glyphs.len() as u16;
     let mut cmap = be16(&[0, 1, 3, 1, 0, 12]); // header, one encoding record
-    cmap.extend(be16(&[4, 32, 0])); // format, length, language
+    cmap.extend(be16(&[4, length, 0])); // format, length, language
     cmap.extend(be16(&[4, 4, 1, 0])); // segCountX2, searchRange, entrySelector, rangeShift
-    cmap.extend(be16(&[u16::from(b'~'), 0xFFFF, 0])); // endCode, reservedPad
+    cmap.extend(be16(&[last, 0xFFFF, 0])); // endCode, reservedPad
     cmap.extend(be16(&[first, 0xFFFF])); // startCode
-    cmap.extend(be16(&[1u16.wrapping_sub(first), 1])); // idDelta
-    cmap.extend(be16(&[0, 0])); // idRangeOffset
+    cmap.extend(be16(&[0, 1])); // idDelta
+    // idRangeOffset: the first segment's glyph IDs start 4 bytes on.
+    cmap.extend(be16(&[4, 0]));
+    cmap.extend(be16(&glyphs));
     cmap
 }
 
@@ -208,4 +212,113 @@ fn block_post() -> Vec<u8> {
     let mut post = 0x0003_0000u32.to_be_bytes().to_vec();
     post.extend([0; 28]);
     post
+}
+
+#[cfg(test)]
+mod tests {
+    use ttf_parser::{Face, GlyphId, OutlineBuilder, name_id};
+
+    use super::*;
+
+    #[test]
+    fn the_directory_lists_each_table_sorted_with_its_checksum_offset_and_length() {
+        let bytes = SfntBuilder::new(b"true")
+            .table(b"zzzz", [0, 0, 0, 1, 0, 0, 0, 2, 3])
+            .table(b"aaaa", [9; 4])
+            .build();
+        assert_eq!(
+            &bytes[..12],
+            [b't', b'r', b'u', b'e', 0, 2, 0, 0, 0, 0, 0, 0]
+        );
+        let record = |at: usize| &bytes[12 + 16 * at..][..16];
+        // `aaaa` first: four bytes at the end of the 44-byte header.
+        assert_eq!(
+            record(0),
+            [b"aaaa".as_slice(), &[9; 4], &[0, 0, 0, 44], &[0, 0, 0, 4]].concat()
+        );
+        // `zzzz` next, padded to 12 bytes; its checksum is 1 + 2 + 0x03000000.
+        assert_eq!(
+            record(1),
+            [
+                b"zzzz".as_slice(),
+                &[3, 0, 0, 3],
+                &[0, 0, 0, 48],
+                &[0, 0, 0, 9]
+            ]
+            .concat()
+        );
+        assert_eq!(bytes.len(), 60);
+        assert_eq!(
+            &bytes[44..],
+            [9, 9, 9, 9, 0, 0, 0, 1, 0, 0, 0, 2, 3, 0, 0, 0]
+        );
+    }
+
+    /// Records an outline's path.
+    #[derive(Default)]
+    struct Path(Vec<String>);
+
+    impl OutlineBuilder for Path {
+        fn move_to(&mut self, x: f32, y: f32) {
+            self.0.push(format!("M {x} {y}"));
+        }
+        fn line_to(&mut self, x: f32, y: f32) {
+            self.0.push(format!("L {x} {y}"));
+        }
+        fn quad_to(&mut self, _: f32, _: f32, x: f32, y: f32) {
+            self.0.push(format!("Q {x} {y}"));
+        }
+        fn curve_to(&mut self, _: f32, _: f32, _: f32, _: f32, x: f32, y: f32) {
+            self.0.push(format!("C {x} {y}"));
+        }
+        fn close(&mut self) {
+            self.0.push("Z".to_owned());
+        }
+    }
+
+    #[test]
+    fn the_block_font_reads_back_as_a_renderer_sees_it() {
+        let bytes = block_font("Block Sans");
+        let face = Face::parse(&bytes, 0).expect("parses");
+        assert_eq!(face.units_per_em(), BLOCK_UNITS_PER_EM);
+        assert_eq!((face.ascender(), face.descender()), (800, -200));
+        assert_eq!(face.number_of_glyphs(), 2);
+        assert!(face.tables().post.is_some(), "post parses");
+        for id in [
+            name_id::FAMILY,
+            name_id::FULL_NAME,
+            name_id::POST_SCRIPT_NAME,
+        ] {
+            let name = face.names().into_iter().find(|n| n.name_id == id);
+            assert_eq!(
+                name.and_then(|n| n.to_string()).as_deref(),
+                Some("Block Sans")
+            );
+        }
+        for c in [' ', 'A', 'g', '~'] {
+            assert_eq!(face.glyph_index(c), Some(GlyphId(1)), "{c:?}");
+        }
+        assert_eq!(face.glyph_index('\u{7f}'), None);
+        assert_eq!(face.glyph_index('\u{1f}'), None);
+        assert_eq!(face.glyph_hor_advance(GlyphId(1)), Some(1000));
+        assert_eq!(face.glyph_hor_side_bearing(GlyphId(1)), Some(100));
+        let mut path = Path::default();
+        face.outline_glyph(GlyphId(1), &mut path)
+            .expect("an outline");
+        assert_eq!(
+            path.0,
+            [
+                "M 100 0",
+                "L 100 700",
+                "L 900 700",
+                "L 900 0",
+                "L 100 0",
+                "Z"
+            ]
+        );
+        assert!(
+            face.outline_glyph(GlyphId(0), &mut Path::default())
+                .is_none()
+        );
+    }
 }

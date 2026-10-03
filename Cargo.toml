@@ -23,6 +23,9 @@ binrw = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+# Reads the synthetic test fonts back in nova-data's fixture tests; the
+# version glyphon's font stack already locks.
+ttf-parser = "0.25.1"
 # Rendering and windowing. glyphon 0.12 is built on wgpu 30, so the two move
 # together.
 wgpu = "30.0.1"

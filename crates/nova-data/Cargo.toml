@@ -26,6 +26,8 @@ nova-rsrc = { workspace = true, features = ["fixture"] }
 nova-data = { workspace = true, features = ["fixture"] }
 # Real folders for the directory-listing adapter and store wiring tests.
 tempfile.workspace = true
+# Reads the synthetic block font back, as a renderer would.
+ttf-parser.workspace = true
 
 [features]
 # Exposes the synthetic picture, sprite and sound builders to other crates'
