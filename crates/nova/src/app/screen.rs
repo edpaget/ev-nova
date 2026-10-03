@@ -2,7 +2,8 @@
 //!
 //! The router keeps every screen alive and shows one at a time; Tab
 //! switches between them, so each keeps its state (the selected ship, the
-//! map's view and selection) while hidden.
+//! map's view and selection) while hidden. The router also decides what
+//! Escape does: it quits.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -95,9 +96,22 @@ impl Screen for AppScreen {
     /// A Tab press switches screens, first cancelling any pointer gesture on
     /// the screen it hides (whose button release will now go to the other
     /// screen). Holding Tab switches once: its key repeats are consumed
-    /// without switching, as is its release. Everything else, repeats
+    /// without switching, as is its release. An Escape press quits; its
+    /// repeats and release are consumed. Everything else, repeats
     /// included, goes to the screen shown.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Key {
+            key: Key::Escape,
+            pressed,
+            repeat,
+        } = *input
+        {
+            return if pressed && !repeat {
+                ScreenAction::Quit
+            } else {
+                ScreenAction::None
+            };
+        }
         if let Input::Key {
             key: Key::Tab,
             pressed,
@@ -388,6 +402,22 @@ mod tests {
         screen.input(&Input::PointerMoved(Point::new(at.x + 50.0, at.y)));
         assert_eq!(*screen.galaxy_map().view(), view, "no drag");
         assert_eq!(screen.galaxy_map().selected(), None);
+    }
+
+    #[test]
+    fn an_escape_press_quits_from_either_screen() {
+        let mut screen = AppScreen::new(data());
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+    }
+
+    #[test]
+    fn an_escape_repeat_or_release_does_nothing() {
+        let mut screen = AppScreen::new(data());
+        assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
+        assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
     }
 
     #[test]

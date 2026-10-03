@@ -4,7 +4,8 @@
 //! routes to whichever of the game's screens is showing; new screens are
 //! added there, so the platform adapter never names one. The adapter
 //! hands it [`WindowEvent`]s, already in the core's terms, together with
-//! the [`WindowPort`] and a [`Gpu`]; the app turns them into screen input,
+//! the [`WindowPort`] and a [`Gpu`]; the app turns them into screen input
+//! (every key, Escape included, is the screen's to act on),
 //! ticks and draws the screen, and renders each frame through
 //! `nova-render`. It never blocks and never names a winit or wgpu type.
 
@@ -124,8 +125,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
 
     /// Handles one window event.
     ///
-    /// A resize refits the viewport. Keys go to the screen, except that
-    /// pressing Escape quits. Losing focus tells the screen to let go of
+    /// A resize refits the viewport. Keys go to the screen, Escape
+    /// included: what it does is the screen's to decide. Losing focus tells the screen to let go of
     /// the keys it holds down, since their releases will not arrive. Pointer events go to the screen in logical
     /// units, and are dropped in the bars. A redraw ticks the screen by the
     /// time since the last redraw, renders its draw list through `gpu` and
@@ -145,12 +146,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 self.viewport = Viewport::new(LOGICAL, size_px, scale_factor);
                 Control::Continue
             }
-            WindowEvent::Key {
-                key: Key::Escape,
-                pressed: true,
-                ..
-            }
-            | WindowEvent::CloseRequested => Control::Exit,
+            WindowEvent::CloseRequested => Control::Exit,
             WindowEvent::FocusLost => {
                 self.screen.release_keys();
                 Control::Continue
@@ -388,14 +384,21 @@ mod tests {
     }
 
     #[test]
-    fn pressing_escape_exits_without_reaching_the_screen() {
+    fn escape_reaches_the_screen() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
         assert_eq!(
             handle(&mut app, &mut window, key(Key::Escape, true)),
-            Control::Exit
+            Control::Continue
         );
-        assert_eq!(app.screen().inputs, []);
+        assert_eq!(
+            app.screen().inputs,
+            [Input::Key {
+                key: Key::Escape,
+                pressed: true,
+                repeat: false
+            }]
+        );
     }
 
     #[test]
