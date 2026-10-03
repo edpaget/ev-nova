@@ -560,8 +560,8 @@ mod compressed_tests {
 mod bounded_tests {
     use super::super::decode_snd;
     use super::super::fixture::{Header, SndBuilder, SndFormat, ima4_packet};
-    use super::super::sweep::assert_never_panics;
     use super::*;
+    use crate::sweep::assert_never_panics;
 
     /// A resource of about 100 bytes whose header field at `field` (from
     /// the header start) is overwritten with `claim`.

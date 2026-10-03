@@ -96,8 +96,6 @@ mod pixmap;
 mod reader;
 mod rled;
 mod sheet;
-#[cfg(test)]
-mod sweep;
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;

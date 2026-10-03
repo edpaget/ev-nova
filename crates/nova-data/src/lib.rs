@@ -118,6 +118,8 @@ pub mod sound;
 pub mod wire;
 
 #[cfg(test)]
+mod sweep;
+#[cfg(test)]
 mod testutil;
 
 pub use decode::{Decoded, Entry, Record, TypedReport, decode, decode_all, decode_bytes};

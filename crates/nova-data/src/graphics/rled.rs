@@ -510,6 +510,6 @@ mod tests {
             .frame(|f| f.line().pixels(&[RED, RED]).line())
             .build();
         assert!(bytes.len() < 1024);
-        crate::graphics::sweep::assert_never_panics(&bytes, decode);
+        crate::sweep::assert_never_panics(&bytes, decode);
     }
 }

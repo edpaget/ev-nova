@@ -126,8 +126,6 @@ mod header;
 mod ima4;
 mod pcm;
 mod snd;
-#[cfg(test)]
-mod sweep;
 
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;

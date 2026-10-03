@@ -356,6 +356,6 @@ mod tests {
     #[test]
     fn corrupt_icons_never_panic() {
         let (cicn, _) = icon(4);
-        crate::graphics::sweep::assert_never_panics(&cicn.bytes(), decode_cicn);
+        crate::sweep::assert_never_panics(&cicn.bytes(), decode_cicn);
     }
 }

@@ -1233,6 +1233,6 @@ mod tests {
             .end()
             .build();
         assert!(pict.len() < 1024);
-        crate::graphics::sweep::assert_never_panics(&pict, decode_pict);
+        crate::sweep::assert_never_panics(&pict, decode_pict);
     }
 }
