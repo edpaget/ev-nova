@@ -25,6 +25,19 @@ pub enum DrawCommand {
         /// Where its top-left corner goes.
         top_left: Point,
     },
+    /// A picture stretched (or shrunk) to fill a rectangle, untinted. A
+    /// rectangle whose width or height is not a positive, finite number
+    /// draws nothing.
+    StretchedPicture {
+        /// The picture.
+        image: ImageKey,
+        /// The rectangle's top-left corner.
+        top_left: Point,
+        /// The rectangle's width.
+        width: f32,
+        /// The rectangle's height.
+        height: f32,
+    },
     /// A run of text.
     Text {
         /// The text.
@@ -108,6 +121,22 @@ impl DrawList {
     /// Appends a [`DrawCommand::Picture`].
     pub fn picture(&mut self, image: ImageKey, top_left: Point) -> &mut Self {
         self.push(DrawCommand::Picture { image, top_left })
+    }
+
+    /// Appends a [`DrawCommand::StretchedPicture`].
+    pub fn stretched_picture(
+        &mut self,
+        image: ImageKey,
+        top_left: Point,
+        width: f32,
+        height: f32,
+    ) -> &mut Self {
+        self.push(DrawCommand::StretchedPicture {
+            image,
+            top_left,
+            width,
+            height,
+        })
     }
 
     /// Appends a [`DrawCommand::Text`].
@@ -240,6 +269,24 @@ mod tests {
                 color: red
             }
         );
+    }
+
+    #[test]
+    fn a_stretched_picture_keeps_its_rectangle() {
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(9502), at(-3.5, 20.0), 188.25, 223.5)
+            .picture(ImageKey::picture(1), at(0.0, 0.0));
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        assert_eq!(
+            *commands[0],
+            DrawCommand::StretchedPicture {
+                image: ImageKey::picture(9502),
+                top_left: at(-3.5, 20.0),
+                width: 188.25,
+                height: 223.5
+            }
+        );
+        assert_eq!(list.len(), 2);
     }
 
     #[test]

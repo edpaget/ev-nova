@@ -69,7 +69,8 @@ impl<S: ImageSource> Renderer<S> {
     /// Draws `list` into `viewport` through `gpu`: uploads images seen for
     /// the first time, then submits one frame. A zero-area viewport draws
     /// nothing. Text that is empty, or whose size is not a positive, finite
-    /// number of pixels, is skipped.
+    /// number of pixels, is skipped, as is a stretched picture whose width
+    /// or height is not a positive, finite number.
     pub fn render(
         &mut self,
         list: &DrawList,
@@ -100,14 +101,21 @@ impl<S: ImageSource> Renderer<S> {
                     }
                 }
                 DrawCommand::Picture { image, top_left } => {
-                    if let Some(entry) = self.entry(image, gpu, &mut report) {
-                        let dest = Rect {
-                            x: top_left.x,
-                            y: top_left.y,
-                            w: entry.rect.w as f32,
-                            h: entry.rect.h as f32,
-                        };
-                        push_quad(&mut batches, &entry, dest, rgba(Color::WHITE));
+                    let picture = (image, top_left, None);
+                    self.push_picture(&mut batches, picture, gpu, &mut report);
+                }
+                DrawCommand::StretchedPicture {
+                    image,
+                    top_left,
+                    width,
+                    height,
+                } => {
+                    // A rectangle with no drawable size draws nothing, so
+                    // its picture is not even loaded.
+                    let drawable = |side: f32| side.is_finite() && side > 0.0;
+                    if drawable(width) && drawable(height) {
+                        let picture = (image, top_left, Some((width, height)));
+                        self.push_picture(&mut batches, picture, gpu, &mut report);
                     }
                 }
                 DrawCommand::Text {
@@ -165,6 +173,27 @@ impl<S: ImageSource> Renderer<S> {
             batches,
         });
         report
+    }
+
+    /// Appends a picture's quad: `(image, top_left, size)`, drawn at `size`
+    /// when given and at the picture's own size otherwise.
+    fn push_picture(
+        &mut self,
+        batches: &mut Vec<Batch>,
+        (image, top_left, size): (ImageKey, Point, Option<(f32, f32)>),
+        gpu: &mut impl Gpu,
+        report: &mut RenderReport,
+    ) {
+        if let Some(entry) = self.entry(image, gpu, report) {
+            let (w, h) = size.unwrap_or((entry.rect.w as f32, entry.rect.h as f32));
+            let dest = Rect {
+                x: top_left.x,
+                y: top_left.y,
+                w,
+                h,
+            };
+            push_quad(batches, &entry, dest, rgba(Color::WHITE));
+        }
     }
 
     /// The placement of `key`, loading its resource on first use. Reports
@@ -467,6 +496,73 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    #[test]
+    fn a_stretched_picture_fills_its_rectangle_from_the_whole_picture() {
+        let mut list = DrawList::new();
+        list.stretched_picture(ImageKey::picture(128), at(-2.5, 3.0), 20.0, 1.5);
+        let mut renderer = renderer(images());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        assert_eq!(
+            gpu.submits()[0].batches,
+            vec![Batch::Sprites {
+                page: PageId(0),
+                quads: vec![QuadInstance {
+                    dest: Rect {
+                        x: -2.5,
+                        y: 3.0,
+                        w: 20.0,
+                        h: 1.5,
+                    },
+                    uv: uv(0, 0, 8, 4),
+                    tint: WHITE,
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_stretched_picture_shares_its_pages_batch_with_sprites() {
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(200, 0), at(10.0, 10.0), Color::WHITE)
+            .stretched_picture(ImageKey::picture(128), at(0.0, 0.0), 16.0, 8.0)
+            .picture(ImageKey::picture(128), at(1.0, 1.0));
+        let frame = render_one(&list, &viewport());
+        let dests: Vec<(f32, f32)> = match frame.batches.as_slice() {
+            [Batch::Sprites { quads, .. }] => quads.iter().map(|q| (q.dest.w, q.dest.h)).collect(),
+            other => panic!("one sprite batch: {other:?}"),
+        };
+        assert_eq!(dests, [(5.0, 6.0), (16.0, 8.0), (8.0, 4.0)]);
+    }
+
+    #[test]
+    fn a_stretched_picture_with_no_drawable_size_draws_and_loads_nothing() {
+        let mut list = DrawList::new();
+        for (w, h) in [
+            (0.0, 4.0),
+            (4.0, 0.0),
+            (-1.0, 4.0),
+            (4.0, -1.0),
+            (f32::NAN, 4.0),
+            (4.0, f32::NAN),
+            (f32::INFINITY, 4.0),
+            (4.0, f32::INFINITY),
+        ] {
+            list.stretched_picture(ImageKey::picture(128), at(0.0, 0.0), w, h);
+        }
+        let mut renderer = renderer(images());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        assert_eq!(only_submit(&gpu.calls).batches, vec![]);
+        assert_eq!(renderer.images().calls(), []);
     }
 
     #[test]

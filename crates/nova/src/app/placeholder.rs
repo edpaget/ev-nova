@@ -171,6 +171,7 @@ mod tests {
             .map(|command| match command {
                 DrawCommand::Sprite { .. } => "sprite",
                 DrawCommand::Picture { .. } => "picture",
+                DrawCommand::StretchedPicture { .. } => "stretched picture",
                 DrawCommand::Text { .. } => "text",
                 DrawCommand::Line { .. } => "line",
                 DrawCommand::Dot { .. } => "dot",
