@@ -32,12 +32,32 @@ mise run test   # nextest and doctests only
 Plain `cargo build` and `cargo test` also work in a shell where mise is
 activated, or with Rust 1.98.1 installed.
 
+## Nightly builds
+
+The [`nightly` prerelease](https://github.com/edpaget/ev-nova/releases/tag/nightly)
+holds `nova` and `nova-dump` built from the latest commit on `main`:
+
+- `ev-nova-x86_64-unknown-linux-gnu.tar.gz`
+- `ev-nova-universal-apple-darwin.tar.gz` (Apple silicon and Intel)
+- `ev-nova-x86_64-pc-windows-msvc.zip`
+
+These are unsigned tester builds, and they contain no game data. Each archive
+has a `README.txt` on running them. On macOS, Gatekeeper blocks unsigned
+binaries; in the extracted folder, run
+`xattr -d com.apple.quarantine nova nova-dump`.
+
 ## Using your own data
 
 Dump the game data to JSON, PNG and WAV:
 
 ```sh
 cargo run -p nova-dump -- "<path>/Nova Files" <out-dir> [--plugins <dir>]
+```
+
+With a prebuilt binary from the [nightly builds](#nightly-builds):
+
+```sh
+nova-dump "<path>/Nova Files" <out-dir> [--plugins <dir>]
 ```
 
 Pass the `Nova Files` directory itself, not the folder that contains it. The

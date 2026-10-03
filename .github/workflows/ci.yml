@@ -44,3 +44,139 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: mise run ci
         shell: bash
+
+  # Release builds of `nova` and `nova-dump` for the rolling `nightly`
+  # prerelease, on pushes to main only, after the `ci` gate. The `ci` Windows
+  # leg is continue-on-error (rdm task windows-path-portable-tests), so a red
+  # Windows test leg doesn't stop this job: the Windows archive ships as long
+  # as its own release build succeeds. Revisit once Windows CI is a hard gate.
+  build:
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      # So every platform's build failure is reported in one run.
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # One universal (arm64 + x86_64) binary, cross-compiled on the arm64
+          # runner and merged with lipo.
+          - name: universal-apple-darwin
+            os: macos-latest
+            target: aarch64-apple-darwin
+            extra_target: x86_64-apple-darwin
+          - name: x86_64-pc-windows-msvc
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    env:
+      # As in `ci`: install only the Rust toolchain.
+      MISE_AUTO_INSTALL: "false"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v5
+        with:
+          install: false
+      - run: mise install rust
+        shell: bash
+      # mise's rust is rustup-managed, so this adds the target to the pinned
+      # toolchain.
+      - if: matrix.extra_target
+        run: rustup target add "${{ matrix.extra_target }}"
+        shell: bash
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      # Default features only: never --features dev-tools or --all-features,
+      # so egui stays out of published builds. The release build must stay on
+      # the same default feature set that
+      # crates/nova/tests/default_build_links_no_egui.rs checks in `ci`.
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p nova -p nova-dump --target "${{ matrix.target }}"
+          if [ -n "${{ matrix.extra_target }}" ]; then
+            cargo build --release --locked -p nova -p nova-dump --target "${{ matrix.extra_target }}"
+          fi
+      # One top-level directory holding the two binaries, README.txt and
+      # LICENSE. No game data.
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="ev-nova-${{ matrix.name }}"
+          release="target/${{ matrix.target }}/release"
+          mkdir -p "dist/$name"
+          case "${{ matrix.os }}" in
+            macos-*)
+              for bin in nova nova-dump; do
+                lipo -create "$release/$bin" \
+                  "target/${{ matrix.extra_target }}/release/$bin" \
+                  -output "dist/$name/$bin"
+              done
+              ;;
+            windows-*)
+              cp "$release/nova.exe" "$release/nova-dump.exe" "dist/$name/"
+              ;;
+            *)
+              cp "$release/nova" "$release/nova-dump" "dist/$name/"
+              ;;
+          esac
+          cp packaging/README.txt LICENSE "dist/$name/"
+          cd dist
+          case "${{ matrix.os }}" in
+            windows-*) 7z a "$name.zip" "$name" ;;
+            *) tar czf "$name.tar.gz" "$name" ;;
+          esac
+          rm -rf "$name"
+      # Only a hand-off to `publish`.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Moves the `nightly` tag to this commit and replaces the prerelease's
+  # assets. All or nothing: it needs every `build` leg, so a failed leg on
+  # any platform skips publishing and leaves the previous nightly untouched.
+  publish:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # On top of the workflow-level group, so two quick pushes can't race on
+    # the tag or the assets. A cancelled older run is harmless: the newer run
+    # re-uploads every asset.
+    concurrency:
+      group: nightly-release
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      # Asset names are fixed per target, so --clobber replaces each one in
+      # place and no stale assets build up.
+      - name: Publish the nightly prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git tag -f nightly "$GITHUB_SHA"
+          git push -f origin nightly
+          commit_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA"
+          notes="Unsigned tester build of \`main\` at $GITHUB_SHA ($commit_url).
+
+          No EV Nova game data is included: supply your own \`Nova Files\` directory. See README.txt inside each archive for how to run the binaries."
+          gh release view nightly >/dev/null 2>&1 ||
+            gh release create nightly --prerelease --title "Nightly build" --notes "$notes"
+          gh release edit nightly --prerelease --notes "$notes"
+          gh release upload nightly dist/* --clobber
