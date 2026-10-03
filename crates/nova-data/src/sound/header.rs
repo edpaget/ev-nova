@@ -527,3 +527,139 @@ mod compressed_tests {
         assert_eq!(decode(header), Err(SoundError::BadSampleRate));
     }
 }
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::super::decode_snd;
+    use super::super::fixture::{Header, SndBuilder, SndFormat, ima4_packet};
+    use super::super::sweep::assert_never_panics;
+    use super::*;
+
+    /// A resource of about 100 bytes whose header field at `field` (from
+    /// the header start) is overwritten with `claim`.
+    fn claiming(header: Header, field: usize, claim: u32) -> Vec<u8> {
+        let mut bytes = SndBuilder::new(SndFormat::Two, header).bytes();
+        bytes.resize(100, 0);
+        bytes[14 + field..14 + field + 4].copy_from_slice(&claim.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn huge_claims_fail_before_allocating() {
+        let standard = Header::Standard {
+            rate: 1,
+            loop_points: (0, 0),
+            base_note: 60,
+            samples: vec![],
+        };
+        assert_eq!(
+            decode_snd(&claiming(standard, 4, u32::MAX)),
+            Err(SoundError::SamplesTruncated {
+                offset: 36,
+                needed: u64::from(u32::MAX),
+                available: 64
+            })
+        );
+        let extended = Header::Extended {
+            channels: 2,
+            rate: 1,
+            sample_size: 16,
+            data: vec![],
+        };
+        assert_eq!(
+            decode_snd(&claiming(extended, 22, u32::MAX)),
+            Err(SoundError::SamplesTruncated {
+                offset: 78,
+                needed: u64::from(u32::MAX) * 4,
+                available: 22
+            })
+        );
+        let compressed = Header::Compressed {
+            channels: 2,
+            rate: 1,
+            format: *b"ima4",
+            compression_id: -1,
+            packets: vec![],
+        };
+        assert_eq!(
+            decode_snd(&claiming(compressed, 22, u32::MAX)),
+            Err(SoundError::SamplesTruncated {
+                offset: 78,
+                needed: u64::from(u32::MAX) * 68,
+                available: 22
+            })
+        );
+    }
+
+    #[test]
+    fn a_header_cut_before_its_samples_is_truncated() {
+        let extended = Header::Extended {
+            channels: 1,
+            rate: 1,
+            sample_size: 8,
+            data: vec![],
+        };
+        let bytes = SndBuilder::new(SndFormat::Two, extended).bytes();
+        assert_eq!(
+            decode_snd(&bytes[..14 + 60]),
+            Err(SoundError::SamplesTruncated {
+                offset: 78,
+                needed: 0,
+                available: 0
+            })
+        );
+        assert!(decode_snd(&bytes).unwrap().samples().is_empty());
+    }
+
+    fn sweep(format: SndFormat, header: Header) {
+        assert_never_panics(&SndBuilder::new(format, header).bytes(), decode_snd);
+    }
+
+    #[test]
+    fn corrupt_sounds_never_panic() {
+        let mut codes = [3; 64];
+        codes[5] = 0xC;
+        let packet = ima4_packet(-3000, 40, codes);
+        sweep(
+            SndFormat::One,
+            Header::Standard {
+                rate: 0x2B77_0000,
+                loop_points: (1, 2),
+                base_note: 60,
+                samples: vec![0x80, 0x00, 0xFF],
+            },
+        );
+        sweep(
+            SndFormat::Two,
+            Header::Standard {
+                rate: 0x2B77_45D1,
+                loop_points: (0, 0),
+                base_note: 60,
+                samples: vec![0x7F],
+            },
+        );
+        for (channels, sample_size) in [(1, 8), (2, 16)] {
+            sweep(
+                SndFormat::One,
+                Header::Extended {
+                    channels,
+                    rate: 0xAC44_0000,
+                    sample_size,
+                    data: vec![0x81, 0x7E, 0x00, 0xFF],
+                },
+            );
+        }
+        for channels in [1, 2] {
+            sweep(
+                SndFormat::Two,
+                Header::Compressed {
+                    channels,
+                    rate: 0x5622_0000,
+                    format: *b"ima4",
+                    compression_id: -1,
+                    packets: vec![packet; 2],
+                },
+            );
+        }
+    }
+}

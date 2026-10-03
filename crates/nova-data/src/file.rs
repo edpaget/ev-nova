@@ -8,7 +8,7 @@ use crate::registry::{AnyRecord, decode_any};
 
 /// Resource types [`decode_file`] skips: pictures and sprites (`PICT`,
 /// `rlëD`, `cicn`, `ppat`), which [`crate::graphics`] decodes, and sounds
-/// (`snd `), left to a later phase.
+/// (`snd `), which [`crate::sound`] decodes.
 pub const OUT_OF_SCOPE: &[ResType] = &[
     ResType::new(*b"PICT"),
     ResType::new([b'r', b'l', 0x91, b'D']),

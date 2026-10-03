@@ -95,6 +95,10 @@
 //! [`graphics`] decodes `PICT`, `rlëD`, `cicn` and `ppat` resources to RGBA
 //! images, one resource at a time.
 //!
+//! # Sounds
+//!
+//! [`sound`] decodes `snd ` resources to 16-bit PCM, one resource at a time.
+//!
 //! # Out of scope
 //!
 //! [`OUT_OF_SCOPE`] lists the media types [`decode_file`] skips (as it does
@@ -102,7 +106,7 @@
 //!
 //! - `PICT`, `rlëD`, `cicn`, `ppat`: pictures and sprites, decoded by
 //!   [`graphics`] instead.
-//! - `snd `: sounds (phase 4).
+//! - `snd `: sounds, decoded by [`sound`] instead.
 
 pub mod decode;
 pub mod error;
