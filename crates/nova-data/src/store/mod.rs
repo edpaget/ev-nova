@@ -273,6 +273,16 @@ impl GameData {
         }))
     }
 
+    /// Every record of type `T`, by ascending ID, each decoded (or its
+    /// error) as [`GameData::get`] gives it.
+    pub fn records<'a, T: Registered + 'a>(
+        &'a self,
+    ) -> impl Iterator<Item = (i16, Result<StoreEntry<'a, T>, &'a DecodeError>)> + 'a {
+        self.ids(T::TYPE)
+            .iter()
+            .filter_map(|&id| Some((id, self.get::<T>(id)?)))
+    }
+
     fn slot(&self, ty: ResType, id: i16) -> Option<&Slot> {
         let index = self.index.get(&ty)?;
         let at = index.ids.binary_search(&id).ok()?;

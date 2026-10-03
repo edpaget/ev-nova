@@ -313,3 +313,111 @@ fn ids_ascend_and_types_cover_everything_present() {
     assert!(data.get_any(Ship::TYPE, 131).is_none());
     assert!(data.get_any(absent, 128).is_none());
 }
+
+/// A data directory holding one file with ships 128 (good), 129 (one byte
+/// short) and 130 (two trailing bytes).
+fn mixed_ships() -> GameData {
+    let mut long = ship_bytes(3);
+    long.extend([0, 0]);
+    let tree = FakeTree::new().dir("/d", &[("one", File)]);
+    let forks = FakeForks::new().file(
+        "/d/one",
+        ForkBuilder::new()
+            .resource(Ship::TYPE, 130, None, &long)
+            .resource(Ship::TYPE, 129, Some(b"short"), &ship_bytes(2)[1..])
+            .resource(Ship::TYPE, 128, Some(b"good"), &ship_bytes(1))
+            .build()
+            .bytes,
+    );
+    open(&tree, &forks, false)
+}
+
+fn decoded(data: &GameData, id: i16) -> bool {
+    data.slot(Ship::TYPE, id)
+        .expect("present")
+        .decoded
+        .get()
+        .is_some()
+}
+
+#[test]
+fn records_decode_only_when_first_asked_for() {
+    let data = mixed_ships();
+    assert!(!decoded(&data, 128));
+    assert!(data.resource(Ship::TYPE, 128).is_some());
+    assert!(!decoded(&data, 128), "raw access does not decode");
+    let _ = data.get::<Ship>(128);
+    assert!(decoded(&data, 128));
+    assert!(!decoded(&data, 129));
+    assert!(!decoded(&data, 130));
+}
+
+#[test]
+fn a_record_is_decoded_once_and_shared() {
+    let data = mixed_ships();
+    let first = data.get::<Ship>(128).expect("present").expect("decodes");
+    let second = data.get::<Ship>(128).expect("present").expect("decodes");
+    assert!(std::ptr::eq(first.record, second.record));
+    assert_eq!(
+        (first.id, first.name, first.record.holds),
+        (128, Some("good"), 1)
+    );
+    assert!(first.warning.is_none());
+
+    let any = data
+        .get_any(Ship::TYPE, 128)
+        .expect("present")
+        .expect("decodes");
+    let AnyRecord::Ship(ship) = any.record else {
+        panic!("a ship: {:?}", any.record)
+    };
+    let ship: &Ship = ship;
+    assert!(std::ptr::eq(ship, first.record));
+    assert_eq!((any.id, any.name), (128, Some("good")));
+    assert_eq!(any.source.path, Path::new("/d/one"));
+}
+
+#[test]
+fn a_decode_error_is_returned_every_time_without_harming_the_store() {
+    let data = mixed_ships();
+    let first = data.get::<Ship>(129).expect("present").expect_err("short");
+    let second = data.get::<Ship>(129).expect("present").expect_err("short");
+    assert!(std::ptr::eq(first, second));
+    assert_eq!((first.res_type, first.id), (Ship::TYPE, 129));
+    assert_eq!(first.name.as_deref(), Some("short"));
+    let any = data
+        .get_any(Ship::TYPE, 129)
+        .expect("present")
+        .expect_err("short");
+    assert!(std::ptr::eq(any, first));
+    assert_eq!(ship(&data, 128).0, 1);
+}
+
+#[test]
+fn trailing_bytes_decode_with_a_warning() {
+    let data = mixed_ships();
+    let entry = data.get::<Ship>(130).expect("present").expect("decodes");
+    assert_eq!(entry.record.holds, 3);
+    let warning = entry.warning.expect("trailing bytes");
+    assert!(
+        matches!(warning, DecodeWarning::TrailingBytes { id: 130, actual_len, .. } if *actual_len == 1862),
+        "{warning:?}"
+    );
+}
+
+#[test]
+fn records_iterate_every_id_ascending_and_keep_going_past_errors() {
+    let data = mixed_ships();
+    let all: Vec<(i16, Result<i16, i16>)> = data
+        .records::<Ship>()
+        .map(|(id, result)| (id, result.map(|e| e.record.holds).map_err(|e| e.id)))
+        .collect();
+    assert_eq!(all, [(128, Ok(1)), (129, Err(129)), (130, Ok(3))]);
+    assert_eq!(data.records::<crate::records::spin::Spin>().count(), 0);
+}
+
+/// The store can be shared across threads.
+const _: fn() = || {
+    fn is<T: Send + Sync>() {}
+    is::<GameData>();
+};
