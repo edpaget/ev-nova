@@ -228,6 +228,8 @@ dependencies = [
 name = "nova-dump"
 version = "0.1.0"
 dependencies = [
+ "nova-data",
+ "nova-rsrc",
  "thiserror",
 ]
 

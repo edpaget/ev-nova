@@ -8,6 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+nova-data.workspace = true
+nova-rsrc.workspace = true
 thiserror.workspace = true
 
 [lints]
