@@ -6,6 +6,8 @@ pub mod checksum;
 pub mod colors;
 pub mod cron;
 pub mod desc;
+pub mod dialog;
+pub mod dialog_items;
 pub mod disaster;
 pub mod dude;
 pub mod fleet;

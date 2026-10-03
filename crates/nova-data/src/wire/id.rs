@@ -56,6 +56,8 @@ nova_ids! {
     CronId;
     /// ID of a `dësc` (description) resource.
     DescId;
+    /// ID of a `DITL` (dialog item list) resource.
+    DitlId;
     /// ID of a `düde` (ship group) resource.
     DudeId;
     /// ID of a `flët` (fleet) resource.
