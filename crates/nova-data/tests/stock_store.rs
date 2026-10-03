@@ -20,7 +20,9 @@ use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::order::IgnoreReason;
 use nova_data::store::{GameData, Origin};
-use nova_data::{AnyRecord, Record, Registered, ShipId, TYPES, decode_any};
+use nova_data::{
+    AnyRecord, LayerError, LayerSprite, Record, Registered, ShipId, TYPES, decode_any,
+};
 use nova_rsrc::{ResType, ResourceFile};
 
 use common::{ndat_files, nova_data, nova_data_rez, rez_files};
@@ -252,6 +254,106 @@ fn every_stock_ship_resolves_to_its_sprite_sheet() {
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
     assert_eq!(resolved, 288);
+}
+
+/// Checks one resolved layer against its `shän`: every frame is the
+/// layer's `*_x_size` x `*_y_size`, and it has as many frames as the base
+/// or exactly one set (`frames_per`). Returns whether it is defined.
+fn check_layer(
+    id: i16,
+    layer: Option<Result<LayerSprite<'_>, LayerError>>,
+    size: (i16, i16),
+    counts: (usize, usize),
+    problems: &mut Vec<String>,
+) -> bool {
+    let Some(layer) = layer else { return false };
+    match layer {
+        Ok(sprite) => {
+            let frames = sprite.sheet.frames().len();
+            if frames != counts.0 && frames != counts.1 {
+                problems.push(format!(
+                    "shïp {id}: rlëD {} has {frames} frames, not {} or {}",
+                    sprite.image_id, counts.0, counts.1
+                ));
+            }
+            let expected = (size.0 as u32, size.1 as u32);
+            for (at, frame) in sprite.sheet.frames().iter().enumerate() {
+                if (frame.width(), frame.height()) != expected {
+                    problems.push(format!(
+                        "shïp {id}: rlëD {} frame {at} is {}x{}, not {expected:?}",
+                        sprite.image_id,
+                        frame.width(),
+                        frame.height()
+                    ));
+                }
+            }
+        }
+        Err(err) => problems.push(format!("shïp {id}: {err}")),
+    }
+    true
+}
+
+#[test]
+fn every_stock_ships_layers_resolve_at_the_shans_sizes() {
+    let Some(dir) = nova_data() else { return };
+    let data = open(&dir);
+
+    let mut problems = Vec::new();
+    let (mut glows, mut lights) = (0, 0);
+    for &id in data.ids(Ship::TYPE) {
+        let anim = data.get::<ShipAnim>(id).expect("present").expect("decodes");
+        let anim = anim.record;
+        let base = data.ship_sprite(ShipId(id)).expect("resolves");
+        let counts = (base.sheet.frames().len(), anim.frames_per as usize);
+        let layers = match data.ship_layers(ShipId(id)) {
+            Ok(layers) => layers,
+            Err(err) => {
+                problems.push(format!("shïp {id}: {err}"));
+                continue;
+            }
+        };
+        let glow_size = (anim.glow_x_size, anim.glow_y_size);
+        let light_size = (anim.light_x_size, anim.light_y_size);
+        glows += usize::from(check_layer(
+            id,
+            layers.glow,
+            glow_size,
+            counts,
+            &mut problems,
+        ));
+        lights += usize::from(check_layer(
+            id,
+            layers.lights,
+            light_size,
+            counts,
+            &mut problems,
+        ));
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    assert_eq!((glows, lights), (281, 107));
+}
+
+#[test]
+fn ninety_nine_stock_ships_have_a_description() {
+    let Some(dir) = nova_data() else { return };
+    let data = open(&dir);
+
+    let mut problems = Vec::new();
+    let mut described = 0;
+    for &id in data.ids(Ship::TYPE) {
+        match data.ship_description(ShipId(id)) {
+            Some(Ok(_)) => described += 1,
+            Some(Err(err)) => problems.push(format!("shïp {id}: {err}")),
+            None => {}
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    assert_eq!(described, 99);
+    let shuttle = data
+        .ship_description(ShipId(128))
+        .expect("present")
+        .expect("decodes");
+    assert_eq!((shuttle.id, shuttle.name), (13000, Some("Shuttle")));
 }
 
 /// The files a ship's `shïp`, `shän` and `rlëD` came from.
