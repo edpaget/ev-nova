@@ -30,7 +30,8 @@ pub enum ParseError {
         /// The length of the whole fork.
         file_len: usize,
     },
-    /// The map is shorter than its 28-byte header plus the type count.
+    /// The map is shorter than its header: for a fork, 28 bytes plus the
+    /// type count; for a `.rez` file, 8 bytes.
     MapTruncated,
     /// The type list does not fit inside the map.
     TypeListOutOfBounds,
@@ -105,6 +106,76 @@ pub enum ParseError {
         /// The resource's ID.
         id: i16,
     },
+    /// The buffer starts with the `.rez` magic but is shorter than the
+    /// 24-byte `.rez` header.
+    RezHeaderTruncated,
+    /// A `.rez` file's group count is not 1.
+    RezGroupCount {
+        /// The declared group count.
+        count: u32,
+    },
+    /// A `.rez` file's group type is not 1.
+    RezGroupType {
+        /// The declared group type.
+        group_type: u32,
+    },
+    /// A `.rez` file declares no entries, so it has no resource map.
+    RezNoEntries,
+    /// A `.rez` header runs past the end of the file, or its entry table
+    /// runs past the end of the header.
+    RezEntryTableOutOfBounds {
+        /// The declared number of entries.
+        count: u32,
+        /// The length of the whole file.
+        file_len: usize,
+    },
+    /// A `.rez` entry's data runs past the end of the file.
+    RezEntryOutOfBounds {
+        /// The entry's row in the entry table, from 0.
+        index: usize,
+        /// The entry's absolute offset.
+        offset: u32,
+        /// The entry's size.
+        size: u32,
+        /// The length of the whole file.
+        file_len: usize,
+    },
+    /// A `.rez` file's last entry, its resource map, is not named
+    /// `resource.map` (or its name lies outside the name table or has no
+    /// terminating NUL).
+    RezMapNotNamed,
+    /// A `.rez` resource names an entry outside the entry table.
+    RezEntryIndexOutOfRange {
+        /// The resource's type.
+        ty: ResType,
+        /// The resource's ID.
+        id: i16,
+        /// The entry index, as stored (counted from the base index).
+        index: u32,
+    },
+    /// A `.rez` resource names the resource map's entry as its data.
+    RezResourceIsMap {
+        /// The resource's type.
+        ty: ResType,
+        /// The resource's ID.
+        id: i16,
+    },
+    /// A `.rez` resource entry repeats a type code other than its type's.
+    RezTypeMismatch {
+        /// The type whose resource list holds the entry.
+        ty: ResType,
+        /// The resource's ID.
+        id: i16,
+        /// The type code the entry holds.
+        found: ResType,
+    },
+    /// A `.rez` resource's 256-byte name field has no terminating NUL.
+    RezUnterminatedName {
+        /// The resource's type.
+        ty: ResType,
+        /// The resource's ID.
+        id: i16,
+    },
 }
 
 impl fmt::Display for Section {
@@ -131,7 +202,7 @@ impl fmt::Display for ParseError {
                 f,
                 "{section} section (offset {offset}, length {len}) extends past the end of the {file_len}-byte fork"
             ),
-            Self::MapTruncated => f.write_str("resource map is shorter than its 30-byte header"),
+            Self::MapTruncated => f.write_str("resource map is shorter than its header"),
             Self::TypeListOutOfBounds => {
                 f.write_str("type list extends past the end of the resource map")
             }
@@ -171,6 +242,44 @@ impl fmt::Display for ParseError {
             Self::CompressedResource { ty, id } => write!(
                 f,
                 "resource '{ty}' {id} is compressed, which is not supported"
+            ),
+            Self::RezHeaderTruncated => f.write_str(".rez header is truncated (needs 24 bytes)"),
+            Self::RezGroupCount { count } => {
+                write!(f, ".rez file has {count} groups (expected 1)")
+            }
+            Self::RezGroupType { group_type } => {
+                write!(f, ".rez group type is {group_type} (expected 1)")
+            }
+            Self::RezNoEntries => f.write_str(".rez file has no entries, so no resource map"),
+            Self::RezEntryTableOutOfBounds { count, file_len } => write!(
+                f,
+                ".rez header or its table of {count} entries extends past the end of the {file_len}-byte file"
+            ),
+            Self::RezEntryOutOfBounds {
+                index,
+                offset,
+                size,
+                file_len,
+            } => write!(
+                f,
+                ".rez entry {index} (offset {offset}, size {size}) extends past the end of the {file_len}-byte file"
+            ),
+            Self::RezMapNotNamed => f.write_str(".rez file's last entry is not named resource.map"),
+            Self::RezEntryIndexOutOfRange { ty, id, index } => write!(
+                f,
+                "resource '{ty}' {id}: .rez entry index {index} is outside the entry table"
+            ),
+            Self::RezResourceIsMap { ty, id } => write!(
+                f,
+                "resource '{ty}' {id}: .rez entry index names the resource map"
+            ),
+            Self::RezTypeMismatch { ty, id, found } => write!(
+                f,
+                "resource '{ty}' {id}: .rez resource entry has type '{found}'"
+            ),
+            Self::RezUnterminatedName { ty, id } => write!(
+                f,
+                "resource '{ty}' {id}: .rez name field has no terminating NUL"
             ),
         }
     }
@@ -255,7 +364,7 @@ mod tests {
             ),
             (
                 ParseError::MapTruncated,
-                "resource map is shorter than its 30-byte header",
+                "resource map is shorter than its header",
             ),
             (
                 ParseError::TypeListOutOfBounds,
@@ -323,6 +432,75 @@ mod tests {
     }
 
     #[test]
+    fn rez_parse_errors_describe_the_problem() {
+        let cases = [
+            (
+                ParseError::RezHeaderTruncated,
+                ".rez header is truncated (needs 24 bytes)",
+            ),
+            (
+                ParseError::RezGroupCount { count: 2 },
+                ".rez file has 2 groups (expected 1)",
+            ),
+            (
+                ParseError::RezGroupType { group_type: 3 },
+                ".rez group type is 3 (expected 1)",
+            ),
+            (
+                ParseError::RezNoEntries,
+                ".rez file has no entries, so no resource map",
+            ),
+            (
+                ParseError::RezEntryTableOutOfBounds {
+                    count: 9,
+                    file_len: 50,
+                },
+                ".rez header or its table of 9 entries extends past the end of the 50-byte file",
+            ),
+            (
+                ParseError::RezEntryOutOfBounds {
+                    index: 4,
+                    offset: 100,
+                    size: 7,
+                    file_len: 101,
+                },
+                ".rez entry 4 (offset 100, size 7) extends past the end of the 101-byte file",
+            ),
+            (
+                ParseError::RezMapNotNamed,
+                ".rez file's last entry is not named resource.map",
+            ),
+            (
+                ParseError::RezEntryIndexOutOfRange {
+                    ty: SHIP,
+                    id: 128,
+                    index: 0,
+                },
+                "resource 'shïp' 128: .rez entry index 0 is outside the entry table",
+            ),
+            (
+                ParseError::RezResourceIsMap { ty: SHIP, id: 128 },
+                "resource 'shïp' 128: .rez entry index names the resource map",
+            ),
+            (
+                ParseError::RezTypeMismatch {
+                    ty: SHIP,
+                    id: 128,
+                    found: ResType(*b"PICT"),
+                },
+                "resource 'shïp' 128: .rez resource entry has type 'PICT'",
+            ),
+            (
+                ParseError::RezUnterminatedName { ty: SHIP, id: 128 },
+                "resource 'shïp' 128: .rez name field has no terminating NUL",
+            ),
+        ];
+        for (error, message) in cases {
+            assert_eq!(error.to_string(), message);
+        }
+    }
+
+    #[test]
     fn parse_error_is_a_std_error() {
         let error: Box<dyn std::error::Error> = Box::new(ParseError::MapTruncated);
         assert!(error.source().is_none());
@@ -349,7 +527,7 @@ mod tests {
         };
         assert_eq!(
             parse.to_string(),
-            "parsing Nova Files/Nova Data 1.ndat: resource map is shorter than its 30-byte header"
+            "parsing Nova Files/Nova Data 1.ndat: resource map is shorter than its header"
         );
         let source = parse.source().expect("has source");
         assert_eq!(

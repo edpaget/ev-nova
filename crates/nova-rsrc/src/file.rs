@@ -4,11 +4,13 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use crate::parse::{self, Entry, TypeEntry};
+use crate::rez;
 use crate::{Fork, ForkReader, LoadError, ParseError, ResType, StdForkReader};
 
-/// A resource fork held in memory: the raw bytes plus a validated index.
+/// A resource file held in memory: the raw bytes plus a validated index.
 ///
-/// Resources borrow their data straight from the owned bytes, so reading
+/// The bytes are a flattened resource fork or a Windows `.rez` file; both
+/// are served through the same view. Resources borrow their data straight from the owned bytes, so reading
 /// them is zero-copy.
 #[derive(Debug)]
 pub struct ResourceFile {
@@ -17,11 +19,17 @@ pub struct ResourceFile {
 }
 
 impl ResourceFile {
-    /// Parses and validates a flattened resource fork.
+    /// Parses and validates a flattened resource fork or a `.rez` file.
     ///
+    /// The format is chosen by content: bytes starting with the `.rez`
+    /// magic `BRGR` are read as `.rez`, anything else as a resource fork.
     /// Fails on any structural problem; never returns a partial file.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, ParseError> {
-        let index = parse::parse(&bytes)?;
+        let index = if bytes.starts_with(rez::MAGIC) {
+            rez::parse(&bytes)?
+        } else {
+            parse::parse(&bytes)?
+        };
         Ok(Self {
             bytes,
             types: index.types,
@@ -30,9 +38,10 @@ impl ResourceFile {
 
     /// Loads a resource file through `reader`.
     ///
-    /// A flattened fork in the data fork (an `.ndat` file) wins; if the data
-    /// fork is missing or empty, the file's real resource fork is read
-    /// instead.
+    /// A flattened fork or `.rez` file in the data fork (an `.ndat` or
+    /// `.rez` file) wins; if the data fork is missing or empty, the file's
+    /// real resource fork is read instead. The bytes, not the extension,
+    /// pick the parser; see [`ResourceFile::from_bytes`].
     pub fn load(reader: &impl ForkReader, path: &Path) -> Result<Self, LoadError> {
         let read = |fork| {
             reader
@@ -99,7 +108,7 @@ impl ResourceFile {
         self.types.iter().map(|t| t.entries.len()).sum()
     }
 
-    /// Whether the fork holds no resources.
+    /// Whether the file holds no resources.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -162,7 +171,8 @@ impl<'a> Resource<'a> {
         self.name_bytes
     }
 
-    /// The attribute byte from the reference list.
+    /// The attribute byte from the reference list; always 0 for a `.rez`
+    /// resource, a format without attributes.
     #[must_use]
     pub fn attributes(&self) -> u8 {
         self.attributes
@@ -178,7 +188,7 @@ impl<'a> Resource<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixture::ForkBuilder;
+    use crate::fixture::{ForkBuilder, RezBuilder};
     use crate::{Fork, ForkReader, LoadError};
     use std::cell::RefCell;
     use std::io;
@@ -343,6 +353,60 @@ mod tests {
     fn accepts_a_gap_before_the_data_section() {
         let file = parse(&ForkBuilder::new().resource(PICT, 1, None, b"x").gap(240));
         assert_eq!(file.get(PICT, 1).expect("present").data(), b"x");
+    }
+
+    fn rez(builder: &RezBuilder) -> ResourceFile {
+        ResourceFile::from_bytes(builder.build().bytes).expect("valid .rez")
+    }
+
+    #[test]
+    fn from_bytes_reads_a_rez_file_by_its_magic() {
+        let file = rez(&RezBuilder::new()
+            .resource(SHIP, 128, Some(b"K\x8Ase"), b"ship-128")
+            .resource(PICT, -5, None, b""));
+        assert_eq!(file.types().collect::<Vec<_>>(), vec![SHIP, PICT]);
+        let ship = file.get(SHIP, 128).expect("present");
+        assert_eq!(ship.res_type(), SHIP);
+        assert_eq!(ship.data(), b"ship-128");
+        assert_eq!(ship.name(), Some("Käse"));
+        assert_eq!(ship.name_bytes(), Some(&b"K\x8Ase"[..]));
+        assert_eq!(ship.attributes(), 0);
+        let pict = file.get(PICT, -5).expect("present");
+        assert_eq!(pict.data(), b"");
+        assert_eq!(pict.name(), None);
+        assert_eq!(pict.name_bytes(), None);
+    }
+
+    #[test]
+    fn a_rez_too_short_after_its_magic_is_a_rez_error() {
+        for len in 4..24 {
+            let mut bytes = b"BRGR".to_vec();
+            bytes.resize(len, 0);
+            assert_eq!(
+                ResourceFile::from_bytes(bytes).err(),
+                Some(ParseError::RezHeaderTruncated),
+                "{len} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn anything_without_the_full_magic_is_read_as_a_fork() {
+        // Too short for the magic, or a near miss: the fork parser decides.
+        for bytes in [&b""[..], b"B", b"BRG", b"BRGX", b"BRGr", b"xRGR"] {
+            assert_eq!(
+                ResourceFile::from_bytes(bytes.to_vec()).err(),
+                Some(ParseError::HeaderTruncated),
+                "{bytes:?}"
+            );
+        }
+        // A real rez file with one magic byte changed fails as a fork.
+        let mut bytes = RezBuilder::new().build().bytes;
+        bytes[3] = b'r';
+        assert!(matches!(
+            ResourceFile::from_bytes(bytes),
+            Err(ParseError::SectionOutOfBounds { .. })
+        ));
     }
 
     #[test]

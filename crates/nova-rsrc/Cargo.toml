@@ -1,6 +1,6 @@
 [package]
 name = "nova-rsrc"
-description = "Reader for classic Mac OS resource forks (flattened .ndat / .rsrc files)"
+description = "Reader for classic Mac OS resource forks (flattened .ndat / .rsrc files) and Windows .rez resource files"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,7 +17,7 @@ nova-rsrc = { workspace = true, features = ["fixture"] }
 tempfile.workspace = true
 
 [features]
-# Exposes the synthetic resource-fork builder to other crates' tests.
+# Exposes the synthetic resource-fork and .rez builders to other crates' tests.
 fixture = []
 
 [lints]

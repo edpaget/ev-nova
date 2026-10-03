@@ -219,7 +219,7 @@ impl Fork<'_> {
 ///
 /// Sorting by start (stably, so ties keep type-list order) puts any overlap
 /// between neighbours; the later one is named.
-fn reject_overlaps(lists: &[(ResType, Range<usize>)]) -> Result<(), ParseError> {
+pub(crate) fn reject_overlaps(lists: &[(ResType, Range<usize>)]) -> Result<(), ParseError> {
     let mut by_start: Vec<&(ResType, Range<usize>)> = lists.iter().collect();
     by_start.sort_by_key(|(_, refs)| refs.start);
     for pair in by_start.windows(2) {
@@ -263,7 +263,7 @@ pub(crate) fn decode_name(bytes: &[u8]) -> String {
 }
 
 /// `N` bytes at `pos`, or `None` if they run past the end.
-fn read<const N: usize>(bytes: &[u8], pos: usize) -> Option<[u8; N]> {
+pub(crate) fn read<const N: usize>(bytes: &[u8], pos: usize) -> Option<[u8; N]> {
     bytes.get(pos..pos.checked_add(N)?)?.try_into().ok()
 }
 
