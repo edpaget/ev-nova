@@ -43,6 +43,9 @@ pub enum WindowEvent {
         key: Key,
         /// Down (`true`) or up.
         pressed: bool,
+        /// Whether this press is the OS repeating a held key; see
+        /// [`Input::Key`].
+        repeat: bool,
     },
     /// The pointer moved to a window position in physical pixels.
     PointerMoved {
@@ -141,9 +144,18 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             WindowEvent::Key {
                 key: Key::Escape,
                 pressed: true,
+                ..
             }
             | WindowEvent::CloseRequested => Control::Exit,
-            WindowEvent::Key { key, pressed } => self.route(Input::Key { key, pressed }),
+            WindowEvent::Key {
+                key,
+                pressed,
+                repeat,
+            } => self.route(Input::Key {
+                key,
+                pressed,
+                repeat,
+            }),
             WindowEvent::PointerMoved { px } => {
                 self.pointer = Some(px);
                 match self.viewport.window_to_logical(px) {
@@ -281,7 +293,11 @@ mod tests {
     }
 
     fn key(key: Key, pressed: bool) -> WindowEvent {
-        WindowEvent::Key { key, pressed }
+        WindowEvent::Key {
+            key,
+            pressed,
+            repeat: false,
+        }
     }
 
     #[test]
@@ -323,6 +339,12 @@ mod tests {
             handle(&mut app, &mut window, key(Key::Up, true)),
             Control::Continue
         );
+        let held = WindowEvent::Key {
+            key: Key::Up,
+            pressed: true,
+            repeat: true,
+        };
+        handle(&mut app, &mut window, held);
         handle(&mut app, &mut window, key(Key::Up, false));
         handle(&mut app, &mut window, key(Key::Escape, false));
         assert_eq!(
@@ -330,15 +352,23 @@ mod tests {
             [
                 Input::Key {
                     key: Key::Up,
-                    pressed: true
+                    pressed: true,
+                    repeat: false
                 },
                 Input::Key {
                     key: Key::Up,
-                    pressed: false
+                    pressed: true,
+                    repeat: true
+                },
+                Input::Key {
+                    key: Key::Up,
+                    pressed: false,
+                    repeat: false
                 },
                 Input::Key {
                     key: Key::Escape,
-                    pressed: false
+                    pressed: false,
+                    repeat: false
                 },
             ]
         );

@@ -230,7 +230,8 @@ fn escape_and_closing_exit() {
     assert_eq!(
         harness.send(WindowEvent::Key {
             key: Key::Escape,
-            pressed: true
+            pressed: true,
+            repeat: false
         }),
         Control::Exit
     );
@@ -254,12 +255,22 @@ fn tab_switches_between_the_ship_browser_and_the_galaxy_map() {
     let tab = |pressed| WindowEvent::Key {
         key: Key::Tab,
         pressed,
+        repeat: false,
+    };
+    let held_tab = WindowEvent::Key {
+        key: Key::Tab,
+        pressed: true,
+        repeat: true,
     };
     let ships = texts(&harness.frame());
     assert!(ships.contains(&"Shuttle".to_owned()), "{ships:?}");
     assert!(ships.contains(&"Tab: ships / galaxy map".to_owned()));
 
     assert_eq!(harness.send(tab(true)), Control::Continue);
+    // Holding Tab past the key-repeat delay stays on the map.
+    for _ in 0..3 {
+        assert_eq!(harness.send(held_tab), Control::Continue);
+    }
     assert_eq!(harness.send(tab(false)), Control::Continue);
     let map = texts(&harness.frame());
     assert!(

@@ -48,6 +48,7 @@ mod tests {
                 Input::Key {
                     key: Key::Escape,
                     pressed: true,
+                    ..
                 } => ScreenAction::Quit,
                 _ => ScreenAction::None,
             }
@@ -69,10 +70,12 @@ mod tests {
         let escape = Input::Key {
             key: Key::Escape,
             pressed: true,
+            repeat: false,
         };
         let space = Input::Key {
             key: Key::Space,
             pressed: true,
+            repeat: false,
         };
         assert_eq!(screen.input(&space), ScreenAction::None);
         assert_eq!(screen.input(&escape), ScreenAction::Quit);

@@ -156,10 +156,15 @@ impl Harness {
     }
 
     fn press(&mut self, key: Key) {
-        self.send(WindowEvent::Key { key, pressed: true });
+        self.send(WindowEvent::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        });
         self.send(WindowEvent::Key {
             key,
             pressed: false,
+            repeat: false,
         });
     }
 

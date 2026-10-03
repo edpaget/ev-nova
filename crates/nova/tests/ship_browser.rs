@@ -139,7 +139,11 @@ impl Harness {
 
     fn press(&mut self, key: Key) {
         assert_eq!(
-            self.send(WindowEvent::Key { key, pressed: true }),
+            self.send(WindowEvent::Key {
+                key,
+                pressed: true,
+                repeat: false,
+            }),
             Control::Continue
         );
     }

@@ -30,7 +30,7 @@ pub enum Showing {
 
 /// Every screen the app can show, and which one it is showing. The router
 /// forwards input, ticks and drawing to the screen shown, and switches
-/// screens on a Tab press.
+/// screens on a Tab press (not on its key repeats).
 #[derive(Clone, Debug)]
 pub struct AppScreen {
     showing: Showing,
@@ -94,15 +94,17 @@ pub fn start_screen(data: Rc<GameData>) -> AppScreen {
 impl Screen for AppScreen {
     /// A Tab press switches screens, first cancelling any pointer gesture on
     /// the screen it hides (whose button release will now go to the other
-    /// screen); Tab's release is consumed too. Everything else goes to the
-    /// screen shown.
+    /// screen). Holding Tab switches once: its key repeats are consumed
+    /// without switching, as is its release. Everything else, repeats
+    /// included, goes to the screen shown.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
             key: Key::Tab,
             pressed,
+            repeat,
         } = *input
         {
-            if pressed {
+            if pressed && !repeat {
                 self.shown_mut().cancel_pointer();
                 self.showing = match self.showing {
                     Showing::ShipBrowser => Showing::GalaxyMap,
@@ -204,7 +206,21 @@ mod tests {
     }
 
     fn key(key: Key, pressed: bool) -> Input {
-        Input::Key { key, pressed }
+        Input::Key {
+            key,
+            pressed,
+            repeat: false,
+        }
+    }
+
+    /// A key held down past the OS key-repeat delay: another press, marked
+    /// as a repeat.
+    fn held(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: true,
+            repeat: true,
+        }
     }
 
     fn drawn(screen: &impl Screen) -> DrawList {
@@ -257,6 +273,62 @@ mod tests {
             showing.push(screen.showing());
         }
         assert_eq!(showing, [Map, Map, Ships, Ships, Map]);
+    }
+
+    #[test]
+    fn holding_tab_switches_once() {
+        use Showing::{GalaxyMap as Map, ShipBrowser as Ships};
+        let mut screen = AppScreen::new(data());
+        let mut showing = Vec::new();
+        for input in [
+            key(Key::Tab, true),
+            held(Key::Tab),
+            held(Key::Tab),
+            held(Key::Tab),
+            key(Key::Tab, false),
+            key(Key::Tab, true),
+        ] {
+            assert_eq!(screen.input(&input), ScreenAction::None);
+            showing.push(screen.showing());
+        }
+        assert_eq!(showing, [Map, Map, Map, Map, Map, Ships]);
+    }
+
+    #[test]
+    fn a_held_tab_reaches_neither_screen() {
+        let mut screen = AppScreen::new(data());
+        screen.input(&key(Key::Tab, true));
+        let map = screen.galaxy_map();
+        let view = *map.view();
+        let at = map.view().world_to_screen(
+            map.model()
+                .system(SystemId(129))
+                .expect("a system")
+                .position(),
+        );
+        let left = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+
+        // A drag on the map survives a held Tab: no switch, so no cancel.
+        screen.input(&left(true));
+        screen.input(&held(Key::Tab));
+        screen.input(&Input::PointerMoved(Point::new(at.x + 50.0, at.y)));
+        assert_eq!(screen.showing(), Showing::GalaxyMap);
+        assert_ne!(*screen.galaxy_map().view(), view, "the drag goes on");
+    }
+
+    #[test]
+    fn held_keys_reach_the_screen_shown() {
+        let mut screen = AppScreen::new(data());
+        screen.input(&held(Key::Right));
+        assert_eq!(screen.ship_browser().selected(), Some(ShipId(129)));
+        screen.input(&key(Key::Tab, true));
+        let fitted = *screen.galaxy_map().view();
+        screen.input(&held(Key::Right));
+        assert_ne!(*screen.galaxy_map().view(), fitted, "the map pans");
     }
 
     #[test]

@@ -230,10 +230,14 @@ fn draw_text(ship: &ShipEntry, list: &mut DrawList) {
 
 impl<C: ShipCatalog> Screen for ShipBrowser<C> {
     /// Right or Down shows the next ship and Left or Up the previous one,
-    /// wrapping round. Everything else, and every key release, is ignored;
-    /// the browser never quits (Escape is the app's).
+    /// wrapping round; holding the key keeps stepping, once per key repeat.
+    /// Everything else, and every key release, is ignored; the browser never
+    /// quits (Escape is the app's).
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key { key, pressed: true } = input {
+        if let Input::Key {
+            key, pressed: true, ..
+        } = input
+        {
             match key {
                 Key::Right | Key::Down => self.select(true),
                 Key::Left | Key::Up => self.select(false),
@@ -357,7 +361,20 @@ mod tests {
     }
 
     fn press(key: Key) -> Input {
-        Input::Key { key, pressed: true }
+        Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        }
+    }
+
+    /// A key held down past the OS key-repeat delay.
+    fn held(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: true,
+            repeat: true,
+        }
     }
 
     /// One frame period: 1/30 s.
@@ -449,6 +466,18 @@ mod tests {
     }
 
     #[test]
+    fn holding_an_arrow_keeps_stepping() {
+        let catalog = three_ships();
+        let mut browser = ShipBrowser::new(&catalog);
+        let mut visited = Vec::new();
+        for input in [press(Key::Right), held(Key::Right), held(Key::Left)] {
+            assert_eq!(browser.input(&input), ScreenAction::None);
+            visited.push(browser.selected().expect("a ship").0);
+        }
+        assert_eq!(visited, [129, 130, 129]);
+    }
+
+    #[test]
     fn down_and_up_mirror_right_and_left() {
         let catalog = three_ships();
         let mut browser = ShipBrowser::new(&catalog);
@@ -482,10 +511,12 @@ mod tests {
             Input::Key {
                 key: Key::Right,
                 pressed: false,
+                repeat: false,
             },
             Input::Key {
                 key: Key::Left,
                 pressed: false,
+                repeat: false,
             },
             press(Key::Enter),
             press(Key::Escape),

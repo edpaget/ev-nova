@@ -326,7 +326,10 @@ impl Screen for GalaxyMap {
     /// Never quits: Escape is the app's.
     fn input(&mut self, input: &Input) -> ScreenAction {
         match *input {
-            Input::Key { key, pressed: true } => self.key(key),
+            // Repeats too: holding a key keeps panning or zooming.
+            Input::Key {
+                key, pressed: true, ..
+            } => self.key(key),
             Input::PointerButton {
                 button: MouseButton::Left,
                 pressed,
@@ -485,7 +488,20 @@ mod tests {
     }
 
     fn press(key: Key) -> Input {
-        Input::Key { key, pressed: true }
+        Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        }
+    }
+
+    /// A key held down past the OS key-repeat delay.
+    fn held(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: true,
+            repeat: true,
+        }
     }
 
     fn button(button: MouseButton, pressed: bool, at: Point) -> Input {
@@ -634,6 +650,20 @@ mod tests {
     }
 
     #[test]
+    fn held_keys_go_on_panning_and_zooming() {
+        let mut map = map();
+        let (scale, start, fitted) = (map.view().scale(), map.view().center(), map.view().zoom());
+        map.input(&press(Key::Right));
+        assert_eq!(map.input(&held(Key::Right)), ScreenAction::None);
+        map.input(&held(Key::Right));
+        let center = map.view().center();
+        let expected = start.x + 3.0 * PAN_STEP / scale;
+        assert!((center.x - expected).abs() < 1e-3, "{center:?}");
+        map.input(&held(Key::Char('=')));
+        assert_eq!(map.view().zoom(), fitted + 1);
+    }
+
+    #[test]
     fn equals_and_plus_zoom_in_and_minus_zooms_out() {
         let mut map = map();
         let fitted = map.view().zoom();
@@ -656,10 +686,12 @@ mod tests {
             Input::Key {
                 key: Key::Right,
                 pressed: false,
+                repeat: false,
             },
             Input::Key {
                 key: Key::Char('='),
                 pressed: false,
+                repeat: false,
             },
             press(Key::Enter),
             press(Key::Escape),

@@ -56,6 +56,7 @@ fn every_stock_ship_is_browsed_with_every_frame_and_layer() {
     let right = Input::Key {
         key: Key::Right,
         pressed: true,
+        repeat: false,
     };
 
     let mut problems_seen = Vec::new();

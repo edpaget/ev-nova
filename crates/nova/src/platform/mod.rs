@@ -30,7 +30,9 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
             size_px: window.size_px(),
             scale_factor: *scale_factor,
         },
-        WinitEvent::KeyboardInput { event, .. } => key_event(event.physical_key, event.state),
+        WinitEvent::KeyboardInput { event, .. } => {
+            key_event(event.physical_key, event.state, event.repeat)
+        }
         WinitEvent::CursorMoved { position, .. } => WindowEvent::PointerMoved {
             px: (position.x, position.y),
         },
@@ -43,12 +45,14 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
     })
 }
 
-/// A key going down or up.
+/// A key going down or up; `repeat` is winit's flag for a press the OS
+/// sends again while the key is held.
 #[must_use]
-pub fn key_event(key: PhysicalKey, state: ElementState) -> WindowEvent {
+pub fn key_event(key: PhysicalKey, state: ElementState, repeat: bool) -> WindowEvent {
     WindowEvent::Key {
         key: map_key(key),
         pressed: state.is_pressed(),
+        repeat,
     }
 }
 
@@ -133,19 +137,41 @@ mod tests {
     }
 
     #[test]
-    fn a_key_event_carries_its_key_and_state() {
+    fn a_key_event_carries_its_key_state_and_repeat_flag() {
         assert_eq!(
-            key_event(PhysicalKey::Code(KeyCode::ArrowUp), ElementState::Pressed),
+            key_event(
+                PhysicalKey::Code(KeyCode::ArrowUp),
+                ElementState::Pressed,
+                false
+            ),
             WindowEvent::Key {
                 key: Key::Up,
-                pressed: true
+                pressed: true,
+                repeat: false
             }
         );
         assert_eq!(
-            key_event(PhysicalKey::Code(KeyCode::Escape), ElementState::Released),
+            key_event(
+                PhysicalKey::Code(KeyCode::Escape),
+                ElementState::Released,
+                false
+            ),
             WindowEvent::Key {
                 key: Key::Escape,
-                pressed: false
+                pressed: false,
+                repeat: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_key_held_past_the_repeat_delay_is_a_repeated_press() {
+        assert_eq!(
+            key_event(PhysicalKey::Code(KeyCode::Tab), ElementState::Pressed, true),
+            WindowEvent::Key {
+                key: Key::Tab,
+                pressed: true,
+                repeat: true
             }
         );
     }

@@ -44,11 +44,19 @@ pub enum MouseButton {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Input {
     /// A key went down or up.
+    ///
+    /// A key held down past the OS key-repeat delay sends further presses
+    /// with `repeat` set. Screens that act on every press (panning,
+    /// zooming, stepping through ships) take repeats as presses; a press
+    /// that toggles something should ignore them.
     Key {
         /// The key.
         key: Key,
         /// Down (`true`) or up.
         pressed: bool,
+        /// Whether this press is the OS repeating a held key; never set on
+        /// a release.
+        repeat: bool,
     },
     /// The pointer moved to a point in the logical space.
     PointerMoved(Point),

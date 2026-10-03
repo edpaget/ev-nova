@@ -74,7 +74,11 @@ fn the_ship_browser_draws_stock_ships() {
         quads
     };
     let press = |app: &mut App<Rc<GameData>>, key| {
-        let event = WindowEvent::Key { key, pressed: true };
+        let event = WindowEvent::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        };
         assert_eq!(
             app.handle(event, &mut Window, &mut RecordingGpu::new()),
             Control::Continue
@@ -136,6 +140,7 @@ fn the_galaxy_map_draws_the_stock_galaxy() {
         WindowEvent::Key {
             key: Key::Tab,
             pressed: true,
+            repeat: false,
         },
     );
     assert_eq!(app.screen().showing(), Showing::GalaxyMap);
