@@ -225,6 +225,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-dump"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "nova-rsrc"
 version = "0.1.0"
 dependencies = [
