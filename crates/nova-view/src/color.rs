@@ -24,6 +24,14 @@ impl Color {
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
     }
+
+    /// The opaque colour of a 24-bit `00RRGGBB` value, as Nova stores
+    /// colours (a `gövt`'s map colour, for one). The top byte is ignored.
+    #[must_use]
+    pub const fn from_rgb24(raw: u32) -> Self {
+        let [_, r, g, b] = raw.to_be_bytes();
+        Self::rgba(r, g, b, 255)
+    }
 }
 
 #[cfg(test)]
@@ -50,6 +58,20 @@ mod tests {
                 a: 255
             }
         );
+    }
+
+    #[test]
+    fn a_24_bit_value_is_an_opaque_colour_ignoring_the_top_byte() {
+        assert_eq!(
+            Color::from_rgb24(0x0012_3456),
+            Color::rgba(0x12, 0x34, 0x56, 255)
+        );
+        assert_eq!(
+            Color::from_rgb24(0xAB2C_2CAF),
+            Color::rgba(0x2C, 0x2C, 0xAF, 255)
+        );
+        assert_eq!(Color::from_rgb24(0), Color::BLACK);
+        assert_eq!(Color::from_rgb24(0x00FF_FFFF), Color::WHITE);
     }
 
     #[test]
