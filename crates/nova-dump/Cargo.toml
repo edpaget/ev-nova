@@ -16,6 +16,8 @@ thiserror.workspace = true
 [dev-dependencies]
 # Synthetic pictures, sprites and sounds for the encoder and export tests.
 nova-data = { workspace = true, features = ["fixture"] }
+# Synthetic resource forks for in-memory stores.
+nova-rsrc = { workspace = true, features = ["fixture"] }
 
 [lints]
 workspace = true

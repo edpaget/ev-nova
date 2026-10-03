@@ -2,6 +2,10 @@
 
 pub mod cli;
 pub mod hex;
+pub mod layouts;
 pub mod names;
 pub mod png;
 pub mod wav;
+
+#[cfg(test)]
+mod testutil;
