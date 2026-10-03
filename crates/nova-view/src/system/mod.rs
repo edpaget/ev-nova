@@ -6,10 +6,12 @@
 //! - [`data`]: the port's adapter over `nova_data`'s `GameData`.
 //! - [`camera`]: the [`Camera`], which part of the system the screen shows,
 //!   at Nova's own scale.
+//! - [`starfield`]: the parallax starfield behind the stellars.
 
 pub mod camera;
 pub mod catalog;
 pub mod data;
+pub mod starfield;
 
 pub use camera::Camera;
 pub use catalog::{
