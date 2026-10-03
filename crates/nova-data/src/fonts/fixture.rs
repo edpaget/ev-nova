@@ -321,4 +321,27 @@ mod tests {
                 .is_none()
         );
     }
+
+    /// The big-endian `u16` at byte `at` of table `tag` in `face`, and the
+    /// table's length.
+    fn table_u16(face: &Face<'_>, tag: [u8; 4], at: usize) -> (u16, usize) {
+        let table = face
+            .raw_face()
+            .table(ttf_parser::Tag::from_bytes(&tag))
+            .expect("the table");
+        (u16::from_be_bytes([table[at], table[at + 1]]), table.len())
+    }
+
+    #[test]
+    fn the_block_fonts_length_and_offset_fields_match_its_tables() {
+        // Fields ttf-parser does not rely on, but other readers may.
+        let bytes = block_font("Block Sans");
+        let face = Face::parse(&bytes, 0).expect("parses");
+        // The cmap subtable runs from byte 12 to the end of the table.
+        let (length, cmap_len) = table_u16(&face, *b"cmap", 14);
+        assert_eq!(usize::from(length), cmap_len - 12);
+        // The name strings start after the header and three records.
+        let (storage, _) = table_u16(&face, *b"name", 4);
+        assert_eq!(storage, 6 + 12 * 3);
+    }
 }
