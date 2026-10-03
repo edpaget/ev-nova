@@ -23,6 +23,7 @@ struct Page {
 }
 
 /// What to draw for one batch, once its data is in the buffers.
+#[derive(Debug, PartialEq)]
 enum Draw {
     Sprites { page: PageId, instances: Range<u32> },
     Solid { vertices: Range<u32> },
@@ -517,4 +518,128 @@ fn pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use nova_view::{Color, Point};
+
+    use super::*;
+    use crate::gpu::{QuadInstance, Rect, SolidQuad};
+    use crate::viewport::LogicalSize;
+    use crate::{PageId, Uv};
+
+    /// A quad told apart from the others by `n`.
+    fn quad(n: f32) -> QuadInstance {
+        QuadInstance {
+            dest: Rect {
+                x: n,
+                y: n,
+                w: 1.0,
+                h: 1.0,
+            },
+            uv: Uv {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 1.0,
+                v1: 1.0,
+            },
+            tint: [1.0; 4],
+        }
+    }
+
+    /// A solid quad told apart from the others by `n`.
+    fn solid(n: f32) -> SolidQuad {
+        let p = |x, y| Point::new(x, y);
+        SolidQuad {
+            corners: [p(n, n), p(n + 1.0, n), p(n + 1.0, n + 1.0), p(n, n + 1.0)],
+            color: [1.0; 4],
+        }
+    }
+
+    fn run(text: &str) -> TextRun {
+        TextRun {
+            text: text.to_owned(),
+            origin_px: (0.0, 0.0),
+            size_px: 16.0,
+            line_height_px: 19.2,
+            wrap_px: None,
+            color: Color::WHITE,
+            clip: PixelRect {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 64,
+            },
+        }
+    }
+
+    #[test]
+    fn batches_share_buffers_and_draw_their_own_ranges_in_order() {
+        let first_text = vec![run("a"), run("b")];
+        let second_text = vec![run("c")];
+        let frame = Frame {
+            target: (64, 64),
+            viewport: PixelRect {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 64,
+            },
+            logical: LogicalSize { w: 32, h: 32 },
+            clear: Color::BLACK,
+            batches: vec![
+                Batch::Sprites {
+                    page: PageId(0),
+                    quads: vec![quad(0.0), quad(1.0)],
+                },
+                Batch::Solid(vec![solid(10.0)]),
+                Batch::Sprites {
+                    page: PageId(1),
+                    quads: vec![quad(2.0)],
+                },
+                Batch::Text(first_text.clone()),
+                Batch::Solid(vec![solid(11.0), solid(12.0)]),
+                Batch::Text(second_text.clone()),
+                Batch::Sprites {
+                    page: PageId(0),
+                    quads: vec![quad(3.0)],
+                },
+            ],
+        };
+
+        let layout = lay_out(&frame);
+
+        assert_eq!(
+            layout.draws,
+            [
+                Draw::Sprites {
+                    page: PageId(0),
+                    instances: 0..2,
+                },
+                Draw::Solid { vertices: 0..6 },
+                Draw::Sprites {
+                    page: PageId(1),
+                    instances: 2..3,
+                },
+                Draw::Text { renderer: 0 },
+                Draw::Solid { vertices: 6..18 },
+                Draw::Text { renderer: 1 },
+                Draw::Sprites {
+                    page: PageId(0),
+                    instances: 3..4,
+                },
+            ]
+        );
+        let instances: Vec<SpriteInstance> = [0.0, 1.0, 2.0, 3.0]
+            .map(|n| SpriteInstance::from(&quad(n)))
+            .to_vec();
+        assert_eq!(layout.instances, instances);
+        let vertices: Vec<SolidVertex> = [10.0, 11.0, 12.0]
+            .iter()
+            .flat_map(|&n| solid_vertices(&solid(n)))
+            .collect();
+        assert_eq!(layout.vertices, vertices);
+        assert_eq!(layout.text, [&first_text[..], &second_text[..]]);
+    }
 }

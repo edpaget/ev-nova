@@ -165,6 +165,44 @@ fn a_known_frame_draws_the_expected_pixels() {
     assert_near(&pixels, (5, 50), BLACK, 0);
 }
 
+#[test]
+fn batches_on_two_pages_draw_their_own_quads_in_order() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // On 4-texel pages the 4x2 picture fills page 0's only shelf and the
+    // 2x4 sprite opens page 1, so the frame is four batches: page 0, page
+    // 1, a solid, then page 0 again. Each covers part of the one before.
+    let grey = Color::rgba(128, 128, 128, 255);
+    let mut list = DrawList::new();
+    list.picture(ImageKey::picture(1), Point::new(2.0, 2.0))
+        .sprite(ImageKey::sprite(3, 0), Point::new(12.0, 4.0), Color::WHITE)
+        .dot(Point::new(12.0, 5.0), 2.0, grey)
+        .picture(ImageKey::picture(1), Point::new(10.0, 5.0));
+    let mut renderer = Renderer::with_page_size(Images, 4);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // The first picture: logical (2..6, 2..4) is pixels (4..12, 12..16).
+    assert_patterned(&pixels, (4, 12), (4, 2));
+    // The sprite, logical (11..13, 2..6), is pixels (22..26, 12..20); the
+    // dot covers its bottom half, so only its top two rows show.
+    assert_patterned(&pixels, (22, 12), (2, 2));
+    // The dot, logical (11..13, 4..6), is pixels (22..26, 16..20); the
+    // second picture covers its bottom row.
+    for at in [(22, 16), (25, 16), (22, 17), (25, 17)] {
+        assert_near(&pixels, at, [128, 128, 128, 255], 2);
+    }
+    // The second picture: logical (10..14, 5..7) is pixels (20..28, 18..22).
+    assert_patterned(&pixels, (20, 18), (4, 2));
+    // Around them.
+    for at in [(21, 13), (26, 13), (19, 19), (28, 19), (22, 22), (12, 13)] {
+        assert_near(&pixels, at, BLACK, 0);
+    }
+}
+
 /// Whether any pixel in rows `rows` is not black.
 fn any_drawn(pixels: &[u8], rows: std::ops::Range<u32>) -> bool {
     rows.flat_map(|y| (0..SIZE).map(move |x| (x, y)))
