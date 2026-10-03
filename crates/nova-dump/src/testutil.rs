@@ -1,15 +1,17 @@
 //! In-memory game data for unit tests.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
-use nova_data::store::GameData;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
+use nova_data::store::{GameData, OpenError};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 
-use crate::ports::Sink;
+use crate::ports::{DataSource, Sink};
 
 /// The data directory every [`MemFs`] store opens.
 pub const DATA: &str = "/data";
@@ -41,6 +43,12 @@ impl MemFs {
         let has_plugins = self.files.keys().any(|path| path.starts_with(plugins));
         GameData::load(self, self, Path::new(DATA), has_plugins.then_some(plugins))
             .expect("in-memory directories list")
+    }
+}
+
+impl DataSource for MemFs {
+    fn open(&self, data: &Path, plugins: Option<&Path>) -> Result<GameData, OpenError> {
+        GameData::load(self, self, data, plugins)
     }
 }
 
@@ -145,5 +153,12 @@ impl Sink for MemSink {
         let old = self.files.insert(rel.to_path_buf(), bytes.to_vec());
         assert!(old.is_none(), "{} written twice", rel.display());
         Ok(())
+    }
+}
+
+/// A sink shared with the test that handed it out.
+impl Sink for Rc<RefCell<MemSink>> {
+    fn write(&mut self, rel: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.borrow_mut().write(rel, bytes)
     }
 }
