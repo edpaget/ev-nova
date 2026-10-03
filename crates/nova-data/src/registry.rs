@@ -1,10 +1,12 @@
 //! The one list of record types.
 //!
 //! The `records!` invocation below is the only place a record type is
-//! registered. It generates [`AnyRecord`], [`decode_any`], [`TYPES`] and, in
-//! tests, the generic checks every record type gets: its type code, its fixed
-//! size (an all-zero buffer of exactly `SIZE` bytes decodes and uses every
-//! byte; one byte fewer fails with an unexpected end), and a JSON round trip.
+//! registered. It generates [`AnyRecord`], [`decode_any`], [`TYPES`], the
+//! [`Registered`] impls and, in tests, the generic checks every record type
+//! gets: its type code, its fixed size (an all-zero buffer of exactly `SIZE`
+//! bytes decodes and uses every byte; one byte fewer fails with an unexpected
+//! end), a JSON round trip, and that [`Registered::from_any`] takes its own
+//! variant and only its own.
 
 use nova_rsrc::{ResType, Resource};
 use serde::{Deserialize, Serialize};
@@ -14,6 +16,14 @@ use crate::error::{DecodeError, DecodeWarning};
 
 /// The result of decoding one registered resource.
 pub type AnyDecoded = Result<(Entry<AnyRecord>, Option<DecodeWarning>), DecodeError>;
+
+/// A registered record type: one that [`AnyRecord`] can hold. Generic code
+/// (such as the game data store) uses it to get a typed record
+/// back out of an [`AnyRecord`].
+pub trait Registered: Record {
+    /// The record inside `any`, if `any` holds this type.
+    fn from_any(any: &AnyRecord) -> Option<&Self>;
+}
 
 macro_rules! records {
     ($($variant:ident = $ty:ty, $code:literal $(, sample = $sample:expr)?;)*) => {
@@ -38,6 +48,17 @@ macro_rules! records {
                 }
             }
         }
+
+        $(
+            impl Registered for $ty {
+                fn from_any(any: &AnyRecord) -> Option<&Self> {
+                    match any {
+                        AnyRecord::$variant(record) => Some(record),
+                        _ => None,
+                    }
+                }
+            }
+        )*
 
         /// Every registered resource type, in registration order.
         pub const TYPES: &[ResType] = &[$(<$ty as Record>::TYPE),*];
@@ -92,6 +113,27 @@ macro_rules! records {
                             assert_eq!(err.path.0.first().map(String::as_str), Some(struct_name::<T>()));
                             assert!(err.offset < size as u64, "{err}");
                         }
+                    }
+
+                    #[test]
+                    fn from_any_returns_its_own_variant() {
+                        use super::super::{AnyRecord, Registered};
+                        let bytes: Vec<u8> = super::super::sample_bytes!(<T as Record>::SIZE $(, $sample)?);
+                        let record = decode_bytes::<T>(&bytes).expect("decodes").record;
+                        let any = AnyRecord::$variant(Box::new(record.clone()));
+                        assert_eq!(<T as Registered>::from_any(&any), Some(&record));
+                    }
+
+                    #[test]
+                    fn from_any_rejects_other_variants() {
+                        use super::super::{AnyRecord, Registered};
+                        use crate::records::{checksum::Checksum, version::Version};
+                        let other = if <T as Record>::TYPE == <Checksum as Record>::TYPE {
+                            AnyRecord::Version(Box::new(decode_bytes::<Version>(&[1, 0, 0x80, 0]).expect("decodes").record))
+                        } else {
+                            AnyRecord::Checksum(Box::new(decode_bytes::<Checksum>(&[1, 2, 3, 4]).expect("decodes").record))
+                        };
+                        assert_eq!(<T as Registered>::from_any(&other), None);
                     }
 
                     #[test]
