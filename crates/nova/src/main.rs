@@ -5,6 +5,10 @@
 //! With `--features dev-tools` (`mise run dev`), `` ` `` toggles the
 //! developer tools.
 //!
+//! Text in Charcoal uses the game's own `Fonts/Charcoal.ttf` beside
+//! `Nova Files` when it is there and usable, and the bundled font
+//! otherwise (with a warning if the file is there but unusable).
+//!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
 //! cannot be opened.
@@ -14,9 +18,11 @@ use std::process::ExitCode;
 use std::rc::Rc;
 
 use nova::app::start_screen;
+use nova::fonts::game_fonts;
 use nova::platform::Runner;
 use nova::{cli, exit};
 use nova_data::GameData;
+use nova_data::fonts::open_charcoal;
 use winit::event_loop::EventLoop;
 
 fn main() -> ExitCode {
@@ -35,10 +41,14 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let (fonts, warning) = game_fonts(open_charcoal(&dir));
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
     // The screens and the renderer read the same game data.
     let data = Rc::new(data);
     let screen = start_screen(Rc::clone(&data));
-    let runner = Runner::new(Rc::clone(&data), screen);
+    let runner = Runner::new(Rc::clone(&data), screen, fonts);
     #[cfg(feature = "dev-tools")]
     let runner = runner.with_dev_tools(Rc::clone(&data));
     let mut runner = runner;

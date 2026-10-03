@@ -42,7 +42,7 @@ struct Running<S> {
 
 /// Runs the app in a winit event loop.
 pub struct Runner<S> {
-    pending: Option<(S, AppScreen)>,
+    pending: Option<(S, AppScreen, FontFaces)>,
     running: Option<Running<S>>,
     failure: Option<OpenFailure>,
     start: Instant,
@@ -52,10 +52,10 @@ pub struct Runner<S> {
 
 impl<S: ImageSource> Runner<S> {
     /// A runner that will open a window showing `screen` with images from
-    /// `images` when the event loop starts.
-    pub fn new(images: S, screen: AppScreen) -> Self {
+    /// `images` and text in `fonts` when the event loop starts.
+    pub fn new(images: S, screen: AppScreen, fonts: FontFaces) -> Self {
         Self {
-            pending: Some((images, screen)),
+            pending: Some((images, screen, fonts)),
             running: None,
             failure: None,
             start: Instant::now(),
@@ -89,8 +89,12 @@ fn gpu_failure(error: &InitError) -> OpenFailure {
     }
 }
 
-/// Opens the 1024x768-point, resizable "EV Nova" window and its surface.
-fn open(event_loop: &ActiveEventLoop) -> Result<(WinitWindow, SurfaceGpu), OpenFailure> {
+/// Opens the 1024x768-point, resizable "EV Nova" window and its surface,
+/// drawing text in `fonts`.
+fn open(
+    event_loop: &ActiveEventLoop,
+    fonts: &FontFaces,
+) -> Result<(WinitWindow, SurfaceGpu), OpenFailure> {
     let attributes = Window::default_attributes()
         .with_title("EV Nova")
         .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0))
@@ -102,7 +106,7 @@ fn open(event_loop: &ActiveEventLoop) -> Result<(WinitWindow, SurfaceGpu), OpenF
     let gpu = SurfaceGpu::new(
         Box::new(event_loop.owned_display_handle()),
         window.clone(),
-        &FontFaces::bundled(),
+        fonts,
     )
     .map_err(|error| gpu_failure(&error))?;
     Ok((WinitWindow(window), gpu))
@@ -110,10 +114,10 @@ fn open(event_loop: &ActiveEventLoop) -> Result<(WinitWindow, SurfaceGpu), OpenF
 
 impl<S: ImageSource> ApplicationHandler for Runner<S> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let Some((images, screen)) = self.pending.take() else {
+        let Some((images, screen, fonts)) = self.pending.take() else {
             return;
         };
-        match open(event_loop) {
+        match open(event_loop, &fonts) {
             Ok((mut window, gpu)) => {
                 let app = App::new(&window, images, screen);
                 #[cfg(feature = "dev-tools")]
@@ -246,8 +250,16 @@ mod tests {
     }
 
     #[test]
+    fn the_runner_keeps_the_fonts_for_the_window_it_opens() {
+        let fonts = FontFaces::new(&b"fallback"[..]).with_charcoal(&b"charcoal"[..]);
+        let runner = Runner::new(NoImages, start_screen(no_data()), fonts.clone());
+        let (_, _, pending) = runner.pending.as_ref().expect("not opened yet");
+        assert_eq!(pending, &fonts);
+    }
+
+    #[test]
     fn the_runner_reports_the_failure_that_stopped_the_window_opening() {
-        let mut runner = Runner::new(NoImages, start_screen(no_data()));
+        let mut runner = Runner::new(NoImages, start_screen(no_data()), FontFaces::bundled());
         assert_eq!(runner.open_failure(), None);
         runner.failure = Some(OpenFailure::Window("no display".into()));
         assert_eq!(
@@ -260,7 +272,7 @@ mod tests {
     #[test]
     fn the_developer_tools_browse_the_data_they_are_given() {
         let data = no_data();
-        let runner = Runner::new(NoImages, start_screen(no_data()));
+        let runner = Runner::new(NoImages, start_screen(no_data()), FontFaces::bundled());
         assert!(runner.dev_catalog.is_none(), "off unless asked for");
         let runner = runner.with_dev_tools(Rc::clone(&data));
         assert!(

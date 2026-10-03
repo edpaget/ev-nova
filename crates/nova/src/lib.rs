@@ -7,6 +7,8 @@
 //! - [`cli`]: where the game data is, from the arguments or `NOVA_DATA`.
 //! - [`exit`]: how the program ends: its exit code and message when the
 //!   window could not be opened.
+//! - [`fonts`]: the fonts text is drawn in, from the result of loading the
+//!   game's Charcoal.
 //! - [`platform`]: the thin winit adapter: event translation, the window
 //!   port over a real window, and the event-loop runner.
 //!
@@ -18,4 +20,5 @@ pub mod cli;
 #[cfg(feature = "dev-tools")]
 pub mod devtools;
 pub mod exit;
+pub mod fonts;
 pub mod platform;
