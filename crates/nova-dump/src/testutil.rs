@@ -9,6 +9,8 @@ use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 
+use crate::ports::Sink;
+
 /// The data directory every [`MemFs`] store opens.
 pub const DATA: &str = "/data";
 /// The plug-ins directory a [`MemFs`] store opens when it has plug-ins.
@@ -105,4 +107,43 @@ pub fn record(len: usize, fields: &[(usize, i16)]) -> Vec<u8> {
         bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
     }
     bytes
+}
+
+/// An in-memory output: every file written, by relative path. Fails the
+/// `fail_at`-th write (counting from 1) when set; writing a path twice is a
+/// test failure.
+#[derive(Debug, Default)]
+pub struct MemSink {
+    pub files: BTreeMap<PathBuf, Vec<u8>>,
+    pub writes: usize,
+    pub fail_at: Option<usize>,
+}
+
+impl MemSink {
+    /// The file at `path`.
+    pub fn get(&self, path: &str) -> &[u8] {
+        self.files
+            .get(Path::new(path))
+            .unwrap_or_else(|| panic!("{path} not written: {:?}", self.paths()))
+    }
+
+    /// Every path written, sorted.
+    pub fn paths(&self) -> Vec<String> {
+        self.files
+            .keys()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect()
+    }
+}
+
+impl Sink for MemSink {
+    fn write(&mut self, rel: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.writes += 1;
+        if self.fail_at == Some(self.writes) {
+            return Err(io::Error::other("disk full"));
+        }
+        let old = self.files.insert(rel.to_path_buf(), bytes.to_vec());
+        assert!(old.is_none(), "{} written twice", rel.display());
+        Ok(())
+    }
 }

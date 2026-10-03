@@ -11,6 +11,8 @@ publish.workspace = true
 nova-data.workspace = true
 nova-rsrc.workspace = true
 png.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

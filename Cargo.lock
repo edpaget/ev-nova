@@ -286,6 +286,8 @@ dependencies = [
  "nova-data",
  "nova-rsrc",
  "png",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
