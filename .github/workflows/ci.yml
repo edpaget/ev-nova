@@ -20,8 +20,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
-      # Don't let `mise run` build the other mise.toml tools from source.
-      MISE_TASK_RUN_AUTO_INSTALL: "false"
+      # Never auto-install the other mise.toml tools: shims would build them
+      # from source (and on Windows each shim call re-enters mise to do it).
+      MISE_AUTO_INSTALL: "false"
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v5
