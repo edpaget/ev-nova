@@ -65,6 +65,11 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::Escape) => Key::Escape,
         PhysicalKey::Code(KeyCode::Space) => Key::Space,
         PhysicalKey::Code(KeyCode::Tab) => Key::Tab,
+        // The map's zoom keys, by position: `=` is the unshifted `+` key on
+        // US-layout keyboards.
+        PhysicalKey::Code(KeyCode::Equal) => Key::Char('='),
+        PhysicalKey::Code(KeyCode::NumpadAdd) => Key::Char('+'),
+        PhysicalKey::Code(KeyCode::Minus | KeyCode::NumpadSubtract) => Key::Char('-'),
         _ => Key::Other,
     }
 }
@@ -113,6 +118,10 @@ mod tests {
             (KeyCode::Escape, Key::Escape),
             (KeyCode::Space, Key::Space),
             (KeyCode::Tab, Key::Tab),
+            (KeyCode::Equal, Key::Char('=')),
+            (KeyCode::NumpadAdd, Key::Char('+')),
+            (KeyCode::Minus, Key::Char('-')),
+            (KeyCode::NumpadSubtract, Key::Char('-')),
             (KeyCode::KeyA, Key::Other),
             (KeyCode::F1, Key::Other),
         ];
