@@ -1,11 +1,12 @@
 //! `nova-dump` over the stock EV Nova data, end to end.
 //!
-//! The game data is copyrighted and never committed, so this test gets its
-//! location from `common`, the only place `NOVA_DATA` (the `Nova Files`
-//! directory) is read, and skips, passing, when it is unset. It runs the
-//! dump with the real adapters into a fresh temporary directory, then
-//! checks the files against the store's own view of the data, collecting
-//! every problem before asserting.
+//! The game data is copyrighted and never committed, so these tests get its
+//! location from `common`, the only place `NOVA_DATA` (the Mac `Nova Files`
+//! directory) and `NOVA_DATA_REZ` (the Windows one, of `.rez` files) are
+//! read, and skip, passing, when theirs is unset. Each runs the dump with
+//! the real adapters into a fresh temporary directory, then checks the
+//! files against the store's own view of the data, collecting every
+//! problem before asserting.
 
 mod common;
 
@@ -24,7 +25,7 @@ use nova_dump::names::{file_stem, type_component};
 use nova_rsrc::ResType;
 use tempfile::TempDir;
 
-use common::nova_data;
+use common::{nova_data, nova_data_rez};
 
 const PICT: ResType = ResType::new(*b"PICT");
 const CICN: ResType = ResType::new(*b"cicn");
@@ -195,18 +196,29 @@ fn check_wavs(data: &GameData, out: &Path, problems: &mut Vec<String>) {
     }
 }
 
-#[test]
-fn the_stock_data_dumps_without_failures() {
-    let Some(dir) = nova_data() else { return };
+/// Dumps `dir` and checks the output against the store.
+fn check_dump(dir: &Path) {
     let tmp = TempDir::new().expect("temp dir");
     let out = tmp.path().join("out");
-    dump(&dir, &out);
+    dump(dir, &out);
 
-    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let data = GameData::open(dir, None).expect("the stock data opens");
     let mut problems = Vec::new();
     check_media(&data, &out, &mut problems);
     check_json(&data, &out, &mut problems);
     check_ship_sheets(&data, &out, &mut problems);
     check_wavs(&data, &out, &mut problems);
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+#[test]
+fn the_stock_data_dumps_without_failures() {
+    let Some(dir) = nova_data() else { return };
+    check_dump(&dir);
+}
+
+#[test]
+fn the_windows_stock_data_dumps_without_failures() {
+    let Some(dir) = nova_data_rez() else { return };
+    check_dump(&dir);
 }
