@@ -7,7 +7,7 @@ hk = "2.4.0"
 pkl = "0.32.1"
 
 [env]
-RDM_ROOT = "{{env.HOME}}/Projects/rdm-atlas-repo"
+RDM_ROOT = "{{env.HOME | default(value=env.USERPROFILE | default(value=''))}}/Projects/rdm-atlas-repo"
 RDM_PROJECT = "ev-nova"
 
 [tasks.fmt]
