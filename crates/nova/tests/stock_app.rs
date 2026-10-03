@@ -13,6 +13,7 @@ use nova_data::{GameData, ShipId};
 use nova_render::Batch;
 use nova_render::recording::{GpuCall, RecordingGpu};
 use nova_view::Key;
+use nova_view::ships::ShipCatalog;
 
 struct Window;
 
@@ -90,6 +91,7 @@ fn the_ship_browser_draws_stock_ships() {
         return;
     };
     let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let ship_count = data.ship_ids().len();
     let mut app: App<_> = App::new(&Window, Rc::clone(&data), start_screen(data));
     let mut gpu = RecordingGpu::new();
     let mut clock = Duration::ZERO;
@@ -123,15 +125,33 @@ fn the_ship_browser_draws_stock_ships() {
     assert_eq!(selected(&app).0, ShipId(128));
     assert_eq!(redraw(&mut app), selected(&app).1);
 
-    while selected(&app).1 < 3 {
+    // Each search presses Right at most once per ship, so a browser that
+    // never reaches its target fails the test instead of hanging it.
+    for _ in 0..ship_count {
+        if selected(&app).1 == 3 {
+            break;
+        }
         press(&mut app, Key::Right);
     }
+    assert_eq!(
+        selected(&app).1,
+        3,
+        "no stock ship within {ship_count} presses of Right has both glow and lights"
+    );
     assert_eq!(redraw(&mut app), 3);
     assert_eq!(redraw(&mut app), 3);
 
-    while selected(&app).0 != ShipId(128) {
+    for _ in 0..ship_count {
+        if selected(&app).0 == ShipId(128) {
+            break;
+        }
         press(&mut app, Key::Right);
     }
+    assert_eq!(
+        selected(&app).0,
+        ShipId(128),
+        "Right did not wrap back to the first ship within {ship_count} presses"
+    );
     press(&mut app, Key::Left);
     assert_eq!(selected(&app).0, ShipId(895));
     assert_eq!(redraw(&mut app), selected(&app).1);

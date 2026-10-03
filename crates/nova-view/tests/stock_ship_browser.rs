@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use nova_data::GameData;
-use nova_view::ships::{ShipBrowser, ShipEntry, ShipId};
+use nova_view::ships::{ShipBrowser, ShipCatalog, ShipEntry, ShipId};
 use nova_view::{DrawCommand, DrawList, ImageKey, Input, Key, Screen};
 
 /// Every problem with the browser's view of `ship`.
@@ -61,7 +61,11 @@ fn every_stock_ship_is_browsed_with_every_frame_and_layer() {
     let mut problems_seen = Vec::new();
     let mut visited = Vec::new();
     let (mut glows, mut lights, mut described) = (0, 0, 0);
-    loop {
+    // One step per ship, so a browser that never wraps back to the first
+    // ship fails the test instead of hanging it.
+    let ship_count = data.ship_ids().len();
+    let mut wrapped = false;
+    for _ in 0..ship_count {
         let ship = browser.current().expect("a ship").clone();
         visited.push(ship.id);
         problems_seen.extend(problems(&ship));
@@ -93,9 +97,15 @@ fn every_stock_ship_is_browsed_with_every_frame_and_layer() {
         described += usize::from(matches!(ship.description, Ok(Some(_))));
         browser.input(&right);
         if browser.selected() == Some(ShipId(128)) {
+            wrapped = true;
             break;
         }
     }
+
+    assert!(
+        wrapped,
+        "Right did not wrap back to the first ship within {ship_count} presses"
+    );
 
     assert!(problems_seen.is_empty(), "{}", problems_seen.join("\n"));
     assert_eq!(visited.len(), 288);
