@@ -6,11 +6,17 @@
 //! selected ship; the map's view and selection, and the open system with
 //! its camera) while hidden. The router also decides what Escape does:
 //! back one level, from a system to the map, and quit at the top.
+//!
+//! F, from either side, enters flight: the [`FlightView`], built the first
+//! time and kept, so flight resumes where it left off. In flight the
+//! arrow keys fly the ship, Tab does nothing, and Escape goes back to the
+//! screen flight was entered from; it never quits.
 
 use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
+use nova_view::flight::FlightView;
 use nova_view::galaxy::GalaxyMap;
 use nova_view::ships::ShipBrowser;
 use nova_view::system::SystemView;
@@ -18,7 +24,7 @@ use nova_view::{Color, DrawList, Input, Key, Navigator, Point, Screen, ScreenAct
 
 /// The hint the router draws over every screen, where it goes, its size and
 /// its colour. Every screen leaves that corner free.
-pub const HINT: &str = "Tab: ships / galaxy map";
+pub const HINT: &str = "Tab: ships / galaxy map   F: fly";
 pub const HINT_AT: Point = Point::new(16.0, 8.0);
 pub const HINT_SIZE: f32 = 14.0;
 pub const HINT_COLOR: Color = Color::DIM;
@@ -32,13 +38,16 @@ pub enum Showing {
     GalaxyMap,
     /// A system opened from the galaxy map.
     System,
+    /// The player's ship in flight.
+    Flight,
 }
 
-/// The two sides Tab switches between.
+/// The two sides Tab switches between, and flight, entered from either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Side {
     Ships,
     Galaxy,
+    Flight,
 }
 
 /// Every screen the app can show, and which side it is showing. The router
@@ -48,11 +57,17 @@ enum Side {
 #[derive(Clone, Debug)]
 pub struct AppScreen {
     side: Side,
+    /// The side flight was last entered from, which Escape goes back to.
+    return_to: Side,
+    /// The game data, which flight reads when it is first entered.
+    data: Rc<GameData>,
     /// The ship browser, reading the game data the renderer draws from.
     ships: ShipBrowser<Rc<GameData>>,
     /// The galaxy map and any system opened from it, reading the same game
     /// data.
     galaxy: Navigator<Rc<GameData>>,
+    /// Flight, once entered.
+    flight: Option<FlightView>,
 }
 
 impl AppScreen {
@@ -61,8 +76,11 @@ impl AppScreen {
     pub fn new(data: Rc<GameData>) -> Self {
         Self {
             side: Side::Ships,
+            return_to: Side::Ships,
             galaxy: Navigator::new(Rc::clone(&data)),
-            ships: ShipBrowser::new(data),
+            ships: ShipBrowser::new(Rc::clone(&data)),
+            data,
+            flight: None,
         }
     }
 
@@ -73,6 +91,7 @@ impl AppScreen {
             Side::Ships => Showing::ShipBrowser,
             Side::Galaxy if self.galaxy.system().is_some() => Showing::System,
             Side::Galaxy => Showing::GalaxyMap,
+            Side::Flight => Showing::Flight,
         }
     }
 
@@ -94,6 +113,12 @@ impl AppScreen {
         self.galaxy.system()
     }
 
+    /// The flight screen, shown or not, once flight has been entered.
+    #[must_use]
+    pub fn flight_view(&self) -> Option<&FlightView> {
+        self.flight.as_ref()
+    }
+
     /// The galaxy side: the map and any open system.
     #[must_use]
     pub fn navigator(&self) -> &Navigator<Rc<GameData>> {
@@ -104,6 +129,7 @@ impl AppScreen {
         match self.side {
             Side::Ships => &self.ships,
             Side::Galaxy => &self.galaxy,
+            Side::Flight => self.flight.as_ref().expect(ENTERED),
         }
     }
 
@@ -111,9 +137,52 @@ impl AppScreen {
         match self.side {
             Side::Ships => &mut self.ships,
             Side::Galaxy => &mut self.galaxy,
+            Side::Flight => self.flight.as_mut().expect(ENTERED),
+        }
+    }
+
+    /// Hides the side shown, first cancelling its pointer gesture and
+    /// letting go of its keys (their releases will go elsewhere), and shows
+    /// `side`.
+    fn switch_to(&mut self, side: Side) {
+        let hidden = self.shown_mut();
+        hidden.cancel_pointer();
+        hidden.release_keys();
+        self.side = side;
+    }
+
+    /// Shows flight, building it the first time, and remembers the side to
+    /// go back to.
+    fn enter_flight(&mut self) {
+        let data = &self.data;
+        self.flight
+            .get_or_insert_with(|| FlightView::new(data.as_ref()));
+        self.return_to = self.side;
+        self.switch_to(Side::Flight);
+    }
+
+    /// Flight's input: an Escape press goes back, Tab does nothing, and
+    /// everything else flies.
+    fn flight_input(&mut self, input: &Input) -> ScreenAction {
+        match *input {
+            Input::Key {
+                key: Key::Escape,
+                pressed,
+                repeat,
+            } => {
+                if pressed && !repeat {
+                    self.switch_to(self.return_to);
+                }
+                ScreenAction::None
+            }
+            Input::Key { key: Key::Tab, .. } => ScreenAction::None,
+            _ => self.shown_mut().input(input),
         }
     }
 }
+
+/// Flight shows only once it has been built.
+const ENTERED: &str = "flight is built when it is entered";
 
 /// The screen the app opens on: every screen over `data`, showing the ship
 /// browser.
@@ -130,11 +199,21 @@ impl Screen for AppScreen {
     ///
     /// An Escape press goes back from an open system to the map, and
     /// otherwise quits; its repeats and release are consumed, so holding
-    /// Escape goes back once and never quits. Everything else, repeats
-    /// included, goes to the side shown.
+    /// Escape goes back once and never quits. An F press enters flight,
+    /// cancelling and letting go on the side it hides as Tab does; holding
+    /// F enters once. Everything else, repeats included, goes to the side
+    /// shown.
+    ///
+    /// In flight, an Escape press goes back to the side flight was entered
+    /// from, letting go of the keys held in flight; it never quits, and its
+    /// repeats and release are consumed. Tab does nothing. Everything else
+    /// goes to flight.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.side == Side::Flight {
+            return self.flight_input(input);
+        }
         if let Input::Key {
-            key: key @ (Key::Tab | Key::Escape),
+            key: key @ (Key::Tab | Key::Escape | Key::Char('f')),
             pressed,
             repeat,
         } = *input
@@ -142,19 +221,15 @@ impl Screen for AppScreen {
             if !pressed || repeat {
                 return ScreenAction::None;
             }
-            if key == Key::Escape {
-                return match self.showing() {
-                    Showing::System => self.galaxy.input(input),
-                    Showing::ShipBrowser | Showing::GalaxyMap => ScreenAction::Quit,
-                };
+            match key {
+                Key::Escape if self.showing() == Showing::System => {
+                    return self.galaxy.input(input);
+                }
+                Key::Escape => return ScreenAction::Quit,
+                Key::Tab if self.side == Side::Ships => self.switch_to(Side::Galaxy),
+                Key::Tab => self.switch_to(Side::Ships),
+                _ => self.enter_flight(),
             }
-            let hidden = self.shown_mut();
-            hidden.cancel_pointer();
-            hidden.release_keys();
-            self.side = match self.side {
-                Side::Ships => Side::Galaxy,
-                Side::Galaxy => Side::Ships,
-            };
             return ScreenAction::None;
         }
         self.shown_mut().input(input)
@@ -165,9 +240,12 @@ impl Screen for AppScreen {
         self.shown_mut().tick(dt);
     }
 
+    /// The side shown, then the hint; flight has its own help line instead.
     fn draw(&self, list: &mut DrawList) {
         self.shown().draw(list);
-        list.text(HINT, HINT_AT, HINT_SIZE, None, HINT_COLOR);
+        if self.side != Side::Flight {
+            list.text(HINT, HINT_AT, HINT_SIZE, None, HINT_COLOR);
+        }
     }
 
     fn cancel_pointer(&mut self) {
@@ -187,6 +265,7 @@ mod tests {
 
     use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::RledBuilder;
+    use nova_data::records::character::Character;
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
@@ -239,7 +318,8 @@ mod tests {
     /// Ships 129 and 128, each with a `shän` naming a 4-frame `rlëD` (one
     /// set of 4 rotations), and systems 128 and 129, 300 apart. System 128
     /// holds stellar 128 at (0, 0), whose `spïn` 1000 names the same
-    /// `rlëD`.
+    /// `rlëD`. The only `chär` starts in ship 128, an average ship, in
+    /// system 128.
     fn data() -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
@@ -251,11 +331,23 @@ mod tests {
             })
             .build();
         let ship = vec![0; Ship::SIZE.expect("fixed")];
+        let mut average = ship.clone();
+        for (at, value) in [(0x04, 300_i16), (0x06, 300), (0x08, 10)] {
+            average[at..at + 2].copy_from_slice(&value.to_be_bytes());
+        }
+        let mut character = vec![0; Character::SIZE.expect("fixed")];
+        character[0x04..0x06].copy_from_slice(&128_i16.to_be_bytes());
+        character[0x06..0x08].copy_from_slice(&128_i16.to_be_bytes());
+        for slot in 1..4 {
+            let at = 0x06 + 2 * slot;
+            character[at..at + 2].copy_from_slice(&(-1_i16).to_be_bytes());
+        }
         let mut spin = vec![0; Spin::SIZE.expect("fixed")];
         spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
         let fork = ForkBuilder::new()
             .resource(Ship::TYPE, 129, Some(b"Second"), &ship)
-            .resource(Ship::TYPE, 128, Some(b"First"), &ship)
+            .resource(Ship::TYPE, 128, Some(b"First"), &average)
+            .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
             .resource(ShipAnim::TYPE, 128, None, &anim)
             .resource(ShipAnim::TYPE, 129, None, &anim)
             .resource(RLED, 1000, None, &sheet)
@@ -659,7 +751,184 @@ mod tests {
         let mut expected = drawn(&ships);
         expected.push(hint());
         assert_eq!(drawn(&screen), expected);
-        assert_eq!(HINT, "Tab: ships / galaxy map");
+        assert_eq!(HINT, "Tab: ships / galaxy map   F: fly");
         assert_eq!((HINT_AT, HINT_SIZE), (Point::new(16.0, 8.0), 14.0));
+    }
+
+    // Flight.
+
+    /// Enters flight with an F press and checks it shows.
+    fn fly(screen: &mut AppScreen) {
+        assert_eq!(screen.input(&key(Key::Char('f'), true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::Flight);
+    }
+
+    fn flight(screen: &AppScreen) -> &FlightView {
+        screen.flight_view().expect("flight entered")
+    }
+
+    fn ship(screen: &AppScreen) -> nova_sim::ShipState {
+        *flight(screen).session().expect("flying").player()
+    }
+
+    const TICK: Duration = nova_sim::TICK;
+
+    #[test]
+    fn f_enters_flight_from_each_screen_and_escape_goes_back_to_it() {
+        let mut screen = AppScreen::new(data());
+        assert!(screen.flight_view().is_none(), "not until entered");
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.system(), SystemId(128));
+        assert_eq!(session.ship(), nova_sim::ShipId(128));
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+
+        screen.input(&key(Key::Tab, true));
+        fly(&mut screen);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::GalaxyMap);
+
+        click_system(&mut screen, 128);
+        screen.input(&key(Key::Enter, true));
+        fly(&mut screen);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::System);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::GalaxyMap);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+    }
+
+    #[test]
+    fn an_f_repeat_or_release_does_not_enter_flight() {
+        let mut screen = AppScreen::new(data());
+        assert_eq!(screen.input(&held(Key::Char('f'))), ScreenAction::None);
+        assert_eq!(
+            screen.input(&key(Key::Char('f'), false)),
+            ScreenAction::None
+        );
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        assert!(screen.flight_view().is_none());
+    }
+
+    #[test]
+    fn escape_in_flight_never_quits_and_its_repeats_and_release_do_nothing() {
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
+        assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        // Holding Escape after leaving does not quit either.
+        assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
+        assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+    }
+
+    #[test]
+    fn tab_does_nothing_in_flight() {
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        for input in [key(Key::Tab, true), held(Key::Tab), key(Key::Tab, false)] {
+            assert_eq!(screen.input(&input), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::Flight);
+        }
+    }
+
+    #[test]
+    fn the_flight_keys_fly_the_ship_and_flight_resumes_where_it_left_off() {
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        screen.input(&key(Key::Up, true));
+        screen.tick(TICK * 10);
+        let flown = ship(&screen);
+        assert!(flown.position.y < 0.0, "{flown:?}");
+        assert_eq!(
+            screen.ship_browser().selected(),
+            Some(ShipId(128)),
+            "the keys went to flight"
+        );
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Char('f'), true));
+        assert_eq!(ship(&screen), flown, "the same flight");
+    }
+
+    #[test]
+    fn entering_and_leaving_flight_let_go_of_the_keys_held() {
+        let mut screen = AppScreen::new(data());
+        enter(&mut screen, 128);
+        screen.input(&key(Key::Right, true));
+        fly(&mut screen);
+        // Right's release goes to flight.
+        screen.input(&key(Key::Right, false));
+        screen.input(&key(Key::Escape, true));
+        screen.tick(Duration::from_millis(250));
+        assert_eq!(camera(&screen), Point::new(0.0, 0.0), "no drift");
+
+        fly(&mut screen);
+        screen.input(&key(Key::Up, true));
+        screen.tick(TICK * 5);
+        screen.input(&key(Key::Escape, true));
+        // Up's release goes to the system view.
+        screen.input(&key(Key::Up, false));
+        fly(&mut screen);
+        let coasting = ship(&screen);
+        screen.tick(TICK * 5);
+        assert_eq!(ship(&screen).velocity, coasting.velocity, "no thrust");
+    }
+
+    #[test]
+    fn entering_flight_cancels_a_drag_on_the_map() {
+        let mut screen = AppScreen::new(data());
+        screen.input(&key(Key::Tab, true));
+        let view = *screen.galaxy_map().view();
+        let left = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: Point::new(100.0, 100.0),
+        };
+        screen.input(&left(true));
+        fly(&mut screen);
+        screen.input(&left(false));
+        screen.input(&key(Key::Escape, true));
+        screen.input(&Input::PointerMoved(Point::new(150.0, 100.0)));
+        assert_eq!(*screen.galaxy_map().view(), view, "no drag");
+    }
+
+    #[test]
+    fn only_flight_ticks_while_it_is_shown() {
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        screen.input(&key(Key::Up, true));
+        screen.tick(TICK);
+        assert_eq!(screen.ship_browser().frame(), Some(0), "paused");
+        let moving = ship(&screen);
+        assert_ne!(moving, nova_sim::ShipState::default());
+        screen.input(&key(Key::Escape, true));
+        screen.tick(TICK * 3);
+        assert_eq!(ship(&screen), moving, "paused while hidden");
+        assert_eq!(screen.ship_browser().frame(), Some(3));
+    }
+
+    #[test]
+    fn releasing_the_keys_reaches_flight() {
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        screen.input(&key(Key::Up, true));
+        screen.release_keys();
+        screen.tick(TICK * 3);
+        assert_eq!(ship(&screen), nova_sim::ShipState::default());
+    }
+
+    #[test]
+    fn flight_is_drawn_without_the_hint() {
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        screen.tick(TICK);
+        assert_eq!(drawn(&screen), drawn(flight(&screen)));
+        screen.input(&key(Key::Escape, true));
+        let list = drawn(&screen);
+        assert_eq!(list.iter().last(), Some(&hint()));
     }
 }

@@ -264,7 +264,7 @@ fn tab_switches_between_the_ship_browser_and_the_galaxy_map() {
     };
     let ships = texts(&harness.frame());
     assert!(ships.contains(&"Shuttle".to_owned()), "{ships:?}");
-    assert!(ships.contains(&"Tab: ships / galaxy map".to_owned()));
+    assert!(ships.contains(&"Tab: ships / galaxy map   F: fly".to_owned()));
 
     assert_eq!(harness.send(tab(true)), Control::Continue);
     // Holding Tab past the key-repeat delay stays on the map.
@@ -278,7 +278,7 @@ fn tab_switches_between_the_ship_browser_and_the_galaxy_map() {
         "{map:?}"
     );
     assert!(!map.contains(&"Shuttle".to_owned()));
-    assert!(map.contains(&"Tab: ships / galaxy map".to_owned()));
+    assert!(map.contains(&"Tab: ships / galaxy map   F: fly".to_owned()));
 
     harness.send(tab(true));
     let back = texts(&harness.frame());

@@ -1313,6 +1313,7 @@ dependencies = [
  "nova-data",
  "nova-render",
  "nova-rsrc",
+ "nova-sim",
  "nova-view",
  "pollster",
  "thiserror 2.0.21",
