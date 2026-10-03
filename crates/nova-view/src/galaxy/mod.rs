@@ -7,6 +7,7 @@
 
 pub mod catalog;
 pub mod data;
+pub mod view;
 
 pub use catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId,
