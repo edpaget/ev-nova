@@ -1,13 +1,28 @@
 //! A system laid out for viewing: each stellar at its world position with
-//! its sheet (or why not) and its animation, read once from the catalog.
+//! its sheet (or why not) and its animation, read once from the catalog;
+//! and [`draw_stellars`], which draws them through a camera for every
+//! screen that shows a system.
 
 use std::num::NonZeroU16;
+use std::time::Duration;
 
 use super::animation::Animation;
-use super::camera::CAMERA_MARGIN;
+use super::camera::{CAMERA_MARGIN, Camera};
 use super::catalog::{StellarId, StellarSheet, SystemCatalog, SystemId};
-use crate::Point;
+use crate::draw::crossed_box;
 use crate::geometry::Bounds;
+use crate::time::ticks;
+use crate::{Color, DrawList, ImageKey, Point};
+
+/// The side of the box drawn where a stellar's sprite cannot be shown.
+pub const PLACEHOLDER_SIZE: f32 = 64.0;
+/// The placeholder's colour.
+pub(crate) const PLACEHOLDER: Color = Color::rgba(128, 128, 128, 255);
+/// How far below a stellar its name goes, and the name's size.
+const NAME_GAP: f32 = 4.0;
+const NAME_SIZE: f32 = 14.0;
+/// How far below a placeholder's name the reason goes.
+const MESSAGE_GAP: f32 = 18.0;
 
 /// One stellar, placed in the scene.
 #[derive(Clone, Debug, PartialEq)]
@@ -95,6 +110,44 @@ impl SystemScene {
         Bounds::around(std::iter::once(Point::default()).chain(positions))
             .expect("the centre is always in it")
             .grown(CAMERA_MARGIN)
+    }
+}
+
+/// Draws every stellar of `scene` where `camera` puts it, `elapsed` into
+/// its animation: each sprite (or, without a sheet, a placeholder box and
+/// the reason), then every name under its stellar, so no sprite covers a
+/// name.
+pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera, elapsed: Duration) {
+    let mut labels = Vec::new();
+    for stellar in scene.stellars() {
+        let at = camera.world_to_screen(stellar.position);
+        let (width, height) = match &stellar.sprite {
+            Ok(sheet) => {
+                let frame = stellar.animation.frame(ticks(elapsed));
+                list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                (sheet.frame_width as f32, sheet.frame_height as f32)
+            }
+            Err(message) => {
+                crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
+                let below = Point::new(
+                    at.x - PLACEHOLDER_SIZE / 2.0,
+                    at.y + PLACEHOLDER_SIZE / 2.0 + NAME_GAP + MESSAGE_GAP,
+                );
+                list.text(
+                    format!("Sprite unavailable: {message}"),
+                    below,
+                    NAME_SIZE,
+                    None,
+                    Color::ERROR,
+                );
+                (PLACEHOLDER_SIZE, PLACEHOLDER_SIZE)
+            }
+        };
+        let name_at = Point::new(at.x - width / 2.0, at.y + height / 2.0 + NAME_GAP);
+        labels.push((stellar.name.as_str(), name_at));
+    }
+    for (name, at) in labels {
+        list.text(name, at, NAME_SIZE, None, Color::DIM);
     }
 }
 

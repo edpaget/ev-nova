@@ -17,21 +17,12 @@ use std::time::Duration;
 
 use super::camera::{CAMERA_SPEED, Camera};
 use super::catalog::{SystemCatalog, SystemId};
-use super::scene::SystemScene;
+use super::scene::{self, SystemScene};
 use super::starfield;
-use crate::draw::crossed_box;
 use crate::time::ticks;
-use crate::{Color, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction};
+use crate::{Color, DrawList, Input, Key, Point, Screen, ScreenAction};
 
-/// The side of the box drawn where a stellar's sprite cannot be shown.
-pub const PLACEHOLDER_SIZE: f32 = 64.0;
-/// The placeholder's colour.
-const PLACEHOLDER: Color = Color::rgba(128, 128, 128, 255);
-/// How far below a stellar its name goes, and the name's size.
-const NAME_GAP: f32 = 4.0;
-const NAME_SIZE: f32 = 14.0;
-/// How far below a placeholder's name the reason goes.
-const MESSAGE_GAP: f32 = 18.0;
+pub use super::scene::PLACEHOLDER_SIZE;
 
 /// The overlay: the system's title, the camera line, "No stellars", the
 /// problems line and the help line, top-left first.
@@ -104,41 +95,6 @@ impl SystemView {
     fn velocity(&self, back: [Key; 2], forward: [Key; 2]) -> f32 {
         let way = i8::from(self.holding(forward)) - i8::from(self.holding(back));
         f32::from(way) * CAMERA_SPEED
-    }
-
-    fn draw_stellars(&self, list: &mut DrawList) {
-        let mut labels = Vec::new();
-        for (index, stellar) in self.scene.stellars().iter().enumerate() {
-            let at = self.camera.world_to_screen(stellar.position);
-            let (width, height) = match &stellar.sprite {
-                Ok(sheet) => {
-                    let frame = self.frame(index).unwrap_or_default();
-                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
-                    (sheet.frame_width as f32, sheet.frame_height as f32)
-                }
-                Err(message) => {
-                    crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
-                    let below = Point::new(
-                        at.x - PLACEHOLDER_SIZE / 2.0,
-                        at.y + PLACEHOLDER_SIZE / 2.0 + NAME_GAP + MESSAGE_GAP,
-                    );
-                    list.text(
-                        format!("Sprite unavailable: {message}"),
-                        below,
-                        NAME_SIZE,
-                        None,
-                        Color::ERROR,
-                    );
-                    (PLACEHOLDER_SIZE, PLACEHOLDER_SIZE)
-                }
-            };
-            let name_at = Point::new(at.x - width / 2.0, at.y + height / 2.0 + NAME_GAP);
-            labels.push((stellar.name.as_str(), name_at));
-        }
-        // Every name after every sprite, so no sprite covers a name.
-        for (name, at) in labels {
-            list.text(name, at, NAME_SIZE, None, Color::DIM);
-        }
     }
 
     fn draw_overlay(&self, list: &mut DrawList) {
@@ -216,7 +172,7 @@ impl Screen for SystemView {
 
     fn draw(&self, list: &mut DrawList) {
         starfield::draw(list, &self.camera);
-        self.draw_stellars(list);
+        scene::draw_stellars(list, &self.scene, &self.camera, self.elapsed);
         self.draw_overlay(list);
     }
 
@@ -232,10 +188,13 @@ mod tests {
     use std::num::NonZeroU16;
 
     use super::*;
+    use crate::ImageKey;
+    use crate::draw::crossed_box;
     use crate::system::camera::{CAMERA_MARGIN, VIEW_CENTER};
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
     };
+    use crate::system::scene::PLACEHOLDER;
     use crate::{DrawCommand, MouseButton};
 
     /// Canned systems.
