@@ -16,9 +16,12 @@ use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 mod fake;
 pub mod fs;
 pub mod order;
+mod sprite;
 #[cfg(test)]
 mod tests;
 mod walk;
+
+pub use self::sprite::{RLED, ShipSprite, SpriteError};
 
 /// Why the store could not be opened at all.
 #[derive(Debug, thiserror::Error)]
