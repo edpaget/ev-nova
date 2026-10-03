@@ -8,6 +8,8 @@
 //! sound's 16.16 rate rounded to the nearest hertz
 //! ([`SampleRate::nearest_hz`](nova_data::sound::SampleRate::nearest_hz)):
 //! the classic 22254.5454 Hz becomes 22255 Hz, a pitch error under 0.003%.
+//! A rate below 0.5 Hz would round to 0 Hz, an unplayable file, so it is
+//! an error instead.
 //! Loop points and the base note are not written.
 
 use nova_data::sound::Pcm;
@@ -20,13 +22,30 @@ const HEADER_LEN: usize = 44;
 #[error("{0} bytes of samples is too long for a WAV file")]
 pub struct TooLong(pub u64);
 
+/// A sound that cannot be written as a WAV file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum WavError {
+    /// The samples are too long.
+    #[error(transparent)]
+    TooLong(#[from] TooLong),
+    /// The rate rounds to 0 Hz.
+    #[error("sample rate {fixed:#010x} (16.16) is below 0.5 Hz, too low for a WAV file")]
+    RateTooLow {
+        /// The header's 16.16 fixed-point rate.
+        fixed: u32,
+    },
+}
+
 /// The sound as a WAV file.
-pub fn encode(pcm: &Pcm) -> Result<Vec<u8>, TooLong> {
-    encode_samples(
-        pcm.channels(),
-        pcm.sample_rate().nearest_hz(),
-        pcm.samples(),
-    )
+pub fn encode(pcm: &Pcm) -> Result<Vec<u8>, WavError> {
+    let rate = pcm.sample_rate();
+    let hz = rate.nearest_hz();
+    if hz == 0 {
+        return Err(WavError::RateTooLow {
+            fixed: rate.fixed(),
+        });
+    }
+    Ok(encode_samples(pcm.channels(), hz, pcm.samples())?)
 }
 
 /// `samples`, interleaved over `channels`, as a WAV file at `rate` Hz.
@@ -134,6 +153,36 @@ mod tests {
         assert_eq!(u32_at(&wav, 24), 22_255);
         assert_eq!(u32_at(&wav, 28), 22_255 * 2);
         assert_eq!(&wav[44..], [0, 0, 0, 0x7F]);
+    }
+
+    fn pcm_at(rate: u32) -> Pcm {
+        let snd = SndBuilder::new(
+            SndFormat::Two,
+            Header::Standard {
+                rate,
+                loop_points: (0, 0),
+                base_note: 60,
+                samples: vec![0x80],
+            },
+        );
+        decode_snd(&snd.bytes()).expect("decodes")
+    }
+
+    #[test]
+    fn a_rate_that_rounds_to_zero_hertz_is_an_error() {
+        for fixed in [1, 0x7FFF] {
+            let error = encode(&pcm_at(fixed)).expect_err("0 Hz is unplayable");
+            assert_eq!(error, WavError::RateTooLow { fixed });
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "sample rate {fixed:#010x} (16.16) is below 0.5 Hz, too low for a WAV file"
+                )
+            );
+        }
+        let slowest = encode(&pcm_at(0x8000)).expect("rounds to 1 Hz");
+        assert_eq!(u32_at(&slowest, 24), 1);
+        assert_eq!(u32_at(&slowest, 28), 2);
     }
 
     #[test]

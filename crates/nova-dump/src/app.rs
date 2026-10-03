@@ -99,6 +99,7 @@ mod tests {
     use nova_data::Record;
     use nova_data::records::ship::Ship;
     use nova_data::records::spin::Spin;
+    use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
     use nova_data::store::{GameData, OpenError};
     use nova_rsrc::ResType;
 
@@ -430,6 +431,45 @@ mod tests {
         // The rest is still written: both good spïns and the (empty) shïp file.
         assert_eq!(root.files(), ["json/shïp.json", "json/spïn.json"]);
         assert!(run.stdout.starts_with("records: 2 in 2 JSON files\n"));
+    }
+
+    #[test]
+    fn a_plug_in_sound_too_slow_for_wav_is_listed_and_not_written() {
+        let slow = SndBuilder::new(
+            SndFormat::Two,
+            Header::Standard {
+                rate: 1,
+                loop_points: (0, 0),
+                base_note: 60,
+                samples: vec![0x80, 0xFF],
+            },
+        )
+        .bytes();
+        let data = good_data().file(
+            "/plugins/Slow",
+            fork(&[(ResType::new(*b"snd "), 500, Some("drone"), slow)]),
+        );
+        let root = FakeRoot::new(RootState::Empty);
+        let run = run_with(DUMP_WITH_PLUGINS, &data, &root);
+        assert_eq!(run.code, 1, "{}", run.stdout);
+        assert_eq!(run.stderr, "");
+        let lines: Vec<&str> = run.stdout.lines().collect();
+        let at = lines
+            .iter()
+            .position(|l| *l == "Failures:")
+            .expect("a list");
+        assert_eq!(
+            lines[at + 1..],
+            [
+                "  snd  500 \"drone\" in /plugins/Slow: sample rate 0x00000001 (16.16) is below \
+                 0.5 Hz, too low for a WAV file",
+                "failures: 1",
+            ],
+            "{}",
+            run.stdout
+        );
+        assert!(run.stdout.contains("sounds: 0 snd\n"), "{}", run.stdout);
+        assert_eq!(root.files(), ["json/spïn.json"]);
     }
 
     #[test]

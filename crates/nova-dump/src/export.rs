@@ -20,7 +20,7 @@ use serde::Serialize;
 use crate::layouts::sheet_layouts;
 use crate::names::{file_stem, type_component};
 use crate::ports::Sink;
-use crate::wav::TooLong;
+use crate::wav::WavError;
 
 /// How many of each kind of file were written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,9 +101,9 @@ pub enum MediaError {
     /// The image could not be written as PNG.
     #[error("PNG: {0}")]
     Png(#[from] crate::png::EncodingError),
-    /// The sound is too long for WAV.
+    /// The sound is too long, or its rate too low, for WAV.
     #[error(transparent)]
-    Wav(#[from] TooLong),
+    Wav(#[from] WavError),
 }
 
 impl MediaError {
