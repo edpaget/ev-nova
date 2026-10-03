@@ -12,6 +12,8 @@ use crate::wire::id::ShipId;
 /// A ship's base sprite sheet and the files each step came from.
 #[derive(Debug)]
 pub struct ShipSprite<'a> {
+    /// The base image's `rlëD` ID (the `shän`'s `BaseImageID`).
+    pub image_id: i16,
     /// The decoded sheet, laid out with the `shän`'s frames per rotation.
     pub sheet: SpriteSheet,
     /// The file the `shïp` came from.
@@ -180,6 +182,7 @@ impl GameData {
         let sheet = decode_rled(found.resource.data(), anim.record.sheet_layout())
             .map_err(|source| SpriteError::Graphics { image_id, source })?;
         Ok(ShipSprite {
+            image_id,
             sheet,
             ship: ship.source,
             anim: anim.source,
@@ -273,6 +276,7 @@ mod tests {
     fn a_ship_resolves_through_its_shan_to_its_sheet() {
         let data = store(&[]);
         let sprite = data.ship_sprite(ShipId(128)).expect("resolves");
+        assert_eq!(sprite.image_id, 1000);
         assert_eq!(sprite.sheet.frames().len(), 3 * 4);
         assert_eq!(sprite.sheet.layout().columns(), 4);
         assert_eq!(sprite.sheet.frame_width(), 2);
