@@ -63,9 +63,18 @@
 //! - **1**: the dump finished, but failures are listed; everything else
 //!   was written.
 //! - **2**: nothing useful was done: a usage error, a data or plug-ins
-//!   directory that cannot be listed, an output directory that cannot be
-//!   created or read or is not empty, or a file that cannot be written.
-//!   The reason goes to standard error.
+//!   directory that cannot be listed, a data directory with no game data
+//!   in it, an output directory that cannot be created or read or is not
+//!   empty, or a file that cannot be written. The reason goes to standard
+//!   error.
+//!
+//! A data directory has no game data when not one file directly inside it
+//! is a resource-file candidate: typically the folder *containing*
+//! `Nova Files` was passed, whose `Nova Files` sub-folder is skipped. The
+//! run then stops before the output directory is created, and the message
+//! counts the entries the data directory skipped (`--verbose` lists them).
+//! Plug-ins alone are not game data. A data file that is found but fails
+//! to load is different: it is a listed failure, exit 1.
 //!
 //! # Structure
 //!

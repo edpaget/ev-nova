@@ -162,7 +162,7 @@ fn identity(ty: ResType, id: i16, name: Option<&str>) -> String {
 }
 
 /// Why an entry was skipped, in words.
-fn ignore_reason(reason: &IgnoreReason) -> String {
+pub(crate) fn ignore_reason(reason: &IgnoreReason) -> String {
     match reason {
         IgnoreReason::Hidden => "hidden".to_owned(),
         IgnoreReason::Symlink => "symbolic link".to_owned(),

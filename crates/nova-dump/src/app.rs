@@ -2,13 +2,17 @@
 //!
 //! Exit codes: 0 when the dump finished with no failures; 1 when it
 //! finished but some failures were listed (everything else was still
-//! written); 2 for a usage error, data that cannot be opened, an output
-//! directory that cannot be created, read or is not empty, or a write
-//! error. `--help` exits 0.
+//! written); 2 for a usage error, data that cannot be opened, a data
+//! directory that holds no resource file at all (checked before the output
+//! directory is touched), an output directory that cannot be created, read
+//! or is not empty, or a write error. `--help` exits 0.
 
 use std::ffi::OsString;
-use std::fmt::Display;
+use std::fmt::{Display, Write as _};
 use std::io::Write;
+use std::path::Path;
+
+use nova_data::store::{GameData, Origin};
 
 use crate::cli::{self, Command, Options, USAGE};
 use crate::export::export;
@@ -49,6 +53,9 @@ fn dump(
         Ok(game) => game,
         Err(error) => return fatal(stderr, error),
     };
+    if let Some(message) = no_game_data(&game, &options.data, options.verbose) {
+        return fatal(stderr, message);
+    }
     let out = options.out.display();
     if let Err(error) = root.create(&options.out) {
         return fatal(
@@ -79,6 +86,47 @@ fn dump(
         Ok(()) => report::exit_code(&outcome),
         Err(error) => fatal(stderr, format_args!("writing the summary: {error}")),
     }
+}
+
+/// Why the run must stop when the data directory yielded no resource file
+/// at all, or `None` when it did.
+///
+/// A file that was found but failed to load counts as data: it is a listed
+/// failure (exit 1), not a wrong directory. Plug-ins never count: they
+/// layer over the game data and cannot replace it. The message counts the
+/// entries the data directory itself skipped, and lists them when
+/// `verbose`.
+fn no_game_data(game: &GameData, data: &Path, verbose: bool) -> Option<String> {
+    let from_data = |origin: Origin| origin == Origin::Data;
+    if game.files().iter().any(|file| from_data(file.origin))
+        || game.failed().iter().any(|file| from_data(file.origin))
+    {
+        return None;
+    }
+    let ignored: Vec<_> = game
+        .ignored()
+        .iter()
+        .filter(|entry| entry.path.parent() == Some(data))
+        .collect();
+    let mut message = format!(
+        "no game data found in {}; pass the 'Nova Files' directory",
+        data.display()
+    );
+    let count = match ignored.len() {
+        0 => return Some(message),
+        1 => "1 entry ignored".to_owned(),
+        n => format!("{n} entries ignored"),
+    };
+    if verbose {
+        let _ = write!(message, " ({count})");
+        for entry in ignored {
+            let reason = report::ignore_reason(&entry.reason);
+            let _ = write!(message, "\n  {}: {reason}", entry.path.display());
+        }
+    } else {
+        let _ = write!(message, " ({count}, use --verbose to list them)");
+    }
+    Some(message)
 }
 
 /// Prints `message` to `stderr` and returns the fatal exit code. A failure
@@ -297,6 +345,98 @@ mod tests {
             )
         );
         assert!(root.calls().is_empty());
+    }
+
+    /// The folder that contains `Nova Files`, passed in its place.
+    fn parent_of_nova_files() -> MemFs {
+        MemFs::new().file(
+            "/data/Nova Files/Nova Data",
+            fork(&[(Spin::TYPE, 200, None, spin())]),
+        )
+    }
+
+    #[test]
+    fn a_data_directory_with_no_game_data_exits_2_before_touching_the_output() {
+        let root = FakeRoot::new(RootState::Missing);
+        let run = run_with(&["/data", "/out"], &parent_of_nova_files(), &root);
+        assert_eq!(run.code, 2);
+        assert_eq!(run.stdout, "");
+        assert_eq!(
+            run.stderr,
+            "nova-dump: no game data found in /data; pass the 'Nova Files' directory \
+             (1 entry ignored, use --verbose to list them)\n"
+        );
+        assert!(root.calls().is_empty());
+        assert!(root.files().is_empty());
+    }
+
+    #[test]
+    fn an_empty_data_directory_has_no_game_data() {
+        let root = FakeRoot::new(RootState::Empty);
+        let run = run_with(&["/data", "/out"], &MemFs::new(), &root);
+        assert_eq!(run.code, 2);
+        assert_eq!(
+            run.stderr,
+            "nova-dump: no game data found in /data; pass the 'Nova Files' directory\n"
+        );
+        assert!(root.calls().is_empty());
+    }
+
+    #[test]
+    fn verbose_lists_what_the_data_directory_ignored() {
+        let data = parent_of_nova_files().file("/data/.DS_Store", vec![]);
+        let root = FakeRoot::new(RootState::Empty);
+        let run = run_with(&["/data", "/out", "-v"], &data, &root);
+        assert_eq!(run.code, 2);
+        assert_eq!(
+            run.stderr,
+            "nova-dump: no game data found in /data; pass the 'Nova Files' directory \
+             (2 entries ignored)\n  \
+             /data/.DS_Store: hidden\n  \
+             /data/Nova Files: folder inside the data directory\n"
+        );
+    }
+
+    #[test]
+    fn plug_ins_alone_are_not_game_data() {
+        let data = parent_of_nova_files()
+            .file("/plugins/Extra", fork(&[(Spin::TYPE, 300, None, spin())]))
+            .file("/plugins/.DS_Store", vec![]);
+        let root = FakeRoot::new(RootState::Empty);
+        let run = run_with(DUMP_WITH_PLUGINS, &data, &root);
+        assert_eq!(run.code, 2);
+        // Only the data directory's own ignored entries are counted.
+        assert_eq!(
+            run.stderr,
+            "nova-dump: no game data found in /data; pass the 'Nova Files' directory \
+             (1 entry ignored, use --verbose to list them)\n"
+        );
+        assert!(root.calls().is_empty());
+    }
+
+    #[test]
+    fn a_data_file_that_fails_to_load_is_a_failure_not_missing_data() {
+        let mut broken = fork(&[(Spin::TYPE, 200, None, spin())]);
+        broken.truncate(20);
+        let data = MemFs::new().file("/data/Nova Data", broken);
+        let root = FakeRoot::new(RootState::Empty);
+        let run = run_with(&["/data", "/out"], &data, &root);
+        assert_eq!(run.code, 1, "{}", run.stderr);
+        assert_eq!(run.stderr, "");
+        let lines: Vec<&str> = run.stdout.lines().collect();
+        let at = lines
+            .iter()
+            .position(|l| *l == "Failures:")
+            .expect("a list");
+        let [file, total] = &lines[at + 1..] else {
+            panic!("{}", run.stdout)
+        };
+        assert!(
+            file.starts_with("  file /data/Nova Data: not a valid resource fork: "),
+            "{file}"
+        );
+        assert_eq!(*total, "failures: 1");
+        assert_eq!(root.calls(), ["create /out", "is_empty /out", "sink /out"]);
     }
 
     #[test]

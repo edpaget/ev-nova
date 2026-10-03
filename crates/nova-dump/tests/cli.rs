@@ -203,6 +203,35 @@ fn a_second_run_into_the_same_directory_is_refused() {
 }
 
 #[test]
+fn the_folder_holding_nova_files_is_refused_before_the_output_is_made() {
+    let dir = TempDir::new().expect("temp dir");
+    let nova_files = dir.path().join("Nova Files");
+    std::fs::create_dir(&nova_files).expect("mkdir");
+    let fork = ForkBuilder::new()
+        .resource(Spin::TYPE, 128, None, &[0; 12])
+        .build();
+    std::fs::write(nova_files.join("Nova Data"), fork.bytes).expect("write");
+    let out = dir.path().join("out");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_nova-dump"))
+        .arg(dir.path())
+        .arg(&out)
+        .output()
+        .expect("nova-dump runs");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("UTF-8"),
+        format!(
+            "nova-dump: no game data found in {}; pass the 'Nova Files' directory \
+             (1 entry ignored, use --verbose to list them)\n",
+            dir.path().display()
+        )
+    );
+    assert!(!out.exists());
+}
+
+#[test]
 fn a_usage_error_exits_2() {
     let output = Command::new(env!("CARGO_BIN_EXE_nova-dump"))
         .arg("--bogus")
