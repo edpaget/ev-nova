@@ -3,3 +3,5 @@
 /EV Nova.app
 .DS_Store
 mutants.out*/
+# Windows Community Edition data (.rez files, copyrighted) — local only.
+/windows-data
