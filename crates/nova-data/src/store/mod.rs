@@ -5,9 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use nova_rsrc::{ForkReader, LoadError, ResType, Resource, ResourceFile};
+use nova_rsrc::{ForkReader, LoadError, ResType, Resource, ResourceFile, StdForkReader};
 
-use self::fs::DirLister;
+use self::fs::{DirLister, StdDirLister};
 use self::order::IgnoreReason;
 use crate::error::{DecodeError, DecodeWarning};
 use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
@@ -155,6 +155,12 @@ pub struct GameData {
 }
 
 impl GameData {
+    /// Opens `data_dir` (`Nova Files`) and, if given, the `plugins` tree
+    /// from disk.
+    pub fn open(data_dir: &Path, plugins: Option<&Path>) -> Result<Self, OpenError> {
+        Self::load(&StdDirLister, &StdForkReader, data_dir, plugins)
+    }
+
     /// Opens `data_dir` and, if given, the `plugins` tree through the given
     /// ports.
     pub fn load(
