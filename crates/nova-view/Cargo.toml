@@ -10,12 +10,16 @@ publish.workspace = true
 [dependencies]
 # The game data the screens show, read through each screen's own port.
 nova-data.workspace = true
+# Resource type codes, for the developer tools' resource catalog.
+nova-rsrc.workspace = true
 
 [dev-dependencies]
 # Synthetic sprite sheets for the GameData adapter tests.
 nova-data = { workspace = true, features = ["fixture"] }
 # Synthetic resource forks for in-memory stores.
 nova-rsrc = { workspace = true, features = ["fixture"] }
+# The developer tools' record view is checked by parsing its JSON.
+serde_json.workspace = true
 
 [lints]
 workspace = true
