@@ -160,9 +160,123 @@ pub enum GraphicsError {
     },
 }
 
+impl GraphicsError {
+    /// The byte offset in the resource where the failure was found, for the
+    /// variants that carry one.
+    #[must_use]
+    pub fn offset(&self) -> Option<usize> {
+        match *self {
+            Self::UnexpectedEnd { offset }
+            | Self::NotAPixMap { offset }
+            | Self::UnsupportedVersion { offset }
+            | Self::UnsupportedOpcode { offset, .. }
+            | Self::BadRegion { offset, .. }
+            | Self::BadCopyRect { offset }
+            | Self::BadPackedRow { offset, .. }
+            | Self::UnsupportedToken { offset, .. }
+            | Self::TokenOutsideLine { offset }
+            | Self::LineOverflow { offset, .. }
+            | Self::TooManyLines { offset, .. }
+            | Self::OddByteCount { offset } => Some(offset),
+            Self::BadDimensions { .. }
+            | Self::TooLarge { .. }
+            | Self::UnsupportedPixMap { .. }
+            | Self::BadRowBytes { .. }
+            | Self::UnsupportedTransferMode { .. }
+            | Self::MaskMismatch
+            | Self::UnsupportedPatternType { .. }
+            | Self::UnsupportedDepth { .. }
+            | Self::NoFrames
+            | Self::MissingColour { .. } => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offset_is_the_failing_byte_when_the_variant_has_one() {
+        use GraphicsError as E;
+        let cases = [
+            (E::UnexpectedEnd { offset: 1 }, Some(1)),
+            (
+                E::BadDimensions {
+                    width: 0,
+                    height: 0,
+                },
+                None,
+            ),
+            (
+                E::TooLarge {
+                    pixels: 9,
+                    input_len: 2,
+                },
+                None,
+            ),
+            (E::NotAPixMap { offset: 2 }, Some(2)),
+            (E::UnsupportedVersion { offset: 3 }, Some(3)),
+            (
+                E::UnsupportedOpcode {
+                    opcode: 0x9B,
+                    offset: 4,
+                },
+                Some(4),
+            ),
+            (E::BadRegion { size: 4, offset: 5 }, Some(5)),
+            (
+                E::UnsupportedPixMap {
+                    pixel_size: 1,
+                    pack_type: 2,
+                    cmp_count: 3,
+                },
+                None,
+            ),
+            (
+                E::BadRowBytes {
+                    row_bytes: 1,
+                    needed: 2,
+                },
+                None,
+            ),
+            (E::UnsupportedTransferMode { mode: 36 }, None),
+            (E::BadCopyRect { offset: 6 }, Some(6)),
+            (E::BadPackedRow { row: 1, offset: 7 }, Some(7)),
+            (E::MaskMismatch, None),
+            (E::UnsupportedPatternType { pat_type: 2 }, None),
+            (E::UnsupportedDepth { depth: 8 }, None),
+            (E::NoFrames, None),
+            (
+                E::UnsupportedToken {
+                    token: 5,
+                    offset: 8,
+                },
+                Some(8),
+            ),
+            (E::TokenOutsideLine { offset: 9 }, Some(9)),
+            (
+                E::LineOverflow {
+                    frame: 1,
+                    line: 2,
+                    offset: 10,
+                },
+                Some(10),
+            ),
+            (
+                E::TooManyLines {
+                    frame: 1,
+                    offset: 11,
+                },
+                Some(11),
+            ),
+            (E::OddByteCount { offset: 12 }, Some(12)),
+            (E::MissingColour { index: 9 }, None),
+        ];
+        for (error, offset) in cases {
+            assert_eq!(error.offset(), offset, "{error:?}");
+        }
+    }
 
     #[test]
     #[allow(clippy::too_many_lines)] // one case per variant

@@ -74,6 +74,26 @@ pub enum SoundError {
     },
 }
 
+impl SoundError {
+    /// The byte offset in the resource where the failure was found, for the
+    /// variants that carry one.
+    #[must_use]
+    pub fn offset(&self) -> Option<usize> {
+        match *self {
+            Self::UnexpectedEnd { offset }
+            | Self::UnsupportedCommand { offset, .. }
+            | Self::UnsupportedHeader { offset, .. }
+            | Self::SamplesTruncated { offset, .. } => Some(offset),
+            Self::UnsupportedFormat { .. }
+            | Self::NoSoundCommand
+            | Self::UnsupportedCompression { .. }
+            | Self::UnsupportedSampleSize { .. }
+            | Self::UnsupportedChannels { .. }
+            | Self::BadSampleRate => None,
+        }
+    }
+}
+
 /// Names a compression for [`SoundError::UnsupportedCompression`]: by its
 /// `format` when that is set, otherwise by its well-known ID.
 struct CompressionName([u8; 4], i16);
@@ -95,6 +115,51 @@ impl fmt::Display for CompressionName {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offset_is_the_failing_byte_when_the_variant_has_one() {
+        use SoundError as E;
+        let cases = [
+            (E::UnexpectedEnd { offset: 1 }, Some(1)),
+            (E::UnsupportedFormat { format: 3 }, None),
+            (E::NoSoundCommand, None),
+            (
+                E::UnsupportedCommand {
+                    command: 0x51,
+                    offset: 2,
+                },
+                Some(2),
+            ),
+            (
+                E::UnsupportedHeader {
+                    encode: 1,
+                    offset: 3,
+                },
+                Some(3),
+            ),
+            (
+                E::UnsupportedCompression {
+                    format: [0; 4],
+                    compression_id: 3,
+                },
+                None,
+            ),
+            (E::UnsupportedSampleSize { bits: 12 }, None),
+            (E::UnsupportedChannels { channels: 3 }, None),
+            (E::BadSampleRate, None),
+            (
+                E::SamplesTruncated {
+                    offset: 4,
+                    needed: 9,
+                    available: 1,
+                },
+                Some(4),
+            ),
+        ];
+        for (error, offset) in cases {
+            assert_eq!(error.offset(), offset, "{error:?}");
+        }
+    }
 
     #[test]
     fn messages_name_the_problem_and_its_offset() {
