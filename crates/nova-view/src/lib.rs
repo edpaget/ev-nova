@@ -27,6 +27,7 @@
 pub mod color;
 pub mod devtools;
 pub mod draw;
+pub mod flight;
 pub mod galaxy;
 pub mod geometry;
 pub mod image;

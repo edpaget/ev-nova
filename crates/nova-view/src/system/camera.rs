@@ -48,6 +48,19 @@ impl Camera {
         }
     }
 
+    /// A camera on world point `center`, held there: what the flight screen
+    /// shows, following the player's ship.
+    #[must_use]
+    pub fn centred_on(center: Point) -> Self {
+        Self {
+            center,
+            limits: Bounds {
+                min: center,
+                max: center,
+            },
+        }
+    }
+
     /// The world point at the screen's centre.
     #[must_use]
     pub fn center(&self) -> Point {
@@ -175,6 +188,16 @@ mod tests {
         // Partway along one axis, held on the other.
         camera.move_by(100.0, -100.0);
         assert_eq!(camera.center(), at(-2624.0, -1624.0));
+    }
+
+    #[test]
+    fn a_camera_centred_on_a_point_draws_it_at_the_screens_centre_and_stays() {
+        let mut camera = Camera::centred_on(at(-250.5, 1200.25));
+        assert_eq!(camera.center(), at(-250.5, 1200.25));
+        assert_eq!(camera.world_to_screen(at(-250.5, 1200.25)), VIEW_CENTER);
+        assert_eq!(camera.world_to_screen(at(0.0, 0.0)), at(762.5, -816.25));
+        camera.move_by(100.0, -100.0);
+        assert_eq!(camera.center(), at(-250.5, 1200.25), "held there");
     }
 
     #[test]

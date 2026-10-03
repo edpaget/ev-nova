@@ -1387,6 +1387,7 @@ version = "0.1.0"
 dependencies = [
  "nova-data",
  "nova-rsrc",
+ "nova-sim",
  "serde_json",
 ]
 

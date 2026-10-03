@@ -12,6 +12,8 @@ publish.workspace = true
 nova-data.workspace = true
 # Resource type codes, for the developer tools' resource catalog.
 nova-rsrc.workspace = true
+# The flight simulation the flight screen runs and draws.
+nova-sim.workspace = true
 
 [dev-dependencies]
 # Synthetic sprite sheets for the GameData adapter tests.
