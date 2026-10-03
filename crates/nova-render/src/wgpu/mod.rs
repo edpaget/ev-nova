@@ -3,8 +3,11 @@
 //!
 //! This is the only module that names `wgpu` or `glyphon` types. It makes
 //! no decisions: the core has already chosen every quad, colour and
-//! rectangle, and [`surface_action`](crate::surface_action) decides what a
-//! window surface does before each frame.
+//! rectangle, [`surface_action`](crate::surface_action) decides what a
+//! window surface does before each frame, and
+//! [`face_for`](crate::face_for) decides which loaded face draws each text
+//! run. Text uses only the faces in the [`FontFaces`](crate::FontFaces) the
+//! adapter is made with.
 //!
 //! [`OverlayGpu::submit_with`] draws a frame with an [`OverlayPainter`]
 //! over it, which gets the frame's device, queue and target

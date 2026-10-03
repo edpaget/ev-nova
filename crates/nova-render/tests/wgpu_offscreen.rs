@@ -2,14 +2,16 @@
 //! back and checked pixel by pixel. Needs a GPU adapter; skips, passing,
 //! without one.
 
+use nova_data::fonts::fixture::block_font;
 use nova_data::graphics::Image;
+use nova_render::fonts::FontFaces;
 use nova_render::wgpu::{
     InitError, OffscreenGpu, OverlayGpu, OverlayPainter, PaintTarget, WithOverlay,
 };
 use nova_render::{
     Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport,
 };
-use nova_view::{Color, DrawList, ImageKey, ImageKind, Point};
+use nova_view::{Color, DrawList, Font, ImageKey, ImageKind, Point};
 
 /// Logical 32x24 in a 64x64 target: scale 2, content (0, 8, 64, 48).
 const LOGICAL: LogicalSize = LogicalSize { w: 32, h: 24 };
@@ -59,9 +61,16 @@ impl ImageSource for Images {
     }
 }
 
-/// An offscreen GPU, or `None` (after a skip message) with no adapter.
+/// An offscreen GPU with the bundled font, or `None` (after a skip
+/// message) with no adapter.
 fn gpu() -> Option<OffscreenGpu> {
-    match OffscreenGpu::new(SIZE, SIZE) {
+    gpu_with(SIZE, SIZE, &FontFaces::bundled())
+}
+
+/// A `width` x `height` offscreen GPU drawing text in `faces`, or `None`
+/// (after a skip message) with no adapter.
+fn gpu_with(width: u32, height: u32, faces: &FontFaces) -> Option<OffscreenGpu> {
+    match OffscreenGpu::new(width, height, faces) {
         Ok(gpu) => Some(gpu),
         Err(error @ (InitError::NoAdapter(_) | InitError::NoDevice(_))) => {
             eprintln!("skipping: no GPU adapter ({error})");
@@ -233,10 +242,6 @@ fn text_draws_inside_its_clip_box() {
     renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
     let pixels = gpu.read_pixels().expect("read back");
 
-    if gpu.font_faces() == 0 {
-        eprintln!("skipping the text check: no fonts loaded");
-        return;
-    }
     // The first run, logical y 2..10, is pixels 12..28.
     assert!(any_drawn(&pixels, 8..28), "the first run is not drawn");
     // The second, from logical y 20 (pixel 48), is cut off at the bar.
@@ -267,11 +272,197 @@ fn zero_size_text_draws_nothing_and_the_frame_goes_on() {
 }
 
 #[test]
-fn the_font_count_is_the_systems() {
-    let Some(gpu) = gpu() else {
+fn only_the_handed_fonts_load() {
+    let Some(bundled) = gpu() else {
         return;
     };
-    assert_eq!(gpu.font_faces(), glyphon::FontSystem::new().db().len());
+    assert_eq!(bundled.font_faces(), 1);
+    assert!(!bundled.charcoal_loaded());
+    let faces = FontFaces::bundled().with_charcoal(block_font("Charcoal"));
+    let Some(with_charcoal) = gpu_with(SIZE, SIZE, &faces) else {
+        return;
+    };
+    assert_eq!(with_charcoal.font_faces(), 2);
+    assert!(with_charcoal.charcoal_loaded());
+}
+
+#[test]
+fn charcoal_bytes_that_load_no_face_are_not_loaded() {
+    let faces = FontFaces::bundled().with_charcoal(&b"not a font"[..]);
+    let Some(gpu) = gpu_with(SIZE, SIZE, &faces) else {
+        return;
+    };
+    assert_eq!(gpu.font_faces(), 1);
+    assert!(!gpu.charcoal_loaded());
+}
+
+/// The logical space of the font tests: one line of text.
+const LINE: LogicalSize = LogicalSize { w: 128, h: 32 };
+
+/// What the font tests draw.
+const SAMPLE: &str = "EV Nova";
+
+/// Where the font tests' text starts, in logical units.
+const TEXT_AT: (f32, f32) = (2.0, 4.0);
+
+/// [`SAMPLE`] in `font` at `size` points, drawn with `faces` into a
+/// [`LINE`]-sized window at `scale` physical pixels per unit, as RGBA8
+/// pixels; `None` with no GPU adapter.
+fn draw_sample(faces: &FontFaces, font: Font, size: f32, scale: u32) -> Option<Picture> {
+    let (w, h) = (LINE.w * scale, LINE.h * scale);
+    let mut gpu = gpu_with(w, h, faces)?;
+    let mut list = DrawList::new();
+    let at = Point::new(TEXT_AT.0, TEXT_AT.1);
+    list.text_in(font, SAMPLE, at, size, None, Color::WHITE);
+    let report = Renderer::new(Images).render(
+        &list,
+        &Viewport::new(LINE, (w, h), f64::from(scale)),
+        &mut gpu,
+    );
+    assert_eq!(report.new_failures, vec![]);
+    Some(Picture {
+        width: w,
+        pixels: gpu.read_pixels().expect("read back"),
+    })
+}
+
+/// Read-back pixels and their width.
+#[derive(PartialEq)]
+struct Picture {
+    width: u32,
+    pixels: Vec<u8>,
+}
+
+impl std::fmt::Debug for Picture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} lit pixels", self.lit().len())
+    }
+}
+
+impl Picture {
+    /// The coverage (red channel: white text on black) at each pixel.
+    fn coverage(&self) -> impl Iterator<Item = ((u32, u32), u8)> + '_ {
+        self.pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .map(|(at, p)| ((at as u32 % self.width, at as u32 / self.width), p[0]))
+    }
+
+    /// Every pixel any glyph touches.
+    fn lit(&self) -> Vec<(u32, u32)> {
+        self.coverage()
+            .filter(|&(_, c)| c > 0)
+            .map(|(at, _)| at)
+            .collect()
+    }
+
+    /// The rows from the top of the highest ink to the bottom of the
+    /// lowest.
+    fn ink_height(&self) -> u32 {
+        let rows = self.lit().into_iter().map(|(_, y)| y);
+        let (top, bottom) = rows.fold((u32::MAX, 0), |(t, b), y| (t.min(y), b.max(y)));
+        bottom + 1 - top
+    }
+
+    /// The longest horizontal run of fully covered pixels.
+    fn longest_solid_run(&self) -> u32 {
+        let mut longest = 0;
+        let mut run = 0;
+        for ((x, _), c) in self.coverage() {
+            if x == 0 {
+                run = 0;
+            }
+            run = if c >= 250 { run + 1 } else { 0 };
+            longest = longest.max(run);
+        }
+        longest
+    }
+}
+
+#[test]
+fn each_font_draws_in_its_own_face() {
+    let faces = FontFaces::bundled().with_charcoal(block_font("Charcoal"));
+    let (Some(charcoal), Some(geneva)) = (
+        draw_sample(&faces, Font::Charcoal, 12.0, 2),
+        draw_sample(&faces, Font::Geneva, 12.0, 2),
+    ) else {
+        return;
+    };
+    assert!(!charcoal.lit().is_empty(), "Charcoal draws nothing");
+    assert!(!geneva.lit().is_empty(), "Geneva draws nothing");
+    assert_ne!(charcoal, geneva);
+    // 24-pixel text: each block-font glyph is a solid square 19 pixels
+    // wide; no letter of the fallback has a solid run that long.
+    assert!(
+        charcoal.longest_solid_run() >= 16,
+        "{}",
+        charcoal.longest_solid_run()
+    );
+    assert!(
+        geneva.longest_solid_run() < 16,
+        "{}",
+        geneva.longest_solid_run()
+    );
+}
+
+#[test]
+fn charcoal_falls_back_when_it_did_not_load() {
+    let missing = FontFaces::bundled();
+    let unusable = FontFaces::bundled().with_charcoal(&b"not a font"[..]);
+    for faces in [missing, unusable] {
+        let (Some(charcoal), Some(geneva)) = (
+            draw_sample(&faces, Font::Charcoal, 12.0, 2),
+            draw_sample(&faces, Font::Geneva, 12.0, 2),
+        ) else {
+            return;
+        };
+        assert!(!geneva.lit().is_empty(), "Geneva draws nothing");
+        assert_eq!(charcoal, geneva);
+    }
+}
+
+#[test]
+fn both_fonts_draw_at_the_original_sizes_at_1x_and_2x() {
+    let faces = FontFaces::bundled().with_charcoal(block_font("Charcoal"));
+    // Nova's interface sizes (`cölr`, `ïntf`): Geneva 9, 10 and 12;
+    // Charcoal 12.
+    for font in [Font::Geneva, Font::Charcoal] {
+        for size in [9.0, 10.0, 12.0] {
+            let (Some(one), Some(two)) = (
+                draw_sample(&faces, font, size, 1),
+                draw_sample(&faces, font, size, 2),
+            ) else {
+                return;
+            };
+            for (scale, picture) in [(1, &one), (2, &two)] {
+                let lit = picture.lit();
+                assert!(
+                    !lit.is_empty(),
+                    "{font:?} {size}pt at {scale}x draws nothing"
+                );
+                // Inside the run's box: from its origin, one line high.
+                let scale = scale as f32;
+                let (left, top) = (TEXT_AT.0 * scale, TEXT_AT.1 * scale);
+                let bottom = top + 1.2 * size * scale;
+                for (x, y) in lit {
+                    let (x, y) = (x as f32, y as f32);
+                    assert!(
+                        x + 1.0 >= left && y + 1.0 >= top && y <= bottom,
+                        "{font:?} {size}pt at {scale}x: ({x}, {y}) is outside the run"
+                    );
+                }
+            }
+            // Drawn at the physical size, not scaled up: twice the pixels
+            // per point gives twice the ink height, give or take rounding.
+            let (h1, h2) = (one.ink_height(), two.ink_height());
+            assert!(
+                h2.abs_diff(2 * h1) <= 2,
+                "{font:?} {size}pt: ink {h1} rows at 1x, {h2} at 2x"
+            );
+        }
+    }
 }
 
 #[test]

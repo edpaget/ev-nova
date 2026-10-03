@@ -17,9 +17,8 @@ thiserror.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]
-# The offscreen test compares the adapter's font count with glyphon's own.
-glyphon.workspace = true
-# Synthetic pictures and sprites for the GameData source tests.
+# Synthetic pictures and sprites for the GameData source tests, and the
+# block font for the text tests.
 nova-data = { workspace = true, features = ["fixture"] }
 # Synthetic resource forks for in-memory stores.
 nova-rsrc = { workspace = true, features = ["fixture"] }

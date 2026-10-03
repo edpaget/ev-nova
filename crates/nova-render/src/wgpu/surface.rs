@@ -5,6 +5,7 @@ use nova_data::graphics::Image;
 use super::data::surface_format;
 use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
 use super::{InitError, WgpuRenderer, acquire};
+use crate::fonts::FontFaces;
 use crate::gpu::{Frame, Gpu, PageId};
 use crate::present::{
     AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action,
@@ -27,10 +28,11 @@ pub struct SurfaceGpu {
 
 impl SurfaceGpu {
     /// A surface on `window`, whose platform display is `display`, drawn
-    /// with vsync (`Fifo`) in a non-sRGB format.
+    /// with vsync (`Fifo`) in a non-sRGB format, with text in `faces`.
     pub fn new(
         display: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>,
         window: impl wgpu::DisplayAndWindowHandle + 'static,
+        faces: &FontFaces,
     ) -> Result<Self, InitError> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(display));
@@ -53,7 +55,7 @@ impl SurfaceGpu {
                 .unwrap_or(wgpu::CompositeAlphaMode::Auto),
             view_formats: Vec::new(),
         };
-        let renderer = WgpuRenderer::new(&device, &queue, format);
+        let renderer = WgpuRenderer::new(&device, &queue, format, faces);
         Ok(Self {
             surface,
             device,

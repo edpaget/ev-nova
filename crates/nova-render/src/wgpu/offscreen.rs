@@ -8,6 +8,7 @@ use nova_data::graphics::Image;
 use super::data::{padded_bytes_per_row, strip_padding};
 use super::overlay::{OverlayGpu, OverlayPainter, PaintTarget};
 use super::{InitError, WgpuRenderer, acquire};
+use crate::fonts::FontFaces;
 use crate::gpu::{Frame, Gpu, PageId};
 use crate::viewport::PixelRect;
 
@@ -42,8 +43,9 @@ pub struct OffscreenGpu {
 }
 
 impl OffscreenGpu {
-    /// A `width` x `height` target on the default GPU adapter.
-    pub fn new(width: u32, height: u32) -> Result<Self, InitError> {
+    /// A `width` x `height` target on the default GPU adapter, drawing
+    /// text in `faces`.
+    pub fn new(width: u32, height: u32, faces: &FontFaces) -> Result<Self, InitError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let (_adapter, device, queue) = acquire(&instance, None)?;
         let target = device.create_texture(&wgpu::TextureDescriptor {
@@ -61,7 +63,7 @@ impl OffscreenGpu {
             view_formats: &[],
         });
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let renderer = WgpuRenderer::new(&device, &queue, FORMAT);
+        let renderer = WgpuRenderer::new(&device, &queue, FORMAT, faces);
         Ok(Self {
             device,
             queue,
@@ -72,10 +74,16 @@ impl OffscreenGpu {
         })
     }
 
-    /// How many font faces the text renderer found.
+    /// How many font faces the text renderer loaded.
     #[must_use]
     pub fn font_faces(&self) -> usize {
         self.renderer.font_faces()
+    }
+
+    /// Whether Charcoal's font file loaded a face.
+    #[must_use]
+    pub fn charcoal_loaded(&self) -> bool {
+        self.renderer.charcoal_loaded()
     }
 
     /// The target's RGBA8 pixels, row-major, top row first.

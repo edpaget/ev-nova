@@ -16,8 +16,8 @@ use nova_data::GameData;
 #[cfg(feature = "dev-tools")]
 use nova_render::wgpu::WithOverlay;
 
-use nova_render::ImageSource;
 use nova_render::wgpu::{InitError, SurfaceGpu};
+use nova_render::{FontFaces, ImageSource};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent as WinitEvent;
 use winit::event_loop::ActiveEventLoop;
@@ -99,8 +99,12 @@ fn open(event_loop: &ActiveEventLoop) -> Result<(WinitWindow, SurfaceGpu), OpenF
         .create_window(attributes)
         .map_err(|error| OpenFailure::Window(error.to_string()))?;
     let window = Arc::new(window);
-    let gpu = SurfaceGpu::new(Box::new(event_loop.owned_display_handle()), window.clone())
-        .map_err(|error| gpu_failure(&error))?;
+    let gpu = SurfaceGpu::new(
+        Box::new(event_loop.owned_display_handle()),
+        window.clone(),
+        &FontFaces::bundled(),
+    )
+    .map_err(|error| gpu_failure(&error))?;
     Ok((WinitWindow(window), gpu))
 }
 

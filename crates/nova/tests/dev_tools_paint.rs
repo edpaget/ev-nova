@@ -7,14 +7,14 @@
 use egui::{Color32, ColorImage, Context, Pos2, RawInput, Rect, TextureOptions, pos2, vec2};
 use nova::devtools::EguiLayer;
 use nova_render::wgpu::{InitError, OffscreenGpu, WithOverlay};
-use nova_render::{Frame, Gpu, LogicalSize, PixelRect};
+use nova_render::{FontFaces, Frame, Gpu, LogicalSize, PixelRect};
 use nova_view::Color;
 
 const SIZE: u32 = 64;
 
 /// An offscreen GPU, or `None` (after a skip message) with no adapter.
 fn gpu() -> Option<OffscreenGpu> {
-    match OffscreenGpu::new(SIZE, SIZE) {
+    match OffscreenGpu::new(SIZE, SIZE, &FontFaces::bundled()) {
         Ok(gpu) => Some(gpu),
         Err(error @ (InitError::NoAdapter(_) | InitError::NoDevice(_))) => {
             eprintln!("skipping: no GPU adapter ({error})");

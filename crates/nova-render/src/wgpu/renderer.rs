@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::Arc;
 
+use glyphon::fontdb::{Database, Source};
 use glyphon::{
     Attrs, Buffer, Cache, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer,
@@ -13,6 +15,7 @@ use wgpu::util::DeviceExt;
 use super::data::{SolidVertex, SpriteInstance, globals, solid_vertices};
 use nova_view::Color;
 
+use crate::fonts::{Face, FontFaces, face_for};
 use crate::gpu::{Batch, Frame, PageId, TextRun};
 use crate::viewport::PixelRect;
 
@@ -44,6 +47,7 @@ pub struct WgpuRenderer {
     globals_group: wgpu::BindGroup,
     pages: HashMap<PageId, Page>,
     font_system: FontSystem,
+    families: Families,
     swash_cache: SwashCache,
     text_atlas: TextAtlas,
     text_viewport: glyphon::Viewport,
@@ -51,9 +55,15 @@ pub struct WgpuRenderer {
 }
 
 impl WgpuRenderer {
-    /// A renderer drawing into `format` textures on `device`.
+    /// A renderer drawing into `format` textures on `device`, with text in
+    /// `faces` alone: no system font is loaded.
     #[must_use]
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        faces: &FontFaces,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let globals_layout = globals_layout(device);
         let page_layout = page_layout(device);
@@ -117,6 +127,7 @@ impl WgpuRenderer {
         let cache = Cache::new(device);
         let text_atlas = TextAtlas::with_color_mode(device, queue, &cache, format, ColorMode::Web);
         let text_viewport = glyphon::Viewport::new(device, &cache);
+        let (font_system, families) = font_system(faces);
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -127,7 +138,8 @@ impl WgpuRenderer {
             globals,
             globals_group,
             pages: HashMap::new(),
-            font_system: FontSystem::new(),
+            font_system,
+            families,
             swash_cache: SwashCache::new(),
             text_atlas,
             text_viewport,
@@ -135,10 +147,16 @@ impl WgpuRenderer {
         }
     }
 
-    /// How many font faces glyphon found on the system.
+    /// How many font faces loaded.
     #[must_use]
     pub fn font_faces(&self) -> usize {
         self.font_system.db().len()
+    }
+
+    /// Whether Charcoal's font file loaded a face.
+    #[must_use]
+    pub fn charcoal_loaded(&self) -> bool {
+        self.families.charcoal.is_some()
     }
 
     /// Creates atlas page `page`, `size` texels square and transparent.
@@ -305,6 +323,7 @@ impl WgpuRenderer {
                 None,
             ));
         }
+        let families = &self.families;
         for (renderer, runs) in self.text_renderers.iter_mut().zip(batches) {
             let buffers: Vec<Buffer> = runs
                 .iter()
@@ -316,7 +335,7 @@ impl WgpuRenderer {
                     buffer.set_size(run.wrap_px, None);
                     buffer.set_text(
                         &run.text,
-                        &Attrs::new().family(Family::SansSerif),
+                        &Attrs::new().family(families.family(run)),
                         Shaping::Advanced,
                         None,
                     );
@@ -367,6 +386,43 @@ impl WgpuRenderer {
                 usage: wgpu::BufferUsages::VERTEX,
             })
     }
+}
+
+/// The family name of each loaded face, as fontdb read it.
+struct Families {
+    charcoal: Option<String>,
+    fallback: Option<String>,
+}
+
+impl Families {
+    /// The family that draws `run`, chosen by [`face_for`].
+    fn family(&self, run: &TextRun) -> Family<'_> {
+        let name = match face_for(run.font, self.charcoal.is_some()) {
+            Face::Charcoal => &self.charcoal,
+            Face::Fallback => &self.fallback,
+        };
+        name.as_deref().map_or(Family::SansSerif, Family::Name)
+    }
+}
+
+/// A font system holding only `faces`, with the fallback as its
+/// sans-serif family, and each face's family name.
+fn font_system(faces: &FontFaces) -> (FontSystem, Families) {
+    let mut db = Database::new();
+    let mut load = |bytes: &Arc<[u8]>| {
+        let ids = db.load_font_source(Source::Binary(Arc::new(Arc::clone(bytes))));
+        ids.first()
+            .and_then(|&id| db.face(id))
+            .and_then(|face| face.families.first())
+            .map(|(name, _)| name.clone())
+    };
+    let fallback = load(faces.fallback());
+    let charcoal = faces.charcoal().and_then(&mut load);
+    if let Some(name) = &fallback {
+        db.set_sans_serif_family(name.clone());
+    }
+    let system = FontSystem::new_with_locale_and_db("en-US".to_owned(), db);
+    (system, Families { charcoal, fallback })
 }
 
 /// The projection uniform's layout.

@@ -25,6 +25,11 @@
 //! reads it back, and [`wgpu::SurfaceGpu`] draws into a window. Both hand
 //! the work to [`wgpu::WgpuRenderer`].
 //!
+//! The adapters are handed their fonts ([`FontFaces`]) when they are made.
+//! They load those faces alone, never the system's fonts, so text draws the
+//! same on every machine, and they draw each run in the face [`face_for`]
+//! picks.
+//!
 //! Both adapters can also draw an overlay over each frame, after the
 //! renderer and before it is presented or read back
 //! ([`wgpu::OverlayGpu`], [`wgpu::OverlayPainter`]): [`wgpu::WithOverlay`]
