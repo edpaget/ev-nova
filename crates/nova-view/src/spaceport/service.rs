@@ -111,7 +111,7 @@ impl Screen for ServiceScreen {
                 pressed: true,
                 repeat: false,
             } => true,
-            Input::Key { .. } => false,
+            // The tracker ignores every other key.
             _ => self.tracker.input(&self.done, input),
         };
         self.closed |= done;
