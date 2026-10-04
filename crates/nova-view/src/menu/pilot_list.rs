@@ -196,11 +196,11 @@ impl PilotList {
     /// Selects pilot `index`, scrolling to show it.
     fn select(&mut self, index: usize) {
         self.selected = Some(index);
-        if index < self.first {
-            self.first = index;
-        } else if index >= self.first + VISIBLE_ROWS {
-            self.first = index + 1 - VISIBLE_ROWS;
-        }
+        // Scrolled no further than needed: the selection at the top or
+        // the bottom of the rows shown.
+        self.first = self
+            .first
+            .clamp((index + 1).saturating_sub(VISIBLE_ROWS), index);
     }
 
     fn key(&mut self, key: Key, repeat: bool) {
@@ -576,5 +576,105 @@ mod tests {
             at: ada,
         });
         assert_eq!(pilots.take_outcome(), None);
+    }
+
+    #[test]
+    fn the_panel_lays_out_its_rows_text_and_buttons_where_pinned() {
+        let mut pilots = list(&["Ada", "Bob"]);
+        pilots.show_error("broken");
+        let rect = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
+        assert_eq!(pilots.row_rect(0), rect(328.0, 264.0, 368.0, 20.0));
+        assert_eq!(pilots.row_rect(3), rect(328.0, 324.0, 368.0, 20.0));
+        assert_eq!(pilots.cancel_button().rect, rect(500.0, 506.0, 90.0, 25.0));
+        assert_eq!(pilots.open_button().rect, rect(606.0, 506.0, 90.0, 25.0));
+        let panel = Bounds {
+            min: Point::new(312.0, 224.0),
+            max: Point::new(712.0, 544.0),
+        };
+        let mut expected = DrawList::new();
+        fill_rect(&mut expected, panel, BACKDROP);
+        outline(&mut expected, panel, BORDER);
+        expected.text(TITLE, Point::new(328.0, 240.0), 12.0, None, Color::WHITE);
+        // Each name is centred down its 20-high row: 14.4 high.
+        fill_rect(&mut expected, rect(328.0, 264.0, 368.0, 20.0), SELECTED);
+        expected.text("Ada", Point::new(332.0, 266.8), 12.0, None, Color::WHITE);
+        expected.text("Bob", Point::new(332.0, 286.8), 12.0, None, Color::WHITE);
+        expected.text(
+            "broken",
+            Point::new(328.0, 474.0),
+            12.0,
+            Some(368.0),
+            Color::ERROR,
+        );
+        for button in [pilots.cancel_button(), pilots.open_button()] {
+            button.draw(
+                false,
+                &ButtonSkin::NOVA,
+                &ButtonStyle::STOCK,
+                &MonoMetrics,
+                &mut expected,
+            );
+        }
+        let mut drawn = DrawList::new();
+        pilots.draw(&mut drawn);
+        assert_eq!(drawn, expected);
+
+        let empty = list(&[]);
+        let mut drawn = DrawList::new();
+        empty.draw(&mut drawn);
+        let mut expected = DrawList::new();
+        expected.text(NO_PILOTS, Point::new(332.0, 266.8), 12.0, None, Color::DIM);
+        let note = expected.iter().next().expect("a text").clone();
+        assert!(drawn.iter().any(|command| *command == note), "{drawn:?}");
+    }
+
+    #[test]
+    fn a_button_shows_pressed_only_while_held_with_the_pointer_on_it() {
+        let mut pilots = list(&["Ada"]);
+        let cancel = pilots.cancel_button().rect.center();
+        pilots.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: cancel,
+        });
+        let drawn_as = |pilots: &PilotList, pressed: [bool; 2]| {
+            let mut expected = DrawList::new();
+            for (button, pressed) in [pilots.cancel_button(), pilots.open_button()]
+                .into_iter()
+                .zip(pressed)
+            {
+                button.draw(
+                    pressed,
+                    &ButtonSkin::NOVA,
+                    &ButtonStyle::STOCK,
+                    &MonoMetrics,
+                    &mut expected,
+                );
+            }
+            let mut drawn = DrawList::new();
+            pilots.draw(&mut drawn);
+            let tail: Vec<DrawCommand> = drawn
+                .iter()
+                .skip(drawn.len() - expected.len())
+                .cloned()
+                .collect();
+            tail == expected.iter().cloned().collect::<Vec<_>>()
+        };
+        assert!(drawn_as(&pilots, [true, false]));
+        pilots.input(&Input::PointerMoved(Point::new(10.0, 10.0)));
+        assert!(drawn_as(&pilots, [false, false]), "the pointer is off it");
+    }
+
+    #[test]
+    fn debug_shows_the_pilots_the_selection_and_the_error() {
+        let mut pilots = list(&["Ada"]);
+        pilots.show_error("broken");
+        let debug = format!("{pilots:?}");
+        assert!(
+            debug.starts_with(
+                r#"PilotList { keys: ["Ada"], selected: Some(0), error: Some("broken"), .."#
+            ),
+            "{debug}"
+        );
     }
 }

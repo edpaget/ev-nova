@@ -359,4 +359,36 @@ mod tests {
             "Open Pilot drawn pressed"
         );
     }
+
+    #[test]
+    fn a_button_held_with_the_pointer_moved_off_draws_unpressed() {
+        let mut menu = menu();
+        let open = menu.button(MenuChoice::OpenPilot).rect.center();
+        menu.input(&button(true, open));
+        menu.input(&Input::PointerMoved(Point::new(10.0, 10.0)));
+        let mut expected = DrawList::new();
+        for choice in MenuChoice::ALL {
+            menu.button(choice).draw(
+                false,
+                &ButtonSkin::NOVA,
+                &ButtonStyle::STOCK,
+                &MonoMetrics,
+                &mut expected,
+            );
+        }
+        let mut list = DrawList::new();
+        menu.draw(&mut list);
+        let buttons: Vec<&DrawCommand> = list.iter().skip(1).collect();
+        assert_eq!(buttons, expected.iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn debug_shows_the_press_and_the_choice() {
+        let mut menu = menu();
+        menu.input(&key(Key::Escape, true, false));
+        assert_eq!(
+            format!("{menu:?}"),
+            "MainMenu { tracked: None, choice: Some(Quit), .. }"
+        );
+    }
 }

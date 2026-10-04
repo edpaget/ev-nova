@@ -622,4 +622,17 @@ mod tests {
         dialog.input(&button(false));
         assert_eq!(dialog.take_outcome(), None);
     }
+
+    #[test]
+    fn debug_shows_the_name_the_outcome_and_the_refusal() {
+        let mut dialog = dialog();
+        typed(&mut dialog, "Ada");
+        dialog.refuse(NAME_TAKEN);
+        assert_eq!(
+            format!("{dialog:?}"),
+            format!(
+                "NewPilotDialog {{ name: \"Ada\", outcome: None, refusal: Some({NAME_TAKEN:?}), .. }}"
+            )
+        );
+    }
 }
