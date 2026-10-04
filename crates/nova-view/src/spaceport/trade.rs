@@ -235,12 +235,11 @@ impl TradeScreen {
     fn select(&mut self, index: usize) {
         let count = self.market.rows.len();
         self.selected = index.min(count.saturating_sub(1));
-        self.top = self.top.min(count.saturating_sub(ROWS));
-        if self.selected < self.top {
-            self.top = self.selected;
-        } else if self.selected >= self.top + ROWS {
-            self.top = self.selected + 1 - ROWS;
-        }
+        self.top = self
+            .top
+            .min(count.saturating_sub(ROWS))
+            .min(self.selected)
+            .max((self.selected + 1).saturating_sub(ROWS));
         self.regrey();
     }
 
@@ -692,6 +691,32 @@ mod tests {
     }
 
     #[test]
+    fn each_event_has_its_own_line() {
+        let screen = screen_of(Market {
+            events: vec!["A glut".to_owned(), "A drought".to_owned()],
+            ..market()
+        });
+        let events = item(&screen, EVENTS_ITEM);
+        let lines: Vec<_> = texts(&drawn(&screen))
+            .into_iter()
+            .filter(|(text, _)| text.starts_with("A "))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                (
+                    "A glut".to_owned(),
+                    Point::new(events.min.x + INSET, events.min.y)
+                ),
+                (
+                    "A drought".to_owned(),
+                    Point::new(events.min.x + INSET, events.min.y + 12.0)
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn the_list_is_in_geneva_white_under_a_dim_header() {
         let commands = drawn(&screen());
         let style = |wanted: &str| {
@@ -783,6 +808,8 @@ mod tests {
         assert_eq!(screen.selected(), Some(0));
         click_item(&mut screen, 9);
         assert_eq!(screen.selected(), Some(0));
+        click_item(&mut screen, 7);
+        assert_eq!(screen.selected(), Some(0), "the first empty row");
         assert_eq!(screen.take_sounds(), [], "rows are silent");
         assert_eq!(screen.take_order(), None);
     }
