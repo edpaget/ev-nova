@@ -23,7 +23,10 @@
 //! The adapter, [`wgpu`], is the only module that names `wgpu` or
 //! `glyphon` types: [`wgpu::OffscreenGpu`] draws into its own texture and
 //! reads it back, and [`wgpu::SurfaceGpu`] draws into a window. Both hand
-//! the work to [`wgpu::WgpuRenderer`].
+//! the work to [`wgpu::WgpuRenderer`]. [`wgpu::GlyphonMetrics`] is
+//! `nova_view`'s text-metrics port over the same glyphon font system, with
+//! no GPU: the widgets lay text out by the widths it is drawn at, and the
+//! batcher spaces lines by `nova_view`'s shared line-height rule.
 //!
 //! The adapters are handed their fonts ([`FontFaces`]) when they are made.
 //! They load those faces alone, never the system's fonts, so text draws the

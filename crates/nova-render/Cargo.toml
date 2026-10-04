@@ -22,6 +22,8 @@ wgpu.workspace = true
 nova-data = { workspace = true, features = ["fixture"] }
 # Synthetic resource forks for in-memory stores.
 nova-rsrc = { workspace = true, features = ["fixture"] }
+# The text-metrics port's contract, for the glyphon adapter's tests.
+nova-view = { workspace = true, features = ["fixture"] }
 # Integration tests record Gpu calls with the `recording` mock.
 nova-render = { workspace = true, features = ["recording"] }
 

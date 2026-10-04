@@ -9,17 +9,24 @@
 //! run. Text uses only the faces in the [`FontFaces`](crate::FontFaces) the
 //! adapter is made with.
 //!
+//! [`GlyphonMetrics`] is `nova_view`'s text-metrics port over the same
+//! font system the renderer draws with, so the widgets lay text out by the
+//! widths it will be drawn at. It needs no GPU.
+//!
 //! [`OverlayGpu::submit_with`] draws a frame with an [`OverlayPainter`]
 //! over it, which gets the frame's device, queue and target
 //! ([`PaintTarget`]); [`WithOverlay`] turns that into a plain
 //! [`Gpu`](crate::Gpu) for the renderer.
 
 mod data;
+mod fonts;
+mod metrics;
 mod offscreen;
 mod overlay;
 mod renderer;
 mod surface;
 
+pub use metrics::GlyphonMetrics;
 pub use offscreen::{OffscreenGpu, ReadError};
 pub use overlay::{MAX_TEXTURE_SIDE, OverlayGpu, OverlayPainter, PaintTarget, WithOverlay};
 pub use renderer::WgpuRenderer;

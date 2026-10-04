@@ -3,15 +3,13 @@
 
 use std::collections::{HashMap, HashSet};
 
+use nova_view::text::LINE_HEIGHT;
 use nova_view::{Color, DrawCommand, DrawList, ImageKey, ImageKind, Point};
 
 use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE};
 use crate::gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
 use crate::images::{ImageError, ImageSource};
 use crate::viewport::Viewport;
-
-/// Line spacing as a multiple of the font size.
-const LINE_HEIGHT: f32 = 1.2;
 
 /// What went wrong while rendering one frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
