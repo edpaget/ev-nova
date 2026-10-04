@@ -28,7 +28,9 @@
 //! or sold (#207), when the original has words for it.
 //!
 //! Buy and Sell, clicked or with B and S (key repeats too, so holding a
-//! key keeps going), ask for one of the selected outfit, and each is
+//! key keeps going, but only on the outfit the key went down on: when an
+//! order removes its cell, a held key stops until it is pressed again),
+//! ask for one of the selected outfit, and each is
 //! greyed when one could not be bought or sold. The screen only records
 //! the order ([`OutfitterScreen::take_order`]): whoever holds the session
 //! makes it and gives back the outfitter as it now is
@@ -229,6 +231,10 @@ pub struct OutfitterScreen {
     top_row: usize,
     /// The order asked for, until it is taken.
     order: Option<OutfitOrder>,
+    /// The key B or S last went down on (a press, not a repeat), and the
+    /// outfit selected then, if any: its repeats act on that outfit
+    /// alone.
+    held: Option<(Key, Option<OutfitId>)>,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -280,6 +286,7 @@ impl OutfitterScreen {
             selected: 0,
             top_row: 0,
             order: None,
+            held: None,
             closed: false,
             sounds: Vec::new(),
         };
@@ -454,6 +461,22 @@ impl OutfitterScreen {
         });
     }
 
+    /// Asks to go `direction` for `key` going down: a press asks for the
+    /// selected outfit and remembers it; a repeat asks only while that
+    /// same outfit is still selected and the press was this key's. So a
+    /// key held while an order removes the outfit's cell never acts on
+    /// the outfit that takes the cell.
+    fn ask_by_key(&mut self, key: Key, input: &Input, direction: Direction) {
+        let selected = self.selected().map(|index| self.outfitter.rows[index].id);
+        let repeat = matches!(*input, Input::Key { repeat: true, .. });
+        if !repeat {
+            self.held = Some((key, selected));
+        } else if self.held != Some((key, selected)) {
+            return;
+        }
+        self.ask(direction);
+    }
+
     /// Scrolls the grid a row down, or up, never past either end.
     fn scroll(&mut self, down: bool) {
         self.top_row = if down {
@@ -626,9 +649,9 @@ impl Screen for OutfitterScreen {
         } else if pressed(Key::Down) {
             self.select(self.selected + COLUMNS);
         } else if pressed(BUY_KEY) {
-            self.ask(Direction::Buy);
+            self.ask_by_key(BUY_KEY, input, Direction::Buy);
         } else if pressed(SELL_KEY) {
-            self.ask(Direction::Sell);
+            self.ask_by_key(SELL_KEY, input, Direction::Sell);
         } else if let Some(index) = match *input {
             Input::PointerButton {
                 pressed: true, at, ..
@@ -1525,6 +1548,8 @@ mod tests {
             "repeats too"
         );
         press(&mut screen, Key::Left);
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
         screen.input(&key(SELL_KEY, true, true));
         assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
         screen.input(&key(BUY_KEY, false, false));
@@ -1556,6 +1581,67 @@ mod tests {
         assert_eq!(screen.take_order(), None);
         press(&mut screen, SELL_KEY);
         assert_eq!(screen.take_order(), Some(order(131, Direction::Sell)));
+    }
+
+    #[test]
+    fn a_held_key_never_acts_on_an_outfit_it_did_not_start_on() {
+        // A sell-only map (1 owned) next to a sellable blaster (2 owned).
+        let both = || Outfitter {
+            rows: vec![
+                OutfitRow {
+                    buy: Err(OutfitRefusal::NotForSale),
+                    ..row(131, "Map", 0, 0, 1)
+                },
+                row(128, "Light\\nBlaster", 1000, 1, 2),
+            ],
+            ..outfitter()
+        };
+        let mut screen = screen_of(both());
+        screen.input(&key(SELL_KEY, true, false));
+        assert_eq!(screen.take_order(), Some(order(131, Direction::Sell)));
+        // Sold, the map's row is gone: the blaster takes its cell.
+        let mut sold = both();
+        sold.rows.remove(0);
+        screen.set_outfitter(sold);
+        assert_eq!(screen.selected(), Some(0));
+        for _ in 0..3 {
+            screen.input(&key(SELL_KEY, true, true));
+            assert_eq!(screen.take_order(), None, "the key was held for the map");
+        }
+        screen.input(&key(SELL_KEY, false, false));
+        screen.input(&key(SELL_KEY, true, false));
+        assert_eq!(
+            screen.take_order(),
+            Some(order(128, Direction::Sell)),
+            "a fresh press acts on the new selection"
+        );
+        screen.input(&key(SELL_KEY, true, true));
+        assert_eq!(
+            screen.take_order(),
+            Some(order(128, Direction::Sell)),
+            "and its repeats too, while the blaster stays selected"
+        );
+    }
+
+    #[test]
+    fn a_repeat_acts_only_for_the_key_pressed_on_the_outfit_selected() {
+        let mut screen = screen();
+        screen.input(&key(BUY_KEY, true, true));
+        assert_eq!(screen.take_order(), None, "no press before it");
+        screen.input(&key(BUY_KEY, true, false));
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+        screen.input(&key(SELL_KEY, true, true));
+        assert_eq!(screen.take_order(), None, "S was never pressed");
+        press(&mut screen, Key::Right);
+        screen.input(&key(BUY_KEY, true, true));
+        assert_eq!(screen.take_order(), None, "pressed on another outfit");
+        press(&mut screen, Key::Left);
+        screen.input(&key(BUY_KEY, true, true));
+        assert_eq!(
+            screen.take_order(),
+            Some(order(128, Direction::Buy)),
+            "back on the outfit it was pressed on"
+        );
     }
 
     #[test]
