@@ -41,7 +41,14 @@ jobs:
       # Only what `mise run ci` needs.
       - run: mise install rust cargo:cargo-nextest
         shell: bash
+      # Save even when tests fail, so a red leg still moves the cache to the
+      # current Cargo.lock. Save only from main: caches saved under a PR's
+      # refs/pull/N/merge are invisible to main, but PRs can still restore
+      # main's.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run ci
         shell: bash
 
