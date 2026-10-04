@@ -15,6 +15,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The shipyard's trade-in leaves out outfits flagged persistent (0x0004)
+    # or unsellable (0x0008): two distinct bits, so `|` and `^` combine them
+    # the same.
+    "replace \\| with \\^ in trade_in",
     # Compiled only on non-macOS targets, so on the macOS development host a
     # mutated body is never built into the tests and cannot be observed. It
     # is a one-line `Ok(None)`.

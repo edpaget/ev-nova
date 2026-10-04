@@ -1277,6 +1277,22 @@ mod tests {
             ..shipyard()
         };
         assert_eq!(info_box(&screen_of(paid))[2], "Final Price: -30000");
+        // A line apart, from the box's top left.
+        let info = item(&screen, INFO_BOX_ITEM);
+        let at = |n: f32| Point::new(info.min.x + INSET, info.min.y + 12.0 * n);
+        let placed: Vec<_> = texts(&drawn(&screen))
+            .into_iter()
+            .filter(|(text, _, _)| text.contains("Price:") || text.starts_with("Trade-In"))
+            .map(|(_, origin, color)| (origin, color))
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                (at(0.0), TEXT_COLOR),
+                (at(1.0), TEXT_COLOR),
+                (at(2.0), TEXT_COLOR)
+            ]
+        );
     }
 
     #[test]
@@ -1423,11 +1439,20 @@ mod tests {
             .position(|c| matches!(c, DrawCommand::Text { text, .. } if text == BUY_SHIP_LABEL))
             .expect("the shipyard under it");
         assert!(done_buy < background && background < title);
-        let DrawCommand::Text { origin, font, .. } = &commands[title] else {
+        let DrawCommand::Text {
+            origin, font, size, ..
+        } = &commands[title]
+        else {
             unreachable!()
         };
-        assert!(panel_item(&screen, PANEL_TITLE_ITEM).contains(*origin));
-        assert_eq!(*font, Font::Charcoal);
+        let area = panel_item(&screen, PANEL_TITLE_ITEM);
+        let width = MonoMetrics.width(Font::Charcoal, 12.0, "Ship 129");
+        assert_eq!(
+            *origin,
+            Point::new(area.center().x - width / 2.0, area.min.y + INSET),
+            "centred across the title"
+        );
+        assert_eq!((*font, *size), (Font::Charcoal, 12.0));
         // Its Done closes it alone.
         let done = panel_item(&screen, PANEL_DONE_ITEM).center();
         click(&mut screen, done);
