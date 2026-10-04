@@ -172,6 +172,7 @@ impl PilotCatalog for GameData {
                     id: SystemId(id),
                     position: Vec2::new(f32::from(system.x_pos), f32::from(system.y_pos)),
                     links: system.con.into_iter().flatten().collect(),
+                    govt: system.govt,
                 })
             })
             .collect()
@@ -818,20 +819,30 @@ mod tests {
         );
     }
 
-    /// A `sÿst` at map (`x`, `y`) with these hyperlinks, every other slot
-    /// -1.
+    /// An independent (`Govt` -1) `sÿst` at map (`x`, `y`) with these
+    /// hyperlinks, every other slot -1.
     fn linked(x: i16, y: i16, links: &[i16]) -> Vec<u8> {
-        let mut bytes = system();
+        let mut bytes = governed(system(), -1);
         put_i16s(&mut bytes, 0x00, &[x, y]);
         put_i16s(&mut bytes, 0x04, &[-1; 16]);
         put_i16s(&mut bytes, 0x04, links);
         bytes
     }
 
+    /// `bytes`, a `sÿst`, owned by `gövt` `govt`.
+    fn governed(mut bytes: Vec<u8>, govt: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x66, &[govt]);
+        bytes
+    }
+
     #[test]
-    fn the_star_map_is_every_readable_system_by_id_with_its_position_and_links() {
+    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_and_govt() {
         let data = store(&[
-            (System::TYPE, 131, linked(600, -75, &[130, 999, 131])),
+            (
+                System::TYPE,
+                131,
+                governed(linked(600, -75, &[130, 999, 131]), 140),
+            ),
             (System::TYPE, 129, short(linked(0, 0, &[130]))),
             (System::TYPE, 130, linked(-20, 40, &[])),
         ]);
@@ -842,11 +853,13 @@ mod tests {
                     id: SystemId(130),
                     position: Vec2::new(-20.0, 40.0),
                     links: Vec::new(),
+                    govt: None,
                 },
                 StarSystem {
                     id: SystemId(131),
                     position: Vec2::new(600.0, -75.0),
                     links: vec![SystemId(130), SystemId(999), SystemId(131)],
+                    govt: Some(GovtId(140)),
                 },
             ]
         );

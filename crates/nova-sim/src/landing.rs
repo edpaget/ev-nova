@@ -11,7 +11,8 @@
 //!    the nearest.
 //! 3. [`LandingRefusal::NotLandable`]: the stellar lacks the can-land flag,
 //!    or can be landed on only once destroyed (nothing is destroyed yet).
-//! 4. [`LandingRefusal::Denied`]: the pilot's legal record is below the
+//! 4. [`LandingRefusal::Denied`]: the pilot's legal record with the
+//!    stellar's government, or its system's when it has none, is below the
 //!    stellar's `MinStatus`, which the Bible says uninhabited stellars
 //!    ignore.
 //! 5. [`LandingRefusal::TooFast`]: the ship is moving faster than
@@ -20,7 +21,7 @@
 //! Each refusal says whether the stellar is a station, which picks the
 //! original's "dock at this station" or "land on this planet" wording.
 
-use crate::catalog::{LandingSite, StellarId};
+use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::flight::ShipState;
 
 /// The fastest a ship can land, in pixels a tick (30 pixels a second): a
@@ -111,12 +112,15 @@ pub fn landing_radius(site: &LandingSite) -> f32 {
         })
 }
 
-/// The stellar `player` lands on among `sites`, with the pilot's legal
-/// `record`, or the first refusal that applies (see the module docs).
+/// The stellar `player` lands on among `sites`, in a system governed by
+/// `system_govt`, or the first refusal that applies (see the module docs).
+/// `record` gives the pilot's legal record with a government; see
+/// [`landing_record`] for which one landing reads.
 pub fn check_landing(
     player: &ShipState,
     sites: &[LandingSite],
-    record: i16,
+    system_govt: Option<GovtId>,
+    record: impl Fn(GovtId) -> i16,
 ) -> Result<StellarId, LandingRefusal> {
     let distance = |site: &LandingSite| (site.position - player.position).length();
     let nearest = |candidates: &mut dyn Iterator<Item = &LandingSite>| {
@@ -143,7 +147,9 @@ pub fn check_landing(
     if !has(StellarFlags::CAN_LAND) || has(StellarFlags::ONLY_WHEN_DESTROYED) {
         return Err(LandingRefusal::NotLandable { stellar, station });
     }
-    if !has(StellarFlags::UNINHABITED) && record < site.min_status {
+    if !has(StellarFlags::UNINHABITED)
+        && landing_record(&site, system_govt, record) < site.min_status
+    {
         return Err(LandingRefusal::Denied {
             stellar,
             station,
@@ -159,6 +165,36 @@ pub fn check_landing(
         });
     }
     Ok(stellar)
+}
+
+/// The legal record that `site`'s `MinStatus` is checked against, in a
+/// system governed by `system_govt`, where `record` gives the pilot's
+/// record with a government.
+///
+/// The Bible's `spöb` `MinStatus` is "the point on your record in the
+/// current system" below which you are denied landing clearance, and the
+/// `chär` `Status1-4` are "the player's legal status in systems owned by
+/// that government". The `spöb` `Govt` is "the stellar's government" and
+/// the `sÿst` `Govt` "the controlling govt" (-1, independent, is `None` in
+/// both). The Bible does not say which of the two the record belongs to
+/// when they differ, so two decisions:
+///
+/// - The stellar's own `Govt` wins, and a stellar without one falls back
+///   to its system's (68 stock stellars, such as Spacedock VI, differ
+///   from their system's government; 58 others have none of their own).
+/// - With no government on either, the record is 0, a clean record. The
+///   Bible's "independent counts as govt 128" rule scales the displayed
+///   status label, not a record, so it does not apply here.
+///
+/// Out of scope here: `chär` status spreading to allies and enemies, the
+/// `gövt` `InitialRec`, and the rank flag that grants landing regardless
+/// of `MinStatus`.
+fn landing_record(
+    site: &LandingSite,
+    system_govt: Option<GovtId>,
+    record: impl Fn(GovtId) -> i16,
+) -> i16 {
+    site.govt.or(system_govt).map_or(0, record)
 }
 
 fn is_station(site: &LandingSite) -> bool {
@@ -207,6 +243,10 @@ pub fn services(flags: u32) -> Vec<Service> {
 mod tests {
     use super::*;
     use crate::geometry::Vec2;
+
+    /// A government for the system around the stellars whose record tests
+    /// only care about the record itself.
+    const GOVT: Option<GovtId> = Some(GovtId(128));
 
     /// A landable planet at (`x`, `y`), 100 x 60 (radius 50), anyone may
     /// land on.
@@ -287,7 +327,7 @@ mod tests {
     fn a_slow_ship_over_a_landable_stellar_lands_on_it() {
         let sites = [site(128, 10.0, -20.0)];
         assert_eq!(
-            check_landing(&ship(5.0, -15.0, 0.5, -0.5), &sites, 0),
+            check_landing(&ship(5.0, -15.0, 0.5, -0.5), &sites, None, |_| 0),
             Ok(StellarId(128))
         );
     }
@@ -295,7 +335,7 @@ mod tests {
     #[test]
     fn no_stellars_refuses() {
         assert_eq!(
-            check_landing(&parked(), &[], 0),
+            check_landing(&parked(), &[], None, |_| 0),
             Err(LandingRefusal::NoStellars)
         );
     }
@@ -308,7 +348,7 @@ mod tests {
             site(130, -400.0, 0.0),
         ];
         assert_eq!(
-            check_landing(&parked(), &sites, 0),
+            check_landing(&parked(), &sites, None, |_| 0),
             Err(LandingRefusal::TooFar {
                 nearest: StellarId(129),
                 station: false,
@@ -319,7 +359,7 @@ mod tests {
             ..site(131, 0.0, 51.0)
         }];
         assert_eq!(
-            check_landing(&parked(), &station, 0),
+            check_landing(&parked(), &station, None, |_| 0),
             Err(LandingRefusal::TooFar {
                 nearest: StellarId(131),
                 station: true,
@@ -331,11 +371,11 @@ mod tests {
     fn exactly_at_the_radius_is_over_it_and_just_beyond_is_not() {
         let sites = [site(128, 0.0, 0.0)];
         assert_eq!(
-            check_landing(&ship(30.0, 40.0, 0.0, 0.0), &sites, 0),
+            check_landing(&ship(30.0, 40.0, 0.0, 0.0), &sites, None, |_| 0),
             Ok(StellarId(128))
         );
         assert!(matches!(
-            check_landing(&ship(30.0, 40.01, 0.0, 0.0), &sites, 0),
+            check_landing(&ship(30.0, 40.01, 0.0, 0.0), &sites, None, |_| 0),
             Err(LandingRefusal::TooFar { .. })
         ));
     }
@@ -347,7 +387,10 @@ mod tests {
             site(129, -20.0, 0.0),
             site(130, 0.0, 30.0),
         ];
-        assert_eq!(check_landing(&parked(), &sites, 0), Ok(StellarId(129)));
+        assert_eq!(
+            check_landing(&parked(), &sites, None, |_| 0),
+            Ok(StellarId(129))
+        );
         // The nearest wins even when it refuses and a farther one would not.
         let unlandable = LandingSite {
             flags: 0,
@@ -355,7 +398,7 @@ mod tests {
         };
         let sites = [site(128, 40.0, 0.0), unlandable];
         assert_eq!(
-            check_landing(&parked(), &sites, 0),
+            check_landing(&parked(), &sites, None, |_| 0),
             Err(LandingRefusal::NotLandable {
                 stellar: StellarId(129),
                 station: false,
@@ -367,7 +410,7 @@ mod tests {
     fn a_stellar_without_the_can_land_flag_is_not_landable() {
         for (flags, station) in [(0, false), (StellarFlags::STATION, true)] {
             assert_eq!(
-                check_landing(&parked(), &[with_flags(flags)], 0),
+                check_landing(&parked(), &[with_flags(flags)], None, |_| 0),
                 Err(LandingRefusal::NotLandable {
                     stellar: StellarId(128),
                     station,
@@ -380,7 +423,7 @@ mod tests {
     fn a_stellar_landable_only_once_destroyed_is_not_landable() {
         let flags = StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED;
         assert_eq!(
-            check_landing(&parked(), &[with_flags(flags)], 0),
+            check_landing(&parked(), &[with_flags(flags)], None, |_| 0),
             Err(LandingRefusal::NotLandable {
                 stellar: StellarId(128),
                 station: false,
@@ -401,7 +444,7 @@ mod tests {
         let can_land = StellarFlags::CAN_LAND;
         for min_status in [1, 32767] {
             assert_eq!(
-                check_landing(&parked(), &needing(min_status, can_land), 0),
+                check_landing(&parked(), &needing(min_status, can_land), GOVT, |_| 0),
                 Err(LandingRefusal::Denied {
                     stellar: StellarId(128),
                     station: false,
@@ -411,7 +454,7 @@ mod tests {
         }
         let station = can_land | StellarFlags::STATION;
         assert_eq!(
-            check_landing(&parked(), &needing(5, station), 4),
+            check_landing(&parked(), &needing(5, station), GOVT, |_| 4),
             Err(LandingRefusal::Denied {
                 stellar: StellarId(128),
                 station: true,
@@ -425,7 +468,7 @@ mod tests {
         let can_land = StellarFlags::CAN_LAND;
         for (min_status, record) in [(-32767, 0), (0, 0), (5, 5), (5, 6), (-3, -3)] {
             assert_eq!(
-                check_landing(&parked(), &needing(min_status, can_land), record),
+                check_landing(&parked(), &needing(min_status, can_land), GOVT, |_| record),
                 Ok(StellarId(128)),
                 "{min_status} {record}"
             );
@@ -436,8 +479,84 @@ mod tests {
     fn an_uninhabited_stellar_ignores_min_status() {
         let flags = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
         assert_eq!(
-            check_landing(&parked(), &needing(32767, flags), 0),
+            check_landing(&parked(), &needing(32767, flags), None, |_| 0),
             Ok(StellarId(128))
+        );
+        // Even under a government whose record of the pilot is far below.
+        let governed = [LandingSite {
+            govt: Some(A),
+            ..needing(32767, flags)[0]
+        }];
+        assert_eq!(
+            check_landing(&parked(), &governed, Some(B), |_| -32768),
+            Ok(StellarId(128))
+        );
+    }
+
+    /// Two governments, and a record of the pilot that is 10 with `A` and
+    /// 9 with `B`, either side of a `MinStatus` of 10.
+    const A: GovtId = GovtId(140);
+    const B: GovtId = GovtId(150);
+
+    fn record(govt: GovtId) -> i16 {
+        match govt {
+            A => 10,
+            B => 9,
+            _ => panic!("no record asked of {govt:?}"),
+        }
+    }
+
+    fn governed_by(govt: Option<GovtId>) -> [LandingSite; 1] {
+        [LandingSite {
+            govt,
+            ..needing(10, StellarFlags::CAN_LAND)[0]
+        }]
+    }
+
+    fn denied() -> Result<StellarId, LandingRefusal> {
+        Err(LandingRefusal::Denied {
+            stellar: StellarId(128),
+            station: false,
+            min_status: 10,
+        })
+    }
+
+    #[test]
+    fn a_stellars_own_government_keeps_the_record_landing_reads() {
+        let land = |site, system| check_landing(&parked(), &governed_by(site), system, record);
+        assert_eq!(land(Some(A), Some(B)), Ok(StellarId(128)));
+        assert_eq!(land(Some(B), Some(A)), denied());
+        assert_eq!(land(Some(A), None), Ok(StellarId(128)));
+        assert_eq!(land(Some(B), None), denied());
+    }
+
+    #[test]
+    fn a_stellar_without_a_government_falls_back_to_its_systems() {
+        let land = |system| check_landing(&parked(), &governed_by(None), system, record);
+        assert_eq!(land(Some(A)), Ok(StellarId(128)));
+        assert_eq!(land(Some(B)), denied());
+    }
+
+    #[test]
+    fn with_no_government_anywhere_the_record_is_0() {
+        let never = |govt| panic!("no record asked of {govt:?}");
+        let needs = |min_status| {
+            [LandingSite {
+                govt: None,
+                ..needing(min_status, StellarFlags::CAN_LAND)[0]
+            }]
+        };
+        assert_eq!(
+            check_landing(&parked(), &needs(0), None, never),
+            Ok(StellarId(128))
+        );
+        assert_eq!(
+            check_landing(&parked(), &needs(1), None, never),
+            Err(LandingRefusal::Denied {
+                stellar: StellarId(128),
+                station: false,
+                min_status: 1,
+            })
         );
     }
 
@@ -448,7 +567,7 @@ mod tests {
         let speed = fast.velocity.length();
         assert!(speed > LANDING_SPEED, "{speed}");
         assert_eq!(
-            check_landing(&fast, &sites, 0),
+            check_landing(&fast, &sites, None, |_| 0),
             Err(LandingRefusal::TooFast {
                 stellar: StellarId(128),
                 station: false,
@@ -457,7 +576,7 @@ mod tests {
         );
         let station = [with_flags(StellarFlags::CAN_LAND | StellarFlags::STATION)];
         assert!(matches!(
-            check_landing(&fast, &station, 0),
+            check_landing(&fast, &station, None, |_| 0),
             Err(LandingRefusal::TooFast { station: true, .. })
         ));
     }
@@ -466,11 +585,11 @@ mod tests {
     fn exactly_the_landing_speed_lands() {
         let sites = [site(128, 0.0, 0.0)];
         assert_eq!(
-            check_landing(&ship(0.0, 0.0, 0.0, 1.0), &sites, 0),
+            check_landing(&ship(0.0, 0.0, 0.0, 1.0), &sites, None, |_| 0),
             Ok(StellarId(128))
         );
         assert_eq!(
-            check_landing(&ship(0.0, 0.0, -1.0, 0.0), &sites, 0),
+            check_landing(&ship(0.0, 0.0, -1.0, 0.0), &sites, None, |_| 0),
             Ok(StellarId(128))
         );
     }
@@ -480,12 +599,12 @@ mod tests {
         // Not landable, denied and too fast at once: not landable.
         let fast = ship(0.0, 0.0, 5.0, 0.0);
         assert!(matches!(
-            check_landing(&fast, &needing(10, 0), 0),
+            check_landing(&fast, &needing(10, 0), None, |_| 0),
             Err(LandingRefusal::NotLandable { .. })
         ));
         // Denied and too fast: denied.
         assert!(matches!(
-            check_landing(&fast, &needing(10, StellarFlags::CAN_LAND), 0),
+            check_landing(&fast, &needing(10, StellarFlags::CAN_LAND), None, |_| 0),
             Err(LandingRefusal::Denied { .. })
         ));
     }

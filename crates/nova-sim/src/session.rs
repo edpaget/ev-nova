@@ -15,7 +15,9 @@
 //! Arriving in a system explores it.
 //!
 //! The ship lands on a stellar of its system when the
-//! [`landing`](crate::landing) rules allow it: docked, it rests at the
+//! [`landing`](crate::landing) rules allow it, which read the pilot's
+//! legal record with the stellar's government, or with its system's on
+//! the star map when the stellar has none: docked, it rests at the
 //! stellar's centre and ticks move nothing until it takes off again, from
 //! the same place. A landed ship cannot jump, nor a jumping one land.
 //!
@@ -354,14 +356,21 @@ impl Session {
     }
 
     /// Lands the ship on the stellar it is over, if it is not jumping and
-    /// the [`landing`](crate::landing) rules allow it: it docks at the
+    /// the [`landing`](crate::landing) rules allow it, with the pilot's
+    /// legal record with the stellar's government, or the system's on the
+    /// star map when the stellar has none: it docks at the
     /// stellar's centre, at rest, its heading and reserves unchanged.
     /// Otherwise it flies on, and the refusal says why.
     pub fn land(&mut self) -> Result<StellarId, LandingRefusal> {
         if self.jumping.is_some() {
             return Err(LandingRefusal::Jumping);
         }
-        let stellar = check_landing(&self.player, &self.sites, self.legal_record())?;
+        let stellar = check_landing(
+            &self.player,
+            &self.sites,
+            self.star_map.govt(self.pilot.system),
+            |govt| self.pilot.legal_record(govt),
+        )?;
         let site = self.sites.iter().find(|site| site.id == stellar);
         if let Some(site) = site {
             self.player.position = site.position;
@@ -550,13 +559,6 @@ impl Session {
     #[must_use]
     pub fn landed(&self) -> Option<StellarId> {
         self.landed
-    }
-
-    /// The player's legal record in the system. Always 0: a new pilot's
-    /// record is clean, and nothing changes it yet.
-    #[must_use]
-    pub fn legal_record(&self) -> i16 {
-        0
     }
 
     /// The player's ship as it flies.
@@ -802,7 +804,9 @@ mod tests {
     #[test]
     fn a_new_pilots_record_is_clean() {
         let session = Session::start(&catalog()).expect("starts");
-        assert_eq!(session.legal_record(), 0);
+        for govt in [128, 140, 150] {
+            assert_eq!(session.pilot().legal_record(GovtId(govt)), 0, "{govt}");
+        }
         assert_eq!(session.landed(), None);
     }
 
@@ -885,7 +889,8 @@ mod tests {
             crate::landing::check_landing(
                 &flying,
                 &[planet(128, 30.0, -40.0), planet(129, 2000.0, 0.0)],
-                0
+                None,
+                |_| 0
             )
         );
         assert!(refusal.is_err(), "{refusal:?}");
@@ -900,6 +905,88 @@ mod tests {
         };
         let mut session = Session::start(&empty).expect("starts");
         assert_eq!(session.land(), Err(LandingRefusal::NoStellars));
+    }
+
+    /// Two governments, with a pilot's record of 10 and 9.
+    const LAWFUL: GovtId = GovtId(140);
+    const WANTED: GovtId = GovtId(150);
+
+    /// [`catalog`] with system 130's planets, 128 and 129, each governed
+    /// by `stellars` and needing a record of 10, and the system governed
+    /// by `system`.
+    fn governed(stellars: [Option<GovtId>; 2], system: Option<GovtId>) -> FakePilotCatalog {
+        let needs = |site, govt| LandingSite {
+            govt,
+            min_status: 10,
+            ..site
+        };
+        let mut catalog = catalog();
+        catalog.sites[0].1 = vec![
+            needs(planet(128, 30.0, -40.0), stellars[0]),
+            needs(planet(129, 2000.0, 0.0), stellars[1]),
+        ];
+        catalog.star_map[0].govt = system;
+        catalog
+    }
+
+    /// A new pilot of `catalog` whose record is 10 with [`LAWFUL`] and 9
+    /// with [`WANTED`].
+    fn on_record(catalog: &FakePilotCatalog) -> Pilot {
+        let mut pilot = Pilot::new(catalog, "Law").expect("starts");
+        pilot.set_legal_record(LAWFUL, 10);
+        pilot.set_legal_record(WANTED, 9);
+        pilot
+    }
+
+    /// Lands `pilot` on `stellar` in system 130 from right over it: docked
+    /// there, taking off and landing again.
+    fn land_at(
+        catalog: &FakePilotCatalog,
+        pilot: &Pilot,
+        stellar: i16,
+    ) -> Result<StellarId, LandingRefusal> {
+        let mut pilot = pilot.clone();
+        pilot.stellar = Some(StellarId(stellar));
+        let mut session = Session::fly(catalog, pilot).expect("flies");
+        assert_eq!(session.take_off(), Some(StellarId(stellar)));
+        session.land()
+    }
+
+    fn denied(stellar: i16) -> Result<StellarId, LandingRefusal> {
+        Err(LandingRefusal::Denied {
+            stellar: StellarId(stellar),
+            station: false,
+            min_status: 10,
+        })
+    }
+
+    #[test]
+    fn landing_reads_the_pilots_record_with_each_stellars_government() {
+        let catalog = governed([Some(LAWFUL), Some(WANTED)], None);
+        let pilot = on_record(&catalog);
+        assert_eq!(land_at(&catalog, &pilot, 128), Ok(StellarId(128)));
+        assert_eq!(land_at(&catalog, &pilot, 129), denied(129));
+    }
+
+    #[test]
+    fn landing_on_a_stellar_without_a_government_reads_its_systems_record() {
+        let lawful = governed([None, None], Some(LAWFUL));
+        let pilot = on_record(&lawful);
+        assert_eq!(land_at(&lawful, &pilot, 129), Ok(StellarId(129)));
+        let wanted = governed([None, Some(LAWFUL)], Some(WANTED));
+        assert_eq!(land_at(&wanted, &pilot, 128), denied(128));
+        assert_eq!(land_at(&wanted, &pilot, 129), Ok(StellarId(129)));
+    }
+
+    #[test]
+    fn a_loaded_pilots_records_decide_landing() {
+        let catalog = governed([Some(LAWFUL), Some(WANTED)], None);
+        let loaded =
+            crate::save::decode(&crate::save::encode(&on_record(&catalog))).expect("loads");
+        assert_eq!(loaded.legal_record(LAWFUL), 10);
+        assert_eq!(loaded.legal_record(WANTED), 9);
+        assert_eq!(land_at(&catalog, &loaded, 128), Ok(StellarId(128)));
+        assert_eq!(land_at(&catalog, &loaded, 129), denied(129));
     }
 
     // Hyperspace.

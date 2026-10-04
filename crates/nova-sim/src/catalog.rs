@@ -48,6 +48,9 @@ pub struct StarSystem {
     /// Its hyperlinks, `Con1-Con16`, in record order: they may repeat,
     /// point at itself or at a system that does not exist.
     pub links: Vec<SystemId>,
+    /// Its controlling government, `Govt`, or `None` when it is
+    /// independent (-1).
+    pub govt: Option<GovtId>,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
@@ -472,6 +475,7 @@ mod tests {
                 id: SystemId(130),
                 position: Vec2::new(5.0, -6.0),
                 links: vec![SystemId(131)],
+                govt: None,
             }]
         }
 

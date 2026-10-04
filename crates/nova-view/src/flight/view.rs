@@ -970,6 +970,7 @@ mod tests {
                 id: SystemId(id),
                 position: Vec2::new(x, y),
                 links: links.iter().copied().map(SystemId).collect(),
+                govt: None,
             };
             vec![
                 star(130, (0.0, 0.0), &[131]),

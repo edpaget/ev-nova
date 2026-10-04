@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::catalog::{StarSystem, SystemId};
+use crate::catalog::{GovtId, StarSystem, SystemId};
 use crate::flight::{ShipState, heading_of};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
@@ -76,6 +76,7 @@ pub enum JumpRefusal {
 #[derive(Clone, Debug, PartialEq)]
 struct Node {
     position: Vec2,
+    govt: Option<GovtId>,
     /// Its neighbours, by ascending ID.
     links: BTreeSet<SystemId>,
 }
@@ -106,6 +107,7 @@ impl StarMap {
             );
             let node = Node {
                 position: system.position,
+                govt: system.govt,
                 links: BTreeSet::new(),
             };
             nodes.insert(from, node);
@@ -124,6 +126,13 @@ impl StarMap {
     #[must_use]
     pub fn position(&self, id: SystemId) -> Option<Vec2> {
         self.nodes.get(&id).map(|node| node.position)
+    }
+
+    /// System `id`'s controlling government: `None` when it is
+    /// independent or not on the map.
+    #[must_use]
+    pub fn govt(&self, id: SystemId) -> Option<GovtId> {
+        self.nodes.get(&id).and_then(|node| node.govt)
     }
 
     /// The fewest jumps from `from` to `to`: each system jumped to, in
@@ -224,6 +233,7 @@ mod tests {
             id: SystemId(id),
             position: Vec2::new(f32::from(id), 0.0),
             links: links.iter().copied().map(SystemId).collect(),
+            govt: None,
         }
     }
 
@@ -335,10 +345,25 @@ mod tests {
             id: SystemId(128),
             position: Vec2::new(-150.0, 75.0),
             links: Vec::new(),
+            govt: None,
         }]);
         assert_eq!(map.position(SystemId(128)), Some(Vec2::new(-150.0, 75.0)));
         assert_eq!(map.position(SystemId(129)), None);
         assert_eq!(StarMap::default().position(SystemId(128)), None);
+    }
+
+    #[test]
+    fn a_systems_government_is_its_sÿsts() {
+        let map = StarMap::new(vec![
+            StarSystem {
+                govt: Some(GovtId(140)),
+                ..system(128, &[129])
+            },
+            system(129, &[128]),
+        ]);
+        assert_eq!(map.govt(SystemId(128)), Some(GovtId(140)));
+        assert_eq!(map.govt(SystemId(129)), None, "independent");
+        assert_eq!(map.govt(SystemId(130)), None, "not on the map");
     }
 
     // Jumping.
