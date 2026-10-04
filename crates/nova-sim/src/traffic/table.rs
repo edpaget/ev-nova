@@ -19,9 +19,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
     DudeId, FleetId, FleetRecord, GovtId, OutfitRecord, ShipId, ShipRecord, SystemId,
-    TrafficCatalog,
+    TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
+use crate::combat::armament::{Armament, Arsenal};
+use crate::combat::hull::HullSpec;
 use crate::outfitter::outfit_mods;
 use crate::pilot::tally;
 use crate::stats::ShipStats;
@@ -151,13 +153,19 @@ pub struct SpawnDude {
 }
 
 /// A ship type the traffic can spawn: how it performs, with its default
-/// items, and its `InherentAI`.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// items, its `InherentAI`, and what it fights with.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShipKind {
     /// Its stats.
     pub stats: ShipStats,
     /// Its `InherentAI`, raw.
     pub inherent_ai: i16,
+    /// Its hull.
+    pub hull: HullSpec,
+    /// Its weapons: its stock weapons and those among its default items.
+    pub armament: Armament,
+    /// The rounds of each ammunition it carries.
+    pub rounds: BTreeMap<WeaponId, u32>,
 }
 
 /// Everything a system's traffic is drawn from.
@@ -184,7 +192,8 @@ impl SpawnTable {
     /// System `system`'s table, governed by `system_govt`, read from
     /// `catalog`, with each ship type's stats from its record in `ships`
     /// and its default items, the `oütf`s from `outfits`, as the player's
-    /// are. A system that cannot be read has no traffic.
+    /// are, and its hull and armament from `arsenal`. A system that cannot
+    /// be read has no traffic.
     #[must_use]
     pub fn resolve(
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -192,6 +201,7 @@ impl SpawnTable {
         system_govt: Option<GovtId>,
         ships: &[ShipRecord],
         outfits: &[OutfitRecord],
+        arsenal: &Arsenal,
     ) -> Self {
         let Some(traffic) = catalog.system_traffic(system) else {
             return Self::default();
@@ -242,7 +252,7 @@ impl SpawnTable {
         let ships = ships
             .iter()
             .filter(|record| wanted.contains(&record.id))
-            .map(|record| (record.id, kind(record, outfits)))
+            .map(|record| (record.id, kind(record, outfits, arsenal)))
             .collect();
         Self {
             avg_ships: u32::try_from(traffic.avg_ships).unwrap_or(0),
@@ -262,12 +272,16 @@ impl SpawnTable {
     }
 }
 
-/// The stats of a ship of `record`, carrying its default items.
-fn kind(record: &ShipRecord, outfits: &[OutfitRecord]) -> ShipKind {
+/// A ship of `record`, carrying its default items, armed from `arsenal`.
+fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) -> ShipKind {
     let defaults = tally(record.defaults.iter().copied());
+    let (armament, rounds) = arsenal.npc(record.id, &defaults, outfits);
     ShipKind {
         stats: ShipStats::new(record.fields, &outfit_mods(&defaults, outfits)),
         inherent_ai: record.inherent_ai,
+        hull: arsenal.hull(record.id),
+        armament,
+        rounds,
     }
 }
 
@@ -276,9 +290,11 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::catalog::{DudeRecord, EscortRecord, OutfitId, SystemTraffic};
+    use crate::catalog::{
+        DudeRecord, EscortRecord, HullRecord, OutfitId, StockWeapon, SystemTraffic,
+    };
     use crate::stats::MORE_SPEED;
-    use crate::testkit::{Draws, FAST, outfit, ship};
+    use crate::testkit::{Draws, FAST, hull, outfit, ship, weapon};
 
     const UNUSED: (i16, i16) = (-1, 0);
 
@@ -483,8 +499,25 @@ mod tests {
                 ..ship(id, FAST)
             })
             .collect();
-        records[0].defaults = vec![(OutfitId(300), 1)];
+        records[0].defaults = vec![(OutfitId(300), 1), (OutfitId(301), 6)];
         records
+    }
+
+    /// Ship 200 carries two of weapon 128 and a 30-pixel `shän`, and
+    /// its default rockets (outfit 301, rounds of weapon 138).
+    fn arsenal() -> Arsenal {
+        Arsenal::new(
+            &[weapon(128), weapon(138)],
+            vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(128),
+                    count: 2,
+                    ammo: 0,
+                }],
+                size: Some(30),
+                ..hull(200)
+            }],
+        )
     }
 
     fn resolved() -> SpawnTable {
@@ -493,7 +526,11 @@ mod tests {
             SystemId(130),
             Some(GovtId(128)),
             &records(),
-            &[outfit(300, &[(MORE_SPEED, 100)])],
+            &[
+                outfit(300, &[(MORE_SPEED, 100)]),
+                outfit(301, &[(crate::combat::armament::MOD_AMMO, 138)]),
+            ],
+            &arsenal(),
         )
     }
 
@@ -556,9 +593,42 @@ mod tests {
     }
 
     #[test]
+    fn each_ship_type_named_is_armed_from_the_arsenal() {
+        let table = resolved();
+        let armed = &table.ships[&ShipId(200)];
+        assert_eq!(armed.hull, arsenal().hull(ShipId(200)));
+        assert!(
+            (armed.hull.hit_radius - 9.9).abs() < 1e-5,
+            "{:?}",
+            armed.hull
+        );
+        assert_eq!(
+            armed
+                .armament
+                .mounts()
+                .iter()
+                .map(|mount| (mount.spec.id, mount.count))
+                .collect::<Vec<_>>(),
+            [(WeaponId(128), 2)]
+        );
+        assert_eq!(armed.rounds, BTreeMap::from([(WeaponId(138), 6)]));
+        let unarmed = &table.ships[&ShipId(201)];
+        assert_eq!(unarmed.armament, Armament::default());
+        assert_eq!(unarmed.hull, HullSpec::default());
+        assert!(unarmed.rounds.is_empty());
+    }
+
+    #[test]
     fn a_system_that_cannot_be_read_has_no_traffic() {
         let catalog = Traffic::default();
-        let table = SpawnTable::resolve(&catalog, SystemId(131), None, &records(), &[]);
+        let table = SpawnTable::resolve(
+            &catalog,
+            SystemId(131),
+            None,
+            &records(),
+            &[],
+            &Arsenal::default(),
+        );
         assert_eq!(table, SpawnTable::default());
         assert!(catalog.dudes_asked.borrow().is_empty());
     }
@@ -580,7 +650,14 @@ mod tests {
                 Vec::new()
             }
         }
-        let table = SpawnTable::resolve(&Negative, SystemId(130), None, &[], &[]);
+        let table = SpawnTable::resolve(
+            &Negative,
+            SystemId(130),
+            None,
+            &[],
+            &[],
+            &Arsenal::default(),
+        );
         assert_eq!(table, SpawnTable::default());
     }
 }

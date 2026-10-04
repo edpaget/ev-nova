@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 
+use crate::ai::Goal;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommodityStrings, DisasterRecord, DudeId, DudeRecord,
     FleetRecord, HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId,
@@ -10,12 +11,17 @@ use crate::catalog::{
     TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
+use crate::combat::armament::{Armament, Trigger};
+use crate::combat::hull::{Condition, HullSpec};
+use crate::flight::ShipState;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::hyperspace::MIN_JUMP_DISTANCE;
 use crate::landing::StellarFlags;
 use crate::session::Session;
+use crate::stats::ShipStats;
+use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 
 /// A canned first `chär`, ships and systems; records the ships asked
 /// for.
@@ -177,6 +183,29 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         mass: 0,
         weapons: Vec::new(),
         size: None,
+    }
+}
+
+/// NPC `id`, a wimpy trader of ship type 128 performing as `stats`, its
+/// reserves full, at rest at the centre facing up, flying and idle,
+/// intact and unarmed.
+pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
+    Npc {
+        id: NpcId(id),
+        ship: ShipId(128),
+        govt: None,
+        ai_type: AiType::WimpyTrader,
+        leader: None,
+        stats,
+        reserves: stats.full(),
+        state: ShipState::default(),
+        mode: Mode::Flying,
+        goal: Goal::Idle,
+        condition: Condition::Intact,
+        hull: HullSpec::default(),
+        armament: Armament::default(),
+        rounds: std::collections::BTreeMap::new(),
+        trigger: Trigger::default(),
     }
 }
 

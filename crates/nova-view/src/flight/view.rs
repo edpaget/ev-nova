@@ -84,10 +84,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Behaviour, Chance, Controls, FixedStep, JumpRefusal, LandingRefusal, Market, NeverFires, Npc,
-    NpcId, Order, OutfitOrder, OutfitRefusal, Outfitter, Peaceful, Pilot, PilotCatalog,
-    RechargeRefusal, Reserves, Session, ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard,
-    StartError, StellarId, Steps, TradeRefusal, TrafficCatalog, Turn, flight::normalized,
+    Behaviour, Chance, CombatCatalog, Controls, FixedStep, JumpRefusal, LandingRefusal, Market,
+    NeverFires, Npc, NpcId, Order, OutfitOrder, OutfitRefusal, Outfitter, Peaceful, Pilot,
+    PilotCatalog, RechargeRefusal, Reserves, Session, ShipId, ShipPurchase, ShipRefusal, ShipState,
+    Shipyard, StartError, StellarId, Steps, TradeRefusal, TrafficCatalog, Turn, flight::normalized,
     flight::shortest_turn,
 };
 
@@ -142,6 +142,9 @@ pub const NO_FUEL: &str = "Insufficient energy for hyperspace jump.";
 /// Not the original's, which never flies a landed ship: worded after
 /// `STR#` 2002 #42 and #73 ("Disengage cloaking device first.").
 pub const TAKE_OFF_FIRST: &str = "Can't initiate hyperspace jump - take off first.";
+/// Not the original's, whose disabled ship takes no keys: worded after
+/// `STR#` 2002 #42.
+pub const JUMP_DISABLED: &str = "Can't initiate hyperspace jump - your ship is disabled.";
 
 /// `STR#` 2002 #49.
 pub const NO_STELLARS: &str = "No stellar objects present.";
@@ -165,6 +168,9 @@ pub const HOSTILE_PLANET: &str = "The planet's environment is too hostile.";
 /// `STR#` 2002 #54 ("Unable to send hail - target ship is entering
 /// hyperspace.").
 pub const IN_HYPERSPACE: &str = "Unable to land - your ship is in hyperspace.";
+/// Not the original's, whose disabled ship takes no keys: worded as
+/// [`IN_HYPERSPACE`] is.
+pub const LAND_DISABLED: &str = "Unable to land - your ship is disabled.";
 
 /// What the player is told when `refusal` stops a landing: the original's
 /// words for it, for a station or a planet.
@@ -175,6 +181,7 @@ pub fn refusal_message(refusal: &LandingRefusal) -> &'static str {
     };
     match *refusal {
         LandingRefusal::Jumping => IN_HYPERSPACE,
+        LandingRefusal::Disabled => LAND_DISABLED,
         LandingRefusal::NoStellars => NO_STELLARS,
         LandingRefusal::TooFar { station, .. } => pick(station, TOO_FAR_STATION, TOO_FAR_PLANET),
         LandingRefusal::NotLandable { station, .. } => {
@@ -209,6 +216,7 @@ pub fn jump_refusal_message(refusal: &JumpRefusal) -> &'static str {
         JumpRefusal::TooClose { .. } => TOO_CLOSE,
         JumpRefusal::NoFuel { .. } => NO_FUEL,
         JumpRefusal::Landed => TAKE_OFF_FIRST,
+        JumpRefusal::Disabled => JUMP_DISABLED,
     }
 }
 
@@ -290,8 +298,15 @@ pub struct FlightView<C> {
     npc_previous: BTreeMap<NpcId, ShipState>,
 }
 
-impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
-    FlightView<C>
+impl<
+    C: PilotCatalog
+        + TrafficCatalog
+        + CombatCatalog
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog,
+> FlightView<C>
 {
     /// A new, unnamed pilot's flight, read from `catalog`, which the
     /// screen keeps.
@@ -734,8 +749,15 @@ impl<C> FlightView<C> {
     }
 }
 
-impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
-    Screen for FlightView<C>
+impl<
+    C: PilotCatalog
+        + TrafficCatalog
+        + CombatCatalog
+        + SystemCatalog
+        + ShipSprites
+        + StatusBars
+        + GalaxyCatalog,
+> Screen for FlightView<C>
 {
     /// Never quits: Escape is the router's.
     fn input(&mut self, input: &Input) -> ScreenAction {
@@ -1112,6 +1134,17 @@ mod tests {
 
         fn disasters(&self) -> Vec<DisasterRecord> {
             self.disasters.clone()
+        }
+    }
+
+    /// Unarmed: no weapons, and no ship type's combat fields.
+    impl CombatCatalog for FakeCatalog {
+        fn weapons(&self) -> Vec<nova_sim::WeaponRecord> {
+            Vec::new()
+        }
+
+        fn hulls(&self) -> Vec<nova_sim::HullRecord> {
+            Vec::new()
         }
     }
 
@@ -2000,6 +2033,7 @@ mod tests {
         let stellar = StellarId(128);
         let cases = [
             (LandingRefusal::Jumping, IN_HYPERSPACE),
+            (LandingRefusal::Disabled, LAND_DISABLED),
             (LandingRefusal::NoStellars, NO_STELLARS),
             (
                 LandingRefusal::TooFar {
@@ -2442,6 +2476,14 @@ mod tests {
             NO_FUEL
         );
         assert_eq!(jump_refusal_message(&JumpRefusal::Landed), TAKE_OFF_FIRST);
+        assert_eq!(jump_refusal_message(&JumpRefusal::Disabled), JUMP_DISABLED);
+        assert_eq!(
+            [LAND_DISABLED, JUMP_DISABLED],
+            [
+                "Unable to land - your ship is disabled.",
+                "Can't initiate hyperspace jump - your ship is disabled."
+            ]
+        );
         assert_eq!(
             [NO_DESTINATION, TOO_CLOSE, NO_FUEL, TAKE_OFF_FIRST],
             [
@@ -3228,13 +3270,13 @@ mod tests {
         assert_eq!(npc_ids(&view), [], "not until the first tick");
         view.tick(TICK);
         let session = view.session().expect("flying");
-        let npc = session.npcs()[0];
+        let npc = &session.npcs()[0];
         assert_eq!((npc.ship, npc.goal), (ShipId(129), Goal::Idle));
         assert_eq!(npc.state.position, Vec2::new(100.0, -100.0));
         assert_eq!(&script.borrow().asked[..7], [7, 7, 100, 1, 1500, 1500, 360]);
         ticks(&mut view, 3);
         assert_eq!(npc_ids(&view), [NpcId(0)], "populated once");
-        let npc = view.session().expect("flying").npcs()[0];
+        let npc = &view.session().expect("flying").npcs()[0];
         assert_eq!(npc.goal, Goal::Idle, "deciding as the behaviour given says");
         assert_eq!(npc.state.position, Vec2::new(100.0, -100.0));
     }
@@ -3294,7 +3336,7 @@ mod tests {
         view.tick(TICK);
         assert_eq!(npc_states(&view)[0].position, Vec2::new(0.0, 100.0));
         view.tick(TICK + TICK / 2);
-        let npc = view.session().expect("flying").npcs()[0];
+        let npc = &view.session().expect("flying").npcs()[0];
         assert_eq!(npc.goal, Goal::Land(StellarId(128)), "Peaceful, by default");
         let moved = npc.state.position.y - 100.0;
         assert!(moved < 0.0, "{npc:?}");

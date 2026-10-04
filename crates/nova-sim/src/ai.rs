@@ -9,6 +9,7 @@ use std::fmt::Debug;
 
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
+use crate::combat::armament::Trigger;
 use crate::hyperspace::JUMP_FUEL;
 use crate::landing::landable;
 use crate::traffic::npc::{Npc, NpcId};
@@ -40,9 +41,16 @@ pub struct Surroundings<'a> {
 pub trait Behaviour: Debug {
     /// `npc`'s goal now, among `around`, rolling any choice on `chance`.
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal;
+
+    /// The fire command `npc` holds now, among `around`: none by default.
+    fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+        let _ = (npc, around);
+        Trigger::default()
+    }
 }
 
-/// Nova's peaceful traffic, the default behaviour (see [`Peaceful::decide`]).
+/// Nova's peaceful traffic, the default behaviour (see [`Peaceful::decide`]):
+/// it never fires.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Peaceful;
 
@@ -69,7 +77,7 @@ impl Behaviour for Peaceful {
         if can_still_fly(npc, around) {
             return npc.goal;
         }
-        let leave = if npc.fuel >= JUMP_FUEL {
+        let leave = if npc.reserves.fuel.now >= JUMP_FUEL {
             Goal::JumpOut
         } else {
             Goal::Idle
@@ -96,7 +104,7 @@ fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
             .sites
             .iter()
             .any(|site| site.id == stellar && landable(site)),
-        Goal::JumpOut => npc.fuel >= JUMP_FUEL,
+        Goal::JumpOut => npc.reserves.fuel.now >= JUMP_FUEL,
         Goal::Idle | Goal::Follow(_) => false,
     }
 }
@@ -104,26 +112,15 @@ fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::ShipId;
-    use crate::flight::ShipState;
     use crate::landing::StellarFlags;
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST, planet};
-    use crate::traffic::npc::{AiType, Mode};
+    use crate::traffic::npc::AiType;
 
     fn npc(id: u32, ai_type: AiType) -> Npc {
-        let stats = ShipStats::new(FAST, &[]);
         Npc {
-            id: NpcId(id),
-            ship: ShipId(128),
-            govt: None,
             ai_type,
-            leader: None,
-            stats,
-            fuel: stats.fuel,
-            state: ShipState::default(),
-            mode: Mode::Flying,
-            goal: Goal::Idle,
+            ..crate::testkit::npc(id, ShipStats::new(FAST, &[]))
         }
     }
 
@@ -188,14 +185,14 @@ mod tests {
     fn a_ship_without_a_jumps_fuel_that_would_jump_stays_idle() {
         for ai_type in [AiType::WimpyTrader, AiType::Warship] {
             let mut short = npc(1, ai_type);
-            short.fuel = 99.9;
+            short.reserves.fuel.now = 99.9;
             assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::Idle);
-            short.fuel = 100.0;
+            short.reserves.fuel.now = 100.0;
             assert_eq!(decide(&short, &[], &[], &mut Draws::of(&[])), Goal::JumpOut);
         }
         // A trader with somewhere to land needs no fuel.
         let mut dry = npc(1, AiType::BraveTrader);
-        dry.fuel = 0.0;
+        dry.reserves.fuel.now = 0.0;
         assert_eq!(
             decide(&dry, &sites(), &[], &mut Draws::of(&[0])),
             Goal::Land(StellarId(128))
@@ -212,7 +209,7 @@ mod tests {
         ] {
             let mut escort = npc(2, ai_type);
             escort.leader = Some(NpcId(1));
-            let together = [lead, escort];
+            let together = [lead.clone(), escort.clone()];
             let mut chance = Draws::of(&[0]);
             assert_eq!(
                 decide(&escort, &sites(), &together, &mut chance),
@@ -221,9 +218,23 @@ mod tests {
             assert!(chance.asked.is_empty());
             escort.goal = Goal::Follow(NpcId(1));
             assert_eq!(
-                decide(&escort, &sites(), &[escort], &mut chance),
+                decide(&escort, &sites(), &[escort.clone()], &mut chance),
                 alone,
                 "{ai_type:?} without its lead"
+            );
+        }
+    }
+
+    #[test]
+    fn peaceful_traffic_never_fires() {
+        let around = Surroundings {
+            sites: &sites(),
+            npcs: &[],
+        };
+        for ai_type in TRADERS.into_iter().chain(FIGHTERS) {
+            assert_eq!(
+                Peaceful.trigger(&npc(1, ai_type), &around),
+                Trigger::default()
             );
         }
     }
@@ -259,7 +270,7 @@ mod tests {
         }
         let mut stranded = npc(1, AiType::Warship);
         stranded.goal = Goal::JumpOut;
-        stranded.fuel = 50.0;
+        stranded.reserves.fuel.now = 50.0;
         assert_eq!(decide(&stranded, &[], &[], &mut Draws::of(&[])), Goal::Idle);
         let mut follower = npc(1, AiType::Warship);
         follower.goal = Goal::Follow(NpcId(7));

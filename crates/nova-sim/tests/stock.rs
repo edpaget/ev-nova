@@ -721,3 +721,379 @@ fn alpharas_named_fleet_comes_when_its_roll_fires() {
         "each type's Min"
     );
 }
+
+// Combat over the stock data.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use nova_sim::combat::armament::{Arsenal, Rounds};
+use nova_sim::combat::flags::FlagField;
+use nova_sim::combat::weapon::{Ammo, Guidance, WeaponSpec};
+use nova_sim::combat::{Combat, Fighter};
+use nova_sim::{
+    Armament, CombatCatalog, CombatEvent, Condition, HullSpec, NovaDisable, Reserves, ShipRef,
+    SimDiagnostic, Trigger, Vec2, WeaponId,
+};
+
+/// Draws the middle outcome: every shot leaves straight ahead.
+struct Straight;
+
+impl nova_sim::Chance for Straight {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        n / 2
+    }
+}
+
+/// A ship in a stock fight, owning what a fighter borrows.
+struct Combatant {
+    id: ShipRef,
+    ship_type: ShipId,
+    state: ShipState,
+    hull: HullSpec,
+    trigger: Trigger,
+    reserves: Reserves,
+    condition: Condition,
+    armament: Armament,
+    rounds: BTreeMap<WeaponId, u32>,
+}
+
+impl Combatant {
+    fn fighter(&mut self) -> Fighter<'_> {
+        Fighter {
+            ship: self.id,
+            ship_type: self.ship_type,
+            fleet: self.id,
+            state: self.state,
+            hull: self.hull,
+            shield_regen: 0.0,
+            armor_regen: 0.0,
+            trigger: self.trigger,
+            reserves: &mut self.reserves,
+            condition: &mut self.condition,
+            armament: &mut self.armament,
+            rounds: &mut self.rounds as &mut dyn Rounds,
+        }
+    }
+}
+
+fn fight(combat: &mut Combat, ships: &mut [Combatant]) {
+    let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
+    combat.tick(&mut fighters, &NovaDisable, &mut Straight);
+}
+
+/// The player at the centre, at rest, facing right, firing one of
+/// `weapon` with all the ammunition, fuel and armour it could want.
+fn shooter(weapon: &WeaponSpec) -> Combatant {
+    let mut rounds = BTreeMap::new();
+    if let Ammo::Rounds(ammo) = weapon.ammo {
+        rounds.insert(ammo, 100_000);
+    }
+    Combatant {
+        id: ShipRef::Player,
+        ship_type: ShipId(128),
+        state: ShipState {
+            heading: 90.0,
+            ..ShipState::default()
+        },
+        hull: HullSpec::default(),
+        trigger: Trigger {
+            primary: !weapon.secondary(),
+            secondary: weapon.secondary().then_some(weapon.id),
+        },
+        reserves: Reserves::full(0.0, 1_000_000.0, 1_000_000.0),
+        condition: Condition::Intact,
+        armament: Armament::new([(*weapon, 1)]),
+        rounds,
+    }
+}
+
+/// NPC 0, a ship of `ship` type `x` pixels right of the centre, at rest,
+/// its reserves full as its stock fields and default items give them.
+fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant {
+    let record = data
+        .ships()
+        .into_iter()
+        .find(|record| record.id == ship)
+        .expect("a stock ship");
+    let outfits = data.outfits();
+    let mods: Vec<OutfitMod> = record
+        .defaults
+        .iter()
+        .flat_map(|&(id, count)| {
+            outfits
+                .iter()
+                .filter(move |outfit| outfit.id == id)
+                .flat_map(move |outfit| {
+                    outfit.mods.map(|(mod_type, mod_val)| OutfitMod {
+                        mod_type,
+                        mod_val,
+                        count,
+                    })
+                })
+        })
+        .collect();
+    Combatant {
+        id: ShipRef::Npc(nova_sim::NpcId(0)),
+        ship_type: ship,
+        state: ShipState {
+            position: Vec2::new(x, 0.0),
+            ..ShipState::default()
+        },
+        hull: arsenal.hull(ship),
+        trigger: Trigger::default(),
+        reserves: ShipStats::new(record.fields, &mods).full(),
+        condition: Condition::Intact,
+        armament: Armament::default(),
+        rounds: BTreeMap::new(),
+    }
+}
+
+/// Every stock weapon this phase flies: guidance -1, 0, 5 and 6.
+fn in_scope(data: &GameData) -> Vec<WeaponSpec> {
+    let weapons: Vec<WeaponSpec> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| {
+            matches!(
+                spec.guidance,
+                Guidance::Unguided | Guidance::Beam | Guidance::FreefallBomb | Guidance::Rocket
+            )
+        })
+        .collect();
+    assert_eq!(weapons.len(), 17, "the stock weapons in scope");
+    weapons
+}
+
+/// The ticks a weapon fires on from rest over `ticks`, as `_FirePlayerWeapon`
+/// paces one copy: every `Reload` ticks (at least every tick), and after
+/// each `BurstCount` shots its `BurstReload`.
+fn paced(spec: &WeaponSpec, ticks: u32) -> Vec<u32> {
+    let mut fired = Vec::new();
+    let mut tick = 0;
+    while tick < ticks {
+        fired.push(tick);
+        let ending = spec.burst_count > 0
+            && u32::try_from(fired.len()).expect("few") % spec.burst_count == 0;
+        let wait = if ending {
+            spec.burst_reload
+        } else {
+            spec.reload
+        };
+        tick += (wait.ceil() as u32).max(1);
+    }
+    fired
+}
+
+/// The ticks one beam of `spec`, fired once, damages a ship that soaks
+/// up any damage `x` pixels ahead.
+fn beam_hits(spec: &WeaponSpec, x: f32) -> u32 {
+    let mut sponge = Combatant {
+        id: ShipRef::Npc(nova_sim::NpcId(0)),
+        reserves: Reserves::full(100_000.0, 100_000.0, 0.0),
+        trigger: Trigger::default(),
+        armament: Armament::default(),
+        ..shooter(spec)
+    };
+    sponge.state.position = Vec2::new(x, 0.0);
+    let mut combat = Combat::default();
+    let mut ships = [shooter(spec), sponge];
+    let mut hits = 0;
+    for _ in 0..spec.lifetime + 5 {
+        let before = ships[1].reserves;
+        fight(&mut combat, &mut ships);
+        ships[0].trigger = Trigger::default();
+        hits += u32::from(ships[1].reserves != before);
+    }
+    hits
+}
+
+/// Each stock weapon in scope, fired from rest into empty space: a shot
+/// leaves at `Speed`/100 (a rocket at its firer's rest, closing on that),
+/// lives `Count` ticks and reaches `Speed`/100 x `Count` (a beam hits for
+/// `Count` ticks and reaches its `BeamLength` and the ship's radius), and
+/// it fires as often as item 7 of the plan says.
+#[test]
+fn every_stock_weapon_in_scope_flies_its_speed_life_and_range_at_its_reload() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    for spec in in_scope(&data) {
+        let id = spec.id.0;
+        let mut combat = Combat::default();
+        let mut ships = [shooter(&spec)];
+        fight(&mut combat, &mut ships);
+        ships[0].trigger = Trigger::default();
+        if spec.guidance == Guidance::Beam {
+            assert!((spec.range() - spec.beam_length).abs() < 1e-6, "{id}");
+            let reach = spec.beam_length + nova_sim::combat::hull::DEFAULT_HIT_RADIUS;
+            assert_eq!(beam_hits(&spec, reach - 0.5), spec.lifetime.max(1), "{id}");
+            assert_eq!(beam_hits(&spec, reach + 0.5), 0, "{id}: out of reach");
+        } else {
+            let shot = combat.shots()[0];
+            let speed = shot.velocity.length();
+            if spec.guidance == Guidance::Rocket {
+                assert!(speed <= spec.speed * 0.05 + 1e-4, "{id}");
+            } else {
+                assert!((speed - spec.speed).abs() < 1e-3, "{id}: {speed}");
+            }
+            let mut lived = 1;
+            let mut last = shot.position;
+            while let Some(shot) = combat.shots().first() {
+                last = shot.position;
+                fight(&mut combat, &mut ships);
+                lived += 1;
+            }
+            assert_eq!(lived, spec.lifetime.max(1), "{id}");
+            // Seen last a tick before it flies its last tick and goes: a
+            // tick short of its range.
+            let flown = last.length() + spec.speed;
+            let range = spec.speed * spec.lifetime as f32;
+            assert!((spec.range() - range).abs() < 1e-3, "{id}");
+            if spec.guidance == Guidance::Rocket {
+                assert!(flown <= range + 1e-3, "{id}");
+            } else {
+                assert!((flown - range).abs() < 1e-2, "{id}: {flown}");
+            }
+        }
+        let mut combat = Combat::default();
+        let mut ships = [shooter(&spec)];
+        let mut fired = Vec::new();
+        for tick in 0..300 {
+            fight(&mut combat, &mut ships);
+            if combat
+                .take_events()
+                .iter()
+                .any(|event| matches!(event, CombatEvent::Fired { .. }))
+            {
+                fired.push(tick);
+            }
+        }
+        assert_eq!(fired, paced(&spec, 300), "wëap {id}");
+    }
+}
+
+/// Each stock weapon in scope, fired at the stock ship with the most
+/// shield: its shields fall first, and its armour only once they are
+/// down; the shield-passing weapons (174 and 232) take only the armour.
+#[test]
+fn every_stock_weapon_in_scope_takes_the_shields_before_the_armour() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let toughest = data
+        .ships()
+        .into_iter()
+        .max_by_key(|record| (record.fields.shield, record.fields.armor))
+        .expect("ships")
+        .id;
+    for spec in in_scope(&data) {
+        let id = spec.id.0;
+        let reach = if spec.guidance == Guidance::Beam {
+            spec.beam_length / 2.0
+        } else {
+            spec.range().clamp(1.0, 60.0)
+        };
+        let mut combat = Combat::default();
+        let mut ships = [shooter(&spec), target(&data, &arsenal, toughest, reach)];
+        let full = ships[1].reserves;
+        let mut seen = Vec::new();
+        for _ in 0..400 {
+            fight(&mut combat, &mut ships);
+            seen.push(ships[1].reserves);
+        }
+        let hurt = seen.iter().position(|r| *r != full);
+        let Some(hurt) = hurt else {
+            // The Stellar Grenade (Speed 0) blows up where it is launched,
+            // too far from anything to fire at.
+            assert!(spec.speed.abs() < f32::EPSILON, "wëap {id} never hit");
+            continue;
+        };
+        if spec.passes_shields() {
+            assert!(seen.iter().all(|r| r.shield == full.shield), "wëap {id}");
+            assert!(seen[hurt].armor.now < full.armor.now, "wëap {id}");
+        } else {
+            assert!(seen[hurt].shield.now < full.shield.now, "wëap {id}");
+            assert_eq!(seen[hurt].armor, full.armor, "wëap {id}: shields first");
+            for reserves in &seen {
+                if reserves.armor.now < full.armor.now {
+                    assert!(reserves.shield.now <= 0.0, "wëap {id}: {reserves:?}");
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Every stock weapon in scope, fired again and again in one fight:
+/// exactly the Mining Blaster and the three Wraith Graviton Beams report
+/// their x10 damage to asteroids (`Flags2` 0x8000), each once.
+#[test]
+fn only_the_asteroid_damage_flag_is_reported_each_once() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut combat = Combat::default();
+    let mut ships: Vec<Combatant> = in_scope(&data).iter().map(shooter).collect();
+    let mut diagnostics = Vec::new();
+    for _ in 0..200 {
+        fight(&mut combat, &mut ships);
+        diagnostics.extend(combat.take_diagnostics());
+    }
+    let expected: BTreeSet<SimDiagnostic> = [181, 165, 167, 168]
+        .into_iter()
+        .map(|id| SimDiagnostic::UnimplementedWeaponFlag {
+            weapon: WeaponId(id),
+            field: FlagField::Flags2,
+            bit: 0x8000,
+        })
+        .collect();
+    assert_eq!(diagnostics.len(), 4, "{diagnostics:?}");
+    assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
+}
+
+/// Each ship type a trader `düde` (AI 1 or 2) flies, hit with Light
+/// Blaster shots until it is disabled and then left alone, ends up
+/// disabled, with armour left, and still there.
+#[test]
+fn a_stock_trader_beaten_in_combat_is_disabled_and_still_alive() {
+    use nova_data::records::dude::Dude;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let blaster = *arsenal.weapon(WeaponId(128)).expect("the Light Blaster");
+    let traders: BTreeSet<ShipId> = data
+        .records::<Dude>()
+        .filter_map(|(_, dude)| dude.ok())
+        .filter(|dude| matches!(dude.record.ai_type, 1 | 2))
+        .flat_map(|dude| dude.record.ship_type.into_iter().flatten())
+        .collect();
+    assert!(traders.len() > 5, "{traders:?}");
+    for ship in traders {
+        let mut combat = Combat::default();
+        let mut ships = [shooter(&blaster), target(&data, &arsenal, ship, 100.0)];
+        let mut ticks = 0;
+        while ships[1].condition == Condition::Intact {
+            fight(&mut combat, &mut ships);
+            ticks += 1;
+            assert!(ticks < 100_000, "shïp {} never disabled", ship.0);
+        }
+        ships[0].trigger = Trigger::default();
+        for _ in 0..30 {
+            fight(&mut combat, &mut ships);
+        }
+        let reserves = ships[1].reserves;
+        assert_eq!(ships[1].condition, Condition::Disabled, "shïp {}", ship.0);
+        assert!(reserves.armor.now > 0.0, "shïp {}: {reserves:?}", ship.0);
+    }
+}

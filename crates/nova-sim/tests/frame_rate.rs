@@ -5,13 +5,24 @@
 use std::time::Duration;
 
 use nova_sim::{
-    CharacterStart, CommodityStrings, Controls, DisasterRecord, FixedStep, JunkRecord, LandingSite,
-    OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId, ShipState, StarSystem,
-    StartDate, StartError, SystemId, Turn,
+    CharacterStart, CombatCatalog, CommodityStrings, Controls, DisasterRecord, FixedStep,
+    HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields,
+    ShipId, ShipState, StarSystem, StartDate, StartError, SystemId, Turn, WeaponRecord,
 };
 
 /// One `chär` flying an agile ship from system 130.
 struct Pilot;
+
+/// Unarmed.
+impl CombatCatalog for Pilot {
+    fn weapons(&self) -> Vec<WeaponRecord> {
+        Vec::new()
+    }
+
+    fn hulls(&self) -> Vec<HullRecord> {
+        Vec::new()
+    }
+}
 
 impl PilotCatalog for Pilot {
     fn first_character(&self) -> Result<CharacterStart, StartError> {

@@ -78,19 +78,42 @@
 //! [`Chance`]; it stands still while the player is landed or jumping, as
 //! the player's own ship does.
 //!
+//! Ships fight ([`combat`](crate::combat)): the player holds a fire
+//! command ([`Session::hold_trigger`]), and each NPC the one its
+//! [`Behaviour`] last decided, and [`Session::tick_combat`] advances the
+//! fight a tick among the player and the NPCs, with each ship's weapons,
+//! read when the session starts, and disabling ships as a
+//! [`DisableRule`] says. The player's weapons are its ship's stock weapons
+//! and its weapon outfits, firing the rounds of its ammunition outfits and
+//! its fuel, so a fight changes the pilot only in its shield, armour and
+//! fuel and the ammunition it owns. The fight stands still while the
+//! player is landed or jumping, and its shots and beams are gone once the
+//! player lands or arrives elsewhere. An NPC destroyed is taken out of the
+//! system. The player's ship, once it is not intact, ignores the controls
+//! and drifts, cannot land or jump, and once destroyed stays where it is.
+//!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
 //! stopping, landing, taking off, a jump beginning and ending), which the
 //! audio side drains with [`Session::take_sounds`]. A refused landing or
-//! jump emits nothing.
+//! jump emits nothing. The fight's [`CombatEvent`]s are drained with
+//! [`Session::take_combat_events`], and the [`SimDiagnostic`]s about game
+//! data the simulation does not handle yet, each once a session, with
+//! [`Session::take_diagnostics`].
 
 use std::collections::BTreeMap;
 
 use crate::ai::Behaviour;
 use crate::catalog::{
-    GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, StartError,
-    StellarId, SystemId, TrafficCatalog,
+    CombatCatalog, GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord,
+    StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
+use crate::combat::armament::{Armament, Arsenal, OutfitRounds, Trigger};
+use crate::combat::beam::Beam;
+use crate::combat::hull::{Condition, DisableRule, HullSpec};
+use crate::combat::projectile::Shot;
+use crate::combat::report::SimDiagnostic;
+use crate::combat::{Combat, CombatEvent, Fighter, ShipRef};
 use crate::date::GameDate;
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
@@ -150,18 +173,34 @@ pub struct Session {
     /// Whether the system is to be populated on the next traffic tick in
     /// flight: from the session's start, and after each take-off.
     traffic_due: bool,
+    /// Every weapon and ship type's combat fields, read when the session
+    /// starts.
+    arsenal: Arsenal,
+    /// Each ammunition outfit, with the weapon it is the rounds of.
+    ammo_outfits: Vec<(WeaponId, OutfitId)>,
+    /// The player's ship type's hull.
+    hull: HullSpec,
+    /// The player's weapons.
+    armament: Armament,
+    /// How the player's ship is holding up.
+    condition: Condition,
+    /// The fire command the player holds.
+    trigger: Trigger,
+    /// The shots and beams in flight, and what the fight reports.
+    combat: Combat,
 }
 
 impl Session {
     /// A new pilot's session, read from `catalog`: an unnamed
     /// [`Pilot::new`], flown.
-    pub fn start(catalog: &impl PilotCatalog) -> Result<Self, StartError> {
+    pub fn start(catalog: &(impl PilotCatalog + CombatCatalog)) -> Result<Self, StartError> {
         Self::fly(catalog, Pilot::new(catalog, "")?)
     }
 
     /// `pilot`'s session, its ship's fields and default items, the
-    /// outfits, its system's stellars, the star map and the goods read
-    /// from `catalog`, with the system marked explored. A pilot whose ship
+    /// outfits, its system's stellars, the star map, the goods, and the
+    /// weapons and ship types' combat fields read from `catalog`, with the
+    /// system marked explored. A pilot whose ship
     /// still carries its default items, from an old save, owns them now,
     /// and the reserves hold no more than the stats allow.
     ///
@@ -174,7 +213,10 @@ impl Session {
     /// # Errors
     ///
     /// When the ship cannot be read, or the system no longer exists.
-    pub fn fly(catalog: &impl PilotCatalog, mut pilot: Pilot) -> Result<Self, StartError> {
+    pub fn fly(
+        catalog: &(impl PilotCatalog + CombatCatalog),
+        mut pilot: Pilot,
+    ) -> Result<Self, StartError> {
         let ship = pilot.ship;
         let fields = catalog
             .ship_fields(ship)
@@ -198,10 +240,12 @@ impl Session {
             pilot.outfits.clone_from(&defaults);
             pilot.default_outfits_pending = false;
         }
+        let outfits = catalog.outfits();
         let mut session = Self {
             fields,
             defaults,
-            outfits: catalog.outfits(),
+            ammo_outfits: Arsenal::ammo_outfits(&outfits),
+            outfits,
             ships: catalog.ships(),
             // Refitted below, from the outfits the pilot owns.
             stats: ShipStats::default(),
@@ -216,6 +260,13 @@ impl Session {
             save_due: false,
             traffic: Traffic::new(),
             traffic_due: true,
+            arsenal: Arsenal::read(catalog),
+            // Refitted below, from the ship and the outfits the pilot owns.
+            hull: HullSpec::default(),
+            armament: Armament::default(),
+            condition: Condition::Intact,
+            trigger: Trigger::default(),
+            combat: Combat::default(),
             pilot,
         };
         session.refit(false);
@@ -232,8 +283,13 @@ impl Session {
 
     /// Recomputes the stats from the outfits the pilot owns: each gauge
     /// holds up to the stats' most, keeping no more than that, and when
-    /// `gain`, one whose most rose gains as much.
+    /// `gain`, one whose most rose gains as much. The hull and the weapons
+    /// follow the ship and the outfits, ready to fire.
     fn refit(&mut self, gain: bool) {
+        self.hull = self.arsenal.hull(self.pilot.ship);
+        self.armament = self
+            .arsenal
+            .player(self.pilot.ship, &self.pilot.outfits, &self.outfits);
         let stats = self.current_stats();
         let reserves = &mut self.pilot.reserves;
         for (gauge, max) in [
@@ -248,9 +304,19 @@ impl Session {
 
     /// Advances the session one tick under the player's `controls`, then
     /// regenerates fuel. A landed ship, or one jumping, does not move, and
-    /// gains no fuel.
+    /// gains no fuel. A ship that is not intact ignores the controls and
+    /// drifts, and a destroyed one stays where it is.
     pub fn tick(&mut self, controls: Controls) {
         if self.landed.is_none() && self.jumping.is_none() {
+            let controls = match self.condition {
+                Condition::Intact => controls,
+                Condition::Disabled | Condition::Dying { .. } => Controls::default(),
+                Condition::Destroyed => {
+                    self.stop_thrust();
+                    self.player.velocity = Vec2::ZERO;
+                    return;
+                }
+            };
             if controls.thrust != self.thrusting {
                 self.thrusting = controls.thrust;
                 self.sounds.push(if controls.thrust {
@@ -278,6 +344,7 @@ impl Session {
             self.star_map.govt(system),
             &self.ships,
             &self.outfits,
+            &self.arsenal,
         );
         self.traffic.enter(table, chance);
         self.traffic_due = false;
@@ -302,6 +369,116 @@ impl Session {
                 self.traffic.tick(behaviour, &self.sites, chance);
             }
         }
+    }
+
+    /// Holds `trigger`, the player's fire command, until another is held.
+    pub fn hold_trigger(&mut self, trigger: Trigger) {
+        self.trigger = trigger;
+    }
+
+    /// Advances the fight a tick among the player and the NPCs, disabling
+    /// ships as `rule` says and drawing each shot's inaccuracy on
+    /// `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
+    /// the system. While the ship is landed or jumping, it stands still.
+    pub fn tick_combat(
+        &mut self,
+        rule: &(impl DisableRule + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if self.landed.is_some() || self.jumping.is_some() {
+            return;
+        }
+        let pilot = &mut self.pilot;
+        let mut rounds = OutfitRounds {
+            owned: &mut pilot.outfits,
+            sources: &self.ammo_outfits,
+        };
+        let mut fighters = vec![Fighter {
+            ship: ShipRef::Player,
+            ship_type: pilot.ship,
+            fleet: ShipRef::Player,
+            state: self.player,
+            hull: self.hull,
+            shield_regen: self.stats.shield_regen,
+            armor_regen: self.stats.armor_regen,
+            trigger: self.trigger,
+            reserves: &mut pilot.reserves,
+            condition: &mut self.condition,
+            armament: &mut self.armament,
+            rounds: &mut rounds,
+        }];
+        for npc in self.traffic.npcs_mut() {
+            let fleet = ShipRef::Npc(npc.fleet());
+            let Npc {
+                id,
+                ship,
+                stats,
+                state,
+                hull,
+                trigger,
+                reserves,
+                condition,
+                armament,
+                rounds,
+                ..
+            } = npc;
+            fighters.push(Fighter {
+                ship: ShipRef::Npc(*id),
+                ship_type: *ship,
+                fleet,
+                state: *state,
+                hull: *hull,
+                shield_regen: stats.shield_regen,
+                armor_regen: stats.armor_regen,
+                trigger: *trigger,
+                reserves,
+                condition,
+                armament,
+                rounds,
+            });
+        }
+        self.combat.tick(&mut fighters, rule, chance);
+        let destroyed: Vec<NpcId> = self
+            .traffic
+            .npcs()
+            .iter()
+            .filter(|npc| npc.condition == Condition::Destroyed)
+            .map(|npc| npc.id)
+            .collect();
+        for id in destroyed {
+            self.traffic.remove(id);
+        }
+    }
+
+    /// How the player's ship is holding up.
+    #[must_use]
+    pub fn player_condition(&self) -> Condition {
+        self.condition
+    }
+
+    /// The shots in flight.
+    #[must_use]
+    pub fn shots(&self) -> &[Shot] {
+        self.combat.shots()
+    }
+
+    /// The beams being fired.
+    #[must_use]
+    pub fn beams(&self) -> &[Beam] {
+        self.combat.beams()
+    }
+
+    /// What has happened in the fight since this was last taken, in order;
+    /// taking it empties the list.
+    pub fn take_combat_events(&mut self) -> Vec<CombatEvent> {
+        self.combat.take_events()
+    }
+
+    /// The diagnostics about game data the simulation does not handle yet,
+    /// each made once a session, since they were last taken; taking them
+    /// empties the list.
+    pub fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
+        self.combat.take_diagnostics()
     }
 
     /// The NPCs in the system, in the order they appeared.
@@ -354,12 +531,15 @@ impl Session {
     }
 
     /// Begins a jump to the next system on the course, if the ship has not
-    /// landed and the [`hyperspace`](crate::hyperspace) rules allow it, and
-    /// gives that system; otherwise the refusal says why. Until it arrives,
-    /// ticks move nothing.
+    /// landed, is intact and the [`hyperspace`](crate::hyperspace) rules
+    /// allow it, and gives that system; otherwise the refusal says why.
+    /// Until it arrives, ticks move nothing.
     pub fn begin_jump(&mut self) -> Result<SystemId, JumpRefusal> {
         if self.landed.is_some() {
             return Err(JumpRefusal::Landed);
+        }
+        if self.condition != Condition::Intact {
+            return Err(JumpRefusal::Disabled);
         }
         let next = check_jump(
             &self.player,
@@ -386,8 +566,9 @@ impl Session {
     /// reserves as they were. Each day
     /// steps the planetary events, rolled on `chance`. The new system's
     /// stellars are read from `catalog`, and it is populated with its
-    /// traffic ([`Session::populate`]), the last system's gone. `None`, and
-    /// nothing changes, when no jump is under way.
+    /// traffic ([`Session::populate`]), the last system's gone, and so are
+    /// the shots and beams in flight. `None`, and nothing changes, when no
+    /// jump is under way.
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -410,6 +591,7 @@ impl Session {
         pilot.explore(next);
         self.sites = catalog.landing_sites(next);
         self.populate(catalog, chance);
+        self.combat.clear();
         self.sounds.push(SimSound::Arrived);
         Some(next)
     }
@@ -438,15 +620,19 @@ impl Session {
         self.stats.fuel_regen
     }
 
-    /// Lands the ship on the stellar it is over, if it is not jumping and
-    /// the [`landing`](crate::landing) rules allow it, with the pilot's
-    /// legal record with the stellar's government, or the system's on the
-    /// star map when the stellar has none: it docks at the
-    /// stellar's centre, at rest, its heading and reserves unchanged.
-    /// Otherwise it flies on, and the refusal says why.
+    /// Lands the ship on the stellar it is over, if it is not jumping, is
+    /// intact and the [`landing`](crate::landing) rules allow it, with the
+    /// pilot's legal record with the stellar's government, or the system's
+    /// on the star map when the stellar has none: it docks at the
+    /// stellar's centre, at rest, its heading and reserves unchanged, and
+    /// the shots and beams in flight are gone. Otherwise it flies on, and
+    /// the refusal says why.
     pub fn land(&mut self) -> Result<StellarId, LandingRefusal> {
         if self.jumping.is_some() {
             return Err(LandingRefusal::Jumping);
+        }
+        if self.condition != Condition::Intact {
+            return Err(LandingRefusal::Disabled);
         }
         let stellar = check_landing(
             &self.player,
@@ -462,6 +648,7 @@ impl Session {
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
         self.pilot.stellar = Some(stellar);
+        self.combat.clear();
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
@@ -3116,5 +3303,403 @@ mod tests {
         assert_eq!(fleet_of(&session), [], "31 is above its 30%");
         session.tick_traffic(&catalog, &Peaceful, &mut Draws::of(&[1, 29, 0, 0, 2]));
         assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+    }
+
+    // Combat.
+
+    use crate::ai::{Behaviour, Goal, Surroundings};
+    use crate::catalog::{HullRecord, StockWeapon, WeaponRecord};
+    use crate::combat::armament::MOD_AMMO;
+    use crate::combat::hull::NovaDisable;
+    use crate::combat::weapon::Explosion;
+    use crate::testkit::{hull, weapon};
+    use crate::traffic::npc::Npc;
+
+    /// A blaster firing every other tick, 20 pixels a tick for 30 ticks,
+    /// doing 5 mass and 10 energy damage.
+    fn blaster() -> WeaponRecord {
+        WeaponRecord {
+            reload: 2,
+            count: 30,
+            speed: 2000,
+            mass_dmg: 5,
+            energy_dmg: 10,
+            ..weapon(128)
+        }
+    }
+
+    /// Ship `id` armed with one of `weapon`, 30 pixels across, breaking
+    /// up for 2 ticks before `bööm` 133 destroys it.
+    fn armed_hull(id: i16, weapon: i16) -> HullRecord {
+        HullRecord {
+            weapons: vec![StockWeapon {
+                weapon: WeaponId(weapon),
+                count: 1,
+                ammo: 0,
+            }],
+            death_delay: 2,
+            explode2: 5,
+            size: Some(30),
+            ..hull(id)
+        }
+    }
+
+    /// [`trafficked`] with the player (ship 128) and its traffic (ship
+    /// 129, a trader: 30 shield, 45 armour) each carrying a blaster.
+    fn armed() -> FakePilotCatalog {
+        FakePilotCatalog {
+            weapons: vec![blaster()],
+            hulls: vec![armed_hull(128, 128), armed_hull(129, 128)],
+            ..trafficked(130, 1, 1)
+        }
+    }
+
+    /// `catalog`'s session with its one NPC placed 100 pixels above the
+    /// player (at the centre, facing up), facing `heading`.
+    fn facing_an_npc(catalog: &FakePilotCatalog, heading: u32) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, 750, 650, heading]));
+        assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
+        session
+    }
+
+    const FIRE: Trigger = Trigger {
+        primary: true,
+        secondary: None,
+    };
+
+    /// The fight's events about NPC 0, other than its firing.
+    fn about_the_npc(events: &[CombatEvent]) -> Vec<CombatEvent> {
+        events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    CombatEvent::Disabled { .. }
+                        | CombatEvent::BreakingUp { .. }
+                        | CombatEvent::Destroyed { .. }
+                )
+            })
+            .copied()
+            .collect()
+    }
+
+    #[test]
+    fn the_players_trigger_fires_its_stock_weapon_and_disables_then_destroys_an_npc() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let mut gauges = Vec::new();
+        let mut events = Vec::new();
+        for _ in 0..60 {
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+            events.extend(session.take_combat_events());
+            let Some(npc) = session.npcs().first() else {
+                break;
+            };
+            gauges.push((
+                npc.reserves.shield.now,
+                npc.reserves.armor.now,
+                npc.condition,
+            ));
+            if npc.condition == Condition::Disabled {
+                break;
+            }
+        }
+        let last = *gauges.last().expect("ticks");
+        assert_eq!(last, (-3.0, 10.0, Condition::Disabled), "{gauges:?}");
+        let first_armour = gauges.iter().position(|g| g.1 < 45.0).expect("hit");
+        assert!(gauges[first_armour].0 <= 0.0, "shields first: {gauges:?}");
+        assert!(
+            gauges[..first_armour]
+                .iter()
+                .any(|g| g.0 > 0.0 && g.0 < 30.0)
+        );
+        assert_eq!(
+            about_the_npc(&events),
+            [CombatEvent::Disabled {
+                ship: ShipRef::Npc(NpcId(0))
+            }]
+        );
+        assert!(events.contains(&CombatEvent::Fired {
+            ship: ShipRef::Player,
+            weapon: WeaponId(128)
+        }));
+        assert_eq!(session.npcs().len(), 1, "disabled, and still alive");
+        for _ in 0..60 {
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+            events.extend(session.take_combat_events());
+        }
+        let ending: Vec<_> = about_the_npc(&events);
+        assert!(
+            matches!(
+                ending[..],
+                [
+                    CombatEvent::Disabled { .. },
+                    CombatEvent::BreakingUp { .. },
+                    CombatEvent::Destroyed {
+                        ship: ShipRef::Npc(NpcId(0)),
+                        ship_type: ShipId(129),
+                        explosion: Some(Explosion { .. }),
+                        huge: false,
+                        ..
+                    }
+                ]
+            ),
+            "{ending:?}"
+        );
+        assert_eq!(session.npcs(), [], "gone once destroyed");
+        assert_eq!(session.player_condition(), Condition::Intact);
+    }
+
+    /// Every NPC idles and holds its trigger.
+    #[derive(Debug)]
+    struct Firing;
+
+    impl Behaviour for Firing {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            FIRE
+        }
+    }
+
+    #[test]
+    fn an_npcs_trigger_fires_at_the_player_through_the_same_fight() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let mut events = Vec::new();
+        for _ in 0..12 {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+            events.extend(session.take_combat_events());
+        }
+        assert!(events.contains(&CombatEvent::Fired {
+            ship: ShipRef::Npc(NpcId(0)),
+            weapon: WeaponId(128)
+        }));
+        assert!(
+            session.reserves().shield.now < 30.0,
+            "{:?}",
+            session.reserves()
+        );
+        assert!(
+            session
+                .shots()
+                .iter()
+                .all(|shot| shot.firer == ShipRef::Npc(NpcId(0))),
+            "the player held no trigger"
+        );
+    }
+
+    #[test]
+    fn the_players_ammunition_outfits_and_fuel_pay_for_its_shots() {
+        let rocket = WeaponRecord {
+            ammo_type: 10,
+            ..blaster()
+        };
+        let mut catalog = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                id: WeaponId(138),
+                ..rocket
+            }],
+            hulls: vec![armed_hull(128, 138)],
+            outfits: vec![outfit(300, &[(MOD_AMMO, 138)])],
+            defaults: vec![(ShipId(128), vec![(OutfitId(300), 2)])],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        session.hold_trigger(FIRE);
+        for _ in 0..8 {
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+        }
+        assert_eq!(session.pilot().outfits().count(), 0, "both rockets fired");
+        assert_eq!(session.shots().len(), 2);
+        let fuelled = WeaponRecord {
+            ammo_type: -1100,
+            ..blaster()
+        };
+        catalog.weapons = vec![fuelled];
+        catalog.hulls = vec![armed_hull(128, 128)];
+        let mut session = Session::start(&catalog).expect("starts");
+        session.hold_trigger(FIRE);
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(session.reserves().fuel.now, 290.0, "10 units a shot");
+    }
+
+    #[test]
+    fn the_fight_stands_still_while_landed_or_jumping() {
+        let mut catalog = armed();
+        catalog.traffic.push((SystemId(131), catalog.traffic[0].1));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.hold_trigger(FIRE);
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(session.shots().len(), 1);
+        session.land().expect("lands on planet 128");
+        assert_eq!(session.shots(), [], "gone on landing");
+        session.take_combat_events();
+        let mut chance = Draws::of(&[]);
+        session.tick_combat(&NovaDisable, &mut chance);
+        assert_eq!(session.take_combat_events(), [], "landed");
+        assert_eq!(session.shots(), []);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.hold_trigger(FIRE);
+        session.tick_combat(&NovaDisable, &mut chance);
+        assert_eq!(session.shots().len(), 1);
+        session.begin_jump().expect("jumps");
+        session.take_combat_events();
+        session.tick_combat(&NovaDisable, &mut chance);
+        assert_eq!(session.take_combat_events(), [], "jumping");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.shots(), [], "gone on arriving");
+        assert!(chance.asked.is_empty());
+    }
+
+    /// Disables every ship.
+    #[derive(Debug)]
+    struct Disabling;
+
+    impl DisableRule for Disabling {
+        fn disabled(&self, _armor: Gauge, _hull: &HullSpec) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_disabled_player_drifts_ignoring_the_controls() {
+        let catalog = armed();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.tick(Controls {
+            thrust: true,
+            ..Controls::default()
+        });
+        session.take_sounds();
+        let moving = *session.player();
+        session.tick_combat(&Disabling, &mut NeverFires);
+        assert_eq!(session.player_condition(), Condition::Disabled);
+        session.tick(Controls {
+            thrust: true,
+            turn: Turn::Left,
+            reverse: false,
+        });
+        let drifted = *session.player();
+        assert_eq!(drifted.velocity, moving.velocity, "no thrust");
+        assert_eq!(drifted.heading, moving.heading, "no turn");
+        assert_eq!(drifted.position, moving.position + moving.velocity);
+        assert_eq!(session.take_sounds(), [SimSound::ThrustStopped]);
+        session.hold_trigger(FIRE);
+        session.tick_combat(&Disabling, &mut NeverFires);
+        assert_eq!(session.shots(), [], "nor fires");
+    }
+
+    #[test]
+    fn a_ship_that_is_not_intact_can_neither_land_nor_jump() {
+        let catalog = armed();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.tick_combat(&Disabling, &mut NeverFires);
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::Disabled),
+            "over planet 128"
+        );
+        assert_eq!(session.landed(), None);
+        assert!(!session.take_save_due(), "nothing to save");
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.take_sounds();
+        session.tick_combat(&Disabling, &mut NeverFires);
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::Disabled));
+        assert_eq!(session.jumping(), None);
+        assert_eq!(session.take_sounds(), [], "a refusal emits nothing");
+    }
+
+    /// An NPC one shot of whose disables, breaks up and destroys the
+    /// player at once: no shield, armour gone.
+    fn deadly() -> FakePilotCatalog {
+        let mut catalog = armed();
+        catalog.weapons = vec![WeaponRecord {
+            mass_dmg: 100,
+            flags: 0x0020,
+            ..blaster()
+        }];
+        catalog
+    }
+
+    #[test]
+    fn a_destroyed_player_stays_destroyed_and_stops_moving() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        let mut events = Vec::new();
+        for _ in 0..20 {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+            events.extend(session.take_combat_events());
+        }
+        assert_eq!(session.player_condition(), Condition::Destroyed);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            CombatEvent::Destroyed {
+                ship: ShipRef::Player,
+                ship_type: ShipId(128),
+                ..
+            }
+        )));
+        let at = *session.player();
+        session.tick(Controls {
+            thrust: true,
+            ..Controls::default()
+        });
+        assert_eq!(session.player().position, at.position);
+        assert_eq!(session.player().velocity, Vec2::ZERO);
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn diagnostics_are_drained_once() {
+        let mut catalog = armed();
+        catalog.weapons[0].flags2 = 0x8000;
+        let mut session = Session::start(&catalog).expect("starts");
+        session.hold_trigger(FIRE);
+        for _ in 0..5 {
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+        }
+        assert_eq!(
+            session.take_diagnostics(),
+            [SimDiagnostic::UnimplementedWeaponFlag {
+                weapon: WeaponId(128),
+                field: crate::combat::flags::FlagField::Flags2,
+                bit: 0x8000
+            }]
+        );
+        assert_eq!(session.take_diagnostics(), []);
+    }
+
+    #[test]
+    fn shields_regenerate_in_the_fight_at_the_ships_rate() {
+        let mut catalog = armed();
+        catalog.ships = vec![(
+            ShipId(128),
+            Ok(ShipFields {
+                shield_rech: 1000,
+                ..FAST
+            }),
+        )];
+        let mut session = facing_an_npc(&catalog, 180);
+        for _ in 0..12 {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+        }
+        let hurt = session.reserves().shield.now;
+        assert!(hurt < 30.0);
+        session.traffic.remove(NpcId(0));
+        session.combat.clear();
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(session.reserves().shield.now, hurt + 1.0);
     }
 }

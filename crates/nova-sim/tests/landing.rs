@@ -4,15 +4,26 @@
 
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    CharacterStart, CommodityStrings, Controls, DisasterRecord, JunkRecord, LandingRefusal,
-    LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId, StarSystem,
-    StartDate, StartError, StellarId, SystemId, Vec2,
+    CharacterStart, CombatCatalog, CommodityStrings, Controls, DisasterRecord, HullRecord,
+    JunkRecord, LandingRefusal, LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session,
+    ShipFields, ShipId, StarSystem, StartDate, StartError, StellarId, SystemId, Vec2, WeaponRecord,
 };
 
 /// One `chär` flying an average ship that turns 6° a tick from system
 /// 130, which holds `sites`.
 struct Pilot {
     sites: Vec<LandingSite>,
+}
+
+/// Unarmed.
+impl CombatCatalog for Pilot {
+    fn weapons(&self) -> Vec<WeaponRecord> {
+        Vec::new()
+    }
+
+    fn hulls(&self) -> Vec<HullRecord> {
+        Vec::new()
+    }
 }
 
 impl PilotCatalog for Pilot {

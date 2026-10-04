@@ -59,6 +59,10 @@ pub enum JumpRefusal {
     /// [`Session`](crate::Session) gives this before [`check_jump`] is
     /// asked.
     Landed,
+    /// The ship is disabled, breaking up or destroyed. The
+    /// [`Session`](crate::Session) gives this before [`check_jump`] is
+    /// asked.
+    Disabled,
     /// No destination has been chosen, or it has been reached.
     NoDestination,
     /// The ship is nearer the system's centre than its jump distance.

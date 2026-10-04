@@ -5,17 +5,20 @@
 //!   resolved when the system is entered.
 //! - [`spawn`]: the rolls: the initial population, the arrivals over time
 //!   and the fleets, and where each ship starts.
-//! - [`npc`]: an [`Npc`]: its ship, government, AI type, stats, fuel,
-//!   flight state and goal.
+//! - [`npc`]: an [`Npc`]: its ship, government, AI type, stats,
+//!   reserves, flight state and goal, and its condition, armament and fire
+//!   command.
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
 //!
 //! [`Traffic`] holds a system's NPCs. Entering a system
 //! ([`Traffic::enter`]) replaces them with its initial population. Each
 //! tick ([`Traffic::tick`]), in order: the arrival roll; the decisions due
-//! on the AI timer, never for a ship still jumping in; the autopilot and
-//! a flight step for every NPC; and the removal of those that landed or
-//! jumped out.
+//! on the AI timer (each NPC's goal and the fire command it holds), never
+//! for a ship still jumping in or one that is not intact; the autopilot
+//! and a flight step for every NPC; and the removal of those that landed
+//! or jumped out. The fight ([`combat`](crate::combat)) damages them, and
+//! its session takes out each one destroyed ([`Traffic::remove`]).
 //!
 //! The AI timer is the original's (`_AIDispatch`): an NPC decides on the
 //! ticks where `tick % interval == id % interval`, so decisions are
@@ -31,6 +34,8 @@ pub mod table;
 use crate::ai::{Behaviour, Goal, Surroundings};
 use crate::catalog::{LandingSite, ShipId};
 use crate::chance::Chance;
+use crate::combat::armament::Trigger;
+use crate::combat::hull::Condition;
 use crate::flight::ShipState;
 use autopilot::Outcome;
 use npc::{Mode, Npc, NpcId};
@@ -116,14 +121,20 @@ impl Traffic {
             sites,
             npcs: &self.npcs,
         };
-        let mut goals = Vec::with_capacity(self.npcs.len());
+        let mut decisions = Vec::with_capacity(self.npcs.len());
         for npc in &self.npcs {
-            let due = npc.mode == Mode::Flying && decision_due(self.ticks, npc.id, self.interval);
-            goals.push(due.then(|| behaviour.decide(npc, &around, &mut &mut *chance)));
+            let due = npc.mode == Mode::Flying
+                && npc.condition == Condition::Intact
+                && decision_due(self.ticks, npc.id, self.interval);
+            decisions.push(due.then(|| {
+                let goal = behaviour.decide(npc, &around, &mut &mut *chance);
+                (goal, behaviour.trigger(npc, &around))
+            }));
         }
-        for (npc, goal) in self.npcs.iter_mut().zip(goals) {
-            if let Some(goal) = goal {
+        for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
+            if let Some((goal, trigger)) = decision {
                 npc.goal = goal;
+                npc.trigger = trigger;
             }
         }
         let states: Vec<(NpcId, ShipState)> =
@@ -160,6 +171,16 @@ impl Traffic {
         &self.npcs
     }
 
+    /// The NPCs, in the order they appeared, to fight with.
+    pub(crate) fn npcs_mut(&mut self) -> &mut [Npc] {
+        &mut self.npcs
+    }
+
+    /// Takes NPC `id` out of the system, if it is there.
+    pub fn remove(&mut self, id: NpcId) {
+        self.npcs.retain(|npc| npc.id != id);
+    }
+
     /// The NPCs that left on the last tick, and how.
     #[must_use]
     pub fn departed(&self) -> &[(NpcId, Outcome)] {
@@ -188,7 +209,7 @@ impl Traffic {
                 ai_type: ship.ai_type,
                 leader: ship.lead.map(|lead| NpcId(first + lead as u32)),
                 stats: kind.stats,
-                fuel: kind.stats.fuel,
+                reserves: kind.stats.full(),
                 state: ship.state,
                 mode: if ship.jumping_in {
                     Mode::JumpingIn {
@@ -198,6 +219,11 @@ impl Traffic {
                     Mode::Flying
                 },
                 goal: Goal::Idle,
+                condition: Condition::Intact,
+                hull: kind.hull,
+                armament: kind.armament.clone(),
+                rounds: kind.rounds.clone(),
+                trigger: Trigger::default(),
             });
         }
     }
@@ -210,17 +236,22 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::catalog::WeaponId;
     use crate::catalog::{DudeId, EscortRecord, FleetId, FleetRecord, GovtId, StellarId};
+    use crate::combat::armament::Armament;
+    use crate::combat::hull::HullSpec;
+    use crate::combat::weapon::WeaponSpec;
     use crate::geometry::Vec2;
     use crate::stats::ShipStats;
-    use crate::testkit::{Draws, FAST, planet};
+    use crate::testkit::{Draws, FAST, planet, weapon};
     use crate::traffic::npc::AiType;
     use crate::traffic::table::{ShipKind, SpawnDude};
 
-    /// Decides `goal` for everyone, recording who decided.
+    /// Decides `goal` and `trigger` for everyone, recording who decided.
     #[derive(Debug)]
     struct Recording {
         goal: Goal,
+        trigger: Trigger,
         decided: RefCell<Vec<NpcId>>,
     }
 
@@ -228,6 +259,7 @@ mod tests {
         fn deciding(goal: Goal) -> Self {
             Self {
                 goal,
+                trigger: Trigger::default(),
                 decided: RefCell::default(),
             }
         }
@@ -242,6 +274,10 @@ mod tests {
             assert!(around.npcs.iter().any(|other| other.id == npc.id));
             self.decided.borrow_mut().push(npc.id);
             self.goal
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            self.trigger
         }
     }
 
@@ -274,6 +310,12 @@ mod tests {
                 ShipKind {
                     stats: ShipStats::new(FAST, &[]),
                     inherent_ai: 3,
+                    hull: HullSpec {
+                        hit_radius: 9.0,
+                        ..HullSpec::default()
+                    },
+                    armament: Armament::new([(WeaponSpec::new(&weapon(128)), 2)]),
+                    rounds: BTreeMap::from([(WeaponId(138), 7)]),
                 },
             )]),
             ..SpawnTable::default()
@@ -320,13 +362,18 @@ mod tests {
             npcs.iter().map(|npc| npc.id).collect::<Vec<_>>(),
             [NpcId(0), NpcId(1)]
         );
-        let first = npcs[0];
+        let first = npcs[0].clone();
         assert_eq!(first.ship, ShipId(200));
         assert_eq!(first.govt, Some(GovtId(130)));
         assert_eq!(first.ai_type, AiType::WimpyTrader);
         assert_eq!(first.leader, None);
         assert_eq!(first.stats, ShipStats::new(FAST, &[]));
-        assert_eq!(first.fuel, first.stats.fuel);
+        assert_eq!(first.reserves, first.stats.full());
+        assert_eq!(first.condition, Condition::Intact);
+        assert_eq!(first.hull.hit_radius, 9.0);
+        assert_eq!(first.armament.mounts().len(), 1);
+        assert_eq!(first.rounds, BTreeMap::from([(WeaponId(138), 7)]));
+        assert_eq!(first.trigger, Trigger::default());
         assert_eq!(first.state.position, Vec2::new(0.0, 0.0));
         assert_eq!(first.mode, Mode::Flying);
         assert_eq!(first.goal, Goal::Idle);
@@ -485,7 +532,7 @@ mod tests {
         let lander = Recording::deciding(Goal::Land(StellarId(140)));
         let sites = [planet(140, 0.0, -300.0)];
         traffic.tick(&lander, &sites, &mut Draws::of(&[]));
-        let npc = traffic.npcs()[0];
+        let npc = &traffic.npcs()[0];
         assert_eq!(npc.goal, Goal::Land(StellarId(140)));
         assert_ne!(npc.state, ShipState::default(), "it moved off at once");
     }
@@ -509,6 +556,67 @@ mod tests {
         );
         traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
         assert_eq!(traffic.departed(), [], "only the last tick's");
+    }
+
+    #[test]
+    fn the_fire_command_decided_is_held_on_the_ai_timer() {
+        let mut traffic = populated(2, 2);
+        let behaviour = Recording {
+            trigger: Trigger {
+                primary: true,
+                secondary: Some(WeaponId(138)),
+            },
+            ..Recording::deciding(Goal::Idle)
+        };
+        traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
+        assert_eq!(behaviour.take(), [NpcId(0)]);
+        assert_eq!(traffic.npcs()[0].trigger, behaviour.trigger);
+        assert_eq!(
+            traffic.npcs()[1].trigger,
+            Trigger::default(),
+            "not its turn"
+        );
+        traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[1].trigger, behaviour.trigger);
+    }
+
+    #[test]
+    fn an_npc_not_intact_decides_nothing_drifts_and_never_lands_or_jumps() {
+        // NPC 0 over planet 140 bent on landing; NPC 1 out at its jump
+        // distance bent on jumping; both drifting right.
+        let mut traffic = populated(2, 1);
+        traffic.npcs[1].state.position = Vec2::new(0.0, -1000.0);
+        traffic.npcs[0].goal = Goal::Land(StellarId(140));
+        traffic.npcs[1].goal = Goal::JumpOut;
+        for npc in traffic.npcs_mut() {
+            npc.state.velocity = Vec2::new(0.25, 0.0);
+            npc.condition = Condition::Disabled;
+        }
+        let behaviour = Recording::deciding(Goal::Idle);
+        let sites = [planet(140, 0.0, 0.0)];
+        for _ in 0..4 {
+            traffic.tick(&behaviour, &sites, &mut Draws::of(&[]));
+        }
+        assert_eq!(behaviour.take(), [], "no decisions");
+        assert_eq!(traffic.departed(), []);
+        assert_eq!(traffic.npcs().len(), 2);
+        assert_eq!(traffic.npcs()[0].state.position, Vec2::new(1.0, 0.0));
+        assert_eq!(traffic.npcs()[1].goal, Goal::JumpOut);
+        traffic.npcs_mut()[0].condition = Condition::Dying { ticks_left: 2 };
+        traffic.tick(&behaviour, &sites, &mut Draws::of(&[]));
+        assert_eq!(behaviour.take(), []);
+    }
+
+    #[test]
+    fn an_npc_is_taken_out_by_its_number() {
+        let mut traffic = populated(3, 1);
+        traffic.remove(NpcId(1));
+        assert_eq!(
+            traffic.npcs().iter().map(|npc| npc.id).collect::<Vec<_>>(),
+            [NpcId(0), NpcId(2)]
+        );
+        traffic.remove(NpcId(9));
+        assert_eq!(traffic.npcs().len(), 2, "not there");
     }
 
     #[test]
@@ -540,7 +648,7 @@ mod tests {
         for _ in 0..60 {
             traffic.tick(&crate::ai::Peaceful, &sites, &mut Draws::of(&[]));
         }
-        let escort = traffic.npcs()[1];
+        let escort = &traffic.npcs()[1];
         assert!(escort.state.position.x < 450.0, "{:?}", escort.state);
     }
 }

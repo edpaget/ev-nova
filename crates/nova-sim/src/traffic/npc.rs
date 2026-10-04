@@ -1,9 +1,14 @@
-//! An NPC ship: what it is, how it performs, where it is and what it is
-//! doing.
+//! An NPC ship: what it is, how it performs, where it is, what it is
+//! doing, and what it fights with.
+
+use std::collections::BTreeMap;
 
 use crate::ai::Goal;
-use crate::catalog::{GovtId, ShipId};
+use crate::catalog::{GovtId, ShipId, WeaponId};
+use crate::combat::armament::{Armament, Trigger};
+use crate::combat::hull::{Condition, HullSpec};
 use crate::flight::ShipState;
+use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 
 /// An NPC's number in its system, unique while the player stays there:
@@ -65,7 +70,7 @@ pub enum Mode {
 }
 
 /// An NPC ship in the player's system.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Npc {
     /// Its number.
     pub id: NpcId,
@@ -79,14 +84,32 @@ pub struct Npc {
     pub leader: Option<NpcId>,
     /// How it performs, its default items included.
     pub stats: ShipStats,
-    /// Its fuel; 100 is one jump.
-    pub fuel: f32,
+    /// Its shield, armour and fuel (100 is one jump).
+    pub reserves: Reserves,
     /// Where it is and how it moves.
     pub state: ShipState,
     /// Whether it is still jumping in.
     pub mode: Mode,
     /// What it is doing.
     pub goal: Goal,
+    /// How it is holding up.
+    pub condition: Condition,
+    /// Its ship type's hull.
+    pub hull: HullSpec,
+    /// Its weapons.
+    pub armament: Armament,
+    /// The rounds of each ammunition it holds.
+    pub rounds: BTreeMap<WeaponId, u32>,
+    /// The fire command it holds, as it last decided.
+    pub trigger: Trigger,
+}
+
+impl Npc {
+    /// Its fleet: the lead it escorts, or itself.
+    #[must_use]
+    pub fn fleet(&self) -> NpcId {
+        self.leader.unwrap_or(self.id)
+    }
 }
 
 #[cfg(test)]
@@ -108,6 +131,17 @@ mod tests {
             assert_eq!(AiType::from_raw(raw), AiType::FALLBACK, "{raw}");
         }
         assert_eq!(AiType::FALLBACK, AiType::WimpyTrader);
+    }
+
+    #[test]
+    fn an_npcs_fleet_is_its_lead_or_itself() {
+        let lead = crate::testkit::npc(3, ShipStats::default());
+        assert_eq!(lead.fleet(), NpcId(3));
+        let escort = Npc {
+            leader: Some(NpcId(3)),
+            ..crate::testkit::npc(5, ShipStats::default())
+        };
+        assert_eq!(escort.fleet(), NpcId(3));
     }
 
     #[test]

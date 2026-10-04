@@ -397,6 +397,30 @@ mod tests {
     }
 
     #[test]
+    fn a_pilot_hurt_in_a_fight_survives_a_round_trip() {
+        // A shield driven below none, and worn armour: all a fight leaves
+        // on a pilot that a save keeps.
+        let pilot = Pilot {
+            reserves: Reserves {
+                shield: Gauge {
+                    now: -3.0,
+                    max: 30.0,
+                },
+                armor: Gauge {
+                    now: 6.5,
+                    max: 45.0,
+                },
+                fuel: Gauge {
+                    now: 90.0,
+                    max: 300.0,
+                },
+            },
+            ..seasoned()
+        };
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
+    #[test]
     fn a_save_is_pretty_json_at_the_current_version() {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");

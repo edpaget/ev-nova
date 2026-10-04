@@ -15,6 +15,11 @@
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
+//! - [`combat`]: ships fighting: firing their [`Armament`] on a
+//!   [`Trigger`], shots and beams flying and hitting, damage to shields
+//!   then armour, the [`DisableRule`] port with Nova's [`NovaDisable`], and
+//!   destruction, reported as [`CombatEvent`]s, with each weapon feature
+//!   not done yet reported once as a [`SimDiagnostic`].
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
 //! - [`data`]: the catalog ports' adapters over `nova_data`'s `GameData`.
@@ -56,7 +61,8 @@
 //!   each is saved under, and the [`PilotKeeper`] that saves, lists and
 //!   opens them.
 //! - [`session`]: a flight [`Session`], a pilot's ship flying
-//!   from its starting system, landing, and jumping along a plotted course.
+//!   from its starting system, landing, jumping along a plotted course, and
+//!   fighting.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -78,6 +84,7 @@ pub mod ai;
 pub mod catalog;
 pub mod chance;
 pub mod clock;
+pub mod combat;
 pub mod data;
 pub mod date;
 #[cfg(any(test, feature = "fixture"))]
@@ -114,6 +121,10 @@ pub use catalog::{
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
+pub use combat::armament::{Armament, Trigger};
+pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
+pub use combat::report::SimDiagnostic;
+pub use combat::{CombatEvent, ShipRef};
 pub use date::GameDate;
 pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};

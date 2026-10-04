@@ -65,6 +65,10 @@ pub enum LandingRefusal {
     /// [`Session`](crate::Session) gives this before [`check_landing`] is
     /// asked.
     Jumping,
+    /// The ship is disabled, breaking up or destroyed. The
+    /// [`Session`](crate::Session) gives this before [`check_landing`] is
+    /// asked.
+    Disabled,
     /// The system has no stellars.
     NoStellars,
     /// The ship is over no stellar.

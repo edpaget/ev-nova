@@ -336,6 +336,7 @@ mod tests {
         ShipKind {
             stats: ShipStats::new(fields, &[]),
             inherent_ai,
+            ..ShipKind::default()
         }
     }
 

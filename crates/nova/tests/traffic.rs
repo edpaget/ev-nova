@@ -447,7 +447,7 @@ fn entering_flight_shows_the_trader_with_its_sprite_and_a_radar_blip() {
     let first = harness.frame();
     let session = harness.session();
     assert_eq!(session.npcs().len(), 1);
-    let trader = session.npcs()[0];
+    let trader = session.npcs()[0].clone();
     assert_eq!(trader.ship, ShipId(129));
     assert_eq!(trader.state.position, Vec2::new(100.0, -100.0));
     // The player is at the centre of the screen, (512, 384).
@@ -468,7 +468,7 @@ fn the_trader_flies_to_the_planet_lands_and_is_gone() {
     let mut harness = Harness::flying(None);
     harness.frame();
     harness.run(1);
-    let trader = harness.session().npcs()[0];
+    let trader = harness.session().npcs()[0].clone();
     assert_eq!(trader.goal, Goal::Land(StellarId(128)));
     let last = harness.run(20);
     assert_eq!(harness.session().npcs(), [], "landed and gone");
@@ -479,7 +479,7 @@ fn the_trader_flies_to_the_planet_lands_and_is_gone() {
 fn the_routers_behaviour_decides_for_a_flight_entered_with_f() {
     let mut harness = Harness::flying(Some(Rc::new(Still)));
     harness.run(3);
-    let trader = harness.session().npcs()[0];
+    let trader = harness.session().npcs()[0].clone();
     assert_eq!(trader.goal, Goal::Idle);
     assert_eq!(trader.state.position, Vec2::new(100.0, -100.0));
 }
@@ -488,7 +488,7 @@ fn the_routers_behaviour_decides_for_a_flight_entered_with_f() {
 fn the_routers_behaviour_decides_for_a_new_pilots_flight() {
     let mut harness = Harness::new_pilot(Rc::new(Still));
     harness.run(3);
-    let trader = harness.session().npcs()[0];
+    let trader = harness.session().npcs()[0].clone();
     assert_eq!(trader.goal, Goal::Idle);
     assert_eq!(trader.state.position, Vec2::new(100.0, -100.0));
 }

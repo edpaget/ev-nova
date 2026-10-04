@@ -13,6 +13,9 @@
 //!   matching its lead's velocity there.
 //! - [`Goal::Idle`], or a goal it cannot fly (a stellar or lead that is
 //!   not there): it brakes to a stop.
+//! - A ship that is not [`Condition::Intact`] (disabled, breaking up or
+//!   destroyed) drifts: it flies on with no controls, and never lands or
+//!   jumps.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
 //!   [`glide_speed`] a tick, with no steering, for
 //!   [`JUMP_IN_TICKS`](crate::traffic::spawn::JUMP_IN_TICKS); then it flies
@@ -20,6 +23,7 @@
 
 use crate::ai::Goal;
 use crate::catalog::{LandingSite, StellarId};
+use crate::combat::hull::Condition;
 use crate::flight::{self, AT_REST_SPEED, Controls, ShipState, Turn, heading_of, shortest_turn};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
@@ -46,6 +50,10 @@ pub enum Outcome {
 /// Flies `npc` one tick towards its goal, among `sites`, its lead (if it
 /// follows one) at `lead`.
 pub fn fly(npc: &mut Npc, sites: &[LandingSite], lead: Option<&ShipState>) -> Outcome {
+    if npc.condition != Condition::Intact {
+        flight::step(&mut npc.state, &npc.stats.handling, Controls::default());
+        return Outcome::Flying;
+    }
     if let Mode::JumpingIn { ticks_left } = npc.mode {
         glide(npc, ticks_left);
         return Outcome::Flying;
@@ -205,11 +213,10 @@ fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Cont
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::ShipId;
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, planet};
-    use crate::traffic::npc::{AiType, NpcId};
+    use crate::traffic::npc::NpcId;
     use crate::traffic::spawn::{hyperspace_entry, jump_in_distance};
 
     /// An average ship: 3 pixels a tick at most, 0.1 more a tick, 1° a
@@ -222,18 +229,10 @@ mod tests {
     };
 
     fn npc(fields: ShipFields, goal: Goal, start: ShipState) -> Npc {
-        let stats = ShipStats::new(fields, &[]);
         Npc {
-            id: NpcId(1),
-            ship: ShipId(128),
-            govt: None,
-            ai_type: AiType::WimpyTrader,
-            leader: None,
-            stats,
-            fuel: stats.fuel,
             state: start,
-            mode: Mode::Flying,
             goal,
+            ..crate::testkit::npc(1, ShipStats::new(fields, &[]))
         }
     }
 
@@ -327,6 +326,39 @@ mod tests {
             at(61.0, 0.0, 0.0, 0.0, 0.0),
         );
         assert_eq!(fly(&mut far, &sites, None), Outcome::Flying, "too far");
+    }
+
+    #[test]
+    fn a_ship_not_intact_drifts_and_never_lands_or_jumps() {
+        let sites = [planet(140, 0.0, 0.0)];
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying { ticks_left: 4 },
+            Condition::Destroyed,
+        ] {
+            let mut lander = npc(
+                AVERAGE,
+                Goal::Land(StellarId(140)),
+                at(0.0, 0.0, 0.0, 0.0, 0.0),
+            );
+            lander.condition = condition;
+            assert_eq!(
+                fly(&mut lander, &sites, None),
+                Outcome::Flying,
+                "{condition:?}"
+            );
+            assert_eq!(
+                lander.state,
+                at(0.0, 0.0, 0.0, 0.0, 0.0),
+                "at rest, it stays"
+            );
+            let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
+            jumper.condition = condition;
+            jumper.mode = Mode::JumpingIn { ticks_left: 3 };
+            assert_eq!(fly(&mut jumper, &sites, None), Outcome::Flying);
+            assert_eq!(jumper.state, at(1.0, -2002.0, 1.0, -2.0, 90.0), "drifting");
+            assert_eq!(jumper.mode, Mode::JumpingIn { ticks_left: 3 }, "no glide");
+        }
     }
 
     #[test]
