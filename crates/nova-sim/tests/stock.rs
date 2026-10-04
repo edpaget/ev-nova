@@ -3,7 +3,8 @@
 //! Kane's exchange trades at its levels, and its outfitter sells what its
 //! tech levels allow; Viking's shipyard sells what its tech levels and the
 //! ships' `BuyRandom` allow, and trades the Shuttle in. Port Kane sells
-//! fuel and uninhabited Reflex-ion sells none. Skips, passing,
+//! fuel and uninhabited Reflex-ion sells none. The date reads with the
+//! first `chär`'s affixes. Skips, passing,
 //! when `NOVA_DATA` is unset.
 
 mod common;
@@ -51,6 +52,23 @@ fn a_new_pilot_starts_as_the_first_chär_says() {
     );
     assert_eq!(pilot.stellar(), None);
     assert_eq!(pilot.explored().collect::<Vec<_>>(), [pilot.system()]);
+}
+
+/// A stock session's date reads "June 23, 1177 NC": the first `chär`'s
+/// empty `DatePrefix` and its `DateSuffix`, " NC".
+#[test]
+fn a_stock_session_shows_its_date_with_the_chärs_affixes() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let affixes = data.date_affixes();
+    assert_eq!(
+        (affixes.prefix.as_str(), affixes.suffix.as_str()),
+        ("", " NC")
+    );
+    let session = Session::start(&data).expect("the stock first chär starts");
+    assert_eq!(session.date_text(), "June 23, 1177 NC");
 }
 
 #[test]

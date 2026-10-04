@@ -5,9 +5,9 @@
 use std::time::Duration;
 
 use nova_sim::{
-    CharacterStart, CommodityStrings, Controls, DisasterRecord, FixedStep, JunkRecord, LandingSite,
-    OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId, ShipState, StarSystem,
-    StartDate, StartError, SystemId, Turn,
+    CharacterStart, CommodityStrings, Controls, DateAffixes, DisasterRecord, FixedStep, JunkRecord,
+    LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId, ShipState,
+    StarSystem, StartDate, StartError, SystemId, Turn,
 };
 
 /// One `chär` flying an agile ship from system 130.
@@ -66,6 +66,10 @@ impl PilotCatalog for Pilot {
 
     fn disasters(&self) -> Vec<DisasterRecord> {
         Vec::new()
+    }
+
+    fn date_affixes(&self) -> DateAffixes {
+        DateAffixes::default()
     }
 }
 

@@ -13,9 +13,9 @@ use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 
 use crate::catalog::{
-    CharacterStart, CommodityStrings, DisasterId, DisasterRecord, JunkRecord, LandingSite,
-    OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, SystemId,
+    CharacterStart, CommodityStrings, DateAffixes, DisasterId, DisasterRecord, JunkRecord,
+    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem,
+    StartDate, StartError, SystemId,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -204,6 +204,16 @@ impl PilotCatalog for GameData {
                 })
             })
             .collect()
+    }
+
+    fn date_affixes(&self) -> DateAffixes {
+        match self.records::<Character>().next() {
+            Some((_, Ok(character))) => DateAffixes {
+                prefix: character.record.date_prefix.as_str().to_owned(),
+                suffix: character.record.date_suffix.as_str().to_owned(),
+            },
+            _ => DateAffixes::default(),
+        }
     }
 
     fn disasters(&self) -> Vec<DisasterRecord> {
@@ -420,6 +430,40 @@ mod tests {
                 year: 1177
             })
         );
+    }
+
+    /// A `chär` whose `DatePrefix` (0x13A) and `DateSuffix` (0x14A) are
+    /// `prefix` and `suffix`.
+    fn dated(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
+        let mut bytes = character(128, [130, -1, -1, -1]);
+        bytes[0x13A..0x13A + prefix.len()].copy_from_slice(prefix);
+        bytes[0x14A..0x14A + suffix.len()].copy_from_slice(suffix);
+        bytes
+    }
+
+    #[test]
+    fn the_date_affixes_are_the_first_chärs_prefix_and_suffix() {
+        let data = store(&[
+            (Character::TYPE, 129, dated(b"Era \0", b" AD\0")),
+            (Character::TYPE, 128, dated(b"Year \0", b" NC\0")),
+        ]);
+        assert_eq!(
+            data.date_affixes(),
+            DateAffixes {
+                prefix: "Year ".to_owned(),
+                suffix: " NC".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn no_chär_or_an_undecodable_one_has_no_date_affixes() {
+        assert_eq!(store(&[]).date_affixes(), DateAffixes::default());
+        let data = store(&[
+            (Character::TYPE, 128, short(dated(b"Year \0", b" NC\0"))),
+            (Character::TYPE, 129, dated(b"Era \0", b" AD\0")),
+        ]);
+        assert_eq!(data.date_affixes(), DateAffixes::default());
     }
 
     #[test]

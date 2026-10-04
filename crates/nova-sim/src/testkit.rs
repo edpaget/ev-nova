@@ -3,9 +3,9 @@
 use std::cell::RefCell;
 
 use crate::catalog::{
-    CharacterStart, CommodityStrings, DisasterRecord, JunkRecord, LandingSite, OutfitId,
-    OutfitRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError, StellarId,
-    SystemId,
+    CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, JunkRecord, LandingSite,
+    OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError,
+    StellarId, SystemId,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::flight::{Controls, Turn};
@@ -43,6 +43,10 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) disasters: Vec<DisasterRecord>,
     /// How many times the goods (commodities, `jünk` and `öops`) were read.
     pub(crate) goods_reads: RefCell<usize>,
+    /// The first `chär`'s date prefix and suffix.
+    pub(crate) date_affixes: DateAffixes,
+    /// How many times the date affixes were read.
+    pub(crate) date_affix_reads: RefCell<usize>,
 }
 
 pub(crate) const FAST: ShipFields = ShipFields {
@@ -164,6 +168,11 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         junk: Vec::new(),
         disasters: Vec::new(),
         goods_reads: RefCell::default(),
+        date_affixes: DateAffixes {
+            prefix: String::new(),
+            suffix: " NC".to_owned(),
+        },
+        date_affix_reads: RefCell::default(),
     }
 }
 
@@ -255,6 +264,11 @@ impl PilotCatalog for FakePilotCatalog {
     fn disasters(&self) -> Vec<DisasterRecord> {
         *self.goods_reads.borrow_mut() += 1;
         self.disasters.clone()
+    }
+
+    fn date_affixes(&self) -> DateAffixes {
+        *self.date_affix_reads.borrow_mut() += 1;
+        self.date_affixes.clone()
     }
 }
 

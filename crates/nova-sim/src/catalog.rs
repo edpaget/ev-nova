@@ -37,6 +37,16 @@ pub struct StartDate {
     pub year: i16,
 }
 
+/// What the date is wrapped in wherever it is displayed: the first
+/// `chär`'s `DatePrefix` and `DateSuffix`, verbatim.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DateAffixes {
+    /// `DatePrefix`: put before the date.
+    pub prefix: String,
+    /// `DateSuffix`: put after the date (stock " NC").
+    pub suffix: String,
+}
+
 /// A star system on the map, raw from its `sÿst`: the
 /// [`hyperspace`](crate::hyperspace) rules decide which links count.
 #[derive(Clone, Debug, PartialEq)]
@@ -281,6 +291,9 @@ pub trait PilotCatalog {
     fn junk(&self) -> Vec<JunkRecord>;
     /// Every `öops` that can be read, by ascending ID.
     fn disasters(&self) -> Vec<DisasterRecord>;
+    /// The first `chär`'s `DatePrefix` and `DateSuffix`, or none (both
+    /// empty) when there is no `chär` or it does not decode.
+    fn date_affixes(&self) -> DateAffixes;
 }
 
 /// A borrowed catalog is a catalog.
@@ -327,6 +340,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn disasters(&self) -> Vec<DisasterRecord> {
         (**self).disasters()
+    }
+
+    fn date_affixes(&self) -> DateAffixes {
+        (**self).date_affixes()
     }
 }
 
@@ -375,6 +392,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn disasters(&self) -> Vec<DisasterRecord> {
         (**self).disasters()
+    }
+
+    fn date_affixes(&self) -> DateAffixes {
+        (**self).date_affixes()
     }
 }
 
@@ -500,6 +521,14 @@ mod tests {
             }]
         }
 
+        /// Dates read "Year ... NC".
+        fn date_affixes(&self) -> DateAffixes {
+            DateAffixes {
+                prefix: "Year ".to_owned(),
+                suffix: " NC".to_owned(),
+            }
+        }
+
         /// A food surplus at stellar 128.
         fn disasters(&self) -> Vec<DisasterRecord> {
             vec![DisasterRecord {
@@ -531,6 +560,7 @@ mod tests {
             format!("{:?}", catalog.disasters()),
             format!("{:?}", catalog.outfits()),
             format!("{:?}", catalog.ships()),
+            format!("{:?}", catalog.date_affixes()),
         ]
     }
 
@@ -551,6 +581,10 @@ mod tests {
         assert!(direct[12].contains("food surplus"), "{direct:?}");
         assert!(direct[13].contains("Scoop"), "{direct:?}");
         assert!(direct[14].contains("Shuttle"), "{direct:?}");
+        assert_eq!(
+            direct[15],
+            r#"DateAffixes { prefix: "Year ", suffix: " NC" }"#
+        );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

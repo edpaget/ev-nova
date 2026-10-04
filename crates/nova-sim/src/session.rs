@@ -86,11 +86,11 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{
-    GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, StartError,
-    StellarId, SystemId,
+    DateAffixes, GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord,
+    StartError, StellarId, SystemId,
 };
 use crate::chance::Chance;
-use crate::date::GameDate;
+use crate::date::{self, GameDate};
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::geometry::Vec2;
@@ -143,6 +143,9 @@ pub struct Session {
     /// Whether the pilot has changed in a way that should be saved since
     /// this was last taken.
     save_due: bool,
+    /// What the date is wrapped in when it is displayed, read when the
+    /// session starts.
+    date_affixes: DateAffixes,
 }
 
 impl Session {
@@ -208,6 +211,7 @@ impl Session {
             thrusting: false,
             sounds: Vec::new(),
             save_due: false,
+            date_affixes: catalog.date_affixes(),
             pilot,
         };
         session.refit(false);
@@ -377,6 +381,13 @@ impl Session {
     #[must_use]
     pub fn date(&self) -> GameDate {
         self.pilot.date
+    }
+
+    /// Today's date as it is displayed, with the first `chär`'s prefix and
+    /// suffix: for example "June 23, 1177 NC".
+    #[must_use]
+    pub fn date_text(&self) -> String {
+        date::date_text(self.pilot.date, &self.date_affixes)
     }
 
     /// The fuel the ship gains each tick in flight.
@@ -1142,6 +1153,33 @@ mod tests {
         assert_eq!(session.system(), SystemId(132));
         assert_eq!(session.course(), []);
         assert_eq!(session.jumping(), None);
+    }
+
+    #[test]
+    fn the_date_reads_with_the_chärs_affixes_and_moves_on_with_each_jump() {
+        let catalog = FakePilotCatalog {
+            date_affixes: DateAffixes {
+                prefix: "Year ".to_owned(),
+                suffix: " NC".to_owned(),
+            },
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.date_text(), "Year June 23, 1177 NC");
+        jump(&mut session, &catalog, 131);
+        assert_eq!(session.date_text(), "Year June 24, 1177 NC");
+        jump(&mut session, &catalog, 132);
+        assert_eq!(session.date_text(), "Year June 25, 1177 NC");
+        assert_eq!(*catalog.date_affix_reads.borrow(), 1);
+    }
+
+    #[test]
+    fn a_flown_pilot_reads_its_date_with_the_chärs_affixes() {
+        let catalog = catalog();
+        let pilot = Pilot::new(&catalog, "Flown").expect("starts");
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.date_text(), "June 23, 1177 NC");
+        assert_eq!(*catalog.date_affix_reads.borrow(), 1);
     }
 
     #[test]

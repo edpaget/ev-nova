@@ -14,7 +14,7 @@
 //! - `fixture` (with the `fixture` feature, and in this crate's tests):
 //!   `MemoryPilots`, a pilot store in memory.
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
-//!   one day a jump.
+//!   one day a jump, and [`date::date_text`], how it is displayed.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
@@ -96,9 +96,9 @@ mod testkit;
 pub mod wares;
 
 pub use catalog::{
-    CharacterStart, CommodityStrings, DisasterId, DisasterRecord, GovtId, JunkId, JunkRecord,
-    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem,
-    StartDate, StartError, StellarId, SystemId,
+    CharacterStart, CommodityStrings, DateAffixes, DisasterId, DisasterRecord, GovtId, JunkId,
+    JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId,
+    StarSystem, StartDate, StartError, StellarId, SystemId,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};

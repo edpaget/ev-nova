@@ -904,9 +904,9 @@ mod tests {
 
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
-        CharacterStart, CommodityStrings, DisasterRecord, Handling, JunkRecord, LandingSite,
-        OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats, SimSound,
-        SoundId, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
+        CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, Handling, JunkRecord,
+        LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats,
+        SimSound, SoundId, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
     };
 
     use super::*;
@@ -1098,6 +1098,14 @@ mod tests {
 
         fn disasters(&self) -> Vec<DisasterRecord> {
             self.disasters.clone()
+        }
+
+        /// Stock's: no prefix, and " NC".
+        fn date_affixes(&self) -> DateAffixes {
+            DateAffixes {
+                prefix: String::new(),
+                suffix: " NC".to_owned(),
+            }
         }
     }
 
