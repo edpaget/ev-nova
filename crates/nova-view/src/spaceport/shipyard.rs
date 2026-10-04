@@ -45,6 +45,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::hyperspace::max_jumps;
 use nova_sim::{ShipId, ShipRow, Shipyard};
 
 use super::catalog::SpaceportCatalog;
@@ -138,9 +139,6 @@ pub const JUMPS: &str = "jumps";
 /// The mark in the cell of the class the player flies.
 pub const CURRENT_MARK: &str = "(current)";
 
-/// A `shïp`'s `Fuel` per jump.
-const FUEL_PER_JUMP: i16 = 100;
-
 /// `ship`'s picture: its own `PICT` ([`FIRST_SHIP_PICTURE`] + ID - 128)
 /// when `exists` says it is there; otherwise that of the lowest-numbered
 /// ship in `bases` sharing its `shän` base image whose picture is there;
@@ -182,7 +180,7 @@ pub fn stat_lines(row: &ShipRow) -> Vec<String> {
         format!("{} tons", fields.mass),
         specs.crew.to_string(),
     ];
-    let jumps = fields.fuel.max(0) / FUEL_PER_JUMP;
+    let jumps = max_jumps(f32::from(fields.fuel));
     let mut lines: Vec<String> = STAT_LABELS
         .iter()
         .zip(values)

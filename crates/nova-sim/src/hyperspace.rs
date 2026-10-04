@@ -27,6 +27,13 @@ use crate::handling::Handling;
 pub const MIN_JUMP_DISTANCE: f32 = 1000.0;
 /// The fuel a jump uses (the Bible: "100 is one jump").
 pub const JUMP_FUEL: f32 = 100.0;
+
+/// How many whole jumps `fuel` holds: none for no fuel or less.
+#[must_use]
+pub fn max_jumps(fuel: f32) -> u32 {
+    // `as` saturates a float into an integer: a negative becomes 0.
+    (fuel / JUMP_FUEL).floor() as u32
+}
 /// How far from the centre of the system it jumps to the ship arrives: the
 /// system's edge, where it could jump out again.
 pub const ARRIVAL_DISTANCE: f32 = MIN_JUMP_DISTANCE;
@@ -200,6 +207,17 @@ pub fn arrival(from: Vec2, to: Vec2, handling: &Handling) -> ShipState {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_jumps_fuel_holds_are_whole_jumps_of_it() {
+        assert_eq!(max_jumps(300.0), 3);
+        assert_eq!(max_jumps(199.9), 1);
+        assert_eq!(max_jumps(100.0), 1);
+        assert_eq!(max_jumps(99.9), 0);
+        assert_eq!(max_jumps(0.0), 0);
+        assert_eq!(max_jumps(-250.0), 0, "none below none");
+        assert_eq!(max_jumps(f32::MAX), u32::MAX, "saturating");
+    }
 
     fn system(id: i16, links: &[i16]) -> StarSystem {
         StarSystem {

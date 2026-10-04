@@ -1051,6 +1051,25 @@ mod tests {
     }
 
     #[test]
+    fn a_persistent_outfit_sold_back_is_priced_on_the_old_ships_mass() {
+        // 100 credits a ton of ship and 20 tons: it fits neither HEAVY's 12
+        // tons free nor anywhere else, and sells back as fitted to the old
+        // ship (mass 40), not the new (25).
+        let by_mass = OutfitRecord {
+            cost: 100,
+            flags: OutfitFlags::PERSISTENT | OutfitFlags::PRICE_BY_MASS,
+            ..persistent(140, 20, 1)
+        };
+        assert_ne!(FAST.mass, HEAVY.mass);
+        let mut pilot = owning(&[(140, 1)]);
+        let bought = buy(&mut pilot, &heavy(), std::slice::from_ref(&by_mass));
+        assert_eq!(bought.sold_back, map(&[(140, 1)]));
+        assert_eq!(bought.refund, resale(100 * i64::from(FAST.mass)));
+        assert_eq!(bought.refund, 2000);
+        assert_eq!(pilot.cash(), 10_000 - 17_500 + 2500 + 2000);
+    }
+
+    #[test]
     fn a_persistent_outfit_beyond_its_max_is_capped_and_the_rest_sold_back() {
         let records = [
             persistent(140, 0, 2),

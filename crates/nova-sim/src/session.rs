@@ -2411,6 +2411,33 @@ mod tests {
     }
 
     #[test]
+    fn a_purchase_sells_back_a_persistent_outfit_priced_on_the_ship_flown() {
+        // A persistent armour plate, 100 credits a ton of ship and 20 tons,
+        // fitted to ship 128 (mass 40): it does not fit ship 129's 12 tons
+        // free, and sells back at half of 100 x 40, not of 100 x 25.
+        const PLATE: OutfitId = OutfitId(320);
+        let plate = OutfitRecord {
+            mass: 20,
+            cost: 100,
+            max: 1,
+            flags: OutfitFlags::PERSISTENT | OutfitFlags::PRICE_BY_MASS,
+            ..outfit(320, &[])
+        };
+        let mut catalog = shipbuying();
+        catalog.outfits.push(plate);
+        catalog.defaults.push((ShipId(128), vec![(PLATE, 1)]));
+        let mut session = outfitted(&catalog);
+        assert_eq!(session.pilot().owned(PLATE), 1);
+        assert_ne!(FAST.mass, HEAVY.mass);
+        let bought = session.buy_ship(NEW).expect("bought");
+        assert_eq!(bought.sold_back, BTreeMap::from([(PLATE, 1)]));
+        assert_eq!(bought.refund, 100 * i64::from(FAST.mass) / 2);
+        assert_eq!(bought.trade_in, 2500, "persistent: not in the trade-in");
+        assert_eq!(session.pilot().cash(), 25_000 - 17_500 + 2500 + 2000);
+        assert_eq!(session.pilot().owned(PLATE), 0);
+    }
+
+    #[test]
     fn a_pilot_saved_after_a_purchase_flies_again_as_it_was() {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);

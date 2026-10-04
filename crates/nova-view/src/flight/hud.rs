@@ -13,6 +13,7 @@
 //! sits against the right edge of the screen, at the top.
 
 use nova_sim::Reserves;
+use nova_sim::hyperspace::max_jumps;
 
 use super::catalog::{GovtId, StatusBarLayout, StatusBars};
 use crate::geometry::{Bounds, Point};
@@ -177,7 +178,7 @@ fn whole_jumps(reserves: &Reserves) -> f32 {
     let fuel = reserves.fuel;
     if fuel.max > 0.0 {
         let held = fuel.now.clamp(0.0, fuel.max);
-        ((held / FUEL_PER_JUMP).floor() * FUEL_PER_JUMP / fuel.max).min(1.0)
+        (max_jumps(held) as f32 * FUEL_PER_JUMP / fuel.max).min(1.0)
     } else {
         0.0
     }
