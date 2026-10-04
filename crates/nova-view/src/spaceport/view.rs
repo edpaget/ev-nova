@@ -23,18 +23,28 @@
 //! the Shipyard's the stellar's shipyard, a [`ShipyardScreen`]
 //! ([`SpaceportView::with_shipyard`], [`SpaceportView::take_ship`],
 //! [`SpaceportView::set_shipyard`]).
+//!
+//! Where the stellar sells fuel, Recharge (item 4) asks for a refill,
+//! taken through the spaceport ([`SpaceportView::take_recharge`]). A
+//! refusal ([`SpaceportView::refuse_recharge`]) shows in the description
+//! box in place of the description until the next button is activated, or
+//! the ship is recharged ([`SpaceportView::recharged`]).
+//!
 //! Without the dialog, or the stellar's record, the screen says why, and
 //! Return or Escape still leaves.
 
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Market, Order, OutfitOrder, Outfitter, Service, ShipId, Shipyard, services};
+use nova_sim::{
+    Market, Order, OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, Shipyard, sells_fuel,
+    services,
+};
 
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::layout::{
     BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, LEAVE_LABEL, NAME_FONT, NAME_ITEM, NAME_SIZE,
-    TEXT_ITEM, item_service, label, landscape_id, service_item,
+    RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, service_item,
 };
 use super::outfitter::{OutfitterCatalog, OutfitterScreen};
 use super::service::ServiceScreen;
@@ -60,6 +70,16 @@ pub const PROBLEM_AT: Point = Point::new(16.0, 32.0);
 /// The reason's size.
 pub const PROBLEM_SIZE: f32 = 20.0;
 
+/// Why recharging was refused for want of credits. No stock `STR#` has
+/// one, so it is built the way the original builds its fee refusals from
+/// `STR#` 2002: #61 "You don't have enough" + #33 "credits" + a tail like
+/// #63's "to pay the docking fee.".
+pub const CANNOT_AFFORD_RECHARGE: &str = "You don't have enough credits to recharge.";
+
+/// Why recharging was refused with the tank full. No stock `STR#` has
+/// one, so these are our own words.
+pub const ALREADY_RECHARGED: &str = "Your ship is already fully recharged.";
+
 /// The spaceport, laid out.
 #[derive(Clone, Debug)]
 struct Port {
@@ -68,10 +88,31 @@ struct Port {
     /// The landscape `PICT`, or the missing one's ID.
     landscape: Result<i16, i16>,
     offered: Vec<Service>,
+    /// Whether the stellar sells fuel, so Recharge is a button.
+    sells_fuel: bool,
+    /// The stellar's description, to show again after a refusal.
+    description: String,
+    /// Whether a refusal shows in the description box.
+    refused: bool,
     /// Why there is no description, if there is none.
     description_problem: Option<String>,
     style: ButtonStyle,
     metrics: MetricsHandle,
+}
+
+impl Port {
+    /// Shows `message` in the description box in its place.
+    fn refuse(&mut self, message: &str) {
+        self.dialog.set_text(TEXT_ITEM, message);
+        self.refused = true;
+    }
+
+    /// Shows the description again, if a refusal shows in its place.
+    fn show_description(&mut self) {
+        if std::mem::take(&mut self.refused) {
+            self.dialog.set_text(TEXT_ITEM, &self.description);
+        }
+    }
 }
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
@@ -171,6 +212,8 @@ pub struct SpaceportView {
     /// The shipyard, once given.
     shipbuying: Option<Shipbuying>,
     left: bool,
+    /// Whether Recharge has been clicked since this was last taken.
+    recharge: bool,
     /// The sounds made since they were last taken, kept here so a service
     /// that closes keeps its sounds.
     sounds: Vec<Sound>,
@@ -188,6 +231,7 @@ impl SpaceportView {
         let port = layout.and_then(|(template, metrics)| {
             let record = catalog.stellar_port(stellar)?;
             let offered = services(record.flags);
+            let sells_fuel = sells_fuel(record.flags);
             let (text, description_problem) = match catalog.description(stellar.0) {
                 Ok(text) => (text, None),
                 Err(reason) => (String::new(), Some(reason)),
@@ -197,7 +241,7 @@ impl SpaceportView {
                 (
                     TEXT_ITEM,
                     Role::ScrollText {
-                        text,
+                        text: text.clone(),
                         font: Font::Geneva,
                         size: BODY_SIZE,
                         color: BODY_COLOR,
@@ -210,6 +254,9 @@ impl SpaceportView {
                     Role::Button(label(service).to_owned()),
                 )
             }));
+            if sells_fuel {
+                roles.push((RECHARGE_ITEM, Role::Button(RECHARGE_LABEL.to_owned())));
+            }
             let style = catalog.button_style();
             let dialog = Dialog::new(&template, &roles, Rc::clone(&metrics))
                 .with_buttons(ButtonSkin::NOVA, style)
@@ -225,6 +272,9 @@ impl SpaceportView {
                     Err(landscape)
                 },
                 offered,
+                sells_fuel,
+                description: text,
+                refused: false,
                 description_problem,
                 style,
                 metrics: MetricsHandle(metrics),
@@ -238,7 +288,36 @@ impl SpaceportView {
             outfitting: None,
             shipbuying: None,
             left: false,
+            recharge: false,
             sounds: Vec::new(),
+        }
+    }
+
+    /// Whether Recharge has been clicked since this was last asked:
+    /// whoever flies the ship refills it, then says how it went with
+    /// [`SpaceportView::recharged`] or [`SpaceportView::refuse_recharge`].
+    pub fn take_recharge(&mut self) -> bool {
+        std::mem::take(&mut self.recharge)
+    }
+
+    /// Says why recharging was refused, in the description box in place of
+    /// the description, until the next button is activated. With no fuel
+    /// sold, which Recharge is never offered for, the description stays.
+    pub fn refuse_recharge(&mut self, refusal: RechargeRefusal) {
+        let Ok(port) = &mut self.port else {
+            return;
+        };
+        match refusal {
+            RechargeRefusal::CannotAfford => port.refuse(CANNOT_AFFORD_RECHARGE),
+            RechargeRefusal::Full => port.refuse(ALREADY_RECHARGED),
+            RechargeRefusal::NoFuel => port.show_description(),
+        }
+    }
+
+    /// Says the ship has been recharged: the description shows again.
+    pub fn recharged(&mut self) {
+        if let Ok(port) = &mut self.port {
+            port.show_description();
         }
     }
 
@@ -437,19 +516,28 @@ impl SpaceportView {
         self.port.as_ref().ok()?.description_problem.as_deref()
     }
 
-    /// Activates dialog item `item`: Leave leaves, and an offered service's
-    /// button opens it. Anything else does nothing.
+    /// Activates dialog item `item`: Leave leaves, Recharge (where fuel is
+    /// sold) asks for a refill, and an offered service's button opens it,
+    /// each showing the description again in place of a refusal. Anything
+    /// else does nothing.
     fn activate(&mut self, item: usize) {
         if item == LEAVE_ITEM {
             self.left = true;
             return;
         }
-        let Ok(port) = &self.port else {
+        let Ok(port) = &mut self.port else {
             return;
         };
+        if item == RECHARGE_ITEM && port.sells_fuel {
+            port.show_description();
+            self.recharge = true;
+            return;
+        }
         let Some(service) = item_service(item).filter(|s| port.offered.contains(s)) else {
             return;
         };
+        port.show_description();
+        let port = &*port;
         let metrics = Rc::clone(&port.metrics.0);
         self.open = Some(
             match (&self.trade, &self.outfitting, &self.shipbuying, service) {
@@ -827,14 +915,14 @@ mod tests {
     }
 
     #[test]
-    fn only_the_offered_services_and_leave_are_buttons() {
+    fn only_the_offered_services_recharge_and_leave_are_buttons() {
         let view = earth();
         let commands = drawn(&view);
         let labels = texts(&commands);
-        for shown in ["Trade Center", "Bar", "Mission BBS", "Leave"] {
+        for shown in ["Trade Center", "Bar", "Mission BBS", "Recharge", "Leave"] {
             assert!(labels.contains(&shown.to_owned()), "{shown}: {labels:?}");
         }
-        for hidden in ["Shipyard", "Outfitter", "Recharge", "Done"] {
+        for hidden in ["Shipyard", "Outfitter", "Done"] {
             assert!(!labels.contains(&hidden.to_owned()), "{hidden}: {labels:?}");
         }
         // Each in its own item, with the button style asked for.
@@ -853,6 +941,7 @@ mod tests {
             ("Trade Center", 7),
             ("Bar", 10),
             ("Mission BBS", 11),
+            ("Recharge", 4),
             ("Leave", 12),
         ] {
             let (origin, color) = label_at(text).expect(text);
@@ -904,9 +993,9 @@ mod tests {
     #[test]
     fn clicks_elsewhere_do_nothing() {
         let mut view = earth();
-        // The shipyard's and outfitter's places, the blank buttons, the
+        // The shipyard's and outfitter's places, the blank button, the
         // landscape and the description.
-        for number in [9, 8, 4, 13, 5, 6, 3] {
+        for number in [9, 8, 13, 5, 6, 3] {
             click_item(&mut view, number);
         }
         click(&mut view, Point::new(5.0, 5.0));
@@ -917,6 +1006,7 @@ mod tests {
         });
         assert!(!view.left());
         assert!(view.open_service().is_none());
+        assert!(!view.take_recharge());
     }
 
     #[test]
@@ -1057,6 +1147,11 @@ mod tests {
         let labels = texts(&drawn(&view));
         assert!(labels.contains(&"Leave".to_owned()));
         assert!(!labels.contains(&"Mission BBS".to_owned()));
+        assert!(!labels.contains(&"Recharge".to_owned()), "no fuel sold");
+        let mut view = view;
+        click_item(&mut view, RECHARGE_ITEM);
+        assert!(!view.take_recharge());
+        assert_eq!(view.take_sounds(), [], "a blank item is silent");
     }
 
     fn problem(reason: &str) -> DrawCommand {
@@ -1173,6 +1268,119 @@ mod tests {
         broken.input(&key(Key::Escape));
         assert!(broken.left());
         assert_eq!(broken.take_sounds(), []);
+    }
+
+    // Recharging.
+
+    use nova_sim::RechargeRefusal;
+
+    use crate::spaceport::layout::RECHARGE_ITEM;
+
+    /// The lines in the description box.
+    fn box_lines(view: &SpaceportView) -> Vec<String> {
+        view.dialog()
+            .expect("laid out")
+            .scroll_text()
+            .expect("the box")
+            .lines()
+            .to_vec()
+    }
+
+    /// The first line the description box shows.
+    fn view_first_line(view: &SpaceportView) -> usize {
+        view.dialog()
+            .expect("laid out")
+            .scroll_text()
+            .expect("the box")
+            .first()
+    }
+
+    const DESCRIPTION: [&str; 2] = ["Blue and green.", "Home."];
+
+    #[test]
+    fn the_refusals_say_why_in_the_originals_words_or_ours() {
+        assert_eq!(
+            CANNOT_AFFORD_RECHARGE,
+            "You don't have enough credits to recharge."
+        );
+        assert_eq!(ALREADY_RECHARGED, "Your ship is already fully recharged.");
+    }
+
+    #[test]
+    fn recharge_is_asked_for_once_per_click() {
+        let mut view = earth();
+        assert!(!view.take_recharge(), "nothing clicked");
+        click_item(&mut view, RECHARGE_ITEM);
+        assert!(view.take_recharge());
+        assert!(!view.take_recharge(), "once");
+        assert!(!view.left());
+        assert!(view.open_service().is_none());
+        assert_eq!(view.take_sounds(), [DOWN, UP]);
+    }
+
+    #[test]
+    fn a_refusal_shows_in_the_description_box_until_recharged() {
+        for (refusal, message) in [
+            (RechargeRefusal::CannotAfford, CANNOT_AFFORD_RECHARGE),
+            (RechargeRefusal::Full, ALREADY_RECHARGED),
+        ] {
+            let mut view = earth();
+            click_item(&mut view, RECHARGE_ITEM);
+            view.refuse_recharge(refusal);
+            assert_eq!(box_lines(&view), [message], "{refusal:?}");
+            let labels = texts(&drawn(&view));
+            assert!(labels.contains(&message.to_owned()), "{labels:?}");
+            assert!(!labels.contains(&DESCRIPTION[0].to_owned()), "{labels:?}");
+            view.recharged();
+            assert_eq!(box_lines(&view), DESCRIPTION);
+        }
+    }
+
+    #[test]
+    fn with_no_fuel_sold_the_description_stays() {
+        let mut view = earth();
+        view.refuse_recharge(RechargeRefusal::NoFuel);
+        assert_eq!(box_lines(&view), DESCRIPTION);
+    }
+
+    #[test]
+    fn a_refusal_shows_until_the_next_button_is_activated() {
+        let mut view = earth();
+        view.refuse_recharge(RechargeRefusal::Full);
+        click_item(&mut view, 13);
+        assert_eq!(box_lines(&view), [ALREADY_RECHARGED], "a blank item");
+        click_item(&mut view, RECHARGE_ITEM);
+        assert_eq!(box_lines(&view), DESCRIPTION, "recharge again");
+        assert!(view.take_recharge());
+        view.refuse_recharge(RechargeRefusal::Full);
+        click_item(&mut view, 7);
+        view.input(&key(Key::Escape));
+        assert!(view.open_service().is_none());
+        assert_eq!(box_lines(&view), DESCRIPTION, "a service");
+    }
+
+    #[test]
+    fn recharged_without_a_refusal_keeps_the_description_where_it_is() {
+        let catalog = FakePort {
+            description: Ok((0..40)
+                .map(|n| format!("l{n}"))
+                .collect::<Vec<_>>()
+                .join("\r")),
+            ..catalog()
+        };
+        let mut view = view_of(&catalog);
+        view.input(&key(Key::Down));
+        view.recharged();
+        assert_eq!(view_first_line(&view), 1, "not scrolled back");
+    }
+
+    #[test]
+    fn a_spaceport_that_cannot_be_shown_takes_recharge_news_quietly() {
+        let mut broken = SpaceportView::new(&catalog(), StellarId(140), Err("no".to_owned()));
+        broken.refuse_recharge(RechargeRefusal::Full);
+        broken.recharged();
+        assert!(!broken.take_recharge());
+        assert_eq!(broken.problem(), Some("no"));
     }
 
     // The Trade Center.

@@ -31,7 +31,8 @@ pub const TEXT_ITEM: usize = 6;
 /// The Leave button's item: bottom right, as in the original.
 pub const LEAVE_ITEM: usize = 12;
 
-/// The item kept for the Recharge button, blank until refuelling exists.
+/// The Recharge button's item, shown only where fuel is sold: right
+/// column, third down, as in the original.
 pub const RECHARGE_ITEM: usize = 4;
 
 /// The button each service gets. The data does not record this; it is
@@ -53,6 +54,8 @@ pub const NAME_SIZE: f32 = 12.0;
 pub const LEAVE_LABEL: &str = "Leave";
 /// `STR#` 150 #5.
 pub const DONE_LABEL: &str = "Done";
+/// `STR#` 150 #6.
+pub const RECHARGE_LABEL: &str = "Recharge";
 /// `STR#` 150 #7.
 pub const TRADE_CENTER_LABEL: &str = "Trade Center";
 /// `STR#` 150 #8.
@@ -184,5 +187,6 @@ mod tests {
             ]
         );
         assert_eq!((LEAVE_LABEL, DONE_LABEL), ("Leave", "Done"));
+        assert_eq!(RECHARGE_LABEL, "Recharge");
     }
 }

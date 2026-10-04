@@ -71,9 +71,9 @@ use std::time::Duration;
 
 use nova_sim::{
     Chance, Controls, FixedStep, JumpRefusal, LandingRefusal, Market, NeverFires, Order,
-    OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, Reserves, Session, ShipId,
-    ShipPurchase, ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps, TradeRefusal,
-    Turn, flight::normalized, flight::shortest_turn,
+    OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, RechargeRefusal, Reserves, Session,
+    ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps,
+    TradeRefusal, Turn, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -500,6 +500,15 @@ impl<C> FlightView<C> {
         match &mut self.session {
             Ok(session) => session.outfit(order),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
+        }
+    }
+
+    /// Recharges as [`Session::recharge`] does; a session that failed
+    /// sells no fuel.
+    pub fn recharge(&mut self) -> Result<i64, RechargeRefusal> {
+        match &mut self.session {
+            Ok(session) => session.recharge(),
+            Err(_) => Err(RechargeRefusal::NoFuel),
         }
     }
 
@@ -2753,6 +2762,23 @@ mod tests {
         let mut broken = FlightView::new(broken);
         assert_eq!(broken.outfitter(), None);
         assert_eq!(broken.outfit(BUY_TANK), Err(OutfitRefusal::NoOutfitter));
+    }
+
+    #[test]
+    fn recharging_goes_through_the_session() {
+        use nova_sim::RechargeRefusal;
+        let mut view = FlightView::new(outfitting());
+        assert_eq!(view.recharge(), Err(RechargeRefusal::NoFuel), "in flight");
+        tap(&mut view, LAND_KEY);
+        view.take_save_due();
+        assert_eq!(view.recharge(), Err(RechargeRefusal::Full));
+        assert!(!view.take_save_due());
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..outfitting()
+        };
+        let mut broken = FlightView::new(broken);
+        assert_eq!(broken.recharge(), Err(RechargeRefusal::NoFuel));
     }
 
     /// Fires every time, and records each percent it is asked.

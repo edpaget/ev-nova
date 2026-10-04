@@ -49,6 +49,13 @@ impl ScrollText {
         }
     }
 
+    /// `text` in this one's font, size, colour and box, wrapped by
+    /// `metrics` and shown from the first line.
+    #[must_use]
+    pub fn rewrapped(&self, text: &str, metrics: &impl TextMetrics) -> Self {
+        Self::new(text, self.font, self.size, self.color, self.rect, metrics)
+    }
+
     /// Every wrapped line.
     #[must_use]
     pub fn lines(&self) -> &[String] {
@@ -302,6 +309,23 @@ mod tests {
             [
                 ("a".to_owned(), Point::new(100.0, 50.0)),
                 ("b".to_owned(), Point::new(100.0, 74.0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn rewrapped_text_keeps_the_box_and_style_and_starts_at_the_top() {
+        let mut text = ten_lines();
+        text.scroll_by(4);
+        let new = text.rewrapped("abcd efgh", &MonoMetrics);
+        assert_eq!(new.lines(), ["abcd", "efgh"]);
+        assert_eq!((new.first(), new.visible()), (0, 3));
+        assert_eq!(new.rect(), text.rect());
+        assert_eq!(
+            texts(&new),
+            [
+                ("abcd".to_owned(), Point::new(100.0, 50.0)),
+                ("efgh".to_owned(), Point::new(100.0, 62.0)),
             ]
         );
     }

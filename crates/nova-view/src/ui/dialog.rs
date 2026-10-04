@@ -351,6 +351,21 @@ impl Dialog {
         }
     }
 
+    /// Replaces the text of item `item` (from 1) with `text`, wrapped in
+    /// its font, size, colour and box and shown from the first line. An
+    /// item that is not text, or no such item, changes nothing.
+    pub fn set_text(&mut self, item: usize, text: &str) {
+        let Some(found) = item
+            .checked_sub(1)
+            .and_then(|index| self.items.get_mut(index))
+        else {
+            return;
+        };
+        if let Widget::Text { text: shown, .. } = &mut found.widget {
+            *shown = shown.rewrapped(text, &self.metrics);
+        }
+    }
+
     /// Where the dialog is on the screen.
     #[must_use]
     pub fn bounds(&self) -> Bounds {
@@ -1164,6 +1179,21 @@ mod tests {
         assert_eq!(lines, ["l0", "l1", "l2"]);
         let text = dialog.scroll_text().expect("scrolling text");
         assert_eq!((text.visible(), text.lines().len()), (3, 5));
+    }
+
+    #[test]
+    fn set_text_rewraps_a_text_item_and_nothing_else() {
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0\rl1\rl2\rl3\rl4"));
+        dialog.input(&key(Key::Down));
+        dialog.set_text(3, "new");
+        let text = dialog.scroll_text().expect("scrolling text");
+        assert_eq!((text.lines(), text.first()), (&["new".to_owned()][..], 0));
+        assert_eq!(text.rect(), rect(10.0, 10.0, 40.0, 36.0));
+        let before = drawn(&dialog);
+        for other in [0, 1, 2, 4, 99] {
+            dialog.set_text(other, "other");
+        }
+        assert_eq!(drawn(&dialog), before, "only text items change");
     }
 
     #[test]
