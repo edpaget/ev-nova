@@ -3,7 +3,9 @@
 //! camera following the ship, and jumping through hyperspace along the
 //! course plotted on the galaxy map.
 //!
-//! The screen owns a [`nova_sim::Session`] and its catalog. It reads, once
+//! The screen owns a [`nova_sim::Session`], flying a new pilot
+//! ([`FlightView::new`]) or a given one ([`FlightView::with_pilot`]), and
+//! its catalog. It reads, once
 //! when it is built: the session's system, through the [`SystemCatalog`]
 //! port, the ship's sprite sheet, through the [`ShipSprites`] port, the
 //! HUD's status bar for the player's government, through the
@@ -41,7 +43,8 @@
 //!   that M closes it ([`FlightView::close_map`] closes it too, for the
 //!   router's Escape). A system clicked on the map becomes the
 //!   destination: the session plots the course there and the map shows
-//!   it.
+//!   it. The map shows the systems the pilot has explored, and the rest
+//!   unexplored.
 //! - J (a press) jumps to the next system on the course when the session
 //!   allows it, and otherwise says why in the original's words (`STR#`
 //!   2002), as a refused landing does. A jump plays its [`JumpEffect`]:
@@ -56,8 +59,8 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use nova_sim::{
-    Controls, FixedStep, JumpRefusal, LandingRefusal, PilotCatalog, Reserves, Session, ShipState,
-    StellarId, Steps, Turn, flight::normalized, flight::shortest_turn,
+    Controls, FixedStep, JumpRefusal, LandingRefusal, Pilot, PilotCatalog, Reserves, Session,
+    ShipState, StartError, StellarId, Steps, Turn, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -202,9 +205,24 @@ pub struct FlightView<C> {
 }
 
 impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog> FlightView<C> {
-    /// A new pilot's flight, read from `catalog`, which the screen keeps.
+    /// A new, unnamed pilot's flight, read from `catalog`, which the
+    /// screen keeps.
     pub fn new(catalog: C) -> Self {
-        let session = Session::start(&catalog).map_err(|err| err.to_string());
+        let session = Session::start(&catalog);
+        Self::flying(catalog, session)
+    }
+
+    /// `pilot`'s flight, read from `catalog`, which the screen keeps. A
+    /// pilot docked at a stellar resumes landed there: the landing is
+    /// reported once ([`FlightView::take_landing`]), with no sound, so the
+    /// router shows the spaceport.
+    pub fn with_pilot(catalog: C, pilot: Pilot) -> Self {
+        let session = Session::fly(&catalog, pilot);
+        Self::flying(catalog, session)
+    }
+
+    fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
+        let session = session.map_err(|err| err.to_string());
         let (scene, sheet, status_bar) = match &session {
             Ok(session) => (
                 Some(SystemScene::load(&catalog, session.system())),
@@ -220,7 +238,9 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         let mut map = GalaxyMap::course(&catalog);
         if let Ok(session) = &session {
             map.show_course(session.system(), session.course());
+            map.show_explored(session.pilot().explored());
         }
+        let pending_landing = session.as_ref().ok().and_then(Session::landed);
         Self {
             catalog,
             map,
@@ -235,7 +255,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             alpha: 0.0,
             elapsed: Duration::ZERO,
             held: HashSet::new(),
-            pending_landing: None,
+            pending_landing,
             message: None,
         }
     }
@@ -294,6 +314,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         };
         self.scene = Some(SystemScene::load(&self.catalog, system));
         self.map.show_course(system, session.course());
+        self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
         self.alpha = 0.0;
         self.message = None;
@@ -369,6 +390,26 @@ impl<C> FlightView<C> {
     /// The flight, or why it could not start.
     pub fn session(&self) -> Result<&Session, &str> {
         self.session.as_ref().map_err(String::as_str)
+    }
+
+    /// The pilot flying, if the flight started.
+    #[must_use]
+    pub fn pilot(&self) -> Option<&Pilot> {
+        self.session.as_ref().ok().map(Session::pilot)
+    }
+
+    /// Changes the pilot with `change` while landed, as
+    /// [`Session::transact`] does, and says whether it did.
+    pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
+        self.session
+            .as_mut()
+            .is_ok_and(|session| session.transact(change))
+    }
+
+    /// Whether the pilot should be saved, as [`Session::take_save_due`]
+    /// says; taking it clears it.
+    pub fn take_save_due(&mut self) -> bool {
+        self.session.as_mut().is_ok_and(Session::take_save_due)
     }
 
     /// The session's system, as laid out, if the session started.
@@ -2316,5 +2357,113 @@ mod tests {
         assert_eq!(view.course_map().selected(), None, "no click");
         assert_eq!(view.session().expect("flying").course(), []);
         assert!(view.map_open());
+    }
+
+    // The pilot.
+
+    /// A pilot named `name` docked at Earth: landed over a planet 128 at
+    /// the centre, then flown in the stock catalog, where Earth is at
+    /// (0, -600).
+    fn docked_pilot(name: &str) -> Pilot {
+        let centred = FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..catalog()
+        };
+        let pilot = Pilot::new(&centred, name).expect("starts");
+        let mut view = FlightView::with_pilot(centred, pilot);
+        tap(&mut view, LAND_KEY);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        view.pilot().expect("flying").clone()
+    }
+
+    #[test]
+    fn a_pilot_docked_at_a_stellar_resumes_landed_there_silently() {
+        let pilot = docked_pilot("Ada");
+        assert_eq!(pilot.stellar(), Some(StellarId(128)));
+        let mut view = FlightView::with_pilot(catalog(), pilot.clone());
+        assert_eq!(view.pilot(), Some(&pilot));
+        assert_eq!(
+            view.take_landing(),
+            Some(StellarId(128)),
+            "the router lands"
+        );
+        assert_eq!(view.take_landing(), None, "once");
+        assert_eq!(player(&view).position, Vec2::new(0.0, -600.0));
+        assert_eq!(view.take_sounds(), [], "no landing sound");
+        assert!(!view.take_save_due());
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn a_pilot_in_flight_resumes_at_the_centre() {
+        let pilot = Pilot::new(&catalog(), "Bob").expect("starts");
+        let mut view = FlightView::with_pilot(catalog(), pilot);
+        assert_eq!(view.take_landing(), None);
+        assert_eq!(player(&view), start());
+        assert_eq!(view.pilot().map(Pilot::name), Some("Bob"));
+    }
+
+    #[test]
+    fn a_pilot_whose_system_is_gone_cannot_fly() {
+        let mut pilot = docked_pilot("Ada");
+        pilot.explore(SystemId(131));
+        let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 131");
+        let moved = nova_sim::save::decode(&text).expect("a pilot");
+        let view = FlightView::with_pilot(catalog(), moved);
+        assert_eq!(
+            view.session().err(),
+            Some("the pilot's system, sÿst 131, does not exist")
+        );
+        assert_eq!(view.pilot(), None);
+    }
+
+    #[test]
+    fn landing_taking_off_and_transactions_make_a_save_due() {
+        let centred = FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..catalog()
+        };
+        let mut view = FlightView::new(centred);
+        assert!(!view.take_save_due());
+        assert!(!view.transact(|pilot| pilot.set_cash(5)), "in flight");
+        tap(&mut view, LAND_KEY);
+        assert!(view.take_save_due(), "landed");
+        assert!(view.transact(|pilot| pilot.set_cash(5)));
+        assert_eq!(view.pilot().map(Pilot::cash), Some(5));
+        assert!(view.take_save_due(), "a transaction");
+        assert!(!view.take_save_due(), "taken");
+        view.take_off();
+        assert!(view.take_save_due(), "took off");
+    }
+
+    #[test]
+    fn a_view_that_cannot_fly_has_no_pilot_and_saves_nothing() {
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        };
+        let mut view = FlightView::new(broken);
+        assert_eq!(view.pilot(), None);
+        assert!(!view.transact(|pilot| pilot.set_cash(5)));
+        assert!(!view.take_save_due());
+    }
+
+    #[test]
+    fn the_course_map_shows_the_explored_systems_and_arriving_explores() {
+        let mut view = flight();
+        let explored = |view: &View| {
+            view.course_map()
+                .explored()
+                .map(|set| set.iter().copied().collect::<Vec<_>>())
+        };
+        assert_eq!(explored(&view), Some(vec![SystemId(130)]));
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        for _ in 0..90 {
+            view.tick(TICK);
+        }
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
+        assert_eq!(explored(&view), Some(vec![SystemId(130), SystemId(131)]));
     }
 }

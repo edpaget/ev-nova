@@ -29,7 +29,14 @@
 //! [`GalaxyMap::take_destination`]. Either map draws the course it is
 //! shown ([`GalaxyMap::show_course`]): the current system marked, and the
 //! route from it through each hop.
+//!
+//! A map shown the systems the pilot has explored
+//! ([`GalaxyMap::show_explored`], the course map in flight) draws every
+//! other system's dot [`UNEXPLORED`] grey instead of its government's
+//! colour, and its panel says [`UNEXPLORED_TEXT`] instead of listing its
+//! stellars. A map never shown them, the viewer, shows everything.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
@@ -53,6 +60,10 @@ pub const OUTLINE: Color = Color::rgba(128, 128, 128, 255);
 pub const OUTLINE_SIZE: f32 = 8.0;
 /// A system dot's size.
 pub const DOT_SIZE: f32 = 6.0;
+/// An unexplored system's dot, on a map shown the explored systems.
+pub const UNEXPLORED: Color = Color::rgba(96, 96, 96, 255);
+/// What the panel says of an unexplored system, in place of its stellars.
+pub const UNEXPLORED_TEXT: &str = "Unexplored";
 /// The side of the square drawn round the selected system, and its width.
 pub const HIGHLIGHT_SIZE: f32 = 16.0;
 const HIGHLIGHT_WIDTH: f32 = 1.0;
@@ -153,6 +164,9 @@ pub struct GalaxyMap {
     current: Option<SystemId>,
     /// The course from it, as last shown.
     route: Vec<SystemId>,
+    /// The systems explored, once shown; `None` shows every system as
+    /// explored.
+    explored: Option<BTreeSet<SystemId>>,
 }
 
 impl GalaxyMap {
@@ -182,6 +196,7 @@ impl GalaxyMap {
             destination: None,
             current: None,
             route: Vec::new(),
+            explored: None,
         }
     }
 
@@ -202,6 +217,25 @@ impl GalaxyMap {
     pub fn show_course(&mut self, current: SystemId, route: &[SystemId]) {
         self.current = Some(current);
         self.route = route.to_vec();
+    }
+
+    /// Shows `explored` as the systems the pilot has explored, in place of
+    /// any shown before: every other system is drawn unexplored.
+    pub fn show_explored(&mut self, explored: impl IntoIterator<Item = SystemId>) {
+        self.explored = Some(explored.into_iter().collect());
+    }
+
+    /// The systems shown as explored, once shown.
+    #[must_use]
+    pub fn explored(&self) -> Option<&BTreeSet<SystemId>> {
+        self.explored.as_ref()
+    }
+
+    /// Whether system `id` is drawn as explored.
+    fn is_explored(&self, id: SystemId) -> bool {
+        self.explored
+            .as_ref()
+            .is_none_or(|explored| explored.contains(&id))
     }
 
     /// The system the player is in, as last shown.
@@ -347,7 +381,12 @@ impl GalaxyMap {
         }
         for system in systems {
             let at = self.view.world_to_screen(system.position());
-            list.dot(at, DOT_SIZE, system.color);
+            let color = if self.is_explored(system.entry.id) {
+                system.color
+            } else {
+                UNEXPLORED
+            };
+            list.dot(at, DOT_SIZE, color);
         }
         if let Some(at) = self.selected.and_then(screen) {
             let half = HIGHLIGHT_SIZE / 2.0;
@@ -385,7 +424,7 @@ impl GalaxyMap {
             fill_rect(list, ENTER_BUTTON, BUTTON);
         }
         match selected {
-            Some(system) => draw_system(&system.entry, list),
+            Some(system) => draw_system(&system.entry, self.is_explored(system.entry.id), list),
             None => {
                 list.text(
                     "Click a system to see its stellars",
@@ -470,8 +509,9 @@ impl GalaxyMap {
     }
 }
 
-/// The system's name and ID, then its stellars.
-fn draw_system(system: &SystemEntry, list: &mut DrawList) {
+/// The system's name and ID, then its stellars, or that it is unexplored
+/// when it is not `explored`.
+fn draw_system(system: &SystemEntry, explored: bool, list: &mut DrawList) {
     list.text(
         format!("{} (sÿst {})", system.name, system.id.0),
         Point::new(LEFT, TITLE_TOP),
@@ -479,7 +519,9 @@ fn draw_system(system: &SystemEntry, list: &mut DrawList) {
         Some(LEFT_WRAP),
         Color::WHITE,
     );
-    let names: Vec<&str> = if system.stellars.is_empty() {
+    let names: Vec<&str> = if !explored {
+        vec![UNEXPLORED_TEXT]
+    } else if system.stellars.is_empty() {
         vec!["No stellars"]
     } else {
         system.stellars.iter().map(|s| s.name.as_str()).collect()
@@ -1191,6 +1233,55 @@ mod tests {
                     .iter()
                     .position(|c| matches!(c, DrawCommand::Dot { .. }))
         );
+    }
+
+    #[test]
+    fn with_an_explored_set_unexplored_systems_are_grey() {
+        let mut map = map();
+        assert_eq!(map.explored(), None, "everything shows by default");
+        map.show_explored([SystemId(128), SystemId(129)]);
+        assert_eq!(
+            map.explored()
+                .map(|set| set.iter().copied().collect::<Vec<_>>()),
+            Some(vec![SystemId(128), SystemId(129)])
+        );
+        let list = drawn(&map);
+        assert_eq!(
+            dots(&list, DOT_SIZE),
+            [
+                (dot(&map, 131), UNEXPLORED),
+                (dot(&map, 130), UNEXPLORED),
+                (dot(&map, 129), NEUTRAL),
+                (dot(&map, 128), Color::from_rgb24(BLUE)),
+            ]
+        );
+        assert_eq!(UNEXPLORED, Color::rgba(96, 96, 96, 255));
+        map.show_explored([SystemId(130)]);
+        let list = drawn(&map);
+        assert_eq!(
+            dots(&list, DOT_SIZE)[1],
+            (dot(&map, 130), Color::from_rgb24(BLUE)),
+            "replaced"
+        );
+        assert_eq!(dots(&list, DOT_SIZE)[3], (dot(&map, 128), UNEXPLORED));
+    }
+
+    #[test]
+    fn an_unexplored_system_shows_its_name_but_not_its_stellars() {
+        let mut map = map();
+        map.show_explored([SystemId(129)]);
+        click_on(&mut map, 128);
+        let list = drawn(&map);
+        let texts = texts(&list);
+        assert!(texts.contains(&"Alpha (sÿst 128)".to_owned()), "{texts:?}");
+        assert_eq!(origin(&list, UNEXPLORED_TEXT), at(LEFT, STELLARS_TOP));
+        assert!(
+            !texts.iter().any(|t| t.starts_with("Alpha Prime")),
+            "{texts:?}"
+        );
+        assert_eq!(UNEXPLORED_TEXT, "Unexplored");
+        click_on(&mut map, 129);
+        assert_eq!(origin(&drawn(&map), "No stellars"), at(LEFT, STELLARS_TOP));
     }
 
     #[test]
