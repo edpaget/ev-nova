@@ -8,6 +8,15 @@
 //! or the dim "No Destination" alone, in the bar's `StatusFont` at its
 //! `StatFontSize`.
 //!
+//! The date is shown on the last line of the `ïntf`'s `CargoArea`, bright,
+//! in the same font. The original shows it only on the player info screen
+//! (`STR#` 2002 #252 "Current Date:"), and no `ïntf` area is for it, so
+//! this is our choice of where it goes in flight: the cargo area is the
+//! stock bar's largest empty panel ((8, 458)-(184, 552), room for about
+//! six lines), the nav area is full with its two lines, and the weapon
+//! and target areas have their own texts. A cargo display would fill the
+//! area from the top and leave its last line to the date.
+//!
 //! Which `ïntf`: a pilot with no government shows `ïntf` 128, the
 //! "Default status bar"; one who belongs to a government shows that
 //! `gövt`'s `Interface`. Either way an ID below 128 means 128
@@ -148,6 +157,8 @@ pub struct HudState<'a> {
     pub reserves: Reserves,
     /// What the nav area shows.
     pub nav: NavDisplay,
+    /// Today's date, as it is displayed.
+    pub date: &'a str,
 }
 
 /// Draws `bar` showing `state`: its background, a radar dot for each
@@ -192,6 +203,24 @@ pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
         layout.fuel_partial,
     );
     draw_nav(list, layout, origin, &state.nav);
+    draw_date(list, layout, origin, state.date);
+}
+
+/// Draws `date` on the last line of the layout's cargo area, at the bar's
+/// `origin`, in the bright text colour and the bar's font.
+fn draw_date(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, date: &str) {
+    let area = layout.cargo.offset(origin);
+    let size = layout.font_size;
+    let last_line = Point::new(area.min.x, area.max.y - LINE_HEIGHT * size);
+    let width = Some(area.width());
+    list.text_in(
+        layout.font,
+        date,
+        last_line,
+        size,
+        width,
+        layout.bright_text,
+    );
 }
 
 /// Draws `nav` in the layout's nav area, at the bar's `origin`: a label in
@@ -292,6 +321,7 @@ mod tests {
             armor: rect(35.0, 216.0, 184.0, 223.0),
             fuel: rect(35.0, 234.0, 184.0, 241.0),
             nav: rect(8.0, 254.0, 184.0, 286.0),
+            cargo: rect(8.0, 458.0, 184.0, 552.0),
             bright_text: TEXT,
             dim_text: Color::DIM,
             bright_radar: RADAR,
@@ -573,6 +603,7 @@ mod tests {
             stellars: &[],
             reserves,
             nav: NavDisplay::None,
+            date: DATE,
         }
     }
 
@@ -687,6 +718,7 @@ mod tests {
             stellars: &stellars,
             reserves: reserves(30.0, 60.0, 300.0),
             nav: NavDisplay::Stellar("Earth".to_owned()),
+            date: DATE,
         };
         let list = drawn(&stock(), &hud);
         let mut expected = DrawList::new();
@@ -698,6 +730,7 @@ mod tests {
         expected.line(at(865.0, 237.5), at(1014.0, 237.5), 7.0, FUEL_FULL);
         expected.push(nav_text(NAV_STELLAR, 0, Color::DIM));
         expected.push(nav_text("Earth", 1, TEXT));
+        expected.push(date_text(DATE));
         assert_eq!(list, expected);
         assert_eq!(RADAR_DOT_SIZE, 2.0);
     }
@@ -708,6 +741,14 @@ mod tests {
         list.iter()
             .filter(|command| matches!(command, DrawCommand::Text { .. }))
             .cloned()
+            .collect()
+    }
+
+    /// The texts but the date.
+    fn nav_texts(list: &DrawList) -> Vec<DrawCommand> {
+        texts(list)
+            .into_iter()
+            .filter(|command| !matches!(command, DrawCommand::Text { text, .. } if text == DATE))
             .collect()
     }
 
@@ -730,7 +771,7 @@ mod tests {
             nav,
             ..state(reserves(30.0, 60.0, 300.0))
         };
-        texts(&drawn(&stock(), &hud))
+        nav_texts(&drawn(&stock(), &hud))
     }
 
     #[test]
@@ -815,12 +856,78 @@ mod tests {
             color,
         };
         assert_eq!(
-            texts(&drawn(&bar, &hud)),
+            nav_texts(&drawn(&bar, &hud)),
             [
                 text(NAV_STELLAR, 300.0, FUEL_PARTIAL),
                 text("Earth", 314.4, SHIELD)
             ]
         );
+    }
+
+    // The date.
+
+    const DATE: &str = "June 23, 1177 NC";
+
+    /// `text` on the last line of the stock bar's cargo area, at (830, 0):
+    /// its (8, 458)-(184, 552) is (838, 458)-(1014, 552), and the last
+    /// line of Charcoal 11 starts one line height (13.2) above its bottom.
+    fn date_text(text: &str) -> DrawCommand {
+        DrawCommand::Text {
+            text: text.to_owned(),
+            font: Font::Charcoal,
+            origin: at(838.0, 552.0 - 13.2),
+            size: 11.0,
+            wrap_width: Some(176.0),
+            color: TEXT,
+        }
+    }
+
+    fn dates(list: &DrawList) -> Vec<DrawCommand> {
+        texts(list)
+            .into_iter()
+            .filter(|command| matches!(command, DrawCommand::Text { text, .. } if text == DATE))
+            .collect()
+    }
+
+    #[test]
+    fn the_date_is_on_the_cargo_areas_last_line_bright() {
+        let list = drawn(&stock(), &state(reserves(30.0, 60.0, 300.0)));
+        assert_eq!(dates(&list), [date_text(DATE)]);
+        let mut expected = nav_texts(&list);
+        expected.push(date_text(DATE));
+        assert_eq!(texts(&list), expected, "after the nav area");
+    }
+
+    #[test]
+    fn the_date_moves_with_the_bar_and_reads_its_layout() {
+        let mut bar = stock();
+        bar.background = Some(Background {
+            id: 700,
+            width: 200.0,
+            height: 767.0,
+        });
+        bar.layout.font = Font::Geneva;
+        bar.layout.font_size = 10.0;
+        bar.layout.cargo = rect(10.0, 400.0, 110.0, 500.0);
+        bar.layout.bright_text = SHIELD;
+        let list = drawn(&bar, &state(reserves(30.0, 60.0, 300.0)));
+        assert_eq!(
+            dates(&list),
+            [DrawCommand::Text {
+                text: DATE.to_owned(),
+                font: Font::Geneva,
+                origin: at(834.0, 488.0),
+                size: 10.0,
+                wrap_width: Some(100.0),
+                color: SHIELD,
+            }]
+        );
+        bar.background = None;
+        let list = drawn(&bar, &state(reserves(30.0, 60.0, 300.0)));
+        let DrawCommand::Text { origin, .. } = &dates(&list)[0] else {
+            unreachable!("a text")
+        };
+        assert_eq!(*origin, at(VIEW_SIZE.0 - STATUS_BAR_WIDTH + 10.0, 488.0));
     }
 
     #[test]

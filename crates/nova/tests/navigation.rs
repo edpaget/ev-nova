@@ -10,6 +10,9 @@
 //! Alpha Prime, then Alpha Minor again, and the selected stellar takes
 //! the place of the course. Arriving in Beta clears both; a course back to
 //! Alpha, explored, shows its name.
+//!
+//! The date, at the foot of the cargo area, reads "June 23, 1177 NC" and
+//! moves on a day with each jump.
 
 use std::io;
 use std::path::Path;
@@ -87,11 +90,14 @@ fn put_u32s(bytes: &mut [u8], at: usize, values: &[u32]) {
     }
 }
 
-/// A `chär` starting in ship 128 in system 128 on 23 June 1177.
+/// A `chär` starting in ship 128 in system 128 on 23 June 1177, its
+/// dates shown as stock's are: no `DatePrefix` (0x13A) and `DateSuffix`
+/// (0x14A) " NC".
 fn character() -> Vec<u8> {
     let mut bytes = vec![0; Character::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x04, &[128, 128, -1, -1, -1]);
     put_i16s(&mut bytes, 0x134, &[23, 6, 1177]);
+    bytes[0x14A..0x14E].copy_from_slice(b" NC\0");
     bytes
 }
 
@@ -105,7 +111,8 @@ fn ship() -> Vec<u8> {
 }
 
 /// Stock `ïntf` 128's areas and font, over background `PICT` 700: its
-/// `NavArea` is (8, 254)-(184, 286).
+/// `NavArea` is (8, 254)-(184, 286) and its `CargoArea` (8, 458)-(184,
+/// 552).
 fn interface() -> Vec<u8> {
     let mut bytes = vec![0; Interface::SIZE.expect("fixed")];
     put_u32s(&mut bytes, 0x00, &[0x00FF_FFFF, 0x0080_8080]);
@@ -118,6 +125,7 @@ fn interface() -> Vec<u8> {
     put_i16s(&mut bytes, 0x30, &[234, 35, 241, 184]);
     put_u32s(&mut bytes, 0x38, &[0x00FF_FF00, 0x0080_8000]);
     put_i16s(&mut bytes, 0x40, &[254, 8, 286, 184]);
+    put_i16s(&mut bytes, 0x58, &[458, 8, 552, 184]);
     bytes[0x60..0x66].copy_from_slice(b"Geneva");
     put_i16s(&mut bytes, 0xA0, &[12]);
     put_i16s(&mut bytes, 0xA4, &[700]);
@@ -359,6 +367,19 @@ impl Harness {
     /// (8, 254)-(184, 286), on the bar against the right edge of the
     /// 1024-wide window, 194 wide.
     fn nav(&mut self) -> Vec<String> {
+        self.texts_on_bar(254.0..=286.0)
+    }
+
+    /// The texts the next frame draws in the cargo area, where the date
+    /// goes: stock `ïntf` 128's (8, 458)-(184, 552), on the bar.
+    fn date(&mut self) -> Vec<String> {
+        self.texts_on_bar(458.0..=552.0)
+    }
+
+    /// The texts the next frame draws starting across the bar's areas
+    /// (from 8 to 184 of its 194, against the right edge of the 1024-wide
+    /// window) at a height in `ys`.
+    fn texts_on_bar(&mut self, ys: std::ops::RangeInclusive<f32>) -> Vec<String> {
         let frame = self.frame();
         frame
             .batches
@@ -369,7 +390,7 @@ impl Harness {
             })
             .filter(|run| {
                 let (x, y) = run.origin_px;
-                (838.0..=1014.0).contains(&x) && (254.0..=286.0).contains(&y)
+                (838.0..=1014.0).contains(&x) && ys.contains(&y)
             })
             .map(|run| run.text)
             .collect()
@@ -418,4 +439,24 @@ fn tab_and_the_course_map_set_what_the_hud_navigation_area_shows() {
     assert_eq!(game.nav(), [NAV_HYPERSPACE, "Alpha"]);
     game.press(KeyCode::Tab);
     assert_eq!(game.nav(), [NAV_STELLAR, "Beta Prime"]);
+}
+
+#[test]
+fn the_hud_date_moves_on_a_day_with_each_jump() {
+    let mut game = Harness::flying();
+    assert_eq!(game.date(), ["June 23, 1177 NC"]);
+
+    game.plot(129);
+    game.fly_out();
+    game.press(KeyCode::KeyJ);
+    game.run(2);
+    assert_eq!(game.session().system(), SystemId(129));
+    assert_eq!(game.date(), ["June 24, 1177 NC"]);
+
+    game.plot(128);
+    game.fly_out();
+    game.press(KeyCode::KeyJ);
+    game.run(2);
+    assert_eq!(game.session().system(), SystemId(128));
+    assert_eq!(game.date(), ["June 25, 1177 NC"]);
 }

@@ -398,7 +398,7 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
     // The stars; the two stellars, then their names; the ship; the title
     // and help lines; then the HUD: the status bar's picture, two radar
     // dots and three bars, then the nav area's "No Destination" (never the
-    // system's name).
+    // system's name) and the date.
     let shape = shape(&first);
     assert_eq!(shape[0].0, "solid");
     assert!(shape[0].1 > 0, "stars");
@@ -411,7 +411,7 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
             ("text", 2),
             ("sprites", 1),
             ("solid", 5),
-            ("text", 1)
+            ("text", 2)
         ]
     );
     let start = quads(&first);
@@ -513,11 +513,14 @@ fn the_hud_is_drawn_while_flying() {
     );
 
     // The nav area comes last, with nothing selected and no course: "No
-    // Destination", not the system's name.
+    // Destination", not the system's name; then the date, the `chär`'s
+    // unset start (1 January of year 0) without affixes.
     assert!(
         matches!(
             first.batches.last(),
-            Some(Batch::Text(runs)) if runs.len() == 1 && runs[0].text == NAV_NO_DESTINATION
+            Some(Batch::Text(runs)) if runs.len() == 2
+                && runs[0].text == NAV_NO_DESTINATION
+                && runs[1].text == "January 1, 0"
         ),
         "the nav area last: {:?}",
         shape(&first)

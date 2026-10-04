@@ -54,6 +54,7 @@ impl StatusBars for GameData {
             armor: bounds(intf.armor_area),
             fuel: bounds(intf.fuel_area),
             nav: bounds(intf.nav_area),
+            cargo: bounds(intf.cargo_area),
             bright_text: Color::from_rgb24(intf.bright_text),
             dim_text: Color::from_rgb24(intf.dim_text),
             bright_radar: Color::from_rgb24(intf.bright_radar),
@@ -223,6 +224,7 @@ mod tests {
         put_u32(&mut bytes, 0x38, 0x00FF_FF00);
         put_u32(&mut bytes, 0x3C, 0x0080_8000);
         put_rect(&mut bytes, 0x40, (254, 8, 286, 184));
+        put_rect(&mut bytes, 0x58, (458, 8, 552, 184));
         bytes[0x60..0x60 + font.len()].copy_from_slice(font.as_bytes());
         put_i16(&mut bytes, 0xA0, size);
         put_i16(&mut bytes, 0xA4, bkgnd);
@@ -264,6 +266,7 @@ mod tests {
                 armor: rect(35.0, 216.0, 184.0, 223.0),
                 fuel: rect(35.0, 234.0, 184.0, 241.0),
                 nav: rect(8.0, 254.0, 184.0, 286.0),
+                cargo: rect(8.0, 458.0, 184.0, 552.0),
                 bright_text: Color::rgba(255, 255, 255, 255),
                 dim_text: Color::rgba(128, 128, 128, 255),
                 bright_radar: Color::rgba(0, 255, 0, 255),

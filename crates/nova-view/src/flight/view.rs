@@ -679,6 +679,15 @@ impl<C> FlightView<C> {
 
     /// The ship's shield, armour and fuel, or none for a session that
     /// never started.
+    /// Today's date as the HUD shows it, or none for a session that never
+    /// started.
+    fn date_text(&self) -> String {
+        self.session
+            .as_ref()
+            .map(Session::date_text)
+            .unwrap_or_default()
+    }
+
     fn reserves(&self) -> Reserves {
         self.session
             .as_ref()
@@ -862,11 +871,13 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         match &self.status_bar {
             Ok(bar) => {
                 let stellars: Vec<Point> = scene.stellars().iter().map(|s| s.position).collect();
+                let date = self.date_text();
                 let state = HudState {
                     position: self.shown_position(),
                     stellars: &stellars,
                     reserves: self.reserves(),
                     nav: self.nav_display(scene),
+                    date: &date,
                 };
                 hud::draw(list, bar, &state);
             }
@@ -979,7 +990,11 @@ mod tests {
             character: Ok(CharacterStart {
                 ship: Some(ShipId(128)),
                 systems: [None, Some(SystemId(130)), None, None],
-                start: StartDate::default(),
+                start: StartDate {
+                    day: 23,
+                    month: 6,
+                    year: 1177,
+                },
                 ..CharacterStart::default()
             }),
             fields: FIELDS,
@@ -1013,6 +1028,9 @@ mod tests {
         }
     }
 
+    /// The start's date, with stock's affixes.
+    const DATE: &str = "June 23, 1177 NC";
+
     /// Stock `ïntf` 128's areas, with background `PICT` 700.
     fn layout() -> StatusBarLayout {
         let rect = |left, top, right, bottom| crate::geometry::Bounds {
@@ -1025,6 +1043,7 @@ mod tests {
             armor: rect(35.0, 216.0, 184.0, 223.0),
             fuel: rect(35.0, 234.0, 184.0, 241.0),
             nav: rect(8.0, 254.0, 184.0, 286.0),
+            cargo: rect(8.0, 458.0, 184.0, 552.0),
             bright_text: Color::WHITE,
             dim_text: Color::DIM,
             bright_radar: Color::rgba(0, 255, 0, 255),
@@ -1594,6 +1613,7 @@ mod tests {
                 stellars: &[at(0.0, -600.0), at(300.0, -200.0)],
                 reserves: ShipStats::new(FIELDS, &[]).full(),
                 nav: NavDisplay::None,
+                date: DATE,
             },
         );
         assert_eq!(list, expected);
@@ -1782,6 +1802,7 @@ mod tests {
                 stellars: &[],
                 reserves,
                 nav: NavDisplay::None,
+                date: DATE,
             },
         );
         assert_eq!(lines(&drawn(&view)), lines(&expected));
@@ -2639,11 +2660,12 @@ mod tests {
                 stellars: &[at(0.0, 0.0)],
                 reserves: reserves(&view),
                 nav: NavDisplay::None,
+                date: "June 24, 1177 NC",
             },
         );
         assert!(
             list.iter().skip(hud_at(&list)).eq(hud.iter()),
-            "the HUD, with a jump's fuel less, is last"
+            "the HUD, with a jump's fuel less and a day on, is last"
         );
         view.tick(ms(100));
         assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(179), "shrinking");
@@ -3177,6 +3199,45 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The texts drawn in the cargo area, at the stock bar's (830, 0),
+    /// with where each starts.
+    fn cargo(view: &View) -> Vec<(String, Point)> {
+        let area = layout().cargo.offset(at(830.0, 0.0));
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } if area.contains(*origin) => {
+                    Some((text.clone(), *origin))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The last line of the cargo area, (8, 458)-(184, 552) at (830, 0):
+    /// one line of Geneva 12 (1.2 x 12) above its bottom.
+    fn last_cargo_line() -> Point {
+        at(838.0, 552.0 - 1.2 * 12.0)
+    }
+
+    #[test]
+    fn the_hud_shows_the_date_on_the_cargo_areas_last_line() {
+        assert_eq!(
+            layout().cargo,
+            crate::geometry::Bounds {
+                min: at(8.0, 458.0),
+                max: at(184.0, 552.0),
+            }
+        );
+        let mut view = flight();
+        assert_eq!(cargo(&view), [(DATE.to_owned(), last_cargo_line())]);
+        jump_to_alpha(&mut view);
+        assert_eq!(
+            cargo(&view),
+            [("June 24, 1177 NC".to_owned(), last_cargo_line())]
+        );
     }
 
     #[test]

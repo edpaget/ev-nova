@@ -61,6 +61,8 @@ pub struct StatusBarLayout {
     pub fuel: Bounds,
     /// `NavArea`.
     pub nav: Bounds,
+    /// `CargoArea`: its last line shows the date.
+    pub cargo: Bounds,
     /// `BrightText`.
     pub bright_text: Color,
     /// `DimText`.
@@ -174,6 +176,7 @@ mod tests {
                 armor: none,
                 fuel: none,
                 nav: none,
+                cargo: none,
                 bright_text: Color::WHITE,
                 dim_text: Color::WHITE,
                 bright_radar: Color::WHITE,
