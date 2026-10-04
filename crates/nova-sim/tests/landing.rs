@@ -5,7 +5,7 @@
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
     CharacterStart, Controls, LandingRefusal, LandingSite, PilotCatalog, Session, ShipFields,
-    ShipId, StartError, StellarId, SystemId, Vec2,
+    ShipId, StarSystem, StartDate, StartError, StellarId, SystemId, Vec2,
 };
 
 /// One `chär` flying an average ship that turns 6° a tick from system
@@ -19,6 +19,7 @@ impl PilotCatalog for Pilot {
         Ok(CharacterStart {
             ship: Some(ShipId(128)),
             systems: [Some(SystemId(130)), None, None, None],
+            start: StartDate::default(),
         })
     }
 
@@ -37,6 +38,10 @@ impl PilotCatalog for Pilot {
 
     fn landing_sites(&self, _system: SystemId) -> Vec<LandingSite> {
         self.sites.clone()
+    }
+
+    fn star_map(&self) -> Vec<StarSystem> {
+        Vec::new()
     }
 }
 

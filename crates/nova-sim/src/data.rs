@@ -7,12 +7,19 @@ use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 
-use crate::catalog::{CharacterStart, LandingSite, PilotCatalog, ShipId, StartError, SystemId};
+use crate::catalog::{
+    CharacterStart, LandingSite, PilotCatalog, ShipId, StarSystem, StartDate, StartError, SystemId,
+};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
+///
+/// The starting date's day and month are the `chär`'s two words at 0x134
+/// and 0x136, which the Bible leaves undocumented and the ResForge template
+/// labels the starting day and month (stock: 23 and 6, with `StartYear`
+/// 1177).
 impl PilotCatalog for GameData {
     fn first_character(&self) -> Result<CharacterStart, StartError> {
         let (_, first) = self
@@ -23,6 +30,11 @@ impl PilotCatalog for GameData {
         Ok(CharacterStart {
             ship: character.record.ship_type,
             systems: character.record.system,
+            start: StartDate {
+                day: character.record.unknown_0x134,
+                month: character.record.unknown_0x136,
+                year: character.record.start_year,
+            },
         })
     }
 
@@ -35,6 +47,7 @@ impl PilotCatalog for GameData {
                 shield: ship.record.shield,
                 armor: ship.record.armor,
                 fuel: ship.record.fuel,
+                fuel_regen: ship.record.fuel_regen,
             }),
             Some(Err(err)) => Err(err.to_string()),
             None => Err(format!("no shïp {}", id.0)),
@@ -70,6 +83,19 @@ impl PilotCatalog for GameData {
             })
             .collect()
     }
+
+    fn star_map(&self) -> Vec<StarSystem> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let system = system.ok()?.record;
+                Some(StarSystem {
+                    id: SystemId(id),
+                    position: Vec2::new(f32::from(system.x_pos), f32::from(system.y_pos)),
+                    links: system.con.into_iter().flatten().collect(),
+                })
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -86,7 +112,7 @@ mod tests {
     use nova_rsrc::{Fork, ForkReader, ResType};
 
     use super::*;
-    use crate::catalog::StellarId;
+    use crate::catalog::{StarSystem, StartDate, StellarId};
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -168,10 +194,26 @@ mod tests {
             Ok(CharacterStart {
                 ship: Some(ShipId(128)),
                 systems: [None, Some(SystemId(999)), Some(SystemId(130)), None],
+                start: StartDate::default(),
             })
         );
         let shipless = store(&[(Character::TYPE, 128, character(-1, [130, -1, -1, -1]))]);
         assert_eq!(shipless.first_character().map(|c| c.ship), Ok(None));
+    }
+
+    #[test]
+    fn the_start_date_is_the_chärs_day_month_and_year() {
+        let mut bytes = character(128, [130, -1, -1, -1]);
+        put_i16s(&mut bytes, 0x134, &[23, 6, 1177]);
+        let data = store(&[(Character::TYPE, 128, bytes)]);
+        assert_eq!(
+            data.first_character().map(|c| c.start),
+            Ok(StartDate {
+                day: 23,
+                month: 6,
+                year: 1177
+            })
+        );
     }
 
     #[test]
@@ -221,6 +263,14 @@ mod tests {
                 ..ShipFields::default()
             })
         );
+    }
+
+    #[test]
+    fn a_ships_fields_include_its_fuel_regeneration() {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x5E, &[8]);
+        let data = store(&[(Ship::TYPE, 128, bytes)]);
+        assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.fuel_regen), Ok(8));
     }
 
     #[test]
@@ -305,6 +355,41 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// A `sÿst` at map (`x`, `y`) with these hyperlinks, every other slot
+    /// -1.
+    fn linked(x: i16, y: i16, links: &[i16]) -> Vec<u8> {
+        let mut bytes = system();
+        put_i16s(&mut bytes, 0x00, &[x, y]);
+        put_i16s(&mut bytes, 0x04, &[-1; 16]);
+        put_i16s(&mut bytes, 0x04, links);
+        bytes
+    }
+
+    #[test]
+    fn the_star_map_is_every_readable_system_by_id_with_its_position_and_links() {
+        let data = store(&[
+            (System::TYPE, 131, linked(600, -75, &[130, 999, 131])),
+            (System::TYPE, 129, short(linked(0, 0, &[130]))),
+            (System::TYPE, 130, linked(-20, 40, &[])),
+        ]);
+        assert_eq!(
+            data.star_map(),
+            [
+                StarSystem {
+                    id: SystemId(130),
+                    position: Vec2::new(-20.0, 40.0),
+                    links: Vec::new(),
+                },
+                StarSystem {
+                    id: SystemId(131),
+                    position: Vec2::new(600.0, -75.0),
+                    links: vec![SystemId(130), SystemId(999), SystemId(131)],
+                },
+            ]
+        );
+        assert_eq!(store(&[]).star_map(), []);
     }
 
     #[test]

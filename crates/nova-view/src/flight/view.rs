@@ -405,8 +405,8 @@ mod tests {
 
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
-        CharacterStart, Handling, LandingSite, Reserves, ShipFields, ShipId, StartError, SystemId,
-        TICK, Vec2, step,
+        CharacterStart, Handling, LandingSite, Reserves, ShipFields, ShipId, StarSystem, StartDate,
+        StartError, SystemId, TICK, Vec2, step,
     };
 
     use super::*;
@@ -438,6 +438,7 @@ mod tests {
         shield: 40,
         armor: 60,
         fuel: 250,
+        fuel_regen: 0,
     };
 
     fn sheet() -> ShipSheet {
@@ -454,6 +455,7 @@ mod tests {
             character: Ok(CharacterStart {
                 ship: Some(ShipId(128)),
                 systems: [None, Some(SystemId(130)), None, None],
+                start: StartDate::default(),
             }),
             sheet: Ok(sheet()),
             bar: Ok(layout()),
@@ -518,6 +520,10 @@ mod tests {
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
             assert_eq!(system, SystemId(130));
             self.sites.clone()
+        }
+
+        fn star_map(&self) -> Vec<StarSystem> {
+            Vec::new()
         }
     }
 

@@ -30,8 +30,9 @@ pub const STATUS_BAR_WIDTH: f32 = 194.0;
 pub const RADAR_SCALE: f32 = 1.0 / 16.0;
 /// The side of a radar dot.
 pub const RADAR_DOT_SIZE: f32 = 2.0;
-/// Fuel for one jump (the Bible: "100 is one jump").
-pub const FUEL_PER_JUMP: f32 = 100.0;
+/// Fuel for one jump (the Bible: "100 is one jump"): the simulation's
+/// [`JUMP_FUEL`](nova_sim::hyperspace::JUMP_FUEL).
+pub const FUEL_PER_JUMP: f32 = nova_sim::hyperspace::JUMP_FUEL;
 /// The size of the message shown when no status bar can be read.
 pub const MESSAGE_SIZE: f32 = 12.0;
 

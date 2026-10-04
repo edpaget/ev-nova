@@ -8,8 +8,8 @@
 //! They are chosen so flight feels like Nova, not to match the original
 //! number for number.
 
-/// A `shïp`'s `Speed`, `Accel`, `Maneuver`, `Shield`, `Armor` and `Fuel`,
-/// raw from the record.
+/// A `shïp`'s `Speed`, `Accel`, `Maneuver`, `Shield`, `Armor`, `Fuel` and
+/// `FuelRegen`, raw from the record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShipFields {
     /// `Speed`: top speed; 300 is average.
@@ -24,6 +24,9 @@ pub struct ShipFields {
     pub armor: i16,
     /// `Fuel`: fuel capacity; 100 is one jump.
     pub fuel: i16,
+    /// `FuelRegen`: ticks per unit of fuel regenerated; 0 or below is
+    /// none (see [`crate::fuel`]).
+    pub fuel_regen: i16,
 }
 
 /// `Speed` per pixel a tick. The Bible gives a weapon's speed in "pixels

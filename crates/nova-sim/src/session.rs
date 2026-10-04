@@ -10,11 +10,24 @@
 //! [`landing`](crate::landing) rules allow it: docked, it rests at the
 //! stellar's centre and ticks move nothing until it takes off again, from
 //! the same place.
+//!
+//! The player plots a course to a system on the star map, read once when
+//! the session starts: the fewest jumps along the hyperlinks. A jump to
+//! the next system on it begins when the [`hyperspace`](crate::hyperspace)
+//! rules allow, and while it lasts ticks move nothing. When the jump is
+//! over ([`Session::arrive`]) the ship is in the next system, at its edge,
+//! with a jump's fuel used and a day gone by, and the rest of the course
+//! still ahead. In flight, fuel regenerates each tick at the ship's rate.
 
 use crate::catalog::{GovtId, LandingSite, PilotCatalog, ShipId, StartError, StellarId, SystemId};
+use crate::date::GameDate;
 use crate::flight::{Controls, ShipState, step};
+use crate::fuel::{fuel_regen_per_tick, regenerate};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::hyperspace::{
+    DAYS_PER_JUMP, JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump,
+};
 use crate::landing::{LandingRefusal, check_landing};
 use crate::reserves::Reserves;
 
@@ -29,6 +42,16 @@ pub struct Session {
     sites: Vec<LandingSite>,
     /// The stellar the ship is docked at, if it has landed.
     landed: Option<StellarId>,
+    /// The star map, read when the session starts.
+    star_map: StarMap,
+    /// The systems still to jump to, in order, ending at the destination.
+    course: Vec<SystemId>,
+    /// The system being jumped to, while a jump is under way.
+    jumping: Option<SystemId>,
+    /// Today's date.
+    date: GameDate,
+    /// The fuel gained each tick in flight.
+    fuel_regen: f32,
 }
 
 impl Session {
@@ -55,15 +78,99 @@ impl Session {
             },
             sites: catalog.landing_sites(system),
             landed: None,
+            star_map: StarMap::new(catalog.star_map()),
+            course: Vec::new(),
+            jumping: None,
+            date: GameDate::from_start(character.start),
+            // No outfits yet: outfitting will pass the ship's.
+            fuel_regen: fuel_regen_per_tick(fields.fuel_regen, &[]),
         })
     }
 
-    /// Advances the session one tick under the player's `controls`. A
-    /// landed ship does not move.
+    /// Advances the session one tick under the player's `controls`, then
+    /// regenerates fuel. A landed ship, or one jumping, does not move, and
+    /// gains no fuel.
     pub fn tick(&mut self, controls: Controls) {
-        if self.landed.is_none() {
+        if self.landed.is_none() && self.jumping.is_none() {
             step(&mut self.player, &self.handling, controls);
+            regenerate(&mut self.player.reserves.fuel, self.fuel_regen);
         }
+    }
+
+    /// Plots a course from the system the ship is in to `to`, replacing any
+    /// course, and gives it. When there is no route the course is cleared.
+    pub fn plot_course(&mut self, to: SystemId) -> Result<&[SystemId], RouteError> {
+        match self.star_map.route(self.system, to) {
+            Ok(route) => {
+                self.course = route;
+                Ok(&self.course)
+            }
+            Err(error) => {
+                self.course.clear();
+                Err(error)
+            }
+        }
+    }
+
+    /// The systems still to jump to, in order, ending at the destination;
+    /// none when no course is plotted or the destination has been reached.
+    #[must_use]
+    pub fn course(&self) -> &[SystemId] {
+        &self.course
+    }
+
+    /// Begins a jump to the next system on the course, if the
+    /// [`hyperspace`](crate::hyperspace) rules allow it, and gives that
+    /// system; otherwise the refusal says why. Until it arrives, ticks
+    /// move nothing.
+    pub fn begin_jump(&mut self) -> Result<SystemId, JumpRefusal> {
+        let next = check_jump(&self.player, self.course.first().copied())?;
+        self.jumping = Some(next);
+        Ok(next)
+    }
+
+    /// The system being jumped to, while a jump is under way.
+    #[must_use]
+    pub fn jumping(&self) -> Option<SystemId> {
+        self.jumping
+    }
+
+    /// Ends the jump under way, if any, and gives the system arrived in:
+    /// the jump's fuel is used, the date advances, the system is taken off
+    /// the course, and the ship is placed at its edge facing the system it
+    /// came from (see [`arrival`]) with its reserves as they were. The new
+    /// system's stellars are read from `catalog`. `None`, and nothing
+    /// changes, when no jump is under way.
+    pub fn arrive(&mut self, catalog: &impl PilotCatalog) -> Option<SystemId> {
+        let next = self.jumping.take()?;
+        let mut reserves = self.player.reserves;
+        reserves.fuel.now -= JUMP_FUEL;
+        for _ in 0..DAYS_PER_JUMP {
+            self.date = self.date.next_day();
+        }
+        if self.course.first() == Some(&next) {
+            self.course.remove(0);
+        }
+        let map = |id| self.star_map.position(id).unwrap_or_default();
+        self.player = ShipState {
+            reserves,
+            ..arrival(map(self.system), map(next), &self.handling)
+        };
+        self.system = next;
+        self.sites = catalog.landing_sites(next);
+        Some(next)
+    }
+
+    /// Today's date.
+    #[must_use]
+    pub fn date(&self) -> GameDate {
+        self.date
+    }
+
+    /// The fuel the ship gains each tick in flight.
+    #[must_use]
+    pub fn fuel_regen_per_tick(&self) -> f32 {
+        self.fuel_regen
     }
 
     /// Lands the ship on the stellar it is over, if the
@@ -140,10 +247,11 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::catalog::{CharacterStart, LandingSite, StellarId};
+    use crate::catalog::{CharacterStart, LandingSite, StarSystem, StartDate, StellarId};
     use crate::flight::Turn;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
+    use crate::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE, RouteError};
     use crate::landing::{LandingRefusal, StellarFlags};
     use crate::reserves::{Gauge, Reserves};
 
@@ -157,6 +265,8 @@ mod tests {
         /// Each system's landing sites; any other has none.
         sites: Vec<(SystemId, Vec<LandingSite>)>,
         sites_asked: RefCell<Vec<SystemId>>,
+        star_map: Vec<StarSystem>,
+        star_map_reads: RefCell<usize>,
     }
 
     const FAST: ShipFields = ShipFields {
@@ -166,6 +276,7 @@ mod tests {
         shield: 30,
         armor: 45,
         fuel: 300,
+        fuel_regen: 0,
     };
 
     /// A landable planet at (`x`, `y`), 100 x 100 (radius 50).
@@ -179,15 +290,18 @@ mod tests {
         }
     }
 
-    /// The first `chär` flies ship 128 from system 130; ship 128 is fast,
-    /// and systems 130 and 131 exist. System 130 holds a planet, 128, at
-    /// (30, -40), which the ship starts over, and another, 129, far away;
-    /// system 131 holds one at the centre.
+    /// The first `chär` flies ship 128 from system 130 on 23 June 1177;
+    /// ship 128 is fast, and systems 130 and 131 exist. System 130 holds a
+    /// planet, 128, at (30, -40), which the ship starts over, and another,
+    /// 129, far away; system 131 holds one at the centre. On the map, 130
+    /// at (0, 0), 131 at (600, 0) and 132 at (600, 600) are linked in a
+    /// line, and 133 is linked to none.
     fn catalog() -> FakePilotCatalog {
         FakePilotCatalog {
             character: Ok(CharacterStart {
                 ship: Some(ShipId(128)),
                 systems: [Some(SystemId(130)), None, None, None],
+                start: START,
             }),
             ships: vec![(ShipId(128), Ok(FAST))],
             systems: vec![SystemId(130), SystemId(131)],
@@ -200,6 +314,27 @@ mod tests {
                 (SystemId(131), vec![planet(140, 0.0, 0.0)]),
             ],
             sites_asked: RefCell::default(),
+            star_map: vec![
+                star(130, (0.0, 0.0), &[131]),
+                star(131, (600.0, 0.0), &[132]),
+                star(132, (600.0, 600.0), &[]),
+                star(133, (-600.0, 0.0), &[]),
+            ],
+            star_map_reads: RefCell::default(),
+        }
+    }
+
+    const START: StartDate = StartDate {
+        day: 23,
+        month: 6,
+        year: 1177,
+    };
+
+    fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
+        StarSystem {
+            id: SystemId(id),
+            position: Vec2::new(x, y),
+            links: links.iter().copied().map(SystemId).collect(),
         }
     }
 
@@ -208,6 +343,7 @@ mod tests {
             character: Ok(CharacterStart {
                 ship: Some(ShipId(128)),
                 systems: systems.map(|slot| slot.map(SystemId)),
+                start: START,
             }),
             ..catalog()
         }
@@ -236,6 +372,11 @@ mod tests {
                 .iter()
                 .find(|(id, _)| *id == system)
                 .map_or_else(Vec::new, |(_, sites)| sites.clone())
+        }
+
+        fn star_map(&self) -> Vec<StarSystem> {
+            *self.star_map_reads.borrow_mut() += 1;
+            self.star_map.clone()
         }
     }
 
@@ -332,6 +473,7 @@ mod tests {
             character: Ok(CharacterStart {
                 ship: None,
                 systems: [Some(SystemId(130)), None, None, None],
+                start: START,
             }),
             ..catalog()
         };
@@ -491,5 +633,304 @@ mod tests {
         };
         let mut session = Session::start(&empty).expect("starts");
         assert_eq!(session.land(), Err(LandingRefusal::NoStellars));
+    }
+
+    // Hyperspace.
+
+    fn ids(route: &[i16]) -> Vec<SystemId> {
+        route.iter().copied().map(SystemId).collect()
+    }
+
+    fn dmy(session: &Session) -> (u8, u8, i32) {
+        let date = session.date();
+        (date.day(), date.month(), date.year())
+    }
+
+    /// Flies the ship out from the centre until it is at least
+    /// [`MIN_JUMP_DISTANCE`] away: it first turns to face away from the
+    /// centre (Down faces against its motion), then thrusts.
+    fn fly_out(session: &mut Session) {
+        for _ in 0..3000 {
+            let player = *session.player();
+            if player.position.length() >= MIN_JUMP_DISTANCE {
+                return;
+            }
+            let outward = if player.position.length() > 0.0 {
+                crate::flight::heading_of(player.position)
+            } else {
+                0.0
+            };
+            let off = crate::flight::shortest_turn(player.heading, outward).abs();
+            // Down lands exactly on the heading against the motion, which
+            // is outward while the ship drifts in.
+            let controls = if off < 1e-3 {
+                THRUST
+            } else if player.velocity.length() > crate::flight::AT_REST_SPEED {
+                Controls {
+                    reverse: true,
+                    ..Controls::default()
+                }
+            } else {
+                Controls {
+                    turn: Turn::Right,
+                    ..Controls::default()
+                }
+            };
+            session.tick(controls);
+        }
+        panic!("never got out: {:?}", session.player());
+    }
+
+    /// Plots a course to `to`, flies out and jumps, and arrives.
+    fn jump(session: &mut Session, catalog: &FakePilotCatalog, to: i16) -> Option<SystemId> {
+        if session.course().last() != Some(&SystemId(to)) {
+            session.plot_course(SystemId(to)).expect("a route");
+        }
+        fly_out(session);
+        session.begin_jump().expect("jumps");
+        session.arrive(catalog)
+    }
+
+    #[test]
+    fn a_session_reads_the_star_map_and_the_date_once_when_it_starts() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(dmy(&session), (23, 6, 1177));
+        assert_eq!(*catalog.star_map_reads.borrow(), 1);
+        session.plot_course(SystemId(132)).expect("a route");
+        jump(&mut session, &catalog, 132);
+        jump(&mut session, &catalog, 132);
+        assert_eq!(*catalog.star_map_reads.borrow(), 1);
+        assert_eq!(session.system(), SystemId(132));
+        assert_eq!(session.course(), []);
+        assert_eq!(session.jumping(), None);
+    }
+
+    #[test]
+    fn plotting_a_course_keeps_the_route_and_a_failed_plot_clears_it() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        assert_eq!(session.course(), []);
+        assert_eq!(
+            session.plot_course(SystemId(132)),
+            Ok(&ids(&[131, 132])[..])
+        );
+        assert_eq!(session.course(), ids(&[131, 132]));
+        assert_eq!(session.plot_course(SystemId(131)), Ok(&ids(&[131])[..]));
+        assert_eq!(session.course(), ids(&[131]));
+        assert_eq!(
+            session.plot_course(SystemId(133)),
+            Err(RouteError::Unreachable)
+        );
+        assert_eq!(session.course(), []);
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(
+            session.plot_course(SystemId(130)),
+            Err(RouteError::AlreadyThere)
+        );
+        assert_eq!(session.course(), []);
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.plot_course(SystemId(999)), Err(RouteError::Unknown));
+        assert_eq!(session.course(), []);
+    }
+
+    #[test]
+    fn a_jump_is_refused_without_a_destination_too_close_or_without_fuel() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+        session.plot_course(SystemId(131)).expect("a route");
+        assert_eq!(
+            session.begin_jump(),
+            Err(JumpRefusal::TooClose { distance: 0.0 })
+        );
+        assert_eq!(session.jumping(), None);
+
+        let empty = FakePilotCatalog {
+            ships: vec![(ShipId(128), Ok(ShipFields { fuel: 99, ..FAST }))],
+            ..catalog()
+        };
+        let mut session = Session::start(&empty).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        assert_eq!(
+            session.begin_jump(),
+            Err(JumpRefusal::NoFuel { fuel: 99.0 })
+        );
+        assert_eq!(session.jumping(), None);
+    }
+
+    #[test]
+    fn while_jumping_ticks_move_nothing() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(session.jumping(), Some(SystemId(131)));
+        let leaving = *session.player();
+        for _ in 0..10 {
+            session.tick(THRUST);
+        }
+        assert_eq!(*session.player(), leaving);
+        assert_eq!(session.system(), SystemId(130), "not there yet");
+    }
+
+    #[test]
+    fn arriving_takes_a_jumps_fuel_and_a_day() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        assert_eq!(
+            session.player().reserves.fuel,
+            Gauge {
+                now: 200.0,
+                max: 300.0
+            }
+        );
+        assert_eq!(dmy(&session), (24, 6, 1177));
+        let shield = session.player().reserves.shield;
+        assert_eq!(shield, Gauge::full(30.0), "the other reserves carry over");
+    }
+
+    #[test]
+    fn arriving_puts_the_ship_at_the_edge_facing_the_system_it_came_from() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        fly_out(&mut session);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.arrive(&catalog), Some(SystemId(131)));
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.course(), ids(&[132]));
+        assert_eq!(session.jumping(), None);
+        let reserves = session.player().reserves;
+        assert_eq!(
+            *session.player(),
+            ShipState {
+                reserves,
+                ..crate::hyperspace::arrival(Vec2::ZERO, Vec2::new(600.0, 0.0), &session.handling())
+            }
+        );
+        assert_eq!(session.player().position, Vec2::new(-1000.0, 0.0));
+    }
+
+    #[test]
+    fn arriving_reads_the_new_systems_stellars_and_landing_uses_them() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131);
+        assert_eq!(
+            *catalog.sites_asked.borrow(),
+            [SystemId(130), SystemId(131)]
+        );
+        // Planet 140 at 131's centre: drift there and land.
+        let refused = session.land();
+        assert!(
+            matches!(refused, Err(LandingRefusal::TooFar { nearest, .. }) if nearest == StellarId(140)),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn arriving_when_not_jumping_does_nothing() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        let before = session.clone();
+        assert_eq!(session.arrive(&catalog), None);
+        assert_eq!(session, before);
+        assert_eq!(*catalog.sites_asked.borrow(), [SystemId(130)]);
+    }
+
+    #[test]
+    fn a_second_jump_continues_the_route_to_the_destination() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        jump(&mut session, &catalog, 132);
+        assert_eq!(session.system(), SystemId(131));
+        session.tick(Controls::default());
+        assert_eq!(
+            session.begin_jump(),
+            Err(JumpRefusal::TooClose { distance: 994.0 }),
+            "drifting in from the edge"
+        );
+        assert_eq!(jump(&mut session, &catalog, 132), Some(SystemId(132)));
+        assert_eq!(session.system(), SystemId(132));
+        assert_eq!(session.course(), []);
+        assert_eq!(session.player().reserves.fuel.now, 100.0);
+        assert_eq!(dmy(&session), (25, 6, 1177));
+        // From 131, north of 132 on screen: it arrives at the top edge.
+        assert_eq!(session.player().position, Vec2::new(0.0, -1000.0));
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+    }
+
+    /// The catalog with ship 128 regenerating a unit of fuel every
+    /// `regen` ticks.
+    fn regenerating(regen: i16) -> FakePilotCatalog {
+        FakePilotCatalog {
+            ships: vec![(
+                ShipId(128),
+                Ok(ShipFields {
+                    fuel_regen: regen,
+                    ..FAST
+                }),
+            )],
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn fuel_regenerates_each_tick_at_the_ships_rate_up_to_full() {
+        let catalog = regenerating(2);
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.fuel_regen_per_tick(), 0.5);
+        jump(&mut session, &catalog, 131);
+        assert_eq!(session.player().reserves.fuel.now, 200.0);
+        for _ in 0..10 {
+            session.tick(Controls::default());
+        }
+        assert_eq!(session.player().reserves.fuel.now, 205.0);
+        for _ in 0..1000 {
+            session.tick(Controls::default());
+        }
+        assert_eq!(session.player().reserves.fuel, Gauge::full(300.0));
+        let still = Session::start(&self::catalog()).expect("starts");
+        assert_eq!(still.fuel_regen_per_tick(), 0.0);
+    }
+
+    #[test]
+    fn fuel_does_not_regenerate_while_landed_or_jumping() {
+        // A slow ship, 1 pixel a tick at most, gaining a unit a tick: it
+        // arrives slow enough to land, over planet 140 at 131's edge.
+        let catalog = FakePilotCatalog {
+            ships: vec![(
+                ShipId(128),
+                Ok(ShipFields {
+                    speed: 100,
+                    fuel_regen: 1,
+                    ..FAST
+                }),
+            )],
+            sites: vec![(SystemId(131), vec![planet(140, -1000.0, 0.0)])],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        jump(&mut session, &catalog, 132);
+        assert_eq!(session.player().reserves.fuel.now, 200.0);
+        assert_eq!(session.land(), Ok(StellarId(140)));
+        for _ in 0..10 {
+            session.tick(Controls::default());
+        }
+        assert_eq!(session.player().reserves.fuel.now, 200.0);
+        session.take_off();
+        session.tick(Controls::default());
+        assert_eq!(session.player().reserves.fuel.now, 201.0);
+
+        session.begin_jump().expect("jumps from the edge");
+        for _ in 0..10 {
+            session.tick(Controls::default());
+        }
+        assert_eq!(session.player().reserves.fuel.now, 201.0);
     }
 }

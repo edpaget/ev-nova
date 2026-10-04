@@ -36,6 +36,7 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         shield: ship.shield,
         armor: ship.armor,
         fuel: ship.fuel,
+        fuel_regen: ship.fuel_regen,
     };
     assert_eq!(session.handling(), Handling::from_fields(fields));
     assert_eq!(session.player().reserves, Reserves::from_fields(fields));
