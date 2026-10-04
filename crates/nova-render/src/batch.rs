@@ -86,6 +86,7 @@ impl<S: ImageSource> Renderer<S> {
                     image,
                     center,
                     tint,
+                    ..
                 } => {
                     if let Some(entry) = self.entry(image, gpu, &mut report) {
                         let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);

@@ -78,7 +78,7 @@ mod time;
 pub mod ui;
 
 pub use color::Color;
-pub use draw::{DrawCommand, DrawList};
+pub use draw::{Blend, DrawCommand, DrawList};
 pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};

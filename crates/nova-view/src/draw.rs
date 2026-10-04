@@ -5,6 +5,16 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 
+/// How a sprite combines with what is beneath it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Blend {
+    /// Painted over what is beneath, by its alpha.
+    #[default]
+    Normal,
+    /// Adds its colour, scaled by its alpha, to what is beneath.
+    Additive,
+}
+
 /// One thing to draw, in logical coordinates.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DrawCommand {
@@ -17,6 +27,8 @@ pub enum DrawCommand {
         center: Point,
         /// Colour multiplier and alpha.
         tint: Color,
+        /// How it combines with what is beneath it.
+        blend: Blend,
     },
     /// A picture, unscaled and untinted, with its top-left corner at
     /// `top_left`.
@@ -112,12 +124,23 @@ impl DrawList {
         self.commands.is_empty()
     }
 
-    /// Appends a [`DrawCommand::Sprite`].
+    /// Appends a [`DrawCommand::Sprite`] drawn with [`Blend::Normal`].
     pub fn sprite(&mut self, image: ImageKey, center: Point, tint: Color) -> &mut Self {
         self.push(DrawCommand::Sprite {
             image,
             center,
             tint,
+            blend: Blend::Normal,
+        })
+    }
+
+    /// Appends a [`DrawCommand::Sprite`] drawn with [`Blend::Additive`].
+    pub fn additive_sprite(&mut self, image: ImageKey, center: Point, tint: Color) -> &mut Self {
+        self.push(DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend: Blend::Additive,
         })
     }
 
@@ -244,6 +267,32 @@ mod tests {
     }
 
     #[test]
+    fn a_sprite_draws_normally_unless_asked_to_add() {
+        let tint = Color::rgba(255, 0, 0, 128);
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(200, 3), at(10.0, 20.0), tint)
+            .additive_sprite(ImageKey::sprite(201, 4), at(30.0, 40.0), tint);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [
+                DrawCommand::Sprite {
+                    image: ImageKey::sprite(200, 3),
+                    center: at(10.0, 20.0),
+                    tint,
+                    blend: Blend::Normal,
+                },
+                DrawCommand::Sprite {
+                    image: ImageKey::sprite(201, 4),
+                    center: at(30.0, 40.0),
+                    tint,
+                    blend: Blend::Additive,
+                },
+            ]
+        );
+        assert_eq!(Blend::default(), Blend::Normal);
+    }
+
+    #[test]
     fn a_new_list_is_empty() {
         let list = DrawList::new();
         assert!(list.is_empty());
@@ -280,7 +329,8 @@ mod tests {
             DrawCommand::Sprite {
                 image: ImageKey::sprite(200, 3),
                 center: at(10.0, 20.0),
-                tint: Color::WHITE
+                tint: Color::WHITE,
+                blend: Blend::Normal,
             }
         );
         assert_eq!(
