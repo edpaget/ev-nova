@@ -427,16 +427,26 @@ fn a_service_opens_its_placeholder_and_done_returns() {
     assert!(self::texts(&frame).iter().any(|t| t == "Leave"));
 }
 
+/// Where the planet is in the take-off test: off the ship's start, but
+/// within the planet's landing radius of 4.
+const OFF_START: i16 = -3;
+
 #[test]
 fn leave_takes_off_back_into_flight_at_the_planet() {
-    let mut harness = Harness::flying(0);
+    let mut harness = Harness::flying(OFF_START);
+    assert_eq!(harness.ship().position, Vec2::ZERO, "starts off the planet");
     harness.press(Key::Char('l'));
+    assert_eq!(harness.showing(), Showing::Spaceport);
     let leave = harness.item(LEAVE_ITEM).center();
     harness.click(leave);
     assert_eq!(harness.showing(), Showing::Flight);
     assert!(harness.app.screen().spaceport_view().is_none());
     let ship = harness.ship();
-    assert_eq!((ship.position, ship.velocity), (Vec2::ZERO, Vec2::ZERO));
+    assert_eq!(
+        (ship.position, ship.velocity),
+        (Vec2::new(0.0, f32::from(OFF_START)), Vec2::ZERO),
+        "at the planet's centre, at rest"
+    );
     let session = harness
         .app
         .screen()
