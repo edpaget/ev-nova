@@ -22,7 +22,7 @@ use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, QuadInstance};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
-use nova_view::Key;
+use nova_view::{Blend, Key};
 
 /// A 1024x768 window at scale 1.
 struct FakeWindow;
@@ -212,10 +212,22 @@ fn the_first_frame_draws_the_ship_its_layers_and_its_text() {
     let mut harness = Harness::new();
     let frame = harness.frame();
 
+    // The base is drawn normally, then the glow and lights added over it.
     assert!(
-        matches!(&frame.batches[0], Batch::Sprites { quads, .. } if quads.len() == 3),
+        matches!(
+            &frame.batches[0],
+            Batch::Sprites { blend: Blend::Normal, quads, .. } if quads.len() == 1
+        ),
         "{:?}",
         frame.batches[0]
+    );
+    assert!(
+        matches!(
+            &frame.batches[1],
+            Batch::Sprites { blend: Blend::Additive, quads, .. } if quads.len() == 2
+        ),
+        "{:?}",
+        frame.batches[1]
     );
     let quads = sprite_quads(&frame);
     let centre = |quad: &QuadInstance| {

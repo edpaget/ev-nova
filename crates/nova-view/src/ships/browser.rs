@@ -135,7 +135,7 @@ impl<C: ShipCatalog> ShipBrowser<C> {
                 for layer in [&ship.glow, &ship.lights] {
                     if let Some(Ok(layer)) = layer {
                         let frame = frame % layer.frames.get();
-                        list.sprite(
+                        list.additive_sprite(
                             ImageKey::sprite(layer.image_id, frame),
                             SHIP_CENTER,
                             Color::WHITE,
@@ -272,8 +272,8 @@ mod tests {
     use super::*;
     use crate::ships::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
     use crate::{
-        Color, DrawCommand, DrawList, Font, ImageKey, Input, Key, MouseButton, Point, Screen,
-        ScreenAction,
+        Blend, Color, DrawCommand, DrawList, Font, ImageKey, Input, Key, MouseButton, Point,
+        Screen, ScreenAction,
     };
 
     /// Canned entries in ID order; records every `ship` call.
@@ -589,6 +589,20 @@ mod tests {
             matches!(list.iter().next(), Some(DrawCommand::Sprite { .. })),
             "the ship is drawn first"
         );
+    }
+
+    #[test]
+    fn the_glow_and_lights_add_to_the_normal_base() {
+        let catalog = FakeCatalog::with(vec![layered()]);
+        let browser = ShipBrowser::new(&catalog);
+        let blends: Vec<Blend> = drawn(&browser)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { blend, .. } => Some(*blend),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(blends, [Blend::Normal, Blend::Additive, Blend::Additive]);
     }
 
     #[test]

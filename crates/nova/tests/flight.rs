@@ -27,7 +27,7 @@ use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::{ShipId, ShipState, SystemId, Vec2};
 use nova_view::flight::FlightView;
 use nova_view::flight::hud::NAV_NO_DESTINATION;
-use nova_view::{Key, Point};
+use nova_view::{Blend, Key, Point};
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -129,11 +129,15 @@ fn status_picture() -> Vec<u8> {
 }
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations,
-/// with an engine glow, `rlëD` 2100.
-fn ship_anim() -> Vec<u8> {
+/// with an engine glow, `rlëD` 2100, and (if `lights`) lights, `rlëD`
+/// 2200.
+fn ship_anim(lights: bool) -> Vec<u8> {
     let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
     put_i16s(&mut bytes, 0x16, &[2100]);
+    if lights {
+        put_i16s(&mut bytes, 0x1E, &[2200]);
+    }
     put_i16s(&mut bytes, 0x34, &[36]);
     bytes
 }
@@ -180,11 +184,17 @@ const STELLARS: [Point; 2] = [Point::new(0.0, -600.0), Point::new(300.0, -200.0)
 /// which holds Alpha Prime (128) at (0, -600), an 8 x 8 sprite, and Alpha
 /// Station (129) at (300, -200), a 6 x 6 one. The ship's sheet is 36
 /// rotations of 1 x 1, its glow's 36 of 3 x 3. Beta (129) holds nothing. The status bar is `ïntf`
-/// 128, over a 194 x 16 `PICT` 700.
+/// 128, over a 194 x 16 `PICT` 700. The ship has no lights.
 fn data(with_character: bool) -> Rc<GameData> {
+    data_with(with_character, false)
+}
+
+/// [`data`], with the ship's lights, 36 rotations of 3 x 3 in `rlëD`
+/// 2200, if `lights`.
+fn data_with(with_character: bool, lights: bool) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship())
-        .resource(ShipAnim::TYPE, 128, None, &ship_anim())
+        .resource(ShipAnim::TYPE, 128, None, &ship_anim(lights))
         .resource(RLED, 2000, None, &sheet(36, 1))
         .resource(RLED, 2100, None, &sheet(36, 3))
         .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128, 129]))
@@ -215,6 +225,9 @@ fn data(with_character: bool) -> Rc<GameData> {
     if with_character {
         fork = fork.resource(Character::TYPE, 128, Some(b"Pilot"), &character());
     }
+    if lights {
+        fork = fork.resource(RLED, 2200, None, &sheet(36, 3));
+    }
     let file = OneFile(fork.build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -233,7 +246,11 @@ struct Harness {
 impl Harness {
     /// The app on the ship browser, before any frame.
     fn new(fps: u64, with_character: bool) -> Self {
-        let data = data(with_character);
+        Self::over(fps, data(with_character))
+    }
+
+    /// The app on the ship browser over `data`, before any frame.
+    fn over(fps: u64, data: Rc<GameData>) -> Self {
         Self {
             app: App::new(&FakeWindow, Rc::clone(&data), start_screen(data)),
             gpu: RecordingGpu::new(),
@@ -245,10 +262,19 @@ impl Harness {
 
     /// The app in flight, entered from the ship browser, before any frame.
     fn flying(fps: u64) -> Self {
-        let mut harness = Self::new(fps, true);
-        harness.press(Key::Char('f'));
-        assert_eq!(harness.showing(), Showing::Flight);
-        harness
+        Self::new(fps, true).into_flight()
+    }
+
+    /// [`Harness::flying`], with the ship's lights.
+    fn flying_with_lights(fps: u64) -> Self {
+        Self::over(fps, data_with(true, true)).into_flight()
+    }
+
+    /// Enters flight from the ship browser.
+    fn into_flight(mut self) -> Self {
+        self.press(Key::Char('f'));
+        assert_eq!(self.showing(), Showing::Flight);
+        self
     }
 
     fn handle(&mut self, event: WindowEvent) -> Control {
@@ -342,6 +368,14 @@ fn shape(frame: &Frame) -> Vec<(&'static str, usize)> {
             Batch::Text(runs) => ("text", runs.len()),
         })
         .collect()
+}
+
+/// Batch `at`'s blend and quad count, if it is a sprites batch.
+fn sprite_batch(frame: &Frame, at: usize) -> Option<(Blend, usize)> {
+    match frame.batches.get(at) {
+        Some(Batch::Sprites { blend, quads, .. }) => Some((*blend, quads.len())),
+        _ => None,
+    }
 }
 
 /// Every sprite drawn, in order: the stellars, the ship, then the status
@@ -600,18 +634,22 @@ fn the_default_keys_fly_the_ship_and_the_camera_follows_it() {
 }
 
 #[test]
-fn holding_up_lights_the_engine_glow_over_the_ship_and_releasing_it_puts_it_out() {
+fn holding_up_adds_the_engine_glow_over_the_ship_and_releasing_it_puts_it_out() {
     let mut harness = Harness::flying(60);
-    let ship_batch = |frame: &Frame| shape(frame)[3];
+    let ship_and_glow = |frame: &Frame| (sprite_batch(frame, 3), sprite_batch(frame, 4));
+    let unlit = |frame: &Frame| {
+        let (ship, next) = ship_and_glow(frame);
+        ship == Some((Blend::Normal, 1)) && !matches!(next, Some((Blend::Additive, _)))
+    };
     let first = harness.frame();
-    assert_eq!(ship_batch(&first), ("sprites", 1), "no glow at rest");
+    assert!(unlit(&first), "no glow at rest: {:?}", shape(&first));
 
     harness.hold(&[Key::Up]);
     let thrusting = harness.run(0.5);
     assert_eq!(
-        ship_batch(&thrusting),
-        ("sprites", 2),
-        "the ship and its glow"
+        ship_and_glow(&thrusting),
+        (Some((Blend::Normal, 1)), Some((Blend::Additive, 1))),
+        "the ship, then its glow added over it"
     );
     let drawn = quads(&thrusting);
     let (ship, glow) = (drawn[2].dest, drawn[3].dest);
@@ -620,7 +658,28 @@ fn holding_up_lights_the_engine_glow_over_the_ship_and_releasing_it_puts_it_out(
 
     harness.hold(&[]);
     let coasting = harness.run(0.5);
-    assert_eq!(ship_batch(&coasting), ("sprites", 1), "out again");
+    assert!(unlit(&coasting), "out again: {:?}", shape(&coasting));
+}
+
+#[test]
+fn the_ships_lights_are_added_over_it() {
+    let mut harness = Harness::flying_with_lights(60);
+    let frame = harness.frame();
+
+    assert_eq!(
+        sprite_batch(&frame, 3),
+        Some((Blend::Normal, 1)),
+        "the ship"
+    );
+    assert_eq!(
+        sprite_batch(&frame, 4),
+        Some((Blend::Additive, 1)),
+        "its lights"
+    );
+    let drawn = quads(&frame);
+    let (ship, lights) = (drawn[2].dest, drawn[3].dest);
+    assert_eq!((ship.w, lights.w, lights.h), (1.0, 3.0, 3.0));
+    assert_eq!(centre(lights), centre(ship), "centred on the ship");
 }
 
 /// Flies to `target` with the default keys alone: turns towards it,

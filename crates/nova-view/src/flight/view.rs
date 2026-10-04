@@ -733,7 +733,7 @@ impl<C> FlightView<C> {
                 let glow = sheet.glow.filter(|_| thrusting);
                 for layer in [glow, sheet.lights].into_iter().flatten() {
                     let layer_frame = frame % layer.frames.get();
-                    list.sprite(
+                    list.additive_sprite(
                         ImageKey::sprite(layer.image_id, layer_frame),
                         at,
                         Color::WHITE,
@@ -945,7 +945,7 @@ mod tests {
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
     };
-    use crate::{DrawCommand, Font};
+    use crate::{Blend, DrawCommand, Font};
     use nova_sim::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
 
     /// The first `chär` flies ship 128 (an average ship that turns 3° a
@@ -1795,6 +1795,41 @@ mod tests {
                 (ImageKey::sprite(2100, 0), centre),
                 (ImageKey::sprite(2200, 0), centre),
             ]
+        );
+    }
+
+    /// The ship's sprites' image ids and blends, as [`ship_sprites`].
+    fn ship_blends(view: &View) -> Vec<(i16, Blend)> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, blend, .. } if (2000..2300).contains(&image.id) => {
+                    Some((image.id, *blend))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_thrusting_ships_glow_and_lights_add_to_its_normal_sprite() {
+        let mut view = FlightView::new(layered());
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert_eq!(
+            ship_blends(&view),
+            [
+                (2000, Blend::Normal),
+                (2100, Blend::Additive),
+                (2200, Blend::Additive),
+            ]
+        );
+        view.input(&key(Key::Up, false));
+        ticks(&mut view, 1);
+        assert_eq!(
+            ship_blends(&view),
+            [(2000, Blend::Normal), (2200, Blend::Additive)],
+            "coasting"
         );
     }
 
