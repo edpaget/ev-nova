@@ -3726,4 +3726,137 @@ mod tests {
         session.tick_combat(&NovaDisable, &mut NeverFires);
         assert_eq!(session.reserves().shield.now, hurt + 1.0);
     }
+
+    // Refitting for the fight.
+
+    use crate::catalog::BoomId;
+    use crate::combat::armament::MOD_WEAPON;
+    use crate::combat::weapon::PASSES_SHIELDS;
+
+    /// The weapons the player fired in `events`.
+    fn fired_by_the_player(events: &[CombatEvent]) -> Vec<WeaponId> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                CombatEvent::Fired {
+                    ship: ShipRef::Player,
+                    weapon,
+                } => Some(*weapon),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_weapon_outfit_bought_fires_once_the_ship_takes_off() {
+        let mut catalog = FakePilotCatalog {
+            weapons: vec![blaster()],
+            hulls: vec![hull(128)],
+            ..outfitting()
+        };
+        catalog.outfits.push(outfit(305, &[(MOD_WEAPON, 128)]));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.hold_trigger(FIRE);
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(session.take_combat_events(), [], "no weapon yet");
+        session.land().expect("lands at the outfitter");
+        session.outfit(buy(OutfitId(305))).expect("bought");
+        session.take_off().expect("took off");
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(
+            fired_by_the_player(&session.take_combat_events()),
+            [WeaponId(128)]
+        );
+        assert_eq!(session.shots().len(), 1);
+    }
+
+    /// [`shipbuying`] where the player's ship 128 carries a blaster
+    /// (weapon 128), 30 pixels across with `bööm` 133 destroying it, and
+    /// ship 129 ([`NEW`]) a cannon (weapon 129), 120 pixels across with
+    /// `bööm` 135; the system's traffic is a trader, ship 130, whose gun
+    /// (weapon 130) passes the shields and destroys at one shot.
+    fn armed_shipyard() -> FakePilotCatalog {
+        let traffic = trafficked(130, 1, 1);
+        let mut catalog = FakePilotCatalog {
+            weapons: vec![
+                blaster(),
+                WeaponRecord {
+                    id: WeaponId(129),
+                    ..blaster()
+                },
+                WeaponRecord {
+                    id: WeaponId(130),
+                    mass_dmg: 1000,
+                    flags: PASSES_SHIELDS,
+                    ..blaster()
+                },
+            ],
+            hulls: vec![
+                armed_hull(128, 128),
+                HullRecord {
+                    size: Some(120),
+                    explode2: 7,
+                    ..armed_hull(129, 129)
+                },
+                armed_hull(130, 130),
+            ],
+            traffic: traffic.traffic,
+            dudes: vec![(
+                DudeId(128),
+                DudeRecord {
+                    ai_type: 1,
+                    govt: Some(GovtId(140)),
+                    ships: vec![(ShipId(130), 1)],
+                },
+            )],
+            ..shipbuying()
+        };
+        catalog.ship_records.push(ship(130, FAST));
+        catalog
+    }
+
+    #[test]
+    fn a_ship_bought_fights_with_its_own_weapons_size_and_explosion() {
+        let catalog = armed_shipyard();
+        let mut session = outfitted(&catalog);
+        session.buy_ship(NEW).expect("bought");
+        session.take_off().expect("took off");
+        session.hold_trigger(FIRE);
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(
+            fired_by_the_player(&session.take_combat_events()),
+            [WeaponId(129)],
+            "the new ship's cannon, not the old one's blaster"
+        );
+        session.hold_trigger(Trigger::default());
+        session.combat.clear();
+        session.populate(&catalog, &mut Draws::of(&[6, 6, 0, 0, 750, 650, 180]));
+        assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
+        // The NPC fires straight down, passing 20 pixels from the player's
+        // centre: beyond the old ship's hit radius (9.9), within the new
+        // one's (39.6).
+        session.player.position = Vec2::new(20.0, 0.0);
+        let mut events = Vec::new();
+        for _ in 0..20 {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+            events.extend(session.take_combat_events());
+        }
+        assert_eq!(session.player_condition(), Condition::Destroyed);
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                CombatEvent::Destroyed {
+                    ship: ShipRef::Player,
+                    ship_type: NEW,
+                    explosion: Some(Explosion {
+                        boom: BoomId(135),
+                        extra: false
+                    }),
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
+    }
 }
