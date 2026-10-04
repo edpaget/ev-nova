@@ -10,7 +10,7 @@ use std::fmt::Debug;
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::hyperspace::JUMP_FUEL;
-use crate::landing::StellarFlags;
+use crate::landing::landable;
 use crate::traffic::npc::{Npc, NpcId};
 
 /// What an NPC sets out to do.
@@ -101,17 +101,12 @@ fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
     }
 }
 
-/// Whether a ship can land on `site`: it has the can-land flag, and is
-/// not one landed on only once destroyed (nothing is destroyed yet).
-fn landable(site: &LandingSite) -> bool {
-    site.flags & StellarFlags::CAN_LAND != 0 && site.flags & StellarFlags::ONLY_WHEN_DESTROYED == 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::catalog::ShipId;
     use crate::flight::ShipState;
+    use crate::landing::StellarFlags;
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST, planet};
     use crate::traffic::npc::{AiType, Mode};

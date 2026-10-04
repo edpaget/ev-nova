@@ -143,11 +143,10 @@ pub fn check_landing(
         });
     };
     let (stellar, station) = (site.id, is_station(&site));
-    let has = |flag| site.flags & flag != 0;
-    if !has(StellarFlags::CAN_LAND) || has(StellarFlags::ONLY_WHEN_DESTROYED) {
+    if !landable(&site) {
         return Err(LandingRefusal::NotLandable { stellar, station });
     }
-    if !has(StellarFlags::UNINHABITED)
+    if site.flags & StellarFlags::UNINHABITED == 0
         && landing_record(&site, system_govt, record) < site.min_status
     {
         return Err(LandingRefusal::Denied {
@@ -195,6 +194,13 @@ fn landing_record(
     record: impl Fn(GovtId) -> i16,
 ) -> i16 {
     site.govt.or(system_govt).map_or(0, record)
+}
+
+/// Whether a ship, the player's or an NPC's, can land on `site`: it has
+/// the can-land flag, and is not one landed on only once destroyed
+/// (nothing is destroyed yet).
+pub(crate) fn landable(site: &LandingSite) -> bool {
+    site.flags & StellarFlags::CAN_LAND != 0 && site.flags & StellarFlags::ONLY_WHEN_DESTROYED == 0
 }
 
 fn is_station(site: &LandingSite) -> bool {
@@ -429,6 +435,21 @@ mod tests {
                 station: false,
             })
         );
+    }
+
+    #[test]
+    fn a_stellar_is_landable_with_the_can_land_flag_unless_only_once_destroyed() {
+        let landable_with = |flags| landable(&with_flags(flags));
+        assert!(landable_with(StellarFlags::CAN_LAND));
+        assert!(landable_with(
+            StellarFlags::CAN_LAND | StellarFlags::STATION | StellarFlags::UNINHABITED
+        ));
+        assert!(!landable_with(0));
+        assert!(!landable_with(StellarFlags::STATION));
+        assert!(!landable_with(StellarFlags::ONLY_WHEN_DESTROYED));
+        assert!(!landable_with(
+            StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED
+        ));
     }
 
     fn needing(min_status: i16, flags: u32) -> [LandingSite; 1] {
