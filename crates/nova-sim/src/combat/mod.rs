@@ -798,6 +798,47 @@ mod tests {
     }
 
     #[test]
+    fn a_beam_explodes_where_it_meets_the_ship_every_tick_it_touches_it() {
+        let flamer = WeaponRecord {
+            explod_type: 0,
+            ..laser()
+        };
+        let mut combat = Combat::default();
+        let mut target = Ship::at(2, 100.0, 0.0);
+        target.reserves.shield = Gauge::full(100.0);
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(flamer), target];
+        let mut explosions = Vec::new();
+        for _ in 0..5 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            explosions.push(
+                combat
+                    .take_events()
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        CombatEvent::Exploded { at, explosion } => Some((at, explosion)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let boom = Explosion {
+            boom: BoomId(128),
+            extra: false,
+        };
+        let edge = Vec2::new(84.0, 0.0);
+        for (tick_no, exploded) in explosions.iter().enumerate() {
+            if tick_no < 3 {
+                assert_eq!(exploded.len(), 1, "tick {tick_no}: {exploded:?}");
+                let (at, explosion) = exploded[0];
+                assert!((at - edge).length() < 1e-3, "tick {tick_no}: {at:?}");
+                assert_eq!(explosion, boom);
+            } else {
+                assert_eq!(exploded, &[], "tick {tick_no}: the beam is over");
+            }
+        }
+    }
+
+    #[test]
     fn a_beam_follows_its_firer_and_goes_with_it() {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser())];
