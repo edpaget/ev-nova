@@ -182,6 +182,9 @@ struct Item {
     /// Where it is on the screen.
     bounds: Bounds,
     enabled: bool,
+    /// Whether the template enables it: greying it can be undone only
+    /// back to this.
+    template_enabled: bool,
     /// Whether any of it is inside the dialog: items wholly outside are
     /// neither drawn nor hit-tested.
     shown: bool,
@@ -274,6 +277,7 @@ impl Dialog {
                 Item {
                     bounds,
                     enabled,
+                    template_enabled: item.enabled,
                     shown,
                     widget: widget(&item.kind, role, bounds, enabled, &metrics),
                 }
@@ -329,6 +333,21 @@ impl Dialog {
             skin,
             style,
             ..self
+        }
+    }
+
+    /// Greys item `item` (from 1), as [`Role::Greyed`] does, or ungreys it
+    /// back to what its template says. No such item, nothing changes.
+    pub fn set_greyed(&mut self, item: usize, greyed: bool) {
+        let Some(found) = item
+            .checked_sub(1)
+            .and_then(|index| self.items.get_mut(index))
+        else {
+            return;
+        };
+        found.enabled = found.template_enabled && !greyed;
+        if let Widget::Button(button) = &mut found.widget {
+            button.enabled = found.enabled;
         }
     }
 
@@ -1271,6 +1290,41 @@ mod tests {
         dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Tab));
         assert_eq!(dialog.focus(), Some(1), "only OK takes the focus");
+    }
+
+    #[test]
+    fn a_button_greyed_after_it_is_built_is_greyed_until_it_is_ungreyed() {
+        let built = dialog(&yes_no(), &[]).with_cancel(Some(5));
+        let mut greyed = built.clone();
+        greyed.set_greyed(5, true);
+        let from_role = dialog(&yes_no(), &[(5, Role::Greyed)]).with_cancel(Some(5));
+        assert_eq!(drawn(&greyed), drawn(&from_role));
+        let cancel = greyed.item_bounds(5).expect("Cancel").center();
+        assert_eq!(click(&mut greyed, cancel), None);
+        assert_eq!(greyed.input(&key(Key::Escape)), None);
+        greyed.set_greyed(5, false);
+        assert_eq!(drawn(&greyed), drawn(&built));
+        assert_eq!(click(&mut greyed, cancel), Some(DialogEvent::Item(5)));
+        assert_eq!(greyed.input(&key(Key::Escape)), Some(DialogEvent::Item(5)));
+    }
+
+    #[test]
+    fn ungreying_never_enables_an_item_the_template_disables_and_no_item_is_nothing() {
+        let mut dialog = dialog(&yes_no(), &[(1, Role::Greyed)]);
+        dialog.set_greyed(1, false);
+        let ok = dialog.item_bounds(1).expect("OK").center();
+        assert_eq!(
+            click(&mut dialog, ok),
+            Some(DialogEvent::Item(1)),
+            "a role is undone"
+        );
+        dialog.set_greyed(3, false);
+        let text = dialog.item_bounds(3).expect("text").center();
+        assert_eq!(click(&mut dialog, text), None, "disabled in the template");
+        let before = drawn(&dialog);
+        dialog.set_greyed(0, true);
+        dialog.set_greyed(99, true);
+        assert_eq!(drawn(&dialog), before);
     }
 
     #[test]

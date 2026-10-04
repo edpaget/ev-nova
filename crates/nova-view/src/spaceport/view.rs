@@ -12,13 +12,18 @@
 //!
 //! Leave, Return and Escape leave: the router takes off. A service's
 //! button opens its [`ServiceScreen`], which takes every input until it
-//! closes. Without the dialog, or the stellar's record, the screen says
-//! why, and Return or Escape still leaves.
+//! closes. The Trade Center's opens the stellar's exchange instead, a
+//! [`TradeScreen`], when the spaceport is given one
+//! ([`SpaceportView::with_trade`]): its orders are taken through the
+//! spaceport ([`SpaceportView::take_trade`]), and the exchange after each
+//! trade given back ([`SpaceportView::set_market`]). Without the dialog,
+//! or the stellar's record, the screen says why, and Return or Escape
+//! still leaves.
 
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Service, services};
+use nova_sim::{Market, Order, Service, services};
 
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::layout::{
@@ -26,6 +31,7 @@ use super::layout::{
     TEXT_ITEM, item_service, label, landscape_id, service_item,
 };
 use super::service::ServiceScreen;
+use super::trade::TradeScreen;
 use crate::color::Color;
 use crate::draw::DrawList;
 use crate::font::Font;
@@ -70,14 +76,49 @@ impl std::fmt::Debug for MetricsHandle {
     }
 }
 
+/// A screen open over the spaceport.
+#[derive(Clone, Debug)]
+enum Open {
+    /// A service's placeholder.
+    Service(ServiceScreen),
+    /// The exchange.
+    Trade(Box<TradeScreen>),
+}
+
+impl Open {
+    fn screen(&self) -> &dyn Screen {
+        match self {
+            Self::Service(screen) => screen,
+            Self::Trade(screen) => screen.as_ref(),
+        }
+    }
+
+    fn screen_mut(&mut self) -> &mut dyn Screen {
+        match self {
+            Self::Service(screen) => screen,
+            Self::Trade(screen) => screen.as_mut(),
+        }
+    }
+
+    fn closed(&self) -> bool {
+        match self {
+            Self::Service(screen) => screen.closed(),
+            Self::Trade(screen) => screen.closed(),
+        }
+    }
+}
+
 /// The spaceport of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct SpaceportView {
     stellar: StellarId,
     /// The spaceport, or why it cannot be shown.
     port: Result<Port, String>,
-    /// The service open over it, if any.
-    open: Option<ServiceScreen>,
+    /// The screen open over it, if any.
+    open: Option<Open>,
+    /// The exchange's dialog template (or why there is none) and the
+    /// exchange as it is, once given.
+    trade: Option<(Result<DialogTemplate, String>, Market)>,
     left: bool,
     /// The sounds made since they were last taken, kept here so a service
     /// that closes keeps its sounds.
@@ -142,8 +183,50 @@ impl SpaceportView {
             stellar,
             port,
             open: None,
+            trade: None,
             left: false,
             sounds: Vec::new(),
+        }
+    }
+
+    /// The spaceport with the stellar's exchange, `market`, which the
+    /// Trade Center opens laid out by `template`, the "Trade" dialog (or
+    /// saying why there is none). Without it, the Trade Center opens its
+    /// placeholder.
+    #[must_use]
+    pub fn with_trade(self, template: Result<DialogTemplate, String>, market: Market) -> Self {
+        Self {
+            trade: Some((template, market)),
+            ..self
+        }
+    }
+
+    /// The exchange open, if it is.
+    #[must_use]
+    pub fn open_trade(&self) -> Option<&TradeScreen> {
+        match &self.open {
+            Some(Open::Trade(screen)) => Some(screen),
+            _ => None,
+        }
+    }
+
+    /// The order the exchange open asked for since it was last taken,
+    /// once.
+    pub fn take_trade(&mut self) -> Option<Order> {
+        match &mut self.open {
+            Some(Open::Trade(screen)) => screen.take_order(),
+            _ => None,
+        }
+    }
+
+    /// Shows `market`, the exchange after a trade: the exchange open shows
+    /// it, and so does the exchange opened next.
+    pub fn set_market(&mut self, market: Market) {
+        if let Some(Open::Trade(screen)) = &mut self.open {
+            screen.set_market(market.clone());
+        }
+        if let Some((_, kept)) = &mut self.trade {
+            *kept = market;
         }
     }
 
@@ -165,10 +248,13 @@ impl SpaceportView {
         self.port.as_ref().map_or(&[], |port| &port.offered)
     }
 
-    /// The service open, if any.
+    /// The service placeholder open, if any.
     #[must_use]
     pub fn open_service(&self) -> Option<&ServiceScreen> {
-        self.open.as_ref()
+        match &self.open {
+            Some(Open::Service(screen)) => Some(screen),
+            _ => None,
+        }
     }
 
     /// The dialog, if the spaceport could be laid out.
@@ -205,13 +291,21 @@ impl SpaceportView {
         let Ok(port) = &self.port else {
             return;
         };
-        if let Some(service) = item_service(item).filter(|s| port.offered.contains(s)) {
-            self.open = Some(ServiceScreen::new(
-                service,
-                port.style,
-                Rc::clone(&port.metrics.0),
-            ));
-        }
+        let Some(service) = item_service(item).filter(|s| port.offered.contains(s)) else {
+            return;
+        };
+        let metrics = Rc::clone(&port.metrics.0);
+        self.open = Some(match (&self.trade, service) {
+            (Some((template, market)), Service::TradeCenter) => {
+                let layout = template.clone().map(|template| (template, metrics));
+                Open::Trade(Box::new(TradeScreen::new(
+                    layout,
+                    market.clone(),
+                    port.style,
+                )))
+            }
+            _ => Open::Service(ServiceScreen::new(service, port.style, metrics)),
+        });
     }
 }
 
@@ -220,8 +314,9 @@ impl Screen for SpaceportView {
     /// input goes to the dialog. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Some(open) = &mut self.open {
-            open.input(input);
-            self.sounds.extend(open.take_sounds());
+            let screen = open.screen_mut();
+            screen.input(input);
+            self.sounds.extend(screen.take_sounds());
             if open.closed() {
                 self.open = None;
             }
@@ -253,7 +348,7 @@ impl Screen for SpaceportView {
 
     fn draw(&self, list: &mut DrawList) {
         if let Some(open) = &self.open {
-            open.draw(list);
+            open.screen().draw(list);
             return;
         }
         let port = match &self.port {
@@ -289,9 +384,16 @@ impl Screen for SpaceportView {
 
     fn cancel_pointer(&mut self) {
         match (&mut self.open, &mut self.port) {
-            (Some(open), _) => open.cancel_pointer(),
+            (Some(open), _) => open.screen_mut().cancel_pointer(),
             (None, Ok(port)) => port.dialog.cancel_pointer(),
             (None, Err(_)) => {}
+        }
+    }
+
+    /// Lets go of the keys the screen open holds.
+    fn release_keys(&mut self) {
+        if let Some(open) = &mut self.open {
+            open.screen_mut().release_keys();
         }
     }
 
@@ -880,5 +982,187 @@ mod tests {
         broken.input(&key(Key::Escape));
         assert!(broken.left());
         assert_eq!(broken.take_sounds(), []);
+    }
+
+    // The Trade Center.
+
+    use crate::spaceport::trade::{BUY_ITEM, TradeScreen};
+    use crate::ui::dialog::DialogTemplate as Template;
+    use nova_sim::{Direction, Good, Lot, Market, MarketRow, Order};
+
+    /// "Trade": 426 x 252, centred, with Done (1), eight rows (4-11), Buy
+    /// (13) and Sell (14).
+    fn trade_template() -> Template {
+        let mut items: Vec<ItemTemplate> = (0..15)
+            .map(|_| ItemTemplate {
+                bounds: rect(0.0, 0.0, 1.0, 1.0),
+                enabled: false,
+                kind: ItemSpec::User,
+            })
+            .collect();
+        let mut place = |number: usize, x, y, w, h| {
+            items[number - 1] = ItemTemplate {
+                bounds: rect(x, y, w, h),
+                enabled: true,
+                kind: ItemSpec::User,
+            };
+        };
+        place(1, 272.0, 221.0, 99.0, 25.0);
+        for row in 0..8_u8 {
+            place(
+                4 + usize::from(row),
+                38.0,
+                25.0 + 12.0 * f32::from(row),
+                352.0,
+                12.0,
+            );
+        }
+        place(13, 60.0, 221.0, 99.0, 25.0);
+        place(14, 166.0, 221.0, 99.0, 25.0);
+        Template {
+            bounds: rect(32.0, 35.0, 426.0, 252.0),
+            placement: Placement::Center,
+            items,
+        }
+    }
+
+    /// Food at 75, none held, with 1000 credits and 10 tons free.
+    fn exchange(held: u32) -> Market {
+        Market {
+            rows: vec![MarketRow {
+                good: Good::Commodity(0),
+                name: "Food".to_owned(),
+                price: 75,
+                held,
+                sold_here: true,
+                bought_here: true,
+            }],
+            events: Vec::new(),
+            cash: 1000,
+            capacity: 10,
+            free: 10,
+        }
+    }
+
+    fn trading(template: Result<Template, String>) -> SpaceportView {
+        earth().with_trade(template, exchange(0))
+    }
+
+    fn trade_item(view: &SpaceportView, number: usize) -> Point {
+        view.open_trade()
+            .expect("trading")
+            .dialog()
+            .expect("laid out")
+            .item_bounds(number)
+            .expect("an item")
+            .center()
+    }
+
+    #[test]
+    fn with_an_exchange_the_trade_center_opens_it() {
+        let mut view = trading(Ok(trade_template()));
+        assert!(view.open_trade().is_none());
+        click_item(&mut view, 7);
+        let open = view.open_trade().expect("trading");
+        assert_eq!(open.market(), &exchange(0));
+        assert!(view.open_service().is_none());
+        let mut expected = DrawList::new();
+        open.draw(&mut expected);
+        assert_eq!(drawn(&view), expected.iter().cloned().collect::<Vec<_>>());
+        assert!(texts(&drawn(&view)).contains(&"Food".to_owned()));
+        // Escape closes the exchange, not the spaceport.
+        view.input(&key(Key::Escape));
+        assert!(view.open_trade().is_none());
+        assert!(!view.left());
+        // The other services still open their placeholders.
+        click_item(&mut view, 10);
+        assert_eq!(
+            view.open_service().map(ServiceScreen::service),
+            Some(Service::Bar)
+        );
+        assert!(view.open_trade().is_none());
+    }
+
+    #[test]
+    fn the_exchange_is_laid_out_by_its_own_dialog_or_says_why_not() {
+        let mut view = trading(Err("no DLOG 1001".to_owned()));
+        click_item(&mut view, 7);
+        assert_eq!(
+            view.open_trade().and_then(TradeScreen::problem),
+            Some("no DLOG 1001")
+        );
+        view.input(&key(Key::Enter));
+        assert!(view.open_trade().is_none());
+        assert!(!view.left());
+    }
+
+    #[test]
+    fn the_exchanges_orders_are_taken_through_the_spaceport_and_its_market_set() {
+        let mut view = trading(Ok(trade_template()));
+        assert_eq!(view.take_trade(), None, "nothing open");
+        view.set_market(exchange(4));
+        click_item(&mut view, 7);
+        assert_eq!(
+            view.open_trade().map(|open| open.market().rows[0].held),
+            Some(4),
+            "it opens on the latest"
+        );
+        view.input(&key(Key::Char('b')));
+        assert_eq!(
+            view.take_trade(),
+            Some(Order {
+                good: Good::Commodity(0),
+                direction: Direction::Buy,
+                lot: Lot::One,
+            })
+        );
+        assert_eq!(view.take_trade(), None, "once");
+        view.set_market(exchange(5));
+        assert_eq!(
+            view.open_trade().map(|open| open.market().rows[0].held),
+            Some(5)
+        );
+        view.input(&key(Key::Escape));
+        click_item(&mut view, 7);
+        assert_eq!(
+            view.open_trade().map(|open| open.market().rows[0].held),
+            Some(5),
+            "and reopens on it"
+        );
+    }
+
+    #[test]
+    fn the_exchange_takes_cancel_pointer_and_its_sounds_are_kept() {
+        let mut view = trading(Ok(trade_template()));
+        click_item(&mut view, 7);
+        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        let buy = trade_item(&view, BUY_ITEM);
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: buy,
+        };
+        view.input(&button(true));
+        view.cancel_pointer();
+        view.input(&button(false));
+        assert_eq!(view.take_trade(), None, "the click was abandoned");
+        assert_eq!(view.take_sounds(), [DOWN]);
+        let done = trade_item(&view, 1);
+        click(&mut view, done);
+        assert!(view.open_trade().is_none(), "closed");
+        assert_eq!(view.take_sounds(), [DOWN, UP]);
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_reaches_the_exchange() {
+        let mut view = trading(Ok(trade_template()));
+        click_item(&mut view, 7);
+        view.input(&key(Key::Alt));
+        view.release_keys();
+        view.input(&key(Key::Char('b')));
+        assert_eq!(view.take_trade().map(|order| order.lot), Some(Lot::One));
+        view.input(&key(Key::Alt));
+        view.input(&key(Key::Char('b')));
+        assert_eq!(view.take_trade().map(|order| order.lot), Some(Lot::Max));
     }
 }

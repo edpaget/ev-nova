@@ -24,6 +24,8 @@ pub enum Key {
     /// Backspace (Delete on a Mac keyboard), which deletes the character
     /// before the caret.
     Backspace,
+    /// Alt (Option on a Mac keyboard), either one, held as a modifier.
+    Alt,
     /// A key that types a character.
     Char(char),
     /// Any other key.

@@ -11,13 +11,17 @@
 //! - [`view`]: the [`SpaceportView`] screen.
 //! - [`service`]: the [`ServiceScreen`], a placeholder for each service
 //!   until it is built.
+//! - [`trade`]: the Trade Center's [`TradeScreen`], the stellar's
+//!   commodity exchange.
 
 pub mod catalog;
 pub mod data;
 pub mod layout;
 pub mod service;
+pub mod trade;
 pub mod view;
 
 pub use catalog::{PortRecord, SpaceportCatalog, StellarId};
 pub use service::ServiceScreen;
+pub use trade::TradeScreen;
 pub use view::SpaceportView;

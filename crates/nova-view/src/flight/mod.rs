@@ -22,4 +22,4 @@ pub mod view;
 pub use catalog::{ShipSheet, ShipSprites, StatusBarLayout, StatusBars};
 pub use jump::{JumpEffect, JumpPhase};
 pub use sprite::rotation_frame;
-pub use view::FlightView;
+pub use view::{FlightView, SharedChance};

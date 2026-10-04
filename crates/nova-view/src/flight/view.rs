@@ -13,6 +13,11 @@
 //! [`GalaxyCatalog`] port. After that it reads only when the ship arrives
 //! in another system: that system. Drawing and input never read anything.
 //!
+//! Each day a jump takes rolls the planetary events on the screen's
+//! [`SharedChance`] ([`FlightView::with_chance`]); without one, nothing
+//! random happens. Landed at a trade center, the session's exchange can be
+//! read ([`FlightView::market`]) and traded on ([`FlightView::trade`]).
+//!
 //! The HUD is drawn last, over everything: the status bar against the
 //! right edge, its radar showing the stellars around the ship as drawn,
 //! and its bars the session's shield, armour and fuel. Without a status
@@ -55,12 +60,15 @@
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Controls, FixedStep, JumpRefusal, LandingRefusal, Pilot, PilotCatalog, Reserves, Session,
-    ShipState, StartError, StellarId, Steps, Turn, flight::normalized, flight::shortest_turn,
+    Chance, Controls, FixedStep, JumpRefusal, LandingRefusal, Market, NeverFires, Order, Pilot,
+    PilotCatalog, Reserves, Session, ShipState, StartError, StellarId, Steps, TradeRefusal, Turn,
+    flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -169,6 +177,37 @@ pub fn jump_refusal_message(refusal: &JumpRefusal) -> &'static str {
     }
 }
 
+/// A [`Chance`] shared by whoever holds a copy: the app's one source of
+/// randomness, handed to each flight. The default never fires.
+#[derive(Clone)]
+pub struct SharedChance(Rc<RefCell<dyn Chance>>);
+
+impl SharedChance {
+    /// The source `chance`, shared.
+    #[must_use]
+    pub fn new(chance: Rc<RefCell<dyn Chance>>) -> Self {
+        Self(chance)
+    }
+}
+
+impl Default for SharedChance {
+    fn default() -> Self {
+        Self(Rc::new(RefCell::new(NeverFires)))
+    }
+}
+
+impl std::fmt::Debug for SharedChance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Chance")
+    }
+}
+
+impl Chance for SharedChance {
+    fn fires(&mut self, percent: u8) -> bool {
+        self.0.borrow_mut().fires(percent)
+    }
+}
+
 /// The player's ship in flight, reading the game data from `C`.
 #[derive(Clone, Debug)]
 pub struct FlightView<C> {
@@ -202,6 +241,8 @@ pub struct FlightView<C> {
     map_open: bool,
     /// The jump's effect, while it plays.
     jump: Option<JumpEffect>,
+    /// What each day's events are rolled on.
+    chance: SharedChance,
 }
 
 impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog> FlightView<C> {
@@ -257,7 +298,14 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             held: HashSet::new(),
             pending_landing,
             message: None,
+            chance: SharedChance::default(),
         }
+    }
+
+    /// The flight with each day's events rolled on `chance`.
+    #[must_use]
+    pub fn with_chance(self, chance: SharedChance) -> Self {
+        Self { chance, ..self }
     }
 
     /// The catalog the screen reads.
@@ -309,7 +357,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         let Ok(session) = &mut self.session else {
             return;
         };
-        let Some(system) = session.arrive(&self.catalog, &mut nova_sim::NeverFires) else {
+        let Some(system) = session.arrive(&self.catalog, &mut self.chance) else {
             return;
         };
         self.scene = Some(SystemScene::load(&self.catalog, system));
@@ -404,6 +452,22 @@ impl<C> FlightView<C> {
         self.session
             .as_mut()
             .is_ok_and(|session| session.transact(change))
+    }
+
+    /// The exchange of the stellar landed on, as [`Session::market`] gives
+    /// it; none for a session that failed.
+    #[must_use]
+    pub fn market(&self) -> Option<Market> {
+        self.session.as_ref().ok()?.market()
+    }
+
+    /// Trades as [`Session::trade`] does; a session that failed has no
+    /// exchange.
+    pub fn trade(&mut self, order: Order) -> Result<u32, TradeRefusal> {
+        match &mut self.session {
+            Ok(session) => session.trade(order),
+            Err(_) => Err(TradeRefusal::NoMarket),
+        }
     }
 
     /// Whether the pilot should be saved, as [`Session::take_save_due`]
@@ -715,6 +779,10 @@ mod tests {
         /// System 130's landing sites: Earth and Moon, by default.
         sites: Vec<LandingSite>,
         systems_read: RefCell<Vec<SystemId>>,
+        /// The commodities: none, by default.
+        commodities: CommodityStrings,
+        /// The planetary events: none, by default.
+        disasters: Vec<DisasterRecord>,
     }
 
     type View = FlightView<FakeCatalog>;
@@ -755,6 +823,8 @@ mod tests {
                 site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
             ],
             systems_read: RefCell::default(),
+            commodities: CommodityStrings::default(),
+            disasters: Vec::new(),
         }
     }
 
@@ -837,7 +907,7 @@ mod tests {
         }
 
         fn commodity_strings(&self) -> CommodityStrings {
-            CommodityStrings::default()
+            self.commodities.clone()
         }
 
         fn junk(&self) -> Vec<JunkRecord> {
@@ -845,7 +915,7 @@ mod tests {
         }
 
         fn disasters(&self) -> Vec<DisasterRecord> {
-            Vec::new()
+            self.disasters.clone()
         }
     }
 
@@ -2479,5 +2549,128 @@ mod tests {
         }
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
         assert_eq!(explored(&view), Some(vec![SystemId(130), SystemId(131)]));
+    }
+
+    // The exchange and the day's chances.
+
+    use nova_sim::{Chance, Direction, DisasterId, Good, Lot, Order, TradeRefusal};
+
+    /// Earth at the centre, a trade center trading food at 75, the first
+    /// `chär` holding 1000 credits, and its ship 10 tons.
+    fn trading() -> FakeCatalog {
+        let flags = StellarFlags::CAN_LAND | StellarFlags::TRADE_CENTER | 2 << 28;
+        FakeCatalog {
+            character: Ok(CharacterStart {
+                cash: 1000,
+                ..catalog().character.expect("a chär")
+            }),
+            fields: ShipFields {
+                holds: 10,
+                ..FIELDS
+            },
+            sites: vec![site(128, (0.0, 0.0), flags)],
+            commodities: CommodityStrings {
+                names: vec!["Food".to_owned()],
+                base_prices: vec!["75".to_owned()],
+            },
+            ..catalog()
+        }
+    }
+
+    const BUY_FOOD: Order = Order {
+        good: Good::Commodity(0),
+        direction: Direction::Buy,
+        lot: Lot::One,
+    };
+
+    #[test]
+    fn the_exchange_is_the_sessions_and_a_trade_goes_through_it() {
+        let mut view = FlightView::new(trading());
+        assert_eq!(view.market(), None, "in flight");
+        assert_eq!(view.trade(BUY_FOOD), Err(TradeRefusal::NoMarket));
+        tap(&mut view, LAND_KEY);
+        view.take_save_due();
+        let market = view.market().expect("landed at a trade center");
+        assert_eq!(
+            market.row(Good::Commodity(0)).map(|row| row.price),
+            Some(75)
+        );
+        assert_eq!(view.trade(BUY_FOOD), Ok(1));
+        assert_eq!(view.pilot().map(Pilot::cash), Some(925));
+        assert!(view.take_save_due(), "a trade");
+        assert_eq!(
+            view.market()
+                .and_then(|m| m.row(Good::Commodity(0)).map(|row| row.held)),
+            Some(1)
+        );
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..trading()
+        };
+        let mut broken = FlightView::new(broken);
+        assert_eq!(broken.market(), None);
+        assert_eq!(broken.trade(BUY_FOOD), Err(TradeRefusal::NoMarket));
+    }
+
+    /// Fires every time, and records each percent it is asked.
+    #[derive(Default)]
+    struct Always {
+        asked: Vec<u8>,
+    }
+
+    impl Chance for Always {
+        fn fires(&mut self, percent: u8) -> bool {
+            self.asked.push(percent);
+            true
+        }
+    }
+
+    /// A food surplus at Proxima, 35 % a day.
+    fn eventful() -> FakeCatalog {
+        FakeCatalog {
+            disasters: vec![DisasterRecord {
+                id: DisasterId(128),
+                name: "An enormous food surplus".to_owned(),
+                stellar: 140,
+                commodity: 0,
+                price_delta: -15,
+                duration: 30,
+                freq: 35,
+                activate_on: String::new(),
+            }],
+            ..catalog()
+        }
+    }
+
+    /// Jumps to Alpha Centauri and arrives.
+    fn jump_to_alpha(view: &mut View) {
+        plot(view, 131);
+        fly_out(view);
+        view.input(&key(JUMP, true));
+        for _ in 0..90 {
+            view.tick(TICK);
+        }
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    }
+
+    #[test]
+    fn a_jump_rolls_the_days_events_on_the_chance_given() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let mut view = FlightView::new(eventful()).with_chance(SharedChance::new(shared));
+        jump_to_alpha(&mut view);
+        assert_eq!(always.borrow().asked, [35]);
+        let events: Vec<_> = view.pilot().expect("a pilot").events().collect();
+        assert_eq!(events, [(DisasterId(128), 30)]);
+        assert_eq!(format!("{:?}", SharedChance::default()), "Chance");
+    }
+
+    #[test]
+    fn without_a_chance_given_nothing_random_happens() {
+        let mut view = FlightView::new(eventful());
+        jump_to_alpha(&mut view);
+        assert_eq!(view.pilot().expect("a pilot").events().count(), 0);
+        let mut shared = SharedChance::default();
+        assert!(!shared.fires(100));
     }
 }
