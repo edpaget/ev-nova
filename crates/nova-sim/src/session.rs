@@ -35,14 +35,15 @@ use crate::hyperspace::{
     DAYS_PER_JUMP, JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump,
 };
 use crate::landing::{LandingRefusal, check_landing};
+use crate::pilot::Pilot;
 use crate::reserves::Reserves;
 use crate::sound::SimSound;
 
 /// The player's ship, flying in one system.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
-    ship: ShipId,
-    system: SystemId,
+    /// The pilot flying: everything a save keeps.
+    pilot: Pilot,
     handling: Handling,
     player: ShipState,
     /// The system's stellars, read when the session starts.
@@ -51,12 +52,8 @@ pub struct Session {
     landed: Option<StellarId>,
     /// The star map, read when the session starts.
     star_map: StarMap,
-    /// The systems still to jump to, in order, ending at the destination.
-    course: Vec<SystemId>,
     /// The system being jumped to, while a jump is under way.
     jumping: Option<SystemId>,
-    /// Today's date.
-    date: GameDate,
     /// The fuel gained each tick in flight, from the ship and its default
     /// outfits.
     fuel_regen: f32,
@@ -67,37 +64,32 @@ pub struct Session {
 }
 
 impl Session {
-    /// A new pilot's session, read from `catalog`.
+    /// A new pilot's session, read from `catalog`: an unnamed
+    /// [`Pilot::new`], flown.
     pub fn start(catalog: &impl PilotCatalog) -> Result<Self, StartError> {
-        let character = catalog.first_character()?;
-        let ship = character.ship.ok_or(StartError::NoShip)?;
+        Self::fly(catalog, Pilot::new(catalog, "")?)
+    }
+
+    /// `pilot`'s session, its ship's handling, its system's stellars, the
+    /// star map and its fuel regeneration read from `catalog`. The ship
+    /// starts at rest at the system's centre, facing up.
+    pub fn fly(catalog: &impl PilotCatalog, pilot: Pilot) -> Result<Self, StartError> {
+        let ship = pilot.ship;
         let fields = catalog
             .ship_fields(ship)
             .map_err(|reason| StartError::Ship(ship, reason))?;
-        let system = character
-            .systems
-            .into_iter()
-            .flatten()
-            .find(|&id| catalog.system_exists(id))
-            .ok_or(StartError::NoStartingSystem(character.systems))?;
         Ok(Self {
-            ship,
-            system,
             handling: Handling::from_fields(fields),
-            player: ShipState {
-                reserves: Reserves::from_fields(fields),
-                ..ShipState::default()
-            },
-            sites: catalog.landing_sites(system),
+            player: ShipState::default(),
+            sites: catalog.landing_sites(pilot.system),
             landed: None,
             star_map: StarMap::new(catalog.star_map()),
-            course: Vec::new(),
             jumping: None,
-            date: GameDate::from_start(character.start),
             // No outfits yet: outfitting will pass the ship's.
             fuel_regen: fuel_regen_per_tick(fields.fuel_regen, &catalog.default_outfits(ship)),
             thrusting: false,
             sounds: Vec::new(),
+            pilot,
         })
     }
 
@@ -115,7 +107,7 @@ impl Session {
                 });
             }
             step(&mut self.player, &self.handling, controls);
-            regenerate(&mut self.player.reserves.fuel, self.fuel_regen);
+            regenerate(&mut self.pilot.reserves.fuel, self.fuel_regen);
         }
     }
 
@@ -130,13 +122,13 @@ impl Session {
     /// Plots a course from the system the ship is in to `to`, replacing any
     /// course, and gives it. When there is no route the course is cleared.
     pub fn plot_course(&mut self, to: SystemId) -> Result<&[SystemId], RouteError> {
-        match self.star_map.route(self.system, to) {
+        match self.star_map.route(self.pilot.system, to) {
             Ok(route) => {
-                self.course = route;
-                Ok(&self.course)
+                self.pilot.course = route;
+                Ok(&self.pilot.course)
             }
             Err(error) => {
-                self.course.clear();
+                self.pilot.course.clear();
                 Err(error)
             }
         }
@@ -146,7 +138,7 @@ impl Session {
     /// none when no course is plotted or the destination has been reached.
     #[must_use]
     pub fn course(&self) -> &[SystemId] {
-        &self.course
+        &self.pilot.course
     }
 
     /// Begins a jump to the next system on the course, if the ship has not
@@ -157,7 +149,11 @@ impl Session {
         if self.landed.is_some() {
             return Err(JumpRefusal::Landed);
         }
-        let next = check_jump(&self.player, self.course.first().copied())?;
+        let next = check_jump(
+            &self.player,
+            self.pilot.reserves.fuel.now,
+            self.pilot.course.first().copied(),
+        )?;
         self.jumping = Some(next);
         self.stop_thrust();
         self.sounds.push(SimSound::JumpBegan);
@@ -178,20 +174,17 @@ impl Session {
     /// changes, when no jump is under way.
     pub fn arrive(&mut self, catalog: &impl PilotCatalog) -> Option<SystemId> {
         let next = self.jumping.take()?;
-        let mut reserves = self.player.reserves;
-        reserves.fuel.now -= JUMP_FUEL;
+        let pilot = &mut self.pilot;
+        pilot.reserves.fuel.now -= JUMP_FUEL;
         for _ in 0..DAYS_PER_JUMP {
-            self.date = self.date.next_day();
+            pilot.date = pilot.date.next_day();
         }
-        if self.course.first() == Some(&next) {
-            self.course.remove(0);
+        if pilot.course.first() == Some(&next) {
+            pilot.course.remove(0);
         }
         let map = |id| self.star_map.position(id).unwrap_or_default();
-        self.player = ShipState {
-            reserves,
-            ..arrival(map(self.system), map(next), &self.handling)
-        };
-        self.system = next;
+        self.player = arrival(map(pilot.system), map(next), &self.handling);
+        pilot.system = next;
         self.sites = catalog.landing_sites(next);
         self.sounds.push(SimSound::Arrived);
         Some(next)
@@ -212,7 +205,7 @@ impl Session {
     /// Today's date.
     #[must_use]
     pub fn date(&self) -> GameDate {
-        self.date
+        self.pilot.date
     }
 
     /// The fuel the ship gains each tick in flight.
@@ -270,16 +263,28 @@ impl Session {
         &self.player
     }
 
+    /// The pilot flying.
+    #[must_use]
+    pub fn pilot(&self) -> &Pilot {
+        &self.pilot
+    }
+
+    /// The ship's shield, armour and fuel.
+    #[must_use]
+    pub fn reserves(&self) -> Reserves {
+        self.pilot.reserves
+    }
+
     /// The system the player is in.
     #[must_use]
     pub fn system(&self) -> SystemId {
-        self.system
+        self.pilot.system
     }
 
     /// The player's ship class.
     #[must_use]
     pub fn ship(&self) -> ShipId {
-        self.ship
+        self.pilot.ship
     }
 
     /// How the player's ship flies.
@@ -319,7 +324,11 @@ mod tests {
         assert_eq!(session.ship(), ShipId(128));
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(session.handling(), Handling::from_fields(FAST));
-        assert_eq!(*catalog.ships_asked.borrow(), [ShipId(128)]);
+        let asked = catalog.ships_asked.borrow();
+        assert!(
+            !asked.is_empty() && asked.iter().all(|&ship| ship == ShipId(128)),
+            "{asked:?}"
+        );
     }
 
     #[test]
@@ -331,11 +340,14 @@ mod tests {
                 position: Vec2::ZERO,
                 velocity: Vec2::ZERO,
                 heading: 0.0,
-                reserves: Reserves {
-                    shield: Gauge::full(30.0),
-                    armor: Gauge::full(45.0),
-                    fuel: Gauge::full(300.0),
-                },
+            }
+        );
+        assert_eq!(
+            session.reserves(),
+            Reserves {
+                shield: Gauge::full(30.0),
+                armor: Gauge::full(45.0),
+                fuel: Gauge::full(300.0),
             }
         );
     }
@@ -349,14 +361,14 @@ mod tests {
     #[test]
     fn a_tick_leaves_the_reserves_as_they_are() {
         let mut session = Session::start(&catalog()).expect("starts");
-        let full = session.player().reserves;
+        let full = session.reserves();
         for _ in 0..30 {
             session.tick(Controls {
                 thrust: true,
                 ..Controls::default()
             });
         }
-        assert_eq!(session.player().reserves, full);
+        assert_eq!(session.reserves(), full);
         assert_ne!(session.player().position, Vec2::ZERO);
     }
 
@@ -723,14 +735,14 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
         assert_eq!(
-            session.player().reserves.fuel,
+            session.reserves().fuel,
             Gauge {
                 now: 200.0,
                 max: 300.0
             }
         );
         assert_eq!(dmy(&session), (24, 6, 1177));
-        let shield = session.player().reserves.shield;
+        let shield = session.reserves().shield;
         assert_eq!(shield, Gauge::full(30.0), "the other reserves carry over");
     }
 
@@ -745,13 +757,9 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.course(), ids(&[132]));
         assert_eq!(session.jumping(), None);
-        let reserves = session.player().reserves;
         assert_eq!(
             *session.player(),
-            ShipState {
-                reserves,
-                ..crate::hyperspace::arrival(Vec2::ZERO, Vec2::new(600.0, 0.0), &session.handling())
-            }
+            crate::hyperspace::arrival(Vec2::ZERO, Vec2::new(600.0, 0.0), &session.handling())
         );
         assert_eq!(session.player().position, Vec2::new(-1000.0, 0.0));
     }
@@ -800,7 +808,7 @@ mod tests {
         assert_eq!(jump(&mut session, &catalog, 132), Some(SystemId(132)));
         assert_eq!(session.system(), SystemId(132));
         assert_eq!(session.course(), []);
-        assert_eq!(session.player().reserves.fuel.now, 100.0);
+        assert_eq!(session.reserves().fuel.now, 100.0);
         assert_eq!(dmy(&session), (25, 6, 1177));
         // From 131, north of 132 on screen: it arrives at the top edge.
         assert_eq!(session.player().position, Vec2::new(0.0, -1000.0));
@@ -828,15 +836,15 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(session.fuel_regen_per_tick(), 0.5);
         jump(&mut session, &catalog, 131);
-        assert_eq!(session.player().reserves.fuel.now, 200.0);
+        assert_eq!(session.reserves().fuel.now, 200.0);
         for _ in 0..10 {
             session.tick(Controls::default());
         }
-        assert_eq!(session.player().reserves.fuel.now, 205.0);
+        assert_eq!(session.reserves().fuel.now, 205.0);
         for _ in 0..1000 {
             session.tick(Controls::default());
         }
-        assert_eq!(session.player().reserves.fuel, Gauge::full(300.0));
+        assert_eq!(session.reserves().fuel, Gauge::full(300.0));
         let still = Session::start(&self::catalog()).expect("starts");
         assert_eq!(still.fuel_regen_per_tick(), 0.0);
     }
@@ -866,7 +874,7 @@ mod tests {
         for _ in 0..8 {
             session.tick(Controls::default());
         }
-        assert_eq!(session.player().reserves.fuel.now, 205.0);
+        assert_eq!(session.reserves().fuel.now, 205.0);
         assert_eq!(*catalog.outfits_asked.borrow(), [ShipId(128)], "once");
     }
 
@@ -929,21 +937,21 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         jump(&mut session, &catalog, 132);
-        assert_eq!(session.player().reserves.fuel.now, 200.0);
+        assert_eq!(session.reserves().fuel.now, 200.0);
         assert_eq!(session.land(), Ok(StellarId(140)));
         for _ in 0..10 {
             session.tick(Controls::default());
         }
-        assert_eq!(session.player().reserves.fuel.now, 200.0);
+        assert_eq!(session.reserves().fuel.now, 200.0);
         session.take_off();
         session.tick(Controls::default());
-        assert_eq!(session.player().reserves.fuel.now, 201.0);
+        assert_eq!(session.reserves().fuel.now, 201.0);
 
         session.begin_jump().expect("jumps from the edge");
         for _ in 0..10 {
             session.tick(Controls::default());
         }
-        assert_eq!(session.player().reserves.fuel.now, 201.0);
+        assert_eq!(session.reserves().fuel.now, 201.0);
     }
 
     // Sounds.

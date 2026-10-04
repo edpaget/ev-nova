@@ -449,7 +449,7 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
 
     // Out past the minimum distance, J jumps to Beta.
     harness.fly_out();
-    let fuel = harness.ship().reserves.fuel.now;
+    let fuel = harness.session().reserves().fuel.now;
     assert_eq!(fuel, 300.0);
     harness.press(Key::Char('j'));
     let arrived = harness.run(2);
@@ -460,7 +460,7 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     let session = harness.session();
     assert_eq!(session.system(), SystemId(129));
     assert_eq!(session.course(), [SystemId(130)]);
-    assert_eq!(session.player().reserves.fuel.now, 200.0);
+    assert_eq!(session.reserves().fuel.now, 200.0);
     assert_eq!(date(&harness), (24, 6, 1177));
     assert_eq!(harness.ship().position, nova_sim::Vec2::new(-1000.0, 0.0));
     assert!(shows(&arrived, "Beta (sÿst 129)"), "{:?}", texts(&arrived));
@@ -478,7 +478,7 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     let session = harness.session();
     assert_eq!(session.system(), SystemId(130));
     assert_eq!(session.course(), []);
-    assert_eq!(session.player().reserves.fuel.now, 100.0);
+    assert_eq!(session.reserves().fuel.now, 100.0);
     assert_eq!(date(&harness), (25, 6, 1177));
     assert!(shows(&last, "Gamma (sÿst 130)"), "{:?}", texts(&last));
     assert_eq!(quads(&last)[0].dest, stellar_drawn(&harness));

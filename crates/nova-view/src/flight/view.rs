@@ -56,8 +56,8 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use nova_sim::{
-    Controls, FixedStep, JumpRefusal, LandingRefusal, PilotCatalog, Session, ShipState, StellarId,
-    Steps, Turn, flight::normalized, flight::shortest_turn,
+    Controls, FixedStep, JumpRefusal, LandingRefusal, PilotCatalog, Reserves, Session, ShipState,
+    StellarId, Steps, Turn, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -420,6 +420,15 @@ impl<C> FlightView<C> {
         Some(rotation_frame(self.shown_heading(), sheet.rotations))
     }
 
+    /// The ship's shield, armour and fuel, or none for a session that
+    /// never started.
+    fn reserves(&self) -> Reserves {
+        self.session
+            .as_ref()
+            .map(Session::reserves)
+            .unwrap_or_default()
+    }
+
     /// The player's ship now, or where it was for a session that never
     /// started.
     fn current(&self) -> ShipState {
@@ -593,7 +602,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
                 let state = HudState {
                     position: self.shown_position(),
                     stellars: &stellars,
-                    reserves: self.current().reserves,
+                    reserves: self.reserves(),
                     system: scene.name(),
                 };
                 hud::draw(list, bar, &state);
@@ -907,12 +916,13 @@ mod tests {
         Handling::from_fields(FIELDS)
     }
 
-    /// The ship as it starts: at rest at the centre, facing up, full.
+    /// The ship as it starts: at rest at the centre, facing up.
     fn start() -> ShipState {
-        ShipState {
-            reserves: Reserves::from_fields(FIELDS),
-            ..ShipState::default()
-        }
+        ShipState::default()
+    }
+
+    fn reserves(view: &View) -> Reserves {
+        view.session().expect("flying").reserves()
     }
 
     /// `state` after `ticks` steps under `controls`.
@@ -1258,7 +1268,7 @@ mod tests {
             &HudState {
                 position: at(0.0, 0.0),
                 stellars: &[at(0.0, -600.0), at(300.0, -200.0)],
-                reserves: start().reserves,
+                reserves: Reserves::from_fields(FIELDS),
                 system: "Sol",
             },
         );
@@ -1436,7 +1446,7 @@ mod tests {
     #[test]
     fn the_bars_show_the_sessions_reserves() {
         let view = flight();
-        let reserves = player(&view).reserves;
+        let reserves = reserves(&view);
         assert_eq!(reserves, Reserves::from_fields(FIELDS));
         let mut expected = DrawList::new();
         hud::draw(
@@ -2133,6 +2143,7 @@ mod tests {
         plot(&mut view, 131);
         fly_out(&mut view);
         let leaving = player(&view);
+        let fuel_leaving = reserves(&view).fuel.now;
         assert_eq!(view.input(&key(JUMP, true)), ScreenAction::None);
         assert_eq!(view.message(), None);
         let effect = view.jump_effect().expect("jumping");
@@ -2178,7 +2189,7 @@ mod tests {
         assert_eq!(view.course_map().route(), []);
         let arrived = player(&view);
         assert_eq!(arrived.position, Vec2::new(-1000.0, 0.0));
-        assert_eq!(arrived.reserves.fuel.now, leaving.reserves.fuel.now - 100.0);
+        assert_eq!(reserves(&view).fuel.now, fuel_leaving - 100.0);
         assert_eq!(view.shown_position(), at(-1000.0, 0.0));
         let list = drawn(&view);
         let (at_fade, color) = fade(&list).expect("a fade");
@@ -2192,7 +2203,7 @@ mod tests {
             &HudState {
                 position: at(-1000.0, 0.0),
                 stellars: &[at(0.0, 0.0)],
-                reserves: arrived.reserves,
+                reserves: reserves(&view),
                 system: "Alpha Centauri",
             },
         );

@@ -19,7 +19,6 @@
 
 use crate::geometry::Vec2;
 use crate::handling::{ACCEL_PER_PIXEL_PER_TICK_SQUARED, Handling};
-use crate::reserves::Reserves;
 
 /// The speed, in pixels a tick, at or below which reverse treats a ship as
 /// at rest: half of one tick's thrust from the weakest engine (`Accel` 1).
@@ -59,8 +58,6 @@ pub struct ShipState {
     pub velocity: Vec2,
     /// Which way it faces, in degrees clockwise from up, in `[0, 360)`.
     pub heading: f32,
-    /// Its shield, armour and fuel; flight leaves them as they are.
-    pub reserves: Reserves,
 }
 
 /// Advances `state` one tick under `controls`, flying as `handling` allows.
@@ -297,7 +294,6 @@ mod tests {
             position: Vec2::new(10.0, 20.0),
             velocity: Vec2::new(1.0, -2.0),
             heading: 45.0,
-            ..ShipState::default()
         };
         let coasted = after(state, Controls::default(), 10);
         assert_eq!(coasted.velocity, state.velocity);

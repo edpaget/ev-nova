@@ -155,15 +155,18 @@ impl StarMap {
     }
 }
 
-/// Whether `player` can jump to `next`, the next system on its route:
-/// `next`, or the first refusal that applies.
-pub fn check_jump(player: &ShipState, next: Option<SystemId>) -> Result<SystemId, JumpRefusal> {
+/// Whether `player`, holding `fuel`, can jump to `next`, the next system
+/// on its route: `next`, or the first refusal that applies.
+pub fn check_jump(
+    player: &ShipState,
+    fuel: f32,
+    next: Option<SystemId>,
+) -> Result<SystemId, JumpRefusal> {
     let next = next.ok_or(JumpRefusal::NoDestination)?;
     let distance = player.position.length();
     if distance < MIN_JUMP_DISTANCE {
         return Err(JumpRefusal::TooClose { distance });
     }
-    let fuel = player.reserves.fuel.now;
     if fuel < JUMP_FUEL {
         return Err(JumpRefusal::NoFuel { fuel });
     }
@@ -175,7 +178,7 @@ pub fn check_jump(player: &ShipState, next: Option<SystemId>) -> Result<SystemId
 /// from the centre on the side facing `from`, facing the centre and moving
 /// towards it at its top speed, as it drops out of hyperspace. Two systems
 /// at the same map position give no side, so it arrives from below, facing
-/// up. Its reserves are left empty for the caller to carry over.
+/// up.
 #[must_use]
 pub fn arrival(from: Vec2, to: Vec2, handling: &Handling) -> ShipState {
     let away = from - to;
@@ -190,7 +193,6 @@ pub fn arrival(from: Vec2, to: Vec2, handling: &Handling) -> ShipState {
         position: outward * ARRIVAL_DISTANCE,
         velocity: inward * handling.max_speed,
         heading: heading_of(inward),
-        ..ShipState::default()
     }
 }
 
@@ -198,7 +200,6 @@ pub fn arrival(from: Vec2, to: Vec2, handling: &Handling) -> ShipState {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::reserves::{Gauge, Reserves};
 
     fn system(id: i16, links: &[i16]) -> StarSystem {
         StarSystem {
@@ -324,35 +325,38 @@ mod tests {
 
     // Jumping.
 
-    /// A ship at (`x`, `y`) with `fuel` of 300.
-    fn ship(x: f32, y: f32, fuel: f32) -> ShipState {
-        ShipState {
-            position: Vec2::new(x, y),
-            reserves: Reserves {
-                fuel: Gauge {
-                    now: fuel,
-                    max: 300.0,
-                },
-                ..Reserves::default()
+    /// Whether a ship at (`x`, `y`) holding `fuel` can jump to `next`.
+    fn ship(x: f32, y: f32, fuel: f32) -> (ShipState, f32) {
+        (
+            ShipState {
+                position: Vec2::new(x, y),
+                ..ShipState::default()
             },
-            ..ShipState::default()
-        }
+            fuel,
+        )
     }
 
     const NEXT: Option<SystemId> = Some(SystemId(129));
 
+    fn check_ship(
+        (player, fuel): (ShipState, f32),
+        next: Option<SystemId>,
+    ) -> Result<SystemId, JumpRefusal> {
+        check_jump(&player, fuel, next)
+    }
+
     #[test]
     fn far_enough_out_with_fuel_the_ship_jumps_to_the_next_system() {
         assert_eq!(
-            check_jump(&ship(0.0, -1000.0, 300.0), NEXT),
+            check_ship(ship(0.0, -1000.0, 300.0), NEXT),
             Ok(SystemId(129))
         );
         assert_eq!(
-            check_jump(&ship(600.0, 800.0, 100.0), NEXT),
+            check_ship(ship(600.0, 800.0, 100.0), NEXT),
             Ok(SystemId(129))
         );
         assert_eq!(
-            check_jump(&ship(1000.1, 0.0, 100.0), NEXT),
+            check_ship(ship(1000.1, 0.0, 100.0), NEXT),
             Ok(SystemId(129))
         );
     }
@@ -360,11 +364,11 @@ mod tests {
     #[test]
     fn without_a_destination_there_is_no_jump_wherever_the_ship_is() {
         assert_eq!(
-            check_jump(&ship(0.0, 0.0, 0.0), None),
+            check_ship(ship(0.0, 0.0, 0.0), None),
             Err(JumpRefusal::NoDestination)
         );
         assert_eq!(
-            check_jump(&ship(0.0, 5000.0, 300.0), None),
+            check_ship(ship(0.0, 5000.0, 300.0), None),
             Err(JumpRefusal::NoDestination)
         );
     }
@@ -372,11 +376,11 @@ mod tests {
     #[test]
     fn just_inside_the_minimum_distance_is_too_close() {
         assert_eq!(
-            check_jump(&ship(0.0, -999.9, 300.0), NEXT),
+            check_ship(ship(0.0, -999.9, 300.0), NEXT),
             Err(JumpRefusal::TooClose { distance: 999.9 })
         );
         assert_eq!(
-            check_jump(&ship(300.0, 400.0, 0.0), NEXT),
+            check_ship(ship(300.0, 400.0, 0.0), NEXT),
             Err(JumpRefusal::TooClose { distance: 500.0 }),
             "before the fuel"
         );
@@ -385,11 +389,11 @@ mod tests {
     #[test]
     fn less_than_a_jumps_fuel_is_no_fuel() {
         assert_eq!(
-            check_jump(&ship(0.0, 1000.0, 99.9), NEXT),
+            check_ship(ship(0.0, 1000.0, 99.9), NEXT),
             Err(JumpRefusal::NoFuel { fuel: 99.9 })
         );
         assert_eq!(
-            check_jump(&ship(0.0, 1000.0, 0.0), NEXT),
+            check_ship(ship(0.0, 1000.0, 0.0), NEXT),
             Err(JumpRefusal::NoFuel { fuel: 0.0 })
         );
     }
@@ -420,7 +424,6 @@ mod tests {
         assert_eq!(arrived.position, Vec2::new(1000.0, 0.0));
         assert_eq!(arrived.velocity, Vec2::new(-6.0, 0.0));
         assert_eq!(arrived.heading, 270.0);
-        assert_eq!(arrived.reserves, Reserves::default());
     }
 
     #[test]

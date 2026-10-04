@@ -74,11 +74,11 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         fuel_regen: ship.fuel_regen,
     };
     assert_eq!(session.handling(), Handling::from_fields(fields));
-    assert_eq!(session.player().reserves, Reserves::from_fields(fields));
+    assert_eq!(session.reserves(), Reserves::from_fields(fields));
     assert!(
-        session.player().reserves.shield.max > 0.0,
+        session.reserves().shield.max > 0.0,
         "{:?}",
-        session.player().reserves
+        session.reserves()
     );
     assert!(
         session.handling().max_speed > 0.0,
