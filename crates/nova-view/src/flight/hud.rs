@@ -1,8 +1,12 @@
 //! The flight HUD: the status bar down the right edge of the screen, laid
 //! out by an `ïntf`, with the radar and the shield, armour and fuel bars.
 //! The `ïntf`'s nav area is the navigation display (Nova Bible, "The ïntf
-//! resource": `NavArea`; STR# 2002 342-349), not the system's name, so it is
-//! left empty here.
+//! resource": `NavArea`; STR# 2002 342-349), never the system's name: a
+//! [`NavDisplay`], drawn as a dim label ("Stellar Navigation" or
+//! "Hyperspace") over the bright name of the selected stellar or of the
+//! next system on the course ("Unexplored System" for one not explored),
+//! or the dim "No Destination" alone, in the bar's `StatusFont` at its
+//! `StatFontSize`.
 //!
 //! Which `ïntf`: a pilot with no government shows `ïntf` 128, the
 //! "Default status bar"; one who belongs to a government shows that
@@ -20,6 +24,7 @@ use nova_sim::hyperspace::max_jumps;
 use super::catalog::{GovtId, StatusBarLayout, StatusBars};
 use crate::geometry::{Bounds, Point};
 use crate::system::camera::VIEW_SIZE;
+use crate::text::LINE_HEIGHT;
 use crate::{Color, DrawList, Font, ImageKey};
 
 /// The `ïntf` shown by a pilot with no government, and the ID any ID
@@ -110,6 +115,28 @@ pub fn radar_point(radar: Bounds, player: Point, stellar: Point) -> Option<Point
     radar.contains(at).then_some(at)
 }
 
+/// `STR#` 2002 #343: the nav area's label over a selected stellar.
+pub const NAV_STELLAR: &str = "Stellar Navigation";
+/// `STR#` 2002 #344: the nav area with nothing to show.
+pub const NAV_NO_DESTINATION: &str = "No Destination";
+/// `STR#` 2002 #345: the nav area's label over a plotted jump.
+pub const NAV_HYPERSPACE: &str = "Hyperspace";
+/// `STR#` 2002 #346: the nav area's name for a system not yet explored.
+pub const NAV_UNEXPLORED: &str = "Unexplored System";
+
+/// What the nav area shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum NavDisplay {
+    /// Nothing selected and no course: "No Destination".
+    #[default]
+    None,
+    /// The stellar selected as the navigation target, by name.
+    Stellar(String),
+    /// The next system on the course, by name, or `None` when the pilot
+    /// has not explored it.
+    Hyperspace(Option<String>),
+}
+
 /// What the HUD shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HudState<'a> {
@@ -119,6 +146,8 @@ pub struct HudState<'a> {
     pub stellars: &'a [Point],
     /// The player's shield, armour and fuel.
     pub reserves: Reserves,
+    /// What the nav area shows.
+    pub nav: NavDisplay,
 }
 
 /// Draws `bar` showing `state`: its background, a radar dot for each
@@ -162,6 +191,29 @@ pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
         reserves.fuel.fraction(),
         layout.fuel_partial,
     );
+    draw_nav(list, layout, origin, &state.nav);
+}
+
+/// Draws `nav` in the layout's nav area, at the bar's `origin`: a label in
+/// the dim text colour over a value in the bright one, both in the bar's
+/// font, or the dim "No Destination" alone.
+fn draw_nav(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, nav: &NavDisplay) {
+    let area = layout.nav.offset(origin);
+    let (label, value) = match nav {
+        NavDisplay::None => (NAV_NO_DESTINATION, None),
+        NavDisplay::Stellar(name) => (NAV_STELLAR, Some(name.as_str())),
+        NavDisplay::Hyperspace(name) => (
+            NAV_HYPERSPACE,
+            Some(name.as_deref().unwrap_or(NAV_UNEXPLORED)),
+        ),
+    };
+    let size = layout.font_size;
+    let width = Some(area.width());
+    list.text_in(layout.font, label, area.min, size, width, layout.dim_text);
+    if let Some(value) = value {
+        let below = Point::new(area.min.x, LINE_HEIGHT.mul_add(size, area.min.y));
+        list.text_in(layout.font, value, below, size, width, layout.bright_text);
+    }
 }
 
 /// The fraction of the fuel bar the whole jumps' worth of fuel fills.
@@ -520,6 +572,7 @@ mod tests {
             position: at(0.0, 0.0),
             stellars: &[],
             reserves,
+            nav: NavDisplay::None,
         }
     }
 
@@ -633,6 +686,7 @@ mod tests {
             position: at(0.0, 0.0),
             stellars: &stellars,
             reserves: reserves(30.0, 60.0, 300.0),
+            nav: NavDisplay::Stellar("Earth".to_owned()),
         };
         let list = drawn(&stock(), &hud);
         let mut expected = DrawList::new();
@@ -642,13 +696,131 @@ mod tests {
         expected.line(at(865.0, 202.5), at(1014.0, 202.5), 7.0, SHIELD);
         expected.line(at(865.0, 219.5), at(1014.0, 219.5), 7.0, ARMOR);
         expected.line(at(865.0, 237.5), at(1014.0, 237.5), 7.0, FUEL_FULL);
+        expected.push(nav_text(NAV_STELLAR, 0, Color::DIM));
+        expected.push(nav_text("Earth", 1, TEXT));
         assert_eq!(list, expected);
-        // The nav area stays empty: the HUD never shows the system's name.
-        assert!(
-            !list.iter().any(|c| matches!(c, DrawCommand::Text { .. })),
-            "{list:?}"
-        );
         assert_eq!(RADAR_DOT_SIZE, 2.0);
+    }
+
+    // The nav area.
+
+    fn texts(list: &DrawList) -> Vec<DrawCommand> {
+        list.iter()
+            .filter(|command| matches!(command, DrawCommand::Text { .. }))
+            .cloned()
+            .collect()
+    }
+
+    /// `text` on line `line` (0 or 1) of the stock bar's nav area, at
+    /// (830, 0): its (8, 254)-(184, 286) is (838, 254), 176 wide, in the
+    /// layout's Charcoal 11, one line height (1.2 x 11) a line.
+    fn nav_text(text: &str, line: u8, color: Color) -> DrawCommand {
+        DrawCommand::Text {
+            text: text.to_owned(),
+            font: Font::Charcoal,
+            origin: at(838.0, 254.0 + f32::from(line) * 13.2),
+            size: 11.0,
+            wrap_width: Some(176.0),
+            color,
+        }
+    }
+
+    fn nav_drawn(nav: NavDisplay) -> Vec<DrawCommand> {
+        let hud = HudState {
+            nav,
+            ..state(reserves(30.0, 60.0, 300.0))
+        };
+        texts(&drawn(&stock(), &hud))
+    }
+
+    #[test]
+    fn the_nav_strings_are_the_originals() {
+        assert_eq!(
+            [
+                NAV_STELLAR,
+                NAV_NO_DESTINATION,
+                NAV_HYPERSPACE,
+                NAV_UNEXPLORED
+            ],
+            [
+                "Stellar Navigation",
+                "No Destination",
+                "Hyperspace",
+                "Unexplored System"
+            ]
+        );
+        assert_eq!(NavDisplay::default(), NavDisplay::None);
+    }
+
+    #[test]
+    fn with_nothing_to_show_the_nav_area_says_no_destination_dim() {
+        assert_eq!(
+            nav_drawn(NavDisplay::None),
+            [nav_text(NAV_NO_DESTINATION, 0, Color::DIM)]
+        );
+    }
+
+    #[test]
+    fn a_selected_stellar_is_stellar_navigation_over_its_name() {
+        assert_eq!(
+            nav_drawn(NavDisplay::Stellar("Earth".to_owned())),
+            [
+                nav_text(NAV_STELLAR, 0, Color::DIM),
+                nav_text("Earth", 1, TEXT)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_plotted_jump_is_hyperspace_over_the_systems_name() {
+        assert_eq!(
+            nav_drawn(NavDisplay::Hyperspace(Some("Sol".to_owned()))),
+            [
+                nav_text(NAV_HYPERSPACE, 0, Color::DIM),
+                nav_text("Sol", 1, TEXT)
+            ]
+        );
+        assert_eq!(
+            nav_drawn(NavDisplay::Hyperspace(None)),
+            [
+                nav_text(NAV_HYPERSPACE, 0, Color::DIM),
+                nav_text(NAV_UNEXPLORED, 1, TEXT)
+            ]
+        );
+    }
+
+    #[test]
+    fn the_nav_area_moves_with_the_bar_and_reads_its_layout() {
+        let mut bar = stock();
+        bar.background = Some(Background {
+            id: 700,
+            width: 200.0,
+            height: 767.0,
+        });
+        bar.layout.font = Font::Geneva;
+        bar.layout.font_size = 12.0;
+        bar.layout.nav = rect(10.0, 300.0, 110.0, 340.0);
+        bar.layout.dim_text = FUEL_PARTIAL;
+        bar.layout.bright_text = SHIELD;
+        let hud = HudState {
+            nav: NavDisplay::Stellar("Earth".to_owned()),
+            ..state(reserves(30.0, 60.0, 300.0))
+        };
+        let text = |text: &str, y: f32, color| DrawCommand::Text {
+            text: text.to_owned(),
+            font: Font::Geneva,
+            origin: at(834.0, y),
+            size: 12.0,
+            wrap_width: Some(100.0),
+            color,
+        };
+        assert_eq!(
+            texts(&drawn(&bar, &hud)),
+            [
+                text(NAV_STELLAR, 300.0, FUEL_PARTIAL),
+                text("Earth", 314.4, SHIELD)
+            ]
+        );
     }
 
     #[test]

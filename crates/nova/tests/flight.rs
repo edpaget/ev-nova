@@ -26,6 +26,7 @@ use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::{ShipId, ShipState, SystemId, Vec2};
 use nova_view::flight::FlightView;
+use nova_view::flight::hud::NAV_NO_DESTINATION;
 use nova_view::{Key, Point};
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
@@ -396,7 +397,8 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
     let first = harness.frame();
     // The stars; the two stellars, then their names; the ship; the title
     // and help lines; then the HUD: the status bar's picture, two radar
-    // dots and three bars. No system name: the nav area stays empty.
+    // dots and three bars, then the nav area's "No Destination" (never the
+    // system's name).
     let shape = shape(&first);
     assert_eq!(shape[0].0, "solid");
     assert!(shape[0].1 > 0, "stars");
@@ -408,7 +410,8 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
             ("sprites", 1),
             ("text", 2),
             ("sprites", 1),
-            ("solid", 5)
+            ("solid", 5),
+            ("text", 1)
         ]
     );
     let start = quads(&first);
@@ -509,10 +512,14 @@ fn the_hud_is_drawn_while_flying() {
         ]
     );
 
-    // The HUD's solids come last: no system name in the nav area.
+    // The nav area comes last, with nothing selected and no course: "No
+    // Destination", not the system's name.
     assert!(
-        matches!(first.batches.last(), Some(Batch::Solid(_))),
-        "solids last: {:?}",
+        matches!(
+            first.batches.last(),
+            Some(Batch::Text(runs)) if runs.len() == 1 && runs[0].text == NAV_NO_DESTINATION
+        ),
+        "the nav area last: {:?}",
         shape(&first)
     );
     assert!(

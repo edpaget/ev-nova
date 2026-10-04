@@ -24,8 +24,9 @@
 //!
 //! The HUD is drawn last, over everything: the status bar against the
 //! right edge, its radar showing the stellars around the ship as drawn,
-//! and its bars the session's shield, armour and fuel. Without a status
-//! bar it says why, and flight goes on.
+//! its bars the session's shield, armour and fuel, and its nav area the
+//! navigation target or else the course. Without a status bar it says
+//! why, and flight goes on.
 //!
 //! Each [`Screen::tick`] runs the simulation's fixed-step clock: the
 //! frame's time becomes whole steps of 1/30 s, each flown with the keys
@@ -54,6 +55,11 @@
 //!   destination: the session plots the course there and the map shows
 //!   it. The map shows the systems the pilot has explored, and the rest
 //!   unexplored.
+//! - Tab (a press, not its repeats) selects the next of the system's
+//!   stellars as the navigation target, as
+//!   [`navigation`](nova_sim::navigation) says. The HUD's nav area shows
+//!   the target, or else the next system on the course (see
+//!   [`hud`](super::hud)).
 //! - J (a press) jumps to the next system on the course when the session
 //!   allows it, and otherwise says why in the original's words (`STR#`
 //!   2002), as a refused landing does. A jump plays its [`JumpEffect`]:
@@ -77,7 +83,7 @@ use nova_sim::{
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
-use super::hud::{self, HudState, StatusBar};
+use super::hud::{self, HudState, NavDisplay, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
 use super::sprite::rotation_frame;
 use crate::draw::crossed_box;
@@ -96,7 +102,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Up: thrust   Left/Right: turn   Down: reverse   L: land   M: map   J: jump   P: preferences   Esc: leave flight";
+pub const HELP: &str = "Up: thrust   Left/Right: turn   Down: reverse   Tab: target   L: land   M: map   J: jump   P: preferences   Esc: leave flight";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
@@ -115,6 +121,9 @@ pub const MAP_KEY: Key = Key::Char('m');
 /// The hyperspace jump key: the original's documented default
 /// (`Keys.nib`'s `jumpKey`).
 pub const JUMP_KEY: Key = Key::Char('j');
+/// The key that selects the next stellar as the navigation target: the
+/// original's default, Tab.
+pub const TARGET_KEY: Key = Key::Tab;
 
 /// `STR#` 2002 #29.
 pub const NO_DESTINATION: &str =
@@ -337,6 +346,28 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             let _ = session.plot_course(destination);
             self.map.show_course(session.system(), session.course());
         }
+    }
+
+    /// What the HUD's nav area shows: the selected stellar, by its name in
+    /// `scene`; otherwise the next system on the course, by its name on the
+    /// map if the pilot has explored it; otherwise nothing.
+    fn nav_display(&self, scene: &SystemScene) -> NavDisplay {
+        let Ok(session) = &self.session else {
+            return NavDisplay::None;
+        };
+        if let Some(target) = session.nav_target() {
+            let name = scene.stellars().iter().find(|stellar| stellar.id == target);
+            return NavDisplay::Stellar(name.map(|s| s.name.clone()).unwrap_or_default());
+        }
+        session.course().first().map_or(NavDisplay::None, |&next| {
+            let name = session
+                .pilot()
+                .has_explored(next)
+                .then(|| self.map.model().system(next))
+                .flatten()
+                .map(|system| system.entry.name.clone());
+            NavDisplay::Hyperspace(name)
+        })
     }
 
     /// Begins a jump, or shows why not.
@@ -664,6 +695,12 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
                 self.jump();
                 return ScreenAction::None;
             }
+            Some(TARGET_KEY) => {
+                if let Ok(session) = &mut self.session {
+                    session.select_next_stellar();
+                }
+                return ScreenAction::None;
+            }
             _ => {}
         }
         if let Input::Key { key, pressed, .. } = *input
@@ -757,6 +794,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
                     position: self.shown_position(),
                     stellars: &stellars,
                     reserves: self.reserves(),
+                    nav: self.nav_display(scene),
                 };
                 hud::draw(list, bar, &state);
             }
@@ -801,7 +839,7 @@ mod tests {
 
     use super::*;
     use crate::flight::catalog::{GovtId, StatusBarLayout};
-    use crate::flight::hud::{self, HudState, StatusBar};
+    use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::sound::Sound;
     use crate::system::camera::VIEW_CENTER;
@@ -1304,7 +1342,6 @@ mod tests {
         let mut view = flight();
         let others = [
             key(Key::Escape, true),
-            key(Key::Tab, true),
             key(Key::Space, true),
             key(Key::Enter, true),
             key(Key::Char('w'), true),
@@ -1476,6 +1513,7 @@ mod tests {
                 position: at(0.0, 0.0),
                 stellars: &[at(0.0, -600.0), at(300.0, -200.0)],
                 reserves: ShipStats::new(FIELDS, &[]).full(),
+                nav: NavDisplay::None,
             },
         );
         assert_eq!(list, expected);
@@ -1490,7 +1528,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Up: thrust   Left/Right: turn   Down: reverse   L: land   M: map   J: jump   P: preferences   Esc: leave flight"
+            "Up: thrust   Left/Right: turn   Down: reverse   Tab: target   L: land   M: map   J: jump   P: preferences   Esc: leave flight"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -1663,6 +1701,7 @@ mod tests {
                 position: at(0.0, 0.0),
                 stellars: &[],
                 reserves,
+                nav: NavDisplay::None,
             },
         );
         assert_eq!(lines(&drawn(&view)), lines(&expected));
@@ -2410,6 +2449,7 @@ mod tests {
                 position: at(-1000.0, 0.0),
                 stellars: &[at(0.0, 0.0)],
                 reserves: reserves(&view),
+                nav: NavDisplay::None,
             },
         );
         assert!(
@@ -2928,5 +2968,126 @@ mod tests {
         let mut broken = FlightView::new(broken);
         assert_eq!(broken.shipyard(), None);
         assert_eq!(broken.buy_ship(ShipId(129)), Err(ShipRefusal::NoShipyard));
+    }
+
+    // The navigation target.
+
+    fn nav_target(view: &View) -> Option<StellarId> {
+        view.session().expect("flying").nav_target()
+    }
+
+    /// The texts drawn in the HUD's nav area, the stock bar's at (830, 0).
+    fn nav(view: &View) -> Vec<String> {
+        let area = layout().nav.offset(at(830.0, 0.0));
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } if area.contains(*origin) => {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tab_cycles_the_target_through_the_systems_stellars_in_nav_order() {
+        let mut view = flight();
+        assert_eq!(TARGET_KEY, Key::Tab);
+        assert_eq!(nav_target(&view), None);
+        // Earth, 128, comes first in the system's order, though the Moon
+        // is nearer.
+        for expected in [128, 129, 128] {
+            assert_eq!(view.input(&key(Key::Tab, true)), ScreenAction::None);
+            assert_eq!(nav_target(&view), Some(StellarId(expected)));
+        }
+    }
+
+    #[test]
+    fn a_repeat_or_release_of_tab_does_nothing() {
+        let mut view = flight();
+        view.input(&held(Key::Tab));
+        view.input(&key(Key::Tab, false));
+        assert_eq!(nav_target(&view), None);
+        tap(&mut view, Key::Tab);
+        view.input(&held(Key::Tab));
+        view.input(&key(Key::Tab, false));
+        assert_eq!(nav_target(&view), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn with_nothing_selected_and_no_course_the_hud_says_no_destination() {
+        assert_eq!(nav(&flight()), [hud::NAV_NO_DESTINATION]);
+    }
+
+    #[test]
+    fn the_hud_shows_the_selected_stellar_by_name() {
+        let mut view = flight();
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Earth"]);
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"]);
+    }
+
+    #[test]
+    fn a_plotted_jump_shows_hyperspace_and_the_next_system_if_explored() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        jump_to_alpha(&mut view);
+        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION], "arrived");
+        plot(&mut view, 130);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Sol"]);
+    }
+
+    #[test]
+    fn with_a_target_and_a_course_the_hud_shows_the_target() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Earth"]);
+        assert_eq!(
+            view.session().expect("flying").course(),
+            [SystemId(131)],
+            "the course is kept"
+        );
+    }
+
+    #[test]
+    fn arriving_clears_the_target_and_tab_selects_in_the_new_system() {
+        let mut view = flight();
+        tap(&mut view, Key::Tab);
+        jump_to_alpha(&mut view);
+        assert_eq!(nav_target(&view), None);
+        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION]);
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Proxima"]);
+    }
+
+    #[test]
+    fn tab_with_the_map_open_or_during_a_jump_changes_nothing() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        tap(&mut view, Key::Tab);
+        assert!(view.map_open());
+        assert_eq!(nav_target(&view), None);
+        tap(&mut view, MAP);
+        tap(&mut view, Key::Tab);
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        view.tick(ms(300));
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav_target(&view), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn tab_in_a_flight_that_never_started_does_nothing() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert_eq!(view.input(&key(Key::Tab, true)), ScreenAction::None);
+        assert!(view.session().is_err());
     }
 }
