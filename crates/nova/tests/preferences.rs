@@ -17,7 +17,8 @@ use nova::platform;
 use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
 use nova_audio::settings::level_volume;
 use nova_audio::{
-    Audio, AudioCommand, AudioCore, AudioSettings, SettingsKeeper, SettingsStore, Volume,
+    Audio, AudioCommand, AudioCore, AudioSettings, SettingsKeeper, SettingsStore, SoundTable,
+    Volume,
 };
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -252,6 +253,11 @@ impl Harness {
     /// The game started over `store`, as `main` starts it: the settings
     /// read through it start the audio core and the router.
     fn new(store: &MemorySettings) -> Self {
+        Self::with_table(store, SoundTable::ORIGINAL)
+    }
+
+    /// The game started over `store`, its audio core playing `table`.
+    fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
         let data = game_data();
         let (keeper, warning) =
             SettingsKeeper::open(Box::new(store.clone()) as Box<dyn SettingsStore>);
@@ -265,7 +271,8 @@ impl Harness {
             .with_sound_prefs(settings.prefs());
         let audio = RecordingAudio::new();
         let log = audio.log();
-        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>).with_settings(settings);
+        let core =
+            AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, table).with_settings(settings);
         let window = FakeWindow;
         Self {
             app: App::new(&window, data, screen)
@@ -285,12 +292,17 @@ impl Harness {
 
     fn press(&mut self, key: Key) {
         for pressed in [true, false] {
-            self.send(WindowEvent::Key {
-                key,
-                pressed,
-                repeat: false,
-            });
+            self.key(key, pressed);
         }
+    }
+
+    /// Presses or releases `key`.
+    fn key(&mut self, key: Key, pressed: bool) {
+        self.send(WindowEvent::Key {
+            key,
+            pressed,
+            repeat: false,
+        });
     }
 
     /// Presses and releases the physical key `code` through winit's
@@ -329,6 +341,13 @@ impl Harness {
         });
         assert_eq!(self.app.take_failures(), []);
         (*self.gpu.submits().last().expect("a frame")).clone()
+    }
+
+    /// Draws frames enough for flight to tick.
+    fn fly(&mut self) {
+        for _ in 0..4 {
+            self.frame();
+        }
     }
 
     /// The audio commands since the last call.
@@ -477,4 +496,46 @@ fn a_failed_save_is_a_warning_and_the_change_still_plays() {
     );
     let (unchanged, _) = SettingsKeeper::open(store.clone());
     assert!(unchanged.settings().music, "the old settings stay saved");
+}
+
+/// An engine sound, for a table that has one.
+const ENGINE: i16 = 200;
+
+#[test]
+fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
+    let store = seeded();
+    let table = SoundTable {
+        engine: Some(SoundId(ENGINE)),
+        ..SoundTable::ORIGINAL
+    };
+    let mut harness = Harness::with_table(&store, table);
+    let effects = level_volume(4);
+    let engine = AudioCommand::StartLoop {
+        sound: SoundId(ENGINE),
+        volume: effects,
+    };
+    harness.press(Key::Char('f'));
+    harness.fly();
+    harness.played();
+    harness.key(Key::Up, true);
+    harness.fly();
+    assert_eq!(harness.played(), [engine], "thrusting");
+
+    harness.press(Key::Char('p'));
+    assert_eq!(harness.showing(), Showing::Preferences);
+    harness.fly();
+    assert_eq!(
+        harness.played(),
+        [AudioCommand::StopLoop],
+        "flight is paused, the music plays on"
+    );
+    harness.key(Key::Up, false);
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    harness.fly();
+    assert_eq!(harness.played(), [], "no thrust on return");
+
+    harness.key(Key::Up, true);
+    harness.fly();
+    assert_eq!(harness.played(), [engine], "a fresh thrust");
 }

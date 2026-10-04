@@ -26,8 +26,9 @@ use crate::table::SoundTable;
 ///   volume, while the sound setting is on. A landing plays the table's
 ///   landing sound, then the stellar's own.
 /// - The engine loops while the sound setting is on, the ship thrusts in
-///   flight, and the table has an engine sound. Leaving flight stops it,
-///   and forgets the thrust: flight lets go of its keys when it is hidden.
+///   flight, and the table has an engine sound. Leaving flight, or opening
+///   the Preferences dialog that pauses it, stops it and forgets the
+///   thrust: flight lets go of its keys when it is hidden or paused.
 pub struct AudioCore<A: Audio> {
     audio: A,
     table: SoundTable,
@@ -69,7 +70,9 @@ impl<A: Audio> AudioCore<A> {
         if let Some(scene) = showing.filter(|&scene| !is_overlay(scene)) {
             self.scene = Some(scene);
         }
-        if self.scene != Some(Showing::Flight) {
+        // The Preferences dialog pauses flight below it, and flight lets
+        // go of its keys, so the thrust is forgotten as for leaving it.
+        if self.scene != Some(Showing::Flight) || showing == Some(Showing::Preferences) {
             self.thrusting = false;
         }
         self.reconcile();
@@ -612,7 +615,15 @@ mod tests {
         core.update(Some(Showing::Flight), &[THRUST]);
         drain(&log);
         core.update(Some(Showing::Preferences), &[]);
-        assert_eq!(drain(&log), [], "the music and the engine go on");
+        assert_eq!(
+            drain(&log),
+            [AudioCommand::StopLoop],
+            "the music goes on; the engine stops, as flight is paused"
+        );
+        core.update(Some(Showing::Flight), &[]);
+        assert_eq!(drain(&log), [], "the thrust is forgotten on return");
+        core.update(Some(Showing::Flight), &[THRUST]);
+        assert_eq!(drain(&log), [start_loop(200, 1.0)], "a fresh thrust");
         let (mut core, log) = original();
         core.update(Some(Showing::Preferences), &[]);
         assert_eq!(drain(&log), [], "over nothing");
