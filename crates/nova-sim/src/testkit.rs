@@ -6,10 +6,13 @@ use crate::catalog::{
     CharacterStart, LandingSite, PilotCatalog, ShipId, StarSystem, StartDate, StartError,
     StellarId, SystemId,
 };
+use crate::flight::{Controls, Turn};
 use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::hyperspace::MIN_JUMP_DISTANCE;
 use crate::landing::StellarFlags;
+use crate::session::Session;
 
 /// A canned first `chär`, ships and systems; records the ships asked
 /// for.
@@ -149,5 +152,72 @@ impl PilotCatalog for FakePilotCatalog {
     fn star_map(&self) -> Vec<StarSystem> {
         *self.star_map_reads.borrow_mut() += 1;
         self.star_map.clone()
+    }
+}
+
+/// Flies the ship out from the centre until it is at least
+/// [`MIN_JUMP_DISTANCE`] away: it first turns to face away from the
+/// centre (Down faces against its motion), then thrusts.
+pub(crate) fn fly_out(session: &mut Session) {
+    const THRUST: Controls = Controls {
+        thrust: true,
+        turn: Turn::None,
+        reverse: false,
+    };
+    for _ in 0..3000 {
+        let player = *session.player();
+        if player.position.length() >= MIN_JUMP_DISTANCE {
+            return;
+        }
+        let outward = if player.position.length() > 0.0 {
+            crate::flight::heading_of(player.position)
+        } else {
+            0.0
+        };
+        let off = crate::flight::shortest_turn(player.heading, outward).abs();
+        // Down lands exactly on the heading against the motion, which
+        // is outward while the ship drifts in.
+        let controls = if off < 1e-3 {
+            THRUST
+        } else if player.velocity.length() > crate::flight::AT_REST_SPEED {
+            Controls {
+                reverse: true,
+                ..Controls::default()
+            }
+        } else {
+            Controls {
+                turn: Turn::Right,
+                ..Controls::default()
+            }
+        };
+        session.tick(controls);
+    }
+    panic!("never got out: {:?}", session.player());
+}
+
+/// Plots a course to `to`, flies out and jumps, and arrives.
+pub(crate) fn jump(session: &mut Session, catalog: &FakePilotCatalog, to: i16) -> Option<SystemId> {
+    if session.course().last() != Some(&SystemId(to)) {
+        session.plot_course(SystemId(to)).expect("a route");
+    }
+    fly_out(session);
+    session.begin_jump().expect("jumps");
+    session.arrive(catalog)
+}
+
+/// A slow ship, 1 pixel a tick at most, gaining a unit a tick: it
+/// arrives slow enough to land, over planet 140 at 131's edge.
+pub(crate) fn edge_lander() -> FakePilotCatalog {
+    FakePilotCatalog {
+        ships: vec![(
+            ShipId(128),
+            Ok(ShipFields {
+                speed: 100,
+                fuel_regen: 1,
+                ..FAST
+            }),
+        )],
+        sites: vec![(SystemId(131), vec![planet(140, -1000.0, 0.0)])],
+        ..catalog()
     }
 }

@@ -8,6 +8,8 @@
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
 //! - [`data`]: the port's adapter over `nova_data`'s `GameData`.
+//! - `fixture` (with the `fixture` feature, and in this crate's tests):
+//!   `MemoryPilots`, a pilot store in memory.
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
 //!   one day a jump.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
@@ -28,7 +30,12 @@
 //!   legal records, starting from the first `chär`.
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full at its `shïp`'s values when it starts.
-//! - [`session`]: a flight [`Session`], the first `chär`'s ship flying
+//! - [`save`]: the save schema: a pilot as versioned JSON and back,
+//!   upgrading older saves.
+//! - [`saves`]: the [`PilotStore`] port pilots are saved through, the key
+//!   each is saved under, and the [`PilotKeeper`] that saves, lists and
+//!   opens them.
+//! - [`session`]: a flight [`Session`], a pilot's ship flying
 //!   from its starting system, landing, and jumping along a plotted course.
 //! - [`sound`]: the [`SimSound`] events a session emits as it thrusts,
 //!   lands, takes off and jumps; the audio side decides what they play.
@@ -37,6 +44,8 @@ pub mod catalog;
 pub mod clock;
 pub mod data;
 pub mod date;
+#[cfg(any(test, feature = "fixture"))]
+pub mod fixture;
 pub mod flight;
 pub mod fuel;
 pub mod geometry;
@@ -45,6 +54,8 @@ pub mod hyperspace;
 pub mod landing;
 pub mod pilot;
 pub mod reserves;
+pub mod save;
+pub mod saves;
 pub mod session;
 pub mod sound;
 #[cfg(test)]
@@ -64,5 +75,7 @@ pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
 pub use pilot::Pilot;
 pub use reserves::{Gauge, Reserves};
+pub use save::SaveError;
+pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::Session;
 pub use sound::SimSound;

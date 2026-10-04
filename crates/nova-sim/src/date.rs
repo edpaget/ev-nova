@@ -32,6 +32,14 @@ impl GameDate {
         Self { year, month, day }
     }
 
+    /// Day `day` of month `month` (1-12) of `year`, if the calendar has
+    /// it.
+    #[must_use]
+    pub fn new(year: i32, month: u8, day: u8) -> Option<Self> {
+        let exists = (1..=12).contains(&month) && day >= 1 && day <= days_in_month(year, month);
+        exists.then_some(Self { year, month, day })
+    }
+
     /// The day after this one.
     #[must_use]
     pub fn next_day(self) -> Self {
@@ -137,6 +145,20 @@ mod tests {
         assert_eq!(dmy(date(28, 2, 1900).next_day()), (1, 3, 1900));
         assert_eq!(dmy(date(28, 2, 2000).next_day()), (29, 2, 2000));
         assert_eq!(dmy(date(28, 2, 1904).next_day()), (29, 2, 1904));
+    }
+
+    #[test]
+    fn a_date_from_its_parts_must_exist() {
+        let made = |year, month, day| GameDate::new(year, month, day).map(dmy);
+        assert_eq!(made(1177, 6, 23), Some((23, 6, 1177)));
+        assert_eq!(made(1176, 2, 29), Some((29, 2, 1176)));
+        assert_eq!(made(1177, 2, 29), None);
+        assert_eq!(made(1177, 12, 31), Some((31, 12, 1177)));
+        assert_eq!(made(1177, 1, 1), Some((1, 1, 1177)));
+        assert_eq!(made(-40_000, 1, 1), Some((1, 1, -40_000)));
+        for (month, day) in [(0, 1), (13, 1), (6, 0), (6, 31), (4, 31), (1, 32)] {
+            assert_eq!(made(1177, month, day), None, "{month}/{day}");
+        }
     }
 
     #[test]

@@ -11,12 +11,19 @@ publish.workspace = true
 # The chär and shïp records a flight session starts from, read through the
 # sim's own port.
 nova-data.workspace = true
+# The save schema: JSON, through private records.
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 # Synthetic resource forks for the GameData adapter tests.
 nova-data = { workspace = true, features = ["fixture"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
+
+[features]
+# Exposes the in-memory pilot store to other crates' tests.
+fixture = []
 
 [lints]
 workspace = true

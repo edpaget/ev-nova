@@ -374,10 +374,12 @@ mod tests {
     use crate::fuel::{FUEL_SCOOP, OutfitMod};
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
-    use crate::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE, RouteError, StarMap};
+    use crate::hyperspace::{JumpRefusal, RouteError, StarMap};
     use crate::landing::LandingRefusal;
     use crate::reserves::{Gauge, Reserves};
-    use crate::testkit::{FAST, FakePilotCatalog, START, catalog, planet, starting};
+    use crate::testkit::{
+        FAST, FakePilotCatalog, START, catalog, edge_lander, fly_out, jump, planet, starting,
+    };
 
     #[test]
     fn a_session_flies_the_first_chärs_ship_with_its_handling() {
@@ -653,51 +655,6 @@ mod tests {
         (date.day(), date.month(), date.year())
     }
 
-    /// Flies the ship out from the centre until it is at least
-    /// [`MIN_JUMP_DISTANCE`] away: it first turns to face away from the
-    /// centre (Down faces against its motion), then thrusts.
-    fn fly_out(session: &mut Session) {
-        for _ in 0..3000 {
-            let player = *session.player();
-            if player.position.length() >= MIN_JUMP_DISTANCE {
-                return;
-            }
-            let outward = if player.position.length() > 0.0 {
-                crate::flight::heading_of(player.position)
-            } else {
-                0.0
-            };
-            let off = crate::flight::shortest_turn(player.heading, outward).abs();
-            // Down lands exactly on the heading against the motion, which
-            // is outward while the ship drifts in.
-            let controls = if off < 1e-3 {
-                THRUST
-            } else if player.velocity.length() > crate::flight::AT_REST_SPEED {
-                Controls {
-                    reverse: true,
-                    ..Controls::default()
-                }
-            } else {
-                Controls {
-                    turn: Turn::Right,
-                    ..Controls::default()
-                }
-            };
-            session.tick(controls);
-        }
-        panic!("never got out: {:?}", session.player());
-    }
-
-    /// Plots a course to `to`, flies out and jumps, and arrives.
-    fn jump(session: &mut Session, catalog: &FakePilotCatalog, to: i16) -> Option<SystemId> {
-        if session.course().last() != Some(&SystemId(to)) {
-            session.plot_course(SystemId(to)).expect("a route");
-        }
-        fly_out(session);
-        session.begin_jump().expect("jumps");
-        session.arrive(catalog)
-    }
-
     #[test]
     fn a_session_reads_the_star_map_and_the_date_once_when_it_starts() {
         let catalog = catalog();
@@ -938,23 +895,6 @@ mod tests {
         }
         assert_eq!(session.reserves().fuel.now, 205.0);
         assert_eq!(*catalog.outfits_asked.borrow(), [ShipId(128)], "once");
-    }
-
-    /// A slow ship, 1 pixel a tick at most, gaining a unit a tick: it
-    /// arrives slow enough to land, over planet 140 at 131's edge.
-    fn edge_lander() -> FakePilotCatalog {
-        FakePilotCatalog {
-            ships: vec![(
-                ShipId(128),
-                Ok(ShipFields {
-                    speed: 100,
-                    fuel_regen: 1,
-                    ..FAST
-                }),
-            )],
-            sites: vec![(SystemId(131), vec![planet(140, -1000.0, 0.0)])],
-            ..catalog()
-        }
     }
 
     /// A session landed on planet 140 at 131's edge, far enough out to
