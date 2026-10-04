@@ -677,8 +677,6 @@ impl<C> FlightView<C> {
         Some(rotation_frame(self.shown_heading(), sheet.rotations))
     }
 
-    /// The ship's shield, armour and fuel, or none for a session that
-    /// never started.
     /// Today's date as the HUD shows it, or none for a session that never
     /// started.
     fn date_text(&self) -> String {
@@ -688,6 +686,8 @@ impl<C> FlightView<C> {
             .unwrap_or_default()
     }
 
+    /// The ship's shield, armour and fuel, or none for a session that
+    /// never started.
     fn reserves(&self) -> Reserves {
         self.session
             .as_ref()
