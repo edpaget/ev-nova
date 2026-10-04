@@ -91,6 +91,9 @@ pub enum StartError {
     /// None of the first `chär`'s starting systems exists.
     #[error("none of the first chär's starting systems ({}) exists", slots(.0))]
     NoStartingSystem([Option<SystemId>; 4]),
+    /// The system a saved pilot is in no longer exists.
+    #[error("the pilot's system, sÿst {}, does not exist", .0.0)]
+    NoSystem(SystemId),
 }
 
 /// The starting system slots as text: each ID, or "none".
@@ -300,6 +303,10 @@ mod tests {
             StartError::NoStartingSystem([None, Some(SystemId(999)), None, Some(SystemId(5))])
                 .to_string(),
             "none of the first chär's starting systems (none, 999, none, 5) exists"
+        );
+        assert_eq!(
+            StartError::NoSystem(SystemId(130)).to_string(),
+            "the pilot's system, sÿst 130, does not exist"
         );
     }
 }

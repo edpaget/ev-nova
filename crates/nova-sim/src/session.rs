@@ -1,10 +1,18 @@
-//! A flight session: the player's ship in its starting system, flown one
-//! tick at a time.
+//! A flight session: a [`Pilot`]'s ship in its system, flown one tick at a
+//! time.
 //!
-//! A session starts as a new pilot does, from the first `chär` by
-//! ascending ID: its ship, in the first of its starting systems that
-//! exists. The ship starts at rest at the system's centre, facing up, with
-//! its shield, armour and fuel full.
+//! A session flies a pilot ([`Session::fly`]), a new one from the first
+//! `chär` ([`Session::start`]) or a saved one. The ship starts at rest at
+//! the system's centre, facing up, or docked at the stellar the pilot last
+//! landed on there. The pilot holds everything a save keeps (the ship,
+//! system, date, course and reserves among them), and the session changes
+//! it as the rules below say; the session itself keeps only what a flight
+//! needs on top.
+//!
+//! Landing, taking off and each change made in the spaceport
+//! ([`Session::transact`]) make a save due ([`Session::take_save_due`]):
+//! whoever saves the pilot takes it after each input and saves then.
+//! Arriving in a system explores it.
 //!
 //! The ship lands on a stellar of its system when the
 //! [`landing`](crate::landing) rules allow it: docked, it rests at the
@@ -61,6 +69,9 @@ pub struct Session {
     thrusting: bool,
     /// The sounds emitted since they were last taken.
     sounds: Vec<SimSound>,
+    /// Whether the pilot has changed in a way that should be saved since
+    /// this was last taken.
+    save_due: bool,
 }
 
 impl Session {
@@ -71,24 +82,49 @@ impl Session {
     }
 
     /// `pilot`'s session, its ship's handling, its system's stellars, the
-    /// star map and its fuel regeneration read from `catalog`. The ship
-    /// starts at rest at the system's centre, facing up.
-    pub fn fly(catalog: &impl PilotCatalog, pilot: Pilot) -> Result<Self, StartError> {
+    /// star map and its fuel regeneration read from `catalog`, with the
+    /// system marked explored.
+    ///
+    /// A pilot last landed on a stellar of its system resumes docked there,
+    /// silently, as the original resumes a pilot at its last planet.
+    /// Otherwise (or when that stellar is no longer in the system, which
+    /// the pilot then forgets) the ship starts at rest at the system's
+    /// centre, facing up.
+    ///
+    /// # Errors
+    ///
+    /// When the ship cannot be read, or the system no longer exists.
+    pub fn fly(catalog: &impl PilotCatalog, mut pilot: Pilot) -> Result<Self, StartError> {
         let ship = pilot.ship;
         let fields = catalog
             .ship_fields(ship)
             .map_err(|reason| StartError::Ship(ship, reason))?;
+        if !catalog.system_exists(pilot.system) {
+            return Err(StartError::NoSystem(pilot.system));
+        }
+        pilot.explore(pilot.system);
+        let sites = catalog.landing_sites(pilot.system);
+        let docked = pilot
+            .stellar
+            .and_then(|stellar| sites.iter().find(|site| site.id == stellar));
+        let player = ShipState {
+            position: docked.map_or(Vec2::ZERO, |site| site.position),
+            ..ShipState::default()
+        };
+        let landed = docked.map(|site| site.id);
+        pilot.stellar = landed;
         Ok(Self {
             handling: Handling::from_fields(fields),
-            player: ShipState::default(),
-            sites: catalog.landing_sites(pilot.system),
-            landed: None,
+            player,
+            sites,
+            landed,
             star_map: StarMap::new(catalog.star_map()),
             jumping: None,
             // No outfits yet: outfitting will pass the ship's.
             fuel_regen: fuel_regen_per_tick(fields.fuel_regen, &catalog.default_outfits(ship)),
             thrusting: false,
             sounds: Vec::new(),
+            save_due: false,
             pilot,
         })
     }
@@ -185,6 +221,8 @@ impl Session {
         let map = |id| self.star_map.position(id).unwrap_or_default();
         self.player = arrival(map(pilot.system), map(next), &self.handling);
         pilot.system = next;
+        pilot.stellar = None;
+        pilot.explore(next);
         self.sites = catalog.landing_sites(next);
         self.sounds.push(SimSound::Arrived);
         Some(next)
@@ -230,6 +268,8 @@ impl Session {
         let stellar_sound = site.and_then(|site| site.landing_sound);
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
+        self.pilot.stellar = Some(stellar);
+        self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
         Ok(stellar)
@@ -241,7 +281,29 @@ impl Session {
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         self.sounds.push(SimSound::TookOff);
+        self.save_due = true;
         Some(stellar)
+    }
+
+    /// Changes the pilot with `change`, while the ship is landed (in the
+    /// spaceport), and says whether it did: in flight nothing changes and
+    /// `change` is not called. A save is due after a change. `change` must
+    /// not change the ship class: the session's handling and fuel
+    /// regeneration stay as they were read.
+    pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
+        if self.landed.is_none() {
+            return false;
+        }
+        change(&mut self.pilot);
+        self.save_due = true;
+        true
+    }
+
+    /// Whether the pilot should be saved: it has landed, taken off or
+    /// changed in the spaceport since this was last taken. Taking it clears
+    /// it.
+    pub fn take_save_due(&mut self) -> bool {
+        std::mem::take(&mut self.save_due)
     }
 
     /// The stellar the ship is docked at, if it has landed.
@@ -952,6 +1014,152 @@ mod tests {
             session.tick(Controls::default());
         }
         assert_eq!(session.reserves().fuel.now, 201.0);
+    }
+
+    // The pilot.
+
+    #[test]
+    fn landing_records_the_stellar_on_the_pilot_and_a_save_is_due() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        assert!(!session.take_save_due(), "nothing to save yet");
+        assert_eq!(session.pilot().stellar(), None);
+        session.land().expect("lands");
+        assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
+        assert!(session.take_save_due());
+        assert!(!session.take_save_due(), "taking it clears it");
+    }
+
+    #[test]
+    fn a_refused_landing_records_nothing_and_no_save_is_due() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        for _ in 0..20 {
+            session.tick(THRUST);
+        }
+        session.land().expect_err("refused");
+        assert_eq!(session.pilot().stellar(), None);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn taking_off_keeps_the_stellar_and_a_save_is_due() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.land().expect("lands");
+        session.take_save_due();
+        session.take_off();
+        assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
+        assert!(session.take_save_due());
+        session.take_off();
+        assert!(!session.take_save_due(), "not landed: nothing happens");
+    }
+
+    #[test]
+    fn a_transaction_while_landed_changes_the_pilot_and_a_save_is_due() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.land().expect("lands");
+        session.take_save_due();
+        assert!(session.transact(|pilot| pilot.set_cash(500)));
+        assert_eq!(session.pilot().cash(), 500);
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn a_transaction_in_flight_is_refused_and_changes_nothing() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let before = session.clone();
+        let mut called = false;
+        assert!(!session.transact(|pilot| {
+            called = true;
+            pilot.set_cash(500);
+        }));
+        assert!(!called);
+        assert_eq!(session, before);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn arriving_explores_the_system_and_forgets_the_stellar() {
+        let catalog = edge_lander();
+        let mut session = landed_at_the_edge(&catalog);
+        assert_eq!(session.pilot().stellar(), Some(StellarId(140)));
+        assert_eq!(
+            session.pilot().explored().collect::<Vec<_>>(),
+            [SystemId(130), SystemId(131)]
+        );
+        session.take_off();
+        session.take_save_due();
+        session.begin_jump().expect("jumps from the edge");
+        session.arrive(&catalog).expect("arrives");
+        let pilot = session.pilot();
+        assert_eq!(pilot.system(), SystemId(132));
+        assert_eq!(pilot.stellar(), None);
+        assert_eq!(
+            pilot.explored().collect::<Vec<_>>(),
+            [SystemId(130), SystemId(131), SystemId(132)]
+        );
+        assert!(!session.take_save_due(), "a jump alone saves nothing");
+    }
+
+    /// A pilot landed on planet 128 in system 130, with 7 credits and a
+    /// day gone by, taken from a session.
+    fn landed_pilot(catalog: &FakePilotCatalog) -> Pilot {
+        let mut session = Session::start(catalog).expect("starts");
+        session.land().expect("lands");
+        session.transact(|pilot| pilot.set_cash(7));
+        session.pilot().clone()
+    }
+
+    #[test]
+    fn flying_a_pilot_landed_at_a_stellar_resumes_docked_there() {
+        let catalog = catalog();
+        let pilot = landed_pilot(&catalog);
+        let session = Session::fly(&catalog, pilot.clone()).expect("flies");
+        assert_eq!(session.landed(), Some(StellarId(128)));
+        assert_eq!(session.player().position, Vec2::new(30.0, -40.0));
+        assert_eq!(session.player().velocity, Vec2::ZERO);
+        assert_eq!(*session.pilot(), pilot);
+        let mut session = session;
+        assert_eq!(session.take_sounds(), [], "no landing sound");
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn flying_a_pilot_whose_stellar_is_gone_starts_at_the_centre() {
+        let pilot = landed_pilot(&catalog());
+        let moved = FakePilotCatalog {
+            sites: vec![(SystemId(130), vec![planet(129, 2000.0, 0.0)])],
+            ..catalog()
+        };
+        let session = Session::fly(&moved, pilot).expect("flies");
+        assert_eq!(session.landed(), None);
+        assert_eq!(*session.player(), ShipState::default());
+        assert_eq!(session.pilot().stellar(), None);
+    }
+
+    #[test]
+    fn flying_a_pilot_in_a_system_that_no_longer_exists_is_an_error() {
+        let pilot = landed_pilot(&catalog());
+        let gone = FakePilotCatalog {
+            systems: vec![SystemId(131)],
+            ..catalog()
+        };
+        assert_eq!(
+            Session::fly(&gone, pilot),
+            Err(StartError::NoSystem(SystemId(130)))
+        );
+    }
+
+    #[test]
+    fn flying_a_pilot_explores_its_system() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131);
+        let mut pilot = session.pilot().clone();
+        pilot.explored.clear();
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(
+            session.pilot().explored().collect::<Vec<_>>(),
+            [SystemId(131)]
+        );
     }
 
     // Sounds.
