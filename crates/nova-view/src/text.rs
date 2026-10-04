@@ -93,7 +93,14 @@ pub fn wrap(
 fn wrap_paragraph(paragraph: &str, fits: &impl Fn(&str) -> bool, lines: &mut Vec<String>) {
     // The line being filled; `None` until something is put on it.
     let mut line: Option<String> = None;
+    // Whether a wrap point has been passed: after one, a fresh line drops
+    // its leading spaces, while the paragraph's own leading spaces stay.
+    let mut wrapped = false;
     for word in paragraph.split(' ') {
+        if wrapped && line.is_none() && word.is_empty() {
+            // A space at the wrap point.
+            continue;
+        }
         let candidate = match &line {
             None => word.to_owned(),
             Some(line) => format!("{line} {word}"),
@@ -102,8 +109,12 @@ fn wrap_paragraph(paragraph: &str, fits: &impl Fn(&str) -> bool, lines: &mut Vec
             line = Some(candidate);
             continue;
         }
+        wrapped = true;
         if let Some(full) = line.take() {
-            lines.push(full.trim_end_matches(' ').to_owned());
+            let full = full.trim_end_matches(' ');
+            if !full.is_empty() {
+                lines.push(full.to_owned());
+            }
         }
         if word.is_empty() {
             // A space at the wrap point.
@@ -192,6 +203,21 @@ mod tests {
     fn spaces_at_a_wrap_point_are_dropped() {
         assert_eq!(geneva("abc   def", 20.0), ["abc", "def"]);
         assert_eq!(geneva("abc def", 15.0), ["abc", "def"]);
+    }
+
+    #[test]
+    fn a_run_of_spaces_at_a_wrap_point_leaves_no_blank_line() {
+        assert_eq!(geneva("abc   def", 15.0), ["abc", "def"]);
+        assert_eq!(geneva("     abc", 10.0), ["ab", "c"]);
+    }
+
+    #[test]
+    fn a_run_of_spaces_at_a_wrap_point_leaves_no_leading_space() {
+        assert_eq!(geneva("abc    def", 20.0), ["abc", "def"]);
+        assert_eq!(
+            geneva("Producer:    Matt Burch", 50.0),
+            ["Producer:", "Matt Burch"]
+        );
     }
 
     #[test]
