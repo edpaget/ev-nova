@@ -204,7 +204,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 16] = [
+    const GAME_CHARACTER_KEYS: [Key; 18] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -221,6 +221,8 @@ mod tests {
         nova_view::devtools::TOGGLE_KEY,
         nova_view::spaceport::trade::BUY_KEY,
         nova_view::spaceport::trade::SELL_KEY,
+        nova_view::spaceport::outfitter::BUY_KEY,
+        nova_view::spaceport::outfitter::SELL_KEY,
     ];
 
     /// The physical key that types `c` on a US-layout keyboard.
@@ -258,10 +260,15 @@ mod tests {
     /// Every key other than a character's that a screen reacts to, where
     /// the screen names it with a constant, and the physical key that
     /// sends it.
-    const GAME_NAMED_KEYS: [(Key, KeyCode); 3] = [
+    const GAME_NAMED_KEYS: [(Key, KeyCode); 7] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltRight),
+        // The outfitter's grid selection.
+        (Key::Left, KeyCode::ArrowLeft),
+        (Key::Right, KeyCode::ArrowRight),
+        (Key::Up, KeyCode::ArrowUp),
+        (Key::Down, KeyCode::ArrowDown),
     ];
 
     #[test]

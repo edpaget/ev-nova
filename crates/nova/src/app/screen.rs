@@ -53,6 +53,13 @@
 //! the router makes each trade through the session, hands the exchange as
 //! it now is back to the screen, and saves the pilot after the input.
 //!
+//! At an outfitter, the spaceport's Outfitter opens the session's
+//! outfitter, laid out by the interface file's "Outfit" dialog, each
+//! outfit's picture and description read from the game data. There B buys
+//! and S sells one of the selected outfit; the router makes each order
+//! through the session, whose stats change with it, hands the outfitter as
+//! it now is back to the screen, and saves the pilot after the input.
+//!
 //! Each day a jump takes rolls the planetary events on the router's
 //! source of chance ([`AppScreen::with_chance`]), which never fires until
 //! one is given, so the developer's flights stay the same each time.
@@ -85,8 +92,10 @@ use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
+use nova_view::spaceport::OutfitterCatalog;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
+use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::trade::TRADE_DIALOG;
 use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
@@ -572,7 +581,7 @@ impl AppScreen {
 
     /// Shows the spaceport of `stellar`, landed on, laid out by the
     /// "Spaceport" dialog when the router has dialogs, with the session's
-    /// exchange when it has one.
+    /// exchange and outfitter when it has them.
     fn show_spaceport(&mut self, stellar: nova_sim::StellarId) {
         let template = |id| match &self.dialogs {
             Some(dialogs) => dialogs
@@ -586,6 +595,11 @@ impl AppScreen {
         if let Some(market) = self.flight.as_ref().and_then(FlightView::market) {
             let trade = template(TRADE_DIALOG).map(|(template, _)| template);
             spaceport = spaceport.with_trade(trade, market);
+        }
+        if let Some(outfitter) = self.flight.as_ref().and_then(FlightView::outfitter) {
+            let template = template(OUTFIT_DIALOG).map(|(template, _)| template);
+            let art: Rc<dyn OutfitterCatalog> = Rc::clone(&self.data) as Rc<dyn OutfitterCatalog>;
+            spaceport = spaceport.with_outfitter(template, outfitter, art);
         }
         self.spaceport = Some(spaceport);
         self.switch_to(Side::Spaceport);
@@ -800,17 +814,30 @@ impl AppScreen {
     }
 
     /// The spaceport's input, all of it: an order on its exchange trades,
-    /// and the exchange as it then is goes back to it. Once it is left, the
-    /// ship takes off and flight shows.
+    /// and one in its outfitter buys or sells, and the exchange and the
+    /// outfitter as they then are go back to it. Once it is left, the ship
+    /// takes off and flight shows.
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
-        if let Some(order) = spaceport.take_trade() {
+        let trade = spaceport.take_trade();
+        let outfit = spaceport.take_outfit();
+        if trade.is_some() || outfit.is_some() {
             let flight = self.flight.as_mut().expect(ENTERED);
             // A refused order changes nothing; the screen greys what it can.
-            let _ = flight.trade(order);
+            if let Some(order) = trade {
+                let _ = flight.trade(order);
+            }
+            if let Some(order) = outfit {
+                let _ = flight.outfit(order);
+            }
+            // Either changes the cash, and an outfit the cargo space, so
+            // both go back.
             if let Some(market) = flight.market() {
                 spaceport.set_market(market);
+            }
+            if let Some(outfitter) = flight.outfitter() {
+                spaceport.set_outfitter(outfitter);
             }
         }
         if spaceport.left() {
@@ -1087,6 +1114,7 @@ mod tests {
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::character::Character;
     use nova_data::records::desc::Desc;
+    use nova_data::records::outfit::Outfit;
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
@@ -1148,14 +1176,21 @@ mod tests {
     /// names the same `rlëD`. The only `chär` starts in ship 128, an
     /// average ship, in system 128, over the planet.
     fn data() -> Rc<GameData> {
-        game_data(false)
+        game_data(false, false)
     }
 
     /// [`data`], where the planet is also a trade center trading food at
     /// 75 (`STR#` 4000 and 4004), the `chär` holds 1000 credits and ship
     /// 128 holds 10 tons.
     fn trading_data() -> Rc<GameData> {
-        game_data(true)
+        game_data(true, false)
+    }
+
+    /// [`trading_data`], where the planet, of tech level 1, is also an
+    /// outfitter selling `oütf` 128, a speed booster (+300) of 2 tons for
+    /// 500 credits, up to 3, and ship 128 has 10 tons free.
+    fn outfitting_data() -> Rc<GameData> {
+        game_data(true, true)
     }
 
     /// A `STR#` of `strings`.
@@ -1171,7 +1206,7 @@ mod tests {
         bytes
     }
 
-    fn game_data(trading: bool) -> Rc<GameData> {
+    fn game_data(trading: bool, outfitting: bool) -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
         anim[0x04..0x06].copy_from_slice(&1_i16.to_be_bytes());
@@ -1196,6 +1231,18 @@ mod tests {
             fork = fork
                 .resource(StrList::TYPE, 4000, None, &str_list(&["Food"]))
                 .resource(StrList::TYPE, 4004, None, &str_list(&["75"]));
+        }
+        if outfitting {
+            stellar[0x09] |= 0x04;
+            stellar[0x0C..0x0E].copy_from_slice(&1_i16.to_be_bytes());
+            average[0x0C..0x0E].copy_from_slice(&10_i16.to_be_bytes());
+            let mut booster = vec![0; Outfit::SIZE.expect("fixed")];
+            for (at, value) in [(0x02, 2_i16), (0x04, 1), (0x06, 8), (0x08, 300), (0x0A, 3)] {
+                booster[at..at + 2].copy_from_slice(&value.to_be_bytes());
+            }
+            booster[0x0E..0x12].copy_from_slice(&500_i32.to_be_bytes());
+            booster[0x32B..0x332].copy_from_slice(b"Booster");
+            fork = fork.resource(Outfit::TYPE, 128, Some(b"Booster"), &booster);
         }
         character[0x04..0x06].copy_from_slice(&128_i16.to_be_bytes());
         character[0x06..0x08].copy_from_slice(&128_i16.to_be_bytes());
@@ -3434,5 +3481,192 @@ mod tests {
         click_port_item(&mut screen, 7);
         assert!(spaceport(&screen).open_trade().is_none());
         assert!(spaceport(&screen).open_service().is_none());
+    }
+
+    // The Outfitter.
+
+    use nova_sim::OutfitId;
+    use nova_view::spaceport::outfitter::{BUY_ITEM as OUTFIT_BUY_ITEM, OUTFIT_DIALOG};
+
+    /// "Outfit", smaller: 400 x 300 at (0, 0), with Done (1), Sell (4),
+    /// the grid (5), the description (6), Buy (7), the picture (8) and the
+    /// info box (9).
+    fn outfit_template() -> DialogTemplate {
+        let item = |x: f32, y: f32, w: f32, h: f32| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        let mut items: Vec<ItemTemplate> = (0..11).map(|_| item(0.0, 400.0, 1.0, 1.0)).collect();
+        items[0] = item(300.0, 250.0, 30.0, 12.0);
+        items[3] = item(200.0, 250.0, 30.0, 12.0);
+        items[4] = item(0.0, 0.0, 200.0, 200.0);
+        items[5] = item(200.0, 0.0, 100.0, 100.0);
+        items[6] = item(100.0, 250.0, 30.0, 12.0);
+        items[7] = item(300.0, 0.0, 100.0, 100.0);
+        items[8] = item(300.0, 100.0, 100.0, 100.0);
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    /// [`Dialogs`], with "Outfit" too.
+    struct OutfitDialogs;
+
+    impl DialogResources for OutfitDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            if id == OUTFIT_DIALOG {
+                return Ok(outfit_template());
+            }
+            Dialogs.dialog_template(id)
+        }
+    }
+
+    /// The router over [`outfitting_data`] with the outfit dialog, keeping
+    /// pilots in `store`, flying a new pilot named Ada, landed.
+    fn landed_outfitter(store: &MemoryPilots) -> AppScreen {
+        let mut screen = AppScreen::new(outfitting_data())
+            .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        screen.input(&key(LAND, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        screen
+    }
+
+    const BOOSTER: OutfitId = OutfitId(128);
+
+    #[test]
+    fn the_outfitter_opens_the_stellars_outfitter() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter(&store);
+        assert!(
+            spaceport(&screen)
+                .offered()
+                .contains(&nova_sim::Service::Outfitter)
+        );
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.problem(), None);
+        let booster = open.outfitter().row(BOOSTER).expect("listed");
+        assert_eq!((booster.price, booster.mass), (500, 2));
+        assert_eq!(
+            (open.outfitter().cash, open.outfitter().free_mass),
+            (1000, 10)
+        );
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert_eq!(drawn(&screen), drawn(spaceport(&screen)));
+    }
+
+    #[test]
+    fn an_outfit_order_changes_the_pilot_refreshes_the_outfitter_and_saves() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter(&store);
+        click_port_item(&mut screen, 8);
+        let speed = flight(&screen)
+            .session()
+            .expect("flying")
+            .handling()
+            .max_speed;
+        let writes = store.writes();
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1);
+        assert_eq!(pilot(&screen).cash(), 500);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().row(BOOSTER).map(|row| row.owned), Some(1));
+        assert_eq!(open.outfitter().free_mass, 8);
+        assert_eq!(store.writes(), writes + 1, "saved after the input");
+        assert_eq!(saved(&store, "Ada").owned(BOOSTER), 1);
+        let faster = flight(&screen)
+            .session()
+            .expect("flying")
+            .handling()
+            .max_speed;
+        assert!((faster - speed - 3.0).abs() < 1e-6, "{speed} to {faster}");
+        // Another, then a click on Buy with too little left to pay.
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).cash(), 0);
+        let writes = store.writes();
+        let buy = spaceport(&screen)
+            .open_outfitter()
+            .and_then(|open| open.dialog())
+            .and_then(|dialog| dialog.item_bounds(OUTFIT_BUY_ITEM))
+            .expect("Buy")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: buy,
+            });
+        }
+        assert_eq!(pilot(&screen).owned(BOOSTER), 2, "greyed");
+        assert_eq!(store.writes(), writes, "nothing to save");
+        // S sells one back for half.
+        screen.input(&key(Key::Char('s'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1);
+        assert_eq!(pilot(&screen).cash(), 250);
+        // Escape closes the outfitter; the spaceport stays.
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_outfitter().is_none());
+        assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    #[test]
+    fn without_the_outfit_dialog_the_outfitter_says_why() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(outfitting_data())
+            .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        screen.input(&key(LAND, true));
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.problem(), Some("no DLOG 1002"));
+    }
+
+    #[test]
+    fn a_stellar_without_an_outfitter_offers_none() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        click_port_item(&mut screen, 8);
+        assert!(spaceport(&screen).open_outfitter().is_none());
+        assert!(spaceport(&screen).open_service().is_none());
+    }
+
+    #[test]
+    fn an_order_in_one_refreshes_the_other_for_when_it_opens() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(outfitting_data())
+            .with_dialogs(Rc::new(EveryDialog), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        screen.input(&key(LAND, true));
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        click_port_item(&mut screen, 7);
+        let open = spaceport(&screen).open_trade().expect("trading");
+        assert_eq!(open.market().cash, 500, "the outfit was paid for");
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).held(FOOD), 1);
+        screen.input(&key(Key::Escape, true));
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().cash, 425, "the food was paid for");
+    }
+
+    /// [`Dialogs`], with "Trade" and "Outfit" too.
+    struct EveryDialog;
+
+    impl DialogResources for EveryDialog {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            if id == TRADE_DIALOG {
+                return Ok(trade_template());
+            }
+            OutfitDialogs.dialog_template(id)
+        }
     }
 }
