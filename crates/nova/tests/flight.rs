@@ -8,9 +8,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
-use nova_data::graphics::RLED;
-use nova_data::graphics::fixture::RledBuilder;
+use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
+use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
+use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -75,11 +76,55 @@ fn character() -> Vec<u8> {
 }
 
 /// A `shïp` with `Accel` 300, `Speed` 300 and `Maneuver` 30: 3 pixels a
-/// tick at most, 0.1 more a tick, 3° a tick.
+/// tick at most, 0.1 more a tick, 3° a tick. Its `Shield` is 30, `Fuel`
+/// 300 and `Armor` 45.
 fn ship() -> Vec<u8> {
     let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
-    put_i16s(&mut bytes, 0x04, &[300, 300, 30]);
+    put_i16s(&mut bytes, 0x02, &[30, 300, 300, 30, 300]);
+    put_i16s(&mut bytes, 0x0E, &[45]);
     bytes
+}
+
+/// Writes 24-bit colours from `at`.
+fn put_u32s(bytes: &mut [u8], at: usize, values: &[u32]) {
+    for (i, value) in values.iter().enumerate() {
+        bytes[at + 4 * i..at + 4 * i + 4].copy_from_slice(&value.to_be_bytes());
+    }
+}
+
+/// The colours of the status bar fixture's shield, armour and fuel bars and
+/// radar dots.
+const SHIELD: u32 = 0x0000_00FF;
+const ARMOR: u32 = 0x00FF_0000;
+const FUEL: u32 = 0x00FF_FF00;
+const RADAR: u32 = 0x0000_FF00;
+
+/// Stock `ïntf` 128's areas and font, over background `PICT` 700.
+fn interface() -> Vec<u8> {
+    let mut bytes = vec![0; Interface::SIZE.expect("fixed")];
+    put_u32s(&mut bytes, 0x00, &[0x00FF_FFFF, 0x0080_8080]);
+    put_i16s(&mut bytes, 0x08, &[8, 8, 184, 184]);
+    put_u32s(&mut bytes, 0x10, &[RADAR, 0x0000_8000]);
+    put_i16s(&mut bytes, 0x18, &[199, 35, 206, 184]);
+    put_u32s(&mut bytes, 0x20, &[SHIELD]);
+    put_i16s(&mut bytes, 0x24, &[216, 35, 223, 184]);
+    put_u32s(&mut bytes, 0x2C, &[ARMOR]);
+    put_i16s(&mut bytes, 0x30, &[234, 35, 241, 184]);
+    put_u32s(&mut bytes, 0x38, &[FUEL, 0x0080_8000]);
+    put_i16s(&mut bytes, 0x40, &[254, 8, 286, 184]);
+    bytes[0x60..0x66].copy_from_slice(b"Geneva");
+    put_i16s(&mut bytes, 0xA0, &[12]);
+    put_i16s(&mut bytes, 0xA4, &[700]);
+    bytes
+}
+
+/// A grey 194 x 16 `PICT`: the status bar's background, cut short.
+fn status_picture() -> Vec<u8> {
+    let bounds = [0, 0, 16, 194];
+    PictBuilder::new(bounds)
+        .direct_bits(&DirectBits::rgb555(bounds, &[0x4210; 194 * 16]))
+        .end()
+        .build()
 }
 
 /// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
@@ -131,7 +176,8 @@ const STELLARS: [Point; 2] = [Point::new(0.0, -600.0), Point::new(300.0, -200.0)
 /// The first `chär` (if `with_character`) flies ship 128 from Alpha (128),
 /// which holds Alpha Prime (128) at (0, -600), an 8 x 8 sprite, and Alpha
 /// Station (129) at (300, -200), a 6 x 6 one. The ship's sheet is 36
-/// rotations of 1 x 1. Beta (129) holds nothing.
+/// rotations of 1 x 1. Beta (129) holds nothing. The status bar is `ïntf`
+/// 128, over a 194 x 16 `PICT` 700.
 fn data(with_character: bool) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship())
@@ -154,7 +200,14 @@ fn data(with_character: bool) -> Rc<GameData> {
         .resource(Spin::TYPE, 1000, None, &spin(1000))
         .resource(Spin::TYPE, 1001, None, &spin(1001))
         .resource(RLED, 1000, None, &sheet(1, 8))
-        .resource(RLED, 1001, None, &sheet(1, 6));
+        .resource(RLED, 1001, None, &sheet(1, 6))
+        .resource(
+            Interface::TYPE,
+            128,
+            Some(b"Default status bar"),
+            &interface(),
+        )
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
     if with_character {
         fork = fork.resource(Character::TYPE, 128, Some(b"Pilot"), &character());
     }
@@ -287,7 +340,8 @@ fn shape(frame: &Frame) -> Vec<(&'static str, usize)> {
         .collect()
 }
 
-/// Every sprite drawn, in order: the stellars, then the ship.
+/// Every sprite drawn, in order: the stellars, the ship, then the status
+/// bar's picture.
 fn quads(frame: &Frame) -> Vec<QuadInstance> {
     frame
         .batches
@@ -340,14 +394,23 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
     assert_eq!(session.ship(), ShipId(128));
 
     let first = harness.frame();
-    // The stars; the two stellars, then their names; the ship; then the
-    // title and help lines.
+    // The stars; the two stellars, then their names; the ship; the title
+    // and help lines; then the HUD: the status bar's picture, two radar
+    // dots and three bars, and the system's name.
     let shape = shape(&first);
     assert_eq!(shape[0].0, "solid");
     assert!(shape[0].1 > 0, "stars");
     assert_eq!(
         &shape[1..],
-        [("sprites", 2), ("text", 2), ("sprites", 1), ("text", 2)]
+        [
+            ("sprites", 2),
+            ("text", 2),
+            ("sprites", 1),
+            ("text", 2),
+            ("sprites", 1),
+            ("solid", 5),
+            ("text", 1)
+        ]
     );
     let start = quads(&first);
     assert_eq!(start[0].dest, centred(512.0, -216.0, 8.0, 8.0));

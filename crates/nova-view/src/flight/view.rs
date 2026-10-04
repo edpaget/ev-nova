@@ -4,8 +4,14 @@
 //!
 //! The screen owns a [`nova_sim::Session`] and reads everything else once,
 //! when it is built: the session's system, through the [`SystemCatalog`]
-//! port, and the ship's sprite sheet, through the [`ShipSprites`] port.
-//! Drawing and input never read anything.
+//! port, the ship's sprite sheet, through the [`ShipSprites`] port, and
+//! the HUD's status bar for the player's government, through the
+//! [`StatusBars`] port. Drawing and input never read anything.
+//!
+//! The HUD is drawn last, over everything: the status bar against the
+//! right edge, its radar showing the stellars around the ship as drawn,
+//! and its bars the session's shield, armour and fuel. Without a status
+//! bar it says why, and flight goes on.
 //!
 //! Each [`Screen::tick`] runs the simulation's fixed-step clock: the
 //! frame's time becomes whole steps of 1/30 s, each flown with the keys
@@ -31,7 +37,8 @@ use nova_sim::{
     flight::shortest_turn,
 };
 
-use super::catalog::{ShipSheet, ShipSprites};
+use super::catalog::{ShipSheet, ShipSprites, StatusBars};
+use super::hud::{self, HudState, StatusBar};
 use super::sprite::rotation_frame;
 use crate::draw::crossed_box;
 use crate::system::camera::Camera;
@@ -62,6 +69,8 @@ pub struct FlightView {
     scene: Option<SystemScene>,
     /// The player ship's sheet, or why it cannot be shown.
     sheet: Result<ShipSheet, String>,
+    /// The HUD's status bar, or why it cannot be shown.
+    status_bar: Result<StatusBar, String>,
     /// Turns frame times into simulation steps.
     clock: FixedStep,
     /// The player's ship as it was a step before the session's.
@@ -76,14 +85,15 @@ pub struct FlightView {
 
 impl FlightView {
     /// A new pilot's flight, read from `catalog` once.
-    pub fn new(catalog: &(impl PilotCatalog + SystemCatalog + ShipSprites)) -> Self {
+    pub fn new(catalog: &(impl PilotCatalog + SystemCatalog + ShipSprites + StatusBars)) -> Self {
         let session = Session::start(catalog).map_err(|err| err.to_string());
-        let (scene, sheet) = match &session {
+        let (scene, sheet, status_bar) = match &session {
             Ok(session) => (
                 Some(SystemScene::load(catalog, session.system())),
                 catalog.ship_sheet(session.ship()),
+                hud::choose_status_bar(catalog, session.government()),
             ),
-            Err(reason) => (None, Err(reason.clone())),
+            Err(reason) => (None, Err(reason.clone()), Err(reason.clone())),
         };
         let previous = session
             .as_ref()
@@ -93,6 +103,7 @@ impl FlightView {
             session,
             scene,
             sheet,
+            status_bar,
             clock: FixedStep::new(),
             previous,
             alpha: 0.0,
@@ -110,6 +121,11 @@ impl FlightView {
     #[must_use]
     pub fn scene(&self) -> Option<&SystemScene> {
         self.scene.as_ref()
+    }
+
+    /// The HUD's status bar, or why it cannot be shown.
+    pub fn status_bar(&self) -> Result<&StatusBar, &str> {
+        self.status_bar.as_ref().map_err(String::as_str)
     }
 
     /// How far the display is between the last two steps, in `[0, 1)`.
@@ -252,6 +268,19 @@ impl Screen for FlightView {
             Color::WHITE,
         );
         list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
+        match &self.status_bar {
+            Ok(bar) => {
+                let stellars: Vec<Point> = scene.stellars().iter().map(|s| s.position).collect();
+                let state = HudState {
+                    position: self.shown_position(),
+                    stellars: &stellars,
+                    reserves: self.current().reserves,
+                    system: scene.name(),
+                };
+                hud::draw(list, bar, &state);
+            }
+            Err(reason) => hud::draw_unavailable(list, reason),
+        }
     }
 
     /// Lets go of every flight key: the ship stops thrusting and turning,
@@ -272,6 +301,8 @@ mod tests {
     };
 
     use super::*;
+    use crate::flight::catalog::{GovtId, StatusBarLayout};
+    use crate::flight::hud::{self, HudState, StatusBar};
     use crate::system::camera::VIEW_CENTER;
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
@@ -285,6 +316,8 @@ mod tests {
     struct FakeCatalog {
         character: Result<CharacterStart, StartError>,
         sheet: Result<ShipSheet, String>,
+        /// `ïntf` 128: stock-like, or why it cannot be read.
+        bar: Result<StatusBarLayout, String>,
     }
 
     const FIELDS: ShipFields = ShipFields {
@@ -312,6 +345,33 @@ mod tests {
                 systems: [None, Some(SystemId(130)), None, None],
             }),
             sheet: Ok(sheet()),
+            bar: Ok(layout()),
+        }
+    }
+
+    /// Stock `ïntf` 128's areas, with background `PICT` 700.
+    fn layout() -> StatusBarLayout {
+        let rect = |left, top, right, bottom| crate::geometry::Bounds {
+            min: at(left, top),
+            max: at(right, bottom),
+        };
+        StatusBarLayout {
+            radar: rect(8.0, 8.0, 184.0, 184.0),
+            shield: rect(35.0, 199.0, 184.0, 206.0),
+            armor: rect(35.0, 216.0, 184.0, 223.0),
+            fuel: rect(35.0, 234.0, 184.0, 241.0),
+            nav: rect(8.0, 254.0, 184.0, 286.0),
+            bright_text: Color::WHITE,
+            dim_text: Color::DIM,
+            bright_radar: Color::rgba(0, 255, 0, 255),
+            dim_radar: Color::rgba(0, 128, 0, 255),
+            shield_color: Color::rgba(0, 0, 255, 255),
+            armor_color: Color::rgba(255, 0, 0, 255),
+            fuel_full: Color::rgba(255, 255, 0, 255),
+            fuel_partial: Color::rgba(128, 128, 0, 255),
+            font: Font::Geneva,
+            font_size: 12.0,
+            status_bkgnd: 700,
         }
     }
 
@@ -369,6 +429,24 @@ mod tests {
         fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
             assert_eq!(id, ShipId(128));
             self.sheet.clone()
+        }
+    }
+
+    /// A new pilot has no government, so only `ïntf` 128 and its picture
+    /// are ever asked for.
+    impl StatusBars for FakeCatalog {
+        fn government_interface(&self, id: GovtId) -> Result<i16, String> {
+            panic!("asked for gövt {}", id.0)
+        }
+
+        fn status_bar(&self, id: i16) -> Result<StatusBarLayout, String> {
+            assert_eq!(id, 128);
+            self.bar.clone()
+        }
+
+        fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
+            assert_eq!(id, 700);
+            Some((194, 767))
         }
     }
 
@@ -707,6 +785,24 @@ mod tests {
             .collect()
     }
 
+    fn lines(list: &DrawList) -> Vec<DrawCommand> {
+        list.iter()
+            .filter(|c| matches!(c, DrawCommand::Line { .. }))
+            .cloned()
+            .collect()
+    }
+
+    /// The radar dots drawn: the dots in the radar's colour.
+    fn dots_on_radar(list: &DrawList) -> Vec<Point> {
+        let radar = layout().bright_radar;
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Dot { center, color, .. } if color == radar => Some(center),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn texts(list: &DrawList) -> Vec<String> {
         list.iter()
             .filter_map(|command| match command {
@@ -717,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn it_draws_the_stars_then_the_stellars_then_the_ship_then_the_overlay() {
+    fn it_draws_the_stars_the_stellars_the_ship_the_overlay_then_the_hud() {
         let view = flight();
         let list = drawn(&view);
         let mut expected = DrawList::new();
@@ -731,6 +827,16 @@ mod tests {
         expected.sprite(ImageKey::sprite(2000, 0), VIEW_CENTER, Color::WHITE);
         expected.push(overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE));
         expected.push(overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM));
+        hud::draw(
+            &mut expected,
+            view.status_bar().expect("a status bar"),
+            &HudState {
+                position: at(0.0, 0.0),
+                stellars: &[at(0.0, -600.0), at(300.0, -200.0)],
+                reserves: start().reserves,
+                system: "Sol",
+            },
+        );
         assert_eq!(list, expected);
         assert!(matches!(list.iter().next(), Some(DrawCommand::Dot { .. })));
         assert_eq!(
@@ -796,12 +902,11 @@ mod tests {
         assert_eq!(sprites(&list).len(), 2, "the stellars only");
         let mut expected = DrawList::new();
         crossed_box(&mut expected, VIEW_CENTER, PLACEHOLDER_SIZE, PLACEHOLDER);
-        let lines: Vec<DrawCommand> = list
-            .iter()
-            .filter(|c| matches!(c, DrawCommand::Line { .. }))
-            .cloned()
-            .collect();
-        assert_eq!(lines, expected.iter().cloned().collect::<Vec<_>>());
+        assert_eq!(
+            lines(&list)[..expected.len()],
+            *lines(&expected),
+            "then the HUD's"
+        );
         let reason = list
             .iter()
             .find(|c| matches!(c, DrawCommand::Text { text, .. } if text.starts_with("Sprite")))
@@ -819,6 +924,137 @@ mod tests {
             ))
         );
         assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
+    }
+
+    // The HUD.
+
+    #[test]
+    fn a_new_pilot_shows_the_default_status_bar() {
+        let view = flight();
+        assert_eq!(
+            view.status_bar(),
+            Ok(&StatusBar {
+                layout: layout(),
+                background: Some(hud::Background {
+                    id: 700,
+                    width: 194.0,
+                    height: 767.0,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn the_hud_shows_the_status_bar_full_bars_and_the_stellars_on_radar() {
+        let view = flight();
+        let list = drawn(&view);
+        assert!(
+            list.iter().any(|c| *c
+                == DrawCommand::Picture {
+                    image: ImageKey::picture(700),
+                    top_left: at(830.0, 0.0),
+                }),
+            "{list:?}"
+        );
+        // The shïp's shield 40, armour 60 and fuel 250: two whole jumps,
+        // then half of one.
+        let width = 149.0;
+        let bar = |top: f32, from: f32, to: f32, color| DrawCommand::Line {
+            from: at(865.0 + from, top + 3.5),
+            to: at(865.0 + to, top + 3.5),
+            width: 7.0,
+            color,
+        };
+        let layout = layout();
+        assert_eq!(
+            lines(&list),
+            [
+                bar(199.0, 0.0, width, layout.shield_color),
+                bar(216.0, 0.0, width, layout.armor_color),
+                bar(234.0, 0.0, width * 0.8, layout.fuel_full),
+                bar(234.0, width * 0.8, width, layout.fuel_partial),
+            ]
+        );
+        let radar = layout.radar.offset(at(830.0, 0.0));
+        let on_radar = |stellar| hud::radar_point(radar, at(0.0, 0.0), stellar);
+        assert_eq!(
+            dots_on_radar(&list),
+            [
+                on_radar(at(0.0, -600.0)).expect("in range"),
+                on_radar(at(300.0, -200.0)).expect("in range"),
+            ]
+        );
+        assert_eq!(texts(&list).last().map(String::as_str), Some("Sol"));
+    }
+
+    #[test]
+    fn the_radar_follows_the_ship_as_drawn() {
+        let mut view = flight();
+        let before = dots_on_radar(&drawn(&view));
+        view.input(&key(Key::Up, true));
+        view.tick(Duration::from_millis(1500));
+        view.tick(TICK / 2);
+        let shown = view.shown_position();
+        assert!(shown.y < -10.0, "{shown:?}");
+        let after = dots_on_radar(&drawn(&view));
+        let radar = layout().radar.offset(at(830.0, 0.0));
+        assert_eq!(
+            after,
+            [
+                hud::radar_point(radar, shown, at(0.0, -600.0)).expect("in range"),
+                hud::radar_point(radar, shown, at(300.0, -200.0)).expect("in range"),
+            ]
+        );
+        assert!(after[0].y > before[0].y, "{before:?} {after:?}");
+    }
+
+    #[test]
+    fn the_bars_show_the_sessions_reserves() {
+        let view = flight();
+        let reserves = player(&view).reserves;
+        assert_eq!(reserves, Reserves::from_fields(FIELDS));
+        let mut expected = DrawList::new();
+        hud::draw(
+            &mut expected,
+            view.status_bar().expect("a status bar"),
+            &HudState {
+                position: at(0.0, 0.0),
+                stellars: &[],
+                reserves,
+                system: "Sol",
+            },
+        );
+        assert_eq!(lines(&drawn(&view)), lines(&expected));
+    }
+
+    #[test]
+    fn an_unreadable_status_bar_says_why_and_flight_goes_on() {
+        let barless = FakeCatalog {
+            bar: Err("no ïntf 128".to_owned()),
+            ..catalog()
+        };
+        let mut view = FlightView::new(&barless);
+        assert_eq!(view.status_bar(), Err("no ïntf 128"));
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 5);
+        assert_eq!(player(&view), stepped(start(), THRUST, 5));
+        let list = drawn(&view);
+        let mut reason = DrawList::new();
+        hud::draw_unavailable(&mut reason, "no ïntf 128");
+        assert_eq!(list.iter().last(), reason.iter().next());
+        assert_eq!(lines(&list), [], "no bars");
+        assert_eq!(dots_on_radar(&list), [], "no radar");
+        assert_eq!(sprites(&list).len(), 3, "stellars and ship");
+    }
+
+    #[test]
+    fn a_session_that_cannot_start_has_no_status_bar() {
+        let failed = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        };
+        let view = FlightView::new(&failed);
+        assert_eq!(view.status_bar(), Err("no chär to start from"));
     }
 
     // Frame rate.

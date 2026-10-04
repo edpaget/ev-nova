@@ -20,8 +20,10 @@
 //!   system view opened from it, and goes back to the map on Escape.
 //! - [`flight`]: the flight screen, which flies the player's ship
 //!   (`nova_sim`'s session) in its starting system with the original's
-//!   default keys, the camera following the ship, and reads the ship's
-//!   sprite through its [`flight::ShipSprites`] port.
+//!   default keys, the camera following the ship, under a HUD laid out by
+//!   the status bar's `ïntf`, and reads the ship's sprite and the status
+//!   bar through its [`flight::ShipSprites`] and [`flight::StatusBars`]
+//!   ports.
 //!
 //! # Text
 //!
