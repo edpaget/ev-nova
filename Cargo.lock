@@ -1390,6 +1390,7 @@ dependencies = [
  "nova-data",
  "nova-rsrc",
  "nova-sim",
+ "nova-view",
  "serde_json",
 ]
 

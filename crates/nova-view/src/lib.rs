@@ -27,7 +27,9 @@
 //!
 //! Each [`DrawCommand::Text`] names its [`Font`], one of the game's two
 //! interface fonts (Geneva or Charcoal); the renderer picks the face that
-//! draws it.
+//! draws it. [`text`] holds the [`text::TextMetrics`] port that measures
+//! text as it will be drawn, the line-height rule the renderer shares, and
+//! word wrap.
 //!
 //! # Developer tools
 //!
@@ -47,6 +49,7 @@ pub mod navigator;
 pub mod screen;
 pub mod ships;
 pub mod system;
+pub mod text;
 mod time;
 
 pub use color::Color;
