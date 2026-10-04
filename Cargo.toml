@@ -41,6 +41,11 @@ bytemuck = { version = "1.25", features = ["derive"] }
 egui = "0.36.2"
 egui-wgpu = { version = "0.36.2", default-features = false }
 egui-winit = { version = "0.36.2", default-features = false }
+# Sound effects and music (nova-audio's adapter): the cpal device backend
+# and the MP3 decoder for the soundtrack. The default features' realtime
+# thread priority (and its dbus dependency) and the other formats are not
+# needed.
+kira = { version = "0.12.5", default-features = false, features = ["cpal", "mp3"] }
 
 # The PNG encoder and its compression and checksum crates run tens of
 # times slower unoptimised, and nova-dump's stock test (a debug build)

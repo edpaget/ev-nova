@@ -8,12 +8,20 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# The `snd ` IDs the table names.
+# Plays the commands: static sounds, the engine loop and the streamed music.
+kira.workspace = true
+# The `snd ` IDs the table names, and the `snd ` decoder the adapter uses.
 nova-data.workspace = true
+# The `snd ` resource type the game data's sound bank reads.
+nova-rsrc.workspace = true
 # The sound events screens report, and which screen is showing.
 nova-view.workspace = true
 
 [dev-dependencies]
+# Synthetic `snd ` resources for the adapter's tests.
+nova-data = { workspace = true, features = ["fixture"] }
+# Synthetic resource forks for the game data sound bank's tests.
+nova-rsrc = { workspace = true, features = ["fixture"] }
 # The core's tests record commands with the `recording` mock.
 nova-audio = { workspace = true, features = ["recording"] }
 
