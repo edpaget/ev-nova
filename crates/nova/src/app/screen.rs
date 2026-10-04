@@ -31,8 +31,9 @@
 //!
 //! F, from either side, enters flight: the [`FlightView`], built the first
 //! time and kept, so flight resumes where it left off. In flight the
-//! arrow keys fly the ship, Tab does nothing, and Escape goes back to the
-//! screen flight was entered from; it never quits.
+//! arrow keys fly the ship, Tab selects the next stellar as the navigation
+//! target, and Escape goes back to the screen flight was entered from; it
+//! never quits.
 //!
 //! M and J are flight's own keys. M opens flight's course map, where a
 //! click sets the destination; Escape (or M) closes it, back into flight.
@@ -563,7 +564,8 @@ impl AppScreen {
 
     /// Flight's input: an Escape press closes flight's map when it is
     /// open, and otherwise goes back; everything else goes to flight
-    /// (which ignores Tab). When it lands, the spaceport shows.
+    /// (where Tab selects the navigation target). When it lands, the
+    /// spaceport shows.
     fn flight_input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
             key: Key::Escape,
@@ -1008,8 +1010,8 @@ impl Screen for AppScreen {
     /// In flight, an Escape press closes flight's map when it is open, and
     /// otherwise goes back to the side flight was entered from, letting go
     /// of the keys held in flight; it never quits, and its repeats and
-    /// release are consumed. Everything else goes to flight, where Tab, F
-    /// and I do nothing.
+    /// release are consumed. Everything else goes to flight, where Tab
+    /// selects the navigation target and F and I do nothing.
     ///
     /// In the spaceport, every event goes to it; leaving it takes off,
     /// back into flight, letting go of its keys.
@@ -1830,13 +1832,16 @@ mod tests {
     }
 
     #[test]
-    fn tab_does_nothing_in_flight() {
+    fn tab_in_flight_selects_a_target_and_stays_in_flight() {
         let mut screen = AppScreen::new(data());
         fly(&mut screen);
+        let target = |screen: &AppScreen| flight(screen).session().expect("flying").nav_target();
+        assert_eq!(target(&screen), None);
         for input in [key(Key::Tab, true), held(Key::Tab), key(Key::Tab, false)] {
             assert_eq!(screen.input(&input), ScreenAction::None);
             assert_eq!(screen.showing(), Showing::Flight);
         }
+        assert_eq!(target(&screen), Some(nova_data::StellarId(128)));
     }
 
     #[test]
