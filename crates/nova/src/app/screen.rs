@@ -70,6 +70,12 @@
 //! ship the cargo space, the free mass and the outfits), and saves the
 //! pilot after the input.
 //!
+//! Where fuel is sold, the spaceport's Recharge fills the tank through the
+//! session; the router tells the screen how it went (a refusal says why in
+//! the description box), hands the exchange, the outfitter and the
+//! shipyard back with the cash as it now is, and saves the pilot after the
+//! input.
+//!
 //! Each day a jump takes rolls the planetary events on the router's
 //! source of chance ([`AppScreen::with_chance`]), which never fires until
 //! one is given, so the developer's flights stay the same each time.
@@ -844,7 +850,8 @@ impl AppScreen {
         let trade = spaceport.take_trade();
         let outfit = spaceport.take_outfit();
         let ship = spaceport.take_ship();
-        if trade.is_some() || outfit.is_some() || ship.is_some() {
+        let recharge = spaceport.take_recharge();
+        if trade.is_some() || outfit.is_some() || ship.is_some() || recharge {
             let flight = self.flight.as_mut().expect(ENTERED);
             // A refused order changes nothing; the screen greys what it can.
             if let Some(order) = trade {
@@ -855,6 +862,13 @@ impl AppScreen {
             }
             if let Some(ship) = ship {
                 let _ = flight.buy_ship(ship);
+            }
+            // A refused refill says why in the spaceport.
+            if recharge {
+                match flight.recharge() {
+                    Ok(_) => spaceport.recharged(),
+                    Err(refusal) => spaceport.refuse_recharge(refusal),
+                }
             }
             // Each changes the cash; an outfit the cargo space and the
             // trade-in; and a ship the cargo space, the free mass and the
