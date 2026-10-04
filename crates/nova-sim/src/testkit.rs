@@ -3,9 +3,10 @@
 use std::cell::RefCell;
 
 use crate::catalog::{
-    CharacterStart, LandingSite, PilotCatalog, ShipId, StarSystem, StartDate, StartError,
-    StellarId, SystemId,
+    CharacterStart, CommodityStrings, DisasterRecord, JunkRecord, LandingSite, PilotCatalog,
+    ShipId, StarSystem, StartDate, StartError, StellarId, SystemId,
 };
+use crate::chance::{Chance, NeverFires};
 use crate::flight::{Controls, Turn};
 use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
@@ -29,6 +30,11 @@ pub(crate) struct FakePilotCatalog {
     /// Each ship's default outfits' mods; any other ship has none.
     pub(crate) outfits: Vec<(ShipId, Vec<OutfitMod>)>,
     pub(crate) outfits_asked: RefCell<Vec<ShipId>>,
+    pub(crate) commodities: CommodityStrings,
+    pub(crate) junk: Vec<JunkRecord>,
+    pub(crate) disasters: Vec<DisasterRecord>,
+    /// How many times the goods (commodities, `jünk` and `öops`) were read.
+    pub(crate) goods_reads: RefCell<usize>,
 }
 
 pub(crate) const FAST: ShipFields = ShipFields {
@@ -39,6 +45,7 @@ pub(crate) const FAST: ShipFields = ShipFields {
     armor: 45,
     fuel: 300,
     fuel_regen: 0,
+    holds: 20,
 };
 
 /// A landable planet at (`x`, `y`), 100 x 100 (radius 50).
@@ -87,6 +94,10 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         star_map_reads: RefCell::default(),
         outfits: Vec::new(),
         outfits_asked: RefCell::default(),
+        commodities: CommodityStrings::default(),
+        junk: Vec::new(),
+        disasters: Vec::new(),
+        goods_reads: RefCell::default(),
     }
 }
 
@@ -153,6 +164,21 @@ impl PilotCatalog for FakePilotCatalog {
         *self.star_map_reads.borrow_mut() += 1;
         self.star_map.clone()
     }
+
+    fn commodity_strings(&self) -> CommodityStrings {
+        *self.goods_reads.borrow_mut() += 1;
+        self.commodities.clone()
+    }
+
+    fn junk(&self) -> Vec<JunkRecord> {
+        *self.goods_reads.borrow_mut() += 1;
+        self.junk.clone()
+    }
+
+    fn disasters(&self) -> Vec<DisasterRecord> {
+        *self.goods_reads.borrow_mut() += 1;
+        self.disasters.clone()
+    }
 }
 
 /// Flies the ship out from the centre until it is at least
@@ -195,14 +221,51 @@ pub(crate) fn fly_out(session: &mut Session) {
     panic!("never got out: {:?}", session.player());
 }
 
-/// Plots a course to `to`, flies out and jumps, and arrives.
+/// Plots a course to `to`, flies out and jumps, and arrives, no chance
+/// firing on the way.
 pub(crate) fn jump(session: &mut Session, catalog: &FakePilotCatalog, to: i16) -> Option<SystemId> {
+    jump_with(session, catalog, to, &mut NeverFires)
+}
+
+/// Plots a course to `to`, flies out and jumps, and arrives, the day's
+/// chances rolled on `chance`.
+pub(crate) fn jump_with(
+    session: &mut Session,
+    catalog: &FakePilotCatalog,
+    to: i16,
+    chance: &mut impl Chance,
+) -> Option<SystemId> {
     if session.course().last() != Some(&SystemId(to)) {
         session.plot_course(SystemId(to)).expect("a route");
     }
     fly_out(session);
     session.begin_jump().expect("jumps");
-    session.arrive(catalog)
+    session.arrive(catalog, chance)
+}
+
+/// A [`Chance`] that answers from a script (no once it runs out) and
+/// records each percent it is asked.
+#[derive(Debug, Default)]
+pub(crate) struct Scripted {
+    answers: Vec<bool>,
+    pub(crate) asked: Vec<u8>,
+}
+
+impl Scripted {
+    /// Answers `answers`, in order, then no.
+    pub(crate) fn answering(answers: &[bool]) -> Self {
+        Self {
+            answers: answers.iter().rev().copied().collect(),
+            asked: Vec::new(),
+        }
+    }
+}
+
+impl Chance for Scripted {
+    fn fires(&mut self, percent: u8) -> bool {
+        self.asked.push(percent);
+        self.answers.pop().unwrap_or(false)
+    }
 }
 
 /// A slow ship, 1 pixel a tick at most, gaining a unit a tick: it

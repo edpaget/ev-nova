@@ -4,7 +4,10 @@
 //!
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's handling fields and default
-//!   outfits, which systems exist and the star map.
+//!   outfits, which systems exist, the star map, and the commodities,
+//!   `jünk` and `öops` the exchange trades and is moved by.
+//! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
+//!   which the day's planetary events roll on.
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
 //! - [`data`]: the port's adapter over `nova_data`'s `GameData`.
@@ -25,9 +28,13 @@
 //! - [`landing`]: whether the ship can land, [`check_landing`], each
 //!   [`LandingRefusal`] in the order it applies, and the [`Service`]s a
 //!   stellar's flags offer.
+//! - [`market`]: the commodity exchange: what a stellar trades and at
+//!   what price ([`Market`]), cargo space, buying and selling
+//!   ([`Order`]), and the planetary events that move prices.
 //! - [`pilot`]: the [`Pilot`], everything about the player a save keeps:
-//!   ship, location, date, cash, reserves, course, explored systems and
-//!   legal records, starting from the first `chär`.
+//!   ship, location, date, cash, reserves, course, explored systems,
+//!   legal records, cargo and the events under way, starting from the
+//!   first `chär`.
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full at its `shïp`'s values when it starts.
 //! - [`save`]: the save schema: a pilot as versioned JSON and back,
@@ -41,6 +48,7 @@
 //!   lands, takes off and jumps; the audio side decides what they play.
 
 pub mod catalog;
+pub mod chance;
 pub mod clock;
 pub mod data;
 pub mod date;
@@ -52,6 +60,7 @@ pub mod geometry;
 pub mod handling;
 pub mod hyperspace;
 pub mod landing;
+pub mod market;
 pub mod pilot;
 pub mod reserves;
 pub mod save;
@@ -62,9 +71,11 @@ pub mod sound;
 mod testkit;
 
 pub use catalog::{
-    CharacterStart, GovtId, LandingSite, PilotCatalog, ShipId, SoundId, StarSystem, StartDate,
-    StartError, StellarId, SystemId,
+    CharacterStart, CommodityStrings, DisasterId, DisasterRecord, GovtId, JunkId, JunkRecord,
+    LandingSite, PilotCatalog, ShipId, SoundId, StarSystem, StartDate, StartError, StellarId,
+    SystemId,
 };
+pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
 pub use date::GameDate;
 pub use flight::{Controls, ShipState, Turn, step};
@@ -73,6 +84,7 @@ pub use geometry::Vec2;
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
+pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use pilot::Pilot;
 pub use reserves::{Gauge, Reserves};
 pub use save::SaveError;

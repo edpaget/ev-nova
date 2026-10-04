@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-pub use nova_data::{GovtId, ShipId, SoundId, StellarId, SystemId};
+pub use nova_data::{GovtId, JunkId, ShipId, SoundId, StellarId, SystemId};
 
 use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
@@ -73,6 +73,66 @@ pub struct LandingSite {
     pub landing_sound: Option<SoundId>,
 }
 
+/// The standard commodities, raw from their string lists: `STR#` 4000
+/// "All Cargo" names them and `STR#` 4004 "Base Prices" prices them, the
+/// nth string for commodity n (from 0); the [`market`](crate::market)
+/// rules decide which are traded.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CommodityStrings {
+    /// Every string of `STR#` 4000, in order; none when it is missing.
+    pub names: Vec<String>,
+    /// Every string of `STR#` 4004, in order; none when it is missing.
+    pub base_prices: Vec<String>,
+}
+
+/// A special commodity, raw from its `jünk`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JunkRecord {
+    /// The `jünk`'s ID.
+    pub id: JunkId,
+    /// Its name: the resource's name, or its `LCName` when the resource
+    /// has none.
+    pub name: String,
+    /// Its `BasePrice`.
+    pub base_price: i16,
+    /// Its `SoldAt` stellars, the unused (-1) slots left out.
+    pub sold_at: Vec<StellarId>,
+    /// Its `BoughtAt` stellars, the unused (-1) slots left out.
+    pub bought_at: Vec<StellarId>,
+    /// Its `BuyOn` control-bit expression.
+    pub buy_on: String,
+    /// Its `SellOn` control-bit expression.
+    pub sell_on: String,
+}
+
+/// An `öops` resource's ID: a planetary event.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DisasterId(pub i16);
+
+/// A planetary event that moves one commodity's price, raw from its
+/// `öops`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DisasterRecord {
+    /// The `öops`'s ID.
+    pub id: DisasterId,
+    /// Its resource name, which the commodity exchange shows while it is
+    /// active.
+    pub name: String,
+    /// Its `Stellar`, raw: a `spöb` ID, -1 for any stellar or -2 for none
+    /// (news only).
+    pub stellar: i16,
+    /// Its `Commodity`: 0 food, 1 industrial, and so on.
+    pub commodity: i16,
+    /// Its `PriceDelta`.
+    pub price_delta: i16,
+    /// Its `Duration`, in days.
+    pub duration: i16,
+    /// Its `Freq`: the percent chance each day that it starts.
+    pub freq: i16,
+    /// Its `ActivateOn` control-bit expression.
+    pub activate_on: String,
+}
+
 /// Why a flight session could not start. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StartError {
@@ -123,6 +183,12 @@ pub trait PilotCatalog {
     /// Every system that can be read, by ascending ID, with its map
     /// position and hyperlinks.
     fn star_map(&self) -> Vec<StarSystem>;
+    /// The standard commodities' names and base prices.
+    fn commodity_strings(&self) -> CommodityStrings;
+    /// Every `jünk` that can be read, by ascending ID.
+    fn junk(&self) -> Vec<JunkRecord>;
+    /// Every `öops` that can be read, by ascending ID.
+    fn disasters(&self) -> Vec<DisasterRecord>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -149,6 +215,18 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn star_map(&self) -> Vec<StarSystem> {
         (**self).star_map()
+    }
+
+    fn commodity_strings(&self) -> CommodityStrings {
+        (**self).commodity_strings()
+    }
+
+    fn junk(&self) -> Vec<JunkRecord> {
+        (**self).junk()
+    }
+
+    fn disasters(&self) -> Vec<DisasterRecord> {
+        (**self).disasters()
     }
 }
 
@@ -177,6 +255,18 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn star_map(&self) -> Vec<StarSystem> {
         (**self).star_map()
+    }
+
+    fn commodity_strings(&self) -> CommodityStrings {
+        (**self).commodity_strings()
+    }
+
+    fn junk(&self) -> Vec<JunkRecord> {
+        (**self).junk()
+    }
+
+    fn disasters(&self) -> Vec<DisasterRecord> {
+        (**self).disasters()
     }
 }
 
@@ -252,6 +342,37 @@ mod tests {
                 links: vec![SystemId(131)],
             }]
         }
+
+        /// Food at 75.
+        fn commodity_strings(&self) -> CommodityStrings {
+            CommodityStrings {
+                names: vec!["Food".to_owned()],
+                base_prices: vec!["75".to_owned()],
+            }
+        }
+
+        /// Opals, sold at stellar 128.
+        fn junk(&self) -> Vec<JunkRecord> {
+            vec![JunkRecord {
+                id: JunkId(146),
+                name: "Opals".to_owned(),
+                base_price: 1200,
+                sold_at: vec![StellarId(128)],
+                bought_at: Vec::new(),
+                buy_on: String::new(),
+                sell_on: String::new(),
+            }]
+        }
+
+        /// A food surplus at stellar 128.
+        fn disasters(&self) -> Vec<DisasterRecord> {
+            vec![DisasterRecord {
+                id: DisasterId(128),
+                name: "An enormous food surplus".to_owned(),
+                stellar: 128,
+                ..DisasterRecord::default()
+            }]
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -268,6 +389,9 @@ mod tests {
             format!("{:?}", catalog.star_map()),
             format!("{:?}", catalog.default_outfits(ShipId(128))),
             format!("{:?}", catalog.default_outfits(ShipId(129))),
+            format!("{:?}", catalog.commodity_strings()),
+            format!("{:?}", catalog.junk()),
+            format!("{:?}", catalog.disasters()),
         ]
     }
 
@@ -283,6 +407,9 @@ mod tests {
         assert!(direct[7].contains("SystemId(131)"), "{direct:?}");
         assert!(direct[8].contains("count: 2"), "{direct:?}");
         assert_eq!(direct[9], "[]");
+        assert!(direct[10].contains("\"75\""), "{direct:?}");
+        assert!(direct[11].contains("Opals"), "{direct:?}");
+        assert!(direct[12].contains("food surplus"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

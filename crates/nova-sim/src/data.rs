@@ -1,17 +1,20 @@
 //! The pilot catalog over the game data: a thin mapping from `GameData`'s
-//! `chär`, `shïp`, `oütf`, `sÿst` and `spöb` records, and its stellar
-//! sprites.
+//! `chär`, `shïp`, `oütf`, `sÿst`, `spöb`, `jünk` and `öops` records, its
+//! commodity string lists and its stellar sprites.
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
+use nova_data::records::disaster::Disaster;
+use nova_data::records::junk::Junk;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
+use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 
 use crate::catalog::{
-    CharacterStart, LandingSite, PilotCatalog, ShipId, SoundId, StarSystem, StartDate, StartError,
-    SystemId,
+    CharacterStart, CommodityStrings, DisasterId, DisasterRecord, JunkRecord, LandingSite,
+    PilotCatalog, ShipId, SoundId, StarSystem, StartDate, StartError, SystemId,
 };
 use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
@@ -56,6 +59,7 @@ impl PilotCatalog for GameData {
                 armor: ship.record.armor,
                 fuel: ship.record.fuel,
                 fuel_regen: ship.record.fuel_regen,
+                holds: ship.record.holds,
             }),
             Some(Err(err)) => Err(err.to_string()),
             None => Err(format!("no shïp {}", id.0)),
@@ -137,6 +141,73 @@ impl PilotCatalog for GameData {
             })
             .collect()
     }
+
+    fn commodity_strings(&self) -> CommodityStrings {
+        CommodityStrings {
+            names: strings(self, COMMODITY_NAMES),
+            base_prices: strings(self, BASE_PRICES),
+        }
+    }
+
+    fn junk(&self) -> Vec<JunkRecord> {
+        self.records::<Junk>()
+            .filter_map(|(id, junk)| {
+                let junk = junk.ok()?;
+                let record = junk.record;
+                let stellars = |slots: &[Option<_>]| slots.iter().flatten().copied().collect();
+                Some(JunkRecord {
+                    id: nova_data::JunkId(id),
+                    name: junk
+                        .name
+                        .map_or_else(|| record.lc_name.as_str().to_owned(), str::to_owned),
+                    base_price: record.base_price,
+                    sold_at: stellars(&record.sold_at),
+                    bought_at: stellars(&record.bought_at),
+                    buy_on: record.buy_on.as_str().to_owned(),
+                    sell_on: record.sell_on.as_str().to_owned(),
+                })
+            })
+            .collect()
+    }
+
+    fn disasters(&self) -> Vec<DisasterRecord> {
+        self.records::<Disaster>()
+            .filter_map(|(id, disaster)| {
+                let disaster = disaster.ok()?;
+                let record = disaster.record;
+                Some(DisasterRecord {
+                    id: DisasterId(id),
+                    name: disaster.name.unwrap_or_default().to_owned(),
+                    // The decoder reads -1 (any stellar) as none.
+                    stellar: record.stellar.map_or(-1, |stellar| stellar.0),
+                    commodity: record.commodity,
+                    price_delta: record.price_delta,
+                    duration: record.duration,
+                    freq: record.freq,
+                    activate_on: record.activate_on.as_str().to_owned(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// The `STR#` naming the standard commodities, "All Cargo".
+const COMMODITY_NAMES: i16 = 4000;
+
+/// The `STR#` pricing them, "Base Prices".
+const BASE_PRICES: i16 = 4004;
+
+/// Every string of `data`'s `STR#` `id`; none when it is missing or
+/// cannot be read.
+fn strings(data: &GameData, id: i16) -> Vec<String> {
+    let Some(Ok(list)) = data.get::<StrList>(id) else {
+        return Vec::new();
+    };
+    list.record
+        .strings
+        .iter()
+        .map(|string| string.as_str().to_owned())
+        .collect()
 }
 
 /// The first stellar landing sound: the community *EV Nova Resource ID
@@ -158,13 +229,16 @@ mod tests {
     use nova_data::Record;
     use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::RledBuilder;
+    use nova_data::records::disaster::Disaster;
+    use nova_data::records::junk::Junk;
     use nova_data::records::spin::Spin;
+    use nova_data::records::string_list::StrList;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
 
     use super::*;
-    use crate::catalog::{GovtId, StarSystem, StartDate, StellarId};
+    use crate::catalog::{DisasterId, GovtId, JunkId, StarSystem, StartDate, StellarId};
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -185,10 +259,19 @@ mod tests {
     }
 
     fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
+        let named: Vec<_> = resources
+            .iter()
+            .map(|(ty, id, data)| (*ty, *id, None, data.clone()))
+            .collect();
+        store_named(&named)
+    }
+
+    /// The store of these resources, each with its name, if any.
+    fn store_named(resources: &[(ResType, i16, Option<&str>, Vec<u8>)]) -> GameData {
         let fork = resources
             .iter()
-            .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
-                fork.resource(*ty, *id, None, data)
+            .fold(ForkBuilder::new(), |fork, (ty, id, name, data)| {
+                fork.resource(*ty, *id, name.map(str::as_bytes), data)
             })
             .build()
             .bytes;
@@ -339,6 +422,14 @@ mod tests {
                 ..ShipFields::default()
             })
         );
+    }
+
+    #[test]
+    fn a_ships_fields_include_its_holds() {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x00, &[-10]);
+        let data = store(&[(Ship::TYPE, 128, bytes)]);
+        assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.holds), Ok(-10));
     }
 
     #[test]
@@ -600,5 +691,183 @@ mod tests {
         ]);
         assert_eq!(data.landing_sites(SystemId(131)), []);
         assert_eq!(data.landing_sites(SystemId(130)), []);
+    }
+
+    /// A `STR#` of `strings`.
+    fn str_list(strings: &[&str]) -> Vec<u8> {
+        let mut bytes = u16::try_from(strings.len())
+            .expect("few")
+            .to_be_bytes()
+            .to_vec();
+        for string in strings {
+            bytes.push(u8::try_from(string.len()).expect("short"));
+            bytes.extend(string.as_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn the_commodity_strings_are_str_4000_and_4004_whole() {
+        let data = store(&[
+            (
+                StrList::TYPE,
+                4000,
+                str_list(&["Food", "Industrial", "*Cargo"]),
+            ),
+            (StrList::TYPE, 4004, str_list(&["75", "lots"])),
+            (StrList::TYPE, 4001, str_list(&["other"])),
+        ]);
+        assert_eq!(
+            data.commodity_strings(),
+            CommodityStrings {
+                names: vec!["Food".into(), "Industrial".into(), "*Cargo".into()],
+                base_prices: vec!["75".into(), "lots".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn missing_or_undecodable_commodity_strings_are_none() {
+        assert_eq!(store(&[]).commodity_strings(), CommodityStrings::default());
+        let data = store(&[
+            (StrList::TYPE, 4000, short(str_list(&["Food"]))),
+            (StrList::TYPE, 4004, str_list(&["75"])),
+        ]);
+        assert_eq!(
+            data.commodity_strings(),
+            CommodityStrings {
+                names: Vec::new(),
+                base_prices: vec!["75".into()],
+            }
+        );
+    }
+
+    /// A `jünk` sold at `sold`, bought at `bought` (every other slot -1),
+    /// at `price`, named `lc_name` in lower case.
+    fn junk(sold: &[i16], bought: &[i16], price: i16, lc_name: &str) -> Vec<u8> {
+        let mut bytes = vec![0; Junk::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[-1; 16]);
+        put_i16s(&mut bytes, 0x00, sold);
+        put_i16s(&mut bytes, 0x10, bought);
+        put_i16s(&mut bytes, 0x20, &[price]);
+        bytes[0x26..0x26 + lc_name.len()].copy_from_slice(lc_name.as_bytes());
+        bytes
+    }
+
+    #[test]
+    fn each_readable_jünk_is_a_special_good_by_id() {
+        let mut opals = junk(&[189, 165], &[185, -1, 199], 1200, "opals");
+        opals[0xA6..0xA9].copy_from_slice(b"b43");
+        opals[0x1A5..0x1A9].copy_from_slice(b"!b80");
+        let data = store_named(&[
+            (Junk::TYPE, 146, Some("Opals"), opals),
+            (Junk::TYPE, 134, None, junk(&[160], &[], 300, "water")),
+            (
+                Junk::TYPE,
+                140,
+                Some("Broken"),
+                short(junk(&[], &[], 1, "x")),
+            ),
+        ]);
+        assert_eq!(
+            data.junk(),
+            [
+                JunkRecord {
+                    id: JunkId(134),
+                    name: "water".to_owned(),
+                    base_price: 300,
+                    sold_at: vec![StellarId(160)],
+                    bought_at: Vec::new(),
+                    buy_on: String::new(),
+                    sell_on: String::new(),
+                },
+                JunkRecord {
+                    id: JunkId(146),
+                    name: "Opals".to_owned(),
+                    base_price: 1200,
+                    sold_at: vec![StellarId(189), StellarId(165)],
+                    bought_at: vec![StellarId(185), StellarId(199)],
+                    buy_on: "b43".to_owned(),
+                    sell_on: "!b80".to_owned(),
+                },
+            ],
+            "a resource without a name goes by its LCName; an undecodable one is skipped"
+        );
+        assert_eq!(store(&[]).junk(), []);
+    }
+
+    /// An `öops` at `stellar` moving `commodity` by `delta` for `duration`
+    /// days, `freq` % a day.
+    fn disaster(stellar: i16, commodity: i16, delta: i16, duration: i16, freq: i16) -> Vec<u8> {
+        let mut bytes = vec![0; Disaster::SIZE.expect("fixed")];
+        put_i16s(
+            &mut bytes,
+            0x00,
+            &[stellar, commodity, delta, duration, freq],
+        );
+        bytes
+    }
+
+    #[test]
+    fn each_readable_öops_is_an_event_by_id() {
+        let mut gated = disaster(-2, 3, 40, 100, 25);
+        gated[0x0A..0x0E].copy_from_slice(b"!b80");
+        let data = store_named(&[
+            (Disaster::TYPE, 129, None, gated),
+            (
+                Disaster::TYPE,
+                128,
+                Some("An enormous food surplus"),
+                disaster(137, 0, -15, 30, 35),
+            ),
+            (
+                Disaster::TYPE,
+                130,
+                Some("x"),
+                short(disaster(1, 1, 1, 1, 1)),
+            ),
+            (
+                Disaster::TYPE,
+                131,
+                Some("Anywhere"),
+                disaster(-1, 1, 1, 1, 1),
+            ),
+        ]);
+        assert_eq!(
+            data.disasters(),
+            [
+                DisasterRecord {
+                    id: DisasterId(128),
+                    name: "An enormous food surplus".to_owned(),
+                    stellar: 137,
+                    commodity: 0,
+                    price_delta: -15,
+                    duration: 30,
+                    freq: 35,
+                    activate_on: String::new(),
+                },
+                DisasterRecord {
+                    id: DisasterId(129),
+                    name: String::new(),
+                    stellar: -2,
+                    commodity: 3,
+                    price_delta: 40,
+                    duration: 100,
+                    freq: 25,
+                    activate_on: "!b80".to_owned(),
+                },
+                DisasterRecord {
+                    id: DisasterId(131),
+                    name: "Anywhere".to_owned(),
+                    stellar: -1,
+                    commodity: 1,
+                    price_delta: 1,
+                    duration: 1,
+                    freq: 1,
+                    activate_on: String::new(),
+                },
+            ]
+        );
+        assert_eq!(store(&[]).disasters(), []);
     }
 }

@@ -28,12 +28,23 @@
 //! still ahead. In flight, fuel regenerates each tick at the rate the ship
 //! and its default outfits give, read when the session starts.
 //!
+//! Each day that goes by steps the planetary events (see
+//! [`market`](crate::market)), rolling whether each can start on the
+//! [`Chance`] the caller passes to [`Session::arrive`].
+//!
+//! Landed at a trade center, the player trades on its exchange
+//! ([`Session::market`], [`Session::trade`]), with the cargo space the ship
+//! and its default outfits give, read when the session starts, as are the
+//! goods traded and the events that move their prices. A trade makes a
+//! save due; a refused one changes nothing.
+//!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
 //! stopping, landing, taking off, a jump beginning and ending), which the
 //! audio side drains with [`Session::take_sounds`]. A refused landing or
 //! jump emits nothing.
 
 use crate::catalog::{GovtId, LandingSite, PilotCatalog, ShipId, StartError, StellarId, SystemId};
+use crate::chance::Chance;
 use crate::date::GameDate;
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::{fuel_regen_per_tick, regenerate};
@@ -43,6 +54,7 @@ use crate::hyperspace::{
     DAYS_PER_JUMP, JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump,
 };
 use crate::landing::{LandingRefusal, check_landing};
+use crate::market::{self, Goods, Market, Order, TradeRefusal, cargo_capacity};
 use crate::pilot::Pilot;
 use crate::reserves::Reserves;
 use crate::sound::SimSound;
@@ -65,6 +77,11 @@ pub struct Session {
     /// The fuel gained each tick in flight, from the ship and its default
     /// outfits.
     fuel_regen: f32,
+    /// The cargo space, in tons, from the ship and its default outfits.
+    capacity: u32,
+    /// The goods traded and the events that move their prices, read when
+    /// the session starts.
+    goods: Goods,
     /// Whether the ship is thrusting, as the last sounds told it.
     thrusting: bool,
     /// The sounds emitted since they were last taken.
@@ -113,6 +130,8 @@ impl Session {
         };
         let landed = docked.map(|site| site.id);
         pilot.stellar = landed;
+        // No outfits yet: outfitting will pass the ship's.
+        let outfits = catalog.default_outfits(ship);
         Ok(Self {
             handling: Handling::from_fields(fields),
             player,
@@ -120,8 +139,9 @@ impl Session {
             landed,
             star_map: StarMap::new(catalog.star_map()),
             jumping: None,
-            // No outfits yet: outfitting will pass the ship's.
-            fuel_regen: fuel_regen_per_tick(fields.fuel_regen, &catalog.default_outfits(ship)),
+            fuel_regen: fuel_regen_per_tick(fields.fuel_regen, &outfits),
+            capacity: cargo_capacity(fields.holds, &outfits),
+            goods: Goods::read(catalog),
             thrusting: false,
             sounds: Vec::new(),
             save_due: false,
@@ -205,15 +225,21 @@ impl Session {
     /// Ends the jump under way, if any, and gives the system arrived in:
     /// the jump's fuel is used, the date advances, the system is taken off
     /// the course, and the ship is placed at its edge facing the system it
-    /// came from (see [`arrival`]) with its reserves as they were. The new
-    /// system's stellars are read from `catalog`. `None`, and nothing
-    /// changes, when no jump is under way.
-    pub fn arrive(&mut self, catalog: &impl PilotCatalog) -> Option<SystemId> {
+    /// came from (see [`arrival`]) with its reserves as they were. Each day
+    /// steps the planetary events, rolled on `chance`. The new system's
+    /// stellars are read from `catalog`. `None`, and nothing changes, when
+    /// no jump is under way.
+    pub fn arrive(
+        &mut self,
+        catalog: &impl PilotCatalog,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<SystemId> {
         let next = self.jumping.take()?;
         let pilot = &mut self.pilot;
         pilot.reserves.fuel.now -= JUMP_FUEL;
         for _ in 0..DAYS_PER_JUMP {
             pilot.date = pilot.date.next_day();
+            market::step_day(&self.goods, &mut pilot.events, chance);
         }
         if pilot.course.first() == Some(&next) {
             pilot.course.remove(0);
@@ -299,6 +325,33 @@ impl Session {
         true
     }
 
+    /// The exchange of the stellar the ship is docked at, if it has landed
+    /// at a trade center.
+    #[must_use]
+    pub fn market(&self) -> Option<Market> {
+        let stellar = self.landed?;
+        let site = self.sites.iter().find(|site| site.id == stellar)?;
+        market::market(&self.goods, stellar, site.flags, &self.pilot, self.capacity)
+    }
+
+    /// Trades on the exchange as `order` asks, and gives the tons moved: a
+    /// change made in the spaceport, so a save is due. When the ship is
+    /// not landed at a trade center, or the order would move nothing,
+    /// nothing changes and the refusal says why.
+    pub fn trade(&mut self, order: Order) -> Result<u32, TradeRefusal> {
+        let market = self.market().ok_or(TradeRefusal::NoMarket)?;
+        let tons = market.tons(order)?;
+        let price = market.row(order.good).map_or(0, |row| row.price);
+        self.transact(|pilot| market::settle(pilot, order, tons, price));
+        Ok(tons)
+    }
+
+    /// The ship's cargo space, in tons.
+    #[must_use]
+    pub fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
     /// Whether the pilot should be saved: it has landed, taken off or
     /// changed in the spaceport since this was last taken. Taking it clears
     /// it.
@@ -370,15 +423,20 @@ impl Session {
 mod tests {
     use super::*;
     use crate::catalog::{CharacterStart, LandingSite, SoundId, StellarId};
+    use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
+    use crate::chance::NeverFires;
     use crate::flight::Turn;
     use crate::fuel::{FUEL_SCOOP, OutfitMod};
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
     use crate::hyperspace::{JumpRefusal, RouteError, StarMap};
     use crate::landing::LandingRefusal;
+    use crate::landing::StellarFlags;
+    use crate::market::{Direction, Good, Lot, Order, TradeRefusal};
     use crate::reserves::{Gauge, Reserves};
     use crate::testkit::{
-        FAST, FakePilotCatalog, START, catalog, edge_lander, fly_out, jump, planet, starting,
+        FAST, FakePilotCatalog, START, Scripted, catalog, edge_lander, fly_out, jump, jump_with,
+        planet, starting,
     };
 
     #[test]
@@ -772,7 +830,10 @@ mod tests {
         session.plot_course(SystemId(132)).expect("a route");
         fly_out(&mut session);
         session.begin_jump().expect("jumps");
-        assert_eq!(session.arrive(&catalog), Some(SystemId(131)));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.course(), ids(&[132]));
         assert_eq!(session.jumping(), None);
@@ -806,7 +867,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
         let before = session.clone();
-        assert_eq!(session.arrive(&catalog), None);
+        assert_eq!(session.arrive(&catalog, &mut NeverFires), None);
         assert_eq!(session, before);
         assert_eq!(*catalog.sites_asked.borrow(), [SystemId(130)]);
     }
@@ -916,7 +977,10 @@ mod tests {
         assert_eq!(session, docked, "nothing changes");
         session.take_off();
         assert_eq!(session.begin_jump(), Ok(SystemId(132)), "once off");
-        assert_eq!(session.arrive(&catalog), Some(SystemId(132)));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(132))
+        );
         assert_eq!(session.landed(), None);
     }
 
@@ -929,7 +993,10 @@ mod tests {
         let jumping = session.clone();
         assert_eq!(session.land(), Err(LandingRefusal::Jumping));
         assert_eq!(session, jumping, "nothing changes");
-        assert_eq!(session.arrive(&catalog), Some(SystemId(132)));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(132))
+        );
         assert_eq!(session.landed(), None);
     }
 
@@ -1028,7 +1095,7 @@ mod tests {
         session.take_off();
         session.take_save_due();
         session.begin_jump().expect("jumps from the edge");
-        session.arrive(&catalog).expect("arrives");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
         let pilot = session.pilot();
         assert_eq!(pilot.system(), SystemId(132));
         assert_eq!(pilot.stellar(), None);
@@ -1252,9 +1319,9 @@ mod tests {
         );
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "jumping, nothing thrusts");
-        session.arrive(&catalog).expect("arrives");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(session.take_sounds(), [SimSound::Arrived]);
-        session.arrive(&catalog);
+        session.arrive(&catalog, &mut NeverFires);
         assert_eq!(session.take_sounds(), [], "no jump under way");
     }
 
@@ -1282,5 +1349,327 @@ mod tests {
         landed.take_sounds();
         assert_eq!(landed.begin_jump(), Err(JumpRefusal::Landed));
         assert_eq!(landed.take_sounds(), []);
+    }
+
+    // The exchange.
+
+    /// Food at 75 and metal at 200, as `STR#` 4000 and 4004 have them.
+    fn food_and_metal() -> CommodityStrings {
+        CommodityStrings {
+            names: ["Food", "Industrial", "Medical", "Luxury", "Metal"]
+                .map(str::to_owned)
+                .to_vec(),
+            base_prices: ["75", "350", "750", "900", "200"]
+                .map(str::to_owned)
+                .to_vec(),
+        }
+    }
+
+    /// Food at medium and metal at low.
+    const TRADES: u32 = StellarFlags::CAN_LAND | StellarFlags::TRADE_CENTER | 2 << 28 | 1 << 12;
+
+    /// The catalog with planet 128 at the centre, which the ship starts
+    /// over, a trade center trading food (75) and metal (160), and the
+    /// first `chär` holding 1000 credits; ship 128 holds 20 tons.
+    fn exchange() -> FakePilotCatalog {
+        FakePilotCatalog {
+            character: Ok(CharacterStart {
+                ship: Some(ShipId(128)),
+                systems: [Some(SystemId(130)), None, None, None],
+                start: START,
+                cash: 1000,
+                ..CharacterStart::default()
+            }),
+            sites: vec![(
+                SystemId(130),
+                vec![LandingSite {
+                    flags: TRADES,
+                    ..planet(128, 0.0, 0.0)
+                }],
+            )],
+            commodities: food_and_metal(),
+            ..catalog()
+        }
+    }
+
+    fn order(good: Good, direction: Direction, lot: Lot) -> Order {
+        Order {
+            good,
+            direction,
+            lot,
+        }
+    }
+
+    const FOOD: Good = Good::Commodity(0);
+    const METAL: Good = Good::Commodity(4);
+
+    #[test]
+    fn a_session_reads_the_goods_once_when_it_starts() {
+        let catalog = exchange();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(*catalog.goods_reads.borrow(), 3);
+        session.land().expect("lands");
+        assert!(session.market().is_some());
+        session.take_off();
+        jump(&mut session, &catalog, 131);
+        assert_eq!(*catalog.goods_reads.borrow(), 3);
+    }
+
+    #[test]
+    fn the_cargo_space_is_the_ships_holds_and_its_cargo_pods() {
+        let session = Session::start(&exchange()).expect("starts");
+        assert_eq!(session.capacity(), 20);
+        let pods = OutfitMod {
+            mod_type: crate::market::MORE_CARGO,
+            mod_val: 5,
+            count: 2,
+        };
+        let catalog = FakePilotCatalog {
+            ships: vec![(ShipId(128), Ok(ShipFields { holds: -3, ..FAST }))],
+            outfits: vec![(ShipId(128), vec![pods])],
+            ..exchange()
+        };
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.capacity(), 13);
+        assert_eq!(*catalog.outfits_asked.borrow(), [ShipId(128)], "once");
+    }
+
+    #[test]
+    fn there_is_an_exchange_only_while_landed_at_a_trade_center() {
+        let catalog = exchange();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.market(), None, "in flight");
+        session.land().expect("lands");
+        let market = session.market().expect("an exchange");
+        let prices: Vec<_> = market.rows.iter().map(|r| (r.good, r.price)).collect();
+        assert_eq!(prices, [(FOOD, 75), (METAL, 160)]);
+        assert_eq!((market.cash, market.capacity, market.free), (1000, 20, 20));
+        session.take_off();
+        assert_eq!(session.market(), None, "taken off");
+        let mut plain = Session::start(&self::catalog()).expect("starts");
+        plain.land().expect("lands");
+        assert_eq!(plain.market(), None, "no trade center");
+    }
+
+    #[test]
+    fn buying_pays_loads_and_makes_a_save_due() {
+        let mut session = Session::start(&exchange()).expect("starts");
+        session.land().expect("lands");
+        session.take_save_due();
+        assert_eq!(session.trade(order(FOOD, Direction::Buy, Lot::One)), Ok(1));
+        assert_eq!(session.pilot().cash(), 925);
+        assert_eq!(session.pilot().held(FOOD), 1);
+        assert!(session.take_save_due());
+        assert_eq!(session.trade(order(METAL, Direction::Buy, Lot::Max)), Ok(5));
+        assert_eq!(session.pilot().cash(), 125, "cash ran out first");
+        assert_eq!(session.market().expect("an exchange").free, 14);
+    }
+
+    #[test]
+    fn buying_stops_when_the_hold_is_full() {
+        let catalog = FakePilotCatalog {
+            ships: vec![(ShipId(128), Ok(ShipFields { holds: 3, ..FAST }))],
+            ..exchange()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        session.land().expect("lands");
+        assert_eq!(session.trade(order(FOOD, Direction::Buy, Lot::Max)), Ok(3));
+        session.take_save_due();
+        assert_eq!(
+            session.trade(order(FOOD, Direction::Buy, Lot::One)),
+            Err(TradeRefusal::NoSpace)
+        );
+        assert_eq!(session.pilot().cash(), 775);
+        assert!(!session.take_save_due(), "nothing changed");
+    }
+
+    #[test]
+    fn selling_pays_the_local_price() {
+        let mut session = Session::start(&exchange()).expect("starts");
+        session.land().expect("lands");
+        assert_eq!(session.trade(order(METAL, Direction::Buy, Lot::Max)), Ok(6));
+        assert_eq!(session.pilot().cash(), 40);
+        session.take_save_due();
+        assert_eq!(
+            session.trade(order(METAL, Direction::Sell, Lot::One)),
+            Ok(1)
+        );
+        assert_eq!(session.pilot().cash(), 40 + 160);
+        assert!(session.take_save_due());
+        assert_eq!(
+            session.trade(order(METAL, Direction::Sell, Lot::Max)),
+            Ok(5)
+        );
+        assert_eq!(session.pilot().cash(), 1000);
+        assert_eq!(session.pilot().held(METAL), 0);
+    }
+
+    #[test]
+    fn a_refused_trade_changes_nothing_and_makes_no_save_due() {
+        let mut session = Session::start(&exchange()).expect("starts");
+        let flying = session.clone();
+        assert_eq!(
+            session.trade(order(FOOD, Direction::Buy, Lot::One)),
+            Err(TradeRefusal::NoMarket)
+        );
+        assert_eq!(session, flying);
+        session.land().expect("lands");
+        session.take_save_due();
+        let landed = session.clone();
+        for refused in [
+            order(FOOD, Direction::Sell, Lot::One),
+            order(Good::Commodity(1), Direction::Buy, Lot::One),
+        ] {
+            assert!(session.trade(refused).is_err(), "{refused:?}");
+        }
+        assert_eq!(session, landed);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn junk_is_bought_and_sold_like_a_commodity() {
+        let opals = JunkRecord {
+            id: JunkId(146),
+            name: "Opals".to_owned(),
+            base_price: 100,
+            sold_at: vec![StellarId(128)],
+            bought_at: vec![StellarId(140)],
+            buy_on: String::new(),
+            sell_on: String::new(),
+        };
+        let catalog = edge_lander();
+        let catalog = FakePilotCatalog {
+            character: exchange().character,
+            sites: vec![
+                (
+                    SystemId(130),
+                    vec![LandingSite {
+                        flags: TRADES,
+                        ..planet(128, 0.0, 0.0)
+                    }],
+                ),
+                (
+                    SystemId(131),
+                    vec![LandingSite {
+                        flags: TRADES,
+                        ..planet(140, -1000.0, 0.0)
+                    }],
+                ),
+            ],
+            junk: vec![opals],
+            ..catalog
+        };
+        let opals = Good::Junk(JunkId(146));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.land().expect("lands");
+        assert_eq!(
+            session.trade(order(opals, Direction::Buy, Lot::Max)),
+            Ok(12)
+        );
+        assert_eq!(session.pilot().cash(), 1000 - 12 * 80);
+        assert_eq!(
+            session.trade(order(opals, Direction::Sell, Lot::One)),
+            Err(TradeRefusal::NotTraded),
+            "not bought here"
+        );
+        session.take_off();
+        jump(&mut session, &catalog, 131);
+        assert_eq!(session.land(), Ok(StellarId(140)));
+        assert_eq!(
+            session.trade(order(opals, Direction::Sell, Lot::Max)),
+            Ok(12)
+        );
+        assert_eq!(session.pilot().cash(), 1000 - 12 * 80 + 12 * 125);
+    }
+
+    /// A food surplus at planet 140 (-15, 30 days, 35 % a day), and planet
+    /// 140 a trade center trading food at 75.
+    fn surplus() -> FakePilotCatalog {
+        let landers = edge_lander();
+        FakePilotCatalog {
+            sites: vec![(
+                SystemId(131),
+                vec![LandingSite {
+                    flags: TRADES,
+                    ..planet(140, -1000.0, 0.0)
+                }],
+            )],
+            commodities: food_and_metal(),
+            disasters: vec![DisasterRecord {
+                id: DisasterId(128),
+                name: "An enormous food surplus".to_owned(),
+                stellar: 140,
+                commodity: 0,
+                price_delta: -15,
+                duration: 30,
+                freq: 35,
+                activate_on: String::new(),
+            }],
+            ..landers
+        }
+    }
+
+    #[test]
+    fn an_event_starts_on_arrival_when_the_chance_fires_and_moves_the_price() {
+        let catalog = surplus();
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = Scripted::answering(&[true]);
+        jump_with(&mut session, &catalog, 131, &mut chance);
+        assert_eq!(chance.asked, [35], "one roll for the one day");
+        assert_eq!(
+            session.pilot().events().collect::<Vec<_>>(),
+            [(DisasterId(128), 30)]
+        );
+        assert_eq!(session.land(), Ok(StellarId(140)));
+        let market = session.market().expect("an exchange");
+        assert_eq!(market.row(FOOD).map(|row| row.price), Some(60));
+        assert_eq!(market.events, ["An enormous food surplus"]);
+    }
+
+    #[test]
+    fn no_event_starts_when_the_chance_does_not_fire() {
+        let catalog = surplus();
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = Scripted::default();
+        jump_with(&mut session, &catalog, 131, &mut chance);
+        assert_eq!(chance.asked, [35]);
+        assert_eq!(session.pilot().events().count(), 0);
+        session.land().expect("lands");
+        let market = session.market().expect("an exchange");
+        assert_eq!(market.row(FOOD).map(|row| row.price), Some(75));
+        assert_eq!(market.events, Vec::<String>::new());
+    }
+
+    #[test]
+    fn each_day_of_a_jump_ages_the_events() {
+        let catalog = surplus();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.pilot.events.insert(DisasterId(128), 5);
+        jump(&mut session, &catalog, 131);
+        assert_eq!(
+            session.pilot().events().collect::<Vec<_>>(),
+            [(
+                DisasterId(128),
+                5 - u16::try_from(DAYS_PER_JUMP).expect("few")
+            )]
+        );
+    }
+
+    #[test]
+    fn a_pilot_flown_with_cargo_has_less_space_and_can_sell_it() {
+        let catalog = exchange();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.land().expect("lands");
+        assert_eq!(session.trade(order(METAL, Direction::Buy, Lot::Max)), Ok(6));
+        let pilot = session.pilot().clone();
+        let mut resumed = Session::fly(&catalog, pilot).expect("flies");
+        let market = resumed.market().expect("docked at the exchange");
+        assert_eq!(market.free, 14);
+        assert_eq!(market.row(METAL).map(|row| row.held), Some(6));
+        assert_eq!(
+            resumed.trade(order(METAL, Direction::Sell, Lot::Max)),
+            Ok(6)
+        );
+        assert_eq!(resumed.pilot().cash(), 1000);
     }
 }

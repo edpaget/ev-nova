@@ -309,7 +309,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         let Ok(session) = &mut self.session else {
             return;
         };
-        let Some(system) = session.arrive(&self.catalog) else {
+        let Some(system) = session.arrive(&self.catalog, &mut nova_sim::NeverFires) else {
             return;
         };
         self.scene = Some(SystemScene::load(&self.catalog, system));
@@ -682,8 +682,9 @@ mod tests {
 
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
-        CharacterStart, Handling, LandingSite, OutfitMod, Reserves, ShipFields, ShipId, SimSound,
-        SoundId, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
+        CharacterStart, CommodityStrings, DisasterRecord, Handling, JunkRecord, LandingSite,
+        OutfitMod, Reserves, ShipFields, ShipId, SimSound, SoundId, StarSystem, StartDate,
+        StartError, SystemId, TICK, Vec2, step,
     };
 
     use super::*;
@@ -726,6 +727,7 @@ mod tests {
         armor: 60,
         fuel: 250,
         fuel_regen: 0,
+        holds: 0,
     };
 
     fn sheet() -> ShipSheet {
@@ -832,6 +834,18 @@ mod tests {
                 star(131, (600.0, 0.0), &[]),
                 star(132, (0.0, 600.0), &[]),
             ]
+        }
+
+        fn commodity_strings(&self) -> CommodityStrings {
+            CommodityStrings::default()
+        }
+
+        fn junk(&self) -> Vec<JunkRecord> {
+            Vec::new()
+        }
+
+        fn disasters(&self) -> Vec<DisasterRecord> {
+            Vec::new()
         }
     }
 

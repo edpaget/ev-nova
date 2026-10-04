@@ -5,15 +5,17 @@
 //! in the first of its starting systems that exists, on its starting date,
 //! with its cash (none, when the `chär`'s is negative) and its legal
 //! records, and with the ship's shield, armour and fuel full. It has
-//! explored only the system it starts in.
+//! explored only the system it starts in. It holds no cargo, and no
+//! planetary event is under way.
 //!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{GovtId, PilotCatalog, ShipId, StartError, StellarId, SystemId};
+use crate::catalog::{DisasterId, GovtId, PilotCatalog, ShipId, StartError, StellarId, SystemId};
 use crate::date::GameDate;
+use crate::market::Good;
 use crate::reserves::Reserves;
 
 /// Everything about the player that a save keeps.
@@ -39,6 +41,12 @@ pub struct Pilot {
     pub(crate) explored: BTreeSet<SystemId>,
     /// The legal record with each government that has one.
     pub(crate) legal: BTreeMap<GovtId, i16>,
+    /// The tons held of each good the ship carries; none of a good not
+    /// listed.
+    pub(crate) cargo: BTreeMap<Good, u32>,
+    /// The planetary events under way, each `öops` with the days it has
+    /// left.
+    pub(crate) events: BTreeMap<DisasterId, u16>,
 }
 
 impl Pilot {
@@ -71,6 +79,8 @@ impl Pilot {
             course: Vec::new(),
             explored: BTreeSet::from([system]),
             legal: character.legal.into_iter().flatten().collect(),
+            cargo: BTreeMap::new(),
+            events: BTreeMap::new(),
         })
     }
 
@@ -159,6 +169,23 @@ impl Pilot {
     pub fn legal_records(&self) -> impl Iterator<Item = (GovtId, i16)> + '_ {
         self.legal.iter().map(|(&govt, &record)| (govt, record))
     }
+
+    /// The tons of `good` held.
+    #[must_use]
+    pub fn held(&self, good: Good) -> u32 {
+        self.cargo.get(&good).copied().unwrap_or(0)
+    }
+
+    /// Every good held, in [`Good`] order, with the tons held.
+    pub fn cargo(&self) -> impl Iterator<Item = (Good, u32)> + '_ {
+        self.cargo.iter().map(|(&good, &tons)| (good, tons))
+    }
+
+    /// Every planetary event under way, by `öops` ID, with the days it has
+    /// left.
+    pub fn events(&self) -> impl Iterator<Item = (DisasterId, u16)> + '_ {
+        self.events.iter().map(|(&id, &days)| (id, days))
+    }
 }
 
 #[cfg(test)]
@@ -237,6 +264,33 @@ mod tests {
         assert_eq!(pilot.explored().collect::<Vec<_>>(), [SystemId(130)]);
         assert!(pilot.has_explored(SystemId(130)));
         assert!(!pilot.has_explored(SystemId(131)));
+    }
+
+    #[test]
+    fn a_new_pilot_holds_no_cargo_and_no_event_is_under_way() {
+        let pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert_eq!(pilot.cargo().count(), 0);
+        assert_eq!(pilot.held(Good::Commodity(0)), 0);
+        assert_eq!(pilot.events().count(), 0);
+    }
+
+    #[test]
+    fn cargo_and_events_read_as_they_are_held() {
+        use crate::catalog::JunkId;
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        pilot.cargo = BTreeMap::from([(Good::Junk(JunkId(146)), 2), (Good::Commodity(3), 7)]);
+        pilot.events = BTreeMap::from([(DisasterId(130), 4), (DisasterId(128), 9)]);
+        assert_eq!(pilot.held(Good::Commodity(3)), 7);
+        assert_eq!(pilot.held(Good::Junk(JunkId(146))), 2);
+        assert_eq!(pilot.held(Good::Commodity(0)), 0);
+        assert_eq!(
+            pilot.cargo().collect::<Vec<_>>(),
+            [(Good::Commodity(3), 7), (Good::Junk(JunkId(146)), 2)]
+        );
+        assert_eq!(
+            pilot.events().collect::<Vec<_>>(),
+            [(DisasterId(128), 9), (DisasterId(130), 4)]
+        );
     }
 
     #[test]
