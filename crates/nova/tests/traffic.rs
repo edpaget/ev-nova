@@ -441,6 +441,9 @@ fn traders(frame: &Frame) -> Vec<Rect> {
 #[test]
 fn entering_flight_shows_the_trader_with_its_sprite_and_a_radar_blip() {
     let mut harness = Harness::flying(None);
+    // The first frame runs no step; the second's sets the system up.
+    harness.frame();
+    assert_eq!(harness.session().npcs(), [], "until the first step");
     let first = harness.frame();
     let session = harness.session();
     assert_eq!(session.npcs().len(), 1);

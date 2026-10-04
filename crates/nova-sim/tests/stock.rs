@@ -567,6 +567,7 @@ fn allowed(data: &GameData, id: i16) -> Vec<(ShipId, Option<nova_sim::GovtId>)> 
 
 /// Every NPC seen in `session`'s system over `ticks` ticks of traffic.
 fn traffic_seen(
+    data: &GameData,
     session: &mut Session,
     chance: &mut Seeded,
     ticks: u32,
@@ -577,15 +578,15 @@ fn traffic_seen(
         .map(|npc| (npc.ship, npc.govt))
         .collect();
     for _ in 0..ticks {
-        session.tick_traffic(&nova_sim::ai::Peaceful, chance);
+        session.tick_traffic(data, &nova_sim::ai::Peaceful, chance);
         seen.extend(session.npcs().iter().map(|npc| (npc.ship, npc.govt)));
     }
     seen
 }
 
 /// The new pilot's starting system and the first system linked to it, its
-/// traffic populated when it starts and when it arrives: every NPC flies
-/// a ship of a `düde` of the system's, or of a fleet it names or its
+/// traffic populated on its first tick and when it arrives: every NPC
+/// flies a ship of a `düde` of the system's, or of a fleet it names or its
 /// `LinkSyst` matches, for its government.
 #[test]
 fn stock_traffic_flies_the_systems_dudes_and_fleets() {
@@ -595,9 +596,8 @@ fn stock_traffic_flies_the_systems_dudes_and_fleets() {
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let mut chance = Seeded(0x5EED_CAFE);
     let mut session = Session::start(&data).expect("the stock first chär starts");
-    session.populate(&data, &mut chance);
     let start = session.system();
-    let seen = traffic_seen(&mut session, &mut chance, 3000);
+    let seen = traffic_seen(&data, &mut session, &mut chance, 3000);
     assert!(!seen.is_empty(), "traffic in sÿst {}", start.0);
     let here = allowed(&data, start.0);
     for npc in &seen {
@@ -617,7 +617,7 @@ fn stock_traffic_flies_the_systems_dudes_and_fleets() {
     }
     session.begin_jump().expect("jumps");
     assert_eq!(session.arrive(&data, &mut chance), Some(next));
-    let seen = traffic_seen(&mut session, &mut chance, 3000);
+    let seen = traffic_seen(&data, &mut session, &mut chance, 3000);
     assert!(!seen.is_empty(), "traffic in sÿst {}", next.0);
     let there = allowed(&data, next.0);
     for npc in &seen {
@@ -694,6 +694,7 @@ fn alpharas_named_fleet_comes_when_its_roll_fires() {
     // Rand(500) = 1, then Rand(100) + 1 = 1, within 20: the first named
     // fleet, flët 129.
     session.tick_traffic(
+        &data,
         &nova_sim::ai::Peaceful,
         &mut Script(std::collections::VecDeque::from([1])),
     );

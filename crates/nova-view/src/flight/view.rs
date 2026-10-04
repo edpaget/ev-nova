@@ -15,12 +15,11 @@
 //! populated: its traffic, through the [`TrafficCatalog`] port. Drawing and
 //! input never read anything.
 //!
-//! The system's NPC traffic is populated when the flight starts (on its
-//! first tick, so on the screen's [`SharedChance`]), on each arrival, and
-//! on the first tick after each take-off, as the original sets a system up
-//! on arrival and take-off. Each time, the sprite sheet of each ship type
-//! the traffic can spawn is read, once per type for the life of the
-//! screen. After each step of the player's ship, the traffic takes a step,
+//! The session populates the system's NPC traffic when it says to (see
+//! [`Session::tick_traffic`]), rolled on the screen's [`SharedChance`].
+//! Each time, the sprite sheet of each ship type the traffic can spawn is
+//! read, once per type for the life of the screen. After each step of the
+//! player's ship, the traffic takes a step,
 //! its NPCs deciding as the screen's [`Behaviour`] says
 //! ([`FlightView::with_behaviour`]; [`Peaceful`] by default). Each NPC is
 //! drawn with its own ship's sprite, after the stellars and before the
@@ -285,9 +284,6 @@ pub struct FlightView<C> {
     chance: SharedChance,
     /// How the NPCs decide.
     behaviour: Rc<dyn Behaviour>,
-    /// Whether the system's traffic is to be populated on the next tick:
-    /// when the flight starts, and after a take-off.
-    populate_due: bool,
     /// Each NPC ship type's sheet, or why it cannot be shown, read once.
     npc_sheets: BTreeMap<ShipId, Result<ShipSheet, String>>,
     /// Each NPC as it was a step before the session's.
@@ -351,7 +347,6 @@ impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars
             message: None,
             chance: SharedChance::default(),
             behaviour: Rc::new(Peaceful),
-            populate_due: true,
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
         }
@@ -368,17 +363,6 @@ impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars
     #[must_use]
     pub fn with_behaviour(self, behaviour: Rc<dyn Behaviour>) -> Self {
         Self { behaviour, ..self }
-    }
-
-    /// Populates the system's traffic, and reads the sheets of the ship
-    /// types it can spawn.
-    fn populate(&mut self) {
-        let Ok(session) = &mut self.session else {
-            return;
-        };
-        session.populate(&self.catalog, &mut self.chance);
-        self.npc_previous.clear();
-        self.read_npc_sheets();
     }
 
     /// Reads the sheet of each ship type the traffic can spawn that has
@@ -505,14 +489,13 @@ impl<C> FlightView<C> {
     /// Takes off from the stellar landed on, and gives it; `None` when the
     /// ship has not landed. The next frame draws the ship where it is, at
     /// the stellar, not on its way from where it was, and shows no message
-    /// from before the landing; the next tick populates the system's
-    /// traffic afresh.
+    /// from before the landing; the session populates the system's
+    /// traffic afresh on its next tick ([`Session::take_off`]).
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.session.as_mut().ok()?.take_off()?;
         self.previous = self.current();
         self.alpha = 0.0;
         self.message = None;
-        self.populate_due = true;
         Some(stellar)
     }
 
@@ -820,14 +803,6 @@ impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars
             return;
         }
         self.elapsed += dt;
-        let flying = self
-            .session
-            .as_ref()
-            .is_ok_and(|session| session.landed().is_none());
-        if self.populate_due && flying {
-            self.populate_due = false;
-            self.populate();
-        }
         let Steps { steps, alpha } = self.clock.advance(dt);
         let controls = self.controls();
         if let Ok(session) = &mut self.session {
@@ -839,9 +814,11 @@ impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars
                     .map(|npc| (npc.id, npc.state))
                     .collect();
                 session.tick(controls);
-                session.tick_traffic(&*self.behaviour, &mut self.chance);
+                session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
             }
         }
+        // The session may have populated its system afresh.
+        self.read_npc_sheets();
         self.alpha = alpha;
     }
 
@@ -3255,6 +3232,9 @@ mod tests {
         assert_eq!(&script.borrow().asked[..7], [7, 7, 100, 1, 1500, 1500, 360]);
         ticks(&mut view, 3);
         assert_eq!(npc_ids(&view), [NpcId(0)], "populated once");
+        let npc = view.session().expect("flying").npcs()[0];
+        assert_eq!(npc.goal, Goal::Idle, "deciding as the behaviour given says");
+        assert_eq!(npc.state.position, Vec2::new(100.0, -100.0));
     }
 
     #[test]
@@ -3308,6 +3288,9 @@ mod tests {
         draws.push(0);
         let (_, chance) = scripted(&draws);
         let mut view = FlightView::new(trafficked(&[130], 1, 129, 1)).with_chance(chance);
+        // The first step sets the system up; the NPC moves from the next.
+        view.tick(TICK);
+        assert_eq!(npc_states(&view)[0].position, Vec2::new(0.0, 100.0));
         view.tick(TICK + TICK / 2);
         let npc = view.session().expect("flying").npcs()[0];
         assert_eq!(npc.goal, Goal::Land(StellarId(128)), "Peaceful, by default");
