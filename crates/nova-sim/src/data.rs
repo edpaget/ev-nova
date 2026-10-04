@@ -1,10 +1,13 @@
-//! The pilot catalog over the game data: a thin mapping from `GameData`'s
-//! `chär`, `shïp`, `oütf`, `sÿst`, `spöb`, `jünk` and `öops` records, its
-//! commodity string lists and its stellar sprites.
+//! The pilot and traffic catalogs over the game data: a thin mapping from
+//! `GameData`'s `chär`, `shïp`, `oütf`, `sÿst`, `spöb`, `jünk`, `öops`,
+//! `düde` and `flët` records, its commodity string lists and its stellar
+//! sprites.
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
 use nova_data::records::disaster::Disaster;
+use nova_data::records::dude::Dude;
+use nova_data::records::fleet::Fleet;
 use nova_data::records::junk::Junk;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
@@ -13,9 +16,10 @@ use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 
 use crate::catalog::{
-    CharacterStart, CommodityStrings, DisasterId, DisasterRecord, JunkRecord, LandingSite,
-    OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, SystemId,
+    CharacterStart, CommodityStrings, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord,
+    FleetId, FleetRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId,
+    ShipRecord, SoundId, StarSystem, StartDate, StartError, SystemId, SystemTraffic,
+    TrafficCatalog,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -90,6 +94,7 @@ impl PilotCatalog for GameData {
                     max_tur: record.max_tur,
                     length: record.length,
                     crew: record.crew,
+                    inherent_ai: record.inherent_ai,
                 })
             })
             .collect()
@@ -221,6 +226,56 @@ impl PilotCatalog for GameData {
                     duration: record.duration,
                     freq: record.freq,
                     activate_on: record.activate_on.as_str().to_owned(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// Reads the records afresh on every call; a session asks each time it
+/// populates a system.
+impl TrafficCatalog for GameData {
+    fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
+        let system = self.get::<System>(id.0)?.ok()?.record;
+        Some(SystemTraffic {
+            dude_types: std::array::from_fn(|slot| (system.dude_types[slot], system.prob[slot])),
+            avg_ships: system.avg_ships,
+        })
+    }
+
+    fn dude(&self, id: DudeId) -> Option<DudeRecord> {
+        let dude = self.get::<Dude>(id.0)?.ok()?.record;
+        Some(DudeRecord {
+            ai_type: dude.ai_type,
+            govt: dude.govt,
+            ships: dude
+                .ship_type
+                .iter()
+                .zip(dude.probability)
+                .filter_map(|(ship, probability)| Some(((*ship)?, probability)))
+                .collect(),
+        })
+    }
+
+    fn fleets(&self) -> Vec<FleetRecord> {
+        self.records::<Fleet>()
+            .filter_map(|(id, fleet)| {
+                let fleet = fleet.ok()?.record;
+                Some(FleetRecord {
+                    id: FleetId(id),
+                    lead: fleet.lead_ship_type,
+                    escorts: (0..fleet.escort_type.len())
+                        .filter_map(|slot| {
+                            Some(EscortRecord {
+                                ship: fleet.escort_type[slot]?,
+                                min: fleet.min[slot],
+                                max: fleet.max[slot],
+                            })
+                        })
+                        .collect(),
+                    govt: fleet.govt,
+                    link_syst: fleet.link_syst,
+                    appear_on: fleet.appear_on.as_str().to_owned(),
                 })
             })
             .collect()
@@ -574,8 +629,7 @@ mod tests {
         put_i16s(&mut bytes, 0x0C, &[12]);
         put_i16s(&mut bytes, 0x2A, &[4, 2, 6]);
         bytes[0x30..0x34].copy_from_slice(&17_500_i32.to_be_bytes());
-        put_i16s(&mut bytes, 0x3C, &[25, 30, 41]);
-        put_i16s(&mut bytes, 0x44, &[3]);
+        put_i16s(&mut bytes, 0x3C, &[25, 30, 41, 2, 3]);
         bytes[0x64..0x6C].copy_from_slice(&0x10_u64.to_be_bytes());
         bytes[0x6C..0x70].copy_from_slice(b"b422");
         bytes[0x380..0x388].copy_from_slice(&0x0000_0002_0000_0001_u64.to_be_bytes());
@@ -620,6 +674,7 @@ mod tests {
             max_tur: 2,
             length: 41,
             crew: 3,
+            inherent_ai: 2,
         };
         assert_eq!(
             data.ships(),
@@ -1091,5 +1146,150 @@ mod tests {
             ]
         );
         assert_eq!(store(&[]).disasters(), []);
+    }
+    /// A `sÿst` with these `DudeTypes` and `% Prob` and this `AvgShips`.
+    fn trafficked(dude_types: [i16; 8], prob: [i16; 8], avg_ships: i16) -> Vec<u8> {
+        let mut bytes = system();
+        put_i16s(&mut bytes, 0x44, &dude_types);
+        put_i16s(&mut bytes, 0x54, &prob);
+        put_i16s(&mut bytes, 0x64, &[avg_ships]);
+        bytes
+    }
+
+    #[test]
+    fn a_systems_traffic_is_its_dude_types_with_their_odds_and_its_average() {
+        let data = store(&[
+            (
+                System::TYPE,
+                130,
+                trafficked(
+                    [128, -129, -1, 639, -383, 0, 640, 5],
+                    [60, 20, 0, 1, 2, 3, 4, 5],
+                    7,
+                ),
+            ),
+            (System::TYPE, 131, short(system())),
+        ]);
+        assert_eq!(
+            data.system_traffic(SystemId(130)),
+            Some(SystemTraffic {
+                dude_types: [
+                    (128, 60),
+                    (-129, 20),
+                    (-1, 0),
+                    (639, 1),
+                    (-383, 2),
+                    (0, 3),
+                    (640, 4),
+                    (5, 5)
+                ],
+                avg_ships: 7,
+            }),
+            "every slot, raw"
+        );
+        assert_eq!(data.system_traffic(SystemId(131)), None, "undecodable");
+        assert_eq!(data.system_traffic(SystemId(132)), None, "missing");
+    }
+
+    /// A `düde` of `ai_type` for `govt`, flying these ships with their
+    /// probabilities in its first slots; the rest unused.
+    fn dude(ai_type: i16, govt: i16, ships: &[(i16, i16)]) -> Vec<u8> {
+        let mut bytes = vec![0; Dude::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[ai_type, govt]);
+        put_i16s(&mut bytes, 0x08, &[-1; 16]);
+        for (slot, (ship, probability)) in ships.iter().enumerate() {
+            put_i16s(&mut bytes, 0x08 + 2 * slot, &[*ship]);
+            put_i16s(&mut bytes, 0x28 + 2 * slot, &[*probability]);
+        }
+        bytes
+    }
+
+    #[test]
+    fn a_dude_is_its_ai_type_government_and_the_slots_that_name_a_ship() {
+        let data = store(&[
+            (
+                Dude::TYPE,
+                128,
+                dude(3, 129, &[(140, 60), (-1, 30), (141, 10)]),
+            ),
+            (Dude::TYPE, 129, dude(-1, -1, &[])),
+            (Dude::TYPE, 130, short(dude(1, 128, &[(140, 100)]))),
+        ]);
+        assert_eq!(
+            data.dude(DudeId(128)),
+            Some(DudeRecord {
+                ai_type: 3,
+                govt: Some(GovtId(129)),
+                ships: vec![(ShipId(140), 60), (ShipId(141), 10)],
+            }),
+            "the unused slot is left out"
+        );
+        assert_eq!(
+            data.dude(DudeId(129)),
+            Some(DudeRecord {
+                ai_type: -1,
+                govt: None,
+                ships: Vec::new(),
+            })
+        );
+        assert_eq!(data.dude(DudeId(130)), None, "undecodable");
+        assert_eq!(data.dude(DudeId(131)), None, "missing");
+    }
+
+    /// A `flët` led by `lead`, with these escorts (type, min, max) in its
+    /// first slots, the rest unused, for `govt`, linked to `link_syst`.
+    fn fleet(lead: i16, escorts: &[(i16, i16, i16)], govt: i16, link_syst: i16) -> Vec<u8> {
+        let mut bytes = vec![0; Fleet::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[lead]);
+        put_i16s(&mut bytes, 0x02, &[-1; 4]);
+        for (slot, (ship, min, max)) in escorts.iter().enumerate() {
+            put_i16s(&mut bytes, 0x02 + 2 * slot, &[*ship]);
+            put_i16s(&mut bytes, 0x0A + 2 * slot, &[*min]);
+            put_i16s(&mut bytes, 0x12 + 2 * slot, &[*max]);
+        }
+        put_i16s(&mut bytes, 0x1A, &[govt, link_syst]);
+        bytes
+    }
+
+    #[test]
+    fn each_readable_flet_is_a_fleet_record_by_id() {
+        let mut appearing = fleet(-1, &[(-1, 1, 1), (142, 0, 3)], -1, 10_000);
+        appearing[0x1E..0x22].copy_from_slice(b"b42\0");
+        let data = store(&[
+            (Fleet::TYPE, 130, appearing),
+            (Fleet::TYPE, 128, fleet(140, &[(141, 1, 2)], 129, -1)),
+            (Fleet::TYPE, 129, short(fleet(140, &[], 128, -1))),
+        ]);
+        assert_eq!(
+            data.fleets(),
+            [
+                FleetRecord {
+                    id: FleetId(128),
+                    lead: Some(ShipId(140)),
+                    escorts: vec![EscortRecord {
+                        ship: ShipId(141),
+                        min: 1,
+                        max: 2,
+                    }],
+                    govt: Some(GovtId(129)),
+                    link_syst: -1,
+                    appear_on: String::new(),
+                },
+                FleetRecord {
+                    id: FleetId(130),
+                    lead: None,
+                    escorts: vec![EscortRecord {
+                        ship: ShipId(142),
+                        min: 0,
+                        max: 3,
+                    }],
+                    govt: None,
+                    link_syst: 10_000,
+                    appear_on: "b42".to_owned(),
+                },
+            ],
+            "by ID, the undecodable one skipped and the unused escort slots left out"
+        );
+        assert_eq!(store(&[]).fleets(), []);
     }
 }

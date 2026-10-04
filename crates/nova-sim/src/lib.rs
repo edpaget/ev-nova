@@ -2,15 +2,21 @@
 //! the simulation takes the player's controls and advances the game state
 //! one fixed step at a time.
 //!
+//! - [`ai`]: NPC decisions: the [`Behaviour`] port that sets each NPC's
+//!   [`Goal`], and [`Peaceful`], Nova's default: traders land, others jump
+//!   out, escorts follow their lead.
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
-//!   `jünk` and `öops` the exchange trades and is moved by.
+//!   `jünk` and `öops` the exchange trades and is moved by; and the
+//!   [`TrafficCatalog`] port, the `sÿst` traffic, `düde`s and `flët`s NPC
+//!   traffic is spawned from.
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
-//!   which the day's planetary events roll on.
+//!   which the day's planetary events roll on, and uniform draws, which
+//!   the NPC traffic rolls on.
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
-//! - [`data`]: the port's adapter over `nova_data`'s `GameData`.
+//! - [`data`]: the catalog ports' adapters over `nova_data`'s `GameData`.
 //! - `fixture` (with the `fixture` feature, and in this crate's tests):
 //!   `MemoryPilots`, a pilot store in memory.
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
@@ -59,10 +65,14 @@
 //! - [`stats`]: a ship's computed [`ShipStats`], from its `shïp`'s fields
 //!   and the outfits it carries: the one place its handling, reserve
 //!   capacities, fuel regeneration and cargo space come from.
+//! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
+//!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
+//!   autopilot with the player's flight physics and stats.
 //! - [`wares`]: the rules the outfitter and the shipyard share: tech
 //!   levels, `Require` and `Contribute`, the hiding flags, the hide-higher
 //!   sweep and the rows' order.
 
+pub mod ai;
 pub mod catalog;
 pub mod chance;
 pub mod clock;
@@ -89,12 +99,15 @@ pub mod sound;
 pub mod stats;
 #[cfg(test)]
 mod testkit;
+pub mod traffic;
 pub mod wares;
 
+pub use ai::{Behaviour, Goal, Peaceful, Surroundings};
 pub use catalog::{
-    CharacterStart, CommodityStrings, DisasterId, DisasterRecord, GovtId, JunkId, JunkRecord,
-    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem,
-    StartDate, StartError, StellarId, SystemId,
+    CharacterStart, CommodityStrings, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord,
+    FleetId, FleetRecord, GovtId, JunkId, JunkRecord, LandingSite, OutfitId, OutfitRecord,
+    PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
+    SystemId, SystemTraffic, TrafficCatalog,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
@@ -116,3 +129,5 @@ pub use session::Session;
 pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;
+pub use traffic::Traffic;
+pub use traffic::npc::{AiType, Npc, NpcId};

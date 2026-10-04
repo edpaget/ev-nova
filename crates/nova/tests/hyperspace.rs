@@ -623,6 +623,10 @@ impl Chance for Always {
         self.0.borrow_mut().push(percent);
         true
     }
+
+    fn below(&mut self, _n: u32) -> u32 {
+        0
+    }
 }
 
 /// The percents asked of an always-firing chance, and that chance, shared.

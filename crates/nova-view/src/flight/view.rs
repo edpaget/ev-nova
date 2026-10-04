@@ -73,7 +73,7 @@ use nova_sim::{
     Chance, Controls, FixedStep, JumpRefusal, LandingRefusal, Market, NeverFires, Order,
     OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, RechargeRefusal, Reserves, Session,
     ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps,
-    TradeRefusal, Turn, flight::normalized, flight::shortest_turn,
+    TradeRefusal, TrafficCatalog, Turn, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -211,6 +211,10 @@ impl Chance for SharedChance {
     fn fires(&mut self, percent: u8) -> bool {
         self.0.borrow_mut().fires(percent)
     }
+
+    fn below(&mut self, n: u32) -> u32 {
+        self.0.borrow_mut().below(n)
+    }
 }
 
 /// The player's ship in flight, reading the game data from `C`.
@@ -250,7 +254,9 @@ pub struct FlightView<C> {
     chance: SharedChance,
 }
 
-impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog> FlightView<C> {
+impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
+    FlightView<C>
+{
     /// A new, unnamed pilot's flight, read from `catalog`, which the
     /// screen keeps.
     pub fn new(catalog: C) -> Self {
@@ -630,8 +636,8 @@ impl<C> FlightView<C> {
     }
 }
 
-impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog> Screen
-    for FlightView<C>
+impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
+    Screen for FlightView<C>
 {
     /// Never quits: Escape is the router's.
     fn input(&mut self, input: &Input) -> ScreenAction {
@@ -989,6 +995,21 @@ mod tests {
 
         fn disasters(&self) -> Vec<DisasterRecord> {
             self.disasters.clone()
+        }
+    }
+
+    /// No traffic anywhere.
+    impl TrafficCatalog for FakeCatalog {
+        fn system_traffic(&self, _id: SystemId) -> Option<nova_sim::SystemTraffic> {
+            None
+        }
+
+        fn dude(&self, _id: nova_sim::DudeId) -> Option<nova_sim::DudeRecord> {
+            None
+        }
+
+        fn fleets(&self) -> Vec<nova_sim::FleetRecord> {
+            Vec::new()
         }
     }
 
@@ -2782,10 +2803,12 @@ mod tests {
         assert_eq!(broken.recharge(), Err(RechargeRefusal::NoFuel));
     }
 
-    /// Fires every time, and records each percent it is asked.
+    /// Fires every time, and records each percent it is asked; each draw
+    /// is 0, and records its `n`.
     #[derive(Default)]
     struct Always {
         asked: Vec<u8>,
+        drawn: Vec<u32>,
     }
 
     impl Chance for Always {
@@ -2793,6 +2816,22 @@ mod tests {
             self.asked.push(percent);
             true
         }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.drawn.push(n);
+            0
+        }
+    }
+
+    #[test]
+    fn a_shared_chance_draws_from_its_source() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let mut chance = SharedChance::new(shared);
+        assert_eq!(chance.below(7), 0);
+        assert_eq!(chance.below(500), 0);
+        assert_eq!(always.borrow().drawn, [7, 500]);
+        assert_eq!(SharedChance::default().below(256), 255, "never fires");
     }
 
     /// A food surplus at Proxima, 35 % a day.
@@ -2878,6 +2917,7 @@ mod tests {
                 max_tur: 0,
                 length: 0,
                 crew: 0,
+                inherent_ai: 1,
             }],
             ..outfitting()
         }

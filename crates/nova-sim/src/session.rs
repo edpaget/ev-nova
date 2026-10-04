@@ -68,6 +68,14 @@
 //! [`recharge`](crate::recharge) rules say. A refill makes a save due; a
 //! refused one changes nothing.
 //!
+//! NPC traffic flies around the player (see [`traffic`](crate::traffic)):
+//! a session starts with none, [`Session::populate`] fills the system
+//! with its initial population, and each arrival does too, replacing the
+//! last system's. [`Session::tick_traffic`] advances it a tick, NPCs
+//! deciding as a [`Behaviour`] says and rolling on the caller's
+//! [`Chance`]; it stands still while the player is landed or jumping, as
+//! the player's own ship does.
+//!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
 //! stopping, landing, taking off, a jump beginning and ending), which the
 //! audio side drains with [`Session::take_sounds`]. A refused landing or
@@ -75,9 +83,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::ai::Behaviour;
 use crate::catalog::{
     GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, StartError,
-    StellarId, SystemId,
+    StellarId, SystemId, TrafficCatalog,
 };
 use crate::chance::Chance;
 use crate::date::GameDate;
@@ -95,6 +104,10 @@ use crate::reserves::{Gauge, Reserves};
 use crate::shipyard::{self, Quote, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
+use crate::traffic::Traffic;
+use crate::traffic::autopilot::Outcome;
+use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::table::SpawnTable;
 
 /// The player's ship, flying in one system.
 #[derive(Clone, Debug, PartialEq)]
@@ -130,6 +143,8 @@ pub struct Session {
     /// Whether the pilot has changed in a way that should be saved since
     /// this was last taken.
     save_due: bool,
+    /// The NPCs in the system.
+    traffic: Traffic,
 }
 
 impl Session {
@@ -194,6 +209,7 @@ impl Session {
             thrusting: false,
             sounds: Vec::new(),
             save_due: false,
+            traffic: Traffic::new(),
             pilot,
         };
         session.refit(false);
@@ -240,6 +256,56 @@ impl Session {
             step(&mut self.player, &self.stats.handling, controls);
             regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
         }
+    }
+
+    /// Fills the system with its initial NPC population, replacing any
+    /// NPCs there, its traffic read from `catalog` and rolled on `chance`.
+    pub fn populate(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let system = self.pilot.system;
+        let table = SpawnTable::resolve(
+            catalog,
+            system,
+            self.star_map.govt(system),
+            &self.ships,
+            &self.outfits,
+        );
+        self.traffic.enter(table, chance);
+    }
+
+    /// Advances the NPC traffic one tick, NPCs deciding as `behaviour`
+    /// says, rolling on `chance`. While the ship is landed or jumping, it
+    /// stands still.
+    pub fn tick_traffic(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if self.landed.is_none() && self.jumping.is_none() {
+            self.traffic.tick(behaviour, &self.sites, chance);
+        }
+    }
+
+    /// The NPCs in the system, in the order they appeared.
+    #[must_use]
+    pub fn npcs(&self) -> &[Npc] {
+        self.traffic.npcs()
+    }
+
+    /// The NPCs that left on the last traffic tick, and how.
+    #[must_use]
+    pub fn departed(&self) -> &[(NpcId, Outcome)] {
+        self.traffic.departed()
+    }
+
+    /// The ship types the system's traffic can spawn, by ascending ID, so
+    /// a view can read their sprites up front.
+    #[must_use]
+    pub fn traffic_ships(&self) -> Vec<ShipId> {
+        self.traffic.ship_types()
     }
 
     /// Stops the thrust, if the ship was thrusting, as it lands or jumps.
@@ -304,11 +370,12 @@ impl Session {
     /// its edge facing the system it came from (see [`arrival`]) with its
     /// reserves as they were. Each day
     /// steps the planetary events, rolled on `chance`. The new system's
-    /// stellars are read from `catalog`. `None`, and nothing changes, when
-    /// no jump is under way.
+    /// stellars are read from `catalog`, and it is populated with its
+    /// traffic ([`Session::populate`]), the last system's gone. `None`, and
+    /// nothing changes, when no jump is under way.
     pub fn arrive(
         &mut self,
-        catalog: &impl PilotCatalog,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<SystemId> {
         let next = self.jumping.take()?;
@@ -327,6 +394,7 @@ impl Session {
         pilot.stellar = None;
         pilot.explore(next);
         self.sites = catalog.landing_sites(next);
+        self.populate(catalog, chance);
         self.sounds.push(SimSound::Arrived);
         Some(next)
     }
@@ -2700,5 +2768,163 @@ mod tests {
         session.take_off();
         session.take_save_due();
         assert_refused(session, RechargeRefusal::NoFuel);
+    }
+    // Traffic.
+
+    use crate::ai::Peaceful;
+    use crate::catalog::{DudeId, DudeRecord, SystemTraffic};
+    use crate::testkit::Draws;
+    use crate::traffic::autopilot::Outcome;
+    use crate::traffic::npc::AiType;
+
+    /// [`catalog`] with `avg` ships on average in `system`, all of düde
+    /// 128: ship 129 (fast) with AI `ai_type`, for govt 140.
+    fn trafficked(system: i16, avg: i16, ai_type: i16) -> FakePilotCatalog {
+        let mut dude_types = [(-1, 0); 8];
+        dude_types[0] = (128, 100);
+        FakePilotCatalog {
+            traffic: vec![(
+                SystemId(system),
+                SystemTraffic {
+                    dude_types,
+                    avg_ships: avg,
+                },
+            )],
+            dudes: vec![(
+                DudeId(128),
+                DudeRecord {
+                    ai_type,
+                    govt: Some(GovtId(140)),
+                    ships: vec![(ShipId(129), 1)],
+                },
+            )],
+            ship_records: vec![ship(129, FAST)],
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn a_session_starts_with_no_traffic_until_it_is_populated() {
+        let catalog = trafficked(130, 2, 1);
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.npcs(), []);
+        assert_eq!(session.traffic_ships(), []);
+        session.populate(&catalog, &mut NeverFires);
+        assert_eq!(session.npcs().len(), 2);
+        assert_eq!(session.traffic_ships(), [ShipId(129)]);
+    }
+
+    #[test]
+    fn arriving_populates_the_new_system_from_its_dudes() {
+        let catalog = trafficked(131, 2, 1);
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131);
+        let npcs = session.npcs();
+        assert_eq!(npcs.len(), 2);
+        for npc in npcs {
+            assert_eq!(
+                (npc.ship, npc.govt, npc.ai_type),
+                (ShipId(129), Some(GovtId(140)), AiType::WimpyTrader)
+            );
+            assert_eq!(npc.stats, ShipStats::new(FAST, &[]));
+        }
+        assert_eq!(session.traffic_ships(), [ShipId(129)]);
+    }
+
+    #[test]
+    fn arriving_clears_the_last_systems_traffic() {
+        let catalog = trafficked(130, 2, 3);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut NeverFires);
+        assert_eq!(session.npcs().len(), 2);
+        jump(&mut session, &catalog, 131);
+        assert_eq!(session.npcs(), []);
+        assert_eq!(session.traffic_ships(), []);
+    }
+
+    #[test]
+    fn populating_replaces_the_npcs() {
+        let catalog = trafficked(130, 3, 3);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut NeverFires);
+        let first: Vec<_> = session.npcs().iter().map(|npc| npc.id).collect();
+        session.populate(&catalog, &mut NeverFires);
+        let second: Vec<_> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(second.len(), 3);
+        assert!(
+            first.iter().all(|id| !second.contains(id)),
+            "{first:?} {second:?}"
+        );
+        let mut persons = Draws::of(&[0, 0, 0]);
+        session.populate(&catalog, &mut persons);
+        assert_eq!(session.npcs(), []);
+        assert_eq!(persons.asked, [7, 7, 7]);
+    }
+
+    #[test]
+    fn traffic_arrives_over_time() {
+        let catalog = trafficked(130, 1, 3);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut Draws::of(&[0]));
+        assert_eq!(session.npcs(), []);
+        session.tick_traffic(&Peaceful, &mut Draws::of(&[2]));
+        assert_eq!(session.npcs(), []);
+        session.tick_traffic(&Peaceful, &mut Draws::of(&[0, 6, 6, 0, 0, 0]));
+        assert_eq!(session.npcs().len(), 1, "jumping in");
+    }
+
+    /// Ticks the traffic until an NPC leaves, and gives how.
+    fn first_departure(session: &mut Session) -> Outcome {
+        for _ in 0..3000 {
+            session.tick_traffic(&Peaceful, &mut NeverFires);
+            if let Some(&(_, outcome)) = session.departed().first() {
+                return outcome;
+            }
+        }
+        panic!("nobody left: {:?}", session.npcs());
+    }
+
+    #[test]
+    fn traders_land_and_others_jump_out() {
+        for (ai_type, how) in [
+            (1, Outcome::Landed(StellarId(129))),
+            (2, Outcome::Landed(StellarId(129))),
+            (3, Outcome::JumpedOut),
+            (4, Outcome::JumpedOut),
+        ] {
+            let catalog = trafficked(130, 1, ai_type);
+            let mut session = Session::start(&catalog).expect("starts");
+            session.populate(&catalog, &mut NeverFires);
+            assert_eq!(first_departure(&mut session), how, "AI {ai_type}");
+            assert_eq!(session.npcs(), []);
+        }
+    }
+
+    #[test]
+    fn traffic_stands_still_while_landed_or_jumping() {
+        let mut catalog = trafficked(130, 1, 1);
+        let elsewhere = (SystemId(131), catalog.traffic[0].1);
+        catalog.traffic.push(elsewhere);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut NeverFires);
+        session.land().expect("lands on planet 128");
+        let before = session.npcs().to_vec();
+        session.tick_traffic(&Peaceful, &mut Draws::of(&[0]));
+        assert_eq!(session.npcs(), before, "landed");
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut NeverFires);
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.begin_jump().expect("jumps");
+        let before = session.npcs().to_vec();
+        let mut chance = Draws::of(&[]);
+        session.tick_traffic(&Peaceful, &mut chance);
+        assert_eq!(session.npcs(), before, "jumping");
+        assert!(chance.asked.is_empty());
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        let before = session.npcs().to_vec();
+        session.tick_traffic(&Peaceful, &mut chance);
+        assert_eq!(session.npcs().len(), 1);
+        assert_ne!(session.npcs()[0].state, before[0].state, "flying again");
     }
 }

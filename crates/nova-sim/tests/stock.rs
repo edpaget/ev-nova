@@ -3,7 +3,9 @@
 //! Kane's exchange trades at its levels, and its outfitter sells what its
 //! tech levels allow; Viking's shipyard sells what its tech levels and the
 //! ships' `BuyRandom` allow, and trades the Shuttle in. Port Kane sells
-//! fuel and uninhabited Reflex-ion sells none. Skips, passing,
+//! fuel and uninhabited Reflex-ion sells none. NPC traffic flies the
+//! ships and governments its system's `düde`s and fleets give, and
+//! Alphara's `DudeTypes` fleet comes when its roll fires. Skips, passing,
 //! when `NOVA_DATA` is unset.
 
 mod common;
@@ -491,5 +493,228 @@ fn reflex_ion_sells_no_fuel() {
             now: 150.0,
             max: 300.0
         }
+    );
+}
+
+/// A small seeded generator (xorshift64*), so the stock traffic tests roll
+/// the same dice every run; it never fires a percentage.
+struct Seeded(u64);
+
+impl nova_sim::Chance for Seeded {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        let draw = self.0.wrapping_mul(0x2545_F491_4F6C_DD1D);
+        u32::try_from(draw % u64::from(n.max(1))).expect("below n")
+    }
+}
+
+/// Every (ship, government) system `id`'s traffic may fly, read straight
+/// from the records: each `düde` its `DudeTypes` name, each fleet they
+/// name, and each fleet whose `LinkSyst` matches it.
+fn allowed(data: &GameData, id: i16) -> Vec<(ShipId, Option<nova_sim::GovtId>)> {
+    use nova_data::records::dude::Dude;
+    use nova_data::records::fleet::Fleet;
+    use nova_data::records::system::System;
+    let system = data
+        .get::<System>(id)
+        .expect("present")
+        .expect("decodes")
+        .record;
+    let mut allowed = Vec::new();
+    for &value in &system.dude_types {
+        if (128..=639).contains(&value) {
+            let dude = data.get::<Dude>(value).expect("present").expect("decodes");
+            let dude = dude.record;
+            allowed.extend(
+                dude.ship_type
+                    .iter()
+                    .flatten()
+                    .map(|&ship| (ship, dude.govt)),
+            );
+        }
+    }
+    let named: Vec<i16> = system
+        .dude_types
+        .iter()
+        .filter(|value| (-383..=-128).contains(*value))
+        .map(|value| -value)
+        .collect();
+    for (fleet_id, fleet) in data.records::<Fleet>() {
+        let Ok(fleet) = fleet else { continue };
+        let fleet = fleet.record;
+        let link = fleet.link_syst;
+        let govt = system.govt.map(|govt| govt.0);
+        let linked = link == -1
+            || link == id
+            || ((10_000..15_000).contains(&link) && govt == Some(link - 10_000 + 128))
+            || ((20_000..25_000).contains(&link) && govt.is_some_and(|g| g != link - 20_000 + 128));
+        if linked || named.contains(&fleet_id) {
+            let ships = fleet
+                .lead_ship_type
+                .into_iter()
+                .chain(fleet.escort_type.into_iter().flatten());
+            allowed.extend(ships.map(|ship| (ship, fleet.govt)));
+        }
+    }
+    allowed
+}
+
+/// Every NPC seen in `session`'s system over `ticks` ticks of traffic.
+fn traffic_seen(
+    session: &mut Session,
+    chance: &mut Seeded,
+    ticks: u32,
+) -> Vec<(ShipId, Option<nova_sim::GovtId>)> {
+    let mut seen: Vec<_> = session
+        .npcs()
+        .iter()
+        .map(|npc| (npc.ship, npc.govt))
+        .collect();
+    for _ in 0..ticks {
+        session.tick_traffic(&nova_sim::ai::Peaceful, chance);
+        seen.extend(session.npcs().iter().map(|npc| (npc.ship, npc.govt)));
+    }
+    seen
+}
+
+/// The new pilot's starting system and the first system linked to it, its
+/// traffic populated when it starts and when it arrives: every NPC flies
+/// a ship of a `düde` of the system's, or of a fleet it names or its
+/// `LinkSyst` matches, for its government.
+#[test]
+fn stock_traffic_flies_the_systems_dudes_and_fleets() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut chance = Seeded(0x5EED_CAFE);
+    let mut session = Session::start(&data).expect("the stock first chär starts");
+    session.populate(&data, &mut chance);
+    let start = session.system();
+    let seen = traffic_seen(&mut session, &mut chance, 3000);
+    assert!(!seen.is_empty(), "traffic in sÿst {}", start.0);
+    let here = allowed(&data, start.0);
+    for npc in &seen {
+        assert!(here.contains(npc), "{npc:?} in sÿst {}", start.0);
+    }
+    // Jump to the first system linked to it, flying straight out.
+    let next = first_link(&data, start.0);
+    session.plot_course(next).expect("a route");
+    let mut tries = 0;
+    while session.player().position.length() < session.stats().jump_distance {
+        session.tick(nova_sim::Controls {
+            thrust: true,
+            ..nova_sim::Controls::default()
+        });
+        tries += 1;
+        assert!(tries < 10_000, "never got out");
+    }
+    session.begin_jump().expect("jumps");
+    assert_eq!(session.arrive(&data, &mut chance), Some(next));
+    let seen = traffic_seen(&mut session, &mut chance, 3000);
+    assert!(!seen.is_empty(), "traffic in sÿst {}", next.0);
+    let there = allowed(&data, next.0);
+    for npc in &seen {
+        assert!(there.contains(npc), "{npc:?} in sÿst {}", next.0);
+    }
+}
+
+/// The first hyperlink of `sÿst` `id`.
+fn first_link(data: &GameData, id: i16) -> nova_sim::SystemId {
+    use nova_data::records::system::System;
+    let system = data
+        .get::<System>(id)
+        .expect("present")
+        .expect("decodes")
+        .record;
+    system
+        .con
+        .into_iter()
+        .flatten()
+        .next()
+        .expect("a hyperlink")
+}
+
+/// Draws its script, then 0 for ever.
+struct Script(std::collections::VecDeque<u32>);
+
+impl nova_sim::Chance for Script {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, _n: u32) -> u32 {
+        self.0.pop_front().unwrap_or(0)
+    }
+}
+
+/// Alphara (`sÿst` 131) names `flët` 129 in its `DudeTypes`, at 20 %:
+/// when an arrival's roll lands on 1 and the percentage roll is within
+/// 20, the fleet's lead jumps in with its escorts, for its government.
+#[test]
+fn alpharas_named_fleet_comes_when_its_roll_fires() {
+    use nova_data::records::fleet::Fleet;
+    use nova_data::records::system::System;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let alphara = data
+        .get::<System>(131)
+        .expect("present")
+        .expect("decodes")
+        .record;
+    assert!(
+        alphara
+            .dude_types
+            .iter()
+            .zip(alphara.prob)
+            .any(|pair| pair == (&-129, 20))
+    );
+    let fleet = data
+        .get::<Fleet>(129)
+        .expect("present")
+        .expect("decodes")
+        .record;
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["system"] = serde_json::json!(131);
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(&data, pilot).expect("flies");
+    // Every setup pass draws a person: no traffic yet.
+    session.populate(&data, &mut Script(std::collections::VecDeque::new()));
+    assert_eq!(session.npcs(), []);
+    // Rand(500) = 1, then Rand(100) + 1 = 1, within 20: the first named
+    // fleet, flët 129.
+    session.tick_traffic(
+        &nova_sim::ai::Peaceful,
+        &mut Script(std::collections::VecDeque::from([1])),
+    );
+    let lead = session.npcs().first().expect("the fleet's lead");
+    assert_eq!(Some(lead.ship), fleet.lead_ship_type);
+    assert_eq!(lead.govt, fleet.govt);
+    let escorts = session
+        .npcs()
+        .iter()
+        .filter(|npc| npc.leader == Some(lead.id))
+        .count();
+    let least: i16 = fleet
+        .escort_type
+        .iter()
+        .zip(fleet.min)
+        .filter(|(ship, _)| ship.is_some())
+        .map(|(_, min)| min.max(0))
+        .sum();
+    assert_eq!(
+        escorts,
+        usize::try_from(least).expect("count"),
+        "each type's Min"
     );
 }

@@ -1,11 +1,12 @@
-//! A canned [`PilotCatalog`] for the crate's own tests.
+//! A canned [`PilotCatalog`] and [`TrafficCatalog`] for the crate's own
+//! tests.
 
 use std::cell::RefCell;
 
 use crate::catalog::{
-    CharacterStart, CommodityStrings, DisasterRecord, JunkRecord, LandingSite, OutfitId,
-    OutfitRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError, StellarId,
-    SystemId,
+    CharacterStart, CommodityStrings, DisasterRecord, DudeId, DudeRecord, FleetRecord, JunkRecord,
+    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate,
+    StartError, StellarId, SystemId, SystemTraffic, TrafficCatalog,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::flight::{Controls, Turn};
@@ -43,6 +44,12 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) disasters: Vec<DisasterRecord>,
     /// How many times the goods (commodities, `jünk` and `öops`) were read.
     pub(crate) goods_reads: RefCell<usize>,
+    /// Each system's traffic; any other has none.
+    pub(crate) traffic: Vec<(SystemId, SystemTraffic)>,
+    /// Every `düde`.
+    pub(crate) dudes: Vec<(DudeId, DudeRecord)>,
+    /// Every `flët`.
+    pub(crate) fleets: Vec<FleetRecord>,
 }
 
 pub(crate) const FAST: ShipFields = ShipFields {
@@ -119,6 +126,7 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         max_tur: 1,
         length: 20,
         crew: 3,
+        inherent_ai: 1,
     }
 }
 
@@ -164,6 +172,9 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         junk: Vec::new(),
         disasters: Vec::new(),
         goods_reads: RefCell::default(),
+        traffic: Vec::new(),
+        dudes: Vec::new(),
+        fleets: Vec::new(),
     }
 }
 
@@ -258,6 +269,27 @@ impl PilotCatalog for FakePilotCatalog {
     }
 }
 
+/// No traffic unless a test sets it.
+impl TrafficCatalog for FakePilotCatalog {
+    fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
+        self.traffic
+            .iter()
+            .find(|(system, _)| *system == id)
+            .map(|(_, traffic)| *traffic)
+    }
+
+    fn dude(&self, id: DudeId) -> Option<DudeRecord> {
+        self.dudes
+            .iter()
+            .find(|(dude, _)| *dude == id)
+            .map(|(_, record)| record.clone())
+    }
+
+    fn fleets(&self) -> Vec<FleetRecord> {
+        self.fleets.clone()
+    }
+}
+
 /// Flies the ship out from the centre until it is at least
 /// [`MIN_JUMP_DISTANCE`] away: it first turns to face away from the
 /// centre (Down faces against its motion), then thrusts.
@@ -342,6 +374,48 @@ impl Chance for Scripted {
     fn fires(&mut self, percent: u8) -> bool {
         self.asked.push(percent);
         self.answers.pop().unwrap_or(false)
+    }
+
+    /// The last outcome, as [`NeverFires`] draws: no roll fires.
+    fn below(&mut self, n: u32) -> u32 {
+        NeverFires.below(n)
+    }
+}
+
+/// A [`Chance`] whose draws come from a queue (the last outcome, `n - 1`,
+/// once it runs out, so no roll fires) and that records each `n` it is
+/// asked. It never fires a percentage.
+#[derive(Debug, Default)]
+pub(crate) struct Draws {
+    queue: std::collections::VecDeque<u32>,
+    pub(crate) asked: Vec<u32>,
+}
+
+impl Draws {
+    /// Draws `draws`, in order, then the last outcome.
+    pub(crate) fn of(draws: &[u32]) -> Self {
+        Self {
+            queue: draws.iter().copied().collect(),
+            asked: Vec::new(),
+        }
+    }
+}
+
+impl Chance for Draws {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    /// The next draw queued; one outside `0..n` is a mistake in the test.
+    fn below(&mut self, n: u32) -> u32 {
+        self.asked.push(n);
+        match self.queue.pop_front() {
+            Some(draw) => {
+                assert!(draw < n, "drew {draw} below {n}");
+                draw
+            }
+            None => n.saturating_sub(1),
+        }
     }
 }
 

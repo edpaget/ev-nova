@@ -28,10 +28,15 @@ impl SplitMix {
     }
 }
 
-/// A `percent` % chance fires when a draw, taken modulo 100, is below it.
+/// A `percent` % chance fires when a draw, taken modulo 100, is below it;
+/// a draw below `n` is a draw taken modulo `n`.
 impl Chance for SplitMix {
     fn fires(&mut self, percent: u8) -> bool {
         self.next_u64() % 100 < u64::from(percent)
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        u32::try_from(self.next_u64() % u64::from(n.max(1))).unwrap_or(0)
     }
 }
 
@@ -75,6 +80,42 @@ mod tests {
             let expected = usize::from(percent) * 100;
             assert!(fired.abs_diff(expected) < 300, "{percent}%: {fired}");
         }
+    }
+
+    #[test]
+    fn a_draw_below_n_is_the_next_draw_modulo_n() {
+        // Seed 0's draws, modulo 7 and modulo 500.
+        let mut zero = SplitMix::new(0);
+        assert_eq!(
+            zero.below(7),
+            u32::try_from(0xE220_A839_7B1D_CDAF_u64 % 7).unwrap()
+        );
+        assert_eq!(
+            zero.below(500),
+            u32::try_from(0x6E78_9E6A_A1B9_65F4_u64 % 500).unwrap()
+        );
+        assert_eq!(SplitMix::new(0).below(1), 0);
+        assert_eq!(
+            SplitMix::new(0).below(0),
+            0,
+            "never asked, but never divides by 0"
+        );
+    }
+
+    #[test]
+    fn draws_below_n_stay_in_range_and_spread_evenly() {
+        let mut mix = SplitMix::new(11);
+        let mut counts = [0_u32; 7];
+        for _ in 0..7000 {
+            let draw = mix.below(7);
+            assert!(draw < 7, "{draw}");
+            counts[draw as usize] += 1;
+        }
+        for count in counts {
+            assert!(count.abs_diff(1000) < 120, "{counts:?}");
+        }
+        let mut wide = SplitMix::new(12);
+        assert!((0..1000).all(|_| wide.below(u32::MAX) < u32::MAX));
     }
 
     #[test]

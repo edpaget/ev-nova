@@ -3,7 +3,9 @@
 
 use std::rc::Rc;
 
-pub use nova_data::{GovtId, JunkId, OutfitId, ShipId, SoundId, StellarId, SystemId};
+pub use nova_data::{
+    DudeId, FleetId, GovtId, JunkId, OutfitId, ShipId, SoundId, StellarId, SystemId,
+};
 
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -159,6 +161,9 @@ pub struct ShipRecord {
     pub length: i16,
     /// Its `Crew`.
     pub crew: i16,
+    /// Its `InherentAI`, raw: the AI type (1-4) it flies with when no
+    /// `düde` gives one, and always as a fleet's ship.
+    pub inherent_ai: i16,
 }
 
 /// The standard commodities, raw from their string lists: `STR#` 4000
@@ -219,6 +224,101 @@ pub struct DisasterRecord {
     pub freq: i16,
     /// Its `ActivateOn` control-bit expression.
     pub activate_on: String,
+}
+
+/// A system's traffic, raw from its `sÿst`: the
+/// [`traffic`](crate::traffic) rules decide what the values mean.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SystemTraffic {
+    /// Its `DudeTypes`, each with its `% Prob`, in record order: a `düde`
+    /// ID, a negated `flët` ID, or an unused slot.
+    pub dude_types: [(i16, i16); 8],
+    /// Its `AvgShips`.
+    pub avg_ships: i16,
+}
+
+/// A `düde`, raw: the [`traffic`](crate::traffic) rules decide what the
+/// values mean.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DudeRecord {
+    /// Its `AIType`.
+    pub ai_type: i16,
+    /// Its `Govt`, or `None` for independent (-1).
+    pub govt: Option<GovtId>,
+    /// Its `ShipType` slots that name a ship, each with its
+    /// `Probability`, in record order; the unused (-1) slots left out.
+    pub ships: Vec<(ShipId, i16)>,
+}
+
+/// One of a fleet's escort types, raw from its `flët`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EscortRecord {
+    /// Its `EscortType`.
+    pub ship: ShipId,
+    /// Its `Min`.
+    pub min: i16,
+    /// Its `Max`.
+    pub max: i16,
+}
+
+/// A fleet, raw from its `flët`: the [`traffic`](crate::traffic) rules
+/// decide what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FleetRecord {
+    /// The `flët`'s ID.
+    pub id: FleetId,
+    /// Its `LeadShipType`, if it names one.
+    pub lead: Option<ShipId>,
+    /// Its escort types that name a ship, in record order; the unused
+    /// (-1) slots left out.
+    pub escorts: Vec<EscortRecord>,
+    /// Its `Govt`, or `None` for independent (-1).
+    pub govt: Option<GovtId>,
+    /// Its `LinkSyst`, raw.
+    pub link_syst: i16,
+    /// Its `AppearOn` control-bit expression.
+    pub appear_on: String,
+}
+
+/// The game data a system's NPC traffic is spawned from: its `sÿst`'s
+/// traffic, the `düde`s it names and the `flët`s.
+pub trait TrafficCatalog {
+    /// System `id`'s traffic, or `None` when it cannot be read.
+    fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic>;
+    /// `düde` `id`, or `None` when it cannot be read.
+    fn dude(&self, id: DudeId) -> Option<DudeRecord>;
+    /// Every `flët` that can be read, by ascending ID.
+    fn fleets(&self) -> Vec<FleetRecord>;
+}
+
+/// A borrowed catalog is a catalog.
+impl<T: TrafficCatalog + ?Sized> TrafficCatalog for &T {
+    fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
+        (**self).system_traffic(id)
+    }
+
+    fn dude(&self, id: DudeId) -> Option<DudeRecord> {
+        (**self).dude(id)
+    }
+
+    fn fleets(&self) -> Vec<FleetRecord> {
+        (**self).fleets()
+    }
+}
+
+/// A shared catalog is a catalog.
+impl<T: TrafficCatalog + ?Sized> TrafficCatalog for Rc<T> {
+    fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
+        (**self).system_traffic(id)
+    }
+
+    fn dude(&self, id: DudeId) -> Option<DudeRecord> {
+        (**self).dude(id)
+    }
+
+    fn fleets(&self) -> Vec<FleetRecord> {
+        (**self).fleets()
+    }
 }
 
 /// Why a flight session could not start. Each message is ready to display.
@@ -553,6 +653,73 @@ mod tests {
         assert!(direct[14].contains("Shuttle"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
+    }
+
+    /// System 130 has düde 128 at 60 % and flët 129 at 20 %, five ships
+    /// on average; düde 128 flies ship 128; flët 129 is led by ship 128.
+    impl TrafficCatalog for One {
+        fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
+            (id == SystemId(130)).then_some(SystemTraffic {
+                dude_types: [
+                    (128, 60),
+                    (-129, 20),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                ],
+                avg_ships: 5,
+            })
+        }
+
+        fn dude(&self, id: DudeId) -> Option<DudeRecord> {
+            (id == DudeId(128)).then(|| DudeRecord {
+                ai_type: 1,
+                govt: Some(GovtId(128)),
+                ships: vec![(ShipId(128), 100)],
+            })
+        }
+
+        fn fleets(&self) -> Vec<FleetRecord> {
+            vec![FleetRecord {
+                id: FleetId(129),
+                lead: Some(ShipId(128)),
+                escorts: vec![EscortRecord {
+                    ship: ShipId(128),
+                    min: 1,
+                    max: 2,
+                }],
+                govt: None,
+                link_syst: -1,
+                appear_on: String::new(),
+            }]
+        }
+    }
+
+    /// Everything `catalog` says about system 130's and 131's traffic,
+    /// düdes 128 and 129 and the fleets.
+    fn traffic(catalog: impl TrafficCatalog) -> Vec<String> {
+        vec![
+            format!("{:?}", catalog.system_traffic(SystemId(130))),
+            format!("{:?}", catalog.system_traffic(SystemId(131))),
+            format!("{:?}", catalog.dude(DudeId(128))),
+            format!("{:?}", catalog.dude(DudeId(129))),
+            format!("{:?}", catalog.fleets()),
+        ]
+    }
+
+    #[test]
+    fn borrowed_and_shared_traffic_catalogs_are_catalogs() {
+        let direct = traffic(One);
+        assert!(direct[0].contains("avg_ships: 5"), "{direct:?}");
+        assert_eq!(direct[1], "None");
+        assert!(direct[2].contains("ShipId(128), 100"), "{direct:?}");
+        assert_eq!(direct[3], "None");
+        assert!(direct[4].contains("FleetId(129)"), "{direct:?}");
+        assert_eq!(traffic(&One), direct);
+        assert_eq!(traffic(Rc::new(One)), direct);
     }
 
     #[test]
