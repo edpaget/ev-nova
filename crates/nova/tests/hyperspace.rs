@@ -2,7 +2,9 @@
 //! the renderer and the recording Gpu and driven only by key and mouse
 //! events and redraws, as the window sends them: flight's map, opened with
 //! M, plots a course two jumps long, and J jumps along it. Each day a jump
-//! takes rolls the planetary events on the app's source of chance.
+//! takes rolls the planetary events on the app's source of chance, whether
+//! flight was entered with the developer's F or a pilot flies it, new from
+//! New Pilot or resumed from Open Pilot.
 //!
 //! Play plots courses on the map opened from flight, which has no "Enter
 //! system" button; the Tab side's map keeps it as the developer's viewer
@@ -36,12 +38,15 @@ use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, QuadInstance, Rect};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
+use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight::shortest_turn;
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
-use nova_sim::{Chance, DisasterId, Session, ShipState, SystemId};
+use nova_sim::{Chance, DisasterId, PilotKeeper, PilotStore, Session, ShipState, SystemId};
 use nova_view::flight::view::TOO_CLOSE;
 use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::map::{COURSE_HELP, ENTER_LABEL, ROUTE};
+use nova_view::menu::MenuChoice;
+use nova_view::text::fixture::MonoMetrics;
 use nova_view::{Key, MouseButton, Point};
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
@@ -253,6 +258,61 @@ impl Harness {
         harness.press(Key::Char('f'));
         assert_eq!(harness.showing(), Showing::Flight);
         harness
+    }
+
+    /// The app rolling chances on `chance`, on the main menu, keeping
+    /// pilots in `store`.
+    fn on_the_menu(chance: SharedChance, store: &MemoryPilots) -> Self {
+        let data = data();
+        let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
+        let screen = start_screen(Rc::clone(&data))
+            .with_chance(chance)
+            .with_pilots(Some(keeper), Rc::new(MonoMetrics));
+        let harness = Self {
+            app: App::new(&FakeWindow, data, screen),
+            gpu: RecordingGpu::new(),
+            frames: 0,
+            held: Vec::new(),
+        };
+        assert_eq!(harness.showing(), Showing::MainMenu);
+        harness
+    }
+
+    /// Clicks the main menu's `choice` button.
+    fn choose(&mut self, choice: MenuChoice) {
+        let at = self
+            .app
+            .screen()
+            .main_menu()
+            .expect("a main menu")
+            .button(choice)
+            .rect
+            .center();
+        self.click(at);
+    }
+
+    /// Flies a new pilot named `name`: New Pilot, the name, Return.
+    fn new_pilot(&mut self, name: &str) {
+        self.choose(MenuChoice::NewPilot);
+        assert_eq!(self.showing(), Showing::NewPilot);
+        for c in name.chars() {
+            self.send(WindowEvent::Text(c));
+        }
+        self.press(Key::Enter);
+        assert_eq!(self.showing(), Showing::Flight);
+    }
+
+    /// Plots a course to Beta on flight's map, flies out and jumps there.
+    fn jump_to_beta(&mut self) {
+        self.frame();
+        self.press(Key::Char('m'));
+        let beta = self.on_map(129);
+        self.click(beta);
+        self.press(Key::Char('m'));
+        self.fly_out();
+        self.press(Key::Char('j'));
+        self.run(2);
+        assert_eq!(self.session().system(), SystemId(129));
     }
 
     fn send(&mut self, event: WindowEvent) {
@@ -565,11 +625,17 @@ impl Chance for Always {
     }
 }
 
-#[test]
-fn each_day_of_a_jump_rolls_the_events_on_the_apps_chance() {
+/// The percents asked of an always-firing chance, and that chance, shared.
+fn always() -> (Rc<RefCell<Vec<u8>>>, SharedChance) {
     let asked = Rc::new(RefCell::new(Vec::new()));
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always(Rc::clone(&asked))));
-    let mut harness = Harness::flying_with(SharedChance::new(chance));
+    (asked, SharedChance::new(chance))
+}
+
+#[test]
+fn each_day_of_a_jump_rolls_the_events_on_the_apps_chance() {
+    let (asked, chance) = always();
+    let mut harness = Harness::flying_with(chance);
     harness.frame();
     harness.press(Key::Char('m'));
     let beta = harness.on_map(129);
@@ -583,6 +649,39 @@ fn each_day_of_a_jump_rolls_the_events_on_the_apps_chance() {
     harness.press(Key::Char('j'));
     harness.run(2);
     assert_eq!(harness.session().system(), SystemId(129));
+    assert_eq!(*asked.borrow(), [35], "the surplus, once for the day");
+    assert_eq!(
+        harness.session().pilot().events().collect::<Vec<_>>(),
+        [(DisasterId(128), 30)]
+    );
+}
+
+#[test]
+fn a_new_pilots_jump_rolls_the_events_on_the_apps_chance() {
+    let (asked, chance) = always();
+    let mut harness = Harness::on_the_menu(chance, &MemoryPilots::new());
+    harness.new_pilot("Ada");
+    harness.jump_to_beta();
+    assert_eq!(*asked.borrow(), [35], "the surplus, once for the day");
+    assert_eq!(
+        harness.session().pilot().events().collect::<Vec<_>>(),
+        [(DisasterId(128), 30)]
+    );
+}
+
+#[test]
+fn an_opened_pilots_jump_rolls_the_events_on_the_apps_chance() {
+    let store = MemoryPilots::new();
+    Harness::on_the_menu(SharedChance::default(), &store).new_pilot("Ada");
+    assert_eq!(store.keys(), ["Ada"]);
+    let (asked, chance) = always();
+    let mut harness = Harness::on_the_menu(chance, &store);
+    harness.choose(MenuChoice::OpenPilot);
+    assert_eq!(harness.showing(), Showing::OpenPilot);
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(harness.session().pilot().name(), "Ada");
+    harness.jump_to_beta();
     assert_eq!(*asked.borrow(), [35], "the surplus, once for the day");
     assert_eq!(
         harness.session().pilot().events().collect::<Vec<_>>(),
