@@ -47,7 +47,7 @@
 //!
 //! # Cargo
 //!
-//! A ship carries `|Holds|` tons, plus each default outfit's `ModVal` of
+//! A ship carries `|Holds|` tons, plus each outfit's `ModVal` of
 //! [`MORE_CARGO`] for each one carried. Buying one lot ([`Lot::One`]) is
 //! a ton, and the most ([`Lot::Max`]) is as much as both the free space
 //! and the cash allow; selling one is a ton, and the most everything
@@ -180,8 +180,8 @@ pub fn band_price(base: i64, level: PriceLevel) -> i64 {
     }
 }
 
-/// The cargo space, in tons, of a ship with `holds` and these default
-/// `outfits`; never below none.
+/// The cargo space, in tons, of a ship with `holds` and these `outfits`;
+/// never below none. [`ShipStats`](crate::stats::ShipStats) gives a ship's.
 #[must_use]
 pub fn cargo_capacity(holds: i16, outfits: &[OutfitMod]) -> u32 {
     let pods: i64 = outfits
@@ -197,8 +197,8 @@ pub fn cargo_capacity(holds: i16, outfits: &[OutfitMod]) -> u32 {
 ///
 /// Always true for now: there are no control bits until rdm
 /// `roadmap/missions-and-storylines` builds them, and this is the one
-/// place every `öops` `ActivateOn` and `jünk` `BuyOn`/`SellOn` is tested,
-/// so that roadmap replaces it here.
+/// place every `öops` `ActivateOn`, `jünk` `BuyOn`/`SellOn` and `oütf`
+/// `Availability` is tested, so that roadmap replaces it here.
 #[must_use]
 pub fn control_bits_allow(_expression: &str) -> bool {
     true

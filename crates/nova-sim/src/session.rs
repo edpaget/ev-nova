@@ -26,7 +26,13 @@
 //! over ([`Session::arrive`]) the ship is in the next system, at its edge,
 //! with a jump's fuel used and a day gone by, and the rest of the course
 //! still ahead. In flight, fuel regenerates each tick at the rate the ship
-//! and its default outfits give, read when the session starts.
+//! and its outfits give.
+//!
+//! Everything about how the ship performs (its handling, the most shield,
+//! armour and fuel it holds, its fuel regeneration and its cargo space)
+//! comes from its [`ShipStats`]: its `shïp`'s fields, read when the session
+//! starts, and the outfits the pilot owns. A pilot from a save made
+//! before outfits were kept owns its ship's default items.
 //!
 //! Each day that goes by steps the planetary events (see
 //! [`market`](crate::market)), rolling whether each can start on the
@@ -34,37 +40,59 @@
 //!
 //! Landed at a trade center, the player trades on its exchange
 //! ([`Session::market`], [`Session::trade`]), with the cargo space the ship
-//! and its default outfits give, read when the session starts, as are the
-//! goods traded and the events that move their prices. A trade makes a
-//! save due; a refused one changes nothing.
+//! and its outfits give; the goods traded and the events that move their
+//! prices are read when the session starts. A trade makes a save due; a
+//! refused one changes nothing.
+//!
+//! Landed at an outfitter, the player buys and sells outfits one at a
+//! time ([`Session::outfitter`], [`Session::outfit`]) as the
+//! [`outfitter`] rules say, from the `oütf`s read when
+//! the session starts. Each changes the stats at once: a gauge whose most
+//! rises gains as much (a new tank comes full), and one whose most falls
+//! keeps no more than it can hold. A change makes a save due; a refused
+//! one changes nothing.
 //!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
 //! stopping, landing, taking off, a jump beginning and ending), which the
 //! audio side drains with [`Session::take_sounds`]. A refused landing or
 //! jump emits nothing.
 
-use crate::catalog::{GovtId, LandingSite, PilotCatalog, ShipId, StartError, StellarId, SystemId};
+use std::collections::BTreeMap;
+
+use crate::catalog::{
+    GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, StartError, StellarId,
+    SystemId,
+};
 use crate::chance::Chance;
 use crate::date::GameDate;
 use crate::flight::{Controls, ShipState, step};
-use crate::fuel::{fuel_regen_per_tick, regenerate};
+use crate::fuel::regenerate;
 use crate::geometry::Vec2;
-use crate::handling::Handling;
+use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{
     DAYS_PER_JUMP, JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump,
 };
 use crate::landing::{LandingRefusal, check_landing};
-use crate::market::{self, Goods, Market, Order, TradeRefusal, cargo_capacity};
-use crate::pilot::Pilot;
-use crate::reserves::Reserves;
+use crate::market::{self, Goods, Market, Order, TradeRefusal};
+use crate::outfitter::{self, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods};
+use crate::pilot::{self, Pilot};
+use crate::reserves::{Gauge, Reserves};
 use crate::sound::SimSound;
+use crate::stats::ShipStats;
 
 /// The player's ship, flying in one system.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
     /// The pilot flying: everything a save keeps.
     pilot: Pilot,
-    handling: Handling,
+    /// The ship's fields, read when the session starts.
+    fields: ShipFields,
+    /// The ship's default items, read when the session starts.
+    defaults: BTreeMap<OutfitId, u16>,
+    /// Every `oütf`, read when the session starts.
+    outfits: Vec<OutfitRecord>,
+    /// How the ship performs, with the outfits it carries.
+    stats: ShipStats,
     player: ShipState,
     /// The system's stellars, read when the session starts.
     sites: Vec<LandingSite>,
@@ -74,11 +102,6 @@ pub struct Session {
     star_map: StarMap,
     /// The system being jumped to, while a jump is under way.
     jumping: Option<SystemId>,
-    /// The fuel gained each tick in flight, from the ship and its default
-    /// outfits.
-    fuel_regen: f32,
-    /// The cargo space, in tons, from the ship and its default outfits.
-    capacity: u32,
     /// The goods traded and the events that move their prices, read when
     /// the session starts.
     goods: Goods,
@@ -98,9 +121,11 @@ impl Session {
         Self::fly(catalog, Pilot::new(catalog, "")?)
     }
 
-    /// `pilot`'s session, its ship's handling, its system's stellars, the
-    /// star map and its fuel regeneration read from `catalog`, with the
-    /// system marked explored.
+    /// `pilot`'s session, its ship's fields and default items, the
+    /// outfits, its system's stellars, the star map and the goods read
+    /// from `catalog`, with the system marked explored. A pilot whose ship
+    /// still carries its default items, from an old save, owns them now,
+    /// and the reserves hold no more than the stats allow.
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
     /// silently, as the original resumes a pilot at its last planet.
@@ -130,23 +155,62 @@ impl Session {
         };
         let landed = docked.map(|site| site.id);
         pilot.stellar = landed;
-        // No outfits yet: outfitting will pass the ship's.
-        let outfits = catalog.default_outfits(ship);
-        Ok(Self {
-            handling: Handling::from_fields(fields),
+        let defaults = pilot::default_outfits(catalog, ship);
+        if pilot.default_outfits_pending {
+            pilot.outfits.clone_from(&defaults);
+            pilot.default_outfits_pending = false;
+        }
+        let mut session = Self {
+            fields,
+            defaults,
+            outfits: catalog.outfits(),
+            stats: ShipStats::default(),
             player,
             sites,
             landed,
             star_map: StarMap::new(catalog.star_map()),
             jumping: None,
-            fuel_regen: fuel_regen_per_tick(fields.fuel_regen, &outfits),
-            capacity: cargo_capacity(fields.holds, &outfits),
             goods: Goods::read(catalog),
             thrusting: false,
             sounds: Vec::new(),
             save_due: false,
             pilot,
-        })
+        };
+        session.stats = session.current_stats();
+        let stats = session.stats;
+        let reserves = &mut session.pilot.reserves;
+        for (gauge, max) in [
+            (&mut reserves.shield, stats.shield),
+            (&mut reserves.armor, stats.armor),
+            (&mut reserves.fuel, stats.fuel),
+        ] {
+            gauge.max = max;
+            gauge.now = gauge.now.min(max);
+        }
+        Ok(session)
+    }
+
+    /// The ship's stats with the outfits the pilot owns.
+    fn current_stats(&self) -> ShipStats {
+        ShipStats::new(
+            self.fields,
+            &outfit_mods(&self.pilot.outfits, &self.outfits),
+        )
+    }
+
+    /// Recomputes the stats after the outfits changed: each gauge whose
+    /// most rose gains as much, and each keeps no more than it can hold.
+    fn refit(&mut self) {
+        let stats = self.current_stats();
+        let reserves = &mut self.pilot.reserves;
+        for (gauge, max) in [
+            (&mut reserves.shield, stats.shield),
+            (&mut reserves.armor, stats.armor),
+            (&mut reserves.fuel, stats.fuel),
+        ] {
+            refit(gauge, max);
+        }
+        self.stats = stats;
     }
 
     /// Advances the session one tick under the player's `controls`, then
@@ -162,8 +226,8 @@ impl Session {
                     SimSound::ThrustStopped
                 });
             }
-            step(&mut self.player, &self.handling, controls);
-            regenerate(&mut self.pilot.reserves.fuel, self.fuel_regen);
+            step(&mut self.player, &self.stats.handling, controls);
+            regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
         }
     }
 
@@ -245,7 +309,7 @@ impl Session {
             pilot.course.remove(0);
         }
         let map = |id| self.star_map.position(id).unwrap_or_default();
-        self.player = arrival(map(pilot.system), map(next), &self.handling);
+        self.player = arrival(map(pilot.system), map(next), &self.stats.handling);
         pilot.system = next;
         pilot.stellar = None;
         pilot.explore(next);
@@ -275,7 +339,7 @@ impl Session {
     /// The fuel the ship gains each tick in flight.
     #[must_use]
     pub fn fuel_regen_per_tick(&self) -> f32 {
-        self.fuel_regen
+        self.stats.fuel_regen
     }
 
     /// Lands the ship on the stellar it is over, if it is not jumping and
@@ -314,8 +378,9 @@ impl Session {
     /// Changes the pilot with `change`, while the ship is landed (in the
     /// spaceport), and says whether it did: in flight nothing changes and
     /// `change` is not called. A save is due after a change. `change` must
-    /// not change the ship class: the session's handling and fuel
-    /// regeneration stay as they were read.
+    /// not change the ship class, whose fields the session read when it
+    /// started, nor the outfits, which only [`Session::outfit`] changes, so
+    /// the stats follow.
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
         if self.landed.is_none() {
             return false;
@@ -331,7 +396,13 @@ impl Session {
     pub fn market(&self) -> Option<Market> {
         let stellar = self.landed?;
         let site = self.sites.iter().find(|site| site.id == stellar)?;
-        market::market(&self.goods, stellar, site.flags, &self.pilot, self.capacity)
+        market::market(
+            &self.goods,
+            stellar,
+            site.flags,
+            &self.pilot,
+            self.stats.capacity,
+        )
     }
 
     /// Trades on the exchange as `order` asks, and gives the tons moved: a
@@ -346,10 +417,50 @@ impl Session {
         Ok(tons)
     }
 
+    /// The outfitter of the stellar the ship is docked at, if it has
+    /// landed at one.
+    #[must_use]
+    pub fn outfitter(&self) -> Option<Outfitter> {
+        let stellar = self.landed?;
+        let site = self.sites.iter().find(|site| site.id == stellar)?;
+        Shop {
+            records: &self.outfits,
+            fields: self.fields,
+            defaults: &self.defaults,
+            site,
+        }
+        .outfitter(&self.pilot)
+    }
+
+    /// Buys or sells one outfit as `order` asks: a change made in the
+    /// spaceport, so a save is due, and the stats change with it. When the
+    /// ship is not landed at an outfitter, or the order is refused,
+    /// nothing changes and the refusal says why.
+    pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
+        let outfitter = self.outfitter().ok_or(OutfitRefusal::NoOutfitter)?;
+        outfitter.check(order)?;
+        let price = outfitter.row(order.outfit).map_or(0, |row| row.price);
+        let record = self
+            .outfits
+            .iter()
+            .find(|record| record.id == order.outfit)
+            .cloned()
+            .ok_or(OutfitRefusal::NotListed)?;
+        self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, price));
+        self.refit();
+        Ok(())
+    }
+
     /// The ship's cargo space, in tons.
     #[must_use]
     pub fn capacity(&self) -> u32 {
-        self.capacity
+        self.stats.capacity
+    }
+
+    /// How the ship performs, with the outfits it carries.
+    #[must_use]
+    pub fn stats(&self) -> ShipStats {
+        self.stats
     }
 
     /// Whether the pilot should be saved: it has landed, taken off or
@@ -405,7 +516,7 @@ impl Session {
     /// How the player's ship flies.
     #[must_use]
     pub fn handling(&self) -> Handling {
-        self.handling
+        self.stats.handling
     }
 
     /// The government the player belongs to, if any. Always `None`: a new
@@ -418,6 +529,16 @@ impl Session {
     }
 }
 
+/// Sets `gauge` to hold up to `max`: when that is more than it held, it
+/// gains the difference; it never keeps more than it can hold.
+fn refit(gauge: &mut Gauge, max: f32) {
+    if max > gauge.max {
+        gauge.now += max - gauge.max;
+    }
+    gauge.max = max;
+    gauge.now = gauge.now.min(max);
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -426,7 +547,7 @@ mod tests {
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
     use crate::chance::NeverFires;
     use crate::flight::Turn;
-    use crate::fuel::{FUEL_SCOOP, OutfitMod};
+    use crate::fuel::FUEL_SCOOP;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
     use crate::hyperspace::{JumpRefusal, RouteError, StarMap};
@@ -436,7 +557,7 @@ mod tests {
     use crate::reserves::{Gauge, Reserves};
     use crate::testkit::{
         FAST, FakePilotCatalog, START, Scripted, catalog, edge_lander, fly_out, jump, jump_with,
-        planet, starting,
+        outfit, planet, starting,
     };
 
     #[test]
@@ -445,7 +566,10 @@ mod tests {
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.ship(), ShipId(128));
         assert_eq!(session.system(), SystemId(130));
-        assert_eq!(session.handling(), Handling::from_fields(FAST));
+        assert_eq!(
+            session.handling(),
+            crate::stats::ShipStats::new(FAST, &[]).handling
+        );
         let asked = catalog.ships_asked.borrow();
         assert!(
             !asked.is_empty() && asked.iter().all(|&ship| ship == ShipId(128)),
@@ -933,29 +1057,31 @@ mod tests {
     fn the_ships_default_outfits_add_to_its_fuel_regeneration() {
         // A unit every 8 ticks from the ship, and two scoops each giving a
         // unit every 4 ticks; a mod of another type gives nothing.
-        let scoops = OutfitMod {
-            mod_type: FUEL_SCOOP,
-            mod_val: 4,
-            count: 2,
-        };
-        let other = OutfitMod {
-            mod_type: 1,
-            mod_val: 1,
-            count: 1,
-        };
         let catalog = FakePilotCatalog {
-            outfits: vec![(ShipId(128), vec![scoops, other])],
+            defaults: vec![(ShipId(128), vec![(OutfitId(200), 2), (OutfitId(201), 1)])],
+            outfits: vec![outfit(200, &[(FUEL_SCOOP, 4)]), outfit(201, &[(1, 1)])],
             ..regenerating(8)
         };
         let mut session = Session::start(&catalog).expect("starts");
-        assert_eq!(*catalog.outfits_asked.borrow(), [ShipId(128)]);
+        let read = (
+            catalog.defaults_asked.borrow().clone(),
+            *catalog.outfit_reads.borrow(),
+        );
+        assert!(read.0.iter().all(|&ship| ship == ShipId(128)), "{read:?}");
         assert_eq!(session.fuel_regen_per_tick(), 0.125 + 0.5);
         jump(&mut session, &catalog, 131);
         for _ in 0..8 {
             session.tick(Controls::default());
         }
         assert_eq!(session.reserves().fuel.now, 205.0);
-        assert_eq!(*catalog.outfits_asked.borrow(), [ShipId(128)], "once");
+        assert_eq!(
+            (
+                catalog.defaults_asked.borrow().clone(),
+                *catalog.outfit_reads.borrow()
+            ),
+            read,
+            "read only when it starts"
+        );
     }
 
     /// A session landed on planet 140 at 131's edge, far enough out to
@@ -1419,19 +1545,14 @@ mod tests {
     fn the_cargo_space_is_the_ships_holds_and_its_cargo_pods() {
         let session = Session::start(&exchange()).expect("starts");
         assert_eq!(session.capacity(), 20);
-        let pods = OutfitMod {
-            mod_type: crate::market::MORE_CARGO,
-            mod_val: 5,
-            count: 2,
-        };
         let catalog = FakePilotCatalog {
             ships: vec![(ShipId(128), Ok(ShipFields { holds: -3, ..FAST }))],
-            outfits: vec![(ShipId(128), vec![pods])],
+            defaults: vec![(ShipId(128), vec![(OutfitId(200), 2)])],
+            outfits: vec![outfit(200, &[(crate::market::MORE_CARGO, 5)])],
             ..exchange()
         };
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.capacity(), 13);
-        assert_eq!(*catalog.outfits_asked.borrow(), [ShipId(128)], "once");
     }
 
     #[test]
@@ -1671,5 +1792,405 @@ mod tests {
             Ok(6)
         );
         assert_eq!(resumed.pilot().cash(), 1000);
+    }
+
+    // The outfitter.
+
+    use crate::catalog::{GovtId, OutfitRecord};
+    use crate::outfitter::{OutfitFlags, OutfitOrder, OutfitRefusal};
+    use crate::stats::{MORE_FUEL, MORE_SHIELD, MORE_SPEED};
+
+    const SPEED: OutfitId = OutfitId(300);
+    const CARGO: OutfitId = OutfitId(301);
+    const SHIELD: OutfitId = OutfitId(302);
+    const TANK: OutfitId = OutfitId(303);
+    const SCOOP: OutfitId = OutfitId(304);
+
+    /// Planet 128 at the centre, which the ship starts over: an outfitter
+    /// of tech level 5, of government 128, and a trade center as
+    /// [`TRADES`] says.
+    fn outfitter_site() -> LandingSite {
+        LandingSite {
+            flags: TRADES | StellarFlags::OUTFITTER,
+            tech_level: 5,
+            govt: Some(GovtId(128)),
+            ..planet(128, 0.0, 0.0)
+        }
+    }
+
+    /// The catalog with planet 128 an outfitter selling a speed booster
+    /// (+300), a cargo pod (+10 tons), a shield (+50), a fuel tank (+100)
+    /// and a fuel scoop (a unit every 10 ticks), each a ton and 1000
+    /// credits; the first `chär` holds 25,000 credits.
+    fn outfitting() -> FakePilotCatalog {
+        FakePilotCatalog {
+            character: Ok(CharacterStart {
+                cash: 25_000,
+                ..exchange().character.expect("a chär")
+            }),
+            sites: vec![(SystemId(130), vec![outfitter_site()])],
+            commodities: food_and_metal(),
+            outfits: vec![
+                outfit(300, &[(MORE_SPEED, 300)]),
+                outfit(301, &[(crate::market::MORE_CARGO, 10)]),
+                outfit(302, &[(MORE_SHIELD, 50)]),
+                outfit(303, &[(MORE_FUEL, 100)]),
+                outfit(304, &[(FUEL_SCOOP, 10)]),
+            ],
+            ..catalog()
+        }
+    }
+
+    fn buy(outfit: OutfitId) -> OutfitOrder {
+        OutfitOrder {
+            outfit,
+            direction: Direction::Buy,
+        }
+    }
+
+    fn sell(outfit: OutfitId) -> OutfitOrder {
+        OutfitOrder {
+            outfit,
+            direction: Direction::Sell,
+        }
+    }
+
+    fn outfitted(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.land().expect("lands");
+        session.take_save_due();
+        session
+    }
+
+    #[test]
+    fn there_is_an_outfitter_only_while_landed_at_one() {
+        let catalog = outfitting();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.outfitter(), None, "in flight");
+        assert_eq!(session.outfit(buy(SPEED)), Err(OutfitRefusal::NoOutfitter));
+        session.land().expect("lands");
+        let outfitter = session.outfitter().expect("an outfitter");
+        assert_eq!(outfitter.rows.len(), 5);
+        assert_eq!((outfitter.cash, outfitter.free_mass), (25_000, 30));
+        let plain = FakePilotCatalog {
+            sites: vec![(
+                SystemId(130),
+                vec![LandingSite {
+                    flags: TRADES,
+                    ..outfitter_site()
+                }],
+            )],
+            ..outfitting()
+        };
+        let mut session = outfitted(&plain);
+        assert_eq!(session.outfitter(), None, "no outfitter here");
+        assert_eq!(session.outfit(buy(SPEED)), Err(OutfitRefusal::NoOutfitter));
+    }
+
+    #[test]
+    fn a_session_reads_the_outfits_once_when_it_starts() {
+        let catalog = outfitting();
+        let mut session = outfitted(&catalog);
+        let reads = *catalog.outfit_reads.borrow();
+        session.outfit(buy(SPEED)).expect("bought");
+        session.outfitter().expect("an outfitter");
+        session.take_off();
+        jump(&mut session, &catalog, 131);
+        assert_eq!(*catalog.outfit_reads.borrow(), reads);
+    }
+
+    #[test]
+    fn a_speed_booster_raises_the_top_speed_and_selling_it_lowers_it_again() {
+        let mut session = outfitted(&outfitting());
+        let before = session.handling();
+        assert_eq!(session.outfit(buy(SPEED)), Ok(()));
+        assert_eq!(session.handling().max_speed, before.max_speed + 3.0);
+        assert_eq!(session.handling().accel, before.accel);
+        assert_eq!(session.pilot().owned(SPEED), 1);
+        assert_eq!(session.pilot().cash(), 24_000);
+        assert_eq!(session.outfit(sell(SPEED)), Ok(()));
+        assert_eq!(session.handling(), before);
+        assert_eq!(session.pilot().cash(), 24_500, "sold for half");
+    }
+
+    #[test]
+    fn a_cargo_pod_adds_space_to_the_exchange_too() {
+        let mut session = outfitted(&outfitting());
+        assert_eq!(session.capacity(), 20);
+        session.outfit(buy(CARGO)).expect("bought");
+        assert_eq!(session.capacity(), 30);
+        assert_eq!(session.market().expect("an exchange").free, 30);
+        session.outfit(sell(CARGO)).expect("sold");
+        assert_eq!(session.capacity(), 20);
+    }
+
+    #[test]
+    fn selling_space_below_the_cargo_held_is_allowed_and_none_is_free() {
+        let mut session = outfitted(&outfitting());
+        session.outfit(buy(CARGO)).expect("bought");
+        let food = order(FOOD, Direction::Buy, Lot::Max);
+        assert_eq!(session.trade(food), Ok(30));
+        assert_eq!(session.outfit(sell(CARGO)), Ok(()));
+        let market = session.market().expect("an exchange");
+        assert_eq!((market.capacity, market.free), (20, 0));
+        assert_eq!(session.pilot().held(FOOD), 30);
+    }
+
+    #[test]
+    fn a_shield_or_tank_comes_full_and_selling_it_keeps_no_more_than_fits() {
+        let mut session = outfitted(&outfitting());
+        session.pilot.reserves.fuel.now = 200.0;
+        session.pilot.reserves.shield.now = 10.0;
+        session.outfit(buy(TANK)).expect("bought");
+        assert_eq!(
+            session.reserves().fuel,
+            Gauge {
+                now: 300.0,
+                max: 400.0
+            }
+        );
+        session.outfit(buy(SHIELD)).expect("bought");
+        assert_eq!(
+            session.reserves().shield,
+            Gauge {
+                now: 60.0,
+                max: 80.0
+            }
+        );
+        assert_eq!(session.reserves().armor, Gauge::full(45.0), "unchanged");
+        session.outfit(sell(TANK)).expect("sold");
+        assert_eq!(
+            session.reserves().fuel,
+            Gauge {
+                now: 300.0,
+                max: 300.0
+            }
+        );
+        session.outfit(sell(SHIELD)).expect("sold");
+        assert_eq!(
+            session.reserves().shield,
+            Gauge {
+                now: 30.0,
+                max: 30.0
+            }
+        );
+        session.pilot.reserves.fuel.now = 50.0;
+        session.outfit(buy(TANK)).expect("bought");
+        session.outfit(sell(TANK)).expect("sold");
+        assert_eq!(
+            session.reserves().fuel,
+            Gauge {
+                now: 150.0,
+                max: 300.0
+            }
+        );
+    }
+
+    #[test]
+    fn a_fuel_scoop_adds_to_the_regeneration_and_selling_it_takes_it_away() {
+        let mut session = outfitted(&outfitting());
+        assert_eq!(session.fuel_regen_per_tick(), 0.0);
+        session.outfit(buy(SCOOP)).expect("bought");
+        assert_eq!(session.fuel_regen_per_tick(), 0.1);
+        assert_eq!(session.stats().fuel_regen, 0.1);
+        session.outfit(sell(SCOOP)).expect("sold");
+        assert_eq!(session.fuel_regen_per_tick(), 0.0);
+    }
+
+    #[test]
+    fn an_outfit_bought_or_sold_makes_a_save_due_and_a_refused_one_changes_nothing() {
+        let mut session = outfitted(&outfitting());
+        let before = session.clone();
+        assert_eq!(session.outfit(sell(SPEED)), Err(OutfitRefusal::NoneOwned));
+        assert_eq!(
+            session.outfit(buy(OutfitId(999))),
+            Err(OutfitRefusal::NotListed)
+        );
+        assert_eq!(session, before);
+        assert!(!session.take_save_due());
+        session.outfit(buy(SPEED)).expect("bought");
+        assert!(session.take_save_due());
+        session.outfit(sell(SPEED)).expect("sold");
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn buying_is_refused_by_cash_free_mass_or_max() {
+        let heavy = OutfitRecord {
+            mass: 20,
+            max: 3,
+            ..outfit(305, &[])
+        };
+        let dear = OutfitRecord {
+            cost: 30_000,
+            ..outfit(306, &[])
+        };
+        let catalog = FakePilotCatalog {
+            outfits: vec![heavy, dear],
+            ..outfitting()
+        };
+        let mut session = outfitted(&catalog);
+        assert_eq!(
+            session.outfit(buy(OutfitId(306))),
+            Err(OutfitRefusal::CannotAfford)
+        );
+        assert_eq!(session.outfit(buy(OutfitId(305))), Ok(()));
+        let before = session.clone();
+        assert_eq!(
+            session.outfit(buy(OutfitId(305))),
+            Err(OutfitRefusal::NoSpace)
+        );
+        assert_eq!(session, before);
+        let roomy = FakePilotCatalog {
+            ships: vec![(
+                ShipId(128),
+                Ok(ShipFields {
+                    free_mass: 100,
+                    ..FAST
+                }),
+            )],
+            ..catalog
+        };
+        let mut session = outfitted(&roomy);
+        for _ in 0..3 {
+            session.outfit(buy(OutfitId(305))).expect("bought");
+        }
+        assert_eq!(
+            session.outfit(buy(OutfitId(305))),
+            Err(OutfitRefusal::MaxOwned)
+        );
+        assert_eq!(session.pilot().owned(OutfitId(305)), 3);
+    }
+
+    #[test]
+    fn an_owned_outfit_that_sells_anywhere_sells_where_it_is_not_for_sale() {
+        let map = OutfitRecord {
+            tech_level: 9,
+            cost: 4001,
+            flags: OutfitFlags::SELL_ANYWHERE,
+            ..outfit(310, &[])
+        };
+        let catalog = FakePilotCatalog {
+            defaults: vec![(ShipId(128), vec![(OutfitId(310), 2)])],
+            outfits: vec![map],
+            ..outfitting()
+        };
+        let mut session = outfitted(&catalog);
+        let outfitter = session.outfitter().expect("an outfitter");
+        let row = outfitter.row(OutfitId(310)).expect("listed, sell-only");
+        assert_eq!(row.buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(row.sell, Ok(()));
+        assert_eq!(session.outfit(sell(OutfitId(310))), Ok(()));
+        assert_eq!(session.pilot().owned(OutfitId(310)), 1);
+        assert_eq!(session.pilot().cash(), 25_000 + 2000);
+    }
+
+    #[test]
+    fn a_new_pilots_default_items_are_owned_and_its_reserves_full_with_them() {
+        let catalog = FakePilotCatalog {
+            defaults: vec![(ShipId(128), vec![(TANK, 1), (SHIELD, 2)])],
+            ..outfitting()
+        };
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            session.pilot().outfits().collect::<Vec<_>>(),
+            [(SHIELD, 2), (TANK, 1)]
+        );
+        assert_eq!(
+            session.reserves(),
+            Reserves {
+                shield: Gauge::full(130.0),
+                armor: Gauge::full(45.0),
+                fuel: Gauge::full(400.0),
+            }
+        );
+        let outfitter = outfitted(&catalog).outfitter().expect("an outfitter");
+        assert_eq!(outfitter.free_mass, 30, "free mass is on top of them");
+    }
+
+    #[test]
+    fn flying_a_pilot_with_outfits_gives_their_stats() {
+        let catalog = outfitting();
+        let mut session = outfitted(&catalog);
+        session.outfit(buy(SPEED)).expect("bought");
+        session.outfit(buy(TANK)).expect("bought");
+        let text = crate::save::encode(session.pilot());
+        let pilot = crate::save::decode(&text).expect("a pilot");
+        let resumed = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(resumed.stats(), session.stats());
+        assert_eq!(resumed.reserves(), session.reserves());
+        assert_eq!(resumed.pilot().owned(SPEED), 1);
+    }
+
+    #[test]
+    fn flying_a_pilot_from_before_outfits_gives_it_the_ships_default_items() {
+        let catalog = FakePilotCatalog {
+            defaults: vec![(ShipId(128), vec![(TANK, 1), (SCOOP, 1)])],
+            ..outfitting()
+        };
+        let mut pilot = Pilot::new(&catalog, "Old").expect("starts");
+        pilot.outfits.clear();
+        pilot.default_outfits_pending = true;
+        pilot.reserves = Reserves::full(30.0, 45.0, 300.0);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(
+            session.pilot().outfits().collect::<Vec<_>>(),
+            [(TANK, 1), (SCOOP, 1)]
+        );
+        assert!(!session.pilot().default_outfits_pending);
+        assert_eq!(session.fuel_regen_per_tick(), 0.1);
+        assert_eq!(
+            session.reserves().fuel,
+            Gauge {
+                now: 300.0,
+                max: 400.0
+            },
+            "as saved, with room for more"
+        );
+        assert!(!session.take_save_due());
+        let saved: serde_json::Value =
+            serde_json::from_str(&crate::save::encode(session.pilot())).expect("JSON");
+        assert_eq!(
+            saved["outfits"],
+            serde_json::json!([{"outfit": 303, "count": 1}, {"outfit": 304, "count": 1}])
+        );
+    }
+
+    #[test]
+    fn flying_a_pilot_keeps_no_more_in_its_reserves_than_its_stats_hold() {
+        let catalog = outfitting();
+        let mut pilot = Pilot::new(&catalog, "").expect("starts");
+        pilot.reserves = Reserves {
+            shield: Gauge {
+                now: 90.0,
+                max: 100.0,
+            },
+            armor: Gauge {
+                now: 20.0,
+                max: 45.0,
+            },
+            fuel: Gauge {
+                now: 350.0,
+                max: 500.0,
+            },
+        };
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(
+            session.reserves(),
+            Reserves {
+                shield: Gauge {
+                    now: 30.0,
+                    max: 30.0
+                },
+                armor: Gauge {
+                    now: 20.0,
+                    max: 45.0
+                },
+                fuel: Gauge {
+                    now: 300.0,
+                    max: 300.0
+                },
+            }
+        );
     }
 }

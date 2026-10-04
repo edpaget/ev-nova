@@ -15,23 +15,30 @@
 //! - Version 3: adds the cargo held and the planetary events under way,
 //!   none in an older save. A good or event whose record no longer
 //!   exists is kept as saved.
+//! - Version 4: adds the outfits the ship carries. An older save's ship
+//!   carried its class's default items, which only the game data knows,
+//!   so the upgrade saves them as `null`, "the ship's default items", and
+//!   flying the pilot reads them ([`Session::fly`](crate::Session::fly));
+//!   the next save lists them. An outfit whose record no longer exists is
+//!   kept as saved.
 //!
 //! IDs are saved as their raw numbers, the date as its year, month and
 //! day, each reserve as how much the ship has and can hold, each good held
 //! as its kind (`commodity` with its number, or `junk` with its ID) and
-//! tons, and each event as its `öops` ID and days left.
+//! tons, each event as its `öops` ID and days left, and each outfit as its
+//! `oütf` ID and how many.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::catalog::{DisasterId, GovtId, JunkId, ShipId, StellarId, SystemId};
+use crate::catalog::{DisasterId, GovtId, JunkId, OutfitId, ShipId, StellarId, SystemId};
 use crate::date::GameDate;
 use crate::market::Good;
 use crate::pilot::Pilot;
 use crate::reserves::{Gauge, Reserves};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 3;
+pub const CURRENT: u64 = 4;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -123,6 +130,13 @@ struct SavedEvent {
     days: u16,
 }
 
+/// An outfit carried, and how many.
+#[derive(Serialize, Deserialize)]
+struct SavedOutfit {
+    outfit: i16,
+    count: u16,
+}
+
 /// The current version's save. No field has a default: a missing one is
 /// an error.
 #[derive(Serialize, Deserialize)]
@@ -142,6 +156,9 @@ struct Saved {
     legal: Vec<SavedRecord>,
     cargo: Vec<SavedCargo>,
     events: Vec<SavedEvent>,
+    /// `None` for the ship's default items, not yet read.
+    #[serde(deserialize_with = "Option::deserialize")]
+    outfits: Option<Vec<SavedOutfit>>,
 }
 
 /// `pilot` as the current version's save: pretty JSON.
@@ -193,13 +210,24 @@ pub fn encode(pilot: &Pilot) -> String {
                 days,
             })
             .collect(),
+        outfits: (!pilot.default_outfits_pending).then(|| {
+            pilot
+                .outfits
+                .iter()
+                .map(|(id, &count)| SavedOutfit {
+                    outfit: id.0,
+                    count,
+                })
+                .collect()
+        }),
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
 
 /// The upgrade from each version to the next: `UPGRADES[n - 1]` takes a
 /// version `n` save to version `n + 1`.
-const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [explored_and_legal, cargo_and_events];
+const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] =
+    [explored_and_legal, cargo_and_events, default_outfits];
 
 /// Version 1 to 2: nothing explored, and no legal records.
 fn explored_and_legal(save: &mut Value) {
@@ -209,6 +237,13 @@ fn explored_and_legal(save: &mut Value) {
 /// Version 2 to 3: no cargo, and no events under way.
 fn cargo_and_events(save: &mut Value) {
     add_empty(save, &["cargo", "events"]);
+}
+
+/// Version 3 to 4: the ship's default items, not yet read.
+fn default_outfits(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("outfits".to_owned(), Value::Null);
+    }
 }
 
 /// Adds each of `fields` to `save` as an empty list.
@@ -285,6 +320,13 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
             .into_iter()
             .map(|saved| (DisasterId(saved.disaster), saved.days))
             .collect(),
+        default_outfits_pending: saved.outfits.is_none(),
+        outfits: saved
+            .outfits
+            .unwrap_or_default()
+            .into_iter()
+            .map(|saved| (OutfitId(saved.outfit), saved.count))
+            .collect(),
     })
 }
 
@@ -294,7 +336,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use crate::catalog::{DisasterId, GovtId, JunkId, ShipId, StellarId, SystemId};
+    use crate::catalog::{DisasterId, GovtId, JunkId, OutfitId, ShipId, StellarId, SystemId};
     use crate::date::GameDate;
     use crate::market::Good;
     use crate::reserves::{Gauge, Reserves};
@@ -327,6 +369,8 @@ mod tests {
             legal: BTreeMap::from([(GovtId(128), -40), (GovtId(129), 300)]),
             cargo: BTreeMap::from([(Good::Commodity(2), 7), (Good::Junk(JunkId(146)), 2)]),
             events: BTreeMap::from([(DisasterId(128), 12), (DisasterId(130), 1)]),
+            outfits: BTreeMap::from([(OutfitId(256), 3), (OutfitId(128), 1)]),
+            default_outfits_pending: false,
         }
     }
 
@@ -345,6 +389,7 @@ mod tests {
             legal: BTreeMap::new(),
             cargo: BTreeMap::new(),
             events: BTreeMap::new(),
+            outfits: BTreeMap::new(),
             cash: -5,
             ..seasoned()
         };
@@ -356,7 +401,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 3);
+        assert_eq!(CURRENT, 4);
         assert_eq!(value["name"], "Ada Lovelace");
         assert_eq!(value["ship"], 140);
         assert_eq!(value["stellar"], 150);
@@ -381,7 +426,11 @@ mod tests {
             value["events"],
             serde_json::json!([{"disaster": 128, "days": 12}, {"disaster": 130, "days": 1}])
         );
-        assert!(text.contains("\n  \"version\": 3"), "{text}");
+        assert_eq!(
+            value["outfits"],
+            serde_json::json!([{"outfit": 128, "count": 1}, {"outfit": 256, "count": 3}])
+        );
+        assert!(text.contains("\n  \"version\": 4"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -455,14 +504,71 @@ mod tests {
         assert_eq!((old.cargo().count(), old.events().count()), (0, 0));
     }
 
+    /// A version 3 save: before outfits.
+    const VERSION_3: &str = r#"{
+        "version": 3,
+        "name": "Hauler",
+        "ship": 128,
+        "system": 130,
+        "stellar": null,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 300,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [130],
+        "legal": [],
+        "cargo": [{"good": {"commodity": 0}, "tons": 4}],
+        "events": []
+    }"#;
+
+    #[test]
+    fn an_older_save_loads_with_the_ships_default_items_pending() {
+        for text in [VERSION_3, VERSION_2, VERSION_1] {
+            let pilot = decode(text).expect("loads");
+            assert!(pilot.default_outfits_pending, "{text}");
+            assert_eq!(pilot.outfits().count(), 0, "{text}");
+        }
+        let pilot = decode(VERSION_3).expect("loads");
+        assert_eq!(pilot.held(Good::Commodity(0)), 4);
+        // Saved again before it flies, it still says so.
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], 4);
+        assert_eq!(value["outfits"], serde_json::Value::Null);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
+    #[test]
+    fn a_current_save_lists_its_outfits_even_when_none() {
+        assert!(!seasoned().default_outfits_pending);
+        let bare = Pilot {
+            outfits: BTreeMap::new(),
+            ..seasoned()
+        };
+        let value: serde_json::Value = serde_json::from_str(&encode(&bare)).expect("JSON");
+        assert_eq!(value["outfits"], serde_json::json!([]));
+        let decoded = decode(&encode(&bare)).expect("loads");
+        assert!(!decoded.default_outfits_pending);
+    }
+
+    #[test]
+    fn a_saved_outfit_whose_record_is_gone_is_kept() {
+        let mut pilot = seasoned();
+        pilot.outfits.insert(OutfitId(-3), 9);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 3", "\"version\": 4");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 4 }));
+        let newer = encode(&seasoned()).replace("\"version\": 4", "\"version\": 5");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 5 }));
         assert_eq!(
-            SaveError::Newer { version: 4 }.to_string(),
+            SaveError::Newer { version: 5 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 4, and this version of Nova reads up to 3)."
+             (it is version 5, and this version of Nova reads up to 4)."
         );
     }
 

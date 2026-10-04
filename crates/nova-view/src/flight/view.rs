@@ -16,7 +16,9 @@
 //! Each day a jump takes rolls the planetary events on the screen's
 //! [`SharedChance`] ([`FlightView::with_chance`]); without one, nothing
 //! random happens. Landed at a trade center, the session's exchange can be
-//! read ([`FlightView::market`]) and traded on ([`FlightView::trade`]).
+//! read ([`FlightView::market`]) and traded on ([`FlightView::trade`]);
+//! landed at an outfitter, so can its outfitter ([`FlightView::outfitter`],
+//! [`FlightView::outfit`]).
 //!
 //! The HUD is drawn last, over everything: the status bar against the
 //! right edge, its radar showing the stellars around the ship as drawn,
@@ -66,9 +68,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Chance, Controls, FixedStep, JumpRefusal, LandingRefusal, Market, NeverFires, Order, Pilot,
-    PilotCatalog, Reserves, Session, ShipState, StartError, StellarId, Steps, TradeRefusal, Turn,
-    flight::normalized, flight::shortest_turn,
+    Chance, Controls, FixedStep, JumpRefusal, LandingRefusal, Market, NeverFires, Order,
+    OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, Reserves, Session, ShipState,
+    StartError, StellarId, Steps, TradeRefusal, Turn, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -470,6 +472,22 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// The outfitter of the stellar landed on, as [`Session::outfitter`]
+    /// gives it; none for a session that failed.
+    #[must_use]
+    pub fn outfitter(&self) -> Option<Outfitter> {
+        self.session.as_ref().ok()?.outfitter()
+    }
+
+    /// Buys or sells an outfit as [`Session::outfit`] does; a session that
+    /// failed has no outfitter.
+    pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
+        match &mut self.session {
+            Ok(session) => session.outfit(order),
+            Err(_) => Err(OutfitRefusal::NoOutfitter),
+        }
+    }
+
     /// Whether the pilot should be saved, as [`Session::take_save_due`]
     /// says; taking it clears it.
     pub fn take_save_due(&mut self) -> bool {
@@ -747,8 +765,8 @@ mod tests {
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
         CharacterStart, CommodityStrings, DisasterRecord, Handling, JunkRecord, LandingSite,
-        OutfitMod, Reserves, ShipFields, ShipId, SimSound, SoundId, StarSystem, StartDate,
-        StartError, SystemId, TICK, Vec2, step,
+        OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipStats, SimSound, SoundId,
+        StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
     };
 
     use super::*;
@@ -783,6 +801,8 @@ mod tests {
         commodities: CommodityStrings,
         /// The planetary events: none, by default.
         disasters: Vec<DisasterRecord>,
+        /// The outfits: none, by default.
+        outfits: Vec<OutfitRecord>,
     }
 
     type View = FlightView<FakeCatalog>;
@@ -796,6 +816,9 @@ mod tests {
         fuel: 250,
         fuel_regen: 0,
         holds: 0,
+        mass: 15,
+        free_mass: 8,
+        contribute: 1,
     };
 
     fn sheet() -> ShipSheet {
@@ -825,6 +848,7 @@ mod tests {
             systems_read: RefCell::default(),
             commodities: CommodityStrings::default(),
             disasters: Vec::new(),
+            outfits: Vec::new(),
         }
     }
 
@@ -837,6 +861,9 @@ mod tests {
             flags,
             min_status: 0,
             landing_sound: None,
+            tech_level: 1,
+            special_tech: [0; 8],
+            govt: None,
         }
     }
 
@@ -876,9 +903,13 @@ mod tests {
             Ok(self.fields)
         }
 
-        fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+        fn default_outfits(&self, id: ShipId) -> Vec<(OutfitId, u16)> {
             assert_eq!(id, ShipId(128));
             Vec::new()
+        }
+
+        fn outfits(&self) -> Vec<OutfitRecord> {
+            self.outfits.clone()
         }
 
         fn system_exists(&self, id: SystemId) -> bool {
@@ -1038,7 +1069,7 @@ mod tests {
     }
 
     fn handling() -> Handling {
-        Handling::from_fields(FIELDS)
+        ShipStats::new(FIELDS, &[]).handling
     }
 
     /// The ship as it starts: at rest at the centre, facing up.
@@ -1393,7 +1424,7 @@ mod tests {
             &HudState {
                 position: at(0.0, 0.0),
                 stellars: &[at(0.0, -600.0), at(300.0, -200.0)],
-                reserves: Reserves::from_fields(FIELDS),
+                reserves: ShipStats::new(FIELDS, &[]).full(),
                 system: "Sol",
             },
         );
@@ -1572,7 +1603,7 @@ mod tests {
     fn the_bars_show_the_sessions_reserves() {
         let view = flight();
         let reserves = reserves(&view);
-        assert_eq!(reserves, Reserves::from_fields(FIELDS));
+        assert_eq!(reserves, ShipStats::new(FIELDS, &[]).full());
         let mut expected = DrawList::new();
         hud::draw(
             &mut expected,
@@ -2610,6 +2641,76 @@ mod tests {
         let mut broken = FlightView::new(broken);
         assert_eq!(broken.market(), None);
         assert_eq!(broken.trade(BUY_FOOD), Err(TradeRefusal::NoMarket));
+    }
+
+    use nova_sim::{OutfitOrder, OutfitRefusal};
+
+    /// Earth at the centre, an outfitter selling a fuel tank (+100 fuel,
+    /// a ton, 1000 credits), the first `chär` holding 1000 credits.
+    fn outfitting() -> FakeCatalog {
+        FakeCatalog {
+            character: Ok(CharacterStart {
+                cash: 1000,
+                ..catalog().character.expect("a chär")
+            }),
+            sites: vec![site(
+                128,
+                (0.0, 0.0),
+                StellarFlags::CAN_LAND | StellarFlags::OUTFITTER,
+            )],
+            outfits: vec![OutfitRecord {
+                id: OutfitId(200),
+                name: "Fuel Tank".to_owned(),
+                short_name: "Fuel Tank".to_owned(),
+                disp_weight: 0,
+                mass: 1,
+                tech_level: 1,
+                max: 5,
+                flags: 0,
+                cost: 1000,
+                mods: [(12, 100), (0, 0), (0, 0), (0, 0)],
+                contribute: 0,
+                require: 0,
+                require_govt: -1,
+                availability: String::new(),
+            }],
+            ..catalog()
+        }
+    }
+
+    const BUY_TANK: OutfitOrder = OutfitOrder {
+        outfit: OutfitId(200),
+        direction: Direction::Buy,
+    };
+
+    #[test]
+    fn the_outfitter_is_the_sessions_and_an_order_goes_through_it() {
+        let mut view = FlightView::new(outfitting());
+        assert_eq!(view.outfitter(), None, "in flight");
+        assert_eq!(view.outfit(BUY_TANK), Err(OutfitRefusal::NoOutfitter));
+        tap(&mut view, LAND_KEY);
+        view.take_save_due();
+        let outfitter = view.outfitter().expect("landed at an outfitter");
+        assert_eq!(
+            outfitter.row(OutfitId(200)).map(|row| row.price),
+            Some(1000)
+        );
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert_eq!(view.pilot().map(Pilot::cash), Some(0));
+        assert!(view.take_save_due(), "a purchase");
+        assert_eq!(
+            view.outfitter()
+                .and_then(|o| o.row(OutfitId(200)).map(|row| row.owned)),
+            Some(1)
+        );
+        assert_eq!(view.reserves().fuel.max, 350.0, "the tank");
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..outfitting()
+        };
+        let mut broken = FlightView::new(broken);
+        assert_eq!(broken.outfitter(), None);
+        assert_eq!(broken.outfit(BUY_TANK), Err(OutfitRefusal::NoOutfitter));
     }
 
     /// Fires every time, and records each percent it is asked.

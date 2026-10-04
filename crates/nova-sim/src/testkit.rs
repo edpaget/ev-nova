@@ -3,12 +3,11 @@
 use std::cell::RefCell;
 
 use crate::catalog::{
-    CharacterStart, CommodityStrings, DisasterRecord, JunkRecord, LandingSite, PilotCatalog,
-    ShipId, StarSystem, StartDate, StartError, StellarId, SystemId,
+    CharacterStart, CommodityStrings, DisasterRecord, JunkRecord, LandingSite, OutfitId,
+    OutfitRecord, PilotCatalog, ShipId, StarSystem, StartDate, StartError, StellarId, SystemId,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::flight::{Controls, Turn};
-use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::hyperspace::MIN_JUMP_DISTANCE;
@@ -27,9 +26,13 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) sites_asked: RefCell<Vec<SystemId>>,
     pub(crate) star_map: Vec<StarSystem>,
     pub(crate) star_map_reads: RefCell<usize>,
-    /// Each ship's default outfits' mods; any other ship has none.
-    pub(crate) outfits: Vec<(ShipId, Vec<OutfitMod>)>,
-    pub(crate) outfits_asked: RefCell<Vec<ShipId>>,
+    /// Each ship's default items; any other ship has none.
+    pub(crate) defaults: Vec<(ShipId, Vec<(OutfitId, u16)>)>,
+    pub(crate) defaults_asked: RefCell<Vec<ShipId>>,
+    /// Every `oütf`.
+    pub(crate) outfits: Vec<OutfitRecord>,
+    /// How many times the outfits were read.
+    pub(crate) outfit_reads: RefCell<usize>,
     pub(crate) commodities: CommodityStrings,
     pub(crate) junk: Vec<JunkRecord>,
     pub(crate) disasters: Vec<DisasterRecord>,
@@ -46,6 +49,9 @@ pub(crate) const FAST: ShipFields = ShipFields {
     fuel: 300,
     fuel_regen: 0,
     holds: 20,
+    mass: 40,
+    free_mass: 30,
+    contribute: 0x1,
 };
 
 /// A landable planet at (`x`, `y`), 100 x 100 (radius 50).
@@ -57,6 +63,32 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         flags: StellarFlags::CAN_LAND,
         min_status: 0,
         landing_sound: None,
+        tech_level: 0,
+        special_tech: [0; 8],
+        govt: None,
+    }
+}
+
+/// `oütf` `id` with these mods (the unused ones none): tech level 1, a
+/// ton, 1000 credits, up to 10 owned, no flags, requiring nothing.
+pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
+    let mut pairs = [(0, 0); 4];
+    pairs[..mods.len()].copy_from_slice(mods);
+    OutfitRecord {
+        id: OutfitId(id),
+        name: format!("Outfit {id}"),
+        short_name: format!("Outfit\\n{id}"),
+        disp_weight: 0,
+        mass: 1,
+        tech_level: 1,
+        max: 10,
+        flags: 0,
+        cost: 1000,
+        mods: pairs,
+        contribute: 0,
+        require: 0,
+        require_govt: -1,
+        availability: String::new(),
     }
 }
 
@@ -92,8 +124,10 @@ pub(crate) fn catalog() -> FakePilotCatalog {
             star(133, (-600.0, 0.0), &[]),
         ],
         star_map_reads: RefCell::default(),
+        defaults: Vec::new(),
+        defaults_asked: RefCell::default(),
         outfits: Vec::new(),
-        outfits_asked: RefCell::default(),
+        outfit_reads: RefCell::default(),
         commodities: CommodityStrings::default(),
         junk: Vec::new(),
         disasters: Vec::new(),
@@ -140,12 +174,17 @@ impl PilotCatalog for FakePilotCatalog {
             .map_or_else(|| Err(format!("no shïp {}", id.0)), |(_, f)| f.clone())
     }
 
-    fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
-        self.outfits_asked.borrow_mut().push(id);
-        self.outfits
+    fn default_outfits(&self, id: ShipId) -> Vec<(OutfitId, u16)> {
+        self.defaults_asked.borrow_mut().push(id);
+        self.defaults
             .iter()
             .find(|(ship, _)| *ship == id)
-            .map_or_else(Vec::new, |(_, mods)| mods.clone())
+            .map_or_else(Vec::new, |(_, items)| items.clone())
+    }
+
+    fn outfits(&self) -> Vec<OutfitRecord> {
+        *self.outfit_reads.borrow_mut() += 1;
+        self.outfits.clone()
     }
 
     fn system_exists(&self, id: SystemId) -> bool {

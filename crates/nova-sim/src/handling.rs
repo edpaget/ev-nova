@@ -9,7 +9,8 @@
 //! number for number.
 
 /// A `shïp`'s `Speed`, `Accel`, `Maneuver`, `Shield`, `Armor`, `Fuel`,
-/// `FuelRegen` and `Holds`, raw from the record.
+/// `FuelRegen`, `Holds`, `Mass`, `FreeMass` and `Contribute`, raw from the
+/// record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShipFields {
     /// `Speed`: top speed; 300 is average.
@@ -27,8 +28,17 @@ pub struct ShipFields {
     /// `FuelRegen`: ticks per unit of fuel regenerated; 0 or below is
     /// none (see [`crate::fuel`]).
     pub fuel_regen: i16,
-    /// `Holds`: cargo space, in tons (see [`crate::market`]).
+    /// `Holds`: cargo space, in tons (see [`crate::market`]); negative
+    /// forbids mass expansions (see [`crate::outfitter`]).
     pub holds: i16,
+    /// `Mass`: the ship's mass, in tons, which some outfits' price and
+    /// mass scale with.
+    pub mass: i16,
+    /// `FreeMass`: the space for outfits added, in tons, on top of its
+    /// default items' mass.
+    pub free_mass: i16,
+    /// `Contribute`: the bits the ship meets an outfit's `Require` with.
+    pub contribute: u64,
 }
 
 /// `Speed` per pixel a tick. The Bible gives a weapon's speed in "pixels
@@ -57,15 +67,17 @@ pub struct Handling {
 }
 
 impl Handling {
-    /// The handling of a ship with these fields. A field of 0 or below
-    /// gives 0: the ship cannot move that way.
+    /// The handling of a ship whose `Speed`, `Accel` and `Maneuver`, its
+    /// outfits' included, total these. A total of 0 or below gives 0: the
+    /// ship cannot move that way. [`ShipStats`](crate::stats::ShipStats)
+    /// gives a ship's handling.
     #[must_use]
-    pub fn from_fields(fields: ShipFields) -> Self {
-        let positive = |field: i16| f32::from(field.max(0));
+    pub(crate) fn from_totals(speed: i64, accel: i64, maneuver: f32) -> Self {
+        let positive = |total: i64| total.max(0) as f32;
         Self {
-            max_speed: positive(fields.speed) / SPEED_PER_PIXEL_PER_TICK,
-            accel: positive(fields.accel) / ACCEL_PER_PIXEL_PER_TICK_SQUARED,
-            turn_rate: positive(fields.maneuver) / MANEUVER_PER_DEGREE_PER_TICK,
+            max_speed: positive(speed) / SPEED_PER_PIXEL_PER_TICK,
+            accel: positive(accel) / ACCEL_PER_PIXEL_PER_TICK_SQUARED,
+            turn_rate: maneuver.max(0.0) / MANEUVER_PER_DEGREE_PER_TICK,
         }
     }
 }
@@ -76,12 +88,7 @@ mod tests {
     use super::*;
 
     fn handling(speed: i16, accel: i16, maneuver: i16) -> Handling {
-        Handling::from_fields(ShipFields {
-            speed,
-            accel,
-            maneuver,
-            ..ShipFields::default()
-        })
+        Handling::from_totals(speed.into(), accel.into(), maneuver.into())
     }
 
     #[test]

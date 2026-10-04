@@ -14,9 +14,9 @@ use nova_data::records::system::System;
 
 use crate::catalog::{
     CharacterStart, CommodityStrings, DisasterId, DisasterRecord, JunkRecord, LandingSite,
-    PilotCatalog, ShipId, SoundId, StarSystem, StartDate, StartError, SystemId,
+    OutfitId, OutfitRecord, PilotCatalog, ShipId, SoundId, StarSystem, StartDate, StartError,
+    SystemId,
 };
-use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
@@ -60,13 +60,16 @@ impl PilotCatalog for GameData {
                 fuel: ship.record.fuel,
                 fuel_regen: ship.record.fuel_regen,
                 holds: ship.record.holds,
+                mass: ship.record.mass,
+                free_mass: ship.record.free_mass,
+                contribute: ship.record.contribute.bits(),
             }),
             Some(Err(err)) => Err(err.to_string()),
             None => Err(format!("no shïp {}", id.0)),
         }
     }
 
-    fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+    fn default_outfits(&self, id: ShipId) -> Vec<(OutfitId, u16)> {
         let Some(Ok(ship)) = self.get::<Ship>(id.0) else {
             return Vec::new();
         };
@@ -78,23 +81,40 @@ impl PilotCatalog for GameData {
         let counts = ship.item_count1_4.into_iter().chain(ship.item_count5_8);
         items
             .zip(counts)
-            .filter_map(|(item, count)| {
-                let outfit = self.get::<Outfit>(item?.0)?.ok()?.record;
-                // A negative count carries none.
-                let count = u16::try_from(count).unwrap_or(0);
-                let mods = [
-                    (outfit.mod_type, outfit.mod_val),
-                    (outfit.mod_type2, outfit.mod_val2),
-                    (outfit.mod_type3, outfit.mod_val3),
-                    (outfit.mod_type4, outfit.mod_val4),
-                ];
-                Some(mods.map(|(mod_type, mod_val)| OutfitMod {
-                    mod_type,
-                    mod_val,
-                    count,
-                }))
+            // A negative count carries none.
+            .filter_map(|(item, count)| Some((item?, u16::try_from(count).unwrap_or(0))))
+            .collect()
+    }
+
+    fn outfits(&self) -> Vec<OutfitRecord> {
+        self.records::<Outfit>()
+            .filter_map(|(id, outfit)| {
+                let outfit = outfit.ok()?;
+                let record = outfit.record;
+                Some(OutfitRecord {
+                    id: OutfitId(id),
+                    name: outfit
+                        .name
+                        .map_or_else(|| record.lc_name.as_str().to_owned(), str::to_owned),
+                    short_name: record.short_name.as_str().to_owned(),
+                    disp_weight: record.disp_weight,
+                    mass: record.mass,
+                    tech_level: record.tech_level,
+                    max: record.max,
+                    flags: record.flags.bits(),
+                    cost: record.cost,
+                    mods: [
+                        (record.mod_type, record.mod_val),
+                        (record.mod_type2, record.mod_val2),
+                        (record.mod_type3, record.mod_val3),
+                        (record.mod_type4, record.mod_val4),
+                    ],
+                    contribute: record.contribute.bits(),
+                    require: record.require.bits(),
+                    require_govt: record.require_govt,
+                    availability: record.availability.as_str().to_owned(),
+                })
             })
-            .flatten()
             .collect()
     }
 
@@ -117,6 +137,9 @@ impl PilotCatalog for GameData {
                     .stellar_sprite(id)
                     .ok()
                     .map(|sprite| (sprite.sheet.frame_width(), sprite.sheet.frame_height()));
+                let mut special_tech = [0; 8];
+                special_tech[..3].copy_from_slice(&stellar.special_tech1_3);
+                special_tech[3..].copy_from_slice(&stellar.special_tech4_8);
                 Some(LandingSite {
                     id,
                     position: Vec2::new(f32::from(stellar.x_pos), f32::from(stellar.y_pos)),
@@ -124,6 +147,9 @@ impl PilotCatalog for GameData {
                     flags: stellar.flags.bits(),
                     min_status: stellar.min_status,
                     landing_sound: landing_sound(stellar.cust_snd_id),
+                    tech_level: stellar.tech_level,
+                    special_tech,
+                    govt: stellar.govt,
                 })
             })
             .collect()
@@ -454,60 +480,37 @@ mod tests {
         bytes
     }
 
-    /// An `oütf` with these four `ModType` and `ModVal` pairs.
-    fn outfit(mods: [(i16, i16); 4]) -> Vec<u8> {
-        let mut bytes = vec![0; Outfit::SIZE.expect("fixed")];
-        for (at, (mod_type, mod_val)) in [0x06, 0x12, 0x16, 0x1A].into_iter().zip(mods) {
-            put_i16s(&mut bytes, at, &[mod_type, mod_val]);
-        }
-        bytes
-    }
-
-    fn outfit_mod(mod_type: i16, mod_val: i16, count: u16) -> OutfitMod {
-        OutfitMod {
-            mod_type,
-            mod_val,
-            count,
-        }
+    #[test]
+    fn a_ships_fields_include_its_mass_free_mass_and_contribute() {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x0C, &[8]);
+        put_i16s(&mut bytes, 0x3E, &[15]);
+        bytes[0x64..0x6C].copy_from_slice(&0x0000_0008_0000_0001_u64.to_be_bytes());
+        let data = store(&[(Ship::TYPE, 128, bytes)]);
+        let fields = data.ship_fields(ShipId(128)).expect("decodes");
+        assert_eq!(
+            (fields.mass, fields.free_mass, fields.contribute),
+            (15, 8, 0x0000_0008_0000_0001)
+        );
     }
 
     #[test]
-    fn a_ships_default_outfits_are_every_mod_of_each_readable_item_with_its_count() {
-        let data = store(&[
-            (
-                Ship::TYPE,
-                128,
-                outfitted(&[(200, 2), (999, 1), (202, 1)], &[(201, 3), (200, -4)]),
-            ),
-            (
-                Outfit::TYPE,
-                200,
-                outfit([(18, 8), (1, 5), (0, 0), (-1, 7)]),
-            ),
-            (
-                Outfit::TYPE,
-                201,
-                outfit([(18, -20), (2, 3), (4, 5), (6, 7)]),
-            ),
-            (Outfit::TYPE, 202, short(outfit([(18, 1); 4]))),
-        ]);
+    fn a_ships_default_outfits_are_each_item_with_its_count_in_slot_order() {
+        let data = store(&[(
+            Ship::TYPE,
+            128,
+            outfitted(&[(200, 2), (999, 1), (202, 1)], &[(201, 3), (200, -4)]),
+        )]);
         assert_eq!(
             data.default_outfits(ShipId(128)),
             [
-                outfit_mod(18, 8, 2),
-                outfit_mod(1, 5, 2),
-                outfit_mod(0, 0, 2),
-                outfit_mod(-1, 7, 2),
-                outfit_mod(18, -20, 3),
-                outfit_mod(2, 3, 3),
-                outfit_mod(4, 5, 3),
-                outfit_mod(6, 7, 3),
-                outfit_mod(18, 8, 0),
-                outfit_mod(1, 5, 0),
-                outfit_mod(0, 0, 0),
-                outfit_mod(-1, 7, 0),
+                (OutfitId(200), 2),
+                (OutfitId(999), 1),
+                (OutfitId(202), 1),
+                (OutfitId(201), 3),
+                (OutfitId(200), 0),
             ],
-            "a missing or undecodable oütf is skipped, a negative count carries none"
+            "repeats kept, a negative count carries none, and the oütf need not exist"
         );
     }
 
@@ -516,11 +519,74 @@ mod tests {
         let data = store(&[
             (Ship::TYPE, 128, outfitted(&[], &[])),
             (Ship::TYPE, 129, short(outfitted(&[(200, 1)], &[]))),
-            (Outfit::TYPE, 200, outfit([(18, 8); 4])),
         ]);
         assert_eq!(data.default_outfits(ShipId(128)), []);
         assert_eq!(data.default_outfits(ShipId(129)), []);
         assert_eq!(data.default_outfits(ShipId(130)), []);
+    }
+
+    /// An `oütf` with these four `ModType` and `ModVal` pairs, every other
+    /// field set to something of its own.
+    fn outfit(mods: [(i16, i16); 4]) -> Vec<u8> {
+        let mut bytes = vec![0; Outfit::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[50, -5, 3]);
+        put_i16s(&mut bytes, 0x0A, &[8]);
+        bytes[0x0C..0x0E].copy_from_slice(&0x4100_u16.to_be_bytes());
+        bytes[0x0E..0x12].copy_from_slice(&150_000_i32.to_be_bytes());
+        for (at, (mod_type, mod_val)) in [0x06, 0x12, 0x16, 0x1A].into_iter().zip(mods) {
+            put_i16s(&mut bytes, at, &[mod_type, mod_val]);
+        }
+        bytes[0x1E..0x26].copy_from_slice(&0x10_u64.to_be_bytes());
+        bytes[0x26..0x2E].copy_from_slice(&0x0000_0008_0000_0001_u64.to_be_bytes());
+        bytes[0x2E..0x31].copy_from_slice(b"b12");
+        bytes[0x32B..0x334].copy_from_slice(b"Big\\nGun!");
+        bytes[0x36B..0x372].copy_from_slice(b"big gun");
+        put_i16s(&mut bytes, 0x3F2, &[1128]);
+        bytes
+    }
+
+    #[test]
+    fn each_readable_oütf_is_an_outfit_record_by_id() {
+        let data = store_named(&[
+            (
+                Outfit::TYPE,
+                201,
+                None,
+                outfit([(2, 5), (9, -2), (0, 0), (18, 4)]),
+            ),
+            (
+                Outfit::TYPE,
+                200,
+                Some("Big Gun"),
+                outfit([(1, 128), (0, 0), (0, 0), (0, 0)]),
+            ),
+            (Outfit::TYPE, 202, Some("Short"), short(outfit([(0, 0); 4]))),
+        ]);
+        let record = |id: i16, name: &str, mods| OutfitRecord {
+            id: OutfitId(id),
+            name: name.to_owned(),
+            short_name: "Big\\nGun!".to_owned(),
+            disp_weight: 50,
+            mass: -5,
+            tech_level: 3,
+            max: 8,
+            flags: 0x4100,
+            cost: 150_000,
+            mods,
+            contribute: 0x10,
+            require: 0x0000_0008_0000_0001,
+            require_govt: 1128,
+            availability: "b12".to_owned(),
+        };
+        assert_eq!(
+            data.outfits(),
+            [
+                record(200, "Big Gun", [(1, 128), (0, 0), (0, 0), (0, 0)]),
+                record(201, "big gun", [(2, 5), (9, -2), (0, 0), (18, 4)]),
+            ],
+            "a resource without a name goes by its LCName; an undecodable one is skipped"
+        );
+        assert_eq!(store(&[]).outfits(), []);
     }
 
     #[test]
@@ -553,12 +619,12 @@ mod tests {
     }
 
     /// A `spöb` at (`x`, `y`) of graphic type `graphic_type`, with these
-    /// `Flags` and `MinStatus`.
+    /// `Flags` and `MinStatus`, independent and of no tech level.
     fn stellar(x: i16, y: i16, graphic_type: i16, flags: u32, min_status: i16) -> Vec<u8> {
         let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
         put_i16s(&mut bytes, 0x00, &[x, y, graphic_type]);
         bytes[0x06..0x0A].copy_from_slice(&flags.to_be_bytes());
-        put_i16s(&mut bytes, 0x16, &[min_status]);
+        put_i16s(&mut bytes, 0x14, &[-1, min_status]);
         bytes
     }
 
@@ -596,6 +662,9 @@ mod tests {
                     flags: 0x2001,
                     min_status: -32767,
                     landing_sound: None,
+                    tech_level: 0,
+                    special_tech: [0; 8],
+                    govt: None,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -604,7 +673,33 @@ mod tests {
                     flags: 0x13,
                     min_status: 25,
                     landing_sound: None,
+                    tech_level: 0,
+                    special_tech: [0; 8],
+                    govt: None,
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_landing_sites_tech_levels_and_government_are_its_spöbs() {
+        let mut port = stellar(0, 0, 0, 0x05, 0);
+        put_i16s(&mut port, 0x0C, &[4, 6, 55, 57, 128]);
+        put_i16s(&mut port, 0x444, &[58, 81, 0, -1, 9]);
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129])),
+            (Stellar::TYPE, 128, port),
+            (Stellar::TYPE, 129, stellar(5, 5, 0, 1, 0)),
+        ]);
+        let sites = data.landing_sites(SystemId(130));
+        assert_eq!(
+            sites
+                .iter()
+                .map(|site| (site.tech_level, site.special_tech, site.govt))
+                .collect::<Vec<_>>(),
+            [
+                (4, [6, 55, 57, 58, 81, 0, -1, 9], Some(GovtId(128))),
+                (0, [0; 8], None),
             ]
         );
     }

@@ -470,12 +470,7 @@ mod tests {
         let creeping = moving(Vec2::new(0.0, AT_REST_SPEED), 90.0);
         assert_eq!(after(creeping, REVERSE, 1).heading, 90.0);
         // One tick's thrust from the weakest engine is motion.
-        let weakest = Handling::from_fields(crate::handling::ShipFields {
-            speed: 300,
-            accel: 1,
-            maneuver: 10,
-            ..crate::handling::ShipFields::default()
-        });
+        let weakest = Handling::from_totals(300, 1, 10.0);
         let nudged = moving(Vec2::new(0.0, weakest.accel), 90.0);
         assert_eq!(after(nudged, REVERSE, 1).heading, 87.0, "towards 0");
     }

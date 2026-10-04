@@ -4,19 +4,24 @@
 //! A new pilot starts as the first `chär` by ascending ID says: its ship,
 //! in the first of its starting systems that exists, on its starting date,
 //! with its cash (none, when the `chär`'s is negative) and its legal
-//! records, and with the ship's shield, armour and fuel full. It has
-//! explored only the system it starts in. It holds no cargo, and no
-//! planetary event is under way.
+//! records, owning its ship's default items (repeated slots adding up),
+//! and with the ship's shield, armour and fuel full at what it and those
+//! items can hold ([`crate::stats`]). It has explored only the system it
+//! starts in. It holds no cargo, and no planetary event is under way.
 //!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{DisasterId, GovtId, PilotCatalog, ShipId, StartError, StellarId, SystemId};
+use crate::catalog::{
+    DisasterId, GovtId, OutfitId, PilotCatalog, ShipId, StartError, StellarId, SystemId,
+};
 use crate::date::GameDate;
 use crate::market::Good;
+use crate::outfitter::outfit_mods;
 use crate::reserves::Reserves;
+use crate::stats::ShipStats;
 
 /// Everything about the player that a save keeps.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +52,13 @@ pub struct Pilot {
     /// The planetary events under way, each `öops` with the days it has
     /// left.
     pub(crate) events: BTreeMap<DisasterId, u16>,
+    /// How many of each outfit the ship carries; none of an outfit not
+    /// listed.
+    pub(crate) outfits: BTreeMap<OutfitId, u16>,
+    /// Whether the ship still carries its class's default items, not yet
+    /// read into `outfits`: a save from before outfits were kept. Flying
+    /// the pilot reads them.
+    pub(crate) default_outfits_pending: bool,
 }
 
 impl Pilot {
@@ -68,6 +80,8 @@ impl Pilot {
             .flatten()
             .find(|&id| catalog.system_exists(id))
             .ok_or(StartError::NoStartingSystem(character.systems))?;
+        let outfits = default_outfits(catalog, ship);
+        let stats = ShipStats::new(fields, &outfit_mods(&outfits, &catalog.outfits()));
         Ok(Self {
             name: name.to_owned(),
             ship,
@@ -75,12 +89,14 @@ impl Pilot {
             stellar: None,
             date: GameDate::from_start(character.start),
             cash: i64::from(character.cash.max(0)),
-            reserves: Reserves::from_fields(fields),
+            reserves: stats.full(),
             course: Vec::new(),
             explored: BTreeSet::from([system]),
             legal: character.legal.into_iter().flatten().collect(),
             cargo: BTreeMap::new(),
             events: BTreeMap::new(),
+            outfits,
+            default_outfits_pending: false,
         })
     }
 
@@ -186,6 +202,32 @@ impl Pilot {
     pub fn events(&self) -> impl Iterator<Item = (DisasterId, u16)> + '_ {
         self.events.iter().map(|(&id, &days)| (id, days))
     }
+
+    /// How many of `outfit` the ship carries.
+    #[must_use]
+    pub fn owned(&self, outfit: OutfitId) -> u16 {
+        self.outfits.get(&outfit).copied().unwrap_or(0)
+    }
+
+    /// Every outfit the ship carries, by `oütf` ID, with how many.
+    pub fn outfits(&self) -> impl Iterator<Item = (OutfitId, u16)> + '_ {
+        self.outfits.iter().map(|(&id, &count)| (id, count))
+    }
+}
+
+/// Ship `ship`'s default items from `catalog`, each with how many: repeated
+/// slots add up, and none of an item is not listed.
+pub(crate) fn default_outfits(
+    catalog: &impl PilotCatalog,
+    ship: ShipId,
+) -> BTreeMap<OutfitId, u16> {
+    let mut outfits = BTreeMap::new();
+    for (id, count) in catalog.default_outfits(ship) {
+        let owned: &mut u16 = outfits.entry(id).or_default();
+        *owned = owned.saturating_add(count);
+    }
+    outfits.retain(|_, count| *count > 0);
+    outfits
 }
 
 #[cfg(test)]
@@ -194,7 +236,7 @@ mod tests {
     use super::*;
     use crate::catalog::{CharacterStart, GovtId, ShipId, StartError, SystemId};
     use crate::date::GameDate;
-    use crate::reserves::{Gauge, Reserves};
+    use crate::reserves::Gauge;
     use crate::testkit::{FAST, FakePilotCatalog, START, catalog, starting};
 
     #[test]
@@ -212,7 +254,10 @@ mod tests {
     #[test]
     fn a_new_pilots_reserves_are_full_from_its_ship() {
         let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
-        assert_eq!(pilot.reserves(), Reserves::from_fields(FAST));
+        assert_eq!(
+            pilot.reserves(),
+            crate::stats::ShipStats::new(FAST, &[]).full()
+        );
         assert_eq!(pilot.reserves().fuel, Gauge::full(300.0));
     }
 
@@ -229,6 +274,42 @@ mod tests {
             }),
             ..catalog()
         }
+    }
+
+    #[test]
+    fn a_new_pilot_owns_its_ships_default_items_with_repeats_adding_up() {
+        use crate::catalog::OutfitId;
+        use crate::stats::MORE_FUEL;
+        use crate::testkit::outfit;
+        let catalog = FakePilotCatalog {
+            defaults: vec![(
+                ShipId(128),
+                vec![
+                    (OutfitId(200), 2),
+                    (OutfitId(201), 0),
+                    (OutfitId(200), 1),
+                    (OutfitId(999), 1),
+                    (OutfitId(202), u16::MAX),
+                    (OutfitId(202), 4),
+                ],
+            )],
+            outfits: vec![outfit(200, &[(MORE_FUEL, 100)])],
+            ..catalog()
+        };
+        let pilot = Pilot::new(&catalog, "").expect("starts");
+        assert_eq!(
+            pilot.outfits().collect::<Vec<_>>(),
+            [
+                (OutfitId(200), 3),
+                (OutfitId(202), u16::MAX),
+                (OutfitId(999), 1)
+            ],
+            "none of a count of 0; an item with no oütf is kept"
+        );
+        assert_eq!(pilot.owned(OutfitId(200)), 3);
+        assert_eq!(pilot.owned(OutfitId(201)), 0);
+        assert_eq!(pilot.reserves().fuel, Gauge::full(600.0), "three tanks");
+        assert!(!pilot.default_outfits_pending);
     }
 
     #[test]

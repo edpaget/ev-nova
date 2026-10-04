@@ -1,11 +1,9 @@
 //! A ship's reserves: its shield, armour and fuel, each a gauge that
-//! starts full at its `shïp` record's value.
+//! starts full at what the ship can hold ([`crate::stats`]).
 //!
 //! The Bible's rules for the record's numbers: a negative `Shield` means
 //! five times its absolute value, and a negative `Armor` or `Fuel` means
 //! none.
-
-use crate::handling::ShipFields;
 
 /// How much of something a ship has, out of how much it can hold.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -47,21 +45,29 @@ pub struct Reserves {
 
 /// How many shield points a negative `Shield` is per unit of its absolute
 /// value (the Bible).
-pub const NEGATIVE_SHIELD_FACTOR: f32 = 5.0;
+pub const NEGATIVE_SHIELD_FACTOR: i64 = 5;
+
+/// The shield points a `shïp`'s `Shield` gives: a negative one is
+/// [`NEGATIVE_SHIELD_FACTOR`] times its absolute value.
+#[must_use]
+pub(crate) fn shield_points(shield: i16) -> i64 {
+    let shield = i64::from(shield);
+    if shield < 0 {
+        -shield * NEGATIVE_SHIELD_FACTOR
+    } else {
+        shield
+    }
+}
 
 impl Reserves {
-    /// A new ship's reserves, full, from its record's fields.
+    /// Reserves holding `shield`, `armor` and `fuel`, full.
+    /// [`ShipStats`](crate::stats::ShipStats) gives a ship's.
     #[must_use]
-    pub fn from_fields(fields: ShipFields) -> Self {
-        let shield = match fields.shield {
-            negative @ i16::MIN..=-1 => f32::from(negative).abs() * NEGATIVE_SHIELD_FACTOR,
-            shield => f32::from(shield),
-        };
-        let positive = |field: i16| f32::from(field.max(0));
+    pub fn full(shield: f32, armor: f32, fuel: f32) -> Self {
         Self {
             shield: Gauge::full(shield),
-            armor: Gauge::full(positive(fields.armor)),
-            fuel: Gauge::full(positive(fields.fuel)),
+            armor: Gauge::full(armor),
+            fuel: Gauge::full(fuel),
         }
     }
 }
@@ -71,19 +77,10 @@ impl Reserves {
 mod tests {
     use super::*;
 
-    fn fields(shield: i16, armor: i16, fuel: i16) -> ShipFields {
-        ShipFields {
-            shield,
-            armor,
-            fuel,
-            ..ShipFields::default()
-        }
-    }
-
     #[test]
-    fn a_new_ships_reserves_start_full_at_its_records_values() {
+    fn full_reserves_hold_all_they_can() {
         assert_eq!(
-            Reserves::from_fields(fields(30, 45, 300)),
+            Reserves::full(30.0, 45.0, 300.0),
             Reserves {
                 shield: Gauge {
                     now: 30.0,
@@ -103,26 +100,12 @@ mod tests {
 
     #[test]
     fn a_negative_shield_is_five_times_its_absolute_value() {
-        assert_eq!(
-            Reserves::from_fields(fields(-20, 1, 1)).shield,
-            Gauge::full(100.0)
-        );
-        assert_eq!(
-            Reserves::from_fields(fields(i16::MIN, 1, 1)).shield,
-            Gauge::full(163_840.0)
-        );
-        assert_eq!(
-            Reserves::from_fields(fields(0, 1, 1)).shield,
-            Gauge::full(0.0)
-        );
-    }
-
-    #[test]
-    fn negative_armour_or_fuel_is_none() {
-        let reserves = Reserves::from_fields(fields(10, -5, -100));
-        assert_eq!(reserves.armor, Gauge::full(0.0));
-        assert_eq!(reserves.fuel, Gauge::full(0.0));
-        assert_eq!(reserves.shield, Gauge::full(10.0));
+        assert_eq!(shield_points(-20), 100);
+        assert_eq!(shield_points(-1), 5);
+        assert_eq!(shield_points(i16::MIN), 163_840);
+        assert_eq!(shield_points(0), 0);
+        assert_eq!(shield_points(30), 30);
+        assert_eq!(NEGATIVE_SHIELD_FACTOR, 5);
     }
 
     #[test]

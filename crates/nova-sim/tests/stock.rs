@@ -1,7 +1,7 @@
 //! A flight session over the stock data: the first `chär` starts a session
-//! with its ship's handling and reserves in a system that exists, and
-//! Port Kane's exchange trades at its levels. Skips, passing, when
-//! `NOVA_DATA` is unset.
+//! with its ship's handling and reserves in a system that exists, Port
+//! Kane's exchange trades at its levels, and its outfitter sells what its
+//! tech levels allow. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -11,9 +11,9 @@ use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::{
-    DisasterId, DisasterRecord, GameDate, Good, Handling, JunkId, LandingRefusal, OutfitMod, Pilot,
-    PilotCatalog, Reserves, Service, Session, ShipFields, ShipId, ShipState, StartDate, StellarId,
-    check_landing, fuel_regen_per_tick, services,
+    Direction, DisasterId, DisasterRecord, GameDate, Gauge, Good, JunkId, LandingRefusal, OutfitId,
+    OutfitMod, OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, Service, Session, ShipFields,
+    ShipId, ShipState, ShipStats, StartDate, StellarId, check_landing, services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -75,9 +75,16 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         fuel: ship.fuel,
         fuel_regen: ship.fuel_regen,
         holds: ship.holds,
+        mass: ship.mass,
+        free_mass: ship.free_mass,
+        contribute: ship.contribute.bits(),
     };
-    assert_eq!(session.handling(), Handling::from_fields(fields));
-    assert_eq!(session.reserves(), Reserves::from_fields(fields));
+    assert_eq!(data.ship_fields(session.ship()), Ok(fields));
+    // The Shuttle carries no default items: its own fields are its stats.
+    let stats = ShipStats::new(fields, &[]);
+    assert_eq!(session.stats(), stats);
+    assert_eq!(session.handling(), stats.handling);
+    assert_eq!(session.reserves(), stats.full());
     assert!(
         session.reserves().shield.max > 0.0,
         "{:?}",
@@ -150,8 +157,8 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
 }
 
 /// The stock starting Shuttle carries no default outfits and regenerates
-/// no fuel; the Scarab's Matter/Antimatter Reactor, a fuel scoop of 4,
-/// adds a unit every 4 ticks to its own every 10.
+/// no fuel; the Scarab's Matter/Antimatter Reactor (`oütf` 235), a fuel
+/// scoop of 4, adds a unit every 4 ticks to its own every 10.
 #[test]
 fn stock_default_outfits_give_their_fuel_regeneration() {
     let Some(dir) = common::nova_data() else {
@@ -173,14 +180,31 @@ fn stock_default_outfits_give_their_fuel_regeneration() {
 
     let scarab = data.get::<Ship>(162).expect("present").expect("decodes");
     assert_eq!(scarab.name, Some("Scarab"));
-    let reactor = OutfitMod {
-        mod_type: FUEL_SCOOP,
-        mod_val: 4,
-        count: 1,
-    };
-    let outfits = data.default_outfits(ShipId(162));
-    assert!(outfits.contains(&reactor), "{outfits:?}");
-    let regen = fuel_regen_per_tick(scarab.record.fuel_regen, &outfits);
+    let defaults = data.default_outfits(ShipId(162));
+    assert!(defaults.contains(&(OutfitId(235), 1)), "{defaults:?}");
+    let records = data.outfits();
+    let mods: Vec<OutfitMod> = defaults
+        .iter()
+        .filter_map(|&(id, count)| {
+            let record = records.iter().find(|record| record.id == id)?;
+            Some(record.mods.map(|(mod_type, mod_val)| OutfitMod {
+                mod_type,
+                mod_val,
+                count,
+            }))
+        })
+        .flatten()
+        .collect();
+    assert!(
+        mods.contains(&OutfitMod {
+            mod_type: FUEL_SCOOP,
+            mod_val: 4,
+            count: 1,
+        }),
+        "{mods:?}"
+    );
+    let fields = data.ship_fields(ShipId(162)).expect("decodes");
+    let regen = ShipStats::new(fields, &mods).fuel_regen;
     assert!((regen - (0.1 + 0.25)).abs() < 1e-6, "{regen}");
 }
 
@@ -283,5 +307,61 @@ fn the_food_surplus_targets_port_kane() {
     assert_eq!(
         strings.base_prices,
         ["75", "350", "750", "900", "200", "550"]
+    );
+}
+
+/// Port Kane (tech level 4, special tech 6, 55, 57, 58 and 81, of the
+/// Federation) lists the Battery Pack (`oütf` 256) and Solar Panels (228)
+/// at tech level 3, the Fission Reactor (179) at its special tech 6 (too
+/// heavy for the Shuttle's 8 free tons), and not the Fusion Reactor (177)
+/// at 8. Carbon Fiber (180) is listed but
+/// cannot be bought: its `Require` (0x800000001), scoped to the
+/// Federation, wants a licence the Shuttle lacks.
+#[test]
+fn port_kanes_outfitter_sells_what_its_tech_levels_allow() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let outfitter = at_port_kane(&data).outfitter().expect("an outfitter");
+    let row = |id| outfitter.row(OutfitId(id));
+    let battery = row(256).expect("the Battery Pack");
+    assert_eq!(
+        (battery.name.as_str(), battery.price, battery.mass),
+        ("Battery Pack", 10_000, 3)
+    );
+    assert_eq!(battery.buy, Ok(()));
+    assert_eq!(row(228).map(|r| r.name.as_str()), Some("Solar Panels"));
+    let fission = row(179).expect("the Fission Reactor");
+    assert_eq!(fission.buy, Err(OutfitRefusal::NoSpaceForAny));
+    assert!(fission.mass > 8, "{}", fission.mass);
+    assert!(row(177).is_none(), "the Fusion Reactor is tech 8");
+    let fiber = row(180).expect("Carbon Fiber");
+    assert_eq!(fiber.buy, Err(OutfitRefusal::NotForSale));
+    assert_eq!((outfitter.cash, outfitter.free_mass), (25_000, 8));
+}
+
+/// Buying a Battery Pack takes 10,000 of the Shuttle's 25,000 credits
+/// and 3 of its 8 tons free, and raises its fuel from 300 to 400.
+#[test]
+fn a_battery_pack_adds_a_jump_of_fuel_to_the_shuttle() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = at_port_kane(&data);
+    assert_eq!(session.reserves().fuel, Gauge::full(300.0));
+    let battery = OutfitOrder {
+        outfit: OutfitId(256),
+        direction: Direction::Buy,
+    };
+    assert_eq!(session.outfit(battery), Ok(()));
+    let outfitter = session.outfitter().expect("an outfitter");
+    assert_eq!((outfitter.cash, outfitter.free_mass), (15_000, 5));
+    assert_eq!(session.pilot().owned(OutfitId(256)), 1);
+    assert_eq!(
+        session.reserves().fuel,
+        Gauge::full(400.0),
+        "the new tank comes full"
     );
 }

@@ -3,8 +3,8 @@
 //! one fixed step at a time.
 //!
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
-//!   from: the first `chär`, its ship's handling fields and default
-//!   outfits, which systems exist, the star map, and the commodities,
+//!   from: the first `chär`, its ship's fields and default items, the
+//!   `oütf`s, which systems exist, the star map, and the commodities,
 //!   `jünk` and `öops` the exchange trades and is moved by.
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on.
@@ -21,8 +21,8 @@
 //!   `shïp` and its outfits' fuel scoops.
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
-//! - [`handling`]: a ship's [`Handling`], its `shïp`'s speed, acceleration
-//!   and turn rate in pixels and ticks.
+//! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
+//!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
 //! - [`landing`]: whether the ship can land, [`check_landing`], each
@@ -31,12 +31,15 @@
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
+//! - [`outfitter`]: the outfitter: which outfits a stellar lists and sells
+//!   ([`Outfitter`]), their price and mass, the ship's free mass, and
+//!   buying and selling one at a time ([`OutfitOrder`]).
 //! - [`pilot`]: the [`Pilot`], everything about the player a save keeps:
 //!   ship, location, date, cash, reserves, course, explored systems,
-//!   legal records, cargo and the events under way, starting from the
-//!   first `chär`.
+//!   legal records, cargo, the events under way and the outfits owned,
+//!   starting from the first `chär`.
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
-//!   [`Gauge`]s, full at its `shïp`'s values when it starts.
+//!   [`Gauge`]s, full when it starts.
 //! - [`save`]: the save schema: a pilot as versioned JSON and back,
 //!   upgrading older saves.
 //! - [`saves`]: the [`PilotStore`] port pilots are saved through, the key
@@ -46,6 +49,9 @@
 //!   from its starting system, landing, and jumping along a plotted course.
 //! - [`sound`]: the [`SimSound`] events a session emits as it thrusts,
 //!   lands, takes off and jumps; the audio side decides what they play.
+//! - [`stats`]: a ship's computed [`ShipStats`], from its `shïp`'s fields
+//!   and the outfits it carries: the one place its handling, reserve
+//!   capacities, fuel regeneration and cargo space come from.
 
 pub mod catalog;
 pub mod chance;
@@ -61,19 +67,21 @@ pub mod handling;
 pub mod hyperspace;
 pub mod landing;
 pub mod market;
+pub mod outfitter;
 pub mod pilot;
 pub mod reserves;
 pub mod save;
 pub mod saves;
 pub mod session;
 pub mod sound;
+pub mod stats;
 #[cfg(test)]
 mod testkit;
 
 pub use catalog::{
     CharacterStart, CommodityStrings, DisasterId, DisasterRecord, GovtId, JunkId, JunkRecord,
-    LandingSite, PilotCatalog, ShipId, SoundId, StarSystem, StartDate, StartError, StellarId,
-    SystemId,
+    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, SoundId, StarSystem, StartDate,
+    StartError, StellarId, SystemId,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
@@ -85,9 +93,11 @@ pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
+pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use pilot::Pilot;
 pub use reserves::{Gauge, Reserves};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::Session;
 pub use sound::SimSound;
+pub use stats::ShipStats;

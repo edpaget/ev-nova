@@ -3,9 +3,8 @@
 
 use std::rc::Rc;
 
-pub use nova_data::{GovtId, JunkId, ShipId, SoundId, StellarId, SystemId};
+pub use nova_data::{GovtId, JunkId, OutfitId, ShipId, SoundId, StellarId, SystemId};
 
-use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
@@ -71,6 +70,49 @@ pub struct LandingSite {
     /// (-1 for none, 0, or the angle hypergates and wormholes keep there)
     /// is none.
     pub landing_sound: Option<SoundId>,
+    /// Its `TechLevel`: the [`outfitter`](crate::outfitter) sells outfits
+    /// up to it.
+    pub tech_level: i16,
+    /// Its `SpecialTech` 1-8, in order: the outfitter also sells outfits of
+    /// exactly these tech levels.
+    pub special_tech: [i16; 8],
+    /// Its `Govt`, or `None` when it is independent.
+    pub govt: Option<GovtId>,
+}
+
+/// An outfit, raw from its `oütf`: the [`outfitter`](crate::outfitter)
+/// rules decide what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutfitRecord {
+    /// The `oütf`'s ID.
+    pub id: OutfitId,
+    /// Its name: the resource's name, or its `LCName` when the resource
+    /// has none.
+    pub name: String,
+    /// Its `ShortName`, raw: a literal `\n` splits it in two lines.
+    pub short_name: String,
+    /// Its `DispWeight`: higher shows nearer the top.
+    pub disp_weight: i16,
+    /// Its `Mass`, in tons.
+    pub mass: i16,
+    /// Its `TechLevel`.
+    pub tech_level: i16,
+    /// Its `Max`: how many the player can own.
+    pub max: i16,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `Cost`.
+    pub cost: i32,
+    /// Its `ModType` and `ModVal` pairs 1-4, in order.
+    pub mods: [(i16, i16); 4],
+    /// Its `Contribute` bits.
+    pub contribute: u64,
+    /// Its `Require` bits.
+    pub require: u64,
+    /// Its `RequireGovt`, raw.
+    pub require_govt: i16,
+    /// Its `Availability` control-bit expression.
+    pub availability: String,
 }
 
 /// The standard commodities, raw from their string lists: `STR#` 4000
@@ -171,10 +213,12 @@ pub trait PilotCatalog {
     fn first_character(&self) -> Result<CharacterStart, StartError>;
     /// Ship `id`'s handling and reserve fields, or why they cannot be read.
     fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String>;
-    /// Every mod of ship `id`'s default outfits, its `DefaultItems`, raw:
-    /// each readable `oütf`'s `ModType`s and `ModVal`s, with how many the
-    /// ship carries. None for a ship that cannot be read.
-    fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod>;
+    /// Ship `id`'s default outfits, its `DefaultItems`, raw: each item's
+    /// `oütf` ID with its count, in slot order, a negative count as none.
+    /// None for a ship that cannot be read.
+    fn default_outfits(&self, id: ShipId) -> Vec<(OutfitId, u16)>;
+    /// Every `oütf` that can be read, by ascending ID.
+    fn outfits(&self) -> Vec<OutfitRecord>;
     /// Whether system `id` exists and can be read.
     fn system_exists(&self, id: SystemId) -> bool;
     /// The stellars of system `id` that can be read, in its `nav_def`
@@ -201,8 +245,12 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).ship_fields(id)
     }
 
-    fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+    fn default_outfits(&self, id: ShipId) -> Vec<(OutfitId, u16)> {
         (**self).default_outfits(id)
+    }
+
+    fn outfits(&self) -> Vec<OutfitRecord> {
+        (**self).outfits()
     }
 
     fn system_exists(&self, id: SystemId) -> bool {
@@ -241,8 +289,12 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
         (**self).ship_fields(id)
     }
 
-    fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+    fn default_outfits(&self, id: ShipId) -> Vec<(OutfitId, u16)> {
         (**self).default_outfits(id)
+    }
+
+    fn outfits(&self) -> Vec<OutfitRecord> {
+        (**self).outfits()
     }
 
     fn system_exists(&self, id: SystemId) -> bool {
@@ -302,15 +354,31 @@ mod tests {
                 .ok_or_else(|| format!("no shïp {}", id.0))
         }
 
-        /// Ship 128 carries two of an outfit whose mod is 18, 8.
-        fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+        /// Ship 128 carries two of outfit 200.
+        fn default_outfits(&self, id: ShipId) -> Vec<(OutfitId, u16)> {
             if id != ShipId(128) {
                 return Vec::new();
             }
-            vec![OutfitMod {
-                mod_type: 18,
-                mod_val: 8,
-                count: 2,
+            vec![(OutfitId(200), 2)]
+        }
+
+        /// Outfit 200, a fuel scoop.
+        fn outfits(&self) -> Vec<OutfitRecord> {
+            vec![OutfitRecord {
+                id: OutfitId(200),
+                name: "Scoop".to_owned(),
+                short_name: "Scoop".to_owned(),
+                disp_weight: 0,
+                mass: 1,
+                tech_level: 1,
+                max: 1,
+                flags: 0,
+                cost: 100,
+                mods: [(18, 8), (0, 0), (0, 0), (0, 0)],
+                contribute: 0,
+                require: 0,
+                require_govt: -1,
+                availability: String::new(),
             }]
         }
 
@@ -331,6 +399,9 @@ mod tests {
                 flags: 0x01,
                 min_status: 0,
                 landing_sound: None,
+                tech_level: 3,
+                special_tech: [0; 8],
+                govt: None,
             }]
         }
 
@@ -376,7 +447,8 @@ mod tests {
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
-    /// outfits, systems 130 and 131 and the star map.
+    /// outfits, systems 130 and 131, the star map, the goods and the
+    /// outfits.
     fn reads(catalog: impl PilotCatalog) -> Vec<String> {
         vec![
             format!("{:?}", catalog.first_character()),
@@ -392,6 +464,7 @@ mod tests {
             format!("{:?}", catalog.commodity_strings()),
             format!("{:?}", catalog.junk()),
             format!("{:?}", catalog.disasters()),
+            format!("{:?}", catalog.outfits()),
         ]
     }
 
@@ -405,11 +478,12 @@ mod tests {
         assert_eq!(direct[6], "[]");
         assert!(direct[0].contains("year: 1177"), "{direct:?}");
         assert!(direct[7].contains("SystemId(131)"), "{direct:?}");
-        assert!(direct[8].contains("count: 2"), "{direct:?}");
+        assert_eq!(direct[8], "[(OutfitId(200), 2)]");
         assert_eq!(direct[9], "[]");
         assert!(direct[10].contains("\"75\""), "{direct:?}");
         assert!(direct[11].contains("Opals"), "{direct:?}");
         assert!(direct[12].contains("food surplus"), "{direct:?}");
+        assert!(direct[13].contains("Scoop"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }
