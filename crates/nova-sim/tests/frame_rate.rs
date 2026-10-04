@@ -5,8 +5,8 @@
 use std::time::Duration;
 
 use nova_sim::{
-    CharacterStart, Controls, FixedStep, LandingSite, PilotCatalog, Session, ShipFields, ShipId,
-    ShipState, StarSystem, StartDate, StartError, SystemId, Turn,
+    CharacterStart, Controls, FixedStep, LandingSite, OutfitMod, PilotCatalog, Session, ShipFields,
+    ShipId, ShipState, StarSystem, StartDate, StartError, SystemId, Turn,
 };
 
 /// One `chär` flying an agile ship from system 130.
@@ -28,6 +28,10 @@ impl PilotCatalog for Pilot {
             maneuver: 25,
             ..ShipFields::default()
         })
+    }
+
+    fn default_outfits(&self, _id: ShipId) -> Vec<OutfitMod> {
+        Vec::new()
     }
 
     fn system_exists(&self, _id: SystemId) -> bool {

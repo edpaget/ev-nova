@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 pub use nova_data::{GovtId, ShipId, StellarId, SystemId};
 
+use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
@@ -96,6 +97,10 @@ pub trait PilotCatalog {
     fn first_character(&self) -> Result<CharacterStart, StartError>;
     /// Ship `id`'s handling and reserve fields, or why they cannot be read.
     fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String>;
+    /// Every mod of ship `id`'s default outfits, its `DefaultItems`, raw:
+    /// each readable `oütf`'s `ModType`s and `ModVal`s, with how many the
+    /// ship carries. None for a ship that cannot be read.
+    fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod>;
     /// Whether system `id` exists and can be read.
     fn system_exists(&self, id: SystemId) -> bool;
     /// The stellars of system `id` that can be read, in its `nav_def`
@@ -114,6 +119,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String> {
         (**self).ship_fields(id)
+    }
+
+    fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+        (**self).default_outfits(id)
     }
 
     fn system_exists(&self, id: SystemId) -> bool {
@@ -138,6 +147,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String> {
         (**self).ship_fields(id)
+    }
+
+    fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+        (**self).default_outfits(id)
     }
 
     fn system_exists(&self, id: SystemId) -> bool {
@@ -184,6 +197,18 @@ mod tests {
                 .ok_or_else(|| format!("no shïp {}", id.0))
         }
 
+        /// Ship 128 carries two of an outfit whose mod is 18, 8.
+        fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+            if id != ShipId(128) {
+                return Vec::new();
+            }
+            vec![OutfitMod {
+                mod_type: 18,
+                mod_val: 8,
+                count: 2,
+            }]
+        }
+
         fn system_exists(&self, id: SystemId) -> bool {
             id == SystemId(130)
         }
@@ -213,8 +238,8 @@ mod tests {
         }
     }
 
-    /// Everything `catalog` says about ships 128 and 129, systems 130
-    /// and 131 and the star map.
+    /// Everything `catalog` says about ships 128 and 129 and their
+    /// outfits, systems 130 and 131 and the star map.
     fn reads(catalog: impl PilotCatalog) -> Vec<String> {
         vec![
             format!("{:?}", catalog.first_character()),
@@ -225,6 +250,8 @@ mod tests {
             format!("{:?}", catalog.landing_sites(SystemId(130))),
             format!("{:?}", catalog.landing_sites(SystemId(131))),
             format!("{:?}", catalog.star_map()),
+            format!("{:?}", catalog.default_outfits(ShipId(128))),
+            format!("{:?}", catalog.default_outfits(ShipId(129))),
         ]
     }
 
@@ -238,6 +265,8 @@ mod tests {
         assert_eq!(direct[6], "[]");
         assert!(direct[0].contains("year: 1177"), "{direct:?}");
         assert!(direct[7].contains("SystemId(131)"), "{direct:?}");
+        assert!(direct[8].contains("count: 2"), "{direct:?}");
+        assert_eq!(direct[9], "[]");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

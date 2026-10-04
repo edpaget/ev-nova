@@ -3,8 +3,8 @@
 //! one fixed step at a time.
 //!
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
-//!   from: the first `chär`, its ship's handling fields, which systems
-//!   exist and the star map.
+//!   from: the first `chär`, its ship's handling fields and default
+//!   outfits, which systems exist and the star map.
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
 //! - [`data`]: the port's adapter over `nova_data`'s `GameData`.

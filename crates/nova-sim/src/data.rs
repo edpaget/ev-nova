@@ -1,8 +1,10 @@
 //! The pilot catalog over the game data: a thin mapping from `GameData`'s
-//! `chär`, `shïp`, `sÿst` and `spöb` records, and its stellar sprites.
+//! `chär`, `shïp`, `oütf`, `sÿst` and `spöb` records, and its stellar
+//! sprites.
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
+use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
@@ -10,6 +12,7 @@ use nova_data::records::system::System;
 use crate::catalog::{
     CharacterStart, LandingSite, PilotCatalog, ShipId, StarSystem, StartDate, StartError, SystemId,
 };
+use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
@@ -52,6 +55,38 @@ impl PilotCatalog for GameData {
             Some(Err(err)) => Err(err.to_string()),
             None => Err(format!("no shïp {}", id.0)),
         }
+    }
+
+    fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+        let Some(Ok(ship)) = self.get::<Ship>(id.0) else {
+            return Vec::new();
+        };
+        let ship = ship.record;
+        let items = ship
+            .default_items1_4
+            .into_iter()
+            .chain(ship.default_items5_8);
+        let counts = ship.item_count1_4.into_iter().chain(ship.item_count5_8);
+        items
+            .zip(counts)
+            .filter_map(|(item, count)| {
+                let outfit = self.get::<Outfit>(item?.0)?.ok()?.record;
+                // A negative count carries none.
+                let count = u16::try_from(count).unwrap_or(0);
+                let mods = [
+                    (outfit.mod_type, outfit.mod_val),
+                    (outfit.mod_type2, outfit.mod_val2),
+                    (outfit.mod_type3, outfit.mod_val3),
+                    (outfit.mod_type4, outfit.mod_val4),
+                ];
+                Some(mods.map(|(mod_type, mod_val)| OutfitMod {
+                    mod_type,
+                    mod_val,
+                    count,
+                }))
+            })
+            .flatten()
+            .collect()
     }
 
     fn system_exists(&self, id: SystemId) -> bool {
@@ -271,6 +306,89 @@ mod tests {
         put_i16s(&mut bytes, 0x5E, &[8]);
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.fuel_regen), Ok(8));
+    }
+
+    /// A `shïp` carrying `items` in its `DefaultItems` 1-4 and `more` in
+    /// 5-8, each an `oütf` ID and a count; every other slot -1.
+    fn outfitted(items: &[(i16, i16)], more: &[(i16, i16)]) -> Vec<u8> {
+        let mut bytes = ship(1, 2, 3);
+        for (ids_at, counts_at, slots) in [(0x4E, 0x56, items), (0x370, 0x378, more)] {
+            put_i16s(&mut bytes, ids_at, &[-1; 4]);
+            for (i, &(id, count)) in slots.iter().enumerate() {
+                put_i16s(&mut bytes, ids_at + 2 * i, &[id]);
+                put_i16s(&mut bytes, counts_at + 2 * i, &[count]);
+            }
+        }
+        bytes
+    }
+
+    /// An `oütf` with these four `ModType` and `ModVal` pairs.
+    fn outfit(mods: [(i16, i16); 4]) -> Vec<u8> {
+        let mut bytes = vec![0; Outfit::SIZE.expect("fixed")];
+        for (at, (mod_type, mod_val)) in [0x06, 0x12, 0x16, 0x1A].into_iter().zip(mods) {
+            put_i16s(&mut bytes, at, &[mod_type, mod_val]);
+        }
+        bytes
+    }
+
+    fn outfit_mod(mod_type: i16, mod_val: i16, count: u16) -> OutfitMod {
+        OutfitMod {
+            mod_type,
+            mod_val,
+            count,
+        }
+    }
+
+    #[test]
+    fn a_ships_default_outfits_are_every_mod_of_each_readable_item_with_its_count() {
+        let data = store(&[
+            (
+                Ship::TYPE,
+                128,
+                outfitted(&[(200, 2), (999, 1), (202, 1)], &[(201, 3), (200, -4)]),
+            ),
+            (
+                Outfit::TYPE,
+                200,
+                outfit([(18, 8), (1, 5), (0, 0), (-1, 7)]),
+            ),
+            (
+                Outfit::TYPE,
+                201,
+                outfit([(18, -20), (2, 3), (4, 5), (6, 7)]),
+            ),
+            (Outfit::TYPE, 202, short(outfit([(18, 1); 4]))),
+        ]);
+        assert_eq!(
+            data.default_outfits(ShipId(128)),
+            [
+                outfit_mod(18, 8, 2),
+                outfit_mod(1, 5, 2),
+                outfit_mod(0, 0, 2),
+                outfit_mod(-1, 7, 2),
+                outfit_mod(18, -20, 3),
+                outfit_mod(2, 3, 3),
+                outfit_mod(4, 5, 3),
+                outfit_mod(6, 7, 3),
+                outfit_mod(18, 8, 0),
+                outfit_mod(1, 5, 0),
+                outfit_mod(0, 0, 0),
+                outfit_mod(-1, 7, 0),
+            ],
+            "a missing or undecodable oütf is skipped, a negative count carries none"
+        );
+    }
+
+    #[test]
+    fn a_missing_undecodable_or_unoutfitted_ship_has_no_default_outfits() {
+        let data = store(&[
+            (Ship::TYPE, 128, outfitted(&[], &[])),
+            (Ship::TYPE, 129, short(outfitted(&[(200, 1)], &[]))),
+            (Outfit::TYPE, 200, outfit([(18, 8); 4])),
+        ]);
+        assert_eq!(data.default_outfits(ShipId(128)), []);
+        assert_eq!(data.default_outfits(ShipId(129)), []);
+        assert_eq!(data.default_outfits(ShipId(130)), []);
     }
 
     #[test]

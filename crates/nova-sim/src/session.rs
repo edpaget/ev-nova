@@ -17,7 +17,8 @@
 //! rules allow, and while it lasts ticks move nothing. When the jump is
 //! over ([`Session::arrive`]) the ship is in the next system, at its edge,
 //! with a jump's fuel used and a day gone by, and the rest of the course
-//! still ahead. In flight, fuel regenerates each tick at the ship's rate.
+//! still ahead. In flight, fuel regenerates each tick at the rate the ship
+//! and its default outfits give, read when the session starts.
 
 use crate::catalog::{GovtId, LandingSite, PilotCatalog, ShipId, StartError, StellarId, SystemId};
 use crate::date::GameDate;
@@ -50,7 +51,8 @@ pub struct Session {
     jumping: Option<SystemId>,
     /// Today's date.
     date: GameDate,
-    /// The fuel gained each tick in flight.
+    /// The fuel gained each tick in flight, from the ship and its default
+    /// outfits.
     fuel_regen: f32,
 }
 
@@ -83,7 +85,7 @@ impl Session {
             jumping: None,
             date: GameDate::from_start(character.start),
             // No outfits yet: outfitting will pass the ship's.
-            fuel_regen: fuel_regen_per_tick(fields.fuel_regen, &[]),
+            fuel_regen: fuel_regen_per_tick(fields.fuel_regen, &catalog.default_outfits(ship)),
         })
     }
 
@@ -255,6 +257,7 @@ mod tests {
     use super::*;
     use crate::catalog::{CharacterStart, LandingSite, StarSystem, StartDate, StellarId};
     use crate::flight::Turn;
+    use crate::fuel::{FUEL_SCOOP, OutfitMod};
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
     use crate::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE, RouteError, StarMap};
@@ -273,6 +276,9 @@ mod tests {
         sites_asked: RefCell<Vec<SystemId>>,
         star_map: Vec<StarSystem>,
         star_map_reads: RefCell<usize>,
+        /// Each ship's default outfits' mods; any other ship has none.
+        outfits: Vec<(ShipId, Vec<OutfitMod>)>,
+        outfits_asked: RefCell<Vec<ShipId>>,
     }
 
     const FAST: ShipFields = ShipFields {
@@ -327,6 +333,8 @@ mod tests {
                 star(133, (-600.0, 0.0), &[]),
             ],
             star_map_reads: RefCell::default(),
+            outfits: Vec::new(),
+            outfits_asked: RefCell::default(),
         }
     }
 
@@ -366,6 +374,14 @@ mod tests {
                 .iter()
                 .find(|(ship, _)| *ship == id)
                 .map_or_else(|| Err(format!("no shïp {}", id.0)), |(_, f)| f.clone())
+        }
+
+        fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+            self.outfits_asked.borrow_mut().push(id);
+            self.outfits
+                .iter()
+                .find(|(ship, _)| *ship == id)
+                .map_or_else(Vec::new, |(_, mods)| mods.clone())
         }
 
         fn system_exists(&self, id: SystemId) -> bool {
@@ -912,6 +928,35 @@ mod tests {
         assert_eq!(session.player().reserves.fuel, Gauge::full(300.0));
         let still = Session::start(&self::catalog()).expect("starts");
         assert_eq!(still.fuel_regen_per_tick(), 0.0);
+    }
+
+    #[test]
+    fn the_ships_default_outfits_add_to_its_fuel_regeneration() {
+        // A unit every 8 ticks from the ship, and two scoops each giving a
+        // unit every 4 ticks; a mod of another type gives nothing.
+        let scoops = OutfitMod {
+            mod_type: FUEL_SCOOP,
+            mod_val: 4,
+            count: 2,
+        };
+        let other = OutfitMod {
+            mod_type: 1,
+            mod_val: 1,
+            count: 1,
+        };
+        let catalog = FakePilotCatalog {
+            outfits: vec![(ShipId(128), vec![scoops, other])],
+            ..regenerating(8)
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(*catalog.outfits_asked.borrow(), [ShipId(128)]);
+        assert_eq!(session.fuel_regen_per_tick(), 0.125 + 0.5);
+        jump(&mut session, &catalog, 131);
+        for _ in 0..8 {
+            session.tick(Controls::default());
+        }
+        assert_eq!(session.player().reserves.fuel.now, 205.0);
+        assert_eq!(*catalog.outfits_asked.borrow(), [ShipId(128)], "once");
     }
 
     #[test]

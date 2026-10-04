@@ -614,8 +614,8 @@ mod tests {
 
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
-        CharacterStart, Handling, LandingSite, Reserves, ShipFields, ShipId, StarSystem, StartDate,
-        StartError, SystemId, TICK, Vec2, step,
+        CharacterStart, Handling, LandingSite, OutfitMod, Reserves, ShipFields, ShipId, StarSystem,
+        StartDate, StartError, SystemId, TICK, Vec2, step,
     };
 
     use super::*;
@@ -731,6 +731,11 @@ mod tests {
         fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String> {
             assert_eq!(id, ShipId(128));
             Ok(self.fields)
+        }
+
+        fn default_outfits(&self, id: ShipId) -> Vec<OutfitMod> {
+            assert_eq!(id, ShipId(128));
+            Vec::new()
         }
 
         fn system_exists(&self, id: SystemId) -> bool {

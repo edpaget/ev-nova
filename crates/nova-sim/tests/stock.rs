@@ -8,9 +8,10 @@ use nova_data::GameData;
 use nova_data::records::character::Character;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
+use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::{
-    Handling, LandingRefusal, PilotCatalog, Reserves, Service, Session, ShipFields, ShipState,
-    check_landing, services,
+    Handling, LandingRefusal, OutfitMod, PilotCatalog, Reserves, Service, Session, ShipFields,
+    ShipId, ShipState, check_landing, fuel_regen_per_tick, services,
 };
 
 #[test]
@@ -98,4 +99,39 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
             Service::MissionBbs,
         ]
     );
+}
+
+/// The stock starting Shuttle carries no default outfits and regenerates
+/// no fuel; the Scarab's Matter/Antimatter Reactor, a fuel scoop of 4,
+/// adds a unit every 4 ticks to its own every 10.
+#[test]
+fn stock_default_outfits_give_their_fuel_regeneration() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let session = Session::start(&data).expect("the stock first chär starts");
+    let shuttle = data
+        .get::<Ship>(session.ship().0)
+        .expect("present")
+        .expect("decodes");
+    assert_eq!(shuttle.name, Some("Shuttle"));
+    assert_eq!(data.default_outfits(session.ship()), []);
+    assert!(
+        session.fuel_regen_per_tick().abs() < f32::EPSILON,
+        "{}",
+        session.fuel_regen_per_tick()
+    );
+
+    let scarab = data.get::<Ship>(162).expect("present").expect("decodes");
+    assert_eq!(scarab.name, Some("Scarab"));
+    let reactor = OutfitMod {
+        mod_type: FUEL_SCOOP,
+        mod_val: 4,
+        count: 1,
+    };
+    let outfits = data.default_outfits(ShipId(162));
+    assert!(outfits.contains(&reactor), "{outfits:?}");
+    let regen = fuel_regen_per_tick(scarab.record.fuel_regen, &outfits);
+    assert!((regen - (0.1 + 0.25)).abs() < 1e-6, "{regen}");
 }
