@@ -27,6 +27,8 @@ nova-data = { workspace = true, features = ["fixture"] }
 nova-render = { workspace = true, features = ["recording"] }
 # Synthetic resource forks for in-memory stores.
 nova-rsrc = { workspace = true, features = ["fixture"] }
+# The text-metrics mock for the router's dialog tests.
+nova-view = { workspace = true, features = ["fixture"] }
 # The router and flight tests read the flight session's state.
 nova-sim.workspace = true
 # The runner tests build the wgpu errors a GPU set-up can fail with.

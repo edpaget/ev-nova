@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::{GameData, ShipId, SystemId};
-use nova_render::Batch;
 use nova_render::recording::RecordingGpu;
+use nova_render::wgpu::GlyphonMetrics;
+use nova_render::{Batch, FontFaces};
 use nova_view::ships::ShipCatalog;
 use nova_view::{Key, MouseButton};
 
@@ -273,4 +274,73 @@ fn sol_opens_from_the_map_and_its_stellars_reach_the_gpu() {
         send(&mut app, &mut gpu, key(Key::Escape, true)),
         Control::Exit
     );
+}
+
+/// I opens the stock "Desc Dialog" over the ship browser, from the
+/// interface file beside the stock data, with the About text laid out by
+/// the real glyphon metrics; its frame, button and text reach the Gpu
+/// with every picture resolved, Down scrolls it and Return closes it.
+#[test]
+fn i_shows_the_stock_about_text() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let interface = match nova_data::open_interface(&dir) {
+        Ok(interface) => interface,
+        Err(error) => {
+            eprintln!("skipping: {error}");
+            return;
+        }
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let screen = start_screen(Rc::clone(&data)).with_dialogs(
+        Rc::new(interface),
+        Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
+    );
+    let mut app: App<_> = App::new(&Window, data, screen);
+    let mut gpu = RecordingGpu::new();
+    let mut send = |app: &mut App<Rc<GameData>>, event| {
+        assert_eq!(app.handle(event, &mut Window, &mut gpu), Control::Continue);
+    };
+    let key = |key| WindowEvent::Key {
+        key,
+        pressed: true,
+        repeat: false,
+    };
+
+    send(&mut app, key(Key::Char('i')));
+    assert_eq!(app.screen().showing(), Showing::About);
+    send(
+        &mut app,
+        WindowEvent::Redraw {
+            elapsed: Duration::from_millis(16),
+        },
+    );
+    assert_eq!(app.take_failures(), []);
+    let about = app.screen().about().expect("open");
+    assert!(about.lines().len() > 20, "{} lines", about.lines().len());
+    send(&mut app, key(Key::Down));
+    assert_eq!(app.screen().about().expect("open").first_line(), 1);
+    send(&mut app, key(Key::Enter));
+    assert_eq!(app.screen().showing(), Showing::ShipBrowser);
+
+    let frame = gpu.submits()[0].clone();
+    let pictures: usize = frame
+        .batches
+        .iter()
+        .map(|batch| match batch {
+            Batch::Sprites { quads, .. } => quads.len(),
+            _ => 0,
+        })
+        .sum();
+    assert!(pictures >= 6, "the frame's three and the button's three");
+    let texts: Vec<String> = frame
+        .batches
+        .iter()
+        .flat_map(|batch| match batch {
+            Batch::Text(runs) => runs.iter().map(|run| run.text.clone()).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert!(texts.contains(&"Done".to_owned()), "{texts:?}");
 }

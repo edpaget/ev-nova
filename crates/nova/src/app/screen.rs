@@ -11,6 +11,11 @@
 //! time and kept, so flight resumes where it left off. In flight the
 //! arrow keys fly the ship, Tab does nothing, and Escape goes back to the
 //! screen flight was entered from; it never quits.
+//!
+//! I, outside flight, opens the About text in the game's "Desc Dialog"
+//! over the screen shown, when the router was given the interface file's
+//! dialogs ([`AppScreen::with_dialogs`]). The dialog is modal: it takes
+//! every input until Done (Return, Escape or a click) closes it.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -20,14 +25,20 @@ use nova_view::flight::FlightView;
 use nova_view::galaxy::GalaxyMap;
 use nova_view::ships::ShipBrowser;
 use nova_view::system::SystemView;
+use nova_view::text::TextMetrics;
+use nova_view::ui::desc::DESC_DIALOG;
+use nova_view::ui::{DescDialog, DescriptionSource, DialogResources};
 use nova_view::{Color, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction};
 
 /// The hint the router draws over every screen, where it goes, its size and
 /// its colour. Every screen leaves that corner free.
-pub const HINT: &str = "Tab: ships / galaxy map   F: fly";
+pub const HINT: &str = "Tab: ships / galaxy map   F: fly   I: about";
 pub const HINT_AT: Point = Point::new(16.0, 8.0);
 pub const HINT_SIZE: f32 = 14.0;
 pub const HINT_COLOR: Color = Color::DIM;
+
+/// The About text's `dësc`.
+pub const ABOUT_TEXT: i16 = 32767;
 
 /// Which screen the app is showing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +51,8 @@ pub enum Showing {
     System,
     /// The player's ship in flight.
     Flight,
+    /// The About text, over another screen.
+    About,
 }
 
 /// The two sides Tab switches between, and flight, entered from either.
@@ -68,6 +81,23 @@ pub struct AppScreen {
     galaxy: Navigator<Rc<GameData>>,
     /// Flight, once entered.
     flight: Option<FlightView>,
+    /// What dialogs are built from, once given.
+    dialogs: Option<Dialogs>,
+    /// The About dialog, while it is open.
+    about: Option<DescDialog>,
+}
+
+/// The interface file's dialogs and the metrics their text is laid out by.
+#[derive(Clone)]
+struct Dialogs {
+    resources: Rc<dyn DialogResources>,
+    metrics: Rc<dyn TextMetrics>,
+}
+
+impl std::fmt::Debug for Dialogs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Dialogs").finish_non_exhaustive()
+    }
 }
 
 impl AppScreen {
@@ -81,12 +111,41 @@ impl AppScreen {
             ships: ShipBrowser::new(Rc::clone(&data)),
             data,
             flight: None,
+            dialogs: None,
+            about: None,
         }
+    }
+
+    /// The router with dialogs: I opens the About text in a dialog built
+    /// from `dialogs`, its text laid out by `metrics`. Without dialogs, I
+    /// does nothing.
+    #[must_use]
+    pub fn with_dialogs(
+        self,
+        dialogs: Rc<dyn DialogResources>,
+        metrics: Rc<dyn TextMetrics>,
+    ) -> Self {
+        Self {
+            dialogs: Some(Dialogs {
+                resources: dialogs,
+                metrics,
+            }),
+            ..self
+        }
+    }
+
+    /// The About dialog, while it is open.
+    #[must_use]
+    pub fn about(&self) -> Option<&DescDialog> {
+        self.about.as_ref()
     }
 
     /// Which screen is showing.
     #[must_use]
     pub fn showing(&self) -> Showing {
+        if self.about.is_some() {
+            return Showing::About;
+        }
         match self.side {
             Side::Ships => Showing::ShipBrowser,
             Side::Galaxy if self.galaxy.system().is_some() => Showing::System,
@@ -161,6 +220,36 @@ impl AppScreen {
         self.switch_to(Side::Flight);
     }
 
+    /// Opens the About dialog over the side shown, first cancelling its
+    /// pointer gesture and letting go of its keys (their releases will go
+    /// to the dialog). With no dialogs, nothing opens; when the dialog
+    /// cannot be built, nothing opens and the reason goes to stderr.
+    fn open_about(&mut self) {
+        let Some(dialogs) = &self.dialogs else {
+            return;
+        };
+        match about_dialog(dialogs, &self.data) {
+            Ok(dialog) => {
+                let below = self.shown_mut();
+                below.cancel_pointer();
+                below.release_keys();
+                self.about = Some(dialog);
+            }
+            Err(reason) => eprintln!("nova: cannot show the About text: {reason}"),
+        }
+    }
+
+    /// The About dialog's input; it closes once Done is activated.
+    fn about_input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(about) = &mut self.about {
+            about.input(input);
+            if about.closed() {
+                self.about = None;
+            }
+        }
+        ScreenAction::None
+    }
+
     /// Flight's input: an Escape press goes back, and everything else goes
     /// to flight (which ignores Tab).
     fn flight_input(&mut self, input: &Input) -> ScreenAction {
@@ -178,6 +267,19 @@ impl AppScreen {
             _ => self.shown_mut().input(input),
         }
     }
+}
+
+/// "Desc Dialog" showing the About text, from the dialogs and the game
+/// data.
+fn about_dialog(dialogs: &Dialogs, data: &GameData) -> Result<DescDialog, String> {
+    let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
+    let text = data.description(ABOUT_TEXT)?;
+    Ok(DescDialog::new(
+        &template,
+        &text,
+        data.button_style(),
+        Rc::clone(&dialogs.metrics),
+    ))
 }
 
 /// Flight shows only once it has been built.
@@ -207,9 +309,29 @@ impl Screen for AppScreen {
     /// from, letting go of the keys held in flight; it never quits, and its
     /// repeats and release are consumed. Everything else goes to flight,
     /// where Tab does nothing.
+    ///
+    /// With dialogs, an I press outside flight opens the About dialog
+    /// over the side shown, cancelling and letting go on it as Tab does.
+    /// While the dialog is open, every event goes to it alone (Escape
+    /// closes it and never quits).
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.about.is_some() {
+            return self.about_input(input);
+        }
         if self.side == Side::Flight {
             return self.flight_input(input);
+        }
+        if let Input::Key {
+            key: Key::Char('i'),
+            pressed,
+            repeat,
+        } = *input
+            && self.dialogs.is_some()
+        {
+            if pressed && !repeat {
+                self.open_about();
+            }
+            return ScreenAction::None;
         }
         if let Input::Key {
             key: key @ (Key::Tab | Key::Escape | Key::Char('f')),
@@ -234,25 +356,39 @@ impl Screen for AppScreen {
         self.shown_mut().input(input)
     }
 
-    /// Only the side shown ticks; a hidden one is paused.
+    /// Only the side shown ticks; a hidden one is paused. While the About
+    /// dialog is open, only it ticks.
     fn tick(&mut self, dt: Duration) {
-        self.shown_mut().tick(dt);
+        match &mut self.about {
+            Some(about) => about.tick(dt),
+            None => self.shown_mut().tick(dt),
+        }
     }
 
-    /// The side shown, then the hint; flight has its own help line instead.
+    /// The side shown, then the hint (flight has its own help line
+    /// instead), then the About dialog when it is open.
     fn draw(&self, list: &mut DrawList) {
         self.shown().draw(list);
         if self.side != Side::Flight {
             list.text(HINT, HINT_AT, HINT_SIZE, None, HINT_COLOR);
         }
+        if let Some(about) = &self.about {
+            about.draw(list);
+        }
     }
 
     fn cancel_pointer(&mut self) {
-        self.shown_mut().cancel_pointer();
+        match &mut self.about {
+            Some(about) => about.cancel_pointer(),
+            None => self.shown_mut().cancel_pointer(),
+        }
     }
 
     fn release_keys(&mut self) {
-        self.shown_mut().release_keys();
+        match &mut self.about {
+            Some(about) => about.release_keys(),
+            None => self.shown_mut().release_keys(),
+        }
     }
 }
 
@@ -265,6 +401,7 @@ mod tests {
     use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::character::Character;
+    use nova_data::records::desc::Desc;
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
@@ -276,7 +413,10 @@ mod tests {
     use nova_rsrc::{Fork, ForkReader};
     use nova_view::galaxy::GalaxyMap;
     use nova_view::galaxy::map::ENTER_BUTTON;
+    use nova_view::geometry::Bounds;
     use nova_view::ships::{ShipBrowser, ShipId};
+    use nova_view::text::fixture::MonoMetrics;
+    use nova_view::ui::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
     use nova_view::{DrawCommand, Font, Key, MouseButton, Point};
 
     use super::*;
@@ -359,11 +499,25 @@ mod tests {
                 &vec![0; Stellar::SIZE.expect("fixed")],
             )
             .resource(Spin::TYPE, 1000, None, &spin)
+            .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
             .build()
             .bytes;
         let file = OneFile(fork);
         let data = GameData::load(&file, &file, Path::new("/data"), None).expect("opens");
         Rc::new(data)
+    }
+
+    /// The About text's `dësc`: ten short lines.
+    fn about_text() -> Vec<u8> {
+        let mut bytes: Vec<u8> = (0..10)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\r")
+            .into_bytes();
+        bytes.push(0);
+        bytes.extend([0xFF; 2]);
+        bytes.extend([0; 34]);
+        bytes
     }
 
     fn key(key: Key, pressed: bool) -> Input {
@@ -751,7 +905,7 @@ mod tests {
         let mut expected = drawn(&ships);
         expected.push(hint());
         assert_eq!(drawn(&screen), expected);
-        assert_eq!(HINT, "Tab: ships / galaxy map   F: fly");
+        assert_eq!(HINT, "Tab: ships / galaxy map   F: fly   I: about");
         assert_eq!((HINT_AT, HINT_SIZE), (Point::new(16.0, 8.0), 14.0));
     }
 
@@ -930,5 +1084,264 @@ mod tests {
         screen.input(&key(Key::Escape, true));
         let list = drawn(&screen);
         assert_eq!(list.iter().last(), Some(&hint()));
+    }
+
+    // The About dialog.
+
+    /// Dialog templates by ID: "Desc Dialog" (3003) alone, 200 x 100 at
+    /// (0, 0), with Done (1) and a 100 x 36 text box (3): three lines of
+    /// the About text show.
+    struct Dialogs;
+
+    impl DialogResources for Dialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            if id != DESC_DIALOG {
+                return Err(format!("no DLOG {id}"));
+            }
+            let item = |x, y, w, h, kind| ItemTemplate {
+                bounds: Bounds::at(Point::new(x, y), w, h),
+                enabled: true,
+                kind,
+            };
+            Ok(DialogTemplate {
+                bounds: Bounds::at(Point::new(0.0, 0.0), 200.0, 100.0),
+                placement: Placement::Fixed,
+                items: vec![
+                    item(100.0, 70.0, 99.0, 25.0, ItemSpec::User),
+                    item(10.0, 150.0, 20.0, 20.0, ItemSpec::Picture(1431)),
+                    item(10.0, 10.0, 100.0, 36.0, ItemSpec::User),
+                ],
+            })
+        }
+    }
+
+    /// No dialogs at all.
+    struct NoDialogs;
+
+    impl DialogResources for NoDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            Err(format!("no DLOG {id}"))
+        }
+    }
+
+    fn with_dialogs(data: Rc<GameData>) -> AppScreen {
+        AppScreen::new(data).with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics))
+    }
+
+    fn open_about(screen: &mut AppScreen) {
+        assert_eq!(screen.input(&key(Key::Char('i'), true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::About);
+    }
+
+    fn about(screen: &AppScreen) -> &DescDialog {
+        screen.about().expect("the About dialog is open")
+    }
+
+    #[test]
+    fn i_opens_the_about_text_over_the_side_shown() {
+        let data = data();
+        let mut screen = with_dialogs(Rc::clone(&data));
+        assert!(screen.about().is_none());
+        let below = drawn(&screen);
+        open_about(&mut screen);
+        assert_eq!(about(&screen).lines()[..2], ["line 0", "line 1"]);
+        assert_eq!(about(&screen).lines().len(), 10);
+        // The side, the hint, then the dialog.
+        let list = drawn(&screen);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        let below: Vec<&DrawCommand> = below.iter().collect();
+        assert_eq!(commands[..below.len()], below[..]);
+        assert_eq!(
+            drawn(about(&screen)).iter().collect::<Vec<_>>(),
+            commands[below.len()..]
+        );
+
+        // From the galaxy map too.
+        let mut screen = with_dialogs(data);
+        screen.input(&key(Key::Tab, true));
+        open_about(&mut screen);
+    }
+
+    #[test]
+    fn the_about_dialog_uses_the_game_s_button_style() {
+        let mut screen = with_dialogs(data());
+        open_about(&mut screen);
+        let list = drawn(about(&screen));
+        let done = list
+            .iter()
+            .find_map(|command| match command {
+                DrawCommand::Text {
+                    text, font, size, ..
+                } if text == "Done" => Some((*font, *size)),
+                _ => None,
+            })
+            .expect("the Done label");
+        assert_eq!(done, (Font::Charcoal, 12.0), "stock, as there is no cölr");
+    }
+
+    #[test]
+    fn without_dialogs_i_does_nothing() {
+        let mut screen = AppScreen::new(data());
+        let before = drawn(&screen);
+        assert_eq!(screen.input(&key(Key::Char('i'), true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        assert!(screen.about().is_none());
+        assert_eq!(drawn(&screen), before);
+    }
+
+    #[test]
+    fn a_missing_dialog_or_text_opens_nothing() {
+        let mut screen =
+            AppScreen::new(data()).with_dialogs(Rc::new(NoDialogs), Rc::new(MonoMetrics));
+        screen.input(&key(Key::Char('i'), true));
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+
+        let file = OneFile(ForkBuilder::new().build().bytes);
+        let empty = Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"));
+        let mut screen = with_dialogs(empty);
+        screen.input(&key(Key::Char('i'), true));
+        assert!(screen.about().is_none());
+    }
+
+    #[test]
+    fn an_i_repeat_or_release_opens_nothing() {
+        let mut screen = with_dialogs(data());
+        screen.input(&key(Key::Char('i'), false));
+        screen.input(&held(Key::Char('i')));
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+    }
+
+    #[test]
+    fn i_does_nothing_in_flight() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        screen.input(&key(Key::Char('i'), true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.about().is_none());
+    }
+
+    #[test]
+    fn while_open_input_reaches_only_the_dialog() {
+        let mut screen = with_dialogs(data());
+        open_about(&mut screen);
+        for input in [
+            key(Key::Right, true),
+            key(Key::Tab, true),
+            key(Key::Char('f'), true),
+            key(Key::Char('i'), true),
+        ] {
+            assert_eq!(screen.input(&input), ScreenAction::None);
+        }
+        assert_eq!(screen.showing(), Showing::About);
+        assert_eq!(screen.ship_browser().selected(), Some(ShipId(128)));
+        assert!(screen.flight_view().is_none());
+        screen.input(&key(Key::Down, true));
+        screen.input(&held(Key::Down));
+        assert_eq!(about(&screen).first_line(), 2);
+    }
+
+    #[test]
+    fn escape_closes_the_dialog_and_never_quits() {
+        let mut screen = with_dialogs(data());
+        screen.input(&key(Key::Tab, true));
+        open_about(&mut screen);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::GalaxyMap);
+        assert!(screen.about().is_none());
+        assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+    }
+
+    #[test]
+    fn return_or_a_click_on_done_closes_the_dialog() {
+        let mut screen = with_dialogs(data());
+        open_about(&mut screen);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+
+        open_about(&mut screen);
+        let done = about(&screen)
+            .dialog()
+            .item_bounds(1)
+            .expect("Done")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: done,
+            });
+        }
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+    }
+
+    #[test]
+    fn only_the_dialog_ticks_while_it_is_open() {
+        let mut screen = with_dialogs(data());
+        let tick = Duration::from_millis(100);
+        screen.tick(tick);
+        let frame = screen.ship_browser().frame();
+        open_about(&mut screen);
+        screen.tick(tick);
+        assert_eq!(screen.ship_browser().frame(), frame, "paused below");
+        screen.input(&key(Key::Escape, true));
+        screen.tick(tick);
+        assert_ne!(screen.ship_browser().frame(), frame);
+    }
+
+    #[test]
+    fn opening_cancels_a_drag_and_lets_go_of_the_keys_below() {
+        let mut screen = with_dialogs(data());
+        enter(&mut screen, 128);
+        let camera_at = camera(&screen);
+        screen.input(&key(Key::Char('d'), true));
+        open_about(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::System);
+        screen.tick(Duration::from_secs(1));
+        assert_eq!(camera(&screen), camera_at, "D was let go");
+
+        let mut screen = with_dialogs(data());
+        screen.input(&key(Key::Tab, true));
+        let view = *screen.galaxy_map().view();
+        let at = Point::new(500.0, 400.0);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at,
+        });
+        open_about(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        screen.input(&Input::PointerMoved(Point::new(600.0, 400.0)));
+        assert_eq!(*screen.galaxy_map().view(), view, "the drag was cancelled");
+    }
+
+    #[test]
+    fn debug_shows_whether_there_are_dialogs() {
+        let debug = format!("{:?}", with_dialogs(data()));
+        assert!(debug.contains("dialogs: Some(Dialogs { .. })"), "{debug}");
+        let debug = format!("{:?}", AppScreen::new(data()));
+        assert!(debug.contains("dialogs: None"), "{debug}");
+    }
+
+    #[test]
+    fn cancelling_and_releasing_reach_the_dialog_while_open() {
+        let mut screen = with_dialogs(data());
+        open_about(&mut screen);
+        let done = about(&screen)
+            .dialog()
+            .item_bounds(1)
+            .expect("Done")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: done,
+        };
+        screen.input(&button(true));
+        screen.release_keys();
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert_eq!(screen.showing(), Showing::About, "the click was abandoned");
     }
 }
