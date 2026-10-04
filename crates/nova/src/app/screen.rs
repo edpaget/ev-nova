@@ -1,5 +1,27 @@
 //! The screen router: every screen the app can show, as one [`Screen`].
 //!
+//! # The main menu and pilots
+//!
+//! The game opens on the main menu ([`AppScreen::with_pilots`]): New
+//! Pilot asks for a name in "Create a new pilot:" (the interface file's,
+//! or a built-in one), refusing a name already saved, then creates the
+//! pilot from the first `chär`, saves it and flies it. Open Pilot lists
+//! the saved pilots and flies the one chosen, from the spaceport of the
+//! stellar it last landed on when it is docked. Quit quits. Escape in
+//! flight goes back to the menu, saving the pilot and putting it away.
+//!
+//! A pilot with a name is saved through the [`PilotKeeper`] on landing,
+//! on taking off, after each change made in the spaceport
+//! ([`AppScreen::transact`]), on going back to the menu and when the app
+//! quits ([`Screen::quit`]); each failure is a warning
+//! ([`Screen::take_warnings`]). Tab on the menu goes to the developer's
+//! sides below, where F flies a fresh pilot without a name, never saved,
+//! and Escape at the top goes back to the menu. A router without a main
+//! menu ([`start_screen`] alone) opens on the ship browser, and Escape at
+//! the top quits.
+//!
+//! # The developer's sides
+//!
 //! The router keeps two sides alive, the ship browser and the
 //! [`Navigator`] (the galaxy map and the system opened from it), and shows
 //! one at a time. Tab switches sides, so each keeps its state (the
@@ -47,15 +69,18 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
+use nova_sim::{Pilot, PilotKeeper, PilotStore, pilot_key};
 pub use nova_view::Showing;
 use nova_view::flight::FlightView;
 use nova_view::galaxy::GalaxyMap;
+use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
 use nova_view::ui::desc::DESC_DIALOG;
+use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::{DescDialog, DescriptionSource, DialogResources, PrefsDialog};
 use nova_view::{
@@ -68,6 +93,9 @@ use nova_view::{
 /// without them it draws [`HINT_WITHOUT_DIALOGS`].
 pub const HINT: &str = "Tab: ships / galaxy map   F: fly   I: about   P: preferences";
 pub const HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map   F: fly";
+/// The hint the router draws over the main menu, with dialogs and without.
+pub const MENU_HINT: &str = "Tab: ships / galaxy map   I: about   P: preferences";
+pub const MENU_HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map";
 pub const HINT_AT: Point = Point::new(16.0, 8.0);
 pub const HINT_SIZE: f32 = 14.0;
 pub const HINT_COLOR: Color = Color::DIM;
@@ -78,9 +106,15 @@ pub const ABOUT_TEXT: i16 = 32767;
 /// Why the spaceport cannot be laid out when the router has no dialogs.
 pub const NO_INTERFACE: &str = "no interface file";
 
-/// The two sides Tab switches between, and flight, entered from either.
+/// What the New Pilot dialog says of a name no pilot file can be saved
+/// under, such as `..`.
+pub const UNUSABLE_NAME: &str = "That name can't be used for a pilot file.";
+
+/// The main menu, the two sides Tab switches between, and flight,
+/// entered from the menu or from either side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Side {
+    MainMenu,
     Ships,
     Galaxy,
     Flight,
@@ -119,6 +153,35 @@ pub struct AppScreen {
     preferences: Option<PrefsDialog>,
     /// The preferences chosen since they were last taken, if they changed.
     prefs_change: Option<SoundPrefs>,
+    /// The main menu and where pilots are kept, once given.
+    menu: Option<Menu>,
+    /// The New Pilot dialog, while it is open over the main menu.
+    new_pilot: Option<NewPilotDialog>,
+    /// The saved pilots' list, while it is open over the main menu.
+    open_pilot: Option<PilotList>,
+    /// The warnings since they were last taken.
+    warnings: Vec<String>,
+}
+
+/// The main menu, the metrics its screens' text is laid out by when there
+/// are no dialogs, and where pilots are kept (if anywhere).
+#[derive(Clone)]
+struct Menu {
+    screen: MainMenu,
+    metrics: Rc<dyn TextMetrics>,
+    pilots: Option<Rc<PilotKeeper<Box<dyn PilotStore>>>>,
+}
+
+impl std::fmt::Debug for Menu {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Menu")
+            .field("screen", &self.screen)
+            .field(
+                "pilots",
+                &self.pilots.as_ref().map(|keeper| keeper.store().location()),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 /// The interface file's dialogs and the metrics their text is laid out by.
@@ -152,7 +215,62 @@ impl AppScreen {
             sound_prefs: SoundPrefs::default(),
             preferences: None,
             prefs_change: None,
+            menu: None,
+            new_pilot: None,
+            open_pilot: None,
+            warnings: Vec::new(),
         }
+    }
+
+    /// The router with the main menu, which it now opens on: New Pilot
+    /// and Open Pilot save and open pilots through `pilots`, and its
+    /// screens lay out their text with `metrics` when there are no
+    /// dialogs. With no `pilots` (nowhere to keep them), New Pilot still
+    /// flies, saving nothing, and Open Pilot lists nothing.
+    #[must_use]
+    pub fn with_pilots(
+        self,
+        pilots: Option<PilotKeeper<Box<dyn PilotStore>>>,
+        metrics: Rc<dyn TextMetrics>,
+    ) -> Self {
+        let screen = MainMenu::new(self.data.button_style(), Rc::clone(&metrics));
+        Self {
+            side: Side::MainMenu,
+            return_to: Side::MainMenu,
+            menu: Some(Menu {
+                screen,
+                metrics,
+                pilots: pilots.map(Rc::new),
+            }),
+            ..self
+        }
+    }
+
+    /// The main menu, once given.
+    #[must_use]
+    pub fn main_menu(&self) -> Option<&MainMenu> {
+        self.menu.as_ref().map(|menu| &menu.screen)
+    }
+
+    /// The New Pilot dialog, while it is open.
+    #[must_use]
+    pub fn new_pilot(&self) -> Option<&NewPilotDialog> {
+        self.new_pilot.as_ref()
+    }
+
+    /// The saved pilots' list, while it is open.
+    #[must_use]
+    pub fn pilot_list(&self) -> Option<&PilotList> {
+        self.open_pilot.as_ref()
+    }
+
+    /// Changes the pilot with `change` while the ship is landed, as a
+    /// spaceport screen does, and says whether it did; the pilot is saved
+    /// after the next input or tick.
+    pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
+        self.flight
+            .as_mut()
+            .is_some_and(|flight| flight.transact(change))
     }
 
     /// The router with dialogs: I opens the About text in a dialog built
@@ -210,7 +328,14 @@ impl AppScreen {
         if self.preferences.is_some() {
             return Showing::Preferences;
         }
+        if self.new_pilot.is_some() {
+            return Showing::NewPilot;
+        }
+        if self.open_pilot.is_some() {
+            return Showing::OpenPilot;
+        }
         match self.side {
+            Side::MainMenu => Showing::MainMenu,
             Side::Ships => Showing::ShipBrowser,
             Side::Galaxy if self.galaxy.system().is_some() => Showing::System,
             Side::Galaxy => Showing::GalaxyMap,
@@ -260,6 +385,7 @@ impl AppScreen {
 
     fn shown(&self) -> &dyn Screen {
         match self.side {
+            Side::MainMenu => &self.menu.as_ref().expect(MENU).screen,
             Side::Ships => &self.ships,
             Side::Galaxy => &self.galaxy,
             Side::Flight => self.flight.as_ref().expect(ENTERED),
@@ -269,6 +395,7 @@ impl AppScreen {
 
     fn shown_mut(&mut self) -> &mut dyn Screen {
         match self.side {
+            Side::MainMenu => &mut self.menu.as_mut().expect(MENU).screen,
             Side::Ships => &mut self.ships,
             Side::Galaxy => &mut self.galaxy,
             Side::Flight => self.flight.as_mut().expect(ENTERED),
@@ -362,15 +489,19 @@ impl AppScreen {
         ScreenAction::None
     }
 
-    /// The overlay open over the side shown, if any: the About dialog or
-    /// the Preferences dialog.
+    /// The overlay open over the side shown, if any: the About dialog, the
+    /// Preferences dialog, the New Pilot dialog or the saved pilots' list.
     fn overlay_mut(&mut self) -> Option<&mut dyn Screen> {
         if let Some(about) = &mut self.about {
             return Some(about);
         }
-        self.preferences
-            .as_mut()
-            .map(|dialog| dialog as &mut dyn Screen)
+        if let Some(dialog) = &mut self.preferences {
+            return Some(dialog);
+        }
+        if let Some(dialog) = &mut self.new_pilot {
+            return Some(dialog);
+        }
+        self.open_pilot.as_mut().map(|list| list as &mut dyn Screen)
     }
 
     /// The About dialog's input; it closes once Done is activated.
@@ -399,6 +530,13 @@ impl AppScreen {
                 let flight = self.flight.as_mut().expect(ENTERED);
                 if flight.map_open() {
                     flight.close_map();
+                } else if self.return_to == Side::MainMenu {
+                    // The pilot is put away: saved, and flight dropped, so
+                    // the developer's F flies a fresh, unnamed pilot.
+                    self.switch_to(Side::MainMenu);
+                    self.save_pilot();
+                    self.flight = None;
+                    self.spaceport = None;
                 } else {
                     self.switch_to(self.return_to);
                 }
@@ -408,17 +546,238 @@ impl AppScreen {
         let flight = self.flight.as_mut().expect(ENTERED);
         flight.input(input);
         if let Some(stellar) = flight.take_landing() {
-            let layout = match &self.dialogs {
-                Some(dialogs) => dialogs
-                    .resources
-                    .dialog_template(SPACEPORT_DIALOG)
-                    .map(|template| (template, Rc::clone(&dialogs.metrics))),
-                None => Err(NO_INTERFACE.to_owned()),
-            };
-            self.spaceport = Some(SpaceportView::new(self.data.as_ref(), stellar, layout));
-            self.switch_to(Side::Spaceport);
+            self.show_spaceport(stellar);
         }
         ScreenAction::None
+    }
+
+    /// Shows the spaceport of `stellar`, landed on, laid out by the
+    /// "Spaceport" dialog when the router has dialogs.
+    fn show_spaceport(&mut self, stellar: nova_sim::StellarId) {
+        let layout = match &self.dialogs {
+            Some(dialogs) => dialogs
+                .resources
+                .dialog_template(SPACEPORT_DIALOG)
+                .map(|template| (template, Rc::clone(&dialogs.metrics))),
+            None => Err(NO_INTERFACE.to_owned()),
+        };
+        self.spaceport = Some(SpaceportView::new(self.data.as_ref(), stellar, layout));
+        self.switch_to(Side::Spaceport);
+    }
+
+    /// Flies `pilot`, from the main menu, in place of any flight; Escape
+    /// goes back to the menu. A pilot docked at a stellar resumes in its
+    /// spaceport.
+    fn start_flight(&mut self, pilot: Pilot) {
+        self.spaceport = None;
+        let mut flight = FlightView::with_pilot(Rc::clone(&self.data), pilot);
+        let landing = flight.take_landing();
+        self.flight = Some(flight);
+        self.return_to = Side::MainMenu;
+        self.switch_to(Side::Flight);
+        if let Some(stellar) = landing {
+            self.show_spaceport(stellar);
+        }
+    }
+
+    /// Where pilots are kept, if anywhere.
+    fn keeper(&self) -> Option<Rc<PilotKeeper<Box<dyn PilotStore>>>> {
+        self.menu.as_ref().and_then(|menu| menu.pilots.clone())
+    }
+
+    /// Saves the pilot flying, when it has a name and there is somewhere to
+    /// keep it; a failure becomes a warning. Pilots without a name, which
+    /// the developer's F flies, are never saved.
+    fn save_pilot(&mut self) {
+        let (Some(flight), Some(keeper)) = (&self.flight, self.keeper()) else {
+            return;
+        };
+        let Some(pilot) = flight.pilot() else {
+            return;
+        };
+        if pilot_key(pilot.name()).is_none() {
+            return;
+        }
+        if let Err(warning) = keeper.save(pilot) {
+            self.warnings.push(warning);
+        }
+    }
+
+    /// Saves the pilot if flight says a save is due: it has landed, taken
+    /// off or changed in the spaceport.
+    fn save_if_due(&mut self) {
+        if self.flight.as_mut().is_some_and(FlightView::take_save_due) {
+            self.save_pilot();
+        }
+    }
+
+    /// The main menu's input: its choice opens the New Pilot dialog or the
+    /// saved pilots' list over it, or quits. Tab goes to the ship browser.
+    fn menu_input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Key {
+            key: Key::Tab,
+            pressed,
+            repeat,
+        } = *input
+        {
+            if pressed && !repeat {
+                self.switch_to(Side::Ships);
+            }
+            return ScreenAction::None;
+        }
+        let menu = self.menu.as_mut().expect(MENU);
+        menu.screen.input(input);
+        match menu.screen.take_choice() {
+            Some(MenuChoice::NewPilot) => self.open_new_pilot(),
+            Some(MenuChoice::OpenPilot) => self.open_pilot_list(),
+            Some(MenuChoice::Quit) => return ScreenAction::Quit,
+            None => {}
+        }
+        ScreenAction::None
+    }
+
+    /// Lets go of the side shown, the main menu, as an overlay opens over
+    /// it: its pointer gesture is abandoned and its keys let go of.
+    fn below_overlay(&mut self) {
+        let below = self.shown_mut();
+        below.cancel_pointer();
+        below.release_keys();
+    }
+
+    /// Opens the New Pilot dialog: the interface file's, or the built-in
+    /// one without it (with a warning when the interface file has none).
+    fn open_new_pilot(&mut self) {
+        let style = self.data.button_style();
+        let built = self.dialogs.as_ref().map(|dialogs| {
+            dialogs
+                .resources
+                .dialog_template(NEW_PILOT_DIALOG)
+                .and_then(|template| {
+                    NewPilotDialog::new(&template, style, Rc::clone(&dialogs.metrics))
+                })
+        });
+        let dialog = match built {
+            Some(Ok(dialog)) => dialog,
+            other => {
+                if let Some(Err(reason)) = other {
+                    self.warnings.push(format!(
+                        "nova: using the built-in New Pilot dialog: {reason}"
+                    ));
+                }
+                let metrics = Rc::clone(&self.menu.as_ref().expect(MENU).metrics);
+                NewPilotDialog::fallback(style, metrics)
+            }
+        };
+        self.below_overlay();
+        self.new_pilot = Some(dialog);
+    }
+
+    /// Opens the saved pilots' list; when they cannot be listed, it shows
+    /// why, and so does a warning.
+    fn open_pilot_list(&mut self) {
+        let (keys, error) = match self.keeper().map(|keeper| keeper.list()) {
+            Some(Ok(keys)) => (keys, None),
+            Some(Err(error)) => (Vec::new(), Some(error)),
+            None => (Vec::new(), None),
+        };
+        let metrics = Rc::clone(&self.menu.as_ref().expect(MENU).metrics);
+        let mut list = PilotList::new(keys, self.data.button_style(), metrics);
+        if let Some(error) = error {
+            list.show_error(&error);
+            self.warnings.push(error);
+        }
+        self.below_overlay();
+        self.open_pilot = Some(list);
+    }
+
+    /// The New Pilot dialog's input. A name already saved, or one no file
+    /// can be saved under, is refused; any other creates the pilot, saves
+    /// it at once (so Open Pilot lists it before it lands) and flies it.
+    fn new_pilot_input(&mut self, input: &Input) -> ScreenAction {
+        let dialog = self.new_pilot.as_mut().expect("open");
+        dialog.input(input);
+        let outcome = dialog.take_outcome();
+        match outcome {
+            Some(NewPilotOutcome::Cancel) => self.close_new_pilot(),
+            Some(NewPilotOutcome::Create(name)) => {
+                let keeper = self.keeper();
+                let refusal = if pilot_key(&name).is_none() {
+                    Some(UNUSABLE_NAME.to_owned())
+                } else if keeper.as_ref().is_some_and(|keeper| keeper.exists(&name)) {
+                    Some(NAME_TAKEN.to_owned())
+                } else {
+                    None
+                };
+                if let Some(refusal) = refusal {
+                    self.new_pilot.as_mut().expect("open").refuse(&refusal);
+                    return ScreenAction::None;
+                }
+                match Pilot::new(self.data.as_ref(), &name) {
+                    Ok(pilot) => {
+                        if let Some(keeper) = keeper
+                            && let Err(warning) = keeper.save(&pilot)
+                        {
+                            self.warnings.push(warning);
+                        }
+                        self.close_new_pilot();
+                        self.start_flight(pilot);
+                    }
+                    Err(error) => {
+                        let why = error.to_string();
+                        self.new_pilot.as_mut().expect("open").refuse(&why);
+                        self.warnings
+                            .push(format!("nova: cannot create a pilot: {why}"));
+                    }
+                }
+            }
+            None => {}
+        }
+        ScreenAction::None
+    }
+
+    /// Closes the New Pilot dialog, keeping its sounds.
+    fn close_new_pilot(&mut self) {
+        if let Some(mut dialog) = self.new_pilot.take() {
+            self.sounds.extend(dialog.take_sounds());
+        }
+    }
+
+    /// The saved pilots' list's input: the pilot chosen is opened and
+    /// flown; one that cannot be opened says why in the list, and in a
+    /// warning.
+    fn open_pilot_input(&mut self, input: &Input) -> ScreenAction {
+        let list = self.open_pilot.as_mut().expect("open");
+        list.input(input);
+        match list.take_outcome() {
+            Some(PilotListOutcome::Cancel) => self.close_pilot_list(),
+            Some(PilotListOutcome::Open(key)) => {
+                let opened = match self.keeper() {
+                    Some(keeper) => keeper.open(&key),
+                    None => Err(format!(
+                        "nova: there is nowhere to open the pilot {key} from"
+                    )),
+                };
+                match opened {
+                    Ok(pilot) => {
+                        self.close_pilot_list();
+                        self.start_flight(pilot);
+                    }
+                    Err(error) => {
+                        self.open_pilot.as_mut().expect("open").show_error(&error);
+                        self.warnings.push(error);
+                    }
+                }
+            }
+            None => {}
+        }
+        ScreenAction::None
+    }
+
+    /// Closes the saved pilots' list, keeping its sounds.
+    fn close_pilot_list(&mut self) {
+        if let Some(mut list) = self.open_pilot.take() {
+            self.sounds.extend(list.take_sounds());
+        }
     }
 
     /// The spaceport's input, all of it; once it is left, the ship takes off
@@ -433,6 +792,76 @@ impl AppScreen {
             self.flight.as_mut().expect(ENTERED).take_off();
         }
         ScreenAction::None
+    }
+
+    /// Routes one input, as [`Screen::input`] describes.
+    fn route(&mut self, input: &Input) -> ScreenAction {
+        if self.about.is_some() {
+            return self.about_input(input);
+        }
+        if self.preferences.is_some() {
+            return self.preferences_input(input);
+        }
+        if self.new_pilot.is_some() {
+            return self.new_pilot_input(input);
+        }
+        if self.open_pilot.is_some() {
+            return self.open_pilot_input(input);
+        }
+        if let Input::Key {
+            key: Key::Char('p'),
+            pressed,
+            repeat,
+        } = *input
+            && self.dialogs.is_some()
+        {
+            if pressed && !repeat {
+                self.open_preferences();
+            }
+            return ScreenAction::None;
+        }
+        match self.side {
+            Side::Flight => return self.flight_input(input),
+            Side::Spaceport => return self.spaceport_input(input),
+            Side::MainMenu | Side::Ships | Side::Galaxy => {}
+        }
+        if let Input::Key {
+            key: Key::Char('i'),
+            pressed,
+            repeat,
+        } = *input
+            && self.dialogs.is_some()
+        {
+            if pressed && !repeat {
+                self.open_about();
+            }
+            return ScreenAction::None;
+        }
+        if self.side == Side::MainMenu {
+            return self.menu_input(input);
+        }
+        if let Input::Key {
+            key: key @ (Key::Tab | Key::Escape | Key::Char('f')),
+            pressed,
+            repeat,
+        } = *input
+        {
+            if !pressed || repeat {
+                return ScreenAction::None;
+            }
+            match key {
+                Key::Escape if self.showing() == Showing::System => {
+                    return self.galaxy.input(input);
+                }
+                Key::Escape if self.menu.is_some() => self.switch_to(Side::MainMenu),
+                Key::Escape => return ScreenAction::Quit,
+                Key::Tab if self.side == Side::Ships => self.switch_to(Side::Galaxy),
+                Key::Tab => self.switch_to(Side::Ships),
+                _ => self.enter_flight(),
+            }
+            return ScreenAction::None;
+        }
+        self.shown_mut().input(input)
     }
 }
 
@@ -455,8 +884,11 @@ const ENTERED: &str = "flight is built when it is entered";
 /// The spaceport shows only once the ship has landed.
 const LANDED: &str = "the spaceport is built when the ship lands";
 
+/// The main menu shows only once the router has one.
+const MENU: &str = "the main menu side is shown only with a main menu";
+
 /// The screen the app opens on: every screen over `data`, showing the ship
-/// browser.
+/// browser; [`AppScreen::with_pilots`] makes it open on the main menu.
 #[must_use]
 pub fn start_screen(data: Rc<GameData>) -> AppScreen {
     AppScreen::new(data)
@@ -491,87 +923,59 @@ impl Screen for AppScreen {
     /// router before flight. Their repeats and releases are consumed.
     /// While either dialog is open, every event goes to it alone (Escape
     /// closes it and never quits).
+    ///
+    /// With a main menu ([`AppScreen::with_pilots`]), the router opens on
+    /// it. Its New Pilot opens the New Pilot dialog and Open Pilot the
+    /// saved pilots' list over it; while either is open, every event goes
+    /// to it first, so typing a name never opens a dialog. Choosing a
+    /// pilot flies it, and Escape in flight goes back to the menu, saving
+    /// the pilot and putting it away. Quit, or Escape, quits. I and P work
+    /// on the menu, and Tab goes to the ship browser; on the ship browser
+    /// and the galaxy map, Escape goes back to the menu instead of
+    /// quitting.
+    ///
+    /// After every input, a pilot with a name is saved when flight says a
+    /// save is due: on landing, on taking off, and after a change in the
+    /// spaceport ([`AppScreen::transact`]).
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if self.about.is_some() {
-            return self.about_input(input);
-        }
-        if self.preferences.is_some() {
-            return self.preferences_input(input);
-        }
-        if let Input::Key {
-            key: Key::Char('p'),
-            pressed,
-            repeat,
-        } = *input
-            && self.dialogs.is_some()
-        {
-            if pressed && !repeat {
-                self.open_preferences();
-            }
-            return ScreenAction::None;
-        }
-        match self.side {
-            Side::Flight => return self.flight_input(input),
-            Side::Spaceport => return self.spaceport_input(input),
-            Side::Ships | Side::Galaxy => {}
-        }
-        if let Input::Key {
-            key: Key::Char('i'),
-            pressed,
-            repeat,
-        } = *input
-            && self.dialogs.is_some()
-        {
-            if pressed && !repeat {
-                self.open_about();
-            }
-            return ScreenAction::None;
-        }
-        if let Input::Key {
-            key: key @ (Key::Tab | Key::Escape | Key::Char('f')),
-            pressed,
-            repeat,
-        } = *input
-        {
-            if !pressed || repeat {
-                return ScreenAction::None;
-            }
-            match key {
-                Key::Escape if self.showing() == Showing::System => {
-                    return self.galaxy.input(input);
-                }
-                Key::Escape => return ScreenAction::Quit,
-                Key::Tab if self.side == Side::Ships => self.switch_to(Side::Galaxy),
-                Key::Tab => self.switch_to(Side::Ships),
-                _ => self.enter_flight(),
-            }
-            return ScreenAction::None;
-        }
-        self.shown_mut().input(input)
+        let action = self.route(input);
+        self.save_if_due();
+        action
     }
 
-    /// Only the side shown ticks; a hidden one is paused. While the About
-    /// dialog or the Preferences dialog is open, only it ticks: flight
-    /// pauses under the preferences, as in the original.
+    /// Only the side shown ticks; a hidden one is paused. While an overlay
+    /// (the About dialog, the Preferences dialog, the New Pilot dialog or
+    /// the saved pilots' list) is open, only it ticks: flight pauses under
+    /// the preferences, as in the original. A save that is due is made.
     fn tick(&mut self, dt: Duration) {
         match self.overlay_mut() {
             Some(overlay) => overlay.tick(dt),
             None => self.shown_mut().tick(dt),
         }
+        self.save_if_due();
     }
 
     /// The side shown, then the hint (not over flight, which has its own
-    /// help line, or the spaceport), then the About dialog or the
-    /// Preferences dialog when one is open.
+    /// help line, or the spaceport), then the overlay open: the New Pilot
+    /// dialog or the saved pilots' list, then the About dialog or the
+    /// Preferences dialog.
     fn draw(&self, list: &mut DrawList) {
         self.shown().draw(list);
-        if matches!(self.side, Side::Ships | Side::Galaxy) {
-            let hint = if self.dialogs.is_some() {
-                HINT
-            } else {
-                HINT_WITHOUT_DIALOGS
-            };
+        let hint = match (self.side, self.dialogs.is_some()) {
+            (Side::Ships | Side::Galaxy, true) => Some(HINT),
+            (Side::Ships | Side::Galaxy, false) => Some(HINT_WITHOUT_DIALOGS),
+            (Side::MainMenu, true) => Some(MENU_HINT),
+            (Side::MainMenu, false) => Some(MENU_HINT_WITHOUT_DIALOGS),
+            (Side::Flight | Side::Spaceport, _) => None,
+        };
+        if let Some(hint) = hint {
             list.text(hint, HINT_AT, HINT_SIZE, None, HINT_COLOR);
+        }
+        if let Some(dialog) = &self.new_pilot {
+            dialog.draw(list);
+        }
+        if let Some(pilots) = &self.open_pilot {
+            pilots.draw(list);
         }
         if let Some(about) = &self.about {
             about.draw(list);
@@ -601,6 +1005,13 @@ impl Screen for AppScreen {
         sounds.extend(self.ships.take_sounds());
         sounds.extend(self.galaxy.take_sounds());
         let open = [
+            self.menu
+                .as_mut()
+                .map(|menu| &mut menu.screen as &mut dyn Screen),
+            self.new_pilot
+                .as_mut()
+                .map(|dialog| dialog as &mut dyn Screen),
+            self.open_pilot.as_mut().map(|list| list as &mut dyn Screen),
             self.about.as_mut().map(|about| about as &mut dyn Screen),
             self.preferences
                 .as_mut()
@@ -622,6 +1033,19 @@ impl Screen for AppScreen {
 
     fn now_showing(&self) -> Option<Showing> {
         Some(self.showing())
+    }
+
+    /// Saves the pilot flying, in flight or in the spaceport, when it has
+    /// a name.
+    fn quit(&mut self) {
+        self.save_pilot();
+    }
+
+    /// The warnings since they were last taken: saves that failed, pilots
+    /// that could not be listed or opened, and a New Pilot dialog missing
+    /// from the interface file.
+    fn take_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.warnings)
     }
 }
 
@@ -1406,6 +1830,9 @@ mod tests {
             }
             if id == PREFS_DIALOG {
                 return Ok(prefs_template());
+            }
+            if id == NEW_PILOT_DIALOG {
+                return Ok(new_pilot_template());
             }
             if id != DESC_DIALOG {
                 return Err(format!("no DLOG {id}"));
@@ -2270,5 +2697,505 @@ mod tests {
     #[test]
     fn the_flight_help_offers_p() {
         assert!(nova_view::flight::view::HELP.contains("P: preferences"));
+    }
+
+    // The main menu and pilots.
+
+    use nova_sim::fixture::MemoryPilots;
+    use nova_sim::{PilotKeeper, PilotStore};
+    use nova_view::menu::MenuChoice;
+    use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG};
+
+    fn keeper(store: &MemoryPilots) -> PilotKeeper<Box<dyn PilotStore>> {
+        PilotKeeper::new(Box::new(store.clone()))
+    }
+
+    /// The router with the main menu over `store`, and no dialogs.
+    fn menu(store: &MemoryPilots) -> AppScreen {
+        AppScreen::new(data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+    }
+
+    /// The router with the main menu over `store`, and dialogs.
+    fn menu_with_dialogs(store: &MemoryPilots) -> AppScreen {
+        with_dialogs(data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+    }
+
+    fn choose(screen: &mut AppScreen, choice: MenuChoice) -> ScreenAction {
+        let at = screen
+            .main_menu()
+            .expect("a main menu")
+            .button(choice)
+            .rect
+            .center();
+        let mut action = ScreenAction::None;
+        for pressed in [true, false] {
+            action = screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+        action
+    }
+
+    fn type_text(screen: &mut AppScreen, text: &str) {
+        for c in text.chars() {
+            screen.input(&Input::Text(c));
+        }
+    }
+
+    /// Creates a pilot named `name` from the main menu: New Pilot, the
+    /// name, Return.
+    fn create(screen: &mut AppScreen, name: &str) {
+        assert_eq!(choose(screen, MenuChoice::NewPilot), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::NewPilot);
+        type_text(screen, name);
+        screen.input(&key(Key::Enter, true));
+    }
+
+    fn pilot(screen: &AppScreen) -> &nova_sim::Pilot {
+        flight(screen).pilot().expect("flying")
+    }
+
+    fn saved(store: &MemoryPilots, key: &str) -> nova_sim::Pilot {
+        nova_sim::save::decode(&store.text(key).expect("saved")).expect("a pilot")
+    }
+
+    #[test]
+    fn with_pilots_the_app_opens_on_the_main_menu() {
+        let store = MemoryPilots::new();
+        let screen = menu(&store);
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert_eq!(screen.now_showing(), Some(Showing::MainMenu));
+        assert!(screen.flight_view().is_none());
+        let mut list = DrawList::new();
+        screen.main_menu().expect("a main menu").draw(&mut list);
+        let mut all = drawn(&screen);
+        assert_eq!(
+            all.iter().take(list.len()).collect::<Vec<_>>(),
+            list.iter().collect::<Vec<_>>()
+        );
+        assert!(matches!(
+            all.iter().last(),
+            Some(DrawCommand::Text { text, .. }) if text == MENU_HINT_WITHOUT_DIALOGS
+        ));
+        all = drawn(&menu_with_dialogs(&store));
+        assert!(matches!(
+            all.iter().last(),
+            Some(DrawCommand::Text { text, .. }) if text == MENU_HINT
+        ));
+    }
+
+    #[test]
+    fn quit_or_escape_on_the_main_menu_quits() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        assert_eq!(choose(&mut screen, MenuChoice::Quit), ScreenAction::Quit);
+        let mut screen = menu(&store);
+        assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+    }
+
+    #[test]
+    fn tab_goes_from_the_menu_to_the_developer_sides_and_escape_comes_back() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        screen.input(&key(Key::Char('f'), true));
+        assert_eq!(screen.showing(), Showing::MainMenu, "F is a developer key");
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(screen.showing(), Showing::GalaxyMap);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        screen.input(&key(Key::Tab, true));
+        enter(&mut screen, 128);
+        assert_eq!(screen.showing(), Showing::System);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(
+            screen.showing(),
+            Showing::GalaxyMap,
+            "back to the map first"
+        );
+    }
+
+    #[test]
+    fn new_pilot_asks_for_a_name_then_flies_and_saves_the_pilot() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(pilot(&screen).name(), "Ada");
+        assert_eq!(store.keys(), ["Ada"], "saved at once");
+        assert_eq!(saved(&store, "Ada"), *pilot(&screen));
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn typing_a_name_never_opens_the_dialogs_under_it() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        choose(&mut screen, MenuChoice::NewPilot);
+        for c in ['p', 'i', 'f'] {
+            screen.input(&key(Key::Char(c), true));
+            screen.input(&Input::Text(c));
+        }
+        assert_eq!(screen.showing(), Showing::NewPilot);
+        assert_eq!(screen.new_pilot().expect("open").name(), "pif");
+        screen.input(&key(Key::Backspace, true));
+        assert_eq!(screen.new_pilot().expect("open").name(), "pi");
+    }
+
+    #[test]
+    fn the_new_pilot_dialog_comes_from_the_interface_file_when_there_is_one() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        choose(&mut screen, MenuChoice::NewPilot);
+        let field = screen.new_pilot().expect("open").field().rect();
+        assert_eq!(field, new_pilot_template().items[7].bounds);
+        let mut without = menu(&store);
+        choose(&mut without, MenuChoice::NewPilot);
+        assert_eq!(without.showing(), Showing::NewPilot, "the built-in one");
+        let mut missing = AppScreen::new(data())
+            .with_dialogs(Rc::new(NoDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        choose(&mut missing, MenuChoice::NewPilot);
+        assert_eq!(missing.showing(), Showing::NewPilot, "the built-in one");
+        assert_eq!(
+            missing.take_warnings(),
+            ["nova: using the built-in New Pilot dialog: no DLOG 3102"]
+        );
+    }
+
+    #[test]
+    fn cancelling_new_pilot_goes_back_to_the_menu() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        choose(&mut screen, MenuChoice::NewPilot);
+        type_text(&mut screen, "Ada");
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert!(screen.new_pilot().is_none());
+        assert_eq!(store.writes(), 0);
+    }
+
+    #[test]
+    fn a_name_already_saved_is_refused_whatever_its_case() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        let writes = store.writes();
+        create(&mut screen, "ada");
+        assert_eq!(screen.showing(), Showing::NewPilot);
+        assert_eq!(
+            screen.new_pilot().expect("open").refusal(),
+            Some(NAME_TAKEN)
+        );
+        assert_eq!(store.writes(), writes);
+    }
+
+    #[test]
+    fn a_name_that_cannot_be_a_file_is_refused() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "..");
+        assert_eq!(screen.showing(), Showing::NewPilot);
+        assert_eq!(
+            screen.new_pilot().expect("open").refusal(),
+            Some(UNUSABLE_NAME)
+        );
+        assert_eq!(store.writes(), 0);
+    }
+
+    #[test]
+    fn open_pilot_lists_the_saved_pilots_and_resumes_the_chosen_one_where_it_landed() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        screen.input(&key(LAND, true));
+        let landed = pilot(&screen).clone();
+        assert_eq!(landed.stellar(), Some(nova_sim::StellarId(128)));
+        assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
+        let mut screen = menu(&store);
+        assert_eq!(
+            choose(&mut screen, MenuChoice::OpenPilot),
+            ScreenAction::None
+        );
+        assert_eq!(screen.showing(), Showing::OpenPilot);
+        assert_eq!(screen.pilot_list().expect("open").keys(), ["Ada"]);
+        screen.take_sounds();
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(128));
+        assert_eq!(*pilot(&screen), landed);
+        assert!(screen.pilot_list().is_none());
+        assert_eq!(screen.take_sounds(), [], "no landing sound");
+    }
+
+    #[test]
+    fn cancelling_open_pilot_goes_back_to_the_menu() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        choose(&mut screen, MenuChoice::OpenPilot);
+        assert_eq!(
+            screen.pilot_list().expect("open").keys(),
+            Vec::<String>::new()
+        );
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+    }
+
+    #[test]
+    fn a_pilot_that_cannot_be_opened_says_why_in_the_list() {
+        let store = MemoryPilots::new();
+        store.put("Broken", "not a save");
+        let mut screen = menu(&store);
+        choose(&mut screen, MenuChoice::OpenPilot);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::OpenPilot);
+        let error = screen
+            .pilot_list()
+            .expect("open")
+            .error()
+            .expect("an error")
+            .to_owned();
+        assert!(
+            error.starts_with("nova: the pilot Broken in memory: "),
+            "{error}"
+        );
+        assert_eq!(screen.take_warnings(), [error]);
+    }
+
+    #[test]
+    fn pilots_that_cannot_be_listed_say_why() {
+        let store = MemoryPilots::new();
+        store.fail_reads(true);
+        let mut screen = menu(&store);
+        choose(&mut screen, MenuChoice::OpenPilot);
+        let message = "nova: cannot list the pilots in memory (the disk is unreadable)";
+        assert_eq!(screen.pilot_list().expect("open").error(), Some(message));
+        assert_eq!(screen.take_warnings(), [message]);
+    }
+
+    #[test]
+    fn without_a_store_new_pilot_flies_unsaved_and_open_pilot_lists_nothing() {
+        let mut screen = AppScreen::new(data()).with_pilots(None, Rc::new(MonoMetrics));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        choose(&mut screen, MenuChoice::OpenPilot);
+        assert_eq!(
+            screen.pilot_list().expect("open").keys(),
+            Vec::<String>::new()
+        );
+        screen.input(&key(Key::Escape, true));
+        create(&mut screen, "Ada");
+        assert_eq!(screen.showing(), Showing::Flight);
+        screen.input(&key(LAND, true));
+        screen.quit();
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn landing_taking_off_and_a_transaction_each_save_the_pilot() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        assert_eq!(store.writes(), 1, "created");
+        screen.input(&key(LAND, true));
+        assert_eq!(store.writes(), 2, "landed");
+        assert_eq!(
+            saved(&store, "Ada").stellar(),
+            Some(nova_sim::StellarId(128))
+        );
+        assert!(screen.transact(|pilot| pilot.set_cash(4_321)));
+        screen.input(&Input::PointerMoved(Point::new(1.0, 1.0)));
+        assert_eq!(store.writes(), 3, "a spaceport transaction");
+        assert_eq!(saved(&store, "Ada").cash(), 4_321);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(store.writes(), 4, "took off");
+        screen.tick(TICK);
+        screen.input(&key(Key::Up, true));
+        assert_eq!(store.writes(), 4, "flying saves nothing");
+    }
+
+    #[test]
+    fn escape_to_the_menu_and_quitting_save_the_pilot() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        screen.input(&key(Key::Up, true));
+        screen.tick(TICK * 10);
+        let writes = store.writes();
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert_eq!(store.writes(), writes + 1);
+        assert!(screen.flight_view().is_none(), "the pilot is put away");
+        let mut screen = menu(&store);
+        choose(&mut screen, MenuChoice::OpenPilot);
+        screen.input(&key(Key::Enter, true));
+        screen.input(&key(LAND, true));
+        let writes = store.writes();
+        screen.quit();
+        assert_eq!(store.writes(), writes + 1, "quitting saves");
+    }
+
+    #[test]
+    fn a_failed_save_is_a_warning() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        store.fail_writes(true);
+        screen.input(&key(LAND, true));
+        assert_eq!(
+            screen.take_warnings(),
+            ["nova: cannot save the pilot Ada in memory (the disk is full)"]
+        );
+        assert_eq!(screen.take_warnings(), Vec::<String>::new(), "taken");
+    }
+
+    #[test]
+    fn the_developer_flight_is_a_fresh_unnamed_pilot_never_saved() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        screen.input(&key(Key::Escape, true));
+        let ada = store.text("Ada");
+        let writes = store.writes();
+        screen.input(&key(Key::Tab, true));
+        fly(&mut screen);
+        assert_eq!(pilot(&screen).name(), "");
+        screen.input(&key(LAND, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        screen.quit();
+        assert_eq!(store.writes(), writes, "nothing saved");
+        assert_eq!(store.text("Ada"), ada);
+        assert_eq!(store.keys(), ["Ada"]);
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn i_and_p_work_on_the_main_menu() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        open_about(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        open_prefs(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+    }
+
+    #[test]
+    fn the_menus_sounds_come_through_the_router() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        let at = screen
+            .main_menu()
+            .expect("a main menu")
+            .button(MenuChoice::OpenPilot)
+            .rect
+            .center();
+        assert_eq!(press_and_release(&mut screen, at), [vec![DOWN], vec![UP]]);
+        let cancel = screen
+            .pilot_list()
+            .expect("open")
+            .cancel_button()
+            .rect
+            .center();
+        assert_eq!(
+            press_and_release(&mut screen, cancel),
+            [vec![DOWN], vec![UP]]
+        );
+        assert!(screen.pilot_list().is_none(), "closed");
+        let at = screen
+            .main_menu()
+            .expect("a main menu")
+            .button(MenuChoice::NewPilot)
+            .rect
+            .center();
+        press_and_release(&mut screen, at);
+        let ok = screen
+            .new_pilot()
+            .expect("open")
+            .dialog()
+            .item_bounds(2)
+            .expect("Cancel")
+            .center();
+        assert_eq!(press_and_release(&mut screen, ok), [vec![DOWN], vec![UP]]);
+        assert!(screen.new_pilot().is_none(), "cancelled");
+    }
+
+    #[test]
+    fn the_overlays_take_pointer_cancels_and_key_releases() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        choose(&mut screen, MenuChoice::OpenPilot);
+        let cancel = screen
+            .pilot_list()
+            .expect("open")
+            .cancel_button()
+            .rect
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: cancel,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.release_keys();
+        screen.input(&button(false));
+        assert_eq!(
+            screen.showing(),
+            Showing::OpenPilot,
+            "the click was abandoned"
+        );
+        screen.tick(TICK);
+        assert_eq!(screen.showing(), Showing::OpenPilot);
+    }
+
+    /// "Create a new pilot:", smaller: 326 x 213 at (0, 0), with OK (1),
+    /// Cancel (2) and the Full Name field (8); the rest parked.
+    fn new_pilot_template() -> DialogTemplate {
+        let item = |x, y, w, h, kind| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind,
+        };
+        let mut items: Vec<ItemTemplate> = (0..14)
+            .map(|_| item(0.0, 300.0, 10.0, 10.0, ItemSpec::User))
+            .collect();
+        items[0] = item(238.0, 183.0, 70.0, 20.0, ItemSpec::Button("OK".into()));
+        items[1] = item(156.0, 183.0, 70.0, 20.0, ItemSpec::Button("Cancel".into()));
+        items[7] = item(
+            140.0,
+            30.0,
+            170.0,
+            16.0,
+            ItemSpec::EditText("Edit Text".into()),
+        );
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 326.0, 213.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    impl AppScreen {
+        /// Quits as the app would, and says what a new router over `store`
+        /// shows.
+        fn quit_and_reopen(&mut self, store: &MemoryPilots) -> Showing {
+            self.quit();
+            menu(store).showing()
+        }
     }
 }

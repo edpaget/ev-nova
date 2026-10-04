@@ -1,9 +1,20 @@
 //! `nova`: opens the game data and shows it in a window, starting on the
-//! ship browser; Tab switches to the galaxy map and back. On the map,
-//! Return enters the selected system; Escape goes back, or quits. F flies
-//! the player's ship, I shows the About text in the game's own dialog, and
-//! P the Preferences dialog, which turns sound and music on or off and
+//! main menu. New Pilot asks for the pilot's name and flies a new pilot
+//! from the first `chär`; Open Pilot lists the saved pilots and resumes
+//! the one chosen where it was; Quit (or Escape) quits. In flight, Escape
+//! goes back to the menu. I shows the About text in the game's own dialog,
+//! and P the Preferences dialog, which turns sound and music on or off and
 //! sets their volumes.
+//!
+//! Pilots are saved, one JSON file each, in a `Pilots` directory beside
+//! the settings file (below): on landing, on taking off, after each change
+//! in the spaceport, on going back to the menu and on quitting. Without a
+//! place to save them, the game runs with a warning and saves nothing.
+//!
+//! Tab, on the menu, goes to the developer's ship browser and galaxy map,
+//! and switches between them. On the map, Return enters the selected
+//! system; Escape goes back, and at the top back to the menu. F there
+//! flies a fresh pilot that is never saved.
 //!
 //! With `--features dev-tools` (`mise run dev`), `` ` `` toggles the
 //! developer tools.
@@ -37,15 +48,17 @@ use std::rc::Rc;
 
 use nova::app::start_screen;
 use nova::audio::{game_audio, game_settings, music_warning};
-use nova::config::{Os, settings_path};
+use nova::config::{Os, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
 use nova::platform::Runner;
+use nova::saves::FilePilots;
 use nova::{cli, exit};
 use nova_audio::{FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
+use nova_sim::{PilotKeeper, PilotStore};
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
 use winit::event_loop::EventLoop;
@@ -78,11 +91,18 @@ fn main() -> ExitCode {
     if let Some(warning) = warning {
         eprintln!("{warning}");
     }
-    let mut screen = start_screen(Rc::clone(&data)).with_sound_prefs(settings.prefs());
+    // Dialog and menu text is laid out by the faces the window draws it in.
+    let metrics: Rc<dyn TextMetrics> = Rc::new(GlyphonMetrics::new(&fonts));
+    let pilots = pilots_dir(Os::current(), |name| std::env::var_os(name))
+        .map(|dir| PilotKeeper::new(Box::new(FilePilots::new(dir)) as Box<dyn PilotStore>));
+    if pilots.is_none() {
+        eprintln!("nova: there is nowhere to save pilots (no home directory); saving nothing");
+    }
+    let mut screen = start_screen(Rc::clone(&data))
+        .with_sound_prefs(settings.prefs())
+        .with_pilots(pilots, Rc::clone(&metrics));
     match open_interface(&dir) {
         Ok(interface) => {
-            // Dialog text is laid out by the faces the window draws it in.
-            let metrics: Rc<dyn TextMetrics> = Rc::new(GlyphonMetrics::new(&fonts));
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);
             screen = screen.with_dialogs(dialogs, metrics);
         }
