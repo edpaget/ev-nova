@@ -1767,9 +1767,13 @@ mod tests {
         view.input(&key(Key::Up, true));
         ticks(&mut view, 1);
         view.input(&key(Key::Up, false));
-        while player(&view).position.y > -4.0 {
+        for _ in 0..100 {
+            if player(&view).position.y <= -4.0 {
+                break;
+            }
             ticks(&mut view, 1);
         }
+        assert!(player(&view).position.y <= -4.0, "{:?}", player(&view));
         assert!(view.elapsed < MESSAGE_SHOWN_FOR, "still on screen");
         view.input(&key(LAND, true));
         assert_eq!(view.take_landing(), Some(StellarId(140)));
@@ -2181,5 +2185,38 @@ mod tests {
         let alpha = on_map(&view, 131);
         click(&mut view, alpha);
         assert_eq!(view.course_map().route(), []);
+    }
+
+    #[test]
+    fn the_stellars_go_on_animating_while_the_jump_plays() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        let moon = |view: &View| sprites(&drawn(view))[1].0.frame;
+        let before = moon(&view);
+        view.tick(TICK);
+        assert_eq!(moon(&view), (before + 1) % 4, "a frame a tick");
+        view.tick(TICK * 2);
+        assert_eq!(moon(&view), (before + 3) % 4);
+        assert!(view.jump_effect().is_some());
+    }
+
+    #[test]
+    fn cancelling_the_pointer_abandons_a_click_on_the_open_map() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        let alpha = on_map(&view, 131);
+        let left = |pressed| Input::PointerButton {
+            button: crate::MouseButton::Left,
+            pressed,
+            at: alpha,
+        };
+        view.input(&left(true));
+        view.cancel_pointer();
+        view.input(&left(false));
+        assert_eq!(view.course_map().selected(), None, "no click");
+        assert_eq!(view.session().expect("flying").course(), []);
+        assert!(view.map_open());
     }
 }
