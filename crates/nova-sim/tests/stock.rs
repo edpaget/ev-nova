@@ -130,7 +130,7 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
     assert_eq!(
         check_landing(
             &parked,
-            &sites,
+            kania,
             session.star_map().govt(session.system()),
             |govt| session.pilot().legal_record(govt),
         ),

@@ -14,12 +14,13 @@
 //! whoever saves the pilot takes it after each input and saves then.
 //! Arriving in a system explores it.
 //!
-//! The ship lands on a stellar of its system when the
-//! [`landing`](crate::landing) rules allow it, which read the pilot's
-//! legal record with the stellar's government, or with its system's on
-//! the star map when the stellar has none: docked, it rests at the
-//! stellar's centre and ticks move nothing until it takes off again, from
-//! the same place. A landed ship cannot jump, nor a jumping one land.
+//! The ship lands on a stellar of its system, on the land key's second
+//! press, when the [`landing`](crate::landing) rules allow it, which read
+//! the pilot's legal record with the stellar's government, or with its
+//! system's on the star map when the stellar has none: docked, it rests
+//! at the stellar's centre and ticks move nothing until it takes off
+//! again, from the same place. A landed ship cannot jump, nor a jumping
+//! one land.
 //!
 //! The player plots a course to a system on the star map, read once when
 //! the session starts: the fewest jumps along the hyperlinks. A jump to
@@ -39,8 +40,11 @@
 //!
 //! The player selects one of the system's stellars as the navigation
 //! target ([`Session::select_next_stellar`]), in the order the
-//! [`navigation`](crate::navigation) rule gives. The target is not part of
-//! the pilot, so it is not saved, and it is independent of the course.
+//! [`navigation`](crate::navigation) rule gives, or with the land key
+//! ([`Session::land`]), which selects the nearest landable stellar when
+//! there is no target and lands on the target when there is one. Landing
+//! clears it. The target is not part of the pilot, so it is not saved,
+//! and it is independent of the course.
 //! Arriving in another system clears it.
 //!
 //! Each day that goes by steps the planetary events (see
@@ -92,7 +96,7 @@ use crate::fuel::regenerate;
 use crate::geometry::Vec2;
 use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
-use crate::landing::{LandingRefusal, check_landing};
+use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
 use crate::navigation::next_stellar;
 use crate::outfitter::{self, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods};
@@ -381,22 +385,36 @@ impl Session {
         self.stats.fuel_regen
     }
 
-    /// Lands the ship on the stellar it is over, if it is not jumping and
-    /// the [`landing`](crate::landing) rules allow it, with the pilot's
-    /// legal record with the stellar's government, or the system's on the
-    /// star map when the stellar has none: it docks at the
-    /// stellar's centre, at rest, its heading and reserves unchanged.
-    /// Otherwise it flies on, and the refusal says why.
-    pub fn land(&mut self) -> Result<StellarId, LandingRefusal> {
+    /// Presses the land key, unless the ship is jumping: as the
+    /// [`landing`](crate::landing) rules say, with the navigation target
+    /// and the pilot's legal record with the stellar's government, or the
+    /// system's on the star map when the stellar has none. A press that
+    /// selects a stellar makes it the navigation target and lands on
+    /// nothing. A press that lands docks the ship at the stellar's centre,
+    /// at rest, its heading and reserves unchanged, and clears the target,
+    /// so that once it takes off L requests clearance again. Otherwise the
+    /// ship flies on, its target kept, and the refusal says why.
+    pub fn land(&mut self) -> Result<LandOutcome, LandingRefusal> {
         if self.jumping.is_some() {
             return Err(LandingRefusal::Jumping);
         }
-        let stellar = check_landing(
+        let outcome = land_or_select(
+            self.nav_target,
             &self.player,
             &self.sites,
             self.star_map.govt(self.pilot.system),
             |govt| self.pilot.legal_record(govt),
         )?;
+        match outcome {
+            LandOutcome::Selected { stellar, .. } => self.nav_target = Some(stellar),
+            LandOutcome::Landed(stellar) => self.dock(stellar),
+        }
+        Ok(outcome)
+    }
+
+    /// Docks the ship at `stellar`, one of the system's.
+    fn dock(&mut self, stellar: StellarId) {
+        self.nav_target = None;
         let site = self.sites.iter().find(|site| site.id == stellar);
         if let Some(site) = site {
             self.player.position = site.position;
@@ -408,7 +426,6 @@ impl Session {
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
-        Ok(stellar)
     }
 
     /// Takes off from the stellar the ship is docked at, and gives it; the
@@ -655,14 +672,14 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
     use crate::hyperspace::{ARRIVAL_DISTANCE, DAYS_PER_JUMP, JumpRefusal, RouteError, StarMap};
-    use crate::landing::LandingRefusal;
     use crate::landing::StellarFlags;
+    use crate::landing::{Clearance, LandOutcome, LandingRefusal};
     use crate::market::{Direction, Good, Lot, Order, TradeRefusal};
     use crate::reserves::{Gauge, Reserves};
     use crate::stats::{HYPERSPACE_DAYS, HYPERSPACE_DISTANCE};
     use crate::testkit::{
         FAST, FakePilotCatalog, START, Scripted, catalog, edge_lander, fly_out, jump, jump_with,
-        outfit, planet, starting,
+        land_now, outfit, planet, starting,
     };
 
     #[test]
@@ -818,14 +835,14 @@ mod tests {
         let catalog = catalog();
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(*catalog.sites_asked.borrow(), [SystemId(130)]);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.take_off();
-        session.land().expect("lands again");
+        land_now(&mut session).expect("lands again");
         assert_eq!(*catalog.sites_asked.borrow(), [SystemId(130)]);
         let other = starting([Some(131), None, None, None]);
         let mut session = Session::start(&other).expect("starts");
         assert_eq!(*other.sites_asked.borrow(), [SystemId(131)]);
-        assert_eq!(session.land(), Ok(StellarId(140)));
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
     }
 
     #[test]
@@ -846,7 +863,7 @@ mod tests {
         });
         let flying = *session.player();
         assert_ne!(flying.velocity, Vec2::ZERO);
-        assert_eq!(session.land(), Ok(StellarId(128)));
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         assert_eq!(session.landed(), Some(StellarId(128)));
         assert_eq!(
             *session.player(),
@@ -861,7 +878,7 @@ mod tests {
     #[test]
     fn a_tick_while_landed_moves_nothing() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         let docked = *session.player();
         for _ in 0..10 {
             session.tick(Controls {
@@ -879,7 +896,7 @@ mod tests {
             turn: Turn::Right,
             ..THRUST
         });
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         let docked = *session.player();
         assert_eq!(session.take_off(), Some(StellarId(128)));
         assert_eq!(session.landed(), None);
@@ -910,15 +927,12 @@ mod tests {
             session.tick(THRUST);
         }
         let flying = *session.player();
-        let refusal = session.land();
+        let refusal = land_now(&mut session);
+        assert_eq!(session.nav_target(), Some(StellarId(128)), "kept");
         assert_eq!(
             refusal,
-            crate::landing::check_landing(
-                &flying,
-                &[planet(128, 30.0, -40.0), planet(129, 2000.0, 0.0)],
-                None,
-                |_| 0
-            )
+            crate::landing::check_landing(&flying, &planet(128, 30.0, -40.0), None, |_| 0)
+                .map(|_| StellarId(128))
         );
         assert!(refusal.is_err(), "{refusal:?}");
         assert_eq!(session.landed(), None);
@@ -931,7 +945,95 @@ mod tests {
             ..catalog()
         };
         let mut session = Session::start(&empty).expect("starts");
-        assert_eq!(session.land(), Err(LandingRefusal::NoStellars));
+        assert_eq!(land_now(&mut session), Err(LandingRefusal::NoStellars));
+    }
+
+    #[test]
+    fn the_first_l_selects_the_nearest_landable_stellar_and_does_not_land() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let before = *session.player();
+        assert_eq!(
+            session.land(),
+            Ok(LandOutcome::Selected {
+                stellar: StellarId(128),
+                station: false,
+                clearance: Clearance::Granted,
+            })
+        );
+        assert_eq!(session.nav_target(), Some(StellarId(128)));
+        assert_eq!(
+            session.landed(),
+            None,
+            "over it and at rest, yet not landed"
+        );
+        assert_eq!(session.pilot().stellar(), None);
+        assert_eq!(*session.player(), before);
+        assert!(!session.take_save_due());
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
+    fn the_second_l_lands_on_the_target_and_clears_it() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.land().expect("selects");
+        assert_eq!(session.land(), Ok(LandOutcome::Landed(StellarId(128))));
+        assert_eq!(session.landed(), Some(StellarId(128)));
+        assert_eq!(session.nav_target(), None, "cleared on landing");
+        assert!(session.take_save_due());
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::Landed {
+                stellar_sound: None
+            }]
+        );
+        // Once off again, L requests clearance afresh.
+        session.take_off();
+        assert!(matches!(session.land(), Ok(LandOutcome::Selected { .. })));
+        assert_eq!(session.landed(), None);
+    }
+
+    #[test]
+    fn l_with_a_target_selected_by_tab_lands_on_it_at_once() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        assert_eq!(session.select_next_stellar(), Some(StellarId(128)));
+        assert_eq!(session.land(), Ok(LandOutcome::Landed(StellarId(128))));
+        // Planet 129 is far away: L refuses and keeps it.
+        session.take_off();
+        session.select_next_stellar();
+        assert_eq!(session.select_next_stellar(), Some(StellarId(129)));
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::TooFar {
+                stellar: StellarId(129),
+                station: false,
+            })
+        );
+        assert_eq!(session.nav_target(), Some(StellarId(129)));
+        assert_eq!(session.landed(), None);
+    }
+
+    #[test]
+    fn l_reads_the_pilots_record_for_the_clearance_it_gives() {
+        let catalog = governed([Some(WANTED), Some(LAWFUL)], None);
+        let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
+        assert_eq!(
+            session.land(),
+            Ok(LandOutcome::Selected {
+                stellar: StellarId(128),
+                station: false,
+                clearance: Clearance::Denied,
+            })
+        );
+        assert_eq!(session.nav_target(), Some(StellarId(128)), "still selected");
+        let catalog = governed([None, None], Some(LAWFUL));
+        let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
+        assert!(matches!(
+            session.land(),
+            Ok(LandOutcome::Selected {
+                clearance: Clearance::Granted,
+                ..
+            })
+        ));
     }
 
     /// Two governments, with a pilot's record of 10 and 9.
@@ -976,7 +1078,7 @@ mod tests {
         pilot.stellar = Some(StellarId(stellar));
         let mut session = Session::fly(catalog, pilot).expect("flies");
         assert_eq!(session.take_off(), Some(StellarId(stellar)));
-        session.land()
+        land_now(&mut session)
     }
 
     fn denied(stellar: i16) -> Result<StellarId, LandingRefusal> {
@@ -1168,9 +1270,9 @@ mod tests {
             [SystemId(130), SystemId(131)]
         );
         // Planet 140 at 131's centre: drift there and land.
-        let refused = session.land();
+        let refused = land_now(&mut session);
         assert!(
-            matches!(refused, Err(LandingRefusal::TooFar { nearest, .. }) if nearest == StellarId(140)),
+            matches!(refused, Err(LandingRefusal::TooFar { stellar, .. }) if stellar == StellarId(140)),
             "{refused:?}"
         );
     }
@@ -1280,7 +1382,7 @@ mod tests {
         let mut session = Session::start(catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         jump(&mut session, catalog, 132);
-        assert_eq!(session.land(), Ok(StellarId(140)));
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         session
     }
 
@@ -1307,7 +1409,7 @@ mod tests {
         session.take_off();
         session.begin_jump().expect("jumps from over planet 140");
         let jumping = session.clone();
-        assert_eq!(session.land(), Err(LandingRefusal::Jumping));
+        assert_eq!(land_now(&mut session), Err(LandingRefusal::Jumping));
         assert_eq!(session, jumping, "nothing changes");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -1323,7 +1425,7 @@ mod tests {
         session.plot_course(SystemId(132)).expect("a route");
         jump(&mut session, &catalog, 132);
         assert_eq!(session.reserves().fuel.now, 200.0);
-        assert_eq!(session.land(), Ok(StellarId(140)));
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         for _ in 0..10 {
             session.tick(Controls::default());
         }
@@ -1346,7 +1448,7 @@ mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         assert!(!session.take_save_due(), "nothing to save yet");
         assert_eq!(session.pilot().stellar(), None);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
         assert!(session.take_save_due());
         assert!(!session.take_save_due(), "taking it clears it");
@@ -1358,7 +1460,7 @@ mod tests {
         for _ in 0..20 {
             session.tick(THRUST);
         }
-        session.land().expect_err("refused");
+        land_now(&mut session).expect_err("refused");
         assert_eq!(session.pilot().stellar(), None);
         assert!(!session.take_save_due());
     }
@@ -1366,7 +1468,7 @@ mod tests {
     #[test]
     fn taking_off_keeps_the_stellar_and_a_save_is_due() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.take_save_due();
         session.take_off();
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
@@ -1378,7 +1480,7 @@ mod tests {
     #[test]
     fn a_transaction_while_landed_changes_the_pilot_and_a_save_is_due() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.take_save_due();
         assert!(session.transact(|pilot| pilot.set_cash(500)));
         assert_eq!(session.pilot().cash(), 500);
@@ -1426,7 +1528,7 @@ mod tests {
     /// day gone by, taken from a session.
     fn landed_pilot(catalog: &FakePilotCatalog) -> Pilot {
         let mut session = Session::start(catalog).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.transact(|pilot| pilot.set_cash(7));
         session.pilot().clone()
     }
@@ -1541,7 +1643,7 @@ mod tests {
     #[test]
     fn landing_emits_landed_with_the_stellars_sound() {
         let mut session = Session::start(&sounding()).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(
             session.take_sounds(),
             [SimSound::Landed {
@@ -1549,7 +1651,7 @@ mod tests {
             }]
         );
         let mut silent = Session::start(&catalog()).expect("starts");
-        silent.land().expect("lands");
+        land_now(&mut silent).expect("lands");
         assert_eq!(
             silent.take_sounds(),
             [SimSound::Landed {
@@ -1566,7 +1668,7 @@ mod tests {
             ..THRUST
         });
         assert_eq!(session.take_sounds(), [SimSound::ThrustStarted]);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(
             session.take_sounds(),
             [
@@ -1593,7 +1695,7 @@ mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         session.take_off();
         assert_eq!(session.take_sounds(), [], "not landed");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.take_sounds();
         session.take_off();
         assert_eq!(session.take_sounds(), [SimSound::TookOff]);
@@ -1608,7 +1710,7 @@ mod tests {
             session.tick(THRUST);
         }
         session.take_sounds();
-        session.land().expect_err("refused");
+        land_now(&mut session).expect_err("refused");
         assert_eq!(session.take_sounds(), []);
         let mut jumping = Session::start(&edge_lander()).expect("starts");
         jumping.plot_course(SystemId(131)).expect("a route");
@@ -1724,7 +1826,7 @@ mod tests {
         let catalog = exchange();
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(*catalog.goods_reads.borrow(), 3);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert!(session.market().is_some());
         session.take_off();
         jump(&mut session, &catalog, 131);
@@ -1750,7 +1852,7 @@ mod tests {
         let catalog = exchange();
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(session.market(), None, "in flight");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         let market = session.market().expect("an exchange");
         let prices: Vec<_> = market.rows.iter().map(|r| (r.good, r.price)).collect();
         assert_eq!(prices, [(FOOD, 75), (METAL, 160)]);
@@ -1758,14 +1860,14 @@ mod tests {
         session.take_off();
         assert_eq!(session.market(), None, "taken off");
         let mut plain = Session::start(&self::catalog()).expect("starts");
-        plain.land().expect("lands");
+        land_now(&mut plain).expect("lands");
         assert_eq!(plain.market(), None, "no trade center");
     }
 
     #[test]
     fn buying_pays_loads_and_makes_a_save_due() {
         let mut session = Session::start(&exchange()).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.take_save_due();
         assert_eq!(session.trade(order(FOOD, Direction::Buy, Lot::One)), Ok(1));
         assert_eq!(session.pilot().cash(), 925);
@@ -1783,7 +1885,7 @@ mod tests {
             ..exchange()
         };
         let mut session = Session::start(&catalog).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(session.trade(order(FOOD, Direction::Buy, Lot::Max)), Ok(3));
         session.take_save_due();
         assert_eq!(
@@ -1797,7 +1899,7 @@ mod tests {
     #[test]
     fn selling_pays_the_local_price() {
         let mut session = Session::start(&exchange()).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(session.trade(order(METAL, Direction::Buy, Lot::Max)), Ok(6));
         assert_eq!(session.pilot().cash(), 40);
         session.take_save_due();
@@ -1824,7 +1926,7 @@ mod tests {
             Err(TradeRefusal::NoMarket)
         );
         assert_eq!(session, flying);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.take_save_due();
         let landed = session.clone();
         for refused in [
@@ -1872,7 +1974,7 @@ mod tests {
         };
         let opals = Good::Junk(JunkId(146));
         let mut session = Session::start(&catalog).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(
             session.trade(order(opals, Direction::Buy, Lot::Max)),
             Ok(12)
@@ -1885,7 +1987,7 @@ mod tests {
         );
         session.take_off();
         jump(&mut session, &catalog, 131);
-        assert_eq!(session.land(), Ok(StellarId(140)));
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         assert_eq!(
             session.trade(order(opals, Direction::Sell, Lot::Max)),
             Ok(12)
@@ -1931,7 +2033,7 @@ mod tests {
             session.pilot().events().collect::<Vec<_>>(),
             [(DisasterId(128), 30)]
         );
-        assert_eq!(session.land(), Ok(StellarId(140)));
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         let market = session.market().expect("an exchange");
         assert_eq!(market.row(FOOD).map(|row| row.price), Some(60));
         assert_eq!(market.events, ["An enormous food surplus"]);
@@ -1945,7 +2047,7 @@ mod tests {
         jump_with(&mut session, &catalog, 131, &mut chance);
         assert_eq!(chance.asked, [35]);
         assert_eq!(session.pilot().events().count(), 0);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         let market = session.market().expect("an exchange");
         assert_eq!(market.row(FOOD).map(|row| row.price), Some(75));
         assert_eq!(market.events, Vec::<String>::new());
@@ -2033,7 +2135,7 @@ mod tests {
     fn a_pilot_flown_with_cargo_has_less_space_and_can_sell_it() {
         let catalog = exchange();
         let mut session = Session::start(&catalog).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(session.trade(order(METAL, Direction::Buy, Lot::Max)), Ok(6));
         let pilot = session.pilot().clone();
         let mut resumed = Session::fly(&catalog, pilot).expect("flies");
@@ -2110,7 +2212,7 @@ mod tests {
 
     fn outfitted(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.take_save_due();
         session
     }
@@ -2121,7 +2223,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(session.outfitter(), None, "in flight");
         assert_eq!(session.outfit(buy(SPEED)), Err(OutfitRefusal::NoOutfitter));
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         let outfitter = session.outfitter().expect("an outfitter");
         assert_eq!(outfitter.rows.len(), 5);
         assert_eq!((outfitter.cash, outfitter.free_mass), (25_000, 30));
@@ -2502,7 +2604,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(session.shipyard(), None, "in flight");
         assert_eq!(session.buy_ship(NEW), Err(ShipRefusal::NoShipyard));
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         let shipyard = session.shipyard().expect("a shipyard");
         assert_eq!(shipyard.rows.len(), 2);
         assert_eq!((shipyard.cash, shipyard.trade_in), (25_000, 2500));
@@ -2663,7 +2765,7 @@ mod tests {
     /// credits and half a tank (150 of 300), no save due.
     fn half_empty_at_port() -> Session {
         let mut session = Session::start(&exchange()).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.pilot.reserves.fuel.now = 150.0;
         session.take_save_due();
         session
@@ -2714,7 +2816,7 @@ mod tests {
             ..exchange()
         };
         let mut session = Session::start(&catalog).expect("starts");
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.pilot.reserves.fuel.now = 150.0;
         session.take_save_due();
         assert_refused(session, RechargeRefusal::NoFuel);

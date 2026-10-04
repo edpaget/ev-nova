@@ -41,12 +41,12 @@
 //! developer's viewer, which enters systems; play plots courses on the map
 //! opened from flight, which has no "Enter system" button.
 //!
-//! L, in flight over a stellar that can be landed on, lands and shows its
-//! spaceport ([`SpaceportView`]), laid out by the interface file's
-//! "Spaceport" dialog when the router has dialogs; without them the
-//! spaceport says why. The spaceport takes every input: Leave, Return and
-//! Escape take off, back into flight at the stellar, and Tab, F and I do
-//! nothing.
+//! L in flight requests clearance at a stellar, and a second L, over it,
+//! lands and shows its spaceport ([`SpaceportView`]), laid out by the
+//! interface file's "Spaceport" dialog when the router has dialogs;
+//! without them the spaceport says why. The spaceport takes every input:
+//! Leave, Return and Escape take off, back into flight at the stellar,
+//! and Tab, F and I do nothing.
 //!
 //! At a trade center, the spaceport's Trade Center opens the session's
 //! exchange, laid out by the interface file's "Trade" dialog. There B buys
@@ -2373,10 +2373,18 @@ mod tests {
 
     const LAND: Key = Key::Char('l');
 
-    /// Enters flight and lands with an L press.
+    /// Presses L twice in flight: the first requests clearance, the
+    /// second lands.
+    fn land_twice(screen: &mut AppScreen) {
+        for pressed in [true, false, true] {
+            assert_eq!(screen.input(&key(LAND, pressed)), ScreenAction::None);
+        }
+    }
+
+    /// Enters flight and lands with two L presses.
     fn land(screen: &mut AppScreen) {
         fly(screen);
-        assert_eq!(screen.input(&key(LAND, true)), ScreenAction::None);
+        land_twice(screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
     }
 
@@ -2409,7 +2417,7 @@ mod tests {
         let mut screen = with_dialogs(data());
         fly(&mut screen);
         screen.input(&key(Key::Up, true));
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         // Up's release goes to the spaceport, and Leave takes off.
         screen.input(&key(Key::Up, false));
@@ -2535,7 +2543,7 @@ mod tests {
         fly(&mut screen);
         screen.input(&key(Key::Up, true));
         screen.tick(TICK * 30);
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Flight);
         assert!(screen.spaceport_view().is_none());
         assert!(flight(&screen).message().is_some());
@@ -2678,7 +2686,7 @@ mod tests {
         assert_eq!(screen.showing(), Showing::FlightMap);
         screen.input(&key(Key::Escape, true));
 
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         open_prefs(&mut screen);
         screen.input(&key(Key::Escape, true));
@@ -3108,7 +3116,7 @@ mod tests {
         let store = MemoryPilots::new();
         let mut screen = menu(&store);
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         let landed = pilot(&screen).clone();
         assert_eq!(landed.stellar(), Some(nova_sim::StellarId(128)));
         assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
@@ -3185,7 +3193,7 @@ mod tests {
         screen.input(&key(Key::Escape, true));
         create(&mut screen, "Ada");
         assert_eq!(screen.showing(), Showing::Flight);
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         screen.quit();
         assert_eq!(screen.take_warnings(), Vec::<String>::new());
     }
@@ -3196,7 +3204,7 @@ mod tests {
         let mut screen = menu(&store);
         create(&mut screen, "Ada");
         assert_eq!(store.writes(), 1, "created");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(store.writes(), 2, "landed");
         assert_eq!(
             saved(&store, "Ada").stellar(),
@@ -3229,7 +3237,7 @@ mod tests {
         let mut screen = menu(&store);
         choose(&mut screen, MenuChoice::OpenPilot);
         screen.input(&key(Key::Enter, true));
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         let writes = store.writes();
         screen.quit();
         assert_eq!(store.writes(), writes + 1, "quitting saves");
@@ -3241,7 +3249,7 @@ mod tests {
         let mut screen = menu(&store);
         create(&mut screen, "Ada");
         store.fail_writes(true);
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(
             screen.take_warnings(),
             ["nova: cannot save the pilot Ada in memory (the disk is full)"]
@@ -3260,7 +3268,7 @@ mod tests {
         screen.input(&key(Key::Tab, true));
         fly(&mut screen);
         assert_eq!(pilot(&screen).name(), "");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         screen.input(&key(Key::Escape, true));
         screen.input(&key(Key::Escape, true));
@@ -3457,7 +3465,7 @@ mod tests {
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
         assert_eq!(screen.showing(), Showing::Flight);
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         screen
     }
@@ -3548,7 +3556,7 @@ mod tests {
             .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         click_port_item(&mut screen, 7);
         let open = spaceport(&screen).open_trade().expect("trading");
         assert_eq!(open.problem(), Some("no DLOG 1001"));
@@ -3611,7 +3619,7 @@ mod tests {
             .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         screen
     }
@@ -3701,7 +3709,7 @@ mod tests {
             .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         click_port_item(&mut screen, 8);
         let open = spaceport(&screen).open_outfitter().expect("outfitting");
         assert_eq!(open.problem(), Some("no DLOG 1002"));
@@ -3723,7 +3731,7 @@ mod tests {
             .with_dialogs(Rc::new(EveryDialog), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         click_port_item(&mut screen, 8);
         screen.input(&key(Key::Char('b'), true));
         screen.input(&key(Key::Escape, true));
@@ -3795,7 +3803,7 @@ mod tests {
             .with_dialogs(Rc::new(ShipyardDialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         screen
     }
@@ -3887,7 +3895,7 @@ mod tests {
             .with_dialogs(Rc::new(EveryDialog), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         click_port_item(&mut screen, 9);
         let open = spaceport(&screen).open_shipyard().expect("shipbuying");
         assert_eq!(open.problem(), Some("no DLOG 1004"));

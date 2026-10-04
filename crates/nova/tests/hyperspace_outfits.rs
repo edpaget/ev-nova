@@ -400,6 +400,13 @@ impl Harness {
         self.type_key(code, None);
     }
 
+    /// Presses L twice, as the player lands: the first requests clearance,
+    /// the second lands.
+    fn land(&mut self) {
+        self.press(KeyCode::KeyL);
+        self.press(KeyCode::KeyL);
+    }
+
     /// Sends the physical key `code` going down or, when not `pressed`, up.
     fn key(&mut self, code: KeyCode, pressed: bool) {
         let state = if pressed {
@@ -503,11 +510,11 @@ impl Harness {
             .expect("outfitting")
     }
 
-    /// Lands on Alpha Prime (L), clicks the Outfitter (spaceport item 8),
+    /// Lands on Alpha Prime (L, L), clicks the Outfitter (spaceport item 8),
     /// clicks the booster's cell and buys it (B), then chooses Done and
     /// Leave (Escape twice).
     fn buy_the_booster(&mut self) {
-        self.press(KeyCode::KeyL);
+        self.land();
         assert_eq!(self.showing(), Showing::Spaceport);
         let outfitter = self
             .app

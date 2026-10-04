@@ -41,11 +41,13 @@
 //!   ship's motion, while held: a press (or its key repeats) holds the key
 //!   and its release lets it go. Left and Right together cancel, and
 //!   either overrides Down.
-//! - L lands on the stellar the ship is over, once a press (its repeats
-//!   do nothing). The router takes the landing ([`FlightView::take_landing`])
-//!   and shows the spaceport. A refused landing says why above the help
-//!   line, in the original's words (`STR#` 2002), for
-//!   [`MESSAGE_SHOWN_FOR`].
+//! - L, once a press (its repeats do nothing), requests clearance, then
+//!   lands, as [`landing`](nova_sim::landing) says: with no navigation
+//!   target it selects the nearest landable stellar and shows the reply
+//!   ([`clearance_message`]); with one it lands there. The router takes
+//!   the landing ([`FlightView::take_landing`]) and shows the spaceport.
+//!   The reply, or why a landing was refused, shows above the help line
+//!   in the original's words (`STR#` 2002), for [`MESSAGE_SHOWN_FOR`].
 //! - M (a press, not its repeats) opens the course map, a [`GalaxyMap`]
 //!   in [`MapMode::Course`](crate::galaxy::MapMode::Course), and lets go
 //!   of the flight keys. While it is open flight is paused, as in the
@@ -76,10 +78,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Chance, Controls, FixedStep, JumpRefusal, LandingRefusal, Market, NeverFires, Order,
-    OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, RechargeRefusal, Reserves, Session,
-    ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps,
-    TradeRefusal, Turn, flight::normalized, flight::shortest_turn,
+    Chance, Clearance, Controls, FixedStep, JumpRefusal, LandOutcome, LandingRefusal, Market,
+    NeverFires, Order, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, RechargeRefusal,
+    Reserves, Session, ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard, StartError,
+    StellarId, Steps, TradeRefusal, Turn, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -159,6 +161,55 @@ pub const HOSTILE_PLANET: &str = "The planet's environment is too hostile.";
 /// `STR#` 2002 #54 ("Unable to send hail - target ship is entering
 /// hyperspace.").
 pub const IN_HYPERSPACE: &str = "Unable to land - your ship is in hyperspace.";
+
+/// `STR#` 2002 #76.
+pub const DOCKMASTER_READS_YOU: &str = "dockmaster reads you";
+/// `STR#` 2002 #78.
+pub const TRAFFIC_CONTROL_READS_YOU: &str = "traffic control reads you";
+/// `STR#` 2002 #95.
+pub const CLEARED_TO_DOCK: &str = "you're cleared to dock.";
+/// `STR#` 2002 #96.
+pub const YOU_ARE_CLEARED_TO_DOCK: &str = "You are cleared to dock.";
+/// `STR#` 2002 #98.
+pub const CLEARED_TO_LAND: &str = "you're cleared to land.";
+/// `STR#` 2002 #99.
+pub const YOU_ARE_CLEARED_TO_LAND: &str = "You are cleared to land.";
+
+/// What the player is told when L requests clearance at the stellar
+/// `name`, a station or a planet, and `clearance` is the reply. Only the
+/// pieces are the original's (`STR#` 2002); how they are joined is a
+/// reconstruction:
+///
+/// - granted: "{name} traffic control reads you, you're cleared to land."
+///   (#78, #98), or at a station "{name} dockmaster reads you, you're
+///   cleared to dock." (#76, #95);
+/// - uninhabited, with no traffic control to answer: "You are cleared to
+///   land." (#99) or "You are cleared to dock." (#96);
+/// - denied: "Landing request denied." (#83) or "Docking request denied."
+///   (#82).
+#[must_use]
+pub fn clearance_message(name: &str, station: bool, clearance: Clearance) -> String {
+    let (reads_you, cleared, you_are_cleared, denied) = if station {
+        (
+            DOCKMASTER_READS_YOU,
+            CLEARED_TO_DOCK,
+            YOU_ARE_CLEARED_TO_DOCK,
+            DOCKING_DENIED,
+        )
+    } else {
+        (
+            TRAFFIC_CONTROL_READS_YOU,
+            CLEARED_TO_LAND,
+            YOU_ARE_CLEARED_TO_LAND,
+            LANDING_DENIED,
+        )
+    };
+    match clearance {
+        Clearance::Granted => format!("{name} {reads_you}, {cleared}"),
+        Clearance::NoTrafficControl => you_are_cleared.to_owned(),
+        Clearance::Denied => denied.to_owned(),
+    }
+}
 
 /// What the player is told when `refusal` stops a landing: the original's
 /// words for it, for a station or a planet.
@@ -248,7 +299,7 @@ pub struct FlightView<C> {
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
     /// The message shown, and `elapsed` when it was shown.
-    message: Option<(&'static str, Duration)>,
+    message: Option<(String, Duration)>,
     /// The course map, shown or not.
     map: GalaxyMap,
     /// Whether the course map is shown.
@@ -383,7 +434,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
                 self.held.clear();
                 self.message = None;
             }
-            Err(refusal) => self.message = Some((jump_refusal_message(&refusal), self.elapsed)),
+            Err(refusal) => self.show(jump_refusal_message(&refusal).to_owned()),
         }
     }
 
@@ -464,22 +515,43 @@ impl<C> FlightView<C> {
 
     /// The message on screen, if any.
     #[must_use]
-    pub fn message(&self) -> Option<&'static str> {
-        let (text, shown_at) = self.message?;
-        (self.elapsed < shown_at + MESSAGE_SHOWN_FOR).then_some(text)
+    pub fn message(&self) -> Option<&str> {
+        let (text, shown_at) = self.message.as_ref()?;
+        (self.elapsed < *shown_at + MESSAGE_SHOWN_FOR).then_some(text.as_str())
     }
 
-    /// Lands, or shows why not.
+    /// Shows `text` from now.
+    fn show(&mut self, text: String) {
+        self.message = Some((text, self.elapsed));
+    }
+
+    /// Presses the land key: requests clearance and shows the reply,
+    /// lands, or shows why not.
     fn land(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
         };
         match session.land() {
-            Ok(stellar) => {
+            Ok(LandOutcome::Selected {
+                stellar,
+                station,
+                clearance,
+            }) => {
+                let name = self.scene.as_ref().and_then(|scene| {
+                    let named = scene.stellars().iter().find(|named| named.id == stellar);
+                    named.map(|named| named.name.as_str())
+                });
+                self.show(clearance_message(
+                    name.unwrap_or_default(),
+                    station,
+                    clearance,
+                ));
+            }
+            Ok(LandOutcome::Landed(stellar)) => {
                 self.pending_landing = Some(stellar);
                 self.message = None;
             }
-            Err(refusal) => self.message = Some((refusal_message(&refusal), self.elapsed)),
+            Err(refusal) => self.show(refusal_message(&refusal).to_owned()),
         }
     }
 
@@ -1793,20 +1865,122 @@ mod tests {
             .cloned()
     }
 
+    /// L pressed twice: clearance, then landing.
+    fn land_now(view: &mut View) {
+        tap(view, LAND);
+        tap(view, LAND);
+    }
+
     #[test]
-    fn l_over_a_landable_stellar_lands_once() {
-        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+    fn l_requests_clearance_and_a_second_l_lands() {
+        // The Moon (129), in the scene, over the ship.
+        let mut view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
         assert_eq!(view.take_landing(), None);
+        assert_eq!(view.input(&key(LAND, true)), ScreenAction::None);
+        assert_eq!(view.take_landing(), None, "cleared, not landed");
+        assert_eq!(view.session().expect("flying").landed(), None);
+        assert_eq!(nav_target(&view), Some(StellarId(129)));
+        let cleared = "Moon traffic control reads you, you're cleared to land.";
+        assert_eq!(view.message(), Some(cleared));
+        assert_eq!(
+            message(&view),
+            Some(overlay(cleared, MESSAGE_AT, OVERLAY_SIZE, Color::WHITE))
+        );
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "the HUD shows it");
+        assert_eq!(view.take_sounds(), [], "no sound for clearance");
+
+        view.input(&key(LAND, false));
         assert_eq!(view.input(&key(LAND, true)), ScreenAction::None);
         assert_eq!(
             view.session().expect("flying").landed(),
-            Some(StellarId(140))
+            Some(StellarId(129))
         );
-        assert_eq!(view.take_landing(), Some(StellarId(140)));
+        assert_eq!(view.take_landing(), Some(StellarId(129)));
         assert_eq!(view.take_landing(), None, "taken");
         assert_eq!(view.message(), None);
         assert_eq!(message(&view), None);
         assert_eq!(LAND_KEY, LAND);
+    }
+
+    #[test]
+    fn l_lands_at_once_on_a_stellar_selected_by_tab() {
+        let mut view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+        tap(&mut view, TARGET_KEY);
+        tap(&mut view, LAND);
+        assert_eq!(view.take_landing(), Some(StellarId(129)));
+    }
+
+    #[test]
+    fn every_clearance_has_its_message() {
+        use Clearance::{Denied, Granted, NoTrafficControl};
+        let cases = [
+            (
+                false,
+                Granted,
+                "Earth traffic control reads you, you're cleared to land.",
+            ),
+            (
+                true,
+                Granted,
+                "Earth dockmaster reads you, you're cleared to dock.",
+            ),
+            (false, NoTrafficControl, "You are cleared to land."),
+            (true, NoTrafficControl, "You are cleared to dock."),
+            (false, Denied, "Landing request denied."),
+            (true, Denied, "Docking request denied."),
+        ];
+        for (station, clearance, text) in cases {
+            assert_eq!(
+                clearance_message("Earth", station, clearance),
+                text,
+                "{station} {clearance:?}"
+            );
+        }
+        assert_eq!(
+            [
+                TRAFFIC_CONTROL_READS_YOU,
+                DOCKMASTER_READS_YOU,
+                CLEARED_TO_LAND,
+                CLEARED_TO_DOCK,
+                YOU_ARE_CLEARED_TO_LAND,
+                YOU_ARE_CLEARED_TO_DOCK,
+            ],
+            [
+                "traffic control reads you",
+                "dockmaster reads you",
+                "you're cleared to land.",
+                "you're cleared to dock.",
+                "You are cleared to land.",
+                "You are cleared to dock.",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_clearance_names_the_stellar_selected_and_says_how_it_answered() {
+        let uninhabited = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
+        let mut view = flight_among(vec![site(128, (0.0, 0.0), uninhabited)]);
+        tap(&mut view, LAND);
+        assert_eq!(view.message(), Some("You are cleared to land."));
+        let strict = LandingSite {
+            min_status: 1,
+            ..site(
+                129,
+                (0.0, 0.0),
+                StellarFlags::CAN_LAND | StellarFlags::STATION,
+            )
+        };
+        let mut view = flight_among(vec![strict]);
+        tap(&mut view, LAND);
+        assert_eq!(view.message(), Some("Docking request denied."));
+        assert_eq!(nav_target(&view), Some(StellarId(129)), "selected anyway");
+        let mut view = flight();
+        tap(&mut view, LAND);
+        assert_eq!(
+            view.message(),
+            Some("Moon traffic control reads you, you're cleared to land."),
+            "the nearer of Sol's two"
+        );
     }
 
     #[test]
@@ -1816,6 +1990,7 @@ mod tests {
         view.input(&key(LAND, false));
         assert_eq!(view.take_landing(), None);
         assert_eq!(view.session().expect("flying").landed(), None);
+        assert_eq!(nav_target(&view), None, "nothing selected");
         let mut far = flight();
         far.input(&held(LAND));
         assert_eq!(far.message(), None, "no refusal either");
@@ -1823,9 +1998,11 @@ mod tests {
 
     #[test]
     fn each_refusal_says_why_in_the_originals_words() {
+        // L, then L again: the first requests clearance where it can.
         let refused = |sites: Vec<LandingSite>| {
             let mut view = flight_among(sites);
-            view.input(&key(LAND, true));
+            tap(&mut view, LAND);
+            tap(&mut view, LAND);
             assert_eq!(view.take_landing(), None);
             view.message().map(str::to_owned)
         };
@@ -1879,9 +2056,10 @@ mod tests {
             let mut view = flight_among(vec![big(flags)]);
             view.input(&key(Key::Up, true));
             ticks(&mut view, 15);
-            view.input(&key(LAND, true));
+            land_now(&mut view);
             assert_eq!(view.take_landing(), None);
             assert_eq!(view.message(), Some(expected));
+            assert_eq!(nav_target(&view), Some(StellarId(140)), "kept: try again");
         }
     }
 
@@ -1893,14 +2071,14 @@ mod tests {
             (LandingRefusal::NoStellars, NO_STELLARS),
             (
                 LandingRefusal::TooFar {
-                    nearest: stellar,
+                    stellar,
                     station: true,
                 },
                 TOO_FAR_STATION,
             ),
             (
                 LandingRefusal::TooFar {
-                    nearest: stellar,
+                    stellar,
                     station: false,
                 },
                 TOO_FAR_PLANET,
@@ -1987,7 +2165,7 @@ mod tests {
     fn the_refusal_is_drawn_above_the_help_line_until_it_has_been_shown_long_enough() {
         let mut view = flight();
         ticks(&mut view, 3);
-        view.input(&key(LAND, true));
+        land_now(&mut view);
         let shown = Some(overlay(
             TOO_FAR_PLANET,
             MESSAGE_AT,
@@ -2016,6 +2194,8 @@ mod tests {
     #[test]
     fn a_new_refusal_shows_afresh() {
         let mut view = flight();
+        land_now(&mut view);
+        assert_eq!(view.message(), Some(TOO_FAR_PLANET));
         view.input(&key(LAND, true));
         view.tick(Duration::from_secs(3));
         view.input(&key(LAND, false));
@@ -2027,7 +2207,7 @@ mod tests {
     #[test]
     fn taking_off_draws_the_ship_at_the_stellar_on_the_next_frame() {
         let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
-        view.input(&key(LAND, true));
+        land_now(&mut view);
         assert_eq!(view.take_landing(), Some(StellarId(140)));
         assert_eq!(view.take_off(), Some(StellarId(140)));
         assert_eq!(view.session().expect("flying").landed(), None);
@@ -2044,8 +2224,7 @@ mod tests {
     #[test]
     fn a_refusal_is_forgotten_once_the_ship_lands() {
         let mut view = flight_among(vec![site(140, (0.0, -12.0), StellarFlags::CAN_LAND)]);
-        view.input(&key(LAND, true));
-        view.input(&key(LAND, false));
+        land_now(&mut view);
         assert_eq!(view.message(), Some(TOO_FAR_PLANET));
         // Nudge the ship and drift over the planet.
         view.input(&key(Key::Up, true));
@@ -2086,7 +2265,9 @@ mod tests {
             ..site(140, (6.0, -8.0), StellarFlags::CAN_LAND)
         }]);
         assert_eq!(view.take_sounds(), []);
-        view.input(&key(LAND, true));
+        tap(&mut view, LAND);
+        assert_eq!(view.take_sounds(), [], "clearance is silent");
+        tap(&mut view, LAND);
         assert_eq!(
             view.take_sounds(),
             [Sound::Sim(SimSound::Landed {
@@ -2347,7 +2528,7 @@ mod tests {
     fn j_while_landed_is_refused_until_take_off() {
         let mut view = flight_among(vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)]);
         plot(&mut view, 131);
-        view.input(&key(LAND, true));
+        land_now(&mut view);
         assert_eq!(view.take_landing(), Some(StellarId(140)));
         view.input(&key(JUMP, true));
         assert_eq!(view.jump_effect(), None);
@@ -2575,7 +2756,7 @@ mod tests {
         };
         let pilot = Pilot::new(&centred, name).expect("starts");
         let mut view = FlightView::with_pilot(centred, pilot);
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         assert_eq!(view.take_landing(), Some(StellarId(128)));
         view.pilot().expect("flying").clone()
     }
@@ -2630,7 +2811,7 @@ mod tests {
         let mut view = FlightView::new(centred);
         assert!(!view.take_save_due());
         assert!(!view.transact(|pilot| pilot.set_cash(5)), "in flight");
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         assert!(view.take_save_due(), "landed");
         assert!(view.transact(|pilot| pilot.set_cash(5)));
         assert_eq!(view.pilot().map(Pilot::cash), Some(5));
@@ -2708,7 +2889,7 @@ mod tests {
         let mut view = FlightView::new(trading());
         assert_eq!(view.market(), None, "in flight");
         assert_eq!(view.trade(BUY_FOOD), Err(TradeRefusal::NoMarket));
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         view.take_save_due();
         let market = view.market().expect("landed at a trade center");
         assert_eq!(
@@ -2777,7 +2958,7 @@ mod tests {
         let mut view = FlightView::new(outfitting());
         assert_eq!(view.outfitter(), None, "in flight");
         assert_eq!(view.outfit(BUY_TANK), Err(OutfitRefusal::NoOutfitter));
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         view.take_save_due();
         let outfitter = view.outfitter().expect("landed at an outfitter");
         assert_eq!(
@@ -2807,7 +2988,7 @@ mod tests {
         use nova_sim::RechargeRefusal;
         let mut view = FlightView::new(outfitting());
         assert_eq!(view.recharge(), Err(RechargeRefusal::NoFuel), "in flight");
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         view.take_save_due();
         assert_eq!(view.recharge(), Err(RechargeRefusal::Full));
         assert!(!view.take_save_due());
@@ -2925,7 +3106,7 @@ mod tests {
         let mut view = FlightView::new(shipbuying());
         assert_eq!(view.shipyard(), None, "in flight");
         assert_eq!(view.buy_ship(ShipId(129)), Err(ShipRefusal::NoShipyard));
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         view.take_save_due();
         let shipyard = view.shipyard().expect("landed at a shipyard");
         assert_eq!(shipyard.row(ShipId(129)).map(|row| row.price), Some(900));

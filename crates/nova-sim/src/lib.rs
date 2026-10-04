@@ -25,9 +25,10 @@
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
-//! - [`landing`]: whether the ship can land, [`check_landing`], each
-//!   [`LandingRefusal`] in the order it applies, and the [`Service`]s a
-//!   stellar's flags offer.
+//! - [`landing`]: what the land key does, [`land_or_select`]: request
+//!   clearance, then land; whether the ship can land, [`check_landing`],
+//!   each [`LandingRefusal`] in the order it applies; and the
+//!   [`Service`]s a stellar's flags offer.
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
@@ -107,7 +108,10 @@ pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
-pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
+pub use landing::{
+    Clearance, LandOutcome, LandingRefusal, Service, check_landing, is_landable, land_or_select,
+    landing_radius, nearest_landable, services,
+};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use navigation::next_stellar;
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};

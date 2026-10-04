@@ -12,7 +12,7 @@ use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::hyperspace::MIN_JUMP_DISTANCE;
-use crate::landing::StellarFlags;
+use crate::landing::{LandOutcome, LandingRefusal, StellarFlags};
 use crate::session::Session;
 
 /// A canned first `chär`, ships and systems; records the ships asked
@@ -296,6 +296,21 @@ pub(crate) fn fly_out(session: &mut Session) {
         session.tick(controls);
     }
     panic!("never got out: {:?}", session.player());
+}
+
+/// Presses L until it lands or is refused: a first press that selects a
+/// stellar is followed by a second. Gives the stellar landed on, or the
+/// refusal.
+pub(crate) fn land_now(session: &mut Session) -> Result<StellarId, LandingRefusal> {
+    for _ in 0..2 {
+        if let LandOutcome::Landed(stellar) = session.land()? {
+            return Ok(stellar);
+        }
+    }
+    panic!(
+        "L selected twice and never landed: {:?}",
+        session.nav_target()
+    );
 }
 
 /// Plots a course to `to`, flies out and jumps, and arrives, no chance

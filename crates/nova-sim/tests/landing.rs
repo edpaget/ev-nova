@@ -1,12 +1,13 @@
-//! Landing through a flight session, headless: each reason a landing is
+//! Landing through a flight session, headless: the land key's first press
+//! requesting clearance and its second landing, each reason a landing is
 //! refused, and a landing and take-off, with the session flown by its
 //! controls alone.
 
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    CharacterStart, CommodityStrings, Controls, DisasterRecord, JunkRecord, LandingRefusal,
-    LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId, StarSystem,
-    StartDate, StartError, StellarId, SystemId, Vec2,
+    CharacterStart, Clearance, CommodityStrings, Controls, DisasterRecord, JunkRecord, LandOutcome,
+    LandingRefusal, LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId,
+    StarSystem, StartDate, StartError, StellarId, SystemId, Vec2,
 };
 
 /// One `chär` flying an average ship that turns 6° a tick from system
@@ -98,36 +99,61 @@ fn a_system_without_stellars_refuses() {
     assert_eq!(session(Vec::new()).land(), Err(LandingRefusal::NoStellars));
 }
 
+fn selected(station: bool, clearance: Clearance) -> LandOutcome {
+    LandOutcome::Selected {
+        stellar: StellarId(128),
+        station,
+        clearance,
+    }
+}
+
+#[test]
+fn the_first_l_requests_clearance_and_the_second_lands() {
+    let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 0)]);
+    assert_eq!(session.land(), Ok(selected(false, Clearance::Granted)));
+    assert_eq!(session.nav_target(), Some(StellarId(128)));
+    assert_eq!(session.landed(), None);
+    assert_eq!(session.land(), Ok(LandOutcome::Landed(StellarId(128))));
+    assert_eq!(session.landed(), Some(StellarId(128)));
+    assert_eq!(session.nav_target(), None);
+}
+
 #[test]
 fn a_ship_over_no_stellar_is_too_far() {
     let far = LandingSite {
         position: Vec2::new(0.0, -500.0),
         ..at_centre(STATION, 0)
     };
-    assert_eq!(
-        session(vec![far]).land(),
-        Err(LandingRefusal::TooFar {
-            nearest: StellarId(128),
-            station: true,
-        })
-    );
+    let mut session = session(vec![far]);
+    assert_eq!(session.land(), Ok(selected(true, Clearance::Granted)));
+    let too_far = Err(LandingRefusal::TooFar {
+        stellar: StellarId(128),
+        station: true,
+    });
+    assert_eq!(session.land(), too_far);
+    assert_eq!(session.land(), too_far, "the target is kept: try again");
+    assert_eq!(session.nav_target(), Some(StellarId(128)));
 }
 
 #[test]
 fn a_stellar_that_cannot_be_landed_on_refuses() {
+    let mut session = session(vec![at_centre(0, 0)]);
     assert_eq!(
-        session(vec![at_centre(0, 0)]).land(),
+        session.land(),
         Err(LandingRefusal::NotLandable {
             stellar: StellarId(128),
             station: false,
         })
     );
+    assert_eq!(session.nav_target(), None, "nothing selected");
 }
 
 #[test]
 fn a_new_pilot_is_denied_where_a_record_is_needed() {
+    let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 32767)]);
+    assert_eq!(session.land(), Ok(selected(false, Clearance::Denied)));
     assert_eq!(
-        session(vec![at_centre(StellarFlags::CAN_LAND, 32767)]).land(),
+        session.land(),
         Err(LandingRefusal::Denied {
             stellar: StellarId(128),
             station: false,
@@ -146,6 +172,7 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     for _ in 0..15 {
         session.tick(thrust);
     }
+    assert_eq!(session.land(), Ok(selected(false, Clearance::Granted)));
     let Err(LandingRefusal::TooFast {
         stellar,
         station,
@@ -168,7 +195,7 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     while session.player().velocity.length() > 1.0 {
         session.tick(thrust);
     }
-    assert_eq!(session.land(), Ok(StellarId(128)));
+    assert_eq!(session.land(), Ok(LandOutcome::Landed(StellarId(128))));
     assert_eq!(session.player().velocity, Vec2::ZERO);
     assert_eq!(session.player().position, Vec2::ZERO);
     assert_eq!(session.take_off(), Some(StellarId(128)));

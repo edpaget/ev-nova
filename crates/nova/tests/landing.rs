@@ -3,9 +3,11 @@
 //! the spaceport background and Nova's button pictures) and a synthetic
 //! interface file holding the stock "Spaceport" dialog, laid out by the
 //! real glyphon metrics, drawn through the renderer into the recording Gpu
-//! and driven only by window events: L lands and shows the spaceport, and
-//! Leave takes off back into flight. With a recording audio port, landing
-//! and Leave play their sounds and the music follows the screen.
+//! and driven only by window events, with every key made by the platform's
+//! own translation of a physical key: L requests clearance, a second L
+//! lands and shows the spaceport, and Leave takes off back into flight.
+//! With a recording audio port, landing and Leave play their sounds and
+//! the music follows the screen.
 
 use std::io;
 use std::path::Path;
@@ -35,11 +37,11 @@ use nova_render::{Batch, FontFaces, Frame, Rect};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::{ShipState, StellarId, Vec2};
+use nova_view::MouseButton;
 use nova_view::geometry::{Bounds, Point};
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::layout::{LANDSCAPE_ITEM, LEAVE_ITEM};
 use nova_view::spaceport::service::DONE_BUTTON;
-use nova_view::{Key, MouseButton};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -284,7 +286,7 @@ impl Harness {
     /// The app in flight over a planet at (0, `y`), before any frame.
     fn flying(y: i16) -> Self {
         let mut harness = Self::browsing(y);
-        harness.press(Key::Char('f'));
+        harness.press_physical(KeyCode::KeyF);
         assert_eq!(harness.showing(), Showing::Flight);
         harness
     }
@@ -306,22 +308,19 @@ impl Harness {
         assert_eq!(control, Control::Continue, "{event:?}");
     }
 
-    fn press(&mut self, key: Key) {
-        for pressed in [true, false] {
-            self.send(WindowEvent::Key {
-                key,
-                pressed,
-                repeat: false,
-            });
-        }
-    }
-
     /// Presses and releases the physical key `code` through winit's
     /// translation, as the real window does.
     fn press_physical(&mut self, code: KeyCode) {
         for state in [ElementState::Pressed, ElementState::Released] {
             self.send(platform::key_event(PhysicalKey::Code(code), state, false));
         }
+    }
+
+    /// Presses L twice, as the player lands: the first requests clearance,
+    /// the second lands.
+    fn land(&mut self) {
+        self.press_physical(KeyCode::KeyL);
+        self.press_physical(KeyCode::KeyL);
     }
 
     fn click(&mut self, at: Point) {
@@ -409,6 +408,12 @@ fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
     let mut harness = Harness::flying(0);
     harness.frame();
     harness.press_physical(KeyCode::KeyL);
+    assert_eq!(
+        harness.showing(),
+        Showing::Flight,
+        "cleared, not yet landed"
+    );
+    harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
     let frame = harness.frame();
 
@@ -448,7 +453,7 @@ fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
 #[test]
 fn a_service_opens_its_placeholder_and_done_returns() {
     let mut harness = Harness::flying(0);
-    harness.press(Key::Char('l'));
+    harness.land();
     // The bar: the Trade Center opens the exchange instead (`trade.rs`).
     let bar = harness.item(10).center();
     harness.click(bar);
@@ -472,7 +477,7 @@ const OFF_START: i16 = -3;
 fn leave_takes_off_back_into_flight_at_the_planet() {
     let mut harness = Harness::flying(OFF_START);
     assert_eq!(harness.ship().position, Vec2::ZERO, "starts off the planet");
-    harness.press(Key::Char('l'));
+    harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
     let leave = harness.item(LEAVE_ITEM).center();
     harness.click(leave);
@@ -498,7 +503,7 @@ fn leave_takes_off_back_into_flight_at_the_planet() {
         "flight is drawn"
     );
     // And it can land again.
-    harness.press(Key::Char('l'));
+    harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
     assert_eq!(
         harness
@@ -514,7 +519,7 @@ fn leave_takes_off_back_into_flight_at_the_planet() {
 fn far_from_the_planet_l_says_so_and_stays_in_flight() {
     let mut harness = Harness::flying(-600);
     harness.frame();
-    harness.press(Key::Char('l'));
+    harness.land();
     assert_eq!(harness.showing(), Showing::Flight);
     let frame = harness.frame();
     assert!(
@@ -544,7 +549,7 @@ fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
     harness.frame();
     assert_eq!(drain(&log), [], "the ship browser is silent");
 
-    harness.press(Key::Char('f'));
+    harness.press_physical(KeyCode::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(
         drain(&log),
@@ -555,8 +560,12 @@ fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
     );
     harness.frame();
 
+    // Requesting clearance is silent.
+    harness.press_physical(KeyCode::KeyL);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(drain(&log), []);
     // The clearance beep, then the planet's own sound; the music plays on.
-    harness.press(Key::Char('l'));
+    harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
     assert_eq!(drain(&log), [play(151), play(LANDING_SOUND)]);
     harness.frame();
@@ -570,7 +579,7 @@ fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
     assert_eq!(drain(&log), []);
 
     // Back to the ship browser flight was entered from: the music stops.
-    harness.press(Key::Escape);
+    harness.press_physical(KeyCode::Escape);
     assert_eq!(harness.showing(), Showing::ShipBrowser);
     assert_eq!(drain(&log), [AudioCommand::StopMusic]);
 }

@@ -313,6 +313,13 @@ impl Harness {
         }
     }
 
+    /// Presses L twice, as the player lands: the first requests clearance,
+    /// the second lands.
+    fn land(&mut self) {
+        self.press_physical(KeyCode::KeyL);
+        self.press_physical(KeyCode::KeyL);
+    }
+
     /// Moves to the logical point `at`, then presses and releases there.
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
@@ -436,7 +443,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     assert_eq!(harness.played(), [AudioCommand::StopMusic]);
 
     // Later sounds play at the new effects volume.
-    harness.press_physical(KeyCode::KeyL);
+    harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
     let five = Volume::new(5.0 / 7.0);
     assert_eq!(
