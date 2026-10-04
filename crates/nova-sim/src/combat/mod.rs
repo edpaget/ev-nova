@@ -34,8 +34,9 @@
 //!    vanishes; a beam damages the nearest ship along it, every tick, until
 //!    its life is over.
 //! 5. Conditions follow the damage: a ship with no armour left (of the
-//!    armour it holds) starts breaking up, and any other is disabled, or
-//!    not, as the [`DisableRule`](hull::DisableRule) says.
+//!    armour it holds) starts breaking up, and any other that holds armour
+//!    is disabled, or not, as the [`DisableRule`](hull::DisableRule) says;
+//!    a ship that holds none is never disabled.
 //! 6. A ship breaking up counts down its `DeathDelay`, then is destroyed.
 //! 7. Shields regenerate on an intact or disabled ship, armour only on an
 //!    intact one, each up to what it holds.
@@ -307,7 +308,8 @@ impl Combat {
                 });
             }
             Condition::Intact | Condition::Disabled => {
-                let disabled = rule.disabled(fighter.reserves.armor, &fighter.hull);
+                let armor = fighter.reserves.armor;
+                let disabled = holds_armour(armor) && rule.disabled(armor, &fighter.hull);
                 if disabled && *fighter.condition == Condition::Intact {
                     self.events.push(CombatEvent::Disabled { ship });
                 }
@@ -373,10 +375,16 @@ impl Combat {
 }
 
 /// Whether `armor` is gone: at or below none, on a ship that holds any.
-/// A ship type with no armour at all (stock `shïp` 895, plug-in or test
-/// data) has none to lose, as it is never disabled either.
 fn armour_gone(armor: Gauge) -> bool {
-    armor.now <= 0.0 && armor.max > 0.0
+    armor.now <= 0.0 && holds_armour(armor)
+}
+
+/// Whether a ship with `armor` holds any. A ship type with no armour at
+/// all (stock `shïp` 895, plug-in or test data) has none to lose, so it
+/// never breaks up, and the [`DisableRule`] is never asked of it, so it is
+/// never disabled either.
+fn holds_armour(armor: Gauge) -> bool {
+    armor.max > 0.0
 }
 
 /// The ships among `targets` that can still be hit that `blast` reaches.
@@ -645,6 +653,42 @@ mod tests {
         ships[0].reserves.armor = Gauge { now: 0.0, max: 0.5 };
         tick(&mut combat, &mut ships, &NovaDisable);
         assert!(matches!(ships[0].condition, Condition::Destroyed));
+    }
+
+    #[test]
+    fn a_ship_that_holds_no_armour_is_never_disabled_by_a_hit() {
+        let mut combat = Combat::default();
+        let mut armourless = Ship::at(2, 100.0, 0.0);
+        armourless.reserves.shield.now = 0.0;
+        armourless.reserves.armor = Gauge::full(0.0);
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(blaster()), armourless];
+        let mut events = Vec::new();
+        for _ in 0..20 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            events.extend(combat.take_events());
+        }
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CombatEvent::Fired { ship: A, .. })),
+            "{events:?}"
+        );
+        assert!(
+            ships[1].reserves.shield.now < 0.0,
+            "hit with its shields down"
+        );
+        assert_eq!(ships[1].reserves.armor, Gauge::full(0.0), "none to take");
+        assert_eq!(ships[1].condition, Condition::Intact);
+        assert_eq!(about(&events, B), []);
+        let disabling = Recording {
+            disabled: true,
+            ..Recording::default()
+        };
+        ships[1].reserves.armor.now = -1.0;
+        tick(&mut combat, &mut ships, &disabling);
+        assert_eq!(ships[1].condition, Condition::Intact, "whatever the rule");
+        assert_eq!(disabling.asked.take().len(), 1, "only of the armoured");
+        assert_eq!(about(&combat.take_events(), B), []);
     }
 
     #[test]

@@ -122,7 +122,9 @@ impl Condition {
 
 /// When a ship is disabled.
 pub trait DisableRule: Debug {
-    /// Whether a ship of `hull` with `armor` is disabled.
+    /// Whether a ship of `hull` with `armor` is disabled. The fight asks
+    /// it only of a ship that holds some armour: one that holds none is
+    /// never disabled.
     fn disabled(&self, armor: Gauge, hull: &HullSpec) -> bool;
 }
 

@@ -14,6 +14,8 @@
 //! - Either way the shield is then kept above [`SHIELD_FLOOR`] of what it
 //!   holds below none, so a shield driven negative must first recharge up
 //!   through none.
+//! - A ship type that holds no armour (stock `shïp` 895, plug-in or test
+//!   data) has none to lose: its armour is never taken below none.
 //! - A blast reaches every ship within the square `radius` on each side of
 //!   it, but the one hit directly and the firer, unless the firer is the
 //!   player and the weapon's blast does not spare the player.
@@ -62,6 +64,9 @@ pub fn apply(reserves: &mut Reserves, hit: Hit) {
         }
     }
     shield.now = shield.now.max(-SHIELD_FLOOR * shield.max);
+    if reserves.armor.max <= 0.0 {
+        reserves.armor.now = reserves.armor.now.max(0.0);
+    }
 }
 
 /// Where a blast goes off and whose it is.
@@ -177,6 +182,24 @@ mod tests {
         let mut down = full();
         down.shield.now = -1.0;
         assert_eq!(after(down, &[through]), (-1.0, 33.0));
+    }
+
+    #[test]
+    fn a_ship_that_holds_no_armour_loses_none() {
+        let mut armourless = Reserves::full(30.0, 0.0, 0.0);
+        armourless.shield.now = -1.0;
+        let through = Hit {
+            passes_shields: true,
+            ..hit(5.0, 0.0)
+        };
+        assert_eq!(after(armourless, &[hit(5.0, 2.0)]), (-3.0, 0.0));
+        assert_eq!(after(armourless, &[through]), (-1.0, 0.0), "through");
+        let mut spare = armourless;
+        spare.armor.now = 2.0;
+        assert_eq!(after(spare, &[hit(5.0, 0.0)]), (-1.0, 0.0), "to none");
+        let mut sunk = armourless;
+        sunk.armor.now = -2.0;
+        assert_eq!(after(sunk, &[hit(5.0, 0.0)]), (-1.0, 0.0), "back to none");
     }
 
     #[test]
