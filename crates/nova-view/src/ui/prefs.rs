@@ -882,6 +882,77 @@ mod tests {
     }
 
     #[test]
+    fn every_way_of_changing_a_setting_reports_it() {
+        let focused = |tabs: usize, input: Input| {
+            let mut dialog = prefs();
+            for _ in 0..tabs {
+                dialog.input(&key(Key::Tab));
+            }
+            dialog.input(&input);
+            dialog.take_change()
+        };
+        let music = focused(1, key(Key::Space)).expect("Space on Music");
+        assert!(music.music);
+        let sound = focused(2, key(Key::Space)).expect("Space on Sound");
+        assert!(!sound.sound);
+        let effects = focused(3, key(Key::Up)).expect("Up on the sound volume");
+        assert_eq!(effects.effects_level, 5);
+        let volume = focused(4, key(Key::Down)).expect("Down on the music volume");
+        assert_eq!(volume.music_level, 1);
+        let clicked = |part: fn(&PrefsDialog) -> Point| {
+            let mut dialog = prefs();
+            let point = part(&dialog);
+            click(&mut dialog, point);
+            dialog.take_change()
+        };
+        assert!(clicked(|d| d.music().rect().center()).expect("Music").music);
+        assert!(!clicked(|d| d.sound().rect().center()).expect("Sound").sound);
+        let up = clicked(|d| d.effects_volume().rects().up.center());
+        assert_eq!(up.expect("the sound volume").effects_level, 5);
+        let up = clicked(|d| d.music_volume().rects().up.center());
+        assert_eq!(up.expect("the music volume").music_level, 3);
+    }
+
+    #[test]
+    fn a_check_box_touching_an_edge_from_outside_is_not_drawn() {
+        let size = (336.0, 278.0);
+        let touching = [
+            ltrb(-20.0, 10.0, 0.0, 20.0),
+            ltrb(size.0, 10.0, size.0 + 20.0, 20.0),
+            ltrb(10.0, -20.0, 30.0, 0.0),
+            ltrb(10.0, size.1, 30.0, size.1 + 20.0),
+        ];
+        let overlapping = [
+            ltrb(-20.0, 10.0, 1.0, 20.0),
+            ltrb(size.0 - 1.0, 10.0, size.0 + 20.0, 20.0),
+            ltrb(10.0, -20.0, 30.0, 1.0),
+            ltrb(10.0, size.1 - 1.0, 30.0, size.1 + 20.0),
+        ];
+        // Only the edge check boxes are greyed: the others become users,
+        // keeping every item's number.
+        let mut template = template();
+        for item in &mut template.items {
+            if matches!(item.kind, ItemSpec::CheckBox(_))
+                && item.bounds != ltrb(171.0, 33.0, 270.0, 51.0)
+                && item.bounds != ltrb(171.0, 121.0, 307.0, 139.0)
+            {
+                item.kind = ItemSpec::User;
+            }
+        }
+        for (n, bounds) in touching.iter().chain(&overlapping).enumerate() {
+            template.items.push(ItemTemplate {
+                bounds: *bounds,
+                enabled: true,
+                kind: ItemSpec::CheckBox(format!("edge {n}")),
+            });
+        }
+        let dialog = PrefsDialog::new(&template, start(), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        let labels: Vec<&str> = dialog.inert().iter().map(Toggle::label).collect();
+        assert_eq!(labels, ["edge 4", "edge 5", "edge 6", "edge 7"]);
+    }
+
+    #[test]
     fn a_click_on_ok_sounds_it_and_the_rest_are_silent() {
         let mut dialog = prefs();
         let point = dialog.music().rect().center();
