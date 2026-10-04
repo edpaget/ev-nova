@@ -19,6 +19,11 @@
 //! with a jump's fuel used and a day gone by, and the rest of the course
 //! still ahead. In flight, fuel regenerates each tick at the rate the ship
 //! and its default outfits give, read when the session starts.
+//!
+//! As it goes the session emits [`SimSound`] events (thrust starting and
+//! stopping, landing, taking off, a jump beginning and ending), which the
+//! audio side drains with [`Session::take_sounds`]. A refused landing or
+//! jump emits nothing.
 
 use crate::catalog::{GovtId, LandingSite, PilotCatalog, ShipId, StartError, StellarId, SystemId};
 use crate::date::GameDate;
@@ -31,6 +36,7 @@ use crate::hyperspace::{
 };
 use crate::landing::{LandingRefusal, check_landing};
 use crate::reserves::Reserves;
+use crate::sound::SimSound;
 
 /// The player's ship, flying in one system.
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +60,10 @@ pub struct Session {
     /// The fuel gained each tick in flight, from the ship and its default
     /// outfits.
     fuel_regen: f32,
+    /// Whether the ship is thrusting, as the last sounds told it.
+    thrusting: bool,
+    /// The sounds emitted since they were last taken.
+    sounds: Vec<SimSound>,
 }
 
 impl Session {
@@ -86,6 +96,8 @@ impl Session {
             date: GameDate::from_start(character.start),
             // No outfits yet: outfitting will pass the ship's.
             fuel_regen: fuel_regen_per_tick(fields.fuel_regen, &catalog.default_outfits(ship)),
+            thrusting: false,
+            sounds: Vec::new(),
         })
     }
 
@@ -94,8 +106,24 @@ impl Session {
     /// gains no fuel.
     pub fn tick(&mut self, controls: Controls) {
         if self.landed.is_none() && self.jumping.is_none() {
+            if controls.thrust != self.thrusting {
+                self.thrusting = controls.thrust;
+                self.sounds.push(if controls.thrust {
+                    SimSound::ThrustStarted
+                } else {
+                    SimSound::ThrustStopped
+                });
+            }
             step(&mut self.player, &self.handling, controls);
             regenerate(&mut self.player.reserves.fuel, self.fuel_regen);
+        }
+    }
+
+    /// Stops the thrust, if the ship was thrusting, as it lands or jumps.
+    fn stop_thrust(&mut self) {
+        if self.thrusting {
+            self.thrusting = false;
+            self.sounds.push(SimSound::ThrustStopped);
         }
     }
 
@@ -131,6 +159,8 @@ impl Session {
         }
         let next = check_jump(&self.player, self.course.first().copied())?;
         self.jumping = Some(next);
+        self.stop_thrust();
+        self.sounds.push(SimSound::JumpBegan);
         Ok(next)
     }
 
@@ -163,7 +193,14 @@ impl Session {
         };
         self.system = next;
         self.sites = catalog.landing_sites(next);
+        self.sounds.push(SimSound::Arrived);
         Some(next)
+    }
+
+    /// The sounds emitted since they were last taken, in order; taking
+    /// them empties the list.
+    pub fn take_sounds(&mut self) -> Vec<SimSound> {
+        std::mem::take(&mut self.sounds)
     }
 
     /// The star map, as read when the session started.
@@ -193,11 +230,15 @@ impl Session {
             return Err(LandingRefusal::Jumping);
         }
         let stellar = check_landing(&self.player, &self.sites, self.legal_record())?;
-        if let Some(site) = self.sites.iter().find(|site| site.id == stellar) {
+        let site = self.sites.iter().find(|site| site.id == stellar);
+        if let Some(site) = site {
             self.player.position = site.position;
         }
+        let stellar_sound = site.and_then(|site| site.landing_sound);
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
+        self.stop_thrust();
+        self.sounds.push(SimSound::Landed { stellar_sound });
         Ok(stellar)
     }
 
@@ -205,7 +246,9 @@ impl Session {
     /// ship flies again from the stellar's centre, at rest. `None`, and
     /// nothing changes, when it has not landed.
     pub fn take_off(&mut self) -> Option<StellarId> {
-        self.landed.take()
+        let stellar = self.landed.take()?;
+        self.sounds.push(SimSound::TookOff);
+        Some(stellar)
     }
 
     /// The stellar the ship is docked at, if it has landed.
@@ -261,7 +304,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::catalog::{CharacterStart, LandingSite, StarSystem, StartDate, StellarId};
+    use crate::catalog::{CharacterStart, LandingSite, SoundId, StarSystem, StartDate, StellarId};
     use crate::flight::Turn;
     use crate::fuel::{FUEL_SCOOP, OutfitMod};
     use crate::geometry::Vec2;
@@ -305,6 +348,7 @@ mod tests {
             frame_size: Some((100, 100)),
             flags: StellarFlags::CAN_LAND,
             min_status: 0,
+            landing_sound: None,
         }
     }
 
@@ -1039,5 +1083,187 @@ mod tests {
             session.tick(Controls::default());
         }
         assert_eq!(session.player().reserves.fuel.now, 201.0);
+    }
+
+    // Sounds.
+
+    #[test]
+    fn holding_thrust_starts_it_once_and_letting_go_stops_it_once() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.tick(Controls::default());
+        assert_eq!(session.take_sounds(), []);
+        for _ in 0..5 {
+            session.tick(THRUST);
+        }
+        assert_eq!(session.take_sounds(), [SimSound::ThrustStarted]);
+        for _ in 0..5 {
+            session.tick(Controls {
+                turn: Turn::Left,
+                ..Controls::default()
+            });
+        }
+        assert_eq!(session.take_sounds(), [SimSound::ThrustStopped]);
+        session.tick(THRUST);
+        session.tick(Controls::default());
+        session.tick(THRUST);
+        assert_eq!(
+            session.take_sounds(),
+            [
+                SimSound::ThrustStarted,
+                SimSound::ThrustStopped,
+                SimSound::ThrustStarted
+            ]
+        );
+    }
+
+    #[test]
+    fn taking_the_sounds_empties_them() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.tick(THRUST);
+        assert_eq!(session.take_sounds(), [SimSound::ThrustStarted]);
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    /// The catalog with planet 128 playing `snd ` 10032 when landed on.
+    fn sounding() -> FakePilotCatalog {
+        FakePilotCatalog {
+            sites: vec![(
+                SystemId(130),
+                vec![LandingSite {
+                    landing_sound: Some(SoundId(10_032)),
+                    ..planet(128, 30.0, -40.0)
+                }],
+            )],
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn landing_emits_landed_with_the_stellars_sound() {
+        let mut session = Session::start(&sounding()).expect("starts");
+        session.land().expect("lands");
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::Landed {
+                stellar_sound: Some(SoundId(10_032))
+            }]
+        );
+        let mut silent = Session::start(&catalog()).expect("starts");
+        silent.land().expect("lands");
+        assert_eq!(
+            silent.take_sounds(),
+            [SimSound::Landed {
+                stellar_sound: None
+            }]
+        );
+    }
+
+    #[test]
+    fn landing_while_thrusting_stops_the_thrust_first() {
+        let mut session = Session::start(&sounding()).expect("starts");
+        session.tick(Controls {
+            turn: Turn::Right,
+            ..THRUST
+        });
+        assert_eq!(session.take_sounds(), [SimSound::ThrustStarted]);
+        session.land().expect("lands");
+        assert_eq!(
+            session.take_sounds(),
+            [
+                SimSound::ThrustStopped,
+                SimSound::Landed {
+                    stellar_sound: Some(SoundId(10_032))
+                }
+            ]
+        );
+        session.tick(THRUST);
+        assert_eq!(session.take_sounds(), [], "docked, nothing thrusts");
+        session.take_off();
+        assert_eq!(session.take_sounds(), [SimSound::TookOff]);
+        session.tick(THRUST);
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::ThrustStarted],
+            "off again"
+        );
+    }
+
+    #[test]
+    fn taking_off_emits_took_off_and_not_taking_off_emits_nothing() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.take_off();
+        assert_eq!(session.take_sounds(), [], "not landed");
+        session.land().expect("lands");
+        session.take_sounds();
+        session.take_off();
+        assert_eq!(session.take_sounds(), [SimSound::TookOff]);
+        session.take_off();
+        assert_eq!(session.take_sounds(), [], "nor twice");
+    }
+
+    #[test]
+    fn a_refused_landing_emits_nothing() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        for _ in 0..20 {
+            session.tick(THRUST);
+        }
+        session.take_sounds();
+        session.land().expect_err("refused");
+        assert_eq!(session.take_sounds(), []);
+        let mut jumping = Session::start(&edge_lander()).expect("starts");
+        jumping.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut jumping);
+        jumping.begin_jump().expect("jumps");
+        jumping.take_sounds();
+        assert_eq!(jumping.land(), Err(LandingRefusal::Jumping));
+        assert_eq!(jumping.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_jump_emits_jump_began_then_arrived_stopping_the_thrust_first() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.tick(THRUST);
+        let thrusting = session.take_sounds();
+        assert_eq!(thrusting.last(), Some(&SimSound::ThrustStarted));
+        session.begin_jump().expect("jumps");
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::ThrustStopped, SimSound::JumpBegan]
+        );
+        session.tick(THRUST);
+        assert_eq!(session.take_sounds(), [], "jumping, nothing thrusts");
+        session.arrive(&catalog).expect("arrives");
+        assert_eq!(session.take_sounds(), [SimSound::Arrived]);
+        session.arrive(&catalog);
+        assert_eq!(session.take_sounds(), [], "no jump under way");
+    }
+
+    #[test]
+    fn a_jump_without_thrust_emits_only_jump_began() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.tick(Controls::default());
+        session.take_sounds();
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [SimSound::JumpBegan]);
+    }
+
+    #[test]
+    fn a_refused_jump_emits_nothing() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.tick(THRUST);
+        session.take_sounds();
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+        assert_eq!(session.take_sounds(), []);
+        let catalog = edge_lander();
+        let mut landed = landed_at_the_edge(&catalog);
+        landed.take_sounds();
+        assert_eq!(landed.begin_jump(), Err(JumpRefusal::Landed));
+        assert_eq!(landed.take_sounds(), []);
     }
 }

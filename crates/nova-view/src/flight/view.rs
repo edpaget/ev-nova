@@ -703,6 +703,7 @@ mod tests {
             frame_size: Some((20, 20)),
             flags,
             min_status: 0,
+            landing_sound: None,
         }
     }
 

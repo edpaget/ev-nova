@@ -27,6 +27,8 @@
 //!   [`Gauge`]s, full at its `shïp`'s values when it starts.
 //! - [`session`]: a flight [`Session`], the first `chär`'s ship flying
 //!   from its starting system, landing, and jumping along a plotted course.
+//! - [`sound`]: the [`SimSound`] events a session emits as it thrusts,
+//!   lands, takes off and jumps; the audio side decides what they play.
 
 pub mod catalog;
 pub mod clock;
@@ -40,10 +42,11 @@ pub mod hyperspace;
 pub mod landing;
 pub mod reserves;
 pub mod session;
+pub mod sound;
 
 pub use catalog::{
-    CharacterStart, GovtId, LandingSite, PilotCatalog, ShipId, StarSystem, StartDate, StartError,
-    StellarId, SystemId,
+    CharacterStart, GovtId, LandingSite, PilotCatalog, ShipId, SoundId, StarSystem, StartDate,
+    StartError, StellarId, SystemId,
 };
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
 pub use date::GameDate;
@@ -55,3 +58,4 @@ pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
 pub use reserves::{Gauge, Reserves};
 pub use session::Session;
+pub use sound::SimSound;

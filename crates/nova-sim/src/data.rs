@@ -10,7 +10,8 @@ use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 
 use crate::catalog::{
-    CharacterStart, LandingSite, PilotCatalog, ShipId, StarSystem, StartDate, StartError, SystemId,
+    CharacterStart, LandingSite, PilotCatalog, ShipId, SoundId, StarSystem, StartDate, StartError,
+    SystemId,
 };
 use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
@@ -114,6 +115,7 @@ impl PilotCatalog for GameData {
                     frame_size,
                     flags: stellar.flags.bits(),
                     min_status: stellar.min_status,
+                    landing_sound: landing_sound(stellar.cust_snd_id),
                 })
             })
             .collect()
@@ -131,6 +133,17 @@ impl PilotCatalog for GameData {
             })
             .collect()
     }
+}
+
+/// The first stellar landing sound: the community *EV Nova Resource ID
+/// Guide* gives `snd ` 10000 and up to "custom stellar landing sounds".
+const FIRST_LANDING_SOUND: i16 = 10_000;
+
+/// A `spöb`'s `CustSndID` as its landing sound: from
+/// [`FIRST_LANDING_SOUND`] up. Anything below is none: -1, 0, and the
+/// angle hypergates and wormholes keep in the field (stock 120).
+fn landing_sound(cust_snd_id: i16) -> Option<SoundId> {
+    (cust_snd_id >= FIRST_LANDING_SOUND).then_some(SoundId(cust_snd_id))
 }
 
 #[cfg(test)]
@@ -463,6 +476,7 @@ mod tests {
                     frame_size: Some((12, 30)),
                     flags: 0x2001,
                     min_status: -32767,
+                    landing_sound: None,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -470,6 +484,7 @@ mod tests {
                     frame_size: None,
                     flags: 0x13,
                     min_status: 25,
+                    landing_sound: None,
                 },
             ]
         );
@@ -508,6 +523,45 @@ mod tests {
             ]
         );
         assert_eq!(store(&[]).star_map(), []);
+    }
+
+    /// A landable `spöb` at the centre with this `CustSndID`.
+    fn sounding(cust_snd_id: i16) -> Vec<u8> {
+        let mut bytes = stellar(0, 0, 0, 1, 0);
+        put_i16s(&mut bytes, 0x1A, &[cust_snd_id]);
+        bytes
+    }
+
+    #[test]
+    fn a_landing_sites_sound_is_its_custom_sound_from_10000_up() {
+        // Port Kane's 10032; none (-1), 0, the 120 a hypergate keeps there
+        // as an angle, and 9999, are no landing sound.
+        let sounds = [10_032, -1, 0, 120, 9_999, 10_000];
+        let mut resources = vec![(
+            System::TYPE,
+            130,
+            system_with(&[128, 129, 130, 131, 132, 133]),
+        )];
+        for (id, sound) in (128..).zip(sounds) {
+            resources.push((Stellar::TYPE, id, sounding(sound)));
+        }
+        let data = store(&resources);
+        let found: Vec<_> = data
+            .landing_sites(SystemId(130))
+            .iter()
+            .map(|site| site.landing_sound)
+            .collect();
+        assert_eq!(
+            found,
+            [
+                Some(SoundId(10_032)),
+                None,
+                None,
+                None,
+                None,
+                Some(SoundId(10_000)),
+            ]
+        );
     }
 
     #[test]

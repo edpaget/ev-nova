@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-pub use nova_data::{GovtId, ShipId, StellarId, SystemId};
+pub use nova_data::{GovtId, ShipId, SoundId, StellarId, SystemId};
 
 use crate::fuel::OutfitMod;
 use crate::geometry::Vec2;
@@ -60,6 +60,11 @@ pub struct LandingSite {
     pub flags: u32,
     /// Its `MinStatus`: the legal record below which landing is refused.
     pub min_status: i16,
+    /// The sound it plays when the player lands, from its `CustSndID`:
+    /// stellar landing sounds are `snd ` 10000 and up, and any other value
+    /// (-1 for none, 0, or the angle hypergates and wormholes keep there)
+    /// is none.
+    pub landing_sound: Option<SoundId>,
 }
 
 /// Why a flight session could not start. Each message is ready to display.
@@ -225,6 +230,7 @@ mod tests {
                 frame_size: Some((10, 20)),
                 flags: 0x01,
                 min_status: 0,
+                landing_sound: None,
             }]
         }
 

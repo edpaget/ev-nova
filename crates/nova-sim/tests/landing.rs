@@ -58,6 +58,7 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         frame_size: Some((200, 200)),
         flags,
         min_status,
+        landing_sound: None,
     }
 }
 
