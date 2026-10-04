@@ -1,13 +1,13 @@
 //! A flight session over the stock data: the first `chär` starts a session
-//! with its ship's handling in a system that exists. Skips, passing, when
-//! `NOVA_DATA` is unset.
+//! with its ship's handling and reserves in a system that exists. Skips,
+//! passing, when `NOVA_DATA` is unset.
 
 mod common;
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
 use nova_data::records::ship::Ship;
-use nova_sim::{Handling, Session, ShipFields};
+use nova_sim::{Handling, Reserves, Session, ShipFields};
 
 #[test]
 fn the_first_chär_starts_a_session_in_one_of_its_systems() {
@@ -29,8 +29,17 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         speed: ship.speed,
         accel: ship.accel,
         maneuver: ship.maneuver,
+        shield: ship.shield,
+        armor: ship.armor,
+        fuel: ship.fuel,
     };
     assert_eq!(session.handling(), Handling::from_fields(fields));
+    assert_eq!(session.player().reserves, Reserves::from_fields(fields));
+    assert!(
+        session.player().reserves.shield.max > 0.0,
+        "{:?}",
+        session.player().reserves
+    );
     assert!(
         session.handling().max_speed > 0.0,
         "{:?}",

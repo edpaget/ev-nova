@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-pub use nova_data::{ShipId, SystemId};
+pub use nova_data::{GovtId, ShipId, SystemId};
 
 use crate::handling::ShipFields;
 
@@ -49,7 +49,7 @@ fn slots(systems: &[Option<SystemId>; 4]) -> String {
 pub trait PilotCatalog {
     /// The first `chär` by ascending ID: its ship and starting systems.
     fn first_character(&self) -> Result<CharacterStart, StartError>;
-    /// Ship `id`'s handling fields, or why they cannot be read.
+    /// Ship `id`'s handling and reserve fields, or why they cannot be read.
     fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String>;
     /// Whether system `id` exists and can be read.
     fn system_exists(&self, id: SystemId) -> bool;
@@ -107,6 +107,7 @@ mod tests {
                     speed: 300,
                     accel: 300,
                     maneuver: 10,
+                    ..ShipFields::default()
                 })
                 .ok_or_else(|| format!("no shïp {}", id.0))
         }

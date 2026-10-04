@@ -8,7 +8,8 @@
 //! They are chosen so flight feels like Nova, not to match the original
 //! number for number.
 
-/// A `shïp`'s `Speed`, `Accel` and `Maneuver`, raw from the record.
+/// A `shïp`'s `Speed`, `Accel`, `Maneuver`, `Shield`, `Armor` and `Fuel`,
+/// raw from the record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShipFields {
     /// `Speed`: top speed; 300 is average.
@@ -17,6 +18,12 @@ pub struct ShipFields {
     pub accel: i16,
     /// `Maneuver`: turn rate; 10 is about 30°/s.
     pub maneuver: i16,
+    /// `Shield`: shield strength; negative means 5x the absolute value.
+    pub shield: i16,
+    /// `Armor`: armour strength.
+    pub armor: i16,
+    /// `Fuel`: fuel capacity; 100 is one jump.
+    pub fuel: i16,
 }
 
 /// `Speed` per pixel a tick. The Bible gives a weapon's speed in "pixels
@@ -68,6 +75,7 @@ mod tests {
             speed,
             accel,
             maneuver,
+            ..ShipFields::default()
         })
     }
 

@@ -25,6 +25,7 @@ impl PilotCatalog for Pilot {
             speed: 450,
             accel: 600,
             maneuver: 25,
+            ..ShipFields::default()
         })
     }
 

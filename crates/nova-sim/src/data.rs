@@ -30,6 +30,9 @@ impl PilotCatalog for GameData {
                 speed: ship.record.speed,
                 accel: ship.record.accel,
                 maneuver: ship.record.maneuver,
+                shield: ship.record.shield,
+                armor: ship.record.armor,
+                fuel: ship.record.fuel,
             }),
             Some(Err(err)) => Err(err.to_string()),
             None => Err(format!("no shïp {}", id.0)),
@@ -104,6 +107,15 @@ mod tests {
         bytes
     }
 
+    /// A `shïp` with this `Shield`, `Fuel` and `Armor`, and no handling.
+    fn reserves(shield: i16, fuel: i16, armor: i16) -> Vec<u8> {
+        let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x02, &[shield]);
+        put_i16s(&mut bytes, 0x0A, &[fuel]);
+        put_i16s(&mut bytes, 0x0E, &[armor]);
+        bytes
+    }
+
     fn system() -> Vec<u8> {
         vec![0; System::SIZE.expect("fixed")]
     }
@@ -160,6 +172,21 @@ mod tests {
                 speed: 400,
                 accel: 250,
                 maneuver: 15,
+                ..ShipFields::default()
+            })
+        );
+    }
+
+    #[test]
+    fn a_ships_fields_include_its_shield_armour_and_fuel() {
+        let data = store(&[(Ship::TYPE, 128, reserves(30, 300, -45))]);
+        assert_eq!(
+            data.ship_fields(ShipId(128)),
+            Ok(ShipFields {
+                shield: 30,
+                armor: -45,
+                fuel: 300,
+                ..ShipFields::default()
             })
         );
     }

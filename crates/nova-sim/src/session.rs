@@ -3,11 +3,13 @@
 //!
 //! A session starts as a new pilot does, from the first `chär` by
 //! ascending ID: its ship, in the first of its starting systems that
-//! exists. The ship starts at rest at the system's centre, facing up.
+//! exists. The ship starts at rest at the system's centre, facing up, with
+//! its shield, armour and fuel full.
 
-use crate::catalog::{PilotCatalog, ShipId, StartError, SystemId};
+use crate::catalog::{GovtId, PilotCatalog, ShipId, StartError, SystemId};
 use crate::flight::{Controls, ShipState, step};
 use crate::handling::Handling;
+use crate::reserves::Reserves;
 
 /// The player's ship, flying in one system.
 #[derive(Clone, Debug, PartialEq)]
@@ -36,7 +38,10 @@ impl Session {
             ship,
             system,
             handling: Handling::from_fields(fields),
-            player: ShipState::default(),
+            player: ShipState {
+                reserves: Reserves::from_fields(fields),
+                ..ShipState::default()
+            },
         })
     }
 
@@ -68,6 +73,15 @@ impl Session {
     pub fn handling(&self) -> Handling {
         self.handling
     }
+
+    /// The government the player belongs to, if any. Always `None`: a new
+    /// pilot belongs to no government. Nova grants membership later, through
+    /// storyline play, and the first `chär` names none (its `Govt1-4` set
+    /// starting legal records, not membership).
+    #[must_use]
+    pub fn government(&self) -> Option<GovtId> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -80,6 +94,7 @@ mod tests {
     use crate::flight::Turn;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
+    use crate::reserves::{Gauge, Reserves};
 
     /// A canned first `chär`, ships and systems; records the ships asked
     /// for.
@@ -94,6 +109,9 @@ mod tests {
         speed: 600,
         accel: 900,
         maneuver: 30,
+        shield: 30,
+        armor: 45,
+        fuel: 300,
     };
 
     /// The first `chär` flies ship 128 from system 130; ship 128 is fast,
@@ -157,8 +175,33 @@ mod tests {
                 position: Vec2::ZERO,
                 velocity: Vec2::ZERO,
                 heading: 0.0,
+                reserves: Reserves {
+                    shield: Gauge::full(30.0),
+                    armor: Gauge::full(45.0),
+                    fuel: Gauge::full(300.0),
+                },
             }
         );
+    }
+
+    #[test]
+    fn a_new_pilot_belongs_to_no_government() {
+        let session = Session::start(&catalog()).expect("starts");
+        assert_eq!(session.government(), None);
+    }
+
+    #[test]
+    fn a_tick_leaves_the_reserves_as_they_are() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let full = session.player().reserves;
+        for _ in 0..30 {
+            session.tick(Controls {
+                thrust: true,
+                ..Controls::default()
+            });
+        }
+        assert_eq!(session.player().reserves, full);
+        assert_ne!(session.player().position, Vec2::ZERO);
     }
 
     #[test]

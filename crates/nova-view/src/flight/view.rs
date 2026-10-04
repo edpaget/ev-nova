@@ -267,7 +267,8 @@ mod tests {
     use std::num::NonZeroU16;
 
     use nova_sim::{
-        CharacterStart, Handling, ShipFields, ShipId, StartError, SystemId, TICK, Vec2, step,
+        CharacterStart, Handling, Reserves, ShipFields, ShipId, StartError, SystemId, TICK, Vec2,
+        step,
     };
 
     use super::*;
@@ -290,6 +291,9 @@ mod tests {
         speed: 300,
         accel: 300,
         maneuver: 30,
+        shield: 40,
+        armor: 60,
+        fuel: 250,
     };
 
     fn sheet() -> ShipSheet {
@@ -400,6 +404,14 @@ mod tests {
         Handling::from_fields(FIELDS)
     }
 
+    /// The ship as it starts: at rest at the centre, facing up, full.
+    fn start() -> ShipState {
+        ShipState {
+            reserves: Reserves::from_fields(FIELDS),
+            ..ShipState::default()
+        }
+    }
+
     /// `state` after `ticks` steps under `controls`.
     fn stepped(mut state: ShipState, controls: Controls, ticks: u32) -> ShipState {
         for _ in 0..ticks {
@@ -433,7 +445,7 @@ mod tests {
         assert_eq!(session.ship(), ShipId(128));
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(session.handling(), handling());
-        assert_eq!(*session.player(), ShipState::default());
+        assert_eq!(*session.player(), start());
         let scene = view.scene().expect("a scene");
         assert_eq!(scene.id(), SystemId(130));
         assert_eq!(scene.stellars().len(), 2);
@@ -477,7 +489,7 @@ mod tests {
         let mut view = flight();
         assert_eq!(view.input(&key(Key::Up, true)), ScreenAction::None);
         view.tick(Duration::from_secs(1));
-        let expected = stepped(ShipState::default(), THRUST, 30);
+        let expected = stepped(start(), THRUST, 30);
         assert_eq!(player(&view), expected);
         assert!(expected.position.y < -40.0, "{expected:?}");
         assert_eq!(expected.position.x, 0.0);
@@ -552,7 +564,7 @@ mod tests {
         let mut view = flight();
         view.input(&held(Key::Up));
         ticks(&mut view, 5);
-        assert_eq!(player(&view), stepped(ShipState::default(), THRUST, 5));
+        assert_eq!(player(&view), stepped(start(), THRUST, 5));
         view.release_keys();
         let coasting = player(&view);
         ticks(&mut view, 5);
@@ -564,7 +576,7 @@ mod tests {
         let mut view = flight();
         view.input(&key(Key::Up, false));
         ticks(&mut view, 3);
-        assert_eq!(player(&view), ShipState::default());
+        assert_eq!(player(&view), start());
     }
 
     #[test]
@@ -588,7 +600,7 @@ mod tests {
             assert_eq!(view.input(&input), ScreenAction::None, "{input:?}");
         }
         ticks(&mut view, 5);
-        assert_eq!(player(&view), ShipState::default());
+        assert_eq!(player(&view), start());
     }
 
     // Interpolation.
@@ -598,7 +610,7 @@ mod tests {
         let mut view = flight();
         view.input(&key(Key::Up, true));
         view.tick(TICK);
-        let first = stepped(ShipState::default(), THRUST, 1);
+        let first = stepped(start(), THRUST, 1);
         assert_eq!(player(&view), first);
         assert_eq!(view.alpha(), 0.0);
         assert_eq!(view.shown_position(), at(0.0, 0.0), "a step behind");
