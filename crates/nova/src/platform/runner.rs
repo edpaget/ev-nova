@@ -30,7 +30,7 @@ use winit::window::{Window, WindowId};
 
 use super::translate;
 use super::window::WinitWindow;
-use crate::app::{App, AppScreen, Control, WindowEvent};
+use crate::app::{App, AppScreen, Control, Handled, WindowEvent};
 #[cfg(feature = "dev-tools")]
 use crate::devtools::DevTools;
 use crate::exit::OpenFailure;
@@ -210,6 +210,18 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
                 .app
                 .handle_routed(event, &mut running.window, &mut running.gpu)
         });
+        // The text a key press types follows the key.
+        let typed = match &raw {
+            WinitEvent::KeyboardInput { event, .. } => {
+                super::text_event(event.text.as_deref(), event.state)
+            }
+            _ => None,
+        };
+        let typed = typed.map(|event| {
+            running
+                .app
+                .handle_routed(event, &mut running.window, &mut running.gpu)
+        });
         #[cfg(feature = "dev-tools")]
         if let Some(dev_tools) = &mut running.dev_tools
             && running.app.overlay_wants(handled.as_ref())
@@ -222,7 +234,8 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
         for warning in running.app.take_warnings() {
             eprintln!("{warning}");
         }
-        if handled.is_some_and(|handled| handled.control == Control::Exit) {
+        let exits = |handled: Option<Handled>| handled.is_some_and(|h| h.control == Control::Exit);
+        if exits(handled) || exits(typed) {
             event_loop.exit();
         }
     }

@@ -11,6 +11,10 @@ use crate::text::TextMetrics;
 
 use super::dialog::outline;
 
+/// The key that deletes the character before the caret: Backspace
+/// (Delete on a Mac keyboard).
+pub const DELETE_KEY: Key = Key::Backspace;
+
 /// The text's size, in Geneva.
 pub const TEXT_SIZE: f32 = 12.0;
 /// The text's colour.
@@ -64,7 +68,7 @@ impl TextField {
                 true
             }
             Input::Key {
-                key: Key::Backspace,
+                key: DELETE_KEY,
                 pressed: true,
                 ..
             } => self.text.pop().is_some(),

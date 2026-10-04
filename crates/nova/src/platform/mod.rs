@@ -2,7 +2,8 @@
 //! [`WindowPort`] over a real window and runs the event loop.
 //!
 //! Translation is pure and unit-tested; the window and the runner only
-//! forward to the app.
+//! forward to the app. A key press that types a character becomes two
+//! events: the key ([`key_event`]), then its text ([`text_event`]).
 
 mod runner;
 mod window;
@@ -57,6 +58,21 @@ pub fn key_event(key: PhysicalKey, state: ElementState, repeat: bool) -> WindowE
     }
 }
 
+/// The text a key press types, from winit's `text`: a printable
+/// character, or `None` for a release, a press that types nothing, a
+/// control character (Return, Backspace, Escape, Tab, Delete) or more than
+/// one character (a dead key's composition, which a name field does not
+/// need).
+#[must_use]
+pub fn text_event(text: Option<&str>, state: ElementState) -> Option<WindowEvent> {
+    if !state.is_pressed() {
+        return None;
+    }
+    let mut chars = text?.chars();
+    let c = chars.next()?;
+    (chars.next().is_none() && !c.is_control()).then_some(WindowEvent::Text(c))
+}
+
 /// The game's key for a physical key; keys it does not use are
 /// [`Key::Other`].
 #[must_use]
@@ -70,6 +86,9 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::Escape) => Key::Escape,
         PhysicalKey::Code(KeyCode::Space) => Key::Space,
         PhysicalKey::Code(KeyCode::Tab) => Key::Tab,
+        // Deletes the character before the caret in a text field: Delete on
+        // a Mac keyboard.
+        PhysicalKey::Code(KeyCode::Backspace) => Key::Backspace,
         // The map's zoom keys, by position: `=` is the unshifted `+` key on
         // US-layout keyboards.
         PhysicalKey::Code(KeyCode::Equal) => Key::Char('='),
@@ -146,6 +165,7 @@ mod tests {
             (KeyCode::Escape, Key::Escape),
             (KeyCode::Space, Key::Space),
             (KeyCode::Tab, Key::Tab),
+            (KeyCode::Backspace, Key::Backspace),
             (KeyCode::Equal, Key::Char('=')),
             (KeyCode::NumpadAdd, Key::Char('+')),
             (KeyCode::Minus, Key::Char('-')),
@@ -223,6 +243,19 @@ mod tests {
         }
     }
 
+    /// Every key other than a character's that a screen reacts to, where
+    /// the screen names it with a constant, and the physical key that
+    /// sends it.
+    const GAME_NAMED_KEYS: [(Key, KeyCode); 1] =
+        [(nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace)];
+
+    #[test]
+    fn every_named_key_a_screen_reacts_to_comes_from_its_physical_key() {
+        for (key, code) in GAME_NAMED_KEYS {
+            assert_eq!(map_key(PhysicalKey::Code(code)), key, "{code:?}");
+        }
+    }
+
     #[test]
     fn a_key_event_carries_its_key_state_and_repeat_flag() {
         assert_eq!(
@@ -261,6 +294,34 @@ mod tests {
                 repeat: true
             }
         );
+    }
+
+    #[test]
+    fn a_press_that_types_one_printable_character_is_text() {
+        let pressed = ElementState::Pressed;
+        assert_eq!(text_event(Some("a"), pressed), Some(WindowEvent::Text('a')));
+        assert_eq!(text_event(Some("A"), pressed), Some(WindowEvent::Text('A')));
+        assert_eq!(text_event(Some("é"), pressed), Some(WindowEvent::Text('é')));
+        assert_eq!(text_event(Some(" "), pressed), Some(WindowEvent::Text(' ')));
+        assert_eq!(text_event(Some("/"), pressed), Some(WindowEvent::Text('/')));
+    }
+
+    #[test]
+    fn no_text_control_characters_several_characters_and_releases_are_not() {
+        let pressed = ElementState::Pressed;
+        for typed in [
+            None,
+            Some(""),
+            Some("\r"),
+            Some("\u{8}"),
+            Some("\u{7f}"),
+            Some("\u{1b}"),
+            Some("\t"),
+            Some("ab"),
+        ] {
+            assert_eq!(text_event(typed, pressed), None, "{typed:?}");
+        }
+        assert_eq!(text_event(Some("a"), ElementState::Released), None);
     }
 
     #[test]

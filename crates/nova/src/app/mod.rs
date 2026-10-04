@@ -5,7 +5,8 @@
 //! added there, so the platform adapter never names one. The adapter
 //! hands it [`WindowEvent`]s, already in the core's terms, together with
 //! the [`WindowPort`] and a [`Gpu`]; the app turns them into screen input
-//! (every key, Escape included, is the screen's to act on),
+//! (every key, Escape included, is the screen's to act on, and so is the
+//! text each key press types),
 //! ticks and draws the screen, and renders each frame through
 //! `nova-render`. It never blocks and never names a winit or wgpu type.
 //!
@@ -34,7 +35,15 @@
 //! applies them to the audio core, if it has one, and saves them through
 //! the settings keeper it was built [`App::with_settings`], if any. The
 //! app prints nothing: a save that fails is kept as a warning until the
-//! caller takes it ([`App::take_warnings`]) and shows it.
+//! caller takes it ([`App::take_warnings`]) and shows it. So are the
+//! warnings the screen reports ([`Screen::take_warnings`]), which the app
+//! takes after every input and frame.
+//!
+//! # Quitting
+//!
+//! Whichever way the app quits (the window closed, or the screen asking
+//! to quit), it first tells the screen ([`Screen::quit`]), so the screen
+//! can keep what should outlive it, such as the pilot.
 
 use std::time::Duration;
 
@@ -77,6 +86,9 @@ pub enum WindowEvent {
         /// [`Input::Key`].
         repeat: bool,
     },
+    /// A printable character was typed: it follows the [`WindowEvent::Key`]
+    /// press that typed it.
+    Text(char),
     /// The pointer moved to a window position in physical pixels.
     PointerMoved {
         /// Where, in physical pixels from the window's top-left.
@@ -247,7 +259,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// Handles one window event.
     ///
     /// A resize refits the viewport. Keys go to the screen, Escape
-    /// included: what it does is the screen's to decide. Losing focus tells the screen to let go of
+    /// included: what it does is the screen's to decide. So does the text
+    /// a key press types. Losing focus tells the screen to let go of
     /// the keys it holds down, since their releases will not arrive. Pointer events go to the screen in logical
     /// units, and are dropped in the bars. A redraw ticks the screen by the
     /// time since the last redraw, renders its draw list through `gpu` and
@@ -295,7 +308,10 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 self.viewport = Viewport::new(LOGICAL, size_px, scale_factor);
                 game(Control::Continue)
             }
-            WindowEvent::CloseRequested => game(Control::Exit),
+            WindowEvent::CloseRequested => {
+                self.quit();
+                game(Control::Exit)
+            }
             WindowEvent::FocusLost => {
                 self.screen.release_keys();
                 game(Control::Continue)
@@ -315,6 +331,12 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                     routing,
                 },
             },
+            WindowEvent::Text(c) => {
+                if self.overlay.as_ref().is_some_and(DevOverlay::visible) {
+                    return overlay;
+                }
+                game(self.route(Input::Text(c)))
+            }
             WindowEvent::PointerMoved { px } => {
                 self.pointer = Some(px);
                 if self.pointer_routing() == Routing::Overlay {
@@ -347,6 +369,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 }
                 self.screen.tick(elapsed.saturating_sub(self.last_redraw));
                 self.feed_audio();
+                self.take_screen_warnings();
                 self.last_redraw = self.last_redraw.max(elapsed);
                 let mut list = DrawList::new();
                 self.screen.draw(&mut list);
@@ -386,10 +409,25 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     fn route(&mut self, input: Input) -> Control {
         let action = self.screen.input(&input);
         self.feed_audio();
+        self.take_screen_warnings();
         match action {
             ScreenAction::None => Control::Continue,
-            ScreenAction::Quit => Control::Exit,
+            ScreenAction::Quit => {
+                self.quit();
+                Control::Exit
+            }
         }
+    }
+
+    /// Tells the screen the app is quitting, and keeps what it reports.
+    fn quit(&mut self) {
+        self.screen.quit();
+        self.take_screen_warnings();
+    }
+
+    /// Keeps the warnings the screen reports, for the caller to take.
+    fn take_screen_warnings(&mut self) {
+        self.warnings.extend(self.screen.take_warnings());
     }
 }
 
@@ -451,7 +489,8 @@ mod tests {
         }
     }
 
-    /// Records its inputs and ticks; quits on `quit_on`; draws one sprite.
+    /// Records its inputs and ticks; quits on `quit_on`; draws one sprite;
+    /// counts the times it is told the app quits; hands out `warnings`.
     #[derive(Default)]
     struct RecordingScreen {
         inputs: Vec<Input>,
@@ -459,6 +498,8 @@ mod tests {
         quit_on: Option<Key>,
         releases: usize,
         cancels: usize,
+        quits: usize,
+        warnings: Vec<String>,
     }
 
     impl Screen for RecordingScreen {
@@ -484,6 +525,15 @@ mod tests {
 
         fn cancel_pointer(&mut self) {
             self.cancels += 1;
+        }
+
+        fn quit(&mut self) {
+            self.quits += 1;
+            self.warnings.push(format!("quit {}", self.quits));
+        }
+
+        fn take_warnings(&mut self) -> Vec<String> {
+            std::mem::take(&mut self.warnings)
         }
     }
 
@@ -598,17 +648,104 @@ mod tests {
     }
 
     #[test]
-    fn a_screen_quit_exits() {
+    fn a_screen_quit_tells_the_screen_and_exits() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let screen = RecordingScreen {
             quit_on: Some(Key::Enter),
             ..RecordingScreen::default()
         };
         let mut app = App::new(&window, NoImages, screen);
+        handle(&mut app, &mut window, key(Key::Up, true));
+        assert_eq!(app.screen().quits, 0);
         assert_eq!(
             handle(&mut app, &mut window, key(Key::Enter, true)),
             Control::Exit
         );
+        assert_eq!(app.screen().quits, 1);
+        assert_eq!(app.take_warnings(), ["quit 1"], "what quitting reported");
+    }
+
+    #[test]
+    fn typed_text_reaches_the_screen_after_its_key() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        assert_eq!(
+            handle(&mut app, &mut window, key(Key::Char('p'), true)),
+            Control::Continue
+        );
+        assert_eq!(
+            handle(&mut app, &mut window, WindowEvent::Text('P')),
+            Control::Continue
+        );
+        assert_eq!(
+            app.screen().inputs,
+            [
+                Input::Key {
+                    key: Key::Char('p'),
+                    pressed: true,
+                    repeat: false
+                },
+                Input::Text('P'),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_screen_quit_on_typed_text_exits() {
+        struct QuitOnText;
+        impl Screen for QuitOnText {
+            fn input(&mut self, input: &Input) -> ScreenAction {
+                if matches!(input, Input::Text(_)) {
+                    ScreenAction::Quit
+                } else {
+                    ScreenAction::None
+                }
+            }
+            fn tick(&mut self, _dt: Duration) {}
+            fn draw(&self, _list: &mut DrawList) {}
+        }
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = App::new(&window, NoImages, QuitOnText);
+        assert_eq!(
+            app.handle(
+                WindowEvent::Text('q'),
+                &mut window,
+                &mut RecordingGpu::new()
+            ),
+            Control::Exit
+        );
+    }
+
+    #[test]
+    fn the_screens_warnings_are_kept_after_each_input_and_redraw() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let screen = RecordingScreen {
+            warnings: vec!["first".to_owned()],
+            ..RecordingScreen::default()
+        };
+        let mut app = App::new(&window, NoImages, screen);
+        assert_eq!(app.take_warnings(), Vec::<String>::new(), "none taken yet");
+        handle(&mut app, &mut window, key(Key::Up, true));
+        assert_eq!(app.take_warnings(), ["first"]);
+        app.screen.warnings.push("second".to_owned());
+        handle(
+            &mut app,
+            &mut window,
+            WindowEvent::Redraw {
+                elapsed: Duration::from_millis(16),
+            },
+        );
+        assert_eq!(app.take_warnings(), ["second"]);
+        app.screen.warnings.push("third".to_owned());
+        handle(&mut app, &mut window, WindowEvent::Text('a'));
+        assert_eq!(app.take_warnings(), ["third"]);
+        app.screen.warnings.push("fourth".to_owned());
+        handle(
+            &mut app,
+            &mut window,
+            WindowEvent::PointerMoved { px: (5.0, 5.0) },
+        );
+        assert_eq!(app.take_warnings(), ["fourth"]);
     }
 
     #[test]
@@ -626,13 +763,15 @@ mod tests {
     }
 
     #[test]
-    fn closing_the_window_exits() {
+    fn closing_the_window_tells_the_screen_and_exits() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
         assert_eq!(
             handle(&mut app, &mut window, WindowEvent::CloseRequested),
             Control::Exit
         );
+        assert_eq!(app.screen().quits, 1);
+        assert_eq!(app.take_warnings(), ["quit 1"], "what quitting reported");
     }
 
     #[test]
@@ -844,6 +983,22 @@ mod tests {
         }
         assert_eq!(app.screen().inputs, []);
         assert!(visible(&app), "Escape does not close it");
+    }
+
+    #[test]
+    fn typed_text_goes_to_the_overlay_alone_while_it_shows() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        assert_eq!(
+            routed(&mut app, &mut window, WindowEvent::Text('a')),
+            handled(Control::Continue, Routing::Game)
+        );
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        assert_eq!(
+            routed(&mut app, &mut window, WindowEvent::Text('b')),
+            handled(Control::Continue, Routing::Overlay)
+        );
+        assert_eq!(app.screen().inputs, [Input::Text('a')]);
     }
 
     #[test]
