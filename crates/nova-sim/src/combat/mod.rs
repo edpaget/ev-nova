@@ -951,6 +951,43 @@ mod tests {
     }
 
     #[test]
+    fn a_blast_hurts_a_disabled_ship_and_spares_a_dying_one() {
+        let shell = WeaponRecord {
+            explod_type: 0,
+            blast_radius: 30,
+            ..blaster()
+        };
+        let mut combat = Combat::default();
+        let mut dying = Ship::at(3, 100.0, 25.0);
+        dying.condition = Condition::Dying { ticks_left: 50 };
+        let mut disabled = Ship::at(4, 100.0, -25.0);
+        disabled.condition = Condition::Disabled;
+        disabled.reserves.armor.now = 5.0;
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(shell),
+            Ship::at(2, 100.0, 0.0),
+            dying,
+            disabled,
+        ];
+        for _ in 0..6 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = Trigger::default();
+        }
+        assert_eq!(ships[1].reserves.shield.now, 0.0, "hit directly");
+        assert_eq!(
+            ships[2].reserves,
+            Reserves::full(10.0, 30.0, 100.0),
+            "a dying ship is past hitting"
+        );
+        assert_eq!(
+            (ships[3].reserves.shield.now, ships[3].reserves.armor.now),
+            (0.0, 1.0),
+            "a disabled ship is blasted"
+        );
+        assert_eq!(ships[3].condition, Condition::Disabled);
+    }
+
+    #[test]
     fn a_shot_detonates_at_the_end_of_its_life_if_its_weapon_says_so() {
         let flak = |flags| WeaponRecord {
             count: 3,
