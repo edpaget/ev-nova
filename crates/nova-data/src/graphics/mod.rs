@@ -11,6 +11,9 @@
 //! | `ppat` | [`decode_ppat`] | one opaque image |
 //! | `rlëD` ([`RLED`]) | [`decode_rled`] | a [`SpriteSheet`] of equal-sized frames |
 //!
+//! [`apply_mask`] gives a decoded picture its alpha from a second picture,
+//! its mask, as Nova masks its button caps.
+//!
 //! A sprite sheet's header gives frame size and count but not how the frames
 //! are arranged. That comes from the `spïn` or `shän` record pointing at the
 //! sheet ([`records::spin::Spin::sheet_layout`],
@@ -89,6 +92,7 @@ mod color;
 mod error;
 mod icon;
 mod image;
+mod mask;
 mod packbits;
 mod pattern;
 mod pict;
@@ -104,6 +108,7 @@ pub use budget::{MAX_PIXELS, MAX_PIXELS_PER_INPUT_BYTE};
 pub use error::GraphicsError;
 pub use icon::decode_cicn;
 pub use image::Image;
+pub use mask::apply_mask;
 pub use pattern::decode_ppat;
 pub use pict::{PICT, decode_pict};
 pub use rled::{RLED, decode_rled};

@@ -158,6 +158,18 @@ pub enum GraphicsError {
         /// The pixel value.
         index: u8,
     },
+    /// A mask picture whose size differs from the picture it masks.
+    #[error("the {mask_width}x{mask_height} mask does not fit the {width}x{height} picture")]
+    MaskSizeMismatch {
+        /// The picture's width.
+        width: u32,
+        /// The picture's height.
+        height: u32,
+        /// The mask's width.
+        mask_width: u32,
+        /// The mask's height.
+        mask_height: u32,
+    },
 }
 
 impl GraphicsError {
@@ -187,7 +199,8 @@ impl GraphicsError {
             | Self::UnsupportedPatternType { .. }
             | Self::UnsupportedDepth { .. }
             | Self::NoFrames
-            | Self::MissingColour { .. } => None,
+            | Self::MissingColour { .. }
+            | Self::MaskSizeMismatch { .. } => None,
         }
     }
 }
@@ -272,6 +285,15 @@ mod tests {
             ),
             (E::OddByteCount { offset: 12 }, Some(12)),
             (E::MissingColour { index: 9 }, None),
+            (
+                E::MaskSizeMismatch {
+                    width: 1,
+                    height: 2,
+                    mask_width: 3,
+                    mask_height: 4,
+                },
+                None,
+            ),
         ];
         for (error, offset) in cases {
             assert_eq!(error.offset(), offset, "{error:?}");
@@ -395,6 +417,15 @@ mod tests {
             (
                 GraphicsError::MissingColour { index: 9 },
                 "pixel value 9 is not in the colour table",
+            ),
+            (
+                GraphicsError::MaskSizeMismatch {
+                    width: 13,
+                    height: 25,
+                    mask_width: 12,
+                    mask_height: 25,
+                },
+                "the 12x25 mask does not fit the 13x25 picture",
             ),
         ];
         for (error, message) in cases {
