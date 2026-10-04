@@ -31,6 +31,13 @@
 //! text as it will be drawn, the line-height rule the renderer shares, and
 //! word wrap.
 //!
+//! # Widgets
+//!
+//! - [`ui`]: immediate-mode widgets (buttons drawn with Nova's button
+//!   graphics, scrolling text) and modal dialogs laid out from the
+//!   interface file's `DLOG`/`DITL`s, such as the "Desc Dialog"
+//!   ([`ui::DescDialog`]).
+//!
 //! # Developer tools
 //!
 //! - [`devtools`]: the developer tools overlay's model, which `nova`
@@ -51,6 +58,7 @@ pub mod ships;
 pub mod system;
 pub mod text;
 mod time;
+pub mod ui;
 
 pub use color::Color;
 pub use draw::{DrawCommand, DrawList};

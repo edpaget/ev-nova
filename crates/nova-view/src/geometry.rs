@@ -27,6 +27,25 @@ pub struct Bounds {
 }
 
 impl Bounds {
+    /// The `width` x `height` rectangle whose top-left corner is
+    /// `top_left`.
+    #[must_use]
+    pub fn at(top_left: Point, width: f32, height: f32) -> Self {
+        Self {
+            min: top_left,
+            max: Point::new(top_left.x + width, top_left.y + height),
+        }
+    }
+
+    /// The rectangle moved right by `by.x` and down by `by.y`.
+    #[must_use]
+    pub fn offset(&self, by: Point) -> Self {
+        Self {
+            min: Point::new(self.min.x + by.x, self.min.y + by.y),
+            max: Point::new(self.max.x + by.x, self.max.y + by.y),
+        }
+    }
+
     /// The smallest rectangle holding every point, or `None` for none.
     pub fn around(points: impl IntoIterator<Item = Point>) -> Option<Self> {
         points.into_iter().fold(None, |bounds, p| {
@@ -145,6 +164,23 @@ mod tests {
         ] {
             assert!(!box_.contains(outside), "{outside:?}");
         }
+    }
+
+    #[test]
+    fn a_rectangle_at_a_corner_has_its_size() {
+        let box_ = Bounds::at(at(3.0, -4.0), 10.0, 20.0);
+        assert_eq!(box_, bounds((3.0, -4.0), (13.0, 16.0)));
+        assert_eq!((box_.width(), box_.height()), (10.0, 20.0));
+    }
+
+    #[test]
+    fn offsetting_moves_both_corners() {
+        let box_ = bounds((-2.0, -1.0), (3.0, 5.0));
+        assert_eq!(
+            box_.offset(at(10.0, 100.0)),
+            bounds((8.0, 99.0), (13.0, 105.0))
+        );
+        assert_eq!(box_.offset(at(0.0, 0.0)), box_);
     }
 
     #[test]
