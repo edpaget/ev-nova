@@ -37,6 +37,12 @@
 //! pilot owns. A pilot from a save made
 //! before outfits were kept owns its ship's default items.
 //!
+//! The player selects one of the system's stellars as the navigation
+//! target ([`Session::select_next_stellar`]), in the order the
+//! [`navigation`](crate::navigation) rule gives. The target is not part of
+//! the pilot, so it is not saved, and it is independent of the course.
+//! Arriving in another system clears it.
+//!
 //! Each day that goes by steps the planetary events (see
 //! [`market`](crate::market)), rolling whether each can start on the
 //! [`Chance`] the caller passes to [`Session::arrive`].
@@ -88,6 +94,7 @@ use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
 use crate::landing::{LandingRefusal, check_landing};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
+use crate::navigation::next_stellar;
 use crate::outfitter::{self, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods};
 use crate::pilot::{self, Pilot};
 use crate::recharge::{self, RechargeRefusal};
@@ -116,6 +123,8 @@ pub struct Session {
     sites: Vec<LandingSite>,
     /// The stellar the ship is docked at, if it has landed.
     landed: Option<StellarId>,
+    /// The stellar selected as the navigation target, one of `sites`.
+    nav_target: Option<StellarId>,
     /// The star map, read when the session starts.
     star_map: StarMap,
     /// The system being jumped to, while a jump is under way.
@@ -188,6 +197,7 @@ impl Session {
             player,
             sites,
             landed,
+            nav_target: None,
             star_map: StarMap::new(catalog.star_map()),
             jumping: None,
             goods: Goods::read(catalog),
@@ -327,8 +337,24 @@ impl Session {
         pilot.stellar = None;
         pilot.explore(next);
         self.sites = catalog.landing_sites(next);
+        self.nav_target = None;
         self.sounds.push(SimSound::Arrived);
         Some(next)
+    }
+
+    /// Selects the next of the system's stellars as the navigation target,
+    /// as the [`navigation`](crate::navigation) rule says, and gives it;
+    /// `None`, and nothing is selected, when the system has no stellars.
+    pub fn select_next_stellar(&mut self) -> Option<StellarId> {
+        let stellars: Vec<StellarId> = self.sites.iter().map(|site| site.id).collect();
+        self.nav_target = next_stellar(&stellars, self.nav_target);
+        self.nav_target
+    }
+
+    /// The stellar selected as the navigation target, if any.
+    #[must_use]
+    pub fn nav_target(&self) -> Option<StellarId> {
+        self.nav_target
     }
 
     /// The sounds emitted since they were last taken, in order; taking
@@ -2700,5 +2726,82 @@ mod tests {
         session.take_off();
         session.take_save_due();
         assert_refused(session, RechargeRefusal::NoFuel);
+    }
+
+    // Navigation.
+
+    /// [`catalog`] with system 130 holding three planets whose navigation
+    /// order, 131, 128, 129, is not their order by distance from the
+    /// centre, where the ship starts: 128 is nearest, then 131, then 129.
+    fn three_stellars() -> FakePilotCatalog {
+        let mut catalog = catalog();
+        catalog.sites[0].1 = vec![
+            planet(131, 900.0, 0.0),
+            planet(128, 30.0, -40.0),
+            planet(129, 2000.0, 0.0),
+        ];
+        catalog
+    }
+
+    #[test]
+    fn a_session_starts_with_no_navigation_target() {
+        let session = Session::start(&three_stellars()).expect("starts");
+        assert_eq!(session.nav_target(), None);
+    }
+
+    #[test]
+    fn tab_selects_the_systems_stellars_in_navigation_order_and_wraps() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        for expected in [131, 128, 129, 131, 128] {
+            assert_eq!(session.select_next_stellar(), Some(StellarId(expected)));
+            assert_eq!(session.nav_target(), Some(StellarId(expected)));
+        }
+    }
+
+    #[test]
+    fn a_system_with_no_stellars_has_no_target_to_select() {
+        let empty = FakePilotCatalog {
+            sites: Vec::new(),
+            ..catalog()
+        };
+        let mut session = Session::start(&empty).expect("starts");
+        assert_eq!(session.select_next_stellar(), None);
+        assert_eq!(session.nav_target(), None);
+    }
+
+    #[test]
+    fn the_target_and_the_course_are_independent() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        session.select_next_stellar();
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.nav_target(), Some(StellarId(131)));
+        session.select_next_stellar();
+        assert_eq!(session.course(), ids(&[131, 132]));
+        assert_eq!(session.nav_target(), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn selecting_a_target_makes_no_save_due() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        session.select_next_stellar();
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn arriving_in_another_system_clears_the_target() {
+        let catalog = three_stellars();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.select_next_stellar();
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.begin_jump().expect("jumps");
+        assert_eq!(
+            session.nav_target(),
+            Some(StellarId(131)),
+            "kept while jumping"
+        );
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(session.select_next_stellar(), Some(StellarId(140)));
     }
 }

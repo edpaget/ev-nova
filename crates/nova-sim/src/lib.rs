@@ -31,6 +31,8 @@
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
+//! - [`navigation`]: the navigation target Tab selects, [`next_stellar`]:
+//!   the system's stellars in their `NavDef` order, wrapping.
 //! - [`outfitter`]: the outfitter: which outfits a stellar lists and sells
 //!   ([`Outfitter`]), their price and mass, the ship's free mass, and
 //!   buying and selling one at a time ([`OutfitOrder`]).
@@ -77,6 +79,7 @@ pub mod handling;
 pub mod hyperspace;
 pub mod landing;
 pub mod market;
+pub mod navigation;
 pub mod outfitter;
 pub mod pilot;
 pub mod recharge;
@@ -106,6 +109,7 @@ pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
+pub use navigation::next_stellar;
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use pilot::Pilot;
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
