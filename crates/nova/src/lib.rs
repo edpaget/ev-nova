@@ -4,6 +4,8 @@
 //! - [`app`]: the core. It owns the window port, turns window events into
 //!   `nova-view` input, routes them to the current screen and hands each
 //!   frame's draw list to `nova-render`. No winit or wgpu types.
+//! - [`audio`]: the audio core over the device that opened, and the
+//!   music that loaded, each with a warning when it did not.
 //! - [`cli`]: where the game data is, from the arguments or `NOVA_DATA`.
 //! - [`exit`]: how the program ends: its exit code and message when the
 //!   window could not be opened.
@@ -16,6 +18,7 @@
 //! developer tools overlay with egui. Without it, egui is not linked.
 
 pub mod app;
+pub mod audio;
 pub mod cli;
 #[cfg(feature = "dev-tools")]
 pub mod devtools;

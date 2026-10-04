@@ -29,6 +29,12 @@
 //! over the screen shown, when the router was given the interface file's
 //! dialogs ([`AppScreen::with_dialogs`]). The dialog is modal: it takes
 //! every input until Done (Return, Escape or a click) closes it.
+//!
+//! The router reports every live screen's sounds through
+//! [`Screen::take_sounds`], and what it shows through
+//! [`Screen::now_showing`]. The spaceport and the About dialog are dropped
+//! as they close, so their sounds (the click that closed them) are kept
+//! first.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -44,7 +50,7 @@ use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
 use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::{DescDialog, DescriptionSource, DialogResources};
-use nova_view::{Color, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction};
+use nova_view::{Color, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction, Sound};
 
 /// The hint the router draws over every screen, where it goes, its size and
 /// its colour. Every screen leaves that corner free. The hint offers I
@@ -95,6 +101,8 @@ pub struct AppScreen {
     about: Option<DescDialog>,
     /// The spaceport, while the ship is landed.
     spaceport: Option<SpaceportView>,
+    /// The sounds of screens closed since the sounds were last taken.
+    sounds: Vec<Sound>,
 }
 
 /// The interface file's dialogs and the metrics their text is laid out by.
@@ -124,6 +132,7 @@ impl AppScreen {
             dialogs: None,
             about: None,
             spaceport: None,
+            sounds: Vec::new(),
         }
     }
 
@@ -267,6 +276,7 @@ impl AppScreen {
         if let Some(about) = &mut self.about {
             about.input(input);
             if about.closed() {
+                self.sounds.extend(about.take_sounds());
                 self.about = None;
             }
         }
@@ -315,6 +325,7 @@ impl AppScreen {
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
         if spaceport.left() {
+            self.sounds.extend(spaceport.take_sounds());
             self.switch_to(Side::Flight);
             self.spaceport = None;
             self.flight.as_mut().expect(ENTERED).take_off();
@@ -458,6 +469,26 @@ impl Screen for AppScreen {
             None => self.shown_mut().release_keys(),
         }
     }
+
+    /// The sounds of the screens closed since, then of every live screen.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        let mut sounds = std::mem::take(&mut self.sounds);
+        sounds.extend(self.ships.take_sounds());
+        sounds.extend(self.galaxy.take_sounds());
+        let open = [
+            self.about.as_mut().map(|about| about as &mut dyn Screen),
+            self.spaceport.as_mut().map(|port| port as &mut dyn Screen),
+            self.flight.as_mut().map(|flight| flight as &mut dyn Screen),
+        ];
+        for screen in open.into_iter().flatten() {
+            sounds.extend(screen.take_sounds());
+        }
+        sounds
+    }
+
+    fn now_showing(&self) -> Option<Showing> {
+        Some(self.showing())
+    }
 }
 
 #[cfg(test)]
@@ -483,10 +514,11 @@ mod tests {
     use nova_view::galaxy::map::ENTER_BUTTON;
     use nova_view::geometry::Bounds;
     use nova_view::ships::{ShipBrowser, ShipId};
+    use nova_view::sound::SimSound;
     use nova_view::spaceport::layout::LEAVE_ITEM;
     use nova_view::text::fixture::MonoMetrics;
     use nova_view::ui::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
-    use nova_view::{DrawCommand, Font, Key, MouseButton, Point};
+    use nova_view::{DrawCommand, Font, Key, MouseButton, Point, Sound, UiSound};
 
     use super::*;
 
@@ -1686,5 +1718,82 @@ mod tests {
         assert_eq!(screen.showing(), Showing::Flight);
         assert!(screen.spaceport_view().is_none());
         assert!(flight(&screen).message().is_some());
+    }
+
+    // Sounds.
+
+    const DOWN: Sound = Sound::Ui(UiSound::ButtonDown);
+    const UP: Sound = Sound::Ui(UiSound::ButtonUp);
+
+    fn press_and_release(screen: &mut AppScreen, at: Point) -> Vec<Vec<Sound>> {
+        [true, false]
+            .into_iter()
+            .map(|pressed| {
+                screen.input(&Input::PointerButton {
+                    button: MouseButton::Left,
+                    pressed,
+                    at,
+                });
+                screen.take_sounds()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_router_says_what_it_shows() {
+        let mut screen = with_dialogs(data());
+        assert_eq!(screen.now_showing(), Some(Showing::ShipBrowser));
+        land(&mut screen);
+        assert_eq!(screen.now_showing(), Some(Showing::Spaceport));
+    }
+
+    #[test]
+    fn flights_sounds_come_through_the_router() {
+        let mut screen = with_dialogs(data());
+        assert_eq!(screen.take_sounds(), []);
+        fly(&mut screen);
+        screen.input(&key(Key::Up, true));
+        screen.tick(TICK * 2);
+        assert_eq!(screen.take_sounds(), [Sound::Sim(SimSound::ThrustStarted)]);
+        screen.input(&key(Key::Up, false));
+        screen.tick(TICK * 2);
+        assert_eq!(screen.take_sounds(), [Sound::Sim(SimSound::ThrustStopped)]);
+        assert_eq!(screen.take_sounds(), [], "taken");
+    }
+
+    #[test]
+    fn leaving_the_spaceport_by_leave_keeps_its_click_and_the_take_off() {
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        assert_eq!(
+            screen.take_sounds(),
+            [Sound::Sim(SimSound::Landed {
+                stellar_sound: None
+            })]
+        );
+        let leave = spaceport(&screen)
+            .dialog()
+            .expect("laid out")
+            .item_bounds(LEAVE_ITEM)
+            .expect("Leave")
+            .center();
+        assert_eq!(
+            press_and_release(&mut screen, leave),
+            [vec![DOWN], vec![UP, Sound::Sim(SimSound::TookOff)]]
+        );
+        assert!(screen.spaceport_view().is_none(), "gone");
+    }
+
+    #[test]
+    fn closing_the_about_text_by_done_keeps_its_click() {
+        let mut screen = with_dialogs(data());
+        open_about(&mut screen);
+        let done = about(&screen)
+            .dialog()
+            .item_bounds(1)
+            .expect("Done")
+            .center();
+        assert_eq!(press_and_release(&mut screen, done), [vec![DOWN], vec![UP]]);
+        assert!(screen.about().is_none(), "closed");
     }
 }

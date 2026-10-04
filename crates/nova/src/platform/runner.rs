@@ -1,6 +1,8 @@
 //! The winit event loop's handler: opens the window and the GPU surface,
 //! then forwards every event to the [`App`].
 //!
+//! With [`Runner::with_audio`], the app it opens plays sound.
+//!
 //! With the `dev-tools` feature and [`Runner::with_dev_tools`], it also
 //! drives the developer tools: while their overlay shows, each redraw runs
 //! the egui panel first and submits the frame with the panel painted over
@@ -16,6 +18,7 @@ use nova_data::GameData;
 #[cfg(feature = "dev-tools")]
 use nova_render::wgpu::WithOverlay;
 
+use nova_audio::{Audio, AudioCore};
 use nova_render::wgpu::{InitError, SurfaceGpu};
 use nova_render::{FontFaces, ImageSource};
 use winit::application::ApplicationHandler;
@@ -48,6 +51,8 @@ pub struct Runner<S> {
     start: Instant,
     #[cfg(feature = "dev-tools")]
     dev_catalog: Option<Rc<GameData>>,
+    /// The audio core, until the app takes it.
+    audio: Option<AudioCore<Box<dyn Audio>>>,
 }
 
 impl<S: ImageSource> Runner<S> {
@@ -61,6 +66,7 @@ impl<S: ImageSource> Runner<S> {
             start: Instant::now(),
             #[cfg(feature = "dev-tools")]
             dev_catalog: None,
+            audio: None,
         }
     }
 
@@ -70,6 +76,13 @@ impl<S: ImageSource> Runner<S> {
     #[must_use]
     pub fn with_dev_tools(mut self, catalog: Rc<GameData>) -> Self {
         self.dev_catalog = Some(catalog);
+        self
+    }
+
+    /// The runner with sound: the app it opens plays through `core`.
+    #[must_use]
+    pub fn with_audio(mut self, core: AudioCore<Box<dyn Audio>>) -> Self {
+        self.audio = Some(core);
         self
     }
 
@@ -120,6 +133,10 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
         match open(event_loop, &fonts) {
             Ok((mut window, gpu)) => {
                 let app = App::new(&window, images, screen);
+                let app = match self.audio.take() {
+                    Some(core) => app.with_audio(core),
+                    None => app,
+                };
                 #[cfg(feature = "dev-tools")]
                 let (app, dev_tools) = match self.dev_catalog.take() {
                     Some(catalog) => (
@@ -206,6 +223,10 @@ mod tests {
     use nova_data::store::fs::{DirLister, Listing};
     use nova_rsrc::{Fork, ForkReader};
 
+    use nova_audio::recording::RecordingAudio;
+    use nova_audio::{AudioCommand, Volume};
+    use nova_view::Showing;
+
     use super::*;
     use crate::app::start_screen;
     use crate::exit::OpenFailure;
@@ -265,6 +286,24 @@ mod tests {
         assert_eq!(
             runner.open_failure(),
             Some(&OpenFailure::Window("no display".into()))
+        );
+    }
+
+    #[test]
+    fn the_runner_keeps_the_audio_for_the_app_it_opens() {
+        let runner = Runner::new(NoImages, start_screen(no_data()), FontFaces::bundled());
+        assert!(runner.audio.is_none(), "silent unless given audio");
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
+        let mut runner = runner.with_audio(core);
+        let core = runner.audio.as_mut().expect("kept");
+        core.update(Some(Showing::GalaxyMap), &[]);
+        assert_eq!(
+            *log.borrow(),
+            [AudioCommand::StartMusic {
+                volume: Volume::FULL
+            }]
         );
     }
 

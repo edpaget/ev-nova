@@ -16,6 +16,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova_audio::recording::RecordingAudio;
+use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -491,4 +493,34 @@ fn escape_closes_flights_map_and_then_leaves_flight() {
     assert_eq!(harness.showing(), Showing::Flight);
     harness.press(Key::Escape);
     assert_eq!(harness.showing(), Showing::ShipBrowser);
+}
+
+#[test]
+fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
+    let audio = RecordingAudio::new();
+    let log = audio.log();
+    let mut harness = Harness::flying();
+    harness.app = harness
+        .app
+        .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
+    harness.press(Key::Char('m'));
+    let beta = harness.on_map(129);
+    harness.click(beta);
+    harness.press(Key::Char('m'));
+    harness.fly_out();
+    log.borrow_mut().clear();
+    harness.press(Key::Char('j'));
+    harness.run(2);
+    assert_eq!(harness.session().system(), SystemId(129));
+    let plays: Vec<AudioCommand> = log
+        .borrow()
+        .iter()
+        .copied()
+        .filter(|command| matches!(command, AudioCommand::Play { .. }))
+        .collect();
+    let play = |id| AudioCommand::Play {
+        sound: nova_data::SoundId(id),
+        volume: Volume::FULL,
+    };
+    assert_eq!(plays, [play(128), play(130)]);
 }

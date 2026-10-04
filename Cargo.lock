@@ -1445,6 +1445,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "nova-audio",
  "nova-data",
  "nova-render",
  "nova-rsrc",

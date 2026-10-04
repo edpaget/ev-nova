@@ -4,7 +4,8 @@
 //! interface file holding the stock "Spaceport" dialog, laid out by the
 //! real glyphon metrics, drawn through the renderer into the recording Gpu
 //! and driven only by window events: L lands and shows the spaceport, and
-//! Leave takes off back into flight.
+//! Leave takes off back into flight. With a recording audio port, landing
+//! and Leave play their sounds and the music follows the screen.
 
 use std::io;
 use std::path::Path;
@@ -12,6 +13,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova_audio::recording::{AudioLog, RecordingAudio};
+use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
@@ -134,13 +137,17 @@ fn system() -> Vec<u8> {
 /// and a bar.
 const FLAGS: u32 = 0x01 | 0x02 | 0x40;
 
+/// Alpha Prime's landing sound, its `CustSndID`: Port Kane's
+/// "Federation Station.SFIL" in the stock data.
+const LANDING_SOUND: i16 = 10_032;
+
 /// Alpha Prime: a planet at (0, `y`) of graphic type 4 and no custom
-/// picture, so its landscape is `PICT` 10004.
+/// picture, so its landscape is `PICT` 10004, with its own landing sound.
 fn stellar(y: i16) -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[0, y, 4]);
     bytes[0x06..0x0A].copy_from_slice(&FLAGS.to_be_bytes());
-    put_i16s(&mut bytes, 0x18, &[-1]);
+    put_i16s(&mut bytes, 0x18, &[-1, LANDING_SOUND]);
     bytes
 }
 
@@ -256,21 +263,39 @@ struct Harness {
 }
 
 impl Harness {
-    /// The app in flight over a planet at (0, `y`), before any frame.
-    fn flying(y: i16) -> Self {
+    /// The app on the ship browser over a planet at (0, `y`), before any
+    /// frame.
+    fn browsing(y: i16) -> Self {
         let data = game_data(y);
         let screen = start_screen(Rc::clone(&data)).with_dialogs(
             Rc::new(interface()),
             Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
         );
-        let mut harness = Self {
+        Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
             frames: 0,
-        };
+        }
+    }
+
+    /// The app in flight over a planet at (0, `y`), before any frame.
+    fn flying(y: i16) -> Self {
+        let mut harness = Self::browsing(y);
         harness.press(Key::Char('f'));
         assert_eq!(harness.showing(), Showing::Flight);
         harness
+    }
+
+    /// The app on the ship browser over a planet at (0, `y`), playing the
+    /// original's sounds through a recording port, and the port's log.
+    fn sounding(y: i16) -> (Self, AudioLog) {
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let mut harness = Self::browsing(y);
+        harness.app = harness
+            .app
+            .with_audio(AudioCore::new(Box::new(audio) as Box<dyn Audio>));
+        (harness, log)
     }
 
     fn send(&mut self, event: WindowEvent) {
@@ -487,4 +512,53 @@ fn far_from_the_planet_l_says_so_and_stays_in_flight() {
         "{:?}",
         texts(&frame)
     );
+}
+
+/// The commands logged since the last call.
+fn drain(log: &AudioLog) -> Vec<AudioCommand> {
+    std::mem::take(&mut *log.borrow_mut())
+}
+
+fn play(id: i16) -> AudioCommand {
+    AudioCommand::Play {
+        sound: nova_data::SoundId(id),
+        volume: Volume::FULL,
+    }
+}
+
+#[test]
+fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
+    let (mut harness, log) = Harness::sounding(0);
+    harness.frame();
+    assert_eq!(drain(&log), [], "the ship browser is silent");
+
+    harness.press(Key::Char('f'));
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(
+        drain(&log),
+        [AudioCommand::StartMusic {
+            volume: Volume::FULL
+        }],
+        "music in space"
+    );
+    harness.frame();
+
+    // The clearance beep, then the planet's own sound; the music plays on.
+    harness.press(Key::Char('l'));
+    assert_eq!(harness.showing(), Showing::Spaceport);
+    assert_eq!(drain(&log), [play(151), play(LANDING_SOUND)]);
+    harness.frame();
+
+    // Leave's button going down and coming up; taking off is silent.
+    let leave = harness.item(LEAVE_ITEM).center();
+    harness.click(leave);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(drain(&log), [play(600), play(601)]);
+    harness.frame();
+    assert_eq!(drain(&log), []);
+
+    // Back to the ship browser flight was entered from: the music stops.
+    harness.press(Key::Escape);
+    assert_eq!(harness.showing(), Showing::ShipBrowser);
+    assert_eq!(drain(&log), [AudioCommand::StopMusic]);
 }

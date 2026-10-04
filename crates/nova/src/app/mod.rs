@@ -18,9 +18,18 @@
 //! [`App::overlay_wants`] whether the overlay's drawing (egui, in the
 //! `dev-tools` build) should see the raw event too. Without an overlay,
 //! every event goes to the game as before.
+//!
+//! # Sound
+//!
+//! An app built [`App::with_audio`] holds the audio core. After every
+//! input it routes and every frame it ticks, it hands the core the screen
+//! shown ([`Screen::now_showing`]) and the sounds the screen made
+//! ([`Screen::take_sounds`]); the core decides what plays. Without one,
+//! the sounds are let go.
 
 use std::time::Duration;
 
+use nova_audio::{Audio, AudioCore};
 use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, Routing};
 use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
@@ -116,6 +125,7 @@ pub struct App<S, C = AppScreen> {
     pointer: Option<(f64, f64)>,
     failures: Vec<(ImageKey, ImageError)>,
     overlay: Option<DevOverlay>,
+    audio: Option<AudioCore<Box<dyn Audio>>>,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -129,6 +139,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             pointer: None,
             failures: Vec::new(),
             overlay: None,
+            audio: None,
         }
     }
 
@@ -137,6 +148,25 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     pub fn with_dev_overlay(mut self) -> Self {
         self.overlay = Some(DevOverlay::new());
         self
+    }
+
+    /// The app with sound: after each input it routes and each frame it
+    /// ticks, it gives `core` the screen shown and the sounds the screen
+    /// made. The core takes in the screen it starts on at once.
+    #[must_use]
+    pub fn with_audio(mut self, core: AudioCore<Box<dyn Audio>>) -> Self {
+        self.audio = Some(core);
+        self.feed_audio();
+        self
+    }
+
+    /// Gives the audio core, if there is one, the screen shown and the
+    /// sounds the screen has made; without one, the sounds are let go.
+    fn feed_audio(&mut self) {
+        let sounds = self.screen.take_sounds();
+        if let Some(core) = &mut self.audio {
+            core.update(self.screen.now_showing(), &sounds);
+        }
     }
 
     /// The developer overlay, if the app has one.
@@ -269,6 +299,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                     overlay.frame(elapsed);
                 }
                 self.screen.tick(elapsed.saturating_sub(self.last_redraw));
+                self.feed_audio();
                 self.last_redraw = self.last_redraw.max(elapsed);
                 let mut list = DrawList::new();
                 self.screen.draw(&mut list);
@@ -306,7 +337,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     }
 
     fn route(&mut self, input: Input) -> Control {
-        match self.screen.input(&input) {
+        let action = self.screen.input(&input);
+        self.feed_audio();
+        match action {
             ScreenAction::None => Control::Continue,
             ScreenAction::Quit => Control::Exit,
         }
@@ -318,11 +351,15 @@ impl<S: ImageSource, C: Screen> App<S, C> {
 mod tests {
     use std::time::Duration;
 
+    use nova_audio::recording::{AudioLog, RecordingAudio};
+    use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
     use nova_data::graphics::Image;
     use nova_render::recording::RecordingGpu;
     use nova_render::{ImageError, ImageSource, PixelRect};
+    use nova_view::sound::SimSound;
     use nova_view::{
         Color, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Point, Screen, ScreenAction,
+        Showing, Sound, UiSound,
     };
 
     use super::*;
@@ -901,5 +938,117 @@ mod tests {
         assert!(app.overlay_wants(Some(&overlay)));
         assert!(app.overlay_wants(Some(&game)));
         assert!(!app.overlay_wants(Some(&toggle)));
+    }
+
+    // Audio.
+
+    /// Shows `showing`, which Tab changes to the ship browser; sounds a
+    /// button going down on each input and coming up on each tick.
+    struct SoundingScreen {
+        showing: Showing,
+        sounds: Vec<Sound>,
+    }
+
+    impl Screen for SoundingScreen {
+        fn input(&mut self, input: &Input) -> ScreenAction {
+            if let Input::Key { key: Key::Tab, .. } = input {
+                self.showing = Showing::ShipBrowser;
+            }
+            self.sounds.push(Sound::Ui(UiSound::ButtonDown));
+            ScreenAction::None
+        }
+
+        fn tick(&mut self, _dt: Duration) {
+            self.sounds.push(Sound::Ui(UiSound::ButtonUp));
+        }
+
+        fn draw(&self, _list: &mut DrawList) {}
+
+        fn take_sounds(&mut self) -> Vec<Sound> {
+            std::mem::take(&mut self.sounds)
+        }
+
+        fn now_showing(&self) -> Option<Showing> {
+            Some(self.showing)
+        }
+    }
+
+    fn play(id: i16) -> AudioCommand {
+        AudioCommand::Play {
+            sound: nova_data::SoundId(id),
+            volume: Volume::FULL,
+        }
+    }
+
+    const MUSIC: AudioCommand = AudioCommand::StartMusic {
+        volume: Volume::FULL,
+    };
+
+    /// An app over a screen on the galaxy map, with audio recorded.
+    fn sounding(window: &FakeWindow) -> (App<NoImages, SoundingScreen>, AudioLog) {
+        let screen = SoundingScreen {
+            showing: Showing::GalaxyMap,
+            sounds: vec![Sound::Sim(SimSound::JumpBegan)],
+        };
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
+        (App::new(window, NoImages, screen).with_audio(core), log)
+    }
+
+    #[test]
+    fn attaching_audio_takes_in_the_screen_and_its_sounds_at_once() {
+        let window = FakeWindow::new((1024, 768), 1.0);
+        let (app, log) = sounding(&window);
+        assert_eq!(*log.borrow(), [MUSIC, play(128)]);
+        assert_eq!(app.screen().sounds, [], "taken");
+    }
+
+    #[test]
+    fn each_input_and_redraw_feeds_the_screens_sounds_to_the_audio() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let (mut app, log) = sounding(&window);
+        log.borrow_mut().clear();
+        let mut gpu = RecordingGpu::new();
+        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        assert_eq!(*log.borrow(), [play(600)]);
+        app.handle(
+            WindowEvent::Redraw {
+                elapsed: Duration::from_millis(16),
+            },
+            &mut window,
+            &mut gpu,
+        );
+        assert_eq!(*log.borrow(), [play(600), play(601)]);
+        app.handle(
+            WindowEvent::PointerMoved { px: (5.0, 5.0) },
+            &mut window,
+            &mut gpu,
+        );
+        assert_eq!(log.borrow().len(), 3, "pointer input too");
+        app.handle(key(Key::Tab, true), &mut window, &mut gpu);
+        assert_eq!(
+            log.borrow()[3..],
+            [AudioCommand::StopMusic, play(600)],
+            "the screen shown, then its sounds"
+        );
+    }
+
+    #[test]
+    fn without_audio_the_screens_sounds_are_let_go() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let screen = SoundingScreen {
+            showing: Showing::GalaxyMap,
+            sounds: Vec::new(),
+        };
+        let mut app = App::new(&window, NoImages, screen);
+        let mut gpu = RecordingGpu::new();
+        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        assert_eq!(app.screen().sounds, [], "not left to pile up");
+        let redraw = WindowEvent::Redraw {
+            elapsed: Duration::from_millis(16),
+        };
+        app.handle(redraw, &mut window, &mut gpu);
+        assert_eq!(app.screen().sounds, []);
     }
 }

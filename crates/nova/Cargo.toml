@@ -8,6 +8,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Sound effects and music: the core the app feeds, and the kira adapter
+# `main` opens.
+nova-audio.workspace = true
 nova-data.workspace = true
 nova-render.workspace = true
 nova-view.workspace = true
@@ -21,6 +24,9 @@ egui-winit = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The app and integration tests record Audio commands with the `recording`
+# mock.
+nova-audio = { workspace = true, features = ["recording"] }
 # Synthetic sprite sheets and pictures for the screen router and app tests.
 nova-data = { workspace = true, features = ["fixture"] }
 # The app tests record Gpu calls with the `recording` mock.

@@ -14,6 +14,11 @@
 //! (`Nova-DF.rsrc`, or the Windows `Nova.rez`). Without one, the game runs
 //! with a warning, and I does nothing.
 //!
+//! Sound effects come from the game data's `snd ` resources and the music
+//! from `Nova Music.mp3` in `Nova Files`, played on the default audio
+//! device. Without the music the game plays none, with a warning; without
+//! an audio device it runs silently, with a warning.
+//!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
 //! cannot be opened.
@@ -23,10 +28,13 @@ use std::process::ExitCode;
 use std::rc::Rc;
 
 use nova::app::start_screen;
+use nova::audio::{game_audio, music_warning};
 use nova::fonts::game_fonts;
 use nova::platform::Runner;
 use nova::{cli, exit};
+use nova_audio::KiraAudio;
 use nova_data::fonts::open_charcoal;
+use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
 use nova_view::text::TextMetrics;
@@ -65,7 +73,19 @@ fn main() -> ExitCode {
         }
         Err(error) => eprintln!("nova: running without dialogs: {error}"),
     }
+    let (music, warning) = music_warning(open_music(&dir));
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
+    let (audio, warning) = game_audio(KiraAudio::open(Rc::clone(&data), music));
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
     let runner = Runner::new(Rc::clone(&data), screen, fonts);
+    let runner = match audio {
+        Some(core) => runner.with_audio(core),
+        None => runner,
+    };
     #[cfg(feature = "dev-tools")]
     let runner = runner.with_dev_tools(Rc::clone(&data));
     let mut runner = runner;
