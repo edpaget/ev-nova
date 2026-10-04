@@ -12,8 +12,9 @@
 //! back to the menu and on quitting. Without a place to save them, the
 //! game runs with a warning and saves nothing.
 //!
-//! Planetary events start at random, on a generator seeded from the clock
-//! when the game starts.
+//! Planetary events start at random, and NPC traffic comes and goes at
+//! random, on a generator seeded from the clock when the game starts; the
+//! NPCs fly Nova's peaceful traffic: traders land, others jump out.
 //!
 //! Tab, on the menu, goes to the developer's ship browser and galaxy map,
 //! and switches between them. On the map, Return enters the selected
@@ -65,7 +66,7 @@ use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
-use nova_sim::{Chance, PilotKeeper, PilotStore};
+use nova_sim::{Chance, Peaceful, PilotKeeper, PilotStore};
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
@@ -119,7 +120,8 @@ fn main() -> ExitCode {
     let mut screen = start_screen(Rc::clone(&data))
         .with_sound_prefs(settings.prefs())
         .with_pilots(pilots, Rc::clone(&metrics))
-        .with_chance(SharedChance::new(chance));
+        .with_chance(SharedChance::new(chance))
+        .with_behaviour(Rc::new(Peaceful));
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);

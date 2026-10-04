@@ -76,9 +76,12 @@
 //! shipyard back with the cash as it now is, and saves the pilot after the
 //! input.
 //!
-//! Each day a jump takes rolls the planetary events on the router's
-//! source of chance ([`AppScreen::with_chance`]), which never fires until
-//! one is given, so the developer's flights stay the same each time.
+//! Each day a jump takes rolls the planetary events, and the NPC traffic
+//! its rolls, on the router's source of chance
+//! ([`AppScreen::with_chance`]), which never fires until one is given, so
+//! the developer's flights stay the same each time. Every flight's NPCs
+//! decide as the router's behaviour says ([`AppScreen::with_behaviour`]),
+//! Nova's peaceful traffic until another is given.
 //!
 //! I, outside flight and the spaceport, opens the About text in the game's "Desc Dialog"
 //! over the screen shown, when the router was given the interface file's
@@ -102,7 +105,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
-use nova_sim::{Pilot, PilotKeeper, PilotStore, pilot_key};
+use nova_sim::{Behaviour, Peaceful, Pilot, PilotKeeper, PilotStore, pilot_key};
 pub use nova_view::Showing;
 use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
@@ -198,8 +201,10 @@ pub struct AppScreen {
     open_pilot: Option<PilotList>,
     /// The warnings since they were last taken.
     warnings: Vec<String>,
-    /// What each flight rolls each day's events on.
+    /// What each flight rolls each day's events and its traffic on.
     chance: SharedChance,
+    /// How each flight's NPCs decide.
+    behaviour: Rc<dyn Behaviour>,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -259,13 +264,32 @@ impl AppScreen {
             open_pilot: None,
             warnings: Vec::new(),
             chance: SharedChance::default(),
+            behaviour: Rc::new(Peaceful),
         }
     }
 
-    /// The router with each flight rolling each day's events on `chance`.
+    /// The router with each flight rolling each day's events and its
+    /// traffic on `chance`.
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self { chance, ..self }
+    }
+
+    /// The router with each flight's NPCs deciding as `behaviour` says.
+    #[must_use]
+    pub fn with_behaviour(self, behaviour: Rc<dyn Behaviour>) -> Self {
+        Self { behaviour, ..self }
+    }
+
+    /// A flight over the game data, `new` from it, rolling on the router's
+    /// chance and deciding as its behaviour says.
+    fn flight(
+        &self,
+        new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
+    ) -> FlightView<Rc<GameData>> {
+        new(Rc::clone(&self.data))
+            .with_chance(self.chance.clone())
+            .with_behaviour(Rc::clone(&self.behaviour))
     }
 
     /// The router with the main menu, which it now opens on: New Pilot
@@ -461,9 +485,9 @@ impl AppScreen {
     /// Shows flight, building it the first time, and remembers the side to
     /// go back to.
     fn enter_flight(&mut self) {
-        let (data, chance) = (&self.data, &self.chance);
-        self.flight
-            .get_or_insert_with(|| FlightView::new(Rc::clone(data)).with_chance(chance.clone()));
+        if self.flight.is_none() {
+            self.flight = Some(self.flight(FlightView::new));
+        }
         self.return_to = self.side;
         self.switch_to(Side::Flight);
     }
@@ -637,8 +661,7 @@ impl AppScreen {
     /// spaceport.
     fn start_flight(&mut self, pilot: Pilot) {
         self.spaceport = None;
-        let mut flight =
-            FlightView::with_pilot(Rc::clone(&self.data), pilot).with_chance(self.chance.clone());
+        let mut flight = self.flight(|data| FlightView::with_pilot(data, pilot));
         let landing = flight.take_landing();
         self.flight = Some(flight);
         self.return_to = Side::MainMenu;
