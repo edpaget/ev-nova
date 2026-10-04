@@ -275,18 +275,19 @@ impl TradeScreen {
     }
 
     /// Activates dialog item `item`: Done closes, Buy and Sell ask, and a
-    /// row is selected.
+    /// row with a good in it is selected. Any other item does nothing.
     fn activate(&mut self, item: usize) {
         match item {
             DONE_ITEM => self.closed = true,
             BUY_ITEM => self.ask(Direction::Buy),
             SELL_ITEM => self.ask(Direction::Sell),
-            row => {
+            row if (FIRST_ROW_ITEM..FIRST_ROW_ITEM + ROWS).contains(&row) => {
                 let index = self.top + (row - FIRST_ROW_ITEM);
                 if index < self.market.rows.len() {
                     self.select(index);
                 }
             }
+            _ => {}
         }
     }
 
@@ -829,6 +830,26 @@ mod tests {
         assert_eq!((screen.selected(), screen.top()), (Some(3), 3));
         press(&mut screen, Key::Up);
         assert_eq!((screen.selected(), screen.top()), (Some(2), 2));
+    }
+
+    #[test]
+    fn a_click_on_an_enabled_item_that_is_no_row_or_button_does_nothing() {
+        let mut template = template();
+        for number in [2, 3, 12, 15, 16] {
+            template.items[number - 1].enabled = true;
+            template.items[number - 1].bounds = rect(10.0 * number as f32, 190.0, 8.0, 8.0);
+        }
+        let mut screen = TradeScreen::new(
+            Ok((template, Rc::new(MonoMetrics))),
+            long(20),
+            ButtonStyle::STOCK,
+        );
+        for number in [2, 3, 12, 15, 16] {
+            click_item(&mut screen, number);
+            assert_eq!(screen.selected(), Some(0), "{number}");
+        }
+        assert!(!screen.closed());
+        assert_eq!(screen.take_order(), None);
     }
 
     #[test]
