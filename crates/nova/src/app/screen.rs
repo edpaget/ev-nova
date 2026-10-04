@@ -1569,7 +1569,10 @@ mod tests {
             .collect();
         assert_eq!(
             texts,
-            ["Cannot show the spaceport: no interface file".to_owned()]
+            [
+                "Cannot show the spaceport: no interface file. Press Return or Escape to take off."
+                    .to_owned()
+            ]
         );
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::Flight);

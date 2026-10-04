@@ -250,7 +250,9 @@ impl Screen for SpaceportView {
             Ok(port) => port,
             Err(reason) => {
                 list.text(
-                    format!("Cannot show the spaceport: {reason}"),
+                    format!(
+                        "Cannot show the spaceport: {reason}. Press Return or Escape to take off."
+                    ),
                     PROBLEM_AT,
                     PROBLEM_SIZE,
                     None,
@@ -750,7 +752,9 @@ mod tests {
 
     fn problem(reason: &str) -> DrawCommand {
         DrawCommand::Text {
-            text: format!("Cannot show the spaceport: {reason}"),
+            text: format!(
+                "Cannot show the spaceport: {reason}. Press Return or Escape to take off."
+            ),
             font: Font::Geneva,
             origin: PROBLEM_AT,
             size: PROBLEM_SIZE,
