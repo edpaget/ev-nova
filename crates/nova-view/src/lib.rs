@@ -82,4 +82,4 @@ pub use image::{ImageKey, ImageKind};
 pub use input::{Input, Key, MouseButton};
 pub use navigator::Navigator;
 pub use screen::{Screen, ScreenAction, Showing};
-pub use sound::{Sound, UiSound};
+pub use sound::{Sound, SoundPrefs, UiSound};

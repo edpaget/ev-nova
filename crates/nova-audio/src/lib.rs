@@ -7,8 +7,12 @@
 //!   [`Volume`]).
 //! - [`table`]: the [`SoundTable`] of which `snd ` each event plays, and
 //!   the original game's, [`SoundTable::ORIGINAL`].
-//! - [`settings`]: the player's [`AudioSettings`]: sound and music on or
-//!   off, and their separate volumes.
+//! - [`settings`]: the player's [`AudioSettings`] (sound and music on or
+//!   off, and their separate volumes), the [`SettingsStore`] port they are
+//!   saved through, and the [`SettingsKeeper`], which reads them (falling
+//!   back to the defaults) and saves each change.
+//! - [`file`]: the settings store's adapter, [`FileSettings`], over one
+//!   file on disk.
 //! - [`core`](mod@core): the [`AudioCore`], which turns each frame's
 //!   sound events (`nova_view::Sound`, from the screens) and the screen
 //!   shown (`nova_view::Showing`) into commands on the port.
@@ -18,9 +22,11 @@
 //!   soundtrack, streamed.
 //!
 //! With the `recording` feature (and in this crate's tests), `recording`
-//! holds `RecordingAudio`, a port mock that logs every command.
+//! holds the port mocks: `RecordingAudio`, which logs every command, and
+//! `MemorySettings`, a settings store in memory.
 
 pub mod core;
+pub mod file;
 pub mod kira;
 pub mod port;
 #[cfg(any(test, feature = "recording"))]
@@ -29,7 +35,8 @@ pub mod settings;
 pub mod table;
 
 pub use crate::core::AudioCore;
+pub use crate::file::FileSettings;
 pub use crate::kira::{KiraAudio, OpenError, SoundBank};
 pub use port::{Audio, AudioCommand, Volume};
-pub use settings::AudioSettings;
+pub use settings::{AudioSettings, SettingsKeeper, SettingsStore};
 pub use table::SoundTable;

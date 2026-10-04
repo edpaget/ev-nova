@@ -16,6 +16,9 @@ nova-data.workspace = true
 nova-rsrc.workspace = true
 # The sound events screens report, and which screen is showing.
 nova-view.workspace = true
+# The saved settings' format: JSON, through a private record.
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 # Synthetic `snd ` resources for the adapter's tests.
@@ -24,9 +27,12 @@ nova-data = { workspace = true, features = ["fixture"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
 # The core's tests record commands with the `recording` mock.
 nova-audio = { workspace = true, features = ["recording"] }
+# The settings file adapter's tests write into a temporary directory.
+tempfile.workspace = true
 
 [features]
-# Exposes the recording Audio mock to other crates' tests.
+# Exposes the recording Audio mock and the in-memory settings store to
+# other crates' tests.
 recording = []
 
 [lints]

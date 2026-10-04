@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::draw::DrawList;
 use crate::input::Input;
-use crate::sound::Sound;
+use crate::sound::{Sound, SoundPrefs};
 
 /// What a screen asks of the app after an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +32,8 @@ pub enum Showing {
     Spaceport,
     /// The About text, over another screen.
     About,
+    /// The Preferences dialog, over another screen.
+    Preferences,
 }
 
 /// A game screen: takes input, advances with time and draws itself.
@@ -58,6 +60,12 @@ pub trait Screen {
     /// order; taking them empties the list. None by default.
     fn take_sounds(&mut self) -> Vec<Sound> {
         vec![]
+    }
+    /// The sound preferences the player has chosen since they were last
+    /// taken, if they changed: each change is reported once. None by
+    /// default.
+    fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+        None
     }
     /// Which screen is showing, for a screen that routes between others;
     /// `None` by default.
@@ -134,10 +142,11 @@ mod tests {
     }
 
     #[test]
-    fn a_screen_makes_no_sounds_and_names_nothing_showing_by_default() {
+    fn a_screen_makes_no_sounds_changes_no_prefs_and_names_nothing_showing_by_default() {
         let mut counter = Counter::default();
         let screen: &mut dyn Screen = &mut counter;
         assert_eq!(screen.take_sounds(), []);
+        assert_eq!(screen.take_sound_prefs(), None);
         assert_eq!(screen.now_showing(), None);
     }
 

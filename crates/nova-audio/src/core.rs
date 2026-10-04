@@ -19,8 +19,8 @@ use crate::table::SoundTable;
 /// - Music plays in menus (the galaxy map, flight's course map and the
 ///   spaceport) and in space (flight, and a system opened from the map),
 ///   while the music setting is on. The ship browser, the developer's
-///   viewer the app opens on, is silent. The About text, over another
-///   screen, keeps the scene below it. Moving between music scenes does
+///   viewer the app opens on, is silent. The About text and the
+///   Preferences dialog, over another screen, keep the scene below them. Moving between music scenes does
 ///   not restart the track.
 /// - Each event with a `snd ` in the table plays it once, at the effects
 ///   volume, while the sound setting is on. A landing plays the table's
@@ -32,7 +32,7 @@ pub struct AudioCore<A: Audio> {
     audio: A,
     table: SoundTable,
     settings: AudioSettings,
-    /// The last scene shown, the About text aside.
+    /// The last scene shown, the overlays (About, Preferences) aside.
     scene: Option<Showing>,
     /// Whether the ship is thrusting, as the events last said.
     thrusting: bool,
@@ -66,7 +66,7 @@ impl<A: Audio> AudioCore<A> {
     /// Takes in one frame's worth: the screen `showing` (`None` keeps the
     /// scene as it was), then each of `sounds` in order.
     pub fn update(&mut self, showing: Option<Showing>, sounds: &[Sound]) {
-        if let Some(scene) = showing.filter(|&scene| scene != Showing::About) {
+        if let Some(scene) = showing.filter(|&scene| !is_overlay(scene)) {
             self.scene = Some(scene);
         }
         if self.scene != Some(Showing::Flight) {
@@ -169,6 +169,30 @@ impl<A: Audio> AudioCore<A> {
         }
     }
 
+    /// The core with `settings` in place of the defaults, before anything
+    /// plays.
+    #[must_use]
+    pub fn with_settings(self, settings: AudioSettings) -> Self {
+        Self { settings, ..self }
+    }
+
+    /// Changes the settings to `settings`, through the setters, only for
+    /// the fields that differ: the volumes first, then sound, then music.
+    pub fn apply(&mut self, settings: AudioSettings) {
+        if settings.effects_volume != self.settings.effects_volume {
+            self.set_effects_volume(settings.effects_volume);
+        }
+        if settings.music_volume != self.settings.music_volume {
+            self.set_music_volume(settings.music_volume);
+        }
+        if settings.sound != self.settings.sound {
+            self.set_sound(settings.sound);
+        }
+        if settings.music != self.settings.music {
+            self.set_music(settings.music);
+        }
+    }
+
     /// The settings.
     #[must_use]
     pub fn settings(&self) -> AudioSettings {
@@ -182,6 +206,12 @@ impl<A: Audio> AudioCore<A> {
     }
 }
 
+/// Whether `showing` is shown over another screen, keeping the scene
+/// below it: the About text and the Preferences dialog.
+fn is_overlay(showing: Showing) -> bool {
+    matches!(showing, Showing::About | Showing::Preferences)
+}
+
 /// Whether music plays on `scene`: menus and space do; the ship browser,
 /// the developer's viewer, does not.
 fn has_music(scene: Showing) -> bool {
@@ -191,8 +221,8 @@ fn has_music(scene: Showing) -> bool {
         | Showing::Spaceport
         | Showing::Flight
         | Showing::System => true,
-        // About is never the scene: it keeps the one below it.
-        Showing::ShipBrowser | Showing::About => false,
+        // The overlays are never the scene: they keep the one below.
+        Showing::ShipBrowser | Showing::About | Showing::Preferences => false,
     }
 }
 
@@ -574,6 +604,136 @@ mod tests {
         drain(&log);
         core.set_effects_volume(Volume::new(0.25));
         assert_eq!(drain(&log), [], "sound off stopped the loop");
+    }
+
+    #[test]
+    fn the_preferences_dialog_keeps_the_scene_below_it() {
+        let (mut core, log) = engine();
+        core.update(Some(Showing::Flight), &[THRUST]);
+        drain(&log);
+        core.update(Some(Showing::Preferences), &[]);
+        assert_eq!(drain(&log), [], "the music and the engine go on");
+        let (mut core, log) = original();
+        core.update(Some(Showing::Preferences), &[]);
+        assert_eq!(drain(&log), [], "over nothing");
+        core.update(Some(Showing::ShipBrowser), &[]);
+        core.update(Some(Showing::Preferences), &[]);
+        assert_eq!(drain(&log), [], "over the ship browser, still silent");
+    }
+
+    // Applying settings.
+
+    fn quiet() -> AudioSettings {
+        AudioSettings {
+            sound: true,
+            music: true,
+            effects_volume: Volume::new(0.5),
+            music_volume: Volume::new(0.25),
+        }
+    }
+
+    #[test]
+    fn a_core_can_start_from_given_settings() {
+        let (core, log) = engine();
+        let mut core = core.with_settings(quiet());
+        assert_eq!(core.settings(), quiet());
+        assert_eq!(drain(&log), []);
+        core.update(Some(Showing::Flight), &[THRUST, JUMP]);
+        assert_eq!(
+            drain(&log),
+            [start_music(0.25), start_loop(200, 0.5), play(128, 0.5)]
+        );
+        let (core, log) = engine();
+        let mut core = core.with_settings(AudioSettings {
+            music: false,
+            sound: false,
+            ..quiet()
+        });
+        core.update(Some(Showing::Flight), &[THRUST, JUMP]);
+        assert_eq!(drain(&log), []);
+    }
+
+    #[test]
+    fn applying_sound_off_stops_the_effects_and_the_loop() {
+        let (mut core, log) = engine();
+        core.update(Some(Showing::Flight), &[THRUST]);
+        drain(&log);
+        core.apply(AudioSettings {
+            sound: false,
+            ..AudioSettings::default()
+        });
+        assert_eq!(drain(&log), [AudioCommand::StopEffects]);
+        assert!(!core.settings().sound);
+        core.update(Some(Showing::Flight), &[JUMP]);
+        assert_eq!(drain(&log), [], "silent");
+        core.apply(AudioSettings::default());
+        assert_eq!(drain(&log), [start_loop(200, 1.0)], "still thrusting");
+    }
+
+    #[test]
+    fn applying_music_off_and_on_stops_and_starts_it() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::Spaceport), &[]);
+        drain(&log);
+        let off = AudioSettings {
+            music: false,
+            ..AudioSettings::default()
+        };
+        core.apply(off);
+        assert_eq!(drain(&log), [AudioCommand::StopMusic]);
+        assert_eq!(core.settings(), off);
+        core.apply(AudioSettings::default());
+        assert_eq!(drain(&log), [start_music(1.0)]);
+    }
+
+    #[test]
+    fn applying_a_volume_changes_what_plays_and_what_plays_next() {
+        let (mut core, log) = engine();
+        core.update(Some(Showing::Flight), &[THRUST]);
+        drain(&log);
+        core.apply(quiet());
+        assert_eq!(
+            drain(&log),
+            [
+                AudioCommand::SetLoopVolume(Volume::new(0.5)),
+                AudioCommand::SetMusicVolume(Volume::new(0.25)),
+            ]
+        );
+        assert_eq!(core.settings(), quiet());
+        core.update(Some(Showing::Flight), &[JUMP]);
+        assert_eq!(drain(&log), [play(128, 0.5)]);
+    }
+
+    #[test]
+    fn applying_a_volume_with_nothing_playing_sends_nothing() {
+        let (mut core, log) = engine();
+        core.update(Some(Showing::ShipBrowser), &[]);
+        core.apply(quiet());
+        assert_eq!(drain(&log), []);
+        assert_eq!(core.settings(), quiet());
+        core.update(Some(Showing::GalaxyMap), &[]);
+        assert_eq!(drain(&log), [start_music(0.25)]);
+    }
+
+    #[test]
+    fn applying_music_on_with_a_new_volume_starts_it_at_that_volume() {
+        let (mut core, log) = original();
+        core.set_music(false);
+        core.update(Some(Showing::GalaxyMap), &[]);
+        core.apply(quiet());
+        assert_eq!(drain(&log), [start_music(0.25)]);
+    }
+
+    #[test]
+    fn applying_the_settings_already_in_place_sends_nothing() {
+        let (mut core, log) = engine();
+        core.update(Some(Showing::Flight), &[THRUST]);
+        drain(&log);
+        core.apply(AudioSettings::default());
+        assert_eq!(drain(&log), []);
+        let mut core = core.with_settings(quiet());
+        core.apply(quiet());
+        assert_eq!(drain(&log), []);
     }
 
     #[test]
