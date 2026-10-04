@@ -56,7 +56,8 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
 /// The start system's stellars land as the stock data says: a new pilot
 /// parked over HG-Kania, a station that needs a legal record of 32767,
 /// is denied, and Port Kane (`spöb` 137) offers its trade center,
-/// outfitter, bar and mission BBS, but no shipyard.
+/// outfitter, bar and mission BBS, but no shipyard, and lands to
+/// "Federation Station.SFIL" (`snd ` 10032).
 #[test]
 fn stock_landing_sites_follow_their_flags_and_min_status() {
     let Some(dir) = common::nova_data() else {
@@ -90,6 +91,16 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
 
     let port_kane = data.get::<Stellar>(137).expect("present").expect("decodes");
     assert_eq!(port_kane.name, Some("Port Kane"));
+    let port_kane_site = sites
+        .iter()
+        .find(|site| site.id.0 == 137)
+        .expect("Port Kane is in the start system");
+    assert_eq!(
+        port_kane_site.landing_sound,
+        Some(nova_sim::SoundId(10_032)),
+        "Federation Station.SFIL"
+    );
+    assert_eq!(kania.landing_sound, None, "a hypergate's angle, 120");
     assert_eq!(
         services(port_kane.record.flags.bits()),
         [
