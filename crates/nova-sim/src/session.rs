@@ -3530,6 +3530,26 @@ mod tests {
     }
 
     #[test]
+    fn a_beam_weapon_fires_beams() {
+        let laser = WeaponRecord {
+            guidance: 0,
+            count: 5,
+            beam_length: 100,
+            ..blaster()
+        };
+        let catalog = FakePilotCatalog {
+            weapons: vec![laser],
+            ..armed()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        session.hold_trigger(FIRE);
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(session.beams().len(), 1);
+        assert_eq!(session.beams()[0].firer, ShipRef::Player);
+        assert_eq!(session.shots(), []);
+    }
+
+    #[test]
     fn the_fight_stands_still_while_landed_or_jumping() {
         let mut catalog = armed();
         catalog.traffic.push((SystemId(131), catalog.traffic[0].1));
@@ -3541,8 +3561,10 @@ mod tests {
         assert_eq!(session.shots(), [], "gone on landing");
         session.take_combat_events();
         let mut chance = Draws::of(&[]);
-        session.tick_combat(&NovaDisable, &mut chance);
-        assert_eq!(session.take_combat_events(), [], "landed");
+        for _ in 0..3 {
+            session.tick_combat(&NovaDisable, &mut chance);
+        }
+        assert_eq!(session.take_combat_events(), [], "landed, though reloaded");
         assert_eq!(session.shots(), []);
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
@@ -3552,8 +3574,10 @@ mod tests {
         assert_eq!(session.shots().len(), 1);
         session.begin_jump().expect("jumps");
         session.take_combat_events();
-        session.tick_combat(&NovaDisable, &mut chance);
-        assert_eq!(session.take_combat_events(), [], "jumping");
+        for _ in 0..3 {
+            session.tick_combat(&NovaDisable, &mut chance);
+        }
+        assert_eq!(session.take_combat_events(), [], "jumping, though reloaded");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(session.shots(), [], "gone on arriving");
         assert!(chance.asked.is_empty());

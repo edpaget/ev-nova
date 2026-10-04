@@ -401,11 +401,9 @@ fn regenerate(fighter: &mut Fighter) {
     }
 }
 
-/// Adds `rate` to `gauge` while it holds less than it can, up to that.
+/// Adds `rate` to `gauge` up to what it holds, never taking any away.
 fn recharge(gauge: &mut Gauge, rate: f32) {
-    if gauge.now < gauge.max {
-        gauge.now = (gauge.now + rate).min(gauge.max);
-    }
+    gauge.now = gauge.now.max((gauge.now + rate).min(gauge.max));
 }
 
 #[cfg(test)]
@@ -734,6 +732,9 @@ mod tests {
             shields.push(ships[0].reserves.shield.now);
         }
         assert_eq!(shields, [7.0, 9.0, 10.0, 10.0]);
+        ships[0].reserves.shield.now = 12.0;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[0].reserves.shield.now, 12.0, "over-full, kept");
         assert_eq!(ships[0].reserves.armor.now, 20.0, "no ArmorRech, no armour");
     }
 

@@ -56,9 +56,7 @@ pub fn apply(reserves: &mut Reserves, hit: Hit) {
     if hit.passes_shields {
         reserves.armor.now -= hit.mass;
     } else {
-        if hit.energy > 0.0 {
-            shield.now -= hit.energy;
-        }
+        shield.now -= hit.energy.max(0.0);
         if shield.now <= 0.0 {
             reserves.armor.now -= hit.mass;
         }

@@ -554,6 +554,8 @@ mod tests {
             Supplies::none().firing(&mut unburst, PRIMARY, 7),
             [0, 2, 4, 6]
         );
+        assert_eq!(unburst.mounts()[0].burst, 0, "no burst to count");
+        assert_eq!(one.mounts()[0].burst, 1, "the 48th tick's shot");
     }
 
     /// A weapon burning `cost` x 10 fuel units a shot.
@@ -793,7 +795,15 @@ mod tests {
             ..blaster(138, 15)
         };
         Arsenal::new(
-            &[blaster(128, 10), rocket, blaster(150, 5)],
+            &[
+                blaster(128, 10),
+                rocket,
+                blaster(150, 5),
+                WeaponRecord {
+                    ammo_type: 12,
+                    ..blaster(140, 50)
+                },
+            ],
             vec![HullRecord {
                 weapons: vec![
                     StockWeapon {
@@ -815,6 +825,11 @@ mod tests {
                         weapon: WeaponId(150),
                         count: -1,
                         ammo: -4,
+                    },
+                    StockWeapon {
+                        weapon: WeaponId(140),
+                        count: 0,
+                        ammo: 0,
                     },
                 ],
                 size: Some(30),
@@ -902,8 +917,13 @@ mod tests {
             (WeaponId(138), OutfitId(204)),
             (WeaponId(140), OutfitId(203)),
         ];
-        let mut owned =
-            BTreeMap::from([(OutfitId(201), 1), (OutfitId(204), 2), (OutfitId(202), 7)]);
+        // An outfit owned none of, as an old save may list one.
+        let mut owned = BTreeMap::from([
+            (OutfitId(201), 1),
+            (OutfitId(204), 2),
+            (OutfitId(202), 7),
+            (OutfitId(203), 0),
+        ]);
         let mut rounds = OutfitRounds {
             owned: &mut owned,
             sources: &sources,
@@ -916,7 +936,7 @@ mod tests {
         rounds.spend(WeaponId(140));
         assert_eq!(
             owned,
-            BTreeMap::from([(OutfitId(202), 7), (OutfitId(204), 1)]),
+            BTreeMap::from([(OutfitId(202), 7), (OutfitId(203), 0), (OutfitId(204), 1)]),
             "used up and no longer owned; none of 203 to spend"
         );
     }

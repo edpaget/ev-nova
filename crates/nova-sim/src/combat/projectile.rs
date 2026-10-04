@@ -73,9 +73,9 @@ pub fn contact(from: Vec2, to: Vec2, centre: Vec2, radius: f32) -> Option<f32> {
     let a = along.x * along.x + along.y * along.y;
     let b = 2.0 * (off.x * along.x + off.y * along.y);
     let discriminant = b * b - 4.0 * a * c;
-    if a == 0.0 || discriminant < 0.0 {
-        return None;
-    }
+    // A segment of no length (`a` none) starting outside, or a line that
+    // misses (a negative discriminant), makes `t` NaN, which is in no
+    // range.
     let t = (-b - discriminant.sqrt()) / (2.0 * a);
     (0.0..=1.0).contains(&t).then_some(t)
 }
@@ -524,5 +524,20 @@ mod tests {
         assert_eq!(at((0.0, 6.0), (20.0, 6.0), 5.0), None, "beside it");
         assert_eq!(at((0.0, 0.0), (0.0, 0.0), 5.0), None, "still, outside");
         assert_eq!(at((20.0, 0.0), (30.0, 0.0), 5.0), None, "moving away");
+        assert_eq!(
+            at((10.0, 4.0), (30.0, 4.0), 5.0),
+            Some(0.0),
+            "within, off the axis"
+        );
+        assert_eq!(
+            at((10.0, 6.0), (30.0, 6.0), 5.0),
+            None,
+            "beside it, off the axis"
+        );
+        assert_eq!(
+            at((10.0, -20.0), (10.0, 20.0), 5.0),
+            Some(0.375),
+            "across it"
+        );
     }
 }

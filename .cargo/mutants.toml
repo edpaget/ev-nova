@@ -62,9 +62,15 @@ exclude_re = [
     # output device, which no gating test may open; everything it hands
     # on to is mutated and tested on kira's device-free `MockBackend`.
     "KiraAudio::open",
-    # The trait's default `take_warnings` is `Vec::new()`; replacing it with
-    # `vec![]` builds the same empty list, so it cannot be observed.
+    # The trait's default `take_warnings` and `take_diagnostics` are
+    # `Vec::new()`; replacing either with `vec![]` builds the same empty
+    # list, so it cannot be observed.
     "replace Screen::take_warnings -> Vec<String> with vec!\\[\\]",
+    "replace Screen::take_diagnostics -> Vec<SimDiagnostic> with vec!\\[\\]",
+    # `Behaviour::trigger`'s default body is `Trigger::default()`, the
+    # "never fires" command; replacing it with `Default::default()` builds
+    # the same value, so it cannot be observed.
+    "replace Behaviour::trigger -> Trigger with Default::default\\(\\)",
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour.
     "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::create_page)",

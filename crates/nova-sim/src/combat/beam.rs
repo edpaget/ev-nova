@@ -156,16 +156,17 @@ mod tests {
 
     #[test]
     fn a_beam_hits_the_nearest_ship_it_reaches() {
-        let beam = Beam::launch(laser(), FIRER, FIRER, &at(0.0, 0.0, 90.0), 0.0);
+        let beam = Beam::launch(laser(), FIRER, FIRER, &at(10.0, 5.0, 90.0), 0.0);
         let (ship, point) = beam
             .hit(&[
-                target(2, 80.0, 0.0),
-                target(3, 40.0, 3.0),
-                target(4, 60.0, -1.0),
+                target(2, 90.0, 5.0),
+                target(3, 50.0, 8.0),
+                target(4, 70.0, 4.0),
             ])
             .expect("a hit");
         assert_eq!(ship, ShipRef::Npc(NpcId(3)));
-        assert!(point.x > 30.0 && point.x < 34.0, "{point:?}");
+        assert!(point.x > 40.0 && point.x < 44.0, "{point:?}");
+        assert!((point.y - 5.0).abs() < 1e-3, "on the beam: {point:?}");
         assert_eq!(beam.hit(&[]), None);
     }
 
