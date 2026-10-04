@@ -295,9 +295,10 @@ impl Screen for FlightView {
 mod tests {
     use std::num::NonZeroU16;
 
+    use nova_sim::landing::StellarFlags;
     use nova_sim::{
-        CharacterStart, Handling, Reserves, ShipFields, ShipId, StartError, SystemId, TICK, Vec2,
-        step,
+        CharacterStart, Handling, LandingSite, Reserves, ShipFields, ShipId, StartError, SystemId,
+        TICK, Vec2, step,
     };
 
     use super::*;
@@ -318,6 +319,8 @@ mod tests {
         sheet: Result<ShipSheet, String>,
         /// `ïntf` 128: stock-like, or why it cannot be read.
         bar: Result<StatusBarLayout, String>,
+        /// System 130's landing sites: Earth and Moon, by default.
+        sites: Vec<LandingSite>,
     }
 
     const FIELDS: ShipFields = ShipFields {
@@ -346,6 +349,21 @@ mod tests {
             }),
             sheet: Ok(sheet()),
             bar: Ok(layout()),
+            sites: vec![
+                site(128, (0.0, -600.0), StellarFlags::CAN_LAND),
+                site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
+            ],
+        }
+    }
+
+    /// Stellar `id` at `(x, y)`, 20 x 20 (radius 10), with `flags`.
+    fn site(id: i16, (x, y): (f32, f32), flags: u32) -> LandingSite {
+        LandingSite {
+            id: StellarId(id),
+            position: Vec2::new(x, y),
+            frame_size: Some((20, 20)),
+            flags,
+            min_status: 0,
         }
     }
 
@@ -387,6 +405,11 @@ mod tests {
 
         fn system_exists(&self, id: SystemId) -> bool {
             id == SystemId(130)
+        }
+
+        fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
+            assert_eq!(system, SystemId(130));
+            self.sites.clone()
         }
     }
 

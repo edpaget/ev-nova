@@ -1,12 +1,14 @@
 //! The pilot catalog over the game data: a thin mapping from `GameData`'s
-//! `chär`, `shïp` and `sÿst` records.
+//! `chär`, `shïp`, `sÿst` and `spöb` records, and its stellar sprites.
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
 use nova_data::records::ship::Ship;
+use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 
-use crate::catalog::{CharacterStart, PilotCatalog, ShipId, StartError, SystemId};
+use crate::catalog::{CharacterStart, LandingSite, PilotCatalog, ShipId, StartError, SystemId};
+use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
 /// Reads the records afresh on every call; a session asks once, when it
@@ -42,6 +44,32 @@ impl PilotCatalog for GameData {
     fn system_exists(&self, id: SystemId) -> bool {
         matches!(self.get::<System>(id.0), Some(Ok(_)))
     }
+
+    fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
+        let Some(Ok(system)) = self.get::<System>(system.0) else {
+            return Vec::new();
+        };
+        system
+            .record
+            .nav_def
+            .into_iter()
+            .flatten()
+            .filter_map(|id| {
+                let stellar = self.get::<Stellar>(id.0)?.ok()?.record;
+                let frame_size = self
+                    .stellar_sprite(id)
+                    .ok()
+                    .map(|sprite| (sprite.sheet.frame_width(), sprite.sheet.frame_height()));
+                Some(LandingSite {
+                    id,
+                    position: Vec2::new(f32::from(stellar.x_pos), f32::from(stellar.y_pos)),
+                    frame_size,
+                    flags: stellar.flags.bits(),
+                    min_status: stellar.min_status,
+                })
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -50,11 +78,15 @@ mod tests {
     use std::path::Path;
 
     use nova_data::Record;
+    use nova_data::graphics::RLED;
+    use nova_data::graphics::fixture::RledBuilder;
+    use nova_data::records::spin::Spin;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
 
     use super::*;
+    use crate::catalog::StellarId;
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -210,5 +242,78 @@ mod tests {
         assert!(data.system_exists(SystemId(130)));
         assert!(!data.system_exists(SystemId(131)), "undecodable");
         assert!(!data.system_exists(SystemId(999)), "missing");
+    }
+
+    /// A `sÿst` whose `nav_def` holds `stellars`, every other slot -1.
+    fn system_with(stellars: &[i16]) -> Vec<u8> {
+        let mut bytes = system();
+        put_i16s(&mut bytes, 0x24, &[-1; 16]);
+        put_i16s(&mut bytes, 0x24, stellars);
+        bytes
+    }
+
+    /// A `spöb` at (`x`, `y`) of graphic type `graphic_type`, with these
+    /// `Flags` and `MinStatus`.
+    fn stellar(x: i16, y: i16, graphic_type: i16, flags: u32, min_status: i16) -> Vec<u8> {
+        let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[x, y, graphic_type]);
+        bytes[0x06..0x0A].copy_from_slice(&flags.to_be_bytes());
+        put_i16s(&mut bytes, 0x16, &[min_status]);
+        bytes
+    }
+
+    /// A `spïn` naming `rlëD` `image`, one frame across.
+    fn spin(image: i16) -> Vec<u8> {
+        let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[image, -1, 0, 0, 1, 1]);
+        bytes
+    }
+
+    /// One `width` x `height` frame.
+    fn sheet(width: u16, height: u16) -> Vec<u8> {
+        RledBuilder::new(width, height)
+            .frame(|f| (0..height).fold(f, |f, _| f.line().pixels(&vec![0x7C00; width.into()])))
+            .build()
+    }
+
+    #[test]
+    fn a_systems_landing_sites_are_its_readable_stellars_in_nav_order() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[129, 999, 128, 131])),
+            (Stellar::TYPE, 128, stellar(-300, 450, 7, 0x0000_0013, 25)),
+            (Stellar::TYPE, 129, stellar(10, -20, 0, 0x2001, -32767)),
+            (Stellar::TYPE, 131, short(stellar(0, 0, 0, 1, 0))),
+            (Spin::TYPE, 1000, spin(1000)),
+            (RLED, 1000, sheet(12, 30)),
+        ]);
+        assert_eq!(
+            data.landing_sites(SystemId(130)),
+            [
+                LandingSite {
+                    id: StellarId(129),
+                    position: Vec2::new(10.0, -20.0),
+                    frame_size: Some((12, 30)),
+                    flags: 0x2001,
+                    min_status: -32767,
+                },
+                LandingSite {
+                    id: StellarId(128),
+                    position: Vec2::new(-300.0, 450.0),
+                    frame_size: None,
+                    flags: 0x13,
+                    min_status: 25,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_missing_or_undecodable_system_has_no_landing_sites() {
+        let data = store(&[
+            (System::TYPE, 131, short(system_with(&[128]))),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
+        ]);
+        assert_eq!(data.landing_sites(SystemId(131)), []);
+        assert_eq!(data.landing_sites(SystemId(130)), []);
     }
 }

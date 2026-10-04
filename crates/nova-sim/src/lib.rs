@@ -14,6 +14,9 @@
 //!   growing down.
 //! - [`handling`]: a ship's [`Handling`], its `shïp`'s speed, acceleration
 //!   and turn rate in pixels and ticks.
+//! - [`landing`]: whether the ship can land, [`check_landing`], each
+//!   [`LandingRefusal`] in the order it applies, and the [`Service`]s a
+//!   stellar's flags offer.
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full at its `shïp`'s values when it starts.
 //! - [`session`]: a flight [`Session`], the first `chär`'s ship flying in
@@ -25,13 +28,17 @@ pub mod data;
 pub mod flight;
 pub mod geometry;
 pub mod handling;
+pub mod landing;
 pub mod reserves;
 pub mod session;
 
-pub use catalog::{CharacterStart, GovtId, PilotCatalog, ShipId, StartError, SystemId};
+pub use catalog::{
+    CharacterStart, GovtId, LandingSite, PilotCatalog, ShipId, StartError, StellarId, SystemId,
+};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
 pub use flight::{Controls, ShipState, Turn, step};
 pub use geometry::Vec2;
 pub use handling::{Handling, ShipFields};
+pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
 pub use reserves::{Gauge, Reserves};
 pub use session::Session;

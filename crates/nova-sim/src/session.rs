@@ -5,10 +5,17 @@
 //! ascending ID: its ship, in the first of its starting systems that
 //! exists. The ship starts at rest at the system's centre, facing up, with
 //! its shield, armour and fuel full.
+//!
+//! The ship lands on a stellar of its system when the
+//! [`landing`](crate::landing) rules allow it: docked, it rests at the
+//! stellar's centre and ticks move nothing until it takes off again, from
+//! the same place.
 
-use crate::catalog::{GovtId, PilotCatalog, ShipId, StartError, SystemId};
+use crate::catalog::{GovtId, LandingSite, PilotCatalog, ShipId, StartError, StellarId, SystemId};
 use crate::flight::{Controls, ShipState, step};
+use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::landing::{LandingRefusal, check_landing};
 use crate::reserves::Reserves;
 
 /// The player's ship, flying in one system.
@@ -18,6 +25,10 @@ pub struct Session {
     system: SystemId,
     handling: Handling,
     player: ShipState,
+    /// The system's stellars, read when the session starts.
+    sites: Vec<LandingSite>,
+    /// The stellar the ship is docked at, if it has landed.
+    landed: Option<StellarId>,
 }
 
 impl Session {
@@ -42,12 +53,51 @@ impl Session {
                 reserves: Reserves::from_fields(fields),
                 ..ShipState::default()
             },
+            sites: catalog.landing_sites(system),
+            landed: None,
         })
     }
 
-    /// Advances the session one tick under the player's `controls`.
+    /// Advances the session one tick under the player's `controls`. A
+    /// landed ship does not move.
     pub fn tick(&mut self, controls: Controls) {
-        step(&mut self.player, &self.handling, controls);
+        if self.landed.is_none() {
+            step(&mut self.player, &self.handling, controls);
+        }
+    }
+
+    /// Lands the ship on the stellar it is over, if the
+    /// [`landing`](crate::landing) rules allow it: it docks at the
+    /// stellar's centre, at rest, its heading and reserves unchanged.
+    /// Otherwise it flies on, and the refusal says why.
+    pub fn land(&mut self) -> Result<StellarId, LandingRefusal> {
+        let stellar = check_landing(&self.player, &self.sites, self.legal_record())?;
+        if let Some(site) = self.sites.iter().find(|site| site.id == stellar) {
+            self.player.position = site.position;
+        }
+        self.player.velocity = Vec2::ZERO;
+        self.landed = Some(stellar);
+        Ok(stellar)
+    }
+
+    /// Takes off from the stellar the ship is docked at, and gives it; the
+    /// ship flies again from the stellar's centre, at rest. `None`, and
+    /// nothing changes, when it has not landed.
+    pub fn take_off(&mut self) -> Option<StellarId> {
+        self.landed.take()
+    }
+
+    /// The stellar the ship is docked at, if it has landed.
+    #[must_use]
+    pub fn landed(&self) -> Option<StellarId> {
+        self.landed
+    }
+
+    /// The player's legal record in the system. Always 0: a new pilot's
+    /// record is clean, and nothing changes it yet.
+    #[must_use]
+    pub fn legal_record(&self) -> i16 {
+        0
     }
 
     /// The player's ship as it flies.
@@ -90,10 +140,11 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::catalog::CharacterStart;
+    use crate::catalog::{CharacterStart, LandingSite, StellarId};
     use crate::flight::Turn;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
+    use crate::landing::{LandingRefusal, StellarFlags};
     use crate::reserves::{Gauge, Reserves};
 
     /// A canned first `chär`, ships and systems; records the ships asked
@@ -103,6 +154,9 @@ mod tests {
         ships: Vec<(ShipId, Result<ShipFields, String>)>,
         systems: Vec<SystemId>,
         ships_asked: RefCell<Vec<ShipId>>,
+        /// Each system's landing sites; any other has none.
+        sites: Vec<(SystemId, Vec<LandingSite>)>,
+        sites_asked: RefCell<Vec<SystemId>>,
     }
 
     const FAST: ShipFields = ShipFields {
@@ -114,8 +168,21 @@ mod tests {
         fuel: 300,
     };
 
+    /// A landable planet at (`x`, `y`), 100 x 100 (radius 50).
+    fn planet(id: i16, x: f32, y: f32) -> LandingSite {
+        LandingSite {
+            id: StellarId(id),
+            position: Vec2::new(x, y),
+            frame_size: Some((100, 100)),
+            flags: StellarFlags::CAN_LAND,
+            min_status: 0,
+        }
+    }
+
     /// The first `chär` flies ship 128 from system 130; ship 128 is fast,
-    /// and systems 130 and 131 exist.
+    /// and systems 130 and 131 exist. System 130 holds a planet, 128, at
+    /// (30, -40), which the ship starts over, and another, 129, far away;
+    /// system 131 holds one at the centre.
     fn catalog() -> FakePilotCatalog {
         FakePilotCatalog {
             character: Ok(CharacterStart {
@@ -125,6 +192,14 @@ mod tests {
             ships: vec![(ShipId(128), Ok(FAST))],
             systems: vec![SystemId(130), SystemId(131)],
             ships_asked: RefCell::default(),
+            sites: vec![
+                (
+                    SystemId(130),
+                    vec![planet(128, 30.0, -40.0), planet(129, 2000.0, 0.0)],
+                ),
+                (SystemId(131), vec![planet(140, 0.0, 0.0)]),
+            ],
+            sites_asked: RefCell::default(),
         }
     }
 
@@ -153,6 +228,14 @@ mod tests {
 
         fn system_exists(&self, id: SystemId) -> bool {
             self.systems.contains(&id)
+        }
+
+        fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
+            self.sites_asked.borrow_mut().push(system);
+            self.sites
+                .iter()
+                .find(|(id, _)| *id == system)
+                .map_or_else(Vec::new, |(_, sites)| sites.clone())
         }
     }
 
@@ -282,5 +365,131 @@ mod tests {
         }
         assert_eq!(*session.player(), expected);
         assert_ne!(expected, ShipState::default());
+    }
+
+    // Landing.
+
+    const THRUST: Controls = Controls {
+        thrust: true,
+        turn: Turn::None,
+        reverse: false,
+    };
+
+    #[test]
+    fn a_session_reads_its_systems_landing_sites_once() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(*catalog.sites_asked.borrow(), [SystemId(130)]);
+        session.land().expect("lands");
+        session.take_off();
+        session.land().expect("lands again");
+        assert_eq!(*catalog.sites_asked.borrow(), [SystemId(130)]);
+        let other = starting([Some(131), None, None, None]);
+        let mut session = Session::start(&other).expect("starts");
+        assert_eq!(*other.sites_asked.borrow(), [SystemId(131)]);
+        assert_eq!(session.land(), Ok(StellarId(140)));
+    }
+
+    #[test]
+    fn a_new_pilots_record_is_clean() {
+        let session = Session::start(&catalog()).expect("starts");
+        assert_eq!(session.legal_record(), 0);
+        assert_eq!(session.landed(), None);
+    }
+
+    #[test]
+    fn landing_docks_the_ship_at_the_stellar_at_rest() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.tick(Controls {
+            turn: Turn::Right,
+            ..THRUST
+        });
+        let flying = *session.player();
+        assert_ne!(flying.velocity, Vec2::ZERO);
+        assert_eq!(session.land(), Ok(StellarId(128)));
+        assert_eq!(session.landed(), Some(StellarId(128)));
+        assert_eq!(
+            *session.player(),
+            ShipState {
+                position: Vec2::new(30.0, -40.0),
+                velocity: Vec2::ZERO,
+                ..flying
+            }
+        );
+    }
+
+    #[test]
+    fn a_tick_while_landed_moves_nothing() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.land().expect("lands");
+        let docked = *session.player();
+        for _ in 0..10 {
+            session.tick(Controls {
+                turn: Turn::Left,
+                ..THRUST
+            });
+        }
+        assert_eq!(*session.player(), docked);
+    }
+
+    #[test]
+    fn taking_off_leaves_the_ship_at_the_stellar_at_rest_and_it_flies_again() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.tick(Controls {
+            turn: Turn::Right,
+            ..THRUST
+        });
+        session.land().expect("lands");
+        let docked = *session.player();
+        assert_eq!(session.take_off(), Some(StellarId(128)));
+        assert_eq!(session.landed(), None);
+        assert_eq!(*session.player(), docked);
+        assert_eq!(docked.position, Vec2::new(30.0, -40.0));
+        assert_eq!(docked.velocity, Vec2::ZERO);
+        session.tick(THRUST);
+        let mut expected = docked;
+        step(&mut expected, &session.handling(), THRUST);
+        assert_eq!(*session.player(), expected);
+        assert_ne!(expected, docked);
+    }
+
+    #[test]
+    fn taking_off_without_landing_does_nothing() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.tick(THRUST);
+        let flying = *session.player();
+        assert_eq!(session.take_off(), None);
+        assert_eq!(*session.player(), flying);
+        assert_eq!(session.take_off(), None, "nor twice");
+    }
+
+    #[test]
+    fn a_refused_landing_is_its_refusal_and_the_ship_flies_on() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        for _ in 0..20 {
+            session.tick(THRUST);
+        }
+        let flying = *session.player();
+        let refusal = session.land();
+        assert_eq!(
+            refusal,
+            crate::landing::check_landing(
+                &flying,
+                &[planet(128, 30.0, -40.0), planet(129, 2000.0, 0.0)],
+                0
+            )
+        );
+        assert!(refusal.is_err(), "{refusal:?}");
+        assert_eq!(session.landed(), None);
+        assert_eq!(*session.player(), flying);
+        session.tick(Controls::default());
+        assert_ne!(*session.player(), flying, "still flying");
+
+        let empty = FakePilotCatalog {
+            sites: Vec::new(),
+            ..catalog()
+        };
+        let mut session = Session::start(&empty).expect("starts");
+        assert_eq!(session.land(), Err(LandingRefusal::NoStellars));
     }
 }

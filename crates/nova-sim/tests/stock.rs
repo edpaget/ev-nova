@@ -7,7 +7,11 @@ mod common;
 use nova_data::GameData;
 use nova_data::records::character::Character;
 use nova_data::records::ship::Ship;
-use nova_sim::{Handling, Reserves, Session, ShipFields};
+use nova_data::records::stellar::Stellar;
+use nova_sim::{
+    Handling, LandingRefusal, PilotCatalog, Reserves, Service, Session, ShipFields, ShipState,
+    check_landing, services,
+};
 
 #[test]
 fn the_first_chär_starts_a_session_in_one_of_its_systems() {
@@ -44,5 +48,53 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         session.handling().max_speed > 0.0,
         "{:?}",
         session.handling()
+    );
+}
+
+/// The start system's stellars land as the stock data says: a new pilot
+/// parked over HG-Kania, a station that needs a legal record of 32767,
+/// is denied, and Port Kane (`spöb` 137) offers its trade center,
+/// outfitter, bar and mission BBS, but no shipyard.
+#[test]
+fn stock_landing_sites_follow_their_flags_and_min_status() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let session = Session::start(&data).expect("the stock first chär starts");
+    let sites = data.landing_sites(session.system());
+    let kania = sites
+        .iter()
+        .find(|site| {
+            data.get::<Stellar>(site.id.0)
+                .and_then(Result::ok)
+                .and_then(|entry| entry.name)
+                == Some("HG-Kania")
+        })
+        .expect("HG-Kania is in the start system");
+    assert_eq!(kania.min_status, 32767);
+    let parked = ShipState {
+        position: kania.position,
+        ..ShipState::default()
+    };
+    assert_eq!(
+        check_landing(&parked, &sites, session.legal_record()),
+        Err(LandingRefusal::Denied {
+            stellar: kania.id,
+            station: true,
+            min_status: 32767,
+        })
+    );
+
+    let port_kane = data.get::<Stellar>(137).expect("present").expect("decodes");
+    assert_eq!(port_kane.name, Some("Port Kane"));
+    assert_eq!(
+        services(port_kane.record.flags.bits()),
+        [
+            Service::TradeCenter,
+            Service::Outfitter,
+            Service::Bar,
+            Service::MissionBbs,
+        ]
     );
 }

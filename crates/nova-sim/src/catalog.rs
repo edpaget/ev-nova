@@ -3,8 +3,9 @@
 
 use std::rc::Rc;
 
-pub use nova_data::{GovtId, ShipId, SystemId};
+pub use nova_data::{GovtId, ShipId, StellarId, SystemId};
 
+use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
 /// A new pilot's start, from the first `chär`.
@@ -14,6 +15,23 @@ pub struct CharacterStart {
     pub ship: Option<ShipId>,
     /// The starting `sÿst`s, in order; any may be unused.
     pub systems: [Option<SystemId>; 4],
+}
+
+/// A stellar the player might land on, raw from its `spöb`; the
+/// [`landing`](crate::landing) rules decide what the values mean.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LandingSite {
+    /// The `spöb`'s ID.
+    pub id: StellarId,
+    /// Its centre, `xPos` and `yPos`, in pixels from the system's centre.
+    pub position: Vec2,
+    /// Its sprite's frame width and height in pixels, or `None` when it
+    /// has no sprite that can be read.
+    pub frame_size: Option<(u32, u32)>,
+    /// Its `Flags`.
+    pub flags: u32,
+    /// Its `MinStatus`: the legal record below which landing is refused.
+    pub min_status: i16,
 }
 
 /// Why a flight session could not start. Each message is ready to display.
@@ -53,6 +71,9 @@ pub trait PilotCatalog {
     fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String>;
     /// Whether system `id` exists and can be read.
     fn system_exists(&self, id: SystemId) -> bool;
+    /// The stellars of system `id` that can be read, in its `nav_def`
+    /// order; none for a system that cannot be read.
+    fn landing_sites(&self, system: SystemId) -> Vec<LandingSite>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -67,6 +88,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn system_exists(&self, id: SystemId) -> bool {
         (**self).system_exists(id)
+    }
+
+    fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
+        (**self).landing_sites(system)
     }
 }
 
@@ -83,6 +108,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn system_exists(&self, id: SystemId) -> bool {
         (**self).system_exists(id)
+    }
+
+    fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
+        (**self).landing_sites(system)
     }
 }
 
@@ -115,6 +144,21 @@ mod tests {
         fn system_exists(&self, id: SystemId) -> bool {
             id == SystemId(130)
         }
+
+        /// System 130 holds stellar 128 at (1, 2); no other system has
+        /// any.
+        fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
+            if system != SystemId(130) {
+                return Vec::new();
+            }
+            vec![LandingSite {
+                id: StellarId(128),
+                position: Vec2::new(1.0, 2.0),
+                frame_size: Some((10, 20)),
+                flags: 0x01,
+                min_status: 0,
+            }]
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and systems 130
@@ -126,6 +170,8 @@ mod tests {
             format!("{:?}", catalog.ship_fields(ShipId(129))),
             format!("{}", catalog.system_exists(SystemId(130))),
             format!("{}", catalog.system_exists(SystemId(131))),
+            format!("{:?}", catalog.landing_sites(SystemId(130))),
+            format!("{:?}", catalog.landing_sites(SystemId(131))),
         ]
     }
 
@@ -134,7 +180,9 @@ mod tests {
         let direct = reads(One);
         assert!(direct[1].contains("speed: 300"), "{direct:?}");
         assert_eq!(direct[2], r#"Err("no shïp 129")"#);
-        assert_eq!(direct[3..], ["true", "false"]);
+        assert_eq!(direct[3..5], ["true", "false"]);
+        assert!(direct[5].contains("StellarId(128)"), "{direct:?}");
+        assert_eq!(direct[6], "[]");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }
