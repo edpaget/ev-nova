@@ -8,8 +8,9 @@
 //!   from one system to another.
 //! - [`check_jump`] gives the next system on the route, or the first
 //!   [`JumpRefusal`] that applies, in this order: there is no destination,
-//!   the ship is nearer the system's centre than [`MIN_JUMP_DISTANCE`] (the
-//!   Bible: "Jump Distance 1000 pixels"), or it has less than [`JUMP_FUEL`].
+//!   the ship is nearer the system's centre than its jump distance
+//!   ([`MIN_JUMP_DISTANCE`] standard, the Bible's "Jump Distance 1000
+//!   pixels", which outfits can move), or it has less than [`JUMP_FUEL`].
 //! - [`arrival`] places the ship in the system it jumps to:
 //!   [`ARRIVAL_DISTANCE`] from the centre, on the side facing the system
 //!   it came from, heading for the centre at its top speed.
@@ -21,9 +22,9 @@ use crate::flight::{ShipState, heading_of};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
 
-/// How far from the system's centre, in pixels, the ship must be to jump
-/// (the Bible: "Jump Distance 1000 pixels"). Exactly this far is far
-/// enough.
+/// How far from the system's centre, in pixels, a ship must be to jump
+/// unless its outfits say otherwise (the Bible: "Jump Distance 1000
+/// pixels"): the no-jump zone's standard radius.
 pub const MIN_JUMP_DISTANCE: f32 = 1000.0;
 /// The fuel a jump uses (the Bible: "100 is one jump").
 pub const JUMP_FUEL: f32 = 100.0;
@@ -60,7 +61,7 @@ pub enum JumpRefusal {
     Landed,
     /// No destination has been chosen, or it has been reached.
     NoDestination,
-    /// The ship is nearer the system's centre than [`MIN_JUMP_DISTANCE`].
+    /// The ship is nearer the system's centre than its jump distance.
     TooClose {
         /// How far from the centre it is.
         distance: f32,
@@ -172,15 +173,18 @@ impl StarMap {
 }
 
 /// Whether `player`, holding `fuel`, can jump to `next`, the next system
-/// on its route: `next`, or the first refusal that applies.
+/// on its route, when it must be `min_distance` from the centre to jump
+/// (exactly that far is far enough): `next`, or the first refusal that
+/// applies.
 pub fn check_jump(
     player: &ShipState,
     fuel: f32,
     next: Option<SystemId>,
+    min_distance: f32,
 ) -> Result<SystemId, JumpRefusal> {
     let next = next.ok_or(JumpRefusal::NoDestination)?;
     let distance = player.position.length();
-    if distance < MIN_JUMP_DISTANCE {
+    if distance < min_distance {
         return Err(JumpRefusal::TooClose { distance });
     }
     if fuel < JUMP_FUEL {
@@ -385,7 +389,24 @@ mod tests {
         (player, fuel): (ShipState, f32),
         next: Option<SystemId>,
     ) -> Result<SystemId, JumpRefusal> {
-        check_jump(&player, fuel, next)
+        check_jump(&player, fuel, next, MIN_JUMP_DISTANCE)
+    }
+
+    #[test]
+    fn the_ship_must_be_as_far_out_as_the_minimum_it_is_given() {
+        let (player, fuel) = ship(0.0, 600.0, 300.0);
+        assert_eq!(check_jump(&player, fuel, NEXT, 500.0), Ok(SystemId(129)));
+        assert_eq!(check_jump(&player, fuel, NEXT, 600.0), Ok(SystemId(129)));
+        assert_eq!(
+            check_jump(&player, fuel, NEXT, 600.1),
+            Err(JumpRefusal::TooClose { distance: 600.0 })
+        );
+        assert_eq!(
+            check_jump(&player, fuel, NEXT, 1000.0),
+            Err(JumpRefusal::TooClose { distance: 600.0 })
+        );
+        let (centre, _) = ship(0.0, 0.0, 300.0);
+        assert_eq!(check_jump(&centre, fuel, NEXT, 0.0), Ok(SystemId(129)));
     }
 
     #[test]

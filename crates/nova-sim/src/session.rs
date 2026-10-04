@@ -26,8 +26,8 @@
 //! the next system on it begins when the [`hyperspace`](crate::hyperspace)
 //! rules allow, and while it lasts ticks move nothing. When the jump is
 //! over ([`Session::arrive`]) the ship is in the next system, at its edge,
-//! with a jump's fuel used and a day gone by, and the rest of the course
-//! still ahead. In flight, fuel regenerates each tick at the rate the ship
+//! with a jump's fuel used and the days its stats give a jump gone by, and
+//! the rest of the course still ahead. In flight, fuel regenerates each tick at the rate the ship
 //! and its outfits give.
 //!
 //! Everything about how the ship performs (its handling, the most shield,
@@ -85,9 +85,7 @@ use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::geometry::Vec2;
 use crate::handling::{Handling, ShipFields};
-use crate::hyperspace::{
-    DAYS_PER_JUMP, JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump,
-};
+use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
 use crate::landing::{LandingRefusal, check_landing};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
 use crate::outfitter::{self, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods};
@@ -286,6 +284,7 @@ impl Session {
             &self.player,
             self.pilot.reserves.fuel.now,
             self.pilot.course.first().copied(),
+            self.stats.jump_distance,
         )?;
         self.jumping = Some(next);
         self.stop_thrust();
@@ -300,9 +299,10 @@ impl Session {
     }
 
     /// Ends the jump under way, if any, and gives the system arrived in:
-    /// the jump's fuel is used, the date advances, the system is taken off
-    /// the course, and the ship is placed at its edge facing the system it
-    /// came from (see [`arrival`]) with its reserves as they were. Each day
+    /// the jump's fuel is used, the date advances by the days the stats give
+    /// a jump, the system is taken off the course, and the ship is placed at
+    /// its edge facing the system it came from (see [`arrival`]) with its
+    /// reserves as they were. Each day
     /// steps the planetary events, rolled on `chance`. The new system's
     /// stellars are read from `catalog`. `None`, and nothing changes, when
     /// no jump is under way.
@@ -314,7 +314,7 @@ impl Session {
         let next = self.jumping.take()?;
         let pilot = &mut self.pilot;
         pilot.reserves.fuel.now -= JUMP_FUEL;
-        for _ in 0..DAYS_PER_JUMP {
+        for _ in 0..self.stats.jump_days {
             pilot.date = pilot.date.next_day();
             market::step_day(&self.goods, &mut pilot.events, chance);
         }
@@ -628,11 +628,12 @@ mod tests {
     use crate::fuel::FUEL_SCOOP;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
-    use crate::hyperspace::{JumpRefusal, RouteError, StarMap};
+    use crate::hyperspace::{ARRIVAL_DISTANCE, DAYS_PER_JUMP, JumpRefusal, RouteError, StarMap};
     use crate::landing::LandingRefusal;
     use crate::landing::StellarFlags;
     use crate::market::{Direction, Good, Lot, Order, TradeRefusal};
     use crate::reserves::{Gauge, Reserves};
+    use crate::stats::{HYPERSPACE_DAYS, HYPERSPACE_DISTANCE};
     use crate::testkit::{
         FAST, FakePilotCatalog, START, Scripted, catalog, edge_lander, fly_out, jump, jump_with,
         outfit, planet, starting,
@@ -1937,6 +1938,69 @@ mod tests {
                 5 - u16::try_from(DAYS_PER_JUMP).expect("few")
             )]
         );
+    }
+
+    /// `catalog` with ship 128 carrying `count` of outfit 320, which has
+    /// `mod_type` at `mod_val`, as a default item: a new pilot owns them.
+    fn owning(
+        catalog: FakePilotCatalog,
+        mod_type: i16,
+        mod_val: i16,
+        count: u16,
+    ) -> FakePilotCatalog {
+        FakePilotCatalog {
+            defaults: vec![(ShipId(128), vec![(OutfitId(320), count)])],
+            outfits: vec![outfit(320, &[(mod_type, mod_val)])],
+            ..catalog
+        }
+    }
+
+    #[test]
+    fn a_hyperspace_distance_outfit_lets_the_ship_jump_nearer_the_centre() {
+        // The stock Horizontal Booster: -500, halving the no-jump zone.
+        let booster = owning(catalog(), HYPERSPACE_DISTANCE, -500, 1);
+        let mut session = Session::start(&booster).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        session.player.position = Vec2::new(0.0, 600.0);
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(
+            session.arrive(&booster, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert_eq!(
+            session.player().position.length(),
+            ARRIVAL_DISTANCE,
+            "it still drops out at the standard edge"
+        );
+
+        let catalog = catalog();
+        let mut plain = Session::start(&catalog).expect("starts");
+        plain.plot_course(SystemId(131)).expect("a route");
+        plain.player.position = Vec2::new(0.0, 600.0);
+        assert_eq!(
+            plain.begin_jump(),
+            Err(JumpRefusal::TooClose { distance: 600.0 })
+        );
+        assert_eq!(plain.jumping(), None);
+    }
+
+    #[test]
+    fn a_hyperspace_speed_outfit_makes_each_jump_take_more_days() {
+        let slower = owning(surplus(), HYPERSPACE_DAYS, 1, 1);
+        let mut session = Session::start(&slower).expect("starts");
+        let mut chance = Scripted::default();
+        jump_with(&mut session, &slower, 131, &mut chance);
+        assert_eq!(chance.asked, [35, 35], "one roll for each of two days");
+        assert_eq!(dmy(&session), (25, 6, 1177));
+        assert_eq!(session.reserves().fuel.now, 200.0, "still one jump's fuel");
+
+        // The stock -1 cannot take a jump below a day.
+        let quicker = owning(surplus(), HYPERSPACE_DAYS, -1, 1);
+        let mut session = Session::start(&quicker).expect("starts");
+        let mut chance = Scripted::default();
+        jump_with(&mut session, &quicker, 131, &mut chance);
+        assert_eq!(chance.asked, [35]);
+        assert_eq!(dmy(&session), (24, 6, 1177));
     }
 
     #[test]
