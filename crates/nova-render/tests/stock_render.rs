@@ -84,3 +84,33 @@ fn a_stock_picture_and_sprite_render_through_the_atlas() {
         other => panic!("expected one sprite batch, got {other:?}"),
     }
 }
+
+/// Stock Nova's normal-state left button cap, masked by `PICT` 7600,
+/// resolves with its rounded corners clear and its centre opaque, as does
+/// every other cap.
+#[test]
+fn a_stock_button_cap_resolves_masked() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    for cap in [7500, 7502, 7503, 7505, 7506, 7508] {
+        let frames = data
+            .frames(ImageKind::MaskedPict { mask: cap + 100 }, cap)
+            .unwrap_or_else(|err| panic!("cap {cap}: {err}"));
+        let [cap_image] = frames.as_slice() else {
+            panic!("cap {cap} is one frame");
+        };
+        assert_eq!((cap_image.width(), cap_image.height()), (13, 25));
+        let alpha = |x, y| cap_image.pixel(x, y).expect("inside")[3];
+        assert_eq!(alpha(6, 12), 255, "cap {cap}'s centre");
+        let corners = [(0, 0), (12, 0), (0, 24), (12, 24)];
+        let clear = corners.iter().filter(|&&(x, y)| alpha(x, y) == 0).count();
+        assert_eq!(clear, 2, "cap {cap}'s two outer corners are clear");
+        let plain = data.frames(ImageKind::Pict, cap).expect("decodes");
+        assert!(
+            plain[0].pixels().chunks(4).all(|pixel| pixel[3] == 255),
+            "cap {cap} is opaque unmasked"
+        );
+    }
+}

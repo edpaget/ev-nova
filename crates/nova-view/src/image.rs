@@ -8,6 +8,13 @@ pub enum ImageKind {
     Pict,
     /// An `rlëD` sprite sheet: one or more equal-sized frames.
     Rled,
+    /// A `PICT` picture whose alpha comes from another `PICT`, its mask:
+    /// opaque where the mask is dark, clear where it is light. Nova's
+    /// button caps are drawn this way.
+    MaskedPict {
+        /// The mask `PICT`'s ID.
+        mask: i16,
+    },
 }
 
 /// One frame of one image resource: (resource type, ID, frame).
@@ -27,6 +34,16 @@ impl ImageKey {
     pub const fn picture(id: i16) -> Self {
         Self {
             kind: ImageKind::Pict,
+            id,
+            frame: 0,
+        }
+    }
+
+    /// `PICT` `id` with its alpha taken from `PICT` `mask`.
+    #[must_use]
+    pub const fn masked_picture(id: i16, mask: i16) -> Self {
+        Self {
+            kind: ImageKind::MaskedPict { mask },
             id,
             frame: 0,
         }
@@ -58,6 +75,21 @@ mod tests {
                 frame: 0
             }
         );
+    }
+
+    #[test]
+    fn a_masked_picture_names_its_mask() {
+        let key = ImageKey::masked_picture(7500, 7600);
+        assert_eq!(
+            key,
+            ImageKey {
+                kind: ImageKind::MaskedPict { mask: 7600 },
+                id: 7500,
+                frame: 0
+            }
+        );
+        assert_ne!(key, ImageKey::picture(7500));
+        assert_ne!(key, ImageKey::masked_picture(7500, 7601));
     }
 
     #[test]

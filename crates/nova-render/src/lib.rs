@@ -17,7 +17,8 @@
 //! - [`batch`]: the [`Renderer`], which packs images into the atlas lazily
 //!   and turns a draw list into batches in draw order.
 //! - [`source`]: [`ImageSource`] for `nova_data`'s `GameData`, a thin
-//!   adapter over the picture and sprite decoders that needs no GPU.
+//!   adapter over the picture and sprite decoders (and the mask that gives
+//!   a masked picture its alpha) that needs no GPU.
 //! - [`present`]: what a window surface does before each frame.
 //!
 //! The adapter, [`wgpu`], is the only module that names `wgpu` or
