@@ -191,7 +191,9 @@ mod stellar_sprite;
 mod tests;
 mod walk;
 
-pub use self::interface::InterfaceData;
+pub use self::interface::{
+    InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
+};
 pub use self::ship_desc::ship_desc_id;
 pub use self::sprite::{LayerError, LayerSprite, ShipLayer, ShipLayers, ShipSprite, SpriteError};
 pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};

@@ -9,6 +9,10 @@
 //! than inside it. Two files qualify: `Nova-DF.rsrc` (Mac OS X), whose data
 //! fork is a flattened resource fork, and the Windows `Nova.rez`, which
 //! holds the same resources. Any file [`ResourceFile::load`] can read works.
+//!
+//! [`load_interface`] (and [`open_interface`], on disk) finds it from the
+//! `Nova Files` directory: `Nova-DF.rsrc` beside it, else `Nova.rez`
+//! beside it ([`interface_path_candidates`]).
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +27,52 @@ use crate::wire::id::{DitlId, PictId};
 
 /// A decoded interface record, or why it failed.
 type DecodeResult<T> = Result<(Entry<T>, Option<DecodeWarning>), DecodeError>;
+
+/// Where the interface file may be, given the `Nova Files` directory
+/// `data_dir`, in the order they are tried: the Mac OS X `Nova-DF.rsrc`
+/// beside it, then the Windows `Nova.rez` beside it.
+#[must_use]
+pub fn interface_path_candidates(data_dir: &Path) -> [PathBuf; 2] {
+    [
+        data_dir.join("../Nova-DF.rsrc"),
+        data_dir.join("../Nova.rez"),
+    ]
+}
+
+/// Neither interface file could be opened.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "no interface file: {} ({}); {} ({})",
+    tried[0].0.display(), tried[0].1, tried[1].0.display(), tried[1].1
+)]
+pub struct NoInterfaceFile {
+    /// Each path tried, in order, with why it failed.
+    pub tried: Box<[(PathBuf, LoadError); 2]>,
+}
+
+/// Opens the interface file for the `Nova Files` directory `data_dir`
+/// through `forks`: the first of [`interface_path_candidates`] that loads.
+pub fn load_interface(
+    forks: &impl ForkReader,
+    data_dir: &Path,
+) -> Result<InterfaceData, NoInterfaceFile> {
+    let [mac, windows] = interface_path_candidates(data_dir);
+    let mac_error = match InterfaceData::load(forks, &mac) {
+        Ok(ui) => return Ok(ui),
+        Err(error) => error,
+    };
+    match InterfaceData::load(forks, &windows) {
+        Ok(ui) => Ok(ui),
+        Err(error) => Err(NoInterfaceFile {
+            tried: Box::new([(mac, mac_error), (windows, error)]),
+        }),
+    }
+}
+
+/// [`load_interface`] from disk.
+pub fn open_interface(data_dir: &Path) -> Result<InterfaceData, NoInterfaceFile> {
+    load_interface(&StdForkReader, data_dir)
+}
 
 /// The interface file's resources. Read-only; every lookup decodes afresh.
 #[derive(Debug)]
@@ -94,7 +144,7 @@ impl InterfaceData {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use nova_rsrc::fixture::{ForkBuilder, RezBuilder};
     use nova_rsrc::{LoadError, ResType};
@@ -168,7 +218,12 @@ mod tests {
 
     /// Everything the lookups return for the [`resources`] fixture.
     fn check_contents(ui: &InterfaceData) {
-        assert_eq!(ui.path(), Path::new(PATH));
+        check_contents_at(ui, PATH);
+    }
+
+    /// [`check_contents`] for a file at `path`.
+    fn check_contents_at(ui: &InterfaceData, path: &str) {
+        assert_eq!(ui.path(), Path::new(path));
         assert_eq!(ui.resources().len(), 4);
         assert_eq!(ui.ids(Ditl::TYPE), [128, 129]);
         assert_eq!(ui.ids(Dlog::TYPE), [128]);
@@ -268,6 +323,59 @@ mod tests {
         assert_eq!((game.width(), game.height()), (7, 2));
         let picture = ui.picture(PictId(128)).expect("present").expect("decodes");
         assert_eq!((picture.width(), picture.height()), (5, 3));
+    }
+
+    #[test]
+    fn the_candidates_are_the_mac_file_then_the_windows_file_beside_the_data() {
+        assert_eq!(
+            interface_path_candidates(Path::new("/game/Nova Files")),
+            [
+                PathBuf::from("/game/Nova Files/../Nova-DF.rsrc"),
+                PathBuf::from("/game/Nova Files/../Nova.rez"),
+            ]
+        );
+    }
+
+    const MAC: &str = "/game/Nova Files/../Nova-DF.rsrc";
+    const WINDOWS: &str = "/game/Nova Files/../Nova.rez";
+
+    #[test]
+    fn the_mac_file_is_preferred() {
+        let forks = FakeForks::new()
+            .file(MAC, fork(&resources()))
+            .file(WINDOWS, rez(&[(PICT, 128, pict(7, 2))]));
+        let ui = load_interface(&forks, Path::new("/game/Nova Files")).expect("loads");
+        assert_eq!(ui.path(), Path::new(MAC));
+        check_contents_at(&ui, MAC);
+    }
+
+    #[test]
+    fn the_windows_file_is_the_fallback() {
+        for forks in [
+            FakeForks::new(),
+            FakeForks::new().unreadable(MAC),
+            FakeForks::new().file(MAC, b"garbage".to_vec()),
+        ] {
+            let forks = forks.file(WINDOWS, rez(&resources()));
+            let ui = load_interface(&forks, Path::new("/game/Nova Files")).expect("loads");
+            check_contents_at(&ui, WINDOWS);
+        }
+    }
+
+    #[test]
+    fn with_neither_file_the_error_names_both() {
+        let forks = FakeForks::new().unreadable(WINDOWS);
+        let err = load_interface(&forks, Path::new("/game/Nova Files")).expect_err("fails");
+        assert_eq!(err.tried[0].0, PathBuf::from(MAC));
+        assert_eq!(err.tried[1].0, PathBuf::from(WINDOWS));
+        assert!(matches!(err.tried[0].1, LoadError::Io { .. }));
+        let message = err.to_string();
+        assert!(
+            message.starts_with(&format!("no interface file: {MAC} (")),
+            "{message}"
+        );
+        assert!(message.contains(&format!("); {WINDOWS} (")), "{message}");
+        assert!(message.contains("disk on fire"), "{message}");
     }
 
     #[test]
