@@ -57,7 +57,7 @@ pub trait Screen {
     /// The sounds the screen has made since they were last taken, in
     /// order; taking them empties the list. None by default.
     fn take_sounds(&mut self) -> Vec<Sound> {
-        Vec::new()
+        vec![]
     }
     /// Which screen is showing, for a screen that routes between others;
     /// `None` by default.
