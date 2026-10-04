@@ -10,9 +10,12 @@
 //! - A ship is disabled as a [`DisableRule`] says. Nova's,
 //!   [`NovaDisable`], is `_IsDisabled`'s.
 //! - Once its armour is gone it breaks up for its `DeathDelay` ticks
-//!   (its `Explode1` going off), then is destroyed (its `Explode2`); a
-//!   delay of [`HUGE_DEATH_DELAY`] or more is the huge final explosion
-//!   (the Bible).
+//!   (its `Explode1` going off), then is destroyed (its `Explode2`). A
+//!   ship of [`DEATH_SIZE_MASS`] tons or more dies in an explosion sized
+//!   by its mass ([`HullSpec::death_size`], `_HandleShipDisplay`
+//!   @0x2d7ef-0x2dee7), which scatters the `Explode2`'s extra explosions
+//!   when it has them; the Bible's huge explosion for a `DeathDelay` of 60
+//!   or more is not what the executable does.
 
 use std::fmt::Debug;
 
@@ -32,8 +35,12 @@ pub const TOUGH: u16 = 0x0010;
 pub const DISABLE_PERCENT: f64 = 33.333;
 /// The percentage for a ship type with [`TOUGH`] set.
 pub const TOUGH_DISABLE_PERCENT: f64 = 10.0;
-/// The `DeathDelay` from which a ship's final explosion is huge.
-pub const HUGE_DEATH_DELAY: u32 = 60;
+/// The mass, in tons, from which a ship's death explosion has a size.
+pub const DEATH_SIZE_MASS: f32 = 100.0;
+/// The death explosion's size per ton (the double @0xdd588).
+pub const DEATH_SIZE_PER_TON: f32 = 0.075;
+/// The death explosion's size before the mass (the double @0xdd590).
+pub const DEATH_SIZE_BASE: f32 = 50.0;
 
 /// A ship type's hull, in the simulation's units.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -87,10 +94,18 @@ impl HullSpec {
         }
     }
 
-    /// Whether its final explosion is huge.
+    /// The size of the explosion it dies in: `trunc(mass x 0.075 + 50)`
+    /// for a ship of [`DEATH_SIZE_MASS`] tons or more, and none for a
+    /// lighter one.
     #[must_use]
-    pub fn huge(&self) -> bool {
-        self.death_delay >= HUGE_DEATH_DELAY
+    pub fn death_size(&self) -> f32 {
+        if self.mass >= DEATH_SIZE_MASS {
+            self.mass
+                .mul_add(DEATH_SIZE_PER_TON, DEATH_SIZE_BASE)
+                .trunc()
+        } else {
+            0.0
+        }
     }
 }
 
@@ -247,19 +262,24 @@ mod tests {
     }
 
     #[test]
-    fn a_death_delay_of_60_or_more_is_huge() {
-        let delayed = |death_delay| {
+    fn a_ship_of_100_tons_or_more_dies_in_an_explosion_sized_by_its_mass() {
+        let of = |mass| {
             HullSpec {
-                death_delay,
+                mass,
                 ..HullSpec::default()
             }
-            .huge()
+            .death_size()
         };
-        assert!(!delayed(0));
-        assert!(!delayed(59));
-        assert!(delayed(60));
-        assert!(delayed(250));
-        assert_eq!(HUGE_DEATH_DELAY, 60);
+        assert_eq!(of(0.0), 0.0);
+        assert_eq!(of(99.0), 0.0);
+        assert_eq!(of(99.99), 0.0);
+        assert_eq!(of(100.0), 57.0, "57.5, truncated");
+        assert_eq!(of(120.0), 59.0);
+        assert_eq!(of(10_000.0), 800.0);
+        assert_eq!(
+            (DEATH_SIZE_MASS, DEATH_SIZE_PER_TON, DEATH_SIZE_BASE),
+            (100.0, 0.075, 50.0)
+        );
     }
 
     #[test]

@@ -121,8 +121,9 @@ pub enum CombatEvent {
         velocity: Vec2,
         /// Its `Explode2`, if any.
         explosion: Option<Explosion>,
-        /// Whether the explosion is the huge one.
-        huge: bool,
+        /// The explosion's size ([`HullSpec::death_size`]): how far its
+        /// extra explosions scatter, and how many there are.
+        size: f32,
     },
 }
 
@@ -331,7 +332,7 @@ impl Combat {
                     at,
                     velocity: fighter.state.velocity,
                     explosion: fighter.hull.explosion,
-                    huge: fighter.hull.huge(),
+                    size: fighter.hull.death_size(),
                 });
             }
             Condition::Dying { ticks_left } => {
@@ -601,7 +602,7 @@ mod tests {
                     boom: BoomId(133),
                     extra: false
                 }),
-                huge: false
+                size: 0.0
             }
         );
         // Six hits take the shield and 24 armour (6 left, below a third):
@@ -692,11 +693,12 @@ mod tests {
     }
 
     #[test]
-    fn a_long_death_delay_ends_in_the_huge_explosion() {
+    fn a_heavy_ship_is_destroyed_in_an_explosion_its_mass_sizes() {
         let mut combat = Combat::default();
         let mut target = Ship::at(2, 0.0, 0.0);
         target.reserves.armor.now = -1.0;
         target.hull.death_delay = 60;
+        target.hull.mass = 400.0;
         let mut ships = [target];
         for _ in 0..=60 {
             tick(&mut combat, &mut ships, &NovaDisable);
@@ -705,7 +707,7 @@ mod tests {
         assert!(
             matches!(
                 events.last(),
-                Some(CombatEvent::Destroyed { huge: true, .. })
+                Some(CombatEvent::Destroyed { size, .. }) if *size == 80.0
             ),
             "{events:?}"
         );

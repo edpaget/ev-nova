@@ -92,6 +92,17 @@
 //! system. The player's ship, once it is not intact, ignores the controls
 //! and drifts, cannot land or jump, and once destroyed stays where it is.
 //!
+//! The player targets an NPC ([`Session::select_target`]), the nearest or
+//! the next in turn as the [`targeting`](crate::targeting) rules say, and
+//! fires its primary weapons and the secondary selected
+//! ([`Session::hold_fire`], [`Session::select_secondary`]): the first the
+//! ship carries to start with, kept through a refit while the ship still
+//! carries it. The target is let go once it starts breaking up, is
+//! destroyed, lands or jumps out, when the system is populated afresh,
+//! and when the player lands; it is kept through a jump, and gone on
+//! arrival with the last system's traffic. Neither the target nor the
+//! secondary is saved.
+//!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
 //! stopping, landing, taking off, a jump beginning and ending), which the
 //! audio side drains with [`Session::take_sounds`]. A refused landing or
@@ -108,11 +119,14 @@ use crate::catalog::{
     StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
-use crate::combat::armament::{Armament, Arsenal, OutfitRounds, Trigger};
+use crate::combat::armament::{
+    Armament, Arsenal, OutfitRounds, Trigger, next_secondary, outfit_rounds,
+};
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
+use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Fighter, ShipRef};
 use crate::date::GameDate;
 use crate::flight::{Controls, ShipState, step};
@@ -129,6 +143,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::shipyard::{self, Quote, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
+use crate::targeting::{self, TargetPick};
 use crate::traffic::Traffic;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
@@ -188,6 +203,10 @@ pub struct Session {
     trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
     combat: Combat,
+    /// The NPC the player targets, if any.
+    target: Option<NpcId>,
+    /// The secondary weapon the player has selected, if any.
+    secondary: Option<WeaponId>,
 }
 
 impl Session {
@@ -267,6 +286,8 @@ impl Session {
             condition: Condition::Intact,
             trigger: Trigger::default(),
             combat: Combat::default(),
+            target: None,
+            secondary: None,
             pilot,
         };
         session.refit(false);
@@ -290,6 +311,12 @@ impl Session {
         self.armament = self
             .arsenal
             .player(self.pilot.ship, &self.pilot.outfits, &self.outfits);
+        let carried = self.secondary.filter(|&id| {
+            self.armament
+                .secondaries()
+                .any(|secondary| secondary.id == id)
+        });
+        self.secondary = carried.or_else(|| self.next_secondary(None, false));
         let stats = self.current_stats();
         let reserves = &mut self.pilot.reserves;
         for (gauge, max) in [
@@ -331,7 +358,8 @@ impl Session {
     }
 
     /// Fills the system with its initial NPC population, replacing any
-    /// NPCs there, its traffic read from `catalog` and rolled on `chance`.
+    /// NPCs there (the target with them), its traffic read from `catalog`
+    /// and rolled on `chance`.
     pub fn populate(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -348,6 +376,7 @@ impl Session {
         );
         self.traffic.enter(table, chance);
         self.traffic_due = false;
+        self.clear_lost_target();
     }
 
     /// Advances the NPC traffic one tick, NPCs deciding as `behaviour`
@@ -356,6 +385,7 @@ impl Session {
     /// and after each take-off, instead populates the system
     /// ([`Session::populate`]) from `catalog`, as the original sets a
     /// system up on arrival and on take-off; its NPCs move from the next.
+    /// A target that landed or jumped out is let go.
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -369,6 +399,7 @@ impl Session {
                 self.traffic.tick(behaviour, &self.sites, chance);
             }
         }
+        self.clear_lost_target();
     }
 
     /// Holds `trigger`, the player's fire command, until another is held.
@@ -376,10 +407,58 @@ impl Session {
         self.trigger = trigger;
     }
 
+    /// Holds the player's fire keys: the `primary` trigger, and the
+    /// `secondary` one on the secondary weapon selected.
+    pub fn hold_fire(&mut self, primary: bool, secondary: bool) {
+        self.hold_trigger(Trigger {
+            primary,
+            secondary: self.secondary.filter(|_| secondary),
+        });
+    }
+
+    /// The secondary after `current`, `backwards` or not (see
+    /// [`next_secondary`]), skipping one hidden while the pilot owns none
+    /// of its rounds.
+    fn next_secondary(&self, current: Option<WeaponId>, backwards: bool) -> Option<WeaponId> {
+        next_secondary(self.armament.mounts(), current, backwards, |ammo| {
+            outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, ammo)
+        })
+    }
+
+    /// Selects the next secondary weapon, or the one before it when
+    /// `backwards`, in the order they were mounted, wrapping (see
+    /// [`next_secondary`]).
+    pub fn select_secondary(&mut self, backwards: bool) {
+        self.secondary = self.next_secondary(self.secondary, backwards);
+    }
+
+    /// The secondary weapon selected, if any: the first the ship carries
+    /// when the session starts, and kept through a refit while the ship
+    /// still carries it.
+    #[must_use]
+    pub fn secondary(&self) -> Option<WeaponId> {
+        self.secondary
+    }
+
+    /// The rounds the selected secondary has left, for one that fires
+    /// rounds of ammunition; none for one that fires without, or burns
+    /// fuel.
+    #[must_use]
+    pub fn secondary_rounds(&self) -> Option<u32> {
+        let spec = self.arsenal.weapon(self.secondary?)?;
+        match spec.ammo {
+            Ammo::Rounds(ammo) => {
+                Some(outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, ammo))
+            }
+            _ => None,
+        }
+    }
+
     /// Advances the fight a tick among the player and the NPCs, disabling
     /// ships as `rule` says and drawing each shot's inaccuracy on
     /// `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
-    /// the system. While the ship is landed or jumping, it stands still.
+    /// the system, and the target is let go once it is breaking up or
+    /// gone. While the ship is landed or jumping, it stands still.
     pub fn tick_combat(
         &mut self,
         rule: &(impl DisableRule + ?Sized),
@@ -448,6 +527,42 @@ impl Session {
         for id in destroyed {
             self.traffic.remove(id);
         }
+        self.clear_lost_target();
+    }
+
+    /// Lets go of the target once it is no longer in the system (it was
+    /// destroyed, landed or jumped out, or the system was populated
+    /// afresh) or no longer targetable (it is breaking up), as the
+    /// original does every frame.
+    fn clear_lost_target(&mut self) {
+        if self.target().is_none_or(|npc| !targeting::targetable(npc)) {
+            self.target = None;
+        }
+    }
+
+    /// Picks the player's target as `pick` says (see
+    /// [`targeting`](crate::targeting)), and gives it: the nearest NPC,
+    /// the target unchanged when there is none, or the next. While the
+    /// ship is landed or jumping, nothing changes.
+    pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
+        if self.landed.is_none() && self.jumping.is_none() {
+            let npcs = self.traffic.npcs();
+            match pick {
+                TargetPick::Nearest => {
+                    let nearest = targeting::nearest(npcs, self.player.position, |_| true);
+                    self.target = nearest.or(self.target);
+                }
+                TargetPick::Next => self.target = targeting::next(npcs, self.target),
+            }
+        }
+        self.target
+    }
+
+    /// The NPC the player targets, if any.
+    #[must_use]
+    pub fn target(&self) -> Option<&Npc> {
+        let id = self.target?;
+        self.npcs().iter().find(|npc| npc.id == id)
     }
 
     /// How the player's ship is holding up.
@@ -625,8 +740,8 @@ impl Session {
     /// pilot's legal record with the stellar's government, or the system's
     /// on the star map when the stellar has none: it docks at the
     /// stellar's centre, at rest, its heading and reserves unchanged, and
-    /// the shots and beams in flight are gone. Otherwise it flies on, and
-    /// the refusal says why.
+    /// the shots and beams in flight and the target are gone. Otherwise it
+    /// flies on, and the refusal says why.
     pub fn land(&mut self) -> Result<StellarId, LandingRefusal> {
         if self.jumping.is_some() {
             return Err(LandingRefusal::Jumping);
@@ -649,6 +764,7 @@ impl Session {
         self.landed = Some(stellar);
         self.pilot.stellar = Some(stellar);
         self.combat.clear();
+        self.target = None;
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
@@ -3441,7 +3557,7 @@ mod tests {
                         ship: ShipRef::Npc(NpcId(0)),
                         ship_type: ShipId(129),
                         explosion: Some(Explosion { .. }),
-                        huge: false,
+                        size: 0.0,
                         ..
                     }
                 ]
@@ -3858,5 +3974,333 @@ mod tests {
             )),
             "{events:?}"
         );
+    }
+
+    // Targeting.
+
+    use crate::targeting::TargetPick;
+
+    /// Every NPC idles.
+    #[derive(Debug)]
+    struct Idling;
+
+    impl Behaviour for Idling {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+    }
+
+    /// `catalog`'s session with two NPCs: 0 at (100, -100) and 1 at
+    /// (-50, 0), nearer the player at the centre.
+    fn two_npcs(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        let draws = [6, 6, 0, 0, 850, 650, 0, 6, 6, 0, 0, 700, 750, 0];
+        session.populate(catalog, &mut Draws::of(&draws));
+        assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)]);
+        session
+    }
+
+    fn target_id(session: &Session) -> Option<NpcId> {
+        session.target().map(|npc| npc.id)
+    }
+
+    #[test]
+    fn selecting_the_next_target_walks_the_npcs_then_none() {
+        let catalog = trafficked(130, 2, 3);
+        let mut session = two_npcs(&catalog);
+        assert_eq!(target_id(&session), None);
+        let picks: Vec<_> = (0..4)
+            .map(|_| session.select_target(TargetPick::Next))
+            .collect();
+        assert_eq!(
+            picks,
+            [Some(NpcId(0)), Some(NpcId(1)), None, Some(NpcId(0))]
+        );
+        assert_eq!(target_id(&session), Some(NpcId(0)));
+        assert_eq!(session.target().map(|npc| npc.ship), Some(ShipId(129)));
+    }
+
+    #[test]
+    fn selecting_the_nearest_target_picks_the_nearest_npc() {
+        let catalog = trafficked(130, 2, 3);
+        let mut session = two_npcs(&catalog);
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(1)));
+        assert_eq!(target_id(&session), Some(NpcId(1)));
+        session.player.position = Vec2::new(90.0, -90.0);
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
+    }
+
+    #[test]
+    fn the_nearest_with_nothing_to_pick_leaves_the_target_as_it_was() {
+        let catalog = trafficked(130, 2, 3);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.target = Some(NpcId(7));
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(7)));
+        assert_eq!(session.target, Some(NpcId(7)));
+    }
+
+    #[test]
+    fn nothing_is_targeted_while_landed() {
+        let catalog = trafficked(130, 2, 3);
+        let mut session = two_npcs(&catalog);
+        session.land().expect("lands on planet 128");
+        assert_eq!(session.select_target(TargetPick::Next), None);
+        assert_eq!(session.select_target(TargetPick::Nearest), None);
+        assert_eq!(target_id(&session), None);
+    }
+
+    #[test]
+    fn the_target_is_kept_through_a_jump_and_cleared_on_arrival() {
+        let mut catalog = trafficked(130, 2, 3);
+        catalog.traffic.push((SystemId(131), catalog.traffic[0].1));
+        let mut session = two_npcs(&catalog);
+        session.select_target(TargetPick::Next);
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
+        session.tick_traffic(&catalog, &Idling, &mut NeverFires);
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(target_id(&session), Some(NpcId(0)), "kept while jumping");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert!(!session.npcs().is_empty());
+        assert_eq!(target_id(&session), None, "cleared on arrival");
+        assert_eq!(session.target, None);
+    }
+
+    #[test]
+    fn the_target_is_kept_through_ticks_and_while_it_is_disabled() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.select_target(TargetPick::Next);
+        for _ in 0..5 {
+            session.tick(Controls::default());
+            session.tick_traffic(&catalog, &Idling, &mut NeverFires);
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+        }
+        assert_eq!(target_id(&session), Some(NpcId(0)));
+        session.tick_combat(&Disabling, &mut NeverFires);
+        assert_eq!(session.npcs()[0].condition, Condition::Disabled);
+        assert_eq!(target_id(&session), Some(NpcId(0)), "a disabled target");
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
+    }
+
+    #[test]
+    fn the_target_is_cleared_as_soon_as_it_starts_breaking_up() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.select_target(TargetPick::Next);
+        session.hold_trigger(FIRE);
+        for _ in 0..200 {
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+            let events = session.take_combat_events();
+            if events
+                .iter()
+                .any(|event| matches!(event, CombatEvent::BreakingUp { .. }))
+            {
+                assert_eq!(npc_ids(&session), [NpcId(0)], "still breaking up");
+                assert_eq!(target_id(&session), None);
+                assert_eq!(session.target, None);
+                return;
+            }
+            assert_eq!(target_id(&session), Some(NpcId(0)));
+        }
+        panic!("never broke up: {:?}", session.npcs());
+    }
+
+    #[test]
+    fn the_target_is_cleared_when_it_is_destroyed_and_gone() {
+        let mut catalog = armed();
+        catalog.hulls[1].death_delay = 0;
+        let mut session = facing_an_npc(&catalog, 180);
+        session.select_target(TargetPick::Next);
+        session.traffic.npcs_mut()[0].reserves.armor.now = 0.0;
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(npc_ids(&session), [], "destroyed at once");
+        assert_eq!(session.target, None);
+    }
+
+    #[test]
+    fn the_target_is_cleared_when_it_lands_or_jumps_out() {
+        for ai_type in [1, 3] {
+            let catalog = trafficked(130, 1, ai_type);
+            let mut session = Session::start(&catalog).expect("starts");
+            session.populate(&catalog, &mut NeverFires);
+            session.select_target(TargetPick::Next);
+            assert_eq!(target_id(&session), Some(NpcId(0)));
+            first_departure(&mut session, &catalog);
+            assert_eq!(session.departed()[0].0, NpcId(0), "AI {ai_type}");
+            assert_eq!(session.target, None, "AI {ai_type}");
+        }
+    }
+
+    #[test]
+    fn the_target_is_cleared_when_the_system_is_populated_afresh() {
+        let catalog = trafficked(130, 2, 3);
+        let mut session = two_npcs(&catalog);
+        session.select_target(TargetPick::Next);
+        session.populate(&catalog, &mut NeverFires);
+        assert_eq!(session.target, None);
+    }
+
+    #[test]
+    fn the_target_is_cleared_on_landing() {
+        let catalog = trafficked(130, 2, 3);
+        let mut session = two_npcs(&catalog);
+        session.select_target(TargetPick::Next);
+        session.land().expect("lands on planet 128");
+        assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)]);
+        assert_eq!(session.target, None);
+    }
+
+    // The secondary weapon.
+
+    use crate::combat::weapon::SECONDARY;
+
+    const ROCKET: WeaponId = WeaponId(140);
+    const MISSILE: WeaponId = WeaponId(141);
+    const TORCH: WeaponId = WeaponId(142);
+
+    /// Secondary weapon `id`, a [`blaster`] spending `ammo_type`.
+    fn secondary(id: i16, ammo_type: i16) -> WeaponRecord {
+        WeaponRecord {
+            id: WeaponId(id),
+            flags: SECONDARY,
+            ammo_type,
+            ..blaster()
+        }
+    }
+
+    /// One of each of `weapons`.
+    fn carrying(id: i16, weapons: &[i16]) -> HullRecord {
+        HullRecord {
+            weapons: weapons
+                .iter()
+                .map(|&weapon| StockWeapon {
+                    weapon: WeaponId(weapon),
+                    count: 1,
+                    ammo: 0,
+                })
+                .collect(),
+            ..hull(id)
+        }
+    }
+
+    /// `catalog` with ship 128 carrying a blaster (128) and three
+    /// secondaries: rockets ([`ROCKET`]) firing rounds of their own, of
+    /// which its default ammunition outfit 310 brings 3; missiles
+    /// ([`MISSILE`]), unlimited; and a torch ([`TORCH`]) burning fuel. Ship
+    /// 129 carries a blaster, a torch and missiles, in that order.
+    fn with_secondaries(catalog: FakePilotCatalog) -> FakePilotCatalog {
+        let mut outfits = catalog.outfits.clone();
+        outfits.push(outfit(310, &[(MOD_AMMO, 140)]));
+        FakePilotCatalog {
+            weapons: vec![
+                blaster(),
+                secondary(140, 12),
+                secondary(141, -1),
+                secondary(142, -1100),
+            ],
+            hulls: vec![
+                carrying(128, &[128, 140, 141, 142]),
+                carrying(129, &[128, 142, 141]),
+            ],
+            outfits,
+            defaults: vec![(ShipId(128), vec![(OutfitId(310), 3)])],
+            ..catalog
+        }
+    }
+
+    #[test]
+    fn the_first_secondary_is_selected_at_start() {
+        let session = Session::start(&with_secondaries(catalog())).expect("starts");
+        assert_eq!(session.secondary(), Some(ROCKET));
+        let unarmed = Session::start(&catalog()).expect("starts");
+        assert_eq!(unarmed.secondary(), None);
+        assert_eq!(unarmed.secondary_rounds(), None);
+    }
+
+    #[test]
+    fn selecting_a_secondary_cycles_through_them_either_way() {
+        let mut session = Session::start(&with_secondaries(catalog())).expect("starts");
+        let mut picked = Vec::new();
+        for backwards in [false, false, false, true, true] {
+            session.select_secondary(backwards);
+            picked.push(session.secondary());
+        }
+        assert_eq!(
+            picked,
+            [
+                Some(MISSILE),
+                Some(TORCH),
+                Some(ROCKET),
+                Some(TORCH),
+                Some(MISSILE)
+            ]
+        );
+    }
+
+    #[test]
+    fn holding_fire_fires_the_selected_secondary_and_the_primaries_as_asked() {
+        let catalog = with_secondaries(catalog());
+        for (primary, secondary, fired) in [
+            (false, true, vec![ROCKET]),
+            (true, false, vec![WeaponId(128)]),
+            (true, true, vec![WeaponId(128), ROCKET]),
+            (false, false, vec![]),
+        ] {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.hold_fire(primary, secondary);
+            session.tick_combat(&NovaDisable, &mut NeverFires);
+            assert_eq!(
+                fired_by_the_player(&session.take_combat_events()),
+                fired,
+                "{primary} {secondary}"
+            );
+        }
+        let mut session = Session::start(&catalog).expect("starts");
+        session.select_secondary(false);
+        session.hold_fire(false, true);
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(
+            fired_by_the_player(&session.take_combat_events()),
+            [MISSILE]
+        );
+    }
+
+    #[test]
+    fn the_secondarys_rounds_follow_its_ammunition() {
+        let mut session = Session::start(&with_secondaries(catalog())).expect("starts");
+        assert_eq!(session.secondary_rounds(), Some(3));
+        session.hold_fire(false, true);
+        session.tick_combat(&NovaDisable, &mut NeverFires);
+        assert_eq!(session.secondary_rounds(), Some(2));
+        session.select_secondary(false);
+        assert_eq!(session.secondary_rounds(), None, "missiles: unlimited");
+        session.select_secondary(false);
+        assert_eq!(session.secondary_rounds(), None, "a torch burns fuel");
+    }
+
+    #[test]
+    fn an_outfit_bought_keeps_the_secondary_selected() {
+        let catalog = with_secondaries(outfitting());
+        let mut session = outfitted(&catalog);
+        session.select_secondary(false);
+        assert_eq!(session.secondary(), Some(MISSILE));
+        session.outfit(buy(SPEED)).expect("bought");
+        assert_eq!(session.secondary(), Some(MISSILE));
+    }
+
+    #[test]
+    fn a_ship_bought_keeps_the_secondary_it_carries_or_selects_its_first() {
+        let catalog = with_secondaries(shipbuying());
+        let mut session = outfitted(&catalog);
+        session.buy_ship(NEW).expect("bought");
+        assert_eq!(session.secondary(), Some(TORCH), "its first");
+        let mut session = outfitted(&catalog);
+        session.select_secondary(false);
+        session.buy_ship(NEW).expect("bought");
+        assert_eq!(session.secondary(), Some(MISSILE), "still carried");
     }
 }

@@ -73,6 +73,8 @@
 //!   and the outfits it carries: the one place its handling, reserve
 //!   capacities, fuel, shield and armour regeneration and cargo space come
 //!   from.
+//! - [`targeting`]: which NPC the player's target command picks
+//!   ([`TargetPick`]): the nearest, or the next in turn.
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
@@ -106,6 +108,7 @@ pub mod session;
 pub mod shipyard;
 pub mod sound;
 pub mod stats;
+pub mod targeting;
 #[cfg(test)]
 mod testkit;
 pub mod traffic;
@@ -143,5 +146,6 @@ pub use session::Session;
 pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;
+pub use targeting::TargetPick;
 pub use traffic::Traffic;
 pub use traffic::npc::{AiType, Npc, NpcId};

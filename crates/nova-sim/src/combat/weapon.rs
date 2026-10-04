@@ -183,6 +183,9 @@ pub const SPARES_PLAYER: u16 = 0x0100;
 pub const DETONATES: u16 = 0x8000;
 /// `Flags3`: it uses ammo only at the end of a burst.
 pub const AMMO_AT_BURST_END: u16 = 0x0001;
+/// `Flags2`: hidden when out of ammo, so selecting a secondary skips it
+/// while it has no rounds.
+pub const HIDE_WHEN_EMPTY: u16 = 0x0800;
 
 impl WeaponSpec {
     /// The weapon `record` describes (see the module docs).
@@ -241,6 +244,12 @@ impl WeaponSpec {
     #[must_use]
     pub fn ammo_at_burst_end(&self) -> bool {
         self.flags3 & AMMO_AT_BURST_END != 0
+    }
+
+    /// Whether it is hidden while out of ammo.
+    #[must_use]
+    pub fn hides_when_empty(&self) -> bool {
+        self.flags2 & HIDE_WHEN_EMPTY != 0
     }
 
     /// How far it reaches, in pixels: a beam its length, and a shot its
@@ -406,6 +415,16 @@ mod tests {
         assert!(flagged(0x0100, 0).spares_player());
         assert!(flagged(0x8000, 0).detonates());
         assert!(flagged(0, 0x0001).ammo_at_burst_end());
+        let hiding = WeaponSpec::new(&WeaponRecord {
+            flags2: 0x0800,
+            ..weapon(128)
+        });
+        assert!(hiding.hides_when_empty() && !plain.hides_when_empty());
+        let others = WeaponSpec::new(&WeaponRecord {
+            flags2: !0x0800,
+            ..weapon(128)
+        });
+        assert!(!others.hides_when_empty());
         let all = flagged(!0, !0);
         assert!(all.secondary() && all.passes_shields() && all.spares_player());
         assert!(all.detonates() && all.ammo_at_burst_end());
