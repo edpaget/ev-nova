@@ -1,7 +1,9 @@
 //! The winit event loop's handler: opens the window and the GPU surface,
 //! then forwards every event to the [`App`].
 //!
-//! With [`Runner::with_audio`], the app it opens plays sound.
+//! With [`Runner::with_audio`], the app it opens plays sound, and with
+//! [`Runner::with_settings`] it saves the player's settings; the runner
+//! prints the warnings the app keeps, such as a failed save.
 //!
 //! With the `dev-tools` feature and [`Runner::with_dev_tools`], it also
 //! drives the developer tools: while their overlay shows, each redraw runs
@@ -18,7 +20,7 @@ use nova_data::GameData;
 #[cfg(feature = "dev-tools")]
 use nova_render::wgpu::WithOverlay;
 
-use nova_audio::{Audio, AudioCore};
+use nova_audio::{Audio, AudioCore, SettingsKeeper, SettingsStore};
 use nova_render::wgpu::{InitError, SurfaceGpu};
 use nova_render::{FontFaces, ImageSource};
 use winit::application::ApplicationHandler;
@@ -53,6 +55,8 @@ pub struct Runner<S> {
     dev_catalog: Option<Rc<GameData>>,
     /// The audio core, until the app takes it.
     audio: Option<AudioCore<Box<dyn Audio>>>,
+    /// The settings keeper, until the app takes it.
+    settings: Option<SettingsKeeper<Box<dyn SettingsStore>>>,
 }
 
 impl<S: ImageSource> Runner<S> {
@@ -67,6 +71,7 @@ impl<S: ImageSource> Runner<S> {
             #[cfg(feature = "dev-tools")]
             dev_catalog: None,
             audio: None,
+            settings: None,
         }
     }
 
@@ -83,6 +88,14 @@ impl<S: ImageSource> Runner<S> {
     #[must_use]
     pub fn with_audio(mut self, core: AudioCore<Box<dyn Audio>>) -> Self {
         self.audio = Some(core);
+        self
+    }
+
+    /// The runner with the player's settings kept by `keeper`: the app it
+    /// opens saves each change through it.
+    #[must_use]
+    pub fn with_settings(mut self, keeper: SettingsKeeper<Box<dyn SettingsStore>>) -> Self {
+        self.settings = Some(keeper);
         self
     }
 
@@ -135,6 +148,10 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
                 let app = App::new(&window, images, screen);
                 let app = match self.audio.take() {
                     Some(core) => app.with_audio(core),
+                    None => app,
+                };
+                let app = match self.settings.take() {
+                    Some(keeper) => app.with_settings(keeper),
                     None => app,
                 };
                 #[cfg(feature = "dev-tools")]
@@ -202,6 +219,9 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
         for (key, error) in running.app.take_failures() {
             eprintln!("nova: image {key:?}: {error}");
         }
+        for warning in running.app.take_warnings() {
+            eprintln!("{warning}");
+        }
         if handled.is_some_and(|handled| handled.control == Control::Exit) {
             event_loop.exit();
         }
@@ -223,8 +243,8 @@ mod tests {
     use nova_data::store::fs::{DirLister, Listing};
     use nova_rsrc::{Fork, ForkReader};
 
-    use nova_audio::recording::RecordingAudio;
-    use nova_audio::{AudioCommand, Volume};
+    use nova_audio::recording::{MemorySettings, RecordingAudio};
+    use nova_audio::{AudioCommand, AudioSettings, Volume};
     use nova_view::Showing;
 
     use super::*;
@@ -305,6 +325,22 @@ mod tests {
                 volume: Volume::FULL
             }]
         );
+    }
+
+    #[test]
+    fn the_runner_keeps_the_settings_for_the_app_it_opens() {
+        let runner = Runner::new(NoImages, start_screen(no_data()), FontFaces::bundled());
+        assert!(runner.settings.is_none(), "unsaved unless given a keeper");
+        let store = MemorySettings::new();
+        let (keeper, _) = SettingsKeeper::open(Box::new(store.clone()) as Box<dyn SettingsStore>);
+        let mut runner = runner.with_settings(keeper);
+        let keeper = runner.settings.as_mut().expect("kept");
+        let quiet = AudioSettings {
+            sound: false,
+            ..AudioSettings::default()
+        };
+        keeper.change(quiet).expect("saves");
+        assert_eq!(store.writes(), 1);
     }
 
     #[cfg(feature = "dev-tools")]

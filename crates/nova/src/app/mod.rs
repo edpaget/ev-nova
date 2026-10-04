@@ -26,10 +26,19 @@
 //! shown ([`Screen::now_showing`]) and the sounds the screen made
 //! ([`Screen::take_sounds`]); the core decides what plays. Without one,
 //! the sounds are let go.
+//!
+//! # Settings
+//!
+//! When the screen reports new sound preferences
+//! ([`Screen::take_sound_prefs`], from the Preferences dialog), the app
+//! applies them to the audio core, if it has one, and saves them through
+//! the settings keeper it was built [`App::with_settings`], if any. The
+//! app prints nothing: a save that fails is kept as a warning until the
+//! caller takes it ([`App::take_warnings`]) and shows it.
 
 use std::time::Duration;
 
-use nova_audio::{Audio, AudioCore};
+use nova_audio::{Audio, AudioCore, AudioSettings, SettingsKeeper, SettingsStore};
 use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, Routing};
 use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
@@ -126,6 +135,8 @@ pub struct App<S, C = AppScreen> {
     failures: Vec<(ImageKey, ImageError)>,
     overlay: Option<DevOverlay>,
     audio: Option<AudioCore<Box<dyn Audio>>>,
+    settings: Option<SettingsKeeper<Box<dyn SettingsStore>>>,
+    warnings: Vec<String>,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -140,6 +151,8 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             failures: Vec::new(),
             overlay: None,
             audio: None,
+            settings: None,
+            warnings: Vec::new(),
         }
     }
 
@@ -160,9 +173,43 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         self
     }
 
+    /// The app with the player's settings kept by `keeper`: each change
+    /// of the sound preferences is saved through it.
+    #[must_use]
+    pub fn with_settings(mut self, keeper: SettingsKeeper<Box<dyn SettingsStore>>) -> Self {
+        self.settings = Some(keeper);
+        self
+    }
+
+    /// The warnings since they were last taken, such as a failed save,
+    /// for the caller to show; taking them empties the list.
+    pub fn take_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.warnings)
+    }
+
     /// Gives the audio core, if there is one, the screen shown and the
     /// sounds the screen has made; without one, the sounds are let go.
+    ///
+    /// First, a change of the sound preferences the screen reports is
+    /// applied to the core and saved through the keeper, each when there
+    /// is one; a failed save is kept as a warning.
     fn feed_audio(&mut self) {
+        if let Some(prefs) = self.screen.take_sound_prefs() {
+            let current = match (&self.settings, &self.audio) {
+                (Some(keeper), _) => keeper.settings(),
+                (None, Some(core)) => core.settings(),
+                (None, None) => AudioSettings::default(),
+            };
+            let settings = current.with_prefs(prefs);
+            if let Some(core) = &mut self.audio {
+                core.apply(settings);
+            }
+            if let Some(keeper) = &mut self.settings
+                && let Err(warning) = keeper.change(settings)
+            {
+                self.warnings.push(warning);
+            }
+        }
         let sounds = self.screen.take_sounds();
         if let Some(core) = &mut self.audio {
             core.update(self.screen.now_showing(), &sounds);
@@ -351,15 +398,15 @@ impl<S: ImageSource, C: Screen> App<S, C> {
 mod tests {
     use std::time::Duration;
 
-    use nova_audio::recording::{AudioLog, RecordingAudio};
-    use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
+    use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
+    use nova_audio::{Audio, AudioCommand, AudioCore, SettingsKeeper, SettingsStore, Volume};
     use nova_data::graphics::Image;
     use nova_render::recording::RecordingGpu;
     use nova_render::{ImageError, ImageSource, PixelRect};
     use nova_view::sound::SimSound;
     use nova_view::{
         Color, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Point, Screen, ScreenAction,
-        Showing, Sound, UiSound,
+        Showing, Sound, SoundPrefs, UiSound,
     };
 
     use super::*;
@@ -1050,5 +1097,200 @@ mod tests {
         };
         app.handle(redraw, &mut window, &mut gpu);
         assert_eq!(app.screen().sounds, []);
+    }
+
+    // Settings.
+
+    /// Reports `prefs` once, after the next input.
+    struct PrefsScreen {
+        prefs: Vec<SoundPrefs>,
+        pending: Option<SoundPrefs>,
+    }
+
+    impl Screen for PrefsScreen {
+        fn input(&mut self, _input: &Input) -> ScreenAction {
+            if !self.prefs.is_empty() {
+                self.pending = Some(self.prefs.remove(0));
+            }
+            ScreenAction::None
+        }
+
+        fn tick(&mut self, _dt: Duration) {}
+
+        fn draw(&self, _list: &mut DrawList) {}
+
+        fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+            self.pending.take()
+        }
+
+        fn now_showing(&self) -> Option<Showing> {
+            Some(Showing::Preferences)
+        }
+    }
+
+    fn prefs_app(window: &FakeWindow, prefs: &[SoundPrefs]) -> App<NoImages, PrefsScreen> {
+        let screen = PrefsScreen {
+            prefs: prefs.to_vec(),
+            pending: None,
+        };
+        App::new(window, NoImages, screen)
+    }
+
+    fn keeper(store: &MemorySettings) -> SettingsKeeper<Box<dyn SettingsStore>> {
+        let (keeper, warning) =
+            SettingsKeeper::open(Box::new(store.clone()) as Box<dyn SettingsStore>);
+        assert_eq!(warning, None);
+        keeper
+    }
+
+    const MUSIC_OFF: SoundPrefs = SoundPrefs {
+        sound: true,
+        music: false,
+        effects_level: 7,
+        music_level: 7,
+    };
+
+    #[test]
+    fn a_change_of_prefs_plays_and_is_saved() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
+        let store = MemorySettings::new();
+        let quieter = SoundPrefs {
+            effects_level: 4,
+            ..MUSIC_OFF
+        };
+        let mut app = prefs_app(&window, &[MUSIC_OFF, quieter])
+            .with_audio(core)
+            .with_settings(keeper(&store));
+        let mut gpu = RecordingGpu::new();
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(*log.borrow(), [], "music was not playing");
+        let (saved, _) = SettingsKeeper::open(store.clone());
+        assert!(!saved.settings().music);
+        assert_eq!(store.writes(), 1);
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(store.writes(), 2);
+        let (saved, _) = SettingsKeeper::open(store.clone());
+        assert_eq!(saved.settings().effects_volume, Volume::new(4.0 / 7.0));
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(store.writes(), 2, "no change, no save");
+        assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    /// With no keeper: the change still plays.
+    #[test]
+    fn a_change_reaches_the_audio_core_and_what_it_plays() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
+        let screen = SoundingScreen {
+            showing: Showing::GalaxyMap,
+            sounds: Vec::new(),
+        };
+        let mut app = App::new(
+            &window,
+            NoImages,
+            PrefsAndSounds {
+                screen,
+                prefs: Some(MUSIC_OFF),
+            },
+        )
+        .with_audio(core);
+        log.borrow_mut().clear();
+        let mut gpu = RecordingGpu::new();
+        app.handle(key(Key::Up, true), &mut window, &mut gpu);
+        assert_eq!(
+            *log.borrow(),
+            [AudioCommand::StopMusic, play(600)],
+            "the change, then the sounds"
+        );
+    }
+
+    /// A sounding screen that also reports `prefs` once, after an input.
+    struct PrefsAndSounds {
+        screen: SoundingScreen,
+        prefs: Option<SoundPrefs>,
+    }
+
+    impl Screen for PrefsAndSounds {
+        fn input(&mut self, input: &Input) -> ScreenAction {
+            self.screen.input(input)
+        }
+
+        fn tick(&mut self, dt: Duration) {
+            self.screen.tick(dt);
+        }
+
+        fn draw(&self, list: &mut DrawList) {
+            self.screen.draw(list);
+        }
+
+        fn take_sounds(&mut self) -> Vec<Sound> {
+            self.screen.take_sounds()
+        }
+
+        fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+            if self.screen.sounds.is_empty() {
+                None
+            } else {
+                self.prefs.take()
+            }
+        }
+
+        fn now_showing(&self) -> Option<Showing> {
+            self.screen.now_showing()
+        }
+    }
+
+    #[test]
+    fn without_audio_the_settings_still_save() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let mut app = prefs_app(&window, &[MUSIC_OFF]).with_settings(keeper(&store));
+        app.handle(key(Key::Space, true), &mut window, &mut RecordingGpu::new());
+        let (saved, _) = SettingsKeeper::open(store);
+        assert!(!saved.settings().music);
+    }
+
+    #[test]
+    fn each_failed_save_is_one_warning_until_taken() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let quieter = SoundPrefs {
+            effects_level: 1,
+            ..MUSIC_OFF
+        };
+        let mut app = prefs_app(&window, &[MUSIC_OFF, quieter, SoundPrefs::default()])
+            .with_settings(keeper(&store));
+        store.fail_writes(true);
+        let mut gpu = RecordingGpu::new();
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        let message = "nova: cannot save the settings: the disk is full".to_owned();
+        assert_eq!(app.take_warnings(), [message.clone(), message]);
+        assert_eq!(app.take_warnings(), Vec::<String>::new(), "taken");
+        store.fail_writes(false);
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(app.take_warnings(), Vec::<String>::new(), "saved");
+        assert_eq!(store.writes(), 1);
+    }
+
+    #[test]
+    fn a_change_reported_on_a_redraw_is_taken_too() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemorySettings::new();
+        let mut app = prefs_app(&window, &[]).with_settings(keeper(&store));
+        app.screen.pending = Some(MUSIC_OFF);
+        app.handle(
+            WindowEvent::Redraw {
+                elapsed: Duration::from_millis(16),
+            },
+            &mut window,
+            &mut RecordingGpu::new(),
+        );
+        assert_eq!(store.writes(), 1);
     }
 }

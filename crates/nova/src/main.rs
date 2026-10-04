@@ -1,7 +1,9 @@
 //! `nova`: opens the game data and shows it in a window, starting on the
 //! ship browser; Tab switches to the galaxy map and back. On the map,
 //! Return enters the selected system; Escape goes back, or quits. F flies
-//! the player's ship, and I shows the About text in the game's own dialog.
+//! the player's ship, I shows the About text in the game's own dialog, and
+//! P the Preferences dialog, which turns sound and music on or off and
+//! sets their volumes.
 //!
 //! With `--features dev-tools` (`mise run dev`), `` ` `` toggles the
 //! developer tools.
@@ -12,12 +14,18 @@
 //!
 //! Dialogs come from the interface file beside `Nova Files`
 //! (`Nova-DF.rsrc`, or the Windows `Nova.rez`). Without one, the game runs
-//! with a warning, and I does nothing.
+//! with a warning, and I and P do nothing.
 //!
 //! Sound effects come from the game data's `snd ` resources and the music
 //! from `Nova Music.mp3` in `Nova Files`, played on the default audio
 //! device. Without the music the game plays none, with a warning; without
 //! an audio device it runs silently, with a warning.
+//!
+//! The sound settings are saved in `settings.json` in a `nova` directory
+//! under the platform's configuration directory: `~/Library/Application
+//! Support` on macOS, `%APPDATA%` on Windows, and `$XDG_CONFIG_HOME` (or
+//! `~/.config`) elsewhere. Missing settings start at the defaults, and so
+//! do settings that cannot be read, with a warning.
 //!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
@@ -28,11 +36,12 @@ use std::process::ExitCode;
 use std::rc::Rc;
 
 use nova::app::start_screen;
-use nova::audio::{game_audio, music_warning};
+use nova::audio::{game_audio, game_settings, music_warning};
+use nova::config::{Os, settings_path};
 use nova::fonts::game_fonts;
 use nova::platform::Runner;
 use nova::{cli, exit};
-use nova_audio::KiraAudio;
+use nova_audio::{FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
@@ -63,7 +72,13 @@ fn main() -> ExitCode {
     }
     // The screens and the renderer read the same game data.
     let data = Rc::new(data);
-    let mut screen = start_screen(Rc::clone(&data));
+    let store = settings_path(Os::current(), |name| std::env::var_os(name))
+        .map(|path| Box::new(FileSettings::new(path)) as Box<dyn SettingsStore>);
+    let (keeper, settings, warning) = game_settings(store);
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
+    let mut screen = start_screen(Rc::clone(&data)).with_sound_prefs(settings.prefs());
     match open_interface(&dir) {
         Ok(interface) => {
             // Dialog text is laid out by the faces the window draws it in.
@@ -83,7 +98,11 @@ fn main() -> ExitCode {
     }
     let runner = Runner::new(Rc::clone(&data), screen, fonts);
     let runner = match audio {
-        Some(core) => runner.with_audio(core),
+        Some(core) => runner.with_audio(core.with_settings(settings)),
+        None => runner,
+    };
+    let runner = match keeper {
+        Some(keeper) => runner.with_settings(keeper),
         None => runner,
     };
     #[cfg(feature = "dev-tools")]

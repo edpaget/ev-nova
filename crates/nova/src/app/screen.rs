@@ -30,9 +30,16 @@
 //! dialogs ([`AppScreen::with_dialogs`]). The dialog is modal: it takes
 //! every input until Done (Return, Escape or a click) closes it.
 //!
+//! P, on any side, opens the Preferences dialog ("new prefs dialog") over
+//! the screen shown when the router has dialogs. Like the About dialog it
+//! is modal, and flight pauses under it. It opens on the player's sound
+//! preferences ([`AppScreen::with_sound_prefs`]), and each change is
+//! reported once through [`Screen::take_sound_prefs`] for the app to play
+//! and save. OK, Return or Escape closes it.
+//!
 //! The router reports every live screen's sounds through
 //! [`Screen::take_sounds`], and what it shows through
-//! [`Screen::now_showing`]. The spaceport and the About dialog are dropped
+//! [`Screen::now_showing`]. The spaceport and the two dialogs are dropped
 //! as they close, so their sounds (the click that closed them) are kept
 //! first.
 
@@ -49,14 +56,17 @@ use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
 use nova_view::ui::desc::DESC_DIALOG;
-use nova_view::ui::{DescDialog, DescriptionSource, DialogResources};
-use nova_view::{Color, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction, Sound};
+use nova_view::ui::prefs::PREFS_DIALOG;
+use nova_view::ui::{DescDialog, DescriptionSource, DialogResources, PrefsDialog};
+use nova_view::{
+    Color, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction, Sound, SoundPrefs,
+};
 
 /// The hint the router draws over every screen, where it goes, its size and
 /// its colour. Every screen leaves that corner free. The hint offers I
-/// only when the router has dialogs, and so I does something; without
-/// them it draws [`HINT_WITHOUT_DIALOGS`].
-pub const HINT: &str = "Tab: ships / galaxy map   F: fly   I: about";
+/// and P only when the router has dialogs, and so they do something;
+/// without them it draws [`HINT_WITHOUT_DIALOGS`].
+pub const HINT: &str = "Tab: ships / galaxy map   F: fly   I: about   P: preferences";
 pub const HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map   F: fly";
 pub const HINT_AT: Point = Point::new(16.0, 8.0);
 pub const HINT_SIZE: f32 = 14.0;
@@ -103,6 +113,12 @@ pub struct AppScreen {
     spaceport: Option<SpaceportView>,
     /// The sounds of screens closed since the sounds were last taken.
     sounds: Vec<Sound>,
+    /// The player's sound preferences, as last chosen.
+    sound_prefs: SoundPrefs,
+    /// The Preferences dialog, while it is open.
+    preferences: Option<PrefsDialog>,
+    /// The preferences chosen since they were last taken, if they changed.
+    prefs_change: Option<SoundPrefs>,
 }
 
 /// The interface file's dialogs and the metrics their text is laid out by.
@@ -133,6 +149,9 @@ impl AppScreen {
             about: None,
             spaceport: None,
             sounds: Vec::new(),
+            sound_prefs: SoundPrefs::default(),
+            preferences: None,
+            prefs_change: None,
         }
     }
 
@@ -154,10 +173,32 @@ impl AppScreen {
         }
     }
 
+    /// The router with the player's sound preferences, `prefs`, which the
+    /// Preferences dialog opens on.
+    #[must_use]
+    pub fn with_sound_prefs(self, prefs: SoundPrefs) -> Self {
+        Self {
+            sound_prefs: prefs,
+            ..self
+        }
+    }
+
+    /// The player's sound preferences, as last chosen.
+    #[must_use]
+    pub fn sound_prefs(&self) -> SoundPrefs {
+        self.sound_prefs
+    }
+
     /// The About dialog, while it is open.
     #[must_use]
     pub fn about(&self) -> Option<&DescDialog> {
         self.about.as_ref()
+    }
+
+    /// The Preferences dialog, while it is open.
+    #[must_use]
+    pub fn preferences(&self) -> Option<&PrefsDialog> {
+        self.preferences.as_ref()
     }
 
     /// Which screen is showing.
@@ -165,6 +206,9 @@ impl AppScreen {
     pub fn showing(&self) -> Showing {
         if self.about.is_some() {
             return Showing::About;
+        }
+        if self.preferences.is_some() {
+            return Showing::Preferences;
         }
         match self.side {
             Side::Ships => Showing::ShipBrowser,
@@ -269,6 +313,64 @@ impl AppScreen {
             }
             Err(reason) => eprintln!("nova: cannot show the About text: {reason}"),
         }
+    }
+
+    /// Opens the Preferences dialog over the side shown, on the player's
+    /// sound preferences, first cancelling the side's pointer gesture and
+    /// letting go of its keys. With no dialogs, nothing opens; when the
+    /// dialog cannot be built, nothing opens and the reason goes to stderr.
+    fn open_preferences(&mut self) {
+        let Some(dialogs) = &self.dialogs else {
+            return;
+        };
+        let dialog = dialogs
+            .resources
+            .dialog_template(PREFS_DIALOG)
+            .and_then(|template| {
+                PrefsDialog::new(
+                    &template,
+                    self.sound_prefs,
+                    self.data.button_style(),
+                    Rc::clone(&dialogs.metrics),
+                )
+            });
+        match dialog {
+            Ok(dialog) => {
+                let below = self.shown_mut();
+                below.cancel_pointer();
+                below.release_keys();
+                self.preferences = Some(dialog);
+            }
+            Err(reason) => eprintln!("nova: cannot show the preferences: {reason}"),
+        }
+    }
+
+    /// The Preferences dialog's input: each change is kept, to be taken
+    /// once, and the dialog closes once OK is activated.
+    fn preferences_input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(dialog) = &mut self.preferences {
+            dialog.input(input);
+            if let Some(prefs) = dialog.take_change() {
+                self.sound_prefs = prefs;
+                self.prefs_change = Some(prefs);
+            }
+            if dialog.closed() {
+                self.sounds.extend(dialog.take_sounds());
+                self.preferences = None;
+            }
+        }
+        ScreenAction::None
+    }
+
+    /// The overlay open over the side shown, if any: the About dialog or
+    /// the Preferences dialog.
+    fn overlay_mut(&mut self) -> Option<&mut dyn Screen> {
+        if let Some(about) = &mut self.about {
+            return Some(about);
+        }
+        self.preferences
+            .as_mut()
+            .map(|dialog| dialog as &mut dyn Screen)
     }
 
     /// The About dialog's input; it closes once Done is activated.
@@ -384,11 +486,29 @@ impl Screen for AppScreen {
     ///
     /// With dialogs, an I press outside flight opens the About dialog
     /// over the side shown, cancelling and letting go on it as Tab does.
-    /// While the dialog is open, every event goes to it alone (Escape
+    /// A P press, on any side (flight, its map and the spaceport
+    /// included), opens the Preferences dialog the same way; P reaches the
+    /// router before flight. Their repeats and releases are consumed.
+    /// While either dialog is open, every event goes to it alone (Escape
     /// closes it and never quits).
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.about.is_some() {
             return self.about_input(input);
+        }
+        if self.preferences.is_some() {
+            return self.preferences_input(input);
+        }
+        if let Input::Key {
+            key: Key::Char('p'),
+            pressed,
+            repeat,
+        } = *input
+            && self.dialogs.is_some()
+        {
+            if pressed && !repeat {
+                self.open_preferences();
+            }
+            return ScreenAction::None;
         }
         match self.side {
             Side::Flight => return self.flight_input(input),
@@ -431,16 +551,18 @@ impl Screen for AppScreen {
     }
 
     /// Only the side shown ticks; a hidden one is paused. While the About
-    /// dialog is open, only it ticks.
+    /// dialog or the Preferences dialog is open, only it ticks: flight
+    /// pauses under the preferences, as in the original.
     fn tick(&mut self, dt: Duration) {
-        match &mut self.about {
-            Some(about) => about.tick(dt),
+        match self.overlay_mut() {
+            Some(overlay) => overlay.tick(dt),
             None => self.shown_mut().tick(dt),
         }
     }
 
     /// The side shown, then the hint (not over flight, which has its own
-    /// help line, or the spaceport), then the About dialog when it is open.
+    /// help line, or the spaceport), then the About dialog or the
+    /// Preferences dialog when one is open.
     fn draw(&self, list: &mut DrawList) {
         self.shown().draw(list);
         if matches!(self.side, Side::Ships | Side::Galaxy) {
@@ -454,18 +576,21 @@ impl Screen for AppScreen {
         if let Some(about) = &self.about {
             about.draw(list);
         }
+        if let Some(dialog) = &self.preferences {
+            dialog.draw(list);
+        }
     }
 
     fn cancel_pointer(&mut self) {
-        match &mut self.about {
-            Some(about) => about.cancel_pointer(),
+        match self.overlay_mut() {
+            Some(overlay) => overlay.cancel_pointer(),
             None => self.shown_mut().cancel_pointer(),
         }
     }
 
     fn release_keys(&mut self) {
-        match &mut self.about {
-            Some(about) => about.release_keys(),
+        match self.overlay_mut() {
+            Some(overlay) => overlay.release_keys(),
             None => self.shown_mut().release_keys(),
         }
     }
@@ -477,6 +602,9 @@ impl Screen for AppScreen {
         sounds.extend(self.galaxy.take_sounds());
         let open = [
             self.about.as_mut().map(|about| about as &mut dyn Screen),
+            self.preferences
+                .as_mut()
+                .map(|dialog| dialog as &mut dyn Screen),
             self.spaceport.as_mut().map(|port| port as &mut dyn Screen),
             self.flight.as_mut().map(|flight| flight as &mut dyn Screen),
         ];
@@ -484,6 +612,12 @@ impl Screen for AppScreen {
             sounds.extend(screen.take_sounds());
         }
         sounds
+    }
+
+    /// The sound preferences chosen in the Preferences dialog, once after
+    /// each change.
+    fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+        self.prefs_change.take()
     }
 
     fn now_showing(&self) -> Option<Showing> {
@@ -1008,7 +1142,10 @@ mod tests {
         let mut expected = drawn(&ships);
         expected.push(hint());
         assert_eq!(drawn(&screen), expected);
-        assert_eq!(HINT, "Tab: ships / galaxy map   F: fly   I: about");
+        assert_eq!(
+            HINT,
+            "Tab: ships / galaxy map   F: fly   I: about   P: preferences"
+        );
         assert_eq!((HINT_AT, HINT_SIZE), (Point::new(16.0, 8.0), 14.0));
     }
 
@@ -1267,6 +1404,9 @@ mod tests {
             if id == SPACEPORT_DIALOG {
                 return Ok(spaceport_template());
             }
+            if id == PREFS_DIALOG {
+                return Ok(prefs_template());
+            }
             if id != DESC_DIALOG {
                 return Err(format!("no DLOG {id}"));
             }
@@ -1279,6 +1419,70 @@ mod tests {
                     item(10.0, 10.0, 100.0, 36.0, ItemSpec::User),
                 ],
             })
+        }
+    }
+
+    /// "new prefs dialog" (4003), smaller: 300 x 260 at (0, 0), with OK
+    /// (1), the effects volume (4 to 7), the Music (8) and Sound (20)
+    /// check boxes, Key Settings (16) and a greyed check box (9).
+    fn prefs_template() -> DialogTemplate {
+        let item = |x, y, w, h, kind| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind,
+        };
+        let mut items: Vec<ItemTemplate> = (0..20)
+            .map(|_| item(0.0, 300.0, 10.0, 10.0, ItemSpec::User))
+            .collect();
+        items[0] = item(200.0, 230.0, 70.0, 20.0, ItemSpec::Button("OK".into()));
+        items[3] = item(
+            150.0,
+            140.0,
+            100.0,
+            16.0,
+            ItemSpec::StaticText("Sound Volume:".into()),
+        );
+        items[4] = item(
+            170.0,
+            160.0,
+            100.0,
+            16.0,
+            ItemSpec::StaticText("Static Text".into()),
+        );
+        items[5] = item(150.0, 167.0, 11.0, 9.0, ItemSpec::Picture(135));
+        items[6] = item(150.0, 158.0, 11.0, 9.0, ItemSpec::Picture(134));
+        items[7] = item(
+            150.0,
+            20.0,
+            100.0,
+            18.0,
+            ItemSpec::CheckBox("Intro Music".into()),
+        );
+        items[8] = item(
+            10.0,
+            20.0,
+            100.0,
+            18.0,
+            ItemSpec::CheckBox("Smoke Trails".into()),
+        );
+        items[15] = item(
+            20.0,
+            230.0,
+            120.0,
+            20.0,
+            ItemSpec::Button("Key Settings".into()),
+        );
+        items[19] = item(
+            150.0,
+            60.0,
+            100.0,
+            18.0,
+            ItemSpec::CheckBox("Ambient Sounds".into()),
+        );
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 260.0),
+            placement: Placement::Fixed,
+            items,
         }
     }
 
@@ -1372,7 +1576,7 @@ mod tests {
         assert!(!without.contains("I:"), "{without}");
         assert_eq!(
             hint_text(&with_dialogs(data)),
-            "Tab: ships / galaxy map   F: fly   I: about"
+            "Tab: ships / galaxy map   F: fly   I: about   P: preferences"
         );
     }
 
@@ -1795,5 +1999,276 @@ mod tests {
             .center();
         assert_eq!(press_and_release(&mut screen, done), [vec![DOWN], vec![UP]]);
         assert!(screen.about().is_none(), "closed");
+    }
+
+    // The Preferences dialog.
+
+    const PREFS: Key = Key::Char('p');
+
+    fn open_prefs(screen: &mut AppScreen) {
+        assert_eq!(screen.input(&key(PREFS, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::Preferences);
+        assert_eq!(screen.now_showing(), Some(Showing::Preferences));
+    }
+
+    fn prefs_dialog(screen: &AppScreen) -> &PrefsDialog {
+        screen
+            .preferences()
+            .expect("the Preferences dialog is open")
+    }
+
+    /// Clicks the left button at `at`.
+    fn click_at(screen: &mut AppScreen, at: Point) {
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+    }
+
+    fn quiet() -> SoundPrefs {
+        SoundPrefs {
+            sound: true,
+            music: false,
+            effects_level: 3,
+            music_level: 5,
+        }
+    }
+
+    #[test]
+    fn p_opens_the_preferences_over_ships_galaxy_flight_its_map_and_the_spaceport() {
+        let mut screen = with_dialogs(data());
+        assert!(screen.preferences().is_none());
+        open_prefs(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+
+        screen.input(&key(Key::Tab, true));
+        open_prefs(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::GalaxyMap);
+
+        fly(&mut screen);
+        open_prefs(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "Escape only closes it");
+
+        screen.input(&key(MAP, true));
+        open_prefs(&mut screen);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::FlightMap);
+        screen.input(&key(Key::Escape, true));
+
+        screen.input(&key(LAND, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        open_prefs(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Spaceport, "still landed");
+    }
+
+    #[test]
+    fn the_dialog_opens_on_the_prefs_the_router_was_given() {
+        let mut screen = with_dialogs(data()).with_sound_prefs(quiet());
+        assert_eq!(screen.sound_prefs(), quiet());
+        open_prefs(&mut screen);
+        assert_eq!(prefs_dialog(&screen).prefs(), quiet());
+        assert_eq!(AppScreen::new(data()).sound_prefs(), SoundPrefs::default());
+    }
+
+    #[test]
+    fn each_change_comes_out_once_and_the_dialog_reopens_on_it() {
+        let mut screen = with_dialogs(data()).with_sound_prefs(quiet());
+        assert_eq!(screen.take_sound_prefs(), None);
+        open_prefs(&mut screen);
+        let music = prefs_dialog(&screen).music().rect().center();
+        click_at(&mut screen, music);
+        let changed = SoundPrefs {
+            music: true,
+            ..quiet()
+        };
+        assert_eq!(screen.take_sound_prefs(), Some(changed));
+        assert_eq!(screen.take_sound_prefs(), None, "once");
+        assert_eq!(screen.sound_prefs(), changed);
+        let up = prefs_dialog(&screen).effects_volume().rects().up.center();
+        click_at(&mut screen, up);
+        screen.input(&key(Key::Enter, true));
+        assert!(screen.preferences().is_none(), "closed");
+        let louder = SoundPrefs {
+            effects_level: 4,
+            ..changed
+        };
+        assert_eq!(screen.take_sound_prefs(), Some(louder));
+        open_prefs(&mut screen);
+        assert_eq!(prefs_dialog(&screen).prefs(), louder);
+    }
+
+    #[test]
+    fn a_p_repeat_or_release_opens_nothing_and_reaches_nothing() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        for input in [held(PREFS), key(PREFS, false)] {
+            assert_eq!(screen.input(&input), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::Flight, "{input:?}");
+        }
+        open_prefs(&mut screen);
+        screen.input(&key(PREFS, false));
+        screen.input(&held(PREFS));
+        assert_eq!(screen.showing(), Showing::Preferences, "still open");
+    }
+
+    #[test]
+    fn without_dialogs_p_does_nothing() {
+        let mut screen = AppScreen::new(data());
+        let before = drawn(&screen);
+        assert_eq!(screen.input(&key(PREFS, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        assert_eq!(drawn(&screen), before);
+        fly(&mut screen);
+        screen.input(&key(PREFS, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.preferences().is_none());
+    }
+
+    #[test]
+    fn a_missing_preferences_dialog_opens_nothing() {
+        let mut screen =
+            AppScreen::new(data()).with_dialogs(Rc::new(NoDialogs), Rc::new(MonoMetrics));
+        screen.input(&key(PREFS, true));
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        assert!(screen.preferences().is_none());
+    }
+
+    #[test]
+    fn flight_is_paused_and_lets_go_of_its_keys_while_the_dialog_is_open() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        screen.input(&key(Key::Up, true));
+        screen.tick(TICK);
+        let moving = ship(&screen);
+        open_prefs(&mut screen);
+        screen.tick(TICK * 5);
+        assert_eq!(ship(&screen), moving, "paused");
+        // Up's release goes to the dialog.
+        screen.input(&key(Key::Up, false));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        let coasting = ship(&screen);
+        screen.tick(TICK * 5);
+        assert_eq!(ship(&screen).velocity, coasting.velocity, "no thrust");
+    }
+
+    #[test]
+    fn while_the_preferences_are_open_input_reaches_only_them() {
+        let mut screen = with_dialogs(data());
+        open_prefs(&mut screen);
+        for input in [
+            key(Key::Right, true),
+            key(Key::Char('f'), true),
+            key(Key::Char('i'), true),
+            key(PREFS, true),
+        ] {
+            assert_eq!(screen.input(&input), ScreenAction::None);
+        }
+        assert_eq!(screen.showing(), Showing::Preferences);
+        assert_eq!(screen.ship_browser().selected(), Some(ShipId(128)));
+        assert!(screen.flight_view().is_none() && screen.about().is_none());
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(
+            prefs_dialog(&screen).focus(),
+            Some(nova_view::ui::prefs::Focus::Music),
+            "Tab moves the dialog's focus"
+        );
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::Quit);
+    }
+
+    #[test]
+    fn the_dialog_is_drawn_over_the_side_and_the_hint() {
+        let mut screen = with_dialogs(data());
+        let below = drawn(&screen);
+        open_prefs(&mut screen);
+        let list = drawn(&screen);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        let below: Vec<&DrawCommand> = below.iter().collect();
+        assert_eq!(commands[..below.len()], below[..]);
+        assert_eq!(
+            drawn(prefs_dialog(&screen)).iter().collect::<Vec<_>>(),
+            commands[below.len()..]
+        );
+    }
+
+    #[test]
+    fn only_the_dialog_ticks_while_it_is_open_over_the_ships() {
+        let mut screen = with_dialogs(data());
+        let tick = Duration::from_millis(100);
+        screen.tick(tick);
+        let frame = screen.ship_browser().frame();
+        open_prefs(&mut screen);
+        screen.tick(tick);
+        assert_eq!(screen.ship_browser().frame(), frame, "paused below");
+        screen.input(&key(Key::Escape, true));
+        screen.tick(tick);
+        assert_ne!(screen.ship_browser().frame(), frame);
+    }
+
+    #[test]
+    fn opening_cancels_a_drag_below() {
+        let mut screen = with_dialogs(data());
+        screen.input(&key(Key::Tab, true));
+        let view = *screen.galaxy_map().view();
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: Point::new(500.0, 400.0),
+        });
+        open_prefs(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        screen.input(&Input::PointerMoved(Point::new(600.0, 400.0)));
+        assert_eq!(*screen.galaxy_map().view(), view, "the drag was cancelled");
+    }
+
+    #[test]
+    fn cancelling_and_releasing_reach_the_preferences_while_open() {
+        let mut screen = with_dialogs(data());
+        open_prefs(&mut screen);
+        let ok = prefs_dialog(&screen)
+            .dialog()
+            .item_bounds(1)
+            .expect("OK")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: ok,
+        };
+        screen.input(&button(true));
+        screen.release_keys();
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert_eq!(
+            screen.showing(),
+            Showing::Preferences,
+            "the click was abandoned"
+        );
+    }
+
+    #[test]
+    fn closing_by_ok_keeps_its_click() {
+        let mut screen = with_dialogs(data());
+        open_prefs(&mut screen);
+        let ok = prefs_dialog(&screen)
+            .dialog()
+            .item_bounds(1)
+            .expect("OK")
+            .center();
+        assert_eq!(press_and_release(&mut screen, ok), [vec![DOWN], vec![UP]]);
+        assert!(screen.preferences().is_none(), "closed");
+    }
+
+    #[test]
+    fn the_flight_help_offers_p() {
+        assert!(nova_view::flight::view::HELP.contains("P: preferences"));
     }
 }

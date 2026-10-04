@@ -1,9 +1,10 @@
-//! The game's sound: the audio core over the device that opened, and the
-//! music that loaded, each with a warning when it did not.
+//! The game's sound: the audio core over the device that opened, the
+//! music that loaded and the settings that were saved, each with a
+//! warning when it did not.
 
 use std::fmt::Display;
 
-use nova_audio::{Audio, AudioCore};
+use nova_audio::{Audio, AudioCore, AudioSettings, SettingsKeeper, SettingsStore};
 use nova_data::music::MusicError;
 
 /// The audio core playing the original's sounds through `device`, the
@@ -28,12 +29,37 @@ pub fn music_warning(music: Result<Vec<u8>, MusicError>) -> (Option<Vec<u8>>, Op
     }
 }
 
+/// The settings keeper the game saves through.
+pub type GameSettings = SettingsKeeper<Box<dyn SettingsStore>>;
+
+/// What the settings saved in `store` give: their keeper, the settings
+/// the game starts with, and a warning to print, if any. With no store
+/// (nowhere to save them), the game starts with the default settings and
+/// does not save them.
+#[must_use]
+pub fn game_settings(
+    store: Option<Box<dyn SettingsStore>>,
+) -> (Option<GameSettings>, AudioSettings, Option<String>) {
+    match store {
+        Some(store) => {
+            let (keeper, warning) = SettingsKeeper::open(store);
+            let settings = keeper.settings();
+            (Some(keeper), settings, warning)
+        }
+        None => (
+            None,
+            AudioSettings::default(),
+            Some("nova: settings will not be saved: no home or config directory is set".to_owned()),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
     use std::path::PathBuf;
 
-    use nova_audio::recording::RecordingAudio;
+    use nova_audio::recording::{MemorySettings, RecordingAudio};
     use nova_audio::{AudioCommand, Volume};
     use nova_view::Showing;
     use nova_view::sound::{SimSound, Sound};
@@ -105,6 +131,42 @@ mod tests {
                 "nova: playing without music: reading the music \
                  /Nova Files/Nova Music.mp3: disk on fire"
             )
+        );
+    }
+
+    #[test]
+    fn saved_settings_are_kept_and_started_with() {
+        let store = MemorySettings::holding(r#"{"music": false, "effects_volume": 0.5}"#);
+        let (keeper, settings, warning) = game_settings(Some(Box::new(store.clone())));
+        let expected = AudioSettings {
+            music: false,
+            effects_volume: Volume::new(0.5),
+            ..AudioSettings::default()
+        };
+        assert_eq!((settings, warning), (expected, None));
+        let mut keeper = keeper.expect("a keeper");
+        assert_eq!(keeper.settings(), expected);
+        keeper.change(AudioSettings::default()).expect("saves");
+        assert_eq!(store.writes(), 1, "through the store");
+    }
+
+    #[test]
+    fn unusable_settings_start_with_the_defaults_and_a_warning() {
+        let store = MemorySettings::holding("not json");
+        let (keeper, settings, warning) = game_settings(Some(Box::new(store)));
+        assert!(keeper.is_some(), "a change can still be saved");
+        assert_eq!(settings, AudioSettings::default());
+        assert!(warning.is_some_and(|warning| warning.starts_with("nova: the saved settings")),);
+    }
+
+    #[test]
+    fn with_nowhere_to_save_them_the_defaults_are_not_saved() {
+        let (keeper, settings, warning) = game_settings(None);
+        assert!(keeper.is_none());
+        assert_eq!(settings, AudioSettings::default());
+        assert_eq!(
+            warning.as_deref(),
+            Some("nova: settings will not be saved: no home or config directory is set")
         );
     }
 }

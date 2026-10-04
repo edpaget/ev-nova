@@ -7,6 +7,8 @@
 //! - [`audio`]: the audio core over the device that opened, and the
 //!   music that loaded, each with a warning when it did not.
 //! - [`cli`]: where the game data is, from the arguments or `NOVA_DATA`.
+//! - [`config`]: where the player's settings are saved, for each
+//!   operating system.
 //! - [`exit`]: how the program ends: its exit code and message when the
 //!   window could not be opened.
 //! - [`fonts`]: the fonts text is drawn in, from the result of loading the
@@ -20,6 +22,7 @@
 pub mod app;
 pub mod audio;
 pub mod cli;
+pub mod config;
 #[cfg(feature = "dev-tools")]
 pub mod devtools;
 pub mod exit;
