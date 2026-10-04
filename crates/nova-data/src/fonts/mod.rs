@@ -525,6 +525,11 @@ mod tests {
     const DATA_DIR: &str = "/games/EV Nova/Nova Files";
     const CHARCOAL: &str = "/games/EV Nova/Nova Files/../Fonts/Charcoal.ttf";
 
+    /// How `charcoal_path(DATA_DIR)` displays, with the platform's separator.
+    fn charcoal_shown() -> String {
+        charcoal_path(Path::new(DATA_DIR)).display().to_string()
+    }
+
     #[test]
     fn charcoal_is_in_the_fonts_folder_beside_nova_files() {
         assert_eq!(charcoal_path(Path::new(DATA_DIR)), PathBuf::from(CHARCOAL));
@@ -549,7 +554,7 @@ mod tests {
             matches!(&err, FontError::Missing { path } if path == Path::new(CHARCOAL)),
             "{err:?}"
         );
-        assert_eq!(err.to_string(), format!("no font at {CHARCOAL}"));
+        assert_eq!(err.to_string(), format!("no font at {}", charcoal_shown()));
         let no_fork = OneFile::new(|| Ok(None));
         let err = load_charcoal(&no_fork, Path::new(DATA_DIR)).expect_err("fails");
         assert!(matches!(err, FontError::Missing { .. }), "{err:?}");
@@ -565,7 +570,7 @@ mod tests {
         );
         assert_eq!(
             err.to_string(),
-            format!("reading the font {CHARCOAL}: disk on fire")
+            format!("reading the font {}: disk on fire", charcoal_shown())
         );
     }
 
@@ -599,7 +604,10 @@ mod tests {
         );
         assert_eq!(
             err.to_string(),
-            format!("the font {CHARCOAL} is unusable: a font collection, not a single font")
+            format!(
+                "the font {} is unusable: a font collection, not a single font",
+                charcoal_shown()
+            )
         );
     }
 }

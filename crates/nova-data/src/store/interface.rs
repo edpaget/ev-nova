@@ -369,12 +369,13 @@ mod tests {
         assert_eq!(err.tried[0].0, PathBuf::from(MAC));
         assert_eq!(err.tried[1].0, PathBuf::from(WINDOWS));
         assert!(matches!(err.tried[0].1, LoadError::Io { .. }));
+        let (mac, windows) = (err.tried[0].0.display(), err.tried[1].0.display());
         let message = err.to_string();
         assert!(
-            message.starts_with(&format!("no interface file: {MAC} (")),
+            message.starts_with(&format!("no interface file: {mac} (")),
             "{message}"
         );
-        assert!(message.contains(&format!("); {WINDOWS} (")), "{message}");
+        assert!(message.contains(&format!("); {windows} (")), "{message}");
         assert!(message.contains("disk on fire"), "{message}");
     }
 

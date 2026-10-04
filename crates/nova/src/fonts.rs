@@ -98,9 +98,12 @@ mod tests {
         assert_eq!(
             warning.as_deref(),
             Some(
-                "nova: drawing Charcoal in the bundled font: the font \
-                 /Nova Files/../Fonts/Charcoal.ttf is unusable: the font's tables do not \
-                 parse: the head table is missing or malformed"
+                format!(
+                    "nova: drawing Charcoal in the bundled font: the font {} is unusable: \
+                     the font's tables do not parse: the head table is missing or malformed",
+                    path_buf().display()
+                )
+                .as_str()
             )
         );
     }
@@ -113,9 +116,12 @@ mod tests {
         assert_eq!(
             warning.as_deref(),
             Some(
-                "nova: drawing Charcoal in the bundled font: the font \
-                 /Nova Files/../Fonts/Charcoal.ttf is unusable: the font has no family or \
-                 PostScript name"
+                format!(
+                    "nova: drawing Charcoal in the bundled font: the font {} is unusable: \
+                     the font has no family or PostScript name",
+                    path_buf().display()
+                )
+                .as_str()
             )
         );
     }
