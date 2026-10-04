@@ -85,6 +85,15 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::KeyF) => Key::Char('f'),
         // The About text's key, by position: I on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyI) => Key::Char('i'),
+        // Landing's key, by position: L on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyL) => Key::Char('l'),
+        // The flight map's key, by position: M on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyM) => Key::Char('m'),
+        // The jump key, by position: J on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyJ) => Key::Char('j'),
+        // The Preferences dialog's key, by position: P on a US-layout
+        // keyboard.
+        PhysicalKey::Code(KeyCode::KeyP) => Key::Char('p'),
         // The developer tools' toggle, by position: the key under Escape on
         // a US-layout keyboard. Without the developer tools, no screen uses
         // it.
@@ -147,6 +156,10 @@ mod tests {
             (KeyCode::KeyD, Key::Char('d')),
             (KeyCode::KeyF, Key::Char('f')),
             (KeyCode::KeyI, Key::Char('i')),
+            (KeyCode::KeyL, Key::Char('l')),
+            (KeyCode::KeyM, Key::Char('m')),
+            (KeyCode::KeyJ, Key::Char('j')),
+            (KeyCode::KeyP, Key::Char('p')),
             (KeyCode::Backquote, Key::Char('`')),
             (KeyCode::KeyQ, Key::Other),
             (KeyCode::F1, Key::Other),
@@ -156,6 +169,58 @@ mod tests {
         }
         let unknown = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
         assert_eq!(map_key(unknown), Key::Other);
+    }
+
+    /// Every character key some screen reacts to, from the constants the
+    /// screens match on where they name one. A screen test that sends one of
+    /// these directly never crosses `map_key`, so this is what keeps each
+    /// one reachable from a real keyboard.
+    const GAME_CHARACTER_KEYS: [Key; 14] = [
+        Key::Char('f'),
+        Key::Char('i'),
+        Key::Char('p'),
+        nova_view::flight::view::LAND_KEY,
+        nova_view::flight::view::MAP_KEY,
+        nova_view::flight::view::JUMP_KEY,
+        Key::Char('w'),
+        Key::Char('a'),
+        Key::Char('s'),
+        Key::Char('d'),
+        Key::Char('='),
+        Key::Char('+'),
+        Key::Char('-'),
+        nova_view::devtools::TOGGLE_KEY,
+    ];
+
+    /// The physical key that types `c` on a US-layout keyboard.
+    fn us_position(c: char) -> KeyCode {
+        match c {
+            'a' => KeyCode::KeyA,
+            'd' => KeyCode::KeyD,
+            'f' => KeyCode::KeyF,
+            'i' => KeyCode::KeyI,
+            'j' => KeyCode::KeyJ,
+            'l' => KeyCode::KeyL,
+            'm' => KeyCode::KeyM,
+            'p' => KeyCode::KeyP,
+            's' => KeyCode::KeyS,
+            'w' => KeyCode::KeyW,
+            '=' => KeyCode::Equal,
+            '+' => KeyCode::NumpadAdd,
+            '-' => KeyCode::Minus,
+            '`' => KeyCode::Backquote,
+            other => panic!("no physical key listed for {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_character_key_a_screen_reacts_to_comes_from_its_physical_key() {
+        for key in GAME_CHARACTER_KEYS {
+            let Key::Char(c) = key else {
+                panic!("{key:?} is not a character key");
+            };
+            assert_eq!(map_key(PhysicalKey::Code(us_position(c))), key, "{c:?}");
+        }
     }
 
     #[test]

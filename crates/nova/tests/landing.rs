@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::platform;
 use nova_audio::recording::{AudioLog, RecordingAudio};
 use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
@@ -39,6 +40,8 @@ use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::layout::{LANDSCAPE_ITEM, LEAVE_ITEM};
 use nova_view::spaceport::service::DONE_BUTTON;
 use nova_view::{Key, MouseButton};
+use winit::event::ElementState;
+use winit::keyboard::{KeyCode, PhysicalKey};
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -313,6 +316,14 @@ impl Harness {
         }
     }
 
+    /// Presses and releases the physical key `code` through winit's
+    /// translation, as the real window does.
+    fn press_physical(&mut self, code: KeyCode) {
+        for state in [ElementState::Pressed, ElementState::Released] {
+            self.send(platform::key_event(PhysicalKey::Code(code), state, false));
+        }
+    }
+
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
@@ -397,7 +408,7 @@ fn rect(bounds: Bounds) -> Rect {
 fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
     let mut harness = Harness::flying(0);
     harness.frame();
-    harness.press(Key::Char('l'));
+    harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
     let frame = harness.frame();
 

@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::platform;
 use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
 use nova_audio::settings::level_volume;
 use nova_audio::{
@@ -38,6 +39,8 @@ use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_view::geometry::Point;
 use nova_view::ui::PrefsDialog;
 use nova_view::{Key, MouseButton};
+use winit::event::ElementState;
+use winit::keyboard::{KeyCode, PhysicalKey};
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -290,6 +293,14 @@ impl Harness {
         }
     }
 
+    /// Presses and releases the physical key `code` through winit's
+    /// translation, as the real window does.
+    fn press_physical(&mut self, code: KeyCode) {
+        for state in [ElementState::Pressed, ElementState::Released] {
+            self.send(platform::key_event(PhysicalKey::Code(code), state, false));
+        }
+    }
+
     /// Moves to the logical point `at`, then presses and releases there.
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
@@ -352,7 +363,7 @@ fn solids(frame: &Frame) -> usize {
 fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     let store = seeded();
     let mut harness = Harness::new(&store);
-    harness.press(Key::Char('f'));
+    harness.press_physical(KeyCode::KeyF);
     assert_eq!(harness.showing(), Showing::Flight);
     let flying = harness.frame();
     assert_eq!(
@@ -363,7 +374,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
         "the seeded music volume"
     );
 
-    harness.press(Key::Char('p'));
+    harness.press_physical(KeyCode::KeyP);
     assert_eq!(harness.showing(), Showing::Preferences);
     let open = harness.frame();
     let shown = texts(&open);
@@ -406,7 +417,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     assert_eq!(harness.played(), [AudioCommand::StopMusic]);
 
     // Later sounds play at the new effects volume.
-    harness.press(Key::Char('l'));
+    harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
     let five = Volume::new(5.0 / 7.0);
     assert_eq!(
