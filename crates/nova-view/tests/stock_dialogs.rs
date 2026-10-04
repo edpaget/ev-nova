@@ -14,11 +14,16 @@ use nova_data::graphics::{Image, PICT, decode_pict};
 use nova_data::records::dialog::Dlog;
 use nova_data::{GameData, InterfaceData, Record};
 use nova_view::geometry::{Bounds, Point};
+use nova_view::sound::SoundPrefs;
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
+use nova_view::ui::prefs::{
+    KEY_SETTINGS_ITEM, MUSIC_ITEM, OK_ITEM, PREFS_DIALOG, SOUND_ITEM, VOLUME_DOWN_ITEM,
+    VOLUME_LABEL_ITEM, VOLUME_UP_ITEM, VOLUME_VALUE_ITEM,
+};
 use nova_view::ui::{
-    ButtonImages, ButtonSkin, DescDialog, DescriptionSource, Dialog, DialogEvent, DialogResources,
-    Placement,
+    ButtonImages, ButtonSkin, ButtonStyle, DescDialog, DescriptionSource, Dialog, DialogEvent,
+    DialogResources, ItemSpec, Placement, PrefsDialog,
 };
 use nova_view::{DrawCommand, DrawList, ImageKey, Input, Key, MouseButton, Screen};
 
@@ -249,4 +254,126 @@ fn the_button_and_frame_pictures_decode_at_their_pinned_sizes() {
     assert_eq!(size(FRAME.middle), (441, 365));
     assert_eq!(size(FRAME.bottom), (441, 40));
     assert_eq!((FRAME.top_height, FRAME.bottom_height), (9.0, 40.0));
+}
+
+/// Bounds from (left, top) to (right, bottom).
+fn ltrb(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+    Bounds {
+        min: Point::new(left, top),
+        max: Point::new(right, bottom),
+    }
+}
+
+#[test]
+fn new_prefs_dialog_has_the_items_the_preferences_dialog_is_built_from() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(PREFS_DIALOG)
+            .expect("converts");
+        assert_eq!(template.placement, Placement::Center);
+        // The Windows build's dialog is 18 taller, with the volume and the
+        // buttons 18 lower, and a Brightness volume (items 23 to 26) at
+        // the left.
+        let windows = path.extension().is_some_and(|ext| ext == "rez");
+        let (height, lower, count) = if windows {
+            (296.0, 18.0, 26)
+        } else {
+            (278.0, 0.0, 22)
+        };
+        let name = path.display();
+        assert_eq!(
+            (template.bounds.width(), template.bounds.height()),
+            (336.0, height),
+            "{name}"
+        );
+        assert_eq!(template.items.len(), count, "{name}");
+        let item = |n: usize| &template.items[n - 1];
+        let expected = [
+            (
+                OK_ITEM,
+                (225.0, 245.0, 295.0, 265.0),
+                ItemSpec::Button("OK".into()),
+            ),
+            (
+                VOLUME_LABEL_ITEM,
+                (171.0, 167.0, 277.0, 183.0),
+                ItemSpec::StaticText("Sound Volume:".into()),
+            ),
+            (
+                VOLUME_VALUE_ITEM,
+                (189.0, 186.0, 311.0, 202.0),
+                ItemSpec::StaticText("Static Text".into()),
+            ),
+            (
+                VOLUME_DOWN_ITEM,
+                (172.0, 194.0, 183.0, 203.0),
+                ItemSpec::Picture(135),
+            ),
+            (
+                VOLUME_UP_ITEM,
+                (172.0, 185.0, 183.0, 194.0),
+                ItemSpec::Picture(134),
+            ),
+            (
+                KEY_SETTINGS_ITEM,
+                (49.0, 245.0, 184.0, 265.0),
+                ItemSpec::Button("Key Settings".into()),
+            ),
+        ];
+        for (n, (l, t, r, b), kind) in expected {
+            assert_eq!(item(n).kind, kind, "{name} item {n}");
+            assert_eq!(
+                item(n).bounds,
+                ltrb(l, t + lower, r, b + lower),
+                "{name} item {n}"
+            );
+        }
+        assert_eq!(
+            item(MUSIC_ITEM).kind,
+            ItemSpec::CheckBox("Intro Music".into())
+        );
+        assert_eq!(item(MUSIC_ITEM).bounds, ltrb(171.0, 33.0, 270.0, 51.0));
+        assert_eq!(
+            item(SOUND_ITEM).kind,
+            ItemSpec::CheckBox("Ambient Sounds".into())
+        );
+        assert_eq!(item(SOUND_ITEM).bounds, ltrb(171.0, 121.0, 307.0, 139.0));
+    }
+}
+
+#[test]
+fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(PREFS_DIALOG)
+            .expect("converts");
+        let prefs = PrefsDialog::new(
+            &template,
+            SoundPrefs::default(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        let dialog = prefs.dialog();
+        let music = prefs.music_volume().rects().bounds();
+        let ok = dialog.item_bounds(OK_ITEM).expect("OK");
+        let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
+        let name = path.display();
+        assert!(music.max.y < ok.min.y && music.max.y < keys.min.y, "{name}");
+        assert!(
+            music.min.y > prefs.effects_volume().rects().bounds().max.y,
+            "{name}"
+        );
+        assert!(dialog.bounds().contains(music.min) && dialog.bounds().contains(music.max));
+        // Nothing else is drawn where the music volume is.
+        for toggle in prefs.inert() {
+            let rect = toggle.rect();
+            let apart = rect.max.x <= music.min.x
+                || rect.min.x >= music.max.x
+                || rect.max.y <= music.min.y
+                || rect.min.y >= music.max.y;
+            assert!(apart, "{name}: {}", toggle.label());
+        }
+        assert_eq!(prefs.inert().len(), 11, "{name}");
+    }
 }

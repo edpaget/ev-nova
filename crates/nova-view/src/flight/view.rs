@@ -80,7 +80,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Up: thrust   Left/Right: turn   Down: reverse   L: land   M: map   J: jump   Esc: leave flight";
+pub const HELP: &str = "Up: thrust   Left/Right: turn   Down: reverse   L: land   M: map   J: jump   P: preferences   Esc: leave flight";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
@@ -1273,7 +1273,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Up: thrust   Left/Right: turn   Down: reverse   L: land   M: map   J: jump   Esc: leave flight"
+            "Up: thrust   Left/Right: turn   Down: reverse   L: land   M: map   J: jump   P: preferences   Esc: leave flight"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }

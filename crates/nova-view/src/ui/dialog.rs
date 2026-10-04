@@ -133,6 +133,12 @@ pub enum Role {
         /// Its colour.
         color: Color,
     },
+    /// Not there at all: not drawn, not hit-tested and never focused, as
+    /// if it were outside the dialog. Any kind of item can be hidden.
+    Hidden,
+    /// Shown greyed and never activated: a button draws disabled. Any
+    /// kind of item can be greyed.
+    Greyed,
 }
 
 /// A dialog's frame: three pictures stacked top to bottom over its bounds,
@@ -230,7 +236,8 @@ impl Dialog {
     /// its text measured by `metrics`.
     ///
     /// Standard buttons become buttons with their titles and static text
-    /// is wrapped in Geneva. Pictures, check boxes, radio buttons, edit
+    /// is wrapped in Geneva. [`Role::Hidden`] hides an item of any kind,
+    /// and [`Role::Greyed`] greys one. Pictures, check boxes, radio buttons, edit
     /// text, controls, icons, other kinds and user items with no role are
     /// laid out and hit-tested but draw nothing. Items wholly outside the
     /// dialog's bounds, where stock dialogs park unused items, are hidden.
@@ -257,16 +264,18 @@ impl Dialog {
                     .find(|(number, _)| *number == index + 1)
                     .map(|(_, role)| role);
                 let local = item.bounds;
-                let shown = local.max.x > 0.0
+                let shown = role != Some(&Role::Hidden)
+                    && local.max.x > 0.0
                     && local.min.x < width
                     && local.max.y > 0.0
                     && local.min.y < height;
+                let enabled = item.enabled && role != Some(&Role::Greyed);
                 let bounds = local.offset(origin);
                 Item {
                     bounds,
-                    enabled: item.enabled,
+                    enabled,
                     shown,
-                    widget: widget(&item.kind, role, bounds, item.enabled, &metrics),
+                    widget: widget(&item.kind, role, bounds, enabled, &metrics),
                 }
             })
             .collect();
@@ -572,7 +581,7 @@ fn widget(
 }
 
 /// A 1-unit outline just inside `rect`.
-fn outline(list: &mut DrawList, rect: Bounds, color: Color) {
+pub(crate) fn outline(list: &mut DrawList, rect: Bounds, color: Color) {
     let (left, top, right, bottom) = (rect.min.x, rect.min.y, rect.max.x, rect.max.y);
     let corners = [
         Point::new(left, top),
@@ -1204,6 +1213,64 @@ mod tests {
                 .collect(),
         };
         assert!(drawn(&dialog(&template, &[])).is_empty());
+    }
+
+    #[test]
+    fn a_hidden_item_of_any_kind_is_not_drawn_hit_or_focused() {
+        let mut template = yes_no();
+        template.items[3].enabled = true;
+        let roles = [(1, Role::Hidden), (3, Role::Hidden), (4, Role::Hidden)];
+        let mut dialog = dialog(&template, &roles);
+        let shown: Vec<bool> = (1..=5).map(|n| dialog.item_shown(n)).collect();
+        assert_eq!(shown, [false, false, false, false, true]);
+        let labels: Vec<String> = drawn(&dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels, ["Cancel"], "neither OK nor the text");
+        let ok = dialog.item_bounds(1).expect("OK").center();
+        let picture = dialog.item_bounds(4).expect("picture").center();
+        assert_eq!(click(&mut dialog, ok), None);
+        assert_eq!(click(&mut dialog, picture), None);
+        assert_eq!(dialog.input(&key(Key::Enter)), None, "OK is the default");
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Tab));
+        assert_eq!(dialog.focus(), Some(5), "only Cancel takes the focus");
+    }
+
+    #[test]
+    fn a_greyed_button_draws_disabled_and_is_never_activated() {
+        let mut dialog = dialog(&yes_no(), &[(5, Role::Greyed)]).with_cancel(Some(5));
+        assert!(dialog.item_shown(5));
+        let commands = drawn(&dialog);
+        let disabled = ButtonSkin::NOVA.disabled;
+        assert!(matches!(
+            commands[5],
+            DrawCommand::StretchedPicture { image, .. } if image == disabled.left
+        ));
+        assert!(matches!(
+            &commands[8],
+            DrawCommand::Text { text, color, .. }
+                if text == "Cancel" && *color == ButtonStyle::STOCK.grey
+        ));
+        let cancel = dialog.item_bounds(5).expect("Cancel").center();
+        assert_eq!(click(&mut dialog, cancel), None);
+        assert_eq!(dialog.take_sound(), None, "it never goes down");
+        assert_eq!(dialog.input(&key(Key::Escape)), None);
+        dialog.input(&key(Key::Tab));
+        dialog.input(&key(Key::Tab));
+        assert_eq!(dialog.focus(), Some(1), "only OK takes the focus");
+    }
+
+    #[test]
+    fn a_greyed_user_item_with_no_other_role_draws_nothing_and_is_not_hit() {
+        let mut dialog = dialog(&desc_like(), &[(4, Role::Greyed)]);
+        assert!(drawn(&dialog).is_empty());
+        let user = dialog.item_bounds(4).expect("item 4").center();
+        assert_eq!(click(&mut dialog, user), None);
     }
 
     #[test]
