@@ -210,22 +210,31 @@ impl<A: Audio> AudioCore<A> {
 }
 
 /// Whether `showing` is shown over another screen, keeping the scene
-/// below it: the About text and the Preferences dialog.
+/// below it: the About text, the Preferences dialog, and the new pilot's
+/// name entry and the saved pilots' list over the main menu.
 fn is_overlay(showing: Showing) -> bool {
-    matches!(showing, Showing::About | Showing::Preferences)
+    matches!(
+        showing,
+        Showing::About | Showing::Preferences | Showing::NewPilot | Showing::OpenPilot
+    )
 }
 
 /// Whether music plays on `scene`: menus and space do; the ship browser,
 /// the developer's viewer, does not.
 fn has_music(scene: Showing) -> bool {
     match scene {
-        Showing::GalaxyMap
+        Showing::MainMenu
+        | Showing::GalaxyMap
         | Showing::FlightMap
         | Showing::Spaceport
         | Showing::Flight
         | Showing::System => true,
         // The overlays are never the scene: they keep the one below.
-        Showing::ShipBrowser | Showing::About | Showing::Preferences => false,
+        Showing::ShipBrowser
+        | Showing::About
+        | Showing::Preferences
+        | Showing::NewPilot
+        | Showing::OpenPilot => false,
     }
 }
 
@@ -442,6 +451,9 @@ mod tests {
             Showing::FlightMap,
             Showing::Spaceport,
             Showing::About,
+            Showing::MainMenu,
+            Showing::NewPilot,
+            Showing::OpenPilot,
             Showing::GalaxyMap,
         ] {
             core.update(Some(scene), &[]);
@@ -465,14 +477,17 @@ mod tests {
             Showing::Flight,
             Showing::FlightMap,
             Showing::Spaceport,
+            Showing::MainMenu,
         ] {
             let (mut core, log) = original();
             core.update(Some(scene), &[]);
             assert_eq!(drain(&log), [start_music(1.0)], "{scene:?}");
         }
-        let (mut core, log) = original();
-        core.update(Some(Showing::About), &[]);
-        assert_eq!(drain(&log), [], "the About text over nothing");
+        for overlay in [Showing::About, Showing::NewPilot, Showing::OpenPilot] {
+            let (mut core, log) = original();
+            core.update(Some(overlay), &[]);
+            assert_eq!(drain(&log), [], "{overlay:?} over nothing");
+        }
     }
 
     #[test]

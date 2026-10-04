@@ -34,6 +34,12 @@ pub enum Showing {
     About,
     /// The Preferences dialog, over another screen.
     Preferences,
+    /// The main menu: New Pilot, Open Pilot and Quit.
+    MainMenu,
+    /// The new pilot's name entry, over the main menu.
+    NewPilot,
+    /// The list of saved pilots, over the main menu.
+    OpenPilot,
 }
 
 /// A game screen: takes input, advances with time and draws itself.
@@ -71,6 +77,16 @@ pub trait Screen {
     /// `None` by default.
     fn now_showing(&self) -> Option<Showing> {
         None
+    }
+    /// The app is about to quit, whichever way: the screen's last chance
+    /// to keep what should outlive it, such as saving the pilot. Does
+    /// nothing by default.
+    fn quit(&mut self) {}
+    /// The problems the screen has run into since they were last taken,
+    /// such as a save that failed, each a message for the app to show;
+    /// taking them empties the list. None by default.
+    fn take_warnings(&mut self) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -148,6 +164,18 @@ mod tests {
         assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_sound_prefs(), None);
         assert_eq!(screen.now_showing(), None);
+    }
+
+    #[test]
+    fn quitting_does_nothing_and_there_are_no_warnings_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        screen.quit();
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list.len(), 1);
+        assert_eq!(counter.elapsed, Duration::ZERO);
     }
 
     #[test]

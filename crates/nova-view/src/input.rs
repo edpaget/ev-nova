@@ -21,6 +21,9 @@ pub enum Key {
     Space,
     /// Tab.
     Tab,
+    /// Backspace (Delete on a Mac keyboard), which deletes the character
+    /// before the caret.
+    Backspace,
     /// A key that types a character.
     Char(char),
     /// Any other key.
@@ -58,6 +61,10 @@ pub enum Input {
         /// a release.
         repeat: bool,
     },
+    /// A printable character was typed, as the keyboard's layout and
+    /// modifiers make it. It follows the [`Input::Key`] press that typed
+    /// it; only text entry acts on it, and every other screen ignores it.
+    Text(char),
     /// The pointer moved to a point in the logical space.
     PointerMoved(Point),
     /// A mouse button went down or up with the pointer at `at`.

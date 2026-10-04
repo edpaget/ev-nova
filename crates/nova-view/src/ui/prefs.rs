@@ -368,7 +368,7 @@ impl Screen for PrefsDialog {
                 pressed: true,
                 repeat,
             } => self.key(key, repeat, input),
-            Input::Key { .. } => {}
+            Input::Key { .. } | Input::Text(_) => {}
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
         ScreenAction::None
@@ -689,6 +689,17 @@ mod tests {
             })
         );
         assert!(!dialog.closed());
+    }
+
+    #[test]
+    fn typed_text_changes_nothing() {
+        let mut dialog = prefs();
+        for c in [' ', 'm', 's', '\r'] {
+            assert_eq!(dialog.input(&Input::Text(c)), ScreenAction::None);
+        }
+        assert_eq!(dialog.prefs(), start());
+        assert!(!dialog.closed());
+        assert_eq!(dialog.take_change(), None);
     }
 
     #[test]

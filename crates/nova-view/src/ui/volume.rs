@@ -150,7 +150,7 @@ impl VolumeControl {
                 pressed: true,
                 ..
             } => Some(Arrow::Down),
-            Input::Key { .. } => None,
+            Input::Key { .. } | Input::Text(_) => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         };
         step.is_some_and(|arrow| self.step(arrow))
@@ -423,7 +423,13 @@ mod tests {
             pressed: false,
             repeat: false,
         };
-        for other in [release, key(Key::Space, false), key(Key::Enter, false)] {
+        let typed = Input::Text('u');
+        for other in [
+            release,
+            key(Key::Space, false),
+            key(Key::Enter, false),
+            typed,
+        ] {
             assert!(!control.input(&other), "{other:?}");
         }
         assert_eq!(control.level(), 2);

@@ -398,7 +398,7 @@ impl Dialog {
                 pressed: true,
                 repeat,
             } => self.key(key, repeat),
-            Input::Key { .. } => None,
+            Input::Key { .. } | Input::Text(_) => None,
             Input::PointerButton { .. } | Input::PointerMoved(_) => self.pointer(input),
         }
     }
@@ -981,6 +981,14 @@ mod tests {
         assert_eq!(dialog.input(&key(Key::Enter)), Some(DialogEvent::Item(5)));
         let mut dialog = dialog.with_default(None);
         assert_eq!(dialog.input(&key(Key::Enter)), None);
+    }
+
+    #[test]
+    fn typed_text_activates_nothing() {
+        let mut dialog = dialog(&yes_no(), &[]).with_cancel(Some(5));
+        for c in ['\r', ' ', 'o', '\u{1b}'] {
+            assert_eq!(dialog.input(&Input::Text(c)), None, "{c:?}");
+        }
     }
 
     #[test]

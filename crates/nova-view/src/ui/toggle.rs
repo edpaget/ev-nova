@@ -134,7 +134,7 @@ impl Toggle {
                 pressed: true,
                 repeat: false,
             } => self.enabled,
-            Input::Key { .. } => false,
+            Input::Key { .. } | Input::Text(_) => false,
             // A check box clicks silently: the tracker's sounds are not
             // taken.
             Input::PointerButton { .. } | Input::PointerMoved(_) => {
@@ -333,6 +333,7 @@ mod tests {
         for other in [Key::Enter, Key::Up, Key::Char(' ')] {
             assert!(!toggle.input(&key(other, true, false)), "{other:?}");
         }
+        assert!(!toggle.input(&Input::Text(' ')), "typed text");
         assert!(!toggle.on());
     }
 
