@@ -38,6 +38,9 @@
 //!   ship, location, date, cash, reserves, course, explored systems,
 //!   legal records, cargo, the events under way and the outfits owned,
 //!   starting from the first `chär`.
+//! - [`recharge`]: recharging in the spaceport: which stellars sell
+//!   fuel ([`sells_fuel`]), what filling the tank costs, and each
+//!   [`RechargeRefusal`].
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full when it starts.
 //! - [`save`]: the save schema: a pilot as versioned JSON and back,
@@ -76,6 +79,7 @@ pub mod landing;
 pub mod market;
 pub mod outfitter;
 pub mod pilot;
+pub mod recharge;
 pub mod reserves;
 pub mod save;
 pub mod saves;
@@ -104,6 +108,7 @@ pub use landing::{LandingRefusal, Service, check_landing, landing_radius, servic
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use pilot::Pilot;
+pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use reserves::{Gauge, Reserves};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};

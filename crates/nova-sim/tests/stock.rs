@@ -2,7 +2,8 @@
 //! with its ship's handling and reserves in a system that exists, Port
 //! Kane's exchange trades at its levels, and its outfitter sells what its
 //! tech levels allow; Viking's shipyard sells what its tech levels and the
-//! ships' `BuyRandom` allow, and trades the Shuttle in. Skips, passing,
+//! ships' `BuyRandom` allow, and trades the Shuttle in. Port Kane sells
+//! fuel and uninhabited Reflex-ion sells none. Skips, passing,
 //! when `NOVA_DATA` is unset.
 
 mod common;
@@ -14,8 +15,8 @@ use nova_data::records::stellar::Stellar;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::{
     Direction, DisasterId, DisasterRecord, GameDate, Gauge, Good, JunkId, LandingRefusal, OutfitId,
-    OutfitMod, OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, Service, Session, ShipFields,
-    ShipId, ShipState, ShipStats, StartDate, StellarId, check_landing, services,
+    OutfitMod, OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session,
+    ShipFields, ShipId, ShipState, ShipStats, StartDate, StellarId, check_landing, services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -436,4 +437,54 @@ fn a_heavy_shuttle_trades_in_the_shuttle() {
     let fields = data.ship_fields(ShipId(129)).expect("decodes");
     assert_eq!(session.stats(), ShipStats::new(fields, &[]));
     assert_eq!(session.pilot().outfits().count(), 0);
+}
+
+/// A new stock pilot, docked at `stellar` in `system` with `fuel` units
+/// in its tank, through a save that says so.
+fn docked_with_fuel(data: &GameData, system: i16, stellar: i16, fuel: f32) -> Session {
+    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["system"] = serde_json::json!(system);
+    save["stellar"] = serde_json::json!(stellar);
+    save["reserves"]["fuel"]["now"] = serde_json::json!(fuel);
+    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let session = Session::fly(data, docked).expect("flies");
+    assert_eq!(session.landed(), Some(StellarId(stellar)), "docked");
+    session
+}
+
+/// At Port Kane (`spöb` 137 in Kania, `sÿst` 128) the Shuttle (300 fuel,
+/// no regeneration), half empty, refills for 150 of its 25,000 credits.
+#[test]
+fn port_kane_refills_the_shuttle_for_a_credit_a_unit() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = docked_with_fuel(&data, 128, 137, 150.0);
+    assert_eq!(session.pilot().system(), at_port_kane(&data).system());
+    assert_eq!(session.pilot().cash(), 25_000);
+    assert_eq!(session.recharge(), Ok(150));
+    assert_eq!(session.reserves().fuel, Gauge::full(300.0));
+    assert_eq!(session.pilot().cash(), 25_000 - 150);
+}
+
+/// Reflex-ion (`spöb` 129 in Agate, `sÿst` 196, flags `0x21`) is
+/// uninhabited, so it sells no fuel.
+#[test]
+fn reflex_ion_sells_no_fuel() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = docked_with_fuel(&data, 196, 129, 150.0);
+    assert_eq!(session.recharge(), Err(RechargeRefusal::NoFuel));
+    assert_eq!(
+        session.reserves().fuel,
+        Gauge {
+            now: 150.0,
+            max: 300.0
+        }
+    );
 }

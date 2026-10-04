@@ -61,6 +61,11 @@
 //! the outfits the purchase leaves. A purchase makes a save due; a refused
 //! one changes nothing.
 //!
+//! Landed where fuel is sold, the player recharges
+//! ([`Session::recharge`]), filling the tank as the
+//! [`recharge`](crate::recharge) rules say. A refill makes a save due; a
+//! refused one changes nothing.
+//!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
 //! stopping, landing, taking off, a jump beginning and ending), which the
 //! audio side drains with [`Session::take_sounds`]. A refused landing or
@@ -85,6 +90,7 @@ use crate::landing::{LandingRefusal, check_landing};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
 use crate::outfitter::{self, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods};
 use crate::pilot::{self, Pilot};
+use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
 use crate::shipyard::{self, Quote, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
@@ -503,6 +509,22 @@ impl Session {
         self.defaults = pilot::tally(record.defaults.iter().copied());
         self.refit(false);
         bought.ok_or(ShipRefusal::NoShipyard)
+    }
+
+    /// Fills the tank at the stellar the ship is docked at, as the
+    /// [`recharge`] rules say, and gives the price paid: a change made in
+    /// the spaceport, so a save is due. When the ship is not landed where
+    /// fuel is sold, or the refill is refused, nothing changes and the
+    /// refusal says why.
+    pub fn recharge(&mut self) -> Result<i64, RechargeRefusal> {
+        let stellar = self.landed.ok_or(RechargeRefusal::NoFuel)?;
+        let site = self.sites.iter().find(|site| site.id == stellar);
+        if !site.is_some_and(|site| recharge::sells_fuel(site.flags)) {
+            return Err(RechargeRefusal::NoFuel);
+        }
+        let price = recharge::quote(self.pilot.reserves.fuel, self.pilot.cash)?;
+        self.transact(|pilot| recharge::settle(pilot, price));
+        Ok(price)
     }
 
     /// The ship's cargo space, in tons.
@@ -2456,5 +2478,76 @@ mod tests {
         assert_eq!(resumed.reserves(), session.reserves());
         assert_eq!(resumed.stats(), session.stats());
         assert_eq!(*resumed.pilot(), *session.pilot(), "no default added twice");
+    }
+
+    // Recharging.
+
+    /// A session landed at the exchange's inhabited planet 128 with 1000
+    /// credits and half a tank (150 of 300), no save due.
+    fn half_empty_at_port() -> Session {
+        let mut session = Session::start(&exchange()).expect("starts");
+        session.land().expect("lands");
+        session.pilot.reserves.fuel.now = 150.0;
+        session.take_save_due();
+        session
+    }
+
+    #[test]
+    fn recharging_fills_the_tank_charges_the_price_and_makes_a_save_due() {
+        let mut session = half_empty_at_port();
+        assert_eq!(session.recharge(), Ok(150));
+        assert_eq!(session.reserves().fuel, Gauge::full(300.0));
+        assert_eq!(session.pilot().cash(), 1000 - 150);
+        assert!(session.take_save_due());
+    }
+
+    /// Asserts `session.recharge()` is refused with `refusal`, changing
+    /// nothing and making no save due.
+    fn assert_refused(mut session: Session, refusal: RechargeRefusal) {
+        let before = session.clone();
+        assert_eq!(session.recharge(), Err(refusal));
+        assert_eq!(session, before, "nothing changes");
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_full_tank_is_not_recharged() {
+        let mut session = half_empty_at_port();
+        session.pilot.reserves.fuel.now = 300.0;
+        assert_refused(session, RechargeRefusal::Full);
+    }
+
+    #[test]
+    fn a_refill_the_pilot_cannot_pay_for_is_refused() {
+        let mut session = half_empty_at_port();
+        session.pilot.cash = 149;
+        assert_refused(session, RechargeRefusal::CannotAfford);
+    }
+
+    #[test]
+    fn an_uninhabited_stellar_sells_no_fuel() {
+        let catalog = FakePilotCatalog {
+            sites: vec![(
+                SystemId(130),
+                vec![LandingSite {
+                    flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+                    ..planet(128, 0.0, 0.0)
+                }],
+            )],
+            ..exchange()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        session.land().expect("lands");
+        session.pilot.reserves.fuel.now = 150.0;
+        session.take_save_due();
+        assert_refused(session, RechargeRefusal::NoFuel);
+    }
+
+    #[test]
+    fn no_fuel_is_sold_in_flight() {
+        let mut session = half_empty_at_port();
+        session.take_off();
+        session.take_save_due();
+        assert_refused(session, RechargeRefusal::NoFuel);
     }
 }
