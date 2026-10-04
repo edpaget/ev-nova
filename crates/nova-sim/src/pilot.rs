@@ -221,8 +221,14 @@ pub(crate) fn default_outfits(
     catalog: &impl PilotCatalog,
     ship: ShipId,
 ) -> BTreeMap<OutfitId, u16> {
+    tally(catalog.default_outfits(ship))
+}
+
+/// `items`, each an outfit with a count, as how many of each: repeats add
+/// up, saturating, and none of an item is not listed.
+pub(crate) fn tally(items: impl IntoIterator<Item = (OutfitId, u16)>) -> BTreeMap<OutfitId, u16> {
     let mut outfits = BTreeMap::new();
-    for (id, count) in catalog.default_outfits(ship) {
+    for (id, count) in items {
         let owned: &mut u16 = outfits.entry(id).or_default();
         *owned = owned.saturating_add(count);
     }

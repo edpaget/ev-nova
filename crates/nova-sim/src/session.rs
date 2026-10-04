@@ -31,7 +31,8 @@
 //! Everything about how the ship performs (its handling, the most shield,
 //! armour and fuel it holds, its fuel regeneration and its cargo space)
 //! comes from its [`ShipStats`]: its `shïp`'s fields, read when the session
-//! starts, and the outfits the pilot owns. A pilot from a save made
+//! starts (or from the record of a ship bought since), and the outfits the
+//! pilot owns. A pilot from a save made
 //! before outfits were kept owns its ship's default items.
 //!
 //! Each day that goes by steps the planetary events (see
@@ -52,6 +53,14 @@
 //! keeps no more than it can hold. A change makes a save due; a refused
 //! one changes nothing.
 //!
+//! Landed at a shipyard, the player buys a new ship
+//! ([`Session::shipyard`], [`Session::buy_ship`]) as the [`shipyard`]
+//! rules say, from the `shïp`s read when the session starts, trading in
+//! the one flown. From then on the session flies the new ship: its fields
+//! and default items come from its record, and the stats from them and
+//! the outfits the purchase leaves. A purchase makes a save due; a refused
+//! one changes nothing.
+//!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
 //! stopping, landing, taking off, a jump beginning and ending), which the
 //! audio side drains with [`Session::take_sounds`]. A refused landing or
@@ -60,8 +69,8 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{
-    GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, StartError, StellarId,
-    SystemId,
+    GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, StartError,
+    StellarId, SystemId,
 };
 use crate::chance::Chance;
 use crate::date::GameDate;
@@ -77,6 +86,7 @@ use crate::market::{self, Goods, Market, Order, TradeRefusal};
 use crate::outfitter::{self, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods};
 use crate::pilot::{self, Pilot};
 use crate::reserves::{Gauge, Reserves};
+use crate::shipyard::{self, Quote, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 
@@ -91,6 +101,8 @@ pub struct Session {
     defaults: BTreeMap<OutfitId, u16>,
     /// Every `oütf`, read when the session starts.
     outfits: Vec<OutfitRecord>,
+    /// Every `shïp`, read when the session starts.
+    ships: Vec<ShipRecord>,
     /// How the ship performs, with the outfits it carries.
     stats: ShipStats,
     player: ShipState,
@@ -164,6 +176,7 @@ impl Session {
             fields,
             defaults,
             outfits: catalog.outfits(),
+            ships: catalog.ships(),
             // Refitted below, from the outfits the pilot owns.
             stats: ShipStats::default(),
             player,
@@ -370,9 +383,9 @@ impl Session {
     /// Changes the pilot with `change`, while the ship is landed (in the
     /// spaceport), and says whether it did: in flight nothing changes and
     /// `change` is not called. A save is due after a change. `change` must
-    /// not change the ship class, whose fields the session read when it
-    /// started, nor the outfits, which only [`Session::outfit`] changes, so
-    /// the stats follow.
+    /// not change the ship class, which only [`Session::buy_ship`]
+    /// changes, nor the outfits, which only [`Session::outfit`] and
+    /// [`Session::buy_ship`] change, so the fields and the stats follow.
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
         if self.landed.is_none() {
             return false;
@@ -441,6 +454,55 @@ impl Session {
         self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, price));
         self.refit(true);
         Ok(())
+    }
+
+    /// The shipyard of the stellar the ship is docked at, if it has landed
+    /// at one.
+    #[must_use]
+    pub fn shipyard(&self) -> Option<Shipyard> {
+        let stellar = self.landed?;
+        let site = self.sites.iter().find(|site| site.id == stellar)?;
+        Yard {
+            ships: &self.ships,
+            outfits: &self.outfits,
+            fields: self.fields,
+            site,
+        }
+        .shipyard(&self.pilot)
+    }
+
+    /// Buys a ship of class `ship`, trading in the one flown, and gives
+    /// what the purchase did: a change made in the spaceport, so a save is
+    /// due, and the session flies the new ship from then on, its fields,
+    /// default items and stats read from its record. When the ship is not
+    /// landed at a shipyard, or the purchase is refused, nothing changes
+    /// and the refusal says why.
+    pub fn buy_ship(&mut self, ship: ShipId) -> Result<ShipPurchase, ShipRefusal> {
+        let shipyard = self.shipyard().ok_or(ShipRefusal::NoShipyard)?;
+        shipyard.check(ship)?;
+        let record = self
+            .ships
+            .iter()
+            .find(|record| record.id == ship)
+            .cloned()
+            .ok_or(ShipRefusal::NotListed)?;
+        let quote = Quote {
+            price: shipyard.row(ship).map_or(0, |row| row.price),
+            trade_in: shipyard.trade_in,
+        };
+        let old_mass = self.fields.mass;
+        let outfits = std::mem::take(&mut self.outfits);
+        let mut bought = None;
+        self.transact(|pilot| {
+            bought = Some(shipyard::purchase(
+                pilot, old_mass, &record, quote, &outfits,
+            ));
+        });
+        self.outfits = outfits;
+        self.fields = record.fields;
+        self.defaults = pilot::tally(record.defaults.iter().copied());
+        self.refit(false);
+        bought.ok_or(ShipRefusal::NoShipyard)
     }
 
     /// The ship's cargo space, in tons.
@@ -2184,5 +2246,188 @@ mod tests {
                 },
             }
         );
+    }
+
+    // The shipyard.
+
+    use crate::catalog::ShipRecord;
+    use crate::shipyard::{ShipPurchase, ShipRefusal};
+    use crate::testkit::ship;
+
+    /// Ship 129: faster, with more shield, 15 tons of cargo space and 12
+    /// free, of mass 25, regenerating a unit of fuel every 5 ticks.
+    const HEAVY: ShipFields = ShipFields {
+        speed: 900,
+        shield: 80,
+        fuel_regen: 5,
+        holds: 15,
+        free_mass: 12,
+        mass: 25,
+        ..FAST
+    };
+
+    /// Planet 128 at the centre, which the ship starts over: a shipyard
+    /// and outfitter of tech level 5, and a trade center.
+    fn shipyard_site() -> LandingSite {
+        LandingSite {
+            flags: TRADES | StellarFlags::OUTFITTER | StellarFlags::SHIPYARD,
+            ..outfitter_site()
+        }
+    }
+
+    /// [`outfitting`], where planet 128 is a shipyard too, selling ship
+    /// 128 (FAST, 10,000 credits) and ship 129 ([`HEAVY`], 17,500
+    /// credits, carrying a fuel tank).
+    fn shipbuying() -> FakePilotCatalog {
+        FakePilotCatalog {
+            sites: vec![(SystemId(130), vec![shipyard_site()])],
+            ships: vec![(ShipId(128), Ok(FAST)), (ShipId(129), Ok(HEAVY))],
+            defaults: vec![(ShipId(129), vec![(TANK, 1)])],
+            ship_records: vec![
+                ship(128, FAST),
+                ShipRecord {
+                    cost: 17_500,
+                    defaults: vec![(TANK, 1)],
+                    ..ship(129, HEAVY)
+                },
+            ],
+            ..outfitting()
+        }
+    }
+
+    const NEW: ShipId = ShipId(129);
+
+    #[test]
+    fn there_is_a_shipyard_only_while_landed_at_one() {
+        let catalog = shipbuying();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.shipyard(), None, "in flight");
+        assert_eq!(session.buy_ship(NEW), Err(ShipRefusal::NoShipyard));
+        session.land().expect("lands");
+        let shipyard = session.shipyard().expect("a shipyard");
+        assert_eq!(shipyard.rows.len(), 2);
+        assert_eq!((shipyard.cash, shipyard.trade_in), (25_000, 2500));
+        assert_eq!(shipyard.current, ShipId(128));
+        let plain = FakePilotCatalog {
+            sites: vec![(SystemId(130), vec![outfitter_site()])],
+            ..shipbuying()
+        };
+        let mut session = outfitted(&plain);
+        assert_eq!(session.shipyard(), None, "no shipyard here");
+        assert_eq!(session.buy_ship(NEW), Err(ShipRefusal::NoShipyard));
+    }
+
+    #[test]
+    fn a_session_reads_the_ship_records_once_when_it_starts() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        assert_eq!(*catalog.ship_record_reads.borrow(), 1);
+        session.buy_ship(NEW).expect("bought");
+        session.shipyard().expect("a shipyard");
+        session.take_off();
+        jump(&mut session, &catalog, 131);
+        assert_eq!(*catalog.ship_record_reads.borrow(), 1);
+    }
+
+    #[test]
+    fn buying_a_ship_makes_a_save_due_and_a_refused_one_changes_nothing() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        let before = session.clone();
+        assert_eq!(session.buy_ship(ShipId(999)), Err(ShipRefusal::NotListed));
+        let mut poor = session.clone();
+        poor.pilot.cash = 14_999;
+        let poorer = poor.clone();
+        assert_eq!(poor.buy_ship(NEW), Err(ShipRefusal::CannotAfford));
+        assert_eq!(poor, poorer);
+        assert!(!poor.take_save_due());
+        assert_eq!(session, before);
+        assert!(!session.take_save_due());
+        assert_eq!(
+            session.buy_ship(NEW),
+            Ok(ShipPurchase {
+                price: 17_500,
+                trade_in: 2500,
+                sold_back: BTreeMap::new(),
+                refund: 0,
+                left_behind: BTreeMap::new(),
+            })
+        );
+        assert!(session.take_save_due());
+        assert_eq!(session.ship(), NEW);
+        assert_eq!(session.pilot().cash(), 25_000 - 17_500 + 2500);
+        assert_eq!(session.pilot().outfits().collect::<Vec<_>>(), [(TANK, 1)]);
+    }
+
+    #[test]
+    fn after_a_purchase_the_stats_are_the_new_ships_with_its_outfits() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session.outfit(buy(SPEED)).expect("bought");
+        session.buy_ship(NEW).expect("bought");
+        let stats = ShipStats::new(
+            HEAVY,
+            &[crate::fuel::OutfitMod {
+                mod_type: MORE_FUEL,
+                mod_val: 100,
+                count: 1,
+            }],
+        );
+        assert_eq!(session.stats(), stats, "the booster went with the old ship");
+        assert_eq!(session.handling(), stats.handling);
+        assert_eq!(session.handling().max_speed, 9.0);
+        assert_eq!(session.capacity(), 15);
+        assert_eq!(session.reserves(), stats.full());
+        assert_eq!(session.reserves().fuel, Gauge::full(400.0));
+        assert_eq!(session.fuel_regen_per_tick(), 0.2);
+        assert_eq!(session.market().expect("an exchange").capacity, 15);
+    }
+
+    #[test]
+    fn after_a_purchase_the_outfitter_reads_the_new_ships_free_mass_and_defaults() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session.buy_ship(NEW).expect("bought");
+        let outfitter = session.outfitter().expect("an outfitter");
+        assert_eq!(outfitter.free_mass, 12, "its tank is fitted on top");
+        let shipyard = session.shipyard().expect("a shipyard");
+        assert_eq!(shipyard.current, NEW);
+        assert_eq!(shipyard.trade_in, 17_500 / 4 + 500, "the hull and its tank");
+    }
+
+    #[test]
+    fn after_take_off_the_ship_flies_at_the_new_top_speed() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session.buy_ship(NEW).expect("bought");
+        session.take_off().expect("took off");
+        let mut expected = *session.player();
+        for _ in 0..200 {
+            session.tick(THRUST);
+            step(&mut expected, &ShipStats::new(HEAVY, &[]).handling, THRUST);
+        }
+        assert_eq!(*session.player(), expected);
+        assert!((session.player().velocity.length() - 9.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_pilot_saved_after_a_purchase_flies_again_as_it_was() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session
+            .trade(order(FOOD, Direction::Buy, Lot::Max))
+            .expect("bought");
+        session.buy_ship(NEW).expect("bought");
+        let text = crate::save::encode(session.pilot());
+        let pilot = crate::save::decode(&text).expect("a pilot");
+        assert_eq!(pilot, *session.pilot());
+        let resumed = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(resumed.ship(), NEW);
+        assert_eq!(resumed.pilot().outfits().collect::<Vec<_>>(), [(TANK, 1)]);
+        assert_eq!(resumed.pilot().cash(), session.pilot().cash());
+        assert_eq!(resumed.pilot().held(FOOD), 15);
+        assert_eq!(resumed.reserves(), session.reserves());
+        assert_eq!(resumed.stats(), session.stats());
+        assert_eq!(*resumed.pilot(), *session.pilot(), "no default added twice");
     }
 }

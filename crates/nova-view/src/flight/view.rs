@@ -765,8 +765,8 @@ mod tests {
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
         CharacterStart, CommodityStrings, DisasterRecord, Handling, JunkRecord, LandingSite,
-        OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipStats, SimSound, SoundId,
-        StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
+        OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats, SimSound,
+        SoundId, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
     };
 
     use super::*;
@@ -803,6 +803,8 @@ mod tests {
         disasters: Vec<DisasterRecord>,
         /// The outfits: none, by default.
         outfits: Vec<OutfitRecord>,
+        /// The ship classes the shipyard reads: none, by default.
+        ships: Vec<ShipRecord>,
     }
 
     type View = FlightView<FakeCatalog>;
@@ -849,6 +851,7 @@ mod tests {
             commodities: CommodityStrings::default(),
             disasters: Vec::new(),
             outfits: Vec::new(),
+            ships: Vec::new(),
         }
     }
 
@@ -910,6 +913,10 @@ mod tests {
 
         fn outfits(&self) -> Vec<OutfitRecord> {
             self.outfits.clone()
+        }
+
+        fn ships(&self) -> Vec<ShipRecord> {
+            self.ships.clone()
         }
 
         fn system_exists(&self, id: SystemId) -> bool {

@@ -4,7 +4,7 @@
 //!
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
-//!   `oütf`s, which systems exist, the star map, and the commodities,
+//!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
 //!   `jünk` and `öops` the exchange trades and is moved by.
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on.
@@ -47,11 +47,18 @@
 //!   opens them.
 //! - [`session`]: a flight [`Session`], a pilot's ship flying
 //!   from its starting system, landing, and jumping along a plotted course.
+//! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
+//!   ([`Shipyard`]), their price, what the ship flown trades in for, and
+//!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
+//!   cargo kept and the default items fitted.
 //! - [`sound`]: the [`SimSound`] events a session emits as it thrusts,
 //!   lands, takes off and jumps; the audio side decides what they play.
 //! - [`stats`]: a ship's computed [`ShipStats`], from its `shïp`'s fields
 //!   and the outfits it carries: the one place its handling, reserve
 //!   capacities, fuel regeneration and cargo space come from.
+//! - [`wares`]: the rules the outfitter and the shipyard share: tech
+//!   levels, `Require` and `Contribute`, the hiding flags, the hide-higher
+//!   sweep and the rows' order.
 
 pub mod catalog;
 pub mod chance;
@@ -73,15 +80,17 @@ pub mod reserves;
 pub mod save;
 pub mod saves;
 pub mod session;
+pub mod shipyard;
 pub mod sound;
 pub mod stats;
 #[cfg(test)]
 mod testkit;
+pub mod wares;
 
 pub use catalog::{
     CharacterStart, CommodityStrings, DisasterId, DisasterRecord, GovtId, JunkId, JunkRecord,
-    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, SoundId, StarSystem, StartDate,
-    StartError, StellarId, SystemId,
+    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem,
+    StartDate, StartError, StellarId, SystemId,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
@@ -99,5 +108,6 @@ pub use reserves::{Gauge, Reserves};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::Session;
+pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;

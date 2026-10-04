@@ -40,6 +40,10 @@ impl PilotCatalog for Pilot {
         Vec::new()
     }
 
+    fn ships(&self) -> Vec<nova_sim::ShipRecord> {
+        Vec::new()
+    }
+
     fn system_exists(&self, _id: SystemId) -> bool {
         true
     }

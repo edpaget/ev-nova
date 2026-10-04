@@ -1,7 +1,9 @@
 //! A flight session over the stock data: the first `chär` starts a session
 //! with its ship's handling and reserves in a system that exists, Port
 //! Kane's exchange trades at its levels, and its outfitter sells what its
-//! tech levels allow. Skips, passing, when `NOVA_DATA` is unset.
+//! tech levels allow; Viking's shipyard sells what its tech levels and the
+//! ships' `BuyRandom` allow, and trades the Shuttle in. Skips, passing,
+//! when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -364,4 +366,74 @@ fn a_battery_pack_adds_a_jump_of_fuel_to_the_shuttle() {
         Gauge::full(400.0),
         "the new tank comes full"
     );
+}
+
+/// A new stock pilot, docked at Viking (`spöb` 157 in Tichel, `sÿst`
+/// 129, a jump from Kania), through a save that says so.
+fn at_viking(data: &GameData) -> Session {
+    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["system"] = serde_json::json!(129);
+    save["stellar"] = serde_json::json!(157);
+    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let session = Session::fly(data, docked).expect("flies");
+    assert_eq!(session.landed(), Some(StellarId(157)), "docked at Viking");
+    session
+}
+
+/// Viking (tech level 4, special tech 81, 16, 12 and 10) sells the
+/// Shuttle, the Heavy Shuttle, the Terrapin and the Viper, and none of
+/// the ships whose `BuyRandom` is 0, though its tech levels allow them
+/// (the Cargo Drone among them).
+#[test]
+fn vikings_shipyard_sells_what_its_tech_levels_and_buy_random_allow() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let session = at_viking(&data);
+    let shipyard = session.shipyard().expect("a shipyard");
+    for id in [128, 129, 136, 167] {
+        assert!(shipyard.row(ShipId(id)).is_some(), "{id}: {shipyard:?}");
+    }
+    let site = data
+        .landing_sites(nova_sim::SystemId(129))
+        .into_iter()
+        .find(|site| site.id == StellarId(157))
+        .expect("Viking is in Tichel");
+    let never: Vec<_> = data
+        .ships()
+        .into_iter()
+        .filter(|ship| ship.buy_random <= 0 && nova_sim::wares::tech_allows(ship.tech_level, &site))
+        .map(|ship| ship.id)
+        .collect();
+    // Among them the Cargo Drone, `shïp` 130, of tech level 4.
+    assert!(never.contains(&ShipId(130)), "{never:?}");
+    for id in never {
+        assert!(shipyard.row(id).is_none(), "{id:?}");
+    }
+    assert_eq!(shipyard.trade_in, 2500, "a quarter of the Shuttle");
+    assert_eq!(shipyard.cash, 25_000);
+    assert_eq!(shipyard.current, ShipId(128));
+}
+
+/// Buying the Heavy Shuttle (17,500 credits) trades the Shuttle in for
+/// 2,500 and leaves 10,000 credits, 15 tons of cargo space and 12 free.
+#[test]
+fn a_heavy_shuttle_trades_in_the_shuttle() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = at_viking(&data);
+    let bought = session.buy_ship(ShipId(129)).expect("bought");
+    assert_eq!((bought.price, bought.trade_in), (17_500, 2500));
+    assert_eq!(session.ship(), ShipId(129));
+    assert_eq!(session.pilot().cash(), 10_000);
+    assert_eq!(session.capacity(), 15);
+    assert_eq!(session.outfitter().map(|o| o.free_mass), Some(12));
+    let fields = data.ship_fields(ShipId(129)).expect("decodes");
+    assert_eq!(session.stats(), ShipStats::new(fields, &[]));
+    assert_eq!(session.pilot().outfits().count(), 0);
 }

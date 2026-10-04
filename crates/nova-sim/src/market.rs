@@ -197,8 +197,8 @@ pub fn cargo_capacity(holds: i16, outfits: &[OutfitMod]) -> u32 {
 ///
 /// Always true for now: there are no control bits until rdm
 /// `roadmap/missions-and-storylines` builds them, and this is the one
-/// place every `öops` `ActivateOn`, `jünk` `BuyOn`/`SellOn` and `oütf`
-/// `Availability` is tested, so that roadmap replaces it here.
+/// place every `öops` `ActivateOn`, `jünk` `BuyOn`/`SellOn`, and `oütf`
+/// and `shïp` `Availability` is tested, so that roadmap replaces it here.
 #[must_use]
 pub fn control_bits_allow(_expression: &str) -> bool {
     true

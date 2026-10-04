@@ -115,6 +115,49 @@ pub struct OutfitRecord {
     pub availability: String,
 }
 
+/// A ship class, raw from its `shïp`: the [`shipyard`](crate::shipyard)
+/// rules decide what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShipRecord {
+    /// The `shïp`'s ID.
+    pub id: ShipId,
+    /// Its name: the resource's name, or its `ShortName` when the resource
+    /// has none.
+    pub name: String,
+    /// Its `ShortName`, raw: a literal `\n` splits it in two lines.
+    pub short_name: String,
+    /// Its `Long Name`.
+    pub long_name: String,
+    /// Its handling, reserve, cargo and mass fields.
+    pub fields: ShipFields,
+    /// Its `DefaultItems`, raw: each item's `oütf` ID with its count, in
+    /// slot order, a negative count as none (as
+    /// [`PilotCatalog::default_outfits`] gives them).
+    pub defaults: Vec<(OutfitId, u16)>,
+    /// Its `Cost`.
+    pub cost: i32,
+    /// Its `TechLevel`.
+    pub tech_level: i16,
+    /// Its `BuyRandom`: the percent chance a day it is for sale.
+    pub buy_random: i16,
+    /// Its `Require` bits.
+    pub require: u64,
+    /// Its `Availability` control-bit expression.
+    pub availability: String,
+    /// Its `Flags3`.
+    pub flags3: u16,
+    /// Its `DispWeight`: higher shows nearer the top.
+    pub disp_weight: i16,
+    /// Its `MaxGun`.
+    pub max_gun: i16,
+    /// Its `MaxTur`.
+    pub max_tur: i16,
+    /// Its `Length`, in metres.
+    pub length: i16,
+    /// Its `Crew`.
+    pub crew: i16,
+}
+
 /// The standard commodities, raw from their string lists: `STR#` 4000
 /// "All Cargo" names them and `STR#` 4004 "Base Prices" prices them, the
 /// nth string for commodity n (from 0); the [`market`](crate::market)
@@ -219,6 +262,8 @@ pub trait PilotCatalog {
     fn default_outfits(&self, id: ShipId) -> Vec<(OutfitId, u16)>;
     /// Every `oütf` that can be read, by ascending ID.
     fn outfits(&self) -> Vec<OutfitRecord>;
+    /// Every `shïp` that can be read, by ascending ID.
+    fn ships(&self) -> Vec<ShipRecord>;
     /// Whether system `id` exists and can be read.
     fn system_exists(&self, id: SystemId) -> bool;
     /// The stellars of system `id` that can be read, in its `nav_def`
@@ -251,6 +296,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn outfits(&self) -> Vec<OutfitRecord> {
         (**self).outfits()
+    }
+
+    fn ships(&self) -> Vec<ShipRecord> {
+        (**self).ships()
     }
 
     fn system_exists(&self, id: SystemId) -> bool {
@@ -295,6 +344,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn outfits(&self) -> Vec<OutfitRecord> {
         (**self).outfits()
+    }
+
+    fn ships(&self) -> Vec<ShipRecord> {
+        (**self).ships()
     }
 
     fn system_exists(&self, id: SystemId) -> bool {
@@ -382,6 +435,14 @@ mod tests {
             }]
         }
 
+        /// Ship 128, the Shuttle.
+        fn ships(&self) -> Vec<ShipRecord> {
+            vec![ShipRecord {
+                name: "Shuttle".to_owned(),
+                ..crate::testkit::ship(128, ShipFields::default())
+            }]
+        }
+
         fn system_exists(&self, id: SystemId) -> bool {
             id == SystemId(130)
         }
@@ -465,6 +526,7 @@ mod tests {
             format!("{:?}", catalog.junk()),
             format!("{:?}", catalog.disasters()),
             format!("{:?}", catalog.outfits()),
+            format!("{:?}", catalog.ships()),
         ]
     }
 
@@ -484,6 +546,7 @@ mod tests {
         assert!(direct[11].contains("Opals"), "{direct:?}");
         assert!(direct[12].contains("food surplus"), "{direct:?}");
         assert!(direct[13].contains("Scoop"), "{direct:?}");
+        assert!(direct[14].contains("Shuttle"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

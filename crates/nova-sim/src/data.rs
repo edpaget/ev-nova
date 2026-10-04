@@ -14,8 +14,8 @@ use nova_data::records::system::System;
 
 use crate::catalog::{
     CharacterStart, CommodityStrings, DisasterId, DisasterRecord, JunkRecord, LandingSite,
-    OutfitId, OutfitRecord, PilotCatalog, ShipId, SoundId, StarSystem, StartDate, StartError,
-    SystemId,
+    OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
+    StartError, SystemId,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -51,19 +51,7 @@ impl PilotCatalog for GameData {
 
     fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String> {
         match self.get::<Ship>(id.0) {
-            Some(Ok(ship)) => Ok(ShipFields {
-                speed: ship.record.speed,
-                accel: ship.record.accel,
-                maneuver: ship.record.maneuver,
-                shield: ship.record.shield,
-                armor: ship.record.armor,
-                fuel: ship.record.fuel,
-                fuel_regen: ship.record.fuel_regen,
-                holds: ship.record.holds,
-                mass: ship.record.mass,
-                free_mass: ship.record.free_mass,
-                contribute: ship.record.contribute.bits(),
-            }),
+            Some(Ok(ship)) => Ok(ship_fields(ship.record)),
             Some(Err(err)) => Err(err.to_string()),
             None => Err(format!("no shïp {}", id.0)),
         }
@@ -73,16 +61,35 @@ impl PilotCatalog for GameData {
         let Some(Ok(ship)) = self.get::<Ship>(id.0) else {
             return Vec::new();
         };
-        let ship = ship.record;
-        let items = ship
-            .default_items1_4
-            .into_iter()
-            .chain(ship.default_items5_8);
-        let counts = ship.item_count1_4.into_iter().chain(ship.item_count5_8);
-        items
-            .zip(counts)
-            // A negative count carries none.
-            .filter_map(|(item, count)| Some((item?, u16::try_from(count).unwrap_or(0))))
+        default_items(ship.record)
+    }
+
+    fn ships(&self) -> Vec<ShipRecord> {
+        self.records::<Ship>()
+            .filter_map(|(id, ship)| {
+                let ship = ship.ok()?;
+                let record = ship.record;
+                let short_name = record.short_name.as_str().to_owned();
+                Some(ShipRecord {
+                    id: ShipId(id),
+                    name: ship.name.map_or_else(|| short_name.clone(), str::to_owned),
+                    short_name,
+                    long_name: record.long_name.as_str().to_owned(),
+                    fields: ship_fields(record),
+                    defaults: default_items(record),
+                    cost: record.cost,
+                    tech_level: record.tech_level,
+                    buy_random: record.buy_random,
+                    require: record.require.bits(),
+                    availability: record.availability.as_str().to_owned(),
+                    flags3: record.flags3.bits(),
+                    disp_weight: record.disp_weight,
+                    max_gun: record.max_gun,
+                    max_tur: record.max_tur,
+                    length: record.length,
+                    crew: record.crew,
+                })
+            })
             .collect()
     }
 
@@ -215,6 +222,37 @@ impl PilotCatalog for GameData {
             })
             .collect()
     }
+}
+
+/// A `shïp`'s handling, reserve, cargo and mass fields.
+fn ship_fields(ship: &Ship) -> ShipFields {
+    ShipFields {
+        speed: ship.speed,
+        accel: ship.accel,
+        maneuver: ship.maneuver,
+        shield: ship.shield,
+        armor: ship.armor,
+        fuel: ship.fuel,
+        fuel_regen: ship.fuel_regen,
+        holds: ship.holds,
+        mass: ship.mass,
+        free_mass: ship.free_mass,
+        contribute: ship.contribute.bits(),
+    }
+}
+
+/// A `shïp`'s `DefaultItems`, each item with its count in slot order.
+fn default_items(ship: &Ship) -> Vec<(OutfitId, u16)> {
+    let items = ship
+        .default_items1_4
+        .into_iter()
+        .chain(ship.default_items5_8);
+    let counts = ship.item_count1_4.into_iter().chain(ship.item_count5_8);
+    items
+        .zip(counts)
+        // A negative count carries none.
+        .filter_map(|(item, count)| Some((item?, u16::try_from(count).unwrap_or(0))))
+        .collect()
 }
 
 /// The `STR#` naming the standard commodities, "All Cargo".
@@ -523,6 +561,82 @@ mod tests {
         assert_eq!(data.default_outfits(ShipId(128)), []);
         assert_eq!(data.default_outfits(ShipId(129)), []);
         assert_eq!(data.default_outfits(ShipId(130)), []);
+    }
+
+    /// A `shïp` sold in the shipyard: every field the shipyard reads set to
+    /// something of its own, with two default items.
+    fn for_sale() -> Vec<u8> {
+        let mut bytes = outfitted(&[(200, 2), (201, -1)], &[(202, 1)]);
+        put_i16s(&mut bytes, 0x00, &[-15]);
+        put_i16s(&mut bytes, 0x0C, &[12]);
+        put_i16s(&mut bytes, 0x2A, &[4, 2, 6]);
+        bytes[0x30..0x34].copy_from_slice(&17_500_i32.to_be_bytes());
+        put_i16s(&mut bytes, 0x3C, &[25, 30, 41]);
+        put_i16s(&mut bytes, 0x44, &[3]);
+        bytes[0x64..0x6C].copy_from_slice(&0x10_u64.to_be_bytes());
+        bytes[0x6C..0x70].copy_from_slice(b"b422");
+        bytes[0x380..0x388].copy_from_slice(&0x0000_0002_0000_0001_u64.to_be_bytes());
+        put_i16s(&mut bytes, 0x388, &[45]);
+        bytes[0x5CE..0x5DD].copy_from_slice(b"Heavy\\nShuttle!");
+        bytes[0x62E..0x63D].copy_from_slice(b"A Heavy Shuttle");
+        bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn each_readable_shïp_is_a_ship_record_by_id() {
+        let data = store_named(&[
+            (Ship::TYPE, 130, None, for_sale()),
+            (Ship::TYPE, 129, Some("Heavy Shuttle"), for_sale()),
+            (Ship::TYPE, 131, Some("Short"), short(for_sale())),
+        ]);
+        let record = |id: i16, name: &str| ShipRecord {
+            id: ShipId(id),
+            name: name.to_owned(),
+            short_name: "Heavy\\nShuttle!".to_owned(),
+            long_name: "A Heavy Shuttle".to_owned(),
+            fields: ShipFields {
+                holds: -15,
+                accel: 1,
+                speed: 2,
+                maneuver: 3,
+                free_mass: 12,
+                mass: 30,
+                contribute: 0x10,
+                ..ShipFields::default()
+            },
+            defaults: vec![(OutfitId(200), 2), (OutfitId(201), 0), (OutfitId(202), 1)],
+            cost: 17_500,
+            tech_level: 6,
+            buy_random: 45,
+            require: 0x0000_0002_0000_0001,
+            availability: "b422".to_owned(),
+            flags3: 0x4100,
+            disp_weight: 25,
+            max_gun: 4,
+            max_tur: 2,
+            length: 41,
+            crew: 3,
+        };
+        assert_eq!(
+            data.ships(),
+            [
+                record(129, "Heavy Shuttle"),
+                record(130, "Heavy\\nShuttle!"),
+            ],
+            "a resource without a name goes by its ShortName; an undecodable one is skipped"
+        );
+        assert_eq!(
+            data.ships()[0].fields,
+            data.ship_fields(ShipId(129)).expect("decodes"),
+            "the same fields a session flies with"
+        );
+        assert_eq!(
+            data.ships()[0].defaults,
+            data.default_outfits(ShipId(129)),
+            "the same default items"
+        );
+        assert_eq!(store(&[]).ships(), []);
     }
 
     /// An `oütf` with these four `ModType` and `ModVal` pairs, every other

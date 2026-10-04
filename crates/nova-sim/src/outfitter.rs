@@ -64,10 +64,11 @@
 //!
 //! Not modelled yet: the gun and turret limits (`MaxGun`, `MaxTur`, flags
 //! 0x0001 and 0x0002), selling a launcher before its ammunition,
-//! `ModType` 27's raised maximums, and keeping outfits across a change of
-//! ship (flags 0x0004 and 0x0020).
+//! and `ModType` 27's raised maximums. Which outfits a ship bought in the
+//! [`shipyard`](crate::shipyard) keeps is the shipyard's (flag 0x0004);
+//! flag 0x0020 only concerns a mission's change of ship.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::catalog::{GovtId, LandingSite, OutfitId, OutfitRecord};
 use crate::fuel::OutfitMod;
@@ -75,12 +76,16 @@ use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
 use crate::market::{Direction, control_bits_allow};
 use crate::pilot::Pilot;
+use crate::wares::{self, HideBits, HideHigher};
 
 /// The `oütf` `Flags` bits the outfitter reads (the Bible).
 #[derive(Clone, Copy, Debug)]
 pub struct OutfitFlags;
 
 impl OutfitFlags {
+    /// Stays with the player when they trade ships (persistent): see
+    /// [`shipyard`](crate::shipyard).
+    pub const PERSISTENT: u16 = 0x0004;
     /// Can't be sold.
     pub const CANNOT_SELL: u16 = 0x0008;
     /// Removed after purchase: buying it only pays.
@@ -203,11 +208,7 @@ impl Outfitter {
 /// Whether `outfit` is for sale, by tech level alone, at `site`.
 #[must_use]
 pub fn tech_allows(outfit: &OutfitRecord, site: &LandingSite) -> bool {
-    outfit.tech_level <= site.tech_level
-        || site
-            .special_tech
-            .iter()
-            .any(|&slot| slot > 0 && slot == outfit.tech_level)
+    wares::tech_allows(outfit.tech_level, site)
 }
 
 /// Whether an outfit's `Require` applies at a stellar of `govt` (`None`
@@ -261,9 +262,14 @@ pub fn unit_mass(outfit: &OutfitRecord, ship_mass: i16) -> i64 {
 /// holds (`available`).
 #[must_use]
 pub fn hides(flags: u16, required: bool, available: bool) -> bool {
-    (flags & OutfitFlags::HIDE_UNLESS_REQUIRED != 0 && !required)
-        || (flags & OutfitFlags::HIDE_UNLESS_AVAILABLE != 0 && !available)
+    wares::hidden(flags, HIDE_BITS, required, available)
 }
+
+/// The `oütf` flags that hide an outfit.
+const HIDE_BITS: HideBits = HideBits {
+    unless_required: OutfitFlags::HIDE_UNLESS_REQUIRED,
+    unless_available: OutfitFlags::HIDE_UNLESS_AVAILABLE,
+};
 
 /// What one outfit priced at `price` sells back for.
 #[must_use]
@@ -331,29 +337,24 @@ impl Shop<'_> {
         if self.site.flags & StellarFlags::OUTFITTER == 0 {
             return None;
         }
-        let contributed = pilot
-            .outfits
-            .keys()
-            .filter_map(|id| self.records.iter().find(|record| record.id == *id))
-            .fold(self.fields.contribute, |bits, record| {
-                bits | record.contribute
-            });
+        let contributed = wares::contributed(self.fields.contribute, &pilot.outfits, self.records);
         let free = free_mass(self.fields, self.defaults, &pilot.outfits, self.records);
         let mut sorted: Vec<&OutfitRecord> = self.records.iter().collect();
         sorted.sort_by_key(|record| record.id);
-        let mut taken_off = BTreeSet::new();
+        let mut sweep = HideHigher::default();
         let mut rows = Vec::new();
         for record in sorted {
             let owned = pilot.owned(record.id);
             let required = !requirements_apply(record.require_govt, self.site.govt)
-                || record.require & !contributed == 0;
+                || wares::requirement_met(record.require, contributed);
             let available = control_bits_allow(&record.availability);
-            let for_sale =
-                tech_allows(record, self.site) && !taken_off.contains(&record.disp_weight);
+            let for_sale = tech_allows(record, self.site) && sweep.on_sale(record.disp_weight);
             let buyable = for_sale && required && available;
-            if buyable && record.flags & OutfitFlags::HIDE_HIGHER != 0 {
-                taken_off.insert(record.disp_weight);
-            }
+            sweep.note(
+                record.disp_weight,
+                record.flags & OutfitFlags::HIDE_HIGHER != 0,
+                buyable,
+            );
             let hidden = owned == 0 && hides(record.flags, required, available);
             let sells_anywhere = record.flags & OutfitFlags::SELL_ANYWHERE != 0;
             let listed = (for_sale && !hidden) || (owned > 0 && sells_anywhere);
@@ -409,7 +410,7 @@ impl Shop<'_> {
                 },
             ));
         }
-        rows.sort_by_key(|(weight, row)| (std::cmp::Reverse(*weight), row.id));
+        wares::in_display_order(&mut rows, |(weight, row)| (*weight, row.id.0));
         Some(Outfitter {
             rows: rows.into_iter().map(|(_, row)| row).collect(),
             cash: pilot.cash,

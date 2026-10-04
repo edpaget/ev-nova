@@ -4,7 +4,8 @@ use std::cell::RefCell;
 
 use crate::catalog::{
     CharacterStart, CommodityStrings, DisasterRecord, JunkRecord, LandingSite, OutfitId,
-    OutfitRecord, PilotCatalog, ShipId, StarSystem, StartDate, StartError, StellarId, SystemId,
+    OutfitRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError, StellarId,
+    SystemId,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::flight::{Controls, Turn};
@@ -33,6 +34,10 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) outfits: Vec<OutfitRecord>,
     /// How many times the outfits were read.
     pub(crate) outfit_reads: RefCell<usize>,
+    /// Every `shïp`, as the shipyard reads them.
+    pub(crate) ship_records: Vec<ShipRecord>,
+    /// How many times the ship records were read.
+    pub(crate) ship_record_reads: RefCell<usize>,
     pub(crate) commodities: CommodityStrings,
     pub(crate) junk: Vec<JunkRecord>,
     pub(crate) disasters: Vec<DisasterRecord>,
@@ -92,6 +97,31 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
     }
 }
 
+/// `shïp` `id` with `fields`: 10,000 credits, tech level 1, for sale
+/// every day (`BuyRandom` 100), requiring nothing, with no default items
+/// and no `Flags3`.
+pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
+    ShipRecord {
+        id: ShipId(id),
+        name: format!("Ship {id}"),
+        short_name: format!("Ship\\n{id}"),
+        long_name: format!("The Ship {id}"),
+        fields,
+        defaults: Vec::new(),
+        cost: 10_000,
+        tech_level: 1,
+        buy_random: 100,
+        require: 0,
+        availability: String::new(),
+        flags3: 0,
+        disp_weight: 0,
+        max_gun: 2,
+        max_tur: 1,
+        length: 20,
+        crew: 3,
+    }
+}
+
 /// The first `chär` flies ship 128 from system 130 on 23 June 1177;
 /// ship 128 is fast, and systems 130 and 131 exist. System 130 holds a
 /// planet, 128, at (30, -40), which the ship starts over, and another,
@@ -128,6 +158,8 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         defaults_asked: RefCell::default(),
         outfits: Vec::new(),
         outfit_reads: RefCell::default(),
+        ship_records: Vec::new(),
+        ship_record_reads: RefCell::default(),
         commodities: CommodityStrings::default(),
         junk: Vec::new(),
         disasters: Vec::new(),
@@ -185,6 +217,11 @@ impl PilotCatalog for FakePilotCatalog {
     fn outfits(&self) -> Vec<OutfitRecord> {
         *self.outfit_reads.borrow_mut() += 1;
         self.outfits.clone()
+    }
+
+    fn ships(&self) -> Vec<ShipRecord> {
+        *self.ship_record_reads.borrow_mut() += 1;
+        self.ship_records.clone()
     }
 
     fn system_exists(&self, id: SystemId) -> bool {
