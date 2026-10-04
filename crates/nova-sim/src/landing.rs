@@ -182,10 +182,7 @@ pub fn land_or_select(
         }
         return check_landing(player, site, system_govt, record).map(LandOutcome::Landed);
     }
-    let Some(site) = nearest(
-        player.position,
-        sites.iter().filter(|site| is_landable(site)),
-    ) else {
+    let Some(site) = nearest_landable_site(player.position, sites) else {
         return Err(
             nearest(player.position, sites.iter()).map_or(LandingRefusal::NoStellars, not_landable)
         );
@@ -218,7 +215,13 @@ pub fn is_landable(site: &LandingSite) -> bool {
 /// landable.
 #[must_use]
 pub fn nearest_landable(position: Vec2, sites: &[LandingSite]) -> Option<StellarId> {
-    nearest(position, sites.iter().filter(|site| is_landable(site))).map(|site| site.id)
+    nearest_landable_site(position, sites).map(|site| site.id)
+}
+
+/// The site [`nearest_landable`] names: the one the land key selects when
+/// there is no target.
+fn nearest_landable_site(position: Vec2, sites: &[LandingSite]) -> Option<&LandingSite> {
+    nearest(position, sites.iter().filter(|site| is_landable(site)))
 }
 
 /// The one of `sites` whose centre is nearest `position`, the first of
