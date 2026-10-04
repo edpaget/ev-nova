@@ -12,6 +12,12 @@
 //! arrow keys fly the ship, Tab does nothing, and Escape goes back to the
 //! screen flight was entered from; it never quits.
 //!
+//! M and J are flight's own keys. M opens flight's course map, where a
+//! click sets the destination; Escape (or M) closes it, back into flight.
+//! J jumps along the course. The Tab side's galaxy map stays the
+//! developer's viewer, which enters systems; play plots courses on the map
+//! opened from flight, which has no "Enter system" button.
+//!
 //! L, in flight over a stellar that can be landed on, lands and shows its
 //! spaceport ([`SpaceportView`]), laid out by the interface file's
 //! "Spaceport" dialog when the router has dialogs; without them the
@@ -66,6 +72,8 @@ pub enum Showing {
     System,
     /// The player's ship in flight.
     Flight,
+    /// Flight's course map, opened with M.
+    FlightMap,
     /// The spaceport of the stellar landed on.
     Spaceport,
     /// The About text, over another screen.
@@ -97,8 +105,8 @@ pub struct AppScreen {
     /// The galaxy map and any system opened from it, reading the same game
     /// data.
     galaxy: Navigator<Rc<GameData>>,
-    /// Flight, once entered.
-    flight: Option<FlightView>,
+    /// Flight, once entered, reading the same game data.
+    flight: Option<FlightView<Rc<GameData>>>,
     /// What dialogs are built from, once given.
     dialogs: Option<Dialogs>,
     /// The About dialog, while it is open.
@@ -171,6 +179,9 @@ impl AppScreen {
             Side::Ships => Showing::ShipBrowser,
             Side::Galaxy if self.galaxy.system().is_some() => Showing::System,
             Side::Galaxy => Showing::GalaxyMap,
+            Side::Flight if self.flight.as_ref().is_some_and(FlightView::map_open) => {
+                Showing::FlightMap
+            }
             Side::Flight => Showing::Flight,
             Side::Spaceport => Showing::Spaceport,
         }
@@ -196,7 +207,7 @@ impl AppScreen {
 
     /// The flight screen, shown or not, once flight has been entered.
     #[must_use]
-    pub fn flight_view(&self) -> Option<&FlightView> {
+    pub fn flight_view(&self) -> Option<&FlightView<Rc<GameData>>> {
         self.flight.as_ref()
     }
 
@@ -245,7 +256,7 @@ impl AppScreen {
     fn enter_flight(&mut self) {
         let data = &self.data;
         self.flight
-            .get_or_insert_with(|| FlightView::new(data.as_ref()));
+            .get_or_insert_with(|| FlightView::new(Rc::clone(data)));
         self.return_to = self.side;
         self.switch_to(Side::Flight);
     }
@@ -280,8 +291,9 @@ impl AppScreen {
         ScreenAction::None
     }
 
-    /// Flight's input: an Escape press goes back, and everything else goes
-    /// to flight (which ignores Tab). When it lands, the spaceport shows.
+    /// Flight's input: an Escape press closes flight's map when it is
+    /// open, and otherwise goes back; everything else goes to flight
+    /// (which ignores Tab). When it lands, the spaceport shows.
     fn flight_input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
             key: Key::Escape,
@@ -290,7 +302,12 @@ impl AppScreen {
         } = *input
         {
             if pressed && !repeat {
-                self.switch_to(self.return_to);
+                let flight = self.flight.as_mut().expect(ENTERED);
+                if flight.map_open() {
+                    flight.close_map();
+                } else {
+                    self.switch_to(self.return_to);
+                }
             }
             return ScreenAction::None;
         }
@@ -363,10 +380,11 @@ impl Screen for AppScreen {
     /// F enters once. Everything else, repeats included, goes to the side
     /// shown.
     ///
-    /// In flight, an Escape press goes back to the side flight was entered
-    /// from, letting go of the keys held in flight; it never quits, and its
-    /// repeats and release are consumed. Everything else goes to flight,
-    /// where Tab does nothing.
+    /// In flight, an Escape press closes flight's map when it is open, and
+    /// otherwise goes back to the side flight was entered from, letting go
+    /// of the keys held in flight; it never quits, and its repeats and
+    /// release are consumed. Everything else goes to flight, where Tab, F
+    /// and I do nothing.
     ///
     /// In the spaceport, every event goes to it; leaving it takes off,
     /// back into flight, letting go of its keys.
@@ -988,7 +1006,7 @@ mod tests {
         assert_eq!(screen.showing(), Showing::Flight);
     }
 
-    fn flight(screen: &AppScreen) -> &FlightView {
+    fn flight(screen: &AppScreen) -> &FlightView<Rc<GameData>> {
         screen.flight_view().expect("flight entered")
     }
 
@@ -1144,6 +1162,67 @@ mod tests {
         screen.release_keys();
         screen.tick(TICK * 3);
         assert_eq!(ship(&screen), nova_sim::ShipState::default());
+    }
+
+    const MAP: Key = Key::Char('m');
+
+    /// Enters flight and opens its map with an M press.
+    fn open_flight_map(screen: &mut AppScreen) {
+        fly(screen);
+        assert_eq!(screen.input(&key(MAP, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::FlightMap);
+    }
+
+    #[test]
+    fn m_in_flight_opens_its_map_and_escape_closes_it_back_into_flight() {
+        let mut screen = AppScreen::new(data());
+        open_flight_map(&mut screen);
+        assert!(flight(&screen).map_open());
+        assert_eq!(screen.input(&key(MAP, false)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::FlightMap);
+        assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
+        assert_eq!(
+            screen.showing(),
+            Showing::FlightMap,
+            "a repeat does nothing"
+        );
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(!flight(&screen).map_open());
+        assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::Flight, "still flying");
+        // Escape in flight leaves it, as before.
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+    }
+
+    #[test]
+    fn m_closes_the_flight_map_too() {
+        let mut screen = AppScreen::new(data());
+        open_flight_map(&mut screen);
+        screen.input(&key(MAP, false));
+        screen.input(&key(MAP, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+    }
+
+    #[test]
+    fn tab_f_and_i_do_nothing_on_the_flight_map() {
+        let mut screen = with_dialogs(data());
+        open_flight_map(&mut screen);
+        for k in [Key::Tab, Key::Char('f'), Key::Char('i')] {
+            assert_eq!(screen.input(&key(k, true)), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::FlightMap, "{k:?}");
+        }
+        assert!(screen.about().is_none());
+    }
+
+    #[test]
+    fn the_flight_map_is_drawn_without_the_hint() {
+        let mut screen = AppScreen::new(data());
+        open_flight_map(&mut screen);
+        let mut map = DrawList::new();
+        flight(&screen).course_map().draw(&mut map);
+        assert_eq!(drawn(&screen), map);
     }
 
     #[test]

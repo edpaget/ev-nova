@@ -288,7 +288,7 @@ impl Harness {
         self.app.screen().showing()
     }
 
-    fn flight(&self) -> &FlightView {
+    fn flight(&self) -> &FlightView<Rc<GameData>> {
         self.app.screen().flight_view().expect("flight entered")
     }
 

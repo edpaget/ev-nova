@@ -1,12 +1,15 @@
-//! The flight screen: the player's ship flying in its starting system,
+//! The flight screen: the player's ship flying from its starting system,
 //! over the parallax starfield and among the system's stellars, with the
-//! camera following the ship.
+//! camera following the ship, and jumping through hyperspace along the
+//! course plotted on the galaxy map.
 //!
-//! The screen owns a [`nova_sim::Session`] and reads everything else once,
+//! The screen owns a [`nova_sim::Session`] and its catalog. It reads, once
 //! when it is built: the session's system, through the [`SystemCatalog`]
-//! port, the ship's sprite sheet, through the [`ShipSprites`] port, and
-//! the HUD's status bar for the player's government, through the
-//! [`StatusBars`] port. Drawing and input never read anything.
+//! port, the ship's sprite sheet, through the [`ShipSprites`] port, the
+//! HUD's status bar for the player's government, through the
+//! [`StatusBars`] port, and the galaxy for its course map, through the
+//! [`GalaxyCatalog`] port. After that it reads only when the ship arrives
+//! in another system: that system. Drawing and input never read anything.
 //!
 //! The HUD is drawn last, over everything: the status bar against the
 //! right edge, its radar showing the stellars around the ship as drawn,
@@ -31,21 +34,38 @@
 //!   and shows the spaceport. A refused landing says why above the help
 //!   line, in the original's words (`STR#` 2002), for
 //!   [`MESSAGE_SHOWN_FOR`].
-//! - Escape belongs to the app's router, which leaves flight. The screen
-//!   never quits.
+//! - M (a press, not its repeats) opens the course map, a [`GalaxyMap`]
+//!   in [`MapMode::Course`](crate::galaxy::MapMode::Course), and lets go
+//!   of the flight keys. While it is open flight is paused, as in the
+//!   original, only the map is drawn and every input goes to it, except
+//!   that M closes it ([`FlightView::close_map`] closes it too, for the
+//!   router's Escape). A system clicked on the map becomes the
+//!   destination: the session plots the course there and the map shows
+//!   it.
+//! - J (a press) jumps to the next system on the course when the session
+//!   allows it, and otherwise says why in the original's words (`STR#`
+//!   2002), as a refused landing does. A jump plays its [`JumpEffect`]:
+//!   the keys are let go and ignored and the session waits while the stars
+//!   streak and the screen fades out; then the ship arrives, the new
+//!   system is read and laid out, and it fades in. The HUD stays on top
+//!   throughout.
+//! - Escape belongs to the app's router, which closes the map or leaves
+//!   flight. The screen never quits.
 
 use std::collections::HashSet;
 use std::time::Duration;
 
 use nova_sim::{
-    Controls, FixedStep, LandingRefusal, PilotCatalog, Session, ShipState, StellarId, Steps, Turn,
-    flight::normalized, flight::shortest_turn,
+    Controls, FixedStep, JumpRefusal, LandingRefusal, PilotCatalog, Session, ShipState, StellarId,
+    Steps, Turn, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
 use super::hud::{self, HudState, StatusBar};
+use super::jump::{JumpEffect, JumpPhase};
 use super::sprite::rotation_frame;
 use crate::draw::crossed_box;
+use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
@@ -60,8 +80,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str =
-    "Up: thrust   Left/Right: turn   Down: reverse   L: land   Esc: leave flight";
+pub const HELP: &str = "Up: thrust   Left/Right: turn   Down: reverse   L: land   M: map   J: jump   Esc: leave flight";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
@@ -74,6 +93,21 @@ const FLIGHT_KEYS: [Key; 4] = [Key::Up, Key::Left, Key::Right, Key::Down];
 /// The land key: the original's default (`STR#` 129, and `STR#` 2002
 /// #25).
 pub const LAND_KEY: Key = Key::Char('l');
+/// The galaxy map key: the original's documented default (`Keys.nib`'s
+/// `mapKey`; `STR#` 2002 #26-28 name a map key).
+pub const MAP_KEY: Key = Key::Char('m');
+/// The hyperspace jump key: the original's documented default
+/// (`Keys.nib`'s `jumpKey`).
+pub const JUMP_KEY: Key = Key::Char('j');
+
+/// `STR#` 2002 #29.
+pub const NO_DESTINATION: &str =
+    "You have to select a destination before you can start a hyperspace jump.";
+/// `STR#` 2002 #42.
+pub const TOO_CLOSE: &str =
+    "Can't initiate hyperspace jump - not yet far enough away from system center.";
+/// `STR#` 2002 #10.
+pub const NO_FUEL: &str = "Insufficient energy for hyperspace jump.";
 
 /// `STR#` 2002 #49.
 pub const NO_STELLARS: &str = "No stellar objects present.";
@@ -112,9 +146,22 @@ pub fn refusal_message(refusal: &LandingRefusal) -> &'static str {
     }
 }
 
-/// The player's ship in flight.
+/// What the player is told when `refusal` stops a jump: the original's
+/// words for it.
+#[must_use]
+pub fn jump_refusal_message(refusal: &JumpRefusal) -> &'static str {
+    match refusal {
+        JumpRefusal::NoDestination => NO_DESTINATION,
+        JumpRefusal::TooClose { .. } => TOO_CLOSE,
+        JumpRefusal::NoFuel { .. } => NO_FUEL,
+    }
+}
+
+/// The player's ship in flight, reading the game data from `C`.
 #[derive(Clone, Debug)]
-pub struct FlightView {
+pub struct FlightView<C> {
+    /// What the screen reads: when it is built, and on each arrival.
+    catalog: C,
     /// The flight, or why it could not start.
     session: Result<Session, String>,
     /// The session's system, laid out; `None` when the session failed.
@@ -137,17 +184,23 @@ pub struct FlightView {
     pending_landing: Option<StellarId>,
     /// The message shown, and `elapsed` when it was shown.
     message: Option<(&'static str, Duration)>,
+    /// The course map, shown or not.
+    map: GalaxyMap,
+    /// Whether the course map is shown.
+    map_open: bool,
+    /// The jump's effect, while it plays.
+    jump: Option<JumpEffect>,
 }
 
-impl FlightView {
-    /// A new pilot's flight, read from `catalog` once.
-    pub fn new(catalog: &(impl PilotCatalog + SystemCatalog + ShipSprites + StatusBars)) -> Self {
-        let session = Session::start(catalog).map_err(|err| err.to_string());
+impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog> FlightView<C> {
+    /// A new pilot's flight, read from `catalog`, which the screen keeps.
+    pub fn new(catalog: C) -> Self {
+        let session = Session::start(&catalog).map_err(|err| err.to_string());
         let (scene, sheet, status_bar) = match &session {
             Ok(session) => (
-                Some(SystemScene::load(catalog, session.system())),
+                Some(SystemScene::load(&catalog, session.system())),
                 catalog.ship_sheet(session.ship()),
-                hud::choose_status_bar(catalog, session.government()),
+                hud::choose_status_bar(&catalog, session.government()),
             ),
             Err(reason) => (None, Err(reason.clone()), Err(reason.clone())),
         };
@@ -155,7 +208,15 @@ impl FlightView {
             .as_ref()
             .map(|session| *session.player())
             .unwrap_or_default();
+        let mut map = GalaxyMap::course(&catalog);
+        if let Ok(session) = &session {
+            map.show_course(session.system(), session.course());
+        }
         Self {
+            catalog,
+            map,
+            map_open: false,
+            jump: None,
             session,
             scene,
             sheet,
@@ -168,6 +229,93 @@ impl FlightView {
             pending_landing: None,
             message: None,
         }
+    }
+
+    /// The catalog the screen reads.
+    #[must_use]
+    pub fn catalog(&self) -> &C {
+        &self.catalog
+    }
+
+    /// Lets go of the flight keys and shows the course map.
+    fn open_map(&mut self) {
+        self.held.clear();
+        self.map_open = true;
+    }
+
+    /// The map's input; a destination clicked on it becomes the session's
+    /// course, which the map then shows.
+    fn map_input(&mut self, input: &Input) {
+        self.map.input(input);
+        let Some(destination) = self.map.take_destination() else {
+            return;
+        };
+        if let Ok(session) = &mut self.session {
+            // A failed plot clears the course, which the map then shows.
+            let _ = session.plot_course(destination);
+            self.map.show_course(session.system(), session.course());
+        }
+    }
+
+    /// Begins a jump, or shows why not.
+    fn jump(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        let from = session.system();
+        match session.begin_jump() {
+            Ok(next) => {
+                let position = |id| session.star_map().position(id).unwrap_or_default();
+                self.jump = Some(JumpEffect::toward(position(from), position(next)));
+                self.held.clear();
+                self.message = None;
+            }
+            Err(refusal) => self.message = Some((jump_refusal_message(&refusal), self.elapsed)),
+        }
+    }
+
+    /// Ends the jump: the ship arrives in the next system, which is read
+    /// and laid out, and drawn from where the ship arrives.
+    fn arrive(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        let Some(system) = session.arrive(&self.catalog) else {
+            return;
+        };
+        self.scene = Some(SystemScene::load(&self.catalog, system));
+        self.map.show_course(system, session.course());
+        self.previous = *session.player();
+        self.alpha = 0.0;
+        self.message = None;
+    }
+}
+
+impl<C> FlightView<C> {
+    /// Whether the course map is shown.
+    #[must_use]
+    pub fn map_open(&self) -> bool {
+        self.map_open
+    }
+
+    /// The course map, shown or not.
+    #[must_use]
+    pub fn course_map(&self) -> &GalaxyMap {
+        &self.map
+    }
+
+    /// Closes the course map, abandoning any gesture on it, and goes back
+    /// to flight.
+    pub fn close_map(&mut self) {
+        self.map.cancel_pointer();
+        self.map.release_keys();
+        self.map_open = false;
+    }
+
+    /// The jump's effect, while it plays.
+    #[must_use]
+    pub fn jump_effect(&self) -> Option<&JumpEffect> {
+        self.jump.as_ref()
     }
 
     /// The stellar the ship has just landed on, once: the router takes it
@@ -310,16 +458,41 @@ impl FlightView {
     }
 }
 
-impl Screen for FlightView {
+impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog> Screen
+    for FlightView<C>
+{
     /// Never quits: Escape is the router's.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if let Input::Key {
-            key: LAND_KEY,
-            pressed: true,
-            repeat: false,
-        } = *input
-        {
-            self.land();
+        if self.jump.is_some() {
+            return ScreenAction::None;
+        }
+        let press = match *input {
+            Input::Key {
+                key,
+                pressed: true,
+                repeat: false,
+            } => Some(key),
+            _ => None,
+        };
+        if self.map_open {
+            if press == Some(MAP_KEY) {
+                self.close_map();
+            } else {
+                self.map_input(input);
+            }
+            return ScreenAction::None;
+        }
+        match press {
+            Some(LAND_KEY) => self.land(),
+            Some(MAP_KEY) => {
+                self.open_map();
+                return ScreenAction::None;
+            }
+            Some(JUMP_KEY) => {
+                self.jump();
+                return ScreenAction::None;
+            }
+            _ => {}
         }
         if let Input::Key { key, pressed, .. } = *input
             && FLIGHT_KEYS.contains(&key)
@@ -334,8 +507,25 @@ impl Screen for FlightView {
     }
 
     /// Runs the simulation's steps for `dt` with the keys held, and advances
-    /// the stellars' animations.
+    /// the stellars' animations. While the map is open nothing moves; while
+    /// a jump plays only its effect does, and the ship arrives when the
+    /// effect says.
     fn tick(&mut self, dt: Duration) {
+        if self.map_open {
+            return;
+        }
+        if let Some(effect) = &mut self.jump {
+            self.elapsed += dt;
+            let arrived = effect.advance(dt);
+            let done = effect.done();
+            if arrived {
+                self.arrive();
+            }
+            if done {
+                self.jump = None;
+            }
+            return;
+        }
         self.elapsed += dt;
         let Steps { steps, alpha } = self.clock.advance(dt);
         let controls = self.controls();
@@ -349,6 +539,10 @@ impl Screen for FlightView {
     }
 
     fn draw(&self, list: &mut DrawList) {
+        if self.map_open {
+            self.map.draw(list);
+            return;
+        }
         let Some(scene) = &self.scene else {
             let reason = self.session().err().unwrap_or_default();
             list.text(
@@ -362,7 +556,12 @@ impl Screen for FlightView {
             return;
         };
         let camera = self.camera();
-        starfield::draw(list, &camera);
+        match self.jump.map(|effect| (effect, effect.phase())) {
+            Some((effect, JumpPhase::Streak(_) | JumpPhase::FadeOut(_))) => {
+                starfield::draw_streaked(list, &camera, effect.direction(), effect.streak_length());
+            }
+            _ => starfield::draw(list, &camera),
+        }
         scene::draw_stellars(list, scene, &camera, self.elapsed);
         self.draw_ship(list, camera.world_to_screen(self.shown_position()));
         list.text(
@@ -375,6 +574,9 @@ impl Screen for FlightView {
         list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
         if let Some(message) = self.message() {
             list.text(message, MESSAGE_AT, OVERLAY_SIZE, None, Color::WHITE);
+        }
+        if let Some(effect) = &self.jump {
+            effect.draw_fade(list);
         }
         match &self.status_bar {
             Ok(bar) => {
@@ -391,16 +593,23 @@ impl Screen for FlightView {
         }
     }
 
+    /// Abandons any gesture on the course map.
+    fn cancel_pointer(&mut self) {
+        self.map.cancel_pointer();
+    }
+
     /// Lets go of every flight key: the ship stops thrusting and turning,
     /// and coasts.
     fn release_keys(&mut self) {
         self.held.clear();
+        self.map.release_keys();
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::cell::RefCell;
     use std::num::NonZeroU16;
 
     use nova_sim::landing::{LandingRefusal, StellarFlags};
@@ -412,24 +621,33 @@ mod tests {
     use super::*;
     use crate::flight::catalog::{GovtId, StatusBarLayout};
     use crate::flight::hud::{self, HudState, StatusBar};
+    use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::system::camera::VIEW_CENTER;
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
     };
     use crate::{DrawCommand, Font};
+    use nova_sim::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
 
     /// The first `chär` flies ship 128 (an average ship that turns 3° a
     /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system
     /// 130, Sol: Earth at (0, -600) and Moon at (300, -200), which animates
-    /// a frame a tick.
+    /// a frame a tick. On the map Sol is at (0, 0), linked to Alpha
+    /// Centauri (131) at (600, 0), which holds Proxima at its centre;
+    /// Barnard (132) at (0, 600) is linked to nothing. Records the systems
+    /// read.
     struct FakeCatalog {
         character: Result<CharacterStart, StartError>,
+        fields: ShipFields,
         sheet: Result<ShipSheet, String>,
         /// `ïntf` 128: stock-like, or why it cannot be read.
         bar: Result<StatusBarLayout, String>,
         /// System 130's landing sites: Earth and Moon, by default.
         sites: Vec<LandingSite>,
+        systems_read: RefCell<Vec<SystemId>>,
     }
+
+    type View = FlightView<FakeCatalog>;
 
     const FIELDS: ShipFields = ShipFields {
         speed: 300,
@@ -457,12 +675,14 @@ mod tests {
                 systems: [None, Some(SystemId(130)), None, None],
                 start: StartDate::default(),
             }),
+            fields: FIELDS,
             sheet: Ok(sheet()),
             bar: Ok(layout()),
             sites: vec![
                 site(128, (0.0, -600.0), StellarFlags::CAN_LAND),
                 site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
             ],
+            systems_read: RefCell::default(),
         }
     }
 
@@ -510,7 +730,7 @@ mod tests {
 
         fn ship_fields(&self, id: ShipId) -> Result<ShipFields, String> {
             assert_eq!(id, ShipId(128));
-            Ok(FIELDS)
+            Ok(self.fields)
         }
 
         fn system_exists(&self, id: SystemId) -> bool {
@@ -518,12 +738,24 @@ mod tests {
         }
 
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
-            assert_eq!(system, SystemId(130));
-            self.sites.clone()
+            match system.0 {
+                130 => self.sites.clone(),
+                131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
+                other => panic!("asked for sÿst {other}'s sites"),
+            }
         }
 
         fn star_map(&self) -> Vec<StarSystem> {
-            Vec::new()
+            let star = |id, (x, y), links: &[i16]| StarSystem {
+                id: SystemId(id),
+                position: Vec2::new(x, y),
+                links: links.iter().copied().map(SystemId).collect(),
+            };
+            vec![
+                star(130, (0.0, 0.0), &[131]),
+                star(131, (600.0, 0.0), &[]),
+                star(132, (0.0, 600.0), &[]),
+            ]
         }
     }
 
@@ -549,15 +781,45 @@ mod tests {
 
     impl SystemCatalog for FakeCatalog {
         fn system(&self, id: SystemId) -> SystemContents {
-            assert_eq!(id, SystemId(130));
+            self.systems_read.borrow_mut().push(id);
+            let (name, stellars) = match id.0 {
+                130 => (
+                    "Sol",
+                    vec![
+                        stellar(128, "Earth", (0, -600), 1),
+                        stellar(129, "Moon", (300, -200), 4),
+                    ],
+                ),
+                131 => ("Alpha Centauri", vec![stellar(140, "Proxima", (0, 0), 1)]),
+                other => panic!("asked for sÿst {other}"),
+            };
             SystemContents {
                 id,
-                name: "Sol".to_owned(),
-                stellars: vec![
-                    stellar(128, "Earth", (0, -600), 1),
-                    stellar(129, "Moon", (300, -200), 4),
-                ],
+                name: name.to_owned(),
+                stellars,
                 problems: Vec::new(),
+            }
+        }
+    }
+
+    impl GalaxyCatalog for FakeCatalog {
+        fn galaxy(&self) -> Galaxy {
+            let entry = |id, name: &str, (x, y), links: &[i16]| SystemEntry {
+                id: SystemId(id),
+                name: name.to_owned(),
+                x,
+                y,
+                links: links.iter().copied().map(SystemId).collect(),
+                govt: None,
+                stellars: Vec::new(),
+            };
+            Galaxy {
+                systems: vec![
+                    entry(130, "Sol", (0, 0), &[131]),
+                    entry(131, "Alpha Centauri", (600, 0), &[]),
+                    entry(132, "Barnard", (0, 600), &[]),
+                ],
+                ..Galaxy::default()
             }
         }
     }
@@ -587,8 +849,8 @@ mod tests {
         }
     }
 
-    fn flight() -> FlightView {
-        FlightView::new(&catalog())
+    fn flight() -> View {
+        FlightView::new(catalog())
     }
 
     fn at(x: f32, y: f32) -> Point {
@@ -611,7 +873,7 @@ mod tests {
         }
     }
 
-    fn player(view: &FlightView) -> ShipState {
+    fn player(view: &View) -> ShipState {
         *view.session().expect("flying").player()
     }
 
@@ -645,7 +907,7 @@ mod tests {
         reverse: false,
     };
 
-    fn ticks(view: &mut FlightView, n: u32) {
+    fn ticks(view: &mut View, n: u32) {
         for _ in 0..n {
             view.tick(TICK);
         }
@@ -675,7 +937,7 @@ mod tests {
             character: Err(StartError::NoCharacter),
             ..catalog()
         };
-        let mut view = FlightView::new(&failed);
+        let mut view = FlightView::new(failed);
         assert_eq!(view.session().err(), Some("no chär to start from"));
         assert!(view.scene().is_none());
         assert_eq!(view.frame(), None);
@@ -896,7 +1158,7 @@ mod tests {
 
     // Drawing.
 
-    fn drawn(view: &FlightView) -> DrawList {
+    fn drawn(view: &View) -> DrawList {
         let mut list = DrawList::new();
         view.draw(&mut list);
         list
@@ -986,7 +1248,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Up: thrust   Left/Right: turn   Down: reverse   L: land   Esc: leave flight"
+            "Up: thrust   Left/Right: turn   Down: reverse   L: land   M: map   J: jump   Esc: leave flight"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -1033,7 +1295,7 @@ mod tests {
             sheet: Err("no shän 128 for shïp 128".to_owned()),
             ..catalog()
         };
-        let view = FlightView::new(&sheetless);
+        let view = FlightView::new(sheetless);
         assert_eq!(view.frame(), None);
         let list = drawn(&view);
         assert_eq!(sprites(&list).len(), 2, "the stellars only");
@@ -1170,7 +1432,7 @@ mod tests {
             bar: Err("no ïntf 128".to_owned()),
             ..catalog()
         };
-        let mut view = FlightView::new(&barless);
+        let mut view = FlightView::new(barless);
         assert_eq!(view.status_bar(), Err("no ïntf 128"));
         view.input(&key(Key::Up, true));
         ticks(&mut view, 5);
@@ -1190,7 +1452,7 @@ mod tests {
             character: Err(StartError::NoCharacter),
             ..catalog()
         };
-        let view = FlightView::new(&failed);
+        let view = FlightView::new(failed);
         assert_eq!(view.status_bar(), Err("no chär to start from"));
     }
 
@@ -1236,14 +1498,14 @@ mod tests {
     // Landing.
 
     /// The fake catalog with system 130 holding just `sites`.
-    fn flight_among(sites: Vec<LandingSite>) -> FlightView {
-        FlightView::new(&FakeCatalog { sites, ..catalog() })
+    fn flight_among(sites: Vec<LandingSite>) -> View {
+        FlightView::new(FakeCatalog { sites, ..catalog() })
     }
 
     const LAND: Key = Key::Char('l');
 
     /// The message drawn at its place, if any.
-    fn message(view: &FlightView) -> Option<DrawCommand> {
+    fn message(view: &View) -> Option<DrawCommand> {
         drawn(view)
             .iter()
             .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == MESSAGE_AT))
@@ -1519,7 +1781,7 @@ mod tests {
 
     #[test]
     fn landing_in_a_flight_that_never_started_does_nothing() {
-        let mut view = FlightView::new(&FakeCatalog {
+        let mut view = FlightView::new(FakeCatalog {
             character: Err(StartError::NoCharacter),
             ..catalog()
         });
@@ -1527,5 +1789,397 @@ mod tests {
         assert_eq!(view.take_landing(), None);
         assert_eq!(view.message(), None);
         assert_eq!(view.take_off(), None);
+    }
+
+    // Hyperspace.
+
+    const MAP: Key = Key::Char('m');
+    const JUMP: Key = Key::Char('j');
+
+    fn ms(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+
+    /// Presses and releases `k`.
+    fn tap(view: &mut View, k: Key) {
+        view.input(&key(k, true));
+        view.input(&key(k, false));
+    }
+
+    /// Where system `id` is on the course map.
+    fn on_map(view: &View, id: i16) -> Point {
+        let map = view.course_map();
+        let system = map.model().system(SystemId(id)).expect("on the map");
+        map.view().world_to_screen(system.position())
+    }
+
+    /// Clicks the left button at `at`.
+    fn click(view: &mut View, at: Point) {
+        for pressed in [true, false] {
+            view.input(&Input::PointerButton {
+                button: crate::MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+    }
+
+    /// Opens the map, picks system `id` and closes the map again.
+    fn plot(view: &mut View, id: i16) {
+        tap(view, MAP);
+        let at = on_map(view, id);
+        click(view, at);
+        tap(view, MAP);
+        assert!(!view.map_open());
+    }
+
+    /// Thrusts straight up until the ship is at least the minimum jump
+    /// distance from the centre, then lets go of Up.
+    fn fly_out(view: &mut View) {
+        view.input(&key(Key::Up, true));
+        for _ in 0..2000 {
+            if player(view).position.length() >= MIN_JUMP_DISTANCE {
+                break;
+            }
+            view.tick(TICK);
+        }
+        view.input(&key(Key::Up, false));
+        assert!(
+            player(view).position.length() >= MIN_JUMP_DISTANCE,
+            "{:?}",
+            player(view)
+        );
+    }
+
+    #[test]
+    fn the_course_map_starts_on_the_current_system_with_no_course() {
+        let view = flight();
+        assert!(!view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Course);
+        assert_eq!(view.course_map().current(), Some(SystemId(130)));
+        assert_eq!(view.course_map().route(), []);
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!((MAP_KEY, JUMP_KEY), (MAP, JUMP));
+    }
+
+    #[test]
+    fn m_opens_the_map_over_everything_and_lets_go_of_the_flight_keys() {
+        let mut view = flight();
+        view.input(&key(Key::Up, true));
+        assert_eq!(view.input(&key(MAP, true)), ScreenAction::None);
+        assert!(view.map_open());
+        let mut map = DrawList::new();
+        view.course_map().draw(&mut map);
+        assert_eq!(drawn(&view), map, "only the map");
+        // Holding M, or letting it go, keeps it open.
+        view.input(&held(MAP));
+        view.input(&key(MAP, false));
+        assert!(view.map_open());
+        view.input(&key(MAP, true));
+        assert!(!view.map_open());
+        ticks(&mut view, 5);
+        assert_eq!(player(&view), start(), "Up was let go");
+    }
+
+    #[test]
+    fn while_the_map_is_open_flight_is_paused_and_keys_go_to_the_map() {
+        let mut view = flight();
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        let flying = player(&view);
+        tap(&mut view, MAP);
+        let fitted = *view.course_map().view();
+        ticks(&mut view, 30);
+        assert_eq!(player(&view), flying, "paused");
+        view.input(&key(Key::Left, true));
+        assert_ne!(*view.course_map().view(), fitted, "Left pans the map");
+        view.input(&key(LAND, true));
+        view.input(&key(JUMP, true));
+        assert_eq!(view.message(), None);
+        assert_eq!(view.take_landing(), None);
+        assert_eq!(view.jump_effect(), None);
+        tap(&mut view, MAP);
+        ticks(&mut view, 1);
+        assert_eq!(player(&view).heading, 0.0, "Left went to the map");
+    }
+
+    #[test]
+    fn a_click_on_a_system_plots_the_course_there_and_the_map_shows_it() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        assert!(view.map_open());
+        let course = [SystemId(131)];
+        assert_eq!(view.session().expect("flying").course(), course);
+        assert_eq!(view.course_map().route(), course);
+        assert_eq!(view.course_map().current(), Some(SystemId(130)));
+        let barnard = on_map(&view, 132);
+        click(&mut view, barnard);
+        assert_eq!(view.session().expect("flying").course(), []);
+        assert_eq!(view.course_map().route(), []);
+        assert!(
+            texts(&drawn(&view)).contains(&"No hyperspace route".to_owned()),
+            "{:?}",
+            texts(&drawn(&view))
+        );
+    }
+
+    #[test]
+    fn closing_the_map_abandons_its_drag() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        let alpha = on_map(&view, 131);
+        view.input(&Input::PointerButton {
+            button: crate::MouseButton::Left,
+            pressed: true,
+            at: alpha,
+        });
+        view.close_map();
+        assert!(!view.map_open());
+        tap(&mut view, MAP);
+        view.input(&Input::PointerButton {
+            button: crate::MouseButton::Left,
+            pressed: false,
+            at: alpha,
+        });
+        assert_eq!(view.course_map().selected(), None, "no click");
+        assert_eq!(view.session().expect("flying").course(), []);
+    }
+
+    #[test]
+    fn j_says_why_a_jump_is_refused_in_the_originals_words() {
+        let mut view = flight();
+        view.input(&key(JUMP, true));
+        assert_eq!(view.message(), Some(NO_DESTINATION));
+        assert_eq!(
+            message(&view),
+            Some(overlay(
+                NO_DESTINATION,
+                MESSAGE_AT,
+                OVERLAY_SIZE,
+                Color::WHITE
+            ))
+        );
+        plot(&mut view, 131);
+        view.input(&key(JUMP, true));
+        assert_eq!(view.message(), Some(TOO_CLOSE));
+        assert_eq!(view.jump_effect(), None);
+
+        let mut dry = FlightView::new(FakeCatalog {
+            fields: ShipFields { fuel: 50, ..FIELDS },
+            ..catalog()
+        });
+        plot(&mut dry, 131);
+        fly_out(&mut dry);
+        dry.input(&key(JUMP, true));
+        assert_eq!(dry.message(), Some(NO_FUEL));
+        assert_eq!(dry.jump_effect(), None);
+    }
+
+    #[test]
+    fn a_repeat_or_release_of_j_does_nothing() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&held(JUMP));
+        view.input(&key(JUMP, false));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(view.message(), None);
+    }
+
+    #[test]
+    fn every_jump_refusal_has_its_string() {
+        assert_eq!(
+            jump_refusal_message(&JumpRefusal::NoDestination),
+            NO_DESTINATION
+        );
+        assert_eq!(
+            jump_refusal_message(&JumpRefusal::TooClose { distance: 1.0 }),
+            TOO_CLOSE
+        );
+        assert_eq!(
+            jump_refusal_message(&JumpRefusal::NoFuel { fuel: 1.0 }),
+            NO_FUEL
+        );
+        assert_eq!(
+            [NO_DESTINATION, TOO_CLOSE, NO_FUEL],
+            [
+                "You have to select a destination before you can start a hyperspace jump.",
+                "Can't initiate hyperspace jump - not yet far enough away from system center.",
+                "Insufficient energy for hyperspace jump.",
+            ]
+        );
+    }
+
+    /// The fade quad's place in the list and its colour, if drawn.
+    fn fade(list: &DrawList) -> Option<(usize, Color)> {
+        list.iter().enumerate().find_map(|(at, c)| match *c {
+            DrawCommand::Line {
+                from, width, color, ..
+            } if from == Point::new(0.0, 384.0) && width == 768.0 => Some((at, color)),
+            _ => None,
+        })
+    }
+
+    /// Where the HUD starts: its status bar picture.
+    fn hud_at(list: &DrawList) -> usize {
+        list.iter()
+            .position(|c| matches!(c, DrawCommand::Picture { image, .. } if *image == ImageKey::picture(700)))
+            .expect("the HUD")
+    }
+
+    /// Where the ship's sprite is drawn.
+    fn ship_at(list: &DrawList) -> usize {
+        list.iter()
+            .position(|c| matches!(c, DrawCommand::Sprite { image, .. } if image.id == 2000))
+            .expect("the ship")
+    }
+
+    #[test]
+    fn a_jump_streaks_the_stars_then_fades_out_arrives_and_fades_in() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        let leaving = player(&view);
+        assert_eq!(view.input(&key(JUMP, true)), ScreenAction::None);
+        assert_eq!(view.message(), None);
+        let effect = view.jump_effect().expect("jumping");
+        assert_eq!(effect.direction(), at(1.0, 0.0), "east, to Alpha Centauri");
+        assert_eq!(
+            view.session().expect("flying").jumping(),
+            Some(SystemId(131))
+        );
+
+        // The stars streak; nothing fades.
+        view.tick(ms(500));
+        assert_eq!(player(&view), leaving, "frozen");
+        let list = drawn(&view);
+        let mut streaks = DrawList::new();
+        starfield::draw_streaked(&mut streaks, &view.camera(), at(1.0, 0.0), 256.0);
+        assert!(!streaks.is_empty());
+        assert!(list.iter().take(streaks.len()).eq(streaks.iter()));
+        assert_eq!(fade(&list), None);
+        assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
+
+        // The old system fades out, under the HUD.
+        view.tick(ms(625));
+        let list = drawn(&view);
+        let (at_fade, color) = fade(&list).expect("a fade");
+        assert_eq!(color, Color::rgba(0, 0, 0, 64));
+        assert!(ship_at(&list) < at_fade && at_fade < hud_at(&list));
+        assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
+        view.tick(ms(125));
+        assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(128), "growing");
+        assert_eq!(view.session().expect("flying").system(), SystemId(130));
+
+        // Past 1.5 s it arrives, and the new system fades in.
+        view.tick(ms(300));
+        let session = view.session().expect("flying");
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.jumping(), None);
+        assert_eq!(
+            *view.catalog().systems_read.borrow(),
+            [SystemId(130), SystemId(131)]
+        );
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(view.course_map().current(), Some(SystemId(131)));
+        assert_eq!(view.course_map().route(), []);
+        let arrived = player(&view);
+        assert_eq!(arrived.position, Vec2::new(-1000.0, 0.0));
+        assert_eq!(arrived.reserves.fuel.now, leaving.reserves.fuel.now - 100.0);
+        assert_eq!(view.shown_position(), at(-1000.0, 0.0));
+        let list = drawn(&view);
+        let (at_fade, color) = fade(&list).expect("a fade");
+        assert_eq!(color.a, 230);
+        assert!(texts(&list).contains(&"Alpha Centauri (sÿst 131)".to_owned()));
+        assert!(at_fade < hud_at(&list));
+        let mut hud = DrawList::new();
+        hud::draw(
+            &mut hud,
+            view.status_bar().expect("a status bar"),
+            &HudState {
+                position: at(-1000.0, 0.0),
+                stellars: &[at(0.0, 0.0)],
+                reserves: arrived.reserves,
+                system: "Alpha Centauri",
+            },
+        );
+        assert!(
+            list.iter().skip(hud_at(&list)).eq(hud.iter()),
+            "the HUD, with a jump's fuel less, is last"
+        );
+        view.tick(ms(100));
+        assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(179), "shrinking");
+        assert_eq!(player(&view), arrived, "still frozen");
+
+        // Then plain flight.
+        view.tick(ms(500));
+        assert_eq!(view.jump_effect(), None);
+        let list = drawn(&view);
+        assert_eq!(fade(&list), None);
+        let mut stars = DrawList::new();
+        starfield::draw(&mut stars, &view.camera());
+        assert!(list.iter().take(stars.len()).eq(stars.iter()));
+        ticks(&mut view, 3);
+        assert_eq!(player(&view), stepped(arrived, Controls::default(), 3));
+        assert_ne!(player(&view), arrived, "it flies again");
+    }
+
+    #[test]
+    fn keys_are_ignored_while_the_jump_plays() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(Key::Up, true));
+        view.input(&key(JUMP, true));
+        view.tick(ms(300));
+        view.input(&key(Key::Up, false));
+        view.input(&key(Key::Left, true));
+        view.input(&key(MAP, true));
+        view.input(&key(LAND, true));
+        view.input(&key(JUMP, true));
+        assert!(!view.map_open());
+        assert_eq!(view.message(), None);
+        view.tick(ms(2000));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(view.take_landing(), None);
+        let arrived = player(&view);
+        ticks(&mut view, 5);
+        assert_eq!(
+            player(&view),
+            stepped(arrived, Controls::default(), 5),
+            "neither thrusting nor turning"
+        );
+    }
+
+    #[test]
+    fn a_refusal_shown_before_the_jump_is_gone_after_it() {
+        let mut view = flight();
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        view.input(&key(JUMP, false));
+        assert_eq!(view.message(), Some(NO_DESTINATION));
+        plot(&mut view, 131);
+        assert_eq!(view.message(), Some(NO_DESTINATION), "still on screen");
+        view.input(&key(JUMP, true));
+        assert_eq!(view.message(), None);
+    }
+
+    #[test]
+    fn map_and_jump_in_a_flight_that_never_started_do_nothing_much() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert_eq!(view.course_map().current(), None);
+        view.input(&key(JUMP, true));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(view.message(), None);
+        tap(&mut view, MAP);
+        assert!(view.map_open());
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        assert_eq!(view.course_map().route(), []);
     }
 }
