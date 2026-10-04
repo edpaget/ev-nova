@@ -443,15 +443,27 @@ impl Dialog {
             self.tracked = self
                 .items
                 .iter()
-                .position(|item| item.active() && item.bounds.contains(at));
+                .position(|item| item.active() && self.hit_area(item).contains(at));
         }
         let index = self.tracked?;
         let item = &self.items[index];
-        let activated = self.tracker.track(item.bounds, item.active(), input);
+        let activated = self
+            .tracker
+            .track(self.hit_area(item), item.active(), input);
         if !self.tracker.armed() {
             self.tracked = None;
         }
         activated.then_some(DialogEvent::Item(index + 1))
+    }
+
+    /// Where `item` takes clicks: the part of it inside the dialog, since
+    /// pointer events outside the dialog do nothing.
+    fn hit_area(&self, item: &Item) -> Bounds {
+        let (outer, inner) = (self.bounds, item.bounds);
+        Bounds {
+            min: Point::new(inner.min.x.max(outer.min.x), inner.min.y.max(outer.min.y)),
+            max: Point::new(inner.max.x.min(outer.max.x), inner.max.y.min(outer.max.y)),
+        }
     }
 
     /// Abandons any click in progress without activating anything.
@@ -860,6 +872,46 @@ mod tests {
         dialog.input(&press(ok));
         assert_eq!(dialog.input(&release(cancel)), None);
         assert_eq!(dialog.input(&release(ok)), None, "the press is over");
+    }
+
+    #[test]
+    fn only_the_part_of_an_item_inside_the_dialog_takes_clicks() {
+        let items = [
+            rect(-9.0, 0.0, 10.0, 10.0),
+            rect(99.0, 0.0, 10.0, 10.0),
+            rect(0.0, -9.0, 10.0, 10.0),
+            rect(0.0, 49.0, 10.0, 10.0),
+        ]
+        .iter()
+        .map(|&bounds| item(bounds, true, ItemSpec::User))
+        .collect();
+        let template = DialogTemplate {
+            bounds: rect(0.0, 0.0, 100.0, 50.0),
+            placement: Placement::Fixed,
+            items,
+        };
+        let mut dialog = dialog(&template, &[]);
+        // For each item: a point on it outside the dialog, then one inside.
+        let points = [
+            (at(-5.0, 5.0), at(0.5, 5.0)),
+            (at(105.0, 5.0), at(99.5, 5.0)),
+            (at(5.0, -5.0), at(5.0, 0.5)),
+            (at(5.0, 55.0), at(5.0, 49.5)),
+        ];
+        for (n, (outside, inside)) in (1..).zip(points) {
+            assert_eq!(click(&mut dialog, outside), None, "item {n} at {outside:?}");
+            assert_eq!(
+                click(&mut dialog, inside),
+                Some(DialogEvent::Item(n)),
+                "item {n} at {inside:?}"
+            );
+            dialog.input(&press(inside));
+            assert_eq!(
+                dialog.input(&release(outside)),
+                None,
+                "item {n} released at {outside:?}"
+            );
+        }
     }
 
     #[test]
