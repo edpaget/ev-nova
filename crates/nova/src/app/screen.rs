@@ -236,7 +236,6 @@ impl AppScreen {
         let screen = MainMenu::new(self.data.button_style(), Rc::clone(&metrics));
         Self {
             side: Side::MainMenu,
-            return_to: Side::MainMenu,
             menu: Some(Menu {
                 screen,
                 metrics,
@@ -636,14 +635,6 @@ impl AppScreen {
         ScreenAction::None
     }
 
-    /// Lets go of the side shown, the main menu, as an overlay opens over
-    /// it: its pointer gesture is abandoned and its keys let go of.
-    fn below_overlay(&mut self) {
-        let below = self.shown_mut();
-        below.cancel_pointer();
-        below.release_keys();
-    }
-
     /// Opens the New Pilot dialog: the interface file's, or the built-in
     /// one without it (with a warning when the interface file has none).
     fn open_new_pilot(&mut self) {
@@ -668,7 +659,8 @@ impl AppScreen {
                 NewPilotDialog::fallback(style, metrics)
             }
         };
-        self.below_overlay();
+        // Chosen by a click let go of on its button, the menu below holds
+        // no press and no keys to let go of.
         self.new_pilot = Some(dialog);
     }
 
@@ -686,7 +678,6 @@ impl AppScreen {
             list.show_error(&error);
             self.warnings.push(error);
         }
-        self.below_overlay();
         self.open_pilot = Some(list);
     }
 
@@ -3188,6 +3179,27 @@ mod tests {
             placement: Placement::Fixed,
             items,
         }
+    }
+
+    #[test]
+    fn a_tab_repeat_or_release_on_the_menu_does_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        for input in [held(Key::Tab), key(Key::Tab, false)] {
+            assert_eq!(screen.input(&input), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::MainMenu, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn debug_shows_the_menu_and_where_pilots_are_kept() {
+        let store = MemoryPilots::new();
+        let debug = format!("{:?}", menu(&store));
+        assert!(
+            debug.contains("menu: Some(Menu { screen: MainMenu {")
+                && debug.contains(r#"pilots: Some("memory"), .. })"#),
+            "{debug}"
+        );
     }
 
     impl AppScreen {
