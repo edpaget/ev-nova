@@ -47,6 +47,16 @@
 //! Escape take off, back into flight at the stellar, and Tab, F and I do
 //! nothing.
 //!
+//! At a trade center, the spaceport's Trade Center opens the session's
+//! exchange, laid out by the interface file's "Trade" dialog. There B buys
+//! and S sells a ton of the selected good, and with Alt held the most;
+//! the router makes each trade through the session, hands the exchange as
+//! it now is back to the screen, and saves the pilot after the input.
+//!
+//! Each day a jump takes rolls the planetary events on the router's
+//! source of chance ([`AppScreen::with_chance`]), which never fires until
+//! one is given, so the developer's flights stay the same each time.
+//!
 //! I, outside flight and the spaceport, opens the About text in the game's "Desc Dialog"
 //! over the screen shown, when the router was given the interface file's
 //! dialogs ([`AppScreen::with_dialogs`]). The dialog is modal: it takes
@@ -71,12 +81,13 @@ use std::time::Duration;
 use nova_data::GameData;
 use nova_sim::{Pilot, PilotKeeper, PilotStore, pilot_key};
 pub use nova_view::Showing;
-use nova_view::flight::FlightView;
+use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
+use nova_view::spaceport::trade::TRADE_DIALOG;
 use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
 use nova_view::ui::desc::DESC_DIALOG;
@@ -161,6 +172,8 @@ pub struct AppScreen {
     open_pilot: Option<PilotList>,
     /// The warnings since they were last taken.
     warnings: Vec<String>,
+    /// What each flight rolls each day's events on.
+    chance: SharedChance,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -219,7 +232,14 @@ impl AppScreen {
             new_pilot: None,
             open_pilot: None,
             warnings: Vec::new(),
+            chance: SharedChance::default(),
         }
+    }
+
+    /// The router with each flight rolling each day's events on `chance`.
+    #[must_use]
+    pub fn with_chance(self, chance: SharedChance) -> Self {
+        Self { chance, ..self }
     }
 
     /// The router with the main menu, which it now opens on: New Pilot
@@ -415,9 +435,9 @@ impl AppScreen {
     /// Shows flight, building it the first time, and remembers the side to
     /// go back to.
     fn enter_flight(&mut self) {
-        let data = &self.data;
+        let (data, chance) = (&self.data, &self.chance);
         self.flight
-            .get_or_insert_with(|| FlightView::new(Rc::clone(data)));
+            .get_or_insert_with(|| FlightView::new(Rc::clone(data)).with_chance(chance.clone()));
         self.return_to = self.side;
         self.switch_to(Side::Flight);
     }
@@ -551,16 +571,23 @@ impl AppScreen {
     }
 
     /// Shows the spaceport of `stellar`, landed on, laid out by the
-    /// "Spaceport" dialog when the router has dialogs.
+    /// "Spaceport" dialog when the router has dialogs, with the session's
+    /// exchange when it has one.
     fn show_spaceport(&mut self, stellar: nova_sim::StellarId) {
-        let layout = match &self.dialogs {
+        let template = |id| match &self.dialogs {
             Some(dialogs) => dialogs
                 .resources
-                .dialog_template(SPACEPORT_DIALOG)
+                .dialog_template(id)
                 .map(|template| (template, Rc::clone(&dialogs.metrics))),
             None => Err(NO_INTERFACE.to_owned()),
         };
-        self.spaceport = Some(SpaceportView::new(self.data.as_ref(), stellar, layout));
+        let mut spaceport =
+            SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG));
+        if let Some(market) = self.flight.as_ref().and_then(FlightView::market) {
+            let trade = template(TRADE_DIALOG).map(|(template, _)| template);
+            spaceport = spaceport.with_trade(trade, market);
+        }
+        self.spaceport = Some(spaceport);
         self.switch_to(Side::Spaceport);
     }
 
@@ -569,7 +596,8 @@ impl AppScreen {
     /// spaceport.
     fn start_flight(&mut self, pilot: Pilot) {
         self.spaceport = None;
-        let mut flight = FlightView::with_pilot(Rc::clone(&self.data), pilot);
+        let mut flight =
+            FlightView::with_pilot(Rc::clone(&self.data), pilot).with_chance(self.chance.clone());
         let landing = flight.take_landing();
         self.flight = Some(flight);
         self.return_to = Side::MainMenu;
@@ -771,11 +799,20 @@ impl AppScreen {
         }
     }
 
-    /// The spaceport's input, all of it; once it is left, the ship takes off
-    /// and flight shows.
+    /// The spaceport's input, all of it: an order on its exchange trades,
+    /// and the exchange as it then is goes back to it. Once it is left, the
+    /// ship takes off and flight shows.
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
+        if let Some(order) = spaceport.take_trade() {
+            let flight = self.flight.as_mut().expect(ENTERED);
+            // A refused order changes nothing; the screen greys what it can.
+            let _ = flight.trade(order);
+            if let Some(market) = flight.market() {
+                spaceport.set_market(market);
+            }
+        }
         if spaceport.left() {
             self.sounds.extend(spaceport.take_sounds());
             self.switch_to(Side::Flight);
@@ -1054,6 +1091,7 @@ mod tests {
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
     use nova_data::records::stellar::Stellar;
+    use nova_data::records::string_list::StrList;
     use nova_data::records::system::System;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_data::{GameData, Record, SystemId};
@@ -1110,6 +1148,30 @@ mod tests {
     /// names the same `rlëD`. The only `chär` starts in ship 128, an
     /// average ship, in system 128, over the planet.
     fn data() -> Rc<GameData> {
+        game_data(false)
+    }
+
+    /// [`data`], where the planet is also a trade center trading food at
+    /// 75 (`STR#` 4000 and 4004), the `chär` holds 1000 credits and ship
+    /// 128 holds 10 tons.
+    fn trading_data() -> Rc<GameData> {
+        game_data(true)
+    }
+
+    /// A `STR#` of `strings`.
+    fn str_list(strings: &[&str]) -> Vec<u8> {
+        let mut bytes = u16::try_from(strings.len())
+            .expect("few")
+            .to_be_bytes()
+            .to_vec();
+        for string in strings {
+            bytes.push(u8::try_from(string.len()).expect("short"));
+            bytes.extend(string.as_bytes());
+        }
+        bytes
+    }
+
+    fn game_data(trading: bool) -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
         anim[0x04..0x06].copy_from_slice(&1_i16.to_be_bytes());
@@ -1125,6 +1187,16 @@ mod tests {
             average[at..at + 2].copy_from_slice(&value.to_be_bytes());
         }
         let mut character = vec![0; Character::SIZE.expect("fixed")];
+        let mut stellar = landable();
+        let mut fork = ForkBuilder::new();
+        if trading {
+            average[0x00..0x02].copy_from_slice(&10_i16.to_be_bytes());
+            character[0x00..0x04].copy_from_slice(&1000_i32.to_be_bytes());
+            stellar[0x06..0x0A].copy_from_slice(&0x2000_0043_u32.to_be_bytes());
+            fork = fork
+                .resource(StrList::TYPE, 4000, None, &str_list(&["Food"]))
+                .resource(StrList::TYPE, 4004, None, &str_list(&["75"]));
+        }
         character[0x04..0x06].copy_from_slice(&128_i16.to_be_bytes());
         character[0x06..0x08].copy_from_slice(&128_i16.to_be_bytes());
         for slot in 1..4 {
@@ -1133,7 +1205,7 @@ mod tests {
         }
         let mut spin = vec![0; Spin::SIZE.expect("fixed")];
         spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
-        let fork = ForkBuilder::new()
+        let fork = fork
             .resource(Ship::TYPE, 129, Some(b"Second"), &ship)
             .resource(Ship::TYPE, 128, Some(b"First"), &average)
             .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
@@ -1142,7 +1214,7 @@ mod tests {
             .resource(RLED, 1000, None, &sheet)
             .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128]))
             .resource(System::TYPE, 129, Some(b"Beta"), &system(300, &[]))
-            .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &landable())
+            .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar)
             .resource(Spin::TYPE, 1000, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
             .build()
@@ -3209,5 +3281,158 @@ mod tests {
             self.quit();
             menu(store).showing()
         }
+    }
+
+    // The Trade Center.
+
+    use nova_sim::Good;
+    use nova_view::spaceport::trade::{BUY_ITEM, TRADE_DIALOG};
+
+    /// "Trade", smaller: 400 x 300 at (0, 0), with Done (1), eight rows (4
+    /// to 11), Buy (13) and Sell (14).
+    fn trade_template() -> DialogTemplate {
+        let item = |x: f32, y: f32| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), 30.0, 12.0),
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        let mut items: Vec<ItemTemplate> = (0..15).map(|_| item(0.0, 400.0)).collect();
+        items[0] = item(300.0, 250.0);
+        for row in 0..8_u8 {
+            items[3 + usize::from(row)] = item(10.0, 20.0 + 12.0 * f32::from(row));
+        }
+        items[12] = item(100.0, 250.0);
+        items[13] = item(200.0, 250.0);
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    /// [`Dialogs`], with "Trade" too.
+    struct TradeDialogs;
+
+    impl DialogResources for TradeDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            if id == TRADE_DIALOG {
+                return Ok(trade_template());
+            }
+            Dialogs.dialog_template(id)
+        }
+    }
+
+    /// The router over [`trading_data`] with the trade dialog, keeping
+    /// pilots in `store`, flying a new pilot named Ada, landed.
+    fn landed_trader(store: &MemoryPilots) -> AppScreen {
+        let mut screen = AppScreen::new(trading_data())
+            .with_dialogs(Rc::new(TradeDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        assert_eq!(screen.showing(), Showing::Flight);
+        screen.input(&key(LAND, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        screen
+    }
+
+    /// Clicks spaceport item `number`.
+    fn click_port_item(screen: &mut AppScreen, number: usize) {
+        let at = spaceport(screen)
+            .dialog()
+            .expect("laid out")
+            .item_bounds(number)
+            .expect("an item")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+    }
+
+    const FOOD: Good = Good::Commodity(0);
+
+    #[test]
+    fn the_trade_center_opens_the_stellars_exchange() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        assert!(
+            spaceport(&screen)
+                .offered()
+                .contains(&nova_sim::Service::TradeCenter)
+        );
+        click_port_item(&mut screen, 7);
+        let open = spaceport(&screen).open_trade().expect("trading");
+        assert_eq!(open.problem(), None);
+        assert_eq!(open.market().row(FOOD).map(|row| row.price), Some(75));
+        assert_eq!((open.market().cash, open.market().free), (1000, 10));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert_eq!(drawn(&screen), drawn(spaceport(&screen)));
+    }
+
+    #[test]
+    fn an_order_trades_refreshes_the_exchange_and_saves_the_pilot() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        click_port_item(&mut screen, 7);
+        let writes = store.writes();
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).cash(), 925);
+        assert_eq!(pilot(&screen).held(FOOD), 1);
+        let open = spaceport(&screen).open_trade().expect("trading");
+        assert_eq!(open.market().row(FOOD).map(|row| row.held), Some(1));
+        assert_eq!(open.market().cash, 925);
+        assert_eq!(store.writes(), writes + 1, "saved after the input");
+        assert_eq!(saved(&store, "Ada").held(FOOD), 1);
+        // A max buy, then a click on Buy with nothing left to buy with.
+        screen.input(&key(Key::Alt, true));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Alt, false));
+        assert_eq!(pilot(&screen).held(FOOD), 10, "the hold is full");
+        assert_eq!(pilot(&screen).cash(), 250);
+        let writes = store.writes();
+        let buy = spaceport(&screen)
+            .open_trade()
+            .and_then(|open| open.dialog())
+            .and_then(|dialog| dialog.item_bounds(BUY_ITEM))
+            .expect("Buy")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: buy,
+            });
+        }
+        assert_eq!(pilot(&screen).held(FOOD), 10, "greyed");
+        assert_eq!(store.writes(), writes, "nothing to save");
+        // Escape closes the exchange; the spaceport stays.
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_trade().is_none());
+        assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    #[test]
+    fn without_the_trade_dialog_the_trade_center_says_why() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(trading_data())
+            .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        screen.input(&key(LAND, true));
+        click_port_item(&mut screen, 7);
+        let open = spaceport(&screen).open_trade().expect("trading");
+        assert_eq!(open.problem(), Some("no DLOG 1001"));
+    }
+
+    #[test]
+    fn a_stellar_without_a_trade_center_offers_no_exchange() {
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        click_port_item(&mut screen, 7);
+        assert!(spaceport(&screen).open_trade().is_none());
+        assert!(spaceport(&screen).open_service().is_none());
     }
 }

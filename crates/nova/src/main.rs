@@ -8,8 +8,12 @@
 //!
 //! Pilots are saved, one JSON file each, in a `Pilots` directory beside
 //! the settings file (below): on landing, on taking off, after each change
-//! in the spaceport, on going back to the menu and on quitting. Without a
-//! place to save them, the game runs with a warning and saves nothing.
+//! in the spaceport (each trade in the Trade Center among them), on going
+//! back to the menu and on quitting. Without a place to save them, the
+//! game runs with a warning and saves nothing.
+//!
+//! Planetary events start at random, on a generator seeded from the clock
+//! when the game starts.
 //!
 //! Tab, on the menu, goes to the developer's ship browser and galaxy map,
 //! and switches between them. On the map, Return enters the selected
@@ -42,12 +46,15 @@
 //! directory. Exits 2 on a usage error and 1 when the data or the window
 //! cannot be opened.
 
+use std::cell::RefCell;
 use std::ffi::OsString;
 use std::process::ExitCode;
 use std::rc::Rc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use nova::app::start_screen;
 use nova::audio::{game_audio, game_settings, music_warning};
+use nova::chance::SplitMix;
 use nova::config::{Os, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
 use nova::platform::Runner;
@@ -58,7 +65,8 @@ use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
-use nova_sim::{PilotKeeper, PilotStore};
+use nova_sim::{Chance, PilotKeeper, PilotStore};
+use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
 use winit::event_loop::EventLoop;
@@ -98,9 +106,20 @@ fn main() -> ExitCode {
     if pilots.is_none() {
         eprintln!("nova: there is nowhere to save pilots (no home directory); saving nothing");
     }
+    // Nanoseconds since 1970, wrapped: a different seed each run.
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| {
+            since
+                .as_secs()
+                .wrapping_mul(1_000_000_000)
+                .wrapping_add(u64::from(since.subsec_nanos()))
+        });
+    let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(SplitMix::new(seed)));
     let mut screen = start_screen(Rc::clone(&data))
         .with_sound_prefs(settings.prefs())
-        .with_pilots(pilots, Rc::clone(&metrics));
+        .with_pilots(pilots, Rc::clone(&metrics))
+        .with_chance(SharedChance::new(chance));
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);

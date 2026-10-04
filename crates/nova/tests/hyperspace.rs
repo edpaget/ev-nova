@@ -1,7 +1,8 @@
 //! The app jumping through hyperspace over synthetic game data, wired to
 //! the renderer and the recording Gpu and driven only by key and mouse
 //! events and redraws, as the window sends them: flight's map, opened with
-//! M, plots a course two jumps long, and J jumps along it.
+//! M, plots a course two jumps long, and J jumps along it. Each day a jump
+//! takes rolls the planetary events on the app's source of chance.
 //!
 //! Play plots courses on the map opened from flight, which has no "Enter
 //! system" button; the Tab side's map keeps it as the developer's viewer
@@ -10,6 +11,7 @@
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
 
+use std::cell::RefCell;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -21,6 +23,7 @@ use nova_audio::{Audio, AudioCommand, AudioCore, Volume};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
+use nova_data::records::disaster::Disaster;
 use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -35,9 +38,9 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::shortest_turn;
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
-use nova_sim::{Session, ShipState, SystemId};
-use nova_view::flight::FlightView;
+use nova_sim::{Chance, DisasterId, Session, ShipState, SystemId};
 use nova_view::flight::view::TOO_CLOSE;
+use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::map::{COURSE_HELP, ENTER_LABEL, ROUTE};
 use nova_view::{Key, MouseButton, Point};
 
@@ -175,10 +178,19 @@ fn sheet(frames: u16, size: u16) -> Vec<u8> {
         .build()
 }
 
+/// An `öops` lowering food at Beta Prime by 15 for 30 days, with a 35 %
+/// chance a day.
+fn food_surplus() -> Vec<u8> {
+    let mut bytes = vec![0; Disaster::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[129, 0, -15, 30, 35]);
+    bytes
+}
+
 /// Alpha (128), Beta (129) and Gamma (130) in a line on the map, 100
 /// apart and linked 128-129-130, each holding one stellar at (0, -300)
 /// with an 8 x 8 sprite. The first `chär` flies the fast ship 128 from
-/// Alpha. The status bar is `ïntf` 128, over a 194 x 16 `PICT` 700.
+/// Alpha. The status bar is `ïntf` 128, over a 194 x 16 `PICT` 700. A
+/// food surplus can break out at Beta Prime.
 fn data() -> Rc<GameData> {
     let fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
@@ -200,6 +212,12 @@ fn data() -> Rc<GameData> {
             &interface(),
         )
         .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
+        .resource(
+            Disaster::TYPE,
+            128,
+            Some(b"A food surplus"),
+            &food_surplus(),
+        )
         .build()
         .bytes;
     let file = OneFile(fork);
@@ -218,9 +236,16 @@ struct Harness {
 impl Harness {
     /// The app in flight, entered from the ship browser with F.
     fn flying() -> Self {
+        Self::flying_with(SharedChance::default())
+    }
+
+    /// The app rolling chances on `chance`, in flight, entered from the
+    /// ship browser with F.
+    fn flying_with(chance: SharedChance) -> Self {
         let data = data();
+        let screen = start_screen(Rc::clone(&data)).with_chance(chance);
         let mut harness = Self {
-            app: App::new(&FakeWindow, Rc::clone(&data), start_screen(data)),
+            app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
             frames: 0,
             held: Vec::new(),
@@ -463,6 +488,11 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     assert_eq!(session.reserves().fuel.now, 200.0);
     assert_eq!(date(&harness), (24, 6, 1177));
     assert_eq!(harness.ship().position, nova_sim::Vec2::new(-1000.0, 0.0));
+    assert_eq!(
+        harness.session().pilot().events().count(),
+        0,
+        "the app's chance never fires unless it is given one"
+    );
     assert!(shows(&arrived, "Beta (sÿst 129)"), "{:?}", texts(&arrived));
     assert_eq!(quads(&arrived)[0].dest, stellar_drawn(&harness));
 
@@ -523,4 +553,39 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
         volume: Volume::FULL,
     };
     assert_eq!(plays, [play(128), play(130)]);
+}
+
+/// Fires every time, recording each percent it is asked.
+struct Always(Rc<RefCell<Vec<u8>>>);
+
+impl Chance for Always {
+    fn fires(&mut self, percent: u8) -> bool {
+        self.0.borrow_mut().push(percent);
+        true
+    }
+}
+
+#[test]
+fn each_day_of_a_jump_rolls_the_events_on_the_apps_chance() {
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always(Rc::clone(&asked))));
+    let mut harness = Harness::flying_with(SharedChance::new(chance));
+    harness.frame();
+    harness.press(Key::Char('m'));
+    let beta = harness.on_map(129);
+    harness.click(beta);
+    harness.press(Key::Char('m'));
+    harness.fly_out();
+    assert!(
+        asked.borrow().is_empty(),
+        "nothing rolled before a day goes by"
+    );
+    harness.press(Key::Char('j'));
+    harness.run(2);
+    assert_eq!(harness.session().system(), SystemId(129));
+    assert_eq!(*asked.borrow(), [35], "the surplus, once for the day");
+    assert_eq!(
+        harness.session().pilot().events().collect::<Vec<_>>(),
+        [(DisasterId(128), 30)]
+    );
 }

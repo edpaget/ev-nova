@@ -449,11 +449,12 @@ fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
 fn a_service_opens_its_placeholder_and_done_returns() {
     let mut harness = Harness::flying(0);
     harness.press(Key::Char('l'));
-    let trade = harness.item(7).center();
-    harness.click(trade);
+    // The bar: the Trade Center opens the exchange instead (`trade.rs`).
+    let bar = harness.item(10).center();
+    harness.click(bar);
     let frame = harness.frame();
     let texts = texts(&frame);
-    assert!(texts.iter().any(|t| t == "Trade Center"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Bar"), "{texts:?}");
     assert!(texts.iter().any(|t| t == "Not available yet"), "{texts:?}");
     assert!(!texts.iter().any(|t| t == "Leave"), "{texts:?}");
 

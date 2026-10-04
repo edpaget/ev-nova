@@ -113,6 +113,12 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // The Preferences dialog's key, by position: P on a US-layout
         // keyboard.
         PhysicalKey::Code(KeyCode::KeyP) => Key::Char('p'),
+        // The Trade Center's buy key, by position: B on a US-layout
+        // keyboard. Its sell key is S, above.
+        PhysicalKey::Code(KeyCode::KeyB) => Key::Char('b'),
+        // Either Alt (Option on a Mac), which makes a trade the most
+        // possible while held.
+        PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::Alt,
         // The developer tools' toggle, by position: the key under Escape on
         // a US-layout keyboard. Without the developer tools, no screen uses
         // it.
@@ -180,6 +186,9 @@ mod tests {
             (KeyCode::KeyM, Key::Char('m')),
             (KeyCode::KeyJ, Key::Char('j')),
             (KeyCode::KeyP, Key::Char('p')),
+            (KeyCode::KeyB, Key::Char('b')),
+            (KeyCode::AltLeft, Key::Alt),
+            (KeyCode::AltRight, Key::Alt),
             (KeyCode::Backquote, Key::Char('`')),
             (KeyCode::KeyQ, Key::Other),
             (KeyCode::F1, Key::Other),
@@ -195,7 +204,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 14] = [
+    const GAME_CHARACTER_KEYS: [Key; 16] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -210,12 +219,15 @@ mod tests {
         Key::Char('+'),
         Key::Char('-'),
         nova_view::devtools::TOGGLE_KEY,
+        nova_view::spaceport::trade::BUY_KEY,
+        nova_view::spaceport::trade::SELL_KEY,
     ];
 
     /// The physical key that types `c` on a US-layout keyboard.
     fn us_position(c: char) -> KeyCode {
         match c {
             'a' => KeyCode::KeyA,
+            'b' => KeyCode::KeyB,
             'd' => KeyCode::KeyD,
             'f' => KeyCode::KeyF,
             'i' => KeyCode::KeyI,
@@ -246,8 +258,11 @@ mod tests {
     /// Every key other than a character's that a screen reacts to, where
     /// the screen names it with a constant, and the physical key that
     /// sends it.
-    const GAME_NAMED_KEYS: [(Key, KeyCode); 1] =
-        [(nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace)];
+    const GAME_NAMED_KEYS: [(Key, KeyCode); 3] = [
+        (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
+        (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
+        (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltRight),
+    ];
 
     #[test]
     fn every_named_key_a_screen_reacts_to_comes_from_its_physical_key() {

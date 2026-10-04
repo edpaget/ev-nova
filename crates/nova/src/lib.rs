@@ -6,6 +6,8 @@
 //!   frame's draw list to `nova-render`. No winit or wgpu types.
 //! - [`audio`]: the audio core over the device that opened, and the
 //!   music that loaded, each with a warning when it did not.
+//! - [`chance`]: the real source of chance, a seeded `SplitMix64`
+//!   generator.
 //! - [`cli`]: where the game data is, from the arguments or `NOVA_DATA`.
 //! - [`config`]: where the player's settings and pilots are saved, for
 //!   each operating system.
@@ -22,6 +24,7 @@
 
 pub mod app;
 pub mod audio;
+pub mod chance;
 pub mod cli;
 pub mod config;
 #[cfg(feature = "dev-tools")]
