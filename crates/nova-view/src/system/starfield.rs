@@ -78,6 +78,22 @@ pub fn draw(list: &mut DrawList, camera: &Camera) {
     }
 }
 
+/// Draws the same stars as [`draw`], each streaked: a line, as wide as
+/// its dot, from where its dot is drawn back along `-direction` (a unit
+/// vector) for `length` times its layer's factor, so the near stars
+/// streak longest. The hyperspace jump draws the stars this way.
+pub fn draw_streaked(list: &mut DrawList, camera: &Camera, direction: Point, length: f32) {
+    for star in stars(camera) {
+        let layer = &LAYERS[star.layer];
+        let trail = length * layer.factor;
+        let end = Point::new(
+            direction.x.mul_add(-trail, star.screen.x),
+            direction.y.mul_add(-trail, star.screen.y),
+        );
+        list.line(star.screen, end, layer.dot_size, layer.color);
+    }
+}
+
 /// One star on screen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Star {
@@ -420,6 +436,54 @@ mod tests {
                     "{n} on layer {layer}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn streaked_stars_trail_back_from_their_dots_by_their_layers_share_of_the_length() {
+        let camera = camera_at(640.0, -320.0);
+        let mut dots = DrawList::new();
+        draw(&mut dots, &camera);
+        let direction = at(0.6, -0.8);
+        let mut streaks = DrawList::new();
+        draw_streaked(&mut streaks, &camera, direction, 200.0);
+        assert_eq!(streaks.len(), dots.len());
+        let stars = stars(&camera);
+        for ((streak, dot), star) in streaks.iter().zip(&dots).zip(&stars) {
+            let layer = &LAYERS[star.layer];
+            let DrawCommand::Dot {
+                center,
+                size,
+                color,
+            } = *dot
+            else {
+                panic!("{dot:?}")
+            };
+            let DrawCommand::Line {
+                from,
+                to,
+                width,
+                color: line_color,
+            } = *streak
+            else {
+                panic!("{streak:?}")
+            };
+            assert_eq!((from, width, line_color), (center, size, color));
+            let (dx, dy) = (to.x - from.x, to.y - from.y);
+            let trail = 200.0 * layer.factor;
+            assert!((dx.hypot(dy) - trail).abs() < 1e-3, "{streak:?}");
+            assert!((dx + 0.6 * trail).abs() < 1e-3, "{streak:?}");
+            assert!((dy - 0.8 * trail).abs() < 1e-3, "{streak:?}");
+        }
+        let mut none = DrawList::new();
+        draw_streaked(&mut none, &camera, direction, 0.0);
+        for (streak, dot) in none.iter().zip(&dots) {
+            let (DrawCommand::Line { from, to, .. }, DrawCommand::Dot { center, .. }) =
+                (streak, dot)
+            else {
+                panic!("{streak:?}")
+            };
+            assert_eq!((*from, *to), (*center, *center));
         }
     }
 

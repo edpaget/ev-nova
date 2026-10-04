@@ -20,6 +20,6 @@ pub use catalog::{
     Galaxy, GalaxyCatalog, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId,
     SystemEntry, SystemId,
 };
-pub use map::GalaxyMap;
+pub use map::{GalaxyMap, MapMode};
 pub use model::{GalaxyModel, MapSystem, NEUTRAL};
 pub use view::MapView;

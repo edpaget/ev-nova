@@ -19,12 +19,23 @@
 //!   it with [`GalaxyMap::take_entry`]. A click on the button is a press
 //!   and a release both on it.
 //! - Tab is the app's router's and Escape the navigator's.
+//!
+//! The map has two modes ([`MapMode`]). The viewer ([`GalaxyMap::new`]),
+//! the developer path the app's Tab reaches, enters systems as above. The
+//! course map ([`GalaxyMap::course`]), opened from flight, plots the
+//! player's course instead: it has no "Enter system" button and Return
+//! does nothing, and a click that selects a system also makes it the
+//! destination, which the owner takes with
+//! [`GalaxyMap::take_destination`]. Either map draws the course it is
+//! shown ([`GalaxyMap::show_course`]): the current system marked, and the
+//! route from it through each hop.
 
 use std::time::Duration;
 
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
 use super::model::{GalaxyModel, placement};
 use super::view::{Bounds, MAP_HEIGHT, MAP_WIDTH, MapView, PAN_STEP};
+use crate::draw::fill_rect;
 use crate::{Color, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction};
 
 /// How far the pointer may travel between pressing and releasing the left
@@ -85,6 +96,21 @@ pub const ENTER_LABEL: &str = "Enter system (Return)";
 const ENTER_LABEL_AT: Point = Point::new(540.0, 720.0);
 const ENTER_LABEL_SIZE: f32 = 14.0;
 
+/// The course map's help line.
+pub const COURSE_HELP: &str =
+    "Arrows or drag: pan   +/-: zoom   Click: set destination   M or Esc: back";
+/// The plotted route's colour and width.
+pub const ROUTE: Color = Color::rgba(64, 224, 64, 255);
+pub const ROUTE_WIDTH: f32 = 3.0;
+/// The mark under the current system's dot: its colour and size.
+pub const CURRENT: Color = Color::rgba(255, 224, 64, 255);
+pub const CURRENT_SIZE: f32 = 14.0;
+/// The panel's course line, in the right column where the viewer's
+/// "Enter system" button goes.
+const COURSE_TOP: f32 = 712.0;
+
+// The current system's mark shows round its dot's outline.
+const _: () = assert!(CURRENT_SIZE > OUTLINE_SIZE);
 // The two columns stay on screen and apart.
 const _: () = assert!(LEFT + LEFT_WRAP <= RIGHT);
 const _: () = assert!(RIGHT + RIGHT_WRAP <= MAP_WIDTH);
@@ -99,9 +125,19 @@ struct Press {
     travelled: f32,
 }
 
+/// What the map is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapMode {
+    /// Browsing the galaxy and entering systems: the developer path.
+    Viewer,
+    /// Choosing where the player's ship goes, from flight.
+    Course,
+}
+
 /// The galaxy map.
 #[derive(Clone, Debug)]
 pub struct GalaxyMap {
+    mode: MapMode,
     model: GalaxyModel,
     view: MapView,
     selected: Option<SystemId>,
@@ -111,22 +147,73 @@ pub struct GalaxyMap {
     armed: bool,
     /// A request to enter a system, not yet taken.
     entry: Option<SystemId>,
+    /// A destination chosen on the course map, not yet taken.
+    destination: Option<SystemId>,
+    /// The system the player is in, as last shown.
+    current: Option<SystemId>,
+    /// The course from it, as last shown.
+    route: Vec<SystemId>,
 }
 
 impl GalaxyMap {
-    /// The map of `catalog`'s galaxy, fitted to the map area, with nothing
-    /// selected.
+    /// The viewer map of `catalog`'s galaxy, fitted to the map area, with
+    /// nothing selected.
     pub fn new(catalog: &impl GalaxyCatalog) -> Self {
+        Self::with_mode(catalog, MapMode::Viewer)
+    }
+
+    /// The course map of `catalog`'s galaxy, fitted to the map area, with
+    /// nothing selected and no course shown.
+    pub fn course(catalog: &impl GalaxyCatalog) -> Self {
+        Self::with_mode(catalog, MapMode::Course)
+    }
+
+    fn with_mode(catalog: &impl GalaxyCatalog, mode: MapMode) -> Self {
         let model = GalaxyModel::new(catalog.galaxy());
         let view = MapView::fit(model.bounds());
         Self {
+            mode,
             model,
             view,
             selected: None,
             press: None,
             armed: false,
             entry: None,
+            destination: None,
+            current: None,
+            route: Vec::new(),
         }
+    }
+
+    /// What the map is for.
+    #[must_use]
+    pub fn mode(&self) -> MapMode {
+        self.mode
+    }
+
+    /// The destination chosen on the course map since it was last taken,
+    /// if any; taking it clears it.
+    pub fn take_destination(&mut self) -> Option<SystemId> {
+        self.destination.take()
+    }
+
+    /// Shows the player in `current` with `route` ahead: the systems still
+    /// to jump to, in order.
+    pub fn show_course(&mut self, current: SystemId, route: &[SystemId]) {
+        self.current = Some(current);
+        self.route = route.to_vec();
+    }
+
+    /// The system the player is in, as last shown.
+    #[must_use]
+    pub fn current(&self) -> Option<SystemId> {
+        self.current
+    }
+
+    /// The course from it, as last shown.
+    #[must_use]
+    pub fn route(&self) -> &[SystemId] {
+        &self.route
     }
 
     /// The selected system, if any.
@@ -174,11 +261,19 @@ impl GalaxyMap {
         }
     }
 
-    /// Asks to enter the selected system, if there is one.
+    /// Asks to enter the selected system, if there is one and the map
+    /// enters systems.
     fn enter(&mut self) {
-        if let Some(id) = self.selected {
+        if self.mode == MapMode::Viewer
+            && let Some(id) = self.selected
+        {
             self.entry = Some(id);
         }
+    }
+
+    /// Whether the "Enter system" button is shown.
+    fn has_enter_button(&self) -> bool {
+        self.mode == MapMode::Viewer && self.selected.is_some()
     }
 
     /// Ends the press, if there is one, with the left button released at
@@ -190,6 +285,9 @@ impl GalaxyMap {
         };
         if press.travelled <= CLICK_SLOP && in_map(at) {
             self.selected = self.model.click(at, &self.view, self.selected);
+            if self.mode == MapMode::Course && self.selected.is_some() {
+                self.destination = self.selected;
+            }
         }
     }
 
@@ -224,6 +322,20 @@ impl GalaxyMap {
         for &(from, to) in self.model.links() {
             if let (Some(from), Some(to)) = (screen(from), screen(to)) {
                 list.line(from, to, LINK_WIDTH, LINK);
+            }
+        }
+        if let Some(current) = self.current {
+            let stops: Vec<Option<Point>> = std::iter::once(current)
+                .chain(self.route.iter().copied())
+                .map(screen)
+                .collect();
+            for hop in stops.windows(2) {
+                if let [Some(from), Some(to)] = *hop {
+                    list.line(from, to, ROUTE_WIDTH, ROUTE);
+                }
+            }
+            if let Some(at) = screen(current) {
+                list.dot(at, CURRENT_SIZE, CURRENT);
             }
         }
         // Highest ID first, so where systems share a position the lowest
@@ -269,7 +381,7 @@ impl GalaxyMap {
             SEPARATOR,
         );
         let selected = self.selected.and_then(|id| self.model.system(id));
-        if selected.is_some() {
+        if self.has_enter_button() {
             fill_rect(list, ENTER_BUTTON, BUTTON);
         }
         match selected {
@@ -293,7 +405,11 @@ impl GalaxyMap {
                 color,
             );
         };
-        right(list, HELP.to_owned(), HELP_TOP, Color::DIM);
+        let help = match self.mode {
+            MapMode::Viewer => HELP,
+            MapMode::Course => COURSE_HELP,
+        };
+        right(list, help.to_owned(), HELP_TOP, Color::DIM);
         let percent = (self.view.scale() * 100.0).round();
         right(list, format!("Zoom {percent}%"), ZOOM_TOP, Color::DIM);
         if let Some(system) = selected {
@@ -318,7 +434,10 @@ impl GalaxyMap {
             );
             right(list, line, PROBLEMS_TOP, Color::ERROR);
         }
-        if selected.is_some() {
+        if let Some(line) = self.course_line() {
+            right(list, line, COURSE_TOP, Color::WHITE);
+        }
+        if self.has_enter_button() {
             list.text(
                 ENTER_LABEL,
                 ENTER_LABEL_AT,
@@ -327,6 +446,27 @@ impl GalaxyMap {
                 Color::WHITE,
             );
         }
+    }
+}
+
+impl GalaxyMap {
+    /// The course map panel's line about the course: how many jumps to
+    /// where, or that there is no route to the system selected; nothing
+    /// while no course is shown and nothing (or the current system) is
+    /// selected, and nothing on the viewer.
+    fn course_line(&self) -> Option<String> {
+        if self.mode == MapMode::Viewer {
+            return None;
+        }
+        if let Some(&last) = self.route.last() {
+            let name = self
+                .model
+                .system(last)
+                .map_or_else(|| format!("sÿst {}", last.0), |s| s.entry.name.clone());
+            return Some(format!("Course: {} jump(s) to {name}", self.route.len()));
+        }
+        let selected = self.selected?;
+        (Some(selected) != self.current).then(|| "No hyperspace route".to_owned())
     }
 }
 
@@ -361,18 +501,6 @@ fn in_map(at: Point) -> bool {
     at.y < MAP_HEIGHT
 }
 
-/// Fills `area` with `color`. There is no rectangle command: a horizontal
-/// line as thick as the area, along its middle, is one.
-fn fill_rect(list: &mut DrawList, area: Bounds, color: Color) {
-    let middle = area.center().y;
-    list.line(
-        Point::new(area.min.x, middle),
-        Point::new(area.max.x, middle),
-        area.height(),
-        color,
-    );
-}
-
 impl Screen for GalaxyMap {
     /// Never quits: Escape is the navigator's.
     fn input(&mut self, input: &Input) -> ScreenAction {
@@ -402,7 +530,7 @@ impl Screen for GalaxyMap {
                         self.enter();
                     }
                     self.release(at);
-                } else if self.selected.is_some() && ENTER_BUTTON.contains(at) {
+                } else if self.has_enter_button() && ENTER_BUTTON.contains(at) {
                     self.armed = true;
                 } else {
                     // Replaces any button press whose release was lost.
@@ -1494,5 +1622,214 @@ mod tests {
             HELP,
             "Arrows or drag: pan   +/-: zoom   Click: select   Return: enter"
         );
+    }
+
+    // Plotting a course.
+
+    fn course_map() -> GalaxyMap {
+        GalaxyMap::course(&FakeCatalog::new(galaxy()))
+    }
+
+    fn ids(route: &[i16]) -> Vec<SystemId> {
+        route.iter().copied().map(SystemId).collect()
+    }
+
+    #[test]
+    fn a_course_map_reads_the_galaxy_once_and_starts_with_no_course() {
+        let catalog = FakeCatalog::new(galaxy());
+        let map = GalaxyMap::course(&catalog);
+        assert_eq!(catalog.reads.get(), 1);
+        assert_eq!(map.mode(), MapMode::Course);
+        assert_eq!(map.current(), None);
+        assert_eq!(map.route(), []);
+        assert_eq!(lines(&drawn(&map), ROUTE), []);
+        assert_eq!(self::map().mode(), MapMode::Viewer);
+    }
+
+    #[test]
+    fn the_route_is_drawn_from_the_current_system_through_each_hop() {
+        let mut map = course_map();
+        map.show_course(SystemId(130), &ids(&[128, 129]));
+        assert_eq!(map.current(), Some(SystemId(130)));
+        assert_eq!(map.route(), ids(&[128, 129]));
+        let list = drawn(&map);
+        assert_eq!(
+            lines(&list, ROUTE),
+            [
+                (dot(&map, 130), dot(&map, 128), ROUTE_WIDTH),
+                (dot(&map, 128), dot(&map, 129), ROUTE_WIDTH),
+            ]
+        );
+        // Over the hyperlinks, under the dots.
+        let last_link = list
+            .iter()
+            .rposition(|c| matches!(c, DrawCommand::Line { color, .. } if *color == LINK));
+        let first_route = list
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Line { color, .. } if *color == ROUTE));
+        let first_dot = list
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Dot { .. }));
+        assert!(
+            last_link < first_route && first_route < first_dot,
+            "{list:?}"
+        );
+        assert_eq!(ROUTE_WIDTH, 3.0);
+    }
+
+    #[test]
+    fn the_current_system_is_marked_under_its_dot() {
+        let mut map = course_map();
+        map.show_course(SystemId(129), &[]);
+        let list = drawn(&map);
+        assert_eq!(dots(&list, CURRENT_SIZE), [(dot(&map, 129), CURRENT)]);
+        assert_eq!(lines(&list, ROUTE), []);
+        let marker = list
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Dot { color, .. } if *color == CURRENT));
+        let first_outline = list
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Dot { size, .. } if *size == OUTLINE_SIZE));
+        assert!(marker < first_outline, "{list:?}");
+        assert_eq!(CURRENT_SIZE, 14.0);
+        assert_ne!(CURRENT, ROUTE);
+    }
+
+    #[test]
+    fn a_course_through_a_system_not_on_the_map_skips_its_lines() {
+        let mut map = course_map();
+        map.show_course(SystemId(130), &ids(&[128, 999, 129]));
+        assert_eq!(
+            lines(&drawn(&map), ROUTE),
+            [(dot(&map, 130), dot(&map, 128), ROUTE_WIDTH)]
+        );
+        map.show_course(SystemId(999), &ids(&[128]));
+        let list = drawn(&map);
+        assert_eq!(lines(&list, ROUTE), []);
+        assert_eq!(dots(&list, CURRENT_SIZE), []);
+    }
+
+    #[test]
+    fn a_course_map_has_no_enter_button_and_return_enters_nothing() {
+        let mut map = course_map();
+        click_on(&mut map, 129);
+        let list = drawn(&map);
+        assert_eq!(lines(&list, BUTTON), []);
+        assert!(!texts(&list).contains(&ENTER_LABEL.to_owned()));
+        map.input(&press(Key::Enter));
+        assert_eq!(map.take_entry(), None);
+        click(&mut map, button_centre());
+        assert_eq!(map.take_entry(), None);
+        assert_eq!(
+            map.selected(),
+            Some(SystemId(129)),
+            "the panel is not the map"
+        );
+        assert_eq!(
+            text(&list, "Arrows"),
+            DrawCommand::Text {
+                text: COURSE_HELP.to_owned(),
+                font: Font::Geneva,
+                origin: at(RIGHT, HELP_TOP),
+                size: RIGHT_SIZE,
+                wrap_width: Some(RIGHT_WRAP),
+                color: Color::DIM,
+            }
+        );
+        assert_eq!(
+            COURSE_HELP,
+            "Arrows or drag: pan   +/-: zoom   Click: set destination   M or Esc: back"
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_system_sets_it_as_the_destination_once() {
+        let mut map = course_map();
+        assert_eq!(map.take_destination(), None);
+        click_on(&mut map, 129);
+        assert_eq!(map.take_destination(), Some(SystemId(129)));
+        assert_eq!(map.take_destination(), None, "taken");
+        // Empty space clears the selection and sets nothing.
+        let beta = dot(&map, 129);
+        click(&mut map, at(beta.x - 40.0, beta.y));
+        assert_eq!(map.selected(), None);
+        assert_eq!(map.take_destination(), None);
+        // A drag sets nothing.
+        map.input(&button(MouseButton::Left, true, beta));
+        map.input(&Input::PointerMoved(at(beta.x + 20.0, beta.y)));
+        map.input(&button(MouseButton::Left, false, at(beta.x + 20.0, beta.y)));
+        assert_eq!(map.take_destination(), None);
+        // The last click is the one taken.
+        click_on(&mut map, 130);
+        click_on(&mut map, 128);
+        assert_eq!(map.take_destination(), Some(SystemId(128)));
+    }
+
+    #[test]
+    fn the_viewer_map_sets_no_destination_and_has_no_course_line() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        assert_eq!(map.take_destination(), None);
+        assert_eq!(map.selected(), Some(SystemId(129)));
+        map.show_course(SystemId(128), &ids(&[129]));
+        assert_eq!(course_line(&drawn(&map)), None);
+        map.show_course(SystemId(128), &[]);
+        assert_eq!(course_line(&drawn(&map)), None);
+    }
+
+    /// The panel's course line, if any.
+    fn course_line(list: &DrawList) -> Option<DrawCommand> {
+        list.iter()
+            .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == at(RIGHT, COURSE_TOP)))
+            .cloned()
+    }
+
+    fn panel_line(text: &str) -> DrawCommand {
+        DrawCommand::Text {
+            text: text.to_owned(),
+            font: Font::Geneva,
+            origin: at(RIGHT, COURSE_TOP),
+            size: RIGHT_SIZE,
+            wrap_width: Some(RIGHT_WRAP),
+            color: Color::WHITE,
+        }
+    }
+
+    #[test]
+    fn the_panel_says_how_many_jumps_the_course_is_to_where() {
+        let mut map = course_map();
+        assert_eq!(course_line(&drawn(&map)), None);
+        click_on(&mut map, 129);
+        map.show_course(SystemId(130), &ids(&[128, 129]));
+        assert_eq!(
+            course_line(&drawn(&map)),
+            Some(panel_line("Course: 2 jump(s) to Beta"))
+        );
+        map.show_course(SystemId(128), &ids(&[129]));
+        assert_eq!(
+            course_line(&drawn(&map)),
+            Some(panel_line("Course: 1 jump(s) to Beta"))
+        );
+        // A hop not on the map is still named by its ID.
+        map.show_course(SystemId(128), &ids(&[999]));
+        assert_eq!(
+            course_line(&drawn(&map)),
+            Some(panel_line("Course: 1 jump(s) to sÿst 999"))
+        );
+    }
+
+    #[test]
+    fn a_selected_system_with_no_route_says_so() {
+        let mut map = course_map();
+        map.show_course(SystemId(128), &[]);
+        assert_eq!(course_line(&drawn(&map)), None, "nothing selected");
+        click_on(&mut map, 130);
+        assert_eq!(
+            course_line(&drawn(&map)),
+            Some(panel_line("No hyperspace route"))
+        );
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(128)));
+        assert_eq!(course_line(&drawn(&map)), None, "the current system");
     }
 }

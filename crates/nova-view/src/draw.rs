@@ -2,7 +2,7 @@
 
 use crate::color::Color;
 use crate::font::Font;
-use crate::geometry::Point;
+use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 
 /// One thing to draw, in logical coordinates.
@@ -214,6 +214,18 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
         .line(corners[1], corners[3], 1.0, color);
 }
 
+/// Fills `area` with `color`. There is no rectangle command: a horizontal
+/// line as thick as the area, along its middle, is one.
+pub fn fill_rect(list: &mut DrawList, area: Bounds, color: Color) {
+    let middle = area.center().y;
+    list.line(
+        Point::new(area.min.x, middle),
+        Point::new(area.max.x, middle),
+        area.height(),
+        color,
+    );
+}
+
 impl<'a> IntoIterator for &'a DrawList {
     type Item = &'a DrawCommand;
     type IntoIter = std::slice::Iter<'a, DrawCommand>;
@@ -381,6 +393,26 @@ mod tests {
     #[test]
     fn default_is_empty() {
         assert!(DrawList::default().is_empty());
+    }
+
+    #[test]
+    fn a_filled_rectangle_is_a_line_through_its_middle_as_thick_as_it_is() {
+        let grey = Color::rgba(16, 16, 28, 255);
+        let mut list = DrawList::new();
+        let area = Bounds {
+            min: at(528.0, 712.0),
+            max: at(708.0, 744.0),
+        };
+        fill_rect(&mut list, area, grey);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [DrawCommand::Line {
+                from: at(528.0, 728.0),
+                to: at(708.0, 728.0),
+                width: 32.0,
+                color: grey,
+            }]
+        );
     }
 
     #[test]
