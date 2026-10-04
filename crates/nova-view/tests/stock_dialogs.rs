@@ -17,6 +17,10 @@ use nova_view::geometry::{Bounds, Point};
 use nova_view::sound::SoundPrefs;
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
+use nova_view::ui::new_pilot::{
+    CANCEL_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome,
+    OK_ITEM as NEW_PILOT_OK_ITEM,
+};
 use nova_view::ui::prefs::{
     KEY_SETTINGS_ITEM, MUSIC_ITEM, OK_ITEM, PREFS_DIALOG, SOUND_ITEM, VOLUME_DOWN_ITEM,
     VOLUME_LABEL_ITEM, VOLUME_UP_ITEM, VOLUME_VALUE_ITEM,
@@ -375,5 +379,59 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
             assert!(apart, "{name}: {}", toggle.label());
         }
         assert_eq!(prefs.inert().len(), 11, "{name}");
+    }
+}
+
+/// "Create a new pilot:" (`DLOG` 3102) is centred, with OK and Cancel
+/// where recorded, its Full Name field taking the typed name, and Return
+/// creating the pilot.
+#[test]
+fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(NEW_PILOT_DIALOG)
+            .expect("converts");
+        let name = path.display();
+        assert_eq!(template.placement, Placement::Center, "{name}");
+        assert_eq!(
+            template.items[NAME_ITEM - 1].kind,
+            ItemSpec::EditText("Edit Text".to_owned()),
+            "{name}"
+        );
+        assert_eq!(
+            template.items[NEW_PILOT_OK_ITEM - 1].kind,
+            ItemSpec::Button("OK".to_owned())
+        );
+        assert_eq!(
+            template.items[CANCEL_ITEM - 1].kind,
+            ItemSpec::Button("Cancel".to_owned())
+        );
+        let mut dialog = NewPilotDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        let bounds = dialog.dialog().bounds();
+        let field = dialog.field().rect();
+        assert!(
+            bounds.contains(field.min) && bounds.contains(field.max),
+            "{name}"
+        );
+        let texts: Vec<String> = drawn(&dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        for shown in ["Create a new pilot:", "Full Name:", "OK", "Cancel"] {
+            assert!(texts.contains(&shown.to_owned()), "{name}: {texts:?}");
+        }
+        for c in "Ada".chars() {
+            dialog.input(&Input::Text(c));
+        }
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(NewPilotOutcome::Create("Ada".to_owned())),
+            "{name}"
+        );
     }
 }

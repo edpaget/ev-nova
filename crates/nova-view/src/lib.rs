@@ -24,6 +24,8 @@
 //!   the status bar's `ïntf`, and reads the ship's sprite and the status
 //!   bar through its [`flight::ShipSprites`] and [`flight::StatusBars`]
 //!   ports. L lands on the stellar the ship is over.
+//! - [`menu`]: the main menu (New Pilot, Open Pilot and Quit) and the
+//!   saved pilots' list.
 //! - [`spaceport`]: the spaceport landed on, its landscape, name,
 //!   description and service buttons laid out by the interface file's
 //!   "Spaceport" dialog, reading the stellar through its
@@ -64,6 +66,7 @@ pub mod galaxy;
 pub mod geometry;
 pub mod image;
 pub mod input;
+pub mod menu;
 pub mod navigator;
 pub mod screen;
 pub mod ships;

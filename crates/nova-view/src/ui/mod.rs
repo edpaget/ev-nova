@@ -16,6 +16,10 @@
 //!   [`DialogTemplate`].
 //! - [`desc`]: the "Desc Dialog" ([`DescDialog`]), a long description in
 //!   a scrolling box with a Done button.
+//! - [`text_field`]: a one-line [`TextField`] that typed characters fill
+//!   and Backspace empties.
+//! - [`new_pilot`]: the New Pilot dialog ([`NewPilotDialog`], "Create a
+//!   new pilot:"): the new pilot's name.
 //! - [`toggle`]: an on/off check box with a label.
 //! - [`volume`]: a volume level with arrows that step it.
 //! - [`prefs`]: the Preferences dialog ([`PrefsDialog`], "new prefs
@@ -30,9 +34,11 @@ pub mod catalog;
 pub mod data;
 pub mod desc;
 pub mod dialog;
+pub mod new_pilot;
 pub mod prefs;
 pub mod scroll_text;
 pub mod slice;
+pub mod text_field;
 pub mod toggle;
 pub mod volume;
 
@@ -42,6 +48,8 @@ pub use desc::DescDialog;
 pub use dialog::{
     Dialog, DialogEvent, DialogFrame, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role,
 };
+pub use new_pilot::{NewPilotDialog, NewPilotOutcome};
 pub use prefs::PrefsDialog;
 pub use scroll_text::ScrollText;
 pub use slice::{Axis, Piece, three_slice};
+pub use text_field::TextField;
