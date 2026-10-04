@@ -53,10 +53,9 @@ impl Reserves {
     /// A new ship's reserves, full, from its record's fields.
     #[must_use]
     pub fn from_fields(fields: ShipFields) -> Self {
-        let shield = if fields.shield < 0 {
-            f32::from(fields.shield).abs() * NEGATIVE_SHIELD_FACTOR
-        } else {
-            f32::from(fields.shield)
+        let shield = match fields.shield {
+            negative @ i16::MIN..=-1 => f32::from(negative).abs() * NEGATIVE_SHIELD_FACTOR,
+            shield => f32::from(shield),
         };
         let positive = |field: i16| f32::from(field.max(0));
         Self {
