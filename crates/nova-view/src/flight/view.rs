@@ -178,11 +178,13 @@ impl FlightView {
 
     /// Takes off from the stellar landed on, and gives it; `None` when the
     /// ship has not landed. The next frame draws the ship where it is, at
-    /// the stellar, not on its way from where it was.
+    /// the stellar, not on its way from where it was, and shows no message
+    /// from before the landing.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.session.as_mut().ok()?.take_off()?;
         self.previous = self.current();
         self.alpha = 0.0;
+        self.message = None;
         Some(stellar)
     }
 
@@ -199,7 +201,10 @@ impl FlightView {
             return;
         };
         match session.land() {
-            Ok(stellar) => self.pending_landing = Some(stellar),
+            Ok(stellar) => {
+                self.pending_landing = Some(stellar);
+                self.message = None;
+            }
             Err(refusal) => self.message = Some((refusal_message(&refusal), self.elapsed)),
         }
     }
@@ -1482,6 +1487,28 @@ mod tests {
         view.input(&key(Key::Up, true));
         ticks(&mut view, 2);
         assert!(player(&view).position.y < -8.0, "{:?}", player(&view));
+    }
+
+    #[test]
+    fn a_refusal_is_forgotten_once_the_ship_lands() {
+        let mut view = flight_among(vec![site(140, (0.0, -12.0), StellarFlags::CAN_LAND)]);
+        view.input(&key(LAND, true));
+        view.input(&key(LAND, false));
+        assert_eq!(view.message(), Some(TOO_FAR_PLANET));
+        // Nudge the ship and drift over the planet.
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 1);
+        view.input(&key(Key::Up, false));
+        while player(&view).position.y > -4.0 {
+            ticks(&mut view, 1);
+        }
+        assert!(view.elapsed < MESSAGE_SHOWN_FOR, "still on screen");
+        view.input(&key(LAND, true));
+        assert_eq!(view.take_landing(), Some(StellarId(140)));
+        assert_eq!(view.message(), None);
+        assert_eq!(message(&view), None);
+        assert_eq!(view.take_off(), Some(StellarId(140)));
+        assert_eq!(view.message(), None, "not back after take-off");
     }
 
     #[test]
