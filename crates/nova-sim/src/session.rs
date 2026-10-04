@@ -161,6 +161,12 @@ impl Session {
         Some(next)
     }
 
+    /// The star map, as read when the session started.
+    #[must_use]
+    pub fn star_map(&self) -> &StarMap {
+        &self.star_map
+    }
+
     /// Today's date.
     #[must_use]
     pub fn date(&self) -> GameDate {
@@ -251,7 +257,7 @@ mod tests {
     use crate::flight::Turn;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
-    use crate::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE, RouteError};
+    use crate::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE, RouteError, StarMap};
     use crate::landing::{LandingRefusal, StellarFlags};
     use crate::reserves::{Gauge, Reserves};
 
@@ -704,6 +710,16 @@ mod tests {
         assert_eq!(session.system(), SystemId(132));
         assert_eq!(session.course(), []);
         assert_eq!(session.jumping(), None);
+    }
+
+    #[test]
+    fn the_star_map_is_the_catalogs() {
+        let session = Session::start(&catalog()).expect("starts");
+        assert_eq!(*session.star_map(), StarMap::new(catalog().star_map));
+        assert_eq!(
+            session.star_map().position(SystemId(132)),
+            Some(Vec2::new(600.0, 600.0))
+        );
     }
 
     #[test]
