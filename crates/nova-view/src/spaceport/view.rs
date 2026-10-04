@@ -13,7 +13,7 @@
 //! Leave, Return and Escape leave: the router takes off. A service's
 //! button opens its [`ServiceScreen`], which takes every input until it
 //! closes. The Trade Center's opens the stellar's exchange instead, a
-//! [`TradeScreen`], when the spaceport is given one
+//! [`TradeScreen`] over it, when the spaceport is given one
 //! ([`SpaceportView::with_trade`]): its orders are taken through the
 //! spaceport ([`SpaceportView::take_trade`]), and the exchange after each
 //! trade given back ([`SpaceportView::set_market`]). Without the dialog,
@@ -86,13 +86,6 @@ enum Open {
 }
 
 impl Open {
-    fn screen(&self) -> &dyn Screen {
-        match self {
-            Self::Service(screen) => screen,
-            Self::Trade(screen) => screen.as_ref(),
-        }
-    }
-
     fn screen_mut(&mut self) -> &mut dyn Screen {
         match self {
             Self::Service(screen) => screen,
@@ -347,8 +340,10 @@ impl Screen for SpaceportView {
     fn tick(&mut self, _dt: Duration) {}
 
     fn draw(&self, list: &mut DrawList) {
-        if let Some(open) = &self.open {
-            open.screen().draw(list);
+        // A service's placeholder takes the whole screen; the exchange is
+        // a dialog over the spaceport.
+        if let Some(Open::Service(screen)) = &self.open {
+            screen.draw(list);
             return;
         }
         let port = match &self.port {
@@ -380,6 +375,9 @@ impl Screen for SpaceportView {
             list.text_in(NAME_FONT, &port.name, origin, NAME_SIZE, None, Color::WHITE);
         }
         dialog.draw(list);
+        if let Some(Open::Trade(screen)) = &self.open {
+            screen.draw(list);
+        }
     }
 
     fn cancel_pointer(&mut self) {
@@ -1066,9 +1064,12 @@ mod tests {
         let open = view.open_trade().expect("trading");
         assert_eq!(open.market(), &exchange(0));
         assert!(view.open_service().is_none());
-        let mut expected = DrawList::new();
-        open.draw(&mut expected);
-        assert_eq!(drawn(&view), expected.iter().cloned().collect::<Vec<_>>());
+        // Drawn over the spaceport, as the original's dialog is.
+        let mut expected: Vec<DrawCommand> = drawn(&earth());
+        let mut trade = DrawList::new();
+        open.draw(&mut trade);
+        expected.extend(trade.iter().cloned());
+        assert_eq!(drawn(&view), expected);
         assert!(texts(&drawn(&view)).contains(&"Food".to_owned()));
         // Escape closes the exchange, not the spaceport.
         view.input(&key(Key::Escape));
