@@ -33,9 +33,9 @@
 //!    shot at the end of its life detonates (blasting the same way) or
 //!    vanishes; a beam damages the nearest ship along it, every tick, until
 //!    its life is over.
-//! 5. Conditions follow the damage: a ship with no armour left starts
-//!    breaking up, and any other is disabled, or not, as the
-//!    [`DisableRule`](hull::DisableRule) says.
+//! 5. Conditions follow the damage: a ship with no armour left (of the
+//!    armour it holds) starts breaking up, and any other is disabled, or
+//!    not, as the [`DisableRule`](hull::DisableRule) says.
 //! 6. A ship breaking up counts down its `DeathDelay`, then is destroyed.
 //! 7. Shields regenerate on an intact or disabled ship, armour only on an
 //!    intact one, each up to what it holds.
@@ -296,7 +296,7 @@ impl Combat {
         let ship = fighter.ship;
         let at = fighter.state.position;
         match *fighter.condition {
-            Condition::Intact | Condition::Disabled if fighter.reserves.armor.now <= 0.0 => {
+            Condition::Intact | Condition::Disabled if armour_gone(fighter.reserves.armor) => {
                 *fighter.condition = Condition::Dying {
                     ticks_left: fighter.hull.death_delay,
                 };
@@ -370,6 +370,13 @@ impl Combat {
         self.shots.clear();
         self.beams.clear();
     }
+}
+
+/// Whether `armor` is gone: at or below none, on a ship that holds any.
+/// A ship type with no armour at all (stock `shïp` 895, plug-in or test
+/// data) has none to lose, as it is never disabled either.
+fn armour_gone(armor: Gauge) -> bool {
+    armor.now <= 0.0 && armor.max > 0.0
 }
 
 /// The ships among `targets` that can still be hit that `blast` reaches.
@@ -624,6 +631,22 @@ mod tests {
         assert_eq!(ships[0].condition, Condition::Destroyed);
         tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(combat.take_events(), [], "destroyed once");
+    }
+
+    #[test]
+    fn a_ship_that_holds_no_armour_never_breaks_up() {
+        let mut combat = Combat::default();
+        let mut armourless = Ship::at(2, 0.0, 0.0);
+        armourless.reserves.armor = Gauge::full(0.0);
+        let mut ships = [armourless];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[0].condition, Condition::Intact);
+        assert_eq!(combat.take_events(), []);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[0].condition, Condition::Intact, "none to lose");
+        ships[0].reserves.armor = Gauge { now: 0.0, max: 0.5 };
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert!(matches!(ships[0].condition, Condition::Destroyed));
     }
 
     #[test]
