@@ -153,3 +153,119 @@ fn port_kanes_trade_center_lists_its_goods_in_the_trade_dialog() {
         }
     }
 }
+
+/// A new stock pilot docked at Viking (`spöb` 157 in Tichel, `sÿst` 129).
+fn at_viking(data: &GameData) -> Session {
+    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["system"] = serde_json::json!(129);
+    save["stellar"] = serde_json::json!(157);
+    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    Session::fly(data, docked).expect("flies")
+}
+
+/// Viking's Shipyard: its ships in the 765 x 323 "Shipyard" dialog,
+/// centred over its background, with Info, Done and Buy Ship along the
+/// bottom; the Shuttle's picture and description; and the info panel, the
+/// 250 x 285 "Shipyard Info", over its own.
+#[test]
+fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
+    use nova_view::spaceport::SpaceportCatalog;
+    use nova_view::spaceport::shipyard::{
+        BACKGROUND as SHIPYARD_BACKGROUND, BUY_ITEM as BUY_SHIP_ITEM, DONE_ITEM as SHIPYARD_DONE,
+        INFO_BACKGROUND, INFO_ITEM, SHIP_INFO_DIALOG, SHIPYARD_DIALOG, ShipBaseImages,
+        ShipyardScreen, ship_picture,
+    };
+    for (dir, ui) in builds() {
+        let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+        let ui = InterfaceData::open(&ui).expect("the interface file opens");
+        let template = ui.dialog_template(SHIPYARD_DIALOG).expect("Shipyard");
+        let info = ui.dialog_template(SHIP_INFO_DIALOG).expect("Shipyard Info");
+        let shipyard = at_viking(&data).shipyard().expect("a shipyard");
+        let mut screen = ShipyardScreen::new(
+            Ok((template, Rc::new(MonoMetrics))),
+            Ok(info),
+            shipyard,
+            Rc::clone(&data) as Rc<dyn nova_view::spaceport::ShipyardCatalog>,
+            data.button_style(),
+        );
+        let dialog = screen.dialog().expect("laid out");
+        assert_eq!(
+            dialog.bounds(),
+            Bounds::at(Point::new(129.0, 222.0), 765.0, 323.0)
+        );
+        for (item, x, w) in [
+            (INFO_ITEM, 253.0, 89.0),
+            (SHIPYARD_DONE, 365.0, 109.0),
+            (BUY_SHIP_ITEM, 480.0, 109.0),
+        ] {
+            assert_eq!(
+                dialog.item_bounds(item),
+                Some(Bounds::at(Point::new(129.0 + x, 222.0 + 289.0), w, 25.0)),
+                "{item}"
+            );
+        }
+        for (id, size) in [(8501, (765, 323)), (8506, (250, 285))] {
+            let picture = data.resource(PICT, id).expect("the picture");
+            let picture = decode_pict(picture.resource.data()).expect("decodes");
+            assert_eq!((picture.width(), picture.height()), size, "{id}");
+        }
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(
+            list.iter().next(),
+            Some(&DrawCommand::Picture {
+                image: SHIPYARD_BACKGROUND,
+                top_left: Point::new(129.0, 222.0),
+            })
+        );
+        let texts: Vec<String> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        for shown in [
+            "Ship Price: 10000",
+            "Trade-In: 2500",
+            "Final Price: 7500",
+            "Buy Ship",
+            "Info",
+            "Done",
+            "(current)",
+        ] {
+            assert!(texts.contains(&shown.to_owned()), "{shown}: {texts:?}");
+        }
+        assert!(list.iter().any(|c| matches!(
+            c,
+            DrawCommand::StretchedPicture { image, .. } if image.id == 5000
+        )));
+        // The second-hand Shuttle (361) has no picture of its own, and
+        // shows the Shuttle's, whose base image it shares.
+        let bases = data.ship_base_images();
+        assert!(!data.picture_exists(5233));
+        assert_eq!(
+            ship_picture(nova_sim::ShipId(361), &bases, |id| data.picture_exists(id)),
+            Some(5000)
+        );
+        screen.input(&nova_view::Input::Key {
+            key: nova_view::Key::Char('i'),
+            pressed: true,
+            repeat: false,
+        });
+        let panel = screen.info_panel().expect("the info panel");
+        assert_eq!(
+            panel.bounds(),
+            Bounds::at(Point::new(387.0, 241.0), 250.0, 285.0)
+        );
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert!(list.iter().any(|c| *c
+            == DrawCommand::Picture {
+                image: INFO_BACKGROUND,
+                top_left: Point::new(387.0, 241.0),
+            }));
+    }
+}

@@ -108,6 +108,6 @@ pub use reserves::{Gauge, Reserves};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::Session;
-pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, Shipyard};
+pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;

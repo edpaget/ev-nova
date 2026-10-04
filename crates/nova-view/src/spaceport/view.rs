@@ -19,14 +19,17 @@
 //! trade given back ([`SpaceportView::set_market`]). The Outfitter's opens
 //! the stellar's outfitter likewise, an [`OutfitterScreen`] over it, when
 //! given one ([`SpaceportView::with_outfitter`],
-//! [`SpaceportView::take_outfit`], [`SpaceportView::set_outfitter`]).
+//! [`SpaceportView::take_outfit`], [`SpaceportView::set_outfitter`]), and
+//! the Shipyard's the stellar's shipyard, a [`ShipyardScreen`]
+//! ([`SpaceportView::with_shipyard`], [`SpaceportView::take_ship`],
+//! [`SpaceportView::set_shipyard`]).
 //! Without the dialog, or the stellar's record, the screen says why, and
 //! Return or Escape still leaves.
 
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Market, Order, OutfitOrder, Outfitter, Service, services};
+use nova_sim::{Market, Order, OutfitOrder, Outfitter, Service, ShipId, Shipyard, services};
 
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::layout::{
@@ -35,6 +38,7 @@ use super::layout::{
 };
 use super::outfitter::{OutfitterCatalog, OutfitterScreen};
 use super::service::ServiceScreen;
+use super::shipyard::{ShipyardCatalog, ShipyardScreen};
 use super::trade::TradeScreen;
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -89,6 +93,8 @@ enum Open {
     Trade(Box<TradeScreen>),
     /// The outfitter.
     Outfitter(Box<OutfitterScreen>),
+    /// The shipyard.
+    Shipyard(Box<ShipyardScreen>),
 }
 
 impl Open {
@@ -97,6 +103,7 @@ impl Open {
             Self::Service(screen) => screen,
             Self::Trade(screen) => screen.as_mut(),
             Self::Outfitter(screen) => screen.as_mut(),
+            Self::Shipyard(screen) => screen.as_mut(),
         }
     }
 
@@ -105,6 +112,7 @@ impl Open {
             Self::Service(screen) => screen.closed(),
             Self::Trade(screen) => screen.closed(),
             Self::Outfitter(screen) => screen.closed(),
+            Self::Shipyard(screen) => screen.closed(),
         }
     }
 }
@@ -127,6 +135,26 @@ impl std::fmt::Debug for Outfitting {
     }
 }
 
+/// The shipyard given: its dialog templates (or why there are none), the
+/// shipyard as it is, and where its pictures and descriptions come from.
+#[derive(Clone)]
+struct Shipbuying {
+    template: Result<DialogTemplate, String>,
+    info: Result<DialogTemplate, String>,
+    shipyard: Shipyard,
+    catalog: Rc<dyn ShipyardCatalog>,
+}
+
+impl std::fmt::Debug for Shipbuying {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shipbuying")
+            .field("template", &self.template)
+            .field("info", &self.info)
+            .field("shipyard", &self.shipyard)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The spaceport of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct SpaceportView {
@@ -140,6 +168,8 @@ pub struct SpaceportView {
     trade: Option<(Result<DialogTemplate, String>, Market)>,
     /// The outfitter, once given.
     outfitting: Option<Outfitting>,
+    /// The shipyard, once given.
+    shipbuying: Option<Shipbuying>,
     left: bool,
     /// The sounds made since they were last taken, kept here so a service
     /// that closes keeps its sounds.
@@ -206,6 +236,7 @@ impl SpaceportView {
             open: None,
             trade: None,
             outfitting: None,
+            shipbuying: None,
             left: false,
             sounds: Vec::new(),
         }
@@ -303,6 +334,58 @@ impl SpaceportView {
         }
     }
 
+    /// The spaceport with the stellar's shipyard, `shipyard`, which the
+    /// Shipyard opens laid out by `template`, the "Shipyard" dialog, with
+    /// its info panel laid out by `info`, "Shipyard Info" (or saying why
+    /// there are none), each ship's picture and description read from
+    /// `catalog`. Without it, the Shipyard opens its placeholder.
+    #[must_use]
+    pub fn with_shipyard(
+        self,
+        template: Result<DialogTemplate, String>,
+        info: Result<DialogTemplate, String>,
+        shipyard: Shipyard,
+        catalog: Rc<dyn ShipyardCatalog>,
+    ) -> Self {
+        Self {
+            shipbuying: Some(Shipbuying {
+                template,
+                info,
+                shipyard,
+                catalog,
+            }),
+            ..self
+        }
+    }
+
+    /// The shipyard open, if it is.
+    #[must_use]
+    pub fn open_shipyard(&self) -> Option<&ShipyardScreen> {
+        match &self.open {
+            Some(Open::Shipyard(screen)) => Some(screen),
+            _ => None,
+        }
+    }
+
+    /// The ship the shipyard open asked for since it was last taken, once.
+    pub fn take_ship(&mut self) -> Option<ShipId> {
+        match &mut self.open {
+            Some(Open::Shipyard(screen)) => screen.take_order(),
+            _ => None,
+        }
+    }
+
+    /// Shows `shipyard`, the shipyard after a purchase: the shipyard open
+    /// shows it, and so does the shipyard opened next.
+    pub fn set_shipyard(&mut self, shipyard: Shipyard) {
+        if let Some(Open::Shipyard(screen)) = &mut self.open {
+            screen.set_shipyard(shipyard.clone());
+        }
+        if let Some(shipbuying) = &mut self.shipbuying {
+            shipbuying.shipyard = shipyard;
+        }
+    }
+
     /// The stellar landed on.
     #[must_use]
     pub fn stellar(&self) -> StellarId {
@@ -368,29 +451,44 @@ impl SpaceportView {
             return;
         };
         let metrics = Rc::clone(&port.metrics.0);
-        self.open = Some(match (&self.trade, &self.outfitting, service) {
-            (Some((template, market)), _, Service::TradeCenter) => {
-                let layout = template.clone().map(|template| (template, metrics));
-                Open::Trade(Box::new(TradeScreen::new(
-                    layout,
-                    market.clone(),
-                    port.style,
-                )))
-            }
-            (_, Some(outfitting), Service::Outfitter) => {
-                let layout = outfitting
-                    .template
-                    .clone()
-                    .map(|template| (template, metrics));
-                Open::Outfitter(Box::new(OutfitterScreen::new(
-                    layout,
-                    outfitting.outfitter.clone(),
-                    Rc::clone(&outfitting.catalog),
-                    port.style,
-                )))
-            }
-            _ => Open::Service(ServiceScreen::new(service, port.style, metrics)),
-        });
+        self.open = Some(
+            match (&self.trade, &self.outfitting, &self.shipbuying, service) {
+                (Some((template, market)), _, _, Service::TradeCenter) => {
+                    let layout = template.clone().map(|template| (template, metrics));
+                    Open::Trade(Box::new(TradeScreen::new(
+                        layout,
+                        market.clone(),
+                        port.style,
+                    )))
+                }
+                (_, _, Some(shipbuying), Service::Shipyard) => {
+                    let layout = shipbuying
+                        .template
+                        .clone()
+                        .map(|template| (template, metrics));
+                    Open::Shipyard(Box::new(ShipyardScreen::new(
+                        layout,
+                        shipbuying.info.clone(),
+                        shipbuying.shipyard.clone(),
+                        Rc::clone(&shipbuying.catalog),
+                        port.style,
+                    )))
+                }
+                (_, Some(outfitting), _, Service::Outfitter) => {
+                    let layout = outfitting
+                        .template
+                        .clone()
+                        .map(|template| (template, metrics));
+                    Open::Outfitter(Box::new(OutfitterScreen::new(
+                        layout,
+                        outfitting.outfitter.clone(),
+                        Rc::clone(&outfitting.catalog),
+                        port.style,
+                    )))
+                }
+                _ => Open::Service(ServiceScreen::new(service, port.style, metrics)),
+            },
+        );
     }
 }
 
@@ -470,6 +568,7 @@ impl Screen for SpaceportView {
         match &self.open {
             Some(Open::Trade(screen)) => screen.draw(list),
             Some(Open::Outfitter(screen)) => screen.draw(list),
+            Some(Open::Shipyard(screen)) => screen.draw(list),
             _ => {}
         }
     }
@@ -1457,5 +1556,212 @@ mod tests {
         let debug = format!("{view:?}");
         assert!(debug.contains("Outfitting"), "{debug}");
         assert!(debug.contains("Fuel Tank"), "{debug}");
+    }
+
+    // The Shipyard.
+
+    use crate::spaceport::shipyard::{ShipBaseImages, ShipyardCatalog, ShipyardScreen};
+    use nova_sim::{ShipId, ShipRow, ShipSpecs, Shipyard};
+
+    impl ShipBaseImages for FakePort {
+        fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
+            Vec::new()
+        }
+    }
+
+    /// "Shipyard": 765 x 323, centred, with Done (1), the grid (5), the
+    /// description (6), Buy Ship (7), the picture (8), the info box (9)
+    /// and Info (10).
+    fn shipyard_template() -> Template {
+        let mut items: Vec<ItemTemplate> = (0..13)
+            .map(|_| ItemTemplate {
+                bounds: rect(0.0, 0.0, 1.0, 1.0),
+                enabled: false,
+                kind: ItemSpec::User,
+            })
+            .collect();
+        let mut place = |number: usize, x, y, w, h| {
+            items[number - 1] = ItemTemplate {
+                bounds: rect(x, y, w, h),
+                enabled: true,
+                kind: ItemSpec::User,
+            };
+        };
+        place(1, 365.0, 289.0, 109.0, 25.0);
+        place(5, 9.0, 8.0, 333.0, 271.0);
+        place(6, 354.0, 10.0, 192.0, 267.0);
+        place(7, 480.0, 289.0, 109.0, 25.0);
+        place(8, 557.0, 8.0, 200.0, 200.0);
+        place(9, 614.0, 214.0, 143.0, 100.0);
+        place(10, 253.0, 289.0, 89.0, 25.0);
+        Template {
+            bounds: rect(100.0, 100.0, 765.0, 323.0),
+            placement: Placement::Center,
+            items,
+        }
+    }
+
+    /// A shipyard selling ship 129 for `price`, the player flying 128.
+    fn yard(price: i64) -> Shipyard {
+        Shipyard {
+            rows: vec![ShipRow {
+                id: ShipId(129),
+                name: "Heavy Shuttle".to_owned(),
+                short_name: "Heavy Shuttle".to_owned(),
+                price,
+                specs: ShipSpecs {
+                    fields: nova_sim::ShipFields::default(),
+                    max_gun: 0,
+                    max_tur: 0,
+                    length: 0,
+                    crew: 0,
+                },
+                buy: Ok(()),
+            }],
+            trade_in: 2500,
+            cash: 25_000,
+            current: ShipId(128),
+        }
+    }
+
+    /// Earth with a shipyard too.
+    fn shipyard_port() -> FakePort {
+        FakePort {
+            port: Ok(PortRecord {
+                flags: FLAGS | StellarFlags::SHIPYARD,
+                ..catalog().port.expect("a record")
+            }),
+            ..catalog()
+        }
+    }
+
+    fn shipbuying(template: Result<Template, String>) -> SpaceportView {
+        let art: Rc<dyn ShipyardCatalog> = Rc::new(shipyard_port());
+        view_of(&shipyard_port()).with_shipyard(
+            template,
+            Err("no DLOG 1005".to_owned()),
+            yard(17_500),
+            art,
+        )
+    }
+
+    fn shipyard_item(view: &SpaceportView, number: usize) -> Point {
+        view.open_shipyard()
+            .expect("shipbuying")
+            .dialog()
+            .expect("laid out")
+            .item_bounds(number)
+            .expect("an item")
+            .center()
+    }
+
+    #[test]
+    fn with_a_shipyard_its_button_opens_it_over_the_spaceport() {
+        let mut view = shipbuying(Ok(shipyard_template()));
+        assert!(view.open_shipyard().is_none());
+        click_item(&mut view, 9);
+        let open = view.open_shipyard().expect("shipbuying");
+        assert_eq!(open.shipyard(), &yard(17_500));
+        assert!(view.open_service().is_none());
+        assert!(view.open_outfitter().is_none());
+        let mut expected: Vec<DrawCommand> = drawn(&view_of(&shipyard_port()));
+        let mut shipyard = DrawList::new();
+        open.draw(&mut shipyard);
+        expected.extend(shipyard.iter().cloned());
+        assert_eq!(drawn(&view), expected);
+        assert!(texts(&drawn(&view)).contains(&"Heavy Shuttle".to_owned()));
+        // Escape closes the shipyard, not the spaceport.
+        view.input(&key(Key::Escape));
+        assert!(view.open_shipyard().is_none());
+        assert!(!view.left());
+        click_item(&mut view, 10);
+        assert_eq!(
+            view.open_service().map(ServiceScreen::service),
+            Some(Service::Bar)
+        );
+        assert!(view.open_shipyard().is_none());
+    }
+
+    #[test]
+    fn without_a_shipyard_given_its_button_opens_the_placeholder() {
+        let mut view = view_of(&shipyard_port());
+        click_item(&mut view, 9);
+        assert_eq!(
+            view.open_service().map(ServiceScreen::service),
+            Some(Service::Shipyard)
+        );
+        assert!(view.open_shipyard().is_none());
+        assert_eq!(view.take_ship(), None);
+    }
+
+    #[test]
+    fn the_shipyard_is_laid_out_by_its_own_dialog_or_says_why_not() {
+        let mut view = shipbuying(Err("no DLOG 1004".to_owned()));
+        click_item(&mut view, 9);
+        assert_eq!(
+            view.open_shipyard().and_then(ShipyardScreen::problem),
+            Some("no DLOG 1004")
+        );
+        view.input(&key(Key::Enter));
+        assert!(view.open_shipyard().is_none());
+        assert!(!view.left());
+    }
+
+    #[test]
+    fn the_shipyards_orders_are_taken_through_the_spaceport_and_its_state_set() {
+        let mut view = shipbuying(Ok(shipyard_template()));
+        assert_eq!(view.take_ship(), None, "nothing open");
+        view.set_shipyard(yard(16_000));
+        click_item(&mut view, 9);
+        assert_eq!(
+            view.open_shipyard()
+                .map(|open| open.shipyard().rows[0].price),
+            Some(16_000),
+            "it opens on the latest"
+        );
+        view.input(&key(Key::Char('b')));
+        assert_eq!(view.take_ship(), Some(ShipId(129)));
+        assert_eq!(view.take_ship(), None, "once");
+        assert_eq!(view.take_outfit(), None, "not an outfit");
+        assert_eq!(view.take_trade(), None, "nor a trade");
+        view.set_shipyard(yard(15_000));
+        assert_eq!(
+            view.open_shipyard()
+                .map(|open| open.shipyard().rows[0].price),
+            Some(15_000)
+        );
+        view.input(&key(Key::Escape));
+        click_item(&mut view, 9);
+        assert_eq!(
+            view.open_shipyard()
+                .map(|open| open.shipyard().rows[0].price),
+            Some(15_000),
+            "and reopens on it"
+        );
+    }
+
+    #[test]
+    fn the_shipyard_takes_cancel_pointer_and_its_sounds_are_kept() {
+        let mut view = shipbuying(Ok(shipyard_template()));
+        click_item(&mut view, 9);
+        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        let buy = shipyard_item(&view, 7);
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: buy,
+        };
+        view.input(&button(true));
+        view.cancel_pointer();
+        view.input(&button(false));
+        assert_eq!(view.take_ship(), None, "the click was abandoned");
+        assert_eq!(view.take_sounds(), [DOWN]);
+        let done = shipyard_item(&view, 1);
+        click(&mut view, done);
+        assert!(view.open_shipyard().is_none(), "closed");
+        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        let debug = format!("{view:?}");
+        assert!(debug.contains("Shipbuying"), "{debug}");
+        assert!(debug.contains("Heavy Shuttle"), "{debug}");
     }
 }

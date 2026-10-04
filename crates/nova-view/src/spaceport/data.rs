@@ -1,11 +1,14 @@
-//! The spaceport's port over the game data: a thin mapping from
-//! `GameData`'s `spöb` records and `PICT`s.
+//! The spaceport's ports over the game data: a thin mapping from
+//! `GameData`'s `spöb` records, `PICT`s and `shän` base images.
 
 use nova_data::GameData;
 use nova_data::graphics::PICT;
+use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::Stellar;
+use nova_sim::ShipId;
 
 use super::catalog::{PortRecord, SpaceportCatalog, StellarId};
+use super::shipyard::ShipBaseImages;
 
 /// Reads afresh on every call; the spaceport asks once, when it opens.
 impl SpaceportCatalog for GameData {
@@ -26,6 +29,15 @@ impl SpaceportCatalog for GameData {
 
     fn picture_exists(&self, id: i16) -> bool {
         self.resource(PICT, id).is_some()
+    }
+}
+
+/// Reads every `shän` afresh; the shipyard asks once, when it opens.
+impl ShipBaseImages for GameData {
+    fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
+        self.records::<ShipAnim>()
+            .filter_map(|(id, anim)| Some((ShipId(id), anim.ok()?.record.base_image_id)))
+            .collect()
     }
 }
 
@@ -126,5 +138,37 @@ mod tests {
         let data = data();
         assert!(data.picture_exists(10_003));
         assert!(!data.picture_exists(10_000));
+    }
+
+    /// A `shän` whose base image is `rlëD` `base`.
+    fn ship_anim(base: i16) -> Vec<u8> {
+        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
+        bytes[0x00..0x02].copy_from_slice(&base.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn the_ships_base_images_are_each_readable_shäns_by_id() {
+        let mut short = ship_anim(1002);
+        short.pop();
+        let fork = ForkBuilder::new()
+            .resource(ShipAnim::TYPE, 361, None, &ship_anim(1000))
+            .resource(ShipAnim::TYPE, 128, None, &ship_anim(1000))
+            .resource(ShipAnim::TYPE, 129, Some(b"Heavy"), &ship_anim(1001))
+            .resource(ShipAnim::TYPE, 130, None, &short)
+            .build()
+            .bytes;
+        let file = OneFile(fork);
+        let data = GameData::load(&file, &file, Path::new("/data"), None).expect("opens");
+        assert_eq!(
+            data.ship_base_images(),
+            [
+                (ShipId(128), 1000),
+                (ShipId(129), 1001),
+                (ShipId(361), 1000)
+            ],
+            "an undecodable one is left out"
+        );
+        assert_eq!(self::data().ship_base_images(), []);
     }
 }

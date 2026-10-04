@@ -45,12 +45,12 @@ use std::time::Duration;
 use nova_sim::{Direction, OutfitId, OutfitOrder, OutfitRefusal, Outfitter};
 
 use super::catalog::SpaceportCatalog;
+use super::grid::{self, CellGrid, Shown, text};
 use super::layout::DONE_LABEL;
 use super::trade::{BUY_LABEL, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
-use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
@@ -59,9 +59,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
-use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
-use crate::ui::scroll_text::ScrollText;
 
 /// The "Outfit" dialog's `DLOG` (and `DITL`) ID.
 pub const OUTFIT_DIALOG: i16 = 1002;
@@ -88,14 +86,10 @@ pub const SCROLL_UP_ITEM: usize = 10;
 /// The grid's scroll-down arrow's item.
 pub const SCROLL_DOWN_ITEM: usize = 11;
 
-/// How many cells across the grid shows.
-pub const COLUMNS: usize = 4;
-/// How many rows of cells the grid shows at once.
-pub const GRID_ROWS: usize = 4;
-/// A cell's width: four fit the stock grid's 333.
-pub const CELL_WIDTH: f32 = 83.0;
-/// A cell's height: four fit the stock grid's 271.
-pub const CELL_HEIGHT: f32 = 67.0;
+pub use super::grid::{
+    CELL_HEIGHT, CELL_WIDTH, COLUMNS, GREY, GRID_ROWS, INSET, NO_PICTURE, SELECTED_COLOR,
+    TEXT_COLOR, TEXT_FONT, TEXT_SIZE, name_lines,
+};
 
 /// Buys one, as Buy does: the original's default.
 pub const BUY_KEY: Key = Key::Char('b');
@@ -114,8 +108,6 @@ pub const NO_ITEMS: &str = "There are no items available for purchase here.";
 /// `STR#` 2002 #207.
 pub const NEGATIVE_FREE_MASS: &str =
     "Can't sell that item, because your ship would have negative free mass afterwards.";
-/// `STR#` 2002 #213.
-pub const NO_PICTURE: &str = "No Picture";
 /// `STR#` 2002 #215.
 pub const PRICE_LABEL: &str = "Item Price:";
 /// `STR#` 2002 #216.
@@ -133,20 +125,6 @@ pub const NO_SPACE: &str = "Can't hold any more!";
 /// `STR#` 2002 #222.
 pub const NO_SPACE_FOR_ANY: &str = "Can't hold any of this item!";
 
-/// The screen's text font.
-pub const TEXT_FONT: Font = Font::Geneva;
-/// The screen's text size.
-pub const TEXT_SIZE: f32 = 10.0;
-/// A line that starts with a letter or digit, and the info box.
-pub const TEXT_COLOR: Color = Color::WHITE;
-/// A line that starts with anything else, the cells' frames and an arrow
-/// that cannot scroll.
-pub const GREY: Color = Color::DIM;
-/// The selected cell's background.
-pub const SELECTED_COLOR: Color = Color::rgba(40, 60, 140, 255);
-/// How far into a cell or box each line of text starts.
-pub const INSET: f32 = 4.0;
-
 /// The original's words for why one cannot be bought or sold, if it has
 /// any.
 #[must_use]
@@ -159,19 +137,6 @@ pub fn refusal_text(refusal: OutfitRefusal) -> Option<&'static str> {
         OutfitRefusal::NegativeFreeMass => Some(NEGATIVE_FREE_MASS),
         _ => None,
     }
-}
-
-/// A `ShortName`'s lines, each with its colour: split on a literal `\n`,
-/// white when it starts with a letter or digit, grey otherwise.
-#[must_use]
-pub fn name_lines(short_name: &str) -> Vec<(&str, Color)> {
-    short_name
-        .split("\\n")
-        .map(|line| {
-            let bright = line.chars().next().is_some_and(char::is_alphanumeric);
-            (line, if bright { TEXT_COLOR } else { GREY })
-        })
-        .collect()
 }
 
 /// What the outfitter reads about an outfit: its description, through
@@ -201,21 +166,13 @@ impl std::fmt::Debug for MetricsHandle {
     }
 }
 
-/// The selected outfit's picture and description, as read.
-#[derive(Clone, Debug)]
-struct Shown {
-    outfit: OutfitId,
-    /// Its `PICT`, when the data has it.
-    picture: Option<i16>,
-    description: ScrollText,
-}
-
 /// The outfitter, laid out.
 #[derive(Clone, Debug)]
 struct Laid {
     dialog: Dialog,
     metrics: MetricsHandle,
-    shown: Option<Shown>,
+    /// The outfit whose picture and description are shown, and them.
+    shown: Option<(OutfitId, Shown)>,
 }
 
 /// The Outfitter of the stellar landed on.
@@ -225,10 +182,8 @@ pub struct OutfitterScreen {
     laid: Result<Laid, String>,
     outfitter: Outfitter,
     catalog: CatalogHandle,
-    /// The selected cell, by index into the outfitter's rows.
-    selected: usize,
-    /// The grid's first row shown.
-    top_row: usize,
+    /// The selected cell and the grid's scrolling.
+    grid: CellGrid,
     /// The order asked for, until it is taken.
     order: Option<OutfitOrder>,
     /// The key B or S last went down on (a press, not a repeat), and the
@@ -283,8 +238,7 @@ impl OutfitterScreen {
             laid,
             outfitter,
             catalog: CatalogHandle(catalog),
-            selected: 0,
-            top_row: 0,
+            grid: CellGrid::default(),
             order: None,
             held: None,
             closed: false,
@@ -303,13 +257,13 @@ impl OutfitterScreen {
     /// The selected cell's index, if anything is listed.
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
-        (self.selected < self.outfitter.rows.len()).then_some(self.selected)
+        self.grid.selected(self.outfitter.rows.len())
     }
 
     /// The grid's first row shown.
     #[must_use]
     pub fn top_row(&self) -> usize {
-        self.top_row
+        self.grid.top_row()
     }
 
     /// The dialog, if it could be laid out.
@@ -340,12 +294,7 @@ impl OutfitterScreen {
     #[must_use]
     pub fn cell_bounds(&self, index: usize) -> Option<Bounds> {
         let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
-        let (row, column) = (index / COLUMNS, index % COLUMNS);
-        let min = Point::new(
-            grid.min.x + CELL_WIDTH * column as f32,
-            grid.min.y + CELL_HEIGHT * row as f32,
-        );
-        Some(Bounds::at(min, CELL_WIDTH, CELL_HEIGHT))
+        Some(grid::cell_bounds(grid, index))
     }
 
     /// Shows `outfitter`, the outfitter after an order, keeping the same
@@ -356,31 +305,19 @@ impl OutfitterScreen {
             .map(|index| self.outfitter.rows[index].id)
             .and_then(|id| outfitter.rows.iter().position(|row| row.id == id));
         self.outfitter = outfitter;
-        self.select(kept.unwrap_or(self.selected));
-    }
-
-    /// How many rows of cells the outfits fill.
-    fn rows_filled(&self) -> usize {
-        self.outfitter.rows.len().div_ceil(COLUMNS)
-    }
-
-    /// The grid's last first row: never scrolled past its end.
-    fn last_top_row(&self) -> usize {
-        self.rows_filled().saturating_sub(GRID_ROWS)
+        self.select(kept.unwrap_or(self.grid.selected_raw()));
     }
 
     /// Selects cell `index`, or the last when there is no such cell,
     /// scrolls the grid to show it, and reads its picture and description
     /// if they are not shown already.
     fn select(&mut self, index: usize) {
-        let count = self.outfitter.rows.len();
-        self.selected = index.min(count.saturating_sub(1));
-        let row = self.selected / COLUMNS;
-        self.top_row = self
-            .top_row
-            .min(self.last_top_row())
-            .min(row)
-            .max((row + 1).saturating_sub(GRID_ROWS));
+        self.grid.select(index, self.outfitter.rows.len());
+        self.selected_changed();
+    }
+
+    /// Regreys and shows the selected outfit.
+    fn selected_changed(&mut self) {
         self.regrey();
         self.show();
     }
@@ -400,31 +337,23 @@ impl OutfitterScreen {
         if laid
             .shown
             .as_ref()
-            .is_some_and(|shown| shown.outfit == outfit)
+            .is_some_and(|(shown, _)| *shown == outfit)
         {
             return;
         }
         let offset = outfit.0.saturating_sub(FIRST_OUTFIT);
         let picture = FIRST_PICTURE.saturating_add(offset);
-        let text = catalog
-            .description(FIRST_DESCRIPTION.saturating_add(offset))
-            .unwrap_or_default();
+        let description = FIRST_DESCRIPTION.saturating_add(offset);
         let area = laid
             .dialog
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
-        laid.shown = Some(Shown {
+        let description = catalog.description(description).unwrap_or_default();
+        let picture = catalog.picture_exists(picture).then_some(picture);
+        laid.shown = Some((
             outfit,
-            picture: catalog.picture_exists(picture).then_some(picture),
-            description: ScrollText::new(
-                &text,
-                Font::Geneva,
-                BODY_SIZE,
-                BODY_COLOR,
-                area,
-                &laid.metrics.0,
-            ),
-        });
+            Shown::read_text(&description, picture, area, &laid.metrics.0),
+        ));
     }
 
     /// Greys Buy and Sell when one of the selected outfit could not be
@@ -479,11 +408,7 @@ impl OutfitterScreen {
 
     /// Scrolls the grid a row down, or up, never past either end.
     fn scroll(&mut self, down: bool) {
-        self.top_row = if down {
-            (self.top_row + 1).min(self.last_top_row())
-        } else {
-            self.top_row.saturating_sub(1)
-        };
+        self.grid.scroll(down, self.outfitter.rows.len());
     }
 
     /// Activates dialog item `item`: Done closes, Buy and Sell ask, and the
@@ -502,56 +427,33 @@ impl OutfitterScreen {
     /// The cell index under `at` on the grid, if a listed outfit is there.
     fn cell_at(&self, at: Point) -> Option<usize> {
         let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
-        if !grid.contains(at) {
-            return None;
-        }
-        let column = ((at.x - grid.min.x) / CELL_WIDTH) as usize;
-        let row = ((at.y - grid.min.y) / CELL_HEIGHT) as usize;
-        if column >= COLUMNS || row >= GRID_ROWS {
-            return None;
-        }
-        let index = (self.top_row + row) * COLUMNS + column;
-        (index < self.outfitter.rows.len()).then_some(index)
-    }
-
-    /// `text` at `origin`, in the screen's font, in `color`.
-    fn text(list: &mut DrawList, text: &str, origin: Point, color: Color) {
-        list.text_in(TEXT_FONT, text, origin, TEXT_SIZE, None, color);
+        self.grid.cell_at(grid, at, self.outfitter.rows.len())
     }
 
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
         let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
+        let Some(grid) = laid.dialog.item_bounds(GRID_ITEM) else {
+            return;
+        };
         if self.outfitter.rows.is_empty() {
-            if let Some(grid) = laid.dialog.item_bounds(GRID_ITEM) {
-                let origin = Point::new(grid.min.x + INSET, grid.min.y + INSET);
-                Self::text(list, NO_ITEMS, origin, TEXT_COLOR);
-            }
+            let origin = Point::new(grid.min.x + INSET, grid.min.y + INSET);
+            text(list, NO_ITEMS, origin, TEXT_COLOR);
             return;
         }
-        let first = self.top_row * COLUMNS;
-        let shown = self
-            .outfitter
-            .rows
-            .iter()
-            .enumerate()
-            .skip(first)
-            .take(COLUMNS * GRID_ROWS);
-        for (index, row) in shown {
-            let Some(cell) = self.cell_bounds(index - first) else {
-                continue;
-            };
+        for (index, cell) in self.grid.shown(grid, self.outfitter.rows.len()) {
+            let row = &self.outfitter.rows[index];
             if Some(index) == self.selected() {
                 fill_rect(list, cell, SELECTED_COLOR);
             }
             outline(list, cell, GREY);
             let mut y = cell.min.y + INSET;
             for (line, color) in name_lines(&row.short_name) {
-                Self::text(list, line, Point::new(cell.min.x + INSET, y), color);
+                text(list, line, Point::new(cell.min.x + INSET, y), color);
                 y += line_height;
             }
             if row.owned > 0 {
                 let origin = Point::new(cell.min.x + INSET, cell.max.y - INSET - line_height);
-                Self::text(list, &row.owned.to_string(), origin, TEXT_COLOR);
+                text(list, &row.owned.to_string(), origin, TEXT_COLOR);
             }
         }
     }
@@ -561,19 +463,9 @@ impl OutfitterScreen {
             return;
         };
         let row = &self.outfitter.rows[index];
-        if let (Some(shown), Some(area)) = (&laid.shown, laid.dialog.item_bounds(PICTURE_ITEM)) {
-            if let Some(id) = shown.picture {
-                list.stretched_picture(
-                    ImageKey::picture(id),
-                    area.min,
-                    area.width(),
-                    area.height(),
-                );
-            } else {
-                let origin = Point::new(area.min.x + INSET, area.min.y + INSET);
-                Self::text(list, NO_PICTURE, origin, GREY);
-            }
-            shown.description.draw(list);
+        if let (Some((_, shown)), Some(area)) = (&laid.shown, laid.dialog.item_bounds(PICTURE_ITEM))
+        {
+            shown.draw(list, area);
         }
         let Some(info) = laid.dialog.item_bounds(INFO_ITEM) else {
             return;
@@ -595,32 +487,19 @@ impl OutfitterScreen {
         );
         for (n, line) in lines.iter().enumerate() {
             let origin = Point::new(info.min.x + INSET, info.min.y + line_height * n as f32);
-            Self::text(list, line, origin, TEXT_COLOR);
+            text(list, line, origin, TEXT_COLOR);
         }
     }
 
     /// The scroll arrows: a triangle in each item, white when the grid can
     /// scroll that way, grey otherwise.
     fn draw_arrows(&self, laid: &Laid, list: &mut DrawList) {
-        for (item, up, can) in [
-            (SCROLL_UP_ITEM, true, self.top_row > 0),
-            (SCROLL_DOWN_ITEM, false, self.top_row < self.last_top_row()),
-        ] {
-            let Some(area) = laid.dialog.item_bounds(item) else {
-                continue;
-            };
-            let color = if can { TEXT_COLOR } else { GREY };
-            let (left, right) = (area.min.x + INSET, area.max.x - INSET);
-            let (tip, base) = if up {
-                (area.min.y + INSET, area.max.y - INSET)
-            } else {
-                (area.max.y - INSET, area.min.y + INSET)
-            };
-            let apex = Point::new(area.center().x, tip);
-            list.line(Point::new(left, base), Point::new(right, base), 1.0, color);
-            list.line(Point::new(right, base), apex, 1.0, color);
-            list.line(apex, Point::new(left, base), 1.0, color);
-        }
+        grid::draw_arrows(
+            list,
+            laid.dialog.item_bounds(SCROLL_UP_ITEM),
+            laid.dialog.item_bounds(SCROLL_DOWN_ITEM),
+            self.grid.can_scroll(self.outfitter.rows.len()),
+        );
     }
 }
 
@@ -640,14 +519,14 @@ impl Screen for OutfitterScreen {
         }
         let pressed =
             |wanted: Key| matches!(*input, Input::Key { key, pressed: true, .. } if key == wanted);
-        if pressed(Key::Left) {
-            self.select(self.selected.saturating_sub(1));
-        } else if pressed(Key::Right) {
-            self.select(self.selected + 1);
-        } else if pressed(Key::Up) {
-            self.select(self.selected.saturating_sub(COLUMNS));
-        } else if pressed(Key::Down) {
-            self.select(self.selected + COLUMNS);
+        let arrow = match *input {
+            Input::Key {
+                key, pressed: true, ..
+            } => self.grid.arrow(key, self.outfitter.rows.len()),
+            _ => false,
+        };
+        if arrow {
+            self.selected_changed();
         } else if pressed(BUY_KEY) {
             self.ask_by_key(BUY_KEY, input, Direction::Buy);
         } else if pressed(SELL_KEY) {
@@ -716,6 +595,7 @@ mod tests {
 
     use super::*;
     use crate::draw::DrawCommand;
+    use crate::font::Font;
     use crate::input::MouseButton;
     use crate::sound::UiSound;
     use crate::spaceport::catalog::{PortRecord, StellarId};

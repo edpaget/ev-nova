@@ -148,8 +148,25 @@ pub struct ShipRow {
     pub short_name: String,
     /// Its price.
     pub price: i64,
+    /// What the shipyard's Info shows of it.
+    pub specs: ShipSpecs,
     /// Whether it can be bought now, or why not.
     pub buy: Result<(), ShipRefusal>,
+}
+
+/// What the shipyard's Info shows of a ship class, raw from its record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShipSpecs {
+    /// Its handling, reserve, cargo and mass fields.
+    pub fields: ShipFields,
+    /// Its `MaxGun`.
+    pub max_gun: i16,
+    /// Its `MaxTur`.
+    pub max_tur: i16,
+    /// Its `Length`, in metres.
+    pub length: i16,
+    /// Its `Crew`.
+    pub crew: i16,
 }
 
 /// A stellar's shipyard, as the player sees it.
@@ -285,6 +302,13 @@ impl Yard<'_> {
                     name: ship.name.clone(),
                     short_name: ship.short_name.clone(),
                     price,
+                    specs: ShipSpecs {
+                        fields: ship.fields,
+                        max_gun: ship.max_gun,
+                        max_tur: ship.max_tur,
+                        length: ship.length,
+                        crew: ship.crew,
+                    },
                     buy,
                 },
             ));
@@ -554,6 +578,10 @@ mod tests {
             name: "Heavy Shuttle".to_owned(),
             short_name: "Heavy\\nShuttle".to_owned(),
             cost: 17_500,
+            max_gun: 3,
+            max_tur: 1,
+            length: 26,
+            crew: 4,
             ..ship(129, FAST)
         };
         let mut rich = pilot();
@@ -567,6 +595,13 @@ mod tests {
                     name: "Heavy Shuttle".to_owned(),
                     short_name: "Heavy\\nShuttle".to_owned(),
                     price: 17_500,
+                    specs: ShipSpecs {
+                        fields: FAST,
+                        max_gun: 3,
+                        max_tur: 1,
+                        length: 26,
+                        crew: 4,
+                    },
                     buy: Ok(()),
                 }],
                 trade_in: 0,

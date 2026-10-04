@@ -15,17 +15,25 @@
 //!   commodity exchange.
 //! - [`outfitter`]: the Outfitter's [`OutfitterScreen`], the stellar's
 //!   outfits for sale.
+//! - [`shipyard`]: the Shipyard's [`ShipyardScreen`], the stellar's ships
+//!   for sale, and its info panel.
+//! - [`grid`]: the parts the Outfitter and the Shipyard share: the grid
+//!   of cells, a `ShortName`'s lines, and the selected item's picture and
+//!   description.
 
 pub mod catalog;
 pub mod data;
+pub mod grid;
 pub mod layout;
 pub mod outfitter;
 pub mod service;
+pub mod shipyard;
 pub mod trade;
 pub mod view;
 
 pub use catalog::{PortRecord, SpaceportCatalog, StellarId};
 pub use outfitter::{OutfitterCatalog, OutfitterScreen};
 pub use service::ServiceScreen;
+pub use shipyard::{ShipBaseImages, ShipyardCatalog, ShipyardScreen};
 pub use trade::TradeScreen;
 pub use view::SpaceportView;

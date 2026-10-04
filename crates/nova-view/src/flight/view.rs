@@ -18,7 +18,9 @@
 //! random happens. Landed at a trade center, the session's exchange can be
 //! read ([`FlightView::market`]) and traded on ([`FlightView::trade`]);
 //! landed at an outfitter, so can its outfitter ([`FlightView::outfitter`],
-//! [`FlightView::outfit`]).
+//! [`FlightView::outfit`]); and landed at a shipyard, a new ship can be
+//! bought ([`FlightView::shipyard`], [`FlightView::buy_ship`]), whose
+//! sprite sheet is read then.
 //!
 //! The HUD is drawn last, over everything: the status bar against the
 //! right edge, its radar showing the stellars around the ship as drawn,
@@ -69,8 +71,9 @@ use std::time::Duration;
 
 use nova_sim::{
     Chance, Controls, FixedStep, JumpRefusal, LandingRefusal, Market, NeverFires, Order,
-    OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, Reserves, Session, ShipState,
-    StartError, StellarId, Steps, TradeRefusal, Turn, flight::normalized, flight::shortest_turn,
+    OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, Reserves, Session, ShipId,
+    ShipPurchase, ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps, TradeRefusal,
+    Turn, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -371,6 +374,18 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
     }
 }
 
+impl<C: ShipSprites> FlightView<C> {
+    /// Buys a ship as [`Session::buy_ship`] does, and reads the new ship's
+    /// sprite sheet, so the new hull is drawn once it takes off; a session
+    /// that failed has no shipyard.
+    pub fn buy_ship(&mut self, ship: ShipId) -> Result<ShipPurchase, ShipRefusal> {
+        let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
+        let bought = session.buy_ship(ship)?;
+        self.sheet = self.catalog.ship_sheet(ship);
+        Ok(bought)
+    }
+}
+
 impl<C> FlightView<C> {
     /// Whether the course map is shown.
     #[must_use]
@@ -486,6 +501,13 @@ impl<C> FlightView<C> {
             Ok(session) => session.outfit(order),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
         }
+    }
+
+    /// The shipyard of the stellar landed on, as [`Session::shipyard`]
+    /// gives it; none for a session that failed.
+    #[must_use]
+    pub fn shipyard(&self) -> Option<Shipyard> {
+        self.session.as_ref().ok()?.shipyard()
     }
 
     /// Whether the pilot should be saved, as [`Session::take_save_due`]
@@ -805,6 +827,8 @@ mod tests {
         outfits: Vec<OutfitRecord>,
         /// The ship classes the shipyard reads: none, by default.
         ships: Vec<ShipRecord>,
+        /// The ships whose sheets were asked for.
+        sheets_asked: RefCell<Vec<ShipId>>,
     }
 
     type View = FlightView<FakeCatalog>;
@@ -852,6 +876,7 @@ mod tests {
             disasters: Vec::new(),
             outfits: Vec::new(),
             ships: Vec::new(),
+            sheets_asked: RefCell::default(),
         }
     }
 
@@ -1023,9 +1048,19 @@ mod tests {
     }
 
     impl ShipSprites for FakeCatalog {
+        /// Ship 128's sheet is [`FakeCatalog::sheet`]; ship 129's is
+        /// `rlëD` 2001's, with 72 rotations.
         fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
-            assert_eq!(id, ShipId(128));
-            self.sheet.clone()
+            self.sheets_asked.borrow_mut().push(id);
+            match id.0 {
+                128 => self.sheet.clone(),
+                129 => Ok(ShipSheet {
+                    image_id: 2001,
+                    rotations: NonZeroU16::new(72).expect("non-zero"),
+                    ..sheet()
+                }),
+                other => panic!("asked for shïp {other}'s sheet"),
+            }
         }
     }
 
@@ -2780,5 +2815,94 @@ mod tests {
         assert_eq!(view.pilot().expect("a pilot").events().count(), 0);
         let mut shared = SharedChance::default();
         assert!(!shared.fires(100));
+    }
+
+    use nova_sim::ShipRefusal;
+
+    /// [`outfitting`], where Earth is a shipyard too, selling ship 129 for
+    /// 900 credits: twice as fast, with a fuel tank.
+    fn shipbuying() -> FakeCatalog {
+        let mut earth = site(
+            128,
+            (0.0, 0.0),
+            StellarFlags::CAN_LAND | StellarFlags::OUTFITTER | StellarFlags::SHIPYARD,
+        );
+        earth.tech_level = 1;
+        FakeCatalog {
+            sites: vec![earth],
+            ships: vec![ShipRecord {
+                id: ShipId(129),
+                name: "Fast".to_owned(),
+                short_name: "Fast".to_owned(),
+                long_name: String::new(),
+                fields: ShipFields {
+                    speed: 600,
+                    ..FIELDS
+                },
+                defaults: vec![(OutfitId(200), 1)],
+                cost: 900,
+                tech_level: 1,
+                buy_random: 100,
+                require: 0,
+                availability: String::new(),
+                flags3: 0,
+                disp_weight: 0,
+                max_gun: 0,
+                max_tur: 0,
+                length: 0,
+                crew: 0,
+            }],
+            ..outfitting()
+        }
+    }
+
+    #[test]
+    fn the_shipyard_is_the_sessions_and_a_purchase_reloads_the_ships_sheet() {
+        let mut view = FlightView::new(shipbuying());
+        assert_eq!(view.shipyard(), None, "in flight");
+        assert_eq!(view.buy_ship(ShipId(129)), Err(ShipRefusal::NoShipyard));
+        tap(&mut view, LAND_KEY);
+        view.take_save_due();
+        let shipyard = view.shipyard().expect("landed at a shipyard");
+        assert_eq!(shipyard.row(ShipId(129)).map(|row| row.price), Some(900));
+        assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
+        assert_eq!(
+            view.buy_ship(ShipId(999)),
+            Err(ShipRefusal::NotListed),
+            "refused"
+        );
+        assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
+        let bought = view.buy_ship(ShipId(129)).expect("bought");
+        assert_eq!(bought.price, 900);
+        assert!(view.take_save_due(), "a purchase");
+        assert_eq!(view.pilot().map(Pilot::ship), Some(ShipId(129)));
+        assert_eq!(view.pilot().map(Pilot::cash), Some(1000 - 900));
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(129)]
+        );
+        assert_eq!(view.reserves().fuel.max, 350.0, "its tank");
+        // Off again, the new hull is drawn, at the new speed.
+        view.take_off().expect("took off");
+        let mut list = DrawList::new();
+        view.draw(&mut list);
+        assert!(
+            list.iter().any(|command| matches!(
+                command,
+                DrawCommand::Sprite { image, .. } if image.id == 2001
+            )),
+            "the new sheet"
+        );
+        assert_eq!(
+            view.session().map(|session| session.handling().max_speed),
+            Ok(6.0)
+        );
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..shipbuying()
+        };
+        let mut broken = FlightView::new(broken);
+        assert_eq!(broken.shipyard(), None);
+        assert_eq!(broken.buy_ship(ShipId(129)), Err(ShipRefusal::NoShipyard));
     }
 }
