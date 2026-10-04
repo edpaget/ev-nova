@@ -109,6 +109,11 @@ impl SettingsStore for MemorySettings {
         self.writes.set(self.writes.get() + 1);
         Ok(())
     }
+
+    /// Always `memory`.
+    fn location(&self) -> String {
+        "memory".to_owned()
+    }
 }
 
 #[cfg(test)]

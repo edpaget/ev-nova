@@ -106,6 +106,10 @@ pub trait SettingsStore {
     ///
     /// When it cannot be saved.
     fn write(&mut self, text: &str) -> io::Result<()>;
+
+    /// Where the settings are saved, for the player to find them: a file's
+    /// path, say.
+    fn location(&self) -> String;
 }
 
 /// A boxed store is a store.
@@ -116,6 +120,10 @@ impl SettingsStore for Box<dyn SettingsStore> {
 
     fn write(&mut self, text: &str) -> io::Result<()> {
         (**self).write(text)
+    }
+
+    fn location(&self) -> String {
+        (**self).location()
     }
 }
 
@@ -174,9 +182,9 @@ impl<S: SettingsStore> SettingsKeeper<S> {
     ///
     /// Nothing saved gives the defaults, silently. Text that cannot be
     /// read, or is not settings (not JSON, or a field of the wrong type),
-    /// gives the defaults and a warning. A missing field takes its default,
-    /// unknown fields are ignored, and volumes are clamped to silent
-    /// through full.
+    /// gives the defaults and a warning naming the store's location. A
+    /// missing field takes its default, unknown fields are ignored, and
+    /// volumes are clamped to silent through full.
     pub fn open(mut store: S) -> (Self, Option<String>) {
         let (settings, warning) = match store.read() {
             Ok(None) => (AudioSettings::default(), None),
@@ -185,14 +193,17 @@ impl<S: SettingsStore> SettingsKeeper<S> {
                 Err(error) => (
                     AudioSettings::default(),
                     Some(format!(
-                        "nova: the saved settings are not usable ({error}); using the defaults"
+                        "nova: the saved settings in {} are not usable ({error}); \
+                         using the defaults, and the next change will replace them",
+                        store.location()
                     )),
                 ),
             },
             Err(error) => (
                 AudioSettings::default(),
                 Some(format!(
-                    "nova: cannot read the saved settings ({error}); using the defaults"
+                    "nova: cannot read the saved settings in {} ({error}); using the defaults",
+                    store.location()
                 )),
             ),
         };
@@ -348,8 +359,9 @@ mod tests {
             assert_eq!(keeper.settings(), AudioSettings::default(), "{text}");
             let warning = warning.expect("a warning");
             assert!(
-                warning.starts_with("nova: the saved settings are not usable (")
-                    && warning.ends_with("); using the defaults"),
+                warning.starts_with("nova: the saved settings in memory are not usable (")
+                    && warning
+                        .ends_with("); using the defaults, and the next change will replace them"),
                 "{text}: {warning}"
             );
         }
@@ -364,10 +376,16 @@ mod tests {
         assert_eq!(
             warning.as_deref(),
             Some(
-                "nova: cannot read the saved settings (the disk is unreadable); \
+                "nova: cannot read the saved settings in memory (the disk is unreadable); \
                  using the defaults"
             )
         );
+    }
+
+    #[test]
+    fn a_boxed_store_is_where_its_store_is() {
+        let boxed: Box<dyn SettingsStore> = Box::new(MemorySettings::new());
+        assert_eq!(boxed.location(), "memory");
     }
 
     #[test]

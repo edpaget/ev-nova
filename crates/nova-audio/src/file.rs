@@ -63,6 +63,11 @@ impl SettingsStore for FileSettings {
         })();
         written.map_err(|error| self.naming(&error))
     }
+
+    /// The file's path.
+    fn location(&self) -> String {
+        self.path.display().to_string()
+    }
 }
 
 #[cfg(test)]
@@ -101,6 +106,32 @@ mod tests {
         let mut reread = FileSettings::new(&path);
         assert_eq!(reread.read().expect("reads").as_deref(), Some("second"));
         assert_eq!(reread.path(), path);
+    }
+
+    #[test]
+    fn the_location_is_the_path() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let path = dir.path().join("settings.json");
+        assert_eq!(
+            FileSettings::new(&path).location(),
+            path.display().to_string()
+        );
+    }
+
+    #[test]
+    fn an_unusable_file_is_named_in_the_warning() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let path = dir.path().join("settings.json");
+        fs::write(&path, "not json").expect("writes");
+        let (_, warning) = SettingsKeeper::open(FileSettings::new(&path));
+        let warning = warning.expect("a warning");
+        assert!(
+            warning.starts_with(&format!(
+                "nova: the saved settings in {} are not usable (",
+                path.display()
+            )),
+            "{warning}"
+        );
     }
 
     #[test]
