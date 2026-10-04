@@ -1,6 +1,10 @@
 //! The app entering a system from the galaxy map and going back, over
 //! synthetic game data, wired to the renderer and the recording Gpu and
 //! driven by key and mouse events.
+//!
+//! This is the developer path: the viewer map Tab reaches enters systems
+//! with Return. In play, the map opened from flight plots a course instead
+//! (`hyperspace.rs`).
 
 // Positions here are whole numbers and quarter-second moves, exact in
 // floating point.

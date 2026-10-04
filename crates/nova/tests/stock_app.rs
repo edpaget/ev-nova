@@ -1,5 +1,6 @@
 //! App frames of the ship browser, the galaxy map and a system over the
-//! stock data, through the recording Gpu. Skips, passing, when `NOVA_DATA` is unset.
+//! stock data, through the recording Gpu, and a course plotted from
+//! flight. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -274,6 +275,57 @@ fn sol_opens_from_the_map_and_its_stellars_reach_the_gpu() {
         send(&mut app, &mut gpu, key(Key::Escape, true)),
         Control::Exit
     );
+}
+
+/// A new pilot starts in Kania (128) on 23 June 1177, and a click on
+/// Tichel (129) on flight's map plots a course one jump long.
+#[test]
+fn a_new_pilot_plots_a_one_jump_course_from_kania_to_tichel() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let mut app: App<_> = App::new(&Window, Rc::clone(&data), start_screen(data));
+    let mut gpu = RecordingGpu::new();
+    let mut send = |app: &mut App<Rc<GameData>>, event| {
+        assert_eq!(app.handle(event, &mut Window, &mut gpu), Control::Continue);
+    };
+    for key in [Key::Char('f'), Key::Char('m')] {
+        for pressed in [true, false] {
+            let event = WindowEvent::Key {
+                key,
+                pressed,
+                repeat: false,
+            };
+            send(&mut app, event);
+        }
+    }
+    assert_eq!(app.screen().showing(), Showing::FlightMap);
+    let flight = app.screen().flight_view().expect("flying");
+    let session = flight.session().expect("the stock first chär starts");
+    assert_eq!(session.system(), SystemId(128));
+    let today = session.date();
+    assert_eq!((today.day(), today.month(), today.year()), (23, 6, 1177));
+    let map = flight.course_map();
+    let tichel = map.model().system(SystemId(129)).expect("Tichel");
+    assert_eq!(tichel.entry.name, "Tichel");
+    let at = map.view().world_to_screen(tichel.position());
+    send(
+        &mut app,
+        WindowEvent::PointerMoved {
+            px: (f64::from(at.x), f64::from(at.y)),
+        },
+    );
+    for pressed in [true, false] {
+        let event = WindowEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+        };
+        send(&mut app, event);
+    }
+    let flight = app.screen().flight_view().expect("flying");
+    let course = flight.session().expect("flying").course();
+    assert_eq!(course, [SystemId(129)]);
 }
 
 /// I opens the stock "Desc Dialog" over the ship browser, from the

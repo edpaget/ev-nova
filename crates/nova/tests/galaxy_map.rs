@@ -1,5 +1,9 @@
 //! The app switching to the galaxy map over synthetic game data, wired to
 //! the renderer and the recording Gpu and driven by key and mouse events.
+//!
+//! This is the developer path: the viewer map Tab reaches, which keeps its
+//! "Enter system" button and Return. Play plots courses on the map opened
+//! from flight with M, which has neither (`hyperspace.rs`).
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
