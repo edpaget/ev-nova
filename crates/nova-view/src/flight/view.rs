@@ -26,6 +26,11 @@
 //!   ship's motion, while held: a press (or its key repeats) holds the key
 //!   and its release lets it go. Left and Right together cancel, and
 //!   either overrides Down.
+//! - L lands on the stellar the ship is over, once a press (its repeats
+//!   do nothing). The router takes the landing ([`FlightView::take_landing`])
+//!   and shows the spaceport. A refused landing says why above the help
+//!   line, in the original's words (`STR#` 2002), for
+//!   [`MESSAGE_SHOWN_FOR`].
 //! - Escape belongs to the app's router, which leaves flight. The screen
 //!   never quits.
 
@@ -33,8 +38,8 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use nova_sim::{
-    Controls, FixedStep, PilotCatalog, Session, ShipState, Steps, Turn, flight::normalized,
-    flight::shortest_turn,
+    Controls, FixedStep, LandingRefusal, PilotCatalog, Session, ShipState, StellarId, Steps, Turn,
+    flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -55,10 +60,57 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Up: thrust   Left/Right: turn   Down: reverse   Esc: leave flight";
+pub const HELP: &str =
+    "Up: thrust   Left/Right: turn   Down: reverse   L: land   Esc: leave flight";
+/// Where a message, such as why a landing was refused, goes: above the
+/// help line.
+pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
+/// How long a message stays on screen.
+pub const MESSAGE_SHOWN_FOR: Duration = Duration::from_secs(4);
 
 /// The keys flight holds: the original's defaults.
 const FLIGHT_KEYS: [Key; 4] = [Key::Up, Key::Left, Key::Right, Key::Down];
+
+/// The land key: the original's default (`STR#` 129, and `STR#` 2002
+/// #25).
+pub const LAND_KEY: Key = Key::Char('l');
+
+/// `STR#` 2002 #49.
+pub const NO_STELLARS: &str = "No stellar objects present.";
+/// `STR#` 2002 #67.
+pub const TOO_FAR_STATION: &str = "You're too far away to dock at this station.";
+/// `STR#` 2002 #68.
+pub const TOO_FAR_PLANET: &str = "You're too far away to land on this planet.";
+/// `STR#` 2002 #71.
+pub const TOO_FAST_STATION: &str = "You're moving too fast to dock at this station.";
+/// `STR#` 2002 #72.
+pub const TOO_FAST_PLANET: &str = "You're moving too fast to land on this planet.";
+/// `STR#` 2002 #82.
+pub const DOCKING_DENIED: &str = "Docking request denied.";
+/// `STR#` 2002 #83.
+pub const LANDING_DENIED: &str = "Landing request denied.";
+/// `STR#` 2002 #89: why a ship cannot dock at a station.
+pub const HOSTILE_STATION: &str = "The station's hull integrity is too unstable.";
+/// `STR#` 2002 #90: why a ship cannot land on a planet.
+pub const HOSTILE_PLANET: &str = "The planet's environment is too hostile.";
+
+/// What the player is told when `refusal` stops a landing: the original's
+/// words for it, for a station or a planet.
+#[must_use]
+pub fn refusal_message(refusal: &LandingRefusal) -> &'static str {
+    let pick = |station: bool, at_station, on_planet| {
+        if station { at_station } else { on_planet }
+    };
+    match *refusal {
+        LandingRefusal::NoStellars => NO_STELLARS,
+        LandingRefusal::TooFar { station, .. } => pick(station, TOO_FAR_STATION, TOO_FAR_PLANET),
+        LandingRefusal::NotLandable { station, .. } => {
+            pick(station, HOSTILE_STATION, HOSTILE_PLANET)
+        }
+        LandingRefusal::Denied { station, .. } => pick(station, DOCKING_DENIED, LANDING_DENIED),
+        LandingRefusal::TooFast { station, .. } => pick(station, TOO_FAST_STATION, TOO_FAST_PLANET),
+    }
+}
 
 /// The player's ship in flight.
 #[derive(Clone, Debug)]
@@ -81,6 +133,10 @@ pub struct FlightView {
     elapsed: Duration,
     /// The flight keys held down.
     held: HashSet<Key>,
+    /// The stellar landed on, until the router takes it.
+    pending_landing: Option<StellarId>,
+    /// The message shown, and `elapsed` when it was shown.
+    message: Option<(&'static str, Duration)>,
 }
 
 impl FlightView {
@@ -109,6 +165,42 @@ impl FlightView {
             alpha: 0.0,
             elapsed: Duration::ZERO,
             held: HashSet::new(),
+            pending_landing: None,
+            message: None,
+        }
+    }
+
+    /// The stellar the ship has just landed on, once: the router takes it
+    /// to show the spaceport.
+    pub fn take_landing(&mut self) -> Option<StellarId> {
+        self.pending_landing.take()
+    }
+
+    /// Takes off from the stellar landed on, and gives it; `None` when the
+    /// ship has not landed. The next frame draws the ship where it is, at
+    /// the stellar, not on its way from where it was.
+    pub fn take_off(&mut self) -> Option<StellarId> {
+        let stellar = self.session.as_mut().ok()?.take_off()?;
+        self.previous = self.current();
+        self.alpha = 0.0;
+        Some(stellar)
+    }
+
+    /// The message on screen, if any.
+    #[must_use]
+    pub fn message(&self) -> Option<&'static str> {
+        let (text, shown_at) = self.message?;
+        (self.elapsed < shown_at + MESSAGE_SHOWN_FOR).then_some(text)
+    }
+
+    /// Lands, or shows why not.
+    fn land(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        match session.land() {
+            Ok(stellar) => self.pending_landing = Some(stellar),
+            Err(refusal) => self.message = Some((refusal_message(&refusal), self.elapsed)),
         }
     }
 
@@ -216,6 +308,14 @@ impl FlightView {
 impl Screen for FlightView {
     /// Never quits: Escape is the router's.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Key {
+            key: LAND_KEY,
+            pressed: true,
+            repeat: false,
+        } = *input
+        {
+            self.land();
+        }
         if let Input::Key { key, pressed, .. } = *input
             && FLIGHT_KEYS.contains(&key)
         {
@@ -268,6 +368,9 @@ impl Screen for FlightView {
             Color::WHITE,
         );
         list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
+        if let Some(message) = self.message() {
+            list.text(message, MESSAGE_AT, OVERLAY_SIZE, None, Color::WHITE);
+        }
         match &self.status_bar {
             Ok(bar) => {
                 let stellars: Vec<Point> = scene.stellars().iter().map(|s| s.position).collect();
@@ -295,7 +398,7 @@ impl Screen for FlightView {
 mod tests {
     use std::num::NonZeroU16;
 
-    use nova_sim::landing::StellarFlags;
+    use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
         CharacterStart, Handling, LandingSite, Reserves, ShipFields, ShipId, StartError, SystemId,
         TICK, Vec2, step,
@@ -872,7 +975,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Up: thrust   Left/Right: turn   Down: reverse   Esc: leave flight"
+            "Up: thrust   Left/Right: turn   Down: reverse   L: land   Esc: leave flight"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -1117,5 +1220,279 @@ mod tests {
         assert!(at_30.position.y < 0.0, "{at_30:?}");
         assert_eq!(fly(60), at_30);
         assert_eq!(fly(120), at_30);
+    }
+
+    // Landing.
+
+    /// The fake catalog with system 130 holding just `sites`.
+    fn flight_among(sites: Vec<LandingSite>) -> FlightView {
+        FlightView::new(&FakeCatalog { sites, ..catalog() })
+    }
+
+    const LAND: Key = Key::Char('l');
+
+    /// The message drawn at its place, if any.
+    fn message(view: &FlightView) -> Option<DrawCommand> {
+        drawn(view)
+            .iter()
+            .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == MESSAGE_AT))
+            .cloned()
+    }
+
+    #[test]
+    fn l_over_a_landable_stellar_lands_once() {
+        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+        assert_eq!(view.take_landing(), None);
+        assert_eq!(view.input(&key(LAND, true)), ScreenAction::None);
+        assert_eq!(
+            view.session().expect("flying").landed(),
+            Some(StellarId(140))
+        );
+        assert_eq!(view.take_landing(), Some(StellarId(140)));
+        assert_eq!(view.take_landing(), None, "taken");
+        assert_eq!(view.message(), None);
+        assert_eq!(message(&view), None);
+        assert_eq!(LAND_KEY, LAND);
+    }
+
+    #[test]
+    fn a_repeat_or_release_of_l_does_nothing() {
+        let mut view = flight_among(vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)]);
+        view.input(&held(LAND));
+        view.input(&key(LAND, false));
+        assert_eq!(view.take_landing(), None);
+        assert_eq!(view.session().expect("flying").landed(), None);
+        let mut far = flight();
+        far.input(&held(LAND));
+        assert_eq!(far.message(), None, "no refusal either");
+    }
+
+    #[test]
+    fn each_refusal_says_why_in_the_originals_words() {
+        let refused = |sites: Vec<LandingSite>| {
+            let mut view = flight_among(sites);
+            view.input(&key(LAND, true));
+            assert_eq!(view.take_landing(), None);
+            view.message().map(str::to_owned)
+        };
+        let centre = |flags, min_status| LandingSite {
+            min_status,
+            ..site(140, (0.0, 0.0), flags)
+        };
+        let station = StellarFlags::CAN_LAND | StellarFlags::STATION;
+        assert_eq!(
+            refused(Vec::new()).as_deref(),
+            Some("No stellar objects present.")
+        );
+        assert_eq!(
+            refused(vec![site(140, (0.0, -600.0), StellarFlags::CAN_LAND)]).as_deref(),
+            Some("You're too far away to land on this planet.")
+        );
+        assert_eq!(
+            refused(vec![site(140, (0.0, -600.0), station)]).as_deref(),
+            Some("You're too far away to dock at this station.")
+        );
+        assert_eq!(
+            refused(vec![centre(0, 0)]).as_deref(),
+            Some("The planet's environment is too hostile.")
+        );
+        assert_eq!(
+            refused(vec![centre(StellarFlags::CAN_LAND, 1)]).as_deref(),
+            Some("Landing request denied.")
+        );
+        assert_eq!(
+            refused(vec![centre(station, 32767)]).as_deref(),
+            Some("Docking request denied.")
+        );
+    }
+
+    #[test]
+    fn a_ship_moving_too_fast_is_told_so() {
+        let big = |flags| LandingSite {
+            frame_size: Some((400, 400)),
+            ..site(140, (0.0, 0.0), flags)
+        };
+        for (flags, expected) in [
+            (
+                StellarFlags::CAN_LAND,
+                "You're moving too fast to land on this planet.",
+            ),
+            (
+                StellarFlags::CAN_LAND | StellarFlags::STATION,
+                "You're moving too fast to dock at this station.",
+            ),
+        ] {
+            let mut view = flight_among(vec![big(flags)]);
+            view.input(&key(Key::Up, true));
+            ticks(&mut view, 15);
+            view.input(&key(LAND, true));
+            assert_eq!(view.take_landing(), None);
+            assert_eq!(view.message(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn every_refusal_has_its_string() {
+        let stellar = StellarId(128);
+        let cases = [
+            (LandingRefusal::NoStellars, NO_STELLARS),
+            (
+                LandingRefusal::TooFar {
+                    nearest: stellar,
+                    station: true,
+                },
+                TOO_FAR_STATION,
+            ),
+            (
+                LandingRefusal::TooFar {
+                    nearest: stellar,
+                    station: false,
+                },
+                TOO_FAR_PLANET,
+            ),
+            (
+                LandingRefusal::NotLandable {
+                    stellar,
+                    station: true,
+                },
+                HOSTILE_STATION,
+            ),
+            (
+                LandingRefusal::NotLandable {
+                    stellar,
+                    station: false,
+                },
+                HOSTILE_PLANET,
+            ),
+            (
+                LandingRefusal::Denied {
+                    stellar,
+                    station: true,
+                    min_status: 1,
+                },
+                DOCKING_DENIED,
+            ),
+            (
+                LandingRefusal::Denied {
+                    stellar,
+                    station: false,
+                    min_status: 1,
+                },
+                LANDING_DENIED,
+            ),
+            (
+                LandingRefusal::TooFast {
+                    stellar,
+                    station: true,
+                    speed: 2.0,
+                },
+                TOO_FAST_STATION,
+            ),
+            (
+                LandingRefusal::TooFast {
+                    stellar,
+                    station: false,
+                    speed: 2.0,
+                },
+                TOO_FAST_PLANET,
+            ),
+        ];
+        for (refusal, text) in cases {
+            assert_eq!(refusal_message(&refusal), text, "{refusal:?}");
+        }
+        assert_eq!(
+            [
+                NO_STELLARS,
+                TOO_FAR_STATION,
+                TOO_FAR_PLANET,
+                TOO_FAST_STATION,
+                TOO_FAST_PLANET,
+                DOCKING_DENIED,
+                LANDING_DENIED,
+                HOSTILE_STATION,
+                HOSTILE_PLANET,
+            ],
+            [
+                "No stellar objects present.",
+                "You're too far away to dock at this station.",
+                "You're too far away to land on this planet.",
+                "You're moving too fast to dock at this station.",
+                "You're moving too fast to land on this planet.",
+                "Docking request denied.",
+                "Landing request denied.",
+                "The station's hull integrity is too unstable.",
+                "The planet's environment is too hostile.",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_refusal_is_drawn_above_the_help_line_until_it_has_been_shown_long_enough() {
+        let mut view = flight();
+        ticks(&mut view, 3);
+        view.input(&key(LAND, true));
+        let shown = Some(overlay(
+            TOO_FAR_PLANET,
+            MESSAGE_AT,
+            OVERLAY_SIZE,
+            Color::WHITE,
+        ));
+        assert_eq!(message(&view), shown);
+        // After the help line.
+        let list = drawn(&view);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        let help = commands
+            .iter()
+            .position(|c| **c == overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM))
+            .expect("the help line");
+        assert_eq!(Some(commands[help + 1]), shown.as_ref());
+        view.tick(Duration::from_millis(3999));
+        assert_eq!(message(&view), shown);
+        assert_eq!(view.message(), Some(TOO_FAR_PLANET));
+        view.tick(Duration::from_millis(1));
+        assert_eq!(message(&view), None);
+        assert_eq!(view.message(), None);
+        assert_eq!(MESSAGE_SHOWN_FOR, Duration::from_secs(4));
+        assert_eq!(MESSAGE_AT, at(16.0, 720.0));
+    }
+
+    #[test]
+    fn a_new_refusal_shows_afresh() {
+        let mut view = flight();
+        view.input(&key(LAND, true));
+        view.tick(Duration::from_secs(3));
+        view.input(&key(LAND, false));
+        view.input(&key(LAND, true));
+        view.tick(Duration::from_secs(2));
+        assert_eq!(view.message(), Some(TOO_FAR_PLANET));
+    }
+
+    #[test]
+    fn taking_off_draws_the_ship_at_the_stellar_on_the_next_frame() {
+        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+        view.input(&key(LAND, true));
+        assert_eq!(view.take_landing(), Some(StellarId(140)));
+        assert_eq!(view.take_off(), Some(StellarId(140)));
+        assert_eq!(view.session().expect("flying").landed(), None);
+        assert_eq!(view.alpha(), 0.0);
+        assert_eq!(view.shown_position(), at(6.0, -8.0));
+        assert_eq!(view.camera().center(), at(6.0, -8.0));
+        assert_eq!(view.take_off(), None, "not landed");
+        // It flies on from there.
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 2);
+        assert!(player(&view).position.y < -8.0, "{:?}", player(&view));
+    }
+
+    #[test]
+    fn landing_in_a_flight_that_never_started_does_nothing() {
+        let mut view = FlightView::new(&FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        view.input(&key(LAND, true));
+        assert_eq!(view.take_landing(), None);
+        assert_eq!(view.message(), None);
+        assert_eq!(view.take_off(), None);
     }
 }
