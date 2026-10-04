@@ -164,6 +164,7 @@ impl Session {
             fields,
             defaults,
             outfits: catalog.outfits(),
+            // Refitted below, from the outfits the pilot owns.
             stats: ShipStats::default(),
             player,
             sites,
@@ -176,17 +177,7 @@ impl Session {
             save_due: false,
             pilot,
         };
-        session.stats = session.current_stats();
-        let stats = session.stats;
-        let reserves = &mut session.pilot.reserves;
-        for (gauge, max) in [
-            (&mut reserves.shield, stats.shield),
-            (&mut reserves.armor, stats.armor),
-            (&mut reserves.fuel, stats.fuel),
-        ] {
-            gauge.max = max;
-            gauge.now = gauge.now.min(max);
-        }
+        session.refit(false);
         Ok(session)
     }
 
@@ -198,9 +189,10 @@ impl Session {
         )
     }
 
-    /// Recomputes the stats after the outfits changed: each gauge whose
-    /// most rose gains as much, and each keeps no more than it can hold.
-    fn refit(&mut self) {
+    /// Recomputes the stats from the outfits the pilot owns: each gauge
+    /// holds up to the stats' most, keeping no more than that, and when
+    /// `gain`, one whose most rose gains as much.
+    fn refit(&mut self, gain: bool) {
         let stats = self.current_stats();
         let reserves = &mut self.pilot.reserves;
         for (gauge, max) in [
@@ -208,7 +200,7 @@ impl Session {
             (&mut reserves.armor, stats.armor),
             (&mut reserves.fuel, stats.fuel),
         ] {
-            refit(gauge, max);
+            refit(gauge, max, gain);
         }
         self.stats = stats;
     }
@@ -447,7 +439,7 @@ impl Session {
             .cloned()
             .ok_or(OutfitRefusal::NotListed)?;
         self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, price));
-        self.refit();
+        self.refit(true);
         Ok(())
     }
 
@@ -529,11 +521,11 @@ impl Session {
     }
 }
 
-/// Sets `gauge` to hold up to `max`: when that is more than it held, it
-/// gains the difference; it never keeps more than it can hold.
-fn refit(gauge: &mut Gauge, max: f32) {
-    if max > gauge.max {
-        gauge.now += max - gauge.max;
+/// Sets `gauge` to hold up to `max`, keeping no more than that; when
+/// `gain` and that is more than it held, it gains the difference.
+fn refit(gauge: &mut Gauge, max: f32, gain: bool) {
+    if gain {
+        gauge.now += (max - gauge.max).max(0.0);
     }
     gauge.max = max;
     gauge.now = gauge.now.min(max);

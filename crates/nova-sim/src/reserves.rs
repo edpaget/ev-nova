@@ -52,7 +52,7 @@ pub const NEGATIVE_SHIELD_FACTOR: i64 = 5;
 #[must_use]
 pub(crate) fn shield_points(shield: i16) -> i64 {
     let shield = i64::from(shield);
-    if shield < 0 {
+    if shield.is_negative() {
         -shield * NEGATIVE_SHIELD_FACTOR
     } else {
         shield

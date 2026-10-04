@@ -249,11 +249,20 @@ pub fn unit_price(outfit: &OutfitRecord, ship_mass: i16) -> i64 {
 #[must_use]
 pub fn unit_mass(outfit: &OutfitRecord, ship_mass: i16) -> i64 {
     let mass = i64::from(outfit.mass);
-    if outfit.flags & OutfitFlags::MASS_BY_MASS != 0 && mass > 0 {
+    if outfit.flags & OutfitFlags::MASS_BY_MASS != 0 && mass.is_positive() {
         i64::from(ship_mass) * mass / 100
     } else {
         mass
     }
+}
+
+/// Whether an outfit with `flags` is hidden from a player who owns none,
+/// given whether its `Require` is met (`required`) and its `Availability`
+/// holds (`available`).
+#[must_use]
+pub fn hides(flags: u16, required: bool, available: bool) -> bool {
+    (flags & OutfitFlags::HIDE_UNLESS_REQUIRED != 0 && !required)
+        || (flags & OutfitFlags::HIDE_UNLESS_AVAILABLE != 0 && !available)
 }
 
 /// What one outfit priced at `price` sells back for.
@@ -345,9 +354,7 @@ impl Shop<'_> {
             if buyable && record.flags & OutfitFlags::HIDE_HIGHER != 0 {
                 taken_off.insert(record.disp_weight);
             }
-            let hidden = owned == 0
-                && ((record.flags & OutfitFlags::HIDE_UNLESS_REQUIRED != 0 && !required)
-                    || (record.flags & OutfitFlags::HIDE_UNLESS_AVAILABLE != 0 && !available));
+            let hidden = owned == 0 && hides(record.flags, required, available);
             let sells_anywhere = record.flags & OutfitFlags::SELL_ANYWHERE != 0;
             let listed = (for_sale && !hidden) || (owned > 0 && sells_anywhere);
             if !listed {
@@ -387,28 +394,24 @@ impl Shop<'_> {
             } else {
                 Ok(())
             };
-            rows.push(OutfitRow {
-                id: record.id,
-                name: record.name.clone(),
-                short_name: record.short_name.clone(),
-                price,
-                mass,
-                owned,
-                max: record.max,
-                buy: buying,
-                sell: selling,
-            });
+            rows.push((
+                record.disp_weight,
+                OutfitRow {
+                    id: record.id,
+                    name: record.name.clone(),
+                    short_name: record.short_name.clone(),
+                    price,
+                    mass,
+                    owned,
+                    max: record.max,
+                    buy: buying,
+                    sell: selling,
+                },
+            ));
         }
-        rows.sort_by_key(|row| {
-            let weight = self
-                .records
-                .iter()
-                .find(|record| record.id == row.id)
-                .map_or(0, |record| record.disp_weight);
-            (std::cmp::Reverse(weight), row.id)
-        });
+        rows.sort_by_key(|(weight, row)| (std::cmp::Reverse(*weight), row.id));
         Some(Outfitter {
-            rows,
+            rows: rows.into_iter().map(|(_, row)| row).collect(),
             cash: pilot.cash,
             free_mass: free,
         })
@@ -663,6 +666,42 @@ mod tests {
         assert_eq!(listed(&owned), [128, 129]);
         assert_eq!(row(&owned, 128).buy, Err(OutfitRefusal::NotForSale));
         assert_eq!(row(&owned, 128).sell, Ok(()));
+    }
+
+    #[test]
+    fn each_hiding_flag_hides_only_for_its_own_test() {
+        let required = OutfitFlags::HIDE_UNLESS_REQUIRED;
+        let available = OutfitFlags::HIDE_UNLESS_AVAILABLE;
+        for (flags, met, holds, hidden) in [
+            (0, false, false, false),
+            (required, false, true, true),
+            (required, true, false, false),
+            (available, true, false, true),
+            (available, false, true, false),
+            (required | available, true, true, false),
+            (required | available, false, true, true),
+            (required | available, true, false, true),
+            (!(required | available), false, false, false),
+        ] {
+            assert_eq!(
+                hides(flags, met, holds),
+                hidden,
+                "{flags:#06x} {met} {holds}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bit_both_the_ship_and_an_outfit_contribute_is_still_met() {
+        let records = [
+            OutfitRecord {
+                contribute: 0x3,
+                ..outfit(140, &[])
+            },
+            requiring(128, 0x3, -1),
+        ];
+        let outfitter = open(&records, &owning(&[(140, 1)]));
+        assert_eq!(row(&outfitter, 128).buy, Ok(()));
     }
 
     #[test]
@@ -963,7 +1002,7 @@ mod tests {
         let massless = Shop {
             records: &[OutfitRecord {
                 mass: 0,
-                ..expansion
+                ..expansion.clone()
             }],
             fields: ShipFields { holds: -1, ..FAST },
             defaults: &NO_DEFAULTS,
@@ -972,6 +1011,15 @@ mod tests {
         .outfitter(&pilot())
         .expect("open");
         assert_eq!(buy(&massless), Ok(()));
+        let empty_holds = Shop {
+            records: std::slice::from_ref(&expansion),
+            fields: ShipFields { holds: 0, ..FAST },
+            defaults: &NO_DEFAULTS,
+            site: &port(),
+        }
+        .outfitter(&pilot())
+        .expect("open");
+        assert_eq!(buy(&empty_holds), Ok(()), "only negative Holds forbids it");
     }
 
     // Selling.
@@ -1045,6 +1093,19 @@ mod tests {
         assert_eq!(sell(&exact), Ok(()), "leaves exactly none");
         let loose = open(&records, &owning(&[(128, 1)]));
         assert_eq!(sell(&loose), Ok(()));
+        let to_none = [
+            OutfitRecord {
+                mass: -20,
+                ..outfit(128, &[])
+            },
+            OutfitRecord {
+                mass: 30,
+                ..outfit(129, &[])
+            },
+        ];
+        let zero = open(&to_none, &owning(&[(128, 1), (129, 1)]));
+        assert_eq!(zero.free_mass, 20);
+        assert_eq!(sell(&zero), Ok(()), "leaves none free");
     }
 
     // Settling.
