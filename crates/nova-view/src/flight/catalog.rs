@@ -1,10 +1,15 @@
-//! The ship sprite port: the player ship's sprite sheet, in the view's own
-//! terms.
+//! The flight screen's ports, in the view's own terms: the ship sprite
+//! port, the player ship's sprite sheet, and the status bar port, the
+//! `ïntf` layouts the HUD is drawn from.
 
 use std::num::NonZeroU16;
 use std::rc::Rc;
 
-pub use nova_sim::ShipId;
+pub use nova_sim::{GovtId, ShipId};
+
+use crate::color::Color;
+use crate::font::Font;
+use crate::geometry::Bounds;
 
 /// A ship's resolved sprite sheet: its `rlëD`, how many frames make one
 /// turn, and each frame's size.
@@ -42,9 +47,91 @@ impl<T: ShipSprites + ?Sized> ShipSprites for Rc<T> {
     }
 }
 
+/// An `ïntf` status bar layout. Every area is relative to the status
+/// bar's top-left corner.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StatusBarLayout {
+    /// `RadarArea`.
+    pub radar: Bounds,
+    /// `ShieldArea`.
+    pub shield: Bounds,
+    /// `ArmorArea`.
+    pub armor: Bounds,
+    /// `FuelArea`.
+    pub fuel: Bounds,
+    /// `NavArea`.
+    pub nav: Bounds,
+    /// `BrightText`.
+    pub bright_text: Color,
+    /// `DimText`.
+    pub dim_text: Color,
+    /// `BrightRadar`.
+    pub bright_radar: Color,
+    /// `DimRadar`.
+    pub dim_radar: Color,
+    /// `ShieldColor`.
+    pub shield_color: Color,
+    /// `ArmorColor`.
+    pub armor_color: Color,
+    /// `FuelFull`: whole jumps' worth of fuel.
+    pub fuel_full: Color,
+    /// `FuelPartial`: the fuel left over a whole jump.
+    pub fuel_partial: Color,
+    /// `StatusFont`.
+    pub font: Font,
+    /// `StatFontSize`.
+    pub font_size: f32,
+    /// `StatusBkgnd`, raw: the background `PICT`'s ID, where values below
+    /// 128 mean 128.
+    pub status_bkgnd: i16,
+}
+
+/// The status bars: which one each government shows and how each is laid
+/// out.
+pub trait StatusBars {
+    /// Govt `id`'s raw `Interface` field, or why it cannot be read.
+    fn government_interface(&self, id: GovtId) -> Result<i16, String>;
+    /// `ïntf` `id`, or why it cannot be read.
+    fn status_bar(&self, id: i16) -> Result<StatusBarLayout, String>;
+    /// `PICT` `id`'s width and height in pixels, or `None` when it is
+    /// missing or does not decode.
+    fn picture_size(&self, id: i16) -> Option<(u32, u32)>;
+}
+
+/// A borrowed catalog is a catalog.
+impl<T: StatusBars + ?Sized> StatusBars for &T {
+    fn government_interface(&self, id: GovtId) -> Result<i16, String> {
+        (**self).government_interface(id)
+    }
+
+    fn status_bar(&self, id: i16) -> Result<StatusBarLayout, String> {
+        (**self).status_bar(id)
+    }
+
+    fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
+        (**self).picture_size(id)
+    }
+}
+
+/// A shared catalog is a catalog.
+impl<T: StatusBars + ?Sized> StatusBars for Rc<T> {
+    fn government_interface(&self, id: GovtId) -> Result<i16, String> {
+        (**self).government_interface(id)
+    }
+
+    fn status_bar(&self, id: i16) -> Result<StatusBarLayout, String> {
+        (**self).status_bar(id)
+    }
+
+    fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
+        (**self).picture_size(id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::Point;
 
     /// Every ship has a 36-rotation sheet with its own ID.
     struct Sheets;
@@ -68,5 +155,59 @@ mod tests {
     fn borrowed_and_shared_catalogs_are_catalogs() {
         assert_eq!(image(&Sheets, 130), Ok(130));
         assert_eq!(image(Rc::new(Sheets), 131), Ok(131));
+    }
+
+    /// Every govt shows its own ID's bar; every bar is empty but for its
+    /// background, its own ID; every picture is as wide as its ID.
+    struct Bars;
+
+    impl StatusBars for Bars {
+        fn government_interface(&self, id: GovtId) -> Result<i16, String> {
+            Ok(id.0)
+        }
+
+        fn status_bar(&self, id: i16) -> Result<StatusBarLayout, String> {
+            let none = Bounds::at(Point::default(), 0.0, 0.0);
+            Ok(StatusBarLayout {
+                radar: none,
+                shield: none,
+                armor: none,
+                fuel: none,
+                nav: none,
+                bright_text: Color::WHITE,
+                dim_text: Color::WHITE,
+                bright_radar: Color::WHITE,
+                dim_radar: Color::WHITE,
+                shield_color: Color::WHITE,
+                armor_color: Color::WHITE,
+                fuel_full: Color::WHITE,
+                fuel_partial: Color::WHITE,
+                font: Font::Geneva,
+                font_size: 12.0,
+                status_bkgnd: id,
+            })
+        }
+
+        fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
+            Some((u32::try_from(id).ok()?, 1))
+        }
+    }
+
+    /// Everything `catalog` says about govt 130, `ïntf` 131 and `PICT` 194.
+    fn bar(catalog: impl StatusBars) -> String {
+        format!(
+            "{:?} {:?} {:?}",
+            catalog.government_interface(GovtId(130)),
+            catalog.status_bar(131).map(|bar| bar.status_bkgnd),
+            catalog.picture_size(194),
+        )
+    }
+
+    #[test]
+    fn borrowed_and_shared_status_bars_are_status_bars() {
+        let direct = "Ok(130) Ok(131) Some((194, 1))";
+        assert_eq!(bar(Bars), direct);
+        assert_eq!(bar(&Bars), direct);
+        assert_eq!(bar(Rc::new(Bars)), direct);
     }
 }
