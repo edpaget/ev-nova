@@ -11,7 +11,22 @@
 //! HUD's status bar for the player's government, through the
 //! [`StatusBars`] port, and the galaxy for its course map, through the
 //! [`GalaxyCatalog`] port. After that it reads only when the ship arrives
-//! in another system: that system. Drawing and input never read anything.
+//! in another system: that system, and when the system's NPC traffic is
+//! populated: its traffic, through the [`TrafficCatalog`] port. Drawing and
+//! input never read anything.
+//!
+//! The system's NPC traffic is populated when the flight starts (on its
+//! first tick, so on the screen's [`SharedChance`]), on each arrival, and
+//! on the first tick after each take-off, as the original sets a system up
+//! on arrival and take-off. Each time, the sprite sheet of each ship type
+//! the traffic can spawn is read, once per type for the life of the
+//! screen. After each step of the player's ship, the traffic takes a step,
+//! its NPCs deciding as the screen's [`Behaviour`] says
+//! ([`FlightView::with_behaviour`]; [`Peaceful`] by default). Each NPC is
+//! drawn with its own ship's sprite, after the stellars and before the
+//! player, smoothed between its last two steps as the player's ship is
+//! (a crossed box when its sheet cannot be read), and as a dim blip on the
+//! radar.
 //!
 //! Each day a jump takes rolls the planetary events on the screen's
 //! [`SharedChance`] ([`FlightView::with_chance`]); without one, nothing
@@ -65,15 +80,16 @@
 //!   flight. The screen never quits.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Chance, Controls, FixedStep, JumpRefusal, LandingRefusal, Market, NeverFires, Order,
-    OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, RechargeRefusal, Reserves, Session,
-    ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps,
-    TradeRefusal, TrafficCatalog, Turn, flight::normalized, flight::shortest_turn,
+    Behaviour, Chance, Controls, FixedStep, JumpRefusal, LandingRefusal, Market, NeverFires, Npc,
+    NpcId, Order, OutfitOrder, OutfitRefusal, Outfitter, Peaceful, Pilot, PilotCatalog,
+    RechargeRefusal, Reserves, Session, ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard,
+    StartError, StellarId, Steps, TradeRefusal, TrafficCatalog, Turn, flight::normalized,
+    flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -170,6 +186,21 @@ pub fn refusal_message(refusal: &LandingRefusal) -> &'static str {
     }
 }
 
+/// Where a ship is drawn `alpha` of the way from `from` to `to`.
+fn shown_position(from: &ShipState, to: &ShipState, alpha: f32) -> Point {
+    let (from, to) = (from.position, to.position);
+    Point::new(
+        (to.x - from.x).mul_add(alpha, from.x),
+        (to.y - from.y).mul_add(alpha, from.y),
+    )
+}
+
+/// Which way a ship is drawn facing `alpha` of the way, the short way
+/// round, from `from` to `to`.
+fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
+    normalized(shortest_turn(from.heading, to.heading).mul_add(alpha, from.heading))
+}
+
 /// What the player is told when `refusal` stops a jump: the original's
 /// words for it.
 #[must_use]
@@ -250,8 +281,17 @@ pub struct FlightView<C> {
     map_open: bool,
     /// The jump's effect, while it plays.
     jump: Option<JumpEffect>,
-    /// What each day's events are rolled on.
+    /// What each day's events and the traffic are rolled on.
     chance: SharedChance,
+    /// How the NPCs decide.
+    behaviour: Rc<dyn Behaviour>,
+    /// Whether the system's traffic is to be populated on the next tick:
+    /// when the flight starts, and after a take-off.
+    populate_due: bool,
+    /// Each NPC ship type's sheet, or why it cannot be shown, read once.
+    npc_sheets: BTreeMap<ShipId, Result<ShipSheet, String>>,
+    /// Each NPC as it was a step before the session's.
+    npc_previous: BTreeMap<NpcId, ShipState>,
 }
 
 impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
@@ -310,13 +350,48 @@ impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars
             pending_landing,
             message: None,
             chance: SharedChance::default(),
+            behaviour: Rc::new(Peaceful),
+            populate_due: true,
+            npc_sheets: BTreeMap::new(),
+            npc_previous: BTreeMap::new(),
         }
     }
 
-    /// The flight with each day's events rolled on `chance`.
+    /// The flight with each day's events and the traffic rolled on
+    /// `chance`.
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self { chance, ..self }
+    }
+
+    /// The flight with its NPCs deciding as `behaviour` says.
+    #[must_use]
+    pub fn with_behaviour(self, behaviour: Rc<dyn Behaviour>) -> Self {
+        Self { behaviour, ..self }
+    }
+
+    /// Populates the system's traffic, and reads the sheets of the ship
+    /// types it can spawn.
+    fn populate(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        session.populate(&self.catalog, &mut self.chance);
+        self.npc_previous.clear();
+        self.read_npc_sheets();
+    }
+
+    /// Reads the sheet of each ship type the traffic can spawn that has
+    /// not been read yet.
+    fn read_npc_sheets(&mut self) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        for ship in session.traffic_ships() {
+            self.npc_sheets
+                .entry(ship)
+                .or_insert_with(|| self.catalog.ship_sheet(ship));
+        }
     }
 
     /// The catalog the screen reads.
@@ -377,6 +452,8 @@ impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars
         self.previous = *session.player();
         self.alpha = 0.0;
         self.message = None;
+        self.npc_previous.clear();
+        self.read_npc_sheets();
     }
 }
 
@@ -428,12 +505,14 @@ impl<C> FlightView<C> {
     /// Takes off from the stellar landed on, and gives it; `None` when the
     /// ship has not landed. The next frame draws the ship where it is, at
     /// the stellar, not on its way from where it was, and shows no message
-    /// from before the landing.
+    /// from before the landing; the next tick populates the system's
+    /// traffic afresh.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.session.as_mut().ok()?.take_off()?;
         self.previous = self.current();
         self.alpha = 0.0;
         self.message = None;
+        self.populate_due = true;
         Some(stellar)
     }
 
@@ -552,19 +631,55 @@ impl<C> FlightView<C> {
     /// ago to where it is.
     #[must_use]
     pub fn shown_position(&self) -> Point {
-        let (from, to) = (self.previous.position, self.current().position);
-        Point::new(
-            (to.x - from.x).mul_add(self.alpha, from.x),
-            (to.y - from.y).mul_add(self.alpha, from.y),
-        )
+        shown_position(&self.previous, &self.current(), self.alpha)
     }
 
     /// Which way the ship is drawn facing: `alpha` of the way, the short way
     /// round, from its heading a step ago to its heading now.
     #[must_use]
     pub fn shown_heading(&self) -> f32 {
-        let (from, to) = (self.previous.heading, self.current().heading);
-        normalized(shortest_turn(from, to).mul_add(self.alpha, from))
+        shown_heading(&self.previous, &self.current(), self.alpha)
+    }
+
+    /// Where `npc` is drawn and which way it faces: `alpha` of the way from
+    /// how it was a step ago, as the player's ship; where it is, when it
+    /// was not there a step ago.
+    fn shown_npc(&self, npc: &Npc) -> (Point, f32) {
+        let from = self.npc_previous.get(&npc.id).unwrap_or(&npc.state);
+        (
+            shown_position(from, &npc.state, self.alpha),
+            shown_heading(from, &npc.state, self.alpha),
+        )
+    }
+
+    /// The NPCs, each with where it is drawn and which way it faces.
+    fn shown_npcs(&self) -> Vec<(&Npc, Point, f32)> {
+        let Ok(session) = &self.session else {
+            return Vec::new();
+        };
+        session
+            .npcs()
+            .iter()
+            .map(|npc| {
+                let (at, heading) = self.shown_npc(npc);
+                (npc, at, heading)
+            })
+            .collect()
+    }
+
+    /// Draws each NPC with its own ship's sprite, or a crossed box when its
+    /// sheet cannot be read.
+    fn draw_npcs(&self, list: &mut DrawList, camera: &Camera) {
+        for (npc, at, heading) in self.shown_npcs() {
+            let at = camera.world_to_screen(at);
+            match self.npc_sheets.get(&npc.ship) {
+                Some(Ok(sheet)) => {
+                    let frame = rotation_frame(heading, sheet.rotations);
+                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                }
+                _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
+            }
+        }
     }
 
     /// The camera, on the ship as drawn.
@@ -705,12 +820,26 @@ impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars
             return;
         }
         self.elapsed += dt;
+        let flying = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_none());
+        if self.populate_due && flying {
+            self.populate_due = false;
+            self.populate();
+        }
         let Steps { steps, alpha } = self.clock.advance(dt);
         let controls = self.controls();
         if let Ok(session) = &mut self.session {
             for _ in 0..steps {
                 self.previous = *session.player();
+                self.npc_previous = session
+                    .npcs()
+                    .iter()
+                    .map(|npc| (npc.id, npc.state))
+                    .collect();
                 session.tick(controls);
+                session.tick_traffic(&*self.behaviour, &mut self.chance);
             }
         }
         self.alpha = alpha;
@@ -741,6 +870,7 @@ impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars
             _ => starfield::draw(list, &camera),
         }
         scene::draw_stellars(list, scene, &camera, self.elapsed);
+        self.draw_npcs(list, &camera);
         self.draw_ship(list, camera.world_to_screen(self.shown_position()));
         list.text(
             format!("{} (sÿst {})", scene.name(), scene.id().0),
@@ -759,9 +889,11 @@ impl<C: PilotCatalog + TrafficCatalog + SystemCatalog + ShipSprites + StatusBars
         match &self.status_bar {
             Ok(bar) => {
                 let stellars: Vec<Point> = scene.stellars().iter().map(|s| s.position).collect();
+                let ships: Vec<Point> = self.shown_npcs().iter().map(|&(_, at, _)| at).collect();
                 let state = HudState {
                     position: self.shown_position(),
                     stellars: &stellars,
+                    ships: &ships,
                     reserves: self.reserves(),
                     system: scene.name(),
                 };
@@ -844,6 +976,10 @@ mod tests {
         ships: Vec<ShipRecord>,
         /// The ships whose sheets were asked for.
         sheets_asked: RefCell<Vec<ShipId>>,
+        /// Each system's traffic: none, by default.
+        traffic: Vec<(SystemId, nova_sim::SystemTraffic)>,
+        /// The düdes: none, by default.
+        dudes: Vec<(nova_sim::DudeId, nova_sim::DudeRecord)>,
     }
 
     type View = FlightView<FakeCatalog>;
@@ -892,6 +1028,8 @@ mod tests {
             outfits: Vec::new(),
             ships: Vec::new(),
             sheets_asked: RefCell::default(),
+            traffic: Vec::new(),
+            dudes: Vec::new(),
         }
     }
 
@@ -998,14 +1136,20 @@ mod tests {
         }
     }
 
-    /// No traffic anywhere.
+    /// The traffic and düdes given; no fleets.
     impl TrafficCatalog for FakeCatalog {
-        fn system_traffic(&self, _id: SystemId) -> Option<nova_sim::SystemTraffic> {
-            None
+        fn system_traffic(&self, id: SystemId) -> Option<nova_sim::SystemTraffic> {
+            self.traffic
+                .iter()
+                .find(|(system, _)| *system == id)
+                .map(|(_, traffic)| *traffic)
         }
 
-        fn dude(&self, _id: nova_sim::DudeId) -> Option<nova_sim::DudeRecord> {
-            None
+        fn dude(&self, id: nova_sim::DudeId) -> Option<nova_sim::DudeRecord> {
+            self.dudes
+                .iter()
+                .find(|(dude, _)| *dude == id)
+                .map(|(_, record)| record.clone())
         }
 
         fn fleets(&self) -> Vec<nova_sim::FleetRecord> {
@@ -1080,7 +1224,7 @@ mod tests {
 
     impl ShipSprites for FakeCatalog {
         /// Ship 128's sheet is [`FakeCatalog::sheet`]; ship 129's is
-        /// `rlëD` 2001's, with 72 rotations.
+        /// `rlëD` 2001's, with 72 rotations; ship 130's cannot be read.
         fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
             self.sheets_asked.borrow_mut().push(id);
             match id.0 {
@@ -1090,6 +1234,7 @@ mod tests {
                     rotations: NonZeroU16::new(72).expect("non-zero"),
                     ..sheet()
                 }),
+                130 => Err("no shän 130".to_owned()),
                 other => panic!("asked for shïp {other}'s sheet"),
             }
         }
@@ -1497,6 +1642,7 @@ mod tests {
             &HudState {
                 position: at(0.0, 0.0),
                 stellars: &[at(0.0, -600.0), at(300.0, -200.0)],
+                ships: &[],
                 reserves: ShipStats::new(FIELDS, &[]).full(),
                 system: "Sol",
             },
@@ -1684,6 +1830,7 @@ mod tests {
             &HudState {
                 position: at(0.0, 0.0),
                 stellars: &[],
+                ships: &[],
                 reserves,
                 system: "Sol",
             },
@@ -2432,6 +2579,7 @@ mod tests {
             &HudState {
                 position: at(-1000.0, 0.0),
                 stellars: &[at(0.0, 0.0)],
+                ships: &[],
                 reserves: reserves(&view),
                 system: "Alpha Centauri",
             },
@@ -2971,5 +3119,298 @@ mod tests {
         let mut broken = FlightView::new(broken);
         assert_eq!(broken.shipyard(), None);
         assert_eq!(broken.buy_ship(ShipId(129)), Err(ShipRefusal::NoShipyard));
+    }
+    // Traffic.
+
+    use std::collections::VecDeque;
+
+    use nova_sim::{Goal, NpcId};
+
+    /// Draws its script, then the last outcome, so no roll fires;
+    /// records each `n` asked.
+    #[derive(Default)]
+    struct Script {
+        draws: VecDeque<u32>,
+        asked: Vec<u32>,
+    }
+
+    impl Chance for Script {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.asked.push(n);
+            self.draws.pop_front().unwrap_or(n - 1)
+        }
+    }
+
+    fn scripted(draws: &[u32]) -> (Rc<RefCell<Script>>, SharedChance) {
+        let script = Rc::new(RefCell::new(Script {
+            draws: draws.iter().copied().collect(),
+            asked: Vec::new(),
+        }));
+        let shared: Rc<RefCell<dyn Chance>> = script.clone();
+        (script, SharedChance::new(shared))
+    }
+
+    /// One setup pass placing the düde's ship at (`x` - 750, `y` - 750)
+    /// facing `heading`.
+    fn placed(x: u32, y: u32, heading: u32) -> [u32; 7] {
+        [6, 6, 0, 0, x, y, heading]
+    }
+
+    /// Decides nothing: every NPC idles.
+    #[derive(Debug)]
+    struct Still;
+
+    impl Behaviour for Still {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            Goal::Idle
+        }
+    }
+
+    /// [`catalog`] with `avg` ships on average in each of `systems`, all of
+    /// düde 128's ship `ship` with AI `ai_type`; ships 129 and 130 are
+    /// records the traffic can fly.
+    fn trafficked(systems: &[i16], avg: i16, ship: i16, ai_type: i16) -> FakeCatalog {
+        let mut dude_types = [(-1, 0); 8];
+        dude_types[0] = (128, 100);
+        let record = |id| ShipRecord {
+            id: ShipId(id),
+            name: format!("Ship {id}"),
+            short_name: String::new(),
+            long_name: String::new(),
+            fields: ShipFields {
+                speed: 600,
+                ..FIELDS
+            },
+            defaults: Vec::new(),
+            cost: 1,
+            tech_level: 1,
+            buy_random: 100,
+            require: 0,
+            availability: String::new(),
+            flags3: 0,
+            disp_weight: 0,
+            max_gun: 0,
+            max_tur: 0,
+            length: 0,
+            crew: 0,
+            inherent_ai: 1,
+        };
+        FakeCatalog {
+            traffic: systems
+                .iter()
+                .map(|&id| {
+                    (
+                        SystemId(id),
+                        nova_sim::SystemTraffic {
+                            dude_types,
+                            avg_ships: avg,
+                        },
+                    )
+                })
+                .collect(),
+            dudes: vec![(
+                nova_sim::DudeId(128),
+                nova_sim::DudeRecord {
+                    ai_type,
+                    govt: None,
+                    ships: vec![(ShipId(ship), 1)],
+                },
+            )],
+            ships: vec![record(129), record(130)],
+            ..catalog()
+        }
+    }
+
+    fn npc_ids(view: &View) -> Vec<NpcId> {
+        let session = view.session().expect("flying");
+        session.npcs().iter().map(|npc| npc.id).collect()
+    }
+
+    fn npc_states(view: &View) -> Vec<ShipState> {
+        let session = view.session().expect("flying");
+        session.npcs().iter().map(|npc| npc.state).collect()
+    }
+
+    #[test]
+    fn the_traffic_is_populated_when_the_flight_starts() {
+        let (script, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        assert_eq!(npc_ids(&view), [], "not until the first tick");
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        let npc = session.npcs()[0];
+        assert_eq!((npc.ship, npc.goal), (ShipId(129), Goal::Idle));
+        assert_eq!(npc.state.position, Vec2::new(100.0, -100.0));
+        assert_eq!(&script.borrow().asked[..7], [7, 7, 100, 1, 1500, 1500, 360]);
+        ticks(&mut view, 3);
+        assert_eq!(npc_ids(&view), [NpcId(0)], "populated once");
+    }
+
+    #[test]
+    fn an_npc_is_drawn_with_its_own_sprite_where_it_is_facing_its_heading() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let list = drawn(&view);
+        let frame = rotation_frame(90.0, NonZeroU16::new(72).expect("non-zero"));
+        assert_eq!(
+            sprites(&list),
+            [
+                (ImageKey::sprite(1128, 0), at(512.0, -216.0)),
+                (ImageKey::sprite(1129, 1), at(812.0, 184.0)),
+                (ImageKey::sprite(2001, frame), at(612.0, 284.0)),
+                (ImageKey::sprite(2000, 0), VIEW_CENTER),
+            ],
+            "after the stellars, before the player"
+        );
+    }
+
+    #[test]
+    fn an_npc_is_a_dim_blip_on_the_radar() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let bar = view.status_bar().expect("a status bar");
+        let radar = bar.layout.radar.offset(hud::bar_origin(bar));
+        let blip = hud::radar_point(radar, at(0.0, 0.0), at(100.0, -100.0)).expect("in range");
+        let list = drawn(&view);
+        let dim: Vec<Point> = list
+            .iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Dot { center, color, .. } if color == layout().dim_radar => {
+                    Some(center)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dim, [blip]);
+    }
+
+    #[test]
+    fn an_npc_is_drawn_between_its_last_two_steps() {
+        // At (0, 100) facing up, it heads for Earth, straight up.
+        let mut draws = placed(750, 850, 0).to_vec();
+        draws.push(0);
+        let (_, chance) = scripted(&draws);
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 1)).with_chance(chance);
+        view.tick(TICK + TICK / 2);
+        let npc = view.session().expect("flying").npcs()[0];
+        assert_eq!(npc.goal, Goal::Land(StellarId(128)), "Peaceful, by default");
+        let moved = npc.state.position.y - 100.0;
+        assert!(moved < 0.0, "{npc:?}");
+        let alpha = view.alpha();
+        assert!(alpha > 0.4, "{alpha}");
+        let shown = sprites(&drawn(&view))[2].1;
+        let expected = view
+            .camera()
+            .world_to_screen(at(0.0, moved.mul_add(alpha, 100.0)));
+        assert!(
+            (shown.y - expected.y).abs() < 1e-3,
+            "{shown:?} {expected:?}"
+        );
+        assert_eq!(shown.x, expected.x);
+    }
+
+    #[test]
+    fn an_npc_whose_sheet_cannot_be_read_is_a_crossed_box() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 130, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let list = drawn(&view);
+        let mut boxed = DrawList::new();
+        crossed_box(&mut boxed, at(612.0, 284.0), PLACEHOLDER_SIZE, PLACEHOLDER);
+        let commands: Vec<_> = list.iter().cloned().collect();
+        let expected: Vec<_> = boxed.iter().cloned().collect();
+        assert!(
+            commands.windows(expected.len()).any(|run| run == expected),
+            "{commands:?}"
+        );
+        assert_eq!(sprites(&list).len(), 3, "two stellars and the player");
+    }
+
+    #[test]
+    fn each_ship_types_sheet_is_read_once() {
+        let mut view = FlightView::new(trafficked(&[130, 131], 3, 129, 1));
+        assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
+        ticks(&mut view, 5);
+        assert_eq!(npc_ids(&view).len(), 3);
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(129)]
+        );
+        jump_to_alpha(&mut view);
+        assert!(!npc_ids(&view).is_empty());
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(129)],
+            "not again"
+        );
+    }
+
+    #[test]
+    fn arriving_repopulates_from_the_new_system() {
+        let mut view = FlightView::new(trafficked(&[131], 2, 129, 1));
+        view.tick(TICK);
+        assert_eq!(npc_ids(&view), []);
+        jump_to_alpha(&mut view);
+        assert_eq!(npc_ids(&view).len(), 2);
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(129)],
+            "read on arrival"
+        );
+    }
+
+    #[test]
+    fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
+        let catalog = FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..trafficked(&[130], 2, 129, 1)
+        };
+        let mut view = FlightView::new(catalog);
+        ticks(&mut view, 3);
+        let before = npc_states(&view);
+        assert_eq!(before.len(), 2);
+        tap(&mut view, MAP);
+        ticks(&mut view, 10);
+        assert_eq!(npc_states(&view), before, "the map is open");
+        tap(&mut view, MAP);
+        tap(&mut view, LAND_KEY);
+        assert!(view.take_landing().is_some());
+        let before = npc_states(&view);
+        ticks(&mut view, 10);
+        assert_eq!(npc_states(&view), before, "landed");
+    }
+
+    #[test]
+    fn taking_off_repopulates_the_system() {
+        let catalog = FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..trafficked(&[130], 2, 129, 1)
+        };
+        let mut view = FlightView::new(catalog);
+        view.tick(TICK);
+        assert_eq!(npc_ids(&view), [NpcId(0), NpcId(1)]);
+        tap(&mut view, LAND_KEY);
+        view.take_off().expect("took off");
+        view.tick(TICK);
+        assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)]);
     }
 }

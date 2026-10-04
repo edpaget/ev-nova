@@ -115,6 +115,8 @@ pub struct HudState<'a> {
     pub position: Point,
     /// Where the system's stellars are, in world units.
     pub stellars: &'a [Point],
+    /// Where the other ships are drawn, in world units.
+    pub ships: &'a [Point],
     /// The player's shield, armour and fuel.
     pub reserves: Reserves,
     /// The system's name.
@@ -122,7 +124,9 @@ pub struct HudState<'a> {
 }
 
 /// Draws `bar` showing `state`: its background, a radar dot for each
-/// stellar within range, the shield, armour and fuel bars, then the
+/// stellar within range in the bright radar colour and one for each ship
+/// within range in the dim one (until ships are told apart by how they
+/// feel about the player), the shield, armour and fuel bars, then the
 /// system's name in the nav area.
 pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
     let origin = bar_origin(bar);
@@ -134,6 +138,11 @@ pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
     for &stellar in state.stellars {
         if let Some(at) = radar_point(radar, state.position, stellar) {
             list.dot(at, RADAR_DOT_SIZE, layout.bright_radar);
+        }
+    }
+    for &ship in state.ships {
+        if let Some(at) = radar_point(radar, state.position, ship) {
+            list.dot(at, RADAR_DOT_SIZE, layout.dim_radar);
         }
     }
     let reserves = &state.reserves;
@@ -239,6 +248,7 @@ mod tests {
     const FUEL_FULL: Color = Color::rgba(255, 255, 0, 255);
     const FUEL_PARTIAL: Color = Color::rgba(128, 128, 0, 255);
     const RADAR: Color = Color::rgba(0, 255, 0, 255);
+    const DIM_RADAR: Color = Color::rgba(0, 128, 0, 255);
     const TEXT: Color = Color::rgba(250, 250, 250, 255);
 
     /// Stock `ïntf` 128's areas, with its background `bkgnd`.
@@ -252,7 +262,7 @@ mod tests {
             bright_text: TEXT,
             dim_text: Color::DIM,
             bright_radar: RADAR,
-            dim_radar: Color::BLACK,
+            dim_radar: DIM_RADAR,
             shield_color: SHIELD,
             armor_color: ARMOR,
             fuel_full: FUEL_FULL,
@@ -528,6 +538,7 @@ mod tests {
         HudState {
             position: at(0.0, 0.0),
             stellars: &[],
+            ships: &[],
             reserves,
             system: "Kania",
         }
@@ -639,9 +650,11 @@ mod tests {
     #[test]
     fn it_draws_the_background_then_the_radar_then_the_bars_then_the_name() {
         let stellars = [at(0.0, -600.0), at(300.0, -200.0), at(5000.0, 0.0)];
+        let ships = [at(-160.0, 0.0), at(0.0, 2000.0)];
         let hud = HudState {
             position: at(0.0, 0.0),
             stellars: &stellars,
+            ships: &ships,
             reserves: reserves(30.0, 60.0, 300.0),
             system: "Kania",
         };
@@ -650,12 +663,52 @@ mod tests {
         expected.picture(ImageKey::picture(700), at(830.0, 0.0));
         expected.dot(at(926.0, 58.5), RADAR_DOT_SIZE, RADAR);
         expected.dot(at(944.75, 83.5), RADAR_DOT_SIZE, RADAR);
+        expected.dot(at(916.0, 96.0), RADAR_DOT_SIZE, DIM_RADAR);
         expected.line(at(865.0, 202.5), at(1014.0, 202.5), 7.0, SHIELD);
         expected.line(at(865.0, 219.5), at(1014.0, 219.5), 7.0, ARMOR);
         expected.line(at(865.0, 237.5), at(1014.0, 237.5), 7.0, FUEL_FULL);
         expected.text_in(Font::Charcoal, "Kania", at(838.0, 254.0), 11.0, None, TEXT);
         assert_eq!(list, expected);
         assert_eq!(RADAR_DOT_SIZE, 2.0);
+    }
+
+    /// The dots drawn in `color`.
+    fn dots(list: &DrawList, color: Color) -> Vec<Point> {
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Dot {
+                    center, color: c, ..
+                } if c == color => Some(center),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_ship_in_range_is_a_dim_blip_on_the_radar() {
+        // The radar is centred on (926, 96) and reaches 88 each way: 1408
+        // world pixels.
+        let ships = [
+            at(16.0, -32.0),
+            at(1408.0, 0.0),
+            at(1409.0, 0.0),
+            at(0.0, -5000.0),
+        ];
+        let hud = HudState {
+            position: at(0.0, 0.0),
+            stellars: &[],
+            ships: &ships,
+            reserves: reserves(30.0, 60.0, 300.0),
+            system: "Kania",
+        };
+        let list = drawn(&stock(), &hud);
+        assert_eq!(dots(&list, DIM_RADAR), [at(927.0, 94.0), at(1014.0, 96.0)]);
+        assert_eq!(dots(&list, RADAR), [], "no stellars");
+        let away = HudState {
+            position: at(1000.0, 0.0),
+            ..hud
+        };
+        assert_eq!(dots(&drawn(&stock(), &away), DIM_RADAR)[0], at(864.5, 94.0));
     }
 
     #[test]
