@@ -23,7 +23,11 @@
 //!   default keys, the camera following the ship, under a HUD laid out by
 //!   the status bar's `ïntf`, and reads the ship's sprite and the status
 //!   bar through its [`flight::ShipSprites`] and [`flight::StatusBars`]
-//!   ports.
+//!   ports. L lands on the stellar the ship is over.
+//! - [`spaceport`]: the spaceport landed on, its landscape, name,
+//!   description and service buttons laid out by the interface file's
+//!   "Spaceport" dialog, reading the stellar through its
+//!   [`spaceport::SpaceportCatalog`] port.
 //!
 //! # Text
 //!
@@ -57,6 +61,7 @@ pub mod input;
 pub mod navigator;
 pub mod screen;
 pub mod ships;
+pub mod spaceport;
 pub mod system;
 pub mod text;
 mod time;
