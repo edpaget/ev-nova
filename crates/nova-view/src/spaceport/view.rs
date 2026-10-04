@@ -16,20 +16,24 @@
 //! [`TradeScreen`] over it, when the spaceport is given one
 //! ([`SpaceportView::with_trade`]): its orders are taken through the
 //! spaceport ([`SpaceportView::take_trade`]), and the exchange after each
-//! trade given back ([`SpaceportView::set_market`]). Without the dialog,
-//! or the stellar's record, the screen says why, and Return or Escape
-//! still leaves.
+//! trade given back ([`SpaceportView::set_market`]). The Outfitter's opens
+//! the stellar's outfitter likewise, an [`OutfitterScreen`] over it, when
+//! given one ([`SpaceportView::with_outfitter`],
+//! [`SpaceportView::take_outfit`], [`SpaceportView::set_outfitter`]).
+//! Without the dialog, or the stellar's record, the screen says why, and
+//! Return or Escape still leaves.
 
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Market, Order, Service, services};
+use nova_sim::{Market, Order, OutfitOrder, Outfitter, Service, services};
 
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::layout::{
     BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, LEAVE_LABEL, NAME_FONT, NAME_ITEM, NAME_SIZE,
     TEXT_ITEM, item_service, label, landscape_id, service_item,
 };
+use super::outfitter::{OutfitterCatalog, OutfitterScreen};
 use super::service::ServiceScreen;
 use super::trade::TradeScreen;
 use crate::color::Color;
@@ -83,6 +87,8 @@ enum Open {
     Service(ServiceScreen),
     /// The exchange.
     Trade(Box<TradeScreen>),
+    /// The outfitter.
+    Outfitter(Box<OutfitterScreen>),
 }
 
 impl Open {
@@ -90,6 +96,7 @@ impl Open {
         match self {
             Self::Service(screen) => screen,
             Self::Trade(screen) => screen.as_mut(),
+            Self::Outfitter(screen) => screen.as_mut(),
         }
     }
 
@@ -97,7 +104,26 @@ impl Open {
         match self {
             Self::Service(screen) => screen.closed(),
             Self::Trade(screen) => screen.closed(),
+            Self::Outfitter(screen) => screen.closed(),
         }
+    }
+}
+
+/// The outfitter given: its dialog template (or why there is none), the
+/// outfitter as it is, and where its pictures and descriptions come from.
+#[derive(Clone)]
+struct Outfitting {
+    template: Result<DialogTemplate, String>,
+    outfitter: Outfitter,
+    catalog: Rc<dyn OutfitterCatalog>,
+}
+
+impl std::fmt::Debug for Outfitting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Outfitting")
+            .field("template", &self.template)
+            .field("outfitter", &self.outfitter)
+            .finish_non_exhaustive()
     }
 }
 
@@ -112,6 +138,8 @@ pub struct SpaceportView {
     /// The exchange's dialog template (or why there is none) and the
     /// exchange as it is, once given.
     trade: Option<(Result<DialogTemplate, String>, Market)>,
+    /// The outfitter, once given.
+    outfitting: Option<Outfitting>,
     left: bool,
     /// The sounds made since they were last taken, kept here so a service
     /// that closes keeps its sounds.
@@ -177,6 +205,7 @@ impl SpaceportView {
             port,
             open: None,
             trade: None,
+            outfitting: None,
             left: false,
             sounds: Vec::new(),
         }
@@ -220,6 +249,57 @@ impl SpaceportView {
         }
         if let Some((_, kept)) = &mut self.trade {
             *kept = market;
+        }
+    }
+
+    /// The spaceport with the stellar's outfitter, `outfitter`, which the
+    /// Outfitter opens laid out by `template`, the "Outfit" dialog (or
+    /// saying why there is none), each outfit's picture and description
+    /// read from `catalog`. Without it, the Outfitter opens its
+    /// placeholder.
+    #[must_use]
+    pub fn with_outfitter(
+        self,
+        template: Result<DialogTemplate, String>,
+        outfitter: Outfitter,
+        catalog: Rc<dyn OutfitterCatalog>,
+    ) -> Self {
+        Self {
+            outfitting: Some(Outfitting {
+                template,
+                outfitter,
+                catalog,
+            }),
+            ..self
+        }
+    }
+
+    /// The outfitter open, if it is.
+    #[must_use]
+    pub fn open_outfitter(&self) -> Option<&OutfitterScreen> {
+        match &self.open {
+            Some(Open::Outfitter(screen)) => Some(screen),
+            _ => None,
+        }
+    }
+
+    /// The order the outfitter open asked for since it was last taken,
+    /// once.
+    pub fn take_outfit(&mut self) -> Option<OutfitOrder> {
+        match &mut self.open {
+            Some(Open::Outfitter(screen)) => screen.take_order(),
+            _ => None,
+        }
+    }
+
+    /// Shows `outfitter`, the outfitter after an order: the outfitter open
+    /// shows it, and so does the outfitter opened next.
+    pub fn set_outfitter(&mut self, outfitter: Outfitter) {
+        if let Some(Open::Outfitter(screen)) = &mut self.open {
+            screen.set_outfitter(outfitter.clone());
+        }
+        if let Some(outfitting) = &mut self.outfitting {
+            outfitting.outfitter = outfitter;
         }
     }
 
@@ -288,12 +368,24 @@ impl SpaceportView {
             return;
         };
         let metrics = Rc::clone(&port.metrics.0);
-        self.open = Some(match (&self.trade, service) {
-            (Some((template, market)), Service::TradeCenter) => {
+        self.open = Some(match (&self.trade, &self.outfitting, service) {
+            (Some((template, market)), _, Service::TradeCenter) => {
                 let layout = template.clone().map(|template| (template, metrics));
                 Open::Trade(Box::new(TradeScreen::new(
                     layout,
                     market.clone(),
+                    port.style,
+                )))
+            }
+            (_, Some(outfitting), Service::Outfitter) => {
+                let layout = outfitting
+                    .template
+                    .clone()
+                    .map(|template| (template, metrics));
+                Open::Outfitter(Box::new(OutfitterScreen::new(
+                    layout,
+                    outfitting.outfitter.clone(),
+                    Rc::clone(&outfitting.catalog),
                     port.style,
                 )))
             }
@@ -340,8 +432,8 @@ impl Screen for SpaceportView {
     fn tick(&mut self, _dt: Duration) {}
 
     fn draw(&self, list: &mut DrawList) {
-        // A service's placeholder takes the whole screen; the exchange is
-        // a dialog over the spaceport.
+        // A service's placeholder takes the whole screen; the exchange and
+        // the outfitter are dialogs over the spaceport.
         if let Some(Open::Service(screen)) = &self.open {
             screen.draw(list);
             return;
@@ -375,8 +467,10 @@ impl Screen for SpaceportView {
             list.text_in(NAME_FONT, &port.name, origin, NAME_SIZE, None, Color::WHITE);
         }
         dialog.draw(list);
-        if let Some(Open::Trade(screen)) = &self.open {
-            screen.draw(list);
+        match &self.open {
+            Some(Open::Trade(screen)) => screen.draw(list),
+            Some(Open::Outfitter(screen)) => screen.draw(list),
+            _ => {}
         }
     }
 
@@ -1165,5 +1259,203 @@ mod tests {
         view.input(&key(Key::Alt));
         view.input(&key(Key::Char('b')));
         assert_eq!(view.take_trade().map(|order| order.lot), Some(Lot::Max));
+    }
+
+    // The Outfitter.
+
+    use crate::spaceport::outfitter::{OutfitterCatalog, OutfitterScreen};
+    use nova_sim::{OutfitId, OutfitOrder, OutfitRow, Outfitter};
+
+    /// "Outfit": 765 x 321, centred, with Done (1), Sell (4), the grid
+    /// (5), the description (6), Buy (7), the picture (8) and the info box
+    /// (9).
+    fn outfit_template() -> Template {
+        let mut items: Vec<ItemTemplate> = (0..11)
+            .map(|_| ItemTemplate {
+                bounds: rect(0.0, 0.0, 1.0, 1.0),
+                enabled: false,
+                kind: ItemSpec::User,
+            })
+            .collect();
+        let mut place = |number: usize, x, y, w, h| {
+            items[number - 1] = ItemTemplate {
+                bounds: rect(x, y, w, h),
+                enabled: true,
+                kind: ItemSpec::User,
+            };
+        };
+        place(1, 500.0, 289.0, 99.0, 25.0);
+        place(4, 394.0, 289.0, 99.0, 25.0);
+        place(5, 9.0, 8.0, 333.0, 271.0);
+        place(6, 354.0, 10.0, 192.0, 267.0);
+        place(7, 288.0, 289.0, 99.0, 25.0);
+        place(8, 557.0, 8.0, 200.0, 200.0);
+        place(9, 618.0, 214.0, 135.0, 100.0);
+        Template {
+            bounds: rect(100.0, 100.0, 765.0, 321.0),
+            placement: Placement::Center,
+            items,
+        }
+    }
+
+    /// A fuel tank, `owned` owned, with 5000 credits and 8 tons free.
+    fn tanks(owned: u16) -> Outfitter {
+        Outfitter {
+            rows: vec![OutfitRow {
+                id: OutfitId(200),
+                name: "Fuel Tank".to_owned(),
+                short_name: "Fuel Tank".to_owned(),
+                price: 1000,
+                mass: 1,
+                owned,
+                max: 10,
+                buy: Ok(()),
+                sell: Ok(()),
+            }],
+            cash: 5000,
+            free_mass: 8,
+        }
+    }
+
+    /// Earth with an outfitter too.
+    fn outfitting_port() -> FakePort {
+        FakePort {
+            port: Ok(PortRecord {
+                flags: FLAGS | StellarFlags::OUTFITTER,
+                ..catalog().port.expect("a record")
+            }),
+            ..catalog()
+        }
+    }
+
+    fn outfitting(template: Result<Template, String>) -> SpaceportView {
+        let art: Rc<dyn OutfitterCatalog> = Rc::new(outfitting_port());
+        view_of(&outfitting_port()).with_outfitter(template, tanks(0), art)
+    }
+
+    fn outfit_item(view: &SpaceportView, number: usize) -> Point {
+        view.open_outfitter()
+            .expect("outfitting")
+            .dialog()
+            .expect("laid out")
+            .item_bounds(number)
+            .expect("an item")
+            .center()
+    }
+
+    #[test]
+    fn with_an_outfitter_its_button_opens_it_over_the_spaceport() {
+        let mut view = outfitting(Ok(outfit_template()));
+        assert!(view.open_outfitter().is_none());
+        click_item(&mut view, 8);
+        let open = view.open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter(), &tanks(0));
+        assert!(view.open_service().is_none());
+        assert!(view.open_trade().is_none());
+        let mut expected: Vec<DrawCommand> = drawn(&view_of(&outfitting_port()));
+        let mut outfitter = DrawList::new();
+        open.draw(&mut outfitter);
+        expected.extend(outfitter.iter().cloned());
+        assert_eq!(drawn(&view), expected);
+        assert!(texts(&drawn(&view)).contains(&"Fuel Tank".to_owned()));
+        // Escape closes the outfitter, not the spaceport.
+        view.input(&key(Key::Escape));
+        assert!(view.open_outfitter().is_none());
+        assert!(!view.left());
+        // The other services keep their placeholders.
+        click_item(&mut view, 10);
+        assert_eq!(
+            view.open_service().map(ServiceScreen::service),
+            Some(Service::Bar)
+        );
+        assert!(view.open_outfitter().is_none());
+    }
+
+    #[test]
+    fn without_an_outfitter_given_its_button_opens_the_placeholder() {
+        let mut view = view_of(&outfitting_port());
+        click_item(&mut view, 8);
+        assert_eq!(
+            view.open_service().map(ServiceScreen::service),
+            Some(Service::Outfitter)
+        );
+        assert!(view.open_outfitter().is_none());
+        assert_eq!(view.take_outfit(), None);
+    }
+
+    #[test]
+    fn the_outfitter_is_laid_out_by_its_own_dialog_or_says_why_not() {
+        let mut view = outfitting(Err("no DLOG 1002".to_owned()));
+        click_item(&mut view, 8);
+        assert_eq!(
+            view.open_outfitter().and_then(OutfitterScreen::problem),
+            Some("no DLOG 1002")
+        );
+        view.input(&key(Key::Enter));
+        assert!(view.open_outfitter().is_none());
+        assert!(!view.left());
+    }
+
+    #[test]
+    fn the_outfitters_orders_are_taken_through_the_spaceport_and_its_state_set() {
+        let mut view = outfitting(Ok(outfit_template()));
+        assert_eq!(view.take_outfit(), None, "nothing open");
+        view.set_outfitter(tanks(4));
+        click_item(&mut view, 8);
+        assert_eq!(
+            view.open_outfitter()
+                .map(|open| open.outfitter().rows[0].owned),
+            Some(4),
+            "it opens on the latest"
+        );
+        view.input(&key(Key::Char('b')));
+        assert_eq!(
+            view.take_outfit(),
+            Some(OutfitOrder {
+                outfit: OutfitId(200),
+                direction: Direction::Buy,
+            })
+        );
+        assert_eq!(view.take_outfit(), None, "once");
+        assert_eq!(view.take_trade(), None, "not a trade");
+        view.set_outfitter(tanks(5));
+        assert_eq!(
+            view.open_outfitter()
+                .map(|open| open.outfitter().rows[0].owned),
+            Some(5)
+        );
+        view.input(&key(Key::Escape));
+        click_item(&mut view, 8);
+        assert_eq!(
+            view.open_outfitter()
+                .map(|open| open.outfitter().rows[0].owned),
+            Some(5),
+            "and reopens on it"
+        );
+    }
+
+    #[test]
+    fn the_outfitter_takes_cancel_pointer_and_its_sounds_are_kept() {
+        let mut view = outfitting(Ok(outfit_template()));
+        click_item(&mut view, 8);
+        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        let buy = outfit_item(&view, 7);
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: buy,
+        };
+        view.input(&button(true));
+        view.cancel_pointer();
+        view.input(&button(false));
+        assert_eq!(view.take_outfit(), None, "the click was abandoned");
+        assert_eq!(view.take_sounds(), [DOWN]);
+        let done = outfit_item(&view, 1);
+        click(&mut view, done);
+        assert!(view.open_outfitter().is_none(), "closed");
+        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        let debug = format!("{view:?}");
+        assert!(debug.contains("Outfitting"), "{debug}");
+        assert!(debug.contains("Fuel Tank"), "{debug}");
     }
 }

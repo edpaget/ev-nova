@@ -13,15 +13,19 @@
 //!   until it is built.
 //! - [`trade`]: the Trade Center's [`TradeScreen`], the stellar's
 //!   commodity exchange.
+//! - [`outfitter`]: the Outfitter's [`OutfitterScreen`], the stellar's
+//!   outfits for sale.
 
 pub mod catalog;
 pub mod data;
 pub mod layout;
+pub mod outfitter;
 pub mod service;
 pub mod trade;
 pub mod view;
 
 pub use catalog::{PortRecord, SpaceportCatalog, StellarId};
+pub use outfitter::{OutfitterCatalog, OutfitterScreen};
 pub use service::ServiceScreen;
 pub use trade::TradeScreen;
 pub use view::SpaceportView;
