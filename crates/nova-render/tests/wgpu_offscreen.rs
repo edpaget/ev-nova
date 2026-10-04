@@ -46,9 +46,13 @@ fn patterned(w: u32, h: u32) -> Image {
     Image::from_rgba(w, h, pixels).expect("w x h")
 }
 
-/// A patterned 4x2 picture (`PICT` 1), a white 4x4 sprite (`rlëD` 2) and
-/// a patterned 2x4 sprite (`rlëD` 3).
+/// A patterned 4x2 picture (`PICT` 1), a white 4x4 sprite (`rlëD` 2), a
+/// patterned 2x4 sprite (`rlëD` 3), an opaque black 4x4 sprite (`rlëD` 4)
+/// and an opaque dark orange 4x4 sprite (`rlëD` 5).
 struct Images;
+
+/// `rlëD` 5's colour.
+const ORANGE: [u8; 4] = [64, 32, 0, 255];
 
 impl ImageSource for Images {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
@@ -57,6 +61,8 @@ impl ImageSource for Images {
             (ImageKind::Pict, 1) => Ok(vec![patterned(4, 2)]),
             (ImageKind::Rled, 2) => Ok(vec![solid([255, 255, 255, 255])]),
             (ImageKind::Rled, 3) => Ok(vec![patterned(2, 4)]),
+            (ImageKind::Rled, 4) => Ok(vec![solid([0, 0, 0, 255])]),
+            (ImageKind::Rled, 5) => Ok(vec![solid(ORANGE)]),
             _ => Err(ImageError::Missing),
         }
     }
@@ -219,6 +225,106 @@ fn batches_on_two_pages_draw_their_own_quads_in_order() {
     for at in [(21, 13), (26, 13), (19, 19), (28, 19), (22, 22), (12, 13)] {
         assert_near(&pixels, at, BLACK, 0);
     }
+}
+
+/// Asserts every pixel of the logical rectangle `left..right` x
+/// `top..bottom` (scale 2, content offset 8 rows) is `want` within 2.
+fn assert_area(pixels: &[u8], (left, top): (u32, u32), (right, bottom): (u32, u32), want: [u8; 4]) {
+    for y in 2 * top + 8..2 * bottom + 8 {
+        for x in 2 * left..2 * right {
+            assert_near(pixels, (x, y), want, 2);
+        }
+    }
+}
+
+#[test]
+fn an_additive_sprite_adds_its_colour_scaled_by_its_alpha() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // Three grey squares, logical (4..8, 4..8), (14..18, 4..8) and
+    // (24..28, 4..8), each with an additive sprite over it, and one
+    // additive sprite over the black clear at (14..18, 14..18).
+    let grey = Color::rgba(64, 64, 64, 255);
+    let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
+    let mut list = DrawList::new();
+    for spot in spots {
+        list.sprite(ImageKey::sprite(2, 0), spot, grey);
+    }
+    list.additive_sprite(ImageKey::sprite(4, 0), spots[0], Color::WHITE)
+        .additive_sprite(ImageKey::sprite(5, 0), spots[1], Color::WHITE)
+        .additive_sprite(
+            ImageKey::sprite(2, 0),
+            spots[2],
+            Color::rgba(255, 0, 0, 128),
+        )
+        .additive_sprite(ImageKey::sprite(5, 0), Point::new(16.0, 16.0), Color::WHITE);
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // Black adds nothing.
+    assert_area(&pixels, (4, 4), (8, 8), [64, 64, 64, 255]);
+    // Orange adds its colour.
+    assert_area(&pixels, (14, 4), (18, 8), [128, 96, 64, 255]);
+    // Red at half alpha adds half of it.
+    assert_area(&pixels, (24, 4), (28, 8), [192, 64, 64, 255]);
+    // Over black it is its own colour.
+    assert_area(&pixels, (14, 14), (18, 18), ORANGE);
+    // Around them.
+    for at in [
+        (3, 5),
+        (8, 5),
+        (13, 5),
+        (18, 5),
+        (5, 3),
+        (5, 8),
+        (16, 13),
+        (16, 18),
+    ] {
+        assert_area(&pixels, at, (at.0 + 1, at.1 + 1), BLACK);
+    }
+}
+
+#[test]
+fn an_additive_sprite_after_a_normal_one_lands_over_it_in_order() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // A normal red square A, logical (8..12, 8..12); an additive orange
+    // square B, (10..14, 10..14), over A's bottom-right quarter; a normal
+    // blue square C, (12..16, 12..16), over B's bottom-right quarter.
+    let mut list = DrawList::new();
+    list.sprite(
+        ImageKey::sprite(2, 0),
+        Point::new(10.0, 10.0),
+        Color::rgba(128, 0, 0, 255),
+    )
+    .additive_sprite(ImageKey::sprite(5, 0), Point::new(12.0, 12.0), Color::WHITE)
+    .sprite(
+        ImageKey::sprite(2, 0),
+        Point::new(14.0, 14.0),
+        Color::rgba(0, 0, 128, 255),
+    );
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // A alone.
+    assert_area(&pixels, (8, 8), (10, 12), [128, 0, 0, 255]);
+    // B added over A.
+    assert_area(&pixels, (10, 10), (12, 12), [192, 32, 0, 255]);
+    // B over the clear.
+    assert_area(&pixels, (12, 10), (14, 12), ORANGE);
+    assert_area(&pixels, (10, 12), (12, 14), ORANGE);
+    // C painted over B.
+    assert_area(&pixels, (12, 12), (14, 14), [0, 0, 128, 255]);
+    // C alone.
+    assert_area(&pixels, (14, 12), (16, 16), [0, 0, 128, 255]);
 }
 
 /// Whether any pixel in rows `rows` is not black.

@@ -11,7 +11,7 @@ use nova_data::graphics::Image;
 use wgpu::util::DeviceExt;
 
 use super::data::{SolidVertex, SpriteInstance, globals, solid_vertices};
-use nova_view::Color;
+use nova_view::{Blend, Color};
 
 use super::fonts::{Families, font_system};
 use crate::fonts::FontFaces;
@@ -27,9 +27,17 @@ struct Page {
 /// What to draw for one batch, once its data is in the buffers.
 #[derive(Debug, PartialEq)]
 enum Draw {
-    Sprites { page: PageId, instances: Range<u32> },
-    Solid { vertices: Range<u32> },
-    Text { renderer: usize },
+    Sprites {
+        page: PageId,
+        blend: Blend,
+        instances: Range<u32>,
+    },
+    Solid {
+        vertices: Range<u32>,
+    },
+    Text {
+        renderer: usize,
+    },
 }
 
 /// The wgpu half of a [`Gpu`](crate::Gpu): pipelines, atlas page textures,
@@ -39,6 +47,7 @@ pub struct WgpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     sprite_pipeline: wgpu::RenderPipeline,
+    additive_pipeline: wgpu::RenderPipeline,
     solid_pipeline: wgpu::RenderPipeline,
     page_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -93,18 +102,22 @@ impl WgpuRenderer {
         let sprite_attributes =
             wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
         let solid_attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
-        let sprite_pipeline = pipeline(
-            device,
-            &sprite_layout,
-            &shader,
-            ("sprite_vs", "sprite_fs"),
-            wgpu::VertexBufferLayout {
-                array_stride: size_of::<SpriteInstance>() as u64,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &sprite_attributes,
-            },
-            format,
-        );
+        let sprite_pipeline_with = |blend| {
+            pipeline(
+                device,
+                &sprite_layout,
+                &shader,
+                ("sprite_vs", "sprite_fs"),
+                wgpu::VertexBufferLayout {
+                    array_stride: size_of::<SpriteInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &sprite_attributes,
+                },
+                (format, blend_state(blend)),
+            )
+        };
+        let sprite_pipeline = sprite_pipeline_with(Blend::Normal);
+        let additive_pipeline = sprite_pipeline_with(Blend::Additive);
         let solid_pipeline = pipeline(
             device,
             &solid_layout,
@@ -115,7 +128,7 @@ impl WgpuRenderer {
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &solid_attributes,
             },
-            format,
+            (format, blend_state(Blend::Normal)),
         );
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("nova nearest"),
@@ -131,6 +144,7 @@ impl WgpuRenderer {
             device: device.clone(),
             queue: queue.clone(),
             sprite_pipeline,
+            additive_pipeline,
             solid_pipeline,
             page_layout,
             sampler,
@@ -269,12 +283,19 @@ impl WgpuRenderer {
             };
             for draw in &layout.draws {
                 match draw {
-                    Draw::Sprites { page, instances } => {
+                    Draw::Sprites {
+                        page,
+                        blend,
+                        instances,
+                    } => {
                         let Some(page) = self.pages.get(page) else {
                             continue;
                         };
                         set_viewport(&mut pass, content);
-                        pass.set_pipeline(&self.sprite_pipeline);
+                        pass.set_pipeline(match blend {
+                            Blend::Normal => &self.sprite_pipeline,
+                            Blend::Additive => &self.additive_pipeline,
+                        });
                         pass.set_bind_group(0, &self.globals_group, &[]);
                         pass.set_bind_group(1, &page.bind_group, &[]);
                         pass.set_vertex_buffer(0, instance_buffer.slice(..));
@@ -459,11 +480,12 @@ fn lay_out(frame: &Frame) -> Layout<'_> {
     let mut draws = Vec::new();
     for batch in &frame.batches {
         draws.push(match batch {
-            Batch::Sprites { page, quads } => {
+            Batch::Sprites { page, blend, quads } => {
                 let start = instances.len() as u32;
                 instances.extend(quads.iter().map(SpriteInstance::from));
                 Draw::Sprites {
                     page: *page,
+                    blend: *blend,
                     instances: start..instances.len() as u32,
                 }
             }
@@ -511,14 +533,36 @@ fn set_viewport(pass: &mut wgpu::RenderPass<'_>, rect: PixelRect) {
     );
 }
 
-/// A pipeline drawing alpha-blended triangles into `format`.
+/// How `blend` combines a fragment with the target. The fragment shaders
+/// output straight (unpremultiplied) alpha, so additive is destination +
+/// source x source alpha, keeping the destination's alpha.
+fn blend_state(blend: Blend) -> wgpu::BlendState {
+    match blend {
+        Blend::Normal => wgpu::BlendState::ALPHA_BLENDING,
+        Blend::Additive => wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        },
+    }
+}
+
+/// A pipeline drawing triangles into `format`, combined with the target
+/// by `blend`.
 fn pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     (vertex, fragment): (&str, &str),
     buffer: wgpu::VertexBufferLayout<'_>,
-    format: wgpu::TextureFormat,
+    (format, blend): (wgpu::TextureFormat, wgpu::BlendState),
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(vertex),
@@ -538,7 +582,7 @@ fn pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: Some(blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -549,7 +593,7 @@ fn pipeline(
 
 #[cfg(test)]
 mod tests {
-    use nova_view::{Color, Point};
+    use nova_view::{Blend, Color, Point};
 
     use super::*;
     use crate::gpu::{QuadInstance, Rect, SolidQuad};
@@ -619,11 +663,13 @@ mod tests {
             batches: vec![
                 Batch::Sprites {
                     page: PageId(0),
+                    blend: Blend::Normal,
                     quads: vec![quad(0.0), quad(1.0)],
                 },
                 Batch::Solid(vec![solid(10.0)]),
                 Batch::Sprites {
                     page: PageId(1),
+                    blend: Blend::Normal,
                     quads: vec![quad(2.0)],
                 },
                 Batch::Text(first_text.clone()),
@@ -631,6 +677,7 @@ mod tests {
                 Batch::Text(second_text.clone()),
                 Batch::Sprites {
                     page: PageId(0),
+                    blend: Blend::Normal,
                     quads: vec![quad(3.0)],
                 },
             ],
@@ -643,11 +690,13 @@ mod tests {
             [
                 Draw::Sprites {
                     page: PageId(0),
+                    blend: Blend::Normal,
                     instances: 0..2,
                 },
                 Draw::Solid { vertices: 0..6 },
                 Draw::Sprites {
                     page: PageId(1),
+                    blend: Blend::Normal,
                     instances: 2..3,
                 },
                 Draw::Text { renderer: 0 },
@@ -655,6 +704,7 @@ mod tests {
                 Draw::Text { renderer: 1 },
                 Draw::Sprites {
                     page: PageId(0),
+                    blend: Blend::Normal,
                     instances: 3..4,
                 },
             ]
@@ -669,5 +719,72 @@ mod tests {
             .collect();
         assert_eq!(layout.vertices, vertices);
         assert_eq!(layout.text, [&first_text[..], &second_text[..]]);
+    }
+
+    fn frame_of(batches: Vec<Batch>) -> Frame {
+        Frame {
+            target: (64, 64),
+            viewport: PixelRect {
+                x: 0,
+                y: 0,
+                w: 64,
+                h: 64,
+            },
+            logical: LogicalSize { w: 32, h: 32 },
+            clear: Color::BLACK,
+            batches,
+        }
+    }
+
+    #[test]
+    fn lay_out_keeps_each_batchs_blend() {
+        let frame = frame_of(vec![
+            Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Normal,
+                quads: vec![quad(0.0)],
+            },
+            Batch::Sprites {
+                page: PageId(0),
+                blend: Blend::Additive,
+                quads: vec![quad(1.0), quad(2.0)],
+            },
+        ]);
+
+        assert_eq!(
+            lay_out(&frame).draws,
+            [
+                Draw::Sprites {
+                    page: PageId(0),
+                    blend: Blend::Normal,
+                    instances: 0..1,
+                },
+                Draw::Sprites {
+                    page: PageId(0),
+                    blend: Blend::Additive,
+                    instances: 1..3,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn blend_state_adds_source_times_its_alpha() {
+        assert_eq!(blend_state(Blend::Normal), wgpu::BlendState::ALPHA_BLENDING);
+        assert_eq!(
+            blend_state(Blend::Additive),
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }
+        );
     }
 }

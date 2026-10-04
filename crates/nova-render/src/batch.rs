@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use nova_view::text::LINE_HEIGHT;
-use nova_view::{Color, DrawCommand, DrawList, ImageKey, ImageKind, Point};
+use nova_view::{Blend, Color, DrawCommand, DrawList, ImageKey, ImageKind, Point};
 
 use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE};
 use crate::gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
@@ -86,7 +86,7 @@ impl<S: ImageSource> Renderer<S> {
                     image,
                     center,
                     tint,
-                    ..
+                    blend,
                 } => {
                     if let Some(entry) = self.entry(image, gpu, &mut report) {
                         let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);
@@ -96,7 +96,7 @@ impl<S: ImageSource> Renderer<S> {
                             w,
                             h,
                         };
-                        push_quad(&mut batches, &entry, dest, rgba(tint));
+                        push_quad(&mut batches, &entry, dest, rgba(tint), blend);
                     }
                 }
                 DrawCommand::Picture { image, top_left } => {
@@ -193,7 +193,7 @@ impl<S: ImageSource> Renderer<S> {
                 w,
                 h,
             };
-            push_quad(batches, &entry, dest, rgba(Color::WHITE));
+            push_quad(batches, &entry, dest, rgba(Color::WHITE), Blend::Normal);
         }
     }
 
@@ -256,21 +256,34 @@ fn rgba(color: Color) -> [f32; 4] {
     [color.r, color.g, color.b, color.a].map(|c| f32::from(c) / 255.0)
 }
 
-/// Appends a quad, extending the last batch when it is the same page's.
-fn push_quad(batches: &mut Vec<Batch>, entry: &AtlasEntry, dest: Rect, tint: [f32; 4]) {
+/// Appends a quad, extending the last batch when it is the same page's
+/// and blends the same way.
+fn push_quad(
+    batches: &mut Vec<Batch>,
+    entry: &AtlasEntry,
+    dest: Rect,
+    tint: [f32; 4],
+    blend: Blend,
+) {
     let quad = QuadInstance {
         dest,
         uv: entry.uv,
         tint,
     };
-    if let Some(Batch::Sprites { page, quads }) = batches.last_mut()
+    if let Some(Batch::Sprites {
+        page,
+        blend: last,
+        quads,
+    }) = batches.last_mut()
         && *page == entry.page
+        && *last == blend
     {
         quads.push(quad);
         return;
     }
     batches.push(Batch::Sprites {
         page: entry.page,
+        blend,
         quads: vec![quad],
     });
 }
@@ -324,7 +337,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use nova_data::graphics::Image;
-    use nova_view::{Color, DrawList, Font, ImageKey, ImageKind, Point};
+    use nova_view::{Blend, Color, DrawList, Font, ImageKey, ImageKind, Point};
 
     use super::*;
     use crate::gpu::{Batch, Frame, QuadInstance, Rect, SolidQuad, TextRun};
@@ -492,6 +505,7 @@ mod tests {
                     clear: Color::BLACK,
                     batches: vec![Batch::Sprites {
                         page: PageId(0),
+                        blend: Blend::Normal,
                         quads: expected_quads,
                     }],
                 }),
@@ -513,6 +527,7 @@ mod tests {
             gpu.submits()[0].batches,
             vec![Batch::Sprites {
                 page: PageId(0),
+                blend: Blend::Normal,
                 quads: vec![QuadInstance {
                     dest: Rect {
                         x: -2.5,
@@ -623,11 +638,73 @@ mod tests {
             .batches
             .iter()
             .map(|batch| match batch {
-                Batch::Sprites { page, quads } => (*page, quads.len()),
+                Batch::Sprites { page, quads, .. } => (*page, quads.len()),
                 other => panic!("unexpected {other:?}"),
             })
             .collect();
         assert_eq!(pages, [(PageId(0), 1), (PageId(1), 1), (PageId(0), 1)]);
+    }
+
+    /// Each sprites batch's blend and quad count, in order.
+    fn sprite_blends(frame: &Frame) -> Vec<(Blend, usize)> {
+        frame
+            .batches
+            .iter()
+            .map(|batch| match batch {
+                Batch::Sprites { blend, quads, .. } => (*blend, quads.len()),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_change_of_blend_starts_a_new_batch_in_order() {
+        let sprite = |frame| ImageKey::sprite(200, frame);
+        let mut list = DrawList::new();
+        list.sprite(sprite(0), at(10.0, 10.0), Color::WHITE)
+            .additive_sprite(sprite(1), at(20.0, 10.0), Color::WHITE)
+            .additive_sprite(sprite(2), at(30.0, 10.0), Color::WHITE)
+            .sprite(sprite(0), at(40.0, 10.0), Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            sprite_blends(&frame),
+            [(Blend::Normal, 1), (Blend::Additive, 2), (Blend::Normal, 1)]
+        );
+        let xs: Vec<f32> = frame
+            .batches
+            .iter()
+            .flat_map(|batch| match batch {
+                Batch::Sprites { quads, .. } => quads.iter().map(|q| q.dest.x).collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(xs, [7.5, 17.5, 27.5, 37.5]);
+    }
+
+    #[test]
+    fn pictures_draw_normally() {
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(128), at(0.0, 0.0))
+            .sprite(ImageKey::sprite(200, 0), at(10.0, 10.0), Color::WHITE)
+            .additive_sprite(ImageKey::sprite(200, 1), at(20.0, 10.0), Color::WHITE)
+            .picture(ImageKey::picture(128), at(0.0, 20.0))
+            .additive_sprite(ImageKey::sprite(200, 1), at(20.0, 10.0), Color::WHITE)
+            .stretched_picture(ImageKey::picture(128), at(0.0, 30.0), 16.0, 8.0);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            sprite_blends(&frame),
+            [
+                (Blend::Normal, 2),
+                (Blend::Additive, 1),
+                (Blend::Normal, 1),
+                (Blend::Additive, 1),
+                (Blend::Normal, 1)
+            ]
+        );
     }
 
     #[test]

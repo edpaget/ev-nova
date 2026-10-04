@@ -77,7 +77,7 @@ fn a_stock_picture_and_sprite_render_through_the_atlas() {
         panic!("the last call is not a submit");
     };
     match frame.batches.as_slice() {
-        [Batch::Sprites { page, quads }] => {
+        [Batch::Sprites { page, quads, .. }] => {
             assert_eq!(*page, PageId(0));
             assert_eq!(quads.len(), 3);
         }

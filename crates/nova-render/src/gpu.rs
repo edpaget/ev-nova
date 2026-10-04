@@ -6,7 +6,7 @@
 //! projects the logical space onto the viewport rectangle.
 
 use nova_data::graphics::Image;
-use nova_view::{Color, Font, Point};
+use nova_view::{Blend, Color, Font, Point};
 
 pub use crate::atlas::{PageId, Uv};
 use crate::viewport::{LogicalSize, PixelRect};
@@ -78,10 +78,13 @@ pub struct TextRun {
 /// A run of same-kind draws, drawn in one go.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Batch {
-    /// Textured quads from one atlas page.
+    /// Textured quads from one atlas page, all combined with what is
+    /// beneath them the same way.
     Sprites {
         /// The page.
         page: PageId,
+        /// How the quads combine with what is beneath them.
+        blend: Blend,
         /// The quads, in draw order.
         quads: Vec<QuadInstance>,
     },
