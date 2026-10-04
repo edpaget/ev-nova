@@ -3016,4 +3016,105 @@ mod tests {
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)]);
     }
+
+    // Fleets.
+
+    use crate::catalog::{EscortRecord, FleetId, FleetRecord};
+
+    /// `flët` `id`, linked by `link_syst`: a ship 129 lead and 1-3 ship
+    /// 130 escorts, for govt 150.
+    fn fleet(id: i16, link_syst: i16) -> FleetRecord {
+        FleetRecord {
+            id: FleetId(id),
+            lead: Some(ShipId(129)),
+            escorts: vec![EscortRecord {
+                ship: ShipId(130),
+                min: 1,
+                max: 3,
+            }],
+            govt: Some(GovtId(150)),
+            link_syst,
+            appear_on: String::new(),
+        }
+    }
+
+    /// The `LinkSyst` of the systems government `govt` governs.
+    fn govt_link(govt: i16) -> i16 {
+        10_000 + (govt - 128)
+    }
+
+    /// [`trafficked`] with one ship on average in 130 and 131, governed
+    /// on the star map by 140 and 141, and `flët`s 130 (slot 2), linked to
+    /// govt 140, and 131 (slot 3), linked to govt 141.
+    fn fleeted() -> FakePilotCatalog {
+        let mut catalog = trafficked(130, 1, 3);
+        let elsewhere = (SystemId(131), catalog.traffic[0].1);
+        catalog.traffic.push(elsewhere);
+        catalog.star_map[0].govt = Some(GovtId(140));
+        catalog.star_map[1].govt = Some(GovtId(141));
+        catalog.fleets = vec![fleet(130, govt_link(140)), fleet(131, govt_link(141))];
+        catalog.ship_records.push(ship(130, FAST));
+        catalog
+    }
+
+    /// A setup pass that draws the `LinkSyst` fleet in `slot`, with three
+    /// escorts.
+    fn linked_fleet_draws(slot: u32) -> Draws {
+        Draws::of(&[1, 0, slot, 0, 2])
+    }
+
+    /// Each NPC's ship, government and leader.
+    fn fleet_of(session: &Session) -> Vec<(ShipId, Option<GovtId>, Option<NpcId>)> {
+        session
+            .npcs()
+            .iter()
+            .map(|npc| (npc.ship, npc.govt, npc.leader))
+            .collect()
+    }
+
+    /// A [`fleet`]'s lead, as NPC `lead`, and its three escorts.
+    fn a_fleet_led_by(lead: u32) -> Vec<(ShipId, Option<GovtId>, Option<NpcId>)> {
+        let escort = (ShipId(130), Some(GovtId(150)), Some(NpcId(lead)));
+        vec![
+            (ShipId(129), Some(GovtId(150)), None),
+            escort,
+            escort,
+            escort,
+        ]
+    }
+
+    #[test]
+    fn populating_brings_in_the_fleet_linked_to_the_systems_government() {
+        let catalog = fleeted();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut linked_fleet_draws(2));
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        session.populate(&catalog, &mut linked_fleet_draws(3));
+        assert_eq!(fleet_of(&session), [], "linked to another government");
+    }
+
+    #[test]
+    fn arriving_brings_in_the_fleet_linked_to_the_new_systems_government() {
+        let catalog = fleeted();
+        let mut session = Session::start(&catalog).expect("starts");
+        jump_with(&mut session, &catalog, 131, &mut linked_fleet_draws(3));
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        session.populate(&catalog, &mut linked_fleet_draws(2));
+        assert_eq!(fleet_of(&session), [], "linked to another government");
+    }
+
+    #[test]
+    fn a_fleet_the_systems_dude_types_name_arrives_when_its_roll_fires() {
+        let mut catalog = trafficked(130, 1, 3);
+        catalog.traffic[0].1.dude_types[1] = (-132, 30);
+        catalog.fleets = vec![fleet(132, 0)];
+        catalog.ship_records.push(ship(130, FAST));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut Draws::of(&[0]));
+        assert_eq!(fleet_of(&session), [], "a person");
+        session.tick_traffic(&catalog, &Peaceful, &mut Draws::of(&[1, 30, 0]));
+        assert_eq!(fleet_of(&session), [], "31 is above its 30%");
+        session.tick_traffic(&catalog, &Peaceful, &mut Draws::of(&[1, 29, 0, 0, 2]));
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+    }
 }
