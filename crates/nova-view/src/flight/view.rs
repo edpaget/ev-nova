@@ -35,6 +35,12 @@
 //! the step before the last towards the last, so motion is smooth at any
 //! frame rate while the simulation itself never depends on it.
 //!
+//! The ship is drawn as its sheet's rotation frame for the heading shown,
+//! then, at the same centre and on the same frame (modulo the layer's
+//! frame count), its engine glow while the session is thrusting, and its
+//! running lights always. A layer that cannot be shown is left out
+//! silently.
+//!
 //! Input, the original's default keys:
 //!
 //! - Up thrusts, Left and Right turn, and Down turns to face against the
@@ -723,6 +729,16 @@ impl<C> FlightView<C> {
             Ok(sheet) => {
                 let frame = rotation_frame(self.shown_heading(), sheet.rotations);
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                let thrusting = self.session.as_ref().is_ok_and(Session::thrusting);
+                let glow = sheet.glow.filter(|_| thrusting);
+                for layer in [glow, sheet.lights].into_iter().flatten() {
+                    let layer_frame = frame % layer.frames.get();
+                    list.sprite(
+                        ImageKey::sprite(layer.image_id, layer_frame),
+                        at,
+                        Color::WHITE,
+                    );
+                }
             }
             Err(reason) => {
                 crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
@@ -921,7 +937,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::flight::catalog::{GovtId, StatusBarLayout};
+    use crate::flight::catalog::{GovtId, LayerSheet, StatusBarLayout};
     use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::sound::Sound;
@@ -982,6 +998,8 @@ mod tests {
             rotations: NonZeroU16::new(36).expect("non-zero"),
             frame_width: 40,
             frame_height: 40,
+            glow: None,
+            lights: None,
         }
     }
 
@@ -1195,7 +1213,8 @@ mod tests {
 
     impl ShipSprites for FakeCatalog {
         /// Ship 128's sheet is [`FakeCatalog::sheet`]; ship 129's is
-        /// `rlëD` 2001's, with 72 rotations.
+        /// `rlëD` 2001's, with 72 rotations, glow `rlëD` 2101 and lights
+        /// `rlëD` 2201.
         fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
             self.sheets_asked.borrow_mut().push(id);
             match id.0 {
@@ -1203,6 +1222,8 @@ mod tests {
                 129 => Ok(ShipSheet {
                     image_id: 2001,
                     rotations: NonZeroU16::new(72).expect("non-zero"),
+                    glow: Some(layer(2101, 72)),
+                    lights: Some(layer(2201, 72)),
                     ..sheet()
                 }),
                 other => panic!("asked for shïp {other}'s sheet"),
@@ -1703,6 +1724,150 @@ mod tests {
             ))
         );
         assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
+    }
+
+    // The engine glow and running lights.
+
+    fn layer(image_id: i16, frames: u16) -> LayerSheet {
+        LayerSheet {
+            image_id,
+            frames: NonZeroU16::new(frames).expect("non-zero"),
+        }
+    }
+
+    /// [`sheet`] with a 36-frame glow, `rlëD` 2100, and 12-frame lights,
+    /// `rlëD` 2200.
+    fn layered() -> FakeCatalog {
+        FakeCatalog {
+            sheet: Ok(ShipSheet {
+                glow: Some(layer(2100, 36)),
+                lights: Some(layer(2200, 12)),
+                ..sheet()
+            }),
+            ..catalog()
+        }
+    }
+
+    /// The ship's sprites drawn: those from `rlëD`s 2000 to 2299.
+    fn ship_sprites(view: &View) -> Vec<(ImageKey, Point)> {
+        sprites(&drawn(view))
+            .into_iter()
+            .filter(|(image, _)| (2000..2300).contains(&image.id))
+            .collect()
+    }
+
+    #[test]
+    fn a_coasting_ship_draws_its_lights_over_it_and_no_glow() {
+        let mut view = FlightView::new(layered());
+        assert_eq!(
+            ship_sprites(&view),
+            [
+                (ImageKey::sprite(2000, 0), VIEW_CENTER),
+                (ImageKey::sprite(2200, 0), VIEW_CENTER),
+            ]
+        );
+        view.input(&key(Key::Up, true));
+        assert_eq!(ship_sprites(&view).len(), 2, "held, but not yet flown");
+        ticks(&mut view, 3);
+        view.input(&key(Key::Up, false));
+        ticks(&mut view, 1);
+        assert!(!view.session().expect("flying").thrusting());
+        assert_eq!(
+            ship_sprites(&view)
+                .iter()
+                .map(|(image, _)| image.id)
+                .collect::<Vec<_>>(),
+            [2000, 2200],
+            "coasting"
+        );
+    }
+
+    #[test]
+    fn a_thrusting_ship_draws_its_glow_between_it_and_its_lights() {
+        let mut view = FlightView::new(layered());
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        let centre = view.camera().world_to_screen(view.shown_position());
+        assert_eq!(
+            ship_sprites(&view),
+            [
+                (ImageKey::sprite(2000, 0), centre),
+                (ImageKey::sprite(2100, 0), centre),
+                (ImageKey::sprite(2200, 0), centre),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_layers_turn_with_the_ship_between_steps() {
+        let mut view = FlightView::new(layered());
+        view.input(&key(Key::Up, true));
+        view.input(&key(Key::Right, true));
+        // 50 steps and a half: the display is between two steps.
+        ticks(&mut view, 50);
+        view.tick(TICK / 2);
+        assert_ne!(view.shown_heading(), player(&view).heading, "between");
+        let frame = view.frame().expect("a sheet");
+        assert_eq!(frame, 15, "{}", view.shown_heading());
+        let centre = view.camera().world_to_screen(view.shown_position());
+        assert_eq!(
+            ship_sprites(&view),
+            [
+                (ImageKey::sprite(2000, frame), centre),
+                (ImageKey::sprite(2100, frame), centre),
+                (ImageKey::sprite(2200, frame % 12), centre),
+            ]
+        );
+    }
+
+    #[test]
+    fn landing_while_thrusting_puts_the_glow_out() {
+        let mut view = FlightView::new(FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..layered()
+        });
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 1);
+        assert_eq!(ship_sprites(&view).len(), 3, "glowing");
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2000, 2200], "landed");
+    }
+
+    #[test]
+    fn beginning_a_jump_while_thrusting_puts_the_glow_out() {
+        let mut view = FlightView::new(layered());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 1);
+        assert_eq!(ship_sprites(&view).len(), 3, "glowing");
+        view.input(&key(JUMP_KEY, true));
+        assert!(view.jump_effect().is_some(), "jumping");
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2000, 2200], "jumping");
+    }
+
+    #[test]
+    fn a_ship_without_layers_draws_only_its_sprite() {
+        let mut view = flight();
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert!(view.session().expect("flying").thrusting());
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2000]);
+    }
+
+    #[test]
+    fn a_ship_without_a_sheet_draws_no_layers() {
+        let mut view = FlightView::new(FakeCatalog {
+            sheet: Err("no shän 128 for shïp 128".to_owned()),
+            ..layered()
+        });
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert_eq!(ship_sprites(&view), []);
     }
 
     // The HUD.
@@ -3168,6 +3333,8 @@ mod tests {
             )),
             "the new sheet"
         );
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2001, 2201], "and its lights");
         assert_eq!(
             view.session().map(|session| session.handling().max_speed),
             Ok(6.0)

@@ -615,6 +615,13 @@ impl Session {
         self.landed
     }
 
+    /// Whether the ship flew its last tick under thrust. Landing and
+    /// beginning a jump stop it, as they stop the thrust sound.
+    #[must_use]
+    pub fn thrusting(&self) -> bool {
+        self.thrusting
+    }
+
     /// The player's ship as it flies.
     #[must_use]
     pub fn player(&self) -> &ShipState {
@@ -1654,6 +1661,35 @@ mod tests {
                 SimSound::ThrustStarted
             ]
         );
+    }
+
+    #[test]
+    fn the_session_is_thrusting_while_the_last_tick_flew_thrust() {
+        let mut session = Session::start(&sounding()).expect("starts");
+        assert!(!session.thrusting(), "at rest");
+        session.tick(THRUST);
+        assert!(session.thrusting());
+        session.tick(Controls::default());
+        assert!(!session.thrusting(), "coasting");
+        session.tick(THRUST);
+        session.land().expect("selects");
+        assert!(matches!(session.land(), Ok(LandOutcome::Landed(_))));
+        assert!(!session.thrusting(), "landed");
+        session.tick(THRUST);
+        assert!(!session.thrusting(), "docked, nothing thrusts");
+    }
+
+    #[test]
+    fn beginning_a_jump_stops_the_session_thrusting() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.tick(THRUST);
+        assert!(session.thrusting());
+        session.begin_jump().expect("jumps");
+        assert!(!session.thrusting());
+        session.tick(THRUST);
+        assert!(!session.thrusting(), "jumping, nothing thrusts");
     }
 
     #[test]

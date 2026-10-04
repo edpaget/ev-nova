@@ -4,18 +4,20 @@
 
 use std::num::NonZeroU16;
 
-use nova_data::GameData;
 use nova_data::graphics::{PICT, decode_pict};
 use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
+use nova_data::{GameData, LayerError, LayerSprite};
 
-use super::catalog::{GovtId, ShipId, ShipSheet, ShipSprites, StatusBarLayout, StatusBars};
+use super::catalog::{
+    GovtId, LayerSheet, ShipId, ShipSheet, ShipSprites, StatusBarLayout, StatusBars,
+};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 
-/// Decodes the sheet on every call; the flight screen asks once, when it
-/// opens.
+/// Decodes the sheet and its layers on every call; the flight screen asks
+/// once, when it opens and when a ship is bought.
 impl ShipSprites for GameData {
     fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
         let sprite = self.ship_sprite(id).map_err(|err| err.to_string())?;
@@ -23,13 +25,36 @@ impl ShipSprites for GameData {
         // The sheet's layout is the `shän`'s frames per rotation as columns.
         let rotations = NonZeroU16::new(sheet.layout().columns())
             .expect("a sheet layout has at least one column");
+        // A layer that cannot be resolved is drawn as no layer; the ship
+        // browser is where its error is shown.
+        let (glow, lights) = self.ship_layers(id).map_or((None, None), |layers| {
+            (
+                layers.glow.and_then(layer_sheet),
+                layers.lights.and_then(layer_sheet),
+            )
+        });
         Ok(ShipSheet {
             image_id: sprite.image_id,
             rotations,
             frame_width: sheet.frame_width(),
             frame_height: sheet.frame_height(),
+            glow,
+            lights,
         })
     }
+}
+
+/// A resolved layer's ID and frame count; `None` for one that failed.
+fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet> {
+    let layer = layer.ok()?;
+    // An `rlëD` header counts its frames in a u16, and the decoder rejects
+    // a sheet with none (`GraphicsError::NoFrames`).
+    let frames = NonZeroU16::new(layer.sheet.frames().len() as u16)
+        .expect("a decoded rlëD has at least one frame");
+    Some(LayerSheet {
+        image_id: layer.image_id,
+        frames,
+    })
 }
 
 /// Decodes on every call; the flight screen asks once, when it opens.
@@ -135,13 +160,28 @@ mod tests {
     }
 
     /// A `shän` with base image `base`, `sets` sets of `frames_per`
-    /// frames.
+    /// frames, and no glow or lights.
     fn anim(base: i16, sets: i16, frames_per: i16) -> Vec<u8> {
+        layered(base, sets, frames_per, 0, 0)
+    }
+
+    /// A `shän` like [`anim`]'s, with glow image `glow` and lights image
+    /// `lights`.
+    fn layered(base: i16, sets: i16, frames_per: i16, glow: i16, lights: i16) -> Vec<u8> {
         let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
         put_i16(&mut bytes, 0x00, base);
         put_i16(&mut bytes, 0x04, sets);
+        put_i16(&mut bytes, 0x16, glow);
+        put_i16(&mut bytes, 0x1E, lights);
         put_i16(&mut bytes, 0x34, frames_per);
         bytes
+    }
+
+    fn layer(image_id: i16, frames: u16) -> LayerSheet {
+        LayerSheet {
+            image_id,
+            frames: NonZeroU16::new(frames).expect("non-zero"),
+        }
     }
 
     /// An `rlëD` of `frames` 3 x 2 frames.
@@ -172,26 +212,60 @@ mod tests {
                 rotations: NonZeroU16::new(8).expect("non-zero"),
                 frame_width: 3,
                 frame_height: 2,
+                glow: None,
+                lights: None,
             })
         );
     }
 
     #[test]
-    fn a_ship_whose_sprite_cannot_be_resolved_says_why() {
+    fn a_ships_sheet_carries_its_glow_and_lights_layers() {
+        // The glow has as many frames as the base; the lights one set of
+        // rotations under the two-set base.
         let data = store(&[
             (Ship::TYPE, 128, ship()),
-            (Ship::TYPE, 129, ship()),
-            (ShipAnim::TYPE, 129, anim(1001, 1, 36)),
+            (ShipAnim::TYPE, 128, layered(1000, 2, 8, 1100, 1200)),
+            (RLED, 1000, sheet(16)),
+            (RLED, 1100, sheet(16)),
+            (RLED, 1200, sheet(8)),
         ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert_eq!(found.image_id, 1000);
+        assert_eq!(found.glow, Some(layer(1100, 16)));
+        assert_eq!(found.lights, Some(layer(1200, 8)));
+    }
+
+    #[test]
+    fn a_layer_the_shan_does_not_name_is_none() {
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, layered(1000, 1, 8, 0, -1)),
+            (RLED, 1000, sheet(8)),
+        ]);
+        let found = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert_eq!((found.glow, found.lights), (None, None));
+    }
+
+    #[test]
+    fn a_broken_layer_is_none_and_never_hides_the_other() {
+        // Ship 128's glow `rlëD` is missing; ship 129's lights `rlëD` does
+        // not decode.
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, layered(1000, 1, 8, 1100, 1200)),
+            (Ship::TYPE, 129, ship()),
+            (ShipAnim::TYPE, 129, layered(1000, 1, 8, 1200, 1300)),
+            (RLED, 1000, sheet(8)),
+            (RLED, 1200, sheet(8)),
+            (RLED, 1300, vec![0; 4]),
+        ]);
+        let missing = data.ship_sheet(ShipId(128)).expect("a sheet");
+        assert_eq!((missing.glow, missing.lights), (None, Some(layer(1200, 8))));
+        let undecodable = data.ship_sheet(ShipId(129)).expect("a sheet");
         assert_eq!(
-            data.ship_sheet(ShipId(128)),
-            Err("no shän 128 for shïp 128".to_owned())
+            (undecodable.glow, undecodable.lights),
+            (Some(layer(1200, 8)), None)
         );
-        assert_eq!(
-            data.ship_sheet(ShipId(129)),
-            Err("shïp 129: no rlëD 1001 for its base image".to_owned())
-        );
-        assert_eq!(data.ship_sheet(ShipId(140)), Err("no shïp 140".to_owned()));
     }
 
     // Status bars.

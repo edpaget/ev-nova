@@ -11,8 +11,24 @@ use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::Bounds;
 
+/// One of a ship's `shän` layers drawn over its base sprite: the layer's
+/// `rlëD` and how many frames it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayerSheet {
+    /// The `rlëD`'s ID.
+    pub image_id: i16,
+    /// The layer's frames. The base's rotation frame `f` is drawn with the
+    /// layer's frame `f % frames`.
+    pub frames: NonZeroU16,
+}
+
 /// A ship's resolved sprite sheet: its `rlëD`, how many frames make one
-/// turn, and each frame's size.
+/// turn, each frame's size, and the engine glow and running lights drawn
+/// over it.
+///
+/// A layer the `shän` names but whose image cannot be resolved is `None`,
+/// like a layer it does not name: flight draws the ship without it and
+/// says nothing. The ship browser is where layer errors are reported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShipSheet {
     /// The `rlëD`'s ID.
@@ -24,6 +40,10 @@ pub struct ShipSheet {
     pub frame_width: u32,
     /// Each frame's height in pixels.
     pub frame_height: u32,
+    /// The engine glow, drawn while the ship thrusts.
+    pub glow: Option<LayerSheet>,
+    /// The running lights, drawn always.
+    pub lights: Option<LayerSheet>,
 }
 
 /// The ships' sprite sheets.
@@ -145,6 +165,8 @@ mod tests {
                 rotations: NonZeroU16::new(36).expect("non-zero"),
                 frame_width: 48,
                 frame_height: 48,
+                glow: None,
+                lights: None,
             })
         }
     }

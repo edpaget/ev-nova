@@ -128,10 +128,12 @@ fn status_picture() -> Vec<u8> {
         .build()
 }
 
-/// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
+/// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations,
+/// with an engine glow, `rlëD` 2100.
 fn ship_anim() -> Vec<u8> {
     let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
+    put_i16s(&mut bytes, 0x16, &[2100]);
     put_i16s(&mut bytes, 0x34, &[36]);
     bytes
 }
@@ -177,13 +179,14 @@ const STELLARS: [Point; 2] = [Point::new(0.0, -600.0), Point::new(300.0, -200.0)
 /// The first `chär` (if `with_character`) flies ship 128 from Alpha (128),
 /// which holds Alpha Prime (128) at (0, -600), an 8 x 8 sprite, and Alpha
 /// Station (129) at (300, -200), a 6 x 6 one. The ship's sheet is 36
-/// rotations of 1 x 1. Beta (129) holds nothing. The status bar is `ïntf`
+/// rotations of 1 x 1, its glow's 36 of 3 x 3. Beta (129) holds nothing. The status bar is `ïntf`
 /// 128, over a 194 x 16 `PICT` 700.
 fn data(with_character: bool) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship())
         .resource(ShipAnim::TYPE, 128, None, &ship_anim())
         .resource(RLED, 2000, None, &sheet(36, 1))
+        .resource(RLED, 2100, None, &sheet(36, 3))
         .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128, 129]))
         .resource(System::TYPE, 129, Some(b"Beta"), &system(600, &[]))
         .resource(
@@ -594,6 +597,30 @@ fn the_default_keys_fly_the_ship_and_the_camera_follows_it() {
         shortest_turn(ship.heading, behind).abs() < 1e-2,
         "{ship:?} against {behind}"
     );
+}
+
+#[test]
+fn holding_up_lights_the_engine_glow_over_the_ship_and_releasing_it_puts_it_out() {
+    let mut harness = Harness::flying(60);
+    let ship_batch = |frame: &Frame| shape(frame)[3];
+    let first = harness.frame();
+    assert_eq!(ship_batch(&first), ("sprites", 1), "no glow at rest");
+
+    harness.hold(&[Key::Up]);
+    let thrusting = harness.run(0.5);
+    assert_eq!(
+        ship_batch(&thrusting),
+        ("sprites", 2),
+        "the ship and its glow"
+    );
+    let drawn = quads(&thrusting);
+    let (ship, glow) = (drawn[2].dest, drawn[3].dest);
+    assert_eq!((ship.w, glow.w), (1.0, 3.0));
+    assert_eq!(centre(glow), centre(ship), "centred on the ship");
+
+    harness.hold(&[]);
+    let coasting = harness.run(0.5);
+    assert_eq!(ship_batch(&coasting), ("sprites", 1), "out again");
 }
 
 /// Flies to `target` with the default keys alone: turns towards it,

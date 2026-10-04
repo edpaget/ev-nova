@@ -19,7 +19,7 @@ pub mod jump;
 pub mod sprite;
 pub mod view;
 
-pub use catalog::{ShipSheet, ShipSprites, StatusBarLayout, StatusBars};
+pub use catalog::{LayerSheet, ShipSheet, ShipSprites, StatusBarLayout, StatusBars};
 pub use jump::{JumpEffect, JumpPhase};
 pub use sprite::rotation_frame;
 pub use view::{FlightView, SharedChance};
