@@ -9,7 +9,7 @@
 //! The ship lands on a stellar of its system when the
 //! [`landing`](crate::landing) rules allow it: docked, it rests at the
 //! stellar's centre and ticks move nothing until it takes off again, from
-//! the same place.
+//! the same place. A landed ship cannot jump, nor a jumping one land.
 //!
 //! The player plots a course to a system on the star map, read once when
 //! the session starts: the fewest jumps along the hyperlinks. A jump to
@@ -121,11 +121,14 @@ impl Session {
         &self.course
     }
 
-    /// Begins a jump to the next system on the course, if the
-    /// [`hyperspace`](crate::hyperspace) rules allow it, and gives that
-    /// system; otherwise the refusal says why. Until it arrives, ticks
-    /// move nothing.
+    /// Begins a jump to the next system on the course, if the ship has not
+    /// landed and the [`hyperspace`](crate::hyperspace) rules allow it, and
+    /// gives that system; otherwise the refusal says why. Until it arrives,
+    /// ticks move nothing.
     pub fn begin_jump(&mut self) -> Result<SystemId, JumpRefusal> {
+        if self.landed.is_some() {
+            return Err(JumpRefusal::Landed);
+        }
         let next = check_jump(&self.player, self.course.first().copied())?;
         self.jumping = Some(next);
         Ok(next)
@@ -181,11 +184,14 @@ impl Session {
         self.fuel_regen
     }
 
-    /// Lands the ship on the stellar it is over, if the
-    /// [`landing`](crate::landing) rules allow it: it docks at the
+    /// Lands the ship on the stellar it is over, if it is not jumping and
+    /// the [`landing`](crate::landing) rules allow it: it docks at the
     /// stellar's centre, at rest, its heading and reserves unchanged.
     /// Otherwise it flies on, and the refusal says why.
     pub fn land(&mut self) -> Result<StellarId, LandingRefusal> {
+        if self.jumping.is_some() {
+            return Err(LandingRefusal::Jumping);
+        }
         let stellar = check_landing(&self.player, &self.sites, self.legal_record())?;
         if let Some(site) = self.sites.iter().find(|site| site.id == stellar) {
             self.player.position = site.position;
@@ -959,11 +965,10 @@ mod tests {
         assert_eq!(*catalog.outfits_asked.borrow(), [ShipId(128)], "once");
     }
 
-    #[test]
-    fn fuel_does_not_regenerate_while_landed_or_jumping() {
-        // A slow ship, 1 pixel a tick at most, gaining a unit a tick: it
-        // arrives slow enough to land, over planet 140 at 131's edge.
-        let catalog = FakePilotCatalog {
+    /// A slow ship, 1 pixel a tick at most, gaining a unit a tick: it
+    /// arrives slow enough to land, over planet 140 at 131's edge.
+    fn edge_lander() -> FakePilotCatalog {
+        FakePilotCatalog {
             ships: vec![(
                 ShipId(128),
                 Ok(ShipFields {
@@ -974,7 +979,48 @@ mod tests {
             )],
             sites: vec![(SystemId(131), vec![planet(140, -1000.0, 0.0)])],
             ..catalog()
-        };
+        }
+    }
+
+    /// A session landed on planet 140 at 131's edge, far enough out to
+    /// jump, with fuel and 132 still to go.
+    fn landed_at_the_edge(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        jump(&mut session, catalog, 132);
+        assert_eq!(session.land(), Ok(StellarId(140)));
+        session
+    }
+
+    #[test]
+    fn a_jump_is_refused_while_landed() {
+        let catalog = edge_lander();
+        let mut session = landed_at_the_edge(&catalog);
+        let docked = session.clone();
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::Landed));
+        assert_eq!(session, docked, "nothing changes");
+        session.take_off();
+        assert_eq!(session.begin_jump(), Ok(SystemId(132)), "once off");
+        assert_eq!(session.arrive(&catalog), Some(SystemId(132)));
+        assert_eq!(session.landed(), None);
+    }
+
+    #[test]
+    fn landing_is_refused_while_jumping() {
+        let catalog = edge_lander();
+        let mut session = landed_at_the_edge(&catalog);
+        session.take_off();
+        session.begin_jump().expect("jumps from over planet 140");
+        let jumping = session.clone();
+        assert_eq!(session.land(), Err(LandingRefusal::Jumping));
+        assert_eq!(session, jumping, "nothing changes");
+        assert_eq!(session.arrive(&catalog), Some(SystemId(132)));
+        assert_eq!(session.landed(), None);
+    }
+
+    #[test]
+    fn fuel_does_not_regenerate_while_landed_or_jumping() {
+        let catalog = edge_lander();
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         jump(&mut session, &catalog, 132);

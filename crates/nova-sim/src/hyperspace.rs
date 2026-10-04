@@ -47,6 +47,10 @@ pub enum RouteError {
 /// Why the ship cannot jump.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum JumpRefusal {
+    /// The ship has landed: it must take off first. The
+    /// [`Session`](crate::Session) gives this before [`check_jump`] is
+    /// asked.
+    Landed,
     /// No destination has been chosen, or it has been reached.
     NoDestination,
     /// The ship is nearer the system's centre than [`MIN_JUMP_DISTANCE`].

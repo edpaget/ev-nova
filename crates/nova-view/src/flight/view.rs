@@ -108,6 +108,9 @@ pub const TOO_CLOSE: &str =
     "Can't initiate hyperspace jump - not yet far enough away from system center.";
 /// `STR#` 2002 #10.
 pub const NO_FUEL: &str = "Insufficient energy for hyperspace jump.";
+/// Not the original's, which never flies a landed ship: worded after
+/// `STR#` 2002 #42 and #73 ("Disengage cloaking device first.").
+pub const TAKE_OFF_FIRST: &str = "Can't initiate hyperspace jump - take off first.";
 
 /// `STR#` 2002 #49.
 pub const NO_STELLARS: &str = "No stellar objects present.";
@@ -127,6 +130,10 @@ pub const LANDING_DENIED: &str = "Landing request denied.";
 pub const HOSTILE_STATION: &str = "The station's hull integrity is too unstable.";
 /// `STR#` 2002 #90: why a ship cannot land on a planet.
 pub const HOSTILE_PLANET: &str = "The planet's environment is too hostile.";
+/// Not the original's, which takes no keys during a jump: worded after
+/// `STR#` 2002 #54 ("Unable to send hail - target ship is entering
+/// hyperspace.").
+pub const IN_HYPERSPACE: &str = "Unable to land - your ship is in hyperspace.";
 
 /// What the player is told when `refusal` stops a landing: the original's
 /// words for it, for a station or a planet.
@@ -136,6 +143,7 @@ pub fn refusal_message(refusal: &LandingRefusal) -> &'static str {
         if station { at_station } else { on_planet }
     };
     match *refusal {
+        LandingRefusal::Jumping => IN_HYPERSPACE,
         LandingRefusal::NoStellars => NO_STELLARS,
         LandingRefusal::TooFar { station, .. } => pick(station, TOO_FAR_STATION, TOO_FAR_PLANET),
         LandingRefusal::NotLandable { station, .. } => {
@@ -154,6 +162,7 @@ pub fn jump_refusal_message(refusal: &JumpRefusal) -> &'static str {
         JumpRefusal::NoDestination => NO_DESTINATION,
         JumpRefusal::TooClose { .. } => TOO_CLOSE,
         JumpRefusal::NoFuel { .. } => NO_FUEL,
+        JumpRefusal::Landed => TAKE_OFF_FIRST,
     }
 }
 
@@ -1613,6 +1622,7 @@ mod tests {
     fn every_refusal_has_its_string() {
         let stellar = StellarId(128);
         let cases = [
+            (LandingRefusal::Jumping, IN_HYPERSPACE),
             (LandingRefusal::NoStellars, NO_STELLARS),
             (
                 LandingRefusal::TooFar {
@@ -1689,6 +1699,7 @@ mod tests {
                 LANDING_DENIED,
                 HOSTILE_STATION,
                 HOSTILE_PLANET,
+                IN_HYPERSPACE,
             ],
             [
                 "No stellar objects present.",
@@ -1700,6 +1711,7 @@ mod tests {
                 "Landing request denied.",
                 "The station's hull integrity is too unstable.",
                 "The planet's environment is too hostile.",
+                "Unable to land - your ship is in hyperspace.",
             ]
         );
     }
@@ -2011,14 +2023,31 @@ mod tests {
             jump_refusal_message(&JumpRefusal::NoFuel { fuel: 1.0 }),
             NO_FUEL
         );
+        assert_eq!(jump_refusal_message(&JumpRefusal::Landed), TAKE_OFF_FIRST);
         assert_eq!(
-            [NO_DESTINATION, TOO_CLOSE, NO_FUEL],
+            [NO_DESTINATION, TOO_CLOSE, NO_FUEL, TAKE_OFF_FIRST],
             [
                 "You have to select a destination before you can start a hyperspace jump.",
                 "Can't initiate hyperspace jump - not yet far enough away from system center.",
                 "Insufficient energy for hyperspace jump.",
+                "Can't initiate hyperspace jump - take off first.",
             ]
         );
+    }
+
+    #[test]
+    fn j_while_landed_is_refused_until_take_off() {
+        let mut view = flight_among(vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)]);
+        plot(&mut view, 131);
+        view.input(&key(LAND, true));
+        assert_eq!(view.take_landing(), Some(StellarId(140)));
+        view.input(&key(JUMP, true));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(view.session().expect("flying").jumping(), None);
+        assert_eq!(view.message(), Some(TAKE_OFF_FIRST));
+        view.take_off();
+        view.input(&key(JUMP, true));
+        assert_eq!(view.message(), Some(TOO_CLOSE), "flying again");
     }
 
     /// The fade quad's place in the list and its colour, if drawn.

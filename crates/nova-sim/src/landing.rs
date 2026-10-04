@@ -60,6 +60,10 @@ impl StellarFlags {
 /// Why the ship cannot land.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LandingRefusal {
+    /// The ship is jumping through hyperspace. The
+    /// [`Session`](crate::Session) gives this before [`check_landing`] is
+    /// asked.
+    Jumping,
     /// The system has no stellars.
     NoStellars,
     /// The ship is over no stellar.
