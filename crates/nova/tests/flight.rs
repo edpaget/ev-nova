@@ -20,7 +20,7 @@ use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
-use nova_render::{Batch, Frame, QuadInstance, Rect};
+use nova_render::{Batch, Frame, QuadInstance, Rect, SolidQuad};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
@@ -423,6 +423,116 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
             texts(&first)
         );
     }
+}
+
+/// The quads of the last solid batch: the HUD's radar dots and bars.
+fn hud_solids(frame: &Frame) -> Vec<SolidQuad> {
+    frame
+        .batches
+        .iter()
+        .rev()
+        .find_map(|batch| match batch {
+            Batch::Solid(quads) => Some(quads.clone()),
+            _ => None,
+        })
+        .expect("a solid batch")
+}
+
+/// The rectangle a solid quad's corners span.
+fn span(quad: &SolidQuad) -> Rect {
+    let xs = quad.corners.map(|c| c.x);
+    let ys = quad.corners.map(|c| c.y);
+    let min = |v: [f32; 4]| v.into_iter().fold(f32::INFINITY, f32::min);
+    let max = |v: [f32; 4]| v.into_iter().fold(f32::NEG_INFINITY, f32::max);
+    Rect {
+        x: min(xs),
+        y: min(ys),
+        w: max(xs) - min(xs),
+        h: max(ys) - min(ys),
+    }
+}
+
+/// A 24-bit colour as the renderer submits it.
+fn submitted(raw: u32) -> [f32; 4] {
+    let [_, r, g, b] = raw.to_be_bytes();
+    [r, g, b, 255].map(|c| f32::from(c) / 255.0)
+}
+
+/// Where the radar shows a stellar at `stellar` to a ship drawn at
+/// `shown`: the stock radar's centre, (926, 96) on screen, plus a
+/// sixteenth of the offset.
+fn on_radar(shown: Point, stellar: Point) -> Point {
+    Point::new(
+        926.0 + (stellar.x - shown.x) / 16.0,
+        96.0 + (stellar.y - shown.y) / 16.0,
+    )
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn the_hud_is_drawn_while_flying() {
+    let mut harness = Harness::flying(60);
+    let first = harness.frame();
+
+    // The status bar's picture, against the right edge.
+    let status = *quads(&first).last().expect("the status bar");
+    assert_eq!(
+        status.dest,
+        Rect {
+            x: 830.0,
+            y: 0.0,
+            w: 194.0,
+            h: 16.0,
+        }
+    );
+
+    // A radar dot for each stellar, then the full shield, armour and fuel
+    // bars at their ïntf areas, moved to the bar.
+    let solids = hud_solids(&first);
+    assert_eq!(solids.len(), 5, "{solids:?}");
+    for (dot, &stellar) in solids.iter().zip(&STELLARS) {
+        assert_eq!(dot.color, submitted(RADAR));
+        assert_eq!(centre(span(dot)), on_radar(Point::new(0.0, 0.0), stellar));
+    }
+    let bars: Vec<(Rect, [f32; 4])> = solids[2..].iter().map(|q| (span(q), q.color)).collect();
+    let bar = |top: f32| Rect {
+        x: 865.0,
+        y: top,
+        w: 149.0,
+        h: 7.0,
+    };
+    assert_eq!(
+        bars,
+        [
+            (bar(199.0), submitted(SHIELD)),
+            (bar(216.0), submitted(ARMOR)),
+            (bar(234.0), submitted(FUEL)),
+        ]
+    );
+
+    // The system's name in the nav area.
+    let Some(Batch::Text(runs)) = first.batches.last() else {
+        panic!("text last: {:?}", shape(&first))
+    };
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        (runs[0].text.as_str(), runs[0].origin_px),
+        ("Alpha", (838.0, 254.0))
+    );
+
+    // Flying up moves the dots down the radar, with the ship as drawn.
+    harness.hold(&[Key::Up]);
+    let flown = harness.run(1.0);
+    let shown = harness.flight().shown_position();
+    assert!(shown.y < -40.0, "{shown:?}");
+    let moved = hud_solids(&flown);
+    for ((now, was), &stellar) in moved.iter().zip(&solids).zip(&STELLARS) {
+        let (now, was) = (centre(span(now)), centre(span(was)));
+        assert!(now.y > was.y, "{was:?} to {now:?}");
+        let expected = on_radar(shown, stellar);
+        assert!(distance(now, expected) < 1e-3, "{now:?}, not {expected:?}");
+    }
+    assert_eq!(moved[2..], solids[2..], "the bars stay full");
 }
 
 #[test]
