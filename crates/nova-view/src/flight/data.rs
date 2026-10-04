@@ -268,6 +268,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_ship_whose_sprite_cannot_be_resolved_says_why() {
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (Ship::TYPE, 129, ship()),
+            (ShipAnim::TYPE, 129, anim(1001, 1, 36)),
+        ]);
+        assert_eq!(
+            data.ship_sheet(ShipId(128)),
+            Err("no shän 128 for shïp 128".to_owned())
+        );
+        assert_eq!(
+            data.ship_sheet(ShipId(129)),
+            Err("shïp 129: no rlëD 1001 for its base image".to_owned())
+        );
+        assert_eq!(data.ship_sheet(ShipId(140)), Err("no shïp 140".to_owned()));
+    }
+
     // Status bars.
 
     fn put_u32(bytes: &mut [u8], at: usize, value: u32) {
