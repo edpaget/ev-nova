@@ -27,6 +27,9 @@ jobs:
       NEXTEST_PROFILE: ci
     steps:
       - uses: actions/checkout@v5
+      # nova-audio plays through cpal, which builds against ALSA on Linux.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - uses: jdx/mise-action@v5
         with:
           install: false
