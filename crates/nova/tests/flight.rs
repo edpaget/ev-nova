@@ -513,7 +513,7 @@ fn escape_goes_back_to_where_flight_was_entered_and_then_quits_as_before() {
     assert_eq!(harness.showing(), Showing::GalaxyMap);
     let map = harness.frame();
     assert!(
-        texts(&map).contains(&"Tab: ships / galaxy map   F: fly   I: about".to_owned()),
+        texts(&map).contains(&"Tab: ships / galaxy map   F: fly".to_owned()),
         "{:?}",
         texts(&map)
     );

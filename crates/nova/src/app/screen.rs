@@ -31,8 +31,11 @@ use nova_view::ui::{DescDialog, DescriptionSource, DialogResources};
 use nova_view::{Color, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction};
 
 /// The hint the router draws over every screen, where it goes, its size and
-/// its colour. Every screen leaves that corner free.
+/// its colour. Every screen leaves that corner free. The hint offers I
+/// only when the router has dialogs, and so I does something; without
+/// them it draws [`HINT_WITHOUT_DIALOGS`].
 pub const HINT: &str = "Tab: ships / galaxy map   F: fly   I: about";
+pub const HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map   F: fly";
 pub const HINT_AT: Point = Point::new(16.0, 8.0);
 pub const HINT_SIZE: f32 = 14.0;
 pub const HINT_COLOR: Color = Color::DIM;
@@ -370,7 +373,12 @@ impl Screen for AppScreen {
     fn draw(&self, list: &mut DrawList) {
         self.shown().draw(list);
         if self.side != Side::Flight {
-            list.text(HINT, HINT_AT, HINT_SIZE, None, HINT_COLOR);
+            let hint = if self.dialogs.is_some() {
+                HINT
+            } else {
+                HINT_WITHOUT_DIALOGS
+            };
+            list.text(hint, HINT_AT, HINT_SIZE, None, HINT_COLOR);
         }
         if let Some(about) = &self.about {
             about.draw(list);
@@ -873,10 +881,10 @@ mod tests {
         assert_eq!(screen.ship_browser().frame(), Some(3));
     }
 
-    /// The router's hint line.
+    /// The hint line of a router with no dialogs.
     fn hint() -> DrawCommand {
         DrawCommand::Text {
-            text: HINT.to_owned(),
+            text: HINT_WITHOUT_DIALOGS.to_owned(),
             font: Font::Geneva,
             origin: HINT_AT,
             size: HINT_SIZE,
@@ -1187,6 +1195,26 @@ mod tests {
         assert_eq!(screen.showing(), Showing::ShipBrowser);
         assert!(screen.about().is_none());
         assert_eq!(drawn(&screen), before);
+    }
+
+    /// The text of the last thing `screen` draws: the hint.
+    fn hint_text(screen: &AppScreen) -> String {
+        match drawn(screen).iter().last() {
+            Some(DrawCommand::Text { text, .. }) => text.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_hint_offers_i_only_with_dialogs() {
+        let data = data();
+        let without = hint_text(&AppScreen::new(Rc::clone(&data)));
+        assert_eq!(without, "Tab: ships / galaxy map   F: fly");
+        assert!(!without.contains("I:"), "{without}");
+        assert_eq!(
+            hint_text(&with_dialogs(data)),
+            "Tab: ships / galaxy map   F: fly   I: about"
+        );
     }
 
     #[test]
