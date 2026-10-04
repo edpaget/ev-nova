@@ -72,7 +72,9 @@ impl PilotCatalog for GameData {
                 let short_name = record.short_name.as_str().to_owned();
                 Some(ShipRecord {
                     id: ShipId(id),
-                    name: ship.name.map_or_else(|| short_name.clone(), str::to_owned),
+                    name: ship
+                        .name
+                        .map_or_else(|| short_name.replace("\\n", " "), str::to_owned),
                     short_name,
                     long_name: record.long_name.as_str().to_owned(),
                     fields: ship_fields(record),
@@ -620,11 +622,9 @@ mod tests {
         };
         assert_eq!(
             data.ships(),
-            [
-                record(129, "Heavy Shuttle"),
-                record(130, "Heavy\\nShuttle!"),
-            ],
-            "a resource without a name goes by its ShortName; an undecodable one is skipped"
+            [record(129, "Heavy Shuttle"), record(130, "Heavy Shuttle!"),],
+            "a resource without a name goes by its ShortName on one line; an undecodable one \
+             is skipped"
         );
         assert_eq!(
             data.ships()[0].fields,

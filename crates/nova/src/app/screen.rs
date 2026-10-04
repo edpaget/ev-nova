@@ -60,6 +60,16 @@
 //! through the session, whose stats change with it, hands the outfitter as
 //! it now is back to the screen, and saves the pilot after the input.
 //!
+//! At a shipyard, the spaceport's Shipyard opens the session's shipyard,
+//! laid out by the interface file's "Shipyard" dialog, with its "Shipyard
+//! Info" panel, each ship's picture and description read from the game
+//! data. There B buys the selected ship, trading in the one flown; the
+//! router makes the purchase through the session, which flies the new
+//! ship from then on, hands the exchange, the outfitter and the shipyard
+//! as they now are back to the screen (any order changes the cash, and a
+//! ship the cargo space, the free mass and the outfits), and saves the
+//! pilot after the input.
+//!
 //! Each day a jump takes rolls the planetary events on the router's
 //! source of chance ([`AppScreen::with_chance`]), which never fires until
 //! one is given, so the developer's flights stay the same each time.
@@ -92,11 +102,12 @@ use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
-use nova_view::spaceport::OutfitterCatalog;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
+use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
 use nova_view::spaceport::trade::TRADE_DIALOG;
+use nova_view::spaceport::{OutfitterCatalog, ShipyardCatalog};
 use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
 use nova_view::ui::desc::DESC_DIALOG;
@@ -601,6 +612,16 @@ impl AppScreen {
             let art: Rc<dyn OutfitterCatalog> = Rc::clone(&self.data) as Rc<dyn OutfitterCatalog>;
             spaceport = spaceport.with_outfitter(template, outfitter, art);
         }
+        if let Some(shipyard) = self.flight.as_ref().and_then(FlightView::shipyard) {
+            let template_of = |id| template(id).map(|(template, _)| template);
+            let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
+            spaceport = spaceport.with_shipyard(
+                template_of(SHIPYARD_DIALOG),
+                template_of(SHIP_INFO_DIALOG),
+                shipyard,
+                art,
+            );
+        }
         self.spaceport = Some(spaceport);
         self.switch_to(Side::Spaceport);
     }
@@ -822,7 +843,8 @@ impl AppScreen {
         spaceport.input(input);
         let trade = spaceport.take_trade();
         let outfit = spaceport.take_outfit();
-        if trade.is_some() || outfit.is_some() {
+        let ship = spaceport.take_ship();
+        if trade.is_some() || outfit.is_some() || ship.is_some() {
             let flight = self.flight.as_mut().expect(ENTERED);
             // A refused order changes nothing; the screen greys what it can.
             if let Some(order) = trade {
@@ -831,13 +853,20 @@ impl AppScreen {
             if let Some(order) = outfit {
                 let _ = flight.outfit(order);
             }
-            // Either changes the cash, and an outfit the cargo space, so
-            // both go back.
+            if let Some(ship) = ship {
+                let _ = flight.buy_ship(ship);
+            }
+            // Each changes the cash; an outfit the cargo space and the
+            // trade-in; and a ship the cargo space, the free mass and the
+            // outfits: so all three go back.
             if let Some(market) = flight.market() {
                 spaceport.set_market(market);
             }
             if let Some(outfitter) = flight.outfitter() {
                 spaceport.set_outfitter(outfitter);
+            }
+            if let Some(shipyard) = flight.shipyard() {
+                spaceport.set_shipyard(shipyard);
             }
         }
         if spaceport.left() {
@@ -1176,21 +1205,28 @@ mod tests {
     /// names the same `rlëD`. The only `chär` starts in ship 128, an
     /// average ship, in system 128, over the planet.
     fn data() -> Rc<GameData> {
-        game_data(false, false)
+        game_data(false, false, false)
     }
 
     /// [`data`], where the planet is also a trade center trading food at
     /// 75 (`STR#` 4000 and 4004), the `chär` holds 1000 credits and ship
     /// 128 holds 10 tons.
     fn trading_data() -> Rc<GameData> {
-        game_data(true, false)
+        game_data(true, false, false)
     }
 
     /// [`trading_data`], where the planet, of tech level 1, is also an
     /// outfitter selling `oütf` 128, a speed booster (+300) of 2 tons for
     /// 500 credits, up to 3, and ship 128 has 10 tons free.
     fn outfitting_data() -> Rc<GameData> {
-        game_data(true, true)
+        game_data(true, true, false)
+    }
+
+    /// [`outfitting_data`], where the planet is also a shipyard selling
+    /// ship 129, twice as fast with 20 tons of cargo space and 12 free,
+    /// for 800 credits, carrying a booster; ship 128 costs nothing.
+    fn shipbuying_data() -> Rc<GameData> {
+        game_data(true, true, true)
     }
 
     /// A `STR#` of `strings`.
@@ -1206,7 +1242,7 @@ mod tests {
         bytes
     }
 
-    fn game_data(trading: bool, outfitting: bool) -> Rc<GameData> {
+    fn game_data(trading: bool, outfitting: bool, shipbuying: bool) -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
         anim[0x04..0x06].copy_from_slice(&1_i16.to_be_bytes());
@@ -1216,7 +1252,7 @@ mod tests {
                 sheet.frame(|f| f.line().pixels(&[0x7C00]))
             })
             .build();
-        let ship = vec![0; Ship::SIZE.expect("fixed")];
+        let mut ship = vec![0; Ship::SIZE.expect("fixed")];
         let mut average = ship.clone();
         for (at, value) in [(0x04, 300_i16), (0x06, 300), (0x08, 10)] {
             average[at..at + 2].copy_from_slice(&value.to_be_bytes());
@@ -1243,6 +1279,31 @@ mod tests {
             booster[0x0E..0x12].copy_from_slice(&500_i32.to_be_bytes());
             booster[0x32B..0x332].copy_from_slice(b"Booster");
             fork = fork.resource(Outfit::TYPE, 128, Some(b"Booster"), &booster);
+        }
+        if shipbuying {
+            stellar[0x09] |= 0x08;
+            for (at, value) in [
+                (0x00, 20_i16),
+                (0x04, 300),
+                (0x06, 600),
+                (0x08, 10),
+                (0x0C, 12),
+                (0x2E, 1),
+                (0x388, 100),
+            ] {
+                ship[at..at + 2].copy_from_slice(&value.to_be_bytes());
+            }
+            ship[0x30..0x34].copy_from_slice(&800_i32.to_be_bytes());
+            for (slot, (id, count)) in [(128_i16, 1_i16), (-1, 0), (-1, 0), (-1, 0)]
+                .into_iter()
+                .enumerate()
+            {
+                let at = 0x4E + 2 * slot;
+                ship[at..at + 2].copy_from_slice(&id.to_be_bytes());
+                ship[at + 8..at + 10].copy_from_slice(&count.to_be_bytes());
+                ship[0x370 + 2 * slot..0x372 + 2 * slot].copy_from_slice(&(-1_i16).to_be_bytes());
+            }
+            ship[0x5CE..0x5D4].copy_from_slice(b"Second");
         }
         character[0x04..0x06].copy_from_slice(&128_i16.to_be_bytes());
         character[0x06..0x08].copy_from_slice(&128_i16.to_be_bytes());
@@ -3668,5 +3729,148 @@ mod tests {
             }
             OutfitDialogs.dialog_template(id)
         }
+    }
+
+    // The Shipyard.
+
+    /// "Shipyard", smaller: 400 x 300 at (0, 0), with Done (1), the grid
+    /// (5), the description (6), Buy Ship (7), the picture (8), the info
+    /// box (9) and Info (10).
+    fn shipyard_template() -> DialogTemplate {
+        let item = |x: f32, y: f32, w: f32, h: f32| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        let mut items: Vec<ItemTemplate> = (0..13).map(|_| item(0.0, 400.0, 1.0, 1.0)).collect();
+        items[0] = item(300.0, 250.0, 30.0, 12.0);
+        items[4] = item(0.0, 0.0, 200.0, 200.0);
+        items[5] = item(200.0, 0.0, 100.0, 100.0);
+        items[6] = item(100.0, 250.0, 30.0, 12.0);
+        items[7] = item(300.0, 0.0, 100.0, 100.0);
+        items[8] = item(300.0, 100.0, 100.0, 100.0);
+        items[9] = item(200.0, 250.0, 30.0, 12.0);
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    /// [`EveryDialog`], with "Shipyard" and "Shipyard Info" too.
+    struct ShipyardDialogs;
+
+    impl DialogResources for ShipyardDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            if id == SHIPYARD_DIALOG || id == SHIP_INFO_DIALOG {
+                return Ok(shipyard_template());
+            }
+            EveryDialog.dialog_template(id)
+        }
+    }
+
+    /// The router over [`shipbuying_data`] with every dialog, keeping
+    /// pilots in `store`, flying a new pilot named Ada, landed.
+    fn landed_shipyard(store: &MemoryPilots) -> AppScreen {
+        let mut screen = AppScreen::new(shipbuying_data())
+            .with_dialogs(Rc::new(ShipyardDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        screen.input(&key(LAND, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        screen
+    }
+
+    #[test]
+    fn the_shipyard_opens_the_stellars_shipyard() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard(&store);
+        assert!(
+            spaceport(&screen)
+                .offered()
+                .contains(&nova_sim::Service::Shipyard)
+        );
+        click_port_item(&mut screen, 9);
+        let open = spaceport(&screen).open_shipyard().expect("shipbuying");
+        assert_eq!(open.problem(), None);
+        let second = open.shipyard().row(ShipId(129)).expect("listed");
+        assert_eq!(second.price, 800);
+        assert_eq!(open.shipyard().row(ShipId(128)), None, "BuyRandom 0");
+        assert_eq!((open.shipyard().cash, open.shipyard().trade_in), (1000, 0));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert_eq!(drawn(&screen), drawn(spaceport(&screen)));
+    }
+
+    #[test]
+    fn a_ship_order_changes_the_pilots_ship_refreshes_the_shops_and_saves() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard(&store);
+        click_port_item(&mut screen, 9);
+        let writes = store.writes();
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).ship(), ShipId(129));
+        assert_eq!(pilot(&screen).cash(), 200);
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "its default booster");
+        assert_eq!(store.writes(), writes + 1, "saved after the input");
+        assert_eq!(saved(&store, "Ada").ship(), ShipId(129));
+        let open = spaceport(&screen).open_shipyard().expect("shipbuying");
+        assert_eq!(open.shipyard().current, ShipId(129));
+        assert_eq!(open.shipyard().cash, 200);
+        let speed = flight(&screen)
+            .session()
+            .expect("flying")
+            .handling()
+            .max_speed;
+        assert!(
+            (speed - 9.0).abs() < 1e-6,
+            "600 and the booster's 300: {speed}"
+        );
+        // The outfitter and the exchange read the new ship.
+        screen.input(&key(Key::Escape, true));
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().cash, 200);
+        assert_eq!(open.outfitter().free_mass, 12);
+        screen.input(&key(Key::Escape, true));
+        click_port_item(&mut screen, 7);
+        let open = spaceport(&screen).open_trade().expect("trading");
+        assert_eq!((open.market().cash, open.market().capacity), (200, 20));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    #[test]
+    fn a_refused_ship_order_changes_nothing_and_saves_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard(&store);
+        click_port_item(&mut screen, 9);
+        screen.input(&key(Key::Char('b'), true));
+        let writes = store.writes();
+        let before = pilot(&screen).clone();
+        // Ship 129 again: 200 and a 400 trade-in do not cover 800.
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(*pilot(&screen), before);
+        assert_eq!(store.writes(), writes, "nothing to save");
+    }
+
+    #[test]
+    fn a_stellar_without_a_shipyard_offers_none() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter(&store);
+        click_port_item(&mut screen, 9);
+        assert!(spaceport(&screen).open_shipyard().is_none());
+        assert!(spaceport(&screen).open_service().is_none());
+    }
+
+    #[test]
+    fn without_the_shipyard_dialog_the_shipyard_says_why() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(shipbuying_data())
+            .with_dialogs(Rc::new(EveryDialog), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        screen.input(&key(LAND, true));
+        click_port_item(&mut screen, 9);
+        let open = spaceport(&screen).open_shipyard().expect("shipbuying");
+        assert_eq!(open.problem(), Some("no DLOG 1004"));
     }
 }

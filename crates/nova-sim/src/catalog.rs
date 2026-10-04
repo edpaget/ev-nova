@@ -121,8 +121,8 @@ pub struct OutfitRecord {
 pub struct ShipRecord {
     /// The `shïp`'s ID.
     pub id: ShipId,
-    /// Its name: the resource's name, or its `ShortName` when the resource
-    /// has none.
+    /// Its name: the resource's name, or its `ShortName` on one line (each
+    /// literal `\n` a space) when the resource has none.
     pub name: String,
     /// Its `ShortName`, raw: a literal `\n` splits it in two lines.
     pub short_name: String,

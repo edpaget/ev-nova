@@ -204,7 +204,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 18] = [
+    const GAME_CHARACTER_KEYS: [Key; 20] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -223,6 +223,8 @@ mod tests {
         nova_view::spaceport::trade::SELL_KEY,
         nova_view::spaceport::outfitter::BUY_KEY,
         nova_view::spaceport::outfitter::SELL_KEY,
+        nova_view::spaceport::shipyard::BUY_KEY,
+        nova_view::spaceport::shipyard::INFO_KEY,
     ];
 
     /// The physical key that types `c` on a US-layout keyboard.
