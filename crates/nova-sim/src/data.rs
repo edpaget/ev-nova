@@ -1,7 +1,7 @@
-//! The pilot and traffic catalogs over the game data: a thin mapping from
-//! `GameData`'s `chär`, `shïp`, `oütf`, `sÿst`, `spöb`, `jünk`, `öops`,
-//! `düde` and `flët` records, its commodity string lists and its stellar
-//! sprites.
+//! The pilot, traffic and combat catalogs over the game data: a thin
+//! mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`, `wëap`,
+//! `sÿst`, `spöb`, `jünk`, `öops`, `düde` and `flët` records, its
+//! commodity string lists and its stellar sprites.
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
@@ -11,15 +11,17 @@ use nova_data::records::fleet::Fleet;
 use nova_data::records::junk::Junk;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
+use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
+use nova_data::records::weapon::Weapon;
 
 use crate::catalog::{
-    CharacterStart, CommodityStrings, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord,
-    FleetId, FleetRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId,
-    ShipRecord, SoundId, StarSystem, StartDate, StartError, SystemId, SystemTraffic,
-    TrafficCatalog,
+    CharacterStart, CombatCatalog, CommodityStrings, DisasterId, DisasterRecord, DudeId,
+    DudeRecord, EscortRecord, FleetId, FleetRecord, HullRecord, JunkRecord, LandingSite, OutfitId,
+    OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
+    StockWeapon, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -282,6 +284,83 @@ impl TrafficCatalog for GameData {
     }
 }
 
+/// Reads the records afresh on every call; a session asks once, when it
+/// starts.
+impl CombatCatalog for GameData {
+    fn weapons(&self) -> Vec<WeaponRecord> {
+        self.records::<Weapon>()
+            .filter_map(|(id, weapon)| {
+                let record = weapon.ok()?.record;
+                Some(WeaponRecord {
+                    id: WeaponId(id),
+                    reload: record.reload,
+                    count: record.count,
+                    mass_dmg: record.mass_dmg,
+                    energy_dmg: record.energy_dmg,
+                    guidance: record.guidance,
+                    speed: record.speed,
+                    ammo_type: record.ammo_type,
+                    inaccuracy: record.inaccuracy,
+                    impact: record.impact,
+                    explod_type: record.explod_type,
+                    prox_radius: record.prox_radius,
+                    blast_radius: record.blast_radius,
+                    flags: record.flags.bits(),
+                    seeker: record.seeker.bits(),
+                    flags2: record.flags2.bits(),
+                    flags3: record.flags3.bits(),
+                    decay: record.decay,
+                    beam_length: record.beam_length,
+                    burst_count: record.burst_count,
+                    burst_reload: record.burst_reload,
+                })
+            })
+            .collect()
+    }
+
+    fn hulls(&self) -> Vec<HullRecord> {
+        self.records::<Ship>()
+            .filter_map(|(id, ship)| {
+                let record = ship.ok()?.record;
+                let size = match self.get::<ShipAnim>(id) {
+                    Some(Ok(anim)) => Some(anim.record.base_x_size),
+                    _ => None,
+                };
+                Some(HullRecord {
+                    id: ShipId(id),
+                    flags: record.flags.bits(),
+                    death_delay: record.death_delay,
+                    explode1: record.explode1,
+                    explode2: record.explode2,
+                    mass: record.mass,
+                    weapons: stock_weapons(record),
+                    size,
+                })
+            })
+            .collect()
+    }
+}
+
+/// A `shïp`'s `WeapType` slots 1-8 that name a weapon, each with its
+/// `WeapCount` and `AmmoLoad`, in slot order: an unused slot (-1) or 0
+/// names none.
+fn stock_weapons(ship: &Ship) -> Vec<StockWeapon> {
+    let types = ship.weap_type1_4.into_iter().chain(ship.weap_type5_8);
+    let counts = ship.weap_count1_4.into_iter().chain(ship.weap_count5_8);
+    let ammo = ship.ammo_load1_4.into_iter().chain(ship.ammo_load5_8);
+    types
+        .zip(counts.zip(ammo))
+        .filter_map(|(weapon, (count, ammo))| {
+            let weapon = weapon.filter(|weapon| weapon.0 != 0)?;
+            Some(StockWeapon {
+                weapon,
+                count,
+                ammo,
+            })
+        })
+        .collect()
+}
+
 /// A `shïp`'s handling, reserve, cargo and mass fields.
 fn ship_fields(ship: &Ship) -> ShipFields {
     ShipFields {
@@ -296,6 +375,8 @@ fn ship_fields(ship: &Ship) -> ShipFields {
         mass: ship.mass,
         free_mass: ship.free_mass,
         contribute: ship.contribute.bits(),
+        shield_rech: ship.shield_rech,
+        armor_rech: ship.armor_rech,
     }
 }
 
@@ -353,14 +434,19 @@ mod tests {
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::disaster::Disaster;
     use nova_data::records::junk::Junk;
+    use nova_data::records::ship_anim::ShipAnim;
     use nova_data::records::spin::Spin;
     use nova_data::records::string_list::StrList;
+    use nova_data::records::weapon::Weapon;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
 
     use super::*;
-    use crate::catalog::{DisasterId, GovtId, JunkId, StarSystem, StartDate, StellarId};
+    use crate::catalog::{
+        DisasterId, GovtId, HullRecord, JunkId, StarSystem, StartDate, StellarId, StockWeapon,
+        WeaponId, WeaponRecord,
+    };
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -560,6 +646,16 @@ mod tests {
         put_i16s(&mut bytes, 0x5E, &[8]);
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.fuel_regen), Ok(8));
+    }
+
+    #[test]
+    fn a_ships_fields_include_its_shield_and_armour_recharge() {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x10, &[125]);
+        put_i16s(&mut bytes, 0x36, &[-20]);
+        let data = store(&[(Ship::TYPE, 128, bytes)]);
+        let fields = data.ship_fields(ShipId(128)).expect("decodes");
+        assert_eq!((fields.shield_rech, fields.armor_rech), (125, -20));
     }
 
     /// A `shïp` carrying `items` in its `DefaultItems` 1-4 and `more` in
@@ -1147,6 +1243,132 @@ mod tests {
         );
         assert_eq!(store(&[]).disasters(), []);
     }
+    /// A `wëap` with every field the combat catalog reads set to
+    /// something of its own.
+    fn weapon_bytes() -> Vec<u8> {
+        let mut bytes = vec![0; Weapon::SIZE.expect("fixed")];
+        put_i16s(
+            &mut bytes,
+            0x00,
+            &[10, 13, 1, 4, -1, 1500, -1010, 7, 9, 3, 25, 1003, 5, 6],
+        );
+        bytes[0x1C..0x1E].copy_from_slice(&0x6102_u16.to_be_bytes());
+        bytes[0x1E..0x20].copy_from_slice(&0x0021_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x22, &[100]);
+        put_i16s(&mut bytes, 0x30, &[300]);
+        bytes[0x48..0x4A].copy_from_slice(&0x8200_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x5A, &[60, 30]);
+        bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn each_readable_wëap_is_a_weapon_record_by_id() {
+        let data = store(&[
+            (Weapon::TYPE, 140, weapon_bytes()),
+            (Weapon::TYPE, 128, weapon_bytes()),
+            (Weapon::TYPE, 129, short(weapon_bytes())),
+        ]);
+        let record = |id| WeaponRecord {
+            id: WeaponId(id),
+            reload: 10,
+            count: 13,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            guidance: -1,
+            speed: 1500,
+            ammo_type: -1010,
+            inaccuracy: 9,
+            impact: 25,
+            explod_type: 1003,
+            prox_radius: 5,
+            blast_radius: 6,
+            flags: 0x6102,
+            seeker: 0x0021,
+            flags2: 0x8200,
+            flags3: 0x0003,
+            decay: 100,
+            beam_length: 300,
+            burst_count: 60,
+            burst_reload: 30,
+        };
+        assert_eq!(
+            data.weapons(),
+            [record(128), record(140)],
+            "by ID, the undecodable one left out"
+        );
+        assert_eq!(store(&[]).weapons(), []);
+    }
+
+    /// A `shïp` with every combat field set to something of its own: two
+    /// stock weapons in slots 1-4 (an unused and a 0 slot among them) and
+    /// one in slots 5-8.
+    fn armed() -> Vec<u8> {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x12, &[128, -1, 0, 130]);
+        put_i16s(&mut bytes, 0x1A, &[2, 5, 6, 1]);
+        put_i16s(&mut bytes, 0x22, &[0, 0, 0, 40]);
+        put_i16s(&mut bytes, 0x34, &[60]);
+        put_i16s(&mut bytes, 0x38, &[4, 1005]);
+        put_i16s(&mut bytes, 0x3E, &[120]);
+        bytes[0x4A..0x4C].copy_from_slice(&0x0130_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x6CE, &[-1, 138, -1, -1]);
+        put_i16s(&mut bytes, 0x6D6, &[0, 3, 0, 0]);
+        put_i16s(&mut bytes, 0x6DE, &[0, 20, 0, 0]);
+        bytes
+    }
+
+    /// A `shän` whose `BaseXSize` is `size`.
+    fn anim(size: i16) -> Vec<u8> {
+        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x06, &[size]);
+        bytes
+    }
+
+    #[test]
+    fn each_readable_shïp_is_a_hull_record_by_id_with_its_shäns_size() {
+        let data = store(&[
+            (Ship::TYPE, 130, armed()),
+            (Ship::TYPE, 128, armed()),
+            (Ship::TYPE, 129, short(armed())),
+            (Ship::TYPE, 131, armed()),
+            (ShipAnim::TYPE, 128, anim(24)),
+            (ShipAnim::TYPE, 131, short(anim(30))),
+        ]);
+        let record = |id, size| HullRecord {
+            id: ShipId(id),
+            flags: 0x0130,
+            death_delay: 60,
+            explode1: 4,
+            explode2: 1005,
+            mass: 120,
+            weapons: vec![
+                StockWeapon {
+                    weapon: WeaponId(128),
+                    count: 2,
+                    ammo: 0,
+                },
+                StockWeapon {
+                    weapon: WeaponId(130),
+                    count: 1,
+                    ammo: 40,
+                },
+                StockWeapon {
+                    weapon: WeaponId(138),
+                    count: 3,
+                    ammo: 20,
+                },
+            ],
+            size,
+        };
+        assert_eq!(
+            data.hulls(),
+            [record(128, Some(24)), record(130, None), record(131, None)],
+            "by ID, the undecodable shïp left out; without a shän that can be read, no size"
+        );
+        assert_eq!(store(&[]).hulls(), []);
+    }
+
     /// A `sÿst` with these `DudeTypes` and `% Prob` and this `AvgShips`.
     fn trafficked(dude_types: [i16; 8], prob: [i16; 8], avg_ships: i16) -> Vec<u8> {
         let mut bytes = system();

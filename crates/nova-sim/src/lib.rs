@@ -8,9 +8,10 @@
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
-//!   `jünk` and `öops` the exchange trades and is moved by; and the
+//!   `jünk` and `öops` the exchange trades and is moved by; the
 //!   [`TrafficCatalog`] port, the `sÿst` traffic, `düde`s and `flët`s NPC
-//!   traffic is spawned from.
+//!   traffic is spawned from; and the [`CombatCatalog`] port, the `wëap`s
+//!   and each `shïp`'s combat fields ships fight with.
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
@@ -64,7 +65,8 @@
 //!   lands, takes off and jumps; the audio side decides what they play.
 //! - [`stats`]: a ship's computed [`ShipStats`], from its `shïp`'s fields
 //!   and the outfits it carries: the one place its handling, reserve
-//!   capacities, fuel regeneration and cargo space come from.
+//!   capacities, fuel, shield and armour regeneration and cargo space come
+//!   from.
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
@@ -104,10 +106,11 @@ pub mod wares;
 
 pub use ai::{Behaviour, Goal, Peaceful, Surroundings};
 pub use catalog::{
-    CharacterStart, CommodityStrings, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord,
-    FleetId, FleetRecord, GovtId, JunkId, JunkRecord, LandingSite, OutfitId, OutfitRecord,
-    PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
-    SystemId, SystemTraffic, TrafficCatalog,
+    BoomId, CharacterStart, CombatCatalog, CommodityStrings, DisasterId, DisasterRecord, DudeId,
+    DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, HullRecord, JunkId, JunkRecord,
+    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem,
+    StartDate, StartError, StellarId, StockWeapon, SystemId, SystemTraffic, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};

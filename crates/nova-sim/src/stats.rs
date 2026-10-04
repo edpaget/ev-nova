@@ -23,6 +23,11 @@
 //! - [`HYPERSPACE_DAYS`] (22) adds days to each jump's
 //!   [`DAYS_PER_JUMP`], which never goes below one (the Bible: "still
 //!   can't go below 1 day/jump").
+//! - [`MORE_SHIELD_RECHARGE`] (5) and [`MORE_ARMOR_RECHARGE`] (29) add to
+//!   the `shïp`'s `ShieldRech` and `ArmorRech`, on the same scale: each
+//!   [`RECHARGE_SCALE`] is a point a tick, the `shïp`'s
+//!   own rate counting as none below none (`_ShipShieldRechargeRate` and
+//!   `_ShipArmorRechargeRate` in the `EV Nova` executable).
 //! - [`HYPERSPACE_DISTANCE`] (23) moves the edge of the no-jump zone from
 //!   its standard [`MIN_JUMP_DISTANCE`] (the Bible: "the standard radius
 //!   is 1000").
@@ -40,6 +45,8 @@ use crate::reserves::{Reserves, shield_points};
 
 /// The `oütf` `ModType` that adds shield points.
 pub const MORE_SHIELD: i16 = 4;
+/// The `oütf` `ModType` that speeds up shield regeneration.
+pub const MORE_SHIELD_RECHARGE: i16 = 5;
 /// The `oütf` `ModType` that adds armour points.
 pub const MORE_ARMOR: i16 = 6;
 /// The `oütf` `ModType` that adds acceleration, on `Accel`'s scale.
@@ -54,6 +61,12 @@ pub const MORE_FUEL: i16 = 12;
 pub const HYPERSPACE_DAYS: i16 = 22;
 /// The `oütf` `ModType` that moves the no-jump zone's edge, in pixels.
 pub const HYPERSPACE_DISTANCE: i16 = 23;
+/// The `oütf` `ModType` that speeds up armour regeneration.
+pub const MORE_ARMOR_RECHARGE: i16 = 29;
+
+/// How many units of `ShieldRech` or `ArmorRech` regenerate a point a
+/// tick: the record's "x1000 per frame".
+pub const RECHARGE_SCALE: f32 = 1000.0;
 
 /// A [`TURN_CHANGE`] `ModVal` per unit of `Maneuver`: the Bible's "100 =
 /// 30°/sec" for the outfit and "10 is about 30°/s" for the ship.
@@ -72,6 +85,10 @@ pub struct ShipStats {
     pub fuel: f32,
     /// The fuel it gains each tick in flight (negative when it drains).
     pub fuel_regen: f32,
+    /// The shield points it regenerates each tick; none below none.
+    pub shield_regen: f32,
+    /// The armour points it regenerates each tick; none below none.
+    pub armor_regen: f32,
     /// Its cargo space, in tons.
     pub capacity: u32,
     /// How far from a system's centre, in pixels, it must be to jump.
@@ -104,6 +121,11 @@ impl ShipStats {
             armor: positive(i64::from(fields.armor.max(0)) + total(MORE_ARMOR)),
             fuel: positive(i64::from(fields.fuel.max(0)) + total(MORE_FUEL)),
             fuel_regen: fuel_regen_per_tick(fields.fuel_regen, outfits),
+            shield_regen: positive(
+                i64::from(fields.shield_rech.max(0)) + total(MORE_SHIELD_RECHARGE),
+            ) / RECHARGE_SCALE,
+            armor_regen: positive(i64::from(fields.armor_rech.max(0)) + total(MORE_ARMOR_RECHARGE))
+                / RECHARGE_SCALE,
             capacity: cargo_capacity(fields.holds, outfits),
             jump_distance: positive(MIN_JUMP_DISTANCE as i64 + total(HYPERSPACE_DISTANCE)),
             jump_days: u32::try_from((i64::from(DAYS_PER_JUMP) + total(HYPERSPACE_DAYS)).max(1))
@@ -142,6 +164,8 @@ mod tests {
         mass: 15,
         free_mass: 8,
         contribute: 1,
+        shield_rech: 10,
+        armor_rech: 0,
     };
 
     fn outfit(mod_type: i16, mod_val: i16, count: u16) -> OutfitMod {
@@ -239,6 +263,71 @@ mod tests {
     }
 
     #[test]
+    fn shields_and_armour_recharge_a_thousandth_of_their_rate_a_tick() {
+        let stats = ShipStats::new(AVERAGE, &[]);
+        assert_eq!((stats.shield_regen, stats.armor_regen), (0.01, 0.0));
+        let both = ShipStats::new(
+            ShipFields {
+                shield_rech: 125,
+                armor_rech: 20,
+                ..AVERAGE
+            },
+            &[],
+        );
+        assert_eq!((both.shield_regen, both.armor_regen), (0.125, 0.02));
+        assert_eq!(RECHARGE_SCALE, 1000.0);
+    }
+
+    #[test]
+    fn a_rate_of_none_or_less_recharges_nothing() {
+        let none = ShipStats::new(
+            ShipFields {
+                shield_rech: -10,
+                armor_rech: -1,
+                ..AVERAGE
+            },
+            &[],
+        );
+        assert_eq!((none.shield_regen, none.armor_regen), (0.0, 0.0));
+    }
+
+    #[test]
+    fn recharge_outfits_add_their_mod_val_for_each_one_carried() {
+        let stats = ShipStats::new(
+            AVERAGE,
+            &[
+                outfit(MORE_SHIELD_RECHARGE, 15, 2),
+                outfit(MORE_ARMOR_RECHARGE, 5, 3),
+            ],
+        );
+        assert_eq!((stats.shield_regen, stats.armor_regen), (0.04, 0.015));
+        let on_none = ShipStats::new(
+            ShipFields {
+                shield_rech: -50,
+                ..AVERAGE
+            },
+            &[outfit(MORE_SHIELD_RECHARGE, 20, 1)],
+        );
+        assert_eq!(on_none.shield_regen, 0.02, "added to none");
+        assert_eq!((MORE_SHIELD_RECHARGE, MORE_ARMOR_RECHARGE), (5, 29));
+    }
+
+    #[test]
+    fn a_negative_recharge_total_is_none() {
+        let stats = ShipStats::new(
+            ShipFields {
+                armor_rech: 10,
+                ..AVERAGE
+            },
+            &[
+                outfit(MORE_SHIELD_RECHARGE, -11, 1),
+                outfit(MORE_ARMOR_RECHARGE, -4, 3),
+            ],
+        );
+        assert_eq!((stats.shield_regen, stats.armor_regen), (0.0, 0.0));
+    }
+
+    #[test]
     fn the_standard_jump_distance_is_the_no_jump_zones_radius() {
         let stats = ShipStats::new(AVERAGE, &[]);
         assert_eq!(stats.jump_distance, MIN_JUMP_DISTANCE);
@@ -301,7 +390,7 @@ mod tests {
     #[test]
     fn every_other_mod_type_changes_nothing() {
         let plain = ShipStats::new(AVERAGE, &[]);
-        for mod_type in [-1, 0, 1, 3, 5, 10, 11, 13, 15, 17, 32, 37, 38, 45, 99] {
+        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 15, 17, 32, 37, 38, 45, 99] {
             assert_eq!(
                 ShipStats::new(AVERAGE, &[outfit(mod_type, 500, 3)]),
                 plain,

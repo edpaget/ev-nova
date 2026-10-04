@@ -1,10 +1,13 @@
-//! The pilot catalog port: what a flight session starts from, in the
-//! simulation's own terms.
+//! The catalog ports: what a flight session starts from
+//! ([`PilotCatalog`]), what its NPC traffic is spawned from
+//! ([`TrafficCatalog`]) and what its ships fight with
+//! ([`CombatCatalog`]), in the simulation's own terms.
 
 use std::rc::Rc;
 
 pub use nova_data::{
-    DudeId, FleetId, GovtId, JunkId, OutfitId, ShipId, SoundId, StellarId, SystemId,
+    BoomId, DudeId, FleetId, GovtId, JunkId, OutfitId, ShipId, SoundId, StellarId, SystemId,
+    WeaponId,
 };
 
 use crate::geometry::Vec2;
@@ -318,6 +321,122 @@ impl<T: TrafficCatalog + ?Sized> TrafficCatalog for Rc<T> {
 
     fn fleets(&self) -> Vec<FleetRecord> {
         (**self).fleets()
+    }
+}
+
+/// A weapon, raw from its `wëap`: the [`combat`](crate::combat) rules
+/// decide what the values mean.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WeaponRecord {
+    /// The `wëap`'s ID.
+    pub id: WeaponId,
+    /// Its `Reload`, in ticks.
+    pub reload: i16,
+    /// Its `Count`: a shot's or beam's life, in ticks.
+    pub count: i16,
+    /// Its `MassDmg`.
+    pub mass_dmg: i16,
+    /// Its `EnergyDmg`.
+    pub energy_dmg: i16,
+    /// Its `Guidance`.
+    pub guidance: i16,
+    /// Its `Speed`, in pixels a tick x100.
+    pub speed: i16,
+    /// Its `AmmoType`, encoded.
+    pub ammo_type: i16,
+    /// Its `Inaccuracy`, in degrees.
+    pub inaccuracy: i16,
+    /// Its `Impact`.
+    pub impact: i16,
+    /// Its `ExplodType`, encoded.
+    pub explod_type: i16,
+    /// Its `ProxRadius`, in pixels.
+    pub prox_radius: i16,
+    /// Its `BlastRadius`, in pixels.
+    pub blast_radius: i16,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `Seeker` flags.
+    pub seeker: u16,
+    /// Its `Flags2`.
+    pub flags2: u16,
+    /// Its `Flags3`.
+    pub flags3: u16,
+    /// Its `Decay`.
+    pub decay: i16,
+    /// Its `BeamLength`, in pixels.
+    pub beam_length: i16,
+    /// Its `BurstCount`.
+    pub burst_count: i16,
+    /// Its `BurstReload`, in ticks.
+    pub burst_reload: i16,
+}
+
+/// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`
+/// slot that names a weapon, with its `WeapCount` and `AmmoLoad`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StockWeapon {
+    /// The `WeapType`.
+    pub weapon: WeaponId,
+    /// The `WeapCount`.
+    pub count: i16,
+    /// The `AmmoLoad`.
+    pub ammo: i16,
+}
+
+/// What a ship class fights with and how it dies, raw from its `shïp` and
+/// its `shän`: the [`combat`](crate::combat) rules decide what the values
+/// mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HullRecord {
+    /// The `shïp`'s ID.
+    pub id: ShipId,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `DeathDelay`, in ticks.
+    pub death_delay: i16,
+    /// Its `Explode1`, encoded.
+    pub explode1: i16,
+    /// Its `Explode2`, encoded.
+    pub explode2: i16,
+    /// Its `Mass`, in tons.
+    pub mass: i16,
+    /// Its `WeapType` slots 1-8 that name a weapon, in slot order.
+    pub weapons: Vec<StockWeapon>,
+    /// Its `shän`'s `BaseXSize`, in pixels, or `None` when it has no
+    /// `shän` that can be read.
+    pub size: Option<i16>,
+}
+
+/// The game data a session's ships fight with: the `wëap`s, and each
+/// `shïp`'s combat fields.
+pub trait CombatCatalog {
+    /// Every `wëap` that can be read, by ascending ID.
+    fn weapons(&self) -> Vec<WeaponRecord>;
+    /// Every `shïp` that can be read, by ascending ID, with its `shän`'s
+    /// size.
+    fn hulls(&self) -> Vec<HullRecord>;
+}
+
+/// A borrowed catalog is a catalog.
+impl<T: CombatCatalog + ?Sized> CombatCatalog for &T {
+    fn weapons(&self) -> Vec<WeaponRecord> {
+        (**self).weapons()
+    }
+
+    fn hulls(&self) -> Vec<HullRecord> {
+        (**self).hulls()
+    }
+}
+
+/// A shared catalog is a catalog.
+impl<T: CombatCatalog + ?Sized> CombatCatalog for Rc<T> {
+    fn weapons(&self) -> Vec<WeaponRecord> {
+        (**self).weapons()
+    }
+
+    fn hulls(&self) -> Vec<HullRecord> {
+        (**self).hulls()
     }
 }
 
@@ -720,6 +839,49 @@ mod tests {
         assert!(direct[4].contains("FleetId(129)"), "{direct:?}");
         assert_eq!(traffic(&One), direct);
         assert_eq!(traffic(Rc::new(One)), direct);
+    }
+
+    /// Weapon 128 is a blaster; ship 128 carries two of it and has a
+    /// 24-pixel `shän`.
+    impl CombatCatalog for One {
+        fn weapons(&self) -> Vec<WeaponRecord> {
+            vec![WeaponRecord {
+                reload: 10,
+                count: 13,
+                speed: 1500,
+                ..crate::testkit::weapon(128)
+            }]
+        }
+
+        fn hulls(&self) -> Vec<HullRecord> {
+            vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(128),
+                    count: 2,
+                    ammo: 0,
+                }],
+                size: Some(24),
+                ..crate::testkit::hull(128)
+            }]
+        }
+    }
+
+    /// Everything `catalog` says about weapons and hulls.
+    fn combat(catalog: impl CombatCatalog) -> Vec<String> {
+        vec![
+            format!("{:?}", catalog.weapons()),
+            format!("{:?}", catalog.hulls()),
+        ]
+    }
+
+    #[test]
+    fn borrowed_and_shared_combat_catalogs_are_catalogs() {
+        let direct = combat(One);
+        assert!(direct[0].contains("speed: 1500"), "{direct:?}");
+        assert!(direct[1].contains("size: Some(24)"), "{direct:?}");
+        assert!(direct[1].contains("WeaponId(128), count: 2"), "{direct:?}");
+        assert_eq!(combat(&One), direct);
+        assert_eq!(combat(Rc::new(One)), direct);
     }
 
     #[test]

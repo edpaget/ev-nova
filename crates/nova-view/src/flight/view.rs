@@ -973,6 +973,8 @@ mod tests {
         mass: 15,
         free_mass: 8,
         contribute: 1,
+        shield_rech: 0,
+        armor_rech: 0,
     };
 
     fn sheet() -> ShipSheet {

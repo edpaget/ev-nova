@@ -1,12 +1,13 @@
-//! A canned [`PilotCatalog`] and [`TrafficCatalog`] for the crate's own
-//! tests.
+//! A canned [`PilotCatalog`], [`TrafficCatalog`] and [`CombatCatalog`]
+//! for the crate's own tests.
 
 use std::cell::RefCell;
 
 use crate::catalog::{
-    CharacterStart, CommodityStrings, DisasterRecord, DudeId, DudeRecord, FleetRecord, JunkRecord,
-    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate,
-    StartError, StellarId, SystemId, SystemTraffic, TrafficCatalog,
+    CharacterStart, CombatCatalog, CommodityStrings, DisasterRecord, DudeId, DudeRecord,
+    FleetRecord, HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId,
+    ShipRecord, StarSystem, StartDate, StartError, StellarId, SystemId, SystemTraffic,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::flight::{Controls, Turn};
@@ -50,6 +51,10 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) dudes: Vec<(DudeId, DudeRecord)>,
     /// Every `flët`.
     pub(crate) fleets: Vec<FleetRecord>,
+    /// Every `wëap`.
+    pub(crate) weapons: Vec<WeaponRecord>,
+    /// Every `shïp`'s combat fields.
+    pub(crate) hulls: Vec<HullRecord>,
 }
 
 pub(crate) const FAST: ShipFields = ShipFields {
@@ -64,6 +69,8 @@ pub(crate) const FAST: ShipFields = ShipFields {
     mass: 40,
     free_mass: 30,
     contribute: 0x1,
+    shield_rech: 0,
+    armor_rech: 0,
 };
 
 /// A landable planet at (`x`, `y`), 100 x 100 (radius 50).
@@ -130,6 +137,49 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
     }
 }
 
+/// `wëap` `id`: an unguided weapon with unlimited ammo that does
+/// nothing, with every other field none or unused (-1).
+pub(crate) fn weapon(id: i16) -> WeaponRecord {
+    WeaponRecord {
+        id: WeaponId(id),
+        reload: 0,
+        count: 0,
+        mass_dmg: 0,
+        energy_dmg: 0,
+        guidance: -1,
+        speed: 0,
+        ammo_type: -1,
+        inaccuracy: 0,
+        impact: 0,
+        explod_type: -1,
+        prox_radius: 0,
+        blast_radius: 0,
+        flags: 0,
+        seeker: 0,
+        flags2: 0,
+        flags3: 0,
+        decay: 0,
+        beam_length: 0,
+        burst_count: 0,
+        burst_reload: 0,
+    }
+}
+
+/// `shïp` `id`'s combat fields: no flags, no weapons, no `shän`, no
+/// explosions, gone at once and massless.
+pub(crate) fn hull(id: i16) -> HullRecord {
+    HullRecord {
+        id: ShipId(id),
+        flags: 0,
+        death_delay: 0,
+        explode1: -1,
+        explode2: -1,
+        mass: 0,
+        weapons: Vec::new(),
+        size: None,
+    }
+}
+
 /// The first `chär` flies ship 128 from system 130 on 23 June 1177;
 /// ship 128 is fast, and systems 130 and 131 exist. System 130 holds a
 /// planet, 128, at (30, -40), which the ship starts over, and another,
@@ -175,6 +225,8 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         traffic: Vec::new(),
         dudes: Vec::new(),
         fleets: Vec::new(),
+        weapons: Vec::new(),
+        hulls: Vec::new(),
     }
 }
 
@@ -287,6 +339,17 @@ impl TrafficCatalog for FakePilotCatalog {
 
     fn fleets(&self) -> Vec<FleetRecord> {
         self.fleets.clone()
+    }
+}
+
+/// Unarmed, unless a test sets weapons and hulls.
+impl CombatCatalog for FakePilotCatalog {
+    fn weapons(&self) -> Vec<WeaponRecord> {
+        self.weapons.clone()
+    }
+
+    fn hulls(&self) -> Vec<HullRecord> {
+        self.hulls.clone()
     }
 }
 

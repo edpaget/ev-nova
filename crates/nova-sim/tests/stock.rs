@@ -83,6 +83,8 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         mass: ship.mass,
         free_mass: ship.free_mass,
         contribute: ship.contribute.bits(),
+        shield_rech: ship.shield_rech,
+        armor_rech: ship.armor_rech,
     };
     assert_eq!(data.ship_fields(session.ship()), Ok(fields));
     // The Shuttle carries no default items: its own fields are its stats.

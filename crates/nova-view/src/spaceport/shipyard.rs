@@ -815,6 +815,8 @@ mod tests {
             mass: 25,
             free_mass: 12,
             contribute: 0,
+            shield_rech: 0,
+            armor_rech: 0,
         },
         max_gun: 2,
         max_tur: 1,
