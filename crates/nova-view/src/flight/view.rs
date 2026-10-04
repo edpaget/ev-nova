@@ -693,6 +693,7 @@ mod tests {
                 ship: Some(ShipId(128)),
                 systems: [None, Some(SystemId(130)), None, None],
                 start: StartDate::default(),
+                ..CharacterStart::default()
             }),
             fields: FIELDS,
             sheet: Ok(sheet()),

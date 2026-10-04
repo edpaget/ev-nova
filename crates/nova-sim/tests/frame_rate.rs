@@ -18,6 +18,7 @@ impl PilotCatalog for Pilot {
             ship: Some(ShipId(128)),
             systems: [Some(SystemId(130)), None, None, None],
             start: StartDate::default(),
+            ..CharacterStart::default()
         })
     }
 

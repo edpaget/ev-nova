@@ -39,6 +39,10 @@ impl PilotCatalog for GameData {
                 month: character.record.unknown_0x136,
                 year: character.record.start_year,
             },
+            cash: character.record.cash,
+            legal: std::array::from_fn(|slot| {
+                character.record.govt[slot].map(|govt| (govt, character.record.status[slot]))
+            }),
         })
     }
 
@@ -160,7 +164,7 @@ mod tests {
     use nova_rsrc::{Fork, ForkReader, ResType};
 
     use super::*;
-    use crate::catalog::{StarSystem, StartDate, StellarId};
+    use crate::catalog::{GovtId, StarSystem, StartDate, StellarId};
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -198,11 +202,13 @@ mod tests {
         }
     }
 
-    /// A `chär` starting in `ship` in these systems.
+    /// A `chär` starting in `ship` in these systems, with no cash and no
+    /// legal records.
     fn character(ship: i16, systems: [i16; 4]) -> Vec<u8> {
         let mut bytes = vec![0; Character::SIZE.expect("fixed")];
         put_i16s(&mut bytes, 0x04, &[ship]);
         put_i16s(&mut bytes, 0x06, &systems);
+        put_i16s(&mut bytes, 0x0E, &[-1; 4]);
         bytes
     }
 
@@ -243,6 +249,8 @@ mod tests {
                 ship: Some(ShipId(128)),
                 systems: [None, Some(SystemId(999)), Some(SystemId(130)), None],
                 start: StartDate::default(),
+                cash: 0,
+                legal: [None; 4],
             })
         );
         let shipless = store(&[(Character::TYPE, 128, character(-1, [130, -1, -1, -1]))]);
@@ -261,6 +269,26 @@ mod tests {
                 month: 6,
                 year: 1177
             })
+        );
+    }
+
+    #[test]
+    fn the_start_carries_the_chärs_cash_and_legal_records() {
+        let mut bytes = character(128, [130, -1, -1, -1]);
+        bytes[0x00..0x04].copy_from_slice(&(-7_000_i32).to_be_bytes());
+        put_i16s(&mut bytes, 0x0E, &[129, -1, 131, 140]);
+        put_i16s(&mut bytes, 0x16, &[50, 99, -20, 0]);
+        let data = store(&[(Character::TYPE, 128, bytes)]);
+        let start = data.first_character().expect("decodes");
+        assert_eq!(start.cash, -7_000);
+        assert_eq!(
+            start.legal,
+            [
+                Some((GovtId(129), 50)),
+                None,
+                Some((GovtId(131), -20)),
+                Some((GovtId(140), 0)),
+            ]
         );
     }
 

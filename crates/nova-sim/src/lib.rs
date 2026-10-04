@@ -23,6 +23,9 @@
 //! - [`landing`]: whether the ship can land, [`check_landing`], each
 //!   [`LandingRefusal`] in the order it applies, and the [`Service`]s a
 //!   stellar's flags offer.
+//! - [`pilot`]: the [`Pilot`], everything about the player a save keeps:
+//!   ship, location, date, cash, reserves, course, explored systems and
+//!   legal records, starting from the first `chär`.
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full at its `shïp`'s values when it starts.
 //! - [`session`]: a flight [`Session`], the first `chär`'s ship flying
@@ -40,9 +43,12 @@ pub mod geometry;
 pub mod handling;
 pub mod hyperspace;
 pub mod landing;
+pub mod pilot;
 pub mod reserves;
 pub mod session;
 pub mod sound;
+#[cfg(test)]
+mod testkit;
 
 pub use catalog::{
     CharacterStart, GovtId, LandingSite, PilotCatalog, ShipId, SoundId, StarSystem, StartDate,
@@ -56,6 +62,7 @@ pub use geometry::Vec2;
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
+pub use pilot::Pilot;
 pub use reserves::{Gauge, Reserves};
 pub use session::Session;
 pub use sound::SimSound;

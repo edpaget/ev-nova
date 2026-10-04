@@ -10,7 +10,7 @@ use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
 /// A new pilot's start, from the first `chär`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CharacterStart {
     /// The starting `shïp`, if it names one.
     pub ship: Option<ShipId>,
@@ -18,6 +18,12 @@ pub struct CharacterStart {
     pub systems: [Option<SystemId>; 4],
     /// The starting date, raw.
     pub start: StartDate,
+    /// The starting credits, raw: the [`pilot`](crate::pilot) rules
+    /// decide what a negative amount means.
+    pub cash: i32,
+    /// The starting legal records, `Govt1-4` with `Status1-4`: each
+    /// government and the record with it, or `None` for an unused slot.
+    pub legal: [Option<(GovtId, i16)>; 4],
 }
 
 /// A new pilot's starting date, raw from the `chär`: the
@@ -188,6 +194,7 @@ mod tests {
                     month: 6,
                     year: 1177,
                 },
+                ..CharacterStart::default()
             })
         }
 

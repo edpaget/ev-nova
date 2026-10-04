@@ -10,9 +10,43 @@ use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::{
-    Handling, LandingRefusal, OutfitMod, PilotCatalog, Reserves, Service, Session, ShipFields,
-    ShipId, ShipState, check_landing, fuel_regen_per_tick, services,
+    GameDate, Handling, LandingRefusal, OutfitMod, Pilot, PilotCatalog, Reserves, Service, Session,
+    ShipFields, ShipId, ShipState, StartDate, check_landing, fuel_regen_per_tick, services,
 };
+
+/// A new pilot starts with the first `chär`'s ship, cash, location (its
+/// first starting system, which exists) and date, 23 June 1177.
+#[test]
+fn a_new_pilot_starts_as_the_first_chär_says() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    let (_, first) = data.records::<Character>().next().expect("a chär");
+    let character = first.expect("decodes").record;
+    assert_eq!(Some(pilot.ship()), character.ship_type);
+    assert_eq!(pilot.cash(), i64::from(character.cash));
+    assert_eq!(Some(pilot.system()), character.system[0]);
+    assert_eq!(
+        pilot.date(),
+        GameDate::from_start(StartDate {
+            day: character.unknown_0x134,
+            month: character.unknown_0x136,
+            year: character.start_year,
+        })
+    );
+    assert_eq!(
+        (
+            pilot.date().day(),
+            pilot.date().month(),
+            pilot.date().year()
+        ),
+        (23, 6, 1177)
+    );
+    assert_eq!(pilot.stellar(), None);
+    assert_eq!(pilot.explored().collect::<Vec<_>>(), [pilot.system()]);
+}
 
 #[test]
 fn the_first_chär_starts_a_session_in_one_of_its_systems() {
