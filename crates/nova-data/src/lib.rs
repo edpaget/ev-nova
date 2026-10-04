@@ -123,6 +123,11 @@
 //! beside `Nova Files` in the Mac OS X release, and checks it is a usable
 //! outline font; see there for why nothing is extracted from a suitcase.
 //!
+//! # Music
+//!
+//! [`music`] finds and reads the game's soundtrack, `Nova Music.mp3` in
+//! `Nova Files`, for the audio player to decode.
+//!
 //! # Out of scope
 //!
 //! [`OUT_OF_SCOPE`] lists the media types [`decode_file`] skips (as it does
@@ -137,6 +142,7 @@ pub mod error;
 pub mod file;
 pub mod fonts;
 pub mod graphics;
+pub mod music;
 pub mod records;
 pub mod registry;
 pub mod sound;
