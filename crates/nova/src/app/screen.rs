@@ -12,7 +12,14 @@
 //! arrow keys fly the ship, Tab does nothing, and Escape goes back to the
 //! screen flight was entered from; it never quits.
 //!
-//! I, outside flight, opens the About text in the game's "Desc Dialog"
+//! L, in flight over a stellar that can be landed on, lands and shows its
+//! spaceport ([`SpaceportView`]), laid out by the interface file's
+//! "Spaceport" dialog when the router has dialogs; without them the
+//! spaceport says why. The spaceport takes every input: Leave, Return and
+//! Escape take off, back into flight at the stellar, and Tab, F and I do
+//! nothing.
+//!
+//! I, outside flight and the spaceport, opens the About text in the game's "Desc Dialog"
 //! over the screen shown, when the router was given the interface file's
 //! dialogs ([`AppScreen::with_dialogs`]). The dialog is modal: it takes
 //! every input until Done (Return, Escape or a click) closes it.
@@ -24,6 +31,8 @@ use nova_data::GameData;
 use nova_view::flight::FlightView;
 use nova_view::galaxy::GalaxyMap;
 use nova_view::ships::ShipBrowser;
+use nova_view::spaceport::SpaceportView;
+use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
 use nova_view::ui::desc::DESC_DIALOG;
@@ -43,6 +52,9 @@ pub const HINT_COLOR: Color = Color::DIM;
 /// The About text's `dësc`.
 pub const ABOUT_TEXT: i16 = 32767;
 
+/// Why the spaceport cannot be laid out when the router has no dialogs.
+pub const NO_INTERFACE: &str = "no interface file";
+
 /// Which screen the app is showing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Showing {
@@ -54,6 +66,8 @@ pub enum Showing {
     System,
     /// The player's ship in flight.
     Flight,
+    /// The spaceport of the stellar landed on.
+    Spaceport,
     /// The About text, over another screen.
     About,
 }
@@ -64,6 +78,7 @@ enum Side {
     Ships,
     Galaxy,
     Flight,
+    Spaceport,
 }
 
 /// Every screen the app can show, and which side it is showing. The router
@@ -88,6 +103,8 @@ pub struct AppScreen {
     dialogs: Option<Dialogs>,
     /// The About dialog, while it is open.
     about: Option<DescDialog>,
+    /// The spaceport, while the ship is landed.
+    spaceport: Option<SpaceportView>,
 }
 
 /// The interface file's dialogs and the metrics their text is laid out by.
@@ -116,6 +133,7 @@ impl AppScreen {
             flight: None,
             dialogs: None,
             about: None,
+            spaceport: None,
         }
     }
 
@@ -154,6 +172,7 @@ impl AppScreen {
             Side::Galaxy if self.galaxy.system().is_some() => Showing::System,
             Side::Galaxy => Showing::GalaxyMap,
             Side::Flight => Showing::Flight,
+            Side::Spaceport => Showing::Spaceport,
         }
     }
 
@@ -181,6 +200,12 @@ impl AppScreen {
         self.flight.as_ref()
     }
 
+    /// The spaceport, while the ship is landed.
+    #[must_use]
+    pub fn spaceport_view(&self) -> Option<&SpaceportView> {
+        self.spaceport.as_ref()
+    }
+
     /// The galaxy side: the map and any open system.
     #[must_use]
     pub fn navigator(&self) -> &Navigator<Rc<GameData>> {
@@ -192,6 +217,7 @@ impl AppScreen {
             Side::Ships => &self.ships,
             Side::Galaxy => &self.galaxy,
             Side::Flight => self.flight.as_ref().expect(ENTERED),
+            Side::Spaceport => self.spaceport.as_ref().expect(LANDED),
         }
     }
 
@@ -200,6 +226,7 @@ impl AppScreen {
             Side::Ships => &mut self.ships,
             Side::Galaxy => &mut self.galaxy,
             Side::Flight => self.flight.as_mut().expect(ENTERED),
+            Side::Spaceport => self.spaceport.as_mut().expect(LANDED),
         }
     }
 
@@ -254,21 +281,46 @@ impl AppScreen {
     }
 
     /// Flight's input: an Escape press goes back, and everything else goes
-    /// to flight (which ignores Tab).
+    /// to flight (which ignores Tab). When it lands, the spaceport shows.
     fn flight_input(&mut self, input: &Input) -> ScreenAction {
-        match *input {
-            Input::Key {
-                key: Key::Escape,
-                pressed,
-                repeat,
-            } => {
-                if pressed && !repeat {
-                    self.switch_to(self.return_to);
-                }
-                ScreenAction::None
+        if let Input::Key {
+            key: Key::Escape,
+            pressed,
+            repeat,
+        } = *input
+        {
+            if pressed && !repeat {
+                self.switch_to(self.return_to);
             }
-            _ => self.shown_mut().input(input),
+            return ScreenAction::None;
         }
+        let flight = self.flight.as_mut().expect(ENTERED);
+        flight.input(input);
+        if let Some(stellar) = flight.take_landing() {
+            let layout = match &self.dialogs {
+                Some(dialogs) => dialogs
+                    .resources
+                    .dialog_template(SPACEPORT_DIALOG)
+                    .map(|template| (template, Rc::clone(&dialogs.metrics))),
+                None => Err(NO_INTERFACE.to_owned()),
+            };
+            self.spaceport = Some(SpaceportView::new(self.data.as_ref(), stellar, layout));
+            self.switch_to(Side::Spaceport);
+        }
+        ScreenAction::None
+    }
+
+    /// The spaceport's input, all of it; once it is left, the ship takes off
+    /// and flight shows.
+    fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
+        let spaceport = self.spaceport.as_mut().expect(LANDED);
+        spaceport.input(input);
+        if spaceport.left() {
+            self.switch_to(Side::Flight);
+            self.spaceport = None;
+            self.flight.as_mut().expect(ENTERED).take_off();
+        }
+        ScreenAction::None
     }
 }
 
@@ -287,6 +339,9 @@ fn about_dialog(dialogs: &Dialogs, data: &GameData) -> Result<DescDialog, String
 
 /// Flight shows only once it has been built.
 const ENTERED: &str = "flight is built when it is entered";
+
+/// The spaceport shows only once the ship has landed.
+const LANDED: &str = "the spaceport is built when the ship lands";
 
 /// The screen the app opens on: every screen over `data`, showing the ship
 /// browser.
@@ -313,6 +368,9 @@ impl Screen for AppScreen {
     /// repeats and release are consumed. Everything else goes to flight,
     /// where Tab does nothing.
     ///
+    /// In the spaceport, every event goes to it; leaving it takes off,
+    /// back into flight, letting go of its keys.
+    ///
     /// With dialogs, an I press outside flight opens the About dialog
     /// over the side shown, cancelling and letting go on it as Tab does.
     /// While the dialog is open, every event goes to it alone (Escape
@@ -321,8 +379,10 @@ impl Screen for AppScreen {
         if self.about.is_some() {
             return self.about_input(input);
         }
-        if self.side == Side::Flight {
-            return self.flight_input(input);
+        match self.side {
+            Side::Flight => return self.flight_input(input),
+            Side::Spaceport => return self.spaceport_input(input),
+            Side::Ships | Side::Galaxy => {}
         }
         if let Input::Key {
             key: Key::Char('i'),
@@ -368,11 +428,11 @@ impl Screen for AppScreen {
         }
     }
 
-    /// The side shown, then the hint (flight has its own help line
-    /// instead), then the About dialog when it is open.
+    /// The side shown, then the hint (not over flight, which has its own
+    /// help line, or the spaceport), then the About dialog when it is open.
     fn draw(&self, list: &mut DrawList) {
         self.shown().draw(list);
-        if self.side != Side::Flight {
+        if matches!(self.side, Side::Ships | Side::Galaxy) {
             let hint = if self.dialogs.is_some() {
                 HINT
             } else {
@@ -423,6 +483,7 @@ mod tests {
     use nova_view::galaxy::map::ENTER_BUTTON;
     use nova_view::geometry::Bounds;
     use nova_view::ships::{ShipBrowser, ShipId};
+    use nova_view::spaceport::layout::LEAVE_ITEM;
     use nova_view::text::fixture::MonoMetrics;
     use nova_view::ui::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
     use nova_view::{DrawCommand, Font, Key, MouseButton, Point};
@@ -464,9 +525,9 @@ mod tests {
 
     /// Ships 129 and 128, each with a `shän` naming a 4-frame `rlëD` (one
     /// set of 4 rotations), and systems 128 and 129, 300 apart. System 128
-    /// holds stellar 128 at (0, 0), whose `spïn` 1000 names the same
-    /// `rlëD`. The only `chär` starts in ship 128, an average ship, in
-    /// system 128.
+    /// holds stellar 128 at (0, 0), a planet with a bar, whose `spïn` 1000
+    /// names the same `rlëD`. The only `chär` starts in ship 128, an
+    /// average ship, in system 128, over the planet.
     fn data() -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
@@ -500,12 +561,7 @@ mod tests {
             .resource(RLED, 1000, None, &sheet)
             .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128]))
             .resource(System::TYPE, 129, Some(b"Beta"), &system(300, &[]))
-            .resource(
-                Stellar::TYPE,
-                128,
-                Some(b"Alpha Prime"),
-                &vec![0; Stellar::SIZE.expect("fixed")],
-            )
+            .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &landable())
             .resource(Spin::TYPE, 1000, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
             .build()
@@ -513,6 +569,13 @@ mod tests {
         let file = OneFile(fork);
         let data = GameData::load(&file, &file, Path::new("/data"), None).expect("opens");
         Rc::new(data)
+    }
+
+    /// A `spöb` at (0, 0) that can be landed on: a planet with a bar.
+    fn landable() -> Vec<u8> {
+        let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
+        bytes[0x06..0x0A].copy_from_slice(&0x41_u32.to_be_bytes());
+        bytes
     }
 
     /// The About text's `dësc`: ten short lines.
@@ -1096,21 +1159,24 @@ mod tests {
 
     // The About dialog.
 
-    /// Dialog templates by ID: "Desc Dialog" (3003) alone, 200 x 100 at
-    /// (0, 0), with Done (1) and a 100 x 36 text box (3): three lines of
-    /// the About text show.
+    /// Dialog templates by ID: "Desc Dialog" (3003), 200 x 100 at (0, 0),
+    /// with Done (1) and a 100 x 36 text box (3): three lines of the About
+    /// text show; and "Spaceport" (1000), [`spaceport_template`].
     struct Dialogs;
 
     impl DialogResources for Dialogs {
         fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
-            if id != DESC_DIALOG {
-                return Err(format!("no DLOG {id}"));
-            }
             let item = |x, y, w, h, kind| ItemTemplate {
                 bounds: Bounds::at(Point::new(x, y), w, h),
                 enabled: true,
                 kind,
             };
+            if id == SPACEPORT_DIALOG {
+                return Ok(spaceport_template());
+            }
+            if id != DESC_DIALOG {
+                return Err(format!("no DLOG {id}"));
+            }
             Ok(DialogTemplate {
                 bounds: Bounds::at(Point::new(0.0, 0.0), 200.0, 100.0),
                 placement: Placement::Fixed,
@@ -1371,5 +1437,190 @@ mod tests {
         screen.cancel_pointer();
         screen.input(&button(false));
         assert_eq!(screen.showing(), Showing::About, "the click was abandoned");
+    }
+
+    // Landing.
+
+    /// "Spaceport", smaller: 400 x 300 at (0, 0), its twelve items in a
+    /// row of 30 x 20 boxes, so each service and Leave (12) has a place.
+    fn spaceport_template() -> DialogTemplate {
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
+            placement: Placement::Fixed,
+            items: (0..12_u8)
+                .map(|n| ItemTemplate {
+                    bounds: Bounds::at(Point::new(f32::from(n) * 32.0, 250.0), 30.0, 20.0),
+                    enabled: true,
+                    kind: ItemSpec::User,
+                })
+                .collect(),
+        }
+    }
+
+    const LAND: Key = Key::Char('l');
+
+    /// Enters flight and lands with an L press.
+    fn land(screen: &mut AppScreen) {
+        fly(screen);
+        assert_eq!(screen.input(&key(LAND, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    fn spaceport(screen: &AppScreen) -> &SpaceportView {
+        screen.spaceport_view().expect("landed")
+    }
+
+    #[test]
+    fn l_over_the_planet_shows_its_spaceport() {
+        let mut screen = with_dialogs(data());
+        assert!(screen.spaceport_view().is_none());
+        land(&mut screen);
+        let port = spaceport(&screen);
+        assert_eq!(port.stellar(), nova_sim::StellarId(128));
+        assert_eq!(port.problem(), None);
+        assert_eq!(
+            port.offered(),
+            [nova_sim::Service::Bar, nova_sim::Service::MissionBbs]
+        );
+        assert_eq!(
+            flight(&screen).session().expect("flying").landed(),
+            Some(nova_sim::StellarId(128))
+        );
+        // Drawn alone: no hint.
+        assert_eq!(drawn(&screen), drawn(spaceport(&screen)));
+    }
+
+    #[test]
+    fn landing_lets_go_of_the_flight_keys() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        screen.input(&key(Key::Up, true));
+        screen.input(&key(LAND, true));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        // Up's release goes to the spaceport, and Leave takes off.
+        screen.input(&key(Key::Up, false));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        screen.tick(TICK * 5);
+        assert_eq!(ship(&screen), nova_sim::ShipState::default(), "no thrust");
+    }
+
+    #[test]
+    fn leave_takes_off_back_into_flight_at_the_planet() {
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        let leave = spaceport(&screen)
+            .dialog()
+            .expect("laid out")
+            .item_bounds(LEAVE_ITEM)
+            .expect("Leave")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: leave,
+            });
+        }
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.spaceport_view().is_none());
+        assert_eq!(flight(&screen).session().expect("flying").landed(), None);
+        assert_eq!(ship(&screen), nova_sim::ShipState::default());
+        // It flies again.
+        screen.input(&key(Key::Up, true));
+        screen.tick(TICK * 3);
+        assert!(ship(&screen).position.y < 0.0);
+    }
+
+    #[test]
+    fn escape_in_the_spaceport_leaves_and_never_quits() {
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        assert_eq!(screen.input(&held(Key::Escape)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
+        assert_eq!(screen.showing(), Showing::Flight);
+    }
+
+    #[test]
+    fn tab_f_and_i_do_nothing_in_the_spaceport() {
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        for k in [Key::Tab, Key::Char('f'), Key::Char('i'), LAND] {
+            assert_eq!(screen.input(&key(k, true)), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::Spaceport, "{k:?}");
+        }
+        assert!(screen.about().is_none());
+    }
+
+    #[test]
+    fn without_dialogs_the_spaceport_says_why_and_escape_still_leaves() {
+        let mut screen = AppScreen::new(data());
+        land(&mut screen);
+        assert_eq!(spaceport(&screen).problem(), Some(NO_INTERFACE));
+        let texts: Vec<String> = drawn(&screen)
+            .iter()
+            .filter_map(|c| match c {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            ["Cannot show the spaceport: no interface file".to_owned()]
+        );
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+    }
+
+    #[test]
+    fn a_missing_spaceport_dialog_says_why() {
+        let mut screen =
+            AppScreen::new(data()).with_dialogs(Rc::new(NoDialogs), Rc::new(MonoMetrics));
+        land(&mut screen);
+        assert_eq!(spaceport(&screen).problem(), Some("no DLOG 1000"));
+    }
+
+    #[test]
+    fn only_the_spaceport_ticks_and_takes_pointer_and_key_resets() {
+        let mut screen = with_dialogs(data());
+        land(&mut screen);
+        let docked = ship(&screen);
+        screen.tick(TICK * 5);
+        assert_eq!(ship(&screen), docked);
+        let leave = spaceport(&screen)
+            .dialog()
+            .expect("laid out")
+            .item_bounds(LEAVE_ITEM)
+            .expect("Leave")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: leave,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.release_keys();
+        screen.input(&button(false));
+        assert_eq!(
+            screen.showing(),
+            Showing::Spaceport,
+            "the click was abandoned"
+        );
+    }
+
+    #[test]
+    fn a_refused_landing_stays_in_flight() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        screen.input(&key(Key::Up, true));
+        screen.tick(TICK * 30);
+        screen.input(&key(LAND, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.spaceport_view().is_none());
+        assert!(flight(&screen).message().is_some());
     }
 }
