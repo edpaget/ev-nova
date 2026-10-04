@@ -1,5 +1,5 @@
-//! Where the player's settings are saved: a pure function of the target
-//! operating system and the environment, which the caller reads.
+//! Where the player's settings and pilots are saved: pure functions of the
+//! target operating system and the environment, which the caller reads.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -32,6 +32,10 @@ impl Os {
 /// The settings file's name, in the `nova` directory.
 pub const SETTINGS_FILE: &str = "settings.json";
 
+/// The pilots directory's name, in the `nova` directory: the original's
+/// folder name (`STR#` 130 #3).
+pub const PILOTS_DIR: &str = "Pilots";
+
 /// The settings file on `os`, from the environment variables `env` looks
 /// up, or `None` when the variables it needs are unset (or empty):
 ///
@@ -40,6 +44,19 @@ pub const SETTINGS_FILE: &str = "settings.json";
 /// - Otherwise: `$XDG_CONFIG_HOME/nova/settings.json`, or
 ///   `$HOME/.config/nova/settings.json` without it.
 pub fn settings_path(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    Some(nova_dir(os, env)?.join(SETTINGS_FILE))
+}
+
+/// The directory pilots are saved in on `os`, [`PILOTS_DIR`] beside the
+/// settings file (see [`settings_path`]), or `None` when the variables it
+/// needs are unset (or empty). On macOS:
+/// `$HOME/Library/Application Support/nova/Pilots`.
+pub fn pilots_dir(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    Some(nova_dir(os, env)?.join(PILOTS_DIR))
+}
+
+/// The `nova` directory under the platform's configuration directory.
+fn nova_dir(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     let var = |name: &str| {
         env(name)
             .filter(|value| !value.is_empty())
@@ -53,7 +70,7 @@ pub fn settings_path(os: Os, env: impl Fn(&str) -> Option<OsString>) -> Option<P
             None => var("HOME")?.join(".config"),
         },
     };
-    Some(base.join("nova").join(SETTINGS_FILE))
+    Some(base.join("nova"))
 }
 
 #[cfg(test)]
@@ -128,6 +145,38 @@ mod tests {
             );
         }
         assert_eq!(settings_path(Os::Other, env(&[("APPDATA", "C:/x")])), None);
+    }
+
+    fn pilots(base: &str, parts: &[&str]) -> PathBuf {
+        let mut path = Path::new(base).to_path_buf();
+        path.extend(parts);
+        path.extend(["nova", "Pilots"]);
+        path
+    }
+
+    #[test]
+    fn pilots_are_saved_in_a_pilots_directory_beside_the_settings() {
+        let vars = env(&[("HOME", "/Users/p"), ("XDG_CONFIG_HOME", "/xdg")]);
+        assert_eq!(
+            pilots_dir(Os::MacOs, vars),
+            Some(pilots("/Users/p", &["Library", "Application Support"]))
+        );
+        let vars = env(&[("APPDATA", "C:/Roaming"), ("HOME", "/home/p")]);
+        assert_eq!(
+            pilots_dir(Os::Windows, vars),
+            Some(pilots("C:/Roaming", &[]))
+        );
+        let vars = env(&[("HOME", "/home/p"), ("XDG_CONFIG_HOME", "/xdg")]);
+        assert_eq!(pilots_dir(Os::Other, vars), Some(pilots("/xdg", &[])));
+        let vars = env(&[("HOME", "/home/p")]);
+        assert_eq!(
+            pilots_dir(Os::Other, vars),
+            Some(pilots("/home/p", &[".config"]))
+        );
+        for os in [Os::MacOs, Os::Windows, Os::Other] {
+            assert_eq!(pilots_dir(os, env(&[])), None, "{os:?}");
+        }
+        assert_eq!(PILOTS_DIR, "Pilots");
     }
 
     #[test]

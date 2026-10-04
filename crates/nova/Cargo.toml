@@ -13,6 +13,9 @@ publish.workspace = true
 nova-audio.workspace = true
 nova-data.workspace = true
 nova-render.workspace = true
+# The pilot store port the filesystem adapter implements, and the keeper
+# the router saves pilots through.
+nova-sim.workspace = true
 nova-view.workspace = true
 pollster.workspace = true
 thiserror.workspace = true
@@ -35,8 +38,10 @@ nova-render = { workspace = true, features = ["recording"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
 # The text-metrics mock for the router's dialog tests.
 nova-view = { workspace = true, features = ["fixture"] }
-# The router and flight tests read the flight session's state.
-nova-sim.workspace = true
+# The router and integration tests save pilots in the in-memory store.
+nova-sim = { workspace = true, features = ["fixture"] }
+# The pilot file adapter's tests write into a temporary directory.
+tempfile.workspace = true
 # The runner tests build the wgpu errors a GPU set-up can fail with.
 wgpu.workspace = true
 
