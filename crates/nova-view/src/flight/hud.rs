@@ -1,6 +1,8 @@
 //! The flight HUD: the status bar down the right edge of the screen, laid
-//! out by an `ïntf`, with the radar, the shield, armour and fuel bars and
-//! the system's name.
+//! out by an `ïntf`, with the radar and the shield, armour and fuel bars.
+//! The `ïntf`'s nav area is the navigation display (Nova Bible, "The ïntf
+//! resource": `NavArea`; STR# 2002 342-349), not the system's name, so it is
+//! left empty here.
 //!
 //! Which `ïntf`: a pilot with no government shows `ïntf` 128, the
 //! "Default status bar"; one who belongs to a government shows that
@@ -117,13 +119,10 @@ pub struct HudState<'a> {
     pub stellars: &'a [Point],
     /// The player's shield, armour and fuel.
     pub reserves: Reserves,
-    /// The system's name.
-    pub system: &'a str,
 }
 
 /// Draws `bar` showing `state`: its background, a radar dot for each
-/// stellar within range, the shield, armour and fuel bars, then the
-/// system's name in the nav area.
+/// stellar within range, then the shield, armour and fuel bars.
 pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
     let origin = bar_origin(bar);
     let layout = &bar.layout;
@@ -162,14 +161,6 @@ pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
         whole,
         reserves.fuel.fraction(),
         layout.fuel_partial,
-    );
-    list.text_in(
-        layout.font,
-        state.system,
-        layout.nav.offset(origin).min,
-        layout.font_size,
-        None,
-        layout.bright_text,
     );
 }
 
@@ -529,7 +520,6 @@ mod tests {
             position: at(0.0, 0.0),
             stellars: &[],
             reserves,
-            system: "Kania",
         }
     }
 
@@ -637,13 +627,12 @@ mod tests {
     }
 
     #[test]
-    fn it_draws_the_background_then_the_radar_then_the_bars_then_the_name() {
+    fn it_draws_the_background_then_the_radar_then_the_bars() {
         let stellars = [at(0.0, -600.0), at(300.0, -200.0), at(5000.0, 0.0)];
         let hud = HudState {
             position: at(0.0, 0.0),
             stellars: &stellars,
             reserves: reserves(30.0, 60.0, 300.0),
-            system: "Kania",
         };
         let list = drawn(&stock(), &hud);
         let mut expected = DrawList::new();
@@ -653,8 +642,12 @@ mod tests {
         expected.line(at(865.0, 202.5), at(1014.0, 202.5), 7.0, SHIELD);
         expected.line(at(865.0, 219.5), at(1014.0, 219.5), 7.0, ARMOR);
         expected.line(at(865.0, 237.5), at(1014.0, 237.5), 7.0, FUEL_FULL);
-        expected.text_in(Font::Charcoal, "Kania", at(838.0, 254.0), 11.0, None, TEXT);
         assert_eq!(list, expected);
+        // The nav area stays empty: the HUD never shows the system's name.
+        assert!(
+            !list.iter().any(|c| matches!(c, DrawCommand::Text { .. })),
+            "{list:?}"
+        );
         assert_eq!(RADAR_DOT_SIZE, 2.0);
     }
 

@@ -757,7 +757,6 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
                     position: self.shown_position(),
                     stellars: &stellars,
                     reserves: self.reserves(),
-                    system: scene.name(),
                 };
                 hud::draw(list, bar, &state);
             }
@@ -1477,7 +1476,6 @@ mod tests {
                 position: at(0.0, 0.0),
                 stellars: &[at(0.0, -600.0), at(300.0, -200.0)],
                 reserves: ShipStats::new(FIELDS, &[]).full(),
-                system: "Sol",
             },
         );
         assert_eq!(list, expected);
@@ -1627,7 +1625,8 @@ mod tests {
                 on_radar(at(300.0, -200.0)).expect("in range"),
             ]
         );
-        assert_eq!(texts(&list).last().map(String::as_str), Some("Sol"));
+        // No system name in the nav area (the dev title still names it).
+        assert!(!texts(&list).contains(&"Sol".to_owned()), "{list:?}");
     }
 
     #[test]
@@ -1664,7 +1663,6 @@ mod tests {
                 position: at(0.0, 0.0),
                 stellars: &[],
                 reserves,
-                system: "Sol",
             },
         );
         assert_eq!(lines(&drawn(&view)), lines(&expected));
@@ -2412,7 +2410,6 @@ mod tests {
                 position: at(-1000.0, 0.0),
                 stellars: &[at(0.0, 0.0)],
                 reserves: reserves(&view),
-                system: "Alpha Centauri",
             },
         );
         assert!(

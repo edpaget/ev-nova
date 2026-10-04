@@ -396,7 +396,7 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
     let first = harness.frame();
     // The stars; the two stellars, then their names; the ship; the title
     // and help lines; then the HUD: the status bar's picture, two radar
-    // dots and three bars, and the system's name.
+    // dots and three bars. No system name: the nav area stays empty.
     let shape = shape(&first);
     assert_eq!(shape[0].0, "solid");
     assert!(shape[0].1 > 0, "stars");
@@ -408,8 +408,7 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
             ("sprites", 1),
             ("text", 2),
             ("sprites", 1),
-            ("solid", 5),
-            ("text", 1)
+            ("solid", 5)
         ]
     );
     let start = quads(&first);
@@ -510,14 +509,16 @@ fn the_hud_is_drawn_while_flying() {
         ]
     );
 
-    // The system's name in the nav area.
-    let Some(Batch::Text(runs)) = first.batches.last() else {
-        panic!("text last: {:?}", shape(&first))
-    };
-    assert_eq!(runs.len(), 1);
-    assert_eq!(
-        (runs[0].text.as_str(), runs[0].origin_px),
-        ("Alpha", (838.0, 254.0))
+    // The HUD's solids come last: no system name in the nav area.
+    assert!(
+        matches!(first.batches.last(), Some(Batch::Solid(_))),
+        "solids last: {:?}",
+        shape(&first)
+    );
+    assert!(
+        !texts(&first).contains(&"Alpha".to_owned()),
+        "{:?}",
+        texts(&first)
     );
 
     // Flying up moves the dots down the radar, with the ship as drawn.
