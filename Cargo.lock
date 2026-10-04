@@ -1322,6 +1322,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nova-audio"
+version = "0.1.0"
+dependencies = [
+ "nova-audio",
+ "nova-data",
+ "nova-view",
+]
+
+[[package]]
 name = "nova-data"
 version = "0.1.0"
 dependencies = [

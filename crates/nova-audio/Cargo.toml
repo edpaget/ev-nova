@@ -1,0 +1,25 @@
+[package]
+name = "nova-audio"
+description = "EV Nova's sound effects and music: what to play, and playing it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The `snd ` IDs the table names.
+nova-data.workspace = true
+# The sound events screens report, and which screen is showing.
+nova-view.workspace = true
+
+[dev-dependencies]
+# The core's tests record commands with the `recording` mock.
+nova-audio = { workspace = true, features = ["recording"] }
+
+[features]
+# Exposes the recording Audio mock to other crates' tests.
+recording = []
+
+[lints]
+workspace = true
