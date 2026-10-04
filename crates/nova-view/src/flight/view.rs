@@ -21,7 +21,13 @@
 //! read, once per type for the life of the screen. After each step of the
 //! player's ship, the traffic takes a step,
 //! its NPCs deciding as the screen's [`Behaviour`] says
-//! ([`FlightView::with_behaviour`]; [`Peaceful`] by default). Each NPC is
+//! ([`FlightView::with_behaviour`]; [`Peaceful`] by default), and then the
+//! fight ([`Session::tick_combat`]), its ships disabled as the screen's
+//! [`DisableRule`] says ([`FlightView::with_disable_rule`];
+//! [`NovaDisable`] by default). The session's diagnostics about game data
+//! it does not handle yet pass through [`Screen::take_diagnostics`] for
+//! the app to write out. Shots, beams and explosions are not drawn yet,
+//! and the player has no fire key yet. Each NPC is
 //! drawn with its own ship's sprite, after the stellars and before the
 //! player, smoothed between its last two steps as the player's ship is
 //! (a crossed box when its sheet cannot be read), and as a dim blip on the
@@ -84,11 +90,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Behaviour, Chance, CombatCatalog, Controls, FixedStep, JumpRefusal, LandingRefusal, Market,
-    NeverFires, Npc, NpcId, Order, OutfitOrder, OutfitRefusal, Outfitter, Peaceful, Pilot,
-    PilotCatalog, RechargeRefusal, Reserves, Session, ShipId, ShipPurchase, ShipRefusal, ShipState,
-    Shipyard, StartError, StellarId, Steps, TradeRefusal, TrafficCatalog, Turn, flight::normalized,
-    flight::shortest_turn,
+    Behaviour, Chance, CombatCatalog, Controls, DisableRule, FixedStep, JumpRefusal,
+    LandingRefusal, Market, NeverFires, NovaDisable, Npc, NpcId, Order, OutfitOrder, OutfitRefusal,
+    Outfitter, Peaceful, Pilot, PilotCatalog, RechargeRefusal, Reserves, Session, ShipId,
+    ShipPurchase, ShipRefusal, ShipState, Shipyard, SimDiagnostic, StartError, StellarId, Steps,
+    TradeRefusal, TrafficCatalog, Turn, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -292,6 +298,8 @@ pub struct FlightView<C> {
     chance: SharedChance,
     /// How the NPCs decide.
     behaviour: Rc<dyn Behaviour>,
+    /// When a ship in the fight is disabled.
+    disable_rule: Rc<dyn DisableRule>,
     /// Each NPC ship type's sheet, or why it cannot be shown, read once.
     npc_sheets: BTreeMap<ShipId, Result<ShipSheet, String>>,
     /// Each NPC as it was a step before the session's.
@@ -362,6 +370,7 @@ impl<
             message: None,
             chance: SharedChance::default(),
             behaviour: Rc::new(Peaceful),
+            disable_rule: Rc::new(NovaDisable),
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
         }
@@ -378,6 +387,15 @@ impl<
     #[must_use]
     pub fn with_behaviour(self, behaviour: Rc<dyn Behaviour>) -> Self {
         Self { behaviour, ..self }
+    }
+
+    /// The flight with its ships disabled as `rule` says.
+    #[must_use]
+    pub fn with_disable_rule(self, disable_rule: Rc<dyn DisableRule>) -> Self {
+        Self {
+            disable_rule,
+            ..self
+        }
     }
 
     /// Reads the sheet of each ship type the traffic can spawn that has
@@ -837,6 +855,7 @@ impl<
                     .collect();
                 session.tick(controls);
                 session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
+                session.tick_combat(&*self.disable_rule, &mut self.chance);
             }
         }
         // The session may have populated its system afresh.
@@ -922,6 +941,14 @@ impl<
             .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
             .unwrap_or_default()
     }
+
+    /// The session's diagnostics, each once.
+    fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
+        self.session
+            .as_mut()
+            .map(Session::take_diagnostics)
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -979,6 +1006,10 @@ mod tests {
         traffic: Vec<(SystemId, nova_sim::SystemTraffic)>,
         /// The düdes: none, by default.
         dudes: Vec<(nova_sim::DudeId, nova_sim::DudeRecord)>,
+        /// The weapons: none, by default.
+        weapons: Vec<nova_sim::WeaponRecord>,
+        /// The ship types' combat fields: none, by default.
+        hulls: Vec<nova_sim::HullRecord>,
     }
 
     type View = FlightView<FakeCatalog>;
@@ -1031,6 +1062,8 @@ mod tests {
             sheets_asked: RefCell::default(),
             traffic: Vec::new(),
             dudes: Vec::new(),
+            weapons: Vec::new(),
+            hulls: Vec::new(),
         }
     }
 
@@ -1137,14 +1170,14 @@ mod tests {
         }
     }
 
-    /// Unarmed: no weapons, and no ship type's combat fields.
+    /// The weapons and ship types' combat fields given.
     impl CombatCatalog for FakeCatalog {
         fn weapons(&self) -> Vec<nova_sim::WeaponRecord> {
-            Vec::new()
+            self.weapons.clone()
         }
 
         fn hulls(&self) -> Vec<nova_sim::HullRecord> {
-            Vec::new()
+            self.hulls.clone()
         }
     }
 
@@ -3439,5 +3472,127 @@ mod tests {
         view.take_off().expect("took off");
         view.tick(TICK);
         assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)]);
+    }
+
+    // Combat.
+
+    /// Says no ship is disabled, counting the times it is asked.
+    #[derive(Debug, Default)]
+    struct Counting {
+        asked: std::cell::Cell<usize>,
+    }
+
+    impl DisableRule for Counting {
+        fn disabled(&self, _armor: nova_sim::Gauge, _hull: &nova_sim::HullSpec) -> bool {
+            self.asked.set(self.asked.get() + 1);
+            false
+        }
+    }
+
+    #[test]
+    fn the_fight_asks_the_disable_rule_given_each_step_in_flight() {
+        let rule = Rc::new(Counting::default());
+        let mut view = flight_among(vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)])
+            .with_disable_rule(rule.clone());
+        view.tick(TICK);
+        assert_eq!(rule.asked.get(), 1, "the player, the only ship");
+        ticks(&mut view, 2);
+        assert_eq!(rule.asked.get(), 3);
+        view.input(&key(MAP_KEY, true));
+        ticks(&mut view, 2);
+        assert_eq!(rule.asked.get(), 3, "not while the map is open");
+        view.input(&key(MAP_KEY, true));
+        view.input(&key(LAND_KEY, true));
+        assert!(view.take_landing().is_some());
+        ticks(&mut view, 2);
+        assert_eq!(rule.asked.get(), 3, "not while landed");
+    }
+
+    /// Every NPC idles and holds its trigger.
+    #[derive(Debug)]
+    struct Firing;
+
+    impl Behaviour for Firing {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            Goal::Idle
+        }
+
+        fn trigger(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+        ) -> nova_sim::Trigger {
+            nova_sim::Trigger {
+                primary: true,
+                secondary: None,
+            }
+        }
+    }
+
+    #[test]
+    fn the_sessions_diagnostics_come_through_the_screen() {
+        let mining = nova_sim::WeaponRecord {
+            id: nova_sim::WeaponId(181),
+            reload: 20,
+            count: 12,
+            mass_dmg: 2,
+            energy_dmg: 2,
+            guidance: -1,
+            speed: 1000,
+            ammo_type: -1,
+            inaccuracy: 0,
+            impact: 5,
+            explod_type: -1,
+            prox_radius: 5,
+            blast_radius: 6,
+            flags: 0,
+            seeker: 0,
+            flags2: 0x8000,
+            flags3: 0,
+            decay: 0,
+            beam_length: 0,
+            burst_count: 0,
+            burst_reload: 0,
+        };
+        let hull = nova_sim::HullRecord {
+            id: ShipId(129),
+            flags: 0,
+            death_delay: 0,
+            explode1: -1,
+            explode2: -1,
+            mass: 0,
+            weapons: vec![nova_sim::StockWeapon {
+                weapon: nova_sim::WeaponId(181),
+                count: 1,
+                ammo: 0,
+            }],
+            size: None,
+        };
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let catalog = FakeCatalog {
+            weapons: vec![mining],
+            hulls: vec![hull],
+            ..trafficked(&[130], 1, 129, 3)
+        };
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Firing));
+        assert_eq!(view.take_diagnostics(), []);
+        ticks(&mut view, 3);
+        assert_eq!(
+            view.take_diagnostics(),
+            [SimDiagnostic::UnimplementedWeaponFlag {
+                weapon: nova_sim::WeaponId(181),
+                field: nova_sim::combat::flags::FlagField::Flags2,
+                bit: 0x8000
+            }]
+        );
+        ticks(&mut view, 30);
+        assert_eq!(view.take_diagnostics(), [], "once");
     }
 }

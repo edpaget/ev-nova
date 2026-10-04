@@ -39,12 +39,21 @@
 //! warnings the screen reports ([`Screen::take_warnings`]), which the app
 //! takes after every input and frame.
 //!
+//! # Diagnostics
+//!
+//! An app built [`App::with_diagnostics`] writes each diagnostic the
+//! screen reports ([`Screen::take_diagnostics`]: game data the simulation
+//! does not handle yet) as a line, `nova: ` and the diagnostic, through
+//! the writer it was given; it takes them where it takes the sounds, after
+//! every input and frame. Without a writer, they are let go.
+//!
 //! # Quitting
 //!
 //! Whichever way the app quits (the window closed, or the screen asking
 //! to quit), it first tells the screen ([`Screen::quit`]), so the screen
 //! can keep what should outlive it, such as the pilot.
 
+use std::io::Write;
 use std::time::Duration;
 
 use nova_audio::{Audio, AudioCore, AudioSettings, SettingsKeeper, SettingsStore};
@@ -149,6 +158,7 @@ pub struct App<S, C = AppScreen> {
     audio: Option<AudioCore<Box<dyn Audio>>>,
     settings: Option<SettingsKeeper<Box<dyn SettingsStore>>>,
     warnings: Vec<String>,
+    diagnostics: Option<Box<dyn Write>>,
 }
 
 impl<S: ImageSource, C: Screen> App<S, C> {
@@ -165,7 +175,16 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             audio: None,
             settings: None,
             warnings: Vec::new(),
+            diagnostics: None,
         }
+    }
+
+    /// The app with each diagnostic the screen reports written as a line
+    /// through `out`.
+    #[must_use]
+    pub fn with_diagnostics(mut self, out: Box<dyn Write>) -> Self {
+        self.diagnostics = Some(out);
+        self
     }
 
     /// The app with a developer overlay, hidden until its toggle key.
@@ -201,6 +220,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
 
     /// Gives the audio core, if there is one, the screen shown and the
     /// sounds the screen has made; without one, the sounds are let go.
+    /// Then writes out the screen's diagnostics.
     ///
     /// First, a change of the sound preferences the screen reports is
     /// applied to the core and saved through the keeper, each when there
@@ -225,6 +245,19 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         let sounds = self.screen.take_sounds();
         if let Some(core) = &mut self.audio {
             core.update(self.screen.now_showing(), &sounds);
+        }
+        self.write_diagnostics();
+    }
+
+    /// Writes each diagnostic the screen reports as a line through the
+    /// writer, if there is one; without one, they are let go. A line that
+    /// cannot be written is let go too: there is nowhere else to say so.
+    fn write_diagnostics(&mut self) {
+        let diagnostics = self.screen.take_diagnostics();
+        if let Some(out) = &mut self.diagnostics {
+            for diagnostic in diagnostics {
+                let _ = writeln!(out, "nova: {diagnostic}");
+            }
         }
     }
 
@@ -490,7 +523,8 @@ mod tests {
     }
 
     /// Records its inputs and ticks; quits on `quit_on`; draws one sprite;
-    /// counts the times it is told the app quits; hands out `warnings`.
+    /// counts the times it is told the app quits; hands out `warnings` and
+    /// `diagnostics`.
     #[derive(Default)]
     struct RecordingScreen {
         inputs: Vec<Input>,
@@ -500,6 +534,7 @@ mod tests {
         cancels: usize,
         quits: usize,
         warnings: Vec<String>,
+        diagnostics: Vec<nova_sim::SimDiagnostic>,
     }
 
     impl Screen for RecordingScreen {
@@ -535,9 +570,96 @@ mod tests {
         fn take_warnings(&mut self) -> Vec<String> {
             std::mem::take(&mut self.warnings)
         }
+
+        fn take_diagnostics(&mut self) -> Vec<nova_sim::SimDiagnostic> {
+            std::mem::take(&mut self.diagnostics)
+        }
     }
 
     type TestApp = App<NoImages, RecordingScreen>;
+
+    /// Bytes written, kept where the test can read them.
+    #[derive(Clone, Default)]
+    struct Written(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl std::io::Write for Written {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Written {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.borrow().clone()).expect("UTF-8")
+        }
+    }
+
+    /// Fails every write.
+    struct Broken;
+
+    impl std::io::Write for Broken {
+        fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("closed"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn flag(weapon: i16) -> nova_sim::SimDiagnostic {
+        nova_sim::SimDiagnostic::UnimplementedWeaponFlag {
+            weapon: nova_sim::WeaponId(weapon),
+            field: nova_sim::combat::flags::FlagField::Flags2,
+            bit: 0x8000,
+        }
+    }
+
+    #[test]
+    fn each_diagnostic_is_written_as_a_line_after_a_frame_or_an_input() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let written = Written::default();
+        let mut app = app(&window).with_diagnostics(Box::new(written.clone()));
+        app.screen.diagnostics = vec![flag(181), flag(165)];
+        let redraw = WindowEvent::Redraw {
+            elapsed: Duration::from_millis(16),
+        };
+        handle(&mut app, &mut window, redraw);
+        assert_eq!(
+            written.text(),
+            "nova: wëap 181 Flags2 0x8000 not implemented\n\
+             nova: wëap 165 Flags2 0x8000 not implemented\n"
+        );
+        app.screen.diagnostics = vec![flag(167)];
+        handle(&mut app, &mut window, key(Key::Up, true));
+        assert!(
+            written
+                .text()
+                .ends_with("\nnova: wëap 167 Flags2 0x8000 not implemented\n"),
+            "{}",
+            written.text()
+        );
+        assert_eq!(app.screen.diagnostics, [], "taken");
+    }
+
+    #[test]
+    fn without_a_writer_or_with_a_broken_one_diagnostics_are_let_go() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        app.screen.diagnostics = vec![flag(181)];
+        handle(&mut app, &mut window, key(Key::Up, true));
+        assert_eq!(app.screen.diagnostics, [], "taken all the same");
+        let mut broken = self::app(&window).with_diagnostics(Box::new(Broken));
+        broken.screen.diagnostics = vec![flag(181)];
+        handle(&mut broken, &mut window, key(Key::Up, true));
+        assert_eq!(broken.screen.diagnostics, []);
+        assert_eq!(broken.take_warnings(), Vec::<String>::new());
+    }
 
     fn app(window: &FakeWindow) -> TestApp {
         App::new(window, NoImages, RecordingScreen::default())

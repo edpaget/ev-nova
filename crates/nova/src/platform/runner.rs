@@ -1,15 +1,18 @@
 //! The winit event loop's handler: opens the window and the GPU surface,
 //! then forwards every event to the [`App`].
 //!
-//! With [`Runner::with_audio`], the app it opens plays sound, and with
-//! [`Runner::with_settings`] it saves the player's settings; the runner
-//! prints the warnings the app keeps, such as a failed save.
+//! With [`Runner::with_audio`], the app it opens plays sound, with
+//! [`Runner::with_settings`] it saves the player's settings, and with
+//! [`Runner::with_diagnostics`] it writes out the simulation's
+//! diagnostics; the runner prints the warnings the app keeps, such as a
+//! failed save.
 //!
 //! With the `dev-tools` feature and [`Runner::with_dev_tools`], it also
 //! drives the developer tools: while their overlay shows, each redraw runs
 //! the egui panel first and submits the frame with the panel painted over
 //! it, and the raw window events the app says the overlay wants go to egui.
 
+use std::io::Write;
 #[cfg(feature = "dev-tools")]
 use std::rc::Rc;
 use std::sync::Arc;
@@ -57,6 +60,8 @@ pub struct Runner<S> {
     audio: Option<AudioCore<Box<dyn Audio>>>,
     /// The settings keeper, until the app takes it.
     settings: Option<SettingsKeeper<Box<dyn SettingsStore>>>,
+    /// Where the diagnostics are written, until the app takes it.
+    diagnostics: Option<Box<dyn Write>>,
 }
 
 impl<S: ImageSource> Runner<S> {
@@ -72,6 +77,7 @@ impl<S: ImageSource> Runner<S> {
             dev_catalog: None,
             audio: None,
             settings: None,
+            diagnostics: None,
         }
     }
 
@@ -96,6 +102,14 @@ impl<S: ImageSource> Runner<S> {
     #[must_use]
     pub fn with_settings(mut self, keeper: SettingsKeeper<Box<dyn SettingsStore>>) -> Self {
         self.settings = Some(keeper);
+        self
+    }
+
+    /// The runner with the simulation's diagnostics written as lines
+    /// through `out` by the app it opens.
+    #[must_use]
+    pub fn with_diagnostics(mut self, out: Box<dyn Write>) -> Self {
+        self.diagnostics = Some(out);
         self
     }
 
@@ -146,6 +160,10 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
         match open(event_loop, &fonts) {
             Ok((mut window, gpu)) => {
                 let app = App::new(&window, images, screen);
+                let app = match self.diagnostics.take() {
+                    Some(out) => app.with_diagnostics(out),
+                    None => app,
+                };
                 let app = match self.audio.take() {
                     Some(core) => app.with_audio(core),
                     None => app,
@@ -354,6 +372,15 @@ mod tests {
         };
         keeper.change(quiet).expect("saves");
         assert_eq!(store.writes(), 1);
+    }
+
+    #[test]
+    fn the_runner_keeps_the_diagnostics_writer_for_the_app_it_opens() {
+        let runner = Runner::new(NoImages, start_screen(no_data()), FontFaces::bundled());
+        assert!(runner.diagnostics.is_none(), "let go unless given a writer");
+        let mut runner = runner.with_diagnostics(Box::new(Vec::new()));
+        let out = runner.diagnostics.as_mut().expect("kept");
+        assert_eq!(out.write(b"x").expect("writes"), 1);
     }
 
     #[cfg(feature = "dev-tools")]

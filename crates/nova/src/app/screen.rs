@@ -81,7 +81,11 @@
 //! ([`AppScreen::with_chance`]), which never fires until one is given, so
 //! the developer's flights stay the same each time. Every flight's NPCs
 //! decide as the router's behaviour says ([`AppScreen::with_behaviour`]),
-//! Nova's peaceful traffic until another is given.
+//! Nova's peaceful traffic until another is given, and their ships are
+//! disabled as the router's rule says ([`AppScreen::with_disable_rule`]),
+//! Nova's own until another is given. The flight's diagnostics about game
+//! data the simulation does not handle yet come through
+//! [`Screen::take_diagnostics`].
 //!
 //! I, outside flight and the spaceport, opens the About text in the game's "Desc Dialog"
 //! over the screen shown, when the router was given the interface file's
@@ -105,7 +109,10 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
-use nova_sim::{Behaviour, Peaceful, Pilot, PilotKeeper, PilotStore, pilot_key};
+use nova_sim::{
+    Behaviour, DisableRule, NovaDisable, Peaceful, Pilot, PilotKeeper, PilotStore, SimDiagnostic,
+    pilot_key,
+};
 pub use nova_view::Showing;
 use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
@@ -205,6 +212,8 @@ pub struct AppScreen {
     chance: SharedChance,
     /// How each flight's NPCs decide.
     behaviour: Rc<dyn Behaviour>,
+    /// When each flight's ships are disabled.
+    disable_rule: Rc<dyn DisableRule>,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -265,6 +274,7 @@ impl AppScreen {
             warnings: Vec::new(),
             chance: SharedChance::default(),
             behaviour: Rc::new(Peaceful),
+            disable_rule: Rc::new(NovaDisable),
         }
     }
 
@@ -281,8 +291,18 @@ impl AppScreen {
         Self { behaviour, ..self }
     }
 
+    /// The router with each flight's ships disabled as `rule` says.
+    #[must_use]
+    pub fn with_disable_rule(self, disable_rule: Rc<dyn DisableRule>) -> Self {
+        Self {
+            disable_rule,
+            ..self
+        }
+    }
+
     /// A flight over the game data, `new` from it, rolling on the router's
-    /// chance and deciding as its behaviour says.
+    /// chance, deciding as its behaviour says and disabling ships as its
+    /// rule says.
     fn flight(
         &self,
         new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
@@ -290,6 +310,7 @@ impl AppScreen {
         new(Rc::clone(&self.data))
             .with_chance(self.chance.clone())
             .with_behaviour(Rc::clone(&self.behaviour))
+            .with_disable_rule(Rc::clone(&self.disable_rule))
     }
 
     /// The router with the main menu, which it now opens on: New Pilot
@@ -1167,6 +1188,14 @@ impl Screen for AppScreen {
     /// from the interface file.
     fn take_warnings(&mut self) -> Vec<String> {
         std::mem::take(&mut self.warnings)
+    }
+
+    /// The flight's diagnostics, once flight has been entered.
+    fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
+        self.flight
+            .as_mut()
+            .map(Screen::take_diagnostics)
+            .unwrap_or_default()
     }
 }
 

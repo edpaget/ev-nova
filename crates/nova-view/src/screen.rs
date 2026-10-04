@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use nova_sim::SimDiagnostic;
+
 use crate::draw::DrawList;
 use crate::input::Input;
 use crate::sound::{Sound, SoundPrefs};
@@ -88,6 +90,12 @@ pub trait Screen {
     fn take_warnings(&mut self) -> Vec<String> {
         Vec::new()
     }
+    /// What the simulation has reported since this was last taken about
+    /// game data it does not handle yet, each for the app to write out;
+    /// taking them empties the list. None by default.
+    fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -167,11 +175,12 @@ mod tests {
     }
 
     #[test]
-    fn quitting_does_nothing_and_there_are_no_warnings_by_default() {
+    fn quitting_does_nothing_and_there_are_no_warnings_or_diagnostics_by_default() {
         let mut counter = Counter::default();
         let screen: &mut dyn Screen = &mut counter;
         screen.quit();
         assert_eq!(screen.take_warnings(), Vec::<String>::new());
+        assert_eq!(screen.take_diagnostics(), []);
         let mut list = DrawList::new();
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);

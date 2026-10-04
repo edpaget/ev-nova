@@ -14,7 +14,9 @@
 //!
 //! Planetary events start at random, and NPC traffic comes and goes at
 //! random, on a generator seeded from the clock when the game starts; the
-//! NPCs fly Nova's peaceful traffic: traders land, others jump out.
+//! NPCs fly Nova's peaceful traffic: traders land, others jump out. Ships
+//! are disabled as Nova disables them. Each weapon feature the simulation
+//! does not handle yet is reported once, as a line on standard error.
 //!
 //! Tab, on the menu, goes to the developer's ship browser and galaxy map,
 //! and switches between them. On the map, Return enters the selected
@@ -66,7 +68,7 @@ use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
-use nova_sim::{Chance, Peaceful, PilotKeeper, PilotStore};
+use nova_sim::{Chance, NovaDisable, Peaceful, PilotKeeper, PilotStore};
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
@@ -121,7 +123,8 @@ fn main() -> ExitCode {
         .with_sound_prefs(settings.prefs())
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))
-        .with_behaviour(Rc::new(Peaceful));
+        .with_behaviour(Rc::new(Peaceful))
+        .with_disable_rule(Rc::new(NovaDisable));
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);
@@ -137,7 +140,8 @@ fn main() -> ExitCode {
     if let Some(warning) = warning {
         eprintln!("{warning}");
     }
-    let runner = Runner::new(Rc::clone(&data), screen, fonts);
+    let runner =
+        Runner::new(Rc::clone(&data), screen, fonts).with_diagnostics(Box::new(std::io::stderr()));
     let runner = match audio {
         Some(core) => runner.with_audio(core.with_settings(settings)),
         None => runner,

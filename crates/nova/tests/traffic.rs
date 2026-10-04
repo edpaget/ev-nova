@@ -6,7 +6,9 @@
 //! a dim radar blip, flies to the system's planet and lands there, and is
 //! gone. Every flight's NPCs decide as the router's behaviour says,
 //! whether flight was entered with the developer's F or a new pilot flies
-//! it.
+//! it, and its ships are disabled as the router's rule says. The trader
+//! carries a weapon the simulation reports as not fully done, and a
+//! trader that fires it has the app write that out once, as a line.
 
 // Sizes and positions here are compared after the same arithmetic on
 // both sides.
@@ -30,6 +32,7 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
+use nova_data::records::weapon::Weapon;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
@@ -38,8 +41,8 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::{
-    Behaviour, Chance, Goal, Npc, PilotKeeper, PilotStore, Session, ShipId, StellarId,
-    Surroundings, Vec2,
+    Behaviour, Chance, DisableRule, Gauge, Goal, HullSpec, Npc, PilotKeeper, PilotStore, Session,
+    ShipId, StellarId, Surroundings, Trigger, Vec2,
 };
 use nova_view::flight::{FlightView, SharedChance};
 use nova_view::menu::MenuChoice;
@@ -106,6 +109,26 @@ fn ship(accel: i16, speed: i16) -> Vec<u8> {
     put_i16s(&mut bytes, 0x02, &[30, accel, speed, 30, 300]);
     put_i16s(&mut bytes, 0x0E, &[45]);
     put_i16s(&mut bytes, 0x42, &[1]);
+    bytes
+}
+
+/// A trader's `shïp`: as [`ship`], carrying one `wëap` 181 in its first
+/// weapon slot (the rest 0, none).
+fn trader() -> Vec<u8> {
+    let mut bytes = ship(600, 600);
+    put_i16s(&mut bytes, 0x12, &[181]);
+    put_i16s(&mut bytes, 0x1A, &[1]);
+    bytes
+}
+
+/// A Mining Blaster-like `wëap`: unguided, 10 pixels a tick for 12 ticks,
+/// every 20, doing x10 mass damage to asteroids (`Flags2` 0x8000), which
+/// the simulation does not do yet.
+fn mining_blaster() -> Vec<u8> {
+    let mut bytes = vec![0; Weapon::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[20, 12, 2, 2, -1, 1000, -1]);
+    put_i16s(&mut bytes, 0x16, &[-1]);
+    bytes[0x48..0x4A].copy_from_slice(&0x8000_u16.to_be_bytes());
     bytes
 }
 
@@ -197,12 +220,19 @@ fn dude() -> Vec<u8> {
 
 /// The first `chär` flies ship 128 (a 1 x 1 sheet) from Alpha (128),
 /// which holds the planet Alpha Prime (128) at (0, -300), 8 x 8, and
-/// whose one `düde` flies ship 129, a trader with a 2 x 2 sheet.
+/// whose one `düde` flies ship 129, a trader with a 2 x 2 sheet and a
+/// mining blaster.
 fn data() -> Rc<GameData> {
     let fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship(300, 300))
-        .resource(Ship::TYPE, 129, Some(b"Trader"), &ship(600, 600))
+        .resource(Ship::TYPE, 129, Some(b"Trader"), &trader())
+        .resource(
+            Weapon::TYPE,
+            181,
+            Some(b"Mining Blaster"),
+            &mining_blaster(),
+        )
         .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
         .resource(ShipAnim::TYPE, 129, None, &ship_anim(2001))
         .resource(RLED, 2000, None, &sheet(36, 1))
@@ -254,6 +284,51 @@ impl Behaviour for Still {
     }
 }
 
+/// Every NPC idles and holds its trigger.
+#[derive(Debug)]
+struct Firing;
+
+impl Behaviour for Firing {
+    fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+        Goal::Idle
+    }
+
+    fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+        Trigger {
+            primary: true,
+            secondary: None,
+        }
+    }
+}
+
+/// Says no ship is disabled, counting the times it is asked.
+#[derive(Debug, Default)]
+struct Counting {
+    asked: std::cell::Cell<usize>,
+}
+
+impl DisableRule for Counting {
+    fn disabled(&self, _armor: Gauge, _hull: &HullSpec) -> bool {
+        self.asked.set(self.asked.get() + 1);
+        false
+    }
+}
+
+/// Bytes written, kept where the test can read them.
+#[derive(Clone, Default)]
+struct Written(Rc<RefCell<Vec<u8>>>);
+
+impl io::Write for Written {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 struct Harness {
     app: App<Rc<GameData>>,
     gpu: RecordingGpu,
@@ -265,14 +340,34 @@ impl Harness {
     /// The app on the ship browser, its NPCs deciding as `behaviour` says
     /// when one is given.
     fn new(behaviour: Option<Rc<dyn Behaviour>>) -> Self {
+        Self::built(behaviour, None, None)
+    }
+
+    /// The app on the ship browser, its NPCs deciding as `behaviour` says
+    /// and its ships disabled as `rule` says, each when one is given, and
+    /// writing its diagnostics to `out` when it is given.
+    fn built(
+        behaviour: Option<Rc<dyn Behaviour>>,
+        rule: Option<Rc<dyn DisableRule>>,
+        out: Option<Written>,
+    ) -> Self {
         let data = data();
         let screen = start_screen(Rc::clone(&data)).with_chance(placing_the_trader());
         let screen = match behaviour {
             Some(behaviour) => screen.with_behaviour(behaviour),
             None => screen,
         };
+        let screen = match rule {
+            Some(rule) => screen.with_disable_rule(rule),
+            None => screen,
+        };
+        let app = App::new(&FakeWindow, data, screen);
+        let app = match out {
+            Some(out) => app.with_diagnostics(Box::new(out)),
+            None => app,
+        };
         Self {
-            app: App::new(&FakeWindow, data, screen),
+            app,
             gpu: RecordingGpu::new(),
             frames: 0,
         }
@@ -491,4 +586,28 @@ fn the_routers_behaviour_decides_for_a_new_pilots_flight() {
     let trader = harness.session().npcs()[0].clone();
     assert_eq!(trader.goal, Goal::Idle);
     assert_eq!(trader.state.position, Vec2::new(100.0, -100.0));
+}
+
+#[test]
+fn the_routers_disable_rule_decides_for_a_flight_entered_with_f() {
+    let rule = Rc::new(Counting::default());
+    let mut harness = Harness::built(None, Some(rule.clone()), None);
+    harness.press(Key::Char('f'));
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(rule.asked.get(), 0);
+    harness.run(1);
+    assert!(rule.asked.get() >= 30, "each step: {}", rule.asked.get());
+}
+
+#[test]
+fn a_flights_diagnostics_are_written_out_once_as_lines() {
+    let written = Written::default();
+    let mut harness = Harness::built(Some(Rc::new(Firing)), None, Some(written.clone()));
+    harness.press(Key::Char('f'));
+    harness.run(3);
+    let text = String::from_utf8(written.0.borrow().clone()).expect("UTF-8");
+    assert_eq!(
+        text, "nova: wëap 181 Flags2 0x8000 not implemented\n",
+        "the trader fired, again and again"
+    );
 }
