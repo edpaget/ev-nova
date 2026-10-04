@@ -33,6 +33,7 @@ use crate::geometry::Point;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
+use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
@@ -78,6 +79,9 @@ pub struct SpaceportView {
     /// The service open over it, if any.
     open: Option<ServiceScreen>,
     left: bool,
+    /// The sounds made since they were last taken, kept here so a service
+    /// that closes keeps its sounds.
+    sounds: Vec<Sound>,
 }
 
 impl SpaceportView {
@@ -139,6 +143,7 @@ impl SpaceportView {
             port,
             open: None,
             left: false,
+            sounds: Vec::new(),
         }
     }
 
@@ -216,13 +221,18 @@ impl Screen for SpaceportView {
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Some(open) = &mut self.open {
             open.input(input);
+            self.sounds.extend(open.take_sounds());
             if open.closed() {
                 self.open = None;
             }
             return ScreenAction::None;
         }
         let event = match &mut self.port {
-            Ok(port) => port.dialog.input(input),
+            Ok(port) => {
+                let event = port.dialog.input(input);
+                self.sounds.extend(port.dialog.take_sound().map(Sound::Ui));
+                event
+            }
             Err(_) => match *input {
                 Input::Key {
                     key: Key::Enter | Key::Escape,
@@ -284,6 +294,11 @@ impl Screen for SpaceportView {
             (None, Err(_)) => {}
         }
     }
+
+    /// The buttons' sounds, the open service's included, in order.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        std::mem::take(&mut self.sounds)
+    }
 }
 
 #[cfg(test)]
@@ -297,6 +312,7 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::geometry::Bounds;
     use crate::input::MouseButton;
+    use crate::sound::{Sound, UiSound};
     use crate::spaceport::catalog::PortRecord;
     use crate::spaceport::layout::SERVICE_ITEMS;
     use crate::text::fixture::MonoMetrics;
@@ -816,5 +832,53 @@ mod tests {
         view.tick(Duration::from_secs(5));
         assert_eq!(drawn(&view), before);
         assert!(format!("{view:?}").contains("TextMetrics"));
+    }
+
+    const DOWN: Sound = Sound::Ui(UiSound::ButtonDown);
+    const UP: Sound = Sound::Ui(UiSound::ButtonUp);
+
+    #[test]
+    fn a_click_on_leave_sounds_it_going_down_then_up() {
+        let mut view = earth();
+        let leave = item(&view, 12).center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: leave,
+        };
+        view.input(&button(true));
+        assert_eq!(view.take_sounds(), [DOWN]);
+        view.input(&button(false));
+        assert!(view.left());
+        assert_eq!(view.take_sounds(), [UP]);
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_service_sounds_its_button_and_its_done_even_as_it_closes() {
+        let mut view = earth();
+        click_item(&mut view, 7);
+        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        click(&mut view, super::super::service::DONE_BUTTON.center());
+        assert!(view.open_service().is_none(), "closed");
+        assert_eq!(view.take_sounds(), [DOWN, UP]);
+        click_item(&mut view, 10);
+        view.input(&key(Key::Escape));
+        assert!(view.open_service().is_none());
+        assert_eq!(view.take_sounds(), [DOWN, UP], "Escape is silent");
+    }
+
+    #[test]
+    fn keys_blank_items_and_a_spaceport_that_cannot_be_shown_are_silent() {
+        let mut view = earth();
+        click_item(&mut view, 9);
+        view.input(&key(Key::Enter));
+        assert!(view.left());
+        assert_eq!(view.take_sounds(), []);
+        let mut broken = SpaceportView::new(&catalog(), StellarId(140), Err("no".to_owned()));
+        click(&mut broken, Point::new(5.0, 5.0));
+        broken.input(&key(Key::Escape));
+        assert!(broken.left());
+        assert_eq!(broken.take_sounds(), []);
     }
 }

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::draw::DrawList;
 use crate::input::Input;
+use crate::sound::Sound;
 
 /// What a screen asks of the app after an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,6 +13,25 @@ pub enum ScreenAction {
     None,
     /// Quit the game.
     Quit,
+}
+
+/// Which screen the app is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Showing {
+    /// The ship browser.
+    ShipBrowser,
+    /// The galaxy map.
+    GalaxyMap,
+    /// A system opened from the galaxy map.
+    System,
+    /// The player's ship in flight.
+    Flight,
+    /// Flight's course map, opened with M.
+    FlightMap,
+    /// The spaceport of the stellar landed on.
+    Spaceport,
+    /// The About text, over another screen.
+    About,
 }
 
 /// A game screen: takes input, advances with time and draws itself.
@@ -34,6 +54,16 @@ pub trait Screen {
     /// it. A screen that acts on held keys over time stops acting on them.
     /// Does nothing by default.
     fn release_keys(&mut self) {}
+    /// The sounds the screen has made since they were last taken, in
+    /// order; taking them empties the list. None by default.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        Vec::new()
+    }
+    /// Which screen is showing, for a screen that routes between others;
+    /// `None` by default.
+    fn now_showing(&self) -> Option<Showing> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -101,6 +131,14 @@ mod tests {
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);
         assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_screen_makes_no_sounds_and_names_nothing_showing_by_default() {
+        let mut counter = Counter::default();
+        let screen: &mut dyn Screen = &mut counter;
+        assert_eq!(screen.take_sounds(), []);
+        assert_eq!(screen.now_showing(), None);
     }
 
     #[test]

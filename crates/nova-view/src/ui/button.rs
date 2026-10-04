@@ -7,6 +7,7 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, MouseButton};
+use crate::sound::UiSound;
 use crate::text::TextMetrics;
 
 use super::slice::{Axis, Piece, three_slice};
@@ -168,6 +169,8 @@ impl Button {
 pub struct ButtonTracker {
     armed: bool,
     inside: bool,
+    /// The sound the last input made, until it is taken.
+    sound: Option<UiSound>,
 }
 
 impl ButtonTracker {
@@ -186,6 +189,9 @@ impl ButtonTracker {
             } => {
                 self.armed = enabled && area.contains(at);
                 self.inside = self.armed;
+                if self.armed {
+                    self.sound = Some(UiSound::ButtonDown);
+                }
                 false
             }
             // Only matters while armed: a press sets it afresh.
@@ -199,6 +205,7 @@ impl ButtonTracker {
                 at,
             } if self.armed => {
                 self.cancel_pointer();
+                self.sound = Some(UiSound::ButtonUp);
                 area.contains(at)
             }
             _ => false,
@@ -217,9 +224,18 @@ impl ButtonTracker {
         self.armed && self.inside
     }
 
-    /// Abandons the press without activating the button.
+    /// Abandons the press without activating the button, silently: a
+    /// sound already made is kept until it is taken.
     pub fn cancel_pointer(&mut self) {
-        *self = Self::default();
+        self.armed = false;
+        self.inside = false;
+    }
+
+    /// The sound the last input made, once: [`UiSound::ButtonDown`] for a
+    /// press that armed the button, [`UiSound::ButtonUp`] for the release
+    /// of an armed press, on the button or off it.
+    pub fn take_sound(&mut self) -> Option<UiSound> {
+        self.sound.take()
     }
 }
 
@@ -539,5 +555,61 @@ mod tests {
         tracker.cancel_pointer();
         assert!(!tracker.armed() && !tracker.pressed());
         assert!(!tracker.input(&button, &release(INSIDE)));
+    }
+
+    #[test]
+    fn an_armed_press_sounds_the_button_going_down_once() {
+        let (button, mut tracker) = (done(), ButtonTracker::default());
+        assert_eq!(tracker.take_sound(), None);
+        tracker.input(&button, &press(INSIDE));
+        assert_eq!(tracker.take_sound(), Some(UiSound::ButtonDown));
+        assert_eq!(tracker.take_sound(), None, "once");
+        tracker.input(&button, &Input::PointerMoved(OUTSIDE));
+        tracker.input(&button, &Input::PointerMoved(INSIDE));
+        assert_eq!(tracker.take_sound(), None, "moving makes no sound");
+    }
+
+    #[test]
+    fn releasing_an_armed_press_sounds_the_button_coming_up_on_it_or_off_it() {
+        for (to, activates) in [(INSIDE, true), (OUTSIDE, false)] {
+            let (button, mut tracker) = (done(), ButtonTracker::default());
+            tracker.input(&button, &press(INSIDE));
+            tracker.take_sound();
+            assert_eq!(tracker.input(&button, &release(to)), activates);
+            assert_eq!(tracker.take_sound(), Some(UiSound::ButtonUp), "{to:?}");
+            assert_eq!(tracker.take_sound(), None, "once");
+        }
+    }
+
+    #[test]
+    fn a_press_that_does_not_arm_and_a_stray_release_are_silent() {
+        let disabled = Button {
+            enabled: false,
+            ..done()
+        };
+        let mut tracker = ButtonTracker::default();
+        tracker.input(&disabled, &press(INSIDE));
+        assert_eq!(tracker.take_sound(), None, "disabled");
+        tracker.input(&disabled, &release(INSIDE));
+        assert_eq!(tracker.take_sound(), None, "never armed");
+        let (button, mut tracker) = (done(), ButtonTracker::default());
+        tracker.input(&button, &press(OUTSIDE));
+        assert_eq!(tracker.take_sound(), None, "empty space");
+        tracker.input(&button, &release(INSIDE));
+        assert_eq!(tracker.take_sound(), None, "never armed");
+    }
+
+    #[test]
+    fn cancelling_makes_no_sound_and_keeps_one_already_made() {
+        let (button, mut tracker) = (done(), ButtonTracker::default());
+        tracker.input(&button, &press(INSIDE));
+        tracker.cancel_pointer();
+        assert_eq!(tracker.take_sound(), Some(UiSound::ButtonDown), "kept");
+        tracker.input(&button, &press(INSIDE));
+        tracker.take_sound();
+        tracker.cancel_pointer();
+        assert_eq!(tracker.take_sound(), None, "cancelling is silent");
+        tracker.input(&button, &release(INSIDE));
+        assert_eq!(tracker.take_sound(), None, "nor is the release after");
     }
 }

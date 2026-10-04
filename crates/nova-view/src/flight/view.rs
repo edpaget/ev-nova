@@ -70,7 +70,7 @@ use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::system::starfield;
-use crate::{Color, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction};
+use crate::{Color, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction, Sound};
 
 /// The overlay: the system's title and the help line.
 const TITLE: Point = Point::new(16.0, 32.0);
@@ -613,6 +613,15 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         self.held.clear();
         self.map.release_keys();
     }
+
+    /// The session's sounds: thrust, landing, taking off and jumping. The
+    /// course map has no buttons that sound.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        self.session
+            .as_mut()
+            .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -623,14 +632,15 @@ mod tests {
 
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
-        CharacterStart, Handling, LandingSite, OutfitMod, Reserves, ShipFields, ShipId, StarSystem,
-        StartDate, StartError, SystemId, TICK, Vec2, step,
+        CharacterStart, Handling, LandingSite, OutfitMod, Reserves, ShipFields, ShipId, SimSound,
+        SoundId, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
     };
 
     use super::*;
     use crate::flight::catalog::{GovtId, StatusBarLayout};
     use crate::flight::hud::{self, HudState, StatusBar};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
+    use crate::sound::Sound;
     use crate::system::camera::VIEW_CENTER;
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
@@ -1811,6 +1821,47 @@ mod tests {
         assert_eq!(view.take_landing(), None);
         assert_eq!(view.message(), None);
         assert_eq!(view.take_off(), None);
+    }
+
+    #[test]
+    fn l_over_a_stellar_sounds_the_landing_with_its_own_sound() {
+        let mut view = flight_among(vec![LandingSite {
+            landing_sound: Some(SoundId(10_032)),
+            ..site(140, (6.0, -8.0), StellarFlags::CAN_LAND)
+        }]);
+        assert_eq!(view.take_sounds(), []);
+        view.input(&key(LAND, true));
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::Landed {
+                stellar_sound: Some(SoundId(10_032))
+            })]
+        );
+        assert_eq!(view.take_sounds(), [], "taken");
+        view.take_off();
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TookOff)]);
+    }
+
+    #[test]
+    fn thrust_sounds_as_it_starts_and_stops() {
+        let mut view = flight();
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::ThrustStarted)]);
+        view.input(&key(Key::Up, false));
+        ticks(&mut view, 1);
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::ThrustStopped)]);
+    }
+
+    #[test]
+    fn a_flight_that_never_started_makes_no_sounds() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert_eq!(view.take_sounds(), []);
     }
 
     // Hyperspace.

@@ -44,6 +44,12 @@
 //!   interface file's `DLOG`/`DITL`s, such as the "Desc Dialog"
 //!   ([`ui::DescDialog`]).
 //!
+//! # Sounds
+//!
+//! Screens report the sounds they make as events ([`sound`]): a button
+//! pressed or released, and the flight session's own. The audio side
+//! decides what each plays.
+//!
 //! # Developer tools
 //!
 //! - [`devtools`]: the developer tools overlay's model, which `nova`
@@ -61,6 +67,7 @@ pub mod input;
 pub mod navigator;
 pub mod screen;
 pub mod ships;
+pub mod sound;
 pub mod spaceport;
 pub mod system;
 pub mod text;
@@ -74,4 +81,5 @@ pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
 pub use input::{Input, Key, MouseButton};
 pub use navigator::Navigator;
-pub use screen::{Screen, ScreenAction};
+pub use screen::{Screen, ScreenAction, Showing};
+pub use sound::{Sound, UiSound};

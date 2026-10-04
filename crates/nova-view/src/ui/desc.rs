@@ -10,6 +10,7 @@ use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::Input;
 use crate::screen::{Screen, ScreenAction};
+use crate::sound::Sound;
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -130,6 +131,15 @@ impl Screen for DescDialog {
     fn cancel_pointer(&mut self) {
         self.dialog.cancel_pointer();
     }
+
+    /// Done's sounds as it is clicked.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        self.dialog
+            .take_sound()
+            .map(Sound::Ui)
+            .into_iter()
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +148,7 @@ mod tests {
     use crate::draw::DrawCommand;
     use crate::geometry::{Bounds, Point};
     use crate::input::{Key, MouseButton};
+    use crate::sound::{Sound, UiSound};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -310,5 +321,24 @@ mod tests {
         let desc = DescDialog::new(&template, TEXT, ButtonStyle::STOCK, Rc::new(MonoMetrics));
         assert!(desc.lines().is_empty());
         assert_eq!(desc.first_line(), 0);
+    }
+
+    #[test]
+    fn a_click_on_done_sounds_it_going_down_then_up_and_keys_are_silent() {
+        let mut desc = desc();
+        let done = desc.dialog().item_bounds(DONE_ITEM).expect("Done").center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: done,
+        };
+        desc.input(&button(true));
+        assert_eq!(desc.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        desc.input(&button(false));
+        assert_eq!(desc.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert_eq!(desc.take_sounds(), []);
+        let mut desc = self::desc();
+        desc.input(&key(Key::Enter));
+        assert_eq!(desc.take_sounds(), []);
     }
 }

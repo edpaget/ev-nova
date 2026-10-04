@@ -34,6 +34,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
+pub use nova_view::Showing;
 use nova_view::flight::FlightView;
 use nova_view::galaxy::GalaxyMap;
 use nova_view::ships::ShipBrowser;
@@ -60,25 +61,6 @@ pub const ABOUT_TEXT: i16 = 32767;
 
 /// Why the spaceport cannot be laid out when the router has no dialogs.
 pub const NO_INTERFACE: &str = "no interface file";
-
-/// Which screen the app is showing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Showing {
-    /// The ship browser.
-    ShipBrowser,
-    /// The galaxy map.
-    GalaxyMap,
-    /// A system opened from the galaxy map.
-    System,
-    /// The player's ship in flight.
-    Flight,
-    /// Flight's course map, opened with M.
-    FlightMap,
-    /// The spaceport of the stellar landed on.
-    Spaceport,
-    /// The About text, over another screen.
-    About,
-}
 
 /// The two sides Tab switches between, and flight, entered from either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

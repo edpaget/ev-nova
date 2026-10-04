@@ -14,6 +14,7 @@ use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
+use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 
@@ -150,6 +151,15 @@ impl Screen for ServiceScreen {
     fn cancel_pointer(&mut self) {
         self.tracker.cancel_pointer();
     }
+
+    /// Done's sounds as it is clicked.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        self.tracker
+            .take_sound()
+            .map(Sound::Ui)
+            .into_iter()
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -158,6 +168,7 @@ mod tests {
     use super::*;
     use crate::draw::DrawCommand;
     use crate::input::MouseButton;
+    use crate::sound::{Sound, UiSound};
     use crate::text::fixture::MonoMetrics;
 
     fn bar() -> ServiceScreen {
@@ -299,5 +310,23 @@ mod tests {
         screen.input(&button(false));
         assert!(!screen.closed());
         assert!(format!("{screen:?}").contains("Bar"));
+    }
+
+    #[test]
+    fn a_click_on_done_sounds_it_going_down_then_up_and_keys_are_silent() {
+        let mut screen = bar();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: DONE_BUTTON.center(),
+        };
+        screen.input(&button(true));
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        screen.input(&button(false));
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert_eq!(screen.take_sounds(), []);
+        let mut screen = bar();
+        screen.input(&key(Key::Enter, true, false));
+        assert_eq!(screen.take_sounds(), []);
     }
 }
