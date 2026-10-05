@@ -167,6 +167,37 @@ mod tests {
     }
 
     #[test]
+    fn the_boarding_and_piracy_rules_are_overridden_by_their_keys() {
+        let text = r#"{"rule_overrides": {"empty_booty": "bible", "crewless_capture": "bible", "piracy_police": "bible"}}"#;
+        let (rulebook, warnings) = rulebook_of(text);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine()
+                .with_override(RuleKey::EmptyBooty, RuleSource::Bible)
+                .with_override(RuleKey::CrewlessCapture, RuleSource::Bible)
+                .with_override(RuleKey::PiracyPolice, RuleSource::Bible)
+        );
+        let text = r#"{"rules": "bible", "rule_overrides": {"piracy_police": "engine"}}"#;
+        let (rulebook, _) = rulebook_of(text);
+        assert_eq!(
+            [
+                RuleKey::CrimeGains,
+                RuleKey::EmptyBooty,
+                RuleKey::CrewlessCapture,
+                RuleKey::PiracyPolice
+            ]
+            .map(|key| rulebook.source_for(key)),
+            [
+                RuleSource::Bible,
+                RuleSource::Bible,
+                RuleSource::Bible,
+                RuleSource::Engine
+            ]
+        );
+    }
+
+    #[test]
     fn a_source_that_is_neither_is_the_engines_with_a_warning_naming_its_key() {
         for value in [r#""Bible""#, r#""both""#, "1", "null", r#"{"bible": true}"#] {
             let text =

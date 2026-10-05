@@ -24,6 +24,16 @@
 //! settings path chooses: by the engine's crime gains, the default,
 //! disabling the trader pleases a neutral government; by the Bible's, it
 //! does not.
+//!
+//! Boarded, with a pilot opened from the main menu and saved in a memory
+//! store, and the interface file's plunder and assignment dialogs: the
+//! blaster disables a trader carrying food and money, Tab targets it, the
+//! arrow keys bring the player over it at its speed and heading, and B
+//! boards it. The plunder dialog offers its credits and cargo, not ammo,
+//! at capture odds of 75 %; Credits takes the credits, and Capture Ship
+//! opens the assignment dialog: "Use As Escort" adds it to the fleet,
+//! which the saved pilot keeps and a new app opens again, and "Use As My
+//! Ship" flies it, keeping the old ship as an escort.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -1078,4 +1088,509 @@ fn the_saved_crime_gains_choose_whether_the_flights_crimes_please_a_neutral() {
              their own DisabPenalty 3, by the engine's law up 1"
         );
     }
+}
+
+// Boarding.
+
+use nova_data::InterfaceData;
+use nova_data::records::dialog::Dlog;
+use nova_data::records::dialog_items::Ditl;
+use nova_sim::fixture::MemoryPilots;
+use nova_sim::{Pilot, PilotKeeper, PilotStore};
+use nova_view::geometry::Point;
+use nova_view::menu::MenuChoice;
+
+/// A `width` x `height` picture of one colour.
+fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
+    let frame = [0, 0, height, width];
+    let pixels = vec![rgb; (width * height) as usize];
+    PictBuilder::new(frame)
+        .direct_bits(&DirectBits::rgb888(frame, &pixels))
+        .end()
+        .build()
+}
+
+/// The first `chär` flies the "Boarder" (ship 128: a crew of 10, 30
+/// shield, 45 armour and a blaster firing every 10 ticks, 10 mass damage
+/// a shot) in Alpha (128), whose one `düde` flies the "Trader" (ship 129:
+/// a crew of 1, no shield, 40 armour, 20 holds and 300 fuel) for food and
+/// money (`Booty` 0x0041); food is commodity 0. The status bar, Nova's
+/// button pictures and the plunder and assignment dialogs' pictures
+/// (`PICT` 8515 and 8516) are there.
+fn boarding_data() -> Rc<GameData> {
+    let mut boarder = ship(30, 45, &[128], &[]);
+    put_i16s(&mut boarder, 0x44, &[10]);
+    let mut trader = ship(0, 40, &[], &[]);
+    put_i16s(&mut trader, 0x00, &[20]);
+    put_i16s(&mut trader, 0x44, &[1]);
+    let mut dude = dude();
+    put_i16s(&mut dude, 0x04, &[0x0041]);
+    let mut fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
+        .resource(Ship::TYPE, 128, Some(b"Boarder"), &boarder)
+        .resource(Ship::TYPE, 129, Some(b"Trader"), &trader)
+        .resource(
+            Weapon::TYPE,
+            128,
+            Some(b"Blaster"),
+            &weapon(10, 10, -1, 0, 8, 0),
+        )
+        .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
+        .resource(ShipAnim::TYPE, 129, None, &ship_anim(2001))
+        .resource(RLED, 2000, None, &sheet(36, 1))
+        .resource(RLED, 2001, None, &sheet(36, 2))
+        .resource(Spin::TYPE, 3000, None, &spin(3000, 6))
+        .resource(RLED, 3000, None, &sheet(36, 3))
+        .resource(System::TYPE, 128, Some(b"Alpha"), &system())
+        .resource(Dude::TYPE, 128, Some(b"Traders"), &dude)
+        .resource(
+            nova_data::records::string_list::StrList::TYPE,
+            4000,
+            None,
+            &str_list("Food"),
+        )
+        .resource(
+            nova_data::records::string_list::StrList::TYPE,
+            4004,
+            None,
+            &str_list("75"),
+        )
+        .resource(
+            Interface::TYPE,
+            128,
+            Some(b"Default status bar"),
+            &interface(),
+        )
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
+        .resource(PICT, 8515, None, &pict(30, 20, [40, 40, 40]))
+        .resource(PICT, 8516, None, &pict(30, 20, [40, 40, 40]));
+    for state in [7500, 7503, 7506] {
+        fork = fork
+            .resource(PICT, state, None, &pict(13, 25, [200, 0, 0]))
+            .resource(PICT, state + 1, None, &pict(2, 25, [0, 200, 0]))
+            .resource(PICT, state + 2, None, &pict(13, 25, [0, 0, 200]))
+            .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
+            .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
+    }
+    let file = OneFile(fork.build().bytes);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
+/// A `STR#` of one string.
+fn str_list(string: &str) -> Vec<u8> {
+    let mut bytes = 1_u16.to_be_bytes().to_vec();
+    bytes.push(u8::try_from(string.len()).expect("short"));
+    bytes.extend(string.as_bytes());
+    bytes
+}
+
+/// One `DITL` user item at (left, top, right, bottom), enabled or not.
+fn user_item((l, t, r, b): (i16, i16, i16, i16), enabled: bool) -> Vec<u8> {
+    let mut bytes = vec![0; 4];
+    for value in [t, l, b, r] {
+        bytes.extend(value.to_be_bytes());
+    }
+    bytes.push(if enabled { 0 } else { 0x80 });
+    bytes.push(0);
+    bytes
+}
+
+/// A centred `DLOG` of `bounds` (top, left, bottom, right) naming `DITL`
+/// `ditl`, and the `DITL` of `items`.
+fn dialog(bounds: (i16, i16, i16, i16), ditl: i16, items: &[Vec<u8>]) -> (Vec<u8>, Vec<u8>) {
+    let (t, l, b, r) = bounds;
+    let mut dlog: Vec<u8> = [t, l, b, r, 1]
+        .iter()
+        .flat_map(|v| v.to_be_bytes())
+        .collect();
+    dlog.extend([1, 0, 0, 0, 0, 0, 0, 0]);
+    dlog.extend(ditl.to_be_bytes());
+    dlog.extend([0, 0, 0xA8, 0x0A]);
+    let mut list = (i16::try_from(items.len()).expect("few") - 1)
+        .to_be_bytes()
+        .to_vec();
+    list.extend(items.concat());
+    (dlog, list)
+}
+
+/// The interface file's plunder dialog (`DLOG` 1011, 309 x 198) and
+/// captured-ship assignment dialog (`DLOG` 1018, 257 x 114), as stock.
+fn boarding_interface() -> InterfaceData {
+    let at = |l: i16, t: i16, w: i16, h: i16| (l, t, l + w, t + h);
+    let (plunder_dlog, plunder_ditl) = dialog(
+        (40, 40, 238, 349),
+        1011,
+        &[
+            user_item(at(91, 166, 126, 25), true),
+            user_item(at(110, 110, 89, 25), true),
+            user_item(at(35, 138, 89, 25), true),
+            user_item(at(204, 110, 89, 25), true),
+            user_item(at(11, 7, 287, 96), false),
+            user_item(at(16, 110, 89, 25), true),
+            user_item(at(129, 138, 146, 25), true),
+        ],
+    );
+    let (assign_dlog, assign_ditl) = dialog(
+        (40, 40, 154, 297),
+        1018,
+        &[
+            user_item(at(55, 51, 146, 26), true),
+            user_item(at(55, 83, 146, 26), true),
+            user_item(at(9, 6, 238, 40), true),
+        ],
+    );
+    let fork = ForkBuilder::new()
+        .resource(Dlog::TYPE, 1011, None, &plunder_dlog)
+        .resource(Ditl::TYPE, 1011, None, &plunder_ditl)
+        .resource(Dlog::TYPE, 1018, None, &assign_dlog)
+        .resource(Ditl::TYPE, 1018, None, &assign_ditl)
+        .build()
+        .bytes;
+    InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
+}
+
+/// The traffic's setup draws first (the trader 100 above the player,
+/// facing down), then, for the capture, a self-destruct roll that misses
+/// (99) and a capture roll that succeeds (0) on the draws of 100, and 1 on
+/// every draw of 10 (so the capture's 1 in 10 misses); otherwise the last
+/// outcome.
+struct BoardChance {
+    setup: VecDeque<u32>,
+    of_100: VecDeque<u32>,
+}
+
+impl Chance for BoardChance {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        if let Some(draw) = self.setup.pop_front() {
+            return draw;
+        }
+        match n {
+            100 => self.of_100.pop_front().unwrap_or(n - 1),
+            10 => 1,
+            _ => n - 1,
+        }
+    }
+}
+
+struct Boarder {
+    app: App<Rc<GameData>>,
+    gpu: RecordingGpu,
+    frames: u64,
+}
+
+impl Boarder {
+    /// The app over [`boarding_data`] and [`boarding_interface`], on the
+    /// main menu, keeping pilots in `store`, its traffic and capture
+    /// rolled on a [`BoardChance`], its NPCs idling.
+    fn opening(store: &MemoryPilots) -> Self {
+        let data = boarding_data();
+        let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(BoardChance {
+            setup: [6, 6, 0, 0, 750, 650, 180, 0].into(),
+            of_100: [99, 0].into(),
+        }));
+        let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
+        let screen = start_screen(Rc::clone(&data))
+            .with_pilots(Some(keeper), Rc::new(MonoMetrics))
+            .with_dialogs(Rc::new(boarding_interface()), Rc::new(MonoMetrics))
+            .with_chance(SharedChance::new(chance))
+            .with_behaviour(Rc::new(Still));
+        Self {
+            app: App::new(&FakeWindow, data, screen),
+            gpu: RecordingGpu::new(),
+            frames: 0,
+        }
+    }
+
+    fn send(&mut self, event: WindowEvent) {
+        assert_eq!(
+            self.app.handle(event, &mut FakeWindow, &mut self.gpu),
+            Control::Continue,
+            "{event:?}"
+        );
+    }
+
+    fn key(&mut self, key: Key, pressed: bool) {
+        self.send(WindowEvent::Key {
+            key,
+            pressed,
+            repeat: false,
+        });
+    }
+
+    fn tap(&mut self, key: Key) {
+        self.key(key, true);
+        self.key(key, false);
+    }
+
+    fn click(&mut self, at: Point) {
+        self.send(WindowEvent::PointerMoved {
+            px: (f64::from(at.x), f64::from(at.y)),
+        });
+        for pressed in [true, false] {
+            self.send(WindowEvent::PointerButton {
+                button: nova_view::MouseButton::Left,
+                pressed,
+            });
+        }
+    }
+
+    fn frame(&mut self) -> Frame {
+        self.frames += 1;
+        let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+        self.send(WindowEvent::Redraw { elapsed });
+        assert_eq!(self.app.take_failures(), []);
+        (*self.gpu.submits().last().expect("a frame")).clone()
+    }
+
+    fn showing(&self) -> Showing {
+        self.app.screen().showing()
+    }
+
+    fn session(&self) -> &Session {
+        self.app
+            .screen()
+            .flight_view()
+            .expect("flying")
+            .session()
+            .expect("a session")
+    }
+
+    fn pilot(&self) -> Pilot {
+        self.session().pilot().clone()
+    }
+
+    /// Opens the first saved pilot from the main menu.
+    fn open_pilot(&mut self) {
+        let at = self
+            .app
+            .screen()
+            .main_menu()
+            .expect("a main menu")
+            .button(MenuChoice::OpenPilot)
+            .rect
+            .center();
+        self.click(at);
+        assert_eq!(self.showing(), Showing::OpenPilot);
+        self.tap(Key::Enter);
+        assert_eq!(self.showing(), Showing::Flight);
+    }
+
+    /// The centre of the open plunder or assignment dialog's item.
+    fn item(&self, item: usize) -> Point {
+        let screen = self.app.screen();
+        let dialog = match (screen.plunder(), screen.assignment()) {
+            (Some(plunder), _) => plunder.dialog(),
+            (None, Some(assignment)) => assignment.dialog(),
+            (None, None) => panic!("no boarding dialog is open"),
+        };
+        dialog.item_bounds(item).expect("an item").center()
+    }
+}
+
+/// The flight keys a press of which `controls` hold.
+fn flight_keys(controls: nova_sim::Controls) -> [(Key, bool); 3] {
+    [
+        (Key::Up, controls.thrust),
+        (Key::Left, controls.turn == nova_sim::Turn::Left),
+        (Key::Right, controls.turn == nova_sim::Turn::Right),
+    ]
+}
+
+/// The controls to come over `quarry` at its velocity, closing in more
+/// slowly the nearer it is, then to face its heading or the reverse.
+fn steering(session: &Session, quarry: &Npc) -> nova_sim::Controls {
+    use nova_sim::flight::{heading_of, shortest_turn};
+    let player = *session.player();
+    let accel = session.handling().accel;
+    let off = quarry.state.position - player.position;
+    let distance = off.length();
+    let wanted = if distance > 0.0 {
+        off * ((distance * 0.02).min(1.5) / distance)
+    } else {
+        nova_sim::Vec2::ZERO
+    };
+    let error = wanted - (player.velocity - quarry.state.velocity);
+    let toward = |heading: f32| {
+        let turn = shortest_turn(player.heading, heading);
+        let side = if turn > 1.5 {
+            nova_sim::Turn::Right
+        } else if turn < -1.5 {
+            nova_sim::Turn::Left
+        } else {
+            nova_sim::Turn::None
+        };
+        (turn, side)
+    };
+    if error.length() > accel || distance > quarry.hull.board_reach / 3.0 {
+        let (turn, side) = toward(heading_of(error));
+        return nova_sim::Controls {
+            thrust: turn.abs() < 10.0 && error.length() > accel / 2.0,
+            turn: side,
+            reverse: false,
+        };
+    }
+    let ahead = toward(quarry.state.heading);
+    let back = toward((quarry.state.heading + 180.0) % 360.0);
+    let (turn, side) = if ahead.0.abs() <= back.0.abs() {
+        ahead
+    } else {
+        back
+    };
+    nova_sim::Controls {
+        turn: if turn.abs() <= 20.0 {
+            nova_sim::Turn::None
+        } else {
+            side
+        },
+        ..nova_sim::Controls::default()
+    }
+}
+
+/// The app with a saved pilot, "Ada", resumed in flight from the main
+/// menu, who disables the trader with the blaster (Space), targets it
+/// (Tab), flies over it with the arrow keys and boards it (B).
+fn boarded(store: &MemoryPilots) -> Boarder {
+    let data = boarding_data();
+    PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
+        .save(&Pilot::new(data.as_ref(), "Ada").expect("a pilot"))
+        .expect("saved");
+    let mut game = Boarder::opening(store);
+    game.open_pilot();
+    // The first frame runs no step; the second's sets the system up.
+    game.frame();
+    game.frame();
+    let trader = game.session().npcs()[0].id;
+    assert_eq!(
+        game.session().npcs()[0].state.position,
+        nova_sim::Vec2::new(0.0, -100.0)
+    );
+    game.tap(Key::Tab);
+    game.key(Key::Space, true);
+    for _ in 0..600 {
+        game.frame();
+        if game.session().npcs()[0].condition == nova_sim::Condition::Disabled {
+            break;
+        }
+    }
+    game.key(Key::Space, false);
+    assert_eq!(
+        game.session().npcs()[0].condition,
+        nova_sim::Condition::Disabled,
+        "the blaster disabled the trader"
+    );
+    let mut held = [(Key::Up, false), (Key::Left, false), (Key::Right, false)];
+    for _ in 0..6000 {
+        let quarry = game
+            .session()
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == trader)
+            .expect("the trader")
+            .clone();
+        let keys = flight_keys(steering(game.session(), &quarry));
+        for (now, was) in keys.iter().zip(held.iter_mut()) {
+            if now.1 != was.1 {
+                game.key(now.0, now.1);
+                was.1 = now.1;
+            }
+        }
+        game.tap(Key::Char('b'));
+        if game.showing() == Showing::Plunder {
+            break;
+        }
+        game.frame();
+    }
+    assert_eq!(game.showing(), Showing::Plunder, "boarded");
+    for (key, down) in held {
+        if down {
+            game.key(key, false);
+        }
+    }
+    game
+}
+
+/// The text runs of `frame`.
+fn run_texts(frame: &Frame) -> Vec<String> {
+    runs(frame).into_iter().map(|run| run.text).collect()
+}
+
+#[test]
+fn boarding_a_disabled_trader_plunders_it_and_captures_it_into_the_saved_fleet() {
+    let store = MemoryPilots::new();
+    let mut game = boarded(&store);
+    let frame = game.frame();
+    let shown = run_texts(&frame);
+    assert!(
+        shown.iter().any(|text| text == "Capture Odds: 75%"),
+        "{shown:?}"
+    );
+    let color = |label: &str| {
+        runs(&frame)
+            .into_iter()
+            .find(|run| run.text == label)
+            .map(|run| run.color)
+    };
+    assert_eq!(color("Credits"), color("Cargo"), "both enabled");
+    assert_ne!(color("Credits"), color("Ammo"), "no ammo: greyed");
+    let cash = game.pilot().cash();
+    game.click(game.item(3));
+    assert_eq!(game.pilot().cash(), cash + 1000, "the credits taken");
+    game.click(game.item(7));
+    assert_eq!(game.showing(), Showing::Assignment, "captured");
+    game.click(game.item(2));
+    assert_eq!(game.showing(), Showing::Flight);
+    let shown = run_texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "You assigned this ship to your fleet of escorts."),
+        "{shown:?}"
+    );
+    let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
+    assert_eq!(
+        saved
+            .escorts()
+            .iter()
+            .map(|escort| escort.ship)
+            .collect::<Vec<_>>(),
+        [nova_sim::ShipId(129)]
+    );
+
+    // A new app: Open Pilot resumes the pilot with its escort.
+    let mut game = Boarder::opening(&store);
+    game.open_pilot();
+    assert_eq!(game.pilot().escorts().len(), 1);
+    assert_eq!(game.pilot().escorts()[0].ship, nova_sim::ShipId(129));
+}
+
+#[test]
+fn use_as_my_ship_flies_the_captured_trader_and_keeps_the_old_ship() {
+    let store = MemoryPilots::new();
+    let mut game = boarded(&store);
+    // The credits, then the capture: its press rolls the self-destruct.
+    game.click(game.item(3));
+    game.click(game.item(7));
+    assert_eq!(game.showing(), Showing::Assignment);
+    game.click(game.item(1));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.session().ship(), nova_sim::ShipId(129));
+    let shown = run_texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "You retained your old ship as an escort."),
+        "{shown:?}"
+    );
+    assert_eq!(
+        game.pilot()
+            .escorts()
+            .iter()
+            .map(|escort| escort.ship)
+            .collect::<Vec<_>>(),
+        [nova_sim::ShipId(128)]
+    );
 }

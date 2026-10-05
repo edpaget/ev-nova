@@ -51,11 +51,16 @@
 //! The same file chooses, for each rule where the Nova Bible and the
 //! original engine disagree, which one the game follows: `"rules"`,
 //! `"engine"` (the default) or `"bible"`, for all of them, and
-//! `"rule_overrides"`, an object, for any one by its key (so far only
-//! `"crime_gains"`: whether a crime against a government's ship improves
+//! `"rule_overrides"`, an object, for any one by its key:
+//! `"crime_gains"` (whether a crime against a government's ship improves
 //! the record with every government not allied with it, as the engine
-//! does, or only with its enemies, as the Bible says). They are set by
-//! editing the file; a sound change in the Preferences dialog keeps them.
+//! does, or only with its enemies, as the Bible says), `"empty_booty"`
+//! (whether a ship of `Booty` 0 opens the plunder dialog anyway, or
+//! repels the boarders), `"crewless_capture"` (whether a ship of no crew
+//! can still capture) and `"piracy_police"` (whether warships as well as
+//! interceptors answer the player's attack or boarding, or interceptors
+//! only). They are set by editing the file; a sound change in the
+//! Preferences dialog keeps them.
 //!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
@@ -81,7 +86,9 @@ use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
-use nova_sim::{Allegiance, Chance, NovaAi, NovaDisable, NovaLaw, PilotKeeper, PilotStore};
+use nova_sim::{
+    Allegiance, Chance, NovaAi, NovaBoarding, NovaDisable, NovaLaw, PilotKeeper, PilotStore,
+};
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
@@ -144,10 +151,11 @@ fn main() -> ExitCode {
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects))
-        .with_behaviour(Rc::new(NovaAi::default()))
+        .with_behaviour(Rc::new(NovaAi::from_rulebook(&rulebook)))
         .with_disable_rule(Rc::new(NovaDisable))
         .with_point_defence_rule(Rc::new(Allegiance))
-        .with_law(Rc::new(NovaLaw::from_rulebook(&rulebook)));
+        .with_law(Rc::new(NovaLaw::from_rulebook(&rulebook)))
+        .with_boarding_rule(Rc::new(NovaBoarding::from_rulebook(&rulebook)));
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);

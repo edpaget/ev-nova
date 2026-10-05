@@ -43,6 +43,10 @@ pub enum Showing {
     NewPilot,
     /// The list of saved pilots, over the main menu.
     OpenPilot,
+    /// The plunder dialog, over flight, which it pauses.
+    Plunder,
+    /// The captured-ship assignment dialog, over flight, which it pauses.
+    Assignment,
 }
 
 /// Something in the game data a screen cannot use, for the app to write

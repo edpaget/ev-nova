@@ -72,9 +72,14 @@ impl<A: Audio> AudioCore<A> {
         if let Some(scene) = showing.filter(|&scene| !is_overlay(scene)) {
             self.scene = Some(scene);
         }
-        // The Preferences dialog pauses flight below it, and flight lets
-        // go of its keys, so the thrust is forgotten as for leaving it.
-        if self.scene != Some(Showing::Flight) || showing == Some(Showing::Preferences) {
+        // The Preferences dialog and the boarding dialogs pause flight
+        // below them, and flight lets go of its keys, so the thrust is
+        // forgotten as for leaving it.
+        let pauses = matches!(
+            showing,
+            Some(Showing::Preferences | Showing::Plunder | Showing::Assignment)
+        );
+        if self.scene != Some(Showing::Flight) || pauses {
             self.thrusting = false;
         }
         self.reconcile();
@@ -250,12 +255,18 @@ pub fn distance_gain(offset: (i32, i32)) -> f32 {
 }
 
 /// Whether `showing` is shown over another screen, keeping the scene
-/// below it: the About text, the Preferences dialog, and the new pilot's
-/// name entry and the saved pilots' list over the main menu.
+/// below it: the About text, the Preferences dialog, the new pilot's name
+/// entry and the saved pilots' list over the main menu, and the plunder
+/// and assignment dialogs over flight.
 fn is_overlay(showing: Showing) -> bool {
     matches!(
         showing,
-        Showing::About | Showing::Preferences | Showing::NewPilot | Showing::OpenPilot
+        Showing::About
+            | Showing::Preferences
+            | Showing::NewPilot
+            | Showing::OpenPilot
+            | Showing::Plunder
+            | Showing::Assignment
     )
 }
 
@@ -274,7 +285,9 @@ fn has_music(scene: Showing) -> bool {
         | Showing::About
         | Showing::Preferences
         | Showing::NewPilot
-        | Showing::OpenPilot => false,
+        | Showing::OpenPilot
+        | Showing::Plunder
+        | Showing::Assignment => false,
     }
 }
 
@@ -744,6 +757,25 @@ mod tests {
         core.update(Some(Showing::ShipBrowser), &[]);
         core.update(Some(Showing::Preferences), &[]);
         assert_eq!(drain(&log), [], "over the ship browser, still silent");
+    }
+
+    #[test]
+    fn the_boarding_dialogs_pause_flight_and_keep_its_music() {
+        for overlay in [Showing::Plunder, Showing::Assignment] {
+            let (mut core, log) = engine();
+            core.update(Some(Showing::Flight), &[THRUST]);
+            drain(&log);
+            core.update(Some(overlay), &[]);
+            assert_eq!(
+                drain(&log),
+                [AudioCommand::StopLoop],
+                "{overlay:?}: the music goes on; the engine stops"
+            );
+            core.update(Some(Showing::Flight), &[]);
+            assert_eq!(drain(&log), [], "{overlay:?}: the thrust is forgotten");
+            assert!(is_overlay(overlay));
+            assert!(!has_music(overlay));
+        }
     }
 
     // Applying settings.

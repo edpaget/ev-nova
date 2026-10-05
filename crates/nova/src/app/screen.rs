@@ -97,6 +97,20 @@
 //! data it could not read or the simulation does not handle yet come
 //! through [`Screen::take_diagnostics`].
 //!
+//! B, in flight, boards the target ([`FlightView`]'s boarding, by the
+//! router's [`BoardingRule`], [`AppScreen::with_boarding_rule`], Nova's
+//! until another is given). A boarding opens the plunder dialog over
+//! flight, which pauses under it as under the Preferences dialog: the
+//! interface file's "Plunder" dialog when the router has dialogs, or a
+//! built-in one (with a warning when the interface file has none); with
+//! no metrics to lay it out the boarding is let go, with a warning. Each
+//! take goes through flight, which says what it took, and the dialog
+//! shows what is still on board, or closes once the boarding is over. A
+//! capture that awaits its assignment opens the assignment dialog the
+//! same way, and the choice goes through flight; the pilot is saved after
+//! the input that captured or assigned, as after a change in the
+//! spaceport.
+//!
 //! I, outside flight and the spaceport, opens the About text in the game's "Desc Dialog"
 //! over the screen shown, when the router was given the interface file's
 //! dialogs ([`AppScreen::with_dialogs`]). The dialog is modal: it takes
@@ -120,8 +134,8 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::{
-    Allegiance, Behaviour, DisableRule, LegalCode, NovaAi, NovaDisable, NovaLaw, Pilot,
-    PilotKeeper, PilotStore, PointDefenceRule, pilot_key,
+    Allegiance, Behaviour, BoardingRule, DisableRule, LegalCode, NovaAi, NovaBoarding, NovaDisable,
+    NovaLaw, Pilot, PilotKeeper, PilotStore, PlunderView, PointDefenceRule, Take, Taken, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::flight::{FlightView, SharedChance};
@@ -138,8 +152,12 @@ use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
 use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
+use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
-use nova_view::ui::{DescDialog, DescriptionSource, DialogResources, PrefsDialog};
+use nova_view::ui::{
+    AssignmentDialog, DescDialog, DescriptionSource, DialogResources, PlunderDialog, PlunderShown,
+    PrefsDialog,
+};
 use nova_view::{
     Color, Diagnostic, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction, Sound,
     SoundPrefs,
@@ -231,6 +249,13 @@ pub struct AppScreen {
     defence_rule: Rc<dyn PointDefenceRule>,
     /// What each flight's player's crimes do to its legal record.
     law: Rc<dyn LegalCode>,
+    /// Who repels boarders, the capture odds and the capture roll, in
+    /// each flight.
+    boarding_rule: Rc<dyn BoardingRule>,
+    /// The plunder dialog, while a boarding is under way.
+    plunder: Option<PlunderDialog>,
+    /// The captured-ship assignment dialog, while a capture awaits it.
+    assignment: Option<AssignmentDialog>,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -295,6 +320,9 @@ impl AppScreen {
             disable_rule: Rc::new(NovaDisable),
             defence_rule: Rc::new(Allegiance),
             law: Rc::new(NovaLaw::default()),
+            boarding_rule: Rc::new(NovaBoarding::default()),
+            plunder: None,
+            assignment: None,
         }
     }
 
@@ -346,6 +374,28 @@ impl AppScreen {
         Self { law, ..self }
     }
 
+    /// The router with each flight's boardings by `rule`: who repels
+    /// boarders, the capture odds and the capture roll.
+    #[must_use]
+    pub fn with_boarding_rule(self, boarding_rule: Rc<dyn BoardingRule>) -> Self {
+        Self {
+            boarding_rule,
+            ..self
+        }
+    }
+
+    /// The plunder dialog, while a boarding is under way.
+    #[must_use]
+    pub fn plunder(&self) -> Option<&PlunderDialog> {
+        self.plunder.as_ref()
+    }
+
+    /// The captured-ship assignment dialog, while a capture awaits it.
+    #[must_use]
+    pub fn assignment(&self) -> Option<&AssignmentDialog> {
+        self.assignment.as_ref()
+    }
+
     /// A flight over the game data, `new` from it, rolling on the router's
     /// chance, its effects on the router's effects chance, deciding as its
     /// behaviour says, disabling ships, engaging missiles and judging
@@ -361,7 +411,8 @@ impl AppScreen {
             .with_behaviour(Rc::clone(&self.behaviour))
             .with_disable_rule(Rc::clone(&self.disable_rule))
             .with_point_defence_rule(Rc::clone(&self.defence_rule))
-            .with_law(Rc::clone(&self.law));
+            .with_law(Rc::clone(&self.law))
+            .with_boarding_rule(Rc::clone(&self.boarding_rule));
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -480,6 +531,12 @@ impl AppScreen {
         }
         if self.preferences.is_some() {
             return Showing::Preferences;
+        }
+        if self.plunder.is_some() {
+            return Showing::Plunder;
+        }
+        if self.assignment.is_some() {
+            return Showing::Assignment;
         }
         if self.new_pilot.is_some() {
             return Showing::NewPilot;
@@ -651,6 +708,12 @@ impl AppScreen {
         if let Some(dialog) = &mut self.preferences {
             return Some(dialog);
         }
+        if let Some(dialog) = &mut self.plunder {
+            return Some(dialog);
+        }
+        if let Some(dialog) = &mut self.assignment {
+            return Some(dialog);
+        }
         if let Some(dialog) = &mut self.new_pilot {
             return Some(dialog);
         }
@@ -700,6 +763,147 @@ impl AppScreen {
         flight.input(input);
         if let Some(stellar) = flight.take_landing() {
             self.show_spaceport(stellar);
+        }
+        if let Some(view) = self.flight.as_mut().and_then(FlightView::take_boarding) {
+            self.open_plunder(view);
+        }
+        ScreenAction::None
+    }
+
+    /// What the plunder dialog shows of `view`: the cargo's good and the
+    /// ammunition's outfit named by the flight's session.
+    fn plunder_names(&self, view: PlunderView) -> (Option<String>, Option<String>) {
+        let Some(session) = self
+            .flight
+            .as_ref()
+            .and_then(|flight| flight.session().ok())
+        else {
+            return (None, None);
+        };
+        let good = view
+            .cargo
+            .and_then(|(good, _)| session.good_name(good))
+            .map(str::to_owned);
+        let outfit = view
+            .ammo
+            .and_then(|(outfit, _)| session.outfit_name(outfit))
+            .map(str::to_owned);
+        (good, outfit)
+    }
+
+    /// Opens the plunder dialog on `view` over flight, which pauses: the
+    /// interface file's, or the built-in one without it (with a warning
+    /// when the interface file has none). With no metrics to lay it out,
+    /// the boarding is let go, with a warning.
+    fn open_plunder(&mut self, view: PlunderView) {
+        let Some(metrics) = self.metrics() else {
+            if let Some(flight) = &mut self.flight {
+                flight.plunder(Take::Abort);
+            }
+            self.warnings
+                .push("nova: cannot show the plunder dialog: no metrics to lay it out".to_owned());
+            return;
+        };
+        let (good, outfit) = self.plunder_names(view);
+        let shown = PlunderShown {
+            view,
+            good: good.as_deref(),
+            outfit: outfit.as_deref(),
+        };
+        let style = self.data.button_style();
+        let built = self.dialogs.as_ref().map(|dialogs| {
+            dialogs
+                .resources
+                .dialog_template(PLUNDER_DIALOG)
+                .and_then(|template| {
+                    PlunderDialog::new(&template, &shown, style, Rc::clone(&metrics))
+                })
+        });
+        let dialog = match built {
+            Some(Ok(dialog)) => dialog,
+            other => {
+                if let Some(Err(reason)) = other {
+                    self.warnings
+                        .push(format!("nova: using the built-in plunder dialog: {reason}"));
+                }
+                PlunderDialog::fallback(&shown, style, metrics)
+            }
+        };
+        self.plunder = Some(dialog);
+    }
+
+    /// The plunder dialog's input: each press goes through flight, and
+    /// the dialog shows what is still on board, or closes once the
+    /// boarding is over; a capture awaiting its assignment opens the
+    /// assignment dialog.
+    fn plunder_input(&mut self, input: &Input) -> ScreenAction {
+        let dialog = self.plunder.as_mut().expect("open");
+        dialog.input(input);
+        let Some(take) = dialog.take_take() else {
+            return ScreenAction::None;
+        };
+        let flight = self.flight.as_mut().expect(ENTERED);
+        let taken = flight.plunder(take);
+        match flight.boarding() {
+            Some(view) => {
+                let (good, outfit) = self.plunder_names(view);
+                let shown = PlunderShown {
+                    view,
+                    good: good.as_deref(),
+                    outfit: outfit.as_deref(),
+                };
+                if let Some(dialog) = &mut self.plunder {
+                    dialog.set_plunder(&shown);
+                }
+            }
+            None => {
+                if let Some(mut dialog) = self.plunder.take() {
+                    self.sounds.extend(dialog.take_sounds());
+                }
+            }
+        }
+        if taken == Taken::Captured {
+            self.open_assignment();
+        }
+        ScreenAction::None
+    }
+
+    /// Opens the captured-ship assignment dialog over flight: the
+    /// interface file's, or the built-in one without it.
+    fn open_assignment(&mut self) {
+        let Some(metrics) = self.metrics() else {
+            return;
+        };
+        let style = self.data.button_style();
+        let built = self.dialogs.as_ref().map(|dialogs| {
+            dialogs
+                .resources
+                .dialog_template(ASSIGNMENT_DIALOG)
+                .and_then(|template| AssignmentDialog::new(&template, style, Rc::clone(&metrics)))
+        });
+        let dialog = match built {
+            Some(Ok(dialog)) => dialog,
+            other => {
+                if let Some(Err(reason)) = other {
+                    self.warnings.push(format!(
+                        "nova: using the built-in assignment dialog: {reason}"
+                    ));
+                }
+                AssignmentDialog::fallback(style, metrics)
+            }
+        };
+        self.assignment = Some(dialog);
+    }
+
+    /// The assignment dialog's input: the choice goes through flight, and
+    /// the dialog closes, keeping its sounds.
+    fn assignment_input(&mut self, input: &Input) -> ScreenAction {
+        let dialog = self.assignment.as_mut().expect("open");
+        dialog.input(input);
+        if let Some(choice) = dialog.take_choice() {
+            self.sounds.extend(dialog.take_sounds());
+            self.assignment = None;
+            self.flight.as_mut().expect(ENTERED).assign(choice);
         }
         ScreenAction::None
     }
@@ -1007,6 +1211,12 @@ impl AppScreen {
         if self.preferences.is_some() {
             return self.preferences_input(input);
         }
+        if self.plunder.is_some() {
+            return self.plunder_input(input);
+        }
+        if self.assignment.is_some() {
+            return self.assignment_input(input);
+        }
         if self.new_pilot.is_some() {
             return self.new_pilot_input(input);
         }
@@ -1182,6 +1392,12 @@ impl Screen for AppScreen {
         if let Some(pilots) = &self.open_pilot {
             pilots.draw(list);
         }
+        if let Some(dialog) = &self.plunder {
+            dialog.draw(list);
+        }
+        if let Some(dialog) = &self.assignment {
+            dialog.draw(list);
+        }
         if let Some(about) = &self.about {
             about.draw(list);
         }
@@ -1219,6 +1435,12 @@ impl Screen for AppScreen {
             self.open_pilot.as_mut().map(|list| list as &mut dyn Screen),
             self.about.as_mut().map(|about| about as &mut dyn Screen),
             self.preferences
+                .as_mut()
+                .map(|dialog| dialog as &mut dyn Screen),
+            self.plunder
+                .as_mut()
+                .map(|dialog| dialog as &mut dyn Screen),
+            self.assignment
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
             self.spaceport.as_mut().map(|port| port as &mut dyn Screen),
@@ -4001,5 +4223,452 @@ mod tests {
         click_port_item(&mut screen, 9);
         let open = spaceport(&screen).open_shipyard().expect("shipbuying");
         assert_eq!(open.problem(), Some("no DLOG 1004"));
+    }
+
+    // Boarding.
+
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
+    use nova_data::records::dude::Dude;
+    use nova_sim::reserves::Gauge;
+    use nova_sim::{Chance, Goal, HullSpec, Npc, Surroundings, Take};
+    use nova_view::ui::plunder::{
+        ASSIGNMENT_DIALOG, ESCORT_ITEM, MY_SHIP_ITEM, PLUNDER_DIALOG, PLUNDER_PICTURE,
+    };
+
+    /// Every ship that holds armour is disabled: the trader (100), never
+    /// the player (none).
+    #[derive(Debug)]
+    struct Downs;
+
+    impl DisableRule for Downs {
+        fn disabled(&self, _armor: Gauge, _hull: &HullSpec) -> bool {
+            true
+        }
+    }
+
+    /// Every NPC idles.
+    #[derive(Debug)]
+    struct Idle;
+
+    impl Behaviour for Idle {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+    }
+
+    /// Never repels, gives odds of 75, and always captures.
+    #[derive(Debug)]
+    struct Sure;
+
+    impl BoardingRule for Sure {
+        fn repels(&self, _booty: u16) -> bool {
+            false
+        }
+
+        fn capture_odds(
+            &self,
+            _crew: &nova_sim::board::CaptureCrew,
+            _chance: &mut dyn Chance,
+        ) -> u8 {
+            75
+        }
+
+        fn captures(&self, _odds: u8, _chance: &mut dyn Chance) -> bool {
+            true
+        }
+    }
+
+    /// Draws its script, then the last outcome.
+    struct Script(VecDeque<u32>);
+
+    impl Chance for Script {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.0.pop_front().unwrap_or(n - 1)
+        }
+    }
+
+    /// The traffic's setup draws: the trader under the player at the
+    /// centre, facing up; then the last outcomes.
+    fn under_the_player() -> SharedChance {
+        let script: Rc<RefCell<dyn Chance>> =
+            Rc::new(RefCell::new(Script([6, 6, 0, 0, 750, 750, 0, 0].into())));
+        SharedChance::new(script)
+    }
+
+    /// The first `chär` flies ship 128 ("First": average, a crew of 10)
+    /// in system 128, whose one `düde`, at 100 %, flies ship 129 ("Trader":
+    /// a crew of 3, 100 armour, 20 holds, 300 fuel, `Cost` 150,000) for
+    /// food and money (`Booty` 0x0041), independent. Food is commodity 0.
+    fn boarding_data() -> Rc<GameData> {
+        let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
+            for (i, value) in values.iter().enumerate() {
+                bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
+            }
+        };
+        let ship = |holds, armor, crew| {
+            let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
+            put(&mut bytes, 0x00, &[holds, 0, 300, 300, 10, 300, 0, armor]);
+            put(&mut bytes, 0x12, &[-1; 4]);
+            put(&mut bytes, 0x42, &[1, crew]);
+            put(&mut bytes, 0x4E, &[-1; 4]);
+            put(&mut bytes, 0x370, &[-1; 4]);
+            put(&mut bytes, 0x6CE, &[-1; 4]);
+            bytes
+        };
+        let mut trader = ship(20, 100, 3);
+        trader[0x30..0x34].copy_from_slice(&150_000_i32.to_be_bytes());
+        let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
+        put(&mut anim, 0x00, &[1000, 0, 1]);
+        put(&mut anim, 0x34, &[4]);
+        let sheet = (0..4)
+            .fold(RledBuilder::new(1, 1), |sheet, _| {
+                sheet.frame(|f| f.line().pixels(&[0x7C00]))
+            })
+            .build();
+        let mut character = vec![0; Character::SIZE.expect("fixed")];
+        put(&mut character, 0x04, &[128, 128, -1, -1, -1]);
+        put(&mut character, 0x0E, &[-1; 4]);
+        let mut system = vec![0; System::SIZE.expect("fixed")];
+        put(&mut system, 0x04, &[-1; 32]);
+        put(&mut system, 0x44, &[128, -1, -1, -1, -1, -1, -1, -1]);
+        put(&mut system, 0x54, &[100]);
+        put(&mut system, 0x64, &[1, -1]);
+        let mut dude = vec![0; Dude::SIZE.expect("fixed")];
+        put(&mut dude, 0x00, &[1, -1, 0x0041]);
+        put(&mut dude, 0x08, &[-1; 16]);
+        put(&mut dude, 0x08, &[129]);
+        put(&mut dude, 0x28, &[100]);
+        let fork = ForkBuilder::new()
+            .resource(Ship::TYPE, 128, Some(b"First"), &ship(0, 0, 10))
+            .resource(Ship::TYPE, 129, Some(b"Trader"), &trader)
+            .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
+            .resource(ShipAnim::TYPE, 128, None, &anim)
+            .resource(ShipAnim::TYPE, 129, None, &anim)
+            .resource(RLED, 1000, None, &sheet)
+            .resource(System::TYPE, 128, Some(b"Alpha"), &system)
+            .resource(Dude::TYPE, 128, Some(b"Traders"), &dude)
+            .resource(StrList::TYPE, 4000, None, &str_list(&["Food"]))
+            .resource(StrList::TYPE, 4004, None, &str_list(&["75"]))
+            .build()
+            .bytes;
+        let file = OneFile(fork);
+        Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    }
+
+    /// `screen` over [`boarding_data`], its trader under the player,
+    /// idling and disabled at once.
+    fn boardable(screen: AppScreen) -> AppScreen {
+        screen
+            .with_chance(under_the_player())
+            .with_behaviour(Rc::new(Idle))
+            .with_disable_rule(Rc::new(Downs))
+    }
+
+    /// Ticks once (the system is set up and the trader disabled), targets
+    /// the trader with Tab and boards it with B.
+    fn board(screen: &mut AppScreen) {
+        screen.tick(TICK);
+        for (k, pressed) in [
+            (Key::Tab, true),
+            (Key::Tab, false),
+            (Key::Char('b'), true),
+            (Key::Char('b'), false),
+        ] {
+            screen.input(&key(k, pressed));
+        }
+    }
+
+    /// The router over [`boarding_data`] with dialogs, in the developer's
+    /// flight, boarded.
+    fn boarded() -> AppScreen {
+        let mut screen = boardable(with_dialogs(boarding_data()));
+        fly(&mut screen);
+        board(&mut screen);
+        assert_eq!(screen.showing(), Showing::Plunder);
+        screen
+    }
+
+    fn plunder_click(screen: &mut AppScreen, item: usize) -> Vec<Sound> {
+        let at = screen
+            .plunder()
+            .expect("the plunder dialog is open")
+            .dialog()
+            .item_bounds(item)
+            .expect("an item")
+            .center();
+        let mut sounds = Vec::new();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+            sounds.extend(screen.take_sounds());
+        }
+        sounds
+    }
+
+    fn assignment_click(screen: &mut AppScreen, item: usize) {
+        let at = screen
+            .assignment()
+            .expect("the assignment dialog is open")
+            .dialog()
+            .item_bounds(item)
+            .expect("an item")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+    }
+
+    #[test]
+    fn b_on_a_disabled_target_opens_the_plunder_dialog_over_paused_flight() {
+        let mut screen = boarded();
+        let dialog = screen.plunder().expect("open");
+        assert_eq!(dialog.lines()[2], "Cargo: 19 tons of Food");
+        assert_eq!(dialog.lines()[4], "Capture Odds: 28%");
+        let alpha = flight(&screen).alpha();
+        screen.tick(TICK / 2);
+        assert_eq!(
+            flight(&screen).alpha().to_bits(),
+            alpha.to_bits(),
+            "flight is paused"
+        );
+        let list = drawn(&screen);
+        let texts: Vec<String> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|text| text == "Capture Ship"), "{texts:?}");
+        assert!(
+            texts.iter().position(|text| text == "Capture Ship")
+                > texts.iter().position(|text| text.contains("Alpha")),
+            "over flight"
+        );
+    }
+
+    #[test]
+    fn each_take_goes_through_the_flight_and_refreshes_the_dialog() {
+        let mut screen = boarded();
+        let cash = flight(&screen).pilot().expect("a pilot").cash();
+        let sounds = plunder_click(&mut screen, 3);
+        assert_eq!(
+            sounds,
+            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
+        );
+        assert_eq!(
+            flight(&screen).pilot().expect("a pilot").cash(),
+            cash + 5750
+        );
+        assert_eq!(
+            flight(&screen).message(),
+            Some("You stole all the 5750 credits from this ship.")
+        );
+        assert_eq!(screen.showing(), Showing::Plunder, "still open");
+        plunder_click(&mut screen, 3);
+        assert_eq!(
+            flight(&screen).pilot().expect("a pilot").cash(),
+            cash + 5750,
+            "greyed: taken once"
+        );
+        plunder_click(&mut screen, 2);
+        let dialog = screen.plunder().expect("open");
+        assert_eq!(dialog.lines()[2], "Cargo: N/A", "refreshed");
+    }
+
+    #[test]
+    fn abort_closes_the_dialog_back_into_flight() {
+        let mut screen = boarded();
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.plunder().is_none());
+        assert_eq!(flight(&screen).boarding(), None);
+        screen.input(&key(Key::Escape, false));
+        assert_eq!(
+            screen.showing(),
+            Showing::Flight,
+            "the release is the dialog's"
+        );
+    }
+
+    #[test]
+    fn the_plunder_dialog_comes_from_the_interface_file_when_there_is_one() {
+        /// "Plunder" (1011), as stock, and nothing else.
+        struct Plunder;
+
+        impl DialogResources for Plunder {
+            fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+                if id != PLUNDER_DIALOG {
+                    return Err(format!("no DLOG {id}"));
+                }
+                let user = |x, y, w, h, enabled| ItemTemplate {
+                    bounds: Bounds::at(Point::new(x, y), w, h),
+                    enabled,
+                    kind: ItemSpec::User,
+                };
+                Ok(DialogTemplate {
+                    bounds: Bounds::at(Point::new(0.0, 0.0), 309.0, 198.0),
+                    placement: Placement::Fixed,
+                    items: vec![
+                        user(91.0, 166.0, 126.0, 25.0, true),
+                        user(110.0, 110.0, 89.0, 25.0, true),
+                        user(35.0, 138.0, 89.0, 25.0, true),
+                        user(204.0, 110.0, 89.0, 25.0, true),
+                        user(11.0, 7.0, 287.0, 96.0, false),
+                        user(16.0, 110.0, 89.0, 25.0, true),
+                        user(129.0, 138.0, 146.0, 25.0, true),
+                    ],
+                })
+            }
+        }
+
+        let mut screen = boardable(
+            AppScreen::new(boarding_data()).with_dialogs(Rc::new(Plunder), Rc::new(MonoMetrics)),
+        );
+        fly(&mut screen);
+        board(&mut screen);
+        let pictures: Vec<_> = drawn(&screen)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::StretchedPicture {
+                    image, top_left, ..
+                } => Some((*image, *top_left)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            pictures.contains(&(PLUNDER_PICTURE, Point::new(0.0, 0.0))),
+            "{pictures:?}"
+        );
+    }
+
+    #[test]
+    fn without_any_metrics_a_boarding_is_let_go() {
+        let mut screen = boardable(AppScreen::new(boarding_data()));
+        fly(&mut screen);
+        board(&mut screen);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(flight(&screen).boarding(), None, "aborted");
+        assert_eq!(
+            screen.take_warnings(),
+            ["nova: cannot show the plunder dialog: no metrics to lay it out"]
+        );
+    }
+
+    /// The router over [`boarding_data`] with dialogs and pilots kept in
+    /// `store`, capturing surely, flying the new pilot "Ada", boarded and
+    /// captured.
+    fn captured(store: &MemoryPilots) -> AppScreen {
+        let mut screen = boardable(
+            with_dialogs(boarding_data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics)),
+        )
+        .with_boarding_rule(Rc::new(Sure));
+        create(&mut screen, "Ada");
+        board(&mut screen);
+        assert_eq!(screen.showing(), Showing::Plunder);
+        plunder_click(&mut screen, 7);
+        assert_eq!(screen.showing(), Showing::Assignment);
+        assert!(screen.plunder().is_none());
+        screen
+    }
+
+    #[test]
+    fn a_capture_asks_its_assignment_and_use_as_escort_joins_the_fleet_and_saves() {
+        let store = MemoryPilots::new();
+        let mut screen = captured(&store);
+        let alpha = flight(&screen).alpha();
+        screen.tick(TICK / 2);
+        assert_eq!(
+            flight(&screen).alpha().to_bits(),
+            alpha.to_bits(),
+            "flight is paused"
+        );
+        assignment_click(&mut screen, ESCORT_ITEM);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(
+            flight(&screen).message(),
+            Some("You assigned this ship to your fleet of escorts.")
+        );
+        assert_eq!(pilot(&screen).escorts().len(), 1);
+        assert_eq!(saved(&store, "Ada").escorts().len(), 1, "saved");
+        assert_eq!((PLUNDER_DIALOG, ASSIGNMENT_DIALOG), (1011, 1018));
+    }
+
+    #[test]
+    fn use_as_my_ship_flies_the_captured_ship() {
+        let store = MemoryPilots::new();
+        let mut screen = captured(&store);
+        assignment_click(&mut screen, MY_SHIP_ITEM);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(pilot(&screen).ship(), nova_sim::ShipId(129));
+        assert_eq!(
+            flight(&screen).message(),
+            Some("You retained your old ship as an escort.")
+        );
+        assert_eq!(saved(&store, "Ada").ship(), nova_sim::ShipId(129));
+    }
+
+    #[test]
+    fn the_overlays_take_the_pointer_cancels_and_the_key_releases() {
+        let store = MemoryPilots::new();
+        let mut screen = captured(&store);
+        let at = screen
+            .assignment()
+            .expect("open")
+            .dialog()
+            .item_bounds(ESCORT_ITEM)
+            .expect("an item")
+            .center();
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at,
+        });
+        screen.cancel_pointer();
+        screen.release_keys();
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at,
+        });
+        assert_eq!(screen.showing(), Showing::Assignment, "abandoned");
+        let mut screen = boarded();
+        let at = screen
+            .plunder()
+            .expect("open")
+            .dialog()
+            .item_bounds(3)
+            .expect("an item")
+            .center();
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at,
+        });
+        screen.cancel_pointer();
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at,
+        });
+        assert_eq!(
+            flight(&screen).boarding().map(|view| view.credits),
+            Some(5750),
+            "abandoned"
+        );
+        let _ = Take::Abort;
     }
 }
