@@ -1857,7 +1857,13 @@ fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let mut fight = trader_disabled_in_fomalhaut(&data);
-    assert!(fight.disabled && fight.answered, "the scenario so far");
+    assert!(fight.fled, "the trader fled from the player");
+    assert!(
+        fight.answered,
+        "the Federation (NPC {}) attacked the player",
+        fight.police.0
+    );
+    assert!(fight.disabled, "the trader was disabled");
     let session = &mut fight.session;
     session.select_target(nova_sim::TargetPick::Nearest);
     while session.target().is_some_and(|npc| npc.id != fight.trader) {
