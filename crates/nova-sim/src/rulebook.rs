@@ -18,6 +18,12 @@
 //! | [`EmptyBooty`](RuleKey::EmptyBooty) | `empty_booty` | boarding a ship of `Booty` 0 opens the plunder dialog anyway ([`NovaBoarding`](crate::NovaBoarding)) | the player is repelled |
 //! | [`CrewlessCapture`](RuleKey::CrewlessCapture) | `crewless_capture` | a player of no crew still has odds of 1 or more ([`NovaBoarding`](crate::NovaBoarding)) | no odds: it cannot capture |
 //! | [`PiracyPolice`](RuleKey::PiracyPolice) | `piracy_police` | warships and interceptors answer the player's attack or boarding ([`NovaAi`](crate::NovaAi)) | interceptors only |
+//! | [`QuietHails`](RuleKey::QuietHails) | `quiet_hails` | a quiet government's ships (`Flags2` 0x0008) answer Greetings, and Request Assistance and Beg For Mercy do nothing ([`hail::nova`](crate::hail::nova)) | they answer Greetings "No response.", and the middle button works |
+//! | [`LongAdvice`](RuleKey::LongAdvice) | `long_advice` | an advice line exactly 42 characters long reads "Nice to meet you." ([`hail::reply`](crate::hail::reply)) | it is shown as written\* |
+//!
+//! \* The Bible says nothing of `long_advice`: for it, the reading other
+//! than the engine's (`"bible"` in the settings) is the intended
+//! behaviour, not the engine's bug, and not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -112,6 +118,18 @@ rule_keys! {
     /// interceptors only, the "piracy police" (see
     /// [`react`](crate::ai::react)).
     PiracyPolice => "piracy_police",
+    /// What a quiet government's ships (`gövt` `Flags2` 0x0008, or
+    /// their ship type's inherent government's) answer when hailed: by
+    /// the engine, Greetings as usual, while Request Assistance and Beg
+    /// For Mercy do nothing; by the Bible, "No response." to Greetings,
+    /// and the middle button as usual (see [`hail::nova`](crate::hail::nova)).
+    QuietHails => "quiet_hails",
+    /// An advice line exactly 42 characters long: by the engine, it reads
+    /// "Nice to meet you.", as the original mistakes its length for a
+    /// `*`; otherwise it is shown as written. The Bible is silent here, so
+    /// the other reading is the intended behaviour, not the engine's bug
+    /// (see [`hail::reply`](crate::hail::reply)).
+    LongAdvice => "long_advice",
 }
 
 impl RuleKey {
@@ -233,13 +251,17 @@ mod tests {
                 RuleKey::CrimeGains,
                 RuleKey::EmptyBooty,
                 RuleKey::CrewlessCapture,
-                RuleKey::PiracyPolice
+                RuleKey::PiracyPolice,
+                RuleKey::QuietHails,
+                RuleKey::LongAdvice
             ]
         );
         assert_eq!(RuleKey::CrimeGains.key(), "crime_gains");
         assert_eq!(RuleKey::EmptyBooty.key(), "empty_booty");
         assert_eq!(RuleKey::CrewlessCapture.key(), "crewless_capture");
         assert_eq!(RuleKey::PiracyPolice.key(), "piracy_police");
+        assert_eq!(RuleKey::QuietHails.key(), "quiet_hails");
+        assert_eq!(RuleKey::LongAdvice.key(), "long_advice");
         for rule in RuleKey::ALL {
             assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
         }

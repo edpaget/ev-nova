@@ -102,6 +102,14 @@ impl Governments {
         self.flags(govt) & bit != 0
     }
 
+    /// Whether `govt` has the `Flags2` `bit`: never for an independent or
+    /// a government the table does not hold.
+    #[must_use]
+    pub fn flag2(&self, govt: Option<GovtId>, bit: u16) -> bool {
+        self.record(govt)
+            .is_some_and(|record| record.flags2 & bit != 0)
+    }
+
     /// Whether `govt` is xenophobic.
     #[must_use]
     pub fn xenophobic(&self, govt: Option<GovtId>) -> bool {
@@ -435,6 +443,21 @@ mod tests {
         assert!(table().xenophobic(PIRATES));
         assert!(table().derelict(WRECKS));
         assert!(!table().derelict(FED));
+    }
+
+    #[test]
+    fn flags2_are_the_governments_and_none_for_others() {
+        let govts = Governments::new([GovtRecord {
+            flags: 0x0008,
+            flags2: 0x0009,
+            ..govt(128)
+        }]);
+        assert!(govts.flag2(FED, 0x0008));
+        assert!(govts.flag2(FED, 0x0001));
+        assert!(!govts.flag2(FED, 0x0002));
+        assert!(!govts.flag(FED, 0x0001), "Flags apart");
+        assert!(!govts.flag2(None, 0x0008));
+        assert!(!govts.flag2(UNKNOWN, 0x0008));
     }
 
     #[test]

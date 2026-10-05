@@ -51,6 +51,13 @@
 //!   growing down.
 //! - [`govt`]: the [`Governments`] and their relations: allies, enemies,
 //!   xenophobes and the flags that say how their ships behave.
+//! - [`hail`]: hailing a ship: whether it likes the player
+//!   ([`Attitude`]), the [`Conversation`] a hail rolls (its variant, mood,
+//!   price and advice) and haggling over a price ([`Haggle`]), the
+//!   [`Reply`] it says, and the [`HailOption`] port the comm dialog lists
+//!   ([`HailOptions`]), with Nova's Greetings, Request Assistance and Beg
+//!   For Mercy, which answer each press with an [`Answer`]: a reply, a
+//!   [`Deed`] and a price asked ([`Ask`]).
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
@@ -121,6 +128,7 @@ pub mod flight;
 pub mod fuel;
 pub mod geometry;
 pub mod govt;
+pub mod hail;
 pub mod handling;
 pub mod hyperspace;
 pub mod landing;
@@ -170,6 +178,9 @@ pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
 pub use govt::Governments;
+pub use hail::{
+    Answer, Ask, Attitude, Conversation, Deed, Haggle, Hail, HailOption, HailOptions, Help, Reply,
+};
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};

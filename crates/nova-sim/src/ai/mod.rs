@@ -112,6 +112,16 @@ impl Goal {
     }
 }
 
+/// The help an NPC flies over to give the player, once asked (see
+/// [`hail`](crate::hail)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Help {
+    /// It tops up the player's fuel.
+    Refuel,
+    /// It repairs the player's disabled ship.
+    Repair,
+}
+
 /// The player's ship as an NPC sees it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlayerSide {
