@@ -25,9 +25,15 @@
 //!     warship or interceptor attacks the best threat to the player at
 //!     any distance with every weapon, keeping formation while there is
 //!     none, and a trader keeps formation and fires nothing.
+//! - **Return to Hangar**: a carried fighter (one with a
+//!   [`Carrier`](crate::bay::Carrier)) drops its target and docks with
+//!   the player ([`Goal::Dock`], `_EscortAI` @0x83e79), firing nothing;
+//!   any other escort, holding it from an edited save, acts as with no
+//!   standing command.
 //!
 //! An escort answers threats to the player, not the hits it takes: it has
-//! no reaction.
+//! no reaction. It never launches the fighters it carries
+//! ([`Trigger::bays`]).
 
 use crate::ai::{Behaviour, Goal, Surroundings, fire};
 use crate::chance::Chance;
@@ -72,6 +78,9 @@ impl Behaviour for EscortAi {
         if order == Some(EscortOrder::Hold) {
             return Goal::Idle;
         }
+        if order == Some(EscortOrder::Dock) && npc.carrier.is_some() {
+            return Goal::Dock(ShipRef::Player);
+        }
         let Some(player) = around.player.map(|player| player.state) else {
             return Goal::Formation { guard: None };
         };
@@ -107,7 +116,10 @@ impl Behaviour for EscortAi {
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
         match npc.goal {
-            Goal::Attack(_) => fire::trigger(npc, around),
+            Goal::Attack(_) => Trigger {
+                bays: false,
+                ..fire::trigger(npc, around)
+            },
             Goal::Formation { guard: Some(_) } => Trigger {
                 primary: true,
                 turrets_only: true,
@@ -284,6 +296,7 @@ mod tests {
         secondary: None,
         only: None,
         turrets_only: true,
+        bays: false,
     };
 
     #[test]
@@ -467,10 +480,14 @@ mod tests {
                 govts: &govts,
                 ..Surroundings::new(&[], &npcs)
             };
+            let fires = Trigger {
+                bays: false,
+                ..fire::trigger(&npcs[0], &around)
+            };
             assert_eq!(
                 command(ENGINE, &npcs),
-                (fire::trigger(&npcs[0], &around), Some(n(2))),
-                "{order:?}"
+                (fires, Some(n(2))),
+                "{order:?}: launching no fighters"
             );
             assert_eq!(
                 fire::trigger(&npcs[0], &around).only,
@@ -570,5 +587,70 @@ mod tests {
             ENGINE.react(&npcs[0], &strike, &around),
             crate::ai::Reaction::default()
         );
+    }
+
+    /// The escort as the player's fighter, out of its bay.
+    fn fighter(order: Option<EscortOrder>) -> Npc {
+        Npc {
+            class: EscortClass::Fighter,
+            carrier: Some(crate::bay::Carrier {
+                ship: ShipRef::Player,
+                window: 100.0,
+                reach: 40.0,
+            }),
+            ..escort(order)
+        }
+    }
+
+    #[test]
+    fn a_fighter_returning_to_its_hangar_docks_with_the_player_firing_nothing() {
+        let dock = Some(EscortOrder::Dock);
+        let npcs = [
+            having(fighter(dock), Goal::Attack(n(2)), Some(n(2))),
+            pirate(2, 100.0, 0.0),
+        ];
+        for ai in [ENGINE, BIBLE] {
+            assert_eq!(
+                decide_with(ai, &npcs, (0.0, 0.0), &[]),
+                (Goal::Dock(ShipRef::Player), vec![])
+            );
+            let docking = having(fighter(dock), Goal::Dock(ShipRef::Player), Some(n(2)));
+            assert_eq!(
+                command(ai, &[docking, pirate(2, 100.0, 0.0)]),
+                (Trigger::default(), None)
+            );
+        }
+    }
+
+    #[test]
+    fn an_escort_of_its_own_told_to_dock_acts_with_no_standing_command() {
+        let npcs = [escort(Some(EscortOrder::Dock)), pirate(2, 100.0, 0.0)];
+        let plain = [escort(None), pirate(2, 100.0, 0.0)];
+        for ai in [ENGINE, BIBLE] {
+            assert_eq!(
+                decide_with(ai, &npcs, (0.0, 0.0), &[0]),
+                decide_with(ai, &plain, (0.0, 0.0), &[0])
+            );
+        }
+        assert_eq!(
+            decide(&npcs, (0.0, 0.0), &[0]).0,
+            Goal::Formation { guard: Some(n(2)) }
+        );
+    }
+
+    #[test]
+    fn no_escort_launches_the_fighters_it_carries() {
+        let npcs = [
+            having(
+                escort(Some(EscortOrder::Attack)),
+                Goal::Attack(n(2)),
+                Some(n(2)),
+            ),
+            pirate(2, 100.0, 0.0),
+        ];
+        let (trigger, target) = command(ENGINE, &npcs);
+        assert_eq!(target, Some(n(2)));
+        assert!(!trigger.bays, "{trigger:?}");
+        assert!(trigger.only.is_some(), "it still fires: {trigger:?}");
     }
 }

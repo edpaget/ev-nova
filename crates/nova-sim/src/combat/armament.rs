@@ -25,10 +25,19 @@
 //! - It leaves up to its `Inaccuracy` off its aim either way: the draw
 //!   `below(2n) - n`, never asked of a weapon that is accurate.
 //! - Nothing fires unless the ship is [`Condition::Intact`].
-//! - A weapon of a guidance a later phase flies (carried ships) does not
-//!   fire; firing one is reported once
-//!   ([`SimDiagnostic::UnimplementedGuidance`]), and so is each flag a
-//!   weapon that does fire sets and the simulation ignores.
+//! - A weapon of a guidance the simulation does not fly (2, 99 without a
+//!   ship to carry, anything undocumented) does not fire; firing one is
+//!   reported once ([`SimDiagnostic::UnimplementedGuidance`]), and so is
+//!   each flag a weapon that does fire sets and the simulation ignores.
+//! - A fighter bay ([`Guidance::FighterBay`]) fires on the secondary
+//!   trigger, never on the primary, and with [`Trigger::bays`], an NPC
+//!   attacking (`_AILaunchFighter` @0x81372): then only the bay of lowest
+//!   weapon ID holding rounds launches, once it is ready, a later bay
+//!   waiting until that one is empty. Its round is a fighter, launched
+//!   as a [`Launch`] the fight turns into a sortie. A fighter docking
+//!   goes back aboard ([`Armament::stow`], `_AIAddFighterToParent`
+//!   @0x802a5): a round to the first bay launching its type, with no cap;
+//!   a bay that held none restarts its reload.
 //! - Point defence ([`Armament::fire_point_defence`]) fires, each tick,
 //!   only the ready point-defence weapon the ship can pay for with the
 //!   lowest weapon ID, and only at a missile it picks; it pays, bursts and
@@ -76,14 +85,23 @@ pub struct Trigger {
     /// Only the turrets (guidance 3, 4, 7 and 8) of what the rest of the
     /// trigger fires: an escort keeping formation.
     pub turrets_only: bool,
+    /// The fighter bays too, whatever `only` says: an NPC attacking
+    /// launches its fighters (see the module docs). The player's trigger
+    /// never sets it.
+    pub bays: bool,
 }
 
 impl Trigger {
-    /// Whether it fires `weapon`: `only` that weapon when set; otherwise
-    /// the secondary on the secondary trigger and the rest on the primary,
-    /// only the turrets among them when `turrets_only`.
+    /// Whether it fires `weapon`: a fighter bay with `bays`, as the
+    /// secondary on the secondary trigger, or as `only`, never on the
+    /// primary; otherwise `only` that weapon when set, or the secondary on
+    /// the secondary trigger and the rest on the primary, only the turrets
+    /// among them when `turrets_only`.
     #[must_use]
     pub fn fires(self, weapon: &WeaponSpec) -> bool {
+        if weapon.is_bay() {
+            return self.bays || self.only == Some(weapon.id) || self.secondary == Some(weapon.id);
+        }
         if let Some(only) = self.only {
             return weapon.id == only;
         }
@@ -104,6 +122,8 @@ pub trait Rounds {
     fn held(&self, ammo: WeaponId) -> u32;
     /// Spends a round of `ammo`, which it holds.
     fn spend(&mut self, ammo: WeaponId);
+    /// Takes a round of `ammo` back: a fighter docking with its bay.
+    fn stow(&mut self, ammo: WeaponId);
 }
 
 /// An NPC's rounds: how many of each ammunition.
@@ -116,6 +136,10 @@ impl Rounds for BTreeMap<WeaponId, u32> {
         if let Some(held) = self.get_mut(&ammo) {
             *held = held.saturating_sub(1);
         }
+    }
+
+    fn stow(&mut self, ammo: WeaponId) {
+        *self.entry(ammo).or_default() += 1;
     }
 }
 
@@ -146,6 +170,21 @@ impl Rounds for OutfitRounds<'_> {
             if *count == 0 {
                 self.owned.remove(&outfit);
             }
+        }
+    }
+
+    /// Adds one of its outfit of lowest ID; none when no outfit is its
+    /// rounds.
+    fn stow(&mut self, ammo: WeaponId) {
+        let lowest = self
+            .sources
+            .iter()
+            .filter(|&&(of, _)| of == ammo)
+            .map(|&(_, outfit)| outfit)
+            .min();
+        if let Some(outfit) = lowest {
+            let count = self.owned.entry(outfit).or_default();
+            *count = count.saturating_add(1);
         }
     }
 }
@@ -299,8 +338,12 @@ impl Armament {
         if condition != Condition::Intact {
             return launches;
         }
+        let launching = self.launching_bay(trigger, rounds, *fuel);
         for mount in &mut self.mounts {
             if !trigger.fires(&mount.spec) || mount.reload > 0.0 {
+                continue;
+            }
+            if mount.spec.is_bay() && trigger.bays && launching != Some(mount.spec.id) {
                 continue;
             }
             if let Guidance::Other(guidance) = mount.spec.guidance {
@@ -369,6 +412,43 @@ impl Armament {
             target: None,
         };
         Some((launch, missile))
+    }
+
+    /// The bay `trigger` launches from with [`Trigger::bays`]: the one of
+    /// lowest weapon ID holding rounds, ready or not; none without
+    /// `bays`.
+    fn launching_bay(
+        &self,
+        trigger: Trigger,
+        rounds: &dyn Rounds,
+        fuel: Gauge,
+    ) -> Option<WeaponId> {
+        if !trigger.bays {
+            return None;
+        }
+        self.mounts
+            .iter()
+            .filter(|mount| mount.spec.is_bay() && mount.affords(rounds, fuel))
+            .map(|mount| mount.spec.id)
+            .min()
+    }
+
+    /// Takes a fighter of ship type `ship` aboard, a round of the first
+    /// bay that launches it, into `rounds` (see the module docs), and says
+    /// whether one did; with none, nothing changes.
+    pub fn stow(&mut self, ship: ShipId, rounds: &mut dyn Rounds) -> bool {
+        let Some(mount) = self
+            .mounts
+            .iter_mut()
+            .find(|mount| mount.spec.carried == Some(ship))
+        else {
+            return false;
+        };
+        if rounds.held(mount.spec.id) == 0 {
+            mount.reload = mount.reload.max(mount.spec.reload);
+        }
+        rounds.stow(mount.spec.id);
+        true
     }
 
     /// Counts every weapon's reload timer down a tick.
@@ -591,6 +671,7 @@ mod tests {
         secondary: None,
         only: None,
         turrets_only: false,
+        bays: false,
     };
 
     /// What `armament` has to fire with.
@@ -925,6 +1006,7 @@ mod tests {
             secondary: Some(WeaponId(140)),
             only: None,
             turrets_only: false,
+            bays: false,
         };
         assert_eq!(fired(&mut armament, second), [140]);
         let both = Trigger {
@@ -932,6 +1014,7 @@ mod tests {
             secondary: Some(WeaponId(138)),
             only: None,
             turrets_only: false,
+            bays: false,
         };
         assert_eq!(fired(&mut armament, both), [128, 138, 129]);
         let primary_as_secondary = Trigger {
@@ -939,6 +1022,7 @@ mod tests {
             secondary: Some(WeaponId(128)),
             only: None,
             turrets_only: false,
+            bays: false,
         };
         assert_eq!(
             fired(&mut armament, primary_as_secondary),
@@ -1634,5 +1718,197 @@ mod tests {
         rounds.spend(WeaponId(140));
         assert_eq!(Rounds::held(&rounds, WeaponId(138)), 0);
         assert_eq!(rounds.len(), 1);
+    }
+
+    // Fighter bays.
+
+    /// A secondary fighter bay `id` launching ship `ship`, reloading every
+    /// `reload` ticks.
+    fn bay(id: i16, ship: i16, reload: i16) -> WeaponRecord {
+        WeaponRecord {
+            guidance: 99,
+            ammo_type: ship,
+            flags: 0x0002,
+            ..blaster(id, reload)
+        }
+    }
+
+    #[test]
+    fn a_bay_fires_on_the_secondary_trigger_or_with_bays_never_on_the_primary() {
+        let viper = WeaponSpec::new(&bay(149, 144, 60));
+        let unflagged = WeaponSpec::new(&WeaponRecord {
+            flags: 0,
+            ..bay(150, 145, 60)
+        });
+        for spec in [viper, unflagged] {
+            assert!(!PRIMARY.fires(&spec), "{:?}", spec.id);
+            let secondary = Trigger {
+                secondary: Some(spec.id),
+                ..Trigger::default()
+            };
+            assert!(secondary.fires(&spec));
+            let bays = Trigger {
+                bays: true,
+                ..Trigger::default()
+            };
+            assert!(bays.fires(&spec), "with bays");
+            let other = Trigger {
+                only: Some(WeaponId(128)),
+                ..bays
+            };
+            assert!(other.fires(&spec), "whatever only says");
+            assert!(!Trigger::default().fires(&spec));
+            let only = Trigger {
+                only: Some(spec.id),
+                ..Trigger::default()
+            };
+            assert!(only.fires(&spec), "picked alone");
+        }
+        let blaster = WeaponSpec::new(&blaster(128, 0));
+        let bays = Trigger {
+            bays: true,
+            ..Trigger::default()
+        };
+        assert!(!bays.fires(&blaster), "bays fires bays alone");
+    }
+
+    /// Two ready bays, 149 and 150, mounted 150 first, of `rounds` each.
+    fn two_bays(rounds: [u32; 2]) -> (Armament, Supplies) {
+        let armament = Armament::new([
+            (WeaponSpec::new(&bay(150, 145, 70)), 1),
+            (WeaponSpec::new(&bay(149, 144, 60)), 2),
+        ]);
+        let mut supplies = Supplies::none();
+        supplies.rounds = BTreeMap::from([(WeaponId(149), rounds[0]), (WeaponId(150), rounds[1])]);
+        (armament, supplies)
+    }
+
+    const BAYS: Trigger = Trigger {
+        primary: false,
+        secondary: None,
+        only: None,
+        turrets_only: false,
+        bays: true,
+    };
+
+    fn launched(launches: &[Launch]) -> Vec<i16> {
+        launches.iter().map(|launch| launch.weapon.id.0).collect()
+    }
+
+    #[test]
+    fn with_bays_only_the_lowest_bay_holding_rounds_launches() {
+        let (mut armament, mut supplies) = two_bays([2, 2]);
+        assert_eq!(launched(&supplies.tick(&mut armament, BAYS)), [149]);
+        assert_eq!(supplies.rounds[&WeaponId(149)], 1, "a round spent");
+        assert_eq!(supplies.rounds[&WeaponId(150)], 2);
+        let launch = supplies.tick(&mut armament, BAYS);
+        assert!(launch.is_empty(), "149 reloads, and 150 waits");
+        let (mut armament, mut supplies) = two_bays([0, 2]);
+        assert_eq!(
+            launched(&supplies.tick(&mut armament, BAYS)),
+            [150],
+            "149 empty"
+        );
+        let (mut armament, mut supplies) = two_bays([0, 0]);
+        assert!(supplies.tick(&mut armament, BAYS).is_empty());
+    }
+
+    #[test]
+    fn a_launch_reloads_reload_over_the_bays_and_the_next_waits_for_it() {
+        let (mut armament, mut supplies) = two_bays([3, 0]);
+        // Reload 60 over 2 bays: a launch every 30 ticks.
+        assert_eq!(supplies.firing(&mut armament, BAYS, 61), [0, 30, 60]);
+        assert_eq!(supplies.rounds[&WeaponId(149)], 0);
+        assert!(supplies.firing(&mut armament, BAYS, 100).is_empty());
+        let (mut armament, mut supplies) = two_bays([2, 3]);
+        assert_eq!(
+            supplies.firing(&mut armament, BAYS, 102),
+            [0, 30, 31, 101],
+            "150 waits while 149 reloads with rounds, then launches every 70"
+        );
+        assert_eq!(supplies.rounds[&WeaponId(150)], 1);
+    }
+
+    #[test]
+    fn a_secondary_bay_launches_as_any_secondary() {
+        let (mut armament, mut supplies) = two_bays([0, 2]);
+        let second = Trigger {
+            secondary: Some(WeaponId(150)),
+            ..Trigger::default()
+        };
+        assert_eq!(launched(&supplies.tick(&mut armament, second)), [150]);
+        assert_eq!(supplies.rounds[&WeaponId(150)], 1);
+        let empty = Trigger {
+            secondary: Some(WeaponId(149)),
+            ..Trigger::default()
+        };
+        assert!(supplies.tick(&mut armament, empty).is_empty(), "no rounds");
+        assert_eq!(supplies.reports.take(), [], "a bay is flown, not reported");
+    }
+
+    #[test]
+    fn stowing_a_fighter_puts_a_round_in_the_first_bay_launching_its_type() {
+        let mut armament = Armament::new([
+            (WeaponSpec::new(&blaster(128, 0)), 1),
+            (WeaponSpec::new(&bay(150, 145, 70)), 1),
+            (WeaponSpec::new(&bay(151, 144, 80)), 1),
+            (WeaponSpec::new(&bay(149, 144, 60)), 1),
+        ]);
+        let mut rounds = BTreeMap::from([(WeaponId(149), 1)]);
+        assert!(armament.stow(ShipId(144), &mut rounds));
+        assert_eq!(
+            rounds,
+            BTreeMap::from([(WeaponId(149), 1), (WeaponId(151), 1)])
+        );
+        let reloads = |armament: &Armament| -> Vec<f32> {
+            armament.mounts().iter().map(|mount| mount.reload).collect()
+        };
+        assert_eq!(
+            reloads(&armament),
+            [0.0, 0.0, 80.0, 0.0],
+            "an empty bay restarts its reload"
+        );
+        assert!(armament.stow(ShipId(144), &mut rounds), "with no cap");
+        assert_eq!(rounds[&WeaponId(151)], 2);
+        assert_eq!(reloads(&armament), [0.0, 0.0, 80.0, 0.0]);
+        let mut armament = Armament::new([(WeaponSpec::new(&bay(151, 144, 80)), 1)]);
+        armament.mounts[0].reload = 90.0;
+        let mut empty = BTreeMap::new();
+        assert!(armament.stow(ShipId(144), &mut empty));
+        assert_eq!(armament.mounts()[0].reload, 90.0, "a longer timer is kept");
+        armament.mounts[0].reload = 5.0;
+        assert!(armament.stow(ShipId(144), &mut empty));
+        assert_eq!(armament.mounts()[0].reload, 5.0, "it held rounds");
+        let before = armament.clone();
+        let mut none = BTreeMap::new();
+        assert!(!armament.stow(ShipId(146), &mut none), "no bay launches it");
+        assert_eq!(armament, before);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn the_players_fighter_goes_to_the_lowest_outfit_of_its_bay() {
+        let sources = [
+            (WeaponId(149), OutfitId(205)),
+            (WeaponId(149), OutfitId(204)),
+            (WeaponId(140), OutfitId(203)),
+        ];
+        let mut owned = BTreeMap::from([(OutfitId(205), 1)]);
+        let mut rounds = OutfitRounds {
+            owned: &mut owned,
+            sources: &sources,
+        };
+        rounds.stow(WeaponId(149));
+        rounds.stow(WeaponId(149));
+        rounds.stow(WeaponId(141));
+        assert_eq!(
+            owned,
+            BTreeMap::from([(OutfitId(204), 2), (OutfitId(205), 1)]),
+            "none of 141's: nowhere to stow"
+        );
+        let mut npc = BTreeMap::new();
+        npc.stow(WeaponId(149));
+        npc.stow(WeaponId(149));
+        assert_eq!(npc, BTreeMap::from([(WeaponId(149), 2)]));
     }
 }

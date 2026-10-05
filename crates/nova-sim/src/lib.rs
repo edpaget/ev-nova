@@ -169,8 +169,8 @@ pub mod traffic;
 pub mod wares;
 
 pub use ai::{
-    Behaviour, BraveTrader, EscortAi, Goal, Interceptor, NovaAi, Peaceful, PlayerSide, Reaction,
-    Surroundings, Warship, WimpyTrader,
+    Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, NovaAi, Peaceful, PlayerSide,
+    Reaction, Surroundings, Warship, WimpyTrader,
 };
 pub use bay::{Carrier, FighterNote, capacity, dock_window};
 pub use board::{
@@ -190,7 +190,7 @@ pub use combat::armament::{Armament, Trigger};
 pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
-pub use combat::{CombatEvent, Downed, Rules, ShipRef, Strike};
+pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
 pub use date::GameDate;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,

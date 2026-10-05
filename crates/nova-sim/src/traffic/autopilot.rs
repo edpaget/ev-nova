@@ -22,8 +22,18 @@
 //!   [`FORMATION_NUDGE`] ticks' acceleration; within
 //!   [`APPROACH_FORMATION`], it closes on the slot at the speed it can
 //!   still brake from; farther off, it flies at full speed towards it.
-//! - [`Goal::Idle`], or a goal it cannot fly (a stellar, lead or player
-//!   that is not there): it brakes to a stop.
+//! - [`Goal::Dock`]: a fighter flies back to its
+//!   [`Carrier`](crate::bay::Carrier)
+//!   (`_LowLevelAIHandler` sub 8 and 0xb, see [`bay`](crate::bay)).
+//!   Outside its dock window on either axis it closes on the carrier as
+//!   an escort on its slot, at full speed beyond [`APPROACH_FORMATION`];
+//!   inside, it turns at the carrier, thrusting within its turn rate and
+//!   [`DOCK_TURN_SLACK`] of it, and each axis more than
+//!   [`FORMATION_NUDGE`] ticks' acceleration off is pulled that much
+//!   towards it. Within the carrier's reach on both axes it docks, and
+//!   leaves the system ([`Outcome::Docked`]).
+//! - [`Goal::Idle`], or a goal it cannot fly (a stellar, lead, player or
+//!   carrier that is not there): it brakes to a stop.
 //! - A ship that is not [`Condition::Intact`] (disabled, breaking up or
 //!   destroyed) drifts: it flies on with no controls, and never lands or
 //!   jumps.
@@ -33,7 +43,10 @@
 //!   on at its top speed.
 
 use crate::ai::{Goal, fire};
-use crate::catalog::{LandingSite, StellarId};
+use crate::bay::DOCK_TURN_SLACK;
+use crate::catalog::{LandingSite, ShipId, StellarId};
+use crate::combat::ShipRef;
+use crate::combat::aim::bearing;
 use crate::combat::hull::Condition;
 use crate::escort::{self, APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{self, AT_REST_SPEED, Controls, ShipState, Turn, heading_of, shortest_turn};
@@ -71,6 +84,14 @@ pub enum Outcome {
     Landed(StellarId),
     /// It jumped out of the system.
     JumpedOut,
+    /// A fighter of ship type `ship` docked with `carrier`, and leaves
+    /// the system for its bay.
+    Docked {
+        /// The ship it docked with.
+        carrier: ShipRef,
+        /// Its ship type.
+        ship: ShipId,
+    },
 }
 
 /// Flies `npc` one tick towards its goal, among `sites`, the ship its
@@ -152,19 +173,89 @@ pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> O
                     keep_formation(npc, leader, slot);
                     return Outcome::Flying;
                 }
-                if within(APPROACH_FORMATION) {
-                    close_on(&state, &handling, slot, leader.velocity, 0.0)
-                } else {
-                    let distance = off.length();
-                    match_velocity(&state, &handling, off * (handling.max_speed / distance))
-                }
+                rejoin(&state, &handling, slot, leader.velocity)
             }
             _ => brake(&state, &handling),
+        },
+        Goal::Dock(_) => match dock(npc, other) {
+            Ok(controls) => controls,
+            Err(outcome) => return outcome,
         },
         Goal::Idle => brake(&state, &handling),
     };
     flight::step(&mut npc.state, &handling, controls);
     Outcome::Flying
+}
+
+/// How `npc` flies back to its carrier at `carrier` (see the module
+/// docs): the controls to fly outside its dock window, or braking with
+/// no carrier there; or, inside it, what became of it, having flown.
+fn dock(npc: &mut Npc, carrier: Option<&ShipState>) -> Result<Controls, Outcome> {
+    let (Some(carrier), Some(dock)) = (carrier, npc.carrier) else {
+        return Ok(brake(&npc.state, &npc.stats.handling));
+    };
+    let off = carrier.position - npc.state.position;
+    let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
+    if !within(dock.window) {
+        return Ok(rejoin(
+            &npc.state,
+            &npc.stats.handling,
+            carrier.position,
+            carrier.velocity,
+        ));
+    }
+    if within(dock.reach) {
+        return Err(Outcome::Docked {
+            carrier: dock.ship,
+            ship: npc.ship,
+        });
+    }
+    dock_in(npc, carrier);
+    Err(Outcome::Flying)
+}
+
+/// Flies back to `to`, which moves at `velocity`: within
+/// [`APPROACH_FORMATION`] of it on each axis, closing at the speed it can
+/// still brake from; farther off, at full speed towards it.
+fn rejoin(state: &ShipState, handling: &Handling, to: Vec2, velocity: Vec2) -> Controls {
+    let off = to - state.position;
+    if off.x.abs() <= APPROACH_FORMATION && off.y.abs() <= APPROACH_FORMATION {
+        close_on(state, handling, to, velocity, 0.0)
+    } else {
+        let distance = off.length();
+        match_velocity(state, handling, off * (handling.max_speed / distance))
+    }
+}
+
+/// One tick of `npc` docking with a carrier at `carrier`, inside its dock
+/// window (see the module docs): it turns at the carrier, thrusting
+/// within its turn rate and [`DOCK_TURN_SLACK`] of it, flies, and is
+/// pulled towards it on each axis farther off than
+/// [`FORMATION_NUDGE`] ticks' acceleration.
+fn dock_in(npc: &mut Npc, carrier: &ShipState) {
+    let handling = npc.stats.handling;
+    let wanted = bearing(npc.state.position, carrier.position);
+    let controls = Controls {
+        thrust: shortest_turn(npc.state.heading, wanted).abs()
+            <= handling.turn_rate + DOCK_TURN_SLACK,
+        turn: steer(npc.state.heading, wanted, &handling),
+        reverse: false,
+    };
+    flight::step(&mut npc.state, &handling, controls);
+    let pull = handling.accel * FORMATION_NUDGE;
+    let towards = |at: f32, to: f32| {
+        let off = to - at;
+        if off.abs() > pull {
+            at + off.signum() * pull
+        } else {
+            at
+        }
+    };
+    let at = npc.state.position;
+    npc.state.position = Vec2::new(
+        towards(at.x, carrier.position.x),
+        towards(at.y, carrier.position.y),
+    );
 }
 
 /// Heads straight out from the centre at full speed; from the centre
@@ -1185,5 +1276,117 @@ mod tests {
                 ship.state
             );
         }
+    }
+
+    // Docking.
+
+    /// A fighter of `fields` returning from `start` to the player, its
+    /// dock window 100 and the player's sprite 40 across.
+    fn docking(fields: ShipFields, start: ShipState) -> Npc {
+        Npc {
+            ship: crate::catalog::ShipId(144),
+            carrier: Some(crate::bay::Carrier {
+                ship: ShipRef::Player,
+                window: 100.0,
+                reach: 40.0,
+            }),
+            ..npc(fields, Goal::Dock(ShipRef::Player), start)
+        }
+    }
+
+    #[test]
+    fn a_fighter_outside_its_dock_window_closes_as_on_a_slot_and_far_off_at_full_speed() {
+        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        // At full speed (3) straight down at the carrier from above.
+        let mut near = docking(AVERAGE, at(0.0, -400.0, 0.0, 3.0, 180.0));
+        let mut far = docking(AVERAGE, at(0.0, -700.0, 0.0, 3.0, 180.0));
+        let before = (near.state, far.state);
+        assert_eq!(fly(&mut near, &[], Some(&carrier)), Outcome::Flying);
+        fly(&mut far, &[], Some(&carrier));
+        assert_ne!(
+            near.state.heading, before.0.heading,
+            "400 off, it turns to slow down"
+        );
+        assert_eq!(
+            far.state.heading, before.1.heading,
+            "700 off, it keeps going"
+        );
+        assert_eq!(far.state.velocity, before.1.velocity);
+        for distance in [101.0, 400.0, 700.0] {
+            let mut ship = docking(AVERAGE, at(0.0, -distance, 0.0, 0.0, 180.0));
+            fly(&mut ship, &[], Some(&carrier));
+            assert!(ship.state.velocity.y > 0.0, "{distance}: {:?}", ship.state);
+        }
+    }
+
+    #[test]
+    fn inside_its_window_a_fighter_turns_at_the_carrier_and_thrusts_within_a_turn_and_a_degree() {
+        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        // 60 above the carrier, facing away: it turns, and only turns.
+        let mut away = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, 0.0));
+        fly(&mut away, &[], Some(&carrier));
+        assert_ne!(away.state.heading, 0.0, "turning");
+        assert_eq!(away.state.velocity, Vec2::ZERO, "no thrust");
+        // A turn (1) and 1.0 off the bearing (180): it thrusts.
+        for heading in [178.0, 182.0, 180.0] {
+            let mut aimed = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, heading));
+            fly(&mut aimed, &[], Some(&carrier));
+            assert!(aimed.state.velocity.length() > 0.0, "{heading}");
+        }
+        for heading in [177.0, 183.0] {
+            let mut aside = docking(AVERAGE, at(0.0, -60.0, 0.0, 0.0, heading));
+            fly(&mut aside, &[], Some(&carrier));
+            assert_eq!(aside.state.velocity, Vec2::ZERO, "{heading}");
+        }
+        assert_eq!(DOCK_TURN_SLACK, 1.0);
+    }
+
+    #[test]
+    fn inside_its_window_a_fighter_is_pulled_by_ten_ticks_thrust_on_each_axis_beyond_it() {
+        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        // At rest, facing away from the carrier at (-70, 2.5): FAST pulls
+        // 0.3 x 10 = 3 a tick, and y is within that.
+        let mut ship = docking(FAST, at(-70.0, 2.5, 0.0, 0.0, 270.0));
+        fly(&mut ship, &[], Some(&carrier));
+        assert_eq!(ship.state.position, Vec2::new(-67.0, 2.5));
+        let mut both = docking(FAST, at(50.0, 60.0, 0.0, 0.0, 135.0));
+        fly(&mut both, &[], Some(&carrier));
+        assert_eq!(both.state.position, Vec2::new(47.0, 57.0));
+    }
+
+    #[test]
+    fn within_the_carriers_reach_on_both_axes_a_fighter_docks() {
+        let carrier = at(500.0, 500.0, 1.0, 1.0, 0.0);
+        for (x, y) in [(40.0, 40.0), (-40.0, 0.0), (0.0, -40.0), (0.0, 0.0)] {
+            let mut ship = docking(FAST, at(500.0 + x, 500.0 + y, 0.0, 0.0, 0.0));
+            assert_eq!(
+                fly(&mut ship, &[], Some(&carrier)),
+                Outcome::Docked {
+                    carrier: ShipRef::Player,
+                    ship: crate::catalog::ShipId(144)
+                },
+                "({x}, {y})"
+            );
+        }
+        for (x, y) in [(41.0, 0.0), (0.0, -41.0), (60.0, 30.0)] {
+            let mut ship = docking(FAST, at(500.0 + x, 500.0 + y, 0.0, 0.0, 0.0));
+            assert_eq!(
+                fly(&mut ship, &[], Some(&carrier)),
+                Outcome::Flying,
+                "({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fighter_whose_carrier_is_gone_or_with_none_brakes() {
+        let mut lost = docking(AVERAGE, at(0.0, 0.0, 0.0, 2.0, 180.0));
+        assert_eq!(fly(&mut lost, &[], None), Outcome::Flying);
+        assert_ne!(lost.state.heading, 180.0, "{:?}", lost.state);
+        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut carrierless = docking(AVERAGE, at(0.0, 0.0, 0.0, 2.0, 180.0));
+        carrierless.carrier = None;
+        assert_eq!(fly(&mut carrierless, &[], Some(&carrier)), Outcome::Flying);
+        assert_ne!(carrierless.state.heading, 180.0, "{:?}", carrierless.state);
     }
 }

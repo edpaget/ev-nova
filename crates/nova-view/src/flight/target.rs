@@ -706,6 +706,7 @@ mod tests {
             info_types: 0,
             spared: false,
             assisting: 0,
+            carrier: None,
         }
     }
 

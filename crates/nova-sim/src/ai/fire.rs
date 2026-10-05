@@ -5,7 +5,10 @@
 //! @0x80ad3, `_AIFireMissile` @0x8115d, `_FireAIShipWeapon` @0x8873d and
 //! `_AIHasDestroyingWeapons` @0x7fc7c in the `EV Nova` executable). Each
 //! tick an NPC proposes one weapon ([`trigger`], a [`Trigger::only`]);
-//! the combat core's firing table then aims it.
+//! the combat core's firing table then aims it. While it attacks or
+//! snipes at a ship that is live in the system, it also launches its
+//! fighters ([`Trigger::bays`], `_AILaunchFighter` @0x81372 from the
+//! attack state, see [`bay`](crate::bay)).
 //!
 //! - **Its manoeuvre** ([`Manoeuvre`]): attacking, it approaches outside
 //!   [`DOGFIGHT_BOX`] on either axis and dogfights within it; it snipes;
@@ -172,12 +175,14 @@ pub fn destroys(npc: &Npc) -> bool {
 }
 
 /// The weapon `npc` fires now among `around`, if any (see the module
-/// docs).
+/// docs), and its fighter bays while it attacks or snipes at a ship that
+/// is live there.
 #[must_use]
 pub fn trigger(npc: &Npc, around: &Surroundings) -> Trigger {
     let only = pick(npc, around);
     Trigger {
         only,
+        bays: npc.goal.attacking().is_some_and(|ship| around.live(ship)),
         ..Trigger::default()
     }
 }
@@ -801,5 +806,55 @@ mod tests {
         assert!(!destroys(&rocket), "no rounds");
         rocket.rounds = BTreeMap::from([(WeaponId(138), 1)]);
         assert!(destroys(&rocket));
+    }
+
+    /// Whether `npc`'s trigger launches its fighters, among `npcs` and the
+    /// player 100 above it.
+    fn bays(npc: &Npc, npcs: &[Npc]) -> bool {
+        let around = Surroundings {
+            player: Some(player_at(SHOOTER.x, SHOOTER.y - 100.0, 50.0)),
+            ..Surroundings::new(&[], npcs)
+        };
+        trigger(npc, &around).bays
+    }
+
+    #[test]
+    fn a_ship_attacking_or_sniping_at_a_ship_there_launches_its_fighters() {
+        let all = [gun(128, 1, 1)];
+        let mut quarry = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
+        quarry.state.position = SHOOTER + Vec2::new(5000.0, 0.0);
+        let at = ShipRef::Npc(NpcId(7));
+        for goal in [ATTACK, Goal::Snipe(ShipRef::Player), Goal::Attack(at)] {
+            assert!(bays(&shooter(&all, goal), &[quarry.clone()]), "{goal:?}");
+        }
+        assert!(
+            bays(&shooter(&[], ATTACK), &[]),
+            "whatever it carries, the armament picks"
+        );
+        let mut disabled = quarry.clone();
+        disabled.condition = Condition::Disabled;
+        assert!(bays(&shooter(&all, Goal::Attack(at)), &[disabled]));
+    }
+
+    #[test]
+    fn no_fighters_launch_fleeing_idle_or_at_a_ship_gone_or_jumping_in() {
+        let all = [gun(128, 1, 1)];
+        for goal in [
+            Goal::Flee(ShipRef::Player),
+            Goal::Idle,
+            Goal::Inspect(ShipRef::Player),
+            Goal::Formation { guard: None },
+            Goal::Dock(ShipRef::Player),
+        ] {
+            assert!(!bays(&shooter(&all, goal), &[]), "{goal:?}");
+        }
+        let at = ShipRef::Npc(NpcId(7));
+        assert!(!bays(&shooter(&all, Goal::Attack(at)), &[]), "gone");
+        let mut arriving = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
+        arriving.mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+        assert!(!bays(&shooter(&all, Goal::Attack(at)), &[arriving]));
+        let mut wreck = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
+        wreck.condition = Condition::Dying { ticks_left: 3 };
+        assert!(!bays(&shooter(&all, Goal::Attack(at)), &[wreck]));
     }
 }

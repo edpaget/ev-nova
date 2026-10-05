@@ -5,15 +5,17 @@
 //! the rulebook's [`RuleKey::PiracyPolice`] entry says
 //! ([`NovaAi::from_rulebook`]). The player's escorts, whatever their AI
 //! type, go to [`EscortAi`] instead (the original's AI type 6, @0x90011),
-//! flying as the rulebook's [`RuleKey::EscortAi`] entry says.
+//! flying as the rulebook's [`RuleKey::EscortAi`] entry says; and an NPC
+//! carrier's fighters, whatever their AI type, to [`CarriedAi`] (the
+//! original's AI type 5 with an NPC parent), until their carrier is gone.
 //! `_PirateWarshipAI` (a warship of `Flags` 0x1000, which disables and
 //! plunders) waits for NPC boarding.
 
 use std::rc::Rc;
 
 use crate::ai::{
-    Behaviour, BraveTrader, EscortAi, Goal, Interceptor, Reaction, Surroundings, Warship,
-    WimpyTrader,
+    Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, Reaction, Surroundings,
+    Warship, WimpyTrader,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -29,6 +31,7 @@ pub struct NovaAi {
     warship: Rc<dyn Behaviour>,
     interceptor: Rc<dyn Behaviour>,
     escorts: Rc<dyn Behaviour>,
+    carried: Rc<dyn Behaviour>,
 }
 
 impl Default for NovaAi {
@@ -54,6 +57,7 @@ impl NovaAi {
             escorts: Rc::new(EscortAi {
                 escort_ai: rulebook.source_for(RuleKey::EscortAi),
             }),
+            carried: Rc::new(CarriedAi),
         }
     }
 
@@ -61,6 +65,13 @@ impl NovaAi {
     #[must_use]
     pub fn with_escorts(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
         self.escorts = behaviour;
+        self
+    }
+
+    /// This AI with `behaviour` for an NPC carrier's fighters.
+    #[must_use]
+    pub fn with_carried(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
+        self.carried = behaviour;
         self
     }
 
@@ -81,11 +92,15 @@ impl NovaAi {
         }
     }
 
-    /// The behaviour for `npc`: the escorts' for the player's escort,
+    /// The behaviour for `npc`: the escorts' for the player's escort (its
+    /// fighters too), the carried fighters' for one an NPC launched,
     /// otherwise the one for its AI type.
     fn of(&self, npc: &Npc) -> &dyn Behaviour {
         if npc.escort.is_some() {
             return &*self.escorts;
+        }
+        if npc.carrier.is_some() {
+            return &*self.carried;
         }
         match npc.ai_type {
             AiType::WimpyTrader => &*self.wimpy,
@@ -287,6 +302,85 @@ mod tests {
         }
         assert_eq!(escorts.asked.borrow().len(), 16);
         assert!(marks.iter().all(|mark| mark.asked.borrow().is_empty()));
+    }
+
+    /// `npc` as a fighter launched by `carrier`.
+    fn carried(mut npc: Npc, carrier: ShipRef) -> Npc {
+        npc.carrier = Some(crate::bay::Carrier {
+            ship: carrier,
+            window: 100.0,
+            reach: 40.0,
+        });
+        npc
+    }
+
+    #[test]
+    fn an_npc_carriers_fighter_goes_to_the_carried_behaviour_whatever_its_ai_type() {
+        let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();
+        let fighters = Marked::new(8);
+        let escorts = Marked::new(9);
+        let ai = TYPES
+            .into_iter()
+            .zip(&marks)
+            .fold(NovaAi::default(), |ai, (ai_type, mark)| {
+                ai.with(ai_type, mark.clone())
+            })
+            .with_escorts(escorts.clone())
+            .with_carried(fighters.clone());
+        let carrier = ShipRef::Npc(NpcId(30));
+        let npcs: Vec<Npc> = TYPES
+            .into_iter()
+            .enumerate()
+            .map(|(i, ai_type)| carried(of(10 + i as u32, ai_type), carrier))
+            .collect();
+        let around = Surroundings::new(&[], &npcs);
+        for npc in &npcs {
+            assert_eq!(
+                ai.decide(npc, &around, &mut Draws::of(&[])),
+                Goal::Attack(fighters.ship())
+            );
+            assert_eq!(ai.trigger(npc, &around).only, Some(WeaponId(8)));
+            assert_eq!(ai.target(npc, &around), Some(fighters.ship()));
+        }
+        assert_eq!(fighters.asked.borrow().len(), 12);
+        assert!(marks.iter().all(|mark| mark.asked.borrow().is_empty()));
+        // The player's fighter is the player's escort.
+        let players = escorting(carried(of(20, AiType::Warship), ShipRef::Player));
+        let npcs = [players];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(escorts.ship())
+        );
+        assert_eq!(fighters.asked.borrow().len(), 12, "not the carried slot");
+        // Once its carrier is gone, it flies by its AI type.
+        let orphan = of(21, AiType::Warship);
+        let npcs = [orphan];
+        let around = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(marks[2].ship())
+        );
+    }
+
+    #[test]
+    fn nova_ai_flies_npc_fighters_by_the_carried_ai() {
+        use crate::ai::fixture::{PIRATES, player, ship};
+        let mut carrier = ship(1, PIRATES, AiType::Warship, 0.0, 0.0);
+        carrier.goal = Goal::Idle;
+        let fighter = carried(
+            ship(2, PIRATES, AiType::Interceptor, 50.0, 0.0),
+            ShipRef::Npc(NpcId(1)),
+        );
+        let npcs = [carrier, fighter];
+        let around = Surroundings {
+            player: Some(player(0.0, 300.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            NovaAi::default().decide(&npcs[1], &around, &mut Draws::of(&[])),
+            Goal::Dock(ShipRef::Npc(NpcId(1)))
+        );
     }
 
     #[test]

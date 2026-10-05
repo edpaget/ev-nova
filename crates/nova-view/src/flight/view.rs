@@ -4469,6 +4469,7 @@ mod tests {
                 secondary: None,
                 only: None,
                 turrets_only: false,
+                bays: false,
             }
         }
     }
@@ -5076,6 +5077,7 @@ mod tests {
                 secondary: None,
                 only: None,
                 turrets_only: false,
+                bays: false,
             }
         }
     }
@@ -5539,6 +5541,7 @@ mod tests {
                 secondary: None,
                 only: None,
                 turrets_only: false,
+                bays: false,
             }
         }
 

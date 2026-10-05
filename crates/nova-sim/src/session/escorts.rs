@@ -44,6 +44,7 @@
 
 use super::Session;
 use crate::ai::Goal;
+use crate::bay::{Carrier, dock_window};
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
@@ -97,6 +98,11 @@ impl Session {
         let escort = *self.pilot.escorts.get(index)?;
         let record = self.ship_record(escort.ship)?;
         let kind = table::kind(record, &self.outfits, &self.arsenal);
+        let carrier = escort.carried.then(|| Carrier {
+            ship: ShipRef::Player,
+            window: dock_window(record.fields.maneuver),
+            reach: self.reach_of(ShipRef::Player),
+        });
         let npc = Npc {
             id: NpcId::default(),
             ship: escort.ship,
@@ -129,6 +135,7 @@ impl Session {
             info_types: 0,
             spared: false,
             assisting: 0,
+            carrier,
         };
         Some(self.traffic.add_npc(npc))
     }
@@ -175,12 +182,12 @@ impl Session {
     }
 
     /// NPC `id`, if it is in the system.
-    fn npc(&self, id: NpcId) -> Option<&Npc> {
+    pub(super) fn npc(&self, id: NpcId) -> Option<&Npc> {
         self.traffic.npcs().iter().find(|npc| npc.id == id)
     }
 
     /// NPC `id`, if it is in the system, to change.
-    fn npc_mut(&mut self, id: NpcId) -> Option<&mut Npc> {
+    pub(super) fn npc_mut(&mut self, id: NpcId) -> Option<&mut Npc> {
         self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id)
     }
 
@@ -237,8 +244,16 @@ impl Session {
     /// Escort NPC `id` leaves the fleet: its record goes, it is no longer
     /// an escort, and the rest re-form. A save is due.
     pub(super) fn dismiss(&mut self, id: NpcId) {
+        if self.unfleet(id) {
+            self.save_due = true;
+        }
+    }
+
+    /// Escort NPC `id` leaves the fleet, as [`Session::dismiss`] says but
+    /// making no save due; whether it was in the fleet.
+    pub(super) fn unfleet(&mut self, id: NpcId) -> bool {
         let Some(index) = self.fleet.iter().position(|&placed| placed == Some(id)) else {
-            return;
+            return false;
         };
         self.fleet.remove(index);
         if self.pilot.escorts.get(index).is_some() {
@@ -248,7 +263,7 @@ impl Session {
             npc.escort = None;
         }
         self.reform();
-        self.save_due = true;
+        true
     }
 
     /// Escort NPC `id` is released (see [`hail`](super::hail)): it leaves
@@ -279,7 +294,7 @@ impl Session {
 
     /// The escort class of the fleet's escort `index`: its NPC's, or its
     /// ship type's by its record.
-    fn escort_class(&self, index: usize) -> EscortClass {
+    pub(super) fn escort_class(&self, index: usize) -> EscortClass {
         if let Some(npc) = self
             .fleet
             .get(index)
@@ -310,16 +325,22 @@ impl Session {
         if self.landed.is_some() || self.jumping.is_some() {
             return None;
         }
-        let order = command.order();
         let target = self
             .target
             .filter(|&target| command == EscortCommand::Attack && !self.is_escort(target));
         let mut changed = false;
+        let mut recalled = false;
         for index in 0..self.pilot.escorts.len() {
             if !group.holds(self.escort_class(index)) {
                 continue;
             }
             let escort = &mut self.pilot.escorts[index];
+            let order = if command == EscortCommand::Dock && !escort.carried {
+                recalled |= escort.order.is_some();
+                None
+            } else {
+                command.order()
+            };
             changed |= escort.order != order;
             escort.order = order;
             let placed = self.fleet.get(index).copied().flatten();
@@ -338,7 +359,11 @@ impl Session {
         }
         changed.then_some(Commanded {
             group,
-            command,
+            command: if recalled {
+                EscortCommand::Recall
+            } else {
+                command
+            },
             targeted: target.is_some(),
         })
     }

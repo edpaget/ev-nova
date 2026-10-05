@@ -508,6 +508,8 @@ impl Session {
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 self.traffic.tick_in(behaviour, world, &strikes, chance);
+                self.dock_fighters();
+                self.orphan_fighters();
             }
         }
         self.clear_lost_target();
@@ -551,6 +553,7 @@ impl Session {
             secondary: self.secondary.filter(|_| secondary),
             only: None,
             turrets_only: false,
+            bays: false,
         });
     }
 
@@ -667,6 +670,8 @@ impl Session {
         let strikes = self.combat.take_strikes();
         self.punish(&strikes, &was, rules.law);
         self.strikes.extend(strikes);
+        let sorties = self.combat.take_sorties();
+        self.launch_fighters(&sorties);
         self.sync_fleet();
         self.lose_escorts();
         let destroyed: Vec<NpcId> = self
@@ -679,6 +684,7 @@ impl Session {
         for id in destroyed {
             self.traffic.remove(id);
         }
+        self.orphan_fighters();
         self.clear_lost_target();
     }
 
@@ -806,11 +812,27 @@ impl Session {
     }
 
     /// The ship types the system's traffic can spawn and the escorts
-    /// fly, by ascending ID, so a view can read their sprites up front.
+    /// fly, and the fighters the player's bays and theirs launch, by
+    /// ascending ID, so a view can read their sprites up front.
     #[must_use]
     pub fn traffic_ships(&self) -> Vec<ShipId> {
         let mut ships = self.traffic.ship_types();
         ships.extend(self.pilot.escorts.iter().map(|escort| escort.ship));
+        let mut armaments: Vec<Armament> = ships
+            .iter()
+            .filter_map(|&ship| self.ship_record(ship))
+            .map(|record| {
+                let defaults = pilot::tally(record.defaults.iter().copied());
+                self.arsenal.player(record.id, &defaults, &self.outfits)
+            })
+            .collect();
+        armaments.push(self.armament.clone());
+        let launched: Vec<ShipId> = armaments
+            .iter()
+            .flat_map(Armament::mounts)
+            .filter_map(|mount| mount.spec.carried)
+            .collect();
+        ships.extend(launched);
         ships.sort_unstable();
         ships.dedup();
         ships
@@ -4192,6 +4214,7 @@ mod tests {
         secondary: None,
         only: None,
         turrets_only: false,
+        bays: false,
     };
 
     /// The fight's events about NPC 0, other than its firing.

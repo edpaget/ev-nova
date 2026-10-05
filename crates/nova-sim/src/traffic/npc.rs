@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use crate::ai::Goal;
+use crate::bay::Carrier;
 use crate::catalog::{GovtId, ShipId, WeaponId};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, Trigger};
@@ -131,6 +132,10 @@ pub struct Npc {
     pub spared: bool,
     /// The ticks it has spent within reach of the player, repairing it.
     pub assisting: u32,
+    /// The ship that launched it from a fighter bay, which it docks with,
+    /// while it has one (see [`bay`](crate::bay)); none for any other
+    /// ship.
+    pub carrier: Option<Carrier>,
 }
 
 impl Npc {

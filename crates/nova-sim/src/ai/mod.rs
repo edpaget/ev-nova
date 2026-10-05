@@ -20,8 +20,11 @@
 //!   NPC to the one for its type.
 //! - [`escort`]: [`EscortAi`], how the player's escorts fly and fight by
 //!   their standing orders; [`NovaAi`] routes every escort to it.
+//! - [`carried`]: [`CarriedAi`], how an NPC carrier's fighters fly and
+//!   fight with their carrier; [`NovaAi`] routes every one to it.
 
 pub mod brave;
+pub mod carried;
 pub mod escort;
 pub mod fire;
 #[cfg(test)]
@@ -51,6 +54,7 @@ use crate::reserves::Reserves;
 use crate::traffic::npc::{Mode, Npc, NpcId};
 
 pub use brave::BraveTrader;
+pub use carried::CarriedAi;
 pub use escort::EscortAi;
 pub use interceptor::Interceptor;
 pub use nova::NovaAi;
@@ -89,6 +93,9 @@ pub enum Goal {
         /// The ship its turrets fire at, if any.
         guard: Option<ShipRef>,
     },
+    /// Fly back to this ship, its carrier, and dock in its fighter bay
+    /// (see [`bay`](crate::bay)). It fights nothing: its quarry is none.
+    Dock(ShipRef),
 }
 
 impl Goal {
@@ -615,6 +622,9 @@ mod tests {
             Goal::Inspect(n),
             Goal::Assist(Help::Refuel),
             Goal::Assist(Help::Repair),
+            Goal::Formation { guard: Some(n) },
+            Goal::Dock(P),
+            Goal::Dock(n),
         ] {
             assert_eq!((idle.quarry(), idle.attacking()), (None, None), "{idle:?}");
             assert!(!idle.fights());

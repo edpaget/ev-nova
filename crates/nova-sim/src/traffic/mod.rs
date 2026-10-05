@@ -261,6 +261,7 @@ impl Traffic {
                 let other = match npc.goal {
                     Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
                     Goal::Assist(_) | Goal::Formation { .. } => Some(ShipRef::Player),
+                    Goal::Dock(carrier) => Some(carrier),
                     goal => goal.quarry().or(goal.inspecting()),
                 };
                 let other = other.and_then(|ship| match ship {
@@ -397,6 +398,7 @@ impl Traffic {
                 info_types: ship.info_types,
                 spared: false,
                 assisting: 0,
+                carrier: None,
             });
         }
     }
@@ -760,6 +762,7 @@ mod tests {
                 secondary: Some(WeaponId(138)),
                 only: None,
                 turrets_only: false,
+                bays: false,
             },
             ..Recording::deciding(Goal::Idle)
         };
@@ -1082,6 +1085,54 @@ mod tests {
         traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
         let escort = &traffic.npcs()[0];
         assert_eq!(escort.state.velocity, player.state.velocity, "in formation");
+    }
+
+    #[test]
+    fn a_fighter_docks_with_its_carrier_and_leaves_the_system() {
+        let mut traffic = populated(3, 1);
+        let carrier = traffic.npcs[1].id;
+        traffic.npcs[1].state.position = Vec2::new(500.0, 0.0);
+        let fighter = &mut traffic.npcs[0];
+        let docker = fighter.id;
+        fighter.state.position = Vec2::new(480.0, 10.0);
+        fighter.goal = Goal::Dock(ShipRef::Npc(carrier));
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Npc(carrier),
+            window: 100.0,
+            reach: 30.0,
+        });
+        // The player's fighter, its carrier the player, far off.
+        let player = traffic.npcs[2].id;
+        traffic.npcs[2].state.position = Vec2::new(-900.0, 0.0);
+        traffic.npcs[2].goal = Goal::Dock(ShipRef::Player);
+        traffic.npcs[2].carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Player,
+            window: 100.0,
+            reach: 30.0,
+        });
+        let world = World {
+            player: Some(player_at(0.0, 0.0)),
+            ..World::new(&[])
+        };
+        traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.departed(),
+            [(
+                docker,
+                Outcome::Docked {
+                    carrier: ShipRef::Npc(carrier),
+                    ship: ShipId(200)
+                }
+            )]
+        );
+        let left: Vec<NpcId> = traffic.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(left, [carrier, player]);
+        let returning = &traffic.npcs()[1];
+        assert!(
+            returning.state.heading > 0.0,
+            "turning to fly at the player: {:?}",
+            returning.state
+        );
     }
 
     #[test]

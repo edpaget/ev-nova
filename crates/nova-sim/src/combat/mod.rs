@@ -35,7 +35,9 @@
 //!
 //! 1. Each ship fires the weapons its trigger holds that are ready, each
 //!    as its guidance aims it at the ship's target ([`aim`]); a turret
-//!    that cannot fire spends nothing.
+//!    that cannot fire spends nothing. A fighter bay's launch is no shot
+//!    but a [`Sortie`], which the session takes
+//!    ([`Combat::take_sorties`]) and puts in the system as a ship.
 //! 2. Each ship's point defence fires at the missile it picks, with no
 //!    target needed ([`defence`]).
 //! 3. Every reload timer counts down a tick.
@@ -94,6 +96,7 @@ use projectile::{Shot, ShotId, Target, contact};
 use report::{Reports, SimDiagnostic};
 use weapon::{Explosion, Guidance};
 
+use crate::bay::FIGHTER_BAY;
 use crate::catalog::{GovtId, ShipId, WeaponId};
 use crate::chance::Chance;
 use crate::flight::ShipState;
@@ -193,6 +196,25 @@ pub struct Strike {
     pub downed: Option<Downed>,
 }
 
+/// A fighter launched from a bay this tick, for the session to put in
+/// the system (see [`bay`](crate::bay)).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sortie {
+    /// The ship that launched it.
+    pub carrier: ShipRef,
+    /// The bay it left from.
+    pub bay: WeaponId,
+    /// Its ship type.
+    pub ship: ShipId,
+    /// Where the carrier was and how it moved.
+    pub from: ShipState,
+    /// The heading it leaves along, the bay's inaccuracy included, in
+    /// degrees.
+    pub heading: f32,
+    /// The carrier's target, if any.
+    pub target: Option<ShipRef>,
+}
+
 /// One ship in a fight, for a tick: what it is, where, what it holds and
 /// how it is holding up, borrowed from wherever the ship is kept.
 pub struct Fighter<'a> {
@@ -260,6 +282,7 @@ pub struct Combat {
     beams: Vec<Beam>,
     events: Vec<CombatEvent>,
     strikes: Vec<Strike>,
+    sorties: Vec<Sortie>,
     reports: Reports,
     /// The next shot's number.
     next_shot: u32,
@@ -326,9 +349,9 @@ impl Combat {
         id
     }
 
-    /// Puts `launch` in flight from `side`, at `from`: a beam held on the
-    /// missile `quarry`, on its target, or ahead, or a shot of its
-    /// government.
+    /// Puts `launch` in flight from `side`, at `from`: a fighter's
+    /// [`Sortie`] from a bay, a beam held on the missile `quarry`, on its
+    /// target, or ahead, or a shot of its government.
     fn launch(&mut self, side: Side, from: &ShipState, launch: Launch, quarry: Option<ShotId>) {
         let Side { ship, fleet, govt } = side;
         self.events.push(CombatEvent::Fired {
@@ -336,7 +359,16 @@ impl Combat {
             weapon: launch.weapon.id,
             at: from.position,
         });
-        if launch.weapon.is_beam() {
+        if let Some(carried) = launch.weapon.carried {
+            self.sorties.push(Sortie {
+                carrier: ship,
+                bay: launch.weapon.id,
+                ship: carried,
+                from: *from,
+                heading: launch.heading,
+                target: launch.target,
+            });
+        } else if launch.weapon.is_beam() {
             let aiming = match (quarry, launch.target) {
                 (Some(missile), _) => Aiming::Shot(missile),
                 (None, Some(target)) => Aiming::Ship(target),
@@ -586,7 +618,12 @@ impl Combat {
         if shots.is_empty() {
             return;
         }
-        if let Guidance::Other(guidance) = sub.guidance {
+        let unflown = match sub.guidance {
+            Guidance::Other(guidance) => Some(guidance),
+            Guidance::FighterBay => Some(FIGHTER_BAY),
+            _ => None,
+        };
+        if let Some(guidance) = unflown {
             self.reports.report(SimDiagnostic::UnimplementedGuidance {
                 weapon: sub.id,
                 guidance,
@@ -688,6 +725,12 @@ impl Combat {
     /// empties the list.
     pub fn take_strikes(&mut self) -> Vec<Strike> {
         std::mem::take(&mut self.strikes)
+    }
+
+    /// The fighters launched since they were last taken, in order; taking
+    /// them empties the list.
+    pub fn take_sorties(&mut self) -> Vec<Sortie> {
+        std::mem::take(&mut self.sorties)
     }
 
     /// The diagnostics made since they were last taken, each once a
@@ -837,6 +880,7 @@ mod tests {
                     secondary: None,
                     only: None,
                     turrets_only: false,
+                    bays: false,
                 },
                 ..self
             }
@@ -1794,6 +1838,7 @@ mod tests {
             secondary: None,
             only: None,
             turrets_only: false,
+            bays: false,
         };
         let mut defender = Ship::at(1, 0.0, 0.0).armed(quad()).facing(0.0);
         defender.trigger = Trigger::default();
@@ -1834,6 +1879,7 @@ mod tests {
             secondary: None,
             only: None,
             turrets_only: false,
+            bays: false,
         };
         for _ in 0..12 {
             tick(&mut combat, &mut ships, &NovaDisable);
@@ -2155,41 +2201,46 @@ mod tests {
 
     #[test]
     fn a_sub_munition_of_an_unimplemented_guidance_is_reported_and_not_released() {
-        let (shell, arsenal) = cluster_of(WeaponRecord {
-            guidance: 2,
-            count: 50,
-            speed: 500,
-            ..weapon(148)
-        });
-        let mut combat = Combat::default();
-        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
-        let mut events = Vec::new();
-        for _ in 0..2 {
-            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-        }
-        assert_eq!(combat.take_diagnostics(), [], "not before it is released");
-        for _ in 0..5 {
-            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
-            events.extend(combat.take_events());
-        }
-        assert_eq!(sub_shots(&combat).len(), 0, "none in flight");
-        assert!(
-            !events.iter().any(|event| matches!(
-                event,
-                CombatEvent::Fired {
+        // Guidance 2, and a fighter bay, which only a ship launches from.
+        for (guidance, ammo_type) in [(2, -1), (99, 144)] {
+            let (shell, arsenal) = cluster_of(WeaponRecord {
+                guidance,
+                ammo_type,
+                count: 50,
+                speed: 500,
+                ..weapon(148)
+            });
+            let mut combat = Combat::default();
+            let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
+            let mut events = Vec::new();
+            for _ in 0..2 {
+                tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+            }
+            assert_eq!(combat.take_diagnostics(), [], "not before it is released");
+            for _ in 0..5 {
+                tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+                events.extend(combat.take_events());
+            }
+            assert_eq!(sub_shots(&combat).len(), 0, "none in flight");
+            assert_eq!(combat.take_sorties(), [], "and no fighter");
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event,
+                    CombatEvent::Fired {
+                        weapon: WeaponId(148),
+                        ..
+                    }
+                )),
+                "{events:?}"
+            );
+            assert_eq!(
+                combat.take_diagnostics(),
+                [SimDiagnostic::UnimplementedGuidance {
                     weapon: WeaponId(148),
-                    ..
-                }
-            )),
-            "{events:?}"
-        );
-        assert_eq!(
-            combat.take_diagnostics(),
-            [SimDiagnostic::UnimplementedGuidance {
-                weapon: WeaponId(148),
-                guidance: 2,
-            }]
-        );
+                    guidance,
+                }]
+            );
+        }
     }
 
     #[test]
@@ -2425,5 +2476,75 @@ mod tests {
         target.reserves.armor.now = 0.0;
         tick(&mut combat, &mut [target], &NovaDisable);
         assert_eq!(combat.take_strikes(), []);
+    }
+
+    // Fighter bays.
+
+    /// Ship A at (10, 20), moving (1, 2) and facing right, its secondary
+    /// trigger on a fighter bay, 149, of ship 144, 10 degrees inaccurate,
+    /// holding 2 fighters, and targeting B, which is at (300, 0).
+    fn carrier() -> [Ship; 2] {
+        let bay = WeaponRecord {
+            guidance: 99,
+            ammo_type: 144,
+            flags: 0x0002,
+            inaccuracy: 10,
+            reload: 60,
+            speed: 400,
+            ..weapon(149)
+        };
+        let mut carrier = Ship::at(1, 10.0, 20.0).armed(bay);
+        carrier.state.velocity = Vec2::new(1.0, 2.0);
+        carrier.trigger = Trigger {
+            secondary: Some(WeaponId(149)),
+            ..Trigger::default()
+        };
+        carrier.rounds = BTreeMap::from([(WeaponId(149), 2)]);
+        carrier.target = Some(B);
+        [carrier, Ship::at(2, 300.0, 0.0)]
+    }
+
+    #[test]
+    fn a_bays_launch_is_a_sortie_not_a_shot() {
+        let mut combat = Combat::default();
+        let mut ships = carrier();
+        let from = ships[0].state;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.shots(), [], "no shot");
+        assert_eq!(combat.beams(), []);
+        assert_eq!(
+            combat.take_events(),
+            [CombatEvent::Fired {
+                ship: A,
+                weapon: WeaponId(149),
+                at: Vec2::new(10.0, 20.0)
+            }],
+            "heard at the carrier"
+        );
+        assert_eq!(
+            combat.take_sorties(),
+            [Sortie {
+                carrier: A,
+                bay: WeaponId(149),
+                ship: ShipId(144),
+                from,
+                heading: 99.0,
+                target: Some(B),
+            }],
+            "heading 90, and the inaccuracy drawn: 19 of 20, less 10"
+        );
+        assert_eq!(combat.take_sorties(), [], "taken");
+        assert_eq!(ships[0].rounds[&WeaponId(149)], 1, "a round spent");
+    }
+
+    #[test]
+    fn a_sortie_without_a_target_has_none() {
+        let mut combat = Combat::default();
+        let [mut carrier, _] = carrier();
+        carrier.target = None;
+        tick(&mut combat, &mut [carrier], &NovaDisable);
+        let sorties = combat.take_sorties();
+        assert_eq!(sorties.len(), 1);
+        assert_eq!(sorties[0].target, None);
     }
 }
