@@ -256,6 +256,24 @@ impl Goods {
             disasters,
         }
     }
+
+    /// `good`'s name, as the exchange names it; none for a good that is
+    /// not traded.
+    #[must_use]
+    pub fn name(&self, good: Good) -> Option<&str> {
+        match good {
+            Good::Commodity(n) => self
+                .commodities
+                .iter()
+                .find(|(number, _)| *number == n)
+                .map(|(_, commodity)| commodity.name.as_str()),
+            Good::Junk(id) => self
+                .junk
+                .iter()
+                .find(|junk| junk.id == id)
+                .map(|junk| junk.name.as_str()),
+        }
+    }
 }
 
 /// One good on a stellar's exchange.

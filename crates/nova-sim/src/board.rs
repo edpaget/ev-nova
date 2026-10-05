@@ -559,16 +559,17 @@ impl BoardingRule for NovaBoarding {
             men = share(men, escort.crew);
             strength = share(strength, escort.strength);
         }
-        let marines = |sign: fn(i16) -> bool| {
+        // A positive `ModVal` is so many more crew, a negative one so many
+        // more points; none is nothing either way.
+        let marines = |sign: i32| {
             crew.marines
                 .iter()
-                .filter(|(value, _)| sign(*value))
-                .map(|&(value, count)| i32::from(value).abs() * i32::from(count))
+                .map(|&(value, count)| (sign * i32::from(value)).max(0) * i32::from(count))
                 .sum::<i32>()
         };
-        men += marines(|value| value > 0);
+        men += marines(1);
         let ratio = f64::from(men) / (f64::from(crew.target_crew) * CREW_RATIO_DIVISOR) * 100.0;
-        let mut odds = ratio as i32 + marines(|value| value < 0);
+        let mut odds = ratio as i32 + marines(-1);
         if STRENGTH_RATIO * crew.target_strength < strength {
             odds += STRENGTH_BONUS;
         }
@@ -617,11 +618,10 @@ pub fn check_board(
     if beyond(player.position - target.state.position, target.reach) {
         return Err(BoardRefusal::TooFar);
     }
-    let heading = target.state.heading;
-    let reverse = (heading + 180.0) % 360.0;
-    if angle_off(player.heading, heading) > FACING_LIMIT
-        && angle_off(player.heading, reverse) > FACING_LIMIT
-    {
+    // Off the target's heading by 0 to 180 degrees: within the limit of
+    // it, or of its reverse, is facing it.
+    let off = angle_off(player.heading, target.state.heading);
+    if off > FACING_LIMIT && off < 180.0 - FACING_LIMIT {
         return Err(BoardRefusal::Misaligned);
     }
     Ok(())
@@ -771,6 +771,19 @@ mod tests {
                 "({x}, {y})"
             );
         }
+        // Measured from wherever the target is.
+        let away = BoardTarget {
+            state: ShipState {
+                position: Vec2::new(100.0, 50.0),
+                ..ShipState::default()
+            },
+            ..quarry()
+        };
+        assert_eq!(board(player((115.0, 35.0), (0.0, 0.0), 0.0), away), Ok(()));
+        assert_eq!(
+            board(player((0.0, 0.0), (0.0, 0.0), 0.0), away),
+            Err(BoardRefusal::TooFar)
+        );
     }
 
     #[test]

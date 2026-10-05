@@ -168,7 +168,7 @@ use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
 use crate::landing::{LandingRefusal, check_landing};
 use crate::legal::{self, Crime, LegalCode};
-use crate::market::{self, Goods, Market, Order, TradeRefusal};
+use crate::market::{self, Good, Goods, Market, Order, TradeRefusal};
 use crate::outfitter::{
     self, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
 };
@@ -1122,6 +1122,20 @@ impl Session {
         None
     }
 
+    /// `good`'s name, as the exchange names it, if it is traded.
+    #[must_use]
+    pub fn good_name(&self, good: Good) -> Option<&str> {
+        self.goods.name(good)
+    }
+
+    /// Outfit `outfit`'s name, as its [`OutfitRecord`] gives it, if the
+    /// session has its record.
+    #[must_use]
+    pub fn outfit_name(&self, outfit: OutfitId) -> Option<&str> {
+        let record = self.outfits.iter().find(|record| record.id == outfit)?;
+        Some(&record.name)
+    }
+
     /// Ship class `ship`'s record, if the session has it.
     fn ship_record(&self, ship: ShipId) -> Option<&ShipRecord> {
         self.ships.iter().find(|record| record.id == ship)
@@ -1264,7 +1278,7 @@ impl Session {
                 .collect(),
             marines: outfit_mods(&self.pilot.outfits, &self.outfits)
                 .into_iter()
-                .filter(|outfit| outfit.mod_type == MARINES && outfit.mod_val != 0)
+                .filter(|outfit| outfit.mod_type == MARINES)
                 .map(|outfit| (outfit.mod_val, outfit.count))
                 .collect(),
             target_crew: i32::from(self.crew(npc.ship)),
@@ -1339,7 +1353,8 @@ impl Session {
             Take::Energy => {
                 let offered = std::mem::take(&mut plunder.fuel);
                 let fuel = &mut self.pilot.reserves.fuel;
-                let stored = (offered as f32).min((fuel.max - fuel.now).max(0.0));
+                let room = (fuel.max - fuel.now).max(0.0).trunc();
+                let stored = (offered as f32).min(room);
                 fuel.now += stored;
                 let stored = stored as u32;
                 (Taken::Energy { offered, stored }, ENERGY_GROWTH)
@@ -5906,17 +5921,47 @@ mod tests {
     #[test]
     fn boarding_a_ship_turns_every_other_ship_off_it() {
         let catalog = boardable();
-        let mut session = alongside(&catalog);
-        let hunter = &mut session.traffic.npcs_mut()[1];
-        hunter.target = Some(ShipRef::Npc(NpcId(0)));
-        hunter.goal = Goal::Attack(ShipRef::Npc(NpcId(0)));
-        hunter.provoked = 5.0;
-        board_by(&mut session, &NovaLaw::default()).expect("boards");
-        let hunter = &session.npcs()[1];
+        let boarded = ShipRef::Npc(NpcId(0));
+        let after = |target, goal| {
+            let mut session = alongside(&catalog);
+            let other = &mut session.traffic.npcs_mut()[1];
+            other.target = Some(target);
+            other.goal = goal;
+            other.provoked = 5.0;
+            board_by(&mut session, &NovaLaw::default()).expect("boards");
+            let other = &session.npcs()[1];
+            (other.target, other.goal, other.provoked)
+        };
+        let dropped = (None, Goal::Idle, 0.0);
+        assert_eq!(after(boarded, Goal::Attack(boarded)), dropped);
         assert_eq!(
-            (hunter.target, hunter.goal, hunter.provoked),
-            (None, Goal::Idle, 0.0)
+            after(boarded, Goal::Attack(ShipRef::Player)),
+            dropped,
+            "targeting it"
         );
+        assert_eq!(
+            after(ShipRef::Player, Goal::Flee(boarded)),
+            dropped,
+            "fighting it"
+        );
+        let player = ShipRef::Player;
+        assert_eq!(
+            after(player, Goal::Attack(player)),
+            (Some(player), Goal::Attack(player), 5.0),
+            "a ship after another is left be"
+        );
+    }
+
+    #[test]
+    fn a_boarding_ends_when_the_ship_boarded_is_gone() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        session.traffic.remove(NpcId(0));
+        assert_eq!(
+            take(&mut session, Take::Credits, &[]),
+            (Taken::Aborted, vec![])
+        );
+        assert_eq!(session.boarding(), None);
     }
 
     #[test]
@@ -6053,6 +6098,11 @@ mod tests {
             }
         );
         assert_eq!(session.pilot().held(Good::Commodity(0)), 0);
+        assert_eq!(
+            session.pilot().cargo().collect::<Vec<_>>(),
+            [(Good::Commodity(3), 20)],
+            "no empty entry for the good not stored"
+        );
         assert_eq!(session.boarding().map(|view| view.cargo), Some(None));
     }
 
@@ -6088,6 +6138,41 @@ mod tests {
             assert_eq!(session.reserves().fuel.now, now + stored as f32);
             assert_eq!(session.boarding().map(|view| view.fuel), Some(0));
         }
+        // Room for 99.5 stores 99, as the original truncates the room.
+        let mut session = aboard(&catalog);
+        session.pilot.reserves.fuel.now = 200.5;
+        assert_eq!(
+            take(&mut session, Take::Energy, &[]).0,
+            Taken::Energy {
+                offered: 170,
+                stored: 99
+            }
+        );
+        assert_eq!(session.reserves().fuel.now, 299.5);
+    }
+
+    #[test]
+    fn the_plunder_is_named_as_the_exchange_and_the_outfitter_name_it() {
+        let mut catalog = boardable();
+        catalog.commodities = food_and_metal();
+        catalog.junk = vec![JunkRecord {
+            id: JunkId(146),
+            name: "Ice".to_owned(),
+            base_price: 10,
+            sold_at: Vec::new(),
+            bought_at: Vec::new(),
+            buy_on: String::new(),
+            sell_on: String::new(),
+        }];
+        catalog.outfits.push(outfit(310, &[]));
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.good_name(Good::Commodity(0)), Some("Food"));
+        assert_eq!(session.good_name(Good::Commodity(4)), Some("Metal"));
+        assert_eq!(session.good_name(Good::Commodity(5)), None, "not traded");
+        assert_eq!(session.good_name(Good::Junk(JunkId(146))), Some("Ice"));
+        assert_eq!(session.good_name(Good::Junk(JunkId(147))), None);
+        assert_eq!(session.outfit_name(OutfitId(310)), Some("Outfit 310"));
+        assert_eq!(session.outfit_name(OutfitId(311)), None);
     }
 
     /// [`boardable`] with rockets (weapon 140, firing rounds of their own)
@@ -6537,6 +6622,71 @@ mod tests {
         assert!(session.take_save_due());
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
         assert_eq!(&saved, session.pilot());
+    }
+
+    #[test]
+    fn a_ship_taken_over_with_no_fuel_tank_draws_no_fuel() {
+        let mut catalog = boardable();
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(129) {
+                record.fields.fuel = 0;
+            }
+        }
+        let mut session = alongside(&catalog);
+        // No energy on board, so no draw for it.
+        let opened = session.board(
+            &NovaLaw::default(),
+            &NovaBoarding::default(),
+            &mut Draws::of(&[0, 2, 0, 3, 5]),
+        );
+        assert!(matches!(
+            opened,
+            Ok(Boarding::Opened(PlunderView { fuel: 0, .. }))
+        ));
+        take(&mut session, Take::Capture, &[43, 1]);
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            session.assign(Assignment::MyShip, &mut chance),
+            Some(Assigned::MyShip)
+        );
+        assert!(chance.asked.is_empty(), "{:?}", chance.asked);
+        assert_eq!(session.reserves().fuel.now, 0.0);
+    }
+
+    #[test]
+    fn ammo_the_player_cannot_fire_or_a_bays_fighters_are_not_plundered() {
+        let mut unarmed = ammo_aboard(1, 20);
+        for hull in &mut unarmed.hulls {
+            if hull.id == ShipId(128) {
+                hull.weapons.retain(|stock| stock.weapon != ROCKET);
+            }
+        }
+        let mut session = alongside(&unarmed);
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Opened(ON_BOARD)),
+            "no rockets to fire them: no ammo, and no draw for it"
+        );
+        let mut bay = ammo_aboard(1, 20);
+        bay.weapons.push(WeaponRecord {
+            guidance: crate::board::FIGHTER_BAY,
+            ..secondary(150, 12)
+        });
+        for hull in &mut bay.hulls {
+            if hull.id == ShipId(129) {
+                hull.weapons = vec![StockWeapon {
+                    weapon: WeaponId(150),
+                    count: 1,
+                    ammo: 9,
+                }];
+            }
+        }
+        let mut session = alongside(&bay);
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Opened(ON_BOARD)),
+            "a bay's rounds are its fighters"
+        );
     }
 
     #[test]
