@@ -14,6 +14,9 @@
 //!   within the weapon's [`engagement_range`] and not in a blind spot (see
 //!   [`aim`](super::aim)), and whose firer the [`PointDefenceRule`] says
 //!   is hostile. The nearest wins; of two as near, the one fired first.
+//!   A point-defence shot meets only a missile that point defence could
+//!   have chosen but for its target, range and arc ([`engageable`]), so it
+//!   flies through one that has lost its target.
 //! - A point-defence turret (9) fires a shot at the missile's bearing, no
 //!   lead, plus its inaccuracy; a point-defence beam (10) is held on the
 //!   missile, with no inaccuracy.
@@ -54,6 +57,17 @@ pub struct Side {
     pub fleet: ShipRef,
 }
 
+impl Side {
+    /// The side that fired `shot`.
+    #[must_use]
+    pub fn of(shot: &Shot) -> Self {
+        Self {
+            ship: shot.firer,
+            fleet: shot.fleet,
+        }
+    }
+}
+
 /// Which missiles point defence engages, by who fired them.
 pub trait PointDefenceRule: Debug {
     /// Whether a missile fired by `firer` is hostile to `defender`.
@@ -83,6 +97,19 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
     }
 }
 
+/// Whether point defence on `defender`, whether a mount choosing a
+/// missile or a shot passing one, can engage `missile` at all: a homing
+/// shot that has not lost its target, that point defence can target (no
+/// `Flags` 0x0080), and whose firer `rule` calls hostile. A lost missile
+/// is neither chosen nor met.
+#[must_use]
+pub fn engageable(defender: Side, missile: &Shot, rule: &dyn PointDefenceRule) -> bool {
+    missile.weapon.guidance == Guidance::Homing
+        && !missile.lost
+        && !missile.weapon.pd_immune()
+        && rule.hostile(defender, Side::of(missile))
+}
+
 /// The missile among `shots` that point defence `spec` on `defender`, at
 /// `at` with `hull`, engages, if any (see the module docs).
 #[must_use]
@@ -100,23 +127,14 @@ pub fn choose<'a>(
     for shot in shots {
         let off = shot.position - at.position;
         let distance = off.x * off.x + off.y * off.y;
-        let candidate = shot.weapon.guidance == Guidance::Homing
-            && !shot.lost
-            && !shot.weapon.pd_immune()
-            && (shot.target == Some(defender.ship) || shot.target == Some(defender.fleet))
+        let candidate = (shot.target == Some(defender.ship) || shot.target == Some(defender.fleet))
             && distance <= range * range
             && !blind(
                 blind_spots,
                 angle_off(at.heading, bearing(at.position, shot.position)),
             )
             && best.is_none_or(|(_, nearest)| distance < nearest)
-            && rule.hostile(
-                defender,
-                Side {
-                    ship: shot.firer,
-                    fleet: shot.fleet,
-                },
-            );
+            && engageable(defender, shot, rule);
         if candidate {
             best = Some((shot, distance));
         }

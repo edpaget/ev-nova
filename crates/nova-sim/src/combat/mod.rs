@@ -364,20 +364,22 @@ impl Combat {
     }
 
     /// Step 5: each point-defence shot, having flown from `was`, meets
-    /// the first missile `rule` calls hostile that it passes within
-    /// [`INTERCEPT_RADIUS`] of, and is spent on it; a missile destroyed is
-    /// shot down. What is spent or destroyed is marked `gone`.
+    /// the first missile it can engage ([`defence::engageable`], as `rule`
+    /// says which are hostile) that it passes within [`INTERCEPT_RADIUS`]
+    /// of, and is spent on it; a missile destroyed is shot down. What is
+    /// spent or destroyed is marked `gone`.
     fn intercept(&mut self, was: &[Vec2], gone: &mut [bool], rule: &dyn PointDefenceRule) {
         for pd in 0..self.shots.len() {
             if gone[pd] || self.shots[pd].weapon.guidance != Guidance::PointDefence {
                 continue;
             }
             let defender = &self.shots[pd];
+            let side = Side::of(defender);
             let met = self
                 .shots
                 .iter()
                 .enumerate()
-                .filter(|&(missile, shot)| !gone[missile] && interceptable(defender, shot, rule))
+                .filter(|&(missile, shot)| !gone[missile] && defence::engageable(side, shot, rule))
                 .filter_map(|(missile, shot)| {
                     let from = was[pd] - was[missile];
                     let to = defender.position - shot.position;
@@ -634,24 +636,6 @@ impl Fighter<'_> {
             condition: *self.condition,
         }
     }
-}
-
-/// Whether point-defence shot `defender` can meet `missile`: a homing
-/// shot point defence can target, whose firer `rule` calls hostile to
-/// the defender's.
-fn interceptable(defender: &Shot, missile: &Shot, rule: &dyn PointDefenceRule) -> bool {
-    missile.weapon.guidance == Guidance::Homing
-        && !missile.weapon.pd_immune()
-        && rule.hostile(
-            Side {
-                ship: defender.firer,
-                fleet: defender.fleet,
-            },
-            Side {
-                ship: missile.firer,
-                fleet: missile.fleet,
-            },
-        )
 }
 
 /// Whether `armor` is gone: at or below none, on a ship that holds any.
@@ -1786,6 +1770,52 @@ mod tests {
             ships[1].trigger = Trigger::default();
             ships[2].trigger = Trigger::default();
             ships[2].state.position = Vec2::new(500.0, 0.0);
+            events.extend(combat.take_events());
+        }
+        let durability = |firer| {
+            combat
+                .shots()
+                .iter()
+                .find(|shot| shot.firer == firer && shot.weapon.id == WeaponId(134))
+                .map(|shot| shot.durability)
+        };
+        assert_eq!(durability(C), Some(4.0), "flown through: {events:?}");
+        assert_eq!(durability(B), Some(1.0), "met: {events:?}");
+    }
+
+    #[test]
+    fn a_point_defence_shot_flies_through_a_lost_missile() {
+        // B and C, each its own fleet and both hostile, fire missiles down
+        // the same line at A, C's nearer, and C moves off the line. C's
+        // missile has lost its target, so A's shot, fired at B's, passes
+        // through it on the way.
+        let [defender, attacker] = missile_attack(quad());
+        let other = Ship::at(3, 0.0, -100.0)
+            .armed(WeaponRecord {
+                speed: 500,
+                ..missile()
+            })
+            .facing(180.0)
+            .targeting(A);
+        let mut ships = [defender, attacker, other];
+        let mut combat = Combat::default();
+        let mut events = Vec::new();
+        for _ in 0..8 {
+            tick_with(
+                &mut combat,
+                &mut ships,
+                &Arsenal::default(),
+                Rules::default(),
+            );
+            ships[1].trigger = Trigger::default();
+            ships[2].trigger = Trigger::default();
+            ships[2].state.position = Vec2::new(500.0, 0.0);
+            for shot in &mut combat.shots {
+                if shot.firer == C {
+                    shot.target = None;
+                    shot.lost = true;
+                }
+            }
             events.extend(combat.take_events());
         }
         let durability = |firer| {
