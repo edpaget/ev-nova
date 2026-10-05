@@ -86,6 +86,15 @@ impl Guidance {
             other => Self::Other(other),
         }
     }
+
+    /// Whether it is a turret: guidance 3, 4, 7 or 8.
+    #[must_use]
+    pub fn turret(self) -> bool {
+        matches!(
+            self,
+            Self::TurretBeam | Self::Turret | Self::FrontTurret | Self::RearTurret
+        )
+    }
 }
 
 /// The `AmmoType` that fires without ammo.

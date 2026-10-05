@@ -20,6 +20,7 @@
 //!   NPC to the one for its type.
 
 pub mod brave;
+pub mod escort;
 pub mod fire;
 #[cfg(test)]
 mod fixture;
@@ -48,6 +49,7 @@ use crate::reserves::Reserves;
 use crate::traffic::npc::{Mode, Npc, NpcId};
 
 pub use brave::BraveTrader;
+pub use escort::EscortAi;
 pub use interceptor::Interceptor;
 pub use nova::NovaAi;
 pub use warship::Warship;
@@ -77,6 +79,14 @@ pub enum Goal {
     /// [`hail`](crate::hail)): it fights nothing, and decides nothing
     /// more until it is done or provoked.
     Assist(Help),
+    /// Keep the escort's slot in the player's formation (see
+    /// [`escort`](crate::escort)), firing its turrets at `guard`, a ship
+    /// threatening the player, if any. It fights nothing: its quarry is
+    /// none.
+    Formation {
+        /// The ship its turrets fire at, if any.
+        guard: Option<ShipRef>,
+    },
 }
 
 impl Goal {

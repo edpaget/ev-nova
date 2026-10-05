@@ -3,13 +3,17 @@
 //! by default [`WimpyTrader`], [`BraveTrader`], [`Warship`] and
 //! [`Interceptor`], each answering the player's attacks and boardings as
 //! the rulebook's [`RuleKey::PiracyPolice`] entry says
-//! ([`NovaAi::from_rulebook`]). `_PirateWarshipAI` (a warship of `Flags`
-//! 0x1000, which disables and plunders) waits for NPC boarding.
+//! ([`NovaAi::from_rulebook`]). The player's escorts, whatever their AI
+//! type, go to [`EscortAi`] instead (the original's AI type 6, @0x90011),
+//! flying as the rulebook's [`RuleKey::EscortAi`] entry says.
+//! `_PirateWarshipAI` (a warship of `Flags` 0x1000, which disables and
+//! plunders) waits for NPC boarding.
 
 use std::rc::Rc;
 
 use crate::ai::{
-    Behaviour, BraveTrader, Goal, Interceptor, Reaction, Surroundings, Warship, WimpyTrader,
+    Behaviour, BraveTrader, EscortAi, Goal, Interceptor, Reaction, Surroundings, Warship,
+    WimpyTrader,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -24,6 +28,7 @@ pub struct NovaAi {
     brave: Rc<dyn Behaviour>,
     warship: Rc<dyn Behaviour>,
     interceptor: Rc<dyn Behaviour>,
+    escorts: Rc<dyn Behaviour>,
 }
 
 impl Default for NovaAi {
@@ -34,8 +39,10 @@ impl Default for NovaAi {
 }
 
 impl NovaAi {
-    /// Nova's four as `rulebook` chooses: each answers the player's
-    /// attack or boarding as its [`RuleKey::PiracyPolice`] entry says.
+    /// Nova's four and its escorts' AI as `rulebook` chooses: each of
+    /// the four answers the player's attack or boarding as its
+    /// [`RuleKey::PiracyPolice`] entry says, and the escorts fly as its
+    /// [`RuleKey::EscortAi`] entry says.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         let piracy_police = rulebook.source_for(RuleKey::PiracyPolice);
@@ -44,7 +51,17 @@ impl NovaAi {
             brave: Rc::new(BraveTrader { piracy_police }),
             warship: Rc::new(Warship { piracy_police }),
             interceptor: Rc::new(Interceptor { piracy_police }),
+            escorts: Rc::new(EscortAi {
+                escort_ai: rulebook.source_for(RuleKey::EscortAi),
+            }),
         }
+    }
+
+    /// This AI with `behaviour` for the player's escorts.
+    #[must_use]
+    pub fn with_escorts(mut self, behaviour: Rc<dyn Behaviour>) -> Self {
+        self.escorts = behaviour;
+        self
     }
 
     /// This AI with `behaviour` for NPCs of `ai_type`.
@@ -64,9 +81,13 @@ impl NovaAi {
         }
     }
 
-    /// The behaviour for NPCs of `ai_type`.
-    fn of(&self, ai_type: AiType) -> &dyn Behaviour {
-        match ai_type {
+    /// The behaviour for `npc`: the escorts' for the player's escort,
+    /// otherwise the one for its AI type.
+    fn of(&self, npc: &Npc) -> &dyn Behaviour {
+        if npc.escort.is_some() {
+            return &*self.escorts;
+        }
+        match npc.ai_type {
             AiType::WimpyTrader => &*self.wimpy,
             AiType::BraveTrader => &*self.brave,
             AiType::Warship => &*self.warship,
@@ -77,19 +98,19 @@ impl NovaAi {
 
 impl Behaviour for NovaAi {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
-        self.of(npc.ai_type).decide(npc, around, chance)
+        self.of(npc).decide(npc, around, chance)
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-        self.of(npc.ai_type).trigger(npc, around)
+        self.of(npc).trigger(npc, around)
     }
 
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
-        self.of(npc.ai_type).target(npc, around)
+        self.of(npc).target(npc, around)
     }
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
-        self.of(npc.ai_type).react(npc, strike, around)
+        self.of(npc).react(npc, strike, around)
     }
 }
 
@@ -219,6 +240,81 @@ mod tests {
             WimpyTrader::default().decide(&npcs[1], &around, &mut Draws::of(&[]))
         );
         assert_eq!(*mark.asked.borrow(), [NpcId(1)]);
+    }
+
+    /// `npc` as the player's escort.
+    fn escorting(mut npc: Npc) -> Npc {
+        npc.escort = Some(crate::escort::EscortDuty {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+            order: None,
+        });
+        npc
+    }
+
+    #[test]
+    fn an_escort_goes_to_the_escort_behaviour_whatever_its_ai_type() {
+        let marks: Vec<Rc<Marked>> = (1..=4).map(Marked::new).collect();
+        let escorts = Marked::new(9);
+        let ai = TYPES
+            .into_iter()
+            .zip(&marks)
+            .fold(NovaAi::default(), |ai, (ai_type, mark)| {
+                ai.with(ai_type, mark.clone())
+            })
+            .with_escorts(escorts.clone());
+        let npcs: Vec<Npc> = TYPES
+            .into_iter()
+            .enumerate()
+            .map(|(i, ai_type)| escorting(of(10 + i as u32, ai_type)))
+            .collect();
+        let around = Surroundings::new(&[], &npcs);
+        let strike = Strike {
+            ship: ShipRef::Player,
+            by: ShipRef::Player,
+            damage: 0.0,
+            downed: None,
+        };
+        for npc in &npcs {
+            assert_eq!(
+                ai.decide(npc, &around, &mut Draws::of(&[])),
+                Goal::Attack(escorts.ship())
+            );
+            assert_eq!(ai.target(npc, &around), Some(escorts.ship()));
+            assert_eq!(ai.trigger(npc, &around).only, Some(WeaponId(9)));
+            assert_eq!(ai.react(npc, &strike, &around).provoked, 9.0);
+        }
+        assert_eq!(escorts.asked.borrow().len(), 16);
+        assert!(marks.iter().all(|mark| mark.asked.borrow().is_empty()));
+    }
+
+    #[test]
+    fn nova_ai_flies_escorts_as_its_rulebook_says() {
+        use crate::ai::fixture::{PIRATES, player, ship};
+        let mut warship = escorting(ship(1, PIRATES, AiType::Warship, 0.0, 0.0));
+        warship.govt = None;
+        let mut pirate = ship(2, PIRATES, AiType::Warship, 300.0, 0.0);
+        pirate.goal = Goal::Attack(ShipRef::Player);
+        let npcs = [warship, pirate];
+        let around = Surroundings {
+            player: Some(player(0.0, 0.0)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let decide = |ai: &NovaAi| ai.decide(&npcs[0], &around, &mut Draws::of(&[0]));
+        let guarding = Goal::Formation {
+            guard: Some(ShipRef::Npc(NpcId(2))),
+        };
+        assert_eq!(decide(&NovaAi::default()), guarding);
+        assert_eq!(
+            decide(&NovaAi::from_rulebook(&Rulebook::default())),
+            guarding
+        );
+        let bible = Rulebook::default().with_override(RuleKey::EscortAi, RuleSource::Bible);
+        assert_eq!(
+            decide(&NovaAi::from_rulebook(&bible)),
+            Goal::Attack(ShipRef::Npc(NpcId(2)))
+        );
     }
 
     /// How each of a police warship and a police interceptor answers the

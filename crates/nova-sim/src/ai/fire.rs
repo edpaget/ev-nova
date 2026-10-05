@@ -133,6 +133,19 @@ pub fn wanted_heading(npc: &Npc, at: &ShipState) -> f32 {
     lead(&npc.state, &target, speed)
 }
 
+/// Whether some weapon `npc` carries reaches a ship at `at`: within its
+/// range and [`RANGE_MARGIN`] (`_AIInGunRange` @0x7f9d5 with no weapon
+/// named).
+#[must_use]
+pub fn in_reach(npc: &Npc, at: &ShipState) -> bool {
+    let off = at.position - npc.state.position;
+    let squared = off.x * off.x + off.y * off.y;
+    npc.armament.mounts().iter().any(|mount| {
+        let reach = mount.spec.range() + RANGE_MARGIN;
+        squared <= reach * reach
+    })
+}
+
 /// Whether `spec` destroys (see the module docs).
 fn destroying(spec: &WeaponSpec) -> bool {
     spec.mass_damage > 0.0

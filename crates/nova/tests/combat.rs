@@ -752,6 +752,7 @@ impl Behaviour for Attacking {
             primary: true,
             secondary: None,
             only: None,
+            turrets_only: false,
         }
     }
 

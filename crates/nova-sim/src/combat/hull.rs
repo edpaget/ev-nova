@@ -80,6 +80,10 @@ pub struct HullSpec {
     /// How far off its centre, in pixels on either axis, the player can
     /// board it.
     pub board_reach: f32,
+    /// Its sprite's width, its `shän`'s `BaseXSize`, in pixels; none
+    /// without a sprite. A formation is spaced by it (see
+    /// [`escort::spacing`](crate::escort::spacing)).
+    pub sprite_size: Option<f32>,
 }
 
 impl Default for HullSpec {
@@ -96,6 +100,7 @@ impl Default for HullSpec {
             blind_spots: 0,
             strength: 0.0,
             board_reach: DEFAULT_BOARD_REACH,
+            sprite_size: None,
         }
     }
 }
@@ -117,6 +122,7 @@ impl HullSpec {
             blind_spots: record.flags & BLIND_SPOTS,
             strength: f32::from(record.strength.max(0)),
             board_reach,
+            sprite_size: size,
         }
     }
 
@@ -246,6 +252,20 @@ mod tests {
         }
         assert_eq!(DEFAULT_HIT_RADIUS, 16.0);
         assert_eq!(HullSpec::default().hit_radius, 16.0);
+    }
+
+    #[test]
+    fn the_sprite_size_is_the_shäns_size() {
+        let shuttle = HullSpec::new(&HullRecord {
+            size: Some(24),
+            ..hull(128)
+        });
+        assert_eq!(shuttle.sprite_size, Some(24.0));
+        for size in [None, Some(0), Some(-5)] {
+            let placeholder = HullSpec::new(&HullRecord { size, ..hull(128) });
+            assert_eq!(placeholder.sprite_size, None, "{size:?}");
+        }
+        assert_eq!(HullSpec::default().sprite_size, None);
     }
 
     #[test]

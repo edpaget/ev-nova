@@ -73,14 +73,22 @@ pub struct Trigger {
     /// This weapon alone, primary or secondary, whatever the triggers
     /// say: an NPC's pick. The player's trigger never sets it.
     pub only: Option<WeaponId>,
+    /// Only the turrets (guidance 3, 4, 7 and 8) of what the rest of the
+    /// trigger fires: an escort keeping formation.
+    pub turrets_only: bool,
 }
 
 impl Trigger {
-    /// Whether it fires `weapon`.
+    /// Whether it fires `weapon`: `only` that weapon when set; otherwise
+    /// the secondary on the secondary trigger and the rest on the primary,
+    /// only the turrets among them when `turrets_only`.
     #[must_use]
     pub fn fires(self, weapon: &WeaponSpec) -> bool {
         if let Some(only) = self.only {
             return weapon.id == only;
+        }
+        if self.turrets_only && !weapon.guidance.turret() {
+            return false;
         }
         if weapon.secondary() {
             self.secondary == Some(weapon.id)
@@ -582,6 +590,7 @@ mod tests {
         primary: true,
         secondary: None,
         only: None,
+        turrets_only: false,
     };
 
     /// What `armament` has to fire with.
@@ -915,18 +924,21 @@ mod tests {
             primary: false,
             secondary: Some(WeaponId(140)),
             only: None,
+            turrets_only: false,
         };
         assert_eq!(fired(&mut armament, second), [140]);
         let both = Trigger {
             primary: true,
             secondary: Some(WeaponId(138)),
             only: None,
+            turrets_only: false,
         };
         assert_eq!(fired(&mut armament, both), [128, 138, 129]);
         let primary_as_secondary = Trigger {
             primary: false,
             secondary: Some(WeaponId(128)),
             only: None,
+            turrets_only: false,
         };
         assert_eq!(
             fired(&mut armament, primary_as_secondary),
@@ -949,6 +961,56 @@ mod tests {
             ..both
         };
         assert_eq!(fired(&mut armament, missing), Vec::<i16>::new());
+    }
+
+    #[test]
+    fn turrets_only_fires_the_turrets_alone() {
+        let guided = |id: i16, guidance: i16| WeaponRecord {
+            guidance,
+            ..blaster(id, 0)
+        };
+        let records = [
+            blaster(128, 0),
+            guided(129, 4),
+            guided(130, 7),
+            guided(131, 3),
+            guided(132, 8),
+            guided(133, 0),
+            WeaponRecord {
+                guidance: 4,
+                flags: super::super::weapon::SECONDARY,
+                ..blaster(140, 0)
+            },
+        ];
+        let armament = Armament::new(records.iter().map(|record| (WeaponSpec::new(record), 1)));
+        let fires = |trigger: Trigger| -> Vec<i16> {
+            armament
+                .mounts()
+                .iter()
+                .filter(|mount| trigger.fires(&mount.spec))
+                .map(|mount| mount.spec.id.0)
+                .collect()
+        };
+        let turrets = Trigger {
+            primary: true,
+            turrets_only: true,
+            ..Trigger::default()
+        };
+        assert_eq!(
+            fires(turrets),
+            [129, 130, 131, 132],
+            "no gun, beam or secondary"
+        );
+        assert_eq!(
+            fires(Trigger {
+                secondary: Some(WeaponId(140)),
+                ..turrets
+            }),
+            [129, 130, 131, 132, 140],
+            "a secondary turret on its own trigger"
+        );
+        assert_eq!(fires(PRIMARY), [128, 129, 130, 131, 132, 133]);
+        assert!(!Trigger::default().turrets_only);
     }
 
     /// Every weapon fires at 100 degrees, at NPC 7.

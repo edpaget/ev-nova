@@ -848,6 +848,7 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
             primary: !weapon.secondary(),
             secondary: weapon.secondary().then_some(weapon.id),
             only: None,
+            turrets_only: false,
         },
         reserves: Reserves::full(0.0, 1_000_000.0, 1_000_000.0),
         condition: Condition::Intact,

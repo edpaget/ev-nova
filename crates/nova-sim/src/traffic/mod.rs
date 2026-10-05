@@ -260,7 +260,7 @@ impl Traffic {
             .map(|npc| {
                 let other = match npc.goal {
                     Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
-                    Goal::Assist(_) => Some(ShipRef::Player),
+                    Goal::Assist(_) | Goal::Formation { .. } => Some(ShipRef::Player),
                     goal => goal.quarry().or(goal.inspecting()),
                 };
                 let other = other.and_then(|ship| match ship {
@@ -362,6 +362,7 @@ impl Traffic {
                 ai_type: ship.ai_type,
                 leader: ship.lead.map(|lead| NpcId(first + lead as u32)),
                 class: kind.escort_class,
+                escort: None,
                 stats: kind.stats,
                 reserves: kind.stats.full(),
                 state: ship.state,
@@ -749,6 +750,7 @@ mod tests {
                 primary: true,
                 secondary: Some(WeaponId(138)),
                 only: None,
+                turrets_only: false,
             },
             ..Recording::deciding(Goal::Idle)
         };
@@ -1034,6 +1036,29 @@ mod tests {
             "{:?}",
             traffic.npcs()[0].state
         );
+    }
+
+    #[test]
+    fn an_escort_keeps_its_slot_beside_the_player() {
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].goal = Goal::Formation { guard: None };
+        traffic.npcs[0].escort = Some(crate::escort::EscortDuty {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+            order: None,
+        });
+        // The escort at the centre, on slot 2, behind and left of the
+        // player.
+        let mut player = player_at(30.0, -30.0);
+        player.state.velocity = Vec2::new(1.0, 0.0);
+        let world = World {
+            player: Some(player),
+            ..World::new(&[])
+        };
+        traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+        let escort = &traffic.npcs()[0];
+        assert_eq!(escort.state.velocity, player.state.velocity, "in formation");
     }
 
     #[test]

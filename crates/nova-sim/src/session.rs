@@ -146,6 +146,7 @@
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
 
+mod escorts;
 mod hail;
 
 use std::collections::BTreeMap;
@@ -189,6 +190,7 @@ use crate::outfitter::{
 use crate::pilot::{self, Escort, Pilot};
 use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
+use crate::rulebook::RuleSource;
 use crate::shipyard::{self, Quote, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
@@ -269,6 +271,9 @@ pub struct Session {
     /// What the NPCs assisting the player have done since this was last
     /// taken.
     comm: Vec<CommNote>,
+    /// Whether the escorts' standing orders are reset on entering a
+    /// system (see [`Session::with_escort_orders`]).
+    escort_orders: RuleSource,
 }
 
 impl Session {
@@ -355,6 +360,7 @@ impl Session {
             aboard: None,
             talk: None,
             comm: Vec::new(),
+            escort_orders: RuleSource::Engine,
             pilot,
         };
         session.refit(false);
@@ -444,6 +450,7 @@ impl Session {
         );
         self.traffic.enter(table, chance);
         self.traffic_due = false;
+        self.enter_escorts();
         self.strikes.clear();
         self.aboard = None;
         self.talk = None;
@@ -519,6 +526,7 @@ impl Session {
             primary,
             secondary: self.secondary.filter(|_| secondary),
             only: None,
+            turrets_only: false,
         });
     }
 
@@ -597,7 +605,7 @@ impl Session {
             rounds: &mut rounds,
         }];
         for npc in self.traffic.npcs_mut() {
-            let fleet = ShipRef::Npc(npc.fleet());
+            let fleet = npc.fleet();
             let Npc {
                 id,
                 ship,
@@ -4102,6 +4110,7 @@ mod tests {
         primary: true,
         secondary: None,
         only: None,
+        turrets_only: false,
     };
 
     /// The fight's events about NPC 0, other than its firing.
@@ -4118,6 +4127,41 @@ mod tests {
             })
             .copied()
             .collect()
+    }
+
+    #[test]
+    fn the_players_shots_pass_through_its_escort_and_the_escorts_through_the_player() {
+        // The escort 100 above the player, facing it: each fires at the
+        // other point-blank.
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let escort = &mut session.traffic.npcs_mut()[0];
+        escort.escort = Some(crate::escort::EscortDuty {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+            order: None,
+        });
+        escort.trigger = FIRE;
+        escort.target = Some(ShipRef::Player);
+        session.hold_trigger(FIRE);
+        session.target = Some(NpcId(0));
+        let mut fired = 0;
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            fired += session
+                .take_combat_events()
+                .iter()
+                .filter(|event| matches!(event, CombatEvent::Fired { .. }))
+                .count();
+        }
+        assert!(fired > 20, "both fired: {fired}");
+        assert_eq!(
+            session.npcs()[0].reserves,
+            Reserves::full(30.0, 45.0, 300.0)
+        );
+        assert_eq!(session.reserves().shield.now, 30.0, "untouched");
+        assert_eq!(session.reserves().armor.now, 45.0);
     }
 
     #[test]

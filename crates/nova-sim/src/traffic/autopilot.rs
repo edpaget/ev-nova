@@ -27,6 +27,7 @@
 use crate::ai::{Goal, fire};
 use crate::catalog::{LandingSite, StellarId};
 use crate::combat::hull::Condition;
+use crate::escort::{self, APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{self, AT_REST_SPEED, Controls, ShipState, Turn, heading_of, shortest_turn};
 use crate::geometry::Vec2;
 use crate::hail::assist;
@@ -131,6 +132,24 @@ pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> O
                 if !assist::within(&state, player, assist::reach(help, handling.turn_rate)) =>
             {
                 follow(&state, &handling, player)
+            }
+            _ => brake(&state, &handling),
+        },
+        Goal::Formation { .. } => match (other, npc.escort) {
+            (Some(leader), Some(duty)) => {
+                let slot = escort::slot_position(leader, duty.slot, duty.ships, duty.spacing);
+                let off = slot - state.position;
+                let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
+                if within(KEEP_FORMATION) {
+                    keep_formation(npc, leader, slot);
+                    return Outcome::Flying;
+                }
+                if within(APPROACH_FORMATION) {
+                    close_on(&state, &handling, slot, leader.velocity, 0.0)
+                } else {
+                    let distance = off.length();
+                    match_velocity(&state, &handling, off * (handling.max_speed / distance))
+                }
             }
             _ => brake(&state, &handling),
         },
@@ -257,13 +276,61 @@ fn brake(state: &ShipState, handling: &Handling) -> Controls {
 /// speed it can still brake from in the distance beyond it, on top of the
 /// lead's velocity, and matching the lead's velocity within it.
 fn follow(state: &ShipState, handling: &Handling, lead: &ShipState) -> Controls {
-    let to = lead.position - state.position;
+    close_on(
+        state,
+        handling,
+        lead.position,
+        lead.velocity,
+        FOLLOW_DISTANCE,
+    )
+}
+
+/// Keeps within `margin` of `target`, which moves at `velocity`: closing
+/// at the speed it can still brake from in the distance beyond the
+/// margin, on top of that velocity, and matching it within the margin.
+fn close_on(
+    state: &ShipState,
+    handling: &Handling,
+    target: Vec2,
+    velocity: Vec2,
+    margin: f32,
+) -> Controls {
+    let to = target - state.position;
     let distance = to.length();
-    let beyond = (distance - FOLLOW_DISTANCE).max(0.0);
+    let beyond = (distance - margin).max(0.0);
     let speed = braking_speed(beyond, handling).min(handling.max_speed);
-    // None within the distance, where `to` may be no direction at all.
-    let closing = to * (speed / distance.max(FOLLOW_DISTANCE));
-    match_velocity(state, handling, lead.velocity + closing)
+    // None within the margin, where `to` may be no direction at all.
+    let closing = if distance > margin {
+        to * (speed / distance)
+    } else {
+        Vec2::ZERO
+    };
+    match_velocity(state, handling, velocity + closing)
+}
+
+/// Keeps formation on `slot` beside a leader at `leader`
+/// (`_AIMaintainFormation` @0x84f04): `npc` takes the leader's velocity
+/// and heading and moves with it, then each axis more than
+/// [`FORMATION_SLACK`] off the slot is nudged towards it by
+/// [`FORMATION_NUDGE`] ticks' acceleration at most, never past it.
+fn keep_formation(npc: &mut Npc, leader: &ShipState, slot: Vec2) {
+    let state = &mut npc.state;
+    state.velocity = leader.velocity;
+    state.heading = leader.heading;
+    state.position = state.position + state.velocity;
+    let nudge = npc.stats.handling.accel * FORMATION_NUDGE;
+    let towards = |at: f32, to: f32| {
+        let off = to - at;
+        if off.abs() > FORMATION_SLACK {
+            at + off.signum() * nudge.min(off.abs())
+        } else {
+            at
+        }
+    };
+    state.position = Vec2::new(
+        towards(state.position.x, slot.x),
+        towards(state.position.y, slot.y),
+    );
 }
 
 /// The fastest a ship can go and still turn round and stop within
@@ -299,6 +366,7 @@ fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Cont
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::escort::EscortDuty;
     use crate::hail::{Help, assist};
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
@@ -341,6 +409,131 @@ mod tests {
             }
         }
         (Outcome::Flying, limit)
+    }
+
+    /// An escort in slot 2 of 3, spaced 30 apart, flying `fields` from
+    /// `start`, keeping formation.
+    fn escort(fields: ShipFields, start: ShipState) -> Npc {
+        Npc {
+            escort: Some(EscortDuty {
+                slot: 2,
+                ships: 3,
+                spacing: 30.0,
+                order: None,
+            }),
+            ..npc(fields, Goal::Formation { guard: None }, start)
+        }
+    }
+
+    /// Slot 2 of 3, spaced 30 apart, behind `leader`.
+    fn slot_of(leader: &ShipState) -> Vec2 {
+        crate::escort::slot_position(leader, 2, 3, 30.0)
+    }
+
+    #[test]
+    fn an_escort_on_its_slot_matches_the_leaders_velocity_and_heading() {
+        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let slot = slot_of(&leader);
+        let mut ship = escort(FAST, at(slot.x, slot.y, 0.0, 0.0, 200.0));
+        assert_eq!(fly(&mut ship, &[], Some(&leader)), Outcome::Flying);
+        assert_eq!(ship.state.velocity, leader.velocity);
+        assert_eq!(ship.state.heading, 30.0);
+        assert_eq!(
+            ship.state.position,
+            slot + leader.velocity,
+            "moving with it"
+        );
+    }
+
+    #[test]
+    fn an_escort_keeping_formation_is_nudged_back_beyond_8_pixels_off_by_at_most_ten_ticks_thrust()
+    {
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let slot = slot_of(&leader);
+        let off = |x: f32, y: f32| at(slot.x + x, slot.y + y, 0.0, 0.0, 0.0);
+        let nudged = |fields: ShipFields, x: f32, y: f32| {
+            let mut ship = escort(fields, off(x, y));
+            fly(&mut ship, &[], Some(&leader));
+            ship.state.position - slot
+        };
+        assert_eq!(
+            nudged(FAST, 8.0, -8.0),
+            Vec2::new(8.0, -8.0),
+            "within the slack"
+        );
+        assert_eq!(
+            nudged(FAST, 9.0, -9.0),
+            Vec2::new(6.0, -6.0),
+            "0.3 x 10 a tick"
+        );
+        assert_eq!(
+            nudged(FAST, 9.0, 2.0),
+            Vec2::new(6.0, 2.0),
+            "each axis on its own"
+        );
+        assert_eq!(nudged(AVERAGE, -9.0, 0.0), Vec2::new(-8.0, 0.0), "0.1 x 10");
+        assert_eq!(nudged(FAST, 299.0, -300.0), Vec2::new(296.0, -297.0));
+        let strong = ShipFields {
+            accel: 30_000,
+            ..FAST
+        };
+        assert_eq!(nudged(strong, 9.0, -20.0), Vec2::ZERO, "never past it");
+        assert_eq!(
+            (
+                KEEP_FORMATION,
+                APPROACH_FORMATION,
+                FORMATION_SLACK,
+                FORMATION_NUDGE
+            ),
+            (300.0, 600.0, 8.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn an_escort_off_its_slot_approaches_it_and_far_off_flies_at_full_speed() {
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let slot = slot_of(&leader);
+        // At full speed (3) straight down at the slot from above.
+        let mut near = escort(AVERAGE, at(slot.x, slot.y - 400.0, 0.0, 3.0, 180.0));
+        let mut far = escort(AVERAGE, at(slot.x, slot.y - 700.0, 0.0, 3.0, 180.0));
+        let before = (near.state, far.state);
+        fly(&mut near, &[], Some(&leader));
+        fly(&mut far, &[], Some(&leader));
+        assert_ne!(
+            near.state.heading, before.0.heading,
+            "400 off, it turns to slow down"
+        );
+        assert_eq!(
+            far.state.heading, before.1.heading,
+            "700 off, it keeps going"
+        );
+        assert_eq!(far.state.velocity, before.1.velocity);
+        assert_eq!(far.state.position, before.1.position + before.1.velocity);
+        // From rest, facing the slot, either thrusts towards it.
+        for distance in [301.0, 400.0, 700.0] {
+            let mut ship = escort(AVERAGE, at(slot.x, slot.y - distance, 0.0, 0.0, 180.0));
+            fly(&mut ship, &[], Some(&leader));
+            assert!(ship.state.velocity.y > 0.0, "{distance}: {:?}", ship.state);
+            assert_eq!(ship.state.heading, 180.0, "{distance}");
+        }
+        // Beyond 300 on one axis only, it flies rather than keeps formation.
+        let mut aside = escort(AVERAGE, at(slot.x + 301.0, slot.y, 0.0, 0.0, 270.0));
+        fly(&mut aside, &[], Some(&leader));
+        assert!(aside.state.velocity.x < 0.0, "{:?}", aside.state);
+        assert_eq!(aside.state.heading, 270.0, "not the leader's");
+    }
+
+    #[test]
+    fn an_escort_whose_leader_is_gone_or_with_no_duty_brakes() {
+        // Moving down and facing down, it turns to face back to brake.
+        let mut lost = escort(AVERAGE, at(0.0, 0.0, 0.0, 2.0, 180.0));
+        fly(&mut lost, &[], None);
+        assert_ne!(lost.state.heading, 180.0, "{:?}", lost.state);
+        let leader = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut dutiless = escort(AVERAGE, at(0.0, 0.0, 0.0, 2.0, 180.0));
+        dutiless.escort = None;
+        fly(&mut dutiless, &[], Some(&leader));
+        assert_ne!(dutiless.state.heading, 180.0, "{:?}", dutiless.state);
     }
 
     #[test]

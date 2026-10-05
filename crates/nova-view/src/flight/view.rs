@@ -4337,6 +4337,7 @@ mod tests {
                 primary: true,
                 secondary: None,
                 only: None,
+                turrets_only: false,
             }
         }
     }
@@ -4941,6 +4942,7 @@ mod tests {
                 primary: true,
                 secondary: None,
                 only: None,
+                turrets_only: false,
             }
         }
     }
@@ -5403,6 +5405,7 @@ mod tests {
                 primary: true,
                 secondary: None,
                 only: None,
+                turrets_only: false,
             }
         }
 

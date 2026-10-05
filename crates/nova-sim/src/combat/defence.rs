@@ -497,6 +497,22 @@ mod tests {
     }
 
     #[test]
+    fn allegiance_spares_the_players_escorts_and_the_player_its_escorts() {
+        let govts = relations();
+        let player = side(ShipRef::Player, ShipRef::Player, None);
+        let escort = side(ENEMY, ShipRef::Player, None);
+        assert!(
+            !Allegiance.hostile(player, escort, &govts),
+            "its escort's missile"
+        );
+        assert!(!Allegiance.hostile(escort, player, &govts), "the player's");
+        assert!(
+            Allegiance.hostile(escort, side(LEAD, LEAD, None), &govts),
+            "another fleet's"
+        );
+    }
+
+    #[test]
     fn allegiance_spares_an_allied_government_and_its_own() {
         let govts = relations();
         let defender = side(DEFENDER, DEFENDER, Some(128));

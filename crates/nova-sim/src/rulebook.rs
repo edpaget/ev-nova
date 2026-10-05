@@ -20,10 +20,13 @@
 //! | [`PiracyPolice`](RuleKey::PiracyPolice) | `piracy_police` | warships and interceptors answer the player's attack or boarding ([`NovaAi`](crate::NovaAi)) | interceptors only |
 //! | [`QuietHails`](RuleKey::QuietHails) | `quiet_hails` | a quiet government's ships (`Flags2` 0x0008) answer Greetings, and Request Assistance and Beg For Mercy do nothing ([`hail::nova`](crate::hail::nova)) | they answer Greetings "No response.", and the middle button works |
 //! | [`LongAdvice`](RuleKey::LongAdvice) | `long_advice` | an advice line exactly 42 characters long reads "Nice to meet you." ([`hail::reply`](crate::hail::reply)) | it is shown as written\* |
+//! | [`EscortAi`](RuleKey::EscortAi) | `escort_ai` | an escort with no standing command keeps formation and fires its turrets at a threat to the player ([`EscortAi`](crate::EscortAi)) | it flies as its `InherentAI`: a warship or interceptor attacks the threat, a trader keeps formation |
+//! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation ([`Session`](crate::Session)) | the orders are kept\* |
 //!
-//! \* The Bible says nothing of `long_advice`: for it, the reading other
-//! than the engine's (`"bible"` in the settings) is the intended
-//! behaviour, not the engine's bug, and not anything the Bible says.
+//! \* The Bible says nothing of `long_advice` or `escort_orders`: for
+//! them, the reading other than the engine's (`"bible"` in the settings)
+//! is the intended behaviour, not the engine's bug or quirk, and not
+//! anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -130,6 +133,19 @@ rule_keys! {
     /// the other reading is the intended behaviour, not the engine's bug
     /// (see [`hail::reply`](crate::hail::reply)).
     LongAdvice => "long_advice",
+    /// What the player's escort with no standing command does: by the
+    /// engine, it keeps formation and fires its turrets at a ship
+    /// threatening the player; by the Bible (`shïp` `InherentAI`), it
+    /// flies as its AI type would, a warship or interceptor attacking
+    /// such a ship with every weapon (see [`ai::escort`](crate::ai::escort)).
+    EscortAi => "escort_ai",
+    /// What becomes of the escorts' standing orders when the player
+    /// enters a system (a jump's arrival, a take-off, a pilot loaded): by
+    /// the engine, every one is reset to formation; otherwise they are
+    /// kept. The Bible is silent here, so the other reading is the
+    /// intended behaviour, not anything the Bible says (see
+    /// [`Session::with_escort_orders`](crate::Session::with_escort_orders)).
+    EscortOrders => "escort_orders",
 }
 
 impl RuleKey {
@@ -253,7 +269,9 @@ mod tests {
                 RuleKey::CrewlessCapture,
                 RuleKey::PiracyPolice,
                 RuleKey::QuietHails,
-                RuleKey::LongAdvice
+                RuleKey::LongAdvice,
+                RuleKey::EscortAi,
+                RuleKey::EscortOrders
             ]
         );
         assert_eq!(RuleKey::CrimeGains.key(), "crime_gains");
@@ -262,6 +280,8 @@ mod tests {
         assert_eq!(RuleKey::PiracyPolice.key(), "piracy_police");
         assert_eq!(RuleKey::QuietHails.key(), "quiet_hails");
         assert_eq!(RuleKey::LongAdvice.key(), "long_advice");
+        assert_eq!(RuleKey::EscortAi.key(), "escort_ai");
+        assert_eq!(RuleKey::EscortOrders.key(), "escort_orders");
         for rule in RuleKey::ALL {
             assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
         }

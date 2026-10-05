@@ -836,6 +836,7 @@ mod tests {
                     primary: true,
                     secondary: None,
                     only: None,
+                    turrets_only: false,
                 },
                 ..self
             }
@@ -1792,6 +1793,7 @@ mod tests {
             primary: true,
             secondary: None,
             only: None,
+            turrets_only: false,
         };
         let mut defender = Ship::at(1, 0.0, 0.0).armed(quad()).facing(0.0);
         defender.trigger = Trigger::default();
@@ -1831,6 +1833,7 @@ mod tests {
             primary: true,
             secondary: None,
             only: None,
+            turrets_only: false,
         };
         for _ in 0..12 {
             tick(&mut combat, &mut ships, &NovaDisable);

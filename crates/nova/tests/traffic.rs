@@ -298,6 +298,7 @@ impl Behaviour for Firing {
             primary: true,
             secondary: None,
             only: None,
+            turrets_only: false,
         }
     }
 }

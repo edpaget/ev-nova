@@ -8,7 +8,7 @@ use crate::catalog::{GovtId, ShipId, WeaponId};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
-use crate::escort::EscortClass;
+use crate::escort::{EscortClass, EscortDuty};
 use crate::flight::ShipState;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
@@ -87,6 +87,8 @@ pub struct Npc {
     /// Its ship type's class as an escort, which the escorts' threat
     /// scores weigh (see [`escort`](crate::escort)).
     pub class: EscortClass,
+    /// Its duty as the player's escort, if it is one: none for traffic.
+    pub escort: Option<EscortDuty>,
     /// How it performs, its default items included.
     pub stats: ShipStats,
     /// Its shield, armour and fuel (100 is one jump).
@@ -132,10 +134,17 @@ pub struct Npc {
 }
 
 impl Npc {
-    /// Its fleet: the lead it escorts, or itself.
+    /// Its fleet: the player, for the player's escort; otherwise the lead
+    /// it escorts, or itself. Ships of one fleet never hit each other
+    /// (`_ShipsShareParent` @0x7926), and count each other's missiles
+    /// friendly.
     #[must_use]
-    pub fn fleet(&self) -> NpcId {
-        self.leader.unwrap_or(self.id)
+    pub fn fleet(&self) -> ShipRef {
+        if self.escort.is_some() {
+            ShipRef::Player
+        } else {
+            ShipRef::Npc(self.leader.unwrap_or(self.id))
+        }
     }
 
     /// Whether it threatens `ship` (`_ExtendedIsThreatToShip`): it is
@@ -178,14 +187,24 @@ mod tests {
     }
 
     #[test]
-    fn an_npcs_fleet_is_its_lead_or_itself() {
+    fn an_npcs_fleet_is_its_lead_or_itself_and_the_players_escorts_the_players() {
         let lead = crate::testkit::npc(3, ShipStats::default());
-        assert_eq!(lead.fleet(), NpcId(3));
+        assert_eq!(lead.fleet(), ShipRef::Npc(NpcId(3)));
         let escort = Npc {
             leader: Some(NpcId(3)),
             ..crate::testkit::npc(5, ShipStats::default())
         };
-        assert_eq!(escort.fleet(), NpcId(3));
+        assert_eq!(escort.fleet(), ShipRef::Npc(NpcId(3)));
+        let players = Npc {
+            escort: Some(crate::escort::EscortDuty {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+                order: None,
+            }),
+            ..crate::testkit::npc(6, ShipStats::default())
+        };
+        assert_eq!(players.fleet(), ShipRef::Player);
     }
 
     #[test]

@@ -230,6 +230,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         ai_type: AiType::WimpyTrader,
         leader: None,
         class: crate::escort::EscortClass::Freighter,
+        escort: None,
         stats,
         reserves: stats.full(),
         state: ShipState::default(),
