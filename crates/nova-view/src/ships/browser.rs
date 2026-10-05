@@ -691,6 +691,66 @@ mod tests {
         assert_eq!(lights_alphas(&browser), [247], "level 31");
     }
 
+    /// Every command drawing the lights, `rlëD` 1200, whatever its blend.
+    fn lights_commands(browser: &ShipBrowser<&FakeCatalog>) -> Vec<DrawCommand> {
+        drawn(browser)
+            .iter()
+            .filter(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 1200),
+            )
+            .cloned()
+            .collect()
+    }
+
+    /// The lights added with `tint` over the ship's centre, at the base's
+    /// current frame.
+    fn lights_at(browser: &ShipBrowser<&FakeCatalog>, tint: Color) -> DrawCommand {
+        DrawCommand::Sprite {
+            image: ImageKey::sprite(1200, browser.frame().expect("a sheet")),
+            center: SHIP_CENTER,
+            tint,
+            blend: Blend::Additive,
+        }
+    }
+
+    #[test]
+    fn lights_are_added_scaled_by_level_below_full_and_whole_at_full() {
+        // The stock triangle, 10 to 31, never full: the original draws
+        // every level with its translucent blit, which adds the lights
+        // scaled by level/32 (see `lights_tint`).
+        let triangle = Blink {
+            mode: 2,
+            a: 10,
+            b: 75,
+            c: 32,
+            d: 75,
+        };
+        let rolls = HashedRolls::new(0);
+        let catalog = FakeCatalog::with(vec![blinking(128, triangle)]);
+        let mut browser = ShipBrowser::new(&catalog);
+        let mut levels = Vec::new();
+        for tick_number in 0..=101 {
+            let level = lights_level(&triangle, tick_number, &rolls);
+            let want: Vec<_> = level
+                .map(|n| lights_at(&browser, lights_tint(n)))
+                .into_iter()
+                .collect();
+            assert_eq!(lights_commands(&browser), want, "tick {tick_number}");
+            levels.extend(level);
+            browser.tick(tick());
+        }
+        assert!(levels.contains(&10), "the lowest level is drawn");
+        assert!(levels.contains(&31), "the highest level is drawn");
+
+        // A steady light is full: added whole.
+        let catalog = FakeCatalog::with(vec![blinking(128, Blink::STEADY)]);
+        let browser = ShipBrowser::new(&catalog);
+        assert_eq!(
+            lights_commands(&browser),
+            [lights_at(&browser, Color::WHITE)]
+        );
+    }
+
     #[test]
     fn choosing_another_ship_restarts_its_blink() {
         let catalog = FakeCatalog::with(vec![blinking(128, SHUTTLE), blinking(129, SHUTTLE)]);

@@ -1999,6 +1999,60 @@ mod tests {
         assert_eq!(lights_alphas(&view), [247], "level 31");
     }
 
+    /// Every command drawing the lights, `rlëD` 2200, whatever its blend.
+    fn lights_commands(view: &View) -> Vec<DrawCommand> {
+        drawn(view)
+            .iter()
+            .filter(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2200),
+            )
+            .cloned()
+            .collect()
+    }
+
+    /// The lights added with `tint` over the coasting ship's centre.
+    fn lights_at(tint: Color) -> DrawCommand {
+        DrawCommand::Sprite {
+            image: ImageKey::sprite(2200, 0),
+            center: VIEW_CENTER,
+            tint,
+            blend: Blend::Additive,
+        }
+    }
+
+    #[test]
+    fn lights_are_added_scaled_by_level_below_full_and_whole_at_full() {
+        // The stock triangle, 10 to 31, never full: the original draws
+        // every level with its translucent blit, which adds the lights
+        // scaled by level/32 (see `lights_tint`).
+        let triangle = Blink {
+            mode: 2,
+            a: 10,
+            b: 75,
+            c: 32,
+            d: 75,
+        };
+        let rolls = HashedRolls::new(0);
+        let mut view = FlightView::new(blinking(triangle));
+        let mut levels = Vec::new();
+        for tick in 0..=101 {
+            let level = lights_level(&triangle, tick, &rolls);
+            let want: Vec<_> = level
+                .map(|n| lights_at(lights_tint(n)))
+                .into_iter()
+                .collect();
+            assert_eq!(lights_commands(&view), want, "tick {tick}");
+            levels.extend(level);
+            ticks(&mut view, 1);
+        }
+        assert!(levels.contains(&10), "the lowest level is drawn");
+        assert!(levels.contains(&31), "the highest level is drawn");
+
+        // A steady light is full: added whole.
+        let view = FlightView::new(blinking(Blink::STEADY));
+        assert_eq!(lights_commands(&view), [lights_at(Color::WHITE)]);
+    }
+
     #[test]
     fn steady_lights_are_added_at_full_from_the_start() {
         let view = FlightView::new(blinking(Blink::STEADY));
