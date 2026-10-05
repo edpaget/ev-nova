@@ -3536,7 +3536,7 @@ mod tests {
     use crate::combat::defence::Allegiance;
     use crate::combat::hull::DisableRule;
     use crate::combat::weapon::Explosion;
-    use crate::legal::{Crime, LegalCode, NovaLaw};
+    use crate::legal::{Crime, CrimeGains, LegalCode, NovaLaw};
     use crate::testkit::{hull, weapon};
     use crate::traffic::npc::Npc;
 
@@ -3824,7 +3824,9 @@ mod tests {
     const DISABLING: Rules = Rules {
         disable: &Disabling,
         defence: &Allegiance,
-        law: &NovaLaw,
+        law: &NovaLaw {
+            gains: CrimeGains::Engine,
+        },
     };
 
     // What NPCs see.
@@ -3999,12 +4001,12 @@ mod tests {
             seen,
             [
                 (Some(Condition::Intact), [0, 0, 0, 0]),
-                (Some(Condition::Disabled), [-3, -3, 4, 0]),
-                (Some(Condition::Dying { ticks_left: 1 }), [-10, -10, 9, 0]),
-                (Some(Condition::Dying { ticks_left: 0 }), [-10, -10, 9, 0]),
-                (None, [-10, -10, 9, 0]),
+                (Some(Condition::Disabled), [-3, -3, 4, 10]),
+                (Some(Condition::Dying { ticks_left: 1 }), [-10, -10, 9, 20]),
+                (Some(Condition::Dying { ticks_left: 0 }), [-10, -10, 9, 20]),
+                (None, [-10, -10, 9, 20]),
             ],
-            "hits that leave it intact change nothing; the neutral is left alone"
+            "hits that leave it intact change nothing; by the engine's law, the neutral gains"
         );
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
         assert_eq!(&saved, session.pilot(), "the records saved as they are");
@@ -5111,9 +5113,9 @@ mod tests {
                 session.hold_trigger(Trigger::default());
                 assert_eq!(
                     [140, 141, 142, 143].map(|govt| session.pilot().legal_record(GovtId(govt))),
-                    [-3, -3, 1, 0],
-                    "the traders and their allies the police lower; the xenophobes, at \
-                     war with all, pleased by half theirs; the neutrals alone"
+                    [-3, -3, 1, 1],
+                    "the traders and their allies the police lower; the xenophobes and \
+                     the neutrals, not allied with them, pleased by half theirs"
                 );
                 let npc_at = |id| {
                     session

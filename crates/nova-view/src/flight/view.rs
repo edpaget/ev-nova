@@ -461,7 +461,7 @@ impl<
             behaviour: Rc::new(NovaAi::default()),
             disable_rule: Rc::new(NovaDisable),
             defence_rule: Rc::new(Allegiance),
-            law: Rc::new(NovaLaw),
+            law: Rc::new(NovaLaw::default()),
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
             unread_looks: looks

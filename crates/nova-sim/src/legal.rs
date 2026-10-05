@@ -14,8 +14,15 @@
 //! (`DisabPenalty`, `BoardPenalty`, `KillPenalty`), changes the record
 //! with each government S in the catalog by:
 //!
-//! - **-V.P** when S is V, or allied with V and not its enemy;
-//! - **+0.5 S.P** when S is an enemy of V (0.5 @0xdd128);
+//! - **-V.P** when S is V, or allied with V and not its enemy (@0x998d,
+//!   @0x9a23);
+//! - **+0.5 S.P**, S's own penalty halved, when S is not allied with V,
+//!   whether its enemy or neutral (@0x9a51; 0.5 @0xdd128). That is the
+//!   engine's rule, [`CrimeGains::Engine`], and the default. The Bible's,
+//!   [`CrimeGains::Bible`] ("evil deeds to one government will improve
+//!   your rating with its enemies... allied governments also communicate
+//!   your actions"), gives +0.5 S.P only to an enemy of V, and leaves a
+//!   neutral alone;
 //! - for an independent victim, **+0.5 S.P** when S is xenophobic, else
 //!   **-0.5 S.P** when S is nosy (`Flags` 0x0002);
 //! - and nothing otherwise.
@@ -26,14 +33,11 @@
 //! neither does [`Crime::Shoot`]: the original never passes
 //! `ShootPenalty`, as the Bible says ("currently ignored").
 //!
-//! Stated divergences: there is no 0.65 decay along the hyperlinks (there
-//! is no per-system record), and neutral governments are left alone. The
-//! original improves the record in a neutral's nearby systems by 0.5 S.P;
-//! applied to every government in the galaxy, that would improve the
-//! record with dozens of unrelated governments on each crime. The Bible's
-//! rule ("evil deeds to one government will improve your rating with its
-//! enemies... allied governments also communicate your actions") is kept
-//! instead.
+//! Stated divergence: there is no 0.65 decay along the hyperlinks (there
+//! is no per-system record). So by the engine's rule a crime improves the
+//! record with every government in the catalog not allied with the
+//! victim's, where the original improves it only in the nearby systems
+//! those governments hold.
 
 use std::fmt::Debug;
 
@@ -43,8 +47,7 @@ use crate::pilot::Pilot;
 
 /// How far either way of none a legal record goes.
 pub const RECORD_LIMIT: i32 = 32_000;
-/// What an enemy's (or a xenophobe's or nosy government's) own penalty
-/// counts for.
+/// What a pleased government's (or a nosy one's) own penalty counts for.
 pub const ENEMY_SHARE: f32 = 0.5;
 
 /// A crime against a ship.
@@ -74,9 +77,24 @@ pub trait LegalCode: Debug {
     ) -> Vec<(GovtId, i32)>;
 }
 
-/// Nova's law (see the module docs).
+/// Which governments a crime against a ship of government V improves the
+/// record with (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct NovaLaw;
+pub enum CrimeGains {
+    /// The original engine's: every government not allied with V, by
+    /// half its own penalty.
+    #[default]
+    Engine,
+    /// The Bible's: only V's enemies, by half their own penalty.
+    Bible,
+}
+
+/// Nova's law (see the module docs): the engine's by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NovaLaw {
+    /// Which governments a crime improves the record with.
+    pub gains: CrimeGains,
+}
 
 impl LegalCode for NovaLaw {
     fn penalties(
@@ -97,9 +115,10 @@ impl LegalCode for NovaLaw {
                 let change = match victim {
                     Some(_) if govts.enemies(victim, other) => ENEMY_SHARE * theirs(id),
                     Some(_) if govts.allies(victim, other) => -own,
+                    Some(_) if self.gains == CrimeGains::Engine => ENEMY_SHARE * theirs(id),
                     None if govts.xenophobic(other) => ENEMY_SHARE * theirs(id),
                     None if govts.flag(other, NOSY) => -ENEMY_SHARE * theirs(id),
-                    // A neutral is left alone.
+                    // By the Bible, a neutral is left alone.
                     Some(_) | None => 0.0,
                 };
                 // Truncated: a change of less than 1 either way is none.
@@ -170,9 +189,35 @@ mod tests {
         ])
     }
 
+    const ENGINE: NovaLaw = NovaLaw {
+        gains: CrimeGains::Engine,
+    };
+    const BIBLE: NovaLaw = NovaLaw {
+        gains: CrimeGains::Bible,
+    };
+
     #[test]
-    fn disabling_takes_the_victims_penalty_off_it_and_its_ally_and_adds_half_the_enemys() {
-        let changes = NovaLaw.penalties(Crime::Disable, Some(VICTIM), &four());
+    fn nova_law_follows_the_engine_by_default() {
+        assert_eq!(CrimeGains::default(), CrimeGains::Engine);
+        assert_eq!(NovaLaw::default(), ENGINE);
+        assert_eq!(
+            NovaLaw::default().penalties(Crime::Disable, Some(VICTIM), &four()),
+            ENGINE.penalties(Crime::Disable, Some(VICTIM), &four())
+        );
+    }
+
+    #[test]
+    fn by_the_engine_disabling_costs_the_victims_penalty_and_pleases_all_but_its_allies() {
+        assert_eq!(
+            ENGINE.penalties(Crime::Disable, Some(VICTIM), &four()),
+            [(VICTIM, -3), (ALLY, -3), (ENEMY, 4), (NEUTRAL, 10)],
+            "the enemy and the neutral gain half their own penalty"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_disabling_pleases_only_the_victims_enemies() {
+        let changes = BIBLE.penalties(Crime::Disable, Some(VICTIM), &four());
         assert_eq!(changes, [(VICTIM, -3), (ALLY, -3), (ENEMY, 4)]);
         assert!(
             !changes.iter().any(|&(govt, _)| govt == NEUTRAL),
@@ -184,12 +229,16 @@ mod tests {
     fn each_crime_reads_its_own_penalty() {
         let govts = four();
         assert_eq!(
-            NovaLaw.penalties(Crime::Kill, Some(VICTIM), &govts),
-            [(VICTIM, -7), (ALLY, -7), (ENEMY, 5)]
+            ENGINE.penalties(Crime::Kill, Some(VICTIM), &govts),
+            [(VICTIM, -7), (ALLY, -7), (ENEMY, 5), (NEUTRAL, 10)]
         );
         assert_eq!(
-            NovaLaw.penalties(Crime::Board, Some(VICTIM), &govts),
-            [(VICTIM, -5), (ALLY, -5), (ENEMY, 3)]
+            ENGINE.penalties(Crime::Board, Some(VICTIM), &govts),
+            [(VICTIM, -5), (ALLY, -5), (ENEMY, 3), (NEUTRAL, 10)]
+        );
+        assert_eq!(
+            BIBLE.penalties(Crime::Kill, Some(VICTIM), &govts),
+            [(VICTIM, -7), (ALLY, -7), (ENEMY, 5)]
         );
     }
 
@@ -206,10 +255,13 @@ mod tests {
                 ..penalised(131, [6, 0, 0, 0])
             },
         ]);
-        assert_eq!(
-            NovaLaw.penalties(Crime::Disable, Some(VICTIM), &govts),
-            [(VICTIM, -3), (ALLY, 3)]
-        );
+        for law in [ENGINE, BIBLE] {
+            assert_eq!(
+                law.penalties(Crime::Disable, Some(VICTIM), &govts),
+                [(VICTIM, -3), (ALLY, 3)],
+                "{law:?}"
+            );
+        }
     }
 
     #[test]
@@ -235,18 +287,23 @@ mod tests {
                 enemies: [1, -1, -1, -1],
                 ..penalised(134, [-1, 0, 0, 0])
             },
+            penalised(135, [1, 0, 0, 0]),
+            penalised(136, [-3, 0, 0, 0]),
         ]);
         assert_eq!(
-            NovaLaw.penalties(Crime::Disable, Some(VICTIM), &govts),
-            [(VICTIM, -3), (ENEMY, 2), (NEUTRAL, -1)],
-            "0.5 skipped, 2.5 to 2, -1.5 to -1, -0.5 skipped"
+            ENGINE.penalties(Crime::Disable, Some(VICTIM), &govts),
+            [(VICTIM, -3), (ENEMY, 2), (NEUTRAL, -1), (WRECKS, -1)],
+            "0.5 skipped, 2.5 to 2, -1.5 to -1, -0.5 skipped; \
+             the neutrals' 0.5 skipped and -1.5 to -1"
         );
-        let lenient = Governments::new([penalised(130, [0, 0, 0, 0])]);
-        assert_eq!(
-            NovaLaw.penalties(Crime::Disable, Some(VICTIM), &lenient),
-            [],
-            "none is no change"
-        );
+        let lenient = Governments::new([penalised(130, [0, 0, 0, 0]), penalised(131, [0; 4])]);
+        for law in [ENGINE, BIBLE] {
+            assert_eq!(
+                law.penalties(Crime::Disable, Some(VICTIM), &lenient),
+                [],
+                "none is no change"
+            );
+        }
     }
 
     #[test]
@@ -262,17 +319,21 @@ mod tests {
             },
             penalised(133, [20, 0, 0, 0]),
         ]);
-        assert_eq!(
-            NovaLaw.penalties(Crime::Disable, None, &govts),
-            [(XENOPHOBE, 4), (NOSY_ONE, -3)],
-            "the xenophobe first, though also nosy; the neutral unchanged"
-        );
+        for law in [ENGINE, BIBLE] {
+            assert_eq!(
+                law.penalties(Crime::Disable, None, &govts),
+                [(XENOPHOBE, 4), (NOSY_ONE, -3)],
+                "the xenophobe first, though also nosy; the neutral unchanged"
+            );
+        }
     }
 
     #[test]
     fn a_derelict_victim_and_shooting_change_nothing() {
         let mut govts = four();
-        assert_eq!(NovaLaw.penalties(Crime::Shoot, Some(VICTIM), &govts), []);
+        for law in [ENGINE, BIBLE] {
+            assert_eq!(law.penalties(Crime::Shoot, Some(VICTIM), &govts), []);
+        }
         govts = Governments::new([
             GovtRecord {
                 flags: DERELICT,
@@ -284,11 +345,13 @@ mod tests {
             },
         ]);
         for crime in [Crime::Disable, Crime::Board, Crime::Kill] {
-            assert_eq!(
-                NovaLaw.penalties(crime, Some(WRECKS), &govts),
-                [],
-                "{crime:?}"
-            );
+            for law in [ENGINE, BIBLE] {
+                assert_eq!(
+                    law.penalties(crime, Some(WRECKS), &govts),
+                    [],
+                    "{crime:?} {law:?}"
+                );
+            }
         }
     }
 

@@ -156,7 +156,7 @@ pub use govt::Governments;
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
-pub use legal::{Crime, LegalCode, NovaLaw};
+pub use legal::{Crime, CrimeGains, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use pilot::Pilot;

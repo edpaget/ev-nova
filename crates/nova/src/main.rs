@@ -133,7 +133,7 @@ fn main() -> ExitCode {
         .with_behaviour(Rc::new(NovaAi::default()))
         .with_disable_rule(Rc::new(NovaDisable))
         .with_point_defence_rule(Rc::new(Allegiance))
-        .with_law(Rc::new(NovaLaw));
+        .with_law(Rc::new(NovaLaw::default()));
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);

@@ -1534,7 +1534,7 @@ fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released()
 // Combat AI and legal status over the stock data.
 
 use nova_sim::ai::{Goal, NovaAi};
-use nova_sim::legal::{Crime, LegalCode, NovaLaw};
+use nova_sim::legal::{Crime, CrimeGains, LegalCode, NovaLaw};
 use nova_sim::{Governments, GovtId};
 
 const FEDERATION: GovtId = GovtId(128);
@@ -1544,7 +1544,11 @@ const MARAUDERS: GovtId = GovtId(178);
 
 /// The Federation and the Civvies are allies, the Federation and the
 /// Pirates enemies, the Pirates and the Marauders xenophobes; disabling a
-/// Civvies ship costs 3 with the Civvies and the Federation.
+/// Civvies ship costs 3 with the Civvies and the Federation. By the
+/// engine's law it also pleases the 20 governments not allied with the
+/// Civvies whose own `DisabPenalty` is 2 or more (`gövt` 133, at 15, by
+/// 7); by the Bible's it pleases none, for the Civvies' enemies all have a
+/// `DisabPenalty` of 0.
 #[test]
 fn stock_governments_stand_as_the_gövts_say() {
     let Some(dir) = common::nova_data() else {
@@ -1557,9 +1561,34 @@ fn stock_governments_stand_as_the_gövts_say() {
     assert!(govts.xenophobic(Some(PIRATES)));
     assert!(govts.xenophobic(Some(MARAUDERS)));
     assert!(!govts.xenophobic(Some(FEDERATION)));
-    let changes = NovaLaw.penalties(Crime::Disable, Some(CIVVIES), &govts);
+    let changes = NovaLaw::default().penalties(Crime::Disable, Some(CIVVIES), &govts);
     assert!(changes.contains(&(CIVVIES, -3)), "{changes:?}");
     assert!(changes.contains(&(FEDERATION, -3)), "{changes:?}");
+    let gains = |changes: &[(GovtId, i32)]| -> Vec<(GovtId, i32)> {
+        changes
+            .iter()
+            .copied()
+            .filter(|&(_, change)| change > 0)
+            .collect()
+    };
+    let pleased = gains(&changes);
+    assert_eq!(pleased.len(), 20, "{pleased:?}");
+    assert!(pleased.contains(&(GovtId(133), 7)), "{pleased:?}");
+    assert!(pleased.contains(&(GovtId(165), 5)), "{pleased:?}");
+    assert!(
+        pleased
+            .iter()
+            .all(|&(govt, _)| !govts.allies(Some(CIVVIES), Some(govt))),
+        "{pleased:?}"
+    );
+    let bible = NovaLaw {
+        gains: CrimeGains::Bible,
+    }
+    .penalties(Crime::Disable, Some(CIVVIES), &govts);
+    assert_eq!(gains(&bible), [], "{bible:?}");
+    let lowered: Vec<(GovtId, i32)> = changes.iter().copied().filter(|&(_, c)| c < 0).collect();
+    assert_eq!(bible, lowered, "the same 24 lowered by both");
+    assert_eq!(bible.len(), 24);
 }
 
 /// A new stock pilot flying the Fed Destroyer (`shïp` 141), in flight at
@@ -1637,7 +1666,10 @@ fn closing_on(session: &Session, quarry: &nova_sim::Npc) -> (nova_sim::Controls,
 /// trader (`düde` 129, AI 1) and a Lone Federation Ship (`düde` 128, AI
 /// 4) fly, the player's attack on the trader puts it to flight and
 /// brings the Federation down on the player; disabling the trader costs
-/// 3 with the Civvies and with the Federation, and it is left alive.
+/// 3 with the Civvies and with the Federation, and it is left alive. By
+/// the engine's law (the default) the record also changes with the
+/// Civvies' other allies (down 3) and rises with the 20 governments
+/// not allied with them that it pleases.
 #[test]
 fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
     let Some(dir) = common::nova_data() else {
@@ -1665,6 +1697,13 @@ fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
         })
         .expect("a seed brings a Civvies trader and the Federation");
     let before = [CIVVIES, FEDERATION].map(|govt| session.pilot().legal_record(govt));
+    let all: Vec<GovtId> = Governments::read(&data).ids().collect();
+    let records = |session: &Session| -> Vec<i16> {
+        all.iter()
+            .map(|&govt| session.pilot().legal_record(govt))
+            .collect()
+    };
+    let before_all = records(&session);
     let (mut fled, mut answered, mut disabled) = (false, false, false);
     for _ in 0..3000 {
         let Some(quarry) = npc_of(&session, trader) else {
@@ -1700,4 +1739,16 @@ fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
     assert!(npc_of(&session, trader).is_some(), "not destroyed");
     let after = [CIVVIES, FEDERATION].map(|govt| session.pilot().legal_record(govt));
     assert_eq!(after, before.map(|record| record - 3));
+    let changed: Vec<(GovtId, i32)> = all
+        .iter()
+        .zip(records(&session).into_iter().zip(before_all))
+        .filter(|(_, (after, before))| after != before)
+        .map(|(&govt, (after, before))| (govt, i32::from(after) - i32::from(before)))
+        .collect();
+    assert_eq!(changed.len(), 44, "{changed:?}");
+    assert!(changed.contains(&(GovtId(133), 7)), "{changed:?}");
+    assert_eq!(
+        changed,
+        NovaLaw::default().penalties(Crime::Disable, Some(CIVVIES), &Governments::read(&data))
+    );
 }

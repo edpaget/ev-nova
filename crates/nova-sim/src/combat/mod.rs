@@ -99,7 +99,7 @@ use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
-use crate::legal::{LegalCode, NovaLaw};
+use crate::legal::{CrimeGains, LegalCode, NovaLaw};
 use crate::reserves::{Gauge, Reserves};
 use crate::traffic::npc::NpcId;
 
@@ -245,7 +245,9 @@ impl Default for Rules<'static> {
         Self {
             disable: &hull::NovaDisable,
             defence: &defence::Allegiance,
-            law: &NovaLaw,
+            law: &NovaLaw {
+                gains: CrimeGains::Engine,
+            },
         }
     }
 }

@@ -294,7 +294,7 @@ impl AppScreen {
             behaviour: Rc::new(NovaAi::default()),
             disable_rule: Rc::new(NovaDisable),
             defence_rule: Rc::new(Allegiance),
-            law: Rc::new(NovaLaw),
+            law: Rc::new(NovaLaw::default()),
         }
     }
 
