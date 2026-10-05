@@ -2000,13 +2000,45 @@ fn stock_ships_have_their_escort_classes() {
 /// and `STR#` 150's Release.
 #[test]
 fn stock_escort_strings_are_where_escorts_read_them() {
+    use nova_sim::escort::{ESCORT_COMMANDS, NEW_ORDERS, NO_ESCORTS, WILL_ATTACK, order_label};
+    use nova_sim::{EscortCommand, EscortGroup, EscortOrder};
     let Some(dir) = common::nova_data() else {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let messages = nova_sim::CommCatalog::string_list(&data, 2002);
-    for (n, text) in nova_sim::escort::STRINGS {
-        assert_eq!(messages[usize::from(n) - 1], text, "STR# 2002 #{n}");
+    let commands = [
+        EscortCommand::Recall,
+        EscortCommand::Hold,
+        EscortCommand::Defend,
+        EscortCommand::Attack,
+    ];
+    let orders = [
+        Some(EscortOrder::Defend),
+        Some(EscortOrder::Attack),
+        Some(EscortOrder::Hold),
+    ];
+    let strings = [(51, NO_ESCORTS), (133, ESCORT_COMMANDS), (134, NEW_ORDERS)]
+        .into_iter()
+        .chain(
+            [139, 135, 136, 137, 138]
+                .into_iter()
+                .zip(EscortGroup::ALL.map(EscortGroup::message_form)),
+        )
+        .chain(
+            [144, 140, 141, 142, 143]
+                .into_iter()
+                .zip(EscortGroup::ALL.map(EscortGroup::menu_label)),
+        )
+        .chain([145, 146, 147].into_iter().zip(orders.map(order_label)))
+        .chain([(149, order_label(None)), (154, WILL_ATTACK)])
+        .chain(
+            [156, 157, 158, 159]
+                .into_iter()
+                .zip(commands.map(EscortCommand::doing)),
+        );
+    for (n, text) in strings {
+        assert_eq!(messages[n - 1], text, "STR# 2002 #{n}");
     }
     assert_eq!(
         nova_sim::CommCatalog::string_list(&data, 3000)[20],

@@ -392,11 +392,19 @@ mod tests {
             Goal::Formation { guard: None },
             "dropped"
         );
-        let npcs = [fighting, bystander(2, 1000.0, 639.0)];
+        let npcs = [fighting.clone(), bystander(2, 1000.0, 639.0)];
         assert_eq!(
             decide(&npcs, (1000.0, 0.0), &[]).0,
             Goal::Attack(n(2)),
             "measured from the player"
+        );
+        // 451² x 2 = 406802 is within, and 452² x 2 = 408608 is not.
+        let npcs = [fighting.clone(), bystander(2, 451.0, 451.0)];
+        assert_eq!(decide(&npcs, (0.0, 0.0), &[]).0, Goal::Attack(n(2)));
+        let npcs = [fighting, bystander(2, 452.0, -452.0)];
+        assert_eq!(
+            decide(&npcs, (0.0, 0.0), &[]).0,
+            Goal::Formation { guard: None }
         );
     }
 

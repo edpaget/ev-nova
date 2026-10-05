@@ -87,6 +87,12 @@ exclude_re = [
     # so it always ends; a larger bound changes nothing, as the loop stops
     # once the player flies and the armour is held at its most.
     "replace - with \\+ in repair",
+    # The autopilot closes on a point with a margin of none only for an
+    # escort approaching its slot, which it does only while more than
+    # `KEEP_FORMATION` off it; a follower exactly at its margin closes at a
+    # braking speed of none. So no distance the autopilot meets tells `>`
+    # from `>=` in the closing speed's guard.
+    "replace > with >= in close_on",
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour.
     "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::create_page)",

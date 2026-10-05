@@ -241,7 +241,7 @@ impl Session {
             return;
         };
         self.fleet.remove(index);
-        if index < self.pilot.escorts.len() {
+        if self.pilot.escorts.get(index).is_some() {
             self.pilot.escorts.remove(index);
         }
         if let Some(npc) = self.npc_mut(id) {

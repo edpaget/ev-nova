@@ -430,6 +430,32 @@ mod tests {
     }
 
     #[test]
+    fn some_weapon_reaches_within_its_range_and_the_margin() {
+        // A turret reaching 300 pixels, and 332 with the margin.
+        let mut npc = crate::testkit::npc(1, crate::stats::ShipStats::default());
+        npc.state.position = crate::geometry::Vec2::new(100.0, 50.0);
+        let at = |x: f32, y: f32| ShipState {
+            position: crate::geometry::Vec2::new(x, y),
+            ..ShipState::default()
+        };
+        assert!(!in_reach(&npc, &at(101.0, 50.0)), "unarmed");
+        npc.armament = crate::combat::armament::Armament::new([(
+            WeaponSpec::new(&crate::catalog::WeaponRecord {
+                guidance: 4,
+                speed: 1000,
+                count: 30,
+                ..crate::testkit::weapon(140)
+            }),
+            1,
+        )]);
+        // 300² + 100² = 100000 is within 332² = 110224; 320² + 100² is not.
+        assert!(in_reach(&npc, &at(400.0, 150.0)));
+        assert!(in_reach(&npc, &at(-200.0, -50.0)));
+        assert!(!in_reach(&npc, &at(420.0, 150.0)));
+        assert!(!in_reach(&npc, &at(100.0, 383.0)));
+    }
+
+    #[test]
     fn the_named_values() {
         assert_eq!(
             [

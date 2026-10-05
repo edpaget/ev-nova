@@ -6648,12 +6648,14 @@ mod tests {
             })),
             "none for the crew, 10 for the strength"
         );
+        session.traffic.npcs_mut()[1].leader = Some(NpcId(0));
         assert_eq!(
             take(&mut session, Take::Capture, &[10, 1]).0,
             Taken::Escorted
         );
         assert_eq!(session.pilot().escorts(), [trader_escort()]);
         assert_joined_in_place(&session);
+        assert_eq!(session.npcs()[1].leader, None, "its own escort let go");
         assert_eq!(session.target(), None);
         assert_eq!(session.boarding(), None);
         assert!(session.take_save_due());
@@ -6711,10 +6713,13 @@ mod tests {
         let mut session = captured(&catalog);
         let records = session.pilot().legal_records().collect::<Vec<_>>();
         session.take_save_due();
+        session.traffic.npcs_mut()[1].leader = Some(NpcId(7));
         assert_eq!(
             session.assign(Assignment::Escort, &mut Draws::of(&[])),
             Some(Assigned::Escort)
         );
+        assert_eq!(session.npcs()[1].leader, Some(NpcId(7)), "another's escort");
+        session.traffic.npcs_mut()[1].leader = None;
         assert_eq!(session.pilot().escorts(), [trader_escort()]);
         assert_joined_in_place(&session);
         assert_eq!(session.target(), None);
@@ -6752,6 +6757,40 @@ mod tests {
             }
         }
         catalog
+    }
+
+    /// The player's old ship, the second NPC, flies as its escort on its
+    /// slot beside the player, stock and full, its record and NPC lined up.
+    fn assert_old_ship_escorts(session: &mut Session) {
+        let old = &session.npcs()[1];
+        assert!(session.is_escort(old.id));
+        let duty = old.escort.expect("an escort");
+        assert_eq!((duty.slot, duty.ships, duty.order), (2, 2, None));
+        assert_eq!(
+            old.state,
+            ShipState {
+                position: crate::escort::slot_position(session.player(), 2, 2, duty.spacing),
+                ..*session.player()
+            },
+            "on its slot"
+        );
+        assert_eq!(old.reserves, Reserves::full(300.0, 450.0, 300.0));
+        assert_eq!(old.govt, None);
+        let old = old.id;
+        assert!(
+            session
+                .command_escorts(
+                    crate::escort::EscortGroup::All,
+                    crate::escort::EscortCommand::Hold
+                )
+                .is_some()
+        );
+        let held = session.npcs().iter().find(|npc| npc.id == old);
+        assert_eq!(
+            held.and_then(|npc| npc.escort).and_then(|duty| duty.order),
+            Some(crate::escort::EscortOrder::Hold),
+            "its record and its NPC lined up"
+        );
     }
 
     #[test]
@@ -6834,20 +6873,7 @@ mod tests {
             "the captured ship left, and the old one flies beside the player"
         );
         assert_eq!(session.npcs()[0].leader, None, "its escort let go");
-        let old = &session.npcs()[1];
-        assert!(session.is_escort(old.id));
-        let duty = old.escort.expect("an escort");
-        assert_eq!((duty.slot, duty.ships, duty.order), (2, 2, None));
-        assert_eq!(
-            old.state,
-            ShipState {
-                position: crate::escort::slot_position(session.player(), 2, 2, duty.spacing),
-                ..*session.player()
-            },
-            "on its slot"
-        );
-        assert_eq!(old.reserves, Reserves::full(300.0, 450.0, 300.0));
-        assert_eq!(old.govt, None);
+        assert_old_ship_escorts(&mut session);
         assert_eq!(session.player_condition(), Condition::Intact);
         assert_eq!(session.boarding(), None);
         assert!(session.take_save_due());

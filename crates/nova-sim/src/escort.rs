@@ -19,8 +19,8 @@
 //! defends the player, V holds position and C recalls the escorts to
 //! formation.
 //!
-//! The strings (`STR#` 2002) are the constants below; [`STRINGS`] lists
-//! each with its number.
+//! The strings are `STR#` 2002's: #51, #133, #134 and #154 the constants
+//! below, and the labels each type gives.
 
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
@@ -35,46 +35,6 @@ pub const ESCORT_COMMANDS: &str = "Escort Commands";
 pub const NEW_ORDERS: &str = "New escort orders assigned:  ";
 /// `STR#` 2002 #154: Attack's message with no target to copy.
 pub const WILL_ATTACK: &str = "will attack.";
-
-/// Every escort string, with its number in `STR#` 2002.
-pub const STRINGS: [(u16, &str); 24] = [
-    (51, NO_ESCORTS),
-    (133, ESCORT_COMMANDS),
-    (134, NEW_ORDERS),
-    (135, "Fighters"),
-    (136, "Medium ships"),
-    (137, "Warships"),
-    (138, "Freighters"),
-    (139, "All ships"),
-    (140, "Fighters"),
-    (141, "Medium Ships"),
-    (142, "Warships"),
-    (143, "Freighters"),
-    (144, "All Ships"),
-    (145, "Defend"),
-    (146, "Attack"),
-    (147, "Hold Position"),
-    (148, "Return to Hangar"),
-    (149, "Formation"),
-    (154, WILL_ATTACK),
-    (155, "returning to hangar."),
-    (156, "returning to formation."),
-    (157, "holding position."),
-    (158, "defending."),
-    (159, "attacking target."),
-];
-
-/// String `n` of [`STRINGS`].
-const fn string(n: u16) -> &'static str {
-    let mut at = 0;
-    while at < STRINGS.len() {
-        if STRINGS[at].0 == n {
-            return STRINGS[at].1;
-        }
-        at += 1;
-    }
-    panic!("no such escort string");
-}
 
 /// An escort's class, which the escort menu groups it by.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -122,10 +82,10 @@ impl EscortClass {
     #[must_use]
     pub const fn menu_label(self) -> &'static str {
         match self {
-            Self::Fighter => string(140),
-            Self::Medium => string(141),
-            Self::Warship => string(142),
-            Self::Freighter => string(143),
+            Self::Fighter => "Fighters",
+            Self::Medium => "Medium Ships",
+            Self::Warship => "Warships",
+            Self::Freighter => "Freighters",
         }
     }
 
@@ -133,10 +93,10 @@ impl EscortClass {
     #[must_use]
     pub const fn message_form(self) -> &'static str {
         match self {
-            Self::Fighter => string(135),
-            Self::Medium => string(136),
-            Self::Warship => string(137),
-            Self::Freighter => string(138),
+            Self::Fighter => "Fighters",
+            Self::Medium => "Medium ships",
+            Self::Warship => "Warships",
+            Self::Freighter => "Freighters",
         }
     }
 }
@@ -158,10 +118,10 @@ pub enum EscortOrder {
 #[must_use]
 pub const fn order_label(order: Option<EscortOrder>) -> &'static str {
     match order {
-        None => string(149),
-        Some(EscortOrder::Defend) => string(145),
-        Some(EscortOrder::Attack) => string(146),
-        Some(EscortOrder::Hold) => string(147),
+        None => "Formation",
+        Some(EscortOrder::Defend) => "Defend",
+        Some(EscortOrder::Attack) => "Attack",
+        Some(EscortOrder::Hold) => "Hold Position",
     }
 }
 
@@ -194,10 +154,10 @@ impl EscortCommand {
     #[must_use]
     pub const fn doing(self) -> &'static str {
         match self {
-            Self::Attack => string(159),
-            Self::Defend => string(158),
-            Self::Hold => string(157),
-            Self::Recall => string(156),
+            Self::Attack => "attacking target.",
+            Self::Defend => "defending.",
+            Self::Hold => "holding position.",
+            Self::Recall => "returning to formation.",
         }
     }
 }
@@ -234,7 +194,7 @@ impl EscortGroup {
     #[must_use]
     pub const fn menu_label(self) -> &'static str {
         match self {
-            Self::All => string(144),
+            Self::All => "All Ships",
             Self::Class(class) => class.menu_label(),
         }
     }
@@ -243,7 +203,7 @@ impl EscortGroup {
     #[must_use]
     pub const fn message_form(self) -> &'static str {
         match self {
-            Self::All => string(139),
+            Self::All => "All ships",
             Self::Class(class) => class.message_form(),
         }
     }
@@ -547,11 +507,6 @@ mod tests {
     }
 
     #[test]
-    fn the_strings_are_numbered_in_order() {
-        assert!(STRINGS.windows(2).all(|pair| pair[0].0 < pair[1].0));
-    }
-
-    #[test]
     fn the_spacing_is_six_tenths_of_the_widest_sprite_held_between_24_and_60() {
         assert_eq!(spacing(Some(30.0), &[]), 24.0);
         assert_eq!(spacing(Some(50.0), &[]), 30.0);
@@ -772,6 +727,41 @@ mod tests {
             Some(5000.0),
             "not the other way round"
         );
+    }
+
+    #[test]
+    fn the_scores_are_measured_from_wherever_the_escort_and_player_are() {
+        let player = ShipState {
+            position: Vec2::new(-50.0, 30.0),
+            ..ShipState::default()
+        };
+        let escort = ship(1, MEDIUM, 100.0, -40.0, false);
+        let candidate = ship(2, MEDIUM, 130.0, 0.0, true);
+        assert_eq!(
+            threat_score(&escort, &candidate, &player, None),
+            Some(2500.0)
+        );
+        assert_eq!(
+            threat_score(&escort, &candidate, &player, Some(DEFEND_RADIUS)),
+            Some(2500.0 + 180.0 * 180.0 + 30.0 * 30.0)
+        );
+        let warship = ship(1, EscortClass::Warship, 100.0, -40.0, false);
+        assert_eq!(
+            threat_score(&warship, &candidate, &player, None),
+            Some(1250.0),
+            "a medium ship against a warship: half"
+        );
+    }
+
+    #[test]
+    fn a_tie_goes_to_the_earlier_threat() {
+        let player = ShipState::default();
+        let escort = ship(1, MEDIUM, 0.0, 0.0, false);
+        let npcs = [
+            ship(2, MEDIUM, 0.0, 100.0, true),
+            ship(3, MEDIUM, 100.0, 0.0, true),
+        ];
+        assert_eq!(best_threat(&escort, &npcs, &player, None), Some(NpcId(2)));
     }
 
     #[test]
