@@ -253,6 +253,16 @@ impl From<&ShipAnim> for Blink {
     }
 }
 
+/// Ship `id`'s blink: its `shän`'s blink fields, or steady when the `shän`
+/// is missing or cannot be read.
+#[must_use]
+pub fn ship_blink(data: &GameData, id: i16) -> Blink {
+    match data.get::<ShipAnim>(id) {
+        Some(Ok(anim)) => Blink::from(anim.record),
+        _ => Blink::STEADY,
+    }
+}
+
 /// A `shïp`'s handling, reserve, cargo and mass fields.
 fn ship_fields(ship: &Ship) -> ShipFields {
     ShipFields {
@@ -1170,5 +1180,27 @@ mod tests {
                 d: 85,
             }
         );
+    }
+
+    #[test]
+    fn a_ships_blink_is_its_shäns_and_steady_without_a_readable_one() {
+        let mut shan = vec![0; ShipAnim::SIZE.expect("fixed")];
+        put_i16s(&mut shan, 0x36, &[1, 4, 1, 2, 20]);
+        let data = store(&[
+            (ShipAnim::TYPE, 128, shan.clone()),
+            (ShipAnim::TYPE, 129, short(shan)),
+        ]);
+        assert_eq!(
+            ship_blink(&data, 128),
+            Blink {
+                mode: 1,
+                a: 4,
+                b: 1,
+                c: 2,
+                d: 20,
+            }
+        );
+        assert_eq!(ship_blink(&data, 129), Blink::STEADY, "undecodable");
+        assert_eq!(ship_blink(&data, 130), Blink::STEADY, "no shän");
     }
 }

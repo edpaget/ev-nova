@@ -7,11 +7,11 @@ use std::num::NonZeroU16;
 use nova_data::graphics::{PICT, decode_pict};
 use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
-use nova_data::records::ship_anim::ShipAnim;
 use nova_data::{GameData, LayerError, LayerSprite};
+use nova_sim::data::ship_blink;
 
 use super::catalog::{
-    Blink, GovtId, LayerSheet, ShipId, ShipSheet, ShipSprites, StatusBarLayout, StatusBars,
+    GovtId, LayerSheet, ShipId, ShipSheet, ShipSprites, StatusBarLayout, StatusBars,
 };
 use crate::color::Color;
 use crate::font::Font;
@@ -41,16 +41,8 @@ impl ShipSprites for GameData {
             frame_height: sheet.frame_height(),
             glow,
             lights,
-            blink: blink(self, id),
+            blink: ship_blink(self, id.0),
         })
-    }
-}
-
-/// Ship `id`'s `shän` blink fields; steady when the `shän` cannot be read.
-fn blink(data: &GameData, id: ShipId) -> Blink {
-    match data.get::<ShipAnim>(id.0) {
-        Some(Ok(anim)) => Blink::from(anim.record),
-        _ => Blink::STEADY,
     }
 }
 

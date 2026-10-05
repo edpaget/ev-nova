@@ -5,10 +5,10 @@ use std::num::NonZeroU16;
 
 use nova_data::graphics::SpriteSheet;
 use nova_data::records::ship::Ship;
-use nova_data::records::ship_anim::ShipAnim;
 use nova_data::{GameData, LayerError, LayerSprite, Record, StoreEntry};
+use nova_sim::data::ship_blink;
 
-use super::catalog::{Blink, SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
+use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
 
 /// Each lookup is decoded afresh on every call; the browser asks once per
 /// selection.
@@ -37,10 +37,6 @@ impl ShipCatalog for GameData {
         let (glow, lights) = self.ship_layers(id).map_or((None, None), |layers| {
             (layers.glow.map(layer_info), layers.lights.map(layer_info))
         });
-        let blink = match self.get::<ShipAnim>(id.0) {
-            Some(Ok(anim)) => Blink::from(anim.record),
-            _ => Blink::STEADY,
-        };
         ShipEntry {
             id,
             name,
@@ -49,7 +45,7 @@ impl ShipCatalog for GameData {
             sprite,
             glow,
             lights,
-            blink,
+            blink: ship_blink(self, id.0),
         }
     }
 }
@@ -258,20 +254,6 @@ mod tests {
                 d: 20,
             }
         );
-    }
-
-    #[test]
-    fn a_ship_without_a_readable_shan_blinks_steadily() {
-        let mut short = anim(1000, 4, 0, 1200);
-        short[0x36..0x38].copy_from_slice(&1_i16.to_be_bytes());
-        short.pop();
-        let data = store(&[
-            (Ship::TYPE, 128, Some("Shuttle"), ship(STATS, "")),
-            (Ship::TYPE, 129, Some("Short"), ship(STATS, "")),
-            (ShipAnim::TYPE, 129, None, short),
-        ]);
-        assert_eq!(data.ship(ShipId(128)).blink, Blink::STEADY, "no shän");
-        assert_eq!(data.ship(ShipId(129)).blink, Blink::STEADY, "undecodable");
     }
 
     #[test]
