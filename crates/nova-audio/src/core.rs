@@ -92,6 +92,8 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
                 Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
                 Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
+                // A fight's sounds are not played yet.
+                Sound::Combat(_) => {}
             }
             self.reconcile();
         }

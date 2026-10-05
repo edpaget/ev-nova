@@ -9,11 +9,13 @@
 //! when it is built: the session's system, through the [`SystemCatalog`]
 //! port, the ship's sprite sheet, through the [`ShipSprites`] port, the
 //! HUD's status bar for the player's government, through the
-//! [`StatusBars`] port, and the galaxy for its course map, through the
-//! [`GalaxyCatalog`] port. After that it reads only when the ship arrives
-//! in another system: that system, and when the system's NPC traffic is
-//! populated: its traffic, through the [`TrafficCatalog`] port. Drawing and
-//! input never read anything.
+//! [`StatusBars`] port, the galaxy for its course map, through the
+//! [`GalaxyCatalog`] port, and the look of every weapon and explosion type,
+//! through the [`CombatLooks`] port. After that it reads only when the
+//! ship arrives in another system: that system, and when the system's NPC
+//! traffic is populated: its traffic, through the [`TrafficCatalog`]
+//! port, and the target cards and codes of the ship types and governments
+//! it brings. Drawing and input never read anything.
 //!
 //! The session populates the system's NPC traffic when it says to (see
 //! [`Session::tick_traffic`]), rolled on the screen's [`SharedChance`].
@@ -26,12 +28,24 @@
 //! [`DisableRule`] says ([`FlightView::with_disable_rule`];
 //! [`NovaDisable`] by default). The session's diagnostics about game data
 //! it does not handle yet pass through [`Screen::take_diagnostics`] for
-//! the app to write out. Shots, beams and explosions are not drawn yet,
-//! and the player has no fire key yet. Each NPC is
+//! the app to write out. Each NPC is
 //! drawn with its own ship's sprite, after the stellars and before the
 //! player, smoothed between its last two steps as the player's ship is
 //! (a crossed box when its sheet cannot be read), and as a dim blip on the
 //! radar.
+//!
+//! Each step's fight events are drained into the [`Effects`]: its
+//! explosions, debris and sounds, rolled on their own [`SharedChance`]
+//! ([`FlightView::with_effects_chance`]), never on the simulation's. The
+//! beams live before the fight's step are passed along, so a looped
+//! weapon is heard once a beam. The fight is drawn over the stellars:
+//! beams that go under the ships, then the ships, then the shots (each
+//! smoothed as the ships are) and the other beams, then the explosions and
+//! debris, then the brackets round the target ([`weapons`],
+//! [`effects`](super::effects), [`target`]). The HUD shows the target
+//! panel and the secondary weapon's line, its text laid out by the
+//! screen's [`TextMetrics`] ([`FlightView::with_metrics`]). Landing and
+//! arriving clear the effects.
 //!
 //! Each day a jump takes rolls the planetary events on the screen's
 //! [`SharedChance`] ([`FlightView::with_chance`]); without one, nothing
@@ -81,6 +95,11 @@
 //!   streak and the screen fades out; then the ship arrives, the new
 //!   system is read and laid out, and it fades in. The HUD stays on top
 //!   throughout.
+//! - Space fires the primary weapons and Control the secondary selected,
+//!   while held. W (a press) selects the next secondary weapon, and with
+//!   Alt (Option) the one before. Tab (a press) targets the next ship in
+//!   turn, and R the nearest ([`TargetPick`]). The original's Shift-Tab,
+//!   back through the ships, is not bound: there is no Shift key yet.
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -90,23 +109,28 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Behaviour, Chance, CombatCatalog, Controls, DisableRule, FixedStep, JumpRefusal,
-    LandingRefusal, Market, NeverFires, NovaDisable, Npc, NpcId, Order, OutfitOrder, OutfitRefusal,
-    Outfitter, Peaceful, Pilot, PilotCatalog, RechargeRefusal, Reserves, Session, ShipId,
-    ShipPurchase, ShipRefusal, ShipState, Shipyard, SimDiagnostic, StartError, StellarId, Steps,
-    TradeRefusal, TrafficCatalog, Turn, flight::normalized, flight::shortest_turn,
+    Behaviour, Chance, CombatCatalog, Condition, Controls, DisableRule, FixedStep, GovtId,
+    JumpRefusal, LandingRefusal, Market, NeverFires, NovaDisable, Npc, NpcId, Order, OutfitOrder,
+    OutfitRefusal, Outfitter, Peaceful, Pilot, PilotCatalog, RechargeRefusal, Reserves, Session,
+    ShipId, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimDiagnostic, StartError,
+    StellarId, Steps, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2, WeaponId,
+    flight::normalized, flight::shortest_turn,
 };
 
-use super::catalog::{ShipSheet, ShipSprites, StatusBars};
+use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
+use super::effects::{Dying, Effects, Scene};
 use super::hud::{self, HudState, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
 use super::sprite::rotation_frame;
+use super::target::{self, TargetShown};
+use super::weapons::{self, BeamShown, ShotShown};
 use crate::draw::crossed_box;
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::system::starfield;
+use crate::text::TextMetrics;
 use crate::{Color, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction, Sound};
 
 /// The overlay: the system's title and the help line.
@@ -117,15 +141,39 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Up: thrust   Left/Right: turn   Down: reverse   L: land   M: map   J: jump   P: preferences   Esc: leave flight";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   L: land   M: map   J: jump   P: preferences   Esc: leave";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
 /// How long a message stays on screen.
 pub const MESSAGE_SHOWN_FOR: Duration = Duration::from_secs(4);
 
-/// The keys flight holds: the original's defaults.
-const FLIGHT_KEYS: [Key; 4] = [Key::Up, Key::Left, Key::Right, Key::Down];
+/// The keys flight holds: the original's defaults, and Alt, which turns
+/// the weapon select key back.
+const FLIGHT_KEYS: [Key; 7] = [
+    Key::Up,
+    Key::Left,
+    Key::Right,
+    Key::Down,
+    FIRE_KEY,
+    SECONDARY_KEY,
+    Key::Alt,
+];
+
+/// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
+/// @0xcd5f8).
+pub const FIRE_KEY: Key = Key::Space;
+/// The secondary fire key: the original's default (`fireKey1`).
+pub const SECONDARY_KEY: Key = Key::Control;
+/// The secondary weapon select key: the original's default
+/// (`weapSelect`); with Alt (Option) it selects the one before.
+pub const SELECT_KEY: Key = Key::Char('w');
+/// The target select key: the original's default (`targSel`), which
+/// picks the next ship in turn.
+pub const TARGET_KEY: Key = Key::Tab;
+/// The closest target key: the original's default (`closeTarg`), which
+/// picks the nearest ship.
+pub const NEAREST_KEY: Key = Key::Char('r');
 
 /// The land key: the original's default (`STR#` 129, and `STR#` 2002
 /// #25).
@@ -304,12 +352,35 @@ pub struct FlightView<C> {
     npc_sheets: BTreeMap<ShipId, Result<ShipSheet, String>>,
     /// Each NPC as it was a step before the session's.
     npc_previous: BTreeMap<NpcId, ShipState>,
+    /// The weapons' and explosions' looks, read once.
+    looks: Looks,
+    /// Each NPC ship type's target card, read once.
+    cards: BTreeMap<ShipId, TargetCard>,
+    /// Each NPC government's target code, read once.
+    codes: BTreeMap<GovtId, Option<String>>,
+    /// The fight's explosions, debris and sounds.
+    effects: Effects,
+    /// What the effects are rolled on.
+    effects_chance: SharedChance,
+    /// What the HUD's text is measured by, if anything.
+    metrics: Option<Metrics>,
+}
+
+/// Text metrics, shared.
+#[derive(Clone)]
+struct Metrics(Rc<dyn TextMetrics>);
+
+impl std::fmt::Debug for Metrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Metrics")
+    }
 }
 
 impl<
     C: PilotCatalog
         + TrafficCatalog
         + CombatCatalog
+        + CombatLooks
         + SystemCatalog
         + ShipSprites
         + StatusBars
@@ -352,6 +423,10 @@ impl<
             map.show_explored(session.pilot().explored());
         }
         let pending_landing = session.as_ref().ok().and_then(Session::landed);
+        let looks = match &session {
+            Ok(_) => Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
+            Err(_) => Looks::default(),
+        };
         Self {
             catalog,
             map,
@@ -373,6 +448,31 @@ impl<
             disable_rule: Rc::new(NovaDisable),
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
+            looks,
+            cards: BTreeMap::new(),
+            codes: BTreeMap::new(),
+            effects: Effects::default(),
+            effects_chance: SharedChance::default(),
+            metrics: None,
+        }
+    }
+
+    /// The flight with its explosions and debris rolled on `chance`, apart
+    /// from the simulation's.
+    #[must_use]
+    pub fn with_effects_chance(self, effects_chance: SharedChance) -> Self {
+        Self {
+            effects_chance,
+            ..self
+        }
+    }
+
+    /// The flight with the HUD's text measured by `metrics`.
+    #[must_use]
+    pub fn with_metrics(self, metrics: Rc<dyn TextMetrics>) -> Self {
+        Self {
+            metrics: Some(Metrics(metrics)),
+            ..self
         }
     }
 
@@ -408,6 +508,14 @@ impl<
             self.npc_sheets
                 .entry(ship)
                 .or_insert_with(|| self.catalog.ship_sheet(ship));
+            self.cards
+                .entry(ship)
+                .or_insert_with(|| self.catalog.target_card(ship));
+        }
+        for govt in session.npcs().iter().filter_map(|npc| npc.govt) {
+            self.codes
+                .entry(govt)
+                .or_insert_with(|| self.catalog.target_code(govt));
         }
     }
 
@@ -470,6 +578,7 @@ impl<
         self.alpha = 0.0;
         self.message = None;
         self.npc_previous.clear();
+        self.effects.clear();
         self.read_npc_sheets();
     }
 }
@@ -548,6 +657,7 @@ impl<C> FlightView<C> {
             Ok(stellar) => {
                 self.pending_landing = Some(stellar);
                 self.message = None;
+                self.effects.clear();
             }
             Err(refusal) => self.message = Some((refusal_message(&refusal), self.elapsed)),
         }
@@ -743,6 +853,111 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// Picks the target as `pick` says.
+    fn select_target(&mut self, pick: TargetPick) {
+        if let Ok(session) = &mut self.session {
+            session.select_target(pick);
+        }
+    }
+
+    /// The fight's explosions, debris and sounds.
+    #[must_use]
+    pub fn effects(&self) -> &Effects {
+        &self.effects
+    }
+
+    /// The shots in flight, each where it is drawn: `alpha` of the way
+    /// from where it was a step ago, as the ships are.
+    fn shown_shots(&self, camera: &Camera) -> Vec<ShotShown> {
+        let Ok(session) = &self.session else {
+            return Vec::new();
+        };
+        let behind = 1.0 - self.alpha;
+        session
+            .shots()
+            .iter()
+            .map(|shot| ShotShown {
+                at: camera.world_to_screen(Point::new(
+                    shot.velocity.x.mul_add(-behind, shot.position.x),
+                    shot.velocity.y.mul_add(-behind, shot.position.y),
+                )),
+                heading: shot.heading,
+                age: shot.age,
+                weapon: shot.weapon.id,
+            })
+            .collect()
+    }
+
+    /// The beams being fired, each moved with its firer as it is drawn.
+    fn shown_beams(&self, camera: &Camera) -> Vec<BeamShown> {
+        let Ok(session) = &self.session else {
+            return Vec::new();
+        };
+        session
+            .beams()
+            .iter()
+            .map(|beam| {
+                let (dx, dy) = self.drawn_off(session, beam.firer);
+                let shown = |at: Vec2| camera.world_to_screen(Point::new(at.x + dx, at.y + dy));
+                BeamShown {
+                    start: shown(beam.start),
+                    end: shown(beam.end),
+                    weapon: beam.weapon.id,
+                }
+            })
+            .collect()
+    }
+
+    /// How far `ship` is drawn from where it is.
+    fn drawn_off(&self, session: &Session, ship: ShipRef) -> (f32, f32) {
+        let (shown, now) = match ship {
+            ShipRef::Player => (self.shown_position(), session.player().position),
+            ShipRef::Npc(id) => match session.npcs().iter().find(|npc| npc.id == id) {
+                Some(npc) => (self.shown_npc(npc).0, npc.state.position),
+                None => return (0.0, 0.0),
+            },
+        };
+        (shown.x - now.x, shown.y - now.y)
+    }
+
+    /// Draws the brackets round the target, where it is drawn.
+    fn draw_brackets(&self, list: &mut DrawList, camera: &Camera) {
+        let Some(npc) = self.session.as_ref().ok().and_then(Session::target) else {
+            return;
+        };
+        let (at, _) = self.shown_npc(npc);
+        let size = match self.npc_sheets.get(&npc.ship) {
+            Some(Ok(sheet)) => sheet.frame_width.max(sheet.frame_height) as f32,
+            _ => PLACEHOLDER_SIZE,
+        };
+        let disabled = npc.condition == Condition::Disabled;
+        target::draw_brackets(list, camera.world_to_screen(at), size, disabled);
+    }
+
+    /// Draws the status bar's target panel and secondary weapon line.
+    fn draw_combat_hud(&self, list: &mut DrawList, bar: &StatusBar) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        let origin = hud::bar_origin(bar);
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        let unread = TargetCard::default();
+        let shown = session.target().map(|npc| TargetShown {
+            card: self.cards.get(&npc.ship).unwrap_or(&unread),
+            code: npc.govt.and_then(|govt| self.codes.get(&govt)?.as_deref()),
+            reserves: npc.reserves,
+            disabled: npc.condition == Condition::Disabled,
+        });
+        target::draw_target_panel(list, &bar.layout, origin, shown.as_ref(), metrics);
+        let line = session.secondary().map(|id| {
+            let look = self.looks.weapon(id);
+            let name = look.map_or_else(|| format!("wëap {}", id.0), |look| look.name.clone());
+            let flags2 = look.map_or(0, |look| look.flags2);
+            target::secondary_text(&name, session.secondary_rounds(), flags2)
+        });
+        target::draw_secondary(list, &bar.layout, origin, line.as_deref(), metrics);
+    }
+
     fn draw_ship(&self, list: &mut DrawList, at: Point) {
         match &self.sheet {
             Ok(sheet) => {
@@ -771,6 +986,7 @@ impl<
     C: PilotCatalog
         + TrafficCatalog
         + CombatCatalog
+        + CombatLooks
         + SystemCatalog
         + ShipSprites
         + StatusBars
@@ -807,6 +1023,14 @@ impl<
             Some(JUMP_KEY) => {
                 self.jump();
                 return ScreenAction::None;
+            }
+            Some(TARGET_KEY) => self.select_target(TargetPick::Next),
+            Some(NEAREST_KEY) => self.select_target(TargetPick::Nearest),
+            Some(SELECT_KEY) => {
+                let backwards = self.held.contains(&Key::Alt);
+                if let Ok(session) = &mut self.session {
+                    session.select_secondary(backwards);
+                }
             }
             _ => {}
         }
@@ -845,7 +1069,12 @@ impl<
         self.elapsed += dt;
         let Steps { steps, alpha } = self.clock.advance(dt);
         let controls = self.controls();
+        let fire = (
+            self.held.contains(&FIRE_KEY),
+            self.held.contains(&SECONDARY_KEY),
+        );
         if let Ok(session) = &mut self.session {
+            session.hold_fire(fire.0, fire.1);
             for _ in 0..steps {
                 self.previous = *session.player();
                 self.npc_previous = session
@@ -855,7 +1084,27 @@ impl<
                     .collect();
                 session.tick(controls);
                 session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
+                // Which beams were already live: a looped sound is heard
+                // once a beam.
+                let beams_before: Vec<(ShipRef, WeaponId)> = session
+                    .beams()
+                    .iter()
+                    .map(|beam| (beam.firer, beam.weapon.id))
+                    .collect();
                 session.tick_combat(&*self.disable_rule, &mut self.chance);
+                let player = point(session.player().position);
+                let dying = dying(session, &self.sheet, &self.npc_sheets);
+                let chance = &mut self.effects_chance;
+                self.effects.step(&dying, player, &self.looks, chance);
+                let ships = ship_positions(session);
+                let scene = Scene {
+                    player,
+                    ships: &ships,
+                    beams_before: &beams_before,
+                };
+                for event in session.take_combat_events() {
+                    self.effects.apply(&event, &scene, &self.looks, chance);
+                }
             }
         }
         // The session may have populated its system afresh.
@@ -888,8 +1137,14 @@ impl<
             _ => starfield::draw(list, &camera),
         }
         scene::draw_stellars(list, scene, &camera, self.elapsed);
+        let beams = self.shown_beams(&camera);
+        weapons::draw_beams(list, &beams, &self.looks, true);
         self.draw_npcs(list, &camera);
         self.draw_ship(list, camera.world_to_screen(self.shown_position()));
+        weapons::draw_shots(list, &self.shown_shots(&camera), &self.looks);
+        weapons::draw_beams(list, &beams, &self.looks, false);
+        self.effects.draw(list, &camera, &self.looks);
+        self.draw_brackets(list, &camera);
         list.text(
             format!("{} (sÿst {})", scene.name(), scene.id().0),
             TITLE,
@@ -916,6 +1171,7 @@ impl<
                     system: scene.name(),
                 };
                 hud::draw(list, bar, &state);
+                self.draw_combat_hud(list, bar);
             }
             Err(reason) => hud::draw_unavailable(list, reason),
         }
@@ -933,13 +1189,16 @@ impl<
         self.map.release_keys();
     }
 
-    /// The session's sounds: thrust, landing, taking off and jumping. The
-    /// course map has no buttons that sound.
+    /// The session's sounds (thrust, landing, taking off and jumping),
+    /// then the fight's. The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
-        self.session
+        let mut sounds: Vec<Sound> = self
+            .session
             .as_mut()
             .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        sounds.extend(self.effects.take_sounds().into_iter().map(Sound::Combat));
+        sounds
     }
 
     /// The session's diagnostics, each once.
@@ -949,6 +1208,58 @@ impl<
             .map(Session::take_diagnostics)
             .unwrap_or_default()
     }
+}
+
+/// The simulation's `v` as a view point.
+fn point(v: Vec2) -> Point {
+    Point::new(v.x, v.y)
+}
+
+/// Where each ship in `session` is: the player, then the NPCs.
+fn ship_positions(session: &Session) -> Vec<(ShipRef, Point)> {
+    let player = (ShipRef::Player, point(session.player().position));
+    let npcs = session
+        .npcs()
+        .iter()
+        .map(|npc| (ShipRef::Npc(npc.id), point(npc.state.position)));
+    std::iter::once(player).chain(npcs).collect()
+}
+
+/// The ships in `session` breaking up, each with its sprite's width from
+/// `player`'s sheet or the NPCs' `sheets` (a placeholder's without one).
+fn dying(
+    session: &Session,
+    player: &Result<ShipSheet, String>,
+    sheets: &BTreeMap<ShipId, Result<ShipSheet, String>>,
+) -> Vec<Dying> {
+    let width = |sheet: Option<&Result<ShipSheet, String>>| match sheet {
+        Some(Ok(sheet)) => sheet.frame_width as f32,
+        _ => PLACEHOLDER_SIZE,
+    };
+    let breaking = |condition, at: Vec2, sprite_width, explosion| match condition {
+        Condition::Dying { ticks_left } => Some(Dying {
+            at: point(at),
+            sprite_width,
+            explosion,
+            ticks_left,
+        }),
+        _ => None,
+    };
+    let me = breaking(
+        session.player_condition(),
+        session.player().position,
+        width(Some(player)),
+        session.hull().breakup,
+    );
+    let npcs = session.npcs().iter().filter_map(|npc| {
+        breaking(
+            npc.condition,
+            npc.state.position,
+            width(sheets.get(&npc.ship)),
+            npc.hull.breakup,
+        )
+    });
+    me.into_iter().chain(npcs).collect()
 }
 
 #[cfg(test)]
@@ -965,7 +1276,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::flight::catalog::{GovtId, StatusBarLayout};
+    use crate::flight::catalog::{BoomLook, GovtId, StatusBarLayout, TargetCard, WeaponLook};
     use crate::flight::hud::{self, HudState, StatusBar};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::sound::Sound;
@@ -1010,6 +1321,14 @@ mod tests {
         weapons: Vec<nova_sim::WeaponRecord>,
         /// The ship types' combat fields: none, by default.
         hulls: Vec<nova_sim::HullRecord>,
+        /// The weapons' looks: none, by default.
+        looks: Vec<(i16, Result<WeaponLook, String>)>,
+        /// The explosions' looks: none, by default.
+        booms: Vec<(i16, Result<BoomLook, String>)>,
+        /// The ship types' target cards: none, by default.
+        cards: Vec<(i16, TargetCard)>,
+        /// The governments' target codes: none, by default.
+        codes: Vec<(i16, String)>,
     }
 
     type View = FlightView<FakeCatalog>;
@@ -1064,6 +1383,10 @@ mod tests {
             dudes: Vec::new(),
             weapons: Vec::new(),
             hulls: Vec::new(),
+            looks: Vec::new(),
+            booms: Vec::new(),
+            cards: Vec::new(),
+            codes: Vec::new(),
         }
     }
 
@@ -1094,6 +1417,8 @@ mod tests {
             armor: rect(35.0, 216.0, 184.0, 223.0),
             fuel: rect(35.0, 234.0, 184.0, 241.0),
             nav: rect(8.0, 254.0, 184.0, 286.0),
+            weap: rect(8.0, 300.0, 184.0, 315.0),
+            targ: rect(8.0, 330.0, 184.0, 442.0),
             bright_text: Color::WHITE,
             dim_text: Color::DIM,
             bright_radar: Color::rgba(0, 255, 0, 255),
@@ -1104,6 +1429,7 @@ mod tests {
             fuel_partial: Color::rgba(128, 128, 0, 255),
             font: Font::Geneva,
             font_size: 12.0,
+            subtitle_size: 10.0,
             status_bkgnd: 700,
         }
     }
@@ -1282,6 +1608,44 @@ mod tests {
                 130 => Err("no shän 130".to_owned()),
                 other => panic!("asked for shïp {other}'s sheet"),
             }
+        }
+    }
+
+    /// The looks, cards and codes given; anything else cannot be read.
+    impl CombatLooks for FakeCatalog {
+        fn weapon_look(&self, id: nova_sim::WeaponId) -> Result<WeaponLook, String> {
+            self.looks
+                .iter()
+                .find(|(weapon, _)| *weapon == id.0)
+                .map_or_else(
+                    || Err(format!("no wëap {}", id.0)),
+                    |(_, look)| look.clone(),
+                )
+        }
+
+        fn boom_look(&self, id: nova_sim::BoomId) -> Result<BoomLook, String> {
+            self.booms
+                .iter()
+                .find(|(boom, _)| *boom == id.0)
+                .map_or_else(
+                    || Err(format!("no bööm {}", id.0)),
+                    |(_, look)| look.clone(),
+                )
+        }
+
+        fn target_card(&self, ship: ShipId) -> TargetCard {
+            self.cards
+                .iter()
+                .find(|(id, _)| *id == ship.0)
+                .map(|(_, card)| card.clone())
+                .unwrap_or_default()
+        }
+
+        fn target_code(&self, govt: GovtId) -> Option<String> {
+            self.codes
+                .iter()
+                .find(|(id, _)| *id == govt.0)
+                .map(|(_, code)| code.clone())
         }
     }
 
@@ -1516,10 +1880,7 @@ mod tests {
         let mut view = flight();
         let others = [
             key(Key::Escape, true),
-            key(Key::Tab, true),
-            key(Key::Space, true),
             key(Key::Enter, true),
-            key(Key::Char('w'), true),
             key(Key::Other, true),
             Input::PointerMoved(at(1.0, 2.0)),
             Input::PointerButton {
@@ -1692,6 +2053,10 @@ mod tests {
                 system: "Sol",
             },
         );
+        let bar = view.status_bar().expect("a status bar");
+        let origin = hud::bar_origin(bar);
+        target::draw_target_panel(&mut expected, &bar.layout, origin, None, None);
+        target::draw_secondary(&mut expected, &bar.layout, origin, None, None);
         assert_eq!(list, expected);
         assert!(matches!(list.iter().next(), Some(DrawCommand::Dot { .. })));
         assert_eq!(
@@ -1704,7 +2069,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Up: thrust   Left/Right: turn   Down: reverse   L: land   M: map   J: jump   P: preferences   Esc: leave flight"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   L: land   M: map   J: jump   P: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -1839,7 +2204,8 @@ mod tests {
                 on_radar(at(300.0, -200.0)).expect("in range"),
             ]
         );
-        assert_eq!(texts(&list).last().map(String::as_str), Some("Sol"));
+        let names: Vec<String> = texts(&list).into_iter().rev().take(3).collect();
+        assert_eq!(names, [NO_SECONDARY, NO_TARGET, "Sol"]);
     }
 
     #[test]
@@ -2639,8 +3005,16 @@ mod tests {
             },
         );
         assert!(
-            list.iter().skip(hud_at(&list)).eq(hud.iter()),
+            list.iter()
+                .skip(hud_at(&list))
+                .take(hud.len())
+                .eq(hud.iter()),
             "the HUD, with a jump's fuel less, is last"
+        );
+        assert_eq!(
+            list.len(),
+            hud_at(&list) + hud.len() + 2,
+            "then the target and weapon"
         );
         view.tick(ms(100));
         assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(179), "shrinking");
@@ -3594,5 +3968,821 @@ mod tests {
         );
         ticks(&mut view, 30);
         assert_eq!(view.take_diagnostics(), [], "once");
+    }
+
+    // Combat controls and display.
+
+    use std::num::NonZeroU16 as Frames;
+
+    use nova_sim::{BoomId, Condition, WeaponId};
+
+    use crate::flight::catalog::EffectSheet;
+    use crate::flight::effects::{DEBRIS_COLOR, Effects};
+    use crate::flight::target::{self, BRACKETS, DISABLED_BRACKETS, NO_SECONDARY, NO_TARGET};
+    use crate::flight::weapons::{BEAM_UNDER_SHIPS, translucent};
+    use crate::sound::CombatSound;
+
+    const BLASTER: WeaponId = WeaponId(128);
+    const ROCKET: WeaponId = WeaponId(140);
+    const MISSILE: WeaponId = WeaponId(141);
+    const TORCH: WeaponId = WeaponId(142);
+    const UNDER: WeaponId = WeaponId(146);
+    const OVER: WeaponId = WeaponId(147);
+    const UNSEEN: WeaponId = WeaponId(150);
+
+    /// `wëap` `id` firing every tick, 20 pixels a tick for 30 ticks, doing
+    /// no damage, with `flags`, `guidance` and `explod_type`.
+    fn gun(id: WeaponId, flags: u16, guidance: i16, explod_type: i16) -> nova_sim::WeaponRecord {
+        nova_sim::WeaponRecord {
+            id,
+            reload: 0,
+            count: 30,
+            mass_dmg: 0,
+            energy_dmg: 0,
+            guidance,
+            speed: 2000,
+            ammo_type: -1,
+            inaccuracy: 0,
+            impact: 0,
+            explod_type,
+            prox_radius: 0,
+            blast_radius: 0,
+            flags,
+            seeker: 0,
+            flags2: 0,
+            flags3: 0,
+            decay: 0,
+            beam_length: 50,
+            burst_count: 0,
+            burst_reload: 0,
+        }
+    }
+
+    /// Ship `id` carrying one of each of `weapons`, gone at once in
+    /// `bööm` 128.
+    fn hull_of(id: i16, weapons: &[WeaponId]) -> nova_sim::HullRecord {
+        nova_sim::HullRecord {
+            id: ShipId(id),
+            flags: 0,
+            death_delay: 0,
+            explode1: -1,
+            explode2: 0,
+            mass: 0,
+            weapons: weapons
+                .iter()
+                .map(|&weapon| nova_sim::StockWeapon {
+                    weapon,
+                    count: 1,
+                    ammo: 0,
+                })
+                .collect(),
+            size: None,
+        }
+    }
+
+    fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet {
+        EffectSheet {
+            image_id,
+            frames: Frames::new(frames).expect("non-zero"),
+        }
+    }
+
+    /// A look named `name` sounding `snd ` `sound`, its shots on `rlëD`
+    /// `image` of 36 frames, if any.
+    fn look(name: &str, sound: i16, image: Option<i16>) -> WeaponLook {
+        WeaponLook {
+            name: name.to_owned(),
+            sheet: image.map(|image| effect_sheet(image, 36)),
+            sound: Some(nova_sim::SoundId(sound)),
+            ..WeaponLook::default()
+        }
+    }
+
+    /// [`trafficked`] (ships of type 129, warships) where the player's
+    /// ship carries `weapons`; the blaster, rockets, missiles and torch
+    /// have looks, and `bööm` 128 shows `rlëD` 400's 3 frames at a frame
+    /// a step, sounding `snd ` 302. Ship 129 is a "Shuttle", a "Light
+    /// Transport" with picture 3001, and govt 140's code is "Fed.".
+    fn armed(avg: i16, weapons: &[WeaponId]) -> FakeCatalog {
+        let mut catalog = trafficked(&[130], avg, 129, 3);
+        catalog.dudes[0].1.govt = Some(GovtId(140));
+        FakeCatalog {
+            weapons: vec![
+                gun(BLASTER, 0, -1, 0),
+                gun(ROCKET, 0x0002, -1, -1),
+                gun(MISSILE, 0x0002, -1, -1),
+                gun(TORCH, 0x0002, -1, -1),
+                gun(UNDER, 0, 0, -1),
+                gun(OVER, 0, 0, -1),
+                gun(UNSEEN, 0, -1, -1),
+            ],
+            hulls: vec![hull_of(128, weapons), hull_of(129, &[])],
+            looks: vec![
+                (128, Ok(look("Blaster", 208, Some(3500)))),
+                (140, Ok(look("Rocket", 209, Some(3501)))),
+                (141, Ok(look("Missile", 210, None))),
+                (142, Ok(look("Torch", 211, None))),
+                (
+                    146,
+                    Ok(WeaponLook {
+                        flags2: BEAM_UNDER_SHIPS,
+                        beam_width: 1,
+                        beam_color: 0x0000_00FF,
+                        ..WeaponLook::default()
+                    }),
+                ),
+                (
+                    147,
+                    Ok(WeaponLook {
+                        beam_width: 1,
+                        beam_color: 0x0000_FF00,
+                        ..WeaponLook::default()
+                    }),
+                ),
+            ],
+            booms: vec![(
+                128,
+                Ok(BoomLook {
+                    sheet: effect_sheet(400, 3),
+                    advance: 1.0,
+                    sound: Some(nova_sim::SoundId(302)),
+                }),
+            )],
+            cards: vec![(
+                129,
+                TargetCard {
+                    name: "Shuttle".to_owned(),
+                    subtitle: "Light Transport".to_owned(),
+                    picture: Some(3001),
+                },
+            )],
+            codes: vec![(140, "Fed.".to_owned())],
+            ..catalog
+        }
+    }
+
+    /// `catalog`'s flight with its NPCs idling, placed by `draws`, after
+    /// the step that populates the system.
+    fn fighting(catalog: FakeCatalog, draws: &[u32]) -> View {
+        let (_, chance) = scripted(draws);
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        view
+    }
+
+    /// NPC 0 at (100, -100) and NPC 1 at (-50, 0), nearer the player.
+    fn two_npcs() -> Vec<u32> {
+        [placed(850, 650, 90), placed(700, 750, 0)].concat()
+    }
+
+    fn target_of(view: &View) -> Option<NpcId> {
+        view.session().expect("flying").target().map(|npc| npc.id)
+    }
+
+    #[test]
+    fn tab_targets_the_next_npc_and_r_the_nearest() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        assert_eq!(target_of(&view), None);
+        tap(&mut view, Key::Tab);
+        assert_eq!(target_of(&view), Some(NpcId(0)));
+        view.input(&held(Key::Tab));
+        assert_eq!(target_of(&view), Some(NpcId(0)), "a repeat does nothing");
+        tap(&mut view, Key::Tab);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        tap(&mut view, Key::Tab);
+        assert_eq!(target_of(&view), None, "past the last");
+        tap(&mut view, NEAREST_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        tap(&mut view, Key::Tab);
+        view.input(&held(NEAREST_KEY));
+        assert_eq!(target_of(&view), None, "a repeat does nothing");
+        assert_eq!((TARGET_KEY, NEAREST_KEY), (Key::Tab, Key::Char('r')));
+    }
+
+    /// How many of the shots in flight are of `weapon`.
+    fn shots_of(view: &View, weapon: WeaponId) -> usize {
+        let session = view.session().expect("flying");
+        session
+            .shots()
+            .iter()
+            .filter(|shot| shot.weapon.id == weapon)
+            .count()
+    }
+
+    #[test]
+    fn space_fires_the_primaries_and_control_the_secondary_while_held() {
+        let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+        view.input(&key(FIRE_KEY, true));
+        ticks(&mut view, 2);
+        view.input(&held(FIRE_KEY));
+        ticks(&mut view, 1);
+        assert_eq!((shots_of(&view, BLASTER), shots_of(&view, ROCKET)), (3, 0));
+        view.input(&key(FIRE_KEY, false));
+        ticks(&mut view, 2);
+        assert_eq!(shots_of(&view, BLASTER), 3, "let go");
+        view.input(&key(SECONDARY_KEY, true));
+        ticks(&mut view, 2);
+        assert_eq!((shots_of(&view, BLASTER), shots_of(&view, ROCKET)), (3, 2));
+        view.input(&key(SECONDARY_KEY, false));
+        ticks(&mut view, 1);
+        assert_eq!(shots_of(&view, ROCKET), 2, "let go");
+        assert_eq!((FIRE_KEY, SECONDARY_KEY), (Key::Space, Key::Control));
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_lets_go_of_the_fire_keys() {
+        let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+        view.input(&key(FIRE_KEY, true));
+        view.input(&key(SECONDARY_KEY, true));
+        ticks(&mut view, 1);
+        view.release_keys();
+        ticks(&mut view, 2);
+        assert_eq!((shots_of(&view, BLASTER), shots_of(&view, ROCKET)), (1, 1));
+    }
+
+    fn secondary_of(view: &View) -> Option<WeaponId> {
+        view.session().expect("flying").secondary()
+    }
+
+    #[test]
+    fn w_selects_the_next_secondary_and_alt_w_the_one_before() {
+        let mut view = fighting(armed(0, &[BLASTER, ROCKET, MISSILE, TORCH]), &[]);
+        assert_eq!(secondary_of(&view), Some(ROCKET));
+        tap(&mut view, SELECT_KEY);
+        assert_eq!(secondary_of(&view), Some(MISSILE));
+        view.input(&held(SELECT_KEY));
+        assert_eq!(secondary_of(&view), Some(MISSILE), "a repeat does nothing");
+        view.input(&key(Key::Alt, true));
+        tap(&mut view, SELECT_KEY);
+        assert_eq!(secondary_of(&view), Some(ROCKET));
+        tap(&mut view, SELECT_KEY);
+        assert_eq!(secondary_of(&view), Some(TORCH), "wrapping");
+        view.input(&key(Key::Alt, false));
+        tap(&mut view, SELECT_KEY);
+        assert_eq!(secondary_of(&view), Some(ROCKET));
+        view.input(&key(Key::Alt, true));
+        view.release_keys();
+        tap(&mut view, SELECT_KEY);
+        assert_eq!(secondary_of(&view), Some(MISSILE), "Alt let go");
+        assert_eq!(SELECT_KEY, Key::Char('w'));
+    }
+
+    #[test]
+    fn the_combat_keys_do_nothing_while_the_map_is_open() {
+        let mut view = fighting(armed(2, &[BLASTER, ROCKET, MISSILE]), &two_npcs());
+        tap(&mut view, MAP);
+        for k in [Key::Tab, NEAREST_KEY, SELECT_KEY, FIRE_KEY, SECONDARY_KEY] {
+            view.input(&key(k, true));
+        }
+        tap(&mut view, MAP);
+        ticks(&mut view, 2);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(secondary_of(&view), Some(ROCKET));
+        assert_eq!(view.session().expect("flying").shots(), []);
+    }
+
+    #[test]
+    fn the_combat_keys_do_nothing_while_a_jump_plays() {
+        let mut view = fighting(armed(0, &[BLASTER, ROCKET, MISSILE]), &[]);
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        for k in [NEAREST_KEY, SELECT_KEY, FIRE_KEY] {
+            view.input(&key(k, true));
+        }
+        view.tick(ms(2000));
+        assert_eq!(view.jump_effect(), None);
+        ticks(&mut view, 2);
+        assert_eq!(secondary_of(&view), Some(ROCKET));
+        assert_eq!(view.session().expect("flying").shots(), []);
+    }
+
+    /// The combat sounds taken.
+    fn combat_sounds(view: &mut View) -> Vec<CombatSound> {
+        view.take_sounds()
+            .into_iter()
+            .filter_map(|sound| match sound {
+                Sound::Combat(sound) => Some(sound),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_steps_fight_reaches_the_effects() {
+        let mut view = fighting(armed(0, &[BLASTER]), &[]);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK * 3);
+        assert_eq!(shots_of(&view, BLASTER), 3, "three steps");
+        let fired = CombatSound {
+            sound: nova_sim::SoundId(208),
+            offset: (0, 0),
+        };
+        assert_eq!(combat_sounds(&mut view), [fired; 3]);
+        assert_eq!(combat_sounds(&mut view), [], "taken");
+    }
+
+    #[test]
+    fn the_sounds_are_the_sessions_then_the_fights() {
+        let mut view = fighting(armed(0, &[BLASTER]), &[]);
+        view.input(&key(Key::Up, true));
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        assert_eq!(
+            view.take_sounds(),
+            [
+                Sound::Sim(SimSound::ThrustStarted),
+                Sound::Combat(CombatSound {
+                    sound: nova_sim::SoundId(208),
+                    offset: (0, 0),
+                })
+            ]
+        );
+    }
+
+    /// The first command matching `wanted`'s position in `list`.
+    fn first(list: &DrawList, wanted: impl Fn(&DrawCommand) -> bool) -> usize {
+        list.iter()
+            .position(wanted)
+            .unwrap_or_else(|| panic!("not drawn: {list:?}"))
+    }
+
+    fn sprite_of(id: i16) -> impl Fn(&DrawCommand) -> bool {
+        move |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == id)
+    }
+
+    fn line_in(color: Color) -> impl Fn(&DrawCommand) -> bool {
+        move |command| matches!(command, DrawCommand::Line { color: c, .. } if *c == color)
+    }
+
+    /// The flight with an NPC 100 pixels above the player, the player
+    /// firing its blaster (which explodes where it hits) and two beams, one
+    /// drawn under the ships and one over them, at it.
+    fn firing_at_an_npc() -> View {
+        let catalog = armed(1, &[BLASTER, UNDER, OVER]);
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        view.input(&key(FIRE_KEY, true));
+        ticks(&mut view, 5);
+        view
+    }
+
+    #[test]
+    fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
+        let view = firing_at_an_npc();
+        let list = drawn(&view);
+        let stellar = first(&list, sprite_of(1128));
+        let under = first(&list, line_in(Color::rgba(0, 0, 255, 255)));
+        let npc = first(&list, sprite_of(2001));
+        let ship = first(&list, sprite_of(2000));
+        let shot = first(&list, sprite_of(3500));
+        let over = first(&list, line_in(Color::rgba(0, 255, 0, 255)));
+        let explosion = first(&list, sprite_of(400));
+        let brackets = first(&list, line_in(BRACKETS));
+        let title = first(
+            &list,
+            |c| matches!(c, DrawCommand::Text { origin, .. } if *origin == TITLE),
+        );
+        let hud = hud_at(&list);
+        let order = [
+            stellar, under, npc, ship, shot, over, explosion, brackets, title, hud,
+        ];
+        assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+        let DrawCommand::Sprite { tint, .. } = list.iter().nth(explosion).cloned().expect("drawn")
+        else {
+            panic!("a sprite")
+        };
+        assert_eq!(tint, translucent());
+    }
+
+    #[test]
+    fn a_shot_is_drawn_with_its_frame_where_it_flies() {
+        let mut view = fighting(armed(0, &[BLASTER]), &[]);
+        // Turned 45 degrees right, so the shot flies across and up.
+        view.input(&key(Key::Right, true));
+        ticks(&mut view, 15);
+        view.input(&key(Key::Right, false));
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        view.tick(TICK / 2);
+        let session = view.session().expect("flying");
+        let shot = session.shots()[0];
+        let alpha = view.alpha();
+        let shown = at(
+            shot.position.x - shot.velocity.x * (1.0 - alpha),
+            shot.position.y - shot.velocity.y * (1.0 - alpha),
+        );
+        let list = drawn(&view);
+        let drawn_at = sprites(&list)
+            .into_iter()
+            .find(|(image, _)| image.id == 3500)
+            .expect("the shot");
+        assert_eq!(drawn_at.0, ImageKey::sprite(3500, 4), "heading 45");
+        let expected = view.camera().world_to_screen(shown);
+        assert!(
+            (drawn_at.1.x - expected.x).abs() < 1e-3 && (drawn_at.1.y - expected.y).abs() < 1e-3,
+            "{drawn_at:?} {expected:?}"
+        );
+    }
+
+    /// Every NPC heads for planet 128 and holds its trigger.
+    #[derive(Debug)]
+    struct LandingFiring;
+
+    impl Behaviour for LandingFiring {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            Goal::Land(StellarId(128))
+        }
+
+        fn trigger(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+        ) -> nova_sim::Trigger {
+            nova_sim::Trigger {
+                primary: true,
+                secondary: None,
+            }
+        }
+    }
+
+    /// Where the beams in `color` start, on screen: the lines a pixel wide,
+    /// not the HUD's bars.
+    fn beam_starts(list: &DrawList, color: Color) -> Vec<Point> {
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Line {
+                    from,
+                    color: c,
+                    width,
+                    ..
+                } if c == color && width == 1.0 => Some(from),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_beam_is_drawn_from_its_firer_where_the_firer_is_drawn() {
+        let mut catalog = armed(1, &[OVER]);
+        catalog.hulls[1] = hull_of(129, &[UNDER]);
+        let (_, chance) = scripted(&placed(850, 650, 0));
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(LandingFiring));
+        view.tick(TICK);
+        view.input(&key(Key::Up, true));
+        view.input(&key(FIRE_KEY, true));
+        ticks(&mut view, 5);
+        view.tick(TICK / 2);
+        let session = view.session().expect("flying");
+        let npc = &session.npcs()[0];
+        assert_ne!(
+            view.npc_previous[&npc.id].position, npc.state.position,
+            "moving"
+        );
+        assert_ne!(view.previous.position, session.player().position, "moving");
+        let list = drawn(&view);
+        let camera = view.camera();
+        let player = camera.world_to_screen(view.shown_position());
+        let over = beam_starts(&list, Color::rgba(0, 255, 0, 255));
+        assert!(!over.is_empty());
+        assert!(
+            over.iter().all(|&start| start == player),
+            "the player's, from the player as drawn: {over:?}"
+        );
+        let (npc_shown, _) = view.shown_npc(npc);
+        let under = beam_starts(&list, Color::rgba(0, 0, 255, 255));
+        assert!(!under.is_empty());
+        let expected = camera.world_to_screen(npc_shown);
+        assert!(
+            under
+                .iter()
+                .all(|start| (start.x - expected.x).abs() < 1e-3
+                    && (start.y - expected.y).abs() < 1e-3),
+            "the NPC's, from the NPC as drawn: {under:?} {expected:?}"
+        );
+    }
+
+    #[test]
+    fn a_ship_breaking_up_goes_off_about_where_it_is() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].mass_dmg = 1000;
+        catalog.weapons[0].flags = 0x0020;
+        catalog.weapons[0].explod_type = -1;
+        catalog.hulls[1].death_delay = 30;
+        catalog.hulls[1].explode1 = 0;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        let mut breaking = None;
+        for _ in 0..40 {
+            view.tick(TICK);
+            let session = view.session().expect("flying");
+            if let Some(npc) = session.npcs().first()
+                && let Condition::Dying { ticks_left } = npc.condition
+                && ticks_left < 19
+                && !view.effects().explosions().is_empty()
+            {
+                breaking = Some(npc.state.position);
+                break;
+            }
+        }
+        let at = breaking.expect("an explosion as it breaks up");
+        // Never firing, the effects' chance draws the last outcome: a
+        // quarter of its 40-pixel sprite less one out, each way.
+        assert_eq!(
+            view.effects().explosions()[0].at,
+            Point::new(at.x + 9.0, at.y + 9.0)
+        );
+    }
+
+    #[test]
+    fn a_shot_whose_look_cannot_be_read_is_a_crossed_box() {
+        let mut view = fighting(armed(0, &[UNSEEN]), &[]);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        let list = drawn(&view);
+        let shot = view.session().expect("flying").shots()[0];
+        let mut boxed = DrawList::new();
+        // A whole step on, it is drawn a step behind, where it left.
+        assert_eq!(view.alpha(), 0.0);
+        let left = shot.position - shot.velocity;
+        let centre = view.camera().world_to_screen(at(left.x, left.y));
+        crossed_box(
+            &mut boxed,
+            centre,
+            weapons::SHOT_PLACEHOLDER_SIZE,
+            PLACEHOLDER,
+        );
+        let commands: Vec<_> = list.iter().cloned().collect();
+        let expected: Vec<_> = boxed.iter().cloned().collect();
+        assert!(
+            commands.windows(expected.len()).any(|run| run == expected),
+            "{commands:?}"
+        );
+    }
+
+    #[test]
+    fn a_destroyed_npc_explodes_and_scatters_debris_on_the_frames_after() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].mass_dmg = 1000;
+        catalog.weapons[0].flags = 0x0020;
+        catalog.weapons[0].explod_type = -1;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        // Drifting up, so the explosion is heard from where the player is.
+        view.input(&key(Key::Up, true));
+        view.tick(TICK);
+        view.input(&key(Key::Up, false));
+        view.input(&key(FIRE_KEY, true));
+        let mut destroyed = false;
+        for _ in 0..10 {
+            view.tick(TICK);
+            if view.session().expect("flying").npcs().is_empty() {
+                destroyed = true;
+                break;
+            }
+        }
+        assert!(destroyed, "{:?}", view.session().expect("flying").npcs());
+        assert_eq!(target_of(&view), None);
+        let effects = view.effects();
+        assert_eq!(effects.explosions().len(), 1);
+        assert_eq!(effects.explosions()[0].boom, BoomId(128));
+        assert_eq!(effects.debris().len(), 16);
+        let list = drawn(&view);
+        let explosion = first(&list, sprite_of(400));
+        assert_eq!(
+            list.iter()
+                .skip(explosion)
+                .filter(|c| matches!(c, DrawCommand::Dot { color, .. } if *color == DEBRIS_COLOR))
+                .count(),
+            16,
+            "drawn after the explosion"
+        );
+        let player = view.session().expect("flying").player().position;
+        assert!(player.y < 0.0, "{player:?}");
+        let boom = view.effects().explosions()[0].at;
+        let heard = CombatSound {
+            sound: nova_sim::SoundId(302),
+            offset: (
+                (boom.x - player.x).round() as i32,
+                (boom.y - player.y).round() as i32,
+            ),
+        };
+        assert!(
+            combat_sounds(&mut view).contains(&heard),
+            "the explosion is heard: {heard:?}"
+        );
+    }
+
+    /// [`armed`] with a blaster whose shots detonate after a tick.
+    fn detonating() -> FakeCatalog {
+        let mut catalog = armed(0, &[BLASTER]);
+        catalog.weapons[0].flags = 0x8000;
+        catalog.weapons[0].count = 1;
+        catalog
+    }
+
+    /// Fires one detonating shot, which explodes.
+    fn detonate(view: &mut View) {
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, false));
+        assert_eq!(view.effects().explosions().len(), 1);
+    }
+
+    #[test]
+    fn landing_clears_the_effects() {
+        let mut catalog = detonating();
+        catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        let mut view = fighting(catalog, &[]);
+        detonate(&mut view);
+        tap(&mut view, LAND_KEY);
+        assert!(view.take_landing().is_some());
+        assert_eq!(*view.effects(), Effects::default());
+    }
+
+    #[test]
+    fn arriving_clears_the_effects() {
+        let mut view = fighting(detonating(), &[]);
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        detonate(&mut view);
+        view.input(&key(JUMP, true));
+        view.tick(ms(1000));
+        assert_eq!(view.effects().explosions().len(), 1, "frozen in the jump");
+        view.tick(ms(1000));
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
+        assert_eq!(*view.effects(), Effects::default());
+    }
+
+    #[test]
+    fn the_target_is_bracketed_and_its_panel_shows_it() {
+        let view = firing_at_an_npc();
+        let session = view.session().expect("flying");
+        let npc = &session.npcs()[0];
+        let list = drawn(&view);
+        let (shown, _) = view.shown_npc(npc);
+        let mut brackets = DrawList::new();
+        target::draw_brackets(
+            &mut brackets,
+            view.camera().world_to_screen(shown),
+            40.0,
+            false,
+        );
+        let commands: Vec<_> = list.iter().cloned().collect();
+        let expected: Vec<_> = brackets.iter().cloned().collect();
+        assert!(
+            commands.windows(8).any(|run| run == expected),
+            "{commands:?}"
+        );
+        let bar = view.status_bar().expect("a status bar");
+        let card = TargetCard {
+            name: "Shuttle".to_owned(),
+            subtitle: "Light Transport".to_owned(),
+            picture: Some(3001),
+        };
+        let mut panel = DrawList::new();
+        target::draw_target_panel(
+            &mut panel,
+            &bar.layout,
+            hud::bar_origin(bar),
+            Some(&target::TargetShown {
+                card: &card,
+                code: Some("Fed."),
+                reserves: npc.reserves,
+                disabled: false,
+            }),
+            None,
+        );
+        let expected: Vec<_> = panel.iter().cloned().collect();
+        assert!(
+            commands.windows(expected.len()).any(|run| run == expected),
+            "{commands:?}"
+        );
+    }
+
+    #[test]
+    fn a_disabled_targets_brackets_are_grey() {
+        let catalog = armed(1, &[]);
+        let mut view =
+            fighting(catalog, &placed(750, 650, 180)).with_disable_rule(Rc::new(Disabling));
+        tap(&mut view, Key::Tab);
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        assert_eq!(session.npcs()[0].condition, Condition::Disabled);
+        let list = drawn(&view);
+        assert!(list.iter().any(line_in(DISABLED_BRACKETS)));
+        assert!(!list.iter().any(line_in(BRACKETS)));
+        assert!(texts(&list).contains(&target::DISABLED.to_owned()));
+    }
+
+    /// Disables every ship.
+    #[derive(Debug)]
+    struct Disabling;
+
+    impl DisableRule for Disabling {
+        fn disabled(&self, _armor: nova_sim::Gauge, _hull: &nova_sim::HullSpec) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn the_hud_shows_no_target_and_the_secondary_weapon() {
+        let view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+        let list = texts(&drawn(&view));
+        assert!(list.contains(&NO_TARGET.to_owned()), "{list:?}");
+        assert!(list.contains(&"Rocket".to_owned()), "{list:?}");
+        let unarmed = texts(&drawn(&fighting(armed(0, &[BLASTER]), &[])));
+        assert!(unarmed.contains(&NO_SECONDARY.to_owned()), "{unarmed:?}");
+    }
+
+    #[test]
+    fn the_panel_is_laid_out_by_the_metrics_given() {
+        let view = fighting(armed(0, &[BLASTER]), &[])
+            .with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
+        let list = drawn(&view);
+        let origin = list
+            .iter()
+            .find_map(|c| match c {
+                DrawCommand::Text { text, origin, .. } if text == NO_TARGET => Some(*origin),
+                _ => None,
+            })
+            .expect("No Target");
+        // Centred: 9 characters of 6 in the 176 across from 838.
+        assert_eq!(origin.x, 899.0);
+    }
+
+    #[test]
+    fn the_effects_roll_on_their_own_chance() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].mass_dmg = 1000;
+        catalog.weapons[0].flags = 0x0020;
+        catalog.weapons[0].explod_type = -1;
+        let (_, chance) = scripted(&placed(750, 650, 180));
+        let (effects, effects_chance) = scripted(&[]);
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still))
+            .with_effects_chance(effects_chance);
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, true));
+        ticks(&mut view, 10);
+        assert!(view.session().expect("flying").npcs().is_empty());
+        assert_eq!(
+            effects.borrow().asked,
+            [360, 101, 31].repeat(16),
+            "the debris, drawn on the effects' own chance"
+        );
+    }
+
+    #[test]
+    fn a_looped_weapon_is_heard_once_while_its_beam_lasts() {
+        let mut catalog = armed(0, &[UNDER]);
+        catalog.weapons[4].reload = 0;
+        catalog.weapons[4].count = 5;
+        catalog.looks[4].1 = Ok(WeaponLook {
+            flags: weapons::LOOPED_SOUND,
+            sound: Some(nova_sim::SoundId(220)),
+            ..WeaponLook::default()
+        });
+        let mut view = fighting(catalog, &[]);
+        view.input(&key(FIRE_KEY, true));
+        ticks(&mut view, 4);
+        assert_eq!(
+            view.session().expect("flying").beams().len(),
+            4,
+            "a beam fired each step"
+        );
+        assert_eq!(combat_sounds(&mut view).len(), 1, "heard once");
+        view.input(&key(FIRE_KEY, false));
+        ticks(&mut view, 5);
+        assert_eq!(view.session().expect("flying").beams(), [], "over");
+        view.input(&key(FIRE_KEY, true));
+        ticks(&mut view, 1);
+        assert_eq!(combat_sounds(&mut view).len(), 1, "a fresh beam");
+    }
+
+    #[test]
+    fn the_metrics_debug_as_their_name() {
+        let metrics = Metrics(Rc::new(crate::text::fixture::MonoMetrics));
+        assert_eq!(format!("{metrics:?}"), "Metrics");
+    }
+
+    #[test]
+    fn the_help_line_names_the_combat_keys() {
+        for name in ["Space", "Ctrl", "W", "Tab", "R:"] {
+            assert!(HELP.contains(name), "{name}: {HELP}");
+        }
     }
 }

@@ -1,11 +1,13 @@
 //! The flight screen's ports, in the view's own terms: the ship sprite
-//! port, the player ship's sprite sheet, and the status bar port, the
-//! `ïntf` layouts the HUD is drawn from.
+//! port, the player ship's sprite sheet, the status bar port, the `ïntf`
+//! layouts the HUD is drawn from, and the combat looks port, how weapons,
+//! explosions and targets are shown.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU16;
 use std::rc::Rc;
 
-pub use nova_sim::{GovtId, ShipId};
+pub use nova_sim::{BoomId, GovtId, ShipId, SoundId, WeaponId};
 
 use crate::color::Color;
 use crate::font::Font;
@@ -61,6 +63,10 @@ pub struct StatusBarLayout {
     pub fuel: Bounds,
     /// `NavArea`.
     pub nav: Bounds,
+    /// `WeapArea`: the secondary weapon's line.
+    pub weap: Bounds,
+    /// `TargArea`: the target panel.
+    pub targ: Bounds,
     /// `BrightText`.
     pub bright_text: Color,
     /// `DimText`.
@@ -81,6 +87,8 @@ pub struct StatusBarLayout {
     pub font: Font,
     /// `StatFontSize`.
     pub font_size: f32,
+    /// `SubtitleSize`: the target's subtitle.
+    pub subtitle_size: f32,
     /// `StatusBkgnd`, raw: the background `PICT`'s ID, where values below
     /// 128 mean 128.
     pub status_bkgnd: i16,
@@ -125,6 +133,160 @@ impl<T: StatusBars + ?Sized> StatusBars for Rc<T> {
 
     fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
         (**self).picture_size(id)
+    }
+}
+
+/// An effect's sprite sheet: its `rlëD`, and how many frames it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EffectSheet {
+    /// The `rlëD`'s ID.
+    pub image_id: i16,
+    /// How many frames the sheet holds.
+    pub frames: NonZeroU16,
+}
+
+/// How a weapon's shots, beams and firing are shown: its `wëap`'s
+/// presentation fields.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WeaponLook {
+    /// Its name: the `wëap` resource's, up to any ';'.
+    pub name: String,
+    /// Its shots' sheet, `spïn` 3000 + `Graphic`; none for a weapon whose
+    /// shots have no graphic (a beam's).
+    pub sheet: Option<EffectSheet>,
+    /// The sound it fires with, `snd ` 200 + `Sound`, if any.
+    pub sound: Option<SoundId>,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `Flags2`.
+    pub flags2: u16,
+    /// Its `Flags3`.
+    pub flags3: u16,
+    /// `BeamWidth`: a beam's width, and a spinning shot's ticks a frame.
+    pub beam_width: i16,
+    /// `Falloff`: how fast a beam's corona fades; none for no corona.
+    pub falloff: i16,
+    /// `BeamColor`, `00RRGGBB`.
+    pub beam_color: u32,
+    /// `CoronaColor`, `00RRGGBB`.
+    pub corona_color: u32,
+    /// `ProxSafety`: the ticks a shot's frame waits before it spins, with
+    /// `Flags2` 0x0001.
+    pub prox_safety: i16,
+}
+
+/// How an explosion type is shown and heard: its `bööm`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoomLook {
+    /// Its sheet, `spïn` 400 + `GraphicIndex`.
+    pub sheet: EffectSheet,
+    /// The frames it advances a tick: `FrameAdvance` / 100.
+    pub advance: f32,
+    /// Its sound, `snd ` 300 + `SoundIndex`, if any.
+    pub sound: Option<SoundId>,
+}
+
+/// What the target panel shows of a ship type.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TargetCard {
+    /// Its name: the `shïp` resource's, up to any ';'.
+    pub name: String,
+    /// Its `Subtitle`.
+    pub subtitle: String,
+    /// Its picture, `PICT` 3000 + (ID - 128), when there is one.
+    pub picture: Option<i16>,
+}
+
+/// How weapons, explosions and targets look.
+pub trait CombatLooks {
+    /// Weapon `id`'s look, or why it cannot be read.
+    fn weapon_look(&self, id: WeaponId) -> Result<WeaponLook, String>;
+    /// Explosion type `id`'s look, or why it cannot be read.
+    fn boom_look(&self, id: BoomId) -> Result<BoomLook, String>;
+    /// What the target panel shows of ship type `ship`; empty when it
+    /// cannot be read.
+    fn target_card(&self, ship: ShipId) -> TargetCard;
+    /// Govt `govt`'s `TargetCode`, if it has one.
+    fn target_code(&self, govt: GovtId) -> Option<String>;
+}
+
+/// A borrowed catalog is a catalog.
+impl<T: CombatLooks + ?Sized> CombatLooks for &T {
+    fn weapon_look(&self, id: WeaponId) -> Result<WeaponLook, String> {
+        (**self).weapon_look(id)
+    }
+
+    fn boom_look(&self, id: BoomId) -> Result<BoomLook, String> {
+        (**self).boom_look(id)
+    }
+
+    fn target_card(&self, ship: ShipId) -> TargetCard {
+        (**self).target_card(ship)
+    }
+
+    fn target_code(&self, govt: GovtId) -> Option<String> {
+        (**self).target_code(govt)
+    }
+}
+
+/// A shared catalog is a catalog.
+impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
+    fn weapon_look(&self, id: WeaponId) -> Result<WeaponLook, String> {
+        (**self).weapon_look(id)
+    }
+
+    fn boom_look(&self, id: BoomId) -> Result<BoomLook, String> {
+        (**self).boom_look(id)
+    }
+
+    fn target_card(&self, ship: ShipId) -> TargetCard {
+        (**self).target_card(ship)
+    }
+
+    fn target_code(&self, govt: GovtId) -> Option<String> {
+        (**self).target_code(govt)
+    }
+}
+
+/// The first explosion type, `bööm` 128.
+pub const FIRST_BOOM: i16 = 128;
+/// The last explosion type, `bööm` 191: 64 in all.
+pub const LAST_BOOM: i16 = 191;
+
+/// The weapons' and explosions' looks, read once.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Looks {
+    /// Each weapon's look, or why it cannot be read.
+    pub weapons: BTreeMap<WeaponId, Result<WeaponLook, String>>,
+    /// Each explosion type's look, or why it cannot be read.
+    pub booms: BTreeMap<BoomId, Result<BoomLook, String>>,
+}
+
+impl Looks {
+    /// The looks of `weapons` and of every explosion type, read from
+    /// `catalog`.
+    pub fn read(catalog: &impl CombatLooks, weapons: impl IntoIterator<Item = WeaponId>) -> Self {
+        Self {
+            weapons: weapons
+                .into_iter()
+                .map(|id| (id, catalog.weapon_look(id)))
+                .collect(),
+            booms: (FIRST_BOOM..=LAST_BOOM)
+                .map(|id| (BoomId(id), catalog.boom_look(BoomId(id))))
+                .collect(),
+        }
+    }
+
+    /// Weapon `id`'s look, if it was read.
+    #[must_use]
+    pub fn weapon(&self, id: WeaponId) -> Option<&WeaponLook> {
+        self.weapons.get(&id)?.as_ref().ok()
+    }
+
+    /// Explosion type `id`'s look, if it was read.
+    #[must_use]
+    pub fn boom(&self, id: BoomId) -> Option<&BoomLook> {
+        self.booms.get(&id)?.as_ref().ok()
     }
 }
 
@@ -174,6 +336,8 @@ mod tests {
                 armor: none,
                 fuel: none,
                 nav: none,
+                weap: none,
+                targ: none,
                 bright_text: Color::WHITE,
                 dim_text: Color::WHITE,
                 bright_radar: Color::WHITE,
@@ -184,6 +348,7 @@ mod tests {
                 fuel_partial: Color::WHITE,
                 font: Font::Geneva,
                 font_size: 12.0,
+                subtitle_size: 10.0,
                 status_bkgnd: id,
             })
         }
@@ -209,5 +374,87 @@ mod tests {
         assert_eq!(bar(Bars), direct);
         assert_eq!(bar(&Bars), direct);
         assert_eq!(bar(Rc::new(Bars)), direct);
+    }
+
+    /// Every weapon is named for its ID; every explosion's sheet is its
+    /// ID; every ship is named for its ID; every govt's code is its ID.
+    struct Named;
+
+    impl CombatLooks for Named {
+        fn weapon_look(&self, id: WeaponId) -> Result<WeaponLook, String> {
+            Ok(WeaponLook {
+                name: format!("w{}", id.0),
+                ..WeaponLook::default()
+            })
+        }
+
+        fn boom_look(&self, id: BoomId) -> Result<BoomLook, String> {
+            Ok(BoomLook {
+                sheet: EffectSheet {
+                    image_id: id.0,
+                    frames: NonZeroU16::MIN,
+                },
+                advance: 1.0,
+                sound: None,
+            })
+        }
+
+        fn target_card(&self, ship: ShipId) -> TargetCard {
+            TargetCard {
+                name: format!("s{}", ship.0),
+                ..TargetCard::default()
+            }
+        }
+
+        fn target_code(&self, govt: GovtId) -> Option<String> {
+            Some(format!("g{}", govt.0))
+        }
+    }
+
+    /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130
+    /// and govt 131.
+    fn looks(catalog: impl CombatLooks) -> String {
+        format!(
+            "{:?} {:?} {:?} {:?}",
+            catalog.weapon_look(WeaponId(128)).map(|look| look.name),
+            catalog
+                .boom_look(BoomId(129))
+                .map(|look| look.sheet.image_id),
+            catalog.target_card(ShipId(130)).name,
+            catalog.target_code(GovtId(131)),
+        )
+    }
+
+    #[test]
+    fn the_looks_read_are_the_weapons_given_and_every_explosion_type() {
+        let looks = Looks::read(&Named, [WeaponId(140), WeaponId(128)]);
+        let weapons: Vec<_> = looks.weapons.keys().copied().collect();
+        assert_eq!(weapons, [WeaponId(128), WeaponId(140)]);
+        assert_eq!(
+            looks.weapon(WeaponId(140)).map(|look| look.name.as_str()),
+            Some("w140")
+        );
+        assert_eq!(looks.weapon(WeaponId(129)), None);
+        let booms: Vec<_> = looks.booms.keys().map(|id| id.0).collect();
+        assert_eq!(booms, (128..=191).collect::<Vec<_>>());
+        assert_eq!(
+            looks.boom(BoomId(191)).map(|look| look.sheet.image_id),
+            Some(191)
+        );
+        assert_eq!(looks.boom(BoomId(192)), None);
+        let unread = Looks {
+            weapons: BTreeMap::from([(WeaponId(1), Err("no".to_owned()))]),
+            booms: BTreeMap::from([(BoomId(1), Err("no".to_owned()))]),
+        };
+        assert_eq!(unread.weapon(WeaponId(1)), None);
+        assert_eq!(unread.boom(BoomId(1)), None);
+    }
+
+    #[test]
+    fn borrowed_and_shared_combat_looks_are_combat_looks() {
+        let direct = r#"Ok("w128") Ok(129) "s130" Some("g131")"#;
+        assert_eq!(looks(Named), direct);
+        assert_eq!(looks(&Named), direct);
+        assert_eq!(looks(Rc::new(Named)), direct);
     }
 }

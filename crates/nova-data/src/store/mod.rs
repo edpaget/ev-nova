@@ -185,6 +185,7 @@ pub mod fs;
 mod interface;
 pub mod order;
 mod ship_desc;
+mod spin_sprite;
 mod sprite;
 mod stellar_sprite;
 #[cfg(test)]
@@ -195,6 +196,7 @@ pub use self::interface::{
     InterfaceData, NoInterfaceFile, interface_path_candidates, load_interface, open_interface,
 };
 pub use self::ship_desc::ship_desc_id;
+pub use self::spin_sprite::{SpinSheet, SpinSpriteError};
 pub use self::sprite::{LayerError, LayerSprite, ShipLayer, ShipLayers, ShipSprite, SpriteError};
 pub use self::stellar_sprite::{StellarSprite, StellarSpriteError, stellar_spin_id};
 

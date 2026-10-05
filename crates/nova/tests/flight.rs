@@ -396,7 +396,8 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
     let first = harness.frame();
     // The stars; the two stellars, then their names; the ship; the title
     // and help lines; then the HUD: the status bar's picture, two radar
-    // dots and three bars, and the system's name.
+    // dots and three bars, the system's name, and the target and secondary
+    // weapon lines.
     let shape = shape(&first);
     assert_eq!(shape[0].0, "solid");
     assert!(shape[0].1 > 0, "stars");
@@ -409,7 +410,7 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
             ("text", 2),
             ("sprites", 1),
             ("solid", 5),
-            ("text", 1)
+            ("text", 3)
         ]
     );
     let start = quads(&first);
@@ -510,11 +511,13 @@ fn the_hud_is_drawn_while_flying() {
         ]
     );
 
-    // The system's name in the nav area.
+    // The system's name in the nav area, then the target and secondary
+    // weapon lines.
     let Some(Batch::Text(runs)) = first.batches.last() else {
         panic!("text last: {:?}", shape(&first))
     };
-    assert_eq!(runs.len(), 1);
+    let lines: Vec<&str> = runs.iter().map(|run| run.text.as_str()).collect();
+    assert_eq!(lines, ["Alpha", "No Target", "No Secondary Weapon"]);
     assert_eq!(
         (runs[0].text.as_str(), runs[0].origin_px),
         ("Alpha", (838.0, 254.0))

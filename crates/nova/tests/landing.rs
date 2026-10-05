@@ -494,7 +494,9 @@ fn leave_takes_off_back_into_flight_at_the_planet() {
     assert_eq!(session.landed(), None);
     let frame = harness.frame();
     assert!(
-        texts(&frame).iter().any(|t| t.starts_with("Up: thrust")),
+        texts(&frame)
+            .iter()
+            .any(|t| t == nova_view::flight::view::HELP),
         "flight is drawn"
     );
     // And it can land again.

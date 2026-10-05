@@ -565,6 +565,12 @@ impl Session {
         self.npcs().iter().find(|npc| npc.id == id)
     }
 
+    /// The player's ship type's hull: how it breaks up and dies.
+    #[must_use]
+    pub fn hull(&self) -> HullSpec {
+        self.hull
+    }
+
     /// How the player's ship is holding up.
     #[must_use]
     pub fn player_condition(&self) -> Condition {
@@ -3929,6 +3935,13 @@ mod tests {
         };
         catalog.ship_records.push(ship(130, FAST));
         catalog
+    }
+
+    #[test]
+    fn the_players_hull_is_its_ship_types() {
+        let session = Session::start(&armed()).expect("starts");
+        assert_eq!(session.hull(), HullSpec::new(&armed_hull(128, 128)));
+        assert_eq!(session.hull().death_delay, 2);
     }
 
     #[test]

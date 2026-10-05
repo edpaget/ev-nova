@@ -23,7 +23,10 @@
 //!   default keys, the camera following the ship, under a HUD laid out by
 //!   the status bar's `ïntf`, and reads the ship's sprite and the status
 //!   bar through its [`flight::ShipSprites`] and [`flight::StatusBars`]
-//!   ports. L lands on the stellar the ship is over.
+//!   ports. L lands on the stellar the ship is over; Space and Control
+//!   fire, W selects the secondary weapon, and Tab and R pick the target,
+//!   and the fight is drawn with the looks read through its
+//!   [`flight::CombatLooks`] port.
 //! - [`menu`]: the main menu (New Pilot, Open Pilot and Quit) and the
 //!   saved pilots' list.
 //! - [`spaceport`]: the spaceport landed on, its landscape, name,
@@ -49,8 +52,8 @@
 //! # Sounds
 //!
 //! Screens report the sounds they make as events ([`sound`]): a button
-//! pressed or released, and the flight session's own. The audio side
-//! decides what each plays.
+//! pressed or released, the flight session's own, and a fight's, heard
+//! from where they happen. The audio side decides what each plays.
 //!
 //! # Developer tools
 //!
@@ -85,4 +88,4 @@ pub use image::{ImageKey, ImageKind};
 pub use input::{Input, Key, MouseButton};
 pub use navigator::Navigator;
 pub use screen::{Screen, ScreenAction, Showing};
-pub use sound::{Sound, SoundPrefs, UiSound};
+pub use sound::{CombatSound, Sound, SoundPrefs, UiSound};

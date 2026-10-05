@@ -1,9 +1,9 @@
 //! Resolving a stellar object to its sprite sheet.
 
+use super::spin_sprite::SpinSpriteError;
 use super::{GameData, SourceFile};
 use crate::error::DecodeError;
-use crate::graphics::{GraphicsError, RLED, SpriteSheet, decode_rled};
-use crate::records::spin::Spin;
+use crate::graphics::{GraphicsError, SpriteSheet};
 use crate::records::stellar::Stellar;
 use crate::wire::id::StellarId;
 
@@ -93,7 +93,7 @@ impl GameData {
     /// decode; its graphic type names `spïn` 1000 + type
     /// ([`stellar_spin_id`]), which must exist and decode; the `rlëD` is the
     /// `spïn`'s `SpritesID`, decoded with the `spïn`'s `xTiles` as its
-    /// columns.
+    /// columns ([`GameData::spin_sheet`]).
     ///
     /// The `spïn`'s `xSize` and `ySize` are not checked against the sheet:
     /// the decoded frames are authoritative (stock `spöb` 472's sheet has
@@ -113,30 +113,27 @@ impl GameData {
             stellar: id,
             graphic_type,
         })?;
-        let spin = self
-            .get::<Spin>(spin_id)
-            .ok_or(StellarSpriteError::NoSpin {
+        let spin = self.spin_sheet(spin_id).map_err(|err| match err {
+            SpinSpriteError::NoSpin(spin) => StellarSpriteError::NoSpin {
                 stellar: id,
                 graphic_type,
-                spin: spin_id,
-            })?
-            .map_err(|e| StellarSpriteError::Decode(e.clone()))?;
-        let image_id = spin.record.sprites_id;
-        let found = self
-            .resource(RLED, image_id)
-            .ok_or(StellarSpriteError::NoSheet {
-                spin: spin_id,
-                image_id,
-            })?;
-        let sheet = decode_rled(found.resource.data(), spin.record.sheet_layout())
-            .map_err(|source| StellarSpriteError::Graphics { image_id, source })?;
+                spin,
+            },
+            SpinSpriteError::Decode(err) => StellarSpriteError::Decode(err),
+            SpinSpriteError::NoSheet { spin, image_id } => {
+                StellarSpriteError::NoSheet { spin, image_id }
+            }
+            SpinSpriteError::Graphics { image_id, source } => {
+                StellarSpriteError::Graphics { image_id, source }
+            }
+        })?;
         Ok(StellarSprite {
             spin_id,
-            image_id,
-            sheet,
+            image_id: spin.image_id,
+            sheet: spin.sheet,
             stellar: entry.source,
-            spin: spin.source,
-            sheet_source: found.source,
+            spin: spin.spin,
+            sheet_source: spin.sheet_source,
         })
     }
 }
@@ -150,8 +147,9 @@ mod tests {
 
     use super::*;
     use crate::decode::Record;
-    use crate::graphics::PICT;
     use crate::graphics::fixture::RledBuilder;
+    use crate::graphics::{PICT, RLED};
+    use crate::records::spin::Spin;
     use crate::store::fake::{FakeForks, FakeTree};
     use crate::store::fs::EntryKind::File;
     use crate::testutil::buf;

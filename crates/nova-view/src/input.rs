@@ -26,6 +26,8 @@ pub enum Key {
     Backspace,
     /// Alt (Option on a Mac keyboard), either one, held as a modifier.
     Alt,
+    /// Control, either one.
+    Control,
     /// A key that types a character.
     Char(char),
     /// Any other key.

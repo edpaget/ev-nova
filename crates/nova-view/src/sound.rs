@@ -3,13 +3,14 @@
 //!
 //! - [`UiSound`]: the interface's own, a button pressed and released.
 //! - [`SimSound`]: the flight session's, re-exported from `nova_sim`.
-//! - [`Sound`]: either, as a screen reports it through
+//! - [`CombatSound`]: a fight's, a `snd ` heard from where it happened.
+//! - [`Sound`]: any of them, as a screen reports it through
 //!   [`Screen::take_sounds`](crate::Screen::take_sounds).
 //! - [`SoundPrefs`]: the player's sound preferences as the Preferences
 //!   dialog shows them, which a screen reports through
 //!   [`Screen::take_sound_prefs`](crate::Screen::take_sound_prefs).
 
-pub use nova_sim::SimSound;
+pub use nova_sim::{SimSound, SoundId};
 
 /// A sound the interface makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +22,17 @@ pub enum UiSound {
     ButtonUp,
 }
 
+/// A sound a fight makes: a weapon firing or an explosion, heard from
+/// where it happened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CombatSound {
+    /// The `snd `.
+    pub sound: SoundId,
+    /// Where it happened from the player, in whole pixels, x right and y
+    /// down: how far away it is heard.
+    pub offset: (i32, i32),
+}
+
 /// A sound a screen reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sound {
@@ -28,6 +40,8 @@ pub enum Sound {
     Sim(SimSound),
     /// From the interface.
     Ui(UiSound),
+    /// From a fight in flight.
+    Combat(CombatSound),
 }
 
 /// The loudest volume level; levels run from 0 (silent) to this.
@@ -63,6 +77,28 @@ impl Default for SoundPrefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_combat_sound_is_its_snd_heard_from_where_it_happened() {
+        let fired = Sound::Combat(CombatSound {
+            sound: SoundId(208),
+            offset: (-300, 40),
+        });
+        assert_eq!(
+            fired,
+            Sound::Combat(CombatSound {
+                sound: SoundId(208),
+                offset: (-300, 40),
+            })
+        );
+        assert_ne!(
+            fired,
+            Sound::Combat(CombatSound {
+                sound: SoundId(208),
+                offset: (0, 0),
+            })
+        );
+    }
 
     #[test]
     fn the_default_is_everything_on_at_the_loudest_level() {

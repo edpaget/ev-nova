@@ -259,6 +259,8 @@ mod tests {
             armor: rect(35.0, 216.0, 184.0, 223.0),
             fuel: rect(35.0, 234.0, 184.0, 241.0),
             nav: rect(8.0, 254.0, 184.0, 286.0),
+            weap: rect(8.0, 300.0, 184.0, 315.0),
+            targ: rect(8.0, 330.0, 184.0, 442.0),
             bright_text: TEXT,
             dim_text: Color::DIM,
             bright_radar: RADAR,
@@ -269,6 +271,7 @@ mod tests {
             fuel_partial: FUEL_PARTIAL,
             font: Font::Charcoal,
             font_size: 11.0,
+            subtitle_size: 9.0,
             status_bkgnd: bkgnd,
         }
     }

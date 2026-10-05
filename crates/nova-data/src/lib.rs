@@ -160,9 +160,9 @@ pub use file::{FileReport, OUT_OF_SCOPE, decode_file};
 pub use registry::{AnyDecoded, AnyRecord, Registered, TYPES, decode_any};
 pub use store::{
     FailedFile, GameData, IgnoredEntry, InterfaceData, LayerError, LayerSprite, NoInterfaceFile,
-    OpenError, Origin, Provenance, ShipLayer, ShipLayers, ShipSprite, SourceFile, SpriteError,
-    StellarSprite, StellarSpriteError, StoreEntry, StoreResource, interface_path_candidates,
-    load_interface, open_interface, ship_desc_id, stellar_spin_id,
+    OpenError, Origin, Provenance, ShipLayer, ShipLayers, ShipSprite, SourceFile, SpinSheet,
+    SpinSpriteError, SpriteError, StellarSprite, StellarSpriteError, StoreEntry, StoreResource,
+    interface_path_candidates, load_interface, open_interface, ship_desc_id, stellar_spin_id,
 };
 pub use wire::flags::{Flags16, Flags32, Flags64};
 pub use wire::geometry::{Point, Rect};
