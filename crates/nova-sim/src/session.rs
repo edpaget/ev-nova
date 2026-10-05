@@ -82,6 +82,10 @@
 //! stopping, landing, taking off, a jump beginning and ending), which the
 //! audio side drains with [`Session::take_sounds`]. A refused landing or
 //! jump emits nothing.
+//!
+//! In flight the engine glow's base level ([`Session::engine_glow`])
+//! ramps with the thrust each tick, as [`glow`](crate::glow) says, and
+//! landing and beginning a jump put it out.
 
 use std::collections::BTreeMap;
 
@@ -94,6 +98,7 @@ use crate::date::{self, GameDate};
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::geometry::Vec2;
+use crate::glow::ramp_glow;
 use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
@@ -138,6 +143,8 @@ pub struct Session {
     goods: Goods,
     /// Whether the ship is thrusting, as the last sounds told it.
     thrusting: bool,
+    /// The engine glow's base level (see [`glow`](crate::glow)).
+    engine_glow: u8,
     /// The sounds emitted since they were last taken.
     sounds: Vec<SimSound>,
     /// Whether the pilot has changed in a way that should be saved since
@@ -209,6 +216,7 @@ impl Session {
             jumping: None,
             goods: Goods::read(catalog),
             thrusting: false,
+            engine_glow: 0,
             sounds: Vec::new(),
             save_due: false,
             date_affixes: catalog.date_affixes(),
@@ -242,9 +250,10 @@ impl Session {
         self.stats = stats;
     }
 
-    /// Advances the session one tick under the player's `controls`, then
-    /// regenerates fuel. A landed ship, or one jumping, does not move, and
-    /// gains no fuel.
+    /// Advances the session one tick under the player's `controls`, ramps
+    /// the engine glow with the thrust, then regenerates fuel. A landed
+    /// ship, or one jumping, does not move, glows not at all, and gains no
+    /// fuel.
     pub fn tick(&mut self, controls: Controls) {
         if self.landed.is_none() && self.jumping.is_none() {
             if controls.thrust != self.thrusting {
@@ -255,13 +264,17 @@ impl Session {
                     SimSound::ThrustStopped
                 });
             }
+            self.engine_glow = ramp_glow(self.engine_glow, controls.thrust);
             step(&mut self.player, &self.stats.handling, controls);
             regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
         }
     }
 
-    /// Stops the thrust, if the ship was thrusting, as it lands or jumps.
+    /// Stops the thrust, if the ship was thrusting, and puts the engine
+    /// glow out, even as it fades after the thrust, as the ship lands or
+    /// jumps.
     fn stop_thrust(&mut self) {
+        self.engine_glow = 0;
         if self.thrusting {
             self.thrusting = false;
             self.sounds.push(SimSound::ThrustStopped);
@@ -622,6 +635,16 @@ impl Session {
         self.thrusting
     }
 
+    /// The engine glow's base level, as [`glow`](crate::glow) says: each
+    /// tick in flight thrust raises it by 1 up to
+    /// [`GLOW_CRUISE`](crate::GLOW_CRUISE) and coasting lowers it by 1 to
+    /// 0, so it stays within 0 to 24. It starts at 0, and landing and
+    /// beginning a jump put it back to 0.
+    #[must_use]
+    pub fn engine_glow(&self) -> u8 {
+        self.engine_glow
+    }
+
     /// The player's ship as it flies.
     #[must_use]
     pub fn player(&self) -> &ShipState {
@@ -688,6 +711,7 @@ mod tests {
     use crate::flight::Turn;
     use crate::fuel::FUEL_SCOOP;
     use crate::geometry::Vec2;
+    use crate::glow::GLOW_CRUISE;
     use crate::handling::ShipFields;
     use crate::hyperspace::{ARRIVAL_DISTANCE, DAYS_PER_JUMP, JumpRefusal, RouteError, StarMap};
     use crate::landing::StellarFlags;
@@ -1690,6 +1714,83 @@ mod tests {
         assert!(!session.thrusting());
         session.tick(THRUST);
         assert!(!session.thrusting(), "jumping, nothing thrusts");
+    }
+
+    // The engine glow.
+
+    #[test]
+    fn the_engine_glow_ramps_up_with_thrust_and_down_after_it() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        assert_eq!(session.engine_glow(), 0, "a new session");
+        for k in 1..=30 {
+            session.tick(THRUST);
+            assert_eq!(session.engine_glow(), k.min(GLOW_CRUISE), "{k} ticks");
+        }
+        for k in 1..=30 {
+            session.tick(Controls::default());
+            assert_eq!(
+                session.engine_glow(),
+                GLOW_CRUISE.saturating_sub(k),
+                "{k} ticks coasting"
+            );
+        }
+    }
+
+    /// A slow ship, at most half a pixel a tick, over a landable planet at
+    /// the centre: it can thrust and still land.
+    fn slow_lander() -> FakePilotCatalog {
+        FakePilotCatalog {
+            ships: vec![(ShipId(128), Ok(ShipFields { speed: 50, ..FAST }))],
+            sites: vec![(SystemId(130), vec![planet(128, 0.0, 0.0)])],
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn landing_puts_the_engine_glow_out_even_while_coasting() {
+        let mut session = Session::start(&slow_lander()).expect("starts");
+        for _ in 0..10 {
+            session.tick(THRUST);
+        }
+        for _ in 0..2 {
+            session.tick(Controls::default());
+        }
+        assert!(!session.thrusting());
+        assert_eq!(session.engine_glow(), 8, "still glowing as it coasts");
+        land_now(&mut session).expect("lands");
+        assert_eq!(session.engine_glow(), 0, "landed");
+        session.tick(THRUST);
+        assert_eq!(session.engine_glow(), 0, "docked, nothing glows");
+    }
+
+    #[test]
+    fn beginning_a_jump_puts_the_engine_glow_out() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        for _ in 0..5 {
+            session.tick(THRUST);
+        }
+        session.tick(Controls::default());
+        assert!(!session.thrusting());
+        assert!(session.engine_glow() > 0, "glowing as it coasts");
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.engine_glow(), 0, "jumping");
+        session.tick(THRUST);
+        assert_eq!(session.engine_glow(), 0, "jumping, nothing glows");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.engine_glow(), 0, "arrived");
+    }
+
+    #[test]
+    fn a_refused_jump_leaves_the_engine_glow_as_it_was() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        for _ in 0..5 {
+            session.tick(THRUST);
+        }
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+        assert_eq!(session.engine_glow(), 5);
     }
 
     #[test]
