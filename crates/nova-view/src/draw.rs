@@ -243,7 +243,8 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
 /// [`nova_sim::blink::FULL`] (32): white, with that many 32nds of full
 /// alpha, rounded to nearest, so level 32 adds the lights as they are.
 /// Levels past 32 are 32.
-pub(crate) fn lights_tint(level: u8) -> Color {
+#[must_use]
+pub fn lights_tint(level: u8) -> Color {
     let full = u16::from(FULL);
     let level = u16::from(level).min(full);
     Color::rgba(255, 255, 255, ((level * 255 + full / 2) / full) as u8)

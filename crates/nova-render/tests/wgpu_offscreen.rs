@@ -12,6 +12,7 @@ use nova_render::wgpu::{
 use nova_render::{
     Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport,
 };
+use nova_view::draw::lights_tint;
 use nova_view::{Color, DrawList, Font, ImageKey, ImageKind, Point};
 
 /// Logical 32x24 in a 64x64 target: scale 2, content (0, 8, 64, 48).
@@ -47,12 +48,23 @@ fn patterned(w: u32, h: u32) -> Image {
 }
 
 /// A patterned 4x2 picture (`PICT` 1), a white 4x4 sprite (`rlëD` 2), a
-/// patterned 2x4 sprite (`rlëD` 3), an opaque black 4x4 sprite (`rlëD` 4)
-/// and an opaque dark orange 4x4 sprite (`rlëD` 5).
+/// patterned 2x4 sprite (`rlëD` 3), an opaque black 4x4 sprite (`rlëD` 4),
+/// an opaque dark orange 4x4 sprite (`rlëD` 5) and a 4x4 lights sheet
+/// (`rlëD` 6) whose left two columns are opaque black and whose right two
+/// are opaque [`LIGHT`].
 struct Images;
 
 /// `rlëD` 5's colour.
 const ORANGE: [u8; 4] = [64, 32, 0, 255];
+
+/// The lit colour of `rlëD` 6, 5-bit (16, 16, 0) widened.
+const LIGHT: [u8; 4] = [128, 128, 0, 255];
+
+/// `rlëD` 6: two opaque black columns, then two [`LIGHT`] columns.
+fn lights_sheet() -> Image {
+    let row = [BLACK, BLACK, LIGHT, LIGHT].concat();
+    Image::from_rgba(4, 4, row.repeat(4)).expect("4x4")
+}
 
 impl ImageSource for Images {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
@@ -63,6 +75,7 @@ impl ImageSource for Images {
             (ImageKind::Rled, 3) => Ok(vec![patterned(2, 4)]),
             (ImageKind::Rled, 4) => Ok(vec![solid([0, 0, 0, 255])]),
             (ImageKind::Rled, 5) => Ok(vec![solid(ORANGE)]),
+            (ImageKind::Rled, 6) => Ok(vec![lights_sheet()]),
             _ => Err(ImageError::Missing),
         }
     }
@@ -325,6 +338,76 @@ fn an_additive_sprite_after_a_normal_one_lands_over_it_in_order() {
     assert_area(&pixels, (12, 12), (14, 14), [0, 0, 128, 255]);
     // C alone.
     assert_area(&pixels, (14, 12), (16, 16), [0, 0, 128, 255]);
+}
+
+/// The original's 16-bit light blit at `level` out of 32, transcribed
+/// from `EV Nova`'s `_BlitPixieTranslucentCopy` (0xc1110) as
+/// `_BlitPixieRLETranslucent` (0xc1568) sets it up for a lights sprite
+/// (`_alpha` = 32, `_alphaC` = level, no bias): per 5-bit channel,
+/// `((src * level) >> 5) | dst`. At level 32 it is `src | dst`,
+/// `_BlitPixieRLEAddOver` (0xc24bf).
+fn original_lights_555(src: [u8; 3], dst: [u8; 3], level: u8) -> [u8; 3] {
+    let level = u16::from(level);
+    std::array::from_fn(|c| (((u16::from(src[c]) * level) >> 5) as u8) | dst[c])
+}
+
+/// A 5-bit colour widened to an opaque 8-bit one by `c << 3`, which keeps
+/// the test's texels exact.
+fn widened(rgb: [u8; 3]) -> [u8; 4] {
+    let [r, g, b] = rgb.map(|c| c << 3);
+    [r, g, b, 255]
+}
+
+#[test]
+fn a_partial_level_light_composites_like_the_originals_translucent_blit() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // Two hull squares, logical (4..8, 4..8) and (14..18, 4..8), with the
+    // lights sheet added over the first at level 16 and over the second at
+    // level 10 (the stock triangle blink's lowest), and the sheet alone
+    // over the black clear at level 16, (24..28, 4..8). Each sheet's left
+    // half (x 4..6, 14..16, 24..26) is black and its right half is lit.
+    //
+    // The 5-bit values are chosen so the scaled light and the hull share
+    // no set bits and the floor is exact: there the original's bitwise OR
+    // equals our saturating add, so this checks the documented result
+    // itself. Where bits overlap, ours is brighter by their AND (the OR
+    // deviation recorded on `lights_tint`).
+    let (light, hull) = ([16, 16, 0], [16, 2, 8]);
+    assert_eq!(widened(light), LIGHT);
+    let hull_tint = {
+        let [r, g, b, a] = widened(hull);
+        Color::rgba(r, g, b, a)
+    };
+    let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
+    let mut list = DrawList::new();
+    list.sprite(ImageKey::sprite(2, 0), spots[0], hull_tint)
+        .sprite(ImageKey::sprite(2, 0), spots[1], hull_tint)
+        .additive_sprite(ImageKey::sprite(6, 0), spots[0], lights_tint(16))
+        .additive_sprite(ImageKey::sprite(6, 0), spots[1], lights_tint(10))
+        .additive_sprite(ImageKey::sprite(6, 0), spots[2], lights_tint(16));
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // A black lights pixel leaves the hull as it was, at either level.
+    assert_area(&pixels, (4, 4), (6, 8), widened(hull));
+    assert_area(&pixels, (14, 4), (16, 8), widened(hull));
+    // A lit one is scaled by level/32 and combined into the undimmed hull.
+    let at_16 = original_lights_555(light, hull, 16);
+    let at_10 = original_lights_555(light, hull, 10);
+    assert_eq!(widened(at_16), [192, 80, 64, 255]);
+    assert_eq!(widened(at_10), [168, 56, 64, 255]);
+    assert_area(&pixels, (6, 4), (8, 8), widened(at_16));
+    assert_area(&pixels, (16, 4), (18, 8), widened(at_10));
+    // Over the clear, black stays black and lit is the light scaled.
+    assert_area(&pixels, (24, 4), (26, 8), BLACK);
+    let alone = original_lights_555(light, [0, 0, 0], 16);
+    assert_eq!(widened(alone), [64, 64, 0, 255]);
+    assert_area(&pixels, (26, 4), (28, 8), widened(alone));
 }
 
 /// Whether any pixel in rows `rows` is not black.
