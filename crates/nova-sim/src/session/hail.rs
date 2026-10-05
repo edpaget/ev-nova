@@ -18,6 +18,13 @@
 //!   fire command are gone, and so is its provocation.
 //! - **Attack** (a bribe declined, `_AIMakeShipAttackPlayer` @0x89c3e):
 //!   it attacks the player.
+//! - **Release**: the player's escort leaves the fleet once the channel
+//!   closes ([`Session::hang_up`]), as the original's dialog does when it
+//!   closes (@0x96852): its AI type its `InherentAI`, of no government
+//!   still, it leaves the system (`_AIMakeShipLeave`), jumping out with a
+//!   jump's fuel, or else deciding as its idle block does. A save is due.
+//!   The player's escort is hailed whatever its ship type's government
+//!   says, and opens "What can I do for you?".
 //! - **Help** (`_AIMakeShipRefuelPlayer` @0x82dbb,
 //!   `_AIMakeShipRepairPlayer` @0x82df2): it assists the player
 //!   ([`Goal::Assist`]), its provocation gone. Each step
@@ -49,6 +56,9 @@ pub(super) struct Talk {
     conversation: Conversation,
     reply: Reply,
     ask: Option<Ask>,
+    /// Whether the escort hailed is to be released once the channel
+    /// closes.
+    release: bool,
 }
 
 impl Session {
@@ -83,20 +93,26 @@ impl Session {
             return Err(HailRefusal::InHyperspace);
         }
         let dispositions = self.dispositions(npc);
-        if npc.condition != Condition::Intact || dispositions.mute {
+        let escort = npc.escort.is_some();
+        if npc.condition != Condition::Intact || (dispositions.mute && !escort) {
             return Err(HailRefusal::NoResponse);
         }
         let conversation =
             Conversation::open(self.pilot.cash, dispositions.greedy, npc.info_types, chance);
-        let opening = reply::opening(
-            !dispositions.untalkative,
-            attitude(npc, &self.world().around(self.npcs())),
-        );
+        let opening = if escort {
+            reply::ESCORT_OPENING
+        } else {
+            reply::opening(
+                !dispositions.untalkative,
+                attitude(npc, &self.world().around(self.npcs())),
+            )
+        };
         self.talk = Some(Talk {
             npc: npc.id,
             conversation,
             reply: Reply::Comm(opening),
             ask: None,
+            release: false,
         });
         self.hailing(catalog, options).ok_or(HailRefusal::NoTarget)
     }
@@ -226,13 +242,24 @@ impl Session {
         self.hailing(catalog, options)
     }
 
-    /// Ends the hail under way, if any.
+    /// Ends the hail under way, if any; an escort Release was pressed
+    /// for is released now.
     pub fn hang_up(&mut self) {
-        self.talk = None;
+        if let Some(talk) = self.talk.take()
+            && talk.release
+        {
+            self.release(talk.npc);
+        }
     }
 
     /// NPC `id` does `deed` (see the module docs).
     fn act(&mut self, id: NpcId, deed: Deed) {
+        if deed == Deed::Release {
+            if let Some(talk) = &mut self.talk {
+                talk.release = true;
+            }
+            return;
+        }
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
@@ -253,6 +280,7 @@ impl Session {
                 npc.goal = Goal::Attack(ShipRef::Player);
                 npc.target = Some(ShipRef::Player);
             }
+            Deed::Release => {}
             Deed::Help(help) => {
                 npc.goal = Goal::Assist(help);
                 npc.target = Some(ShipRef::Player);
@@ -390,9 +418,11 @@ mod tests {
 
     /// The first variant's words of the groups the tests read; every
     /// other ship comm string is "c<n>".
-    const SAID: [(u16, &str); 16] = [
+    const SAID: [(u16, &str); 18] = [
         (1, "Channel open."),
         (11, "What is it you want?"),
+        (21, "What can I do for you?"),
+        (22, "What can I help you with?"),
         (46, "Nice to meet you."),
         (61, "Yeah, come back when you actually have some money."),
         (66, "Stop wasting my time."),
@@ -504,6 +534,13 @@ mod tests {
                 ),
                 (7000, fed_hails()),
                 (7505, vec!["Mind the pirates.".to_owned()]),
+                (
+                    3001,
+                    vec![
+                        "Goodbye, captain.".to_owned(),
+                        "See you around the galaxy.".to_owned(),
+                    ],
+                ),
             ],
             ..crate::testkit::catalog()
         };
@@ -1355,5 +1392,96 @@ mod tests {
         decide(&mut session, &catalog, 1, |npc| {
             assert!(!matches!(npc.goal, Goal::Assist(_)), "{:?}", npc.goal);
         });
+    }
+
+    // Hailing an escort.
+
+    /// [`targeting`]'s ship, the Federation cruiser, joined to the fleet
+    /// where it is (as a capture does), and targeted.
+    fn escorting(catalog: &FakePilotCatalog) -> Session {
+        let mut session = targeting(catalog);
+        session.join_fleet(NpcId(0));
+        session.target = Some(NpcId(0));
+        session.take_save_due();
+        session
+    }
+
+    #[test]
+    fn an_escort_answers_what_can_i_do_for_you_with_release_alone() {
+        let catalog = hailable();
+        let mut session = escorting(&catalog);
+        let view = hail(&mut session, &catalog);
+        assert_eq!(view.reply, "What can I do for you?");
+        assert_eq!(labels(&view), [("Release", Some('R'))]);
+        assert!(!view.hostile);
+        assert_eq!(view.govt_name, None, "of no government");
+        let (view, _) = hail_with(&mut session, &catalog, &opening(1));
+        assert_eq!(view.expect("answered").reply, "What can I help you with?");
+    }
+
+    #[test]
+    fn an_escort_of_a_mute_ship_type_is_hailed_all_the_same() {
+        let mut catalog = hailable();
+        catalog.ship_records[0].inherent_govt = Some(MUTED);
+        let mut session = escorting(&catalog);
+        assert!(hail_with(&mut session, &catalog, &opening(0)).0.is_ok());
+    }
+
+    #[test]
+    fn release_says_goodbye_and_the_escort_leaves_when_the_channel_closes() {
+        let catalog = hailable();
+        let mut session = escorting(&catalog);
+        hail(&mut session, &catalog);
+        let view = session
+            .answer(0, &catalog, &HailOptions::default(), &mut Draws::of(&[]))
+            .expect("answered");
+        assert_eq!(view.reply, "Goodbye, captain.");
+        assert!(session.is_escort(NpcId(0)), "not yet");
+        assert_eq!(session.pilot().escorts().len(), 1);
+        assert!(!session.take_save_due());
+        session.hang_up();
+        assert_eq!(session.pilot().escorts(), []);
+        assert!(!session.is_escort(NpcId(0)));
+        let released = npc(&mut session).clone();
+        assert_eq!(released.escort, None);
+        assert_eq!(released.ai_type, AiType::WimpyTrader, "its InherentAI");
+        assert_eq!(released.goal, Goal::JumpOut, "with a jump's fuel");
+        assert_eq!(released.target, None);
+        assert_eq!(released.govt, None);
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn released_without_a_jumps_fuel_it_decides_again() {
+        let catalog = hailable();
+        let mut session = escorting(&catalog);
+        npc(&mut session).reserves.fuel.now = 99.0;
+        hail(&mut session, &catalog);
+        session.answer(0, &catalog, &HailOptions::default(), &mut Draws::of(&[]));
+        session.hang_up();
+        assert_eq!(npc(&mut session).goal, Goal::Idle);
+    }
+
+    #[test]
+    fn hanging_up_on_an_escort_without_a_press_changes_nothing() {
+        let catalog = hailable();
+        let mut session = escorting(&catalog);
+        hail(&mut session, &catalog);
+        let before = (session.pilot().clone(), npc(&mut session).clone());
+        session.hang_up();
+        assert_eq!((session.pilot().clone(), npc(&mut session).clone()), before);
+        assert!(session.is_escort(NpcId(0)));
+        assert!(!session.take_save_due());
+        session.hang_up();
+        assert!(session.is_escort(NpcId(0)), "nothing to hang up");
+    }
+
+    #[test]
+    fn a_traffic_ship_is_never_offered_release() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        let view = hail(&mut session, &catalog);
+        assert!(labels(&view).iter().all(|(label, _)| *label != "Release"));
+        assert_eq!(view.options.len(), 2, "{view:?}");
     }
 }

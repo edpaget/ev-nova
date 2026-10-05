@@ -1,5 +1,7 @@
-//! Nova's three hail options, the defaults: [`Greetings`],
-//! [`RequestAssistance`] and [`BegForMercy`].
+//! Nova's four hail options, the defaults: [`Greetings`],
+//! [`RequestAssistance`], [`BegForMercy`] and [`Release`]. The first
+//! three are for any ship but the player's escort, and Release for the
+//! escort alone.
 //!
 //! The comm dialog's buttons stand in a column (`_DrawCommDialogButtons`
 //! @0x28c43 in the `EV Nova` executable): Greetings, then the middle
@@ -51,6 +53,14 @@
 //!    ha. What a comedian."; short, "Yeah, come back when you actually
 //!    have some money.".
 //!
+//! **Release** (`STR#` 150 #32, key R, the escort dialog's), listed for
+//! the player's escort alone (`_DoCommDialog` @0x95721): it says "Goodbye,
+//! captain." (group 38) and releases the escort ([`Deed::Release`]) once
+//! the channel closes (`_releaseCommEscort` @0x96848). The escort's hail
+//! opens "What can I do for you?" (group 4). The original gives a hired
+//! or captured escort its own dialog (`DLOG` 1022), with Upgrade and
+//! Sell; that waits for hiring.
+//!
 //! **Beg For Mercy** (item 2, @0x96107-0x96258, key R), the engine's
 //! bribe, listed for a talkative hostile ship. In order:
 //!
@@ -65,7 +75,7 @@
 
 use super::reply::{
     self, BAD_MOOD, BUSY, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU, IN_YOUR_DREAMS,
-    NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST, PLEASURE, RATHER_NOT,
+    NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST, PLEASURE, RATHER_NOT, RELEASED,
     WASTING_TIME,
 };
 use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply};
@@ -179,8 +189,8 @@ impl HailOption for Greetings {
         Some(GREETINGS_KEY)
     }
 
-    fn applies(&self, _hail: &Hail) -> bool {
-        true
+    fn applies(&self, hail: &Hail) -> bool {
+        !hail.escort()
     }
 
     fn press(&self, hail: &Hail, _chance: &mut dyn Chance) -> Answer {
@@ -226,7 +236,7 @@ impl HailOption for RequestAssistance {
     }
 
     fn applies(&self, hail: &Hail) -> bool {
-        hail.attitude != Attitude::Hostile && !hail.dispositions.untalkative
+        hail.attitude != Attitude::Hostile && !hail.dispositions.untalkative && !hail.escort()
     }
 
     fn press(&self, hail: &Hail, _chance: &mut dyn Chance) -> Answer {
@@ -297,7 +307,7 @@ impl HailOption for BegForMercy {
     }
 
     fn applies(&self, hail: &Hail) -> bool {
-        hail.attitude == Attitude::Hostile && !hail.dispositions.untalkative
+        hail.attitude == Attitude::Hostile && !hail.dispositions.untalkative && !hail.escort()
     }
 
     fn press(&self, hail: &Hail, _chance: &mut dyn Chance) -> Answer {
@@ -314,6 +324,36 @@ impl HailOption for BegForMercy {
                 short: Reply::Comm(NO_MONEY),
             }),
             ..Answer::say(Reply::Comm(mood_reply(hail.mood, PAY_ME_FIRST)))
+        }
+    }
+}
+
+/// Release's label, `STR#` 150 #32.
+pub const RELEASE: &str = "Release";
+/// Release's hotkey, the escort dialog's.
+pub const RELEASE_KEY: char = 'R';
+
+/// Release (see the module docs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Release;
+
+impl HailOption for Release {
+    fn label(&self) -> String {
+        RELEASE.to_owned()
+    }
+
+    fn key(&self) -> Option<char> {
+        Some(RELEASE_KEY)
+    }
+
+    fn applies(&self, hail: &Hail) -> bool {
+        hail.escort()
+    }
+
+    fn press(&self, _hail: &Hail, _chance: &mut dyn Chance) -> Answer {
+        Answer {
+            deed: Some(Deed::Release),
+            ..Answer::say(Reply::Comm(RELEASED))
         }
     }
 }
@@ -387,6 +427,54 @@ mod tests {
         npc.govt = govt.map(GovtId);
         npc.info_types = info_types;
         npc
+    }
+
+    /// `npc` as the player's escort.
+    fn escorting(mut npc: Npc) -> Npc {
+        npc.escort = Some(crate::escort::EscortDuty {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+            order: None,
+        });
+        npc
+    }
+
+    #[test]
+    fn release_applies_only_to_an_escort_and_the_others_never_to_one() {
+        let stranger = ship();
+        let escort = escorting(ship());
+        let [greetings, request, beg] = engine();
+        for attitude in [Attitude::Friendly, Attitude::Unfriendly, Attitude::Hostile] {
+            for dispositions in [Dispositions::default(), untalkative()] {
+                let of = |npc| Hail {
+                    attitude,
+                    dispositions,
+                    ..hail(npc)
+                };
+                assert!(Release.applies(&of(&escort)), "{attitude:?}");
+                assert!(!Release.applies(&of(&stranger)), "{attitude:?}");
+                for option in [&greetings, &request, &beg] {
+                    assert!(!option.applies(&of(&escort)), "{}", option.label());
+                }
+            }
+        }
+        assert!(hail(&escort).escort());
+        assert!(!hail(&stranger).escort());
+    }
+
+    #[test]
+    fn release_says_goodbye_and_releases_the_escort() {
+        let escort = escorting(ship());
+        assert_eq!(Release.label(), "Release");
+        assert_eq!(Release.key(), Some('R'));
+        assert_eq!(
+            press(&Release, &hail(&escort)),
+            Answer {
+                deed: Some(Deed::Release),
+                ..says(RELEASED)
+            }
+        );
     }
 
     #[test]

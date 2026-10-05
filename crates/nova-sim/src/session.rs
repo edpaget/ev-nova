@@ -126,6 +126,15 @@
 //! haggled over and paid from the cash ([`Session::haggle`]), which makes
 //! no save due. The hail under way, and the help, are never saved.
 //!
+//! The pilot's fleet flies with it: each escort an NPC
+//! beside the player, keeping formation, following it through jumps, and
+//! fighting by its standing order, which the player commands
+//! ([`Session::command_escorts`], [`Session::escort_menu`]) and which
+//! entering a system resets, or keeps, as
+//! [`Session::with_escort_orders`] says. A ship captured joins the fleet
+//! where it is; an escort disabled or destroyed leaves it, and one hailed
+//! may be released. Each change to the fleet makes a save due.
+//!
 //! The player targets an NPC ([`Session::select_target`]), the nearest,
 //! the nearest threat or the next in turn as the
 //! [`targeting`](crate::targeting) rules say, and
@@ -174,6 +183,7 @@ use crate::combat::report::SimDiagnostic;
 use crate::combat::weapon::{Ammo, Guidance};
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
 use crate::date::GameDate;
+use crate::escort::EscortDuty;
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::geometry::Vec2;
@@ -196,7 +206,7 @@ use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::targeting::{self, TargetPick};
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::npc::{AiType, Npc, NpcId};
 use crate::traffic::table::SpawnTable;
 use crate::traffic::{Traffic, World};
 
@@ -274,6 +284,9 @@ pub struct Session {
     /// Whether the escorts' standing orders are reset on entering a
     /// system (see [`Session::with_escort_orders`]).
     escort_orders: RuleSource,
+    /// Each escort of the fleet's NPC in the system, lined up with the
+    /// pilot's escorts while in flight; none for one not placed.
+    fleet: Vec<Option<NpcId>>,
 }
 
 impl Session {
@@ -361,9 +374,11 @@ impl Session {
             talk: None,
             comm: Vec::new(),
             escort_orders: RuleSource::Engine,
+            fleet: Vec::new(),
             pilot,
         };
         session.refit(false);
+        session.restock_fleet();
         Ok(session)
     }
 
@@ -643,6 +658,8 @@ impl Session {
         let strikes = self.combat.take_strikes();
         self.punish(&strikes, &was, rules.law);
         self.strikes.extend(strikes);
+        self.sync_fleet();
+        self.lose_escorts();
         let destroyed: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -715,6 +732,9 @@ impl Session {
                     self.target = nearest.or(self.target);
                 }
                 TargetPick::Next => self.target = targeting::next(npcs, self.target),
+                TargetPick::NextEscort => {
+                    self.target = targeting::next_escort(npcs, self.target);
+                }
             }
         }
         self.target
@@ -776,11 +796,15 @@ impl Session {
         self.traffic.departed()
     }
 
-    /// The ship types the system's traffic can spawn, by ascending ID, so
-    /// a view can read their sprites up front.
+    /// The ship types the system's traffic can spawn and the escorts
+    /// fly, by ascending ID, so a view can read their sprites up front.
     #[must_use]
     pub fn traffic_ships(&self) -> Vec<ShipId> {
-        self.traffic.ship_types()
+        let mut ships = self.traffic.ship_types();
+        ships.extend(self.pilot.escorts.iter().map(|escort| escort.ship));
+        ships.sort_unstable();
+        ships.dedup();
+        ships
     }
 
     /// Ship type `ship`'s name, as its [`ShipRecord`] gives it, if the
@@ -956,6 +980,8 @@ impl Session {
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         self.traffic_due = true;
+        self.restock_fleet();
+        self.fleet.clear();
         self.sounds.push(SimSound::TookOff);
         self.save_due = true;
         Some(stellar)
@@ -1494,20 +1520,56 @@ impl Session {
         self.aboard = None;
     }
 
-    /// NPC `id` joins the fleet, its armour at half its most, and leaves
-    /// the system; a save is due.
+    /// NPC `id` joins the fleet where it is (`_AIMakeEscortFlyInForm`
+    /// @0x89b8e): intact, its armour at half its most, of no government,
+    /// its AI type its ship type's `InherentAI`, keeping formation with
+    /// no standing order. Every other NPC lets it go, its own escorts
+    /// leave it, and so does the player's target; a save is due.
     fn join_fleet(&mut self, id: NpcId) {
-        let Some(npc) = self.npcs().iter().find(|npc| npc.id == id).cloned() else {
+        let inherent_ai = self
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .and_then(|npc| self.ship_record(npc.ship))
+            .map(|record| record.inherent_ai);
+        let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
-        let mut reserves = npc.reserves;
-        reserves.armor.now = reserves.armor.max * ESCORT_ARMOR_SHARE;
-        self.pilot.escorts.push(Escort {
-            ship: npc.ship,
-            reserves,
+        npc.reserves.armor.now = npc.reserves.armor.max * ESCORT_ARMOR_SHARE;
+        npc.condition = Condition::Intact;
+        npc.govt = None;
+        if let Some(inherent_ai) = inherent_ai {
+            npc.ai_type = AiType::from_raw(inherent_ai);
+        }
+        npc.leader = None;
+        npc.goal = Goal::Formation { guard: None };
+        npc.target = None;
+        npc.trigger = Trigger::default();
+        npc.provoked = 0.0;
+        npc.escort = Some(EscortDuty {
+            slot: 0,
+            ships: 0,
+            spacing: 0.0,
             order: None,
         });
-        self.leave(id);
+        let escort = Escort {
+            ship: npc.ship,
+            reserves: npc.reserves,
+            order: None,
+        };
+        self.drop_quarry(id);
+        for other in self.traffic.npcs_mut() {
+            if other.leader == Some(id) {
+                other.leader = None;
+            }
+        }
+        if self.target == Some(id) {
+            self.target = None;
+        }
+        self.pilot.escorts.push(escort);
+        self.fleet.resize(self.pilot.escorts.len() - 1, None);
+        self.fleet.push(Some(id));
+        self.reform();
         self.save_due = true;
     }
 
@@ -1543,11 +1605,11 @@ impl Session {
             return Some(Assigned::Abandoned);
         };
         let stock = ShipStats::new(self.fields, &outfit_mods(&self.defaults, &self.outfits));
-        self.pilot.escorts.push(Escort {
+        let old = Escort {
             ship: self.pilot.ship,
             reserves: stock.full(),
             order: None,
-        });
+        };
         let defaults = pilot::tally(record.defaults.iter().copied());
         let records = &self.outfits;
         self.pilot.outfits.retain(|id, _| {
@@ -1583,6 +1645,14 @@ impl Session {
             }
         }
         self.leave(npc.id);
+        self.pilot.escorts.push(old);
+        self.fleet.resize(self.pilot.escorts.len() - 1, None);
+        let placed = self.place_escort(self.pilot.escorts.len() - 1);
+        self.fleet.push(placed);
+        self.reform();
+        if let Some(id) = placed {
+            self.snap(id);
+        }
         self.save_due = true;
         Some(Assigned::MyShip)
     }
@@ -6583,10 +6653,46 @@ mod tests {
             Taken::Escorted
         );
         assert_eq!(session.pilot().escorts(), [trader_escort()]);
-        assert_eq!(session.npcs().len(), 1, "it left the system");
+        assert_joined_in_place(&session);
         assert_eq!(session.target(), None);
         assert_eq!(session.boarding(), None);
         assert!(session.take_save_due());
+    }
+
+    /// The trader, NPC 0, has joined the fleet where it is: intact, its
+    /// armour at half its most, of no government, its AI type its ship
+    /// type's, keeping formation in slot 2 with no standing order, and
+    /// let go by the police.
+    fn assert_joined_in_place(session: &Session) {
+        assert_eq!(
+            session.npcs().iter().map(|npc| npc.id).collect::<Vec<_>>(),
+            [NpcId(0), NpcId(1)],
+            "it stays in the system"
+        );
+        let escort = &session.npcs()[0];
+        assert_eq!(escort.condition, Condition::Intact);
+        assert_eq!(escort.reserves, trader_escort().reserves);
+        assert_eq!(escort.govt, None);
+        assert_eq!(escort.ai_type, crate::traffic::npc::AiType::WimpyTrader);
+        assert_eq!(escort.goal, Goal::Formation { guard: None });
+        assert_eq!(escort.target, None);
+        assert_eq!(
+            escort.escort,
+            Some(EscortDuty {
+                slot: 2,
+                ships: 2,
+                spacing: crate::escort::spacing(None, &[None]),
+                order: None,
+            })
+        );
+        assert_eq!(escort.fleet(), ShipRef::Player);
+        assert!(session.is_escort(NpcId(0)));
+        assert!(!session.is_escort(NpcId(1)));
+        assert_ne!(
+            session.npcs()[1].target,
+            Some(ShipRef::Npc(NpcId(0))),
+            "the police let it go"
+        );
     }
 
     /// [`aboard`], captured and awaiting its assignment.
@@ -6610,11 +6716,7 @@ mod tests {
             Some(Assigned::Escort)
         );
         assert_eq!(session.pilot().escorts(), [trader_escort()]);
-        assert_eq!(
-            session.npcs().iter().map(|npc| npc.id).collect::<Vec<_>>(),
-            [NpcId(1)],
-            "the trader left"
-        );
+        assert_joined_in_place(&session);
         assert_eq!(session.target(), None);
         assert_eq!(session.boarding(), None);
         assert_eq!(
@@ -6722,8 +6824,30 @@ mod tests {
             }],
             "the old ship, stock and full"
         );
-        assert_eq!(session.npcs().len(), 1, "the captured ship left");
+        assert_eq!(
+            session
+                .npcs()
+                .iter()
+                .map(|npc| (npc.id, npc.ship))
+                .collect::<Vec<_>>(),
+            [(NpcId(1), ShipId(130)), (NpcId(2), ShipId(128))],
+            "the captured ship left, and the old one flies beside the player"
+        );
         assert_eq!(session.npcs()[0].leader, None, "its escort let go");
+        let old = &session.npcs()[1];
+        assert!(session.is_escort(old.id));
+        let duty = old.escort.expect("an escort");
+        assert_eq!((duty.slot, duty.ships, duty.order), (2, 2, None));
+        assert_eq!(
+            old.state,
+            ShipState {
+                position: crate::escort::slot_position(session.player(), 2, 2, duty.spacing),
+                ..*session.player()
+            },
+            "on its slot"
+        );
+        assert_eq!(old.reserves, Reserves::full(300.0, 450.0, 300.0));
+        assert_eq!(old.govt, None);
         assert_eq!(session.player_condition(), Condition::Intact);
         assert_eq!(session.boarding(), None);
         assert!(session.take_save_due());

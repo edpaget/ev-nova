@@ -104,6 +104,15 @@ pub const ON_MY_WAY: u8 = 29;
 pub const HOW_DARE_YOU: u8 = 30;
 /// Group 31: "Ha ha ha. What a comedian.": help's price declined.
 pub const COMEDIAN: u8 = 31;
+/// Group 4: "What can I do for you?": the opening line to the player's
+/// escort.
+pub const ESCORT_OPENING: u8 = 4;
+/// Group 22: "Sorry sir, I'm just an escort.": Request Assistance to a
+/// carried fighter or a mission escort that likes the player and is
+/// busy. No escort lists Request Assistance yet, so it is not said.
+pub const JUST_AN_ESCORT: u8 = 22;
+/// Group 38: "Goodbye, captain.": an escort released.
+pub const RELEASED: u8 = 38;
 
 /// The words an option asks a hailed ship to say.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -383,11 +392,18 @@ mod tests {
                 ON_MY_WAY,
                 HOW_DARE_YOU,
                 COMEDIAN,
+                ESCORT_OPENING,
+                JUST_AN_ESCORT,
+                RELEASED,
             ],
             [
-                0, 1, 2, 9, 12, 13, 14, 16, 17, 18, 19, 20, 23, 24, 28, 29, 30, 31
+                0, 1, 2, 9, 12, 13, 14, 16, 17, 18, 19, 20, 23, 24, 28, 29, 30, 31, 4, 22, 38
             ]
         );
+        assert_eq!(Reply::locate(ESCORT_OPENING, 0), (3000, 21));
+        assert_eq!(Reply::locate(RELEASED, 0), (3001, 1));
+        assert_eq!(Reply::locate(RELEASED, 4), (3001, 5));
+        assert_eq!(Reply::locate(JUST_AN_ESCORT, 3), (3000, 114));
         assert_eq!(GREETINGS, (2002, 175));
     }
 

@@ -18,6 +18,8 @@
 //! - [`wimpy`], [`brave`], [`warship`] and [`interceptor`]: Nova's four AI
 //!   types, each its own [`Behaviour`], and [`NovaAi`], which routes each
 //!   NPC to the one for its type.
+//! - [`escort`]: [`EscortAi`], how the player's escorts fly and fight by
+//!   their standing orders; [`NovaAi`] routes every escort to it.
 
 pub mod brave;
 pub mod escort;

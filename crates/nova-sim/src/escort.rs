@@ -249,6 +249,31 @@ impl EscortGroup {
     }
 }
 
+/// What a command to the escorts changed, for its message: the group
+/// it went to, the command, and whether Attack copied the player's
+/// target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Commanded {
+    /// The escorts it went to.
+    pub group: EscortGroup,
+    /// The command.
+    pub command: EscortCommand,
+    /// Whether the escorts took the player's target to attack.
+    pub targeted: bool,
+}
+
+/// One class's row in the escort menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClassRow {
+    /// The class.
+    pub class: EscortClass,
+    /// Whether the player has an escort of it.
+    pub present: bool,
+    /// The standing order of its first escort; none for formation, or
+    /// with no escort of it.
+    pub order: Option<EscortOrder>,
+}
+
 /// An escort's duty in the system: its place in the formation and the
 /// standing order it follows. An NPC carries one while it escorts the
 /// player; it is never saved.

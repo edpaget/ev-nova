@@ -7,8 +7,8 @@
 //!
 //! 1. A ship that threatens the player ([`Npc::threatens_player`]) does
 //!    not like it.
-//! 2. The player's escorts do, and so do the governments that bless the
-//!    player; neither happens yet.
+//! 2. The player's escorts do. (So do the governments that bless the
+//!    player, which does not happen yet.)
 //! 3. An independent ship does.
 //! 4. A xenophobic G in another government's system does not when L is
 //!    above that government's tol. At home, and otherwise, the rules
@@ -47,6 +47,9 @@ pub enum Attitude {
 pub fn likes_player(npc: &Npc, around: &Surroundings) -> bool {
     if npc.threatens_player() {
         return false;
+    }
+    if npc.escort.is_some() {
+        return true;
     }
     let Some(govt) = npc.govt else {
         return true;
@@ -173,6 +176,27 @@ mod tests {
             assert!(!likes_player(&npc, &around), "{govt:?}");
             assert_eq!(attitude(&npc, &around), Attitude::Hostile);
         }
+    }
+
+    #[test]
+    fn the_players_escort_likes_it_whatever_its_record() {
+        let govts = govts(0);
+        let mut escort = ship(Some(ALLY));
+        escort.escort = Some(crate::escort::EscortDuty {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+            order: None,
+        });
+        let around = Surroundings {
+            govts: &govts,
+            system_govt: Some(ME),
+            record: -100,
+            ..Surroundings::new(&[], &[])
+        };
+        assert!(!likes(0, Some(ALLY), Some(ME), -100), "not as a stranger");
+        assert!(likes_player(&escort, &around));
+        assert_eq!(attitude(&escort, &around), Attitude::Friendly);
     }
 
     #[test]

@@ -3,10 +3,14 @@
 //! The rules are the original's (`_HandlePlayer` and the searches it calls
 //! in the `EV Nova` executable):
 //!
-//! - A ship is a candidate ([`targetable`]) while it is intact or
-//!   disabled: a ship breaking up or destroyed is not (`_IsDying`). Cloaked
-//!   and untargetable ships, ships coming out of a hypergate and the
-//!   player's escorts are skipped too, once they exist.
+//! - A ship is targetable ([`targetable`]) while it is intact or
+//!   disabled: a ship breaking up or destroyed is not (`_IsDying`). Target
+//!   Select and Closest Target skip the player's escorts ([`candidate`]);
+//!   cloaked and untargetable ships and ships coming out of a hypergate
+//!   are skipped too, once they exist.
+//! - Escort Select (Option-Tab here) walks the player's escorts alone,
+//!   in the same order, from the one after the target, and does not wrap
+//!   ([`next_escort`]).
 //! - Target Select (Tab, `_FindNextShipInSystem` @0xa5b1, its caller
 //!   @0x69f1c-0x69ff5) walks the ship slots in order, from the one after
 //!   the target, or from the first with none, and does not wrap: past the
@@ -37,6 +41,9 @@ pub enum TargetPick {
     NearestThreat,
     /// The next candidate after the target ([`next`]).
     Next,
+    /// The next of the player's escorts after the target
+    /// ([`next_escort`]).
+    NextEscort,
 }
 
 /// Whether `npc` can be targeted: it is intact or disabled.
@@ -45,12 +52,19 @@ pub fn targetable(npc: &Npc) -> bool {
     matches!(npc.condition, Condition::Intact | Condition::Disabled)
 }
 
-/// The targetable NPC among `npcs` that passes `filter` nearest `from`, by
+/// Whether `npc` is a candidate for Target Select and Closest Target:
+/// targetable, and not one of the player's escorts.
+#[must_use]
+pub fn candidate(npc: &Npc) -> bool {
+    targetable(npc) && npc.escort.is_none()
+}
+
+/// The candidate among `npcs` that passes `filter` nearest `from`, by
 /// squared distance, a tie going to the earlier; none when none qualifies.
 #[must_use]
 pub fn nearest(npcs: &[Npc], from: Vec2, filter: impl Fn(&Npc) -> bool) -> Option<NpcId> {
     let mut best: Option<(f32, NpcId)> = None;
-    for npc in npcs.iter().filter(|npc| targetable(npc) && filter(npc)) {
+    for npc in npcs.iter().filter(|npc| candidate(npc) && filter(npc)) {
         let off = npc.state.position - from;
         let distance = off.x * off.x + off.y * off.y;
         if best.is_none_or(|(nearest, _)| distance < nearest) {
@@ -60,12 +74,29 @@ pub fn nearest(npcs: &[Npc], from: Vec2, filter: impl Fn(&Npc) -> bool) -> Optio
     best.map(|(_, id)| id)
 }
 
-/// The first targetable NPC among `npcs` numbered after `current`, or the
-/// first targetable one when there is no target; none past the last.
+/// The first candidate among `npcs` numbered after `current`, or the
+/// first candidate when there is no target; none past the last.
 #[must_use]
 pub fn next(npcs: &[Npc], current: Option<NpcId>) -> Option<NpcId> {
+    first_after(npcs, current, candidate)
+}
+
+/// The first of the player's escorts among `npcs` numbered after
+/// `current`, or the first when there is no target; none past the last.
+#[must_use]
+pub fn next_escort(npcs: &[Npc], current: Option<NpcId>) -> Option<NpcId> {
+    first_after(npcs, current, |npc| targetable(npc) && npc.escort.is_some())
+}
+
+/// The first NPC among `npcs` passing `filter` numbered after `current`,
+/// or the first passing it when there is no target.
+fn first_after(
+    npcs: &[Npc],
+    current: Option<NpcId>,
+    filter: impl Fn(&Npc) -> bool,
+) -> Option<NpcId> {
     npcs.iter()
-        .filter(|npc| targetable(npc))
+        .filter(|npc| filter(npc))
         .map(|npc| npc.id)
         .find(|&id| current.is_none_or(|current| id > current))
 }
@@ -192,5 +223,64 @@ mod tests {
         assert_eq!(next(&npcs, None), Some(NpcId(2)));
         assert_eq!(next(&npcs, Some(NpcId(2))), Some(NpcId(4)));
         assert_eq!(next(&npcs[..1], None), None);
+    }
+
+    /// NPC `id` at (`x`, `y`), the player's escort.
+    fn escort(id: u32, x: f32, y: f32) -> Npc {
+        let mut npc = intact(id, x, y);
+        npc.escort = Some(crate::escort::EscortDuty {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+            order: None,
+        });
+        npc
+    }
+
+    #[test]
+    fn the_nearest_and_next_skip_the_players_escorts() {
+        let npcs = [
+            escort(1, 10.0, 0.0),
+            intact(2, 20.0, 0.0),
+            escort(3, 5.0, 0.0),
+        ];
+        assert_eq!(nearest(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
+        assert_eq!(next(&npcs, None), Some(NpcId(2)));
+        assert_eq!(next(&npcs, Some(NpcId(2))), None);
+        assert_eq!(nearest(&[escort(1, 0.0, 0.0)], Vec2::ZERO, |_| true), None);
+        assert!(targetable(&npcs[0]), "an escort targeted stays targeted");
+    }
+
+    #[test]
+    fn next_escort_walks_the_escorts_alone_in_order_then_gives_none() {
+        let npcs = [
+            escort(1, 0.0, 0.0),
+            intact(2, 0.0, 0.0),
+            escort(4, 0.0, 0.0),
+            intact(5, 0.0, 0.0),
+            escort(7, 0.0, 0.0),
+        ];
+        let mut walked = Vec::new();
+        let mut current = None;
+        for _ in 0..5 {
+            current = next_escort(&npcs, current);
+            walked.push(current);
+        }
+        assert_eq!(
+            walked,
+            [
+                Some(NpcId(1)),
+                Some(NpcId(4)),
+                Some(NpcId(7)),
+                None,
+                Some(NpcId(1))
+            ]
+        );
+        assert_eq!(
+            next_escort(&npcs, Some(NpcId(2))),
+            Some(NpcId(4)),
+            "after a non-escort"
+        );
+        assert_eq!(next_escort(&npcs[1..2], None), None);
     }
 }

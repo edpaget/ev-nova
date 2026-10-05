@@ -1932,6 +1932,94 @@ fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
     );
     let saved = nova_sim::save::decode(&nova_sim::save::encode(session.pilot())).expect("reads");
     assert_eq!(&saved, session.pilot());
+    // The trader flies with the player as its escort, through a jump.
+    assert!(session.is_escort(fight.trader), "it joined where it was");
+    let next = first_link(&data, 136);
+    session.plot_course(next).expect("a route");
+    let mut tries = 0;
+    while session.player().position.length() < session.stats().jump_distance {
+        session.tick(nova_sim::Controls {
+            thrust: true,
+            ..nova_sim::Controls::default()
+        });
+        session.tick_traffic(&data, &NovaAi::default(), &mut fight.chance);
+        tries += 1;
+        assert!(tries < 10_000, "never got out");
+    }
+    session.begin_jump().expect("jumps");
+    assert_eq!(session.arrive(&data, &mut fight.chance), Some(next));
+    let arrived: Vec<_> = session
+        .npcs()
+        .iter()
+        .filter(|npc| npc.escort.is_some())
+        .collect();
+    assert_eq!(arrived.len(), 1, "the trader came along");
+    assert_eq!(arrived[0].ship, class);
+    assert!(session.is_escort(arrived[0].id));
+    let off = arrived[0].state.position - session.player().position;
+    assert!(off.length() < 100.0, "beside the player: {off:?}");
+}
+
+/// The stock ships' escort classes: the Shuttle (`shïp` 128) a freighter,
+/// the Starbridge (133) a medium ship, the Lightning (135) a fighter and
+/// the Fed Destroyer (141) a warship.
+#[test]
+fn stock_ships_have_their_escort_classes() {
+    use nova_sim::escort::EscortClass;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let ships = PilotCatalog::ships(&data);
+    let class = |id: i16| {
+        let record = ships
+            .iter()
+            .find(|record| record.id == ShipId(id))
+            .expect("a stock shïp");
+        EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass)
+    };
+    assert_eq!(
+        [128, 133, 135, 141].map(class),
+        [
+            EscortClass::Freighter,
+            EscortClass::Medium,
+            EscortClass::Fighter,
+            EscortClass::Warship
+        ]
+    );
+    assert!(
+        ships
+            .iter()
+            .all(|record| (0..=3).contains(&record.escort_type)),
+        "every stock shïp names its class"
+    );
+}
+
+/// The stock escort strings: `STR#` 2002's menu, command and message
+/// strings, `STR#` 3000's opening to an escort, `STR#` 3001's farewell
+/// and `STR#` 150's Release.
+#[test]
+fn stock_escort_strings_are_where_escorts_read_them() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let messages = nova_sim::CommCatalog::string_list(&data, 2002);
+    for (n, text) in nova_sim::escort::STRINGS {
+        assert_eq!(messages[usize::from(n) - 1], text, "STR# 2002 #{n}");
+    }
+    assert_eq!(
+        nova_sim::CommCatalog::string_list(&data, 3000)[20],
+        "What can I do for you?"
+    );
+    assert_eq!(
+        nova_sim::CommCatalog::string_list(&data, 3001)[0],
+        "Goodbye, captain."
+    );
+    assert_eq!(
+        nova_sim::CommCatalog::string_list(&data, 150)[31],
+        nova_sim::hail::nova::RELEASE
+    );
 }
 
 /// The stock `düde` and `shïp` fields boarding reads: the Civvies

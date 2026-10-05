@@ -5,8 +5,9 @@
 //! the ship answers with a ship comm string ([`reply`]) chosen by its
 //! [`Attitude`] ([`like`]), and a [`Conversation`] rolls its variant,
 //! mood, price and advice once ([`deal`]). The dialog lists the
-//! [`HailOption`]s that apply, Nova's three by default ([`nova`]:
-//! Greetings, Request Assistance and Beg For Mercy). Each option sees the
+//! [`HailOption`]s that apply, Nova's four by default ([`nova`]:
+//! Greetings, Request Assistance and Beg For Mercy, and Release for the
+//! player's escort). Each option sees the
 //! conversation as a read-only [`Hail`] and answers a press with an
 //! [`Answer`]: the [`Reply`] the ship says, a [`Deed`] it does, and a
 //! price it asks ([`Ask`]), which the player may haggle over. The session
@@ -56,7 +57,7 @@ use crate::traffic::npc::{Npc, NpcId};
 pub use crate::ai::Help;
 pub use deal::{Conversation, Haggle, Mood, Settled};
 pub use like::{Attitude, attitude, likes_player};
-pub use nova::{BegForMercy, Greetings, RequestAssistance};
+pub use nova::{BegForMercy, Greetings, Release, RequestAssistance};
 pub use reply::Reply;
 
 /// `Flags`: its ships answer no hail.
@@ -153,6 +154,14 @@ pub struct Hail<'a> {
     pub need: Option<Help>,
 }
 
+impl Hail<'_> {
+    /// Whether the ship hailed is the player's escort.
+    #[must_use]
+    pub fn escort(&self) -> bool {
+        self.npc.escort.is_some()
+    }
+}
+
 impl<'a> Hail<'a> {
     /// The hail of `npc` among `around`, of `dispositions`, in
     /// conversation `talk`, the player needing `need`. It is busy while
@@ -199,6 +208,9 @@ pub enum Deed {
     Attack,
     /// It flies over to help the player.
     Help(Help),
+    /// The player's escort leaves the fleet, and the system, once the
+    /// channel closes.
+    Release,
 }
 
 /// A price a ship asks, and what it says and does as the haggling ends.
@@ -320,7 +332,7 @@ pub struct HailOptions {
 }
 
 impl Default for HailOptions {
-    /// Nova's three, by the engine.
+    /// Nova's four, by the engine.
     fn default() -> Self {
         Self::nova(&Rulebook::default())
     }
@@ -335,8 +347,8 @@ impl HailOptions {
         }
     }
 
-    /// Nova's three, Greetings, Request Assistance and Beg For Mercy, as
-    /// `rulebook` chooses: their
+    /// Nova's four, Greetings, Request Assistance, Beg For Mercy and
+    /// Release, as `rulebook` chooses: the first three's
     /// [`RuleKey::QuietHails`](crate::RuleKey::QuietHails) and Greetings'
     /// [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice) entries.
     #[must_use]
@@ -345,6 +357,7 @@ impl HailOptions {
             .with(Rc::new(Greetings::from_rulebook(rulebook)))
             .with(Rc::new(RequestAssistance::from_rulebook(rulebook)))
             .with(Rc::new(BegForMercy::from_rulebook(rulebook)))
+            .with(Rc::new(Release))
     }
 
     /// These options with `option` after them.
@@ -665,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn nova_lists_greetings_then_the_middle_option_that_applies() {
+    fn nova_lists_greetings_then_the_middle_option_that_applies_and_release_for_an_escort() {
         let options = HailOptions::nova(&Rulebook::default());
         let npc = ship();
         let friendly = hail(&npc);
@@ -686,6 +699,19 @@ mod tests {
             ..hostile
         };
         assert_eq!(labels(&options, &untalkative), ["Greetings"]);
+        let mut escort = ship();
+        escort.escort = Some(crate::escort::EscortDuty {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+            order: None,
+        });
+        assert_eq!(
+            labels(&options, &hail(&escort)),
+            ["Release"],
+            "the escort's"
+        );
+        assert_eq!(labels(&HailOptions::default(), &hail(&escort)), ["Release"]);
     }
 
     #[test]

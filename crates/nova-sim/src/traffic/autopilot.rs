@@ -14,6 +14,14 @@
 //! - [`Goal::Assist`]: outside its reach of the player (see
 //!   [`assist`]) it follows the player as an escort its lead; within it,
 //!   it brakes.
+//! - [`Goal::Formation`]: the player's escort keeps its slot beside the
+//!   player ([`escort::slot_position`]). Within
+//!   [`KEEP_FORMATION`] of it on each axis, it takes the player's
+//!   velocity and heading and moves with it, nudged back towards the slot
+//!   on each axis more than [`FORMATION_SLACK`] off by at most
+//!   [`FORMATION_NUDGE`] ticks' acceleration; within
+//!   [`APPROACH_FORMATION`], it closes on the slot at the speed it can
+//!   still brake from; farther off, it flies at full speed towards it.
 //! - [`Goal::Idle`], or a goal it cannot fly (a stellar, lead or player
 //!   that is not there): it brakes to a stop.
 //! - A ship that is not [`Condition::Intact`] (disabled, breaking up or

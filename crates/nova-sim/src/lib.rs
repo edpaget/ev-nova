@@ -8,7 +8,9 @@
 //!   each NPC by its AI type to [`WimpyTrader`], [`BraveTrader`],
 //!   [`Warship`] or [`Interceptor`]: whom they attack by governments'
 //!   relations and the player's legal record, when they flee, how they
-//!   come to each other's help, and which weapon they fire.
+//!   come to each other's help, and which weapon they fire; and the
+//!   player's escorts to [`EscortAi`], which flies them by their standing
+//!   orders.
 //! - [`board`]: boarding a disabled ship: whether the player can
 //!   ([`BoardRefusal`]), the [`Plunder`] rolled for it, the plunder
 //!   dialog's [`Take`]s and what each [`Taken`] did, capturing it, and
@@ -43,6 +45,12 @@
 //!   `MemoryPilots`, a pilot store in memory.
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
 //!   one day a jump.
+//! - [`escort`]: the player's escorts: their [`EscortClass`], the
+//!   [`EscortOrder`] each follows, the [`EscortCommand`]s the player gives
+//!   an [`EscortGroup`] and what one changed ([`Commanded`]), the escort
+//!   menu's [`ClassRow`]s, an escort NPC's [`EscortDuty`], the formation
+//!   it keeps beside the player, and how it scores the threats to the
+//!   player.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
@@ -56,9 +64,9 @@
 //!   price and advice) and haggling over a price ([`Haggle`]), the
 //!   [`Reply`] it says, and the [`HailOption`] port the comm dialog lists
 //!   ([`HailOptions`]), with Nova's Greetings, Request Assistance and Beg
-//!   For Mercy, which answer each press with an [`Answer`]: a reply, a
-//!   [`Deed`] and a price asked ([`Ask`]); and the [`Help`] a ship gives
-//!   the player once asked.
+//!   For Mercy, and [`Release`] for the player's escort, which answer each
+//!   press with an [`Answer`]: a reply, a [`Deed`] and a price asked
+//!   ([`Ask`]); and the [`Help`] a ship gives the player once asked.
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
@@ -94,8 +102,9 @@
 //!   opens them.
 //! - [`session`]: a flight [`Session`], a pilot's ship flying
 //!   from its starting system, landing, jumping along a plotted course,
-//!   fighting, boarding and capturing ships, and hailing them
-//!   ([`HailView`], [`HailRefusal`], [`CommNote`]).
+//!   fighting, boarding and capturing ships, hailing them
+//!   ([`HailView`], [`HailRefusal`], [`CommNote`]), and flying and
+//!   commanding its escorts.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -107,8 +116,8 @@
 //!   capacities, fuel, shield and armour regeneration and cargo space come
 //!   from.
 //! - [`targeting`]: which NPC the player's target command picks
-//!   ([`TargetPick`]): the nearest, the nearest threat, or the next in
-//!   turn.
+//!   ([`TargetPick`]): the nearest, the nearest threat, the next in turn,
+//!   or the next of the player's escorts.
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
@@ -155,7 +164,7 @@ pub mod traffic;
 pub mod wares;
 
 pub use ai::{
-    Behaviour, BraveTrader, Goal, Interceptor, NovaAi, Peaceful, PlayerSide, Reaction,
+    Behaviour, BraveTrader, EscortAi, Goal, Interceptor, NovaAi, Peaceful, PlayerSide, Reaction,
     Surroundings, Warship, WimpyTrader,
 };
 pub use board::{
@@ -177,13 +186,16 @@ pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Rules, ShipRef, Strike};
 pub use date::GameDate;
+pub use escort::{
+    ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
+};
 pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
 pub use govt::Governments;
 pub use hail::{
     Answer, Ask, Attitude, CommNote, Conversation, Deed, Haggle, Hail, HailButton, HailOption,
-    HailOptions, HailRefusal, HailView, Help, Reply,
+    HailOptions, HailRefusal, HailView, Help, Release, Reply,
 };
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};

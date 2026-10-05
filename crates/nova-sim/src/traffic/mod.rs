@@ -5,10 +5,10 @@
 //!   resolved when the system is entered.
 //! - [`spawn`]: the rolls: the initial population, the arrivals over time
 //!   and the fleets, and where each ship starts.
-//! - [`npc`]: an [`Npc`]: its ship, government, AI type, stats,
-//!   reserves, flight state and goal, its condition, armament and fire
-//!   command, and its provocation, aggression and the ship it last
-//!   inspected.
+//! - [`npc`]: an [`Npc`]: its ship, government, AI type, escort class
+//!   and duty as the player's escort, stats, reserves, flight state and
+//!   goal, its condition, armament and fire command, and its provocation,
+//!   aggression and the ship it last inspected.
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
 //!
@@ -30,7 +30,7 @@
 //!    its provocation, and one that stops inspecting a ship remembers it;
 //! 5. the autopilot and a flight step for every NPC, each flying towards
 //!    the ship its goal is about, the player's included (the one it
-//!    assists);
+//!    assists, or escorts in formation);
 //! 6. and the removal of those that landed or jumped out.
 //!
 //! The fight ([`combat`](crate::combat)) damages them, and its session
@@ -327,6 +327,15 @@ impl Traffic {
     /// The NPCs, in the order they appeared, to fight with.
     pub(crate) fn npcs_mut(&mut self) -> &mut [Npc] {
         &mut self.npcs
+    }
+
+    /// Adds `npc` to the system, numbered as the next NPC, and gives its
+    /// number.
+    pub(crate) fn add_npc(&mut self, npc: Npc) -> NpcId {
+        let id = NpcId(self.next_id);
+        self.next_id += 1;
+        self.npcs.push(Npc { id, ..npc });
+        id
     }
 
     /// Takes NPC `id` out of the system, if it is there.
@@ -1035,6 +1044,20 @@ mod tests {
             traffic.npcs()[0].state.position.x > -500.0,
             "{:?}",
             traffic.npcs()[0].state
+        );
+    }
+
+    #[test]
+    fn an_npc_added_is_numbered_after_every_other() {
+        let mut traffic = populated(2, 1);
+        let added = traffic.add_npc(crate::testkit::npc(77, ShipStats::default()));
+        assert_eq!(added, NpcId(2));
+        assert_eq!(traffic.npcs()[2].id, NpcId(2));
+        traffic.enter(table(1), &mut Draws::of(&placed(0, 0)));
+        assert_eq!(traffic.npcs()[0].id, NpcId(3), "never reused");
+        assert_eq!(
+            traffic.add_npc(crate::testkit::npc(0, ShipStats::default())),
+            NpcId(4)
         );
     }
 
