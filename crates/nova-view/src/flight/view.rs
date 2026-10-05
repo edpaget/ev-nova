@@ -26,7 +26,9 @@
 //! ([`FlightView::with_behaviour`]; [`Peaceful`] by default), and then the
 //! fight ([`Session::tick_combat`]), its ships disabled as the screen's
 //! [`DisableRule`] says ([`FlightView::with_disable_rule`];
-//! [`NovaDisable`] by default). What could not be read of the looks
+//! [`NovaDisable`] by default), and their point defence engaging the
+//! missiles its [`PointDefenceRule`] calls hostile
+//! ([`FlightView::with_point_defence_rule`]; [`OtherFleets`] by default). What could not be read of the looks
 //! (each once, when the screen is built), then the session's diagnostics
 //! about game data it does not handle yet, pass through
 //! [`Screen::take_diagnostics`] for the app to write out. Each NPC is
@@ -112,10 +114,10 @@ use std::time::Duration;
 use nova_sim::{
     Behaviour, Chance, CombatCatalog, Condition, Controls, DisableRule, FixedStep, GovtId,
     JumpRefusal, LandingRefusal, Market, NeverFires, NovaDisable, Npc, NpcId, Order, OtherFleets,
-    OutfitOrder, OutfitRefusal, Outfitter, Peaceful, Pilot, PilotCatalog, RechargeRefusal,
-    Reserves, Rules, Session, ShipId, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
-    StartError, StellarId, Steps, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2, WeaponId,
-    flight::normalized, flight::shortest_turn,
+    OutfitOrder, OutfitRefusal, Outfitter, Peaceful, Pilot, PilotCatalog, PointDefenceRule,
+    RechargeRefusal, Reserves, Rules, Session, ShipId, ShipPurchase, ShipRef, ShipRefusal,
+    ShipState, Shipyard, StartError, StellarId, Steps, TargetPick, TradeRefusal, TrafficCatalog,
+    Turn, Vec2, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -351,6 +353,8 @@ pub struct FlightView<C> {
     behaviour: Rc<dyn Behaviour>,
     /// When a ship in the fight is disabled.
     disable_rule: Rc<dyn DisableRule>,
+    /// Which missiles the ships' point defence engages.
+    defence_rule: Rc<dyn PointDefenceRule>,
     /// Each NPC ship type's sheet, or why it cannot be shown, read once.
     npc_sheets: BTreeMap<ShipId, Result<ShipSheet, String>>,
     /// Each NPC as it was a step before the session's.
@@ -451,6 +455,7 @@ impl<
             chance: SharedChance::default(),
             behaviour: Rc::new(Peaceful),
             disable_rule: Rc::new(NovaDisable),
+            defence_rule: Rc::new(OtherFleets),
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
             unread_looks: looks
@@ -504,6 +509,16 @@ impl<
     pub fn with_disable_rule(self, disable_rule: Rc<dyn DisableRule>) -> Self {
         Self {
             disable_rule,
+            ..self
+        }
+    }
+
+    /// The flight with its ships' point defence engaging the missiles
+    /// `rule` calls hostile.
+    #[must_use]
+    pub fn with_point_defence_rule(self, defence_rule: Rc<dyn PointDefenceRule>) -> Self {
+        Self {
+            defence_rule,
             ..self
         }
     }
@@ -1095,28 +1110,16 @@ impl<
                     .collect();
                 session.tick(controls);
                 session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                // Which beams were already live: a looped sound is heard
-                // once a beam.
-                let beams_before: Vec<(ShipRef, WeaponId)> = session
-                    .beams()
-                    .iter()
-                    .map(|beam| (beam.firer, beam.weapon.id))
-                    .collect();
                 let rules = Rules {
                     disable: &*self.disable_rule,
-                    defence: &OtherFleets,
+                    defence: &*self.defence_rule,
                 };
                 session.tick_combat(rules, &mut self.chance);
                 let player = point(session.player().position);
                 let dying = dying(session, &self.sheet, &self.npc_sheets);
                 let chance = &mut self.effects_chance;
                 self.effects.step(&dying, player, &self.looks, chance);
-                let ships = ship_positions(session);
-                let scene = Scene {
-                    player,
-                    ships: &ships,
-                    beams_before: &beams_before,
-                };
+                let scene = Scene { player };
                 for event in session.take_combat_events() {
                     self.effects.apply(&event, &scene, &self.looks, chance);
                 }
@@ -1231,16 +1234,6 @@ impl<
 /// The simulation's `v` as a view point.
 fn point(v: Vec2) -> Point {
     Point::new(v.x, v.y)
-}
-
-/// Where each ship in `session` is: the player, then the NPCs.
-fn ship_positions(session: &Session) -> Vec<(ShipRef, Point)> {
-    let player = (ShipRef::Player, point(session.player().position));
-    let npcs = session
-        .npcs()
-        .iter()
-        .map(|npc| (ShipRef::Npc(npc.id), point(npc.state.position)));
-    std::iter::once(player).chain(npcs).collect()
 }
 
 /// The ships in `session` breaking up, each with its sprite's width from
@@ -4846,13 +4839,14 @@ mod tests {
     }
 
     #[test]
-    fn a_looped_weapon_is_heard_once_while_its_beam_lasts() {
+    fn a_looped_weapon_is_heard_again_only_once_its_sound_has_played_out() {
         let mut catalog = armed(0, &[UNDER]);
         catalog.weapons[4].reload = 0;
         catalog.weapons[4].count = 5;
         catalog.looks[4].1 = Ok(WeaponLook {
             flags: weapons::LOOPED_SOUND,
             sound: Some(nova_sim::SoundId(220)),
+            sound_ticks: Some(3),
             ..WeaponLook::default()
         });
         let mut view = fighting(catalog, &[]);
@@ -4863,13 +4857,17 @@ mod tests {
             4,
             "a beam fired each step"
         );
-        assert_eq!(combat_sounds(&mut view).len(), 1, "heard once");
+        assert_eq!(combat_sounds(&mut view).len(), 2, "on the first and fourth");
         view.input(&key(FIRE_KEY, false));
-        ticks(&mut view, 5);
-        assert_eq!(view.session().expect("flying").beams(), [], "over");
+        ticks(&mut view, 1);
         view.input(&key(FIRE_KEY, true));
         ticks(&mut view, 1);
-        assert_eq!(combat_sounds(&mut view).len(), 1, "a fresh beam");
+        assert_eq!(combat_sounds(&mut view), [], "still playing");
+        view.input(&key(FIRE_KEY, false));
+        ticks(&mut view, 3);
+        view.input(&key(FIRE_KEY, true));
+        ticks(&mut view, 1);
+        assert_eq!(combat_sounds(&mut view).len(), 1, "played out");
     }
 
     #[test]
@@ -4883,5 +4881,141 @@ mod tests {
         for name in ["Space", "Ctrl", "W", "Tab", "R:"] {
             assert!(HELP.contains(name), "{name}: {HELP}");
         }
+    }
+
+    // Point defence.
+
+    /// Says no missile is hostile, counting the times it is asked.
+    #[derive(Debug, Default)]
+    struct Unalarmed {
+        asked: std::cell::Cell<usize>,
+    }
+
+    impl nova_sim::PointDefenceRule for Unalarmed {
+        fn hostile(
+            &self,
+            _defender: nova_sim::combat::defence::Side,
+            _firer: nova_sim::combat::defence::Side,
+        ) -> bool {
+            self.asked.set(self.asked.get() + 1);
+            false
+        }
+    }
+
+    /// Every NPC idles, targets the player and holds its trigger.
+    #[derive(Debug)]
+    struct Attacking;
+
+    impl Behaviour for Attacking {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            Goal::Idle
+        }
+
+        fn trigger(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+        ) -> nova_sim::Trigger {
+            nova_sim::Trigger {
+                primary: true,
+                secondary: None,
+            }
+        }
+
+        fn target(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+        ) -> Option<ShipRef> {
+            Some(ShipRef::Player)
+        }
+    }
+
+    const QUAD: WeaponId = WeaponId(133);
+    const IR: WeaponId = WeaponId(134);
+
+    /// [`armed`] with the player, over a planet at the centre, carrying a
+    /// point-defence turret, and its traffic a missile it fires once, 5
+    /// pixels a tick.
+    fn defending() -> FakeCatalog {
+        let mut catalog = armed(1, &[]);
+        catalog.sites = vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        catalog.weapons.push(nova_sim::WeaponRecord {
+            reload: 5,
+            count: 12,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..gun(QUAD, 0, 9, -1)
+        });
+        catalog.weapons.push(nova_sim::WeaponRecord {
+            reload: 1000,
+            count: 200,
+            speed: 500,
+            ..gun(IR, 0, 1, -1)
+        });
+        catalog.hulls = vec![hull_of(128, &[QUAD]), hull_of(129, &[IR])];
+        catalog
+    }
+
+    /// `catalog`'s flight with its NPC attacking from 200 pixels above
+    /// the player, after the step that populates the system.
+    fn attacked(catalog: FakeCatalog) -> View {
+        let (_, chance) = scripted(&placed(750, 550, 180));
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Attacking));
+        view.tick(TICK);
+        view
+    }
+
+    #[test]
+    fn the_fight_asks_the_point_defence_rule_given_each_step_in_flight() {
+        let rule = Rc::new(Unalarmed::default());
+        let mut view = attacked(defending()).with_point_defence_rule(rule.clone());
+        view.tick(TICK);
+        assert_eq!(shots_of(&view, IR), 1, "fired at the player");
+        assert_eq!(rule.asked.get(), 1, "of the one missile");
+        ticks(&mut view, 2);
+        assert_eq!(rule.asked.get(), 3);
+        assert_eq!(shots_of(&view, QUAD), 0, "never hostile");
+        view.input(&key(MAP_KEY, true));
+        ticks(&mut view, 2);
+        assert_eq!(rule.asked.get(), 3, "not while the map is open");
+        view.input(&key(MAP_KEY, true));
+        view.input(&key(LAND_KEY, true));
+        assert!(view.take_landing().is_some());
+        ticks(&mut view, 2);
+        assert_eq!(rule.asked.get(), 3, "not while landed");
+    }
+
+    #[test]
+    fn a_missile_shot_down_is_drawn_exploding_and_unheard() {
+        let mut view = attacked(defending());
+        let mut sounds = Vec::new();
+        let mut exploded = false;
+        for _ in 0..12 {
+            view.tick(TICK);
+            sounds.extend(combat_sounds(&mut view));
+            let explosion = drawn(&view).iter().any(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 400),
+            );
+            if explosion {
+                exploded = true;
+                break;
+            }
+        }
+        assert!(exploded, "bööm 128 drawn");
+        assert_eq!(shots_of(&view, IR), 0, "shot down");
+        assert!(
+            sounds
+                .iter()
+                .all(|sound| sound.sound != nova_sim::SoundId(302)),
+            "{sounds:?}"
+        );
     }
 }

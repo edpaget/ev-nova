@@ -12,6 +12,9 @@ use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
 use nova_data::records::weapon::Weapon;
+use nova_data::sound::decode_snd;
+use nova_rsrc::ResType;
+use nova_sim::TICKS_PER_SECOND;
 
 use super::catalog::{
     BoomId, BoomLook, CombatLooks, EffectSheet, GovtId, ShipId, ShipSheet, ShipSprites, SoundId,
@@ -114,10 +117,12 @@ impl CombatLooks for GameData {
         let weapon = entry.record;
         let sheet = (weapon.graphic >= 0)
             .then(|| effect_sheet(self, FIRST_SHOT_SPIN.saturating_add(weapon.graphic)));
+        let sound = offset_sound(FIRST_WEAPON_SOUND, weapon.sound);
         Ok(WeaponLook {
             name: resource_name(entry.name.unwrap_or_default()),
             sheet,
-            sound: offset_sound(FIRST_WEAPON_SOUND, weapon.sound),
+            sound,
+            sound_ticks: sound.and_then(|sound| sound_ticks(self, sound)),
             flags: weapon.flags.bits(),
             flags2: weapon.flags2.bits(),
             flags3: weapon.flags3.bits(),
@@ -178,6 +183,20 @@ fn effect_sheet(data: &GameData, id: i16) -> Result<EffectSheet, String> {
 fn resource_name(name: &str) -> String {
     name.split(';').next().unwrap_or_default().to_owned()
 }
+
+/// How long `snd ` `sound` lasts in `data`, in ticks rounded up: its
+/// frames over its rate; none when it is missing, cannot be decoded, or
+/// has no rate.
+fn sound_ticks(data: &GameData, sound: SoundId) -> Option<u32> {
+    let snd = data.resource(SND, sound.0)?;
+    let pcm = decode_snd(snd.resource.data()).ok()?;
+    let hz = pcm.sample_rate().hz();
+    let seconds_x_ticks = pcm.frames() as f64 * f64::from(TICKS_PER_SECOND);
+    (hz > 0.0).then(|| (seconds_x_ticks / hz).ceil() as u32)
+}
+
+/// The `snd ` resource type.
+const SND: ResType = ResType::new(*b"snd ");
 
 /// The `snd ` `index` past `first`, or none for a negative index.
 fn offset_sound(first: i16, index: i16) -> Option<SoundId> {
@@ -447,6 +466,7 @@ mod tests {
     use nova_data::records::boom::Boom;
     use nova_data::records::spin::Spin;
     use nova_data::records::weapon::Weapon;
+    use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
 
     use super::super::catalog::{BoomId, CombatLooks, EffectSheet, SoundId, TargetCard, WeaponId};
 
@@ -535,8 +555,66 @@ mod tests {
                 beam_color: 0x00FF_8000,
                 corona_color: 0x0000_80FF,
                 prox_safety: 6,
+                sound_ticks: None,
             })
         );
+    }
+
+    /// A `snd ` of `frames` 8-bit mono frames at 22,050 Hz.
+    fn snd(frames: usize) -> Vec<u8> {
+        SndBuilder::new(
+            SndFormat::Two,
+            Header::Standard {
+                rate: 22_050 << 16,
+                loop_points: (0, 0),
+                base_note: 60,
+                samples: vec![0x80; frames],
+            },
+        )
+        .bytes()
+    }
+
+    #[test]
+    fn a_weapons_sound_lasts_its_frames_over_its_rate_in_ticks_rounded_up() {
+        for (frames, ticks) in [(11_025, 15), (11_026, 16), (11_024, 15), (735, 1)] {
+            let data = named_store(&[
+                (Weapon::TYPE, 155, Some("Hail Chaingun"), weapon(-1, 5)),
+                (SND, 205, None, snd(frames)),
+            ]);
+            let look = data.weapon_look(WeaponId(155)).expect("reads");
+            assert_eq!(look.sound_ticks, Some(ticks), "{frames}");
+        }
+    }
+
+    #[test]
+    fn a_weapon_whose_sound_is_missing_or_cannot_be_decoded_has_no_length() {
+        let data = named_store(&[
+            (Weapon::TYPE, 155, Some("Hail Chaingun"), weapon(-1, 5)),
+            (Weapon::TYPE, 156, Some("Railgun"), weapon(-1, 6)),
+            (Weapon::TYPE, 157, Some("Silent"), weapon(-1, -1)),
+            (Weapon::TYPE, 158, Some("Rateless"), weapon(-1, 8)),
+            (SND, 205, None, vec![0, 1, 2]),
+            (SND, 199, None, snd(100)),
+            (
+                SND,
+                208,
+                None,
+                SndBuilder::new(
+                    SndFormat::Two,
+                    Header::Standard {
+                        rate: 0,
+                        loop_points: (0, 0),
+                        base_note: 60,
+                        samples: vec![0x80; 100],
+                    },
+                )
+                .bytes(),
+            ),
+        ]);
+        for id in [155, 156, 157, 158] {
+            let look = data.weapon_look(WeaponId(id)).expect("reads");
+            assert_eq!(look.sound_ticks, None, "{id}");
+        }
     }
 
     #[test]

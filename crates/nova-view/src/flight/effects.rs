@@ -24,13 +24,26 @@
 //!   particles of debris, by the original's particle model: each in a
 //!   random direction at [`DEBRIS_SPEED`] ± [`DEBRIS_SPEED_VARIATION`] %,
 //!   living 15-45 ticks, and carried on with the ship's velocity.
-//! - A weapon firing sounds its `snd `, and an explosion its own, each
-//!   heard from where it happened ([`CombatSound`]). A weapon whose sound
-//!   loops while its beam lasts (`Flags` 0x0010) is heard once a beam: not
-//!   again while a beam of it from the same ship was already live before
-//!   the step, which the caller says ([`Scene::beams_before`]).
+//! - A weapon firing sounds its `snd ` from where it was fired (its ship,
+//!   or the shot releasing sub-munitions), and an explosion its own, each
+//!   heard from the player ([`CombatSound`]).
+//! - A weapon whose sound loops (`Flags` 0x0010) is not heard again while
+//!   its sound is still playing: for its length in steps
+//!   ([`WeaponLook::sound_ticks`]) after it was heard. It plays out when
+//!   firing stops, and is never stopped. The original's rule
+//!   (`_ST_IsSoundPlaying`, for the player, NPCs, point defence and
+//!   sub-munitions alike) keeps one of each `snd ` playing; here each ship
+//!   keeps its own, so two ships' chainguns are each heard, from where
+//!   each is. A looped weapon whose sound has no known length is heard
+//!   every shot.
+//! - A missile shot down by point defence goes off as explosion type 0
+//!   ([`SHOT_DOWN`]), unheard, as `_SpawnExplod` plays nothing.
+//!
+//! [`WeaponLook::sound_ticks`]: super::catalog::WeaponLook::sound_ticks
 //!
 //! The effects draw on their own [`Chance`], never on the simulation's.
+
+use std::collections::BTreeMap;
 
 use nova_sim::combat::weapon::Explosion as Blast;
 use nova_sim::{Chance, CombatEvent, ShipRef, Vec2};
@@ -47,6 +60,8 @@ pub const MAX_EXPLOSIONS: usize = 32;
 pub const SMALL_EXTRA: BoomId = BoomId(129);
 /// The large extra explosions, `bööm` 128.
 pub const LARGE_EXTRA: BoomId = BoomId(128);
+/// A missile shot down by point defence, explosion type 0: `bööm` 128.
+pub const SHOT_DOWN: BoomId = BoomId(128);
 /// Small extras per unit of size (the double @0xdd700).
 pub const SMALL_PER_SIZE: f64 = 0.04;
 /// Large extras per unit of size (the double @0xdd710).
@@ -114,15 +129,11 @@ pub struct Particle {
     pub life: u32,
 }
 
-/// Where a step's events are placed and heard from.
+/// Where a step's events are heard from.
 #[derive(Clone, Copy, Debug)]
-pub struct Scene<'a> {
+pub struct Scene {
     /// Where the player is: sounds are heard from here.
     pub player: Point,
-    /// Where each ship is.
-    pub ships: &'a [(ShipRef, Point)],
-    /// The beams live before the step: each firer and its weapon.
-    pub beams_before: &'a [(ShipRef, WeaponId)],
 }
 
 /// A ship breaking up.
@@ -144,6 +155,9 @@ pub struct Effects {
     explosions: Vec<Explosion>,
     debris: Vec<Particle>,
     sounds: Vec<CombatSound>,
+    /// Each looped weapon sound still playing, by firer and weapon, with
+    /// the steps it has left.
+    playing: BTreeMap<(ShipRef, WeaponId), u32>,
 }
 
 impl Effects {
@@ -157,16 +171,25 @@ impl Effects {
         chance: &mut dyn Chance,
     ) {
         match *event {
-            CombatEvent::Fired { ship, weapon, .. } => {
-                let Some(look) = looks.weapon(weapon) else {
+            CombatEvent::Fired { ship, weapon, at } => {
+                let Some((sound, look)) = looks
+                    .weapon(weapon)
+                    .and_then(|look| Some((look.sound?, look)))
+                else {
                     return;
                 };
-                let looping =
-                    look.flags & LOOPED_SOUND != 0 && scene.beams_before.contains(&(ship, weapon));
-                let firer = scene.ships.iter().find(|(id, _)| *id == ship);
-                if let (Some(sound), Some(&(_, at)), false) = (look.sound, firer, looping) {
-                    self.sounds.push(heard(sound, at, scene.player));
+                if look.flags & LOOPED_SOUND != 0
+                    && let Some(ticks) = look.sound_ticks
+                {
+                    if self.playing.contains_key(&(ship, weapon)) {
+                        return;
+                    }
+                    self.playing.insert((ship, weapon), ticks);
                 }
+                self.sounds.push(heard(sound, point(at), scene.player));
+            }
+            CombatEvent::ShotDown { at } => {
+                self.spawn(SHOT_DOWN, point(at), 0.0, looks);
             }
             CombatEvent::Exploded { at, explosion } => {
                 self.explode(explosion, point(at), 0.0, scene.player, looks, chance);
@@ -183,9 +206,7 @@ impl Effects {
                 }
                 self.scatter(point(at), point(velocity), chance);
             }
-            CombatEvent::Disabled { .. }
-            | CombatEvent::BreakingUp { .. }
-            | CombatEvent::ShotDown { .. } => {}
+            CombatEvent::Disabled { .. } | CombatEvent::BreakingUp { .. } => {}
         }
     }
 
@@ -261,9 +282,14 @@ impl Effects {
         }
     }
 
-    /// Advances the explosions and debris a step, then sets off the
-    /// explosions of the ships `dying`, heard from `player`.
+    /// Advances the explosions and debris a step, and the looped sounds
+    /// playing, then sets off the explosions of the ships `dying`, heard
+    /// from `player`.
     pub fn step(&mut self, dying: &[Dying], player: Point, looks: &Looks, chance: &mut dyn Chance) {
+        self.playing.retain(|_, left| {
+            *left = left.saturating_sub(1);
+            *left > 0
+        });
         self.explosions.retain_mut(|explosion| {
             let Some(look) = looks.boom(explosion.boom) else {
                 return false;
@@ -341,11 +367,13 @@ impl Effects {
         std::mem::take(&mut self.sounds)
     }
 
-    /// Clears everything: the explosions, the debris and the sounds.
+    /// Clears everything: the explosions, the debris, the sounds, and the
+    /// looped sounds playing.
     pub fn clear(&mut self) {
         self.explosions.clear();
         self.debris.clear();
         self.sounds.clear();
+        self.playing.clear();
     }
 }
 
@@ -408,21 +436,26 @@ mod tests {
 
     /// `bööm` 128 (3 frames, silent), 129 (2 frames, silent), 130 (4
     /// frames, `snd ` 302), 135 (3 frames at 0.3 a step, `snd ` 300),
-    /// 142 (no sheet, `snd ` 303); 140 cannot be read; weapon 128 sounds `snd ` 208, weapon 146 loops `snd ` 210, and
-    /// weapon 147 is silent.
+    /// 142 (no sheet, `snd ` 303); 140 cannot be read. Weapon 128 sounds
+    /// `snd ` 208; 146, a beam, loops `snd ` 210 for 3 ticks; 147 is
+    /// silent; 148 loops `snd ` 211 of no known length; and 155, a
+    /// chaingun, loops `snd ` 205 for 14 ticks.
     fn looks() -> Looks {
-        let weapon = |sound: Option<i16>, flags| {
+        let weapon = |sound: Option<i16>, flags, sound_ticks| {
             Ok(WeaponLook {
                 sound: sound.map(SoundId),
                 flags,
+                sound_ticks,
                 ..WeaponLook::default()
             })
         };
         Looks {
             weapons: BTreeMap::from([
-                (WeaponId(128), weapon(Some(208), 0)),
-                (WeaponId(146), weapon(Some(210), LOOPED_SOUND)),
-                (WeaponId(147), weapon(None, 0)),
+                (WeaponId(128), weapon(Some(208), 0, Some(5))),
+                (WeaponId(146), weapon(Some(210), LOOPED_SOUND, Some(3))),
+                (WeaponId(147), weapon(None, LOOPED_SOUND, Some(3))),
+                (WeaponId(148), weapon(Some(211), LOOPED_SOUND, None)),
+                (WeaponId(155), weapon(Some(205), LOOPED_SOUND, Some(14))),
             ]),
             booms: BTreeMap::from([
                 (BoomId(128), Ok(boom_look(400, 3, 1.0, None))),
@@ -783,42 +816,46 @@ mod tests {
         assert_eq!(effects.explosions(), []);
     }
 
-    /// The scene: the player at the origin and NPC 1 at (300, -400), with
-    /// `beams` live before the step.
-    fn scene(beams: &[(ShipRef, WeaponId)]) -> Scene<'_> {
-        const SHIPS: [(ShipRef, Point); 2] = [
-            (ShipRef::Player, PLAYER),
-            (ShipRef::Npc(NpcId(1)), Point::new(300.0, -400.0)),
-        ];
-        Scene {
-            player: PLAYER,
-            ships: &SHIPS,
-            beams_before: beams,
-        }
+    /// The scene: the player at the origin.
+    fn scene() -> Scene {
+        Scene { player: PLAYER }
     }
 
+    /// Where NPC 1 is.
+    const NPC_AT: Vec2 = Vec2::new(300.0, -400.0);
+
+    /// `ship` firing `weapon` from where it is: the player at the origin,
+    /// any NPC at [`NPC_AT`].
     fn fired(ship: ShipRef, weapon: i16) -> CombatEvent {
         CombatEvent::Fired {
             ship,
             weapon: WeaponId(weapon),
-            at: Vec2::ZERO,
+            at: if ship == ShipRef::Player {
+                Vec2::ZERO
+            } else {
+                NPC_AT
+            },
         }
     }
 
     const NPC: ShipRef = ShipRef::Npc(NpcId(1));
 
     #[test]
-    fn a_weapon_fired_sounds_from_its_firer() {
+    fn a_weapon_fired_sounds_from_where_it_was_fired() {
         let mut effects = Effects::default();
         let mut chance = Script::default();
         for event in [
             fired(ShipRef::Player, 128),
             fired(NPC, 128),
             fired(NPC, 147),
-            fired(ShipRef::Npc(NpcId(9)), 128),
             fired(NPC, 199),
+            CombatEvent::Fired {
+                ship: NPC,
+                weapon: WeaponId(128),
+                at: Vec2::new(-5.0, 7.0),
+            },
         ] {
-            effects.apply(&event, &scene(&[]), &looks(), &mut chance);
+            effects.apply(&event, &scene(), &looks(), &mut chance);
         }
         assert_eq!(
             effects.take_sounds(),
@@ -830,9 +867,13 @@ mod tests {
                 CombatSound {
                     sound: SoundId(208),
                     offset: (300, -400)
+                },
+                CombatSound {
+                    sound: SoundId(208),
+                    offset: (-5, 7)
                 }
             ],
-            "silent, gone, or unread: unheard"
+            "silent or unread: unheard"
         );
         assert_eq!(effects.take_sounds(), [], "taken");
         assert_eq!(effects.explosions(), []);
@@ -840,11 +881,8 @@ mod tests {
 
     #[test]
     fn a_sound_is_heard_from_where_the_player_is() {
-        let ships = [(ShipRef::Player, at(10.0, 20.0)), (NPC, at(300.0, -400.0))];
         let scene = Scene {
             player: at(10.0, 20.0),
-            ships: &ships,
-            beams_before: &[],
         };
         let mut effects = Effects::default();
         effects.apply(&fired(NPC, 128), &scene, &looks(), &mut Script::default());
@@ -857,37 +895,103 @@ mod tests {
         );
     }
 
+    /// The steps of `steps` on which `firers` firing `weapon` every step
+    /// are heard, each firer's separately.
+    fn heard_on(weapon: i16, firers: &[ShipRef], steps: u32) -> Vec<Vec<u32>> {
+        let mut effects = Effects::default();
+        let mut heard = vec![Vec::new(); firers.len()];
+        for step in 0..steps {
+            effects.step(&[], PLAYER, &looks(), &mut Script::default());
+            for (n, &firer) in firers.iter().enumerate() {
+                effects.apply(
+                    &fired(firer, weapon),
+                    &scene(),
+                    &looks(),
+                    &mut Script::default(),
+                );
+                if !effects.take_sounds().is_empty() {
+                    heard[n].push(step);
+                }
+            }
+        }
+        heard
+    }
+
     #[test]
-    fn a_looped_weapon_is_heard_once_a_beam_and_not_while_it_was_already_live() {
-        let looped = |live: &[(ShipRef, WeaponId)]| {
-            let mut effects = Effects::default();
-            effects.apply(
-                &fired(NPC, 146),
-                &scene(live),
-                &looks(),
-                &mut Script::default(),
+    fn a_looped_weapon_firing_every_step_is_heard_once_its_sound_has_played_out() {
+        assert_eq!(heard_on(155, &[NPC], 30), [vec![0, 14, 28]]);
+        assert_eq!(heard_on(146, &[NPC], 7), [vec![0, 3, 6]], "a looped beam");
+    }
+
+    #[test]
+    fn each_firer_hears_its_own_looped_weapon_on_its_own_schedule() {
+        let mut effects = Effects::default();
+        let mut heard = Vec::new();
+        for step in 0..20 {
+            effects.step(&[], PLAYER, &looks(), &mut Script::default());
+            if step % 14 == 0 {
+                effects.apply(&fired(NPC, 155), &scene(), &looks(), &mut Script::default());
+            }
+            if step >= 5 {
+                effects.apply(
+                    &fired(ShipRef::Player, 155),
+                    &scene(),
+                    &looks(),
+                    &mut Script::default(),
+                );
+            }
+            heard.push(
+                effects
+                    .take_sounds()
+                    .iter()
+                    .map(|sound| sound.offset)
+                    .collect::<Vec<_>>(),
             );
-            effects.take_sounds().len()
+        }
+        let on = |offset: (i32, i32)| -> Vec<usize> {
+            (0..20)
+                .filter(|&step| heard[step].contains(&offset))
+                .collect()
         };
-        assert_eq!(looped(&[]), 1, "a new beam");
-        assert_eq!(looped(&[(NPC, WeaponId(146))]), 0, "already live");
+        assert_eq!(on((300, -400)), [0, 14]);
+        assert_eq!(on((0, 0)), [5, 19]);
+    }
+
+    #[test]
+    fn a_weapon_not_looped_or_of_no_known_length_is_heard_every_shot() {
+        assert_eq!(heard_on(128, &[NPC], 4), [vec![0, 1, 2, 3]], "not looped");
+        assert_eq!(heard_on(148, &[NPC], 4), [vec![0, 1, 2, 3]], "no length");
+    }
+
+    #[test]
+    fn clearing_forgets_the_looped_sounds_playing() {
+        let mut effects = Effects::default();
+        effects.apply(&fired(NPC, 155), &scene(), &looks(), &mut Script::default());
+        effects.clear();
+        effects.apply(&fired(NPC, 155), &scene(), &looks(), &mut Script::default());
+        assert_eq!(effects.take_sounds().len(), 1, "heard afresh");
+    }
+
+    #[test]
+    fn a_missile_shot_down_explodes_as_bööm_128_without_a_sound() {
+        let mut effects = Effects::default();
+        let mut chance = Script::default();
+        let event = CombatEvent::ShotDown {
+            at: Vec2::new(30.0, 40.0),
+        };
+        effects.apply(&event, &scene(), &looks(), &mut chance);
         assert_eq!(
-            looped(&[(ShipRef::Player, WeaponId(146))]),
-            1,
-            "another ship's"
+            effects.explosions(),
+            [Explosion {
+                boom: BoomId(128),
+                at: at(30.0, 40.0),
+                frame: 0.0,
+                delay: 0.0
+            }]
         );
-        assert_eq!(looped(&[(NPC, WeaponId(128))]), 1, "another weapon's");
-        let plain = |live: &[(ShipRef, WeaponId)]| {
-            let mut effects = Effects::default();
-            effects.apply(
-                &fired(NPC, 128),
-                &scene(live),
-                &looks(),
-                &mut Script::default(),
-            );
-            effects.take_sounds().len()
-        };
-        assert_eq!(plain(&[(NPC, WeaponId(128))]), 1, "not looped: every shot");
+        assert_eq!(effects.take_sounds(), []);
+        assert!(chance.asked.is_empty());
+        assert_eq!(SHOT_DOWN, BoomId(128));
     }
 
     #[test]
@@ -898,7 +1002,7 @@ mod tests {
             at: Vec2::new(30.0, 40.0),
             explosion: blast(130, true),
         };
-        effects.apply(&event, &scene(&[]), &looks(), &mut chance);
+        effects.apply(&event, &scene(), &looks(), &mut chance);
         assert_eq!(effects.explosions().len(), 1, "no size, no extras");
         assert_eq!(effects.explosions()[0].at, at(30.0, 40.0));
         assert_eq!(
@@ -923,7 +1027,7 @@ mod tests {
                 explosion: Some(blast(130, false)),
             },
         ] {
-            effects.apply(&event, &scene(&[]), &looks(), &mut chance);
+            effects.apply(&event, &scene(), &looks(), &mut chance);
         }
         assert_eq!(effects, Effects::default());
         assert!(chance.asked.is_empty(), "{:?}", chance.asked);
@@ -946,7 +1050,7 @@ mod tests {
         let mut chance = Script::default();
         effects.apply(
             &destroyed(Some(blast(130, true)), 57.0),
-            &scene(&[]),
+            &scene(),
             &looks(),
             &mut chance,
         );
@@ -974,7 +1078,7 @@ mod tests {
         let mut draws = vec![0, 0, 0, 90, 100, 30];
         draws.extend([0, 50, 0].repeat(14));
         let mut chance = Script::of(&draws);
-        effects.apply(&destroyed(None, 0.0), &scene(&[]), &looks(), &mut chance);
+        effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
         assert_eq!(effects.explosions(), [], "no Explode2");
         let first = effects.debris()[0];
         assert_eq!(first.at, at(200.0, 100.0));
@@ -1003,7 +1107,7 @@ mod tests {
         exploded(&mut effects, 130, at(10.0, 20.0));
         steps(&mut effects, 2);
         let mut chance = Script::of(&[0, 0, 0]);
-        effects.apply(&destroyed(None, 0.0), &scene(&[]), &looks(), &mut chance);
+        effects.apply(&destroyed(None, 0.0), &scene(), &looks(), &mut chance);
         let camera = Camera::centred_on(at(10.0, 20.0));
         let mut list = DrawList::new();
         effects.draw(&mut list, &camera, &looks());
@@ -1033,7 +1137,7 @@ mod tests {
         exploded(&mut effects, 130, at(0.0, 0.0));
         effects.apply(
             &destroyed(None, 0.0),
-            &scene(&[]),
+            &scene(),
             &looks(),
             &mut Script::default(),
         );

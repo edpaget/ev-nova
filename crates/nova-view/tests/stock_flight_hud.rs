@@ -2,7 +2,8 @@
 //! shows `ïntf` 128, the "Default status bar", over its 194 x 767
 //! background against the right edge, and every stock `ïntf` reads; and
 //! the combat looks: every weapon the simulation flies, every explosion
-//! type and a ship's target card read. Skips, passing, when `NOVA_DATA`
+//! type and a ship's target card read, and every looped weapon sound's
+//! length. Skips, passing, when `NOVA_DATA`
 //! is unset.
 
 // The stock areas are small whole numbers, exact in floating point.
@@ -110,6 +111,31 @@ fn every_weapon_the_simulation_flies_has_a_look() {
         }
     }
     assert_eq!(projectiles, [128, 129, 138, 140, 181, 231]);
+}
+
+/// Every stock weapon whose sound loops (`Flags` 0x0010) knows how long
+/// its sound lasts; the Hail Chaingun's (`snd ` 205) about 0.47 s, 15
+/// ticks rounded up.
+#[test]
+fn every_looped_stock_weapon_knows_how_long_its_sound_lasts() {
+    let Some(data) = open() else {
+        return;
+    };
+    let mut looped = Vec::new();
+    for (id, weapon) in data.records::<Weapon>() {
+        let weapon = weapon.expect("decodes").record;
+        if weapon.flags.bits() & 0x0010 == 0 || weapon.sound < 0 {
+            continue;
+        }
+        let look = data.weapon_look(WeaponId(id)).expect("reads");
+        assert!(look.sound_ticks.is_some_and(|ticks| ticks > 0), "wëap {id}");
+        looped.push(id);
+    }
+    assert!(looped.contains(&155), "{looped:?}");
+    let chaingun = data.weapon_look(WeaponId(155)).expect("the Hail Chaingun");
+    assert_eq!(chaingun.sound, Some(SoundId(205)));
+    // 10,304 frames at 22,050 Hz: 14.02 ticks, rounded up.
+    assert_eq!(chaingun.sound_ticks, Some(15));
 }
 
 #[test]

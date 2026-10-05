@@ -173,6 +173,9 @@ pub struct WeaponLook {
     /// `ProxSafety`: the ticks a shot's frame waits before it spins, with
     /// `Flags2` 0x0001.
     pub prox_safety: i16,
+    /// How long its sound lasts, in ticks rounded up; none when it has no
+    /// sound or the sound cannot be decoded.
+    pub sound_ticks: Option<u32>,
 }
 
 /// How an explosion type is shown and heard: its `bööm`.
