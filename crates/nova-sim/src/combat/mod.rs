@@ -62,6 +62,12 @@
 //! 10. Shields regenerate on an intact or disabled ship, armour only on an
 //!     intact one, each up to what it holds.
 //!
+//! Each hit on a ship (a shot's, a beam's, a blast's) is kept as a
+//! [`Strike`] by the ship whose it was, with the shield and armour it
+//! took; the last on a ship disabled or breaking up that tick says so
+//! ([`Downed`]). The session takes them ([`Combat::take_strikes`]) for
+//! the player's crimes and the NPCs' answers.
+//!
 //! Each step is reported as a [`CombatEvent`] for the view to show, and
 //! each unimplemented weapon feature once as a
 //! [`SimDiagnostic`](report::SimDiagnostic). Nothing here is saved: the
@@ -93,6 +99,7 @@ use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::legal::{LegalCode, NovaLaw};
 use crate::reserves::{Gauge, Reserves};
 use crate::traffic::npc::NpcId;
 
@@ -161,6 +168,30 @@ pub enum CombatEvent {
     },
 }
 
+/// How a strike left the ship it hit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Downed {
+    /// It disabled the ship.
+    Disabled,
+    /// It took the last of the ship's armour: the ship is breaking up.
+    BreakingUp,
+}
+
+/// A hit on a ship: who made it, what it took, and whether it downed
+/// the ship.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Strike {
+    /// The ship hit.
+    pub ship: ShipRef,
+    /// The ship whose shot, beam or blast it was.
+    pub by: ShipRef,
+    /// The shield and armour it took.
+    pub damage: f32,
+    /// How it left the ship, for the last hit on a ship whose condition
+    /// changed that tick; none otherwise.
+    pub downed: Option<Downed>,
+}
+
 /// One ship in a fight, for a tick: what it is, where, what it holds and
 /// how it is holding up, borrowed from wherever the ship is kept.
 pub struct Fighter<'a> {
@@ -194,23 +225,27 @@ pub struct Fighter<'a> {
     pub rounds: &'a mut dyn Rounds,
 }
 
-/// The rules a fight is fought by: when a ship is disabled, and which
-/// missiles point defence engages.
+/// The rules a fight is fought by: when a ship is disabled, which
+/// missiles point defence engages, and what the player's crimes do to
+/// its legal record.
 #[derive(Clone, Copy, Debug)]
 pub struct Rules<'a> {
     /// When a ship is disabled.
     pub disable: &'a dyn DisableRule,
     /// Which missiles point defence engages.
     pub defence: &'a dyn PointDefenceRule,
+    /// What the player's crimes do to its legal record.
+    pub law: &'a dyn LegalCode,
 }
 
 impl Default for Rules<'static> {
-    /// Nova's: [`NovaDisable`](hull::NovaDisable), and point defence by
-    /// [`Allegiance`](defence::Allegiance).
+    /// Nova's: [`NovaDisable`](hull::NovaDisable), point defence by
+    /// [`Allegiance`](defence::Allegiance), and [`NovaLaw`].
     fn default() -> Self {
         Self {
             disable: &hull::NovaDisable,
             defence: &defence::Allegiance,
+            law: &NovaLaw,
         }
     }
 }
@@ -221,6 +256,7 @@ pub struct Combat {
     shots: Vec<Shot>,
     beams: Vec<Beam>,
     events: Vec<CombatEvent>,
+    strikes: Vec<Strike>,
     reports: Reports,
     /// The next shot's number.
     next_shot: u32,
@@ -263,9 +299,17 @@ impl Combat {
         let mut gone = vec![false; self.shots.len()];
         self.intercept(&was, &mut gone, rules.defence, govts);
         self.hold_on_missiles(&mut gone);
+        let first_strike = self.strikes.len();
         self.resolve(fighters, &targets, &was, &gone, arsenal, chance);
         for fighter in fighters.iter_mut() {
-            self.update_condition(fighter, rules.disable);
+            let downed = self.update_condition(fighter, rules.disable);
+            let last = self.strikes[first_strike..]
+                .iter_mut()
+                .rev()
+                .find(|strike| strike.ship == fighter.ship);
+            if let (Some(downed), Some(last)) = (downed, last) {
+                last.downed = Some(downed);
+            }
         }
         for fighter in fighters.iter_mut() {
             regenerate(fighter);
@@ -449,7 +493,8 @@ impl Combat {
         arsenal: &Arsenal,
         chance: &mut dyn Chance,
     ) {
-        let mut hits: Vec<(ShipRef, Hit)> = Vec::new();
+        // Each ship hit, by whom, and the hit.
+        let mut hits: Vec<(ShipRef, ShipRef, Hit)> = Vec::new();
         let mut kept = Vec::with_capacity(self.shots.len());
         let mut released: Vec<(Shot, Option<ShipRef>)> = Vec::new();
         let flown = self.shots.drain(..).zip(was).zip(gone);
@@ -458,7 +503,7 @@ impl Combat {
                 continue;
             }
             let (blast, subs) = if let Some((ship, at)) = shot.hit(from, targets) {
-                hits.push((ship, Hit::of(&shot.weapon)));
+                hits.push((ship, shot.firer, Hit::of(&shot.weapon)));
                 shot.position = at;
                 (Some(shot.blast(Some(ship))), Some(Some(ship)))
             } else if shot.expired() {
@@ -479,7 +524,7 @@ impl Combat {
                 hits.extend(
                     reached
                         .into_iter()
-                        .map(|ship| (ship, Hit::of(&shot.weapon))),
+                        .map(|ship| (ship, shot.firer, Hit::of(&shot.weapon))),
                 );
             }
             if let Some(target) = subs {
@@ -492,7 +537,7 @@ impl Combat {
         }
         for beam in &mut self.beams {
             if let Some((ship, at)) = beam.hit(targets) {
-                hits.push((ship, Hit::of(&beam.weapon)));
+                hits.push((ship, beam.firer, Hit::of(&beam.weapon)));
                 if let Some(explosion) = beam.weapon.explosion {
                     self.events.push(CombatEvent::Exploded { at, explosion });
                 }
@@ -500,9 +545,16 @@ impl Combat {
             beam.age();
         }
         self.beams.retain(|beam| !beam.expired());
-        for (ship, hit) in hits {
+        for (ship, by, hit) in hits {
             if let Some(fighter) = fighters.iter_mut().find(|fighter| fighter.ship == ship) {
+                let before = taken(fighter.reserves);
                 damage::apply(fighter.reserves, hit);
+                self.strikes.push(Strike {
+                    ship,
+                    by,
+                    damage: before - taken(fighter.reserves),
+                    downed: None,
+                });
             }
         }
     }
@@ -551,10 +603,16 @@ impl Combat {
     }
 
     /// Steps 8 and 9: `fighter`'s condition follows its damage, as `rule`
-    /// says, and a ship breaking up counts down to its destruction.
-    fn update_condition(&mut self, fighter: &mut Fighter, rule: &dyn DisableRule) {
+    /// says, and a ship breaking up counts down to its destruction. How
+    /// it was downed, if it was this tick.
+    fn update_condition(
+        &mut self,
+        fighter: &mut Fighter,
+        rule: &dyn DisableRule,
+    ) -> Option<Downed> {
         let ship = fighter.ship;
         let at = fighter.state.position;
+        let mut downed = None;
         match *fighter.condition {
             Condition::Intact | Condition::Disabled if armour_gone(fighter.reserves.armor) => {
                 *fighter.condition = Condition::Dying {
@@ -565,19 +623,21 @@ impl Combat {
                     at,
                     explosion: fighter.hull.breakup,
                 });
+                downed = Some(Downed::BreakingUp);
             }
             Condition::Intact | Condition::Disabled => {
                 let armor = fighter.reserves.armor;
                 let disabled = holds_armour(armor) && rule.disabled(armor, &fighter.hull);
                 if disabled && *fighter.condition == Condition::Intact {
                     self.events.push(CombatEvent::Disabled { ship });
+                    downed = Some(Downed::Disabled);
                 }
                 *fighter.condition = if disabled {
                     Condition::Disabled
                 } else {
                     Condition::Intact
                 };
-                return;
+                return downed;
             }
             Condition::Dying { .. } | Condition::Destroyed => {}
         }
@@ -600,6 +660,7 @@ impl Combat {
             }
             _ => {}
         }
+        downed
     }
 
     /// The shots in flight.
@@ -618,6 +679,12 @@ impl Combat {
     /// empties the list.
     pub fn take_events(&mut self) -> Vec<CombatEvent> {
         std::mem::take(&mut self.events)
+    }
+
+    /// The strikes made since they were last taken, in order; taking them
+    /// empties the list.
+    pub fn take_strikes(&mut self) -> Vec<Strike> {
+        std::mem::take(&mut self.strikes)
     }
 
     /// The diagnostics made since they were last taken, each once a
@@ -654,6 +721,12 @@ impl Fighter<'_> {
             condition: *self.condition,
         }
     }
+}
+
+/// The shield and armour `reserves` hold, together: what a hit takes is
+/// how much less this is after it.
+fn taken(reserves: &Reserves) -> f32 {
+    reserves.shield.now + reserves.armor.now
 }
 
 /// Whether `armor` is gone: at or below none, on a ship that holds any.
@@ -2121,5 +2194,227 @@ mod tests {
         assert_eq!((combat.shots().len(), combat.beams().len()), (1, 1));
         combat.clear();
         assert_eq!((combat.shots().len(), combat.beams().len()), (0, 0));
+    }
+
+    // Strikes.
+
+    /// Ticks until a strike is made, or 40 ticks pass, and gives the
+    /// strikes of that tick.
+    fn first_strikes(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal) -> Vec<Strike> {
+        for _ in 0..40 {
+            tick_with(combat, ships, arsenal, Rules::default());
+            let strikes = combat.take_strikes();
+            if !strikes.is_empty() {
+                return strikes;
+            }
+        }
+        Vec::new()
+    }
+
+    #[test]
+    fn a_shot_that_hits_strikes_by_its_firer_with_the_shield_and_armour_it_took() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(blaster()),
+            Ship::at(2, 100.0, 0.0),
+        ];
+        let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
+        assert_eq!(
+            strikes,
+            [Strike {
+                ship: B,
+                by: A,
+                damage: 14.0,
+                downed: None
+            }],
+            "10 off the shield, then 4 off the armour"
+        );
+        assert_eq!(combat.take_strikes(), [], "taken");
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(
+            combat.take_strikes(),
+            [Strike {
+                ship: B,
+                by: A,
+                damage: 5.0,
+                downed: None
+            }],
+            "the shield down to its floor, a tenth below none, then 4 off the armour"
+        );
+    }
+
+    #[test]
+    fn a_beam_strikes_every_tick_it_touches() {
+        let mut combat = Combat::default();
+        let mut target = Ship::at(2, 100.0, 0.0);
+        target.reserves.shield = Gauge::full(100.0);
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(laser()), target];
+        let mut struck = Vec::new();
+        for _ in 0..5 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            struck.push(combat.take_strikes());
+        }
+        let hit = vec![Strike {
+            ship: B,
+            by: A,
+            damage: 5.0,
+            downed: None,
+        }];
+        assert_eq!(struck, [hit.clone(), hit.clone(), hit, vec![], vec![]]);
+    }
+
+    #[test]
+    fn a_blast_strikes_each_ship_it_reaches() {
+        let shell = WeaponRecord {
+            explod_type: 0,
+            blast_radius: 30,
+            ..blaster()
+        };
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(shell),
+            Ship::at(2, 100.0, 0.0),
+            Ship::at(3, 100.0, 25.0),
+        ];
+        ships[0].armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                reload: 1000,
+                ..shell
+            }),
+            1,
+        )]);
+        let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
+        let of = |ship| Strike {
+            ship,
+            by: A,
+            damage: 14.0,
+            downed: None,
+        };
+        assert_eq!(strikes, [of(B), of(C)], "the hit, then the blast");
+    }
+
+    #[test]
+    fn a_sub_munition_strikes_by_its_parents_firer() {
+        let shell = WeaponRecord {
+            reload: 1000,
+            count: 3,
+            speed: 1000,
+            sub_count: 1,
+            sub_type: Some(WeaponId(148)),
+            ..weapon(182)
+        };
+        let sub = WeaponRecord {
+            count: 50,
+            speed: 500,
+            energy_dmg: 3,
+            ..weapon(148)
+        };
+        let arsenal = Arsenal::new(&[shell, sub], Vec::new());
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell), Ship::at(2, 80.0, 0.0)];
+        let strikes = first_strikes(&mut combat, &mut ships, &arsenal);
+        assert_eq!(
+            strikes,
+            [Strike {
+                ship: B,
+                by: A,
+                damage: 3.0,
+                downed: None
+            }]
+        );
+    }
+
+    #[test]
+    fn the_hit_that_disables_a_ship_says_so_and_the_one_that_breaks_it_up_too() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(blaster()),
+            Ship::at(2, 100.0, 0.0),
+        ];
+        let mut struck = Vec::new();
+        for _ in 0..30 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            struck.extend(combat.take_strikes());
+        }
+        let downed: Vec<Option<Downed>> = struck.iter().map(|strike| strike.downed).collect();
+        // Six hits take the shield and 24 armour (6 left, below a third):
+        // disabled; two more leave it at -2.
+        assert_eq!(
+            downed,
+            [
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(Downed::Disabled),
+                None,
+                Some(Downed::BreakingUp)
+            ],
+            "{struck:?}"
+        );
+        assert!(
+            struck
+                .iter()
+                .all(|strike| strike.ship == B && strike.by == A)
+        );
+    }
+
+    #[test]
+    fn a_ship_broken_up_at_once_is_only_breaking_up() {
+        let mut combat = Combat::default();
+        let mut target = Ship::at(2, 100.0, 0.0);
+        target.reserves.shield.now = 0.0;
+        target.reserves.armor.now = 3.0;
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(blaster()), target];
+        let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
+        assert_eq!(
+            strikes
+                .iter()
+                .map(|strike| strike.downed)
+                .collect::<Vec<_>>(),
+            [Some(Downed::BreakingUp)]
+        );
+    }
+
+    #[test]
+    fn only_the_last_strike_on_a_ship_downed_that_tick_says_so() {
+        let mut combat = Combat::default();
+        let mut target = Ship::at(2, 100.0, 0.0);
+        target.reserves.shield.now = 0.0;
+        target.reserves.armor.now = 12.0;
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(blaster()),
+            target,
+            Ship::at(3, 200.0, 0.0).armed(blaster()).facing(270.0),
+        ];
+        let strikes = first_strikes(&mut combat, &mut ships, &Arsenal::default());
+        assert_eq!(
+            strikes,
+            [
+                Strike {
+                    ship: B,
+                    by: A,
+                    damage: 5.0,
+                    downed: None
+                },
+                Strike {
+                    ship: B,
+                    by: C,
+                    damage: 4.0,
+                    downed: Some(Downed::Disabled)
+                }
+            ],
+            "12 armour less 8 is below a third of 30"
+        );
+    }
+
+    #[test]
+    fn a_ship_downed_without_a_strike_makes_none() {
+        let mut combat = Combat::default();
+        let mut target = Ship::at(2, 0.0, 0.0);
+        target.reserves.armor.now = 0.0;
+        tick(&mut combat, &mut [target], &NovaDisable);
+        assert_eq!(combat.take_strikes(), []);
     }
 }

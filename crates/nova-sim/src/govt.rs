@@ -28,6 +28,7 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{CombatCatalog, GovtId, GovtRecord};
+use crate::legal::Crime;
 
 /// `Flags`: xenophobic, the enemy of every other government.
 pub const XENOPHOBIC: u16 = 0x0001;
@@ -110,6 +111,21 @@ impl Governments {
     #[must_use]
     pub fn crime_tol(&self, govt: Option<GovtId>) -> i16 {
         self.record(govt).map_or(0, |record| record.crime_tol)
+    }
+
+    /// `govt`'s penalty for `crime` against its ships: none for an
+    /// independent or a government the table does not hold.
+    #[must_use]
+    pub fn penalty(&self, govt: Option<GovtId>, crime: Crime) -> i16 {
+        self.record(govt).map_or(0, |record| {
+            let penalties = record.penalties;
+            match crime {
+                Crime::Disable => penalties.disable,
+                Crime::Board => penalties.board,
+                Crime::Kill => penalties.kill,
+                Crime::Shoot => penalties.shoot,
+            }
+        })
     }
 
     /// The odds `govt`'s ships still take on, as a fraction (see the
@@ -428,6 +444,27 @@ mod tests {
             Governments::read(&crate::testkit::catalog()),
             Governments::default()
         );
+    }
+
+    #[test]
+    fn each_crime_has_its_own_penalty_and_none_for_others() {
+        let govts = Governments::new([GovtRecord {
+            penalties: crate::catalog::Penalties {
+                smuggle: 1,
+                disable: 3,
+                board: 5,
+                kill: 7,
+                shoot: 2,
+            },
+            ..govt(128)
+        }]);
+        assert_eq!(
+            [Crime::Disable, Crime::Board, Crime::Kill, Crime::Shoot]
+                .map(|crime| govts.penalty(FED, crime)),
+            [3, 5, 7, 2]
+        );
+        assert_eq!(govts.penalty(None, Crime::Kill), 0);
+        assert_eq!(govts.penalty(UNKNOWN, Crime::Kill), 0);
     }
 
     #[test]

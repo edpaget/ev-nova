@@ -96,6 +96,11 @@
 //! system. The player's ship, once it is not intact, ignores the controls
 //! and drifts, cannot land or jump, and once destroyed stays where it is.
 //!
+//! The player's crimes change its legal records as the fight's
+//! [`LegalCode`] says: disabling an NPC, and breaking one up (which is
+//! disabling it too when it was intact), each against the NPC's
+//! government. A mere hit is no crime, as in the original.
+//!
 //! The player targets an NPC ([`Session::select_target`]), the nearest or
 //! the next in turn as the [`targeting`](crate::targeting) rules say, and
 //! fires its primary weapons and the secondary selected
@@ -131,7 +136,7 @@ use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
 use crate::combat::weapon::Ammo;
-use crate::combat::{Combat, CombatEvent, Fighter, Rules, ShipRef};
+use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
 use crate::date::GameDate;
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
@@ -140,6 +145,7 @@ use crate::govt::Governments;
 use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
 use crate::landing::{LandingRefusal, check_landing};
+use crate::legal::{self, Crime, LegalCode};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
 use crate::outfitter::{self, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods};
 use crate::pilot::{self, Pilot};
@@ -473,6 +479,12 @@ impl Session {
         if self.landed.is_some() || self.jumping.is_some() {
             return;
         }
+        let was: Vec<(NpcId, Condition, Option<GovtId>)> = self
+            .traffic
+            .npcs()
+            .iter()
+            .map(|npc| (npc.id, npc.condition, npc.govt))
+            .collect();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -530,6 +542,8 @@ impl Session {
         }
         self.combat
             .tick(&mut fighters, &self.arsenal, &self.govts, rules, chance);
+        let strikes = self.combat.take_strikes();
+        self.punish(&strikes, &was, rules.law);
         let destroyed: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -541,6 +555,37 @@ impl Session {
             self.traffic.remove(id);
         }
         self.clear_lost_target();
+    }
+
+    /// Convicts the player of its crimes among `strikes`, as `law` says:
+    /// disabling an NPC, and breaking one up, which is disabling it too
+    /// when it `was` intact before (as `_DamageShip` slaps both). Each
+    /// victim's condition and government are as it `was` before the
+    /// fight's tick.
+    fn punish(
+        &mut self,
+        strikes: &[Strike],
+        was: &[(NpcId, Condition, Option<GovtId>)],
+        law: &dyn LegalCode,
+    ) {
+        for strike in strikes.iter().filter(|strike| strike.by == ShipRef::Player) {
+            let ShipRef::Npc(id) = strike.ship else {
+                continue;
+            };
+            let Some(&(_, condition, govt)) = was.iter().find(|(npc, ..)| *npc == id) else {
+                continue;
+            };
+            let crimes: &[Crime] = match (strike.downed, condition) {
+                (Some(Downed::Disabled), _) => &[Crime::Disable],
+                (Some(Downed::BreakingUp), Condition::Intact) => &[Crime::Disable, Crime::Kill],
+                (Some(Downed::BreakingUp), _) => &[Crime::Kill],
+                (None, _) => &[],
+            };
+            for &crime in crimes {
+                let changes = law.penalties(crime, govt, &self.govts);
+                legal::convict(&mut self.pilot, &changes);
+            }
+        }
     }
 
     /// Lets go of the target once it is no longer in the system (it was
@@ -3459,11 +3504,12 @@ mod tests {
     // Combat.
 
     use crate::ai::{Behaviour, Goal, Surroundings};
-    use crate::catalog::{HullRecord, StockWeapon, WeaponRecord};
+    use crate::catalog::{GovtRecord, HullRecord, StockWeapon, WeaponRecord};
     use crate::combat::armament::MOD_AMMO;
     use crate::combat::defence::Allegiance;
     use crate::combat::hull::DisableRule;
     use crate::combat::weapon::Explosion;
+    use crate::legal::{Crime, LegalCode, NovaLaw};
     use crate::testkit::{hull, weapon};
     use crate::traffic::npc::Npc;
 
@@ -3750,7 +3796,191 @@ mod tests {
     const DISABLING: Rules = Rules {
         disable: &Disabling,
         defence: &Allegiance,
+        law: &NovaLaw,
     };
+
+    // Crimes.
+
+    /// The NPCs' government 140 (class 1: disabling costs 3, killing 7),
+    /// its ally 141, its enemy 142 (disabling 8, killing 10) and a
+    /// neutral, 143.
+    fn lawful_govts() -> Vec<GovtRecord> {
+        let penalised = |id, disable, kill| GovtRecord {
+            penalties: crate::catalog::Penalties {
+                disable,
+                kill,
+                ..crate::catalog::Penalties::default()
+            },
+            ..crate::testkit::govt(id)
+        };
+        vec![
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..penalised(140, 3, 7)
+            },
+            GovtRecord {
+                allies: [1, -1, -1, -1],
+                ..penalised(141, 20, 20)
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..penalised(142, 8, 10)
+            },
+            penalised(143, 20, 20),
+        ]
+    }
+
+    /// [`armed`], with [`lawful_govts`].
+    fn lawful() -> FakePilotCatalog {
+        FakePilotCatalog {
+            govts: lawful_govts(),
+            ..armed()
+        }
+    }
+
+    /// The pilot's records with governments 140-143.
+    fn records(session: &Session) -> [i16; 4] {
+        [140, 141, 142, 143].map(|govt| session.pilot().legal_record(GovtId(govt)))
+    }
+
+    /// Records each crime it is asked about, and the victim's
+    /// government, and changes nothing.
+    #[derive(Debug, Default)]
+    struct Witness {
+        seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
+    }
+
+    impl LegalCode for Witness {
+        fn penalties(
+            &self,
+            crime: Crime,
+            victim: Option<GovtId>,
+            _govts: &Governments,
+        ) -> Vec<(GovtId, i32)> {
+            self.seen.borrow_mut().push((crime, victim));
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn disabling_an_npc_lowers_the_records_as_the_law_says_once_and_breaking_it_up_again() {
+        let catalog = lawful();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let mut seen = Vec::new();
+        for _ in 0..80 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let condition = session.npcs().first().map(|npc| npc.condition);
+            if seen.last().is_none_or(|(last, _)| *last != condition) {
+                seen.push((condition, records(&session)));
+            }
+        }
+        assert_eq!(
+            seen,
+            [
+                (Some(Condition::Intact), [0, 0, 0, 0]),
+                (Some(Condition::Disabled), [-3, -3, 4, 0]),
+                (Some(Condition::Dying { ticks_left: 1 }), [-10, -10, 9, 0]),
+                (Some(Condition::Dying { ticks_left: 0 }), [-10, -10, 9, 0]),
+                (None, [-10, -10, 9, 0]),
+            ],
+            "hits that leave it intact change nothing; the neutral is left alone"
+        );
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
+        assert_eq!(&saved, session.pilot(), "the records saved as they are");
+    }
+
+    #[test]
+    fn the_law_hears_of_a_disabling_then_a_killing_against_the_victims_government() {
+        let catalog = lawful();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let witness = Witness::default();
+        let rules = Rules {
+            law: &witness,
+            ..Rules::default()
+        };
+        for _ in 0..80 {
+            session.tick_combat(rules, &mut NeverFires);
+        }
+        assert_eq!(session.npcs(), [], "destroyed");
+        assert_eq!(
+            witness.seen.take(),
+            [
+                (Crime::Disable, Some(GovtId(140))),
+                (Crime::Kill, Some(GovtId(140)))
+            ]
+        );
+        assert_eq!(records(&session), [0; 4], "as the witness says");
+    }
+
+    #[test]
+    fn breaking_up_an_intact_ship_at_once_is_disabling_it_and_killing_it() {
+        let catalog = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                mass_dmg: 500,
+                energy_dmg: 500,
+                ..blaster()
+            }],
+            ..lawful()
+        };
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let witness = Witness::default();
+        let rules = Rules {
+            law: &witness,
+            ..Rules::default()
+        };
+        for _ in 0..20 {
+            session.tick_combat(rules, &mut NeverFires);
+            session.hold_trigger(Trigger::default());
+        }
+        assert_eq!(
+            witness.seen.take(),
+            [
+                (Crime::Disable, Some(GovtId(140))),
+                (Crime::Kill, Some(GovtId(140)))
+            ],
+            "as the original's _DamageShip slaps both"
+        );
+    }
+
+    #[test]
+    fn an_npc_downing_another_is_no_crime() {
+        let catalog = FakePilotCatalog {
+            traffic: lawful()
+                .traffic
+                .into_iter()
+                .map(|(system, traffic)| {
+                    (
+                        system,
+                        SystemTraffic {
+                            avg_ships: 2,
+                            ..traffic
+                        },
+                    )
+                })
+                .collect(),
+            ..lawful()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        // NPC 0 at (0, -100) and NPC 1 at (100, -100), both facing right.
+        session.populate(
+            &catalog,
+            &mut Draws::of(&[6, 6, 0, 0, 750, 650, 90, 6, 6, 0, 0, 850, 650, 90]),
+        );
+        let witness = Witness::default();
+        let rules = Rules {
+            law: &witness,
+            ..Rules::default()
+        };
+        for _ in 0..80 {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(rules, &mut NeverFires);
+        }
+        assert_eq!(session.npcs().len(), 1, "NPC 0 destroyed NPC 1");
+        assert_eq!(witness.seen.take(), []);
+    }
 
     #[test]
     fn a_disabled_player_drifts_ignoring_the_controls() {

@@ -1113,6 +1113,7 @@ impl<
                 let rules = Rules {
                     disable: &*self.disable_rule,
                     defence: &*self.defence_rule,
+                    law: &nova_sim::NovaLaw,
                 };
                 session.tick_combat(rules, &mut self.chance);
                 let player = point(session.player().position);

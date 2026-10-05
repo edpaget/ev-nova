@@ -46,6 +46,9 @@
 //! - [`landing`]: whether the ship can land, [`check_landing`], each
 //!   [`LandingRefusal`] in the order it applies, and the [`Service`]s a
 //!   stellar's flags offer.
+//! - [`legal`]: the player's legal record: the [`LegalCode`] port that
+//!   says what a [`Crime`] against a ship does to it, Nova's
+//!   [`NovaLaw`], and [`legal::convict`], which applies it.
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
@@ -104,6 +107,7 @@ pub mod govt;
 pub mod handling;
 pub mod hyperspace;
 pub mod landing;
+pub mod legal;
 pub mod market;
 pub mod outfitter;
 pub mod pilot;
@@ -135,7 +139,7 @@ pub use combat::armament::{Armament, Trigger};
 pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
-pub use combat::{CombatEvent, Rules, ShipRef};
+pub use combat::{CombatEvent, Downed, Rules, ShipRef, Strike};
 pub use date::GameDate;
 pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
@@ -144,6 +148,7 @@ pub use govt::Governments;
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
+pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use pilot::Pilot;
