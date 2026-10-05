@@ -40,7 +40,8 @@ pub struct ShipSheet {
     pub frame_width: u32,
     /// Each frame's height in pixels.
     pub frame_height: u32,
-    /// The engine glow, drawn while the ship thrusts.
+    /// The engine glow, drawn at the level [`nova_sim::glow_level`] gives
+    /// for the ship's glow base, which thrust ramps up.
     pub glow: Option<LayerSheet>,
     /// The running lights, drawn at the level [`nova_sim::lights_level`]
     /// gives for `blink`.

@@ -282,7 +282,10 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
 /// is `src | dst`, the `AddOver` blit, so one operator covers every level:
 /// the lights scaled by n/32 and added into the screen. That is why both
 /// screens draw the lights [`Blend::Additive`] with this tint at every
-/// level rather than choosing the blend by level.
+/// level rather than choosing the blend by level. The engine glow's sprite
+/// has the same draw proc and field writes (`_HandleShipDisplay` at
+/// 0x2c2b6-0x2c2d6), so flight adds the glow with this tint at its level
+/// too.
 ///
 /// Where this deviates from the original:
 ///

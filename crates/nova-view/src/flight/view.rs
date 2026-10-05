@@ -37,17 +37,23 @@
 //!
 //! The ship is drawn as its sheet's rotation frame for the heading shown,
 //! then, at the same centre and on the same frame (modulo the layer's
-//! frame count), its engine glow while the session is thrusting, and its
-//! running lights at the level [`nova_sim::lights_level`] gives for the
-//! sheet's blink at the flight's time in ticks, added with that many 32nds
-//! of full alpha, or not at all while they are off. They are added
+//! frame count), its engine glow and its running lights. The glow is
+//! drawn at the level [`nova_sim::glow_level`] gives for the session's
+//! glow base ([`Session::engine_glow`]) at the flight's time in ticks: it
+//! fades in over 24 ticks of thrust, flickers, and fades out over 24
+//! ticks after Up is released, and landing and beginning a jump put it
+//! out. The lights are drawn at the level [`nova_sim::lights_level`]
+//! gives for the sheet's blink at the flight's time in ticks. Each is
+//! added with that many 32nds of full alpha, or not at all while it is
+//! hidden or off. Both are added
 //! ([`Blend::Additive`](crate::Blend::Additive)) at every level, because
 //! the original's partial-level blit, `_BlitPixieRLETranslucent`
-//! (0xc1568), is its full-level `AddOver` applied to the lights scaled by
+//! (0xc1568), is its full-level `AddOver` applied to the layer scaled by
 //! level/32: see [`lights_tint`] for the full record. The flight's time
-//! stops while the course map is open, so the lights blink in game time.
-//! Random blinking rolls on [`HashedRolls`] from seed 0. A layer that
-//! cannot be shown is left out silently.
+//! stops while the course map is open, so the lights blink and the glow
+//! flickers in game time. Random blinking rolls on [`HashedRolls`] from
+//! seed 0, and the glow's flicker on [`HashedRolls`] from seed 1. A layer
+//! that cannot be shown is left out silently.
 //!
 //! Input, the original's default keys:
 //!
@@ -96,7 +102,7 @@ use nova_sim::{
     Market, NeverFires, Order, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
     RechargeRefusal, Reserves, Session, ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard,
     StartError, StellarId, Steps, TradeRefusal, Turn, flight::normalized, flight::shortest_turn,
-    lights_level,
+    glow_level, lights_level,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -327,6 +333,9 @@ pub struct FlightView<C> {
     chance: SharedChance,
     /// What random running lights roll on.
     blink_rolls: HashedRolls,
+    /// What the engine glow's flicker rolls on: seed 1, so it never
+    /// mirrors random-mode lights, which roll on seed 0.
+    glow_rolls: HashedRolls,
 }
 
 impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog> FlightView<C> {
@@ -384,6 +393,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             message: None,
             chance: SharedChance::default(),
             blink_rolls: HashedRolls::new(0),
+            glow_rolls: HashedRolls::new(1),
         }
     }
 
@@ -743,12 +753,11 @@ impl<C> FlightView<C> {
             Ok(sheet) => {
                 let frame = rotation_frame(self.shown_heading(), sheet.rotations);
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
-                let thrusting = self.session.as_ref().is_ok_and(Session::thrusting);
+                let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+                let base = self.session.as_ref().map_or(0, Session::engine_glow);
                 let glow = sheet
                     .glow
-                    .filter(|_| thrusting)
-                    .map(|glow| (glow, Color::WHITE));
-                let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+                    .zip(glow_level(base, tick, &self.glow_rolls).map(lights_tint));
                 let level = lights_level(&sheet.blink, tick, &self.blink_rolls);
                 let lights = sheet.lights.zip(level.map(lights_tint));
                 for (layer, tint) in [glow, lights].into_iter().flatten() {
@@ -964,7 +973,7 @@ mod tests {
     };
     use crate::{Blend, DrawCommand, Font};
     use nova_sim::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
-    use nova_sim::{BlinkChance, HashedRolls};
+    use nova_sim::{BlinkChance, GLOW_CRUISE, HashedRolls, glow_level};
 
     /// The first `chär` flies ship 128 (an average ship that turns 3° a
     /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system
@@ -1789,8 +1798,11 @@ mod tests {
         assert_eq!(ship_sprites(&view).len(), 2, "held, but not yet flown");
         ticks(&mut view, 3);
         view.input(&key(Key::Up, false));
-        ticks(&mut view, 1);
-        assert!(!view.session().expect("flying").thrusting());
+        // As many ticks coasting as thrusting: the glow has faded out.
+        ticks(&mut view, 3);
+        let session = view.session().expect("flying");
+        assert!(!session.thrusting());
+        assert_eq!(session.engine_glow(), 0);
         assert_eq!(
             ship_sprites(&view)
                 .iter()
@@ -1805,7 +1817,8 @@ mod tests {
     fn a_thrusting_ship_draws_its_glow_between_it_and_its_lights() {
         let mut view = FlightView::new(layered());
         view.input(&key(Key::Up, true));
-        ticks(&mut view, 3);
+        // A base of 6: drawn at every roll.
+        ticks(&mut view, 6);
         let centre = view.camera().world_to_screen(view.shown_position());
         assert_eq!(
             ship_sprites(&view),
@@ -1834,7 +1847,7 @@ mod tests {
     fn a_thrusting_ships_glow_and_lights_add_to_its_normal_sprite() {
         let mut view = FlightView::new(layered());
         view.input(&key(Key::Up, true));
-        ticks(&mut view, 3);
+        ticks(&mut view, 6);
         assert_eq!(
             ship_blends(&view),
             [
@@ -1844,7 +1857,8 @@ mod tests {
             ]
         );
         view.input(&key(Key::Up, false));
-        ticks(&mut view, 1);
+        ticks(&mut view, 6);
+        assert_eq!(view.session().expect("flying").engine_glow(), 0);
         assert_eq!(
             ship_blends(&view),
             [(2000, Blend::Normal), (2200, Blend::Additive)],
@@ -1881,10 +1895,11 @@ mod tests {
             ..layered()
         });
         view.input(&key(Key::Up, true));
-        ticks(&mut view, 1);
+        ticks(&mut view, 6);
         assert_eq!(ship_sprites(&view).len(), 3, "glowing");
         land_now(&mut view);
         assert_eq!(view.take_landing(), Some(StellarId(128)));
+        assert_eq!(view.session().expect("flying").engine_glow(), 0);
         let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
         assert_eq!(ids, [2000, 2200], "landed");
     }
@@ -1895,10 +1910,11 @@ mod tests {
         plot(&mut view, 131);
         fly_out(&mut view);
         view.input(&key(Key::Up, true));
-        ticks(&mut view, 1);
+        ticks(&mut view, 6);
         assert_eq!(ship_sprites(&view).len(), 3, "glowing");
         view.input(&key(JUMP_KEY, true));
         assert!(view.jump_effect().is_some(), "jumping");
+        assert_eq!(view.session().expect("flying").engine_glow(), 0);
         let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
         assert_eq!(ids, [2000, 2200], "jumping");
     }
@@ -1922,6 +1938,81 @@ mod tests {
         view.input(&key(Key::Up, true));
         ticks(&mut view, 3);
         assert_eq!(ship_sprites(&view), []);
+    }
+
+    /// Every command drawing the glow, `rlëD` 2100, whatever its blend.
+    fn glow_commands(view: &View) -> Vec<DrawCommand> {
+        drawn(view)
+            .iter()
+            .filter(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2100),
+            )
+            .cloned()
+            .collect()
+    }
+
+    /// The glow commands for a base of `base` at `tick`: the glow added at
+    /// the level [`glow_level`] gives over the ship's centre, on its frame,
+    /// or none when it is hidden.
+    fn glow_for(view: &View, base: u8, tick: u64) -> Vec<DrawCommand> {
+        let frame = view.frame().expect("a sheet") % 36;
+        let center = view.camera().world_to_screen(view.shown_position());
+        glow_level(base, tick, &view.glow_rolls)
+            .map(|level| DrawCommand::Sprite {
+                image: ImageKey::sprite(2100, frame),
+                center,
+                tint: lights_tint(level),
+                blend: Blend::Additive,
+            })
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn the_glow_ramps_in_and_flickers_at_the_glow_function_level() {
+        let mut view = FlightView::new(layered());
+        view.input(&key(Key::Up, true));
+        let mut cruising = Vec::new();
+        for n in 1..=40_u8 {
+            ticks(&mut view, 1);
+            let base = n.min(GLOW_CRUISE);
+            assert_eq!(view.session().expect("flying").engine_glow(), base);
+            let want = glow_for(&view, base, u64::from(n));
+            assert_eq!(glow_commands(&view), want, "tick {n}");
+            if n >= 6 {
+                assert_eq!(want.len(), 1, "a base of 6 or more always shows");
+            }
+            if n >= 24 {
+                cruising.extend(want);
+            }
+        }
+        cruising.dedup();
+        assert!(cruising.len() >= 2, "it flickers: {cruising:?}");
+    }
+
+    #[test]
+    fn releasing_up_fades_the_glow_out() {
+        let mut view = FlightView::new(layered());
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 30);
+        assert_eq!(view.session().expect("flying").engine_glow(), GLOW_CRUISE);
+        view.input(&key(Key::Up, false));
+        for k in 1..=40_u8 {
+            ticks(&mut view, 1);
+            let base = GLOW_CRUISE.saturating_sub(k);
+            assert_eq!(view.session().expect("flying").engine_glow(), base);
+            let want = glow_for(&view, base, 30 + u64::from(k));
+            assert_eq!(glow_commands(&view), want, "{k} ticks after");
+            if k == 3 {
+                let level = glow_level(21, 33, &view.glow_rolls).expect("still drawn");
+                let alpha = lights_tint(level).a;
+                assert!(alpha < 255 && alpha >= lights_tint(17).a, "{alpha}");
+                assert_eq!(want.len(), 1, "fading, not out");
+            }
+            if k >= 24 {
+                assert_eq!(want, [], "out {k} ticks after");
+            }
+        }
     }
 
     // The running lights' blinking.
@@ -2067,7 +2158,9 @@ mod tests {
     fn the_glow_still_shows_while_the_lights_are_off() {
         let mut view = FlightView::new(blinking(SHUTTLE));
         view.input(&key(Key::Up, true));
-        ticks(&mut view, 4);
+        // Tick 13: the Shuttle's lights are dark, and a base of 13 always
+        // shows the glow.
+        ticks(&mut view, 13);
         assert!(view.session().expect("flying").thrusting());
         assert_eq!(
             ship_blends(&view),
@@ -2077,7 +2170,8 @@ mod tests {
             DrawCommand::Sprite { image, tint, .. } if image.id == 2100 => Some(*tint),
             _ => None,
         });
-        assert_eq!(glow, Some(Color::WHITE));
+        let level = glow_level(13, 13, &view.glow_rolls).expect("drawn");
+        assert_eq!(glow, Some(lights_tint(level)));
     }
 
     #[test]

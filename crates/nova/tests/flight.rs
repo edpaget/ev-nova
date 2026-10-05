@@ -25,6 +25,7 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::{ShipId, ShipState, SystemId, Vec2};
+use nova_view::draw::lights_tint;
 use nova_view::flight::FlightView;
 use nova_view::flight::hud::NAV_NO_DESTINATION;
 use nova_view::{Blend, Key, Point};
@@ -634,7 +635,7 @@ fn the_default_keys_fly_the_ship_and_the_camera_follows_it() {
 }
 
 #[test]
-fn holding_up_adds_the_engine_glow_over_the_ship_and_releasing_it_puts_it_out() {
+fn holding_up_adds_the_engine_glow_over_the_ship_and_it_fades_out_after_release() {
     let mut harness = Harness::flying(60);
     let ship_and_glow = |frame: &Frame| (sprite_batch(frame, 3), sprite_batch(frame, 4));
     let unlit = |frame: &Frame| {
@@ -644,8 +645,9 @@ fn holding_up_adds_the_engine_glow_over_the_ship_and_releasing_it_puts_it_out() 
     let first = harness.frame();
     assert!(unlit(&first), "no glow at rest: {:?}", shape(&first));
 
+    // A second of thrust: the glow's base is at cruise, 24.
     harness.hold(&[Key::Up]);
-    let thrusting = harness.run(0.5);
+    let thrusting = harness.run(1.0);
     assert_eq!(
         ship_and_glow(&thrusting),
         (Some((Blend::Normal, 1)), Some((Blend::Additive, 1))),
@@ -655,10 +657,24 @@ fn holding_up_adds_the_engine_glow_over_the_ship_and_releasing_it_puts_it_out() 
     let (ship, glow) = (drawn[2].dest, drawn[3].dest);
     assert_eq!((ship.w, glow.w), (1.0, 3.0));
     assert_eq!(centre(glow), centre(ship), "centred on the ship");
+    let alpha = drawn[3].tint[3];
+    assert!(
+        (20..=25).any(|level| (alpha - f32::from(lights_tint(level).a) / 255.0).abs() < 1e-6),
+        "a flickering partial level: {alpha}"
+    );
 
+    // Three ticks after release the glow is fading, not out.
     harness.hold(&[]);
-    let coasting = harness.run(0.5);
-    assert!(unlit(&coasting), "out again: {:?}", shape(&coasting));
+    let released = harness.run(0.1);
+    assert_eq!(
+        sprite_batch(&released, 4),
+        Some((Blend::Additive, 1)),
+        "still glowing: {:?}",
+        shape(&released)
+    );
+
+    let coasting = harness.run(1.0);
+    assert!(unlit(&coasting), "faded out: {:?}", shape(&coasting));
 }
 
 #[test]
