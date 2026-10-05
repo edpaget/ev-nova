@@ -4232,7 +4232,7 @@ mod tests {
 
     use nova_data::records::dude::Dude;
     use nova_sim::reserves::Gauge;
-    use nova_sim::{Chance, Goal, HullSpec, Npc, Surroundings, Take};
+    use nova_sim::{Chance, Goal, HullSpec, Npc, Surroundings};
     use nova_view::ui::plunder::{
         ASSIGNMENT_DIALOG, ESCORT_ITEM, MY_SHIP_ITEM, PLUNDER_DIALOG, PLUNDER_PICTURE,
     };
@@ -4669,6 +4669,5 @@ mod tests {
             Some(5750),
             "abandoned"
         );
-        let _ = Take::Abort;
     }
 }
