@@ -18,6 +18,25 @@ use crate::fonts::FontFaces;
 use crate::gpu::{Batch, Frame, PageId, TextRun};
 use crate::viewport::PixelRect;
 
+/// The format every frame is drawn in, whatever the target's: the scene
+/// texture's, so the pipelines (and the OR composite) work on known 8-bit
+/// unorm channels. Only the blit to the target uses the target's format.
+const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// The offscreen texture a frame is drawn into before one blit copies it
+/// to the target, with the bind group the blit reads it through.
+struct Scene {
+    size: (u32, u32),
+    view: wgpu::TextureView,
+    blit_group: wgpu::BindGroup,
+}
+
+/// Whether a scene of size `current` (`None` before the first frame) can
+/// draw a frame for a `target`-sized target.
+fn reuse_scene(current: Option<(u32, u32)>, target: (u32, u32)) -> bool {
+    current == Some(target)
+}
+
 /// One atlas page on the GPU.
 struct Page {
     texture: wgpu::Texture,
@@ -43,13 +62,19 @@ enum Draw {
 /// The wgpu half of a [`Gpu`](crate::Gpu): pipelines, atlas page textures,
 /// per-frame buffers and glyphon's text state. Both GPU adapters delegate
 /// to it.
+///
+/// Every frame is drawn into an offscreen scene texture in
+/// [`SCENE_FORMAT`], then copied to the target by one blit.
 pub struct WgpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     sprite_pipeline: wgpu::RenderPipeline,
     additive_pipeline: wgpu::RenderPipeline,
     solid_pipeline: wgpu::RenderPipeline,
+    blit_pipeline: wgpu::RenderPipeline,
     page_layout: wgpu::BindGroupLayout,
+    blit_layout: wgpu::BindGroupLayout,
+    scene: Option<Scene>,
     sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
     globals_group: wgpu::BindGroup,
@@ -64,7 +89,8 @@ pub struct WgpuRenderer {
 
 impl WgpuRenderer {
     /// A renderer drawing into `format` textures on `device`, with text in
-    /// `faces` alone: no system font is loaded.
+    /// `faces` alone: no system font is loaded. `format` is the target's;
+    /// only the final blit draws in it.
     #[must_use]
     pub fn new(
         device: &wgpu::Device,
@@ -75,6 +101,7 @@ impl WgpuRenderer {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let globals_layout = globals_layout(device);
         let page_layout = page_layout(device);
+        let blit_layout = unfiltered_texture_layout(device, "nova scene");
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("nova globals"),
             size: 16,
@@ -108,12 +135,12 @@ impl WgpuRenderer {
                 &sprite_layout,
                 &shader,
                 ("sprite_vs", "sprite_fs"),
-                wgpu::VertexBufferLayout {
+                &[Some(wgpu::VertexBufferLayout {
                     array_stride: size_of::<SpriteInstance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &sprite_attributes,
-                },
-                (format, blend_state(blend)),
+                })],
+                (SCENE_FORMAT, Some(blend_state(blend))),
             )
         };
         let sprite_pipeline = sprite_pipeline_with(Blend::Normal);
@@ -123,13 +150,14 @@ impl WgpuRenderer {
             &solid_layout,
             &shader,
             ("solid_vs", "solid_fs"),
-            wgpu::VertexBufferLayout {
+            &[Some(wgpu::VertexBufferLayout {
                 array_stride: size_of::<SolidVertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &solid_attributes,
-            },
-            (format, blend_state(Blend::Normal)),
+            })],
+            (SCENE_FORMAT, Some(blend_state(Blend::Normal))),
         );
+        let blit_pipeline = blit_pipeline(device, &blit_layout, format);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("nova nearest"),
             mag_filter: wgpu::FilterMode::Nearest,
@@ -137,7 +165,8 @@ impl WgpuRenderer {
             ..Default::default()
         });
         let cache = Cache::new(device);
-        let text_atlas = TextAtlas::with_color_mode(device, queue, &cache, format, ColorMode::Web);
+        let text_atlas =
+            TextAtlas::with_color_mode(device, queue, &cache, SCENE_FORMAT, ColorMode::Web);
         let text_viewport = glyphon::Viewport::new(device, &cache);
         let (font_system, families) = font_system(faces);
         Self {
@@ -146,7 +175,10 @@ impl WgpuRenderer {
             sprite_pipeline,
             additive_pipeline,
             solid_pipeline,
+            blit_pipeline,
             page_layout,
+            blit_layout,
+            scene: None,
             sampler,
             globals,
             globals_group,
@@ -242,8 +274,10 @@ impl WgpuRenderer {
         );
     }
 
-    /// Draws `frame` into `view`, a texture of the frame's target size.
+    /// Draws `frame` into `view`, a texture of the frame's target size:
+    /// into the scene first, then blitted to `view`.
     pub fn draw(&mut self, frame: &Frame, view: &wgpu::TextureView) {
+        self.ensure_scene(frame.target);
         self.queue.write_buffer(
             &self.globals,
             0,
@@ -254,6 +288,7 @@ impl WgpuRenderer {
         let instance_buffer = self.vertex_buffer("nova sprite instances", &layout.instances);
         let vertex_buffer = self.vertex_buffer("nova solid vertices", &layout.vertices);
 
+        let scene = self.scene.as_ref().expect("ensured above");
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -261,7 +296,7 @@ impl WgpuRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("nova frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
+                    view: &scene.view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -320,8 +355,55 @@ impl WgpuRenderer {
                 }
             }
         }
+        blit(&mut encoder, &self.blit_pipeline, &scene.blit_group, view);
         self.queue.submit(Some(encoder.finish()));
         self.text_atlas.trim();
+    }
+
+    /// Makes sure the scene is `target`-sized, creating it on the first
+    /// frame and again whenever the target's size changes.
+    fn ensure_scene(&mut self, target: (u32, u32)) {
+        if reuse_scene(self.scene.as_ref().map(|scene| scene.size), target) {
+            return;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("nova scene"),
+            size: wgpu::Extent3d {
+                width: target.0,
+                height: target.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: SCENE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let blit_group = self.texture_group("nova scene", &self.blit_layout, &view);
+        self.scene = Some(Scene {
+            size: target,
+            view,
+            blit_group,
+        });
+    }
+
+    /// A bind group of `layout` holding `view` alone.
+    fn texture_group(
+        &self,
+        label: &str,
+        layout: &wgpu::BindGroupLayout,
+        view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            }],
+        })
     }
 
     /// Shapes every text batch and prepares one glyphon renderer for each.
@@ -459,6 +541,76 @@ fn page_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
+/// A layout of one texture read with `textureLoad` (no sampler) in the
+/// fragment stage.
+fn unfiltered_texture_layout(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some(label),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }],
+    })
+}
+
+/// The pipeline that copies the scene, read through `scene_layout`, onto a
+/// `format` target as it is.
+fn blit_pipeline(
+    device: &wgpu::Device,
+    scene_layout: &wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::include_wgsl!("blit.wgsl"));
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("nova blit"),
+        bind_group_layouts: &[Some(scene_layout)],
+        immediate_size: 0,
+    });
+    pipeline(
+        device,
+        &layout,
+        &shader,
+        ("blit_vs", "blit_fs"),
+        &[],
+        (format, None),
+    )
+}
+
+/// Copies the scene (read through `scene_group`) onto `view`, every
+/// pixel as it is, in one pass.
+fn blit(
+    encoder: &mut wgpu::CommandEncoder,
+    pipeline: &wgpu::RenderPipeline,
+    scene_group: &wgpu::BindGroup,
+    view: &wgpu::TextureView,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("nova blit"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, scene_group, &[]);
+    pass.draw(0..3, 0..1);
+}
+
 /// A frame's batches laid out for the GPU.
 struct Layout<'a> {
     /// Every sprite batch's instances, in one buffer.
@@ -554,15 +706,15 @@ fn blend_state(blend: Blend) -> wgpu::BlendState {
     }
 }
 
-/// A pipeline drawing triangles into `format`, combined with the target
-/// by `blend`.
+/// A pipeline drawing triangles from `buffers` into `format`, combined
+/// with the target by `blend` (`None` writes the fragment as it is).
 fn pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     (vertex, fragment): (&str, &str),
-    buffer: wgpu::VertexBufferLayout<'_>,
-    (format, blend): (wgpu::TextureFormat, wgpu::BlendState),
+    buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+    (format, blend): (wgpu::TextureFormat, Option<wgpu::BlendState>),
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(vertex),
@@ -571,7 +723,7 @@ fn pipeline(
             module: shader,
             entry_point: Some(vertex),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Some(buffer)],
+            buffers,
         },
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
@@ -582,7 +734,7 @@ fn pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: Some(blend),
+                blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -786,5 +938,13 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn the_scene_is_reused_only_at_the_targets_size() {
+        assert!(reuse_scene(Some((64, 64)), (64, 64)));
+        assert!(!reuse_scene(Some((64, 64)), (32, 64)));
+        assert!(!reuse_scene(Some((64, 64)), (64, 32)));
+        assert!(!reuse_scene(None, (64, 64)));
     }
 }
