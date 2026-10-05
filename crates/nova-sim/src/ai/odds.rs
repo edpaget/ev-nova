@@ -370,13 +370,22 @@ mod tests {
         (chaser, target)
     }
 
-    fn hopeless(chaser: &Npc, target: PlayerSide) -> bool {
+    /// Whether `chaser`'s chase of `target` is hopeless, both moved to
+    /// (100, 200) from where they are and drifting left at 0.5 on top of
+    /// their own velocities, which changes nothing.
+    fn hopeless(chaser: &Npc, mut target: PlayerSide) -> bool {
+        let (offset, drift) = (Vec2::new(100.0, 200.0), Vec2::new(-0.5, 0.0));
+        let mut chaser = chaser.clone();
+        chaser.state.position = chaser.state.position + offset;
+        chaser.state.velocity = chaser.state.velocity + drift;
+        target.state.position = target.state.position + offset;
+        target.state.velocity = target.state.velocity + drift;
         let npcs = [chaser.clone()];
         let around = Surroundings {
             player: Some(target),
             ..Surroundings::new(&[], &npcs)
         };
-        hopeless_chase(chaser, ShipRef::Player, &around)
+        hopeless_chase(&chaser, ShipRef::Player, &around)
     }
 
     #[test]
@@ -455,6 +464,10 @@ mod tests {
         target.handling.max_speed = 6.0;
         target.state.position = Vec2::new(0.0, -111.81);
         assert!(hopeless(&chaser, target), "out of reach");
+        target.state.position = Vec2::new(70.0, -80.0);
+        assert!(!hopeless(&chaser, target), "in reach both ways");
+        target.state.position = Vec2::new(80.0, -80.0);
+        assert!(hopeless(&chaser, target), "out of reach both ways");
         target.state.position = Vec2::new(0.0, -100.0);
         chaser.rounds.clear();
         assert!(hopeless(&chaser, target), "no rounds");

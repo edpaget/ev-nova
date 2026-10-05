@@ -87,11 +87,7 @@ fn ignores(npc: &Npc, attacker: ShipRef, around: &Surroundings) -> bool {
             (off.x * off.x + off.y * off.y, state.position)
         })
     };
-    let Some(own) = npc
-        .goal
-        .attacking()
-        .filter(|&own| own != attacker && around.live(own))
-    else {
+    let Some(own) = npc.goal.attacking().filter(|&own| around.live(own)) else {
         return false;
     };
     match (squared(own), squared(attacker)) {
@@ -311,6 +307,29 @@ mod tests {
             answered(&govts, &gone, 0, &hit),
             TAKES(n(3)),
             "its target gone"
+        );
+        let shift = |ships: &[Npc]| -> Vec<Npc> {
+            ships
+                .iter()
+                .cloned()
+                .map(|mut npc| {
+                    npc.state.position = npc.state.position + Vec2::new(300.0, -200.0);
+                    npc
+                })
+                .collect()
+        };
+        assert_eq!(
+            answered(&govts, &shift(&npcs), 0, &hit),
+            Reaction::default(),
+            "measured from where it is"
+        );
+        assert_eq!(answered(&govts, &shift(&farther), 0, &hit), TAKES(n(3)));
+        let mut by_its_target = npcs.clone();
+        by_its_target[0].goal = Goal::Attack(n(3));
+        assert_eq!(
+            answered(&govts, &by_its_target, 0, &hit),
+            TAKES(n(3)),
+            "hit by the ship it attacks"
         );
         assert_eq!((FOCUS, FOCUS_ANGLE), (0.25, 44.0));
     }

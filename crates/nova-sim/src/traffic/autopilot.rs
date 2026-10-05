@@ -851,6 +851,11 @@ mod tests {
             .expect("leaves");
         assert_eq!(outcome, Outcome::JumpedOut, "never lands");
         assert!(runner.state.position.x.abs() < 1.0, "{:?}", runner.state);
+        assert!(
+            runner.state.position.length() >= runner.stats.jump_distance,
+            "only past its jump distance: {:?}",
+            runner.state
+        );
         let mut dry = npc(FAST, Goal::Flee(FOE), at(0.0, -1000.0, 0.0, -6.0, 0.0));
         dry.reserves.fuel.now = 99.0;
         for _ in 0..30 {

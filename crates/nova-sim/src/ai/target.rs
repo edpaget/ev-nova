@@ -396,6 +396,127 @@ mod tests {
     }
 
     #[test]
+    fn the_hunt_is_measured_from_where_the_warship_is() {
+        let govts = govts(0);
+        let npcs = [ship(1, ME, 1000.0, -1000.0)];
+        let at = |x: f32, y: f32| {
+            let around = Surroundings {
+                player: Some(player(1000.0 + x, -1000.0 + y)),
+                govts: &govts,
+                system_govt: Some(ME),
+                record: -7,
+                ..Surroundings::new(&[], &npcs)
+            };
+            hostile_to_player(&npcs[0], &around)
+        };
+        assert!(at(1200.0, -1200.0));
+        assert!(!at(1200.5, 0.0));
+        assert!(!at(0.0, 1200.5));
+    }
+
+    /// A xenophobic ship (NPC 1, govt 144 with `flags` besides) choosing
+    /// between the player 100 above and a rival 300 to the right, with
+    /// record `record` in a system of `system`.
+    fn xenophobe_choice(flags: u16, system: Option<GovtId>, record: i16) -> Option<ShipRef> {
+        let govts = Governments::new([
+            GovtRecord {
+                flags: XENOPHOBIC | flags,
+                ..govt(144)
+            },
+            govt(145),
+        ]);
+        let npcs = [ship(1, XENO, 0.0, 0.0), ship(2, RIVAL, 300.0, 0.0)];
+        let around = Surroundings {
+            player: Some(player(0.0, -100.0)),
+            govts: &govts,
+            system_govt: system,
+            record,
+            ..Surroundings::new(&[], &npcs)
+        };
+        select_target(&npcs[0], None, &around)
+    }
+
+    #[test]
+    fn a_xenophobe_hunts_the_player_unless_told_not_to_or_at_home_in_good_standing() {
+        assert_eq!(xenophobe_choice(0, Some(ME), 1000), Some(P), "elsewhere");
+        assert_eq!(
+            xenophobe_choice(0, Some(XENO), 0),
+            Some(P),
+            "at home, no better"
+        );
+        assert_eq!(xenophobe_choice(0, Some(XENO), -5), Some(P));
+        assert_eq!(
+            xenophobe_choice(0, Some(XENO), 1),
+            Some(n(2)),
+            "at home, in good standing"
+        );
+        assert_eq!(
+            xenophobe_choice(NEVER_ATTACKS_PLAYER, Some(ME), 0),
+            Some(n(2)),
+            "never the player"
+        );
+        assert_eq!(
+            xenophobe_choice(NEVER_ATTACKS_PLAYER | ALWAYS_ATTACKS_PLAYER, Some(XENO), 1),
+            Some(P),
+            "always wins"
+        );
+    }
+
+    #[test]
+    fn a_xenophobe_never_hunts_a_player_breaking_up() {
+        let govts = Governments::new([
+            GovtRecord {
+                flags: XENOPHOBIC | ALWAYS_ATTACKS_PLAYER,
+                ..govt(144)
+            },
+            govt(145),
+        ]);
+        let npcs = [ship(1, XENO, 0.0, 0.0), ship(2, RIVAL, 300.0, 0.0)];
+        let around = Surroundings {
+            player: Some(PlayerSide {
+                condition: Condition::Dying { ticks_left: 3 },
+                ..player(0.0, -100.0)
+            }),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(select_target(&npcs[0], None, &around), Some(n(2)));
+    }
+
+    #[test]
+    fn max_odds_scale_the_ships_strength_against_its_candidates() {
+        // MaxOdds 200: a ship of 100 takes on up to 200.
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                max_odds: 200,
+                ..govt(140)
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..govt(142)
+            },
+        ]);
+        let mut brute = ship(2, ENEMY, 100.0, 0.0);
+        brute.hull.strength = 200.0;
+        let npcs = [me(), brute];
+        let around = Surroundings {
+            player: Some(player(0.0, -5000.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(select_target(&npcs[0], None, &around), Some(n(2)));
+        let mut stronger = npcs.clone();
+        stronger[1].hull.strength = 200.5;
+        let around = Surroundings {
+            player: Some(player(0.0, -5000.0)),
+            govts: &govts,
+            ..Surroundings::new(&[], &stronger)
+        };
+        assert_eq!(select_target(&stronger[0], None, &around), None);
+    }
+
+    #[test]
     fn flags_0x0004_always_attack_the_player_and_0x0040_never() {
         let far = (5000.0, 5000.0);
         assert!(hostile(ALWAYS_ATTACKS_PLAYER, Some(ME), 1000, far));

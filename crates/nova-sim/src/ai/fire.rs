@@ -362,14 +362,20 @@ mod tests {
         }
     }
 
-    /// An NPC at the centre facing up (3 degrees a tick), carrying one of
+    /// Where the shooter is: off the centre, so every offset is measured
+    /// from it.
+    const SHOOTER: Vec2 = Vec2::new(300.0, 200.0);
+
+    /// An NPC at [`SHOOTER`] facing up (3 degrees a tick), carrying one of
     /// each of `weapons`, with `goal`.
     fn shooter(weapons: &[WeaponRecord], goal: Goal) -> Npc {
-        Npc {
+        let mut npc = Npc {
             armament: Armament::new(weapons.iter().map(|record| (WeaponSpec::new(record), 1))),
             goal,
             ..crate::testkit::npc(1, ShipStats::new(FAST, &[]))
-        }
+        };
+        npc.state.position = SHOOTER;
+        npc
     }
 
     /// The player at (`x`, `y`), at rest, its shields at `shield`.
@@ -394,11 +400,12 @@ mod tests {
 
     const ATTACK: Goal = Goal::Attack(ShipRef::Player);
 
-    /// What `npc` fires at the player at (`x`, `y`) with `shield`.
+    /// What `npc` fires at the player (`x`, `y`) from [`SHOOTER`] with
+    /// `shield`.
     fn fired(npc: &Npc, x: f32, y: f32, shield: f32) -> Option<WeaponId> {
         let npcs = [npc.clone()];
         let around = Surroundings {
-            player: Some(player_at(x, y, shield)),
+            player: Some(player_at(SHOOTER.x + x, SHOOTER.y + y, shield)),
             ..Surroundings::new(&[], &npcs)
         };
         trigger(npc, &around).only
@@ -427,9 +434,12 @@ mod tests {
 
     #[test]
     fn an_attack_approaches_outside_the_box_and_dogfights_within_it() {
-        let from = ShipState::default();
+        let from = ShipState {
+            position: SHOOTER,
+            ..ShipState::default()
+        };
         let at = |x: f32, y: f32| ShipState {
-            position: Vec2::new(x, y),
+            position: SHOOTER + Vec2::new(x, y),
             ..ShipState::default()
         };
         let target = ShipRef::Npc(NpcId(2));
@@ -455,12 +465,14 @@ mod tests {
     #[test]
     fn the_heading_wanted_leads_with_the_first_forward_gun_or_bears_without() {
         let mut npc = shooter(&[missile(131), gun(128, 1, 1)], ATTACK);
+        npc.state.velocity = Vec2::new(-1.0, 0.0);
         let crossing = ShipState {
-            position: Vec2::new(0.0, -100.0),
-            velocity: Vec2::new(5.0, 0.0),
+            position: SHOOTER + Vec2::new(0.0, -100.0),
+            velocity: Vec2::new(4.0, 0.0),
             heading: 0.0,
         };
-        // 100 pixels at 10 a tick: 10 ticks, 50 to the right.
+        // 100 pixels at 10 a tick: 10 ticks, 50 to the right of it,
+        // relative to the shooter's own motion.
         let expected = bearing(Vec2::ZERO, Vec2::new(50.0, -100.0));
         assert!((wanted_heading(&npc, &crossing) - expected).abs() < 1e-3);
         npc.armament = Armament::new([(WeaponSpec::new(&missile(131)), 1)]);
@@ -518,6 +530,18 @@ mod tests {
             ATTACK,
         );
         assert_eq!(fired(&unfused, 0.0, -200.0, 50.0), id(128));
+        let fused_gun = shooter(
+            &[WeaponRecord {
+                prox_radius: 10,
+                ..gun(128, 1, 1)
+            }],
+            ATTACK,
+        );
+        assert_eq!(
+            fired(&fused_gun, 0.0, -200.0, 50.0),
+            id(128),
+            "only a rocket's fuse needs room"
+        );
     }
 
     #[test]
@@ -556,6 +580,13 @@ mod tests {
         let mut hull_blind = npc.clone();
         hull_blind.hull.blind_spots = 0x4000;
         assert_eq!(fired(&hull_blind, 0.0, 200.0, 50.0), None);
+        let mut both_blind = blind_aft.clone();
+        both_blind.hull.blind_spots = 0x4000;
+        assert_eq!(
+            fired(&both_blind, 0.0, 200.0, 50.0),
+            None,
+            "blind both ways"
+        );
         let front = shooter(&[guided(130, 7)], Goal::Flee(ShipRef::Player));
         assert_eq!(
             fired(&front, 100.0, -100.0, 50.0),
@@ -583,6 +614,12 @@ mod tests {
         let npc = shooter(&[short(128), missile(131)], ATTACK);
         assert_eq!(fired(&npc, 0.0, -307.79, 50.0), id(131));
         assert_eq!(fired(&npc, 0.0, -307.8, 50.0), None);
+        // Off to the side, both ways counting: 40000 + 52900 is in reach,
+        // 40000 + 55225 not.
+        let mut leaning = npc;
+        leaning.state.heading = 41.0;
+        assert_eq!(fired(&leaning, 200.0, -230.0, 50.0), id(131));
+        assert_eq!(fired(&leaning, 200.0, -235.0, 50.0), None);
     }
 
     #[test]

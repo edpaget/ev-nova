@@ -101,6 +101,7 @@ mod tests {
     use crate::catalog::{StellarId, WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::weapon::WeaponSpec;
+    use crate::geometry::Vec2;
     use crate::govt::{Governments, WARSHIPS_RETREAT};
     use crate::testkit::{Draws, weapon};
 
@@ -225,14 +226,30 @@ mod tests {
         let npcs = [cop.clone(), far];
         let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[]);
         assert_eq!((goal, asked), (Goal::Inspect(n(2)), vec![]), "kept");
-        let near = ship(2, TRADERS, AiType::WimpyTrader, -100.0, 100.0);
-        let npcs = [cop.clone(), near];
-        let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[0]);
-        assert_eq!(
-            (goal, asked),
-            (Goal::Inspect(P), vec![1]),
-            "looked it over: on to another, not it again"
+        for (x, y) in [(-100.0, 100.0), (10.0, -50.0), (-50.0, 10.0)] {
+            let near = ship(2, TRADERS, AiType::WimpyTrader, x, y);
+            let npcs = [cop.clone(), near];
+            let (goal, asked) = decided_by(&govts(0, 0), &npcs, (0.0, -1000.0), 0, &[0]);
+            assert_eq!(
+                (goal, asked),
+                (Goal::Inspect(P), vec![1]),
+                "looked it over at ({x}, {y}): on to another, not it again"
+            );
+        }
+        let mut aside = cop.clone();
+        aside.state.position = Vec2::new(500.0, 500.0);
+        let beside = ship(2, TRADERS, AiType::WimpyTrader, 450.0, 450.0);
+        let (goal, _) = decided_by(
+            &govts(0, 0),
+            &[aside.clone(), beside],
+            (0.0, -1000.0),
+            0,
+            &[0],
         );
+        assert_eq!(goal, Goal::Inspect(P), "measured from where it is");
+        let off = ship(2, TRADERS, AiType::WimpyTrader, 0.0, 0.0);
+        let (goal, _) = decided_by(&govts(0, 0), &[aside, off], (0.0, -1000.0), 0, &[0]);
+        assert_eq!(goal, Goal::Inspect(n(2)), "500 off: kept");
         let (goal, _) = decided_by(&govts(0, 0), &[cop], (0.0, -1000.0), 0, &[0]);
         assert_eq!(goal, Goal::Inspect(P), "it has gone");
         assert_eq!(INSPECT_REACH, 100.0);

@@ -61,13 +61,16 @@ mod tests {
     use crate::testkit::{Draws, weapon};
     use crate::traffic::npc::AiType;
 
-    /// A provoked brave trader at the centre and its attacker at (`x`,
-    /// `y`).
+    /// A provoked brave trader at (200, 100) and its attacker (`x`, `y`)
+    /// from it.
     fn provoked(x: f32, y: f32) -> [Npc; 2] {
-        let mut trader = ship(1, TRADERS, AiType::BraveTrader, 0.0, 0.0);
+        let mut trader = ship(1, TRADERS, AiType::BraveTrader, 200.0, 100.0);
         trader.provoked = 10.0;
         trader.target = Some(n(2));
-        [trader, ship(2, PIRATES, AiType::Warship, x, y)]
+        [
+            trader,
+            ship(2, PIRATES, AiType::Warship, 200.0 + x, 100.0 + y),
+        ]
     }
 
     fn decided(npcs: &[Npc]) -> Goal {

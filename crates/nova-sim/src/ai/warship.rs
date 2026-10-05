@@ -176,6 +176,25 @@ mod tests {
     }
 
     #[test]
+    fn only_a_provoked_warship_turns_on_its_attacker_and_never_on_an_ally() {
+        let neutral = ship(3, NEUTRAL, AiType::Warship, 0.0, 500.0);
+        let mut calm = police();
+        calm.target = Some(n(3));
+        assert_eq!(
+            decided(&[calm.clone(), neutral], 0),
+            Goal::Land(StellarId(128)),
+            "not provoked"
+        );
+        let trader = ship(3, TRADERS, AiType::WimpyTrader, 0.0, 500.0);
+        calm.provoked = 5.0;
+        assert_eq!(
+            decided(&[calm, trader], 0),
+            Goal::Land(StellarId(128)),
+            "provoked by an ally"
+        );
+    }
+
+    #[test]
     fn a_warship_keeps_its_target_until_it_drops_it() {
         let mut hunter = police();
         hunter.goal = Goal::Attack(n(3));
