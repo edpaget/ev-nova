@@ -15,7 +15,10 @@
 //! Planetary events start at random, and NPC traffic comes and goes at
 //! random, on a generator seeded from the clock when the game starts; the
 //! NPCs fly Nova's peaceful traffic: traders land, others jump out. Ships
-//! are disabled as Nova disables them. Each weapon feature the simulation
+//! are disabled as Nova disables them. In flight, Space and Control fire,
+//! W selects the secondary weapon, and Tab and R pick the target; the
+//! fight's explosions and debris roll on a generator of their own, seeded
+//! beside the first, and its sounds are heard by how far away they are. Each weapon feature the simulation
 //! does not handle yet is reported once, as a line on standard error.
 //!
 //! Tab, on the menu, goes to the developer's ship browser and galaxy map,
@@ -119,10 +122,14 @@ fn main() -> ExitCode {
                 .wrapping_add(u64::from(since.subsec_nanos()))
         });
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(SplitMix::new(seed)));
+    // The effects' own: drawing on it never changes the simulation's draws.
+    let effects: Rc<RefCell<dyn Chance>> =
+        Rc::new(RefCell::new(SplitMix::new(seed.wrapping_add(1))));
     let mut screen = start_screen(Rc::clone(&data))
         .with_sound_prefs(settings.prefs())
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))
+        .with_effects_chance(SharedChance::new(effects))
         .with_behaviour(Rc::new(Peaceful))
         .with_disable_rule(Rc::new(NovaDisable));
     match open_interface(&dir) {

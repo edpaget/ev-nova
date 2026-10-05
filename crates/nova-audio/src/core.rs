@@ -25,6 +25,8 @@ use crate::table::SoundTable;
 /// - Each event with a `snd ` in the table plays it once, at the effects
 ///   volume, while the sound setting is on. A landing plays the table's
 ///   landing sound, then the stellar's own.
+/// - Each of a fight's sounds plays its own `snd ` once, at the effects
+///   volume times its [`distance_gain`], while the sound setting is on.
 /// - The engine loops while the sound setting is on, the ship thrusts in
 ///   flight, and the table has an engine sound. Leaving flight, or opening
 ///   the Preferences dialog that pauses it, stops it and forgets the
@@ -92,8 +94,11 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
                 Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
                 Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
-                // A fight's sounds are not played yet.
-                Sound::Combat(_) => {}
+                Sound::Combat(fight) => {
+                    let gain = distance_gain(fight.offset);
+                    let volume = self.settings.effects_volume.amplitude() * gain;
+                    self.play_at(Some(fight.sound), Volume::new(volume));
+                }
             }
             self.reconcile();
         }
@@ -102,13 +107,15 @@ impl<A: Audio> AudioCore<A> {
     /// Plays `sound`, if there is one, at the effects volume, while sound
     /// is on.
     fn play(&mut self, sound: Option<SoundId>) {
+        self.play_at(sound, self.settings.effects_volume);
+    }
+
+    /// Plays `sound`, if there is one, at `volume`, while sound is on.
+    fn play_at(&mut self, sound: Option<SoundId>, volume: Volume) {
         if let Some(sound) = sound
             && self.settings.sound
         {
-            self.audio.run(AudioCommand::Play {
-                sound,
-                volume: self.settings.effects_volume,
-            });
+            self.audio.run(AudioCommand::Play { sound, volume });
         }
     }
 
@@ -211,6 +218,37 @@ impl<A: Audio> AudioCore<A> {
     }
 }
 
+/// Within this many pixels of the player, a sound is heard at full volume.
+pub const NEAR: f64 = 200.0;
+/// The squared distance whose ratio gives a sound's volume up and down.
+pub const FAR_ALONG: f64 = 722_500.0;
+/// The squared distance whose ratio gives a sound's volume across, beyond
+/// [`NEAR`].
+pub const FAR_ACROSS: f64 = NEAR * NEAR;
+/// The quietest a sound is heard, however far away.
+pub const QUIETEST: f64 = 0.125;
+
+/// How loud a sound `offset` pixels from the player is heard, from 1/8 to
+/// 1, as the original hears it (`_PlaySoundDistance` @0xe007): in full
+/// within [`NEAR`] pixels; beyond, `722500 / d²`, or, when it is more than
+/// [`NEAR`] pixels across, the mean of that and `40000 / d²`, each kept
+/// within [`QUIETEST`] and 1.
+#[must_use]
+pub fn distance_gain(offset: (i32, i32)) -> f32 {
+    let (dx, dy) = (f64::from(offset.0), f64::from(offset.1));
+    let squared = dx.mul_add(dx, dy * dy);
+    if squared <= FAR_ACROSS {
+        return 1.0;
+    }
+    let heard = |ratio: f64| (ratio / squared).clamp(QUIETEST, 1.0);
+    let gain = if dx.abs() > NEAR {
+        f64::midpoint(heard(FAR_ALONG), heard(FAR_ACROSS))
+    } else {
+        heard(FAR_ALONG)
+    };
+    gain as f32
+}
+
 /// Whether `showing` is shown over another screen, keeping the scene
 /// below it: the About text, the Preferences dialog, and the new pilot's
 /// name entry and the saved pilots' list over the main menu.
@@ -241,6 +279,7 @@ fn has_music(scene: Showing) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::recording::{AudioLog, RecordingAudio};
@@ -435,6 +474,64 @@ mod tests {
         assert_eq!(drain(&log), []);
         core.update(None, &[COAST]);
         assert_eq!(drain(&log), [AudioCommand::StopLoop]);
+    }
+
+    // The fight's sounds.
+
+    fn fight(id: i16, offset: (i32, i32)) -> Sound {
+        Sound::Combat(nova_view::sound::CombatSound {
+            sound: SoundId(id),
+            offset,
+        })
+    }
+
+    #[test]
+    fn a_sound_within_200_pixels_is_heard_at_full_volume() {
+        for offset in [(0, 0), (200, 0), (0, -200), (120, 160), (-141, 141)] {
+            assert_eq!(distance_gain(offset), 1.0, "{offset:?}");
+        }
+    }
+
+    #[test]
+    fn a_far_sound_is_heard_at_an_eighth() {
+        for offset in [
+            (10_000, 0),
+            (0, -10_000),
+            (5000, 5000),
+            (i32::MAX, i32::MIN),
+        ] {
+            assert_eq!(distance_gain(offset), 0.125, "{offset:?}");
+        }
+    }
+
+    #[test]
+    fn a_sound_far_across_falls_off_faster_than_one_far_up_or_down() {
+        // d² 160,000: 722,500 / d² is over 1, and 40,000 / d² a quarter.
+        assert_eq!(distance_gain((0, 400)), 1.0);
+        assert_eq!(distance_gain((400, 0)), 0.625);
+        assert_eq!(distance_gain((-400, 0)), 0.625);
+        // d² 1,000,000: 0.7225, and 0.04 floored at an eighth.
+        assert!((distance_gain((0, 1000)) - 0.7225).abs() < 1e-6);
+        assert!((distance_gain((1000, 0)) - 0.42375).abs() < 1e-6);
+        // 200 across is not past 200.
+        assert!((distance_gain((200, 980)) - 722_500.0 / 1_000_400.0).abs() < 1e-6);
+        assert!((distance_gain((201, 980)) - 0.423_461).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_fights_sound_plays_at_the_effects_volume_by_its_distance() {
+        let (mut core, log) = original();
+        core.set_music(false);
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::Flight),
+            &[fight(208, (0, 0)), fight(302, (400, 0))],
+        );
+        assert_eq!(drain(&log), [play(208, 0.5), play(302, 0.3125)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::Flight), &[fight(208, (0, 0))]);
+        assert_eq!(drain(&log), [], "sound off");
     }
 
     // Music.

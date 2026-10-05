@@ -31,7 +31,8 @@
 //!
 //! F, from either side, enters flight: the [`FlightView`], built the first
 //! time and kept, so flight resumes where it left off. In flight the
-//! arrow keys fly the ship, Tab does nothing, and Escape goes back to the
+//! arrow keys fly the ship, Space and Control fire, W selects the
+//! secondary weapon, Tab and R pick the target, and Escape goes back to the
 //! screen flight was entered from; it never quits.
 //!
 //! M and J are flight's own keys. M opens flight's course map, where a
@@ -79,7 +80,11 @@
 //! Each day a jump takes rolls the planetary events, and the NPC traffic
 //! its rolls, on the router's source of chance
 //! ([`AppScreen::with_chance`]), which never fires until one is given, so
-//! the developer's flights stay the same each time. Every flight's NPCs
+//! the developer's flights stay the same each time; each flight's
+//! explosions and debris roll on another
+//! ([`AppScreen::with_effects_chance`]), the same until one is given. A
+//! flight's HUD lays out its text with the router's metrics, the
+//! dialogs' or the main menu's. Every flight's NPCs
 //! decide as the router's behaviour says ([`AppScreen::with_behaviour`]),
 //! Nova's peaceful traffic until another is given, and their ships are
 //! disabled as the router's rule says ([`AppScreen::with_disable_rule`]),
@@ -210,6 +215,8 @@ pub struct AppScreen {
     warnings: Vec<String>,
     /// What each flight rolls each day's events and its traffic on.
     chance: SharedChance,
+    /// What each flight's explosions and debris are rolled on.
+    effects_chance: SharedChance,
     /// How each flight's NPCs decide.
     behaviour: Rc<dyn Behaviour>,
     /// When each flight's ships are disabled.
@@ -273,6 +280,7 @@ impl AppScreen {
             open_pilot: None,
             warnings: Vec::new(),
             chance: SharedChance::default(),
+            effects_chance: SharedChance::default(),
             behaviour: Rc::new(Peaceful),
             disable_rule: Rc::new(NovaDisable),
         }
@@ -283,6 +291,16 @@ impl AppScreen {
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self { chance, ..self }
+    }
+
+    /// The router with each flight's explosions and debris rolled on
+    /// `chance`, apart from the simulation's.
+    #[must_use]
+    pub fn with_effects_chance(self, effects_chance: SharedChance) -> Self {
+        Self {
+            effects_chance,
+            ..self
+        }
     }
 
     /// The router with each flight's NPCs deciding as `behaviour` says.
@@ -301,16 +319,30 @@ impl AppScreen {
     }
 
     /// A flight over the game data, `new` from it, rolling on the router's
-    /// chance, deciding as its behaviour says and disabling ships as its
-    /// rule says.
+    /// chance, its effects on the router's effects chance, deciding as its
+    /// behaviour says, disabling ships as its rule says, and laying out its
+    /// HUD's text with the router's metrics, if it has any.
     fn flight(
         &self,
         new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
     ) -> FlightView<Rc<GameData>> {
-        new(Rc::clone(&self.data))
+        let flight = new(Rc::clone(&self.data))
             .with_chance(self.chance.clone())
+            .with_effects_chance(self.effects_chance.clone())
             .with_behaviour(Rc::clone(&self.behaviour))
-            .with_disable_rule(Rc::clone(&self.disable_rule))
+            .with_disable_rule(Rc::clone(&self.disable_rule));
+        match self.metrics() {
+            Some(metrics) => flight.with_metrics(metrics),
+            None => flight,
+        }
+    }
+
+    /// The metrics the router's text is laid out by: the dialogs', or the
+    /// main menu's, if either was given.
+    fn metrics(&self) -> Option<Rc<dyn TextMetrics>> {
+        let dialogs = self.dialogs.as_ref().map(|dialogs| &dialogs.metrics);
+        let menu = self.menu.as_ref().map(|menu| &menu.metrics);
+        dialogs.or(menu).map(Rc::clone)
     }
 
     /// The router with the main menu, which it now opens on: New Pilot
@@ -1052,8 +1084,8 @@ impl Screen for AppScreen {
     /// In flight, an Escape press closes flight's map when it is open, and
     /// otherwise goes back to the side flight was entered from, letting go
     /// of the keys held in flight; it never quits, and its repeats and
-    /// release are consumed. Everything else goes to flight, where Tab, F
-    /// and I do nothing.
+    /// release are consumed. Everything else goes to flight, where Tab
+    /// targets the next ship, and F and I do nothing.
     ///
     /// In the spaceport, every event goes to it; leaving it takes off,
     /// back into flight, letting go of its keys.

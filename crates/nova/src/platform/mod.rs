@@ -116,9 +116,14 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // The Trade Center's buy key, by position: B on a US-layout
         // keyboard. Its sell key is S, above.
         PhysicalKey::Code(KeyCode::KeyB) => Key::Char('b'),
+        // Flight's nearest target key, by position: R on a US-layout
+        // keyboard.
+        PhysicalKey::Code(KeyCode::KeyR) => Key::Char('r'),
         // Either Alt (Option on a Mac), which makes a trade the most
-        // possible while held.
+        // possible, and flight's weapon select go back, while held.
         PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::Alt,
+        // Either Control: flight's secondary fire key.
+        PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
         // The developer tools' toggle, by position: the key under Escape on
         // a US-layout keyboard. Without the developer tools, no screen uses
         // it.
@@ -189,6 +194,9 @@ mod tests {
             (KeyCode::KeyB, Key::Char('b')),
             (KeyCode::AltLeft, Key::Alt),
             (KeyCode::AltRight, Key::Alt),
+            (KeyCode::ControlLeft, Key::Control),
+            (KeyCode::ControlRight, Key::Control),
+            (KeyCode::KeyR, Key::Char('r')),
             (KeyCode::Backquote, Key::Char('`')),
             (KeyCode::KeyQ, Key::Other),
             (KeyCode::F1, Key::Other),
@@ -204,13 +212,15 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 20] = [
+    const GAME_CHARACTER_KEYS: [Key; 22] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
         nova_view::flight::view::LAND_KEY,
         nova_view::flight::view::MAP_KEY,
         nova_view::flight::view::JUMP_KEY,
+        nova_view::flight::view::SELECT_KEY,
+        nova_view::flight::view::NEAREST_KEY,
         Key::Char('w'),
         Key::Char('a'),
         Key::Char('s'),
@@ -239,6 +249,7 @@ mod tests {
             'l' => KeyCode::KeyL,
             'm' => KeyCode::KeyM,
             'p' => KeyCode::KeyP,
+            'r' => KeyCode::KeyR,
             's' => KeyCode::KeyS,
             'w' => KeyCode::KeyW,
             '=' => KeyCode::Equal,
