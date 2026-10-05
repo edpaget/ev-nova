@@ -152,10 +152,8 @@ impl CombatLooks for GameData {
         let Some(Ok(entry)) = self.get::<Ship>(ship.0) else {
             return TargetCard::default();
         };
-        let short_name = || entry.record.short_name.as_str().replace("\\n", " ");
         let picture = FIRST_TARGET_PICTURE.saturating_add(ship.0 - FIRST_SHIP);
         TargetCard {
-            name: entry.name.map_or_else(short_name, resource_name),
             subtitle: entry.record.subtitle.as_str().to_owned(),
             picture: self.resource(PICT, picture).map(|_| picture),
         }
@@ -618,35 +616,23 @@ mod tests {
         );
     }
 
-    /// A `shïp` with `subtitle` and short name `short`.
-    fn subtitled(subtitle: &str, short: &str) -> Vec<u8> {
+    /// A `shïp` with `subtitle`.
+    fn subtitled(subtitle: &str) -> Vec<u8> {
         let mut bytes = ship();
         bytes[0x6E6..0x6E6 + subtitle.len()].copy_from_slice(subtitle.as_bytes());
-        bytes[0x5CE..0x5CE + short.len()].copy_from_slice(short.as_bytes());
         bytes
     }
 
     #[test]
-    fn a_target_card_is_the_ships_name_subtitle_and_picture() {
+    fn a_target_card_is_the_ships_subtitle_and_picture() {
         let data = named_store(&[
-            (
-                Ship::TYPE,
-                128,
-                Some("Shuttle;Fed"),
-                subtitled("Light Transport", ""),
-            ),
-            (
-                Ship::TYPE,
-                129,
-                None,
-                subtitled("Freighter", "Heavy\\nShuttle"),
-            ),
+            (Ship::TYPE, 128, None, subtitled("Light Transport")),
+            (Ship::TYPE, 129, None, subtitled("Freighter")),
             (PICT, 3000, None, picture(2, 2)),
         ]);
         assert_eq!(
             data.target_card(ShipId(128)),
             TargetCard {
-                name: "Shuttle".to_owned(),
                 subtitle: "Light Transport".to_owned(),
                 picture: Some(3000),
             }
@@ -654,11 +640,10 @@ mod tests {
         assert_eq!(
             data.target_card(ShipId(129)),
             TargetCard {
-                name: "Heavy Shuttle".to_owned(),
                 subtitle: "Freighter".to_owned(),
                 picture: None,
             },
-            "named by its short name, without a PICT 3001"
+            "without a PICT 3001"
         );
         assert_eq!(data.target_card(ShipId(130)), TargetCard::default());
     }

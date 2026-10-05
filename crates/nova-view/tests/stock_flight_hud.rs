@@ -144,12 +144,10 @@ fn every_explosion_type_reads_with_its_sound_and_sprite() {
 }
 
 #[test]
-fn the_first_ships_target_card_has_its_name_and_picture() {
+fn the_first_ships_target_card_has_its_picture() {
     let Some(data) = open() else {
         return;
     };
     let card = data.target_card(ShipId(128));
-    assert!(!card.name.is_empty());
-    assert!(!card.name.contains(';'), "{}", card.name);
     assert_eq!(card.picture, Some(3000));
 }

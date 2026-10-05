@@ -186,11 +186,11 @@ pub struct BoomLook {
     pub sound: Option<SoundId>,
 }
 
-/// What the target panel shows of a ship type.
+/// What the target panel shows of a ship type besides its name, which is
+/// the simulation's (`ShipRecord::name`, through
+/// `Session::ship_name`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TargetCard {
-    /// Its name: the `shïp` resource's, up to any ';'.
-    pub name: String,
     /// Its `Subtitle`.
     pub subtitle: String,
     /// Its picture, `PICT` 3000 + (ID - 128), when there is one.
@@ -377,7 +377,7 @@ mod tests {
     }
 
     /// Every weapon is named for its ID; every explosion's sheet is its
-    /// ID; every ship is named for its ID; every govt's code is its ID.
+    /// ID; every ship's subtitle is its ID; every govt's code is its ID.
     struct Named;
 
     impl CombatLooks for Named {
@@ -401,7 +401,7 @@ mod tests {
 
         fn target_card(&self, ship: ShipId) -> TargetCard {
             TargetCard {
-                name: format!("s{}", ship.0),
+                subtitle: format!("s{}", ship.0),
                 ..TargetCard::default()
             }
         }
@@ -420,7 +420,7 @@ mod tests {
             catalog
                 .boom_look(BoomId(129))
                 .map(|look| look.sheet.image_id),
-            catalog.target_card(ShipId(130)).name,
+            catalog.target_card(ShipId(130)).subtitle,
             catalog.target_code(GovtId(131)),
         )
     }

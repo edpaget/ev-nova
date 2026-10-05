@@ -621,6 +621,14 @@ impl Session {
         self.traffic.ship_types()
     }
 
+    /// Ship type `ship`'s name, as its [`ShipRecord`] gives it, if the
+    /// session has its record.
+    #[must_use]
+    pub fn ship_name(&self, ship: ShipId) -> Option<&str> {
+        let record = self.ships.iter().find(|record| record.id == ship)?;
+        Some(&record.name)
+    }
+
     /// Stops the thrust, if the ship was thrusting, as it lands or jumps.
     fn stop_thrust(&mut self) {
         if self.thrusting {
@@ -2883,6 +2891,14 @@ mod tests {
         let mut session = outfitted(&plain);
         assert_eq!(session.shipyard(), None, "no shipyard here");
         assert_eq!(session.buy_ship(NEW), Err(ShipRefusal::NoShipyard));
+    }
+
+    #[test]
+    fn a_ship_type_is_named_by_its_ship_record() {
+        let session = Session::start(&shipbuying()).expect("starts");
+        assert_eq!(session.ship_name(ShipId(129)), Some("Ship 129"));
+        assert_eq!(session.ship_name(ShipId(128)), Some("Ship 128"));
+        assert_eq!(session.ship_name(ShipId(130)), None, "no such record");
     }
 
     #[test]

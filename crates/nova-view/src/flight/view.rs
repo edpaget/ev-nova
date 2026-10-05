@@ -943,6 +943,7 @@ impl<C> FlightView<C> {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let unread = TargetCard::default();
         let shown = session.target().map(|npc| TargetShown {
+            name: session.ship_name(npc.ship).unwrap_or_default(),
             card: self.cards.get(&npc.ship).unwrap_or(&unread),
             code: npc.govt.and_then(|govt| self.codes.get(&govt)?.as_deref()),
             reserves: npc.reserves,
@@ -4061,8 +4062,8 @@ mod tests {
     /// [`trafficked`] (ships of type 129, warships) where the player's
     /// ship carries `weapons`; the blaster, rockets, missiles and torch
     /// have looks, and `bööm` 128 shows `rlëD` 400's 3 frames at a frame
-    /// a step, sounding `snd ` 302. Ship 129 is a "Shuttle", a "Light
-    /// Transport" with picture 3001, and govt 140's code is "Fed.".
+    /// a step, sounding `snd ` 302. Ship 129 is a "Light Transport" with
+    /// picture 3001, and govt 140's code is "Fed.".
     fn armed(avg: i16, weapons: &[WeaponId]) -> FakeCatalog {
         let mut catalog = trafficked(&[130], avg, 129, 3);
         catalog.dudes[0].1.govt = Some(GovtId(140));
@@ -4111,7 +4112,6 @@ mod tests {
             cards: vec![(
                 129,
                 TargetCard {
-                    name: "Shuttle".to_owned(),
                     subtitle: "Light Transport".to_owned(),
                     picture: Some(3001),
                 },
@@ -4648,7 +4648,6 @@ mod tests {
         );
         let bar = view.status_bar().expect("a status bar");
         let card = TargetCard {
-            name: "Shuttle".to_owned(),
             subtitle: "Light Transport".to_owned(),
             picture: Some(3001),
         };
@@ -4658,6 +4657,7 @@ mod tests {
             &bar.layout,
             hud::bar_origin(bar),
             Some(&target::TargetShown {
+                name: "Ship 129",
                 card: &card,
                 code: Some("Fed."),
                 reserves: npc.reserves,

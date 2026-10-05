@@ -126,7 +126,9 @@ impl Pen<'_, '_> {
 /// What the panel shows of the target.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TargetShown<'a> {
-    /// Its ship type's name, subtitle and picture.
+    /// Its ship type's name.
+    pub name: &'a str,
+    /// Its ship type's subtitle and picture.
     pub card: &'a TargetCard,
     /// Its government's `TargetCode`, if any.
     pub code: Option<&'a str>,
@@ -180,7 +182,7 @@ pub fn draw_target_panel(
     let (left, right) = (area.min.x, area.max.x);
     let size = layout.font_size;
     pen.centred(
-        &card.name,
+        target.name,
         left,
         right,
         top + NAME_BASELINE,
@@ -375,7 +377,6 @@ mod tests {
 
     fn card(picture: Option<i16>) -> TargetCard {
         TargetCard {
-            name: "Shuttle".to_owned(),
             subtitle: "Light Transport".to_owned(),
             picture,
         }
@@ -397,6 +398,7 @@ mod tests {
 
     fn shown(card: &TargetCard, reserves: Reserves, disabled: bool) -> TargetShown<'_> {
         TargetShown {
+            name: "Shuttle",
             card,
             code: Some("Fed."),
             reserves,

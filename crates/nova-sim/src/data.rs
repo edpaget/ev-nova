@@ -80,7 +80,7 @@ impl PilotCatalog for GameData {
                     id: ShipId(id),
                     name: ship
                         .name
-                        .map_or_else(|| short_name.replace("\\n", " "), str::to_owned),
+                        .map_or_else(|| short_name.replace("\\n", " "), shown_name),
                     short_name,
                     long_name: record.long_name.as_str().to_owned(),
                     fields: ship_fields(record),
@@ -339,6 +339,13 @@ impl CombatCatalog for GameData {
             })
             .collect()
     }
+}
+
+/// A resource's name as the game shows it: up to any ';', after which
+/// the designers kept their notes (stock `shïp` 361 is "Shuttle;Second-Hand
+/// - poor").
+fn shown_name(name: &str) -> String {
+    name.split(';').next().unwrap_or_default().to_owned()
 }
 
 /// A `shïp`'s `WeapType` slots 1-8 that name a weapon, each with its
@@ -789,6 +796,22 @@ mod tests {
             "the same default items"
         );
         assert_eq!(store(&[]).ships(), []);
+    }
+
+    #[test]
+    fn a_shïps_name_stops_at_its_designer_note() {
+        let data = store_named(&[
+            (
+                Ship::TYPE,
+                128,
+                Some("Shuttle;Second-Hand - poor"),
+                for_sale(),
+            ),
+            (Ship::TYPE, 129, Some("Lightning; Wild Geese"), for_sale()),
+            (Ship::TYPE, 130, Some(";"), for_sale()),
+        ]);
+        let names: Vec<_> = data.ships().into_iter().map(|ship| ship.name).collect();
+        assert_eq!(names, ["Shuttle", "Lightning", ""]);
     }
 
     /// An `oütf` with these four `ModType` and `ModVal` pairs, every other

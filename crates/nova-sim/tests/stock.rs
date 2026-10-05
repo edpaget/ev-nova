@@ -2,7 +2,8 @@
 //! with its ship's handling and reserves in a system that exists, Port
 //! Kane's exchange trades at its levels, and its outfitter sells what its
 //! tech levels allow; Viking's shipyard sells what its tech levels and the
-//! ships' `BuyRandom` allow, and trades the Shuttle in. Port Kane sells
+//! ships' `BuyRandom` allow, and trades the Shuttle in; the ships go by
+//! their names without the designers' notes. Port Kane sells
 //! fuel and uninhabited Reflex-ion sells none. NPC traffic flies the
 //! ships and governments its system's `düde`s and fleets give, and
 //! Alphara's `DudeTypes` fleet comes when its roll fires. Skips, passing,
@@ -426,6 +427,28 @@ fn vikings_shipyard_sells_what_its_tech_levels_and_buy_random_allow() {
     assert_eq!(shipyard.trade_in, 2500, "a quarter of the Shuttle");
     assert_eq!(shipyard.cash, 25_000);
     assert_eq!(shipyard.current, ShipId(128));
+}
+
+/// The stock ships go by their names without the designers' notes after
+/// a ';': `shïp` 361, "Shuttle;Second-Hand - poor", is a "Shuttle".
+#[test]
+fn stock_ships_are_named_without_their_designer_notes() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let ships = data.ships();
+    let name = |id| {
+        let ship = ships.iter().find(|ship| ship.id == ShipId(id));
+        ship.map(|ship| ship.name.as_str())
+    };
+    assert_eq!(name(361), Some("Shuttle"));
+    assert_eq!(name(191), Some("Lightning"));
+    let noted: Vec<_> = ships
+        .iter()
+        .filter(|ship| ship.name.contains(';'))
+        .collect();
+    assert!(noted.is_empty(), "{noted:?}");
 }
 
 /// Buying the Heavy Shuttle (17,500 credits) trades the Shuttle in for
