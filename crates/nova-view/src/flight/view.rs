@@ -4507,6 +4507,44 @@ mod tests {
     }
 
     #[test]
+    fn the_players_ship_breaking_up_goes_off_about_where_it_is() {
+        // The NPC, straight above the player and facing it, fires a
+        // blaster that kills at a hit; the player's ship, 80 pixels wide
+        // (the NPC's 40), takes 30 ticks to break up.
+        let mut catalog = armed(1, &[]);
+        catalog.sheet = Ok(ShipSheet {
+            frame_width: 80,
+            ..sheet()
+        });
+        catalog.weapons[0].mass_dmg = 1000;
+        catalog.weapons[0].flags = 0x0020;
+        catalog.weapons[0].explod_type = -1;
+        catalog.hulls[0].death_delay = 30;
+        catalog.hulls[0].explode1 = 0;
+        catalog.hulls[1] = hull_of(129, &[BLASTER]);
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        let mut breaking = None;
+        for _ in 0..40 {
+            view.tick(TICK);
+            let session = view.session().expect("flying");
+            if let Condition::Dying { ticks_left } = session.player_condition()
+                && ticks_left < 19
+                && !view.effects().explosions().is_empty()
+            {
+                breaking = Some(session.player().position);
+                break;
+            }
+        }
+        let at = breaking.expect("an explosion as the player's ship breaks up");
+        // Never firing, the effects' chance draws the last outcome: a
+        // quarter of the player's 80-pixel sprite less one out, each way.
+        assert_eq!(
+            view.effects().explosions()[0].at,
+            Point::new(at.x + 19.0, at.y + 19.0)
+        );
+    }
+
+    #[test]
     fn a_shot_whose_look_cannot_be_read_is_a_crossed_box() {
         let mut view = fighting(armed(0, &[UNSEEN]), &[]);
         view.input(&key(FIRE_KEY, true));
