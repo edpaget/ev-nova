@@ -7,7 +7,11 @@
 //! records, owning its ship's default items (repeated slots adding up),
 //! and with the ship's shield, armour and fuel full at what it and those
 //! items can hold ([`crate::stats`]). It has explored only the system it
-//! starts in. It holds no cargo, and no planetary event is under way.
+//! starts in. It holds no cargo, no planetary event is under way, and it
+//! has no escorts.
+//!
+//! The fleet is a list of [`Escort`] records, each a ship class with its
+//! reserves, in the order the ships joined.
 //!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
@@ -59,6 +63,19 @@ pub struct Pilot {
     /// read into `outfits`: a save from before outfits were kept. Flying
     /// the pilot reads them.
     pub(crate) default_outfits_pending: bool,
+    /// The fleet: every ship escorting the player, in the order it joined.
+    pub(crate) escorts: Vec<Escort>,
+}
+
+/// A ship in the player's fleet: its class and its shield, armour and
+/// fuel. For now only a record, kept with the pilot and saved; flying the
+/// fleet comes later.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Escort {
+    /// The escort's ship class.
+    pub ship: ShipId,
+    /// Its shield, armour and fuel.
+    pub reserves: Reserves,
 }
 
 impl Pilot {
@@ -97,7 +114,14 @@ impl Pilot {
             events: BTreeMap::new(),
             outfits,
             default_outfits_pending: false,
+            escorts: Vec::new(),
         })
+    }
+
+    /// The fleet: every ship escorting the player, in the order it joined.
+    #[must_use]
+    pub fn escorts(&self) -> &[Escort] {
+        &self.escorts
     }
 
     /// The pilot's name; empty for a pilot that is never saved.
@@ -378,6 +402,23 @@ mod tests {
             pilot.events().collect::<Vec<_>>(),
             [(DisasterId(128), 9), (DisasterId(130), 4)]
         );
+    }
+
+    #[test]
+    fn a_new_pilot_has_an_empty_fleet() {
+        let pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert_eq!(pilot.escorts(), []);
+    }
+
+    #[test]
+    fn the_fleet_reads_as_it_is_kept() {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        let escort = Escort {
+            ship: ShipId(130),
+            reserves: Reserves::full(10.0, 20.0, 30.0),
+        };
+        pilot.escorts.push(escort);
+        assert_eq!(pilot.escorts(), [escort]);
     }
 
     #[test]

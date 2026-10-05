@@ -61,8 +61,8 @@
 //!   buying and selling one at a time ([`OutfitOrder`]).
 //! - [`pilot`]: the [`Pilot`], everything about the player a save keeps:
 //!   ship, location, date, cash, reserves, course, explored systems,
-//!   legal records, cargo, the events under way and the outfits owned,
-//!   starting from the first `chär`.
+//!   legal records, cargo, the events under way, the outfits owned and
+//!   the fleet of [`Escort`]s, starting from the first `chär`.
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
 //!   fuel ([`sells_fuel`]), what filling the tank costs, and each
 //!   [`RechargeRefusal`].
@@ -163,7 +163,7 @@ pub use landing::{LandingRefusal, Service, check_landing, landing_radius, servic
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
-pub use pilot::Pilot;
+pub use pilot::{Escort, Pilot};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use reserves::{Gauge, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
