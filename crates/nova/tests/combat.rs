@@ -8,6 +8,12 @@
 //! secondary weapon's line counts it; and firing until the trader is
 //! destroyed draws its explosion, scatters debris on the effects' own
 //! source of chance, and lets go of the target.
+//!
+//! Armed otherwise: a front-quadrant chaingun whose looped sound lasts 14
+//! ticks is heard once a burst, not once a shot, and fires at the
+//! lead angle at a trader targeted 30 degrees off the nose; and the
+//! player's point defence shoots down a trader's missile, as the router's
+//! point-defence rule says.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -19,7 +25,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
+use nova::app::{App, AppScreen, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_audio::recording::{AudioLog, RecordingAudio};
 use nova_audio::{Audio, AudioCommand, AudioCore};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
@@ -34,14 +40,17 @@ use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
+use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, Record, SoundId};
 use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, Rect, TextRun};
 use nova_rsrc::fixture::ForkBuilder;
-use nova_rsrc::{Fork, ForkReader};
+use nova_rsrc::{Fork, ForkReader, ResType};
+use nova_sim::combat::defence::Side;
 use nova_sim::{
-    Behaviour, Chance, DisableRule, Gauge, Goal, HullSpec, Npc, NpcId, Session, Surroundings,
+    Behaviour, Chance, DisableRule, Gauge, Goal, HullSpec, Npc, NpcId, PointDefenceRule, Session,
+    Surroundings,
 };
 use nova_view::Key;
 use nova_view::flight::{FlightView, SharedChance};
@@ -108,6 +117,30 @@ fn character() -> Vec<u8> {
     put_i16s(&mut bytes, 0x04, &[128, 128, -1, -1, -1]);
     put_i16s(&mut bytes, 0x0E, &[-1; 4]);
     bytes
+}
+
+/// `bytes`, a `wëap`, of `guidance`, living `count` ticks at `speed`
+/// pixels a tick x100, in bursts of `burst` then `burst_reload` ticks.
+fn guided(mut bytes: Vec<u8>, guidance: i16, count: i16, speed: i16, burst: (i16, i16)) -> Vec<u8> {
+    put_i16s(&mut bytes, 0x02, &[count]);
+    put_i16s(&mut bytes, 0x08, &[guidance]);
+    put_i16s(&mut bytes, 0x0A, &[speed]);
+    put_i16s(&mut bytes, 0x5A, &[burst.0, burst.1]);
+    bytes
+}
+
+/// A mono `snd ` of `frames` frames at 22,050 Hz.
+fn snd(frames: usize) -> Vec<u8> {
+    SndBuilder::new(
+        SndFormat::Two,
+        Header::Standard {
+            rate: 22_050 << 16,
+            loop_points: (0, 0),
+            base_note: 60,
+            samples: vec![0x80; frames],
+        },
+    )
+    .bytes()
 }
 
 /// A `shïp` with this `Shield` and `Armor`, slow and steady, carrying
@@ -238,6 +271,9 @@ fn dude() -> Vec<u8> {
     bytes
 }
 
+/// The `snd ` resource type.
+const SND: ResType = ResType::new(*b"snd ");
+
 /// The size of the blaster's shots' frames.
 const SHOT: f32 = 3.0;
 /// The size of the rockets' frames.
@@ -253,20 +289,50 @@ const EXPLOSION: f32 = 5.0;
 /// launcher (`wëap` 138, a secondary) fires its 4 x 4 rockets every 30
 /// ticks, each a round of its own. Explosion type 0 is 5 x 5 frames.
 fn data() -> Rc<GameData> {
+    data_arming(&[128, 138], &[])
+}
+
+/// [`data`] with the Gunship carrying `player` and the Trader `trader`,
+/// and these weapons besides: the Quad (`wëap` 133), point defence firing
+/// every 5 ticks, 20 pixels a tick for 12; the IR Missile (134), homing
+/// at 5 pixels a tick for 200 ticks, fired once; and the Chaingun (155), a
+/// front-quadrant turret firing every tick in bursts of 10 then 15 ticks
+/// (sound looped, `snd ` 205 lasting 14 ticks), its 3 x 3 shots 18 pixels
+/// a tick for 20.
+fn data_arming(player: &[i16], trader: &[i16]) -> Rc<GameData> {
     let fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(
             Ship::TYPE,
             128,
             Some(b"Gunship"),
-            &ship(30, 45, &[128, 138], &[(128, 3)]),
+            &ship(30, 45, player, &[(128, 3)]),
         )
         .resource(
             Ship::TYPE,
             129,
             Some(b"Trader;merchant"),
-            &ship(0, 10, &[], &[]),
+            &ship(0, 10, trader, &[]),
         )
+        .resource(
+            Weapon::TYPE,
+            133,
+            Some(b"Quad"),
+            &guided(weapon(5, 1, -1, 0, -1, 0), 9, 12, 2000, (0, 0)),
+        )
+        .resource(
+            Weapon::TYPE,
+            134,
+            Some(b"IR Missile"),
+            &guided(weapon(1000, 20, -1, 0, -1, 0), 1, 200, 500, (0, 0)),
+        )
+        .resource(
+            Weapon::TYPE,
+            155,
+            Some(b"Chaingun"),
+            &guided(weapon(0, 4, -1, 0, 5, 0x0010), 7, 20, 1800, (10, 15)),
+        )
+        .resource(SND, 205, Some(b"Chaingun"), &snd(10_290))
         .resource(
             Weapon::TYPE,
             128,
@@ -367,15 +433,26 @@ impl Harness {
     /// disabled; its text measured by the monospaced metrics; its effects
     /// rolled on a script of their own; playing through a recording port.
     fn flying() -> Self {
-        let data = data();
-        let (_, chance) = scripted(&[6, 6, 0, 0, 750, 650, 180]);
+        Self::flying_over(data(), &[6, 6, 0, 0, 750, 650, 180], |screen| {
+            screen.with_behaviour(Rc::new(Still))
+        })
+    }
+
+    /// [`Harness::flying`] over `data`, its trader placed by `placing`,
+    /// the router as `router` makes it.
+    fn flying_over(
+        data: Rc<GameData>,
+        placing: &[u32],
+        router: impl FnOnce(AppScreen) -> AppScreen,
+    ) -> Self {
+        let (_, chance) = scripted(placing);
         let (effects, effects_chance) = scripted(&[]);
         let screen = start_screen(Rc::clone(&data))
             .with_dialogs(Rc::new(NoDialogs), Rc::new(MonoMetrics))
             .with_chance(chance)
             .with_effects_chance(effects_chance)
-            .with_behaviour(Rc::new(Still))
             .with_disable_rule(Rc::new(Never));
+        let screen = router(screen);
         let audio = RecordingAudio::new();
         let log = audio.log();
         let app = App::new(&FakeWindow, data, screen)
@@ -554,4 +631,153 @@ fn a_trader_shot_down_explodes_scatters_debris_and_is_no_longer_targeted() {
         "the explosion, within 200 pixels: {:?}",
         harness.log.borrow()
     );
+}
+
+/// How many times `sound` was played, at any volume.
+fn plays(log: &AudioLog, sound: i16) -> usize {
+    log.borrow()
+        .iter()
+        .filter(|command| {
+            matches!(command, AudioCommand::Play { sound: played, .. } if *played == SoundId(sound))
+        })
+        .count()
+}
+
+/// The Chaingun's shots seen in flight, by number.
+fn chaingun_shots(harness: &Harness) -> Vec<u32> {
+    harness
+        .session()
+        .shots()
+        .iter()
+        .filter(|shot| shot.weapon.id == nova_sim::WeaponId(155))
+        .map(|shot| shot.id.0)
+        .collect()
+}
+
+#[test]
+fn a_chaingun_held_on_is_heard_once_a_burst_not_once_a_shot() {
+    let mut harness = Harness::flying_over(
+        data_arming(&[155], &[]),
+        &[6, 6, 0, 0, 750, 650, 180],
+        |screen| screen.with_behaviour(Rc::new(Still)),
+    );
+    let mut fired = std::collections::BTreeMap::new();
+    harness.key(Key::Space, true);
+    // 60 ticks, at two frames a tick.
+    for frame in 0..120 {
+        harness.frame();
+        for id in chaingun_shots(&harness) {
+            fired.entry(id).or_insert(frame / 2);
+        }
+    }
+    harness.key(Key::Space, false);
+    let ticks: Vec<u64> = fired.values().copied().collect();
+    let first = ticks[0];
+    let bursts: Vec<u64> = (0..10)
+        .chain(24..34)
+        .chain(48..58)
+        .map(|tick| first + tick)
+        .collect();
+    assert_eq!(ticks, bursts, "three bursts of ten");
+    assert_eq!(plays(&harness.log, 205), 3, "once a burst");
+}
+
+#[test]
+fn a_front_quadrant_turret_fires_at_a_trader_targeted_30_degrees_off_the_nose() {
+    // The trader at (50, -87) from the player, who faces up.
+    let mut harness = Harness::flying_over(
+        data_arming(&[155], &[]),
+        &[6, 6, 0, 0, 800, 663, 180],
+        |screen| screen.with_behaviour(Rc::new(Still)),
+    );
+    harness.key(Key::Tab, true);
+    harness.key(Key::Tab, false);
+    assert_eq!(harness.session().target().map(|npc| npc.id), Some(NpcId(0)));
+    harness.key(Key::Space, true);
+    harness.until(|harness| !chaingun_shots(harness).is_empty());
+    harness.key(Key::Space, false);
+    let bearing = 50.0_f32.atan2(87.0).to_degrees();
+    let shot = harness.session().shots()[0];
+    assert!((shot.heading - bearing).abs() < 1e-3, "{shot:?}");
+    let first = sprites_of(&harness.frame(), SHOT);
+    harness.frame();
+    let second = sprites_of(&harness.frame(), SHOT);
+    let (dx, dy) = (second[0].x - first[0].x, second[0].y - first[0].y);
+    let drawn = dx.atan2(-dy).to_degrees();
+    assert!((drawn - bearing).abs() < 1.0, "drawn moving at {drawn}");
+}
+
+/// Every NPC idles, targets the player and holds its trigger.
+#[derive(Debug)]
+struct Attacking;
+
+impl Behaviour for Attacking {
+    fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+        Goal::Idle
+    }
+
+    fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> nova_sim::Trigger {
+        nova_sim::Trigger {
+            primary: true,
+            secondary: None,
+        }
+    }
+
+    fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<nova_sim::ShipRef> {
+        Some(nova_sim::ShipRef::Player)
+    }
+}
+
+/// Says no missile is hostile, counting the times it is asked.
+#[derive(Debug, Default)]
+struct Unalarmed {
+    asked: std::cell::Cell<usize>,
+}
+
+impl PointDefenceRule for Unalarmed {
+    fn hostile(&self, _defender: Side, _firer: Side) -> bool {
+        self.asked.set(self.asked.get() + 1);
+        false
+    }
+}
+
+/// The app in flight with the player carrying the Quad and the trader,
+/// 200 pixels above it, firing the IR Missile at it, the router as
+/// `router` makes it.
+fn defending(router: impl FnOnce(AppScreen) -> AppScreen) -> Harness {
+    Harness::flying_over(
+        data_arming(&[133], &[134]),
+        &[6, 6, 0, 0, 750, 550, 180],
+        |screen| router(screen.with_behaviour(Rc::new(Attacking))),
+    )
+}
+
+fn missiles(harness: &Harness) -> usize {
+    harness
+        .session()
+        .shots()
+        .iter()
+        .filter(|shot| shot.weapon.id == nova_sim::WeaponId(134))
+        .count()
+}
+
+#[test]
+fn the_players_point_defence_shoots_down_the_traders_missile() {
+    let mut harness = defending(|screen| screen);
+    harness.until(|harness| missiles(harness) == 1);
+    harness.until(|harness| missiles(harness) == 0);
+    assert_eq!(harness.session().reserves().shield.now, 30.0, "untouched");
+}
+
+#[test]
+fn the_routers_point_defence_rule_decides_for_the_flight() {
+    let rule = Rc::new(Unalarmed::default());
+    let given: Rc<dyn PointDefenceRule> = rule.clone();
+    let mut harness = defending(|screen| screen.with_point_defence_rule(given));
+    harness.until(|harness| missiles(harness) == 1);
+    for _ in 0..20 {
+        harness.frame();
+    }
+    assert!(rule.asked.get() > 0);
+    assert_eq!(missiles(&harness), 1, "never hostile, never shot down");
 }
