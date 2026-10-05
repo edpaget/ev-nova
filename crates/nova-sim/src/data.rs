@@ -1,6 +1,7 @@
 //! The pilot catalog over the game data: a thin mapping from `GameData`'s
 //! `chär`, `shïp`, `oütf`, `sÿst`, `spöb`, `jünk` and `öops` records, its
-//! commodity string lists and its stellar sprites.
+//! commodity string lists and its stellar sprites; and a `shän`'s blink
+//! fields as a [`Blink`].
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
@@ -8,10 +9,12 @@ use nova_data::records::disaster::Disaster;
 use nova_data::records::junk::Junk;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
+use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 
+use crate::blink::Blink;
 use crate::catalog::{
     CharacterStart, CommodityStrings, DateAffixes, DisasterId, DisasterRecord, JunkRecord,
     LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem,
@@ -234,6 +237,19 @@ impl PilotCatalog for GameData {
                 })
             })
             .collect()
+    }
+}
+
+/// A `shän`'s `BlinkMode` and `BlinkValA`–`D`, raw.
+impl From<&ShipAnim> for Blink {
+    fn from(anim: &ShipAnim) -> Self {
+        Self {
+            mode: anim.blink_mode,
+            a: anim.blink_val_a,
+            b: anim.blink_val_b,
+            c: anim.blink_val_c,
+            d: anim.blink_val_d,
+        }
     }
 }
 
@@ -1135,5 +1151,24 @@ mod tests {
             ]
         );
         assert_eq!(store(&[]).disasters(), []);
+    }
+
+    #[test]
+    fn a_blink_is_its_shäns_blink_fields() {
+        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x36, &[2, -3, 75, 31, 85]);
+        let shan = nova_data::decode_bytes::<ShipAnim>(&bytes)
+            .expect("decodes")
+            .record;
+        assert_eq!(
+            Blink::from(&shan),
+            Blink {
+                mode: 2,
+                a: -3,
+                b: 75,
+                c: 31,
+                d: 85,
+            }
+        );
     }
 }

@@ -2,6 +2,9 @@
 //! the simulation takes the player's controls and advances the game state
 //! one fixed step at a time.
 //!
+//! - [`blink`]: how bright a ship's running lights are at a tick,
+//!   [`lights_level`], from its `shän`'s [`Blink`] fields, with random
+//!   mode rolling on the [`BlinkChance`] port.
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
@@ -66,6 +69,7 @@
 //!   levels, `Require` and `Contribute`, the hiding flags, the hide-higher
 //!   sweep and the rows' order.
 
+pub mod blink;
 pub mod catalog;
 pub mod chance;
 pub mod clock;
@@ -95,6 +99,7 @@ pub mod stats;
 mod testkit;
 pub mod wares;
 
+pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};
 pub use catalog::{
     CharacterStart, CommodityStrings, DateAffixes, DisasterId, DisasterRecord, GovtId, JunkId,
     JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId,
