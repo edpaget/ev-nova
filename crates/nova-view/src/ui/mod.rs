@@ -27,6 +27,8 @@
 //! - [`plunder`]: the plunder dialog ([`PlunderDialog`]), taking what is
 //!   on board a ship boarded, and the captured-ship assignment dialog
 //!   ([`AssignmentDialog`]).
+//! - [`comm`]: the comm dialog ([`CommDialog`]), talking to a ship
+//!   hailed, and the haggle dialog ([`HaggleDialog`]) over its price.
 //! - [`catalog`]: the ports the widgets read: [`DialogResources`] and
 //!   [`DescriptionSource`].
 //! - [`data`]: the ports' adapters over `nova_data`'s `InterfaceData` and
@@ -34,6 +36,7 @@
 
 pub mod button;
 pub mod catalog;
+pub mod comm;
 pub mod data;
 pub mod desc;
 pub mod dialog;
@@ -48,6 +51,7 @@ pub mod volume;
 
 pub use button::{Button, ButtonImages, ButtonSkin, ButtonStyle, ButtonTracker};
 pub use catalog::{DescriptionSource, DialogResources};
+pub use comm::{CommDialog, CommPress, HaggleDialog};
 pub use desc::DescDialog;
 pub use dialog::{
     Dialog, DialogEvent, DialogFrame, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role,

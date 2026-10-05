@@ -117,6 +117,19 @@
 //!   [`FlightView::plunder`], and a capture's assignment through
 //!   [`FlightView::assign`], each saying what it did as a message. After
 //!   "Use As My Ship" the new ship's sprite sheet is read.
+//! - Y (a press) hails the target ([`Session::hail`]), the comm dialog
+//!   listing the screen's [`HailOptions`]
+//!   ([`FlightView::with_hail_options`]; Nova's by default), its replies
+//!   read through the [`CommCatalog`] port, and otherwise says why in the
+//!   original's words (`STR#` 2002 #53-54), or nothing with no target. A
+//!   hail answered lets go of the flight keys and is held for the router
+//!   ([`FlightView::take_hail`]), which opens the comm dialog over the
+//!   paused flight; each press there goes through [`FlightView::answer`],
+//!   each haggle through [`FlightView::haggle`], and closing the channel
+//!   through [`FlightView::hang_up`]. Each step, the NPCs assisting the
+//!   player give their help ([`Session::tick_assistance`], by the screen's
+//!   [`DisableRule`]), and each says when it is done, as a message
+//!   ([`comm_message`]).
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -127,13 +140,13 @@ use std::time::Duration;
 
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
-    CombatCatalog, Condition, Controls, DisableRule, FixedStep, Good, GovtId, JumpRefusal,
-    LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
-    NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, Rules, Session, ShipId, ShipPurchase,
-    ShipRef, ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps, Take, Taken,
-    TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
-    flight::shortest_turn,
+    CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule, FixedStep, Good,
+    GovtId, Haggle, HailOptions, HailRefusal, HailView, Help, JumpRefusal, LandingRefusal,
+    LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order,
+    OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, PlunderView,
+    PointDefenceRule, RechargeRefusal, Reserves, Rules, Session, ShipId, ShipPurchase, ShipRef,
+    ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps, Take, Taken, TargetPick,
+    TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -163,7 +176,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   L: land   M: map   J: jump   P: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   L: land   M: map   J: jump   P: preferences   Esc: leave";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
@@ -209,6 +222,42 @@ pub const JUMP_KEY: Key = Key::Char('j');
 /// The board key: the original's default (`Keys.nib`'s `boardKey`), one
 /// attempt a press.
 pub const BOARD_KEY: Key = Key::Char('b');
+/// The hail key: the original's default (`Keys.nib`'s `hailKey`), one
+/// hail a press.
+pub const HAIL_KEY: Key = Key::Char('y');
+
+/// `STR#` 2002 #53.
+pub const NO_RESPONSE: &str = "No response.";
+/// `STR#` 2002 #54.
+pub const HAIL_IN_HYPERSPACE: &str = "Unable to send hail - target ship is entering hyperspace.";
+/// `STR#` 2002 #3, without the ship's name the original adds.
+pub const ENERGY_TRANSFER: &str = "Energy transfer complete";
+/// `STR#` 2002 #384.
+pub const REPAIRS_COMPLETE: &str = "Repairs complete";
+
+/// What the player is told when `refusal` stops a hail: the original's
+/// words for it, or nothing when there is no ship to hail.
+#[must_use]
+pub fn hail_refusal_message(refusal: HailRefusal) -> Option<&'static str> {
+    match refusal {
+        HailRefusal::NoTarget => None,
+        HailRefusal::NoResponse => Some(NO_RESPONSE),
+        HailRefusal::InHyperspace => Some(HAIL_IN_HYPERSPACE),
+    }
+}
+
+/// What the player is told when a ship it asked for help is done:
+/// "<ship>:  Energy transfer complete." or "<ship>:  Repairs complete."
+/// (the original names the player's ship after the energy transfer; it
+/// has no name here).
+#[must_use]
+pub fn comm_message(note: &CommNote) -> String {
+    let done = match note.done {
+        Help::Refuel => ENERGY_TRANSFER,
+        Help::Repair => REPAIRS_COMPLETE,
+    };
+    format!("{}:  {done}.", note.comm_name)
+}
 
 /// `STR#` 2002 #29.
 pub const NO_DESTINATION: &str =
@@ -467,6 +516,10 @@ pub struct FlightView<C> {
     message: Option<(String, Duration)>,
     /// Whether a boarding has opened that the router has not taken.
     pending_boarding: bool,
+    /// The hail just answered, for the router.
+    pending_hail: Option<HailView>,
+    /// The options the comm dialog lists.
+    hail_options: HailOptions,
     /// Who repels boarders, the capture odds and the capture roll.
     boarding_rule: Rc<dyn BoardingRule>,
     /// The course map, shown or not.
@@ -519,6 +572,7 @@ impl<
     C: PilotCatalog
         + TrafficCatalog
         + CombatCatalog
+        + CommCatalog
         + CombatLooks
         + SystemCatalog
         + ShipSprites
@@ -583,6 +637,8 @@ impl<
             pending_landing,
             message: None,
             pending_boarding: false,
+            pending_hail: None,
+            hail_options: HailOptions::default(),
             boarding_rule: Rc::new(NovaBoarding::default()),
             chance: SharedChance::default(),
             behaviour: Rc::new(NovaAi::default()),
@@ -670,6 +726,65 @@ impl<
             boarding_rule,
             ..self
         }
+    }
+
+    /// The flight with the comm dialog listing `hail_options`.
+    #[must_use]
+    pub fn with_hail_options(self, hail_options: HailOptions) -> Self {
+        Self {
+            hail_options,
+            ..self
+        }
+    }
+
+    /// Hails the target, or says why not: a hail answered is held for the
+    /// router ([`FlightView::take_hail`]) and lets go of the flight keys.
+    fn hail(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        match session.hail(&self.catalog, &self.hail_options, &mut self.chance) {
+            Ok(view) => {
+                self.pending_hail = Some(view);
+                self.message = None;
+                self.held.clear();
+            }
+            Err(refusal) => {
+                if let Some(text) = hail_refusal_message(refusal) {
+                    self.say(text);
+                }
+            }
+        }
+    }
+
+    /// The hail just answered, once: the router takes it to open the comm
+    /// dialog.
+    pub fn take_hail(&mut self) -> Option<HailView> {
+        self.pending_hail.take()
+    }
+
+    /// The comm dialog's contents while a hail is under way
+    /// ([`Session::hailing`]).
+    #[must_use]
+    pub fn hailing(&self) -> Option<HailView> {
+        self.session
+            .as_ref()
+            .ok()?
+            .hailing(&self.catalog, &self.hail_options)
+    }
+
+    /// Presses the `pick`th option listed, through the session
+    /// ([`Session::answer`]).
+    pub fn answer(&mut self, pick: usize) -> Option<HailView> {
+        let session = self.session.as_mut().ok()?;
+        session.answer(pick, &self.catalog, &self.hail_options, &mut self.chance)
+    }
+
+    /// Makes `choice` in the haggle dialog, through the session
+    /// ([`Session::haggle`]).
+    pub fn haggle(&mut self, choice: Haggle) -> Option<HailView> {
+        let session = self.session.as_mut().ok()?;
+        session.haggle(choice, &self.catalog, &self.hail_options)
     }
 
     /// Reads the sheet of each ship type the traffic can spawn that has
@@ -862,6 +977,13 @@ impl<C> FlightView<C> {
                     self.say(text);
                 }
             }
+        }
+    }
+
+    /// Ends the hail under way, if any ([`Session::hang_up`]).
+    pub fn hang_up(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.hang_up();
         }
     }
 
@@ -1257,6 +1379,7 @@ impl<
     C: PilotCatalog
         + TrafficCatalog
         + CombatCatalog
+        + CommCatalog
         + CombatLooks
         + SystemCatalog
         + ShipSprites
@@ -1290,6 +1413,12 @@ impl<
             Some(BOARD_KEY) => {
                 self.board();
                 if self.pending_boarding {
+                    return ScreenAction::None;
+                }
+            }
+            Some(HAIL_KEY) => {
+                self.hail();
+                if self.pending_hail.is_some() {
                     return ScreenAction::None;
                 }
             }
@@ -1354,6 +1483,7 @@ impl<
             self.held.contains(&FIRE_KEY),
             self.held.contains(&SECONDARY_KEY),
         );
+        let mut notes = Vec::new();
         if let Ok(session) = &mut self.session {
             session.hold_fire(fire.0, fire.1);
             for _ in 0..steps {
@@ -1365,6 +1495,8 @@ impl<
                     .collect();
                 session.tick(controls);
                 session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
+                session.tick_assistance(&*self.disable_rule);
+                notes.extend(session.take_comm());
                 let rules = Rules {
                     disable: &*self.disable_rule,
                     defence: &*self.defence_rule,
@@ -1380,6 +1512,9 @@ impl<
                     self.effects.apply(&event, &scene, &self.looks, chance);
                 }
             }
+        }
+        for note in &notes {
+            self.say(comm_message(note));
         }
         // The session may have populated its system afresh.
         self.read_npc_sheets();
@@ -1598,6 +1733,18 @@ mod tests {
         cards: Vec<(i16, TargetCard)>,
         /// The governments' target codes: none, by default.
         codes: Vec<(i16, String)>,
+        /// The string lists: none, by default.
+        strings: Vec<(i16, Vec<String>)>,
+    }
+
+    /// No strings unless a test sets them.
+    impl nova_sim::CommCatalog for FakeCatalog {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            self.strings
+                .iter()
+                .find(|(list, _)| *list == id)
+                .map_or_else(Vec::new, |(_, strings)| strings.clone())
+        }
     }
 
     type View = FlightView<FakeCatalog>;
@@ -1657,6 +1804,7 @@ mod tests {
             booms: Vec::new(),
             cards: Vec::new(),
             codes: Vec::new(),
+            strings: Vec::new(),
         }
     }
 
@@ -2341,7 +2489,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   L: land   M: map   J: jump   P: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   L: land   M: map   J: jump   P: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -5829,5 +5977,115 @@ mod tests {
     #[test]
     fn the_help_line_names_board() {
         assert!(HELP.contains("B: board"), "{HELP}");
+    }
+
+    // Hailing.
+
+    use nova_sim::{Haggle, HailOptions, HailRefusal, Help};
+
+    /// [`boardable`]'s ship comm strings: "c<n>" for each, with "Channel
+    /// open." in every variant of the first group.
+    fn comm_strings() -> Vec<String> {
+        (1..=200)
+            .map(|n| {
+                if n <= 5 {
+                    "Channel open.".to_owned()
+                } else {
+                    format!("c{n}")
+                }
+            })
+            .collect()
+    }
+
+    /// [`beside`] with the ship comm strings.
+    fn hailable(intact: bool) -> View {
+        let mut view = beside(750, 750, 0, intact);
+        view.catalog.strings = vec![(3000, comm_strings())];
+        view
+    }
+
+    #[test]
+    fn y_on_a_hailable_target_reports_a_hail_once() {
+        let mut view = hailable(true);
+        assert_eq!(view.take_hail(), None);
+        view.input(&key(Key::Up, true));
+        tap(&mut view, HAIL_KEY);
+        let hail = view.take_hail().expect("hailed");
+        assert_eq!(hail.npc, NpcId(0));
+        assert_eq!(hail.reply, "Channel open.");
+        assert_eq!(view.take_hail(), None, "once");
+        assert_eq!(view.hailing().map(|hail| hail.npc), Some(NpcId(0)));
+        assert_eq!(view.message(), None);
+        view.tick(TICK);
+        assert_eq!(
+            view.session().expect("flying").player().velocity,
+            Vec2::ZERO,
+            "the flight keys let go"
+        );
+        assert_eq!(HAIL_KEY, Key::Char('y'));
+    }
+
+    #[test]
+    fn y_on_a_disabled_target_says_no_response() {
+        let mut view = hailable(false);
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_hail(), None);
+        assert_eq!(view.message(), Some(NO_RESPONSE));
+        assert_eq!(
+            hail_refusal_message(HailRefusal::NoResponse),
+            Some("No response.")
+        );
+        assert_eq!(
+            hail_refusal_message(HailRefusal::InHyperspace),
+            Some("Unable to send hail - target ship is entering hyperspace.")
+        );
+        assert_eq!(hail_refusal_message(HailRefusal::NoTarget), None);
+        let mut alone = flight();
+        tap(&mut alone, HAIL_KEY);
+        assert_eq!(alone.take_hail(), None);
+        assert_eq!(alone.message(), None, "no target: nothing said");
+    }
+
+    #[test]
+    fn answers_haggles_and_hanging_up_go_through_the_session() {
+        let mut view = hailable(true);
+        tap(&mut view, HAIL_KEY);
+        view.take_hail().expect("hailed");
+        let answered = view.answer(0).expect("open");
+        assert_eq!(answered.npc, NpcId(0));
+        assert_eq!(view.haggle(Haggle::Accept), None, "no price asked");
+        view.hang_up();
+        assert_eq!(view.hailing(), None);
+        assert_eq!(view.answer(0), None);
+    }
+
+    #[test]
+    fn the_screens_hail_options_are_listed() {
+        let mut view = hailable(true);
+        view = view.with_hail_options(HailOptions::empty());
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_hail().expect("hailed").options, []);
+    }
+
+    #[test]
+    fn a_helpers_note_names_it_in_the_originals_words() {
+        let note = |done| nova_sim::CommNote {
+            from: NpcId(2),
+            comm_name: "Cruiser".to_owned(),
+            done,
+        };
+        assert_eq!(
+            comm_message(&note(Help::Refuel)),
+            "Cruiser:  Energy transfer complete."
+        );
+        assert_eq!(
+            comm_message(&note(Help::Repair)),
+            "Cruiser:  Repairs complete."
+        );
+    }
+
+    #[test]
+    fn the_help_line_names_hail() {
+        assert!(HELP.contains("Y: hail"), "{HELP}");
     }
 }
