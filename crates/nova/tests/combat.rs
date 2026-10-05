@@ -34,6 +34,16 @@
 //! opens the assignment dialog: "Use As Escort" adds it to the fleet,
 //! which the saved pilot keeps and a new app opens again, and "Use As My
 //! Ship" flies it, keeping the old ship as an escort.
+//!
+//! Hailed, with the interface file's comm and haggle dialogs: Y opens the
+//! comm dialog on a xenophobic pirate attacking the player, "What is it
+//! you want?", with Greetings, Beg For Mercy and Close Channel; R asks
+//! "Pay me 3,000 credits.", and Accept Price pays it off ("A pleasure
+//! doing business with you."), after which the pirate fires no more. A
+//! friendly trader asked for assistance by a player out of fuel names its
+//! price, and once paid flies alongside and refuels the player, saying
+//! "Hauler:  Energy transfer complete.". A hail option registered at the
+//! edge shows its button, and pressing it shows its reply.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -1287,17 +1297,35 @@ impl Boarder {
     /// main menu, keeping pilots in `store`, its traffic and capture
     /// rolled on a [`BoardChance`], its NPCs idling.
     fn opening(store: &MemoryPilots) -> Self {
-        let data = boarding_data();
         let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(BoardChance {
             setup: [6, 6, 0, 0, 750, 650, 180, 0].into(),
             of_100: [99, 0].into(),
         }));
+        Self::opening_over(
+            boarding_data(),
+            boarding_interface(),
+            store,
+            SharedChance::new(chance),
+            |screen| screen.with_behaviour(Rc::new(Still)),
+        )
+    }
+
+    /// The app over `data` and `interface`, on the main menu, keeping
+    /// pilots in `store`, rolling on `chance`, the router as `router`
+    /// makes it.
+    fn opening_over(
+        data: Rc<GameData>,
+        interface: InterfaceData,
+        store: &MemoryPilots,
+        chance: SharedChance,
+        router: impl FnOnce(AppScreen) -> AppScreen,
+    ) -> Self {
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), Rc::new(MonoMetrics))
-            .with_dialogs(Rc::new(boarding_interface()), Rc::new(MonoMetrics))
-            .with_chance(SharedChance::new(chance))
-            .with_behaviour(Rc::new(Still));
+            .with_dialogs(Rc::new(interface), Rc::new(MonoMetrics))
+            .with_chance(chance);
+        let screen = router(screen);
         Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
@@ -1593,4 +1621,442 @@ fn use_as_my_ship_flies_the_captured_trader_and_keeps_the_old_ship() {
             .collect::<Vec<_>>(),
         [nova_sim::ShipId(128)]
     );
+}
+
+// Hailing.
+
+use nova_sim::hail::{Answer, Hail, HailOption};
+use nova_sim::{HailOptions, Reply, Rulebook};
+
+/// Each ship comm string group's first words, said in every variant;
+/// every other group is "c<g>".
+const SAID: [(usize, &str); 7] = [
+    (0, "Channel open."),
+    (2, "What is it you want?"),
+    (20, "A pleasure doing business with you."),
+    (23, "You're lucky - I'm in a good mood today."),
+    (24, "I'm in a bad mood today, so it's going to cost you."),
+    (28, "I'll help you out if you pay me."),
+    (29, "Okay, I'm on my way."),
+];
+
+/// A `STR#` of `strings`.
+fn strings(strings: &[String]) -> Vec<u8> {
+    let mut bytes = u16::try_from(strings.len())
+        .expect("few")
+        .to_be_bytes()
+        .to_vec();
+    for string in strings {
+        bytes.push(u8::try_from(string.len()).expect("short"));
+        bytes.extend(string.as_bytes());
+    }
+    bytes
+}
+
+/// `STR#` 3000: [`SAID`]'s words for each group's five variants.
+fn comm_strings() -> Vec<String> {
+    (0..40)
+        .flat_map(|group| {
+            let said = SAID
+                .iter()
+                .find(|(at, _)| *at == group)
+                .map_or_else(|| format!("c{group}"), |(_, said)| (*said).to_owned());
+            std::iter::repeat_n(said, 5)
+        })
+        .collect()
+}
+
+/// A `gövt` of `flags`, named `name` when hailed.
+fn hailed_govt(flags: u16, name: &str) -> Vec<u8> {
+    let mut bytes = govt(4, -1);
+    bytes[0x02..0x04].copy_from_slice(&flags.to_be_bytes());
+    bytes[0x34..0x34 + name.len()].copy_from_slice(name.as_bytes());
+    bytes
+}
+
+/// A `shïp` with this `Shield`, `Armor` and `weapons`, named `name` when
+/// hailed.
+fn hailed_ship(shield: i16, armor: i16, weapons: &[i16], name: &str) -> Vec<u8> {
+    let mut bytes = ship(shield, armor, weapons, &[]);
+    bytes[0x60E..0x60E + name.len()].copy_from_slice(name.as_bytes());
+    bytes
+}
+
+/// The first `chär` flies the "Hailer" (ship 128: 30 shield, 45 armour,
+/// a blaster) in Alpha (128), independent, whose one `düde`, of AI type
+/// `ai_type` and `gövt` `govt`, flies ship `ship`: the pirates' (137,
+/// xenophobes whose warships take bribes, `Flags` 0x0201) "Raider" (129:
+/// 30 shield, 45 armour and a gun firing every 10 ticks), or the
+/// Civvies' (157, whose traders take bribes, 0x2000) "Hauler" (130: no
+/// shield, 40 armour). `STR#` 3000 holds the replies and 2002 #175
+/// "Greetings."; the status bar, the buttons' pictures, the comm and
+/// haggle dialogs' (`PICT` 8511 and 8514) and the ships' (5001 and 5002)
+/// are there.
+fn hailing_data(ai_type: i16, govt: i16, ship: i16) -> Rc<GameData> {
+    let mut gun = weapon(10, 5, -1, 0, 8, 0);
+    put_i16s(&mut gun, 0x06, &[10]);
+    let mut fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
+        .resource(
+            Ship::TYPE,
+            128,
+            Some(b"Hailer"),
+            &hailed_ship(30, 45, &[128], "Hailer"),
+        )
+        .resource(
+            Ship::TYPE,
+            129,
+            Some(b"Raider"),
+            &hailed_ship(30, 45, &[129], "Raider"),
+        )
+        .resource(
+            Ship::TYPE,
+            130,
+            Some(b"Hauler"),
+            &hailed_ship(0, 40, &[], "Hauler"),
+        )
+        .resource(
+            Weapon::TYPE,
+            128,
+            Some(b"Blaster"),
+            &weapon(10, 10, -1, 0, 8, 0),
+        )
+        .resource(Weapon::TYPE, 129, Some(b"Gun"), &gun)
+        .resource(
+            Govt::TYPE,
+            137,
+            Some(b"Pirates"),
+            &hailed_govt(0x0201, "Pirate"),
+        )
+        .resource(
+            Govt::TYPE,
+            157,
+            Some(b"Civvies"),
+            &hailed_govt(0x2000, "Civilian"),
+        )
+        .resource(
+            Dude::TYPE,
+            128,
+            Some(b"Hailed"),
+            &dude_of(ai_type, govt, ship),
+        )
+        .resource(System::TYPE, 128, Some(b"Alpha"), &system())
+        .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
+        .resource(ShipAnim::TYPE, 129, None, &ship_anim(2001))
+        .resource(ShipAnim::TYPE, 130, None, &ship_anim(2001))
+        .resource(RLED, 2000, None, &sheet(36, 1))
+        .resource(RLED, 2001, None, &sheet(36, 2))
+        .resource(Spin::TYPE, 3000, None, &spin(3000, 6))
+        .resource(RLED, 3000, None, &sheet(36, 3))
+        .resource(
+            Interface::TYPE,
+            128,
+            Some(b"Default status bar"),
+            &interface(),
+        )
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
+        .resource(PICT, 8511, None, &pict(30, 20, [40, 40, 40]))
+        .resource(PICT, 8514, None, &pict(30, 20, [40, 40, 40]))
+        .resource(PICT, 5001, None, &pict(20, 20, [90, 90, 90]))
+        .resource(PICT, 5002, None, &pict(20, 20, [90, 90, 90]));
+    for state in [7500, 7503, 7506] {
+        fork = fork
+            .resource(PICT, state, None, &pict(13, 25, [200, 0, 0]))
+            .resource(PICT, state + 1, None, &pict(2, 25, [0, 200, 0]))
+            .resource(PICT, state + 2, None, &pict(13, 25, [0, 0, 200]))
+            .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
+            .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
+    }
+    let file = OneFile(hailing_strings(fork).build().bytes);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
+/// `fork` with the strings hailing reads: `STR#` 3000's replies, 2002's
+/// messages ("Greetings." at #175, "m<n>" elsewhere) and 9000's "Fine
+/// weather.".
+fn hailing_strings(fork: ForkBuilder) -> ForkBuilder {
+    use nova_data::records::string_list::StrList;
+    let messages: Vec<String> = (1..=200)
+        .map(|n| {
+            if n == 175 {
+                "Greetings.".to_owned()
+            } else {
+                format!("m{n}")
+            }
+        })
+        .collect();
+    fork.resource(StrList::TYPE, 3000, None, &strings(&comm_strings()))
+        .resource(StrList::TYPE, 2002, None, &strings(&messages))
+        .resource(StrList::TYPE, 9000, None, &str_list("Fine weather."))
+}
+
+/// The interface file's comm dialog (`DLOG` 1007, 423 x 215) and haggle
+/// dialog (`DLOG` 1008, 262 x 107), as stock.
+fn hailing_interface() -> InterfaceData {
+    let at = |l: i16, t: i16, w: i16, h: i16| (l, t, l + w, t + h);
+    let (comm_dlog, comm_ditl) = dialog(
+        (78, 51, 293, 474),
+        1007,
+        &[
+            user_item(at(21, 181, 166, 26), true),
+            user_item(at(21, 153, 166, 26), true),
+            user_item(at(21, 125, 166, 26), true),
+            user_item(at(46, 241, 200, 25), true),
+            user_item(at(7, 320, 200, 25), true),
+            user_item(at(199, 335, 200, 25), true),
+            user_item(at(178, 261, 200, 25), true),
+            user_item(at(178, 289, 200, 25), true),
+            user_item(at(34, 299, 112, 16), false),
+            user_item(at(11, 8, 192, 58), false),
+            user_item(at(216, 7, 200, 200), false),
+            user_item(at(40, 73, 134, 46), false),
+        ],
+    );
+    let (haggle_dlog, haggle_ditl) = dialog(
+        (40, 40, 147, 302),
+        1008,
+        &[
+            user_item(at(58, 74, 146, 26), true),
+            user_item(at(58, 39, 146, 26), true),
+            user_item(at(7, 6, 248, 25), false),
+        ],
+    );
+    let fork = ForkBuilder::new()
+        .resource(Dlog::TYPE, 1007, None, &comm_dlog)
+        .resource(Ditl::TYPE, 1007, None, &comm_ditl)
+        .resource(Dlog::TYPE, 1008, None, &haggle_dlog)
+        .resource(Ditl::TYPE, 1008, None, &haggle_ditl)
+        .build()
+        .bytes;
+    InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
+}
+
+/// The app over [`hailing_data`] of `dude` and [`hailing_interface`],
+/// with a saved pilot, "Ada", holding 10,000 credits and `fuel`, resumed
+/// in flight from the main menu; the hailed ship placed 100 pixels above
+/// the player facing down by the setup draws, then every draw the last
+/// outcome; Nova's AI.
+fn hailer(store: &MemoryPilots, dude: (i16, i16, i16), fuel: f32) -> Boarder {
+    let data = hailing_data(dude.0, dude.1, dude.2);
+    let pilot = Pilot::new(data.as_ref(), "Ada").expect("a pilot");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["cash"] = serde_json::json!(10_000);
+    save["reserves"]["fuel"]["now"] = serde_json::json!(fuel);
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
+        .save(&pilot)
+        .expect("saved");
+    let (_, chance) = scripted(&[6, 6, 0, 0, 750, 650, 180, 0]);
+    let mut game = Boarder::opening_over(data, hailing_interface(), store, chance, |screen| screen);
+    game.open_pilot();
+    // The first frame runs no step; the second's sets the system up.
+    game.frame();
+    game.frame();
+    assert_eq!(
+        game.session().npcs()[0].state.position,
+        nova_sim::Vec2::new(0.0, -100.0)
+    );
+    game
+}
+
+impl Boarder {
+    /// The comm dialog's reply, as the flight gives it.
+    fn reply(&self) -> String {
+        self.app
+            .screen()
+            .flight_view()
+            .expect("flying")
+            .hailing()
+            .expect("hailing")
+            .reply
+    }
+
+    /// Targets the ship with Tab and hails it with Y.
+    fn hail(&mut self) {
+        self.tap(Key::Tab);
+        self.tap(Key::Char('y'));
+        assert_eq!(self.showing(), Showing::Comm);
+    }
+}
+
+#[test]
+fn begging_a_hostile_pirate_for_mercy_pays_it_off() {
+    let store = MemoryPilots::new();
+    let mut game = hailer(&store, (3, 137, 129), 300.0);
+    for _ in 0..600 {
+        game.frame();
+        if game.session().reserves().shield.now < 30.0 {
+            break;
+        }
+    }
+    assert!(
+        game.session().reserves().shield.now < 30.0,
+        "the pirate attacks"
+    );
+    game.hail();
+    assert_eq!(game.reply(), "What is it you want?");
+    let shown = run_texts(&game.frame());
+    let buttons: Vec<&String> = shown
+        .iter()
+        .filter(|text| {
+            [
+                "Greetings",
+                "Beg For Mercy",
+                "Close Channel",
+                "Request Assistance",
+            ]
+            .contains(&text.as_str())
+        })
+        .collect();
+    assert_eq!(buttons, ["Close Channel", "Beg For Mercy", "Greetings"]);
+    game.tap(Key::Char('r'));
+    assert_eq!(game.showing(), Showing::Haggle);
+    let shown = run_texts(&game.frame());
+    assert!(
+        shown.iter().any(|text| text == "Pay me 3,000 credits."),
+        "{shown:?}"
+    );
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Comm);
+    assert_eq!(game.reply(), "A pleasure doing business with you.");
+    assert_eq!(game.pilot().cash(), 7000);
+    game.tap(Key::Char('e'));
+    assert_eq!(game.showing(), Showing::Flight);
+    // The shots already in flight run their course.
+    for _ in 0..60 {
+        game.frame();
+    }
+    let shield = game.session().reserves().shield.now;
+    for _ in 0..200 {
+        game.frame();
+    }
+    assert_eq!(
+        game.session().reserves().shield.now,
+        shield,
+        "spared: the pirate fires no more"
+    );
+}
+
+#[test]
+fn requesting_assistance_from_a_friendly_trader_refuels_the_player() {
+    let store = MemoryPilots::new();
+    let mut game = hailer(&store, (1, 157, 130), 0.0);
+    game.hail();
+    assert_eq!(game.reply(), "Channel open.");
+    let shown = run_texts(&game.frame());
+    let buttons: Vec<&String> = shown
+        .iter()
+        .filter(|text| {
+            [
+                "Greetings",
+                "Beg For Mercy",
+                "Close Channel",
+                "Request Assistance",
+            ]
+            .contains(&text.as_str())
+        })
+        .collect();
+    assert_eq!(
+        buttons,
+        ["Close Channel", "Request Assistance", "Greetings"]
+    );
+    game.tap(Key::Char('r'));
+    assert_eq!(
+        game.reply(),
+        "I'm in a bad mood today, so it's going to cost you."
+    );
+    assert_eq!(game.showing(), Showing::Haggle);
+    game.tap(Key::Enter);
+    assert_eq!(game.reply(), "Okay, I'm on my way.");
+    game.tap(Key::Escape);
+    assert_eq!(game.showing(), Showing::Flight);
+    let mut said = false;
+    let mut alongside = false;
+    for _ in 0..1200 {
+        let frame = game.frame();
+        let helper = &game.session().npcs()[0];
+        let off = helper.state.position - game.session().player().position;
+        alongside |= off.x.abs() <= 105.0 && off.y.abs() <= 105.0;
+        said |= run_texts(&frame)
+            .iter()
+            .any(|text| text == "Hauler:  Energy transfer complete.");
+        if said {
+            break;
+        }
+    }
+    assert!(alongside, "the trader flew alongside");
+    assert!(said, "it said it was done");
+    assert!(game.session().reserves().fuel.now > 100.0, "the fuel rose");
+    assert_eq!(game.pilot().cash(), 7000, "paid");
+}
+
+/// A hail option for every ship, keyed W, that says `STR#` 9000 #1.
+#[derive(Debug)]
+struct Weather;
+
+impl HailOption for Weather {
+    fn label(&self) -> String {
+        "Weather".to_owned()
+    }
+
+    fn key(&self) -> Option<char> {
+        Some('W')
+    }
+
+    fn applies(&self, _hail: &Hail) -> bool {
+        true
+    }
+
+    fn press(&self, _hail: &Hail, _chance: &mut dyn Chance) -> Answer {
+        Answer::say(Reply::Line {
+            list: 9000,
+            index: 1,
+        })
+    }
+}
+
+#[test]
+fn a_hail_option_registered_at_the_edge_shows_its_button_and_its_reply() {
+    let options = HailOptions::nova(&Rulebook::default()).with(Rc::new(Weather));
+    let mut harness = Harness::flying_over(
+        hailing_data(1, 157, 130),
+        &[6, 6, 0, 0, 750, 650, 180, 0],
+        |screen| screen.with_hail_options(options),
+    );
+    harness.key(Key::Tab, true);
+    harness.key(Key::Tab, false);
+    harness.key(Key::Char('y'), true);
+    harness.key(Key::Char('y'), false);
+    assert_eq!(harness.app.screen().showing(), Showing::Comm);
+    let frame = harness.frame();
+    assert!(text_at(&frame, "Weather").is_some(), "its button");
+    let at = harness
+        .app
+        .screen()
+        .comm()
+        .expect("open")
+        .dialog()
+        .item_bounds(13)
+        .expect("the third option's place")
+        .center();
+    harness.app.handle(
+        WindowEvent::PointerMoved {
+            px: (f64::from(at.x), f64::from(at.y)),
+        },
+        &mut FakeWindow,
+        &mut harness.gpu,
+    );
+    for pressed in [true, false] {
+        harness.app.handle(
+            WindowEvent::PointerButton {
+                button: nova_view::MouseButton::Left,
+                pressed,
+            },
+            &mut FakeWindow,
+            &mut harness.gpu,
+        );
+    }
+    let frame = harness.frame();
+    assert!(text_at(&frame, "Fine weather.").is_some(), "its reply");
 }

@@ -57,10 +57,15 @@
 //! does, or only with its enemies, as the Bible says), `"empty_booty"`
 //! (whether a ship of `Booty` 0 opens the plunder dialog anyway, or
 //! repels the boarders), `"crewless_capture"` (whether a ship of no crew
-//! can still capture) and `"piracy_police"` (whether warships as well as
+//! can still capture), `"piracy_police"` (whether warships as well as
 //! interceptors answer the player's attack or boarding, or interceptors
-//! only). They are set by editing the file; a sound change in the
-//! Preferences dialog keeps them.
+//! only), `"quiet_hails"` (whether a quiet government's ships answer
+//! Greetings and ignore the middle button, as the engine does, or answer
+//! "No response." to Greetings, as the Bible says) and `"long_advice"`
+//! (whether an advice line exactly 42 characters long reads "Nice to meet
+//! you.", as the engine's slip has it, or is shown as written). They are
+//! set by editing the file; a sound change in the Preferences dialog
+//! keeps them.
 //!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
@@ -87,7 +92,8 @@ use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
 use nova_sim::{
-    Allegiance, Chance, NovaAi, NovaBoarding, NovaDisable, NovaLaw, PilotKeeper, PilotStore,
+    Allegiance, Chance, HailOptions, NovaAi, NovaBoarding, NovaDisable, NovaLaw, PilotKeeper,
+    PilotStore,
 };
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
@@ -155,7 +161,8 @@ fn main() -> ExitCode {
         .with_disable_rule(Rc::new(NovaDisable))
         .with_point_defence_rule(Rc::new(Allegiance))
         .with_law(Rc::new(NovaLaw::from_rulebook(&rulebook)))
-        .with_boarding_rule(Rc::new(NovaBoarding::from_rulebook(&rulebook)));
+        .with_boarding_rule(Rc::new(NovaBoarding::from_rulebook(&rulebook)))
+        .with_hail_options(HailOptions::nova(&rulebook));
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);

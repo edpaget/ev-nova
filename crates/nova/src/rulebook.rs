@@ -167,6 +167,25 @@ mod tests {
     }
 
     #[test]
+    fn the_hailing_rules_are_overridden_by_their_keys() {
+        let text = r#"{"rule_overrides": {"quiet_hails": "bible", "long_advice": "bible"}}"#;
+        let (rulebook, warnings) = rulebook_of(text);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine()
+                .with_override(RuleKey::QuietHails, RuleSource::Bible)
+                .with_override(RuleKey::LongAdvice, RuleSource::Bible)
+        );
+        let text = r#"{"rules": "bible", "rule_overrides": {"long_advice": "engine"}}"#;
+        let (rulebook, _) = rulebook_of(text);
+        assert_eq!(
+            [RuleKey::QuietHails, RuleKey::LongAdvice].map(|key| rulebook.source_for(key)),
+            [RuleSource::Bible, RuleSource::Engine]
+        );
+    }
+
+    #[test]
     fn the_boarding_and_piracy_rules_are_overridden_by_their_keys() {
         let text = r#"{"rule_overrides": {"empty_booty": "bible", "crewless_capture": "bible", "piracy_police": "bible"}}"#;
         let (rulebook, warnings) = rulebook_of(text);

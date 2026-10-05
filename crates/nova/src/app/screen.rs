@@ -134,8 +134,9 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, DisableRule, LegalCode, NovaAi, NovaBoarding, NovaDisable,
-    NovaLaw, Pilot, PilotKeeper, PilotStore, PointDefenceRule, Take, Taken, pilot_key,
+    Allegiance, Behaviour, BoardingRule, DisableRule, HailOptions, HailView, LegalCode, NovaAi,
+    NovaBoarding, NovaDisable, NovaLaw, Pilot, PilotKeeper, PilotStore, PointDefenceRule, Take,
+    Taken, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::flight::{FlightView, SharedChance};
@@ -150,13 +151,14 @@ use nova_view::spaceport::trade::TRADE_DIALOG;
 use nova_view::spaceport::{OutfitterCatalog, ShipyardCatalog};
 use nova_view::system::SystemView;
 use nova_view::text::TextMetrics;
+use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::{
-    AssignmentDialog, DescDialog, DescriptionSource, DialogResources, PlunderDialog, PlunderShown,
-    PrefsDialog,
+    AssignmentDialog, CommDialog, CommPress, DescDialog, DescriptionSource, DialogResources,
+    HaggleDialog, PlunderDialog, PlunderShown, PrefsDialog,
 };
 use nova_view::{
     Color, Diagnostic, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction, Sound,
@@ -256,6 +258,12 @@ pub struct AppScreen {
     plunder: Option<PlunderDialog>,
     /// The captured-ship assignment dialog, while a capture awaits it.
     assignment: Option<AssignmentDialog>,
+    /// The options each flight's comm dialog lists.
+    hail_options: HailOptions,
+    /// The comm dialog, while a hail is under way.
+    comm: Option<CommDialog>,
+    /// The haggle dialog, over the comm dialog, while a price is asked.
+    haggle: Option<HaggleDialog>,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -323,6 +331,9 @@ impl AppScreen {
             boarding_rule: Rc::new(NovaBoarding::default()),
             plunder: None,
             assignment: None,
+            hail_options: HailOptions::default(),
+            comm: None,
+            haggle: None,
         }
     }
 
@@ -384,6 +395,27 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's comm dialog listing `hail_options`.
+    #[must_use]
+    pub fn with_hail_options(self, hail_options: HailOptions) -> Self {
+        Self {
+            hail_options,
+            ..self
+        }
+    }
+
+    /// The comm dialog, while a hail is under way.
+    #[must_use]
+    pub fn comm(&self) -> Option<&CommDialog> {
+        self.comm.as_ref()
+    }
+
+    /// The haggle dialog, while a price is asked.
+    #[must_use]
+    pub fn haggle(&self) -> Option<&HaggleDialog> {
+        self.haggle.as_ref()
+    }
+
     /// The plunder dialog, while a boarding is under way.
     #[must_use]
     pub fn plunder(&self) -> Option<&PlunderDialog> {
@@ -412,7 +444,8 @@ impl AppScreen {
             .with_disable_rule(Rc::clone(&self.disable_rule))
             .with_point_defence_rule(Rc::clone(&self.defence_rule))
             .with_law(Rc::clone(&self.law))
-            .with_boarding_rule(Rc::clone(&self.boarding_rule));
+            .with_boarding_rule(Rc::clone(&self.boarding_rule))
+            .with_hail_options(self.hail_options.clone());
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -531,6 +564,12 @@ impl AppScreen {
         }
         if self.preferences.is_some() {
             return Showing::Preferences;
+        }
+        if self.haggle.is_some() {
+            return Showing::Haggle;
+        }
+        if self.comm.is_some() {
+            return Showing::Comm;
         }
         if self.plunder.is_some() {
             return Showing::Plunder;
@@ -708,6 +747,12 @@ impl AppScreen {
         if let Some(dialog) = &mut self.preferences {
             return Some(dialog);
         }
+        if let Some(dialog) = &mut self.haggle {
+            return Some(dialog);
+        }
+        if let Some(dialog) = &mut self.comm {
+            return Some(dialog);
+        }
         if let Some(dialog) = &mut self.plunder {
             return Some(dialog);
         }
@@ -766,6 +811,139 @@ impl AppScreen {
         }
         if let Some(shown) = self.flight.as_mut().and_then(FlightView::take_boarding) {
             self.open_plunder(&shown);
+        }
+        if let Some(view) = self.flight.as_mut().and_then(FlightView::take_hail) {
+            self.open_comm(&view);
+        }
+        ScreenAction::None
+    }
+
+    /// Opens the comm dialog on `view` over flight, which pauses: the
+    /// interface file's, or the built-in one without it (with a warning
+    /// when the interface file has none). With no metrics to lay it out,
+    /// the hail is hung up, with a warning.
+    fn open_comm(&mut self, view: &HailView) {
+        let Some(metrics) = self.metrics() else {
+            if let Some(flight) = &mut self.flight {
+                flight.hang_up();
+            }
+            self.warnings
+                .push("nova: cannot show the comm dialog: no metrics to lay it out".to_owned());
+            return;
+        };
+        let style = self.data.button_style();
+        let built = self.dialogs.as_ref().map(|dialogs| {
+            dialogs
+                .resources
+                .dialog_template(COMM_DIALOG)
+                .and_then(|template| CommDialog::new(&template, view, style, Rc::clone(&metrics)))
+        });
+        let dialog = match built {
+            Some(Ok(dialog)) => dialog,
+            other => {
+                if let Some(Err(reason)) = other {
+                    self.warnings
+                        .push(format!("nova: using the built-in comm dialog: {reason}"));
+                }
+                CommDialog::fallback(view, style, metrics)
+            }
+        };
+        self.comm = Some(dialog);
+    }
+
+    /// The comm dialog's input: each option pressed goes through flight,
+    /// and the dialog shows what came of it, opening the haggle dialog
+    /// over it when a price is asked; Close Channel hangs up and resumes
+    /// flight, keeping the dialog's sounds, as does the ship leaving.
+    fn comm_input(&mut self, input: &Input) -> ScreenAction {
+        let dialog = self.comm.as_mut().expect("open");
+        dialog.input(input);
+        let Some(press) = dialog.take_press() else {
+            return ScreenAction::None;
+        };
+        let flight = self.flight.as_mut().expect(ENTERED);
+        let shown = match press {
+            CommPress::Option(place) => flight.answer(place),
+            CommPress::Close => None,
+        };
+        match shown {
+            Some(view) => {
+                if let Some(dialog) = &mut self.comm {
+                    dialog.set_hail(&view);
+                }
+                if let Some(price) = view.asking {
+                    self.open_haggle(price, view.pay_me);
+                }
+            }
+            None if press == CommPress::Close || flight.hailing().is_none() => {
+                flight.hang_up();
+                if let Some(mut dialog) = self.comm.take() {
+                    self.sounds.extend(dialog.take_sounds());
+                }
+            }
+            None => {}
+        }
+        ScreenAction::None
+    }
+
+    /// Opens the haggle dialog asking `price` over the comm dialog: the
+    /// interface file's, or the built-in one without it.
+    fn open_haggle(&mut self, price: i64, pay_me: bool) {
+        let Some(metrics) = self.metrics() else {
+            return;
+        };
+        let style = self.data.button_style();
+        let built = self.dialogs.as_ref().map(|dialogs| {
+            dialogs
+                .resources
+                .dialog_template(HAGGLE_DIALOG)
+                .and_then(|template| {
+                    HaggleDialog::new(&template, price, pay_me, style, Rc::clone(&metrics))
+                })
+        });
+        let dialog = match built {
+            Some(Ok(dialog)) => dialog,
+            other => {
+                if let Some(Err(reason)) = other {
+                    self.warnings
+                        .push(format!("nova: using the built-in haggle dialog: {reason}"));
+                }
+                HaggleDialog::fallback(price, pay_me, style, metrics)
+            }
+        };
+        self.haggle = Some(dialog);
+    }
+
+    /// The haggle dialog's input: the choice goes through flight; a price
+    /// lowered is shown, and otherwise the dialog closes, keeping its
+    /// sounds, and the comm dialog shows what came of it.
+    fn haggle_input(&mut self, input: &Input) -> ScreenAction {
+        let dialog = self.haggle.as_mut().expect("open");
+        dialog.input(input);
+        let Some(choice) = dialog.take_choice() else {
+            return ScreenAction::None;
+        };
+        let flight = self.flight.as_mut().expect(ENTERED);
+        let shown = flight.haggle(choice);
+        if let Some(price) = shown.as_ref().and_then(|view| view.asking) {
+            let pay_me = shown.as_ref().is_none_or(|view| view.pay_me);
+            if let Some(dialog) = &mut self.haggle {
+                dialog.set_asking(price, pay_me);
+            }
+            return ScreenAction::None;
+        }
+        if let Some(mut dialog) = self.haggle.take() {
+            self.sounds.extend(dialog.take_sounds());
+        }
+        if let Some(view) = shown.or_else(|| flight.hailing()) {
+            if let Some(dialog) = &mut self.comm {
+                dialog.set_hail(&view);
+            }
+        } else {
+            flight.hang_up();
+            if let Some(mut dialog) = self.comm.take() {
+                self.sounds.extend(dialog.take_sounds());
+            }
         }
         ScreenAction::None
     }
@@ -1178,6 +1356,12 @@ impl AppScreen {
         if self.preferences.is_some() {
             return self.preferences_input(input);
         }
+        if self.haggle.is_some() {
+            return self.haggle_input(input);
+        }
+        if self.comm.is_some() {
+            return self.comm_input(input);
+        }
         if self.plunder.is_some() {
             return self.plunder_input(input);
         }
@@ -1365,6 +1549,12 @@ impl Screen for AppScreen {
         if let Some(dialog) = &self.assignment {
             dialog.draw(list);
         }
+        if let Some(dialog) = &self.comm {
+            dialog.draw(list);
+        }
+        if let Some(dialog) = &self.haggle {
+            dialog.draw(list);
+        }
         if let Some(about) = &self.about {
             about.draw(list);
         }
@@ -1410,6 +1600,8 @@ impl Screen for AppScreen {
             self.assignment
                 .as_mut()
                 .map(|dialog| dialog as &mut dyn Screen),
+            self.comm.as_mut().map(|dialog| dialog as &mut dyn Screen),
+            self.haggle.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.spaceport.as_mut().map(|port| port as &mut dyn Screen),
             self.flight.as_mut().map(|flight| flight as &mut dyn Screen),
         ];
@@ -4322,10 +4514,54 @@ mod tests {
             .resource(Dude::TYPE, 128, Some(b"Traders"), &dude)
             .resource(StrList::TYPE, 4000, None, &str_list(&["Food"]))
             .resource(StrList::TYPE, 4004, None, &str_list(&["75"]))
+            .resource(
+                StrList::TYPE,
+                3000,
+                None,
+                &str_list(&as_strs(&comm_strings())),
+            )
+            .resource(StrList::TYPE, 2002, None, &str_list(&as_strs(&messages())))
+            .resource(
+                StrList::TYPE,
+                9000,
+                None,
+                &str_list(&["Pay up.", "Paid.", "Declined.", "Short."]),
+            )
             .build()
             .bytes;
         let file = OneFile(fork);
         Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+    }
+
+    /// The ship comm strings: "Channel open." in every variant of the
+    /// first group, and "c<n>" for each other.
+    fn comm_strings() -> Vec<String> {
+        (1..=200)
+            .map(|n| {
+                if n <= 5 {
+                    "Channel open.".to_owned()
+                } else {
+                    format!("c{n}")
+                }
+            })
+            .collect()
+    }
+
+    /// The game's messages: "Greetings." at #175, "m<n>" for each other.
+    fn messages() -> Vec<String> {
+        (1..=200)
+            .map(|n| {
+                if n == 175 {
+                    "Greetings.".to_owned()
+                } else {
+                    format!("m{n}")
+                }
+            })
+            .collect()
+    }
+
+    fn as_strs(strings: &[String]) -> Vec<&str> {
+        strings.iter().map(String::as_str).collect()
     }
 
     /// `screen` over [`boarding_data`], its trader under the player,
@@ -4636,5 +4872,288 @@ mod tests {
             Some(5750),
             "abandoned"
         );
+    }
+
+    // Hailing.
+
+    use nova_sim::Reply;
+    use nova_sim::hail::{Answer, Ask, Hail, HailOption};
+    use nova_view::ui::comm::{CLOSE_ITEM, COMM_DIALOG, HAGGLE_DIALOG};
+
+    /// An option that asks a price, saying `STR#` 9000's strings: "Pay
+    /// up." asked, "Paid." paid, "Declined." declined and "Short." short.
+    #[derive(Debug)]
+    struct Sell;
+
+    impl HailOption for Sell {
+        fn label(&self) -> String {
+            "Sell".to_owned()
+        }
+
+        fn key(&self) -> Option<char> {
+            Some('S')
+        }
+
+        fn applies(&self, _hail: &Hail) -> bool {
+            true
+        }
+
+        fn press(&self, _hail: &Hail, _chance: &mut dyn Chance) -> Answer {
+            let line = |index| Reply::Line { list: 9000, index };
+            Answer {
+                ask: Some(Ask {
+                    paid: (line(2), None),
+                    declined: (line(3), None),
+                    short: line(4),
+                }),
+                ..Answer::say(line(1))
+            }
+        }
+    }
+
+    /// `screen` over [`boarding_data`], its trader under the player,
+    /// idling and intact, and Nova's options with [`Sell`].
+    fn hailable(screen: AppScreen) -> AppScreen {
+        screen
+            .with_chance(under_the_player())
+            .with_behaviour(Rc::new(Idle))
+            .with_hail_options(HailOptions::default().with(Rc::new(Sell)))
+    }
+
+    /// Ticks once, targets the trader with Tab and hails it with Y.
+    fn hail(screen: &mut AppScreen) {
+        screen.tick(TICK);
+        for (k, pressed) in [
+            (Key::Tab, true),
+            (Key::Tab, false),
+            (Key::Char('y'), true),
+            (Key::Char('y'), false),
+        ] {
+            screen.input(&key(k, pressed));
+        }
+    }
+
+    /// The router over [`boarding_data`] with dialogs, in the developer's
+    /// flight, hailing the trader.
+    fn hailing() -> AppScreen {
+        let mut screen = hailable(with_dialogs(boarding_data()));
+        fly(&mut screen);
+        hail(&mut screen);
+        assert_eq!(screen.showing(), Showing::Comm);
+        screen
+    }
+
+    fn tap(screen: &mut AppScreen, k: Key) {
+        screen.input(&key(k, true));
+        screen.input(&key(k, false));
+    }
+
+    fn reply(screen: &AppScreen) -> String {
+        flight(screen).hailing().expect("hailing").reply
+    }
+
+    #[test]
+    fn y_opens_the_comm_dialog_over_paused_flight() {
+        let screen = &mut hailing();
+        assert_eq!(reply(screen), "Channel open.");
+        let alpha = flight(screen).alpha();
+        screen.tick(TICK / 2);
+        assert_eq!(
+            flight(screen).alpha().to_bits(),
+            alpha.to_bits(),
+            "flight is paused"
+        );
+        let texts: Vec<String> = drawn(screen)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        for label in ["Greetings", "Request Assistance", "Sell", "Close Channel"] {
+            assert!(texts.iter().any(|text| text == label), "{label}: {texts:?}");
+        }
+        assert!(
+            texts.iter().position(|text| text == "Close Channel")
+                > texts.iter().position(|text| text.contains("Alpha")),
+            "over flight"
+        );
+        assert!(screen.comm().is_some());
+    }
+
+    #[test]
+    fn each_press_goes_through_the_flight_and_refreshes_the_dialog() {
+        let screen = &mut hailing();
+        tap(screen, Key::Char('g'));
+        assert_eq!(screen.showing(), Showing::Comm, "still open");
+        assert_eq!(reply(screen), "Greetings.", "the trader's advice: none");
+        let shown: Vec<String> = drawn(screen)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(shown.iter().any(|text| text == "Greetings."), "{shown:?}");
+    }
+
+    #[test]
+    fn a_price_asked_opens_the_haggle_dialog_whose_choice_settles_it() {
+        let screen = &mut hailing();
+        tap(screen, Key::Char('s'));
+        assert_eq!(screen.showing(), Showing::Haggle);
+        assert_eq!(reply(screen), "Pay up.");
+        let dialog = screen.haggle().expect("open");
+        assert_eq!(dialog.lines(), ["Pay me 1,000 credits."]);
+        tap(screen, Key::Escape);
+        assert_eq!(screen.showing(), Showing::Haggle, "Escape does nothing");
+        tap(screen, Key::Enter);
+        assert_eq!(screen.showing(), Showing::Comm, "back to the comm dialog");
+        assert!(screen.haggle().is_none());
+        assert_eq!(reply(screen), "Short.", "no cash");
+    }
+
+    #[test]
+    fn close_channel_hangs_up_and_resumes_flight() {
+        let screen = &mut hailing();
+        let at = screen
+            .comm()
+            .expect("open")
+            .dialog()
+            .item_bounds(CLOSE_ITEM)
+            .expect("an item")
+            .center();
+        let mut sounds = Vec::new();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+            sounds.extend(screen.take_sounds());
+        }
+        assert_eq!(
+            sounds,
+            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
+        );
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.comm().is_none());
+        assert_eq!(flight(screen).hailing(), None, "hung up");
+        let alpha = flight(screen).alpha();
+        screen.tick(TICK / 2);
+        assert_ne!(flight(screen).alpha().to_bits(), alpha.to_bits(), "resumed");
+    }
+
+    #[test]
+    fn escape_closes_the_channel_too() {
+        let screen = &mut hailing();
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        screen.input(&key(Key::Escape, false));
+        assert_eq!(
+            screen.showing(),
+            Showing::Flight,
+            "the release is the dialog's"
+        );
+    }
+
+    #[test]
+    fn the_comm_dialogs_come_from_the_interface_file_when_there_is_one() {
+        /// "Comm" (1007) and "Haggle" (1008), as the built-in ones, fixed.
+        struct Comm;
+
+        impl DialogResources for Comm {
+            fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+                let user = |x, y, w, h, enabled| ItemTemplate {
+                    bounds: Bounds::at(Point::new(x, y), w, h),
+                    enabled,
+                    kind: ItemSpec::User,
+                };
+                match id {
+                    COMM_DIALOG => Ok(DialogTemplate {
+                        bounds: Bounds::at(Point::new(0.0, 0.0), 423.0, 215.0),
+                        placement: Placement::Fixed,
+                        items: vec![
+                            user(21.0, 181.0, 166.0, 26.0, true),
+                            user(21.0, 153.0, 166.0, 26.0, true),
+                            user(21.0, 125.0, 166.0, 26.0, true),
+                            user(46.0, 241.0, 200.0, 25.0, true),
+                            user(7.0, 320.0, 200.0, 25.0, true),
+                            user(199.0, 335.0, 200.0, 25.0, true),
+                            user(178.0, 261.0, 200.0, 25.0, true),
+                            user(178.0, 289.0, 200.0, 25.0, true),
+                            user(34.0, 299.0, 112.0, 16.0, false),
+                            user(11.0, 8.0, 192.0, 58.0, false),
+                            user(216.0, 7.0, 200.0, 200.0, false),
+                            user(40.0, 73.0, 134.0, 46.0, false),
+                        ],
+                    }),
+                    HAGGLE_DIALOG => Ok(DialogTemplate {
+                        bounds: Bounds::at(Point::new(0.0, 0.0), 262.0, 107.0),
+                        placement: Placement::Fixed,
+                        items: vec![
+                            user(58.0, 74.0, 146.0, 26.0, true),
+                            user(58.0, 39.0, 146.0, 26.0, true),
+                            user(7.0, 6.0, 248.0, 25.0, false),
+                        ],
+                    }),
+                    _ => Err(format!("no DLOG {id}")),
+                }
+            }
+        }
+
+        let mut screen = hailable(
+            AppScreen::new(boarding_data()).with_dialogs(Rc::new(Comm), Rc::new(MonoMetrics)),
+        );
+        fly(&mut screen);
+        hail(&mut screen);
+        let pictures = |screen: &AppScreen| -> Vec<_> {
+            drawn(screen)
+                .iter()
+                .filter_map(|command| match command {
+                    DrawCommand::StretchedPicture {
+                        image, top_left, ..
+                    } => Some((*image, *top_left)),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert!(
+            pictures(&screen).contains(&(nova_view::ui::comm::COMM_PICTURE, Point::new(0.0, 0.0))),
+            "{:?}",
+            pictures(&screen)
+        );
+        tap(&mut screen, Key::Char('s'));
+        assert!(
+            pictures(&screen)
+                .contains(&(nova_view::ui::comm::HAGGLE_PICTURE, Point::new(0.0, 0.0))),
+            "{:?}",
+            pictures(&screen)
+        );
+        assert!(screen.take_warnings().is_empty());
+    }
+
+    #[test]
+    fn without_any_metrics_a_hail_is_hung_up() {
+        let mut screen = hailable(AppScreen::new(boarding_data()));
+        fly(&mut screen);
+        hail(&mut screen);
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(flight(&screen).hailing(), None, "hung up");
+        assert_eq!(
+            screen.take_warnings(),
+            ["nova: cannot show the comm dialog: no metrics to lay it out"]
+        );
+    }
+
+    #[test]
+    fn the_routers_hail_options_reach_every_flight() {
+        let mut screen = with_dialogs(boarding_data())
+            .with_chance(under_the_player())
+            .with_behaviour(Rc::new(Idle))
+            .with_hail_options(HailOptions::empty());
+        fly(&mut screen);
+        hail(&mut screen);
+        assert_eq!(flight(&screen).hailing().expect("hailing").options, []);
     }
 }

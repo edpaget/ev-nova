@@ -47,6 +47,10 @@ pub enum Showing {
     Plunder,
     /// The captured-ship assignment dialog, over flight, which it pauses.
     Assignment,
+    /// The comm dialog, over flight, which it pauses.
+    Comm,
+    /// The haggle dialog, over the comm dialog.
+    Haggle,
 }
 
 /// Something in the game data a screen cannot use, for the app to write
