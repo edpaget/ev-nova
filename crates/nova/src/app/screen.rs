@@ -266,6 +266,11 @@ pub struct AppScreen {
     /// Whether each flight's escorts' standing orders are reset on
     /// entering a system.
     escort_orders: RuleSource,
+    /// What a fighter each flight's player launches does first.
+    fighter_launch: RuleSource,
+    /// What becomes of each flight's fighters out as the player leaves a
+    /// system.
+    fighter_recall: RuleSource,
     /// The comm dialog, while a hail is under way.
     comm: Option<CommDialog>,
     /// The haggle dialog, over the comm dialog, while a price is asked.
@@ -339,6 +344,8 @@ impl AppScreen {
             assignment: None,
             hail_options: HailOptions::default(),
             escort_orders: RuleSource::Engine,
+            fighter_launch: RuleSource::Engine,
+            fighter_recall: RuleSource::Engine,
             comm: None,
             haggle: None,
         }
@@ -423,6 +430,28 @@ impl AppScreen {
         }
     }
 
+    /// The router with the fighters each flight's player launches doing
+    /// first as `source` says ([`FlightView::with_fighter_launch`]); the
+    /// engine's until another is given.
+    #[must_use]
+    pub fn with_fighter_launch(self, source: RuleSource) -> Self {
+        Self {
+            fighter_launch: source,
+            ..self
+        }
+    }
+
+    /// The router with each flight's fighters out, as the player leaves a
+    /// system, following `source` ([`FlightView::with_fighter_recall`]);
+    /// the engine's until another is given.
+    #[must_use]
+    pub fn with_fighter_recall(self, source: RuleSource) -> Self {
+        Self {
+            fighter_recall: source,
+            ..self
+        }
+    }
+
     /// The comm dialog, while a hail is under way.
     #[must_use]
     pub fn comm(&self) -> Option<&CommDialog> {
@@ -465,7 +494,9 @@ impl AppScreen {
             .with_law(Rc::clone(&self.law))
             .with_boarding_rule(Rc::clone(&self.boarding_rule))
             .with_hail_options(self.hail_options.clone())
-            .with_escort_orders(self.escort_orders);
+            .with_escort_orders(self.escort_orders)
+            .with_fighter_launch(self.fighter_launch)
+            .with_fighter_recall(self.fighter_recall);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -5261,6 +5292,22 @@ mod tests {
             RuleSource::Engine,
             "the engine's by default"
         );
+    }
+
+    #[test]
+    fn the_routers_fighter_rules_reach_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_fighter_launch(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.fighter_launch(), source);
+            assert_eq!(session.fighter_recall(), RuleSource::Engine);
+            let mut screen = AppScreen::new(data()).with_fighter_recall(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.fighter_recall(), source);
+            assert_eq!(session.fighter_launch(), RuleSource::Engine);
+        }
     }
 
     #[test]

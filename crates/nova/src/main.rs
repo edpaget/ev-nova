@@ -164,7 +164,9 @@ fn main() -> ExitCode {
         .with_law(Rc::new(NovaLaw::from_rulebook(&rulebook)))
         .with_boarding_rule(Rc::new(NovaBoarding::from_rulebook(&rulebook)))
         .with_hail_options(HailOptions::nova(&rulebook))
-        .with_escort_orders(rulebook.source_for(RuleKey::EscortOrders));
+        .with_escort_orders(rulebook.source_for(RuleKey::EscortOrders))
+        .with_fighter_launch(rulebook.source_for(RuleKey::FighterLaunch))
+        .with_fighter_recall(rulebook.source_for(RuleKey::FighterRecall));
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);

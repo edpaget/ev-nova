@@ -56,6 +56,17 @@
 //! which the saved pilot keeps. Standing orders are saved on landing, and
 //! reopened they are back to formation by the engine's `escort_orders`,
 //! or kept by its other reading in the settings file.
+//!
+//! Carrying fighters: W selects the player's fighter bay and Control
+//! launches a fighter, which is drawn beside the player while the
+//! secondary line counts one fewer; F sends it at a pirate targeted,
+//! whose shield drops, or by `fighter_launch`'s other reading in the
+//! settings file it attacks the target at once. Option-C says "New escort
+//! orders assigned:  All ships returning to hangar." and the fighters fly
+//! home and dock, the line counting them again. A pirate carrier attacking
+//! the player launches fighters that take the player's shield down. A
+//! fighter out is saved on landing and flies again after take-off, or by
+//! `fighter_recall`'s other reading is aboard as soon as the pilot lands.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -2665,4 +2676,402 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
             "{text}: {shown:?}"
         );
     }
+}
+
+// Fighters.
+
+/// How wide a fighter's sprite is drawn.
+const FIGHTER: f32 = 5.0;
+
+/// [`escort_data`]'s world, where the player's ship (128) carries a
+/// fighter bay (`wëap` 130, "Bay": guidance 99, carrying ship 132,
+/// reloading every 30 ticks, pushing its fighter out at 4 pixels a tick,
+/// four a bay) with two fighters aboard (`oütf` 128, its rounds); the
+/// "Fighter" (ship 132, `EscortType` 0, `InherentAI` 4: 20 shield, 30
+/// armour and the gun, drawn from a sheet 5 across); and the pirates'
+/// "Carrier" (`düde` 130, ship 133: a warship carrying a bay with two
+/// fighters aboard).
+fn fighter_data(alpha_dudes: &[i16]) -> Rc<GameData> {
+    use nova_data::records::string_list::StrList;
+    let carrier_of = |weapons: &[i16], items: &[(i16, i16)]| {
+        let mut bytes = ship(30, 45, weapons, items);
+        put_i16s(&mut bytes, 0x44, &[10]);
+        bytes
+    };
+    let boarder = carrier_of(&[128, 130], &[(128, 2)]);
+    let mut bay = weapon(30, 0, 132, 0, 8, 0x0002);
+    put_i16s(&mut bay, 0x08, &[99, 400]);
+    put_i16s(&mut bay, 0x6C, &[4]);
+    let mut gun = weapon(10, 5, -1, 0, 8, 0);
+    put_i16s(&mut gun, 0x06, &[10]);
+    let mut fighter = ship(20, 30, &[129], &[]);
+    put_i16s(&mut fighter, 0x42, &[4]);
+    put_i16s(&mut fighter, 0x732, &[0]);
+    let mut carrier = carrier_of(&[130], &[]);
+    put_i16s(&mut carrier, 0x22, &[2]);
+    put_i16s(&mut carrier, 0x42, &[3]);
+    put_i16s(&mut carrier, 0x732, &[2]);
+    let mut fighters = vec![0; Outfit::SIZE.expect("fixed")];
+    put_i16s(&mut fighters, 0x06, &[3, 130, 9999]);
+    let mut fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
+        .resource(Ship::TYPE, 128, Some(b"Boarder"), &boarder)
+        .resource(Ship::TYPE, 131, Some(b"Raider"), &ship(30, 45, &[], &[]))
+        .resource(Ship::TYPE, 132, Some(b"Fighter"), &fighter)
+        .resource(Ship::TYPE, 133, Some(b"Carrier"), &carrier)
+        .resource(
+            Weapon::TYPE,
+            128,
+            Some(b"Blaster"),
+            &weapon(10, 10, -1, 0, 8, 0),
+        )
+        .resource(Weapon::TYPE, 129, Some(b"Gun"), &gun)
+        .resource(Weapon::TYPE, 130, Some(b"Bay"), &bay)
+        .resource(Outfit::TYPE, 128, Some(b"Fighters"), &fighters)
+        .resource(Govt::TYPE, 137, Some(b"Pirates"), &hailed_govt(0, "Pirate"))
+        .resource(Dude::TYPE, 129, Some(b"Pirates"), &dude_of(3, 137, 131))
+        .resource(Dude::TYPE, 130, Some(b"Carriers"), &dude_of(3, 137, 133))
+        .resource(
+            System::TYPE,
+            128,
+            Some(b"Alpha"),
+            &escort_system(0, &[129], Some(128), alpha_dudes),
+        )
+        .resource(
+            System::TYPE,
+            129,
+            Some(b"Beta"),
+            &escort_system(100, &[128], None, &[]),
+        )
+        .resource(Stellar::TYPE, 128, Some(b"Pad"), &landing_pad())
+        .resource(Spin::TYPE, 1004, None, &spin(1000, 1))
+        .resource(RLED, 1000, None, &sheet(1, 40))
+        .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
+        .resource(RLED, 2000, None, &sheet(36, 1))
+        .resource(Spin::TYPE, 3000, None, &spin(3000, 6))
+        .resource(RLED, 3000, None, &sheet(36, 3))
+        .resource(RLED, 2001, None, &sheet(36, 2))
+        .resource(ShipAnim::TYPE, 132, None, &ship_anim(2002))
+        .resource(RLED, 2002, None, &sheet(36, 5))
+        .resource(StrList::TYPE, 4000, None, &str_list("Food"))
+        .resource(StrList::TYPE, 4004, None, &str_list("75"))
+        .resource(StrList::TYPE, 3000, None, &strings(&comm_strings()))
+        .resource(
+            Interface::TYPE,
+            128,
+            Some(b"Default status bar"),
+            &interface(),
+        )
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
+    for id in [131, 133] {
+        fork = fork.resource(ShipAnim::TYPE, id, None, &ship_anim(2001));
+    }
+    for id in [8511, 8514, 8515, 8516, 5001, 5002, 5003] {
+        fork = fork.resource(PICT, id, None, &pict(30, 20, [40, 40, 40]));
+    }
+    for state in [7500, 7503, 7506] {
+        fork = fork
+            .resource(PICT, state, None, &pict(13, 25, [200, 0, 0]))
+            .resource(PICT, state + 1, None, &pict(2, 25, [0, 200, 0]))
+            .resource(PICT, state + 2, None, &pict(13, 25, [0, 0, 200]))
+            .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
+            .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
+    }
+    let file = OneFile(fork.build().bytes);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
+/// Attacks the player as soon as it can, firing as any ship does: the
+/// pirate carrier.
+#[derive(Debug)]
+struct Raider;
+
+impl Behaviour for Raider {
+    fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+        Goal::Attack(nova_sim::ShipRef::Player)
+    }
+
+    fn trigger(&self, npc: &Npc, around: &Surroundings) -> nova_sim::Trigger {
+        nova_sim::ai::fire::trigger(npc, around)
+    }
+
+    fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<nova_sim::ShipRef> {
+        npc.goal.attacking()
+    }
+}
+
+/// Nova's AI with every warship raiding the player and the other AI
+/// types idling.
+fn raiders() -> Rc<dyn Behaviour> {
+    let still: Rc<dyn Behaviour> = Rc::new(Still);
+    let ai = [
+        AiType::WimpyTrader,
+        AiType::BraveTrader,
+        AiType::Interceptor,
+    ]
+    .into_iter()
+    .fold(NovaAi::default(), |ai, ai_type| {
+        ai.with(ai_type, Rc::clone(&still))
+    })
+    .with(AiType::Warship, Rc::new(Raider));
+    Rc::new(ai)
+}
+
+/// The app over [`fighter_data`] of `alpha_dudes` on the main menu, with
+/// `store`'s pilots, its traffic placed 300 above the player facing
+/// down, the traffic idling unless `router` says otherwise.
+fn refly(
+    store: &MemoryPilots,
+    alpha_dudes: &[i16],
+    router: impl FnOnce(AppScreen) -> AppScreen,
+) -> Boarder {
+    let setup: &[u32] = if alpha_dudes.is_empty() {
+        &[]
+    } else {
+        &[6, 6, 0, 0, 750, 450, 180, 0]
+    };
+    let (_, chance) = scripted(setup);
+    Boarder::opening_over(
+        fighter_data(alpha_dudes),
+        escort_interface(),
+        store,
+        chance,
+        |screen| router(screen.with_behaviour(escorts_only())),
+    )
+}
+
+/// [`refly`]'s app with a saved pilot, "Ada", resumed in flight from the
+/// main menu. Two frames place the system's ships.
+fn carrying(
+    store: &MemoryPilots,
+    alpha_dudes: &[i16],
+    router: impl FnOnce(AppScreen) -> AppScreen,
+) -> Boarder {
+    let data = fighter_data(alpha_dudes);
+    let pilot = Pilot::new(data.as_ref(), "Ada").expect("a pilot");
+    PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
+        .save(&pilot)
+        .expect("saved");
+    let mut game = refly(store, alpha_dudes, router);
+    game.open_pilot();
+    game.frame();
+    game.frame();
+    game
+}
+
+impl Boarder {
+    /// The fighters out of the player's bays.
+    fn fighters_out(&self) -> usize {
+        self.pilot()
+            .escorts()
+            .iter()
+            .filter(|escort| escort.carried)
+            .count()
+    }
+
+    /// W, then Control held until a fighter is out; the frame then.
+    fn launch(&mut self) -> Frame {
+        self.tap(Key::Char('w'));
+        let out = self.fighters_out();
+        self.key(Key::Control, true);
+        for _ in 0..120 {
+            let frame = self.frame();
+            if self.fighters_out() > out {
+                self.key(Key::Control, false);
+                return frame;
+            }
+        }
+        panic!("no fighter launched");
+    }
+
+    /// Whether `ship`'s shield drops within `frames` frames.
+    fn shield_drops(&mut self, ship: NpcId, frames: u32) -> bool {
+        (0..frames).any(|_| {
+            self.frame();
+            self.npc(ship).reserves.shield.now < 30.0
+        })
+    }
+}
+
+/// The settings file holding `text`, read as `main` reads it: its
+/// rulebook's source for `rule`.
+fn saved_rule(text: &str, rule: nova_sim::RuleKey) -> RuleSource {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = home.path().join("settings.json");
+    std::fs::write(&path, text).expect("writes");
+    let mut store: Option<Box<dyn nova_audio::SettingsStore>> =
+        Some(Box::new(nova_audio::FileSettings::new(&path)));
+    let (rulebook, warnings) = nova::rulebook::game_rulebook(store.as_deref_mut());
+    assert_eq!(warnings, Vec::<String>::new(), "{text}");
+    rulebook.source_for(rule)
+}
+
+#[test]
+fn w_and_control_launch_a_fighter_that_attacks_the_pirate_targeted_on_f() {
+    let store = MemoryPilots::new();
+    let mut game = carrying(&store, &[129], |screen| screen);
+    let frame = game.frame();
+    assert!(
+        text_at(&frame, "Bay - 2").is_some(),
+        "{:?}",
+        run_texts(&frame)
+    );
+    let frame = game.launch();
+    assert!(
+        text_at(&frame, "Bay - 1").is_some(),
+        "{:?}",
+        run_texts(&frame)
+    );
+    let frame = game.frame();
+    assert_eq!(sprites_of(&frame, FIGHTER).len(), 1, "the fighter drawn");
+    let fighter = game.escorts()[0].clone();
+    let off = fighter.state.position - game.session().player().position;
+    assert!(off.length() < 50.0, "beside the player: {off:?}");
+    let pirate = game
+        .session()
+        .npcs()
+        .iter()
+        .find(|npc| npc.ship == nova_sim::ShipId(131))
+        .expect("the pirate")
+        .id;
+    game.tap(Key::Tab);
+    assert_eq!(game.session().target().map(|npc| npc.id), Some(pirate));
+    assert!(!game.shield_drops(pirate, 60), "no command yet");
+    game.tap(Key::Char('f'));
+    let shown = run_texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "New escort orders assigned:  All ships attacking target."),
+        "{shown:?}"
+    );
+    assert!(game.shield_drops(pirate, 300));
+}
+
+#[test]
+fn by_the_settings_fighter_launch_a_fighter_attacks_the_target_at_once() {
+    let source = saved_rule(
+        r#"{"rule_overrides": {"fighter_launch": "bible"}}"#,
+        nova_sim::RuleKey::FighterLaunch,
+    );
+    assert_eq!(source, RuleSource::Bible);
+    let store = MemoryPilots::new();
+    let mut game = carrying(&store, &[129], |screen| screen.with_fighter_launch(source));
+    game.tap(Key::Tab);
+    let pirate = game.session().target().map(|npc| npc.id).expect("targeted");
+    game.launch();
+    assert!(game.shield_drops(pirate, 300), "without F");
+}
+
+#[test]
+fn option_c_brings_the_fighters_home_and_the_bay_counts_them_again() {
+    let store = MemoryPilots::new();
+    let mut game = carrying(&store, &[], |screen| screen);
+    game.launch();
+    game.launch();
+    assert_eq!(game.fighters_out(), 2);
+    assert!(text_at(&game.frame(), "Bay - 0").is_some());
+    game.key(Key::Alt, true);
+    game.tap(Key::Char('c'));
+    game.key(Key::Alt, false);
+    let shown = run_texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "New escort orders assigned:  All ships returning to hangar."),
+        "{shown:?}"
+    );
+    let home = (0..600).find(|_| {
+        game.frame();
+        game.fighters_out() == 0
+    });
+    assert!(home.is_some(), "{:?}", game.escorts());
+    let frame = game.frame();
+    assert_eq!(sprites_of(&frame, FIGHTER), [], "none drawn");
+    assert!(
+        text_at(&frame, "Bay - 2").is_some(),
+        "{:?}",
+        run_texts(&frame)
+    );
+}
+
+#[test]
+fn a_pirate_carrier_launches_fighters_that_take_the_players_shield_down() {
+    let store = MemoryPilots::new();
+    let mut game = carrying(&store, &[130], |screen| screen.with_behaviour(raiders()));
+    let shield = game.session().reserves().shield.now;
+    let mut drawn = false;
+    let mut hit = false;
+    for _ in 0..300 {
+        let frame = game.frame();
+        drawn |= !sprites_of(&frame, FIGHTER).is_empty();
+        hit |= game.session().reserves().shield.now < shield;
+    }
+    assert!(
+        game.session()
+            .npcs()
+            .iter()
+            .any(|npc| npc.ship == nova_sim::ShipId(132)),
+        "a fighter launched"
+    );
+    assert!(drawn, "and drawn");
+    assert!(hit, "the player's shield dropped");
+}
+
+#[test]
+fn a_fighter_out_is_saved_on_landing_and_flies_again_after_take_off() {
+    let store = MemoryPilots::new();
+    let mut game = carrying(&store, &[], |screen| screen);
+    game.launch();
+    game.tap(Key::Char('l'));
+    assert_eq!(game.showing(), Showing::Spaceport, "landed");
+    let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
+    assert_eq!(saved.escorts().len(), 1);
+    assert!(saved.escorts()[0].carried);
+    let mut game = refly(&store, &[], |screen| screen);
+    game.open_pilot_to(Showing::Spaceport);
+    game.tap(Key::Escape);
+    assert_eq!(game.showing(), Showing::Flight, "took off");
+    game.frame();
+    game.frame();
+    let fighters = game.escorts();
+    assert_eq!(fighters.len(), 1, "beside the player again");
+    let off = fighters[0].state.position - game.session().player().position;
+    assert!(off.length() < 100.0, "{off:?}");
+    assert!(text_at(&game.frame(), "Bay - 1").is_some());
+    game.key(Key::Alt, true);
+    game.tap(Key::Char('c'));
+    game.key(Key::Alt, false);
+    assert!(
+        (0..600).any(|_| {
+            game.frame();
+            game.fighters_out() == 0
+        }),
+        "docked"
+    );
+    assert!(text_at(&game.frame(), "Bay - 2").is_some());
+}
+
+#[test]
+fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_lands() {
+    let source = saved_rule(
+        r#"{"rule_overrides": {"fighter_recall": "bible"}}"#,
+        nova_sim::RuleKey::FighterRecall,
+    );
+    assert_eq!(source, RuleSource::Bible);
+    let store = MemoryPilots::new();
+    let mut game = carrying(&store, &[], |screen| screen.with_fighter_recall(source));
+    game.launch();
+    game.tap(Key::Char('l'));
+    assert_eq!(game.showing(), Showing::Spaceport, "landed");
+    let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
+    assert_eq!(saved.escorts(), []);
+    assert_eq!(saved.owned(nova_sim::OutfitId(128)), 2, "both aboard");
+    let mut game = refly(&store, &[], |screen| screen.with_fighter_recall(source));
+    game.open_pilot_to(Showing::Spaceport);
+    game.tap(Key::Escape);
+    game.frame();
+    game.frame();
+    assert_eq!(game.fighters_out(), 0, "no fighter out");
+    assert!(text_at(&game.frame(), "Bay - 2").is_some());
 }

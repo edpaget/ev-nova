@@ -205,6 +205,25 @@ mod tests {
     }
 
     #[test]
+    fn the_fighter_rules_are_overridden_by_their_keys() {
+        let text = r#"{"rule_overrides": {"fighter_launch": "bible", "fighter_recall": "bible"}}"#;
+        let (rulebook, warnings) = rulebook_of(text);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine()
+                .with_override(RuleKey::FighterLaunch, RuleSource::Bible)
+                .with_override(RuleKey::FighterRecall, RuleSource::Bible)
+        );
+        let text = r#"{"rules": "bible", "rule_overrides": {"fighter_recall": "engine"}}"#;
+        let (rulebook, _) = rulebook_of(text);
+        assert_eq!(
+            [RuleKey::FighterLaunch, RuleKey::FighterRecall].map(|key| rulebook.source_for(key)),
+            [RuleSource::Bible, RuleSource::Engine]
+        );
+    }
+
+    #[test]
     fn the_boarding_and_piracy_rules_are_overridden_by_their_keys() {
         let text = r#"{"rule_overrides": {"empty_booty": "bible", "crewless_capture": "bible", "piracy_police": "bible"}}"#;
         let (rulebook, warnings) = rulebook_of(text);
