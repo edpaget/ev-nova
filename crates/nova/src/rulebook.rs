@@ -186,6 +186,25 @@ mod tests {
     }
 
     #[test]
+    fn the_escort_rules_are_overridden_by_their_keys() {
+        let text = r#"{"rule_overrides": {"escort_ai": "bible", "escort_orders": "bible"}}"#;
+        let (rulebook, warnings) = rulebook_of(text);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine()
+                .with_override(RuleKey::EscortAi, RuleSource::Bible)
+                .with_override(RuleKey::EscortOrders, RuleSource::Bible)
+        );
+        let text = r#"{"rules": "bible", "rule_overrides": {"escort_orders": "engine"}}"#;
+        let (rulebook, _) = rulebook_of(text);
+        assert_eq!(
+            [RuleKey::EscortAi, RuleKey::EscortOrders].map(|key| rulebook.source_for(key)),
+            [RuleSource::Bible, RuleSource::Engine]
+        );
+    }
+
+    #[test]
     fn the_boarding_and_piracy_rules_are_overridden_by_their_keys() {
         let text = r#"{"rule_overrides": {"empty_booty": "bible", "crewless_capture": "bible", "piracy_police": "bible"}}"#;
         let (rulebook, warnings) = rulebook_of(text);

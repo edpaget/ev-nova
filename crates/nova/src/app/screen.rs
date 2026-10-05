@@ -91,8 +91,11 @@
 //! Nova's own until another is given; their point defence engages the
 //! missiles the router's point-defence rule calls hostile
 //! ([`AppScreen::with_point_defence_rule`]), by governments' allegiance
-//! until another is given; and the player's crimes are judged by the
-//! router's law ([`AppScreen::with_law`]), Nova's until another is given.
+//! until another is given; the player's crimes are judged by the
+//! router's law ([`AppScreen::with_law`]), Nova's until another is given;
+//! and the escorts' standing orders are reset, or kept, on entering a
+//! system as the router says ([`AppScreen::with_escort_orders`]), reset
+//! (the engine's) until another is given.
 //! The flight's diagnostics about game
 //! data it could not read or the simulation does not handle yet come
 //! through [`Screen::take_diagnostics`].
@@ -135,8 +138,8 @@ use std::time::Duration;
 use nova_data::GameData;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, DisableRule, HailOptions, HailView, LegalCode, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, Pilot, PilotKeeper, PilotStore, PointDefenceRule, Take,
-    Taken, pilot_key,
+    NovaBoarding, NovaDisable, NovaLaw, Pilot, PilotKeeper, PilotStore, PointDefenceRule,
+    RuleSource, Take, Taken, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::flight::{FlightView, SharedChance};
@@ -260,6 +263,9 @@ pub struct AppScreen {
     assignment: Option<AssignmentDialog>,
     /// The options each flight's comm dialog lists.
     hail_options: HailOptions,
+    /// Whether each flight's escorts' standing orders are reset on
+    /// entering a system.
+    escort_orders: RuleSource,
     /// The comm dialog, while a hail is under way.
     comm: Option<CommDialog>,
     /// The haggle dialog, over the comm dialog, while a price is asked.
@@ -332,6 +338,7 @@ impl AppScreen {
             plunder: None,
             assignment: None,
             hail_options: HailOptions::default(),
+            escort_orders: RuleSource::Engine,
             comm: None,
             haggle: None,
         }
@@ -404,6 +411,18 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's escorts' standing orders reset, or
+    /// kept, on entering a system as `source` says
+    /// ([`FlightView::with_escort_orders`]); the engine's reset until
+    /// another is given.
+    #[must_use]
+    pub fn with_escort_orders(self, source: RuleSource) -> Self {
+        Self {
+            escort_orders: source,
+            ..self
+        }
+    }
+
     /// The comm dialog, while a hail is under way.
     #[must_use]
     pub fn comm(&self) -> Option<&CommDialog> {
@@ -445,7 +464,8 @@ impl AppScreen {
             .with_point_defence_rule(Rc::clone(&self.defence_rule))
             .with_law(Rc::clone(&self.law))
             .with_boarding_rule(Rc::clone(&self.boarding_rule))
-            .with_hail_options(self.hail_options.clone());
+            .with_hail_options(self.hail_options.clone())
+            .with_escort_orders(self.escort_orders);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -5223,6 +5243,23 @@ mod tests {
         assert_eq!(
             screen.take_warnings(),
             ["nova: cannot show the comm dialog: no metrics to lay it out"]
+        );
+    }
+
+    #[test]
+    fn the_routers_escort_orders_rule_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_escort_orders(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.escort_orders(), source);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        assert_eq!(
+            flight(&screen).session().expect("flying").escort_orders(),
+            RuleSource::Engine,
+            "the engine's by default"
         );
     }
 

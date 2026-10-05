@@ -44,6 +44,18 @@
 //! price, and once paid flies alongside and refuels the player, saying
 //! "Hauler:  Energy transfer complete.". A hail option registered at the
 //! edge shows its button, and pressing it shows its reply.
+//!
+//! Escorted, by Nova's escort AI over idle traffic: a trader captured
+//! "Use As Escort" stays beside the player, and follows it through a jump
+//! plotted on the map. F sends a warship escort at a targeted pirate,
+//! saying "New escort orders assigned:  All ships attacking target.", and
+//! the pirate's shield drops. E, 4 and V hold the warships alone, which
+//! stay put while the freighter follows the player, and C recalls them.
+//! Option-Tab and Y hail an escort, "What can I do for you?", with Release
+//! alone; R says "Goodbye, captain." and closing the channel releases it,
+//! which the saved pilot keeps. Standing orders are saved on landing, and
+//! reopened they are back to formation by the engine's `escort_orders`,
+//! or kept by its other reading in the settings file.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -69,6 +81,7 @@ use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
+use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
 use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
@@ -1227,6 +1240,11 @@ fn dialog(bounds: (i16, i16, i16, i16), ditl: i16, items: &[Vec<u8>]) -> (Vec<u8
 /// The interface file's plunder dialog (`DLOG` 1011, 309 x 198) and
 /// captured-ship assignment dialog (`DLOG` 1018, 257 x 114), as stock.
 fn boarding_interface() -> InterfaceData {
+    interface_of(&boarding_dialogs())
+}
+
+/// [`boarding_interface`]'s resources.
+fn boarding_dialogs() -> Vec<(ResType, i16, Vec<u8>)> {
     let at = |l: i16, t: i16, w: i16, h: i16| (l, t, l + w, t + h);
     let (plunder_dlog, plunder_ditl) = dialog(
         (40, 40, 238, 349),
@@ -1250,11 +1268,21 @@ fn boarding_interface() -> InterfaceData {
             user_item(at(9, 6, 238, 40), true),
         ],
     );
-    let fork = ForkBuilder::new()
-        .resource(Dlog::TYPE, 1011, None, &plunder_dlog)
-        .resource(Ditl::TYPE, 1011, None, &plunder_ditl)
-        .resource(Dlog::TYPE, 1018, None, &assign_dlog)
-        .resource(Ditl::TYPE, 1018, None, &assign_ditl)
+    vec![
+        (Dlog::TYPE, 1011, plunder_dlog),
+        (Ditl::TYPE, 1011, plunder_ditl),
+        (Dlog::TYPE, 1018, assign_dlog),
+        (Ditl::TYPE, 1018, assign_ditl),
+    ]
+}
+
+/// An interface file of `resources`.
+fn interface_of(resources: &[(ResType, i16, Vec<u8>)]) -> InterfaceData {
+    let fork = resources
+        .iter()
+        .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
+            fork.resource(*ty, *id, None, bytes)
+        })
         .build()
         .bytes;
     InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
@@ -1392,8 +1420,14 @@ impl Boarder {
         self.session().pilot().clone()
     }
 
-    /// Opens the first saved pilot from the main menu.
+    /// Opens the first saved pilot from the main menu, in flight.
     fn open_pilot(&mut self) {
+        self.open_pilot_to(Showing::Flight);
+    }
+
+    /// Opens the first saved pilot from the main menu, which then shows
+    /// `showing`: flight, or the spaceport of a pilot saved landed.
+    fn open_pilot_to(&mut self, showing: Showing) {
         let at = self
             .app
             .screen()
@@ -1405,7 +1439,7 @@ impl Boarder {
         self.click(at);
         assert_eq!(self.showing(), Showing::OpenPilot);
         self.tap(Key::Enter);
-        assert_eq!(self.showing(), Showing::Flight);
+        assert_eq!(self.showing(), showing);
     }
 
     /// The centre of the open plunder or assignment dialog's item.
@@ -1483,11 +1517,28 @@ fn steering(session: &Session, quarry: &Npc) -> nova_sim::Controls {
 /// menu, who disables the trader with the blaster (Space), targets it
 /// (Tab), flies over it with the arrow keys and boards it (B).
 fn boarded(store: &MemoryPilots) -> Boarder {
-    let data = boarding_data();
+    boarded_with(store, boarding_data(), boarding_interface(), |screen| {
+        screen.with_behaviour(Rc::new(Still))
+    })
+}
+
+/// [`boarded`] over `data` and `interface`, the router as `router` makes
+/// it, the trader placed and the capture rolled as [`Boarder::opening`]
+/// rolls them.
+fn boarded_with(
+    store: &MemoryPilots,
+    data: Rc<GameData>,
+    interface: InterfaceData,
+    router: impl FnOnce(AppScreen) -> AppScreen,
+) -> Boarder {
     PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
         .save(&Pilot::new(data.as_ref(), "Ada").expect("a pilot"))
         .expect("saved");
-    let mut game = Boarder::opening(store);
+    let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(BoardChance {
+        setup: [6, 6, 0, 0, 750, 650, 180, 0].into(),
+        of_100: [99, 0].into(),
+    }));
+    let mut game = Boarder::opening_over(data, interface, store, SharedChance::new(chance), router);
     game.open_pilot();
     // The first frame runs no step; the second's sets the system up.
     game.frame();
@@ -1794,6 +1845,11 @@ fn hailing_strings(fork: ForkBuilder) -> ForkBuilder {
 /// The interface file's comm dialog (`DLOG` 1007, 423 x 215) and haggle
 /// dialog (`DLOG` 1008, 262 x 107), as stock.
 fn hailing_interface() -> InterfaceData {
+    interface_of(&hailing_dialogs())
+}
+
+/// [`hailing_interface`]'s resources.
+fn hailing_dialogs() -> Vec<(ResType, i16, Vec<u8>)> {
     let at = |l: i16, t: i16, w: i16, h: i16| (l, t, l + w, t + h);
     let (comm_dlog, comm_ditl) = dialog(
         (78, 51, 293, 474),
@@ -1822,14 +1878,12 @@ fn hailing_interface() -> InterfaceData {
             user_item(at(7, 6, 248, 25), false),
         ],
     );
-    let fork = ForkBuilder::new()
-        .resource(Dlog::TYPE, 1007, None, &comm_dlog)
-        .resource(Ditl::TYPE, 1007, None, &comm_ditl)
-        .resource(Dlog::TYPE, 1008, None, &haggle_dlog)
-        .resource(Ditl::TYPE, 1008, None, &haggle_ditl)
-        .build()
-        .bytes;
-    InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
+    vec![
+        (Dlog::TYPE, 1007, comm_dlog),
+        (Ditl::TYPE, 1007, comm_ditl),
+        (Dlog::TYPE, 1008, haggle_dlog),
+        (Ditl::TYPE, 1008, haggle_ditl),
+    ]
 }
 
 /// The app over [`hailing_data`] of `dude` and [`hailing_interface`],
@@ -2060,4 +2114,553 @@ fn a_hail_option_registered_at_the_edge_shows_its_button_and_its_reply() {
     }
     let frame = harness.frame();
     assert!(text_at(&frame, "Fine weather.").is_some(), "its reply");
+}
+
+// Escorts.
+
+use nova_sim::{AiType, EscortOrder, NovaAi, RuleSource};
+
+/// A `sÿst` at map (`x`, 0) with these hyperlinks, `stellar` if any, and
+/// `dudes` at an equal share, one ship of each on average; independent.
+fn escort_system(x: i16, links: &[i16], stellar: Option<i16>, dudes: &[i16]) -> Vec<u8> {
+    let mut bytes = vec![0; System::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[x, 0]);
+    put_i16s(&mut bytes, 0x04, &[-1; 32]);
+    put_i16s(&mut bytes, 0x04, links);
+    if let Some(stellar) = stellar {
+        put_i16s(&mut bytes, 0x24, &[stellar]);
+    }
+    put_i16s(&mut bytes, 0x44, &[-1; 8]);
+    put_i16s(&mut bytes, 0x44, dudes);
+    let share = i16::try_from(100 / dudes.len().max(1)).expect("small");
+    for slot in 0..dudes.len() {
+        put_i16s(&mut bytes, 0x54 + 2 * slot, &[share]);
+    }
+    let count = i16::try_from(dudes.len()).expect("few");
+    put_i16s(&mut bytes, 0x64, &[count, -1]);
+    bytes
+}
+
+/// A `spöb` at the centre that can be landed on, drawn from `spïn` 1004.
+fn landing_pad() -> Vec<u8> {
+    let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
+    bytes[0x06..0x0A].copy_from_slice(&0x01_u32.to_be_bytes());
+    put_i16s(&mut bytes, 0x18, &[-1, -1]);
+    bytes
+}
+
+/// `STR#` 3001: "Goodbye, captain." and the farewells after it, each the
+/// first of a group of five.
+fn more_comm_strings() -> Vec<String> {
+    ["Goodbye, captain.", "See you around the galaxy."]
+        .iter()
+        .flat_map(|said| std::iter::repeat_n((*said).to_owned(), 5))
+        .collect()
+}
+
+/// [`boarding_data`]'s pilot (the "Boarder", ship 128, with a blaster) in
+/// Alpha (128, at the centre of the map), over a landing pad, linked to
+/// Beta (129), whose `düde`s are `alpha_dudes`: 128 the traders' "Trader"
+/// (ship 129, a freighter escort, `EscortType` 3, carrying food and
+/// money), and 129 the pirates' (`gövt` 137) "Raider" (ship 131: 30
+/// shield, 45 armour, unarmed). Ship 130 is the "Warship", a warship
+/// escort (`EscortType` 2, `InherentAI` 3: 30 shield, 45 armour and a gun,
+/// `wëap` 129, firing every 10 ticks for 5 mass and 10 energy damage). `STR#` 3000 and 3001 hold the replies, with "What can I do
+/// for you?" (group 4) for an escort.
+fn escort_data(alpha_dudes: &[i16]) -> Rc<GameData> {
+    use nova_data::records::string_list::StrList;
+    let mut boarder = ship(30, 45, &[128], &[]);
+    put_i16s(&mut boarder, 0x44, &[10]);
+    let mut trader = ship(0, 40, &[], &[]);
+    put_i16s(&mut trader, 0x00, &[20]);
+    put_i16s(&mut trader, 0x44, &[1]);
+    put_i16s(&mut trader, 0x732, &[3]);
+    let mut gun = weapon(10, 5, -1, 0, 8, 0);
+    put_i16s(&mut gun, 0x06, &[10]);
+    let mut warship = ship(30, 45, &[129], &[]);
+    put_i16s(&mut warship, 0x42, &[3]);
+    put_i16s(&mut warship, 0x732, &[2]);
+    let mut traders = dude();
+    put_i16s(&mut traders, 0x04, &[0x0041]);
+    let mut replies = comm_strings();
+    for variant in 0..5 {
+        "What can I do for you?".clone_into(&mut replies[20 + variant]);
+    }
+    let mut fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
+        .resource(Ship::TYPE, 128, Some(b"Boarder"), &boarder)
+        .resource(Ship::TYPE, 129, Some(b"Trader"), &trader)
+        .resource(Ship::TYPE, 130, Some(b"Warship"), &warship)
+        .resource(Ship::TYPE, 131, Some(b"Raider"), &ship(30, 45, &[], &[]))
+        .resource(
+            Weapon::TYPE,
+            128,
+            Some(b"Blaster"),
+            &weapon(10, 10, -1, 0, 8, 0),
+        )
+        .resource(Weapon::TYPE, 129, Some(b"Gun"), &gun)
+        .resource(Govt::TYPE, 137, Some(b"Pirates"), &hailed_govt(0, "Pirate"))
+        .resource(Dude::TYPE, 128, Some(b"Traders"), &traders)
+        .resource(Dude::TYPE, 129, Some(b"Pirates"), &dude_of(3, 137, 131))
+        .resource(
+            System::TYPE,
+            128,
+            Some(b"Alpha"),
+            &escort_system(0, &[129], Some(128), alpha_dudes),
+        )
+        .resource(
+            System::TYPE,
+            129,
+            Some(b"Beta"),
+            &escort_system(100, &[128], None, &[]),
+        )
+        .resource(Stellar::TYPE, 128, Some(b"Pad"), &landing_pad())
+        .resource(Spin::TYPE, 1004, None, &spin(1000, 1))
+        .resource(RLED, 1000, None, &sheet(1, 40))
+        .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
+        .resource(RLED, 2000, None, &sheet(36, 1))
+        .resource(Spin::TYPE, 3000, None, &spin(3000, 6))
+        .resource(RLED, 3000, None, &sheet(36, 3))
+        .resource(RLED, 2001, None, &sheet(36, 2))
+        .resource(StrList::TYPE, 4000, None, &str_list("Food"))
+        .resource(StrList::TYPE, 4004, None, &str_list("75"))
+        .resource(StrList::TYPE, 3000, None, &strings(&replies))
+        .resource(StrList::TYPE, 3001, None, &strings(&more_comm_strings()))
+        .resource(
+            Interface::TYPE,
+            128,
+            Some(b"Default status bar"),
+            &interface(),
+        )
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
+    for id in 129..=131 {
+        fork = fork.resource(ShipAnim::TYPE, id, None, &ship_anim(2001));
+    }
+    for id in [8511, 8514, 8515, 8516, 5001, 5002, 5003] {
+        fork = fork.resource(PICT, id, None, &pict(30, 20, [40, 40, 40]));
+    }
+    for state in [7500, 7503, 7506] {
+        fork = fork
+            .resource(PICT, state, None, &pict(13, 25, [200, 0, 0]))
+            .resource(PICT, state + 1, None, &pict(2, 25, [0, 200, 0]))
+            .resource(PICT, state + 2, None, &pict(13, 25, [0, 0, 200]))
+            .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
+            .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
+    }
+    let file = OneFile(fork.build().bytes);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
+/// The interface file's plunder, assignment, comm and haggle dialogs.
+fn escort_interface() -> InterfaceData {
+    let mut resources = boarding_dialogs();
+    resources.extend(hailing_dialogs());
+    interface_of(&resources)
+}
+
+/// Nova's AI with every AI type idling: the traffic sits still and only
+/// the escorts fly, by Nova's escort AI.
+fn escorts_only() -> Rc<dyn Behaviour> {
+    let still: Rc<dyn Behaviour> = Rc::new(Still);
+    let ai = [
+        AiType::WimpyTrader,
+        AiType::BraveTrader,
+        AiType::Warship,
+        AiType::Interceptor,
+    ]
+    .into_iter()
+    .fold(NovaAi::default(), |ai, ai_type| {
+        ai.with(ai_type, Rc::clone(&still))
+    });
+    Rc::new(ai)
+}
+
+/// `pilot` with a fleet of `ships`, full.
+fn with_fleet(pilot: &Pilot, ships: &[i16]) -> Pilot {
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(pilot)).expect("JSON");
+    let gauge = |max: f32| serde_json::json!({"now": max, "max": max});
+    save["escorts"] = ships
+        .iter()
+        .map(|ship| {
+            serde_json::json!({
+                "ship": ship,
+                "reserves": {"shield": gauge(30.0), "armor": gauge(45.0), "fuel": gauge(300.0)},
+                "order": null
+            })
+        })
+        .collect();
+    nova_sim::save::decode(&save.to_string()).expect("a pilot")
+}
+
+/// The app over [`escort_data`] of `alpha_dudes` and [`escort_interface`],
+/// with a saved pilot, "Ada", whose fleet is `fleet`, resumed in flight
+/// from the main menu, its traffic placed 300 above the player facing
+/// down; the escorts flying alone ([`escorts_only`]), the router as
+/// `router` makes it on top. Two frames place the system's ships.
+fn escorted(
+    store: &MemoryPilots,
+    alpha_dudes: &[i16],
+    fleet: &[i16],
+    router: impl FnOnce(AppScreen) -> AppScreen,
+) -> Boarder {
+    let data = escort_data(alpha_dudes);
+    let pilot = with_fleet(&Pilot::new(data.as_ref(), "Ada").expect("a pilot"), fleet);
+    PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
+        .save(&pilot)
+        .expect("saved");
+    let mut game = reopened(store, alpha_dudes, |screen| {
+        router(screen.with_behaviour(escorts_only()))
+    });
+    game.open_pilot();
+    game.frame();
+    game.frame();
+    game
+}
+
+/// The app over [`escort_data`] of `alpha_dudes` on the main menu, with
+/// `store`'s pilots, its traffic placed 300 above the player; with no
+/// traffic, nothing is drawn but the last outcome.
+fn reopened(
+    store: &MemoryPilots,
+    alpha_dudes: &[i16],
+    router: impl FnOnce(AppScreen) -> AppScreen,
+) -> Boarder {
+    let setup: &[u32] = if alpha_dudes.is_empty() {
+        &[]
+    } else {
+        &[6, 6, 0, 0, 750, 450, 180, 0]
+    };
+    let (_, chance) = scripted(setup);
+    Boarder::opening_over(
+        escort_data(alpha_dudes),
+        escort_interface(),
+        store,
+        chance,
+        router,
+    )
+}
+
+impl Boarder {
+    /// The player's escorts' NPCs.
+    fn escorts(&self) -> Vec<Npc> {
+        self.session()
+            .npcs()
+            .iter()
+            .filter(|npc| npc.escort.is_some())
+            .cloned()
+            .collect()
+    }
+
+    /// The NPC numbered `id`.
+    fn npc(&self, id: NpcId) -> Npc {
+        self.session()
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .expect("in the system")
+            .clone()
+    }
+
+    /// Where system `id` is on flight's map.
+    fn on_map(&self, id: i16) -> Point {
+        let map = self
+            .app
+            .screen()
+            .flight_view()
+            .expect("flying")
+            .course_map();
+        let system = map
+            .model()
+            .system(nova_sim::SystemId(id))
+            .expect("on the map");
+        map.view().world_to_screen(system.position())
+    }
+
+    /// Flies out from the centre to the minimum jump distance: turns to
+    /// face away from the centre, then thrusts.
+    fn fly_out(&mut self) {
+        use nova_sim::flight::{heading_of, shortest_turn};
+        let mut held: Option<Key> = None;
+        for _ in 0..2400 {
+            let ship = *self.session().player();
+            if ship.position.length() >= nova_sim::hyperspace::MIN_JUMP_DISTANCE {
+                if let Some(key) = held {
+                    self.key(key, false);
+                }
+                return;
+            }
+            let out = if ship.position.length() > 0.0 {
+                heading_of(ship.position)
+            } else {
+                ship.heading
+            };
+            let off = shortest_turn(ship.heading, out);
+            let want = if off > 3.0 {
+                Key::Right
+            } else if off < -3.0 {
+                Key::Left
+            } else {
+                Key::Up
+            };
+            if held != Some(want) {
+                if let Some(key) = held {
+                    self.key(key, false);
+                }
+                self.key(want, true);
+                held = Some(want);
+            }
+            self.frame();
+        }
+        panic!("never got out: {:?}", self.session().player());
+    }
+
+    /// Plots a course to Beta on flight's map, flies out and jumps there.
+    fn jump_to_beta(&mut self) {
+        self.tap(Key::Char('m'));
+        let beta = self.on_map(129);
+        self.click(beta);
+        self.tap(Key::Char('m'));
+        self.fly_out();
+        self.tap(Key::Char('j'));
+        for _ in 0..600 {
+            self.frame();
+            if self.session().system() == nova_sim::SystemId(129)
+                && self
+                    .app
+                    .screen()
+                    .flight_view()
+                    .expect("flying")
+                    .jump_effect()
+                    .is_none()
+            {
+                return;
+            }
+        }
+        panic!("never arrived");
+    }
+}
+
+#[test]
+fn a_captured_escort_stays_beside_the_player_and_follows_it_through_a_jump() {
+    let store = MemoryPilots::new();
+    let mut game = boarded_with(&store, escort_data(&[128]), escort_interface(), |screen| {
+        screen.with_behaviour(escorts_only())
+    });
+    let trader = game.session().npcs()[0].id;
+    game.click(game.item(3));
+    game.click(game.item(7));
+    assert_eq!(game.showing(), Showing::Assignment);
+    game.click(game.item(2));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert!(game.session().is_escort(trader), "it joined where it was");
+    for _ in 0..120 {
+        game.frame();
+    }
+    let off = game.npc(trader).state.position - game.session().player().position;
+    assert!(off.length() < 100.0, "beside the player: {off:?}");
+    game.jump_to_beta();
+    let escorts = game.escorts();
+    assert_eq!(escorts.len(), 1, "it came along");
+    assert_eq!(escorts[0].ship, nova_sim::ShipId(129));
+    let off = escorts[0].state.position - game.session().player().position;
+    assert!(
+        off.length() < 100.0,
+        "beside the player on arrival: {off:?}"
+    );
+}
+
+#[test]
+fn f_sends_the_escorts_at_the_pirate_targeted() {
+    let store = MemoryPilots::new();
+    let mut game = escorted(&store, &[129], &[130], |screen| screen);
+    let pirate = game
+        .session()
+        .npcs()
+        .iter()
+        .find(|npc| npc.ship == nova_sim::ShipId(131))
+        .expect("the pirate")
+        .id;
+    game.tap(Key::Tab);
+    assert_eq!(game.session().target().map(|npc| npc.id), Some(pirate));
+    game.tap(Key::Char('f'));
+    let shown = run_texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "New escort orders assigned:  All ships attacking target."),
+        "{shown:?}"
+    );
+    let mut hit = false;
+    for _ in 0..300 {
+        game.frame();
+        hit |= game.npc(pirate).reserves.shield.now < 30.0;
+        if hit {
+            break;
+        }
+    }
+    assert!(hit, "the pirate's shield dropped");
+}
+
+#[test]
+fn the_escort_menu_holds_the_warships_alone_and_c_recalls_them() {
+    let store = MemoryPilots::new();
+    let mut game = escorted(&store, &[], &[130, 129], |screen| screen);
+    game.tap(Key::Char('e'));
+    game.tap(Key::Char('4'));
+    game.tap(Key::Char('v'));
+    let shown = run_texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "New escort orders assigned:  Warships holding position."),
+        "{shown:?}"
+    );
+    let ship = |game: &Boarder, id| game.npc(id);
+    let [warship, freighter] = [0, 1].map(|at| game.escorts()[at].id);
+    assert_eq!(ship(&game, warship).ship, nova_sim::ShipId(130));
+    let held = ship(&game, warship).state.position;
+    game.key(Key::Up, true);
+    for _ in 0..400 {
+        game.frame();
+    }
+    game.key(Key::Up, false);
+    let player = game.session().player().position;
+    assert!(
+        (ship(&game, warship).state.position - held).length() < 5.0,
+        "the warship stayed put"
+    );
+    assert!((player - held).length() > 300.0, "the player flew on");
+    assert!(
+        (ship(&game, freighter).state.position - player).length() < 150.0,
+        "the freighter followed"
+    );
+    game.tap(Key::Char('c'));
+    let shown = run_texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "New escort orders assigned:  Warships returning to formation."),
+        "{shown:?}"
+    );
+    assert_eq!(
+        game.pilot()
+            .escorts()
+            .iter()
+            .map(|escort| escort.order)
+            .collect::<Vec<_>>(),
+        [None, None]
+    );
+}
+
+#[test]
+fn hailing_an_escort_offers_release_which_removes_it_from_the_saved_fleet() {
+    let store = MemoryPilots::new();
+    let mut game = escorted(&store, &[], &[129], |screen| screen);
+    let escort = game.escorts()[0].id;
+    game.key(Key::Alt, true);
+    game.tap(Key::Tab);
+    game.key(Key::Alt, false);
+    assert_eq!(game.session().target().map(|npc| npc.id), Some(escort));
+    game.tap(Key::Char('y'));
+    assert_eq!(game.showing(), Showing::Comm);
+    assert_eq!(game.reply(), "What can I do for you?");
+    let shown = run_texts(&game.frame());
+    let buttons: Vec<&String> = shown
+        .iter()
+        .filter(|text| {
+            [
+                "Greetings",
+                "Request Assistance",
+                "Beg For Mercy",
+                "Release",
+                "Close Channel",
+            ]
+            .contains(&text.as_str())
+        })
+        .collect();
+    assert_eq!(buttons, ["Close Channel", "Release"]);
+    game.tap(Key::Char('r'));
+    assert_eq!(game.reply(), "Goodbye, captain.");
+    game.tap(Key::Escape);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert!(!game.session().is_escort(escort));
+    let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
+    assert_eq!(saved.escorts(), []);
+}
+
+/// The escorts' standing-order rule the settings file holding `text`
+/// chooses, read as `main` reads it.
+fn saved_escort_orders(text: &str) -> RuleSource {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let path = home.path().join("settings.json");
+    std::fs::write(&path, text).expect("writes");
+    let mut store: Option<Box<dyn nova_audio::SettingsStore>> =
+        Some(Box::new(nova_audio::FileSettings::new(&path)));
+    let (rulebook, warnings) = nova::rulebook::game_rulebook(store.as_deref_mut());
+    assert_eq!(warnings, Vec::<String>::new(), "{text}");
+    rulebook.source_for(nova_sim::RuleKey::EscortOrders)
+}
+
+#[test]
+fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_them() {
+    for (text, order, label) in [
+        ("{}", None, "Formation"),
+        (
+            r#"{"rule_overrides": {"escort_orders": "bible"}}"#,
+            Some(EscortOrder::Defend),
+            "Defend",
+        ),
+    ] {
+        let source = saved_escort_orders(text);
+        let store = MemoryPilots::new();
+        let mut game = escorted(&store, &[], &[130], |screen| {
+            screen.with_escort_orders(source)
+        });
+        game.tap(Key::Char('d'));
+        let shown = run_texts(&game.frame());
+        assert!(
+            shown
+                .iter()
+                .any(|text| text == "New escort orders assigned:  All ships defending."),
+            "{shown:?}"
+        );
+        game.tap(Key::Char('l'));
+        assert_eq!(game.showing(), Showing::Spaceport, "landed");
+        let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
+        assert_eq!(
+            saved.escorts()[0].order,
+            Some(EscortOrder::Defend),
+            "{text}: saved either way"
+        );
+
+        let mut game = reopened(&store, &[], |screen| {
+            screen
+                .with_behaviour(escorts_only())
+                .with_escort_orders(source)
+        });
+        game.open_pilot_to(Showing::Spaceport);
+        game.tap(Key::Escape);
+        assert_eq!(game.showing(), Showing::Flight, "took off");
+        game.frame();
+        game.frame();
+        assert_eq!(game.escorts().len(), 1, "{text}");
+        assert_eq!(game.pilot().escorts()[0].order, order, "{text}");
+        game.tap(Key::Char('e'));
+        let shown = run_texts(&game.frame());
+        assert!(
+            shown.iter().any(|shown| shown == label),
+            "{text}: {shown:?}"
+        );
+        assert!(
+            !shown.iter().any(|shown| shown
+                == if order.is_some() {
+                    "Formation"
+                } else {
+                    "Defend"
+                }),
+            "{text}: {shown:?}"
+        );
+    }
 }

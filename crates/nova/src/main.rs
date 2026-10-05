@@ -93,7 +93,7 @@ use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
 use nova_sim::{
     Allegiance, Chance, HailOptions, NovaAi, NovaBoarding, NovaDisable, NovaLaw, PilotKeeper,
-    PilotStore,
+    PilotStore, RuleKey,
 };
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
@@ -116,10 +116,13 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let warn = |warning: Option<String>| {
+        if let Some(warning) = warning {
+            eprintln!("{warning}");
+        }
+    };
     let (fonts, warning) = game_fonts(open_charcoal(&dir));
-    if let Some(warning) = warning {
-        eprintln!("{warning}");
-    }
+    warn(warning);
     // The screens and the renderer read the same game data.
     let data = Rc::new(data);
     let mut store = settings_path(Os::current(), |name| std::env::var_os(name))
@@ -129,9 +132,7 @@ fn main() -> ExitCode {
         eprintln!("{warning}");
     }
     let (keeper, settings, warning) = game_settings(store);
-    if let Some(warning) = warning {
-        eprintln!("{warning}");
-    }
+    warn(warning);
     // Dialog and menu text is laid out by the faces the window draws it in.
     let metrics: Rc<dyn TextMetrics> = Rc::new(GlyphonMetrics::new(&fonts));
     let pilots = pilots_dir(Os::current(), |name| std::env::var_os(name))
@@ -162,7 +163,8 @@ fn main() -> ExitCode {
         .with_point_defence_rule(Rc::new(Allegiance))
         .with_law(Rc::new(NovaLaw::from_rulebook(&rulebook)))
         .with_boarding_rule(Rc::new(NovaBoarding::from_rulebook(&rulebook)))
-        .with_hail_options(HailOptions::nova(&rulebook));
+        .with_hail_options(HailOptions::nova(&rulebook))
+        .with_escort_orders(rulebook.source_for(RuleKey::EscortOrders));
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);
@@ -171,13 +173,9 @@ fn main() -> ExitCode {
         Err(error) => eprintln!("nova: running without dialogs: {error}"),
     }
     let (music, warning) = music_warning(open_music(&dir));
-    if let Some(warning) = warning {
-        eprintln!("{warning}");
-    }
+    warn(warning);
     let (audio, warning) = game_audio(KiraAudio::open(Rc::clone(&data), music));
-    if let Some(warning) = warning {
-        eprintln!("{warning}");
-    }
+    warn(warning);
     let runner =
         Runner::new(Rc::clone(&data), screen, fonts).with_diagnostics(Box::new(std::io::stderr()));
     let runner = match audio {
