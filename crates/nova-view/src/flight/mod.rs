@@ -5,6 +5,8 @@
 //! - [`data`]: the ports' adapters over `nova_data`'s `GameData`.
 //! - [`effects`]: the fight's explosions, debris and sounds, from the
 //!   session's combat events.
+//! - [`escorts`]: the escort menu, which picks the escorts a command goes
+//!   to, its look ([`EscortMenuLooks`]), and the message a command gives.
 //! - [`jump`]: the hyperspace jump's [`JumpEffect`], the stars streaking
 //!   and the screen fading out and in.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
@@ -20,6 +22,7 @@
 pub mod catalog;
 pub mod data;
 pub mod effects;
+pub mod escorts;
 pub mod hud;
 pub mod jump;
 pub mod sprite;
@@ -31,6 +34,7 @@ pub use catalog::{
     BoomLook, CombatLooks, EffectSheet, Looks, ShipSheet, ShipSprites, StatusBarLayout, StatusBars,
     TargetCard, WeaponLook,
 };
+pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
 pub use sprite::rotation_frame;
 pub use view::{FlightView, SharedChance};

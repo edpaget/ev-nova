@@ -1,13 +1,15 @@
 //! The flight screen's ports over the game data: thin mappings from
 //! `GameData`'s ship sprite lookup to [`ShipSheet`], from its `gövt`,
-//! `ïntf` and `PICT` resources to the status bars, and from its `wëap`,
-//! `bööm`, `spïn`, `shïp` and `gövt` resources to the combat looks.
+//! `ïntf` and `PICT` resources to the status bars, from its `wëap`,
+//! `bööm`, `spïn`, `shïp` and `gövt` resources to the combat looks, and
+//! from its `cölr` to the escort menu's colours.
 
 use std::num::NonZeroU16;
 
 use nova_data::GameData;
 use nova_data::graphics::{PICT, decode_pict};
 use nova_data::records::boom::Boom;
+use nova_data::records::colors::Colors;
 use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
@@ -20,6 +22,7 @@ use super::catalog::{
     BoomId, BoomLook, CombatLooks, EffectSheet, GovtId, ShipId, ShipSheet, ShipSprites, SoundId,
     StatusBarLayout, StatusBars, TargetCard, WeaponId, WeaponLook,
 };
+use super::escorts::{EscortMenuColors, EscortMenuLooks};
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
@@ -206,6 +209,22 @@ fn bounds(rect: nova_data::Rect) -> Bounds {
     Bounds {
         min: Point::new(f32::from(rect.left), f32::from(rect.top)),
         max: Point::new(f32::from(rect.right), f32::from(rect.bottom)),
+    }
+}
+
+/// The `cölr` the escort menu's colours come from.
+const COLORS_ID: i16 = 128;
+
+/// Decodes on every call; the flight screen asks once, when it opens.
+impl EscortMenuLooks for GameData {
+    fn escort_menu_colors(&self) -> EscortMenuColors {
+        let Some(Ok(colors)) = self.get::<Colors>(COLORS_ID) else {
+            return EscortMenuColors::STOCK;
+        };
+        EscortMenuColors {
+            border: Color::from_rgb24(colors.record.floating_map),
+            hilite: Color::from_rgb24(colors.record.escort_hilite),
+        }
     }
 }
 
@@ -757,5 +776,31 @@ mod tests {
         assert_eq!(data.target_code(GovtId(128)), Some("Fed.".to_owned()));
         assert_eq!(data.target_code(GovtId(129)), None, "none set");
         assert_eq!(data.target_code(GovtId(130)), None, "no gövt");
+    }
+
+    #[test]
+    fn the_escort_menus_colours_come_from_colr_128_or_are_stock() {
+        let mut bytes = vec![0; Colors::SIZE.expect("fixed")];
+        bytes[0x8A..0x8E].copy_from_slice(&0x0011_2233_u32.to_be_bytes());
+        bytes[0x9A..0x9E].copy_from_slice(&0x0044_5566_u32.to_be_bytes());
+        let data = store(&[(Colors::TYPE, 128, bytes.clone())]);
+        assert_eq!(
+            data.escort_menu_colors(),
+            EscortMenuColors {
+                border: Color::rgba(0x11, 0x22, 0x33, 255),
+                hilite: Color::rgba(0x44, 0x55, 0x66, 255),
+            }
+        );
+        assert_eq!(store(&[]).escort_menu_colors(), EscortMenuColors::STOCK);
+        assert_eq!(
+            store(&[(Colors::TYPE, 129, bytes)]).escort_menu_colors(),
+            EscortMenuColors::STOCK,
+            "only 128"
+        );
+        assert_eq!(
+            store(&[(Colors::TYPE, 128, vec![0; 3])]).escort_menu_colors(),
+            EscortMenuColors::STOCK,
+            "undecodable"
+        );
     }
 }

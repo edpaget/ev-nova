@@ -130,6 +130,22 @@
 //!   player give their help ([`Session::tick_assistance`], by the screen's
 //!   [`DisableRule`]), and each says when it is done, as a message
 //!   ([`comm_message`]).
+//! - The player's escorts fly beside it (see [`Session`]), their ship
+//!   types' sprite sheets read with the traffic's. F, D, V and C (presses)
+//!   command them ([`Session::command_escorts`]): attack the player's
+//!   target, defend the player, hold position, and recall them to
+//!   formation (Option-C, the fighters' dock, recalls the others too).
+//!   A command goes to the group selected in the escort menu, or to every
+//!   escort while it is shut, and says what it changed
+//!   ([`escort_command_message`]); one that changed nothing says nothing.
+//!   E opens and closes the escort menu ([`EscortMenu`]), or says "You
+//!   don't have any escorts." with none; while it is open, 1-5 select
+//!   its group and Return closes it. The menu is drawn over the flight,
+//!   under the HUD, in the colours the [`EscortMenuLooks`] port gives,
+//!   read when the screen is built. Option-Tab targets the next escort
+//!   ([`TargetPick::NextEscort`]), as for a hail. The escorts' standing
+//!   orders reset, or not, on entering a system as the screen's session
+//!   is told ([`FlightView::with_escort_orders`]).
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -140,17 +156,22 @@ use std::time::Duration;
 
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
-    CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule, FixedStep, Good,
-    GovtId, Haggle, HailOptions, HailRefusal, HailView, Help, JumpRefusal, LandingRefusal,
-    LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order,
-    OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, PlunderView,
-    PointDefenceRule, RechargeRefusal, Reserves, Rules, Session, ShipId, ShipPurchase, ShipRef,
-    ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps, Take, Taken, TargetPick,
-    TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
+    ClassRow, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
+    EscortCommand, FixedStep, Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, Help,
+    JumpRefusal, LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable,
+    NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot,
+    PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleSource, Rules,
+    Session, ShipId, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, StartError,
+    StellarId, Steps, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2,
+    flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
+use super::escorts::{
+    EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, Toggled,
+    escort_command_message,
+};
 use super::hud::{self, HudState, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
 use super::sprite::rotation_frame;
@@ -176,7 +197,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   L: land   M: map   J: jump   P: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   E: escort menu   L: land   M: map   J: jump   P: preferences   Esc: leave";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
@@ -225,6 +246,18 @@ pub const BOARD_KEY: Key = Key::Char('b');
 /// The hail key: the original's default (`Keys.nib`'s `hailKey`), one
 /// hail a press.
 pub const HAIL_KEY: Key = Key::Char('y');
+/// The escorts' attack key: the original's default (`Keys.nib`'s
+/// `escortCmdKey0`, "Attack Target").
+pub const ESCORT_ATTACK_KEY: Key = Key::Char('f');
+/// The escorts' defend key (`escortCmdKey1`, "Defend Me").
+pub const ESCORT_DEFEND_KEY: Key = Key::Char('d');
+/// The escorts' hold key (`escortCmdKey2`, "Hold Position").
+pub const ESCORT_HOLD_KEY: Key = Key::Char('v');
+/// The escorts' recall key (`escortCmdKey3`, "Recall: (option = dock)").
+pub const ESCORT_RECALL_KEY: Key = Key::Char('c');
+/// What closes the escort menu besides its own key: Return
+/// (`ackComm`).
+pub const MENU_CLOSE_KEY: Key = Key::Enter;
 
 /// `STR#` 2002 #53.
 pub const NO_RESPONSE: &str = "No response.";
@@ -556,6 +589,10 @@ pub struct FlightView<C> {
     effects_chance: SharedChance,
     /// What the HUD's text is measured by, if anything.
     metrics: Option<Metrics>,
+    /// The escort menu, shut or open.
+    escort_menu: EscortMenu,
+    /// The escort menu's colours, read once.
+    escort_colors: EscortMenuColors,
 }
 
 /// Text metrics, shared.
@@ -577,7 +614,8 @@ impl<
         + SystemCatalog
         + ShipSprites
         + StatusBars
-        + GalaxyCatalog,
+        + GalaxyCatalog
+        + EscortMenuLooks,
 > FlightView<C>
 {
     /// A new, unnamed pilot's flight, read from `catalog`, which the
@@ -620,6 +658,7 @@ impl<
             Ok(_) => Looks::read(&catalog, catalog.weapons().iter().map(|weapon| weapon.id)),
             Err(_) => Looks::default(),
         };
+        let escort_colors = catalog.escort_menu_colors();
         Self {
             catalog,
             map,
@@ -658,6 +697,21 @@ impl<
             effects: Effects::default(),
             effects_chance: SharedChance::default(),
             metrics: None,
+            escort_menu: EscortMenu::default(),
+            escort_colors,
+        }
+    }
+
+    /// The flight with its escorts' standing orders reset, or kept, on
+    /// entering a system as `source` says
+    /// ([`Session::with_escort_orders`]).
+    #[must_use]
+    pub fn with_escort_orders(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_escort_orders(source)),
+            ..self
         }
     }
 
@@ -1245,6 +1299,48 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// The escort menu's class rows ([`Session::escort_menu`]); none for
+    /// a session that failed.
+    fn escort_rows(&self) -> [ClassRow; 4] {
+        self.session.as_ref().map_or_else(
+            |_| {
+                nova_sim::EscortClass::ALL.map(|class| ClassRow {
+                    class,
+                    present: false,
+                    order: None,
+                })
+            },
+            Session::escort_menu,
+        )
+    }
+
+    /// E: opens or closes the escort menu, or says the player has no
+    /// escorts.
+    fn toggle_escort_menu(&mut self) {
+        let rows = self.escort_rows();
+        if self.escort_menu.toggle(self.elapsed, &rows) == Toggled::NoEscorts {
+            self.say(NO_ESCORTS);
+        }
+    }
+
+    /// Gives the escorts `command`, through the session, as the menu says
+    /// which; says what it changed, and keeps the menu open for it.
+    fn command_escorts(&mut self, command: EscortCommand) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        if let Some(commanded) = session.command_escorts(self.escort_menu.group(), command) {
+            self.escort_menu.touch(self.elapsed);
+            self.say(escort_command_message(&commanded));
+        }
+    }
+
+    /// The escort menu, shut or open.
+    #[must_use]
+    pub fn escort_menu(&self) -> &EscortMenu {
+        &self.escort_menu
+    }
+
     /// Picks the target as `pick` says.
     fn select_target(&mut self, pick: TargetPick) {
         if let Ok(session) = &mut self.session {
@@ -1384,7 +1480,8 @@ impl<
         + SystemCatalog
         + ShipSprites
         + StatusBars
-        + GalaxyCatalog,
+        + GalaxyCatalog
+        + EscortMenuLooks,
 > Screen for FlightView<C>
 {
     /// Never quits: Escape is the router's.
@@ -1430,7 +1527,24 @@ impl<
                 self.jump();
                 return ScreenAction::None;
             }
-            Some(TARGET_KEY) => self.select_target(TargetPick::Next),
+            Some(TARGET_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
+                TargetPick::NextEscort
+            } else {
+                TargetPick::Next
+            }),
+            Some(MENU_KEY) => self.toggle_escort_menu(),
+            Some(MENU_CLOSE_KEY) => self.escort_menu.close(),
+            Some(ESCORT_ATTACK_KEY) => self.command_escorts(EscortCommand::Attack),
+            Some(ESCORT_DEFEND_KEY) => self.command_escorts(EscortCommand::Defend),
+            Some(ESCORT_HOLD_KEY) => self.command_escorts(EscortCommand::Hold),
+            Some(ESCORT_RECALL_KEY) => self.command_escorts(EscortCommand::Recall),
+            Some(key) if GROUP_KEYS.contains(&key) => {
+                let n = GROUP_KEYS.iter().position(|&group| group == key);
+                let rows = self.escort_rows();
+                if let Some(n) = n {
+                    self.escort_menu.select(n, self.elapsed, &rows);
+                }
+            }
             Some(NEAREST_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
                 TargetPick::Nearest
             } else {
@@ -1518,6 +1632,8 @@ impl<
         }
         // The session may have populated its system afresh.
         self.read_npc_sheets();
+        let rows = self.escort_rows();
+        self.escort_menu.update(self.elapsed, &rows);
         self.alpha = alpha;
     }
 
@@ -1554,6 +1670,9 @@ impl<
         weapons::draw_beams(list, &beams, &self.looks, false);
         self.effects.draw(list, &camera, &self.looks);
         self.draw_brackets(list, &camera);
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        self.escort_menu
+            .draw(list, &self.escort_rows(), self.escort_colors, metrics);
         list.text(
             format!("{} (sÿst {})", scene.name(), scene.id().0),
             TITLE,
@@ -2069,6 +2188,18 @@ mod tests {
         }
     }
 
+    /// The escort menu in its own colours, so tests can tell them.
+    impl EscortMenuLooks for FakeCatalog {
+        fn escort_menu_colors(&self) -> EscortMenuColors {
+            MENU_COLORS
+        }
+    }
+
+    const MENU_COLORS: EscortMenuColors = EscortMenuColors {
+        border: Color::from_rgb24(0x0012_3456),
+        hilite: Color::from_rgb24(0x0065_4321),
+    };
+
     /// A new pilot has no government, so only `ïntf` 128 and its picture
     /// are ever asked for.
     impl StatusBars for FakeCatalog {
@@ -2489,7 +2620,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   L: land   M: map   J: jump   P: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   E: escort menu   L: land   M: map   J: jump   P: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -6129,5 +6260,267 @@ mod tests {
     #[test]
     fn the_help_line_names_hail() {
         assert!(HELP.contains("Y: hail"), "{HELP}");
+    }
+
+    // Escorts.
+
+    use super::super::escorts::{ABSENT_ROW, MENU_AT, MENU_HEIGHT, MENU_WIDTH};
+    use nova_sim::{EscortClass, EscortGroup, EscortOrder};
+
+    /// `pilot`, saved and read back with a fleet of `ships`, each full.
+    fn with_escorts(pilot: &Pilot, ships: &[i16]) -> Pilot {
+        let mut save: serde_json::Value =
+            serde_json::from_str(&nova_sim::save::encode(pilot)).expect("JSON");
+        let gauge = |max: f32| serde_json::json!({"now": max, "max": max});
+        save["escorts"] = ships
+            .iter()
+            .map(|ship| {
+                serde_json::json!({
+                    "ship": ship,
+                    "reserves": {"shield": gauge(40.0), "armor": gauge(60.0), "fuel": gauge(250.0)},
+                    "order": null
+                })
+            })
+            .collect();
+        nova_sim::save::decode(&save.to_string()).expect("a pilot")
+    }
+
+    /// [`boardable`] with ship 130, a warship escort (`EscortType` 2,
+    /// `InherentAI` 3), whose sheet cannot be read, and the pilot's fleet
+    /// one of them; its traffic ship (NPC 0) placed 100 above the player;
+    /// all idle. A tick has placed the escort (NPC 1).
+    fn escorted() -> View {
+        let mut catalog = boardable();
+        for record in &mut catalog.ships {
+            if record.id == ShipId(130) {
+                record.escort_type = 2;
+                record.inherent_ai = 3;
+            }
+        }
+        let pilot = with_escorts(&Pilot::new(&catalog, "Escorted").expect("starts"), &[130]);
+        let (_, chance) = scripted(&placed(750, 650, 0));
+        let mut view = FlightView::with_pilot(catalog, pilot)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        assert!(session.is_escort(NpcId(1)), "{:?}", session.npcs());
+        view
+    }
+
+    fn orders(view: &View) -> Vec<Option<EscortOrder>> {
+        view.pilot()
+            .expect("flying")
+            .escorts()
+            .iter()
+            .map(|escort| escort.order)
+            .collect()
+    }
+
+    #[test]
+    fn f_d_v_and_c_command_every_escort_and_say_what_changed() {
+        let mut view = escorted();
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(
+            view.session().expect("flying").target().map(|npc| npc.id),
+            Some(NpcId(0)),
+            "Tab skips the escort"
+        );
+        tap(&mut view, ESCORT_ATTACK_KEY);
+        assert_eq!(orders(&view), [Some(EscortOrder::Attack)]);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships attacking target.")
+        );
+        let escort = &view.session().expect("flying").npcs()[1];
+        assert_eq!(escort.target, Some(ShipRef::Npc(NpcId(0))));
+        tap(&mut view, ESCORT_DEFEND_KEY);
+        assert_eq!(orders(&view), [Some(EscortOrder::Defend)]);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships defending.")
+        );
+        tap(&mut view, ESCORT_HOLD_KEY);
+        assert_eq!(orders(&view), [Some(EscortOrder::Hold)]);
+        tap(&mut view, ESCORT_RECALL_KEY);
+        assert_eq!(orders(&view), [None]);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships returning to formation.")
+        );
+        assert_eq!(
+            [
+                ESCORT_ATTACK_KEY,
+                ESCORT_DEFEND_KEY,
+                ESCORT_HOLD_KEY,
+                ESCORT_RECALL_KEY
+            ],
+            ['f', 'd', 'v', 'c'].map(Key::Char)
+        );
+    }
+
+    #[test]
+    fn a_command_that_changes_nothing_says_nothing() {
+        let mut view = escorted();
+        tap(&mut view, ESCORT_RECALL_KEY);
+        assert_eq!(view.message(), None, "already in formation");
+        tap(&mut view, ESCORT_HOLD_KEY);
+        view.tick(MESSAGE_SHOWN_FOR);
+        assert_eq!(view.message(), None, "gone in time");
+        tap(&mut view, ESCORT_HOLD_KEY);
+        assert_eq!(view.message(), None, "held already");
+    }
+
+    #[test]
+    fn option_c_recalls_too() {
+        let mut view = escorted();
+        tap(&mut view, ESCORT_HOLD_KEY);
+        view.input(&key(Key::Alt, true));
+        tap(&mut view, ESCORT_RECALL_KEY);
+        view.input(&key(Key::Alt, false));
+        assert_eq!(orders(&view), [None]);
+    }
+
+    #[test]
+    fn attack_with_no_target_will_attack() {
+        let mut view = escorted();
+        tap(&mut view, ESCORT_ATTACK_KEY);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships will attack.")
+        );
+    }
+
+    #[test]
+    fn e_opens_the_menu_and_its_keys_pick_the_group_commanded() {
+        let mut view = escorted();
+        tap(&mut view, GROUP_KEYS[3]);
+        assert!(!view.escort_menu().is_open(), "1-5 do nothing while shut");
+        assert_eq!(view.escort_menu().group(), EscortGroup::All);
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        tap(&mut view, GROUP_KEYS[1]);
+        assert_eq!(view.escort_menu().group(), EscortGroup::All, "no fighters");
+        tap(&mut view, GROUP_KEYS[3]);
+        assert_eq!(
+            view.escort_menu().group(),
+            EscortGroup::Class(EscortClass::Warship)
+        );
+        tap(&mut view, ESCORT_HOLD_KEY);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  Warships holding position.")
+        );
+        tap(&mut view, MENU_CLOSE_KEY);
+        assert!(!view.escort_menu().is_open(), "Return closes it");
+        tap(&mut view, MENU_KEY);
+        tap(&mut view, MENU_KEY);
+        assert!(!view.escort_menu().is_open(), "E again closes it");
+        assert_eq!(MENU_CLOSE_KEY, Key::Enter);
+    }
+
+    #[test]
+    fn the_menu_closes_8_seconds_after_its_last_command() {
+        let mut view = escorted();
+        tap(&mut view, MENU_KEY);
+        view.tick(Duration::from_secs(6));
+        tap(&mut view, ESCORT_HOLD_KEY);
+        view.tick(Duration::from_secs(6));
+        assert!(view.escort_menu().is_open(), "the command kept it open");
+        view.tick(Duration::from_secs(3));
+        assert!(!view.escort_menu().is_open());
+    }
+
+    #[test]
+    fn e_with_no_escorts_says_so() {
+        let mut view = flight();
+        tap(&mut view, MENU_KEY);
+        assert!(!view.escort_menu().is_open());
+        assert_eq!(view.message(), Some("You don't have any escorts."));
+        tap(&mut view, ESCORT_ATTACK_KEY);
+        assert_eq!(
+            view.message(),
+            Some("You don't have any escorts."),
+            "no command"
+        );
+    }
+
+    #[test]
+    fn option_tab_targets_the_escorts() {
+        let mut view = escorted();
+        view.input(&key(Key::Alt, true));
+        tap(&mut view, TARGET_KEY);
+        view.input(&key(Key::Alt, false));
+        assert_eq!(
+            view.session().expect("flying").target().map(|npc| npc.id),
+            Some(NpcId(1))
+        );
+    }
+
+    #[test]
+    fn the_escorts_sheets_are_read_with_the_traffics() {
+        let view = escorted();
+        let asked = view.catalog().sheets_asked.borrow();
+        assert!(asked.contains(&ShipId(130)), "{asked:?}");
+    }
+
+    #[test]
+    fn the_open_menu_is_drawn_over_the_flight_under_the_hud() {
+        let mut view = escorted();
+        let mut shut = DrawList::new();
+        view.draw(&mut shut);
+        tap(&mut view, MENU_KEY);
+        let mut open = DrawList::new();
+        view.draw(&mut open);
+        let commands: Vec<_> = open.iter().collect();
+        let title = commands
+            .iter()
+            .position(|command| matches!(command, DrawCommand::Text { text, .. } if text == "Escort Commands"))
+            .expect("the menu");
+        let frame = commands
+            .iter()
+            .position(|command| {
+                matches!(command, DrawCommand::Line { color, .. } if *color == MENU_COLORS.border)
+            })
+            .expect("its border");
+        let help = commands
+            .iter()
+            .position(|command| **command == overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM))
+            .expect("the help line");
+        let player = commands
+            .iter()
+            .position(|command| matches!(command, DrawCommand::Sprite { image, .. } if *image == ImageKey::sprite(2000, 0)))
+            .expect("the player");
+        assert!(
+            player < frame && frame < title && title < help,
+            "{player} {frame} {title} {help}"
+        );
+        assert_eq!(
+            open.len() - shut.len(),
+            1 + 4 + 1 + 5 + 1 + 1,
+            "fill, border, title, rows, bar, order"
+        );
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, color, .. } if text == "2) Fighters" && *color == ABSENT_ROW
+        )));
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            DrawCommand::Line { from, .. } if from.x == MENU_AT.x && from.y == MENU_AT.y + MENU_HEIGHT / 2.0
+        )), "filled across {MENU_WIDTH}");
+    }
+
+    #[test]
+    fn the_help_line_names_the_escort_keys() {
+        assert!(HELP.contains("F/D/V/C: escorts"), "{HELP}");
+        assert!(HELP.contains("E: escort menu"), "{HELP}");
+    }
+
+    #[test]
+    fn the_escort_orders_rule_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_escort_orders(source);
+            assert_eq!(view.session().expect("flying").escort_orders(), source);
+        }
     }
 }
