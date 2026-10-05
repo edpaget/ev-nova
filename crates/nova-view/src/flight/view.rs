@@ -134,7 +134,8 @@
 //!   types' sprite sheets read with the traffic's. F, D, V and C (presses)
 //!   command them ([`Session::command_escorts`]): attack the player's
 //!   target, defend the player, hold position, and recall them to
-//!   formation (Option-C, the fighters' dock, recalls the others too).
+//!   formation; Option-C is Return to Hangar, sending the fighters out of
+//!   the player's bays home to dock and the others back to formation.
 //!   A command goes to the group selected in the escort menu, or to every
 //!   escort while it is shut, and says what it changed
 //!   ([`escort_command_message`]); one that changed nothing says nothing.
@@ -146,6 +147,14 @@
 //!   ([`TargetPick::NextEscort`]), as for a hail. The escorts' standing
 //!   orders reset, or not, on entering a system as the screen's session
 //!   is told ([`FlightView::with_escort_orders`]).
+//! - The player's fighters launch from its bays as its secondary weapon
+//!   (W selects a bay, Ctrl launches), and the fighter types every bay in
+//!   the system launches have their sheets read with the traffic's. What
+//!   a fighter launched does first, and what becomes of the fighters out
+//!   as the player leaves a system, follow the session's rules
+//!   ([`FlightView::with_fighter_launch`],
+//!   [`FlightView::with_fighter_recall`]); fighters abandoned in a jump
+//!   are told on arrival ([`fighters_abandoned_message`]).
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -157,20 +166,20 @@ use std::time::Duration;
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
     ClassRow, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
-    EscortCommand, FixedStep, Good, GovtId, Haggle, HailOptions, HailRefusal, HailView, Help,
-    JumpRefusal, LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable,
-    NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot,
-    PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleSource, Rules,
-    Session, ShipId, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, StartError,
-    StellarId, Steps, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2,
-    flight::normalized, flight::shortest_turn,
+    EscortCommand, FighterNote, FixedStep, Good, GovtId, Haggle, HailOptions, HailRefusal,
+    HailView, Help, JumpRefusal, LandingRefusal, LegalCode, Market, NeverFires, NovaAi,
+    NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal,
+    Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reserves,
+    RuleSource, Rules, Session, ShipId, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
+    StartError, StellarId, Steps, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn,
+    Vec2, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, Toggled,
-    escort_command_message,
+    escort_command_message, fighters_abandoned_message,
 };
 use super::hud::{self, HudState, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
@@ -197,7 +206,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   E: escort menu   L: land   M: map   J: jump   P: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   P: preferences   Esc: leave";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
@@ -715,6 +724,30 @@ impl<
         }
     }
 
+    /// The flight with the fighters the player launches doing first as
+    /// `source` says ([`Session::with_fighter_launch`]).
+    #[must_use]
+    pub fn with_fighter_launch(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_fighter_launch(source)),
+            ..self
+        }
+    }
+
+    /// The flight with the player's fighters out, as it leaves a system,
+    /// following `source` ([`Session::with_fighter_recall`]).
+    #[must_use]
+    pub fn with_fighter_recall(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_fighter_recall(source)),
+            ..self
+        }
+    }
+
     /// The flight with its explosions and debris rolled on `chance`, apart
     /// from the simulation's.
     #[must_use]
@@ -906,7 +939,8 @@ impl<
     }
 
     /// Ends the jump: the ship arrives in the next system, which is read
-    /// and laid out, and drawn from where the ship arrives.
+    /// and laid out, and drawn from where the ship arrives; the flight
+    /// says how many fighters were abandoned, if any.
     fn arrive(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
@@ -914,6 +948,7 @@ impl<
         let Some(system) = session.arrive(&self.catalog, &mut self.chance) else {
             return;
         };
+        let notes = session.take_fighter_notes();
         self.scene = Some(SystemScene::load(&self.catalog, system));
         self.map.show_course(system, session.course());
         self.map.show_explored(session.pilot().explored());
@@ -923,6 +958,10 @@ impl<
         self.npc_previous.clear();
         self.effects.clear();
         self.read_npc_sheets();
+        for note in notes {
+            let FighterNote::Abandoned(count) = note;
+            self.say(fighters_abandoned_message(count));
+        }
     }
 }
 
@@ -1537,7 +1576,11 @@ impl<
             Some(ESCORT_ATTACK_KEY) => self.command_escorts(EscortCommand::Attack),
             Some(ESCORT_DEFEND_KEY) => self.command_escorts(EscortCommand::Defend),
             Some(ESCORT_HOLD_KEY) => self.command_escorts(EscortCommand::Hold),
-            Some(ESCORT_RECALL_KEY) => self.command_escorts(EscortCommand::Recall),
+            Some(ESCORT_RECALL_KEY) => self.command_escorts(if self.held.contains(&Key::Alt) {
+                EscortCommand::Dock
+            } else {
+                EscortCommand::Recall
+            }),
             Some(key) if GROUP_KEYS.contains(&key) => {
                 let n = GROUP_KEYS.iter().position(|&group| group == key);
                 let rows = self.escort_rows();
@@ -2620,7 +2663,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   E: escort menu   L: land   M: map   J: jump   P: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   P: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -6274,6 +6317,12 @@ mod tests {
 
     /// `pilot`, saved and read back with a fleet of `ships`, each full.
     fn with_escorts(pilot: &Pilot, ships: &[i16]) -> Pilot {
+        with_fleet(pilot, ships, false)
+    }
+
+    /// `pilot`, saved and read back with a fleet of `ships`, each full,
+    /// and fighters out of a bay when `carried`.
+    fn with_fleet(pilot: &Pilot, ships: &[i16], carried: bool) -> Pilot {
         let mut save: serde_json::Value =
             serde_json::from_str(&nova_sim::save::encode(pilot)).expect("JSON");
         let gauge = |max: f32| serde_json::json!({"now": max, "max": max});
@@ -6284,11 +6333,110 @@ mod tests {
                     "ship": ship,
                     "reserves": {"shield": gauge(40.0), "armor": gauge(60.0), "fuel": gauge(250.0)},
                     "order": null,
-                    "carried": false
+                    "carried": carried
                 })
             })
             .collect();
         nova_sim::save::decode(&save.to_string()).expect("a pilot")
+    }
+
+    /// [`boardable`] with ship 130 a fighter (`EscortType` 0) holding
+    /// no fuel, and two of them out of the player's bays; its traffic
+    /// ship (NPC 0) placed 100 above the player. A tick has placed the
+    /// fighters (NPCs 1 and 2).
+    fn fighters_out() -> View {
+        let mut catalog = boardable();
+        for record in &mut catalog.ships {
+            if record.id == ShipId(130) {
+                record.escort_type = 0;
+                record.fields.fuel = 0;
+            }
+        }
+        let pilot = with_fleet(
+            &Pilot::new(&catalog, "Carrier").expect("starts"),
+            &[130, 130],
+            true,
+        );
+        let (_, chance) = scripted(&placed(750, 650, 0));
+        let mut view = FlightView::with_pilot(catalog, pilot)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        assert!(view.session().expect("flying").is_escort(NpcId(2)));
+        view
+    }
+
+    /// Taps `key` with Alt (Option) held.
+    fn option(view: &mut View, key_: Key) {
+        view.input(&key(Key::Alt, true));
+        tap(view, key_);
+        view.input(&key(Key::Alt, false));
+    }
+
+    #[test]
+    fn option_c_sends_the_fighters_home_and_c_alone_back_to_formation() {
+        let mut view = fighters_out();
+        option(&mut view, ESCORT_RECALL_KEY);
+        assert_eq!(orders(&view), [Some(EscortOrder::Dock); 2]);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships returning to hangar.")
+        );
+        tap(&mut view, ESCORT_RECALL_KEY);
+        assert_eq!(orders(&view), [None; 2], "C alone recalls");
+        tap(&mut view, MENU_KEY);
+        tap(&mut view, GROUP_KEYS[1]);
+        option(&mut view, ESCORT_RECALL_KEY);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  Fighters returning to hangar.")
+        );
+    }
+
+    #[test]
+    fn option_c_sends_an_escort_of_its_own_back_to_formation() {
+        let mut view = escorted();
+        tap(&mut view, ESCORT_HOLD_KEY);
+        option(&mut view, ESCORT_RECALL_KEY);
+        assert_eq!(orders(&view), [None]);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships returning to formation.")
+        );
+    }
+
+    #[test]
+    fn the_escort_menu_shows_return_to_hangar_for_fighters_returning() {
+        let mut view = fighters_out();
+        option(&mut view, ESCORT_RECALL_KEY);
+        tap(&mut view, MENU_KEY);
+        assert!(
+            texts(&drawn(&view)).contains(&"Return to Hangar".to_owned()),
+            "{:?}",
+            texts(&drawn(&view))
+        );
+    }
+
+    #[test]
+    fn fighters_abandoned_in_a_jump_are_told_on_arrival() {
+        let mut view = fighters_out();
+        jump_to_alpha(&mut view);
+        assert_eq!(view.message(), Some("(Two fighters abandoned)"));
+        assert_eq!(view.pilot().expect("flying").escorts(), []);
+    }
+
+    #[test]
+    fn both_fighter_rules_reach_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_fighter_launch(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.fighter_launch(), source);
+            assert_eq!(session.fighter_recall(), RuleSource::Engine);
+            let view = flight().with_fighter_recall(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.fighter_recall(), source);
+            assert_eq!(session.fighter_launch(), RuleSource::Engine);
+        }
     }
 
     /// [`boardable`] with ship 130, a warship escort (`EscortType` 2,
@@ -6375,16 +6523,6 @@ mod tests {
         assert_eq!(view.message(), None, "gone in time");
         tap(&mut view, ESCORT_HOLD_KEY);
         assert_eq!(view.message(), None, "held already");
-    }
-
-    #[test]
-    fn option_c_recalls_too() {
-        let mut view = escorted();
-        tap(&mut view, ESCORT_HOLD_KEY);
-        view.input(&key(Key::Alt, true));
-        tap(&mut view, ESCORT_RECALL_KEY);
-        view.input(&key(Key::Alt, false));
-        assert_eq!(orders(&view), [None]);
     }
 
     #[test]
@@ -6518,8 +6656,10 @@ mod tests {
 
     #[test]
     fn the_help_line_names_the_escort_keys() {
-        assert!(HELP.contains("F/D/V/C: escorts"), "{HELP}");
-        assert!(HELP.contains("E: escort menu"), "{HELP}");
+        assert!(
+            HELP.contains("F/D/V/C: escorts   Alt-C: dock   E: escort menu"),
+            "{HELP}"
+        );
     }
 
     #[test]

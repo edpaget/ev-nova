@@ -14,7 +14,11 @@
 //!   here it closes at once.
 //! - A command goes to the group selected, or to every escort while the
 //!   menu is shut ([`EscortMenu::group`]), and the flight says what it
-//!   changed ([`escort_command_message`]).
+//!   changed ([`escort_command_message`]): Return to Hangar
+//!   (Option-C) "returning to hangar.", or "returning to formation." when
+//!   an escort that is no fighter went back to formation.
+//! - Fighters abandoned as the player jumps are told in brackets
+//!   ([`fighters_abandoned_message`]).
 //!
 //! **Drawing** ([`EscortMenu::draw`]): a [`MENU_WIDTH`] x [`MENU_HEIGHT`]
 //! frame at [`MENU_AT`], black inside, bordered in `cölr` `FloatingMap`,
@@ -28,6 +32,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::bay::{ABANDONED_MANY, ABANDONED_ONE};
 use nova_sim::escort::{ESCORT_COMMANDS, NEW_ORDERS, WILL_ATTACK, order_label};
 use nova_sim::{ClassRow, Commanded, EscortCommand, EscortGroup};
 
@@ -305,6 +310,40 @@ pub fn escort_command_message(commanded: &Commanded) -> String {
         commanded.command.doing()
     };
     format!("{NEW_ORDERS}{} {doing}", commanded.group.message_form())
+}
+
+/// `STR#` 137 #29-#38 of `Nova-DF.rsrc`: the numbers one to ten in
+/// words, which `_StrcatOrdinalNumber` @0x8ab4 writes counts in.
+pub const NUMBER_WORDS: [&str; 10] = [
+    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+];
+
+/// What the flight says of `count` fighters abandoned as the player
+/// jumped (`_HandlePlayer` @0x6c3c4-0x6c42b): in brackets, the count in
+/// words up to ten, its first letter capitalised, and in digits above
+/// that, then `STR#` 2002 #164 or #165. The original adds it to its
+/// arrival line, which the flight does not show yet.
+#[must_use]
+pub fn fighters_abandoned_message(count: u32) -> String {
+    let words = usize::try_from(count)
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|index| NUMBER_WORDS.get(index));
+    let number = words.map_or_else(
+        || count.to_string(),
+        |word| {
+            let mut chars = word.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
+        },
+    );
+    let noun = if count == 1 {
+        ABANDONED_ONE
+    } else {
+        ABANDONED_MANY
+    };
+    format!("({number} {noun})")
 }
 
 #[cfg(test)]
@@ -601,5 +640,39 @@ mod tests {
             ),
             "New escort orders assigned:  Medium ships defending."
         );
+        assert_eq!(
+            commanded(EscortGroup::All, EscortCommand::Dock, false),
+            "New escort orders assigned:  All ships returning to hangar."
+        );
+        assert_eq!(
+            commanded(
+                EscortGroup::Class(EscortClass::Fighter),
+                EscortCommand::Dock,
+                false
+            ),
+            "New escort orders assigned:  Fighters returning to hangar."
+        );
+    }
+
+    #[test]
+    fn fighters_abandoned_are_counted_in_words_up_to_ten() {
+        assert_eq!(fighters_abandoned_message(1), "(One fighter abandoned)");
+        assert_eq!(fighters_abandoned_message(2), "(Two fighters abandoned)");
+        assert_eq!(fighters_abandoned_message(10), "(Ten fighters abandoned)");
+        assert_eq!(fighters_abandoned_message(11), "(11 fighters abandoned)");
+        assert_eq!(fighters_abandoned_message(0), "(0 fighters abandoned)");
+        assert_eq!(
+            NUMBER_WORDS,
+            [
+                "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"
+            ]
+        );
+        for (n, word) in (1..=10).zip(NUMBER_WORDS) {
+            let message = fighters_abandoned_message(n);
+            assert!(
+                message.to_lowercase().starts_with(&format!("({word} ")),
+                "{message}"
+            );
+        }
     }
 }
