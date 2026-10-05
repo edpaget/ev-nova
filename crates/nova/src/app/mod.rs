@@ -42,8 +42,8 @@
 //! # Diagnostics
 //!
 //! An app built [`App::with_diagnostics`] writes each diagnostic the
-//! screen reports ([`Screen::take_diagnostics`]: game data the simulation
-//! does not handle yet) as a line, `nova: ` and the diagnostic, through
+//! screen reports ([`Screen::take_diagnostics`]: game data the screen could
+//! not read or the simulation does not handle yet) as a line, `nova: ` and the diagnostic, through
 //! the writer it was given; it takes them where it takes the sounds, after
 //! every input and frame. Without a writer, they are let go.
 //!
@@ -476,8 +476,8 @@ mod tests {
     use nova_render::{ImageError, ImageSource, PixelRect};
     use nova_view::sound::SimSound;
     use nova_view::{
-        Color, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Point, Screen, ScreenAction,
-        Showing, Sound, SoundPrefs, UiSound,
+        Color, Diagnostic, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Point, Screen,
+        ScreenAction, Showing, Sound, SoundPrefs, UiSound,
     };
 
     use super::*;
@@ -534,7 +534,7 @@ mod tests {
         cancels: usize,
         quits: usize,
         warnings: Vec<String>,
-        diagnostics: Vec<nova_sim::SimDiagnostic>,
+        diagnostics: Vec<Diagnostic>,
     }
 
     impl Screen for RecordingScreen {
@@ -571,7 +571,7 @@ mod tests {
             std::mem::take(&mut self.warnings)
         }
 
-        fn take_diagnostics(&mut self) -> Vec<nova_sim::SimDiagnostic> {
+        fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
             std::mem::take(&mut self.diagnostics)
         }
     }
@@ -612,12 +612,12 @@ mod tests {
         }
     }
 
-    fn flag(weapon: i16) -> nova_sim::SimDiagnostic {
-        nova_sim::SimDiagnostic::UnimplementedWeaponFlag {
+    fn flag(weapon: i16) -> Diagnostic {
+        Diagnostic::Sim(nova_sim::SimDiagnostic::UnimplementedWeaponFlag {
             weapon: nova_sim::WeaponId(weapon),
             field: nova_sim::combat::flags::FlagField::Flags2,
             bit: 0x8000,
-        }
+        })
     }
 
     #[test]
@@ -625,7 +625,8 @@ mod tests {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let written = Written::default();
         let mut app = app(&window).with_diagnostics(Box::new(written.clone()));
-        app.screen.diagnostics = vec![flag(181), flag(165)];
+        let unreadable = Diagnostic::Unreadable("wëap 140: no spïn 3005".to_owned());
+        app.screen.diagnostics = vec![flag(181), unreadable, flag(165)];
         let redraw = WindowEvent::Redraw {
             elapsed: Duration::from_millis(16),
         };
@@ -633,6 +634,7 @@ mod tests {
         assert_eq!(
             written.text(),
             "nova: wëap 181 Flags2 0x8000 not implemented\n\
+             nova: wëap 140: no spïn 3005\n\
              nova: wëap 165 Flags2 0x8000 not implemented\n"
         );
         app.screen.diagnostics = vec![flag(167)];

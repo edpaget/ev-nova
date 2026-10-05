@@ -151,22 +151,26 @@ pub struct ShotShown {
 
 /// Draws each of `shots` as its weapon's frame ([`shot_frame`]), a
 /// translucent one at [`TRANSLUCENT_ALPHA`]; nothing for a weapon whose
-/// shots have no graphic, and a crossed box for one whose look was not
-/// read.
+/// shots have no graphic, and a crossed box for one whose look or sheet
+/// was not read.
 pub fn draw_shots(list: &mut DrawList, shots: &[ShotShown], looks: &Looks) {
     for shot in shots {
         let Some(look) = looks.weapon(shot.weapon) else {
             crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER);
             continue;
         };
-        if let Some(sheet) = look.sheet {
-            let frame = shot_frame(shot.heading, shot.age, sheet.frames, look);
-            let tint = if look.flags3 & TRANSLUCENT == 0 {
-                Color::WHITE
-            } else {
-                translucent()
-            };
-            list.sprite(ImageKey::sprite(sheet.image_id, frame), shot.at, tint);
+        match &look.sheet {
+            None => {}
+            Some(Err(_)) => crossed_box(list, shot.at, SHOT_PLACEHOLDER_SIZE, PLACEHOLDER),
+            Some(Ok(sheet)) => {
+                let frame = shot_frame(shot.heading, shot.age, sheet.frames, look);
+                let tint = if look.flags3 & TRANSLUCENT == 0 {
+                    Color::WHITE
+                } else {
+                    translucent()
+                };
+                list.sprite(ImageKey::sprite(sheet.image_id, frame), shot.at, tint);
+            }
         }
     }
 }
@@ -420,19 +424,26 @@ mod tests {
             (
                 128,
                 WeaponLook {
-                    sheet: Some(sheet(3500, 36)),
+                    sheet: Some(Ok(sheet(3500, 36))),
                     ..WeaponLook::default()
                 },
             ),
             (
                 129,
                 WeaponLook {
-                    sheet: Some(sheet(3501, 36)),
+                    sheet: Some(Ok(sheet(3501, 36))),
                     flags3: TRANSLUCENT,
                     ..WeaponLook::default()
                 },
             ),
             (130, WeaponLook::default()),
+            (
+                132,
+                WeaponLook {
+                    sheet: Some(Err("no spïn 3005".to_owned())),
+                    ..WeaponLook::default()
+                },
+            ),
         ]);
         let shot = |x, weapon| ShotShown {
             at: at(x, 5.0),
@@ -448,6 +459,7 @@ mod tests {
                 shot(2.0, 129),
                 shot(3.0, 130),
                 shot(4.0, 131),
+                shot(5.0, 132),
             ],
             &looks,
         );
@@ -458,12 +470,14 @@ mod tests {
             at(2.0, 5.0),
             Color::rgba(255, 255, 255, 191),
         );
-        crossed_box(
-            &mut expected,
-            at(4.0, 5.0),
-            SHOT_PLACEHOLDER_SIZE,
-            PLACEHOLDER,
-        );
+        for x in [4.0, 5.0] {
+            crossed_box(
+                &mut expected,
+                at(x, 5.0),
+                SHOT_PLACEHOLDER_SIZE,
+                PLACEHOLDER,
+            );
+        }
         assert_eq!(list, expected);
         assert_eq!((TRANSLUCENT_ALPHA, SHOT_PLACEHOLDER_SIZE), (0.75, 8.0));
     }

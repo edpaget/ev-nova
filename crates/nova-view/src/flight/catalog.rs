@@ -151,9 +151,9 @@ pub struct EffectSheet {
 pub struct WeaponLook {
     /// Its name: the `wëap` resource's, up to any ';'.
     pub name: String,
-    /// Its shots' sheet, `spïn` 3000 + `Graphic`; none for a weapon whose
-    /// shots have no graphic (a beam's).
-    pub sheet: Option<EffectSheet>,
+    /// Its shots' sheet, `spïn` 3000 + `Graphic`, or why it cannot be read;
+    /// none for a weapon whose shots have no graphic (a beam's).
+    pub sheet: Option<Result<EffectSheet, String>>,
     /// The sound it fires with, `snd ` 200 + `Sound`, if any.
     pub sound: Option<SoundId>,
     /// Its `Flags`.
@@ -176,10 +176,10 @@ pub struct WeaponLook {
 }
 
 /// How an explosion type is shown and heard: its `bööm`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BoomLook {
-    /// Its sheet, `spïn` 400 + `GraphicIndex`.
-    pub sheet: EffectSheet,
+    /// Its sheet, `spïn` 400 + `GraphicIndex`, or why it cannot be read.
+    pub sheet: Result<EffectSheet, String>,
     /// The frames it advances a tick: `FrameAdvance` / 100.
     pub advance: f32,
     /// Its sound, `snd ` 300 + `SoundIndex`, if any.
@@ -201,8 +201,9 @@ pub struct TargetCard {
 pub trait CombatLooks {
     /// Weapon `id`'s look, or why it cannot be read.
     fn weapon_look(&self, id: WeaponId) -> Result<WeaponLook, String>;
-    /// Explosion type `id`'s look, or why it cannot be read.
-    fn boom_look(&self, id: BoomId) -> Result<BoomLook, String>;
+    /// Explosion type `id`'s look, or why it cannot be read; none when
+    /// there is no such `bööm`.
+    fn boom_look(&self, id: BoomId) -> Option<Result<BoomLook, String>>;
     /// What the target panel shows of ship type `ship`; empty when it
     /// cannot be read.
     fn target_card(&self, ship: ShipId) -> TargetCard;
@@ -216,7 +217,7 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
         (**self).weapon_look(id)
     }
 
-    fn boom_look(&self, id: BoomId) -> Result<BoomLook, String> {
+    fn boom_look(&self, id: BoomId) -> Option<Result<BoomLook, String>> {
         (**self).boom_look(id)
     }
 
@@ -235,7 +236,7 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
         (**self).weapon_look(id)
     }
 
-    fn boom_look(&self, id: BoomId) -> Result<BoomLook, String> {
+    fn boom_look(&self, id: BoomId) -> Option<Result<BoomLook, String>> {
         (**self).boom_look(id)
     }
 
@@ -258,7 +259,7 @@ pub const LAST_BOOM: i16 = 191;
 pub struct Looks {
     /// Each weapon's look, or why it cannot be read.
     pub weapons: BTreeMap<WeaponId, Result<WeaponLook, String>>,
-    /// Each explosion type's look, or why it cannot be read.
+    /// Each explosion type there is: its look, or why it cannot be read.
     pub booms: BTreeMap<BoomId, Result<BoomLook, String>>,
 }
 
@@ -272,7 +273,7 @@ impl Looks {
                 .map(|id| (id, catalog.weapon_look(id)))
                 .collect(),
             booms: (FIRST_BOOM..=LAST_BOOM)
-                .map(|id| (BoomId(id), catalog.boom_look(BoomId(id))))
+                .filter_map(|id| Some((BoomId(id), catalog.boom_look(BoomId(id))?)))
                 .collect(),
         }
     }
@@ -287,6 +288,29 @@ impl Looks {
     #[must_use]
     pub fn boom(&self, id: BoomId) -> Option<&BoomLook> {
         self.booms.get(&id)?.as_ref().ok()
+    }
+
+    /// What could not be read, a line each: a look that could not be read
+    /// at all, as the catalog says, and a sheet that could not, after its
+    /// `wëap` or `bööm` ("wëap 140: no spïn 3005"); the weapons' by ID,
+    /// then the explosions'.
+    #[must_use]
+    pub fn problems(&self) -> Vec<String> {
+        let weapons = self.weapons.iter().filter_map(|(id, look)| match look {
+            Err(reason) => Some(reason.clone()),
+            Ok(look) => match &look.sheet {
+                Some(Err(reason)) => Some(format!("wëap {}: {reason}", id.0)),
+                _ => None,
+            },
+        });
+        let booms = self.booms.iter().filter_map(|(id, look)| match look {
+            Err(reason) => Some(reason.clone()),
+            Ok(look) => match &look.sheet {
+                Err(reason) => Some(format!("bööm {}: {reason}", id.0)),
+                Ok(_) => None,
+            },
+        });
+        weapons.chain(booms).collect()
     }
 }
 
@@ -376,8 +400,9 @@ mod tests {
         assert_eq!(bar(Rc::new(Bars)), direct);
     }
 
-    /// Every weapon is named for its ID; every explosion's sheet is its
-    /// ID; every ship's subtitle is its ID; every govt's code is its ID.
+    /// Every weapon is named for its ID; every explosion type up to 150 is
+    /// a sheet of its ID, and there are none past it; every ship's
+    /// subtitle is its ID; every govt's code is its ID.
     struct Named;
 
     impl CombatLooks for Named {
@@ -388,15 +413,15 @@ mod tests {
             })
         }
 
-        fn boom_look(&self, id: BoomId) -> Result<BoomLook, String> {
-            Ok(BoomLook {
-                sheet: EffectSheet {
+        fn boom_look(&self, id: BoomId) -> Option<Result<BoomLook, String>> {
+            (id.0 <= 150).then_some(Ok(BoomLook {
+                sheet: Ok(EffectSheet {
                     image_id: id.0,
                     frames: NonZeroU16::MIN,
-                },
+                }),
                 advance: 1.0,
                 sound: None,
-            })
+            }))
         }
 
         fn target_card(&self, ship: ShipId) -> TargetCard {
@@ -419,14 +444,14 @@ mod tests {
             catalog.weapon_look(WeaponId(128)).map(|look| look.name),
             catalog
                 .boom_look(BoomId(129))
-                .map(|look| look.sheet.image_id),
+                .map(|look| look.map(|look| look.sheet.map(|sheet| sheet.image_id))),
             catalog.target_card(ShipId(130)).subtitle,
             catalog.target_code(GovtId(131)),
         )
     }
 
     #[test]
-    fn the_looks_read_are_the_weapons_given_and_every_explosion_type() {
+    fn the_looks_read_are_the_weapons_given_and_every_explosion_type_there_is() {
         let looks = Looks::read(&Named, [WeaponId(140), WeaponId(128)]);
         let weapons: Vec<_> = looks.weapons.keys().copied().collect();
         assert_eq!(weapons, [WeaponId(128), WeaponId(140)]);
@@ -436,12 +461,16 @@ mod tests {
         );
         assert_eq!(looks.weapon(WeaponId(129)), None);
         let booms: Vec<_> = looks.booms.keys().map(|id| id.0).collect();
-        assert_eq!(booms, (128..=191).collect::<Vec<_>>());
+        assert_eq!(booms, (128..=150).collect::<Vec<_>>());
         assert_eq!(
-            looks.boom(BoomId(191)).map(|look| look.sheet.image_id),
-            Some(191)
+            looks.boom(BoomId(150)).map(|look| look.sheet.clone()),
+            Some(Ok(EffectSheet {
+                image_id: 150,
+                frames: NonZeroU16::MIN
+            }))
         );
-        assert_eq!(looks.boom(BoomId(192)), None);
+        assert_eq!(looks.boom(BoomId(151)), None);
+        assert_eq!(looks.problems(), Vec::<String>::new());
         let unread = Looks {
             weapons: BTreeMap::from([(WeaponId(1), Err("no".to_owned()))]),
             booms: BTreeMap::from([(BoomId(1), Err("no".to_owned()))]),
@@ -452,9 +481,72 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") Ok(129) "s130" Some("g131")"#;
+        let direct = r#"Ok("w128") Some(Ok(Ok(129))) "s130" Some("g131")"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);
+    }
+
+    /// Weapon 140's shots and `bööm` 128 have no sheet, and weapon 141
+    /// and `bööm` 129 cannot be read at all; there are no other
+    /// explosion types.
+    struct Broken;
+
+    impl CombatLooks for Broken {
+        fn weapon_look(&self, id: WeaponId) -> Result<WeaponLook, String> {
+            match id.0 {
+                140 => Ok(WeaponLook {
+                    name: "Blaster".to_owned(),
+                    sheet: Some(Err("no spïn 3005".to_owned())),
+                    sound: Some(SoundId(208)),
+                    flags2: 0x0040,
+                    ..WeaponLook::default()
+                }),
+                other => Err(format!("no wëap {other}")),
+            }
+        }
+
+        fn boom_look(&self, id: BoomId) -> Option<Result<BoomLook, String>> {
+            match id.0 {
+                128 => Some(Ok(BoomLook {
+                    sheet: Err("no spïn 400".to_owned()),
+                    advance: 1.0,
+                    sound: Some(SoundId(302)),
+                })),
+                129 => Some(Err("bööm 129: too short".to_owned())),
+                _ => None,
+            }
+        }
+
+        fn target_card(&self, _ship: ShipId) -> TargetCard {
+            TargetCard::default()
+        }
+
+        fn target_code(&self, _govt: GovtId) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_look_whose_sheet_cannot_be_read_keeps_the_rest_and_says_why() {
+        let looks = Looks::read(&Broken, [WeaponId(141), WeaponId(140)]);
+        let blaster = looks.weapon(WeaponId(140)).expect("read");
+        assert_eq!(
+            (blaster.name.as_str(), blaster.sound, blaster.flags2),
+            ("Blaster", Some(SoundId(208)), 0x0040)
+        );
+        let boom = looks.boom(BoomId(128)).expect("read");
+        assert_eq!((boom.advance, boom.sound), (1.0, Some(SoundId(302))));
+        assert_eq!(looks.weapon(WeaponId(141)), None);
+        assert_eq!(looks.boom(BoomId(129)), None);
+        assert_eq!(
+            looks.problems(),
+            [
+                "wëap 140: no spïn 3005",
+                "no wëap 141",
+                "bööm 128: no spïn 400",
+                "bööm 129: too short",
+            ]
+        );
     }
 }

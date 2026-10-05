@@ -3,8 +3,8 @@
 //!
 //! With [`Runner::with_audio`], the app it opens plays sound, with
 //! [`Runner::with_settings`] it saves the player's settings, and with
-//! [`Runner::with_diagnostics`] it writes out the simulation's
-//! diagnostics; the runner prints the warnings the app keeps, such as a
+//! [`Runner::with_diagnostics`] it writes out the screen's diagnostics
+//! about the game data; the runner prints the warnings the app keeps, such as a
 //! failed save.
 //!
 //! With the `dev-tools` feature and [`Runner::with_dev_tools`], it also
@@ -105,7 +105,7 @@ impl<S: ImageSource> Runner<S> {
         self
     }
 
-    /// The runner with the simulation's diagnostics written as lines
+    /// The runner with the screen's diagnostics written as lines
     /// through `out` by the app it opens.
     #[must_use]
     pub fn with_diagnostics(mut self, out: Box<dyn Write>) -> Self {

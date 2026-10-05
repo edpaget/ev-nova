@@ -1,5 +1,6 @@
 //! The screen trait: what every game screen does.
 
+use std::fmt;
 use std::time::Duration;
 
 use nova_sim::SimDiagnostic;
@@ -42,6 +43,32 @@ pub enum Showing {
     NewPilot,
     /// The list of saved pilots, over the main menu.
     OpenPilot,
+}
+
+/// Something in the game data a screen cannot use, for the app to write
+/// out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Diagnostic {
+    /// What the simulation does not handle yet.
+    Sim(SimDiagnostic),
+    /// A resource the screen could not read, and why ("wëap 140: no spïn
+    /// 3005").
+    Unreadable(String),
+}
+
+impl From<SimDiagnostic> for Diagnostic {
+    fn from(diagnostic: SimDiagnostic) -> Self {
+        Self::Sim(diagnostic)
+    }
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sim(diagnostic) => diagnostic.fmt(f),
+            Self::Unreadable(reason) => f.write_str(reason),
+        }
+    }
 }
 
 /// A game screen: takes input, advances with time and draws itself.
@@ -90,10 +117,11 @@ pub trait Screen {
     fn take_warnings(&mut self) -> Vec<String> {
         Vec::new()
     }
-    /// What the simulation has reported since this was last taken about
-    /// game data it does not handle yet, each for the app to write out;
-    /// taking them empties the list. None by default.
-    fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
+    /// What the screen has found since this was last taken in game data
+    /// it cannot use (resources it could not read, and what the simulation
+    /// does not handle yet), each for the app to write out; taking them
+    /// empties the list. None by default.
+    fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         Vec::new()
     }
 }
@@ -185,6 +213,18 @@ mod tests {
         screen.draw(&mut list);
         assert_eq!(list.len(), 1);
         assert_eq!(counter.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_diagnostic_reads_as_a_line() {
+        let sim = SimDiagnostic::UnimplementedGuidance {
+            weapon: nova_sim::WeaponId(131),
+            guidance: 1,
+        };
+        assert_eq!(Diagnostic::from(sim), Diagnostic::Sim(sim));
+        assert_eq!(Diagnostic::Sim(sim).to_string(), sim.to_string());
+        let unreadable = Diagnostic::Unreadable("wëap 140: no spïn 3005".to_owned());
+        assert_eq!(unreadable.to_string(), "wëap 140: no spïn 3005");
     }
 
     #[test]

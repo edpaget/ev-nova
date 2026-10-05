@@ -87,5 +87,5 @@ pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
 pub use input::{Input, Key, MouseButton};
 pub use navigator::Navigator;
-pub use screen::{Screen, ScreenAction, Showing};
+pub use screen::{Diagnostic, Screen, ScreenAction, Showing};
 pub use sound::{CombatSound, Sound, SoundPrefs, UiSound};

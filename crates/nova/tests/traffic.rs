@@ -607,7 +607,10 @@ fn a_flights_diagnostics_are_written_out_once_as_lines() {
     harness.run(3);
     let text = String::from_utf8(written.0.borrow().clone()).expect("UTF-8");
     assert_eq!(
-        text, "nova: wëap 181 Flags2 0x8000 not implemented\n",
-        "the trader fired, again and again"
+        text,
+        "nova: wëap 181: no spïn 3000\n\
+         nova: wëap 181 Flags2 0x8000 not implemented\n",
+        "its shots' sheet missing from the fixture, as the flight opened; then the trader \
+         fired, again and again"
     );
 }

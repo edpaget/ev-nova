@@ -15,7 +15,7 @@ use nova_data::records::weapon::Weapon;
 use nova_data::{GameData, Record};
 use nova_sim::{BoomId, ShipId, SoundId, WeaponId};
 use nova_view::flight::hud::{Background, bar_origin, interface_id};
-use nova_view::flight::{CombatLooks, FlightView, StatusBars};
+use nova_view::flight::{CombatLooks, FlightView, Looks, StatusBars};
 use nova_view::geometry::Bounds;
 use nova_view::{DrawCommand, DrawList, ImageKey, Point, Screen};
 
@@ -103,7 +103,8 @@ fn every_weapon_the_simulation_flies_has_a_look() {
             .unwrap_or_else(|err| panic!("wëap {id}: {err}"));
         if weapon.guidance != 0 && weapon.graphic >= 0 {
             projectiles.push(id);
-            let frames = look.sheet.expect("a projectile's sheet").frames.get();
+            let sheet = look.sheet.expect("a projectile's sheet");
+            let frames = sheet.expect("the sheet reads").frames.get();
             let expected = if id == 140 { 2 } else { 36 };
             assert_eq!(frames, expected, "wëap {id}");
         }
@@ -136,11 +137,25 @@ fn every_explosion_type_reads_with_its_sound_and_sprite() {
     for (boom, sound, spin) in table {
         let look = data
             .boom_look(BoomId(boom))
+            .expect("there")
             .unwrap_or_else(|err| panic!("bööm {boom}: {err}"));
         let sheet = data.spin_sheet(spin).expect("the spïn reads");
-        assert_eq!(look.sheet.image_id, sheet.image_id, "bööm {boom}");
+        let image = look.sheet.expect("the sheet reads").image_id;
+        assert_eq!(image, sheet.image_id, "bööm {boom}");
         assert_eq!(look.sound, Some(SoundId(sound)), "bööm {boom}");
     }
+    assert_eq!(data.boom_look(BoomId(143)), None, "past the last");
+}
+
+#[test]
+fn the_looks_the_flight_reads_have_no_problems() {
+    let Some(data) = open() else {
+        return;
+    };
+    let weapons = data.records::<Weapon>().map(|(id, _)| WeaponId(id));
+    let looks = Looks::read(&data, weapons);
+    assert_eq!(looks.problems(), Vec::<String>::new());
+    assert_eq!(looks.booms.len(), 15, "bööm 128-142");
 }
 
 #[test]

@@ -26,9 +26,10 @@
 //! ([`FlightView::with_behaviour`]; [`Peaceful`] by default), and then the
 //! fight ([`Session::tick_combat`]), its ships disabled as the screen's
 //! [`DisableRule`] says ([`FlightView::with_disable_rule`];
-//! [`NovaDisable`] by default). The session's diagnostics about game data
-//! it does not handle yet pass through [`Screen::take_diagnostics`] for
-//! the app to write out. Each NPC is
+//! [`NovaDisable`] by default). What could not be read of the looks
+//! (each once, when the screen is built), then the session's diagnostics
+//! about game data it does not handle yet, pass through
+//! [`Screen::take_diagnostics`] for the app to write out. Each NPC is
 //! drawn with its own ship's sprite, after the stellars and before the
 //! player, smoothed between its last two steps as the player's ship is
 //! (a crossed box when its sheet cannot be read), and as a dim blip on the
@@ -112,9 +113,9 @@ use nova_sim::{
     Behaviour, Chance, CombatCatalog, Condition, Controls, DisableRule, FixedStep, GovtId,
     JumpRefusal, LandingRefusal, Market, NeverFires, NovaDisable, Npc, NpcId, Order, OutfitOrder,
     OutfitRefusal, Outfitter, Peaceful, Pilot, PilotCatalog, RechargeRefusal, Reserves, Session,
-    ShipId, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimDiagnostic, StartError,
-    StellarId, Steps, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2, WeaponId,
-    flight::normalized, flight::shortest_turn,
+    ShipId, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps,
+    TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2, WeaponId, flight::normalized,
+    flight::shortest_turn,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -131,7 +132,9 @@ use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::system::starfield;
 use crate::text::TextMetrics;
-use crate::{Color, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction, Sound};
+use crate::{
+    Color, Diagnostic, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction, Sound,
+};
 
 /// The overlay: the system's title and the help line.
 const TITLE: Point = Point::new(16.0, 32.0);
@@ -354,6 +357,8 @@ pub struct FlightView<C> {
     npc_previous: BTreeMap<NpcId, ShipState>,
     /// The weapons' and explosions' looks, read once.
     looks: Looks,
+    /// What could not be read of the looks, until it is taken.
+    unread_looks: Vec<Diagnostic>,
     /// Each NPC ship type's target card, read once.
     cards: BTreeMap<ShipId, TargetCard>,
     /// Each NPC government's target code, read once.
@@ -448,6 +453,11 @@ impl<
             disable_rule: Rc::new(NovaDisable),
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
+            unread_looks: looks
+                .problems()
+                .into_iter()
+                .map(Diagnostic::Unreadable)
+                .collect(),
             looks,
             cards: BTreeMap::new(),
             codes: BTreeMap::new(),
@@ -1202,12 +1212,15 @@ impl<
         sounds
     }
 
-    /// The session's diagnostics, each once.
-    fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
-        self.session
-            .as_mut()
-            .map(Session::take_diagnostics)
-            .unwrap_or_default()
+    /// What could not be read of the looks, then the session's
+    /// diagnostics, each once.
+    fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+        let mut diagnostics = std::mem::take(&mut self.unread_looks);
+        if let Ok(session) = &mut self.session {
+            let sim = session.take_diagnostics().into_iter();
+            diagnostics.extend(sim.map(Diagnostic::Sim));
+        }
+        diagnostics
     }
 }
 
@@ -1272,8 +1285,8 @@ mod tests {
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
         CharacterStart, CommodityStrings, DisasterRecord, Handling, JunkRecord, LandingSite,
-        OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats, SimSound,
-        SoundId, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
+        OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats, SimDiagnostic,
+        SimSound, SoundId, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
     };
 
     use super::*;
@@ -1612,7 +1625,8 @@ mod tests {
         }
     }
 
-    /// The looks, cards and codes given; anything else cannot be read.
+    /// The looks, cards and codes given; any other weapon cannot be read,
+    /// and there is no other explosion type.
     impl CombatLooks for FakeCatalog {
         fn weapon_look(&self, id: nova_sim::WeaponId) -> Result<WeaponLook, String> {
             self.looks
@@ -1624,14 +1638,11 @@ mod tests {
                 )
         }
 
-        fn boom_look(&self, id: nova_sim::BoomId) -> Result<BoomLook, String> {
+        fn boom_look(&self, id: nova_sim::BoomId) -> Option<Result<BoomLook, String>> {
             self.booms
                 .iter()
                 .find(|(boom, _)| *boom == id.0)
-                .map_or_else(
-                    || Err(format!("no bööm {}", id.0)),
-                    |(_, look)| look.clone(),
-                )
+                .map(|(_, look)| look.clone())
         }
 
         fn target_card(&self, ship: ShipId) -> TargetCard {
@@ -3952,6 +3963,7 @@ mod tests {
         let catalog = FakeCatalog {
             weapons: vec![mining],
             hulls: vec![hull],
+            looks: vec![(181, Ok(WeaponLook::default()))],
             ..trafficked(&[130], 1, 129, 3)
         };
         let mut view = FlightView::new(catalog)
@@ -3961,13 +3973,46 @@ mod tests {
         ticks(&mut view, 3);
         assert_eq!(
             view.take_diagnostics(),
-            [SimDiagnostic::UnimplementedWeaponFlag {
+            [Diagnostic::Sim(SimDiagnostic::UnimplementedWeaponFlag {
                 weapon: nova_sim::WeaponId(181),
                 field: nova_sim::combat::flags::FlagField::Flags2,
                 bit: 0x8000
-            }]
+            })]
         );
         ticks(&mut view, 30);
+        assert_eq!(view.take_diagnostics(), [], "once");
+    }
+
+    #[test]
+    fn a_look_whose_sheet_cannot_be_read_still_sounds_and_is_reported_once() {
+        let mut catalog = armed(0, &[BLASTER]);
+        catalog.looks[0].1 = Ok(WeaponLook {
+            sheet: Some(Err("no spïn 3005".to_owned())),
+            ..look("Blaster", 208, None)
+        });
+        catalog.booms.push((
+            129,
+            Ok(BoomLook {
+                sheet: Err("no spïn 401".to_owned()),
+                advance: 1.0,
+                sound: None,
+            }),
+        ));
+        let mut view = fighting(catalog, &[]);
+        assert_eq!(
+            view.take_diagnostics(),
+            [
+                Diagnostic::Unreadable("wëap 128: no spïn 3005".to_owned()),
+                Diagnostic::Unreadable("no wëap 150".to_owned()),
+                Diagnostic::Unreadable("bööm 129: no spïn 401".to_owned()),
+            ],
+            "and the unseen weapon, which has no look at all"
+        );
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        let sounds: Vec<_> = combat_sounds(&mut view).iter().map(|s| s.sound).collect();
+        assert_eq!(sounds, [nova_sim::SoundId(208)], "the blaster is heard");
+        ticks(&mut view, 3);
         assert_eq!(view.take_diagnostics(), [], "once");
     }
 
@@ -4053,7 +4098,7 @@ mod tests {
     fn look(name: &str, sound: i16, image: Option<i16>) -> WeaponLook {
         WeaponLook {
             name: name.to_owned(),
-            sheet: image.map(|image| effect_sheet(image, 36)),
+            sheet: image.map(|image| Ok(effect_sheet(image, 36))),
             sound: Some(nova_sim::SoundId(sound)),
             ..WeaponLook::default()
         }
@@ -4104,7 +4149,7 @@ mod tests {
             booms: vec![(
                 128,
                 Ok(BoomLook {
-                    sheet: effect_sheet(400, 3),
+                    sheet: Ok(effect_sheet(400, 3)),
                     advance: 1.0,
                     sound: Some(nova_sim::SoundId(302)),
                 }),

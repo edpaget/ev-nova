@@ -66,7 +66,7 @@ exclude_re = [
     # `Vec::new()`; replacing either with `vec![]` builds the same empty
     # list, so it cannot be observed.
     "replace Screen::take_warnings -> Vec<String> with vec!\\[\\]",
-    "replace Screen::take_diagnostics -> Vec<SimDiagnostic> with vec!\\[\\]",
+    "replace Screen::take_diagnostics -> Vec<Diagnostic> with vec!\\[\\]",
     # `Behaviour::trigger`'s default body is `Trigger::default()`, the
     # "never fires" command; replacing it with `Default::default()` builds
     # the same value, so it cannot be observed.

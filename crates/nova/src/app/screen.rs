@@ -89,8 +89,8 @@
 //! Nova's peaceful traffic until another is given, and their ships are
 //! disabled as the router's rule says ([`AppScreen::with_disable_rule`]),
 //! Nova's own until another is given. The flight's diagnostics about game
-//! data the simulation does not handle yet come through
-//! [`Screen::take_diagnostics`].
+//! data it could not read or the simulation does not handle yet come
+//! through [`Screen::take_diagnostics`].
 //!
 //! I, outside flight and the spaceport, opens the About text in the game's "Desc Dialog"
 //! over the screen shown, when the router was given the interface file's
@@ -115,8 +115,7 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::{
-    Behaviour, DisableRule, NovaDisable, Peaceful, Pilot, PilotKeeper, PilotStore, SimDiagnostic,
-    pilot_key,
+    Behaviour, DisableRule, NovaDisable, Peaceful, Pilot, PilotKeeper, PilotStore, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::flight::{FlightView, SharedChance};
@@ -136,7 +135,8 @@ use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, New
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::{DescDialog, DescriptionSource, DialogResources, PrefsDialog};
 use nova_view::{
-    Color, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction, Sound, SoundPrefs,
+    Color, Diagnostic, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction, Sound,
+    SoundPrefs,
 };
 
 /// The hint the router draws over every screen, where it goes, its size and
@@ -1223,7 +1223,7 @@ impl Screen for AppScreen {
     }
 
     /// The flight's diagnostics, once flight has been entered.
-    fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
+    fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         self.flight
             .as_mut()
             .map(Screen::take_diagnostics)

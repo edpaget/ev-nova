@@ -8,7 +8,8 @@
 //!   went off: it never moves. Each step its frame advances by the
 //!   `bööm`'s `FrameAdvance` / 100, and it ends once the frame is past the
 //!   last. A delayed one is hidden while its delay counts down by the same
-//!   advance a step. At most [`MAX_EXPLOSIONS`] are kept: one more is
+//!   advance a step. One whose sheet cannot be read is heard and lasts a
+//!   frame, unseen. At most [`MAX_EXPLOSIONS`] are kept: one more is
 //!   dropped.
 //! - An explosion of a code of 1000 or more, with a size, first scatters
 //!   `trunc(0.04 x size)` explosions of `bööm` 129 within a quarter of the
@@ -270,7 +271,8 @@ impl Effects {
             } else {
                 explosion.frame += look.advance;
             }
-            (explosion.frame as u32) < u32::from(look.sheet.frames.get())
+            let frames = look.sheet.as_ref().map_or(1, |sheet| sheet.frames.get());
+            (explosion.frame as u32) < u32::from(frames)
         });
         self.debris.retain_mut(|piece| {
             piece.at = Point::new(piece.at.x + piece.velocity.x, piece.at.y + piece.velocity.y);
@@ -309,8 +311,8 @@ impl Effects {
     /// `camera` shows them.
     pub fn draw(&self, list: &mut DrawList, camera: &Camera, looks: &Looks) {
         for explosion in self.explosions.iter().filter(|e| e.delay <= 0.0) {
-            if let Some(look) = looks.boom(explosion.boom) {
-                let frame = ImageKey::sprite(look.sheet.image_id, explosion.frame as u16);
+            if let Some(Ok(sheet)) = looks.boom(explosion.boom).map(|look| &look.sheet) {
+                let frame = ImageKey::sprite(sheet.image_id, explosion.frame as u16);
                 list.sprite(frame, camera.world_to_screen(explosion.at), translucent());
             }
         }
@@ -393,18 +395,18 @@ mod tests {
 
     fn boom_look(image_id: i16, frames: u16, advance: f32, sound: Option<i16>) -> BoomLook {
         BoomLook {
-            sheet: EffectSheet {
+            sheet: Ok(EffectSheet {
                 image_id,
                 frames: NonZeroU16::new(frames).expect("non-zero"),
-            },
+            }),
             advance,
             sound: sound.map(SoundId),
         }
     }
 
     /// `bööm` 128 (3 frames, silent), 129 (2 frames, silent), 130 (4
-    /// frames, `snd ` 302), 135 (3 frames at 0.3 a step, `snd ` 300);
-    /// weapon 128 sounds `snd ` 208, weapon 146 loops `snd ` 210, and
+    /// frames, `snd ` 302), 135 (3 frames at 0.3 a step, `snd ` 300),
+    /// 142 (no sheet, `snd ` 303); 140 cannot be read; weapon 128 sounds `snd ` 208, weapon 146 loops `snd ` 210, and
     /// weapon 147 is silent.
     fn looks() -> Looks {
         let weapon = |sound: Option<i16>, flags| {
@@ -426,6 +428,14 @@ mod tests {
                 (BoomId(130), Ok(boom_look(402, 4, 1.0, Some(302)))),
                 (BoomId(135), Ok(boom_look(405, 3, 0.3, Some(300)))),
                 (BoomId(140), Err("no spïn 410".to_owned())),
+                (
+                    BoomId(142),
+                    Ok(BoomLook {
+                        sheet: Err("no spïn 412".to_owned()),
+                        advance: 1.0,
+                        sound: Some(SoundId(303)),
+                    }),
+                ),
             ]),
         }
     }
@@ -517,6 +527,25 @@ mod tests {
         exploded(&mut effects, 141, at(0.0, 0.0));
         assert_eq!(effects.explosions(), []);
         assert_eq!(effects.take_sounds(), []);
+    }
+
+    #[test]
+    fn an_explosion_without_a_sheet_sounds_for_a_frame_and_is_not_drawn() {
+        let mut effects = Effects::default();
+        exploded(&mut effects, 142, at(3.0, 4.0));
+        assert_eq!(
+            effects.take_sounds(),
+            [CombatSound {
+                sound: SoundId(303),
+                offset: (3, 4),
+            }]
+        );
+        assert_eq!(frames(&effects), [0.0]);
+        let mut list = DrawList::new();
+        effects.draw(&mut list, &Camera::centred_on(PLAYER), &looks());
+        assert_eq!(list, DrawList::new());
+        steps(&mut effects, 1);
+        assert_eq!(effects.explosions(), [], "past its one frame");
     }
 
     #[test]

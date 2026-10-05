@@ -112,14 +112,8 @@ impl CombatLooks for GameData {
             None => return Err(format!("no wëap {}", id.0)),
         };
         let weapon = entry.record;
-        let sheet = if weapon.graphic < 0 {
-            None
-        } else {
-            Some(effect_sheet(
-                self,
-                FIRST_SHOT_SPIN.saturating_add(weapon.graphic),
-            )?)
-        };
+        let sheet = (weapon.graphic >= 0)
+            .then(|| effect_sheet(self, FIRST_SHOT_SPIN.saturating_add(weapon.graphic)));
         Ok(WeaponLook {
             name: resource_name(entry.name.unwrap_or_default()),
             sheet,
@@ -135,17 +129,16 @@ impl CombatLooks for GameData {
         })
     }
 
-    fn boom_look(&self, id: BoomId) -> Result<BoomLook, String> {
-        let boom = match self.get::<Boom>(id.0) {
-            Some(Ok(entry)) => entry.record,
-            Some(Err(err)) => return Err(err.to_string()),
-            None => return Err(format!("no bööm {}", id.0)),
+    fn boom_look(&self, id: BoomId) -> Option<Result<BoomLook, String>> {
+        let boom = match self.get::<Boom>(id.0)? {
+            Ok(entry) => entry.record,
+            Err(err) => return Some(Err(err.to_string())),
         };
-        Ok(BoomLook {
-            sheet: effect_sheet(self, FIRST_BOOM_SPIN.saturating_add(boom.graphic_index))?,
+        Some(Ok(BoomLook {
+            sheet: effect_sheet(self, FIRST_BOOM_SPIN.saturating_add(boom.graphic_index)),
             advance: f32::from(boom.frame_advance) * FRAME_ADVANCE_UNIT,
             sound: offset_sound(FIRST_BOOM_SOUND, boom.sound_index),
-        })
+        }))
     }
 
     fn target_card(&self, ship: ShipId) -> TargetCard {
@@ -532,7 +525,7 @@ mod tests {
             data.weapon_look(WeaponId(128)),
             Ok(WeaponLook {
                 name: "Light Blaster".to_owned(),
-                sheet: Some(sheet_of(3500, 36)),
+                sheet: Some(Ok(sheet_of(3500, 36))),
                 sound: Some(SoundId(208)),
                 flags: 0x0011,
                 flags2: 0x2002,
@@ -560,17 +553,21 @@ mod tests {
     }
 
     #[test]
-    fn a_weapon_that_cannot_be_read_or_shown_says_why() {
+    fn a_weapon_whose_shots_cannot_be_shown_keeps_the_rest_of_its_look() {
+        let data = named_store(&[(Weapon::TYPE, 128, Some("Blaster"), weapon(1, 8))]);
+        let look = data.weapon_look(WeaponId(128)).expect("reads");
+        assert_eq!(look.sheet, Some(Err("no spïn 3001".to_owned())));
+        assert_eq!(
+            (look.name.as_str(), look.sound, look.flags2, look.beam_color),
+            ("Blaster", Some(SoundId(208)), 0x2002, 0x00FF_8000)
+        );
+    }
+
+    #[test]
+    fn a_weapon_that_cannot_be_read_says_why() {
         let mut short = weapon(-1, -1);
         short.pop();
-        let data = named_store(&[
-            (Weapon::TYPE, 128, None, weapon(1, -1)),
-            (Weapon::TYPE, 129, None, short),
-        ]);
-        assert_eq!(
-            data.weapon_look(WeaponId(128)),
-            Err("no spïn 3001".to_owned())
-        );
+        let data = named_store(&[(Weapon::TYPE, 129, None, short)]);
         let Err(message) = data.weapon_look(WeaponId(129)) else {
             panic!("an error")
         };
@@ -591,29 +588,48 @@ mod tests {
             (Spin::TYPE, 405, None, spin(405)),
             (RLED, 405, None, sheet(20)),
         ]);
-        let look = data.boom_look(BoomId(130)).expect("reads");
-        assert_eq!(look.sheet, sheet_of(400, 12));
+        let look = data.boom_look(BoomId(130)).expect("there").expect("reads");
+        assert_eq!(look.sheet, Ok(sheet_of(400, 12)));
         assert_eq!((look.advance, look.sound), (1.0, Some(SoundId(302))));
-        let slow = data.boom_look(BoomId(135)).expect("reads");
-        assert_eq!(slow.sheet, sheet_of(405, 20));
+        let slow = data.boom_look(BoomId(135)).expect("there").expect("reads");
+        assert_eq!(slow.sheet, Ok(sheet_of(405, 20)));
         assert!((slow.advance - 0.3).abs() < 1e-6, "{slow:?}");
         assert_eq!(slow.sound, None);
     }
 
     #[test]
-    fn an_explosion_that_cannot_be_read_or_shown_says_why() {
+    fn an_explosion_that_cannot_be_shown_keeps_its_sound_and_advance() {
         let data = named_store(&[(Boom::TYPE, 128, None, boom(100, 0, 3))]);
-        assert_eq!(data.boom_look(BoomId(128)), Err("no spïn 403".to_owned()));
-        assert_eq!(data.boom_look(BoomId(129)), Err("no bööm 129".to_owned()));
+        assert_eq!(
+            data.boom_look(BoomId(128)),
+            Some(Ok(BoomLook {
+                sheet: Err("no spïn 403".to_owned()),
+                advance: 1.0,
+                sound: Some(SoundId(300)),
+            }))
+        );
         let empty = named_store(&[
             (Boom::TYPE, 128, None, boom(100, 0, 0)),
             (Spin::TYPE, 400, None, spin(400)),
             (RLED, 400, None, sheet(0)),
         ]);
+        let look = empty.boom_look(BoomId(128)).expect("there").expect("reads");
         assert_eq!(
-            empty.boom_look(BoomId(128)),
+            look.sheet,
             Err("rlëD 400: the rlëD sheet has no frames".to_owned())
         );
+    }
+
+    #[test]
+    fn an_explosion_that_cannot_be_read_says_why_and_one_not_there_is_none() {
+        let mut short = boom(100, 0, 0);
+        short.pop();
+        let data = named_store(&[(Boom::TYPE, 128, None, short)]);
+        let Some(Err(message)) = data.boom_look(BoomId(128)) else {
+            panic!("an error")
+        };
+        assert!(message.contains("128"), "{message}");
+        assert_eq!(data.boom_look(BoomId(129)), None);
     }
 
     /// A `shïp` with `subtitle`.
