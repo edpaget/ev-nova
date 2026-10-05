@@ -24,6 +24,9 @@
 //! - [`volume`]: a volume level with arrows that step it.
 //! - [`prefs`]: the Preferences dialog ([`PrefsDialog`], "new prefs
 //!   dialog"): sound and music on or off, and their volumes.
+//! - [`plunder`]: the plunder dialog ([`PlunderDialog`]), taking what is
+//!   on board a ship boarded, and the captured-ship assignment dialog
+//!   ([`AssignmentDialog`]).
 //! - [`catalog`]: the ports the widgets read: [`DialogResources`] and
 //!   [`DescriptionSource`].
 //! - [`data`]: the ports' adapters over `nova_data`'s `InterfaceData` and
@@ -35,6 +38,7 @@ pub mod data;
 pub mod desc;
 pub mod dialog;
 pub mod new_pilot;
+pub mod plunder;
 pub mod prefs;
 pub mod scroll_text;
 pub mod slice;
@@ -49,6 +53,7 @@ pub use dialog::{
     Dialog, DialogEvent, DialogFrame, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role,
 };
 pub use new_pilot::{NewPilotDialog, NewPilotOutcome};
+pub use plunder::{AssignmentDialog, PlunderDialog, PlunderShown};
 pub use prefs::PrefsDialog;
 pub use scroll_text::ScrollText;
 pub use slice::{Axis, Piece, three_slice};

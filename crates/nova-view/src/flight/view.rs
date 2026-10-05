@@ -106,6 +106,17 @@
 //!   turn, R the nearest threat, and Alt-R (Option-R) the nearest ship
 //!   ([`TargetPick`]). The original's Shift-Tab, back through the ships,
 //!   is not bound: there is no Shift key yet.
+//! - B (a press) boards the target when the session allows it
+//!   ([`Session::board`]), by the screen's [`BoardingRule`]
+//!   ([`FlightView::with_boarding_rule`]; [`NovaBoarding`] by default),
+//!   and otherwise says why in the original's words (`STR#` 2002
+//!   #130-132), or nothing when there is no target or the player does not
+//!   face it. A boarding lets go of the flight keys and is held for the
+//!   router ([`FlightView::take_boarding`]), which opens the plunder
+//!   dialog over the paused flight; each press there goes through
+//!   [`FlightView::plunder`], and a capture's assignment through
+//!   [`FlightView::assign`], each saying what it did as a message. After
+//!   "Use As My Ship" the new ship's sprite sheet is read.
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -115,12 +126,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Allegiance, Behaviour, Chance, CombatCatalog, Condition, Controls, DisableRule, FixedStep,
-    GovtId, JumpRefusal, LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaDisable,
-    NovaLaw, Npc, NpcId, Order, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
+    Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
+    CombatCatalog, Condition, Controls, DisableRule, FixedStep, GovtId, JumpRefusal,
+    LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
+    NpcId, Order, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, PlunderView,
     PointDefenceRule, RechargeRefusal, Reserves, Rules, Session, ShipId, ShipPurchase, ShipRef,
-    ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps, TargetPick, TradeRefusal,
-    TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
+    ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps, Take, Taken, TargetPick,
+    TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -149,7 +161,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   L: land   M: map   J: jump   P: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   L: land   M: map   J: jump   P: preferences   Esc: leave";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
@@ -192,6 +204,9 @@ pub const MAP_KEY: Key = Key::Char('m');
 /// The hyperspace jump key: the original's documented default
 /// (`Keys.nib`'s `jumpKey`).
 pub const JUMP_KEY: Key = Key::Char('j');
+/// The board key: the original's default (`Keys.nib`'s `boardKey`), one
+/// attempt a press.
+pub const BOARD_KEY: Key = Key::Char('b');
 
 /// `STR#` 2002 #29.
 pub const NO_DESTINATION: &str =
@@ -269,6 +284,101 @@ fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
     normalized(shortest_turn(from.heading, to.heading).mul_add(alpha, from.heading))
 }
 
+/// `STR#` 2002 #130: the target cannot be boarded.
+pub const CANT_BOARD: &str = "You can't board this ship.";
+/// `STR#` 2002 #131: the player is not over the target.
+pub const NOT_CLOSE_ENOUGH: &str = "You're not close enough to board this ship.";
+/// `STR#` 2002 #132: the player moves too fast against the target.
+pub const TOO_FAST_TO_BOARD: &str = "You're moving too fast to board this ship.";
+/// The Bible's words for a crew that repels boarders (`düde` `Booty` 0);
+/// the original has no such string.
+pub const REPELLED: &str = "You were repelled while attempting to board this ship.";
+/// `STR#` 2002 #113: the self-destruct went off.
+pub const SELF_DESTRUCT: &str = "Oops! You tripped this ship's security self-destruct mechanism.";
+/// `STR#` 2002 #114: the hold had no room for the cargo.
+pub const NO_CARGO_STORED: &str =
+    "You couldn't store any of the cargo you plundered from this ship.";
+/// `STR#` 2002 #117: no ammunition could be taken.
+pub const NO_AMMO_STORED: &str = "You couldn't store any of the ammo you plundered from this ship.";
+/// `STR#` 2002 #6: the tank had no room for the energy.
+pub const NO_ENERGY_STORED: &str =
+    "You couldn't store any of the energy you transferred from this ship.";
+/// `STR#` 2002 #5: all the energy was stored, and the tank is not full.
+pub const ALL_ENERGY_STORED: &str =
+    "You transferred all of this ship's energy to your reactors and batteries.";
+/// `STR#` 2002 #4: the energy filled the tank.
+pub const ENERGY_FILLED: &str =
+    "You filled your reactors and batteries with energy from this ship.";
+/// `STR#` 2002 #125: the capture failed.
+pub const CAPTURE_FAILED: &str = "Your attempt to capture this ship was unsuccessful.";
+/// `STR#` 2002 #124: the fleet is full.
+pub const FLEET_FULL: &str = "You already have the maximum possible number of escorts.";
+/// `STR#` 2002 #123: the ship captured joined the fleet.
+pub const ASSIGNED_ESCORT: &str = "You assigned this ship to your fleet of escorts.";
+/// `STR#` 2002 #304: the old ship joined the fleet after "Use As My Ship".
+pub const RETAINED_OLD_SHIP: &str = "You retained your old ship as an escort.";
+/// `STR#` 2002 #305: no slot was free for the old ship.
+pub const LOST_OLD_SHIP: &str = "You were unable to retain your old ship as an escort.";
+
+/// What the player is told when `refusal` stops a boarding: the
+/// original's words for it, or nothing.
+#[must_use]
+pub fn board_refusal_message(refusal: BoardRefusal) -> Option<&'static str> {
+    match refusal {
+        BoardRefusal::CantBoard => Some(CANT_BOARD),
+        BoardRefusal::TooFar => Some(NOT_CLOSE_ENOUGH),
+        BoardRefusal::TooFast => Some(TOO_FAST_TO_BOARD),
+        BoardRefusal::NoTarget | BoardRefusal::Misaligned => None,
+    }
+}
+
+/// What the player is told of a press in the plunder dialog that did
+/// `taken`, in the original's words (`_DoPlunderDialog`): the cargo's
+/// `good` and the ammunition's `outfit` by name, and the energy by
+/// whether the tank is `full` after it; nothing for a capture awaiting
+/// its assignment, an abort or a press that did nothing.
+#[must_use]
+pub fn plunder_message(
+    taken: Taken,
+    good: Option<&str>,
+    outfit: Option<&str>,
+    full: bool,
+) -> Option<String> {
+    let text = match taken {
+        Taken::Cargo { stored: 0, .. } => NO_CARGO_STORED.to_owned(),
+        Taken::Cargo { stored, .. } => {
+            let tons = if stored == 1 { "ton" } else { "tons" };
+            let good = good.unwrap_or("cargo");
+            format!("You salvaged {stored} {tons} of {good} from this ship.")
+        }
+        Taken::Credits(credits) => format!("You stole all the {credits} credits from this ship."),
+        Taken::Ammo { count: 0, .. } => NO_AMMO_STORED.to_owned(),
+        Taken::Ammo { count, .. } => {
+            let outfit = outfit.unwrap_or("rounds");
+            format!("You salvaged {count} {outfit} from this ship.")
+        }
+        Taken::Energy { stored: 0, .. } => NO_ENERGY_STORED.to_owned(),
+        Taken::Energy { .. } if full => ENERGY_FILLED.to_owned(),
+        Taken::Energy { .. } => ALL_ENERGY_STORED.to_owned(),
+        Taken::Tripped => SELF_DESTRUCT.to_owned(),
+        Taken::CaptureFailed => CAPTURE_FAILED.to_owned(),
+        Taken::FleetFull => FLEET_FULL.to_owned(),
+        Taken::Escorted => ASSIGNED_ESCORT.to_owned(),
+        Taken::Captured | Taken::Aborted | Taken::Nothing => return None,
+    };
+    Some(text)
+}
+
+/// What the player is told of an assignment that did `assigned`.
+#[must_use]
+pub fn assigned_message(assigned: Assigned) -> &'static str {
+    match assigned {
+        Assigned::Escort => ASSIGNED_ESCORT,
+        Assigned::MyShip => RETAINED_OLD_SHIP,
+        Assigned::Abandoned => LOST_OLD_SHIP,
+    }
+}
+
 /// What the player is told when `refusal` stops a jump: the original's
 /// words for it.
 #[must_use]
@@ -343,7 +453,11 @@ pub struct FlightView<C> {
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
     /// The message shown, and `elapsed` when it was shown.
-    message: Option<(&'static str, Duration)>,
+    message: Option<(String, Duration)>,
+    /// Whether a boarding has opened that the router has not taken.
+    pending_boarding: bool,
+    /// Who repels boarders, the capture odds and the capture roll.
+    boarding_rule: Rc<dyn BoardingRule>,
     /// The course map, shown or not.
     map: GalaxyMap,
     /// Whether the course map is shown.
@@ -457,6 +571,8 @@ impl<
             held: HashSet::new(),
             pending_landing,
             message: None,
+            pending_boarding: false,
+            boarding_rule: Rc::new(NovaBoarding::default()),
             chance: SharedChance::default(),
             behaviour: Rc::new(NovaAi::default()),
             disable_rule: Rc::new(NovaDisable),
@@ -535,6 +651,16 @@ impl<
         Self { law, ..self }
     }
 
+    /// The flight with its boardings by `rule`: who repels boarders, the
+    /// capture odds and the capture roll.
+    #[must_use]
+    pub fn with_boarding_rule(self, boarding_rule: Rc<dyn BoardingRule>) -> Self {
+        Self {
+            boarding_rule,
+            ..self
+        }
+    }
+
     /// Reads the sheet of each ship type the traffic can spawn that has
     /// not been read yet.
     fn read_npc_sheets(&mut self) {
@@ -595,7 +721,7 @@ impl<
                 self.held.clear();
                 self.message = None;
             }
-            Err(refusal) => self.message = Some((jump_refusal_message(&refusal), self.elapsed)),
+            Err(refusal) => self.say(jump_refusal_message(&refusal)),
         }
     }
 
@@ -629,6 +755,22 @@ impl<C: ShipSprites> FlightView<C> {
         let bought = session.buy_ship(ship)?;
         self.sheet = self.catalog.ship_sheet(ship);
         Ok(bought)
+    }
+
+    /// Assigns the ship captured, as [`Session::assign`] does, and says
+    /// what it did; after "Use As My Ship" the new ship's sprite sheet is
+    /// read, and it is drawn where it is, not on its way from the old
+    /// ship. `None` when no capture awaits its assignment.
+    pub fn assign(&mut self, choice: Assignment) -> Option<Assigned> {
+        let session = self.session.as_mut().ok()?;
+        let assigned = session.assign(choice, &mut self.chance)?;
+        if assigned == Assigned::MyShip {
+            self.sheet = self.catalog.ship_sheet(session.ship());
+            self.previous = *session.player();
+            self.alpha = 0.0;
+        }
+        self.say(assigned_message(assigned));
+        Some(assigned)
     }
 }
 
@@ -680,9 +822,74 @@ impl<C> FlightView<C> {
 
     /// The message on screen, if any.
     #[must_use]
-    pub fn message(&self) -> Option<&'static str> {
-        let (text, shown_at) = self.message?;
-        (self.elapsed < shown_at + MESSAGE_SHOWN_FOR).then_some(text)
+    pub fn message(&self) -> Option<&str> {
+        let (text, shown_at) = self.message.as_ref()?;
+        (self.elapsed < *shown_at + MESSAGE_SHOWN_FOR).then_some(text.as_str())
+    }
+
+    /// Shows `text` as the message, from now.
+    fn say(&mut self, text: impl Into<String>) {
+        self.message = Some((text.into(), self.elapsed));
+    }
+
+    /// Boards the target, or says why not: a boarding that opens is held
+    /// for the router ([`FlightView::take_boarding`]) and lets go of the
+    /// flight keys.
+    fn board(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        match session.board(&*self.law, &*self.boarding_rule, &mut self.chance) {
+            Ok(Boarding::Opened(_)) => {
+                self.pending_boarding = true;
+                self.message = None;
+                self.held.clear();
+            }
+            Ok(Boarding::Repelled) => self.say(REPELLED),
+            Err(refusal) => {
+                if let Some(text) = board_refusal_message(refusal) {
+                    self.say(text);
+                }
+            }
+        }
+    }
+
+    /// What is on board the ship just boarded, once: the router takes it
+    /// to open the plunder dialog.
+    pub fn take_boarding(&mut self) -> Option<PlunderView> {
+        if !std::mem::take(&mut self.pending_boarding) {
+            return None;
+        }
+        self.boarding()
+    }
+
+    /// What is on board the ship being boarded, while the plunder dialog
+    /// is open ([`Session::boarding`]).
+    #[must_use]
+    pub fn boarding(&self) -> Option<PlunderView> {
+        self.session.as_ref().ok()?.boarding()
+    }
+
+    /// Presses `take` in the plunder dialog, through the session
+    /// ([`Session::plunder`]), and says what it did.
+    pub fn plunder(&mut self, take: Take) -> Taken {
+        let Ok(session) = &mut self.session else {
+            return Taken::Nothing;
+        };
+        let taken = session.plunder(take, &*self.boarding_rule, &mut self.chance);
+        let good = match taken {
+            Taken::Cargo { good, .. } => session.good_name(good),
+            _ => None,
+        };
+        let outfit = match taken {
+            Taken::Ammo { outfit, .. } => session.outfit_name(outfit),
+            _ => None,
+        };
+        let fuel = session.reserves().fuel;
+        if let Some(text) = plunder_message(taken, good, outfit, fuel.now >= fuel.max) {
+            self.say(text);
+        }
+        taken
     }
 
     /// Lands, or shows why not.
@@ -696,7 +903,7 @@ impl<C> FlightView<C> {
                 self.message = None;
                 self.effects.clear();
             }
-            Err(refusal) => self.message = Some((refusal_message(&refusal), self.elapsed)),
+            Err(refusal) => self.say(refusal_message(&refusal)),
         }
     }
 
@@ -1054,6 +1261,12 @@ impl<
         }
         match press {
             Some(LAND_KEY) => self.land(),
+            Some(BOARD_KEY) => {
+                self.board();
+                if self.pending_boarding {
+                    return ScreenAction::None;
+                }
+            }
             Some(MAP_KEY) => {
                 self.open_map();
                 return ScreenAction::None;
@@ -2102,7 +2315,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   L: land   M: map   J: jump   P: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   L: land   M: map   J: jump   P: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -5199,5 +5412,305 @@ mod tests {
         assert_eq!(*witness.seen.borrow(), [nova_sim::Crime::Disable]);
         let session = view.session().expect("flying");
         assert_eq!(session.pilot().legal_record(GovtId(140)), 0, "as it says");
+    }
+
+    // Boarding.
+
+    use nova_sim::HullSpec;
+    use nova_sim::reserves::Gauge;
+
+    /// Disables every ship of some strength: the NPCs (ship 129, of
+    /// strength 5), never the player (ship 128, of none).
+    #[derive(Debug)]
+    struct DisablesTheStrong;
+
+    impl DisableRule for DisablesTheStrong {
+        fn disabled(&self, _armor: Gauge, hull: &HullSpec) -> bool {
+            hull.strength > 0.0
+        }
+    }
+
+    /// Never repels, always gives odds of 75 and always captures.
+    #[derive(Debug)]
+    struct Sure;
+
+    impl BoardingRule for Sure {
+        fn repels(&self, _booty: u16) -> bool {
+            false
+        }
+
+        fn capture_odds(
+            &self,
+            _crew: &nova_sim::board::CaptureCrew,
+            _chance: &mut dyn Chance,
+        ) -> u8 {
+            75
+        }
+
+        fn captures(&self, _odds: u8, _chance: &mut dyn Chance) -> bool {
+            true
+        }
+    }
+
+    /// [`trafficked`] with its ship 129 (of strength 5, a crew of 3 and a
+    /// `Cost` of 150,000) carrying money (`Booty` 0x0040), and the
+    /// player's ship 128 a crew of 10.
+    fn boardable() -> FakeCatalog {
+        let mut catalog = trafficked(&[130], 1, 129, 1);
+        catalog.dudes[0].1.booty = 0x0040;
+        for record in &mut catalog.ships {
+            if record.id == ShipId(129) {
+                record.crew = 3;
+                record.cost = 150_000;
+            }
+        }
+        let mut player = catalog.ships[0].clone();
+        player.id = ShipId(128);
+        player.crew = 10;
+        catalog.ships.push(player);
+        catalog.hulls = vec![nova_sim::HullRecord {
+            strength: 5,
+            ..hull_of(129, &[])
+        }];
+        catalog
+    }
+
+    /// [`boardable`]'s flight with its one NPC placed at (`x` - 750,
+    /// `y` - 750) facing `heading`, disabled by [`DisablesTheStrong`] on
+    /// the first tick unless `intact`, and targeted.
+    fn beside(x: u32, y: u32, heading: u32, intact: bool) -> View {
+        let (_, chance) = scripted(&placed(x, y, heading));
+        let mut view = FlightView::new(boardable())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        if !intact {
+            view = view.with_disable_rule(Rc::new(DisablesTheStrong));
+        }
+        view.tick(TICK);
+        tap(&mut view, TARGET_KEY);
+        let session = view.session().expect("flying");
+        assert_eq!(session.target().map(|npc| npc.id), Some(NpcId(0)));
+        view
+    }
+
+    #[test]
+    fn b_on_a_disabled_aligned_slow_target_reports_a_boarding_once() {
+        let mut view = beside(750, 750, 0, false);
+        assert_eq!(view.take_boarding(), None);
+        tap(&mut view, BOARD_KEY);
+        let boarding = view.take_boarding().expect("boarded");
+        assert_eq!((boarding.npc, boarding.ship), (NpcId(0), ShipId(129)));
+        assert!(boarding.credits >= 1000, "{boarding:?}");
+        assert_eq!(view.take_boarding(), None, "once");
+        assert_eq!(view.boarding(), Some(boarding), "still under way");
+        assert_eq!(view.message(), None);
+        let session = view.session().expect("flying");
+        assert!(session.npcs()[0].boarded);
+        assert_eq!(BOARD_KEY, Key::Char('b'));
+    }
+
+    #[test]
+    fn each_refused_boarding_says_why_in_the_originals_words() {
+        let mut intact = beside(750, 750, 0, true);
+        tap(&mut intact, BOARD_KEY);
+        assert_eq!(intact.message(), Some(CANT_BOARD));
+        assert_eq!(intact.take_boarding(), None);
+        let mut far = beside(800, 750, 0, false);
+        tap(&mut far, BOARD_KEY);
+        assert_eq!(far.message(), Some(NOT_CLOSE_ENOUGH));
+        let mut fast = beside(750, 750, 0, false);
+        fast.input(&key(Key::Up, true));
+        ticks(&mut fast, 10);
+        fast.input(&key(Key::Up, false));
+        tap(&mut fast, BOARD_KEY);
+        assert_eq!(fast.message(), Some(TOO_FAST_TO_BOARD));
+        assert_eq!(
+            [CANT_BOARD, NOT_CLOSE_ENOUGH, TOO_FAST_TO_BOARD, REPELLED,],
+            [
+                "You can't board this ship.",
+                "You're not close enough to board this ship.",
+                "You're moving too fast to board this ship.",
+                "You were repelled while attempting to board this ship.",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_misaligned_or_missing_target_says_nothing() {
+        let mut aside = beside(750, 750, 90, false);
+        tap(&mut aside, BOARD_KEY);
+        assert_eq!(aside.message(), None);
+        assert_eq!(aside.take_boarding(), None);
+        let mut alone = flight();
+        tap(&mut alone, BOARD_KEY);
+        assert_eq!(alone.message(), None);
+        assert_eq!(board_refusal_message(BoardRefusal::NoTarget), None);
+        assert_eq!(board_refusal_message(BoardRefusal::Misaligned), None);
+    }
+
+    #[test]
+    fn plundering_goes_through_the_session_and_says_what_it_took() {
+        let mut view = beside(750, 750, 0, false);
+        tap(&mut view, BOARD_KEY);
+        let boarding = view.take_boarding().expect("boarded");
+        let cash = view.pilot().expect("a pilot").cash();
+        assert_eq!(
+            view.plunder(Take::Credits),
+            Taken::Credits(boarding.credits)
+        );
+        assert_eq!(
+            view.pilot().expect("a pilot").cash(),
+            cash + boarding.credits
+        );
+        let said = format!(
+            "You stole all the {} credits from this ship.",
+            boarding.credits
+        );
+        assert_eq!(view.message(), Some(said.as_str()));
+        assert_eq!(view.boarding().map(|now| now.credits), Some(0));
+        assert_eq!(view.plunder(Take::Abort), Taken::Aborted);
+        assert_eq!(view.boarding(), None);
+    }
+
+    #[test]
+    fn the_plunder_messages_are_the_originals() {
+        let food = Some("Food");
+        let message = |taken| plunder_message(taken, food, Some("Rockets"), false);
+        let cargo = |stored| Taken::Cargo {
+            good: Good::Commodity(0),
+            stored,
+        };
+        assert_eq!(message(cargo(0)).as_deref(), Some(NO_CARGO_STORED));
+        assert_eq!(
+            message(cargo(1)).as_deref(),
+            Some("You salvaged 1 ton of Food from this ship.")
+        );
+        assert_eq!(
+            message(cargo(12)).as_deref(),
+            Some("You salvaged 12 tons of Food from this ship.")
+        );
+        assert_eq!(
+            plunder_message(cargo(3), None, None, false).as_deref(),
+            Some("You salvaged 3 tons of cargo from this ship."),
+            "a good with no name"
+        );
+        assert_eq!(
+            message(Taken::Credits(5750)).as_deref(),
+            Some("You stole all the 5750 credits from this ship.")
+        );
+        let ammo = |count| Taken::Ammo {
+            outfit: OutfitId(310),
+            count,
+        };
+        assert_eq!(message(ammo(0)).as_deref(), Some(NO_AMMO_STORED));
+        assert_eq!(
+            message(ammo(7)).as_deref(),
+            Some("You salvaged 7 Rockets from this ship.")
+        );
+        let energy = |stored| Taken::Energy {
+            offered: 170,
+            stored,
+        };
+        assert_eq!(message(energy(0)).as_deref(), Some(NO_ENERGY_STORED));
+        assert_eq!(message(energy(170)).as_deref(), Some(ALL_ENERGY_STORED));
+        assert_eq!(
+            plunder_message(energy(100), food, None, true).as_deref(),
+            Some(ENERGY_FILLED)
+        );
+        assert_eq!(message(Taken::Tripped).as_deref(), Some(SELF_DESTRUCT));
+        assert_eq!(
+            message(Taken::CaptureFailed).as_deref(),
+            Some(CAPTURE_FAILED)
+        );
+        assert_eq!(message(Taken::FleetFull).as_deref(), Some(FLEET_FULL));
+        assert_eq!(message(Taken::Escorted).as_deref(), Some(ASSIGNED_ESCORT));
+        for silent in [Taken::Captured, Taken::Aborted, Taken::Nothing] {
+            assert_eq!(message(silent), None, "{silent:?}");
+        }
+        assert_eq!(
+            [
+                NO_CARGO_STORED,
+                NO_AMMO_STORED,
+                NO_ENERGY_STORED,
+                ALL_ENERGY_STORED,
+                ENERGY_FILLED,
+                SELF_DESTRUCT,
+                CAPTURE_FAILED,
+                FLEET_FULL,
+                ASSIGNED_ESCORT,
+                RETAINED_OLD_SHIP,
+                LOST_OLD_SHIP,
+            ],
+            [
+                "You couldn't store any of the cargo you plundered from this ship.",
+                "You couldn't store any of the ammo you plundered from this ship.",
+                "You couldn't store any of the energy you transferred from this ship.",
+                "You transferred all of this ship's energy to your reactors and batteries.",
+                "You filled your reactors and batteries with energy from this ship.",
+                "Oops! You tripped this ship's security self-destruct mechanism.",
+                "Your attempt to capture this ship was unsuccessful.",
+                "You already have the maximum possible number of escorts.",
+                "You assigned this ship to your fleet of escorts.",
+                "You retained your old ship as an escort.",
+                "You were unable to retain your old ship as an escort.",
+            ]
+        );
+        assert_eq!(assigned_message(Assigned::Escort), ASSIGNED_ESCORT);
+        assert_eq!(assigned_message(Assigned::MyShip), RETAINED_OLD_SHIP);
+        assert_eq!(assigned_message(Assigned::Abandoned), LOST_OLD_SHIP);
+    }
+
+    /// [`beside`], boarded by [`Sure`] and captured, awaiting its
+    /// assignment.
+    fn captured() -> View {
+        let (_, chance) = scripted(&placed(750, 750, 0));
+        let mut view = FlightView::new(boardable())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still))
+            .with_disable_rule(Rc::new(DisablesTheStrong))
+            .with_boarding_rule(Rc::new(Sure));
+        view.tick(TICK);
+        tap(&mut view, TARGET_KEY);
+        tap(&mut view, BOARD_KEY);
+        let boarding = view.take_boarding().expect("boarded");
+        assert_eq!(boarding.odds, 75, "by the rule given");
+        assert_eq!(view.plunder(Take::Capture), Taken::Captured);
+        assert_eq!(view.message(), None, "the assignment dialog says it");
+        view
+    }
+
+    #[test]
+    fn use_as_escort_says_so() {
+        let mut view = captured();
+        assert_eq!(view.assign(Assignment::Escort), Some(Assigned::Escort));
+        assert_eq!(view.message(), Some(ASSIGNED_ESCORT));
+        let pilot = view.pilot().expect("a pilot");
+        assert_eq!(pilot.escorts().len(), 1);
+        assert!(view.take_save_due());
+    }
+
+    #[test]
+    fn use_as_my_ship_flies_and_draws_the_captured_ship() {
+        let mut view = captured();
+        assert_eq!(view.assign(Assignment::MyShip), Some(Assigned::MyShip));
+        assert_eq!(view.message(), Some(RETAINED_OLD_SHIP));
+        assert_eq!(view.session().expect("flying").ship(), ShipId(129));
+        assert!(view.catalog().sheets_asked.borrow().contains(&ShipId(129)));
+        let drawn_player = sprites(&drawn(&view))
+            .into_iter()
+            .filter(|&(_, center)| center == VIEW_CENTER)
+            .map(|(image, _)| image)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            drawn_player,
+            [ImageKey::sprite(2001, 0)],
+            "ship 129's sheet"
+        );
+        assert_eq!(view.assign(Assignment::MyShip), None, "nothing awaits");
+    }
+
+    #[test]
+    fn the_help_line_names_board() {
+        assert!(HELP.contains("B: board"), "{HELP}");
     }
 }
