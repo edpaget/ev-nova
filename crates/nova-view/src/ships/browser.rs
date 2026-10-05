@@ -4,7 +4,12 @@
 //! description in a column beside it. The lights blink by the ship's
 //! [`Blink`](super::catalog::Blink) from the selection on, as
 //! [`nova_sim::lights_level`] says, rolling on [`HashedRolls`] from seed 0
-//! for random blinking.
+//! for random blinking. They are added
+//! ([`Blend::Additive`](crate::Blend::Additive)) at every level, because
+//! the original's partial-level blit,
+//! `_BlitPixieRLETranslucent` (0xc1568), is its full-level `AddOver`
+//! applied to the lights scaled by level/32: see [`lights_tint`] for the
+//! full record.
 //!
 //! The screen reads ships only through the [`ShipCatalog`] port, once at
 //! start-up and once per selection; drawing never resolves anything.

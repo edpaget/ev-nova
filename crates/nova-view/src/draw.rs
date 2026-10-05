@@ -13,7 +13,9 @@ pub enum Blend {
     /// Painted over what is beneath, by its alpha.
     #[default]
     Normal,
-    /// Adds its colour, scaled by its alpha, to what is beneath.
+    /// Adds its colour, scaled by its alpha, to what is beneath. It stands
+    /// in for the original's OR-based `AddOver` and translucent light and
+    /// glow blits (see [`lights_tint`]).
     Additive,
 }
 
@@ -243,6 +245,59 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
 /// [`nova_sim::blink::FULL`] (32): white, with that many 32nds of full
 /// alpha, rounded to nearest, so level 32 adds the lights as they are.
 /// Levels past 32 are 32.
+///
+/// # The original's light blit
+///
+/// Traced in `EV Nova.app/Contents/MacOS/EV Nova` (i386, `otool -tV`), in
+/// the 16-bit ("thousands of colours", RGB555) depth this reproduces. Each
+/// routine is cited at its entry point; instruction sites inside one are
+/// given after "at".
+///
+/// - `_HandleShipDisplay` (0x2b514) shows the lights sprite while the
+///   intensity is above 1, at level n = `trunc(intensity)`. At
+///   0x2c672–0x2c692 it writes the sprite's destination factor (+0xa8) as
+///   32 and its red, green and blue factors (+0xaa, +0xac, +0xae) as n;
+///   an uncloaked ship's lights get no bias (+0xb0 = 0).
+/// - `_BlitPixieRLETranslucentDrawProc` (0xbb3fc), the draw proc of every
+///   ship's glow and lights sprites, picks `_BlitPixieRLEAddOver`
+///   (0xc24bf) when all four factors are 32 and there is no bias, which
+///   is level 32, and `_BlitPixieRLETranslucent` (0xc1568) otherwise,
+///   which is levels 1 to 31.
+/// - `_BlitPixieRLEAddOver` ORs the sprite's packed pixels into the
+///   screen: `dst | src`.
+/// - `_BlitPixieRLETranslucent` takes +0xa8 (32) as the destination factor
+///   and each channel's factor - +0xa8 + 32, capped at 32, as that
+///   channel's source factor (n). `_BlitPixieTranslucentCopy` (0xc1110)
+///   then combines each 5-bit channel as `((src_c * source factor) >> 5)
+///   | ((dst_c * destination factor) >> 5)`.
+///
+/// So at every level n from 1 to 32, per 5-bit channel:
+///
+/// ```text
+/// out_c = ((src_c * n) >> 5) | dst_c
+/// ```
+///
+/// A black lights pixel adds nothing, and the destination is never
+/// dimmed: the lights draw no silhouette at any level. At 32 the formula
+/// is `src | dst`, the `AddOver` blit, so one operator covers every level:
+/// the lights scaled by n/32 and added into the screen. That is why both
+/// screens draw the lights [`Blend::Additive`] with this tint at every
+/// level rather than choosing the blend by level.
+///
+/// Where this deviates from the original:
+///
+/// - **Saturating add, not bitwise OR.** `a | b` is `a + b - (a & b)`, so
+///   ours matches exactly where the scaled light and the screen share no
+///   set bits in a channel (always where either is black), and elsewhere
+///   is brighter by `a & b` before saturating: 5-bit 16 over 16 is 16 in
+///   the original and 31 here. WebGPU has no logic-op blending.
+/// - **No 5-bit truncation.** The original floors `src_c * n / 32` to 5
+///   bits; we scale 8-bit colour by this alpha, which differs by less than
+///   one 5-bit step per channel.
+/// - **Cloaking is not modelled.** A cloaked ship's bias (+0xb0 ≠ 0)
+///   mixes the lights toward a colour and keeps them off `AddOver` even at
+///   level 32. Nor is the 8-bit depth, whose alpha-table blits were not
+///   traced.
 #[must_use]
 pub fn lights_tint(level: u8) -> Color {
     let full = u16::from(FULL);

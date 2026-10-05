@@ -81,13 +81,17 @@ pub struct ShipAnim {
     ///
     /// The original keeps a lights intensity from 0 to 32 per ship (32 is
     /// full brightness) and updates it once every 1/30 s tick: every timer
-    /// and ramp in `_HandleShipDisplay` (0x2c2ea–0x2c565) scales by
-    /// `_gSpeedMult`, which `_HandleTimeAdjustment` sets to the frame's
-    /// elapsed milliseconds x 0.03 (0x333e1), so 1.0 is one tick. The
-    /// lights are drawn only while the intensity is above 1, at level
-    /// `trunc(intensity)` out of 32 (0x2c59a–0x2c6a9); level 32 is the
-    /// additive `BlitPixieRLEAddOver` blit (0xbb6c4–0xbb703). The intensity
-    /// starts at 0 (`_InitObjects`, 0x1c423).
+    /// and ramp in `_HandleShipDisplay` (0x2b514), at 0x2c2ea–0x2c565,
+    /// scales by `_gSpeedMult`, which `_HandleTimeAdjustment` sets to the
+    /// frame's elapsed milliseconds x 0.03 (at 0x333e1), so 1.0 is one
+    /// tick. The lights are drawn only while the intensity is above 1, at
+    /// level `trunc(intensity)` out of 32 (at 0x2c59a–0x2c6a9). Level 32 is
+    /// `_BlitPixieRLEAddOver` (0xc24bf), a bitwise OR into the screen;
+    /// lower levels use `_BlitPixieRLETranslucent` (0xc1568), whose
+    /// per-pixel `_BlitPixieTranslucentCopy` (0xc1110) ORs in the lights
+    /// scaled by level/32 and leaves the screen undimmed. The full record
+    /// is on `nova_view::draw::lights_tint`. The intensity starts at 0
+    /// (`_InitObjects`, at 0x1c423).
     ///
     /// Any mode but 1, 2 and 3 (stock: -1) holds the intensity at 32
     /// (0x2c565): the lights show steadily, which is what the Bible's

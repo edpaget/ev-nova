@@ -40,10 +40,14 @@
 //! frame count), its engine glow while the session is thrusting, and its
 //! running lights at the level [`nova_sim::lights_level`] gives for the
 //! sheet's blink at the flight's time in ticks, added with that many 32nds
-//! of full alpha, or not at all while they are off. The flight's time stops
-//! while the course map is open, so the lights blink in game time. Random
-//! blinking rolls on [`HashedRolls`] from seed 0. A layer that cannot be
-//! shown is left out silently.
+//! of full alpha, or not at all while they are off. They are added
+//! ([`Blend::Additive`](crate::Blend::Additive)) at every level, because
+//! the original's partial-level blit, `_BlitPixieRLETranslucent`
+//! (0xc1568), is its full-level `AddOver` applied to the lights scaled by
+//! level/32: see [`lights_tint`] for the full record. The flight's time
+//! stops while the course map is open, so the lights blink in game time.
+//! Random blinking rolls on [`HashedRolls`] from seed 0. A layer that
+//! cannot be shown is left out silently.
 //!
 //! Input, the original's default keys:
 //!
