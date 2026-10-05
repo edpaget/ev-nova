@@ -32,13 +32,16 @@
 //!
 //! The brackets in space are four corners, each two
 //! [`BRACKET_LENGTH`]-pixel lines, half the target's sprite out from its
-//! centre: blue for every target until hostility exists (a placeholder),
-//! and grey for a disabled one (`plunder.html`). The original's corners
-//! are `cicn`s, which the renderer does not have, and zoom in as the
-//! target is picked, which is left out.
+//! centre, coloured by the target's [`Standing`]: red for a target that
+//! threatens the player (the original's hostile brackets, `cicn`
+//! 10008-10011, and its colour-coded threat red, `_ColorCodeShip`
+//! @0x4ae8), grey for a disabled one (`plunder.html`), and blue otherwise.
+//! The original's corners are `cicn`s, which the renderer does not have
+//! (the colours are placeholders for them), and zoom in as the target is
+//! picked, which is left out.
 
-use nova_sim::Reserves;
 use nova_sim::reserves::Gauge;
+use nova_sim::{Condition, Npc, Reserves};
 
 use super::catalog::{StatusBarLayout, TargetCard};
 use super::weapons::HIDES_AMMO;
@@ -79,6 +82,9 @@ pub const WEAPON_BASELINE: f32 = 12.0;
 pub const BRACKET_LENGTH: f32 = 16.0;
 /// The brackets round a target: neutral blue, a placeholder.
 pub const BRACKETS: Color = Color::from_rgb24(0x0040_80FF);
+/// The brackets round a target threatening the player: red, a
+/// placeholder for the original's hostile brackets.
+pub const HOSTILE_BRACKETS: Color = Color::from_rgb24(0x00FF_0000);
 /// The brackets round a disabled target: grey.
 pub const DISABLED_BRACKETS: Color = Color::from_rgb24(0x0088_8888);
 
@@ -269,14 +275,37 @@ pub fn draw_secondary(
     );
 }
 
-/// Draws the brackets round a target whose sprite is `sprite_size`
-/// across, centred at `at` on screen, grey when it is `disabled`.
-pub fn draw_brackets(list: &mut DrawList, at: Point, sprite_size: f32, disabled: bool) {
-    let half = sprite_size / 2.0;
-    let color = if disabled {
-        DISABLED_BRACKETS
+/// How a target stands towards the player, for its brackets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Standing {
+    /// Neither threatening the player nor disabled.
+    Neutral,
+    /// Threatening the player ([`Npc::threatens_player`]).
+    Hostile,
+    /// Disabled.
+    Disabled,
+}
+
+/// How `npc` stands towards the player.
+#[must_use]
+pub fn standing(npc: &Npc) -> Standing {
+    if npc.condition == Condition::Disabled {
+        Standing::Disabled
+    } else if npc.threatens_player() {
+        Standing::Hostile
     } else {
-        BRACKETS
+        Standing::Neutral
+    }
+}
+
+/// Draws the brackets round a target whose sprite is `sprite_size`
+/// across, centred at `at` on screen, coloured by its `standing`.
+pub fn draw_brackets(list: &mut DrawList, at: Point, sprite_size: f32, standing: Standing) {
+    let half = sprite_size / 2.0;
+    let color = match standing {
+        Standing::Neutral => BRACKETS,
+        Standing::Hostile => HOSTILE_BRACKETS,
+        Standing::Disabled => DISABLED_BRACKETS,
     };
     for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
         let corner = Point::new(at.x + sx * half, at.y + sy * half);
@@ -303,6 +332,7 @@ mod tests {
     use crate::geometry::Bounds;
     use crate::text::fixture::MonoMetrics;
     use crate::{DrawCommand, Font};
+    use nova_sim::{Goal, NpcId, ShipRef};
 
     const BRIGHT: Color = Color::rgba(250, 250, 250, 255);
     const DIM: Color = Color::rgba(100, 100, 100, 255);
@@ -590,9 +620,9 @@ mod tests {
         );
     }
 
-    fn brackets(disabled: bool) -> Vec<DrawCommand> {
+    fn brackets(standing: Standing) -> Vec<DrawCommand> {
         let mut list = DrawList::new();
-        draw_brackets(&mut list, Point::new(500.0, 400.0), 48.0, disabled);
+        draw_brackets(&mut list, Point::new(500.0, 400.0), 48.0, standing);
         list.iter().cloned().collect()
     }
 
@@ -608,7 +638,7 @@ mod tests {
     #[test]
     fn the_brackets_are_four_corners_half_the_sprite_out() {
         assert_eq!(
-            brackets(false),
+            brackets(Standing::Neutral),
             [
                 stroke((476.0, 376.0), (492.0, 376.0), BRACKETS),
                 stroke((476.0, 376.0), (476.0, 392.0), BRACKETS),
@@ -624,14 +654,80 @@ mod tests {
         assert_eq!(BRACKET_LENGTH, 16.0);
     }
 
+    /// Whether every line of `commands`, eight in all, is `color`.
+    fn all_of(commands: &[DrawCommand], color: Color) -> bool {
+        commands.len() == 8
+            && commands.iter().all(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Line { color: c, .. } if *c == color
+                )
+            })
+    }
+
     #[test]
     fn a_disabled_targets_brackets_are_grey() {
-        let grey = brackets(true);
-        assert_eq!(grey.len(), 8);
-        assert!(grey.iter().all(|command| matches!(
-            command,
-            DrawCommand::Line { color, .. } if *color == DISABLED_BRACKETS
-        )));
+        assert!(all_of(&brackets(Standing::Disabled), DISABLED_BRACKETS));
         assert_eq!(DISABLED_BRACKETS, Color::rgba(0x88, 0x88, 0x88, 255));
+    }
+
+    #[test]
+    fn a_hostile_targets_brackets_are_red() {
+        assert!(all_of(&brackets(Standing::Hostile), HOSTILE_BRACKETS));
+        assert_eq!(HOSTILE_BRACKETS, Color::rgba(0xFF, 0x00, 0x00, 255));
+    }
+
+    /// NPC 1 with `goal`, in `condition`.
+    fn npc(goal: Goal, condition: Condition) -> nova_sim::Npc {
+        nova_sim::Npc {
+            id: NpcId(1),
+            ship: nova_sim::ShipId(128),
+            govt: None,
+            ai_type: nova_sim::AiType::Warship,
+            leader: None,
+            stats: nova_sim::ShipStats::default(),
+            reserves: Reserves::full(1.0, 1.0, 1.0),
+            state: nova_sim::ShipState::default(),
+            mode: nova_sim::traffic::npc::Mode::Flying,
+            goal,
+            condition,
+            hull: nova_sim::HullSpec::default(),
+            armament: nova_sim::Armament::default(),
+            rounds: std::collections::BTreeMap::new(),
+            trigger: nova_sim::Trigger::default(),
+            target: None,
+            provoked: 0.0,
+            aggression: 0,
+            inspected: None,
+        }
+    }
+
+    #[test]
+    fn a_target_threatening_the_player_is_hostile_and_a_disabled_one_disabled() {
+        let player = ShipRef::Player;
+        for goal in [
+            Goal::Attack(player),
+            Goal::Snipe(player),
+            Goal::Flee(player),
+        ] {
+            assert_eq!(
+                standing(&npc(goal, Condition::Intact)),
+                Standing::Hostile,
+                "{goal:?}"
+            );
+            assert_eq!(
+                standing(&npc(goal, Condition::Disabled)),
+                Standing::Disabled,
+                "{goal:?}"
+            );
+        }
+        let other = ShipRef::Npc(NpcId(5));
+        for goal in [Goal::Idle, Goal::Attack(other), Goal::Inspect(player)] {
+            assert_eq!(
+                standing(&npc(goal, Condition::Intact)),
+                Standing::Neutral,
+                "{goal:?}"
+            );
+        }
     }
 }

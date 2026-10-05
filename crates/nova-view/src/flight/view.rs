@@ -23,12 +23,14 @@
 //! read, once per type for the life of the screen. After each step of the
 //! player's ship, the traffic takes a step,
 //! its NPCs deciding as the screen's [`Behaviour`] says
-//! ([`FlightView::with_behaviour`]; [`Peaceful`] by default), and then the
+//! ([`FlightView::with_behaviour`]; [`NovaAi`] by default), and then the
 //! fight ([`Session::tick_combat`]), its ships disabled as the screen's
 //! [`DisableRule`] says ([`FlightView::with_disable_rule`];
-//! [`NovaDisable`] by default), and their point defence engaging the
+//! [`NovaDisable`] by default), their point defence engaging the
 //! missiles its [`PointDefenceRule`] calls hostile
-//! ([`FlightView::with_point_defence_rule`]; [`Allegiance`] by default). What could not be read of the looks
+//! ([`FlightView::with_point_defence_rule`]; [`Allegiance`] by default),
+//! and the player's crimes judged by its [`LegalCode`]
+//! ([`FlightView::with_law`]; [`NovaLaw`] by default). What could not be read of the looks
 //! (each once, when the screen is built), then the session's diagnostics
 //! about game data it does not handle yet, pass through
 //! [`Screen::take_diagnostics`] for the app to write out. Each NPC is
@@ -101,8 +103,9 @@
 //! - Space fires the primary weapons and Control the secondary selected,
 //!   while held. W (a press) selects the next secondary weapon, and with
 //!   Alt (Option) the one before. Tab (a press) targets the next ship in
-//!   turn, and R the nearest ([`TargetPick`]). The original's Shift-Tab,
-//!   back through the ships, is not bound: there is no Shift key yet.
+//!   turn, R the nearest threat, and Alt-R (Option-R) the nearest ship
+//!   ([`TargetPick`]). The original's Shift-Tab, back through the ships,
+//!   is not bound: there is no Shift key yet.
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -113,11 +116,11 @@ use std::time::Duration;
 
 use nova_sim::{
     Allegiance, Behaviour, Chance, CombatCatalog, Condition, Controls, DisableRule, FixedStep,
-    GovtId, JumpRefusal, LandingRefusal, Market, NeverFires, NovaDisable, Npc, NpcId, Order,
-    OutfitOrder, OutfitRefusal, Outfitter, Peaceful, Pilot, PilotCatalog, PointDefenceRule,
-    RechargeRefusal, Reserves, Rules, Session, ShipId, ShipPurchase, ShipRef, ShipRefusal,
-    ShipState, Shipyard, StartError, StellarId, Steps, TargetPick, TradeRefusal, TrafficCatalog,
-    Turn, Vec2, flight::normalized, flight::shortest_turn,
+    GovtId, JumpRefusal, LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaDisable,
+    NovaLaw, Npc, NpcId, Order, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
+    PointDefenceRule, RechargeRefusal, Reserves, Rules, Session, ShipId, ShipPurchase, ShipRef,
+    ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps, TargetPick, TradeRefusal,
+    TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -177,7 +180,7 @@ pub const SELECT_KEY: Key = Key::Char('w');
 /// picks the next ship in turn.
 pub const TARGET_KEY: Key = Key::Tab;
 /// The closest target key: the original's default (`closeTarg`), which
-/// picks the nearest ship.
+/// picks the nearest threat, and with Alt (Option) the nearest ship.
 pub const NEAREST_KEY: Key = Key::Char('r');
 
 /// The land key: the original's default (`STR#` 129, and `STR#` 2002
@@ -355,6 +358,8 @@ pub struct FlightView<C> {
     disable_rule: Rc<dyn DisableRule>,
     /// Which missiles the ships' point defence engages.
     defence_rule: Rc<dyn PointDefenceRule>,
+    /// What the player's crimes do to its legal record.
+    law: Rc<dyn LegalCode>,
     /// Each NPC ship type's sheet, or why it cannot be shown, read once.
     npc_sheets: BTreeMap<ShipId, Result<ShipSheet, String>>,
     /// Each NPC as it was a step before the session's.
@@ -453,9 +458,10 @@ impl<
             pending_landing,
             message: None,
             chance: SharedChance::default(),
-            behaviour: Rc::new(Peaceful),
+            behaviour: Rc::new(NovaAi::default()),
             disable_rule: Rc::new(NovaDisable),
             defence_rule: Rc::new(Allegiance),
+            law: Rc::new(NovaLaw),
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
             unread_looks: looks
@@ -521,6 +527,12 @@ impl<
             defence_rule,
             ..self
         }
+    }
+
+    /// The flight with the player's crimes judged by `law`.
+    #[must_use]
+    pub fn with_law(self, law: Rc<dyn LegalCode>) -> Self {
+        Self { law, ..self }
     }
 
     /// Reads the sheet of each ship type the traffic can spawn that has
@@ -955,8 +967,8 @@ impl<C> FlightView<C> {
             Some(Ok(sheet)) => sheet.frame_width.max(sheet.frame_height) as f32,
             _ => PLACEHOLDER_SIZE,
         };
-        let disabled = npc.condition == Condition::Disabled;
-        target::draw_brackets(list, camera.world_to_screen(at), size, disabled);
+        let standing = target::standing(npc);
+        target::draw_brackets(list, camera.world_to_screen(at), size, standing);
     }
 
     /// Draws the status bar's target panel and secondary weapon line.
@@ -1051,7 +1063,11 @@ impl<
                 return ScreenAction::None;
             }
             Some(TARGET_KEY) => self.select_target(TargetPick::Next),
-            Some(NEAREST_KEY) => self.select_target(TargetPick::Nearest),
+            Some(NEAREST_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
+                TargetPick::Nearest
+            } else {
+                TargetPick::NearestThreat
+            }),
             Some(SELECT_KEY) => {
                 let backwards = self.held.contains(&Key::Alt);
                 if let Ok(session) = &mut self.session {
@@ -1113,7 +1129,7 @@ impl<
                 let rules = Rules {
                     disable: &*self.disable_rule,
                     defence: &*self.defence_rule,
-                    law: &nova_sim::NovaLaw,
+                    law: &*self.law,
                 };
                 session.tick_combat(rules, &mut self.chance);
                 let player = point(session.player().position);
@@ -3761,7 +3777,11 @@ mod tests {
         assert_eq!(npc_states(&view)[0].position, Vec2::new(0.0, 100.0));
         view.tick(TICK + TICK / 2);
         let npc = &view.session().expect("flying").npcs()[0];
-        assert_eq!(npc.goal, Goal::Land(StellarId(128)), "Peaceful, by default");
+        assert_eq!(
+            npc.goal,
+            Goal::Land(StellarId(128)),
+            "Nova's AI, by default: a trader's business"
+        );
         let moved = npc.state.position.y - 100.0;
         assert!(moved < 0.0, "{npc:?}");
         let alpha = view.alpha();
@@ -4037,7 +4057,9 @@ mod tests {
 
     use crate::flight::catalog::EffectSheet;
     use crate::flight::effects::{DEBRIS_COLOR, Effects};
-    use crate::flight::target::{self, BRACKETS, DISABLED_BRACKETS, NO_SECONDARY, NO_TARGET};
+    use crate::flight::target::{
+        self, BRACKETS, DISABLED_BRACKETS, HOSTILE_BRACKETS, NO_SECONDARY, NO_TARGET,
+    };
     use crate::flight::weapons::{BEAM_UNDER_SHIPS, translucent};
     use crate::sound::CombatSound;
 
@@ -4206,8 +4228,15 @@ mod tests {
         view.session().expect("flying").target().map(|npc| npc.id)
     }
 
+    /// Taps R while holding Alt (Option).
+    fn alt_tap(view: &mut View, k: Key) {
+        view.input(&key(Key::Alt, true));
+        tap(view, k);
+        view.input(&key(Key::Alt, false));
+    }
+
     #[test]
-    fn tab_targets_the_next_npc_and_r_the_nearest() {
+    fn tab_targets_the_next_npc_and_alt_r_the_nearest() {
         let mut view = fighting(armed(2, &[]), &two_npcs());
         assert_eq!(target_of(&view), None);
         tap(&mut view, Key::Tab);
@@ -4218,12 +4247,53 @@ mod tests {
         assert_eq!(target_of(&view), Some(NpcId(1)));
         tap(&mut view, Key::Tab);
         assert_eq!(target_of(&view), None, "past the last");
-        tap(&mut view, NEAREST_KEY);
+        alt_tap(&mut view, NEAREST_KEY);
         assert_eq!(target_of(&view), Some(NpcId(1)));
         tap(&mut view, Key::Tab);
+        view.input(&key(Key::Alt, true));
         view.input(&held(NEAREST_KEY));
         assert_eq!(target_of(&view), None, "a repeat does nothing");
         assert_eq!((TARGET_KEY, NEAREST_KEY), (Key::Tab, Key::Char('r')));
+    }
+
+    /// NPC 0 attacks the player; the rest idle.
+    #[derive(Debug)]
+    struct Threatening;
+
+    impl Behaviour for Threatening {
+        fn decide(
+            &self,
+            npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            if npc.id == NpcId(0) {
+                Goal::Attack(ShipRef::Player)
+            } else {
+                Goal::Idle
+            }
+        }
+    }
+
+    #[test]
+    fn r_targets_the_nearest_threat_over_a_nearer_ship_and_brackets_it_red() {
+        let mut view = fighting(armed(2, &[]), &two_npcs()).with_behaviour(Rc::new(Threatening));
+        tap(&mut view, NEAREST_KEY);
+        assert_eq!(target_of(&view), None, "no threat yet: unchanged");
+        view.tick(TICK);
+        tap(&mut view, NEAREST_KEY);
+        assert_eq!(
+            target_of(&view),
+            Some(NpcId(0)),
+            "the threat, though farther"
+        );
+        let list = drawn(&view);
+        assert!(list.iter().any(line_in(HOSTILE_BRACKETS)), "{list:?}");
+        assert!(!list.iter().any(line_in(BRACKETS)));
+        alt_tap(&mut view, NEAREST_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(1)), "Alt-R: the nearer");
+        let list = drawn(&view);
+        assert!(list.iter().any(line_in(BRACKETS)));
     }
 
     /// How many of the shots in flight are of `weapon`.
@@ -4742,7 +4812,7 @@ mod tests {
             &mut brackets,
             view.camera().world_to_screen(shown),
             40.0,
-            false,
+            target::Standing::Neutral,
         );
         let commands: Vec<_> = list.iter().cloned().collect();
         let expected: Vec<_> = brackets.iter().cloned().collect();
@@ -5031,5 +5101,102 @@ mod tests {
                 .all(|sound| sound.sound != nova_sim::SoundId(302)),
             "{sounds:?}"
         );
+    }
+
+    /// [`armed`] with a blaster doing 10 energy and 10 mass damage, and
+    /// govt 140 that costs 3 to disable a ship of.
+    fn damaging() -> FakeCatalog {
+        let catalog = armed(1, &[BLASTER]);
+        FakeCatalog {
+            weapons: vec![nova_sim::WeaponRecord {
+                reload: 5,
+                mass_dmg: 10,
+                energy_dmg: 10,
+                ..gun(BLASTER, 0, -1, -1)
+            }],
+            govts: vec![nova_sim::GovtRecord {
+                id: GovtId(140),
+                flags: 0,
+                flags2: 0,
+                crime_tol: 0,
+                penalties: nova_sim::Penalties {
+                    disable: 3,
+                    ..nova_sim::Penalties::default()
+                },
+                max_odds: 100,
+                classes: [-1; 4],
+                allies: [-1; 4],
+                enemies: [-1; 4],
+            }],
+            ..catalog
+        }
+    }
+
+    #[test]
+    fn by_default_npcs_fight_by_novas_ai_and_crimes_by_novas_law() {
+        // The warship 100 above, facing the player.
+        let (_, chance) = scripted(&placed(750, 650, 180));
+        let mut view = FlightView::new(damaging()).with_chance(chance);
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, true));
+        let mut answered = false;
+        for _ in 0..120 {
+            view.tick(TICK);
+            let session = view.session().expect("flying");
+            answered |= session
+                .npcs()
+                .first()
+                .is_some_and(|npc| npc.goal == Goal::Attack(ShipRef::Player));
+            if session
+                .npcs()
+                .first()
+                .is_some_and(|npc| npc.condition == Condition::Disabled)
+            {
+                break;
+            }
+        }
+        assert!(answered, "the warship hit turned on the player");
+        let session = view.session().expect("flying");
+        assert_eq!(session.npcs()[0].condition, Condition::Disabled);
+        assert_eq!(session.pilot().legal_record(GovtId(140)), -3);
+    }
+
+    /// Records each crime, and changes nothing.
+    #[derive(Debug, Default)]
+    struct Witness {
+        seen: RefCell<Vec<nova_sim::Crime>>,
+    }
+
+    impl nova_sim::LegalCode for Witness {
+        fn penalties(
+            &self,
+            crime: nova_sim::Crime,
+            _victim: Option<GovtId>,
+            _govts: &nova_sim::Governments,
+        ) -> Vec<(GovtId, i32)> {
+            self.seen.borrow_mut().push(crime);
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn the_flight_convicts_by_the_law_it_is_given() {
+        let witness = Rc::new(Witness::default());
+        let (_, chance) = scripted(&placed(750, 650, 180));
+        let mut view = FlightView::new(damaging())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still))
+            .with_law(witness.clone());
+        view.tick(TICK);
+        view.input(&key(FIRE_KEY, true));
+        for _ in 0..120 {
+            view.tick(TICK);
+            if view.session().expect("flying").npcs()[0].condition == Condition::Disabled {
+                break;
+            }
+        }
+        assert_eq!(*witness.seen.borrow(), [nova_sim::Crime::Disable]);
+        let session = view.session().expect("flying");
+        assert_eq!(session.pilot().legal_record(GovtId(140)), 0, "as it says");
     }
 }
