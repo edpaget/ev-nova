@@ -1598,6 +1598,122 @@ mod tests {
     }
 
     #[test]
+    fn each_shot_in_flight_has_its_own_number() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(blaster()),
+            Ship::at(2, 0.0, 500.0).armed(blaster()),
+        ];
+        for _ in 0..3 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+        }
+        let mut ids: Vec<ShotId> = combat.shots().iter().map(|shot| shot.id).collect();
+        assert_eq!(ids.len(), 6);
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 6, "{:?}", combat.shots());
+    }
+
+    #[test]
+    fn a_point_defence_shot_meets_only_a_homing_missile_of_another_fleet_it_can_target() {
+        // B fires, together and along the same line at A: a shell, a
+        // missile point defence cannot target, and one it can, in that
+        // order.
+        let shell = WeaponRecord {
+            reload: 1000,
+            count: 100,
+            speed: 500,
+            ..weapon(128)
+        };
+        let immune = WeaponRecord {
+            flags: 0x0080,
+            ..WeaponRecord {
+                speed: 500,
+                ..missile()
+            }
+        };
+        let plain = WeaponRecord {
+            guidance: 1,
+            reload: 1000,
+            count: 100,
+            speed: 500,
+            ..weapon(134)
+        };
+        let mut attacker = Ship::at(2, 0.0, -200.0).facing(180.0).targeting(A);
+        attacker.armament = Armament::new(
+            [
+                WeaponRecord {
+                    id: WeaponId(128),
+                    ..shell
+                },
+                WeaponRecord {
+                    id: WeaponId(135),
+                    ..immune
+                },
+                WeaponRecord {
+                    id: WeaponId(134),
+                    ..plain
+                },
+            ]
+            .iter()
+            .map(|record| (WeaponSpec::new(record), 1)),
+        );
+        attacker.trigger = Trigger {
+            primary: true,
+            secondary: None,
+        };
+        let mut defender = Ship::at(1, 0.0, 0.0).armed(quad()).facing(0.0);
+        defender.trigger = Trigger::default();
+        let mut ships = [defender, attacker];
+        let mut combat = Combat::default();
+        let mut events = Vec::new();
+        for _ in 0..10 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[1].trigger = Trigger::default();
+            events.extend(combat.take_events());
+        }
+        let flying: Vec<i16> = combat
+            .shots()
+            .iter()
+            .map(|shot| shot.weapon.id.0)
+            .filter(|&id| id != 133)
+            .collect();
+        assert_eq!(flying, [128, 135], "only 134 shot down: {events:?}");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, CombatEvent::ShotDown { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_shot_of_no_point_defence_meets_no_missile() {
+        let gun = WeaponRecord {
+            guidance: -1,
+            ..quad()
+        };
+        let mut combat = Combat::default();
+        let mut ships = missile_attack(gun);
+        ships[0].trigger = Trigger {
+            primary: true,
+            secondary: None,
+        };
+        for _ in 0..12 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[1].trigger = Trigger::default();
+        }
+        assert_eq!(missile_durability(&combat), Some(4.0), "flown through");
+        assert!(
+            !combat
+                .take_events()
+                .iter()
+                .any(|event| matches!(event, CombatEvent::ShotDown { .. }))
+        );
+    }
+
+    #[test]
     fn point_defence_spares_a_missile_the_rule_does_not_call_hostile() {
         let mut combat = Combat::default();
         let mut ships = missile_attack(quad());

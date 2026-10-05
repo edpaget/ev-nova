@@ -185,14 +185,13 @@ fn resource_name(name: &str) -> String {
 }
 
 /// How long `snd ` `sound` lasts in `data`, in ticks rounded up: its
-/// frames over its rate; none when it is missing, cannot be decoded, or
-/// has no rate.
+/// frames over its rate; none when it is missing or cannot be decoded
+/// (which a rate of none cannot).
 fn sound_ticks(data: &GameData, sound: SoundId) -> Option<u32> {
     let snd = data.resource(SND, sound.0)?;
     let pcm = decode_snd(snd.resource.data()).ok()?;
-    let hz = pcm.sample_rate().hz();
-    let seconds_x_ticks = pcm.frames() as f64 * f64::from(TICKS_PER_SECOND);
-    (hz > 0.0).then(|| (seconds_x_ticks / hz).ceil() as u32)
+    let frames_x_ticks = pcm.frames() as f64 * f64::from(TICKS_PER_SECOND);
+    Some((frames_x_ticks / pcm.sample_rate().hz()).ceil() as u32)
 }
 
 /// The `snd ` resource type.

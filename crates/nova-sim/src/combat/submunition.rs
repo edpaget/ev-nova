@@ -183,7 +183,9 @@ mod tests {
             generation: 2,
             ..parent(-1, 3, 0, 0, 0)
         };
-        let subs = release(&parent, &sub(-1), Some(HIT), &[], &mut Draws::of(&[]));
+        let mut chance = Draws::of(&[]);
+        let subs = release(&parent, &sub(-1), Some(HIT), &[], &mut chance);
+        assert!(chance.asked.is_empty(), "no spread, nothing drawn");
         assert_eq!(subs.len(), 3);
         for shot in &subs {
             assert_eq!(shot.position, Vec2::new(100.0, 50.0));
@@ -242,6 +244,11 @@ mod tests {
         );
         assert_eq!(alone[0].target, Some(HIT), "the given target, the only one");
         assert_eq!(alone[0].heading, 180.0, "at its bearing");
+        // Nearer the parent at (100, 50), though nearer the centre is the
+        // other.
+        let measured = [ship(NEAR, 100.0, -50.0), ship(HIT, -100.0, -40.0)];
+        let subs = release(&seeking, &sub(-1), None, &measured, &mut Draws::of(&[]));
+        assert_eq!(subs[0].target, Some(NEAR), "from the parent");
         let nothing = release(&seeking, &sub(-1), Some(HIT), &[], &mut Draws::of(&[]));
         assert_eq!(nothing[0].target, Some(HIT), "the given target");
         assert_eq!(nothing[0].heading, 90.0, "nowhere to head");

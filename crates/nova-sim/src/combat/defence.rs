@@ -299,6 +299,33 @@ mod tests {
             "the hull's blind spot"
         );
         assert_eq!(picked(&astern, 0, 0), Some(ShotId(1)));
+        assert_eq!(
+            picked(&astern, BLIND_REAR, BLIND_REAR),
+            None,
+            "blind both ways"
+        );
+    }
+
+    #[test]
+    fn a_missile_is_measured_from_where_the_defender_is() {
+        let at = ShipState {
+            position: Vec2::new(1000.0, 1000.0),
+            ..ShipState::default()
+        };
+        let rule = Recording {
+            hostile: true,
+            ..Recording::default()
+        };
+        let near = [missile(1, 1000.0, 700.0, Some(DEFENDER))];
+        let chosen = choose(ESCORT, &at, &HullSpec::default(), &quad(0), &near, &rule);
+        assert_eq!(
+            chosen.map(|shot| shot.id),
+            Some(ShotId(1)),
+            "300 pixels off"
+        );
+        let far = [missile(1, 0.0, 0.0, Some(DEFENDER))];
+        let chosen = choose(ESCORT, &at, &HullSpec::default(), &quad(0), &far, &rule);
+        assert_eq!(chosen, None, "1414 pixels off");
     }
 
     #[test]

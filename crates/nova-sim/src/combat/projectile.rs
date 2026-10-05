@@ -652,6 +652,18 @@ mod tests {
             shot.step(&ahead);
         }
         assert_eq!(shot.heading, 90.0, "not snapped to the bearing");
+        // Straight up from where it is on its 16th tick: exactly 90
+        // degrees off, its turn.
+        let sharp = WeaponSpec {
+            turn: 90.0,
+            ..missile(0)
+        };
+        let above = [target(2, 150.0, -1000.0, Condition::Intact)];
+        let mut shot = homing(sharp, Some(TARGET));
+        for _ in 0..16 {
+            shot.step(&above);
+        }
+        assert_eq!(shot.heading, 90.0, "exactly its turn off: kept");
     }
 
     #[test]

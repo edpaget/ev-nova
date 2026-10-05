@@ -273,6 +273,15 @@ mod tests {
         );
         let slow = lead(&firer(0.0), &crossing, 5.0);
         assert!(close(slow, 40.0_f32.atan2(100.0).to_degrees()), "{slow}");
+        let elsewhere = ShipState {
+            position: Vec2::new(-300.0, 400.0),
+            ..firer(0.0)
+        };
+        let ahead = target(-300.0, 300.0, 2.0, 0.0);
+        assert!(
+            close(lead(&elsewhere, &ahead, 10.0), expected),
+            "from where it is"
+        );
     }
 
     /// `spec` aimed from a ship facing `heading` at the target dead ahead
@@ -358,6 +367,11 @@ mod tests {
             let rear_blind = spec(raw, BLIND_REAR);
             assert_eq!(aimed(&rear_blind, 180.0, 0, true), None, "{raw}");
             assert_eq!(aimed(&spec(raw, 0), 180.0, BLIND_REAR, true), None, "{raw}");
+            assert_eq!(
+                aimed(&rear_blind, 180.0, BLIND_REAR, true),
+                None,
+                "{raw}: both"
+            );
         }
         for raw in [3, 4] {
             assert!(
