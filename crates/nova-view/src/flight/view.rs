@@ -335,15 +335,10 @@ pub fn board_refusal_message(refusal: BoardRefusal) -> Option<&'static str> {
 /// What the player is told of a press in the plunder dialog that did
 /// `taken`, in the original's words (`_DoPlunderDialog`): the cargo's
 /// `good` and the ammunition's `outfit` by name, and the energy by
-/// whether the tank is `full` after it; nothing for a capture awaiting
-/// its assignment, an abort or a press that did nothing.
+/// whether it filled the tank; nothing for a capture awaiting its
+/// assignment, an abort or a press that did nothing.
 #[must_use]
-pub fn plunder_message(
-    taken: Taken,
-    good: Option<&str>,
-    outfit: Option<&str>,
-    full: bool,
-) -> Option<String> {
+pub fn plunder_message(taken: Taken, good: Option<&str>, outfit: Option<&str>) -> Option<String> {
     let text = match taken {
         Taken::Cargo { stored: 0, .. } => NO_CARGO_STORED.to_owned(),
         Taken::Cargo { stored, .. } => {
@@ -358,7 +353,7 @@ pub fn plunder_message(
             format!("You salvaged {count} {outfit} from this ship.")
         }
         Taken::Energy { stored: 0, .. } => NO_ENERGY_STORED.to_owned(),
-        Taken::Energy { .. } if full => ENERGY_FILLED.to_owned(),
+        Taken::Energy { full: true, .. } => ENERGY_FILLED.to_owned(),
         Taken::Energy { .. } => ALL_ENERGY_STORED.to_owned(),
         Taken::Tripped => SELF_DESTRUCT.to_owned(),
         Taken::CaptureFailed => CAPTURE_FAILED.to_owned(),
@@ -885,8 +880,7 @@ impl<C> FlightView<C> {
             Taken::Ammo { outfit, .. } => session.outfit_name(outfit),
             _ => None,
         };
-        let fuel = session.reserves().fuel;
-        if let Some(text) = plunder_message(taken, good, outfit, fuel.now >= fuel.max) {
+        if let Some(text) = plunder_message(taken, good, outfit) {
             self.say(text);
         }
         taken
@@ -5575,7 +5569,7 @@ mod tests {
     #[test]
     fn the_plunder_messages_are_the_originals() {
         let food = Some("Food");
-        let message = |taken| plunder_message(taken, food, Some("Rockets"), false);
+        let message = |taken| plunder_message(taken, food, Some("Rockets"));
         let cargo = |stored| Taken::Cargo {
             good: Good::Commodity(0),
             stored,
@@ -5590,7 +5584,7 @@ mod tests {
             Some("You salvaged 12 tons of Food from this ship.")
         );
         assert_eq!(
-            plunder_message(cargo(3), None, None, false).as_deref(),
+            plunder_message(cargo(3), None, None).as_deref(),
             Some("You salvaged 3 tons of cargo from this ship."),
             "a good with no name"
         );
@@ -5607,16 +5601,17 @@ mod tests {
             message(ammo(7)).as_deref(),
             Some("You salvaged 7 Rockets from this ship.")
         );
-        let energy = |stored| Taken::Energy {
+        let energy = |stored, full| Taken::Energy {
             offered: 170,
             stored,
+            full,
         };
-        assert_eq!(message(energy(0)).as_deref(), Some(NO_ENERGY_STORED));
-        assert_eq!(message(energy(170)).as_deref(), Some(ALL_ENERGY_STORED));
+        assert_eq!(message(energy(0, true)).as_deref(), Some(NO_ENERGY_STORED));
         assert_eq!(
-            plunder_message(energy(100), food, None, true).as_deref(),
-            Some(ENERGY_FILLED)
+            message(energy(170, false)).as_deref(),
+            Some(ALL_ENERGY_STORED)
         );
+        assert_eq!(message(energy(100, true)).as_deref(), Some(ENERGY_FILLED));
         assert_eq!(message(Taken::Tripped).as_deref(), Some(SELF_DESTRUCT));
         assert_eq!(
             message(Taken::CaptureFailed).as_deref(),
@@ -5707,6 +5702,79 @@ mod tests {
             "ship 129's sheet"
         );
         assert_eq!(view.assign(Assignment::MyShip), None, "nothing awaits");
+    }
+
+    #[test]
+    fn the_plunder_taken_is_named_as_the_session_names_it() {
+        let mut catalog = boardable();
+        catalog.fields.holds = 20;
+        catalog.dudes[0].1.booty = 0x0041;
+        catalog.commodities = CommodityStrings {
+            names: vec!["Food".to_owned()],
+            base_prices: vec!["75".to_owned()],
+        };
+        for record in &mut catalog.ships {
+            if record.id == ShipId(129) {
+                record.fields.holds = 20;
+            }
+        }
+        catalog.weapons = vec![nova_sim::WeaponRecord {
+            ammo_type: 12,
+            ..gun(ROCKET, 0x0002, -1, -1)
+        }];
+        let rockets = |id, ammo| nova_sim::HullRecord {
+            strength: 5,
+            weapons: vec![nova_sim::StockWeapon {
+                weapon: ROCKET,
+                count: 1,
+                ammo,
+            }],
+            ..hull_of(id, &[])
+        };
+        catalog.hulls = vec![rockets(128, 0), rockets(129, 2)];
+        catalog.hulls[0].strength = 0;
+        catalog.outfits = vec![OutfitRecord {
+            id: OutfitId(310),
+            name: "Rockets".to_owned(),
+            short_name: "Rockets".to_owned(),
+            disp_weight: 0,
+            mass: 1,
+            tech_level: 1,
+            max: 10,
+            flags: 0,
+            cost: 100,
+            mods: [
+                (nova_sim::combat::armament::MOD_AMMO, 140),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+            ],
+            contribute: 0,
+            require: 0,
+            require_govt: -1,
+            availability: String::new(),
+        }];
+        let (_, chance) = scripted(&placed(750, 750, 0));
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still))
+            .with_disable_rule(Rc::new(DisablesTheStrong));
+        view.tick(TICK);
+        tap(&mut view, TARGET_KEY);
+        tap(&mut view, BOARD_KEY);
+        let boarding = view.take_boarding().expect("boarded");
+        assert_eq!(boarding.cargo, Some((Good::Commodity(0), 19)));
+        assert_eq!(boarding.ammo, Some((OutfitId(310), 2)));
+        view.plunder(Take::Cargo);
+        assert_eq!(
+            view.message(),
+            Some("You salvaged 19 tons of Food from this ship.")
+        );
+        view.plunder(Take::Ammo);
+        assert_eq!(
+            view.message(),
+            Some("You salvaged 2 Rockets from this ship.")
+        );
     }
 
     #[test]

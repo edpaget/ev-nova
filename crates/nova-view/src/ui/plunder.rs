@@ -729,18 +729,31 @@ mod tests {
 
     #[test]
     fn disabled_button_items_in_the_template_still_work() {
-        let mut template = stock();
-        template.items[1].enabled = false;
-        let mut dialog = PlunderDialog::new(
-            &template,
-            &shown(loaded()),
-            ButtonStyle::STOCK,
-            Rc::new(MonoMetrics),
-        )
-        .expect("builds");
-        let at = center(dialog.dialog(), 2);
+        for (item, _, take) in TAKE_BUTTONS {
+            let mut template = stock();
+            for found in &mut template.items {
+                found.enabled = false;
+            }
+            let mut dialog = PlunderDialog::new(
+                &template,
+                &shown(loaded()),
+                ButtonStyle::STOCK,
+                Rc::new(MonoMetrics),
+            )
+            .expect("builds");
+            let at = center(dialog.dialog(), item);
+            click(&mut dialog, at);
+            assert_eq!(dialog.take_take(), Some(take), "{item}");
+        }
+        let mut template = stock_assignment();
+        for found in &mut template.items {
+            found.enabled = false;
+        }
+        let mut dialog = AssignmentDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        let at = center(dialog.dialog(), MY_SHIP_ITEM);
         click(&mut dialog, at);
-        assert_eq!(dialog.take_take(), Some(Take::Cargo));
+        assert_eq!(dialog.take_choice(), Some(Assignment::MyShip));
     }
 
     #[test]
@@ -851,7 +864,12 @@ mod tests {
             at,
         });
         dialog.cancel_pointer();
+        dialog.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at,
+        });
         dialog.tick(Duration::from_secs(1));
-        assert_eq!(dialog.take_choice(), None);
+        assert_eq!(dialog.take_choice(), None, "the click was abandoned");
     }
 }

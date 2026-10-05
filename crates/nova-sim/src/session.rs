@@ -1356,8 +1356,12 @@ impl Session {
                 let room = (fuel.max - fuel.now).max(0.0).trunc();
                 let stored = (offered as f32).min(room);
                 fuel.now += stored;
-                let stored = stored as u32;
-                (Taken::Energy { offered, stored }, ENERGY_GROWTH)
+                let taken = Taken::Energy {
+                    offered,
+                    stored: stored as u32,
+                    full: fuel.now >= fuel.max,
+                };
+                (taken, ENERGY_GROWTH)
             }
             Take::Capture => return self.capture(aboard, rule, chance),
             Take::Abort => return Taken::Nothing,
@@ -6124,14 +6128,20 @@ mod tests {
     #[test]
     fn the_energy_fills_the_tank_up_to_its_room() {
         let catalog = boardable();
-        for (now, stored) in [(300.0, 0), (200.0, 100), (0.0, 170)] {
+        for (now, stored, full) in [
+            (300.0, 0, true),
+            (200.0, 100, true),
+            (0.0, 170, false),
+            (130.0, 170, true),
+        ] {
             let mut session = aboard(&catalog);
             session.pilot.reserves.fuel.now = now;
             assert_eq!(
                 take(&mut session, Take::Energy, &[]).0,
                 Taken::Energy {
                     offered: 170,
-                    stored
+                    stored,
+                    full
                 },
                 "{now}"
             );
@@ -6145,7 +6155,8 @@ mod tests {
             take(&mut session, Take::Energy, &[]).0,
             Taken::Energy {
                 offered: 170,
-                stored: 99
+                stored: 99,
+                full: false
             }
         );
         assert_eq!(session.reserves().fuel.now, 299.5);

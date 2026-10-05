@@ -358,6 +358,9 @@ pub enum Taken {
         offered: u32,
         /// The fuel stored.
         stored: u32,
+        /// Whether the tank is full after it, which the original's
+        /// message tells apart from all of it stored.
+        full: bool,
     },
     /// The self-destruct went off: the ship is breaking up, and the
     /// boarding is over.
