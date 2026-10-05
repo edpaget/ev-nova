@@ -735,7 +735,7 @@ struct Unalarmed {
 }
 
 impl PointDefenceRule for Unalarmed {
-    fn hostile(&self, _defender: Side, _firer: Side) -> bool {
+    fn hostile(&self, _defender: Side, _firer: Side, _govts: &nova_sim::Governments) -> bool {
         self.asked.set(self.asked.get() + 1);
         false
     }

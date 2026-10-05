@@ -422,16 +422,62 @@ pub struct HullRecord {
     /// Its `shän`'s `BaseXSize`, in pixels, or `None` when it has no
     /// `shän` that can be read.
     pub size: Option<i16>,
+    /// Its `Strength`: how strong it counts in a fight.
+    pub strength: i16,
 }
 
-/// The game data a session's ships fight with: the `wëap`s, and each
-/// `shïp`'s combat fields.
+/// A government's penalties for crimes against its ships, raw from its
+/// `gövt`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Penalties {
+    /// Its `SmugPenalty`.
+    pub smuggle: i16,
+    /// Its `DisabPenalty`.
+    pub disable: i16,
+    /// Its `BoardPenalty`.
+    pub board: i16,
+    /// Its `KillPenalty`.
+    pub kill: i16,
+    /// Its `ShootPenalty`.
+    pub shoot: i16,
+}
+
+/// A government, raw from its `gövt`: the [`govt`](crate::govt) and
+/// [`legal`](crate::legal) rules decide what the values mean.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GovtRecord {
+    /// The `gövt`'s ID.
+    pub id: GovtId,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `Flags2`.
+    pub flags2: u16,
+    /// Its `CrimeTol`.
+    pub crime_tol: i16,
+    /// Its penalties.
+    pub penalties: Penalties,
+    /// Its `MaxOdds`, in percent.
+    pub max_odds: i16,
+    /// Its `Class1-4`: -1 for an unused slot.
+    pub classes: [i16; 4],
+    /// Its `Ally1-4`: the classes it is allied with, -1 for an unused
+    /// slot.
+    pub allies: [i16; 4],
+    /// Its `Enemy1-4`: the classes it is at war with, -1 for an unused
+    /// slot.
+    pub enemies: [i16; 4],
+}
+
+/// The game data a session's ships fight with: the `wëap`s, each
+/// `shïp`'s combat fields, and the `gövt`s.
 pub trait CombatCatalog {
     /// Every `wëap` that can be read, by ascending ID.
     fn weapons(&self) -> Vec<WeaponRecord>;
     /// Every `shïp` that can be read, by ascending ID, with its `shän`'s
     /// size.
     fn hulls(&self) -> Vec<HullRecord>;
+    /// Every `gövt` that can be read, by ascending ID.
+    fn governments(&self) -> Vec<GovtRecord>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -443,6 +489,10 @@ impl<T: CombatCatalog + ?Sized> CombatCatalog for &T {
     fn hulls(&self) -> Vec<HullRecord> {
         (**self).hulls()
     }
+
+    fn governments(&self) -> Vec<GovtRecord> {
+        (**self).governments()
+    }
 }
 
 /// A shared catalog is a catalog.
@@ -453,6 +503,10 @@ impl<T: CombatCatalog + ?Sized> CombatCatalog for Rc<T> {
 
     fn hulls(&self) -> Vec<HullRecord> {
         (**self).hulls()
+    }
+
+    fn governments(&self) -> Vec<GovtRecord> {
+        (**self).governments()
     }
 }
 
@@ -877,16 +931,25 @@ mod tests {
                     ammo: 0,
                 }],
                 size: Some(24),
+                strength: 250,
                 ..crate::testkit::hull(128)
+            }]
+        }
+
+        fn governments(&self) -> Vec<GovtRecord> {
+            vec![GovtRecord {
+                crime_tol: 6,
+                ..crate::testkit::govt(128)
             }]
         }
     }
 
-    /// Everything `catalog` says about weapons and hulls.
+    /// Everything `catalog` says about weapons, hulls and governments.
     fn combat(catalog: impl CombatCatalog) -> Vec<String> {
         vec![
             format!("{:?}", catalog.weapons()),
             format!("{:?}", catalog.hulls()),
+            format!("{:?}", catalog.governments()),
         ]
     }
 
@@ -896,6 +959,8 @@ mod tests {
         assert!(direct[0].contains("speed: 1500"), "{direct:?}");
         assert!(direct[1].contains("size: Some(24)"), "{direct:?}");
         assert!(direct[1].contains("WeaponId(128), count: 2"), "{direct:?}");
+        assert!(direct[1].contains("strength: 250"), "{direct:?}");
+        assert!(direct[2].contains("crime_tol: 6"), "{direct:?}");
         assert_eq!(combat(&One), direct);
         assert_eq!(combat(Rc::new(One)), direct);
     }

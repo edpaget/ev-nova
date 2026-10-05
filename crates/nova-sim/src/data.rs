@@ -1,6 +1,6 @@
 //! The pilot, traffic and combat catalogs over the game data: a thin
 //! mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`, `wëap`,
-//! `sÿst`, `spöb`, `jünk`, `öops`, `düde` and `flët` records, its
+//! `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët` and `gövt` records, its
 //! commodity string lists and its stellar sprites.
 
 use nova_data::GameData;
@@ -8,6 +8,7 @@ use nova_data::records::character::Character;
 use nova_data::records::disaster::Disaster;
 use nova_data::records::dude::Dude;
 use nova_data::records::fleet::Fleet;
+use nova_data::records::govt::Govt;
 use nova_data::records::junk::Junk;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
@@ -19,9 +20,10 @@ use nova_data::records::weapon::Weapon;
 
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommodityStrings, DisasterId, DisasterRecord, DudeId,
-    DudeRecord, EscortRecord, FleetId, FleetRecord, HullRecord, JunkRecord, LandingSite, OutfitId,
-    OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
-    StockWeapon, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord, HullRecord, JunkRecord,
+    LandingSite, OutfitId, OutfitRecord, Penalties, PilotCatalog, ShipId, ShipRecord, SoundId,
+    StarSystem, StartDate, StartError, StockWeapon, SystemId, SystemTraffic, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -341,6 +343,32 @@ impl CombatCatalog for GameData {
                     mass: record.mass,
                     weapons: stock_weapons(record),
                     size,
+                    strength: record.strength,
+                })
+            })
+            .collect()
+    }
+
+    fn governments(&self) -> Vec<GovtRecord> {
+        self.records::<Govt>()
+            .filter_map(|(id, govt)| {
+                let record = govt.ok()?.record;
+                Some(GovtRecord {
+                    id: GovtId(id),
+                    flags: record.flags.bits(),
+                    flags2: record.flags2.bits(),
+                    crime_tol: record.crime_tol,
+                    penalties: Penalties {
+                        smuggle: record.smug_penalty,
+                        disable: record.disab_penalty,
+                        board: record.board_penalty,
+                        kill: record.kill_penalty,
+                        shoot: record.shoot_penalty,
+                    },
+                    max_odds: record.max_odds,
+                    classes: record.class,
+                    allies: record.ally,
+                    enemies: record.enemy,
                 })
             })
             .collect()
@@ -457,8 +485,8 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        DisasterId, GovtId, HullRecord, JunkId, StarSystem, StartDate, StellarId, StockWeapon,
-        WeaponId, WeaponRecord,
+        DisasterId, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem, StartDate,
+        StellarId, StockWeapon, WeaponId, WeaponRecord,
     };
 
     /// One data file, `/data/Nova Data`, holding a fork.
@@ -1357,6 +1385,7 @@ mod tests {
         put_i16s(&mut bytes, 0x34, &[60]);
         put_i16s(&mut bytes, 0x38, &[4, 1005]);
         put_i16s(&mut bytes, 0x3E, &[120]);
+        put_i16s(&mut bytes, 0x46, &[325]);
         bytes[0x4A..0x4C].copy_from_slice(&0x0130_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x6CE, &[-1, 138, -1, -1]);
         put_i16s(&mut bytes, 0x6D6, &[0, 3, 0, 0]);
@@ -1406,6 +1435,7 @@ mod tests {
                 },
             ],
             size,
+            strength: 325,
         };
         assert_eq!(
             data.hulls(),
@@ -1413,6 +1443,51 @@ mod tests {
             "by ID, the undecodable shïp left out; without a shän that can be read, no size"
         );
         assert_eq!(store(&[]).hulls(), []);
+    }
+
+    /// A `gövt` with every field the combat catalog reads set to something
+    /// of its own.
+    fn govt_bytes() -> Vec<u8> {
+        let mut bytes = vec![0; Govt::SIZE.expect("fixed")];
+        bytes[0x02..0x04].copy_from_slice(&0xE2B0_u16.to_be_bytes());
+        bytes[0x04..0x06].copy_from_slice(&0x0012_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x08, &[6, 1, 3, 5, 7, 2, -100, 200]);
+        put_i16s(&mut bytes, 0x18, &[1, -1, 4, -1]);
+        put_i16s(&mut bytes, 0x20, &[0, 1, 12, 13]);
+        put_i16s(&mut bytes, 0x28, &[2, 10, 16, 9]);
+        bytes
+    }
+
+    #[test]
+    fn each_readable_gövt_is_a_government_record_by_id() {
+        let data = store(&[
+            (Govt::TYPE, 140, govt_bytes()),
+            (Govt::TYPE, 128, govt_bytes()),
+            (Govt::TYPE, 129, short(govt_bytes())),
+        ]);
+        let record = |id| GovtRecord {
+            id: GovtId(id),
+            flags: 0xE2B0,
+            flags2: 0x0012,
+            crime_tol: 6,
+            penalties: Penalties {
+                smuggle: 1,
+                disable: 3,
+                board: 5,
+                kill: 7,
+                shoot: 2,
+            },
+            max_odds: 200,
+            classes: [1, -1, 4, -1],
+            allies: [0, 1, 12, 13],
+            enemies: [2, 10, 16, 9],
+        };
+        assert_eq!(
+            data.governments(),
+            [record(128), record(140)],
+            "by ID, the undecodable one left out"
+        );
+        assert_eq!(store(&[]).governments(), []);
     }
 
     /// A `sÿst` with these `DudeTypes` and `% Prob` and this `AvgShips`.

@@ -6,20 +6,24 @@ use std::time::Duration;
 
 use nova_sim::{
     CharacterStart, CombatCatalog, CommodityStrings, Controls, DisasterRecord, FixedStep,
-    HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields,
-    ShipId, ShipState, StarSystem, StartDate, StartError, SystemId, Turn, WeaponRecord,
+    GovtRecord, HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session,
+    ShipFields, ShipId, ShipState, StarSystem, StartDate, StartError, SystemId, Turn, WeaponRecord,
 };
 
 /// One `chär` flying an agile ship from system 130.
 struct Pilot;
 
-/// Unarmed.
+/// Unarmed and ungoverned.
 impl CombatCatalog for Pilot {
     fn weapons(&self) -> Vec<WeaponRecord> {
         Vec::new()
     }
 
     fn hulls(&self) -> Vec<HullRecord> {
+        Vec::new()
+    }
+
+    fn governments(&self) -> Vec<GovtRecord> {
         Vec::new()
     }
 }

@@ -88,10 +88,11 @@ use projectile::{Shot, ShotId, Target, contact};
 use report::{Reports, SimDiagnostic};
 use weapon::{Explosion, Guidance};
 
-use crate::catalog::{ShipId, WeaponId};
+use crate::catalog::{GovtId, ShipId, WeaponId};
 use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
+use crate::govt::Governments;
 use crate::reserves::{Gauge, Reserves};
 use crate::traffic::npc::NpcId;
 
@@ -169,6 +170,8 @@ pub struct Fighter<'a> {
     pub ship_type: ShipId,
     /// Its fleet: the lead it escorts, or itself.
     pub fleet: ShipRef,
+    /// Its government, or `None` for an independent ship or the player.
+    pub govt: Option<GovtId>,
     /// Where it is and how it moves.
     pub state: ShipState,
     /// Its hull.
@@ -202,12 +205,12 @@ pub struct Rules<'a> {
 }
 
 impl Default for Rules<'static> {
-    /// Nova's: [`NovaDisable`](hull::NovaDisable), and point defence
-    /// against [`OtherFleets`](defence::OtherFleets).
+    /// Nova's: [`NovaDisable`](hull::NovaDisable), and point defence by
+    /// [`Allegiance`](defence::Allegiance).
     fn default() -> Self {
         Self {
             disable: &hull::NovaDisable,
-            defence: &defence::OtherFleets,
+            defence: &defence::Allegiance,
         }
     }
 }
@@ -225,12 +228,14 @@ pub struct Combat {
 
 impl Combat {
     /// Advances the fight among `fighters` a tick (see the module docs),
-    /// by `rules`, each sub-munition's weapon read from `arsenal` and each
-    /// shot's inaccuracy and spread drawn on `chance`.
+    /// by `rules`, with the relations between governments in `govts`,
+    /// each sub-munition's weapon read from `arsenal` and each shot's
+    /// inaccuracy and spread drawn on `chance`.
     pub fn tick(
         &mut self,
         fighters: &mut [Fighter],
         arsenal: &Arsenal,
+        govts: &Governments,
         rules: Rules,
         chance: &mut (impl Chance + ?Sized),
     ) {
@@ -239,7 +244,7 @@ impl Combat {
         let chance: &mut dyn Chance = &mut source;
         let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
         self.fire(fighters, &targets, chance);
-        self.defend(fighters, rules.defence, chance);
+        self.defend(fighters, rules.defence, govts, chance);
         for fighter in fighters.iter_mut() {
             fighter.armament.reload();
         }
@@ -256,7 +261,7 @@ impl Combat {
             firer.is_some_and(|firer| beam.follow(&firer.state, &targets, shots))
         });
         let mut gone = vec![false; self.shots.len()];
-        self.intercept(&was, &mut gone, rules.defence);
+        self.intercept(&was, &mut gone, rules.defence, govts);
         self.hold_on_missiles(&mut gone);
         self.resolve(fighters, &targets, &was, &gone, arsenal, chance);
         for fighter in fighters.iter_mut() {
@@ -274,15 +279,11 @@ impl Combat {
         id
     }
 
-    /// Puts `launch` in flight from `ship` of `fleet`, at `from`: a beam
-    /// held on the missile `quarry`, on its target, or ahead, or a shot.
-    fn launch(
-        &mut self,
-        (ship, fleet): (ShipRef, ShipRef),
-        from: &ShipState,
-        launch: Launch,
-        quarry: Option<ShotId>,
-    ) {
+    /// Puts `launch` in flight from `side`, at `from`: a beam held on the
+    /// missile `quarry`, on its target, or ahead, or a shot of its
+    /// government.
+    fn launch(&mut self, side: Side, from: &ShipState, launch: Launch, quarry: Option<ShotId>) {
+        let Side { ship, fleet, govt } = side;
         self.events.push(CombatEvent::Fired {
             ship,
             weapon: launch.weapon.id,
@@ -300,6 +301,7 @@ impl Combat {
             let shot = Shot {
                 id: self.next_id(),
                 target: launch.target,
+                govt,
                 ..Shot::launch(launch.weapon, ship, fleet, from, launch.heading)
             };
             self.shots.push(shot);
@@ -326,25 +328,23 @@ impl Combat {
                 &mut |spec| aim::aim(spec, &state, &hull, target),
             );
             for launch in launches {
-                self.launch((fighter.ship, fighter.fleet), &state, launch, None);
+                self.launch(fighter.side(), &state, launch, None);
             }
         }
     }
 
     /// Step 2: each ship's point defence fires at the missile it picks,
-    /// as `rule` says which are hostile.
+    /// as `rule` says which are hostile with the relations in `govts`.
     fn defend(
         &mut self,
         fighters: &mut [Fighter],
         rule: &dyn PointDefenceRule,
+        govts: &Governments,
         chance: &mut dyn Chance,
     ) {
         for fighter in fighters.iter_mut() {
             let (state, hull) = (fighter.state, fighter.hull);
-            let side = Side {
-                ship: fighter.ship,
-                fleet: fighter.fleet,
-            };
+            let side = fighter.side();
             let shots = &self.shots;
             let fired = fighter.armament.fire_point_defence(
                 *fighter.condition,
@@ -353,22 +353,29 @@ impl Combat {
                 chance,
                 &mut self.reports,
                 &mut |spec| {
-                    let missile = defence::choose(side, &state, &hull, spec, shots, rule)?;
+                    let missile = defence::choose(side, &state, &hull, spec, shots, rule, govts)?;
                     Some((aim::bearing(state.position, missile.position), missile.id))
                 },
             );
             if let Some((launch, missile)) = fired {
-                self.launch((side.ship, side.fleet), &state, launch, Some(missile));
+                self.launch(side, &state, launch, Some(missile));
             }
         }
     }
 
     /// Step 5: each point-defence shot, having flown from `was`, meets
     /// the first missile it can engage ([`defence::engageable`], as `rule`
-    /// says which are hostile) that it passes within [`INTERCEPT_RADIUS`]
-    /// of, and is spent on it; a missile destroyed is shot down. What is
-    /// spent or destroyed is marked `gone`.
-    fn intercept(&mut self, was: &[Vec2], gone: &mut [bool], rule: &dyn PointDefenceRule) {
+    /// says which are hostile with the relations in `govts`) that it
+    /// passes within [`INTERCEPT_RADIUS`] of, and is spent on it; a
+    /// missile destroyed is shot down. What is spent or destroyed is
+    /// marked `gone`.
+    fn intercept(
+        &mut self,
+        was: &[Vec2],
+        gone: &mut [bool],
+        rule: &dyn PointDefenceRule,
+        govts: &Governments,
+    ) {
         for pd in 0..self.shots.len() {
             if gone[pd] || self.shots[pd].weapon.guidance != Guidance::PointDefence {
                 continue;
@@ -379,7 +386,9 @@ impl Combat {
                 .shots
                 .iter()
                 .enumerate()
-                .filter(|&(missile, shot)| !gone[missile] && defence::engageable(side, shot, rule))
+                .filter(|&(missile, shot)| {
+                    !gone[missile] && defence::engageable(side, shot, rule, govts)
+                })
                 .filter_map(|(missile, shot)| {
                     let from = was[pd] - was[missile];
                     let to = defender.position - shot.position;
@@ -625,6 +634,15 @@ impl Combat {
 }
 
 impl Fighter<'_> {
+    /// The ship's side: itself, its fleet and its government.
+    fn side(&self) -> Side {
+        Side {
+            ship: self.ship,
+            fleet: self.fleet,
+            govt: self.govt,
+        }
+    }
+
     /// The ship as shots and beams see it.
     fn as_target(&self) -> Target {
         Target {
@@ -696,6 +714,7 @@ mod tests {
     struct Ship {
         id: ShipRef,
         fleet: ShipRef,
+        govt: Option<GovtId>,
         target: Option<ShipRef>,
         state: ShipState,
         hull: HullSpec,
@@ -715,6 +734,7 @@ mod tests {
             Self {
                 id: ShipRef::Npc(NpcId(id)),
                 fleet: ShipRef::Npc(NpcId(id)),
+                govt: None,
                 target: None,
                 state: ShipState {
                     position: Vec2::new(x, y),
@@ -749,6 +769,7 @@ mod tests {
                 ship: self.id,
                 ship_type: ShipId(128),
                 fleet: self.fleet,
+                govt: self.govt,
                 state: self.state,
                 hull: self.hull,
                 shield_regen: self.shield_regen,
@@ -772,8 +793,18 @@ mod tests {
     }
 
     fn tick_with(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal, rules: Rules) {
+        tick_among(combat, ships, arsenal, &Governments::default(), rules);
+    }
+
+    fn tick_among(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        arsenal: &Arsenal,
+        govts: &Governments,
+        rules: Rules,
+    ) {
         let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-        combat.tick(&mut fighters, arsenal, rules, &mut NeverFires);
+        combat.tick(&mut fighters, arsenal, govts, rules, &mut NeverFires);
     }
 
     /// A blaster firing every tick, 15 pixels a tick for 13 ticks, doing
@@ -817,6 +848,7 @@ mod tests {
     fn a_shot_fired_this_tick_has_flown_a_tick() {
         let mut combat = Combat::default();
         let mut ships = [Ship::at(1, 0.0, 0.0).armed(blaster())];
+        ships[0].govt = Some(GovtId(140));
         tick(&mut combat, &mut ships, &NovaDisable);
         assert_eq!(
             combat.take_events(),
@@ -828,6 +860,7 @@ mod tests {
         );
         assert_eq!(combat.take_events(), [], "taken");
         assert_eq!(combat.shots().len(), 1);
+        assert_eq!(combat.shots()[0].govt, Some(GovtId(140)), "its firer's");
         assert!((combat.shots()[0].position.x - 15.0).abs() < 1e-4);
         assert_eq!(combat.beams(), []);
         for _ in 1..13 {
@@ -1493,16 +1526,19 @@ mod tests {
         }
     }
 
-    /// Says every missile is `hostile`, recording what it was asked.
+    /// Says every missile is `hostile`, recording what it was asked and
+    /// the governments it was asked with.
     #[derive(Debug, Default)]
     struct Hostility {
         hostile: bool,
         asked: RefCell<Vec<(Side, Side)>>,
+        govts: RefCell<Vec<Governments>>,
     }
 
     impl PointDefenceRule for Hostility {
-        fn hostile(&self, defender: Side, firer: Side) -> bool {
+        fn hostile(&self, defender: Side, firer: Side, govts: &Governments) -> bool {
             self.asked.borrow_mut().push((defender, firer));
+            self.govts.borrow_mut().push(govts.clone());
             self.hostile
         }
     }
@@ -1540,6 +1576,8 @@ mod tests {
     fn point_defence_shoots_down_a_missile_by_the_hit_after_its_durability_is_gone() {
         let mut combat = Combat::default();
         let mut ships = missile_attack(quad());
+        ships[1].govt = Some(GovtId(140));
+        let govts = Governments::new([crate::testkit::govt(140)]);
         let rule = Hostility {
             hostile: true,
             ..Hostility::default()
@@ -1551,7 +1589,7 @@ mod tests {
         let mut durabilities = Vec::new();
         let mut events = Vec::new();
         for _ in 0..30 {
-            tick_with(&mut combat, &mut ships, &Arsenal::default(), rules);
+            tick_among(&mut combat, &mut ships, &Arsenal::default(), &govts, rules);
             ships[1].trigger = Trigger::default();
             let new = combat.take_events();
             let defended = new
@@ -1598,7 +1636,18 @@ mod tests {
             "untouched"
         );
         let asked = rule.asked.take();
-        assert!(asked.contains(&(Side { ship: A, fleet: A }, Side { ship: B, fleet: B })));
+        let defender = Side {
+            ship: A,
+            fleet: A,
+            govt: None,
+        };
+        let attacker = Side {
+            ship: B,
+            fleet: B,
+            govt: Some(GovtId(140)),
+        };
+        assert!(asked.contains(&(defender, attacker)), "{asked:?}");
+        assert!(rule.govts.take().iter().all(|asked| *asked == govts));
     }
 
     #[test]
@@ -1739,7 +1788,7 @@ mod tests {
     struct FiredBy(ShipRef);
 
     impl PointDefenceRule for FiredBy {
-        fn hostile(&self, _defender: Side, firer: Side) -> bool {
+        fn hostile(&self, _defender: Side, firer: Side, _govts: &Governments) -> bool {
             firer.ship == self.0
         }
     }

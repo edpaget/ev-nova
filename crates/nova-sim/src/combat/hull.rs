@@ -65,6 +65,8 @@ pub struct HullSpec {
     /// Where its turrets cannot fire: its `Flags` 0x1000 (front), 0x2000
     /// (sides) and 0x4000 (rear), as a weapon's `Flags` mark them.
     pub blind_spots: u16,
+    /// How strong it counts in a fight, its `Strength`; none below none.
+    pub strength: f32,
 }
 
 impl Default for HullSpec {
@@ -79,6 +81,7 @@ impl Default for HullSpec {
             explosion: None,
             mass: 0.0,
             blind_spots: 0,
+            strength: 0.0,
         }
     }
 }
@@ -101,6 +104,7 @@ impl HullSpec {
             explosion: Explosion::decode(record.explode2),
             mass: f32::from(record.mass.max(0)),
             blind_spots: record.flags & BLIND_SPOTS,
+            strength: f32::from(record.strength.max(0)),
         }
     }
 
@@ -240,8 +244,11 @@ mod tests {
             explode1: 4,
             explode2: 1005,
             mass: 120,
+            strength: 325,
             ..hull(141)
         });
+        assert_eq!(spec.strength, 325.0);
+        assert_eq!(HullSpec::default().strength, 0.0);
         assert!(spec.tough);
         assert_eq!(spec.death_delay, 60);
         assert_eq!(
@@ -263,10 +270,12 @@ mod tests {
             flags: 0x0120,
             death_delay: -5,
             mass: -1,
+            strength: -2,
             ..hull(128)
         });
         assert!(!trader.tough);
         assert_eq!((trader.death_delay, trader.mass), (0, 0.0));
+        assert_eq!(trader.strength, 0.0, "none below none");
         assert_eq!((trader.breakup, trader.explosion), (None, None));
         assert_eq!(TOUGH, 0x0010);
     }

@@ -26,9 +26,11 @@
 //!   defence shot is spent on the missile it meets; a beam hits the
 //!   missile it is held on every tick.
 //! - The original has no hostility check: "fired at me or my lead" is the
-//!   whole rule. Until governments' relations come, the default
-//!   [`OtherFleets`] treats any ship outside the defender's fleet as
-//!   hostile.
+//!   whole rule. The default [`Allegiance`] adds governments' relations: a
+//!   missile is hostile unless its firer is in the defender's fleet, or
+//!   both have governments that are allies. The player has none, so its
+//!   point defence engages any NPC's missile at it, and an NPC's the
+//!   player's, while police leave an allied trader's stray missile be.
 //! - The original tests a point-defence shot against a missile's sprite;
 //!   the simulation has no sprites, so a shot meets a missile within
 //!   [`INTERCEPT_RADIUS`] of it, a placeholder.
@@ -40,7 +42,9 @@ use super::aim::{angle_off, bearing, blind};
 use super::hull::HullSpec;
 use super::projectile::Shot;
 use super::weapon::{Guidance, WeaponSpec};
+use crate::catalog::GovtId;
 use crate::flight::ShipState;
+use crate::govt::Governments;
 
 /// How near, in pixels, a point-defence shot must pass a missile to meet
 /// it: a placeholder for the original's sprite test.
@@ -48,13 +52,15 @@ pub const INTERCEPT_RADIUS: f32 = 10.0;
 /// A point-defence turret's engagement range, per pixel of its range.
 pub const PD_RANGE_FACTOR: f32 = 1.5;
 
-/// A ship and its fleet: the lead it escorts, or itself.
+/// A ship, its fleet (the lead it escorts, or itself) and its government.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Side {
     /// The ship.
     pub ship: ShipRef,
     /// Its fleet.
     pub fleet: ShipRef,
+    /// Its government, or `None` for an independent ship or the player.
+    pub govt: Option<GovtId>,
 }
 
 impl Side {
@@ -64,24 +70,30 @@ impl Side {
         Self {
             ship: shot.firer,
             fleet: shot.fleet,
+            govt: shot.govt,
         }
     }
 }
 
 /// Which missiles point defence engages, by who fired them.
 pub trait PointDefenceRule: Debug {
-    /// Whether a missile fired by `firer` is hostile to `defender`.
-    fn hostile(&self, defender: Side, firer: Side) -> bool;
+    /// Whether a missile fired by `firer` is hostile to `defender`, with
+    /// the relations between governments in `govts`.
+    fn hostile(&self, defender: Side, firer: Side, govts: &Governments) -> bool;
 }
 
-/// The interim rule until governments' relations come: a missile fired
-/// from outside the defender's fleet is hostile.
+/// Nova's rule (see the module docs): a missile is hostile unless its
+/// firer is in the defender's fleet, or both have governments that are
+/// allies.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct OtherFleets;
+pub struct Allegiance;
 
-impl PointDefenceRule for OtherFleets {
-    fn hostile(&self, defender: Side, firer: Side) -> bool {
-        firer.fleet != defender.fleet
+impl PointDefenceRule for Allegiance {
+    fn hostile(&self, defender: Side, firer: Side, govts: &Governments) -> bool {
+        let allied = defender.govt.is_some()
+            && firer.govt.is_some()
+            && govts.allies(defender.govt, firer.govt);
+        firer.fleet != defender.fleet && !allied
     }
 }
 
@@ -100,18 +112,24 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
 /// Whether point defence on `defender`, whether a mount choosing a
 /// missile or a shot passing one, can engage `missile` at all: a homing
 /// shot that has not lost its target, that point defence can target (no
-/// `Flags` 0x0080), and whose firer `rule` calls hostile. A lost missile
-/// is neither chosen nor met.
+/// `Flags` 0x0080), and whose firer `rule` calls hostile, with the
+/// relations in `govts`. A lost missile is neither chosen nor met.
 #[must_use]
-pub fn engageable(defender: Side, missile: &Shot, rule: &dyn PointDefenceRule) -> bool {
+pub fn engageable(
+    defender: Side,
+    missile: &Shot,
+    rule: &dyn PointDefenceRule,
+    govts: &Governments,
+) -> bool {
     missile.weapon.guidance == Guidance::Homing
         && !missile.lost
         && !missile.weapon.pd_immune()
-        && rule.hostile(defender, Side::of(missile))
+        && rule.hostile(defender, Side::of(missile), govts)
 }
 
 /// The missile among `shots` that point defence `spec` on `defender`, at
-/// `at` with `hull`, engages, if any (see the module docs).
+/// `at` with `hull`, engages, if any, as `rule` says with the relations
+/// in `govts` (see the module docs).
 #[must_use]
 pub fn choose<'a>(
     defender: Side,
@@ -120,6 +138,7 @@ pub fn choose<'a>(
     spec: &WeaponSpec,
     shots: &'a [Shot],
     rule: &dyn PointDefenceRule,
+    govts: &Governments,
 ) -> Option<&'a Shot> {
     let range = engagement_range(spec);
     let blind_spots = spec.flags | hull.blind_spots;
@@ -134,7 +153,7 @@ pub fn choose<'a>(
                 angle_off(at.heading, bearing(at.position, shot.position)),
             )
             && best.is_none_or(|(_, nearest)| distance < nearest)
-            && engageable(defender, shot, rule);
+            && engageable(defender, shot, rule, govts);
         if candidate {
             best = Some((shot, distance));
         }
@@ -168,7 +187,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::catalog::WeaponRecord;
+    use crate::catalog::{GovtId, WeaponRecord};
     use crate::combat::aim::BLIND_REAR;
     use crate::combat::projectile::ShotId;
     use crate::geometry::Vec2;
@@ -220,8 +239,8 @@ mod tests {
         assert_eq!(PD_RANGE_FACTOR, 1.5);
     }
 
-    /// A shot numbered `id` of a missile with `flags`, guided `guidance`,
-    /// fired by `firer` of `fleet` at `target`, at (`x`, `y`).
+    /// A shot numbered `id` of a homing missile fired by `ENEMY` of
+    /// government 140 at `target`, at (`x`, `y`).
     fn missile(id: u32, x: f32, y: f32, target: Option<ShipRef>) -> Shot {
         let spec = WeaponSpec::new(&WeaponRecord {
             guidance: 1,
@@ -232,20 +251,24 @@ mod tests {
             id: ShotId(id),
             position: Vec2::new(x, y),
             target,
+            govt: Some(GovtId(140)),
             ..Shot::launch(spec, ENEMY, ENEMY, &ShipState::default(), 0.0)
         }
     }
 
-    /// Says every firer is `hostile`, recording what it was asked.
+    /// Says every firer is `hostile`, recording what it was asked and
+    /// the governments it was asked with.
     #[derive(Debug, Default)]
     struct Recording {
         hostile: bool,
         asked: RefCell<Vec<(Side, Side)>>,
+        govts: RefCell<Vec<Governments>>,
     }
 
     impl PointDefenceRule for Recording {
-        fn hostile(&self, defender: Side, firer: Side) -> bool {
+        fn hostile(&self, defender: Side, firer: Side, govts: &Governments) -> bool {
             self.asked.borrow_mut().push((defender, firer));
+            self.govts.borrow_mut().push(govts.clone());
             self.hostile
         }
     }
@@ -253,6 +276,7 @@ mod tests {
     const ESCORT: Side = Side {
         ship: DEFENDER,
         fleet: LEAD,
+        govt: None,
     };
 
     /// The missile the defender, an escort of `LEAD` at the centre facing
@@ -274,6 +298,7 @@ mod tests {
             &quad(flags),
             shots,
             &rule,
+            &Governments::default(),
         )
         .map(|shot| shot.id)
     }
@@ -335,14 +360,31 @@ mod tests {
             ..Recording::default()
         };
         let near = [missile(1, 1000.0, 700.0, Some(DEFENDER))];
-        let chosen = choose(ESCORT, &at, &HullSpec::default(), &quad(0), &near, &rule);
+        let none = Governments::default();
+        let chosen = choose(
+            ESCORT,
+            &at,
+            &HullSpec::default(),
+            &quad(0),
+            &near,
+            &rule,
+            &none,
+        );
         assert_eq!(
             chosen.map(|shot| shot.id),
             Some(ShotId(1)),
             "300 pixels off"
         );
         let far = [missile(1, 0.0, 0.0, Some(DEFENDER))];
-        let chosen = choose(ESCORT, &at, &HullSpec::default(), &quad(0), &far, &rule);
+        let chosen = choose(
+            ESCORT,
+            &at,
+            &HullSpec::default(),
+            &quad(0),
+            &far,
+            &rule,
+            &none,
+        );
         assert_eq!(chosen, None, "1414 pixels off");
     }
 
@@ -367,11 +409,13 @@ mod tests {
             Shot {
                 firer: ShipRef::Player,
                 fleet: ShipRef::Player,
+                govt: None,
                 ..missile(2, 0.0, -80.0, Some(DEFENDER))
             },
             missile(3, 0.0, -1000.0, Some(DEFENDER)),
         ];
         let peaceful = Recording::default();
+        let govts = Governments::new([crate::testkit::govt(128)]);
         let chosen = choose(
             ESCORT,
             &ShipState::default(),
@@ -379,34 +423,107 @@ mod tests {
             &quad(0),
             &shots,
             &peaceful,
+            &govts,
         );
         assert_eq!(chosen, None);
         let enemy = Side {
             ship: ENEMY,
             fleet: ENEMY,
+            govt: Some(GovtId(140)),
         };
         let player = Side {
             ship: ShipRef::Player,
             fleet: ShipRef::Player,
+            govt: None,
         };
         assert_eq!(
             peaceful.asked.take(),
             [(ESCORT, enemy), (ESCORT, player)],
             "not of the one out of range"
         );
+        assert_eq!(
+            peaceful.govts.take(),
+            [govts.clone(), govts],
+            "asked with them"
+        );
+    }
+
+    /// Governments 128 and 129 are allies, 130 is at war with 128, and
+    /// 131 is neutral.
+    fn relations() -> Governments {
+        use crate::catalog::GovtRecord;
+        use crate::testkit::govt;
+        Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                allies: [2, -1, -1, -1],
+                ..govt(128)
+            },
+            GovtRecord {
+                classes: [2, -1, -1, -1],
+                ..govt(129)
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..govt(130)
+            },
+            govt(131),
+        ])
+    }
+
+    fn side(ship: ShipRef, fleet: ShipRef, govt: Option<i16>) -> Side {
+        Side {
+            ship,
+            fleet,
+            govt: govt.map(GovtId),
+        }
     }
 
     #[test]
-    fn other_fleets_are_hostile_and_the_defenders_own_is_not() {
-        let side = |ship, fleet| Side { ship, fleet };
-        assert!(!OtherFleets.hostile(ESCORT, side(LEAD, LEAD)), "its lead");
+    fn allegiance_spares_the_defenders_own_fleet_whatever_the_governments() {
+        let govts = relations();
+        let defender = side(DEFENDER, LEAD, Some(128));
+        for govt in [Some(128), Some(130), None] {
+            assert!(
+                !Allegiance.hostile(defender, side(LEAD, LEAD, govt), &govts),
+                "its lead"
+            );
+            assert!(
+                !Allegiance.hostile(defender, side(ENEMY, LEAD, govt), &govts),
+                "another escort"
+            );
+        }
+        assert!(!Allegiance.hostile(defender, defender, &govts), "itself");
+    }
+
+    #[test]
+    fn allegiance_spares_an_allied_government_and_its_own() {
+        let govts = relations();
+        let defender = side(DEFENDER, DEFENDER, Some(128));
+        assert!(!Allegiance.hostile(defender, side(ENEMY, ENEMY, Some(129)), &govts));
+        assert!(!Allegiance.hostile(defender, side(ENEMY, ENEMY, Some(128)), &govts));
+        let ally = side(DEFENDER, DEFENDER, Some(129));
+        assert!(!Allegiance.hostile(ally, side(ENEMY, ENEMY, Some(128)), &govts));
+    }
+
+    #[test]
+    fn allegiance_calls_hostile_an_enemy_a_neutral_an_independent_and_the_player() {
+        let govts = relations();
+        let defender = side(DEFENDER, DEFENDER, Some(128));
+        for govt in [Some(130), Some(131), None] {
+            assert!(
+                Allegiance.hostile(defender, side(ENEMY, ENEMY, govt), &govts),
+                "{govt:?}"
+            );
+        }
+        let player = side(ShipRef::Player, ShipRef::Player, None);
+        assert!(Allegiance.hostile(player, side(ENEMY, ENEMY, Some(128)), &govts));
+        let independent = side(DEFENDER, DEFENDER, None);
         assert!(
-            !OtherFleets.hostile(ESCORT, side(ENEMY, LEAD)),
-            "another escort"
+            Allegiance.hostile(independent, player, &govts),
+            "two without a government are not allies"
         );
-        assert!(!OtherFleets.hostile(ESCORT, ESCORT), "itself");
-        assert!(OtherFleets.hostile(ESCORT, side(ENEMY, ENEMY)));
-        assert!(OtherFleets.hostile(ESCORT, side(LEAD, ENEMY)));
+        assert!(Allegiance.hostile(independent, side(ENEMY, ENEMY, None), &govts));
     }
 
     #[test]

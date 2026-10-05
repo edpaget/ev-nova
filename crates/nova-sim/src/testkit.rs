@@ -6,9 +6,9 @@ use std::cell::RefCell;
 use crate::ai::Goal;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommodityStrings, DisasterRecord, DudeId, DudeRecord,
-    FleetRecord, HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId,
-    ShipRecord, StarSystem, StartDate, StartError, StellarId, SystemId, SystemTraffic,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    FleetRecord, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord,
+    Penalties, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError, StellarId,
+    SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -61,6 +61,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) weapons: Vec<WeaponRecord>,
     /// Every `shïp`'s combat fields.
     pub(crate) hulls: Vec<HullRecord>,
+    /// Every `gövt`.
+    pub(crate) govts: Vec<GovtRecord>,
 }
 
 pub(crate) const FAST: ShipFields = ShipFields {
@@ -178,7 +180,7 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
 }
 
 /// `shïp` `id`'s combat fields: no flags, no weapons, no `shän`, no
-/// explosions, gone at once and massless.
+/// explosions, gone at once, massless and of no strength.
 pub(crate) fn hull(id: i16) -> HullRecord {
     HullRecord {
         id: ShipId(id),
@@ -189,6 +191,23 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         mass: 0,
         weapons: Vec::new(),
         size: None,
+        strength: 0,
+    }
+}
+
+/// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
+/// for crime, no penalties, and `MaxOdds` 100 (even odds).
+pub(crate) fn govt(id: i16) -> GovtRecord {
+    GovtRecord {
+        id: GovtId(id),
+        flags: 0,
+        flags2: 0,
+        crime_tol: 0,
+        penalties: Penalties::default(),
+        max_odds: 100,
+        classes: [-1; 4],
+        allies: [-1; 4],
+        enemies: [-1; 4],
     }
 }
 
@@ -263,6 +282,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         fleets: Vec::new(),
         weapons: Vec::new(),
         hulls: Vec::new(),
+        govts: Vec::new(),
     }
 }
 
@@ -378,7 +398,8 @@ impl TrafficCatalog for FakePilotCatalog {
     }
 }
 
-/// Unarmed, unless a test sets weapons and hulls.
+/// Unarmed and ungoverned, unless a test sets weapons, hulls and
+/// governments.
 impl CombatCatalog for FakePilotCatalog {
     fn weapons(&self) -> Vec<WeaponRecord> {
         self.weapons.clone()
@@ -386,6 +407,10 @@ impl CombatCatalog for FakePilotCatalog {
 
     fn hulls(&self) -> Vec<HullRecord> {
         self.hulls.clone()
+    }
+
+    fn governments(&self) -> Vec<GovtRecord> {
+        self.govts.clone()
     }
 }
 

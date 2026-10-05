@@ -791,6 +791,7 @@ impl Combatant {
             ship: self.id,
             ship_type: self.ship_type,
             fleet: self.id,
+            govt: None,
             state: self.state,
             hull: self.hull,
             shield_regen: 0.0,
@@ -812,7 +813,13 @@ fn fight(combat: &mut Combat, ships: &mut [Combatant]) {
 /// A tick of `combat` among `ships`, sub-munitions read from `arsenal`.
 fn fight_with(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
-    combat.tick(&mut fighters, arsenal, Rules::default(), &mut Straight);
+    combat.tick(
+        &mut fighters,
+        arsenal,
+        &nova_sim::Governments::default(),
+        Rules::default(),
+        &mut Straight,
+    );
 }
 
 /// The player at the centre, at rest, facing right, firing one of

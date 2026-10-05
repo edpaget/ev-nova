@@ -94,6 +94,7 @@ pub fn release(
             Shot {
                 target,
                 generation: unaimed.generation,
+                govt: parent.govt,
                 ..Shot::launch(
                     *sub,
                     parent.firer,
@@ -181,6 +182,7 @@ mod tests {
     fn each_sub_munition_starts_where_its_parent_is_a_generation_on() {
         let parent = Shot {
             generation: 2,
+            govt: Some(crate::catalog::GovtId(140)),
             ..parent(-1, 3, 0, 0, 0)
         };
         let mut chance = Draws::of(&[]);
@@ -191,6 +193,7 @@ mod tests {
             assert_eq!(shot.position, Vec2::new(100.0, 50.0));
             assert_eq!(shot.generation, 3);
             assert_eq!((shot.firer, shot.fleet), (FIRER, FIRER));
+            assert_eq!(shot.govt, parent.govt, "its firer's government");
             assert_eq!(shot.weapon.id, WeaponId(148));
             assert_eq!(shot.target, Some(HIT));
             assert_eq!(shot.heading, 90.0, "the parent's heading");

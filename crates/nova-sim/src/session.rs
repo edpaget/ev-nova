@@ -136,6 +136,7 @@ use crate::date::GameDate;
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::geometry::Vec2;
+use crate::govt::Governments;
 use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
 use crate::landing::{LandingRefusal, check_landing};
@@ -195,6 +196,9 @@ pub struct Session {
     /// Every weapon and ship type's combat fields, read when the session
     /// starts.
     arsenal: Arsenal,
+    /// Every government and their relations, read when the session
+    /// starts.
+    govts: Governments,
     /// Each ammunition outfit, with the weapon it is the rounds of.
     ammo_outfits: Vec<(WeaponId, OutfitId)>,
     /// The player's ship type's hull.
@@ -284,6 +288,7 @@ impl Session {
             traffic: Traffic::new(),
             traffic_due: true,
             arsenal: Arsenal::read(catalog),
+            govts: Governments::read(catalog),
             // Refitted below, from the ship and the outfits the pilot owns.
             hull: HullSpec::default(),
             armament: Armament::default(),
@@ -374,6 +379,7 @@ impl Session {
             catalog,
             system,
             self.star_map.govt(system),
+            &self.govts,
             &self.ships,
             &self.outfits,
             &self.arsenal,
@@ -476,6 +482,7 @@ impl Session {
             ship: ShipRef::Player,
             ship_type: pilot.ship,
             fleet: ShipRef::Player,
+            govt: None,
             state: self.player,
             hull: self.hull,
             shield_regen: self.stats.shield_regen,
@@ -492,6 +499,7 @@ impl Session {
             let Npc {
                 id,
                 ship,
+                govt,
                 stats,
                 state,
                 hull,
@@ -507,6 +515,7 @@ impl Session {
                 ship: ShipRef::Npc(*id),
                 ship_type: *ship,
                 fleet,
+                govt: *govt,
                 state: *state,
                 hull: *hull,
                 shield_regen: stats.shield_regen,
@@ -520,7 +529,7 @@ impl Session {
             });
         }
         self.combat
-            .tick(&mut fighters, &self.arsenal, rules, chance);
+            .tick(&mut fighters, &self.arsenal, &self.govts, rules, chance);
         let destroyed: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -3452,7 +3461,7 @@ mod tests {
     use crate::ai::{Behaviour, Goal, Surroundings};
     use crate::catalog::{HullRecord, StockWeapon, WeaponRecord};
     use crate::combat::armament::MOD_AMMO;
-    use crate::combat::defence::OtherFleets;
+    use crate::combat::defence::Allegiance;
     use crate::combat::hull::DisableRule;
     use crate::combat::weapon::Explosion;
     use crate::testkit::{hull, weapon};
@@ -3740,7 +3749,7 @@ mod tests {
 
     const DISABLING: Rules = Rules {
         disable: &Disabling,
-        defence: &OtherFleets,
+        defence: &Allegiance,
     };
 
     #[test]

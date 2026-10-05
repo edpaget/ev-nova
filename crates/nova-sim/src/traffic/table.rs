@@ -24,6 +24,7 @@ use crate::catalog::{
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::HullSpec;
+use crate::govt::Governments;
 use crate::outfitter::outfit_mods;
 use crate::pilot::tally;
 use crate::stats::ShipStats;
@@ -109,17 +110,28 @@ impl FleetLink {
         }
     }
 
-    /// Whether system `system`, governed by `system_govt`, matches. There
-    /// are no relations between governments yet, so no system matches the
-    /// allies or the enemies of one.
+    /// Whether system `system`, governed by `system_govt`, matches, with
+    /// the relations between governments in `govts` (`_SpawnFleet`
+    /// @0x42768-0x4289d): the allies of a government include it, so its
+    /// own systems match; an independent system matches neither allies
+    /// nor enemies.
     #[must_use]
-    pub fn matches(self, system: SystemId, system_govt: Option<GovtId>) -> bool {
+    pub fn matches(
+        self,
+        system: SystemId,
+        system_govt: Option<GovtId>,
+        govts: &Governments,
+    ) -> bool {
         match self {
             Self::Any => true,
             Self::System(id) => id == system,
             Self::Govt(govt) => system_govt == Some(govt),
             Self::NotGovt(govt) => system_govt.is_some_and(|own| own != govt),
-            Self::AlliesOf(_) | Self::EnemiesOf(_) | Self::Never => false,
+            Self::AlliesOf(govt) => system_govt.is_some() && govts.allies(Some(govt), system_govt),
+            Self::EnemiesOf(govt) => {
+                system_govt.is_some() && govts.enemies(Some(govt), system_govt)
+            }
+            Self::Never => false,
         }
     }
 }
@@ -190,7 +202,8 @@ pub struct SpawnTable {
 
 impl SpawnTable {
     /// System `system`'s table, governed by `system_govt`, read from
-    /// `catalog`, with each ship type's stats from its record in `ships`
+    /// `catalog`, its fleets' links matched with the relations in
+    /// `govts`, with each ship type's stats from its record in `ships`
     /// and its default items, the `oütf`s from `outfits`, as the player's
     /// are, and its hull and armament from `arsenal`. A system that cannot
     /// be read has no traffic.
@@ -199,6 +212,7 @@ impl SpawnTable {
         catalog: &(impl TrafficCatalog + ?Sized),
         system: SystemId,
         system_govt: Option<GovtId>,
+        govts: &Governments,
         ships: &[ShipRecord],
         outfits: &[OutfitRecord],
         arsenal: &Arsenal,
@@ -231,7 +245,7 @@ impl SpawnTable {
         let mut link_fleets = BTreeSet::new();
         let mut fleets = BTreeMap::new();
         for fleet in catalog.fleets() {
-            let linked = FleetLink::decode(fleet.link_syst).matches(system, system_govt);
+            let linked = FleetLink::decode(fleet.link_syst).matches(system, system_govt, govts);
             if linked {
                 link_fleets.insert(fleet.id);
             }
@@ -290,11 +304,12 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
+    use crate::catalog::GovtRecord;
     use crate::catalog::{
         DudeRecord, EscortRecord, HullRecord, OutfitId, StockWeapon, SystemTraffic,
     };
     use crate::stats::MORE_SPEED;
-    use crate::testkit::{Draws, FAST, hull, outfit, ship, weapon};
+    use crate::testkit::{Draws, FAST, govt, hull, outfit, ship, weapon};
 
     const UNUSED: (i16, i16) = (-1, 0);
 
@@ -390,22 +405,74 @@ mod tests {
         }
     }
 
+    /// Governments 128 and 129 are allies (class 1 and its ally); 130 is
+    /// at war with 128 (class 3, listing class 1); 131 is xenophobic;
+    /// 132 is neutral to all.
+    fn relations() -> Governments {
+        Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..govt(128)
+            },
+            GovtRecord {
+                allies: [1, -1, -1, -1],
+                ..govt(129)
+            },
+            GovtRecord {
+                classes: [3, -1, -1, -1],
+                enemies: [1, -1, -1, -1],
+                ..govt(130)
+            },
+            GovtRecord {
+                flags: crate::govt::XENOPHOBIC,
+                ..govt(131)
+            },
+            govt(132),
+        ])
+    }
+
     #[test]
     fn each_link_matches_its_systems() {
         const HERE: SystemId = SystemId(130);
+        let govts = relations();
         let (a, b) = (Some(GovtId(128)), Some(GovtId(129)));
-        let matches = |raw: i16, govt| FleetLink::decode(raw).matches(HERE, govt);
+        let matches = |raw: i16, govt| FleetLink::decode(raw).matches(HERE, govt, &govts);
         assert!(matches(-1, None) && matches(-1, a));
         assert!(matches(130, None) && !matches(131, None));
         assert!(matches(10_000, a) && !matches(10_000, b) && !matches(10_000, None));
         assert!(matches(20_000, b) && !matches(20_000, a));
         assert!(!matches(20_000, None), "an independent system has no govt");
-        for raw in [15_000, 25_000] {
-            for govt in [None, a, b] {
-                assert!(!matches(raw, govt), "{raw} {govt:?}: no relations yet");
-            }
-        }
         assert!(!matches(30_000, a) && !matches(0, None));
+    }
+
+    #[test]
+    fn an_allies_link_matches_the_governments_own_systems_and_its_allies() {
+        let govts = relations();
+        let matches = |raw: i16, govt: Option<i16>| {
+            FleetLink::decode(raw).matches(SystemId(130), govt.map(GovtId), &govts)
+        };
+        assert!(matches(15_000, Some(128)), "its own");
+        assert!(matches(15_000, Some(129)), "an ally's");
+        assert!(matches(15_001, Some(128)), "the other way round");
+        assert!(!matches(15_000, Some(132)), "a neutral's");
+        assert!(!matches(15_000, Some(130)), "an enemy's");
+        assert!(!matches(15_000, None), "an independent system");
+    }
+
+    #[test]
+    fn an_enemies_link_matches_an_enemys_systems_and_a_xenophobes() {
+        let govts = relations();
+        let matches = |raw: i16, govt: Option<i16>| {
+            FleetLink::decode(raw).matches(SystemId(130), govt.map(GovtId), &govts)
+        };
+        assert!(matches(25_000, Some(130)), "an enemy's");
+        assert!(matches(25_002, Some(128)), "the other way round");
+        assert!(matches(25_000, Some(131)), "a xenophobe-ruled system");
+        assert!(matches(25_003, Some(132)), "a xenophobe's link");
+        assert!(!matches(25_000, Some(128)), "its own");
+        assert!(!matches(25_000, Some(129)), "an ally's");
+        assert!(!matches(25_000, Some(132)), "a neutral's");
+        assert!(!matches(25_000, None), "an independent system");
     }
 
     #[test]
@@ -443,8 +510,10 @@ mod tests {
     /// (unreadable) at 40, and fleet 140 at 20, with 4 ships on average.
     /// Düde 128 flies ship 200 and ship 999 (no record). Fleet 140 is led by
     /// ship 201 with ship 202 escorting; fleet 141 links to any system,
-    /// fleet 142 to Federation systems, fleet 143 to system 131 and fleet
-    /// 144 to Federation systems but led by nothing readable.
+    /// fleet 142 to Federation systems, fleet 143 to system 131, fleet
+    /// 144 to Federation systems but led by nothing readable, fleet 145 to
+    /// the systems of govt 129's allies and fleet 146 to those of its
+    /// enemies.
     #[derive(Default)]
     struct Traffic {
         dudes_asked: RefCell<Vec<DudeId>>,
@@ -486,6 +555,8 @@ mod tests {
                 fleet(142, 202, 201, 10_000),
                 fleet(143, 202, 202, 131),
                 fleet(144, 998, 202, 10_000),
+                fleet(145, 202, 202, 15_001),
+                fleet(146, 202, 202, 25_001),
             ]
         }
     }
@@ -525,6 +596,7 @@ mod tests {
             &Traffic::default(),
             SystemId(130),
             Some(GovtId(128)),
+            &relations(),
             &records(),
             &[
                 outfit(300, &[(MORE_SPEED, 100)]),
@@ -555,12 +627,18 @@ mod tests {
         assert_eq!(table.dude_fleets, [(FleetId(140), 20)]);
         assert_eq!(
             table.link_fleets,
-            BTreeSet::from([FleetId(141), FleetId(142), FleetId(144)])
+            BTreeSet::from([FleetId(141), FleetId(142), FleetId(144), FleetId(145)])
         );
         assert_eq!(
             table.fleets.keys().copied().collect::<Vec<_>>(),
-            [FleetId(140), FleetId(141), FleetId(142), FleetId(144)],
-            "fleet 143 links elsewhere and is not named"
+            [
+                FleetId(140),
+                FleetId(141),
+                FleetId(142),
+                FleetId(144),
+                FleetId(145)
+            ],
+            "fleet 143 links elsewhere and is not named; 146 needs an enemy system"
         );
     }
 
@@ -625,6 +703,7 @@ mod tests {
             &catalog,
             SystemId(131),
             None,
+            &Governments::default(),
             &records(),
             &[],
             &Arsenal::default(),
@@ -654,6 +733,7 @@ mod tests {
             &Negative,
             SystemId(130),
             None,
+            &Governments::default(),
             &[],
             &[],
             &Arsenal::default(),

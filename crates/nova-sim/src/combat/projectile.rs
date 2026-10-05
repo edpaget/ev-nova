@@ -34,6 +34,7 @@ use super::aim::bearing;
 use super::damage::Blast;
 use super::hull::Condition;
 use super::weapon::{Guidance, WeaponSpec};
+use crate::catalog::GovtId;
 use crate::flight::{ShipState, facing, heading_of, normalized, shortest_turn};
 use crate::geometry::Vec2;
 
@@ -107,6 +108,9 @@ pub struct Shot {
     pub firer: ShipRef,
     /// The firer's fleet.
     pub fleet: ShipRef,
+    /// The firer's government, or `None` for an independent ship or the
+    /// player.
+    pub govt: Option<GovtId>,
     /// Where it is.
     pub position: Vec2,
     /// How far it moves each tick.
@@ -132,7 +136,7 @@ pub struct Shot {
 
 impl Shot {
     /// A shot of `weapon` launched by `firer` of `fleet`, flying `from`
-    /// along `heading`.
+    /// along `heading`, of no government until it is given one.
     #[must_use]
     pub fn launch(
         weapon: WeaponSpec,
@@ -152,6 +156,7 @@ impl Shot {
             weapon,
             firer,
             fleet,
+            govt: None,
             position: from.position,
             velocity,
             heading,

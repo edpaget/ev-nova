@@ -118,7 +118,7 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::{
-    Behaviour, DisableRule, NovaDisable, OtherFleets, Peaceful, Pilot, PilotKeeper, PilotStore,
+    Allegiance, Behaviour, DisableRule, NovaDisable, Peaceful, Pilot, PilotKeeper, PilotStore,
     PointDefenceRule, pilot_key,
 };
 pub use nova_view::Showing;
@@ -289,7 +289,7 @@ impl AppScreen {
             effects_chance: SharedChance::default(),
             behaviour: Rc::new(Peaceful),
             disable_rule: Rc::new(NovaDisable),
-            defence_rule: Rc::new(OtherFleets),
+            defence_rule: Rc::new(Allegiance),
         }
     }
 

@@ -28,7 +28,7 @@
 //! [`DisableRule`] says ([`FlightView::with_disable_rule`];
 //! [`NovaDisable`] by default), and their point defence engaging the
 //! missiles its [`PointDefenceRule`] calls hostile
-//! ([`FlightView::with_point_defence_rule`]; [`OtherFleets`] by default). What could not be read of the looks
+//! ([`FlightView::with_point_defence_rule`]; [`Allegiance`] by default). What could not be read of the looks
 //! (each once, when the screen is built), then the session's diagnostics
 //! about game data it does not handle yet, pass through
 //! [`Screen::take_diagnostics`] for the app to write out. Each NPC is
@@ -112,8 +112,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Behaviour, Chance, CombatCatalog, Condition, Controls, DisableRule, FixedStep, GovtId,
-    JumpRefusal, LandingRefusal, Market, NeverFires, NovaDisable, Npc, NpcId, Order, OtherFleets,
+    Allegiance, Behaviour, Chance, CombatCatalog, Condition, Controls, DisableRule, FixedStep,
+    GovtId, JumpRefusal, LandingRefusal, Market, NeverFires, NovaDisable, Npc, NpcId, Order,
     OutfitOrder, OutfitRefusal, Outfitter, Peaceful, Pilot, PilotCatalog, PointDefenceRule,
     RechargeRefusal, Reserves, Rules, Session, ShipId, ShipPurchase, ShipRef, ShipRefusal,
     ShipState, Shipyard, StartError, StellarId, Steps, TargetPick, TradeRefusal, TrafficCatalog,
@@ -455,7 +455,7 @@ impl<
             chance: SharedChance::default(),
             behaviour: Rc::new(Peaceful),
             disable_rule: Rc::new(NovaDisable),
-            defence_rule: Rc::new(OtherFleets),
+            defence_rule: Rc::new(Allegiance),
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
             unread_looks: looks
@@ -1332,6 +1332,8 @@ mod tests {
         weapons: Vec<nova_sim::WeaponRecord>,
         /// The ship types' combat fields: none, by default.
         hulls: Vec<nova_sim::HullRecord>,
+        /// The governments: none, by default.
+        govts: Vec<nova_sim::GovtRecord>,
         /// The weapons' looks: none, by default.
         looks: Vec<(i16, Result<WeaponLook, String>)>,
         /// The explosions' looks: none, by default.
@@ -1394,6 +1396,7 @@ mod tests {
             dudes: Vec::new(),
             weapons: Vec::new(),
             hulls: Vec::new(),
+            govts: Vec::new(),
             looks: Vec::new(),
             booms: Vec::new(),
             cards: Vec::new(),
@@ -1507,7 +1510,7 @@ mod tests {
         }
     }
 
-    /// The weapons and ship types' combat fields given.
+    /// The weapons, ship types' combat fields and governments given.
     impl CombatCatalog for FakeCatalog {
         fn weapons(&self) -> Vec<nova_sim::WeaponRecord> {
             self.weapons.clone()
@@ -1515,6 +1518,10 @@ mod tests {
 
         fn hulls(&self) -> Vec<nova_sim::HullRecord> {
             self.hulls.clone()
+        }
+
+        fn governments(&self) -> Vec<nova_sim::GovtRecord> {
+            self.govts.clone()
         }
     }
 
@@ -3961,6 +3968,7 @@ mod tests {
                 ammo: 0,
             }],
             size: None,
+            strength: 0,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
@@ -4092,6 +4100,7 @@ mod tests {
                 })
                 .collect(),
             size: None,
+            strength: 0,
         }
     }
 
@@ -4896,6 +4905,7 @@ mod tests {
             &self,
             _defender: nova_sim::combat::defence::Side,
             _firer: nova_sim::combat::defence::Side,
+            _govts: &nova_sim::Governments,
         ) -> bool {
             self.asked.set(self.asked.get() + 1);
             false

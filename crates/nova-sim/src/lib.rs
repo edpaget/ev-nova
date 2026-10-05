@@ -10,8 +10,8 @@
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
 //!   `jünk` and `öops` the exchange trades and is moved by; the
 //!   [`TrafficCatalog`] port, the `sÿst` traffic, `düde`s and `flët`s NPC
-//!   traffic is spawned from; and the [`CombatCatalog`] port, the `wëap`s
-//!   and each `shïp`'s combat fields ships fight with.
+//!   traffic is spawned from; and the [`CombatCatalog`] port, the `wëap`s,
+//!   each `shïp`'s combat fields and the `gövt`s ships fight by.
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
@@ -20,8 +20,8 @@
 //!   homing missiles steering, turrets aiming in their arcs, point defence
 //!   shooting missiles down, sub-munitions, damage to shields then armour,
 //!   the fight's [`Rules`]: the [`DisableRule`] port with Nova's
-//!   [`NovaDisable`] and the [`PointDefenceRule`] port with the interim
-//!   [`OtherFleets`], and destruction, reported as [`CombatEvent`]s, with
+//!   [`NovaDisable`] and the [`PointDefenceRule`] port with Nova's
+//!   [`Allegiance`], and destruction, reported as [`CombatEvent`]s, with
 //!   each weapon feature not done yet reported once as a
 //!   [`SimDiagnostic`].
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
@@ -37,6 +37,8 @@
 //!   `shïp` and its outfits' fuel scoops.
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
+//! - [`govt`]: the [`Governments`] and their relations: allies, enemies,
+//!   xenophobes and the flags that say how their ships behave.
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
@@ -98,6 +100,7 @@ pub mod fixture;
 pub mod flight;
 pub mod fuel;
 pub mod geometry;
+pub mod govt;
 pub mod handling;
 pub mod hyperspace;
 pub mod landing;
@@ -121,15 +124,15 @@ pub mod wares;
 pub use ai::{Behaviour, Goal, Peaceful, Surroundings};
 pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommodityStrings, DisasterId, DisasterRecord, DudeId,
-    DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, HullRecord, JunkId, JunkRecord,
-    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem,
-    StartDate, StartError, StellarId, StockWeapon, SystemId, SystemTraffic, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord, HullRecord, JunkId,
+    JunkRecord, LandingSite, OutfitId, OutfitRecord, Penalties, PilotCatalog, ShipId, ShipRecord,
+    SoundId, StarSystem, StartDate, StartError, StellarId, StockWeapon, SystemId, SystemTraffic,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
 pub use combat::armament::{Armament, Trigger};
-pub use combat::defence::{OtherFleets, PointDefenceRule};
+pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Rules, ShipRef};
@@ -137,6 +140,7 @@ pub use date::GameDate;
 pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
+pub use govt::Governments;
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
