@@ -25,7 +25,6 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::{ShipId, ShipState, SystemId, Vec2};
-use nova_view::draw::lights_tint;
 use nova_view::flight::FlightView;
 use nova_view::flight::hud::NAV_NO_DESTINATION;
 use nova_view::{Blend, Key, Point};
@@ -635,12 +634,12 @@ fn the_default_keys_fly_the_ship_and_the_camera_follows_it() {
 }
 
 #[test]
-fn holding_up_adds_the_engine_glow_over_the_ship_and_it_fades_out_after_release() {
+fn holding_up_ors_the_engine_glow_over_the_ship_and_it_fades_out_after_release() {
     let mut harness = Harness::flying(60);
     let ship_and_glow = |frame: &Frame| (sprite_batch(frame, 3), sprite_batch(frame, 4));
     let unlit = |frame: &Frame| {
         let (ship, next) = ship_and_glow(frame);
-        ship == Some((Blend::Normal, 1)) && !matches!(next, Some((Blend::Additive, _)))
+        ship == Some((Blend::Normal, 1)) && !matches!(next, Some((Blend::Or, _)))
     };
     let first = harness.frame();
     assert!(unlit(&first), "no glow at rest: {:?}", shape(&first));
@@ -650,17 +649,24 @@ fn holding_up_adds_the_engine_glow_over_the_ship_and_it_fades_out_after_release(
     let thrusting = harness.run(1.0);
     assert_eq!(
         ship_and_glow(&thrusting),
-        (Some((Blend::Normal, 1)), Some((Blend::Additive, 1))),
-        "the ship, then its glow added over it"
+        (Some((Blend::Normal, 1)), Some((Blend::Or, 1))),
+        "the ship, then its glow ORed over it"
     );
     let drawn = quads(&thrusting);
     let (ship, glow) = (drawn[2].dest, drawn[3].dest);
     assert_eq!((ship.w, glow.w), (1.0, 3.0));
     assert_eq!(centre(glow), centre(ship), "centred on the ship");
-    let alpha = drawn[3].tint[3];
+    // An OR quad's tint is its level in 32nds: lights_tint(level), as the
+    // batcher turns it into levels.
+    let tint = drawn[3].tint;
     assert!(
-        (20..=25).any(|level| (alpha - f32::from(lights_tint(level).a) / 255.0).abs() < 1e-6),
-        "a flickering partial level: {alpha}"
+        (20..=25_u8).any(|level| {
+            let n = f32::from(level) / 32.0;
+            tint.iter()
+                .zip([n, n, n, 1.0])
+                .all(|(got, want)| (got - want).abs() < 1e-6)
+        }),
+        "a flickering partial level: {tint:?}"
     );
 
     // Three ticks after release the glow is fading, not out.
@@ -668,7 +674,7 @@ fn holding_up_adds_the_engine_glow_over_the_ship_and_it_fades_out_after_release(
     let released = harness.run(0.1);
     assert_eq!(
         sprite_batch(&released, 4),
-        Some((Blend::Additive, 1)),
+        Some((Blend::Or, 1)),
         "still glowing: {:?}",
         shape(&released)
     );
@@ -678,7 +684,7 @@ fn holding_up_adds_the_engine_glow_over_the_ship_and_it_fades_out_after_release(
 }
 
 #[test]
-fn the_ships_lights_are_added_over_it() {
+fn the_ships_lights_are_ored_over_it() {
     let mut harness = Harness::flying_with_lights(60);
     let frame = harness.frame();
 
@@ -687,11 +693,7 @@ fn the_ships_lights_are_added_over_it() {
         Some((Blend::Normal, 1)),
         "the ship"
     );
-    assert_eq!(
-        sprite_batch(&frame, 4),
-        Some((Blend::Additive, 1)),
-        "its lights"
-    );
+    assert_eq!(sprite_batch(&frame, 4), Some((Blend::Or, 1)), "its lights");
     let drawn = quads(&frame);
     let (ship, lights) = (drawn[2].dest, drawn[3].dest);
     assert_eq!((ship.w, lights.w, lights.h), (1.0, 3.0, 3.0));

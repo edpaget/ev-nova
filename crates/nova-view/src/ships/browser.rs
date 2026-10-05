@@ -4,11 +4,11 @@
 //! description in a column beside it. The lights blink by the ship's
 //! [`Blink`](super::catalog::Blink) from the selection on, as
 //! [`nova_sim::lights_level`] says, rolling on [`HashedRolls`] from seed 0
-//! for random blinking. They are added
-//! ([`Blend::Additive`](crate::Blend::Additive)) at every level, because
-//! the original's partial-level blit,
-//! `_BlitPixieRLETranslucent` (0xc1568), is its full-level `AddOver`
-//! applied to the lights scaled by level/32: see [`lights_tint`] for the
+//! for random blinking. The glow (at full level) and the lights (at
+//! [`lights_tint`] of their level) are combined by OR with what is beneath
+//! ([`Blend::Or`](crate::Blend::Or)), scaled by level/32, like the
+//! original's `_BlitPixieRLETranslucent` (0xc1568) below full and
+//! `_BlitPixieRLEAddOver` (0xc24bf) at full: see [`lights_tint`] for the
 //! full record.
 //!
 //! The screen reads ships only through the [`ShipCatalog`] port, once at
@@ -150,11 +150,7 @@ impl<C: ShipCatalog> ShipBrowser<C> {
                 for (layer, tint) in [(&ship.glow, Some(Color::WHITE)), (&ship.lights, lights)] {
                     if let (Some(Ok(layer)), Some(tint)) = (layer, tint) {
                         let frame = frame % layer.frames.get();
-                        list.additive_sprite(
-                            ImageKey::sprite(layer.image_id, frame),
-                            SHIP_CENTER,
-                            tint,
-                        );
+                        list.or_sprite(ImageKey::sprite(layer.image_id, frame), SHIP_CENTER, tint);
                     }
                 }
             }
@@ -608,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn the_glow_and_lights_add_to_the_normal_base() {
+    fn the_glow_and_lights_or_onto_the_normal_base() {
         let catalog = FakeCatalog::with(vec![layered()]);
         let browser = ShipBrowser::new(&catalog);
         let blends: Vec<Blend> = drawn(&browser)
@@ -618,7 +614,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(blends, [Blend::Normal, Blend::Additive, Blend::Additive]);
+        assert_eq!(blends, [Blend::Normal, Blend::Or, Blend::Or]);
     }
 
     /// The Shuttle's blink: lit at ticks 1-3 and 10-12 of every 40.
@@ -639,7 +635,7 @@ mod tests {
         }
     }
 
-    /// The alphas the lights, `rlëD` 1200, are added with: one, or none
+    /// The alphas the lights, `rlëD` 1200, are drawn with: one, or none
     /// while they are off.
     fn lights_alphas(browser: &impl Screen) -> Vec<u8> {
         drawn(browser)
@@ -648,7 +644,7 @@ mod tests {
                 DrawCommand::Sprite {
                     image,
                     tint,
-                    blend: Blend::Additive,
+                    blend: Blend::Or,
                     ..
                 } if image.id == 1200 => {
                     assert_eq!((tint.r, tint.g, tint.b), (255, 255, 255));
@@ -678,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn pulsing_lights_are_added_at_their_level() {
+    fn pulsing_lights_are_ored_at_their_level() {
         // The stock triangle: 10 to 31.
         let triangle = Blink {
             mode: 2,
@@ -707,21 +703,21 @@ mod tests {
             .collect()
     }
 
-    /// The lights added with `tint` over the ship's centre, at the base's
+    /// The lights drawn by OR with `tint` over the ship's centre, at the base's
     /// current frame.
     fn lights_at(browser: &ShipBrowser<&FakeCatalog>, tint: Color) -> DrawCommand {
         DrawCommand::Sprite {
             image: ImageKey::sprite(1200, browser.frame().expect("a sheet")),
             center: SHIP_CENTER,
             tint,
-            blend: Blend::Additive,
+            blend: Blend::Or,
         }
     }
 
     #[test]
-    fn lights_are_added_scaled_by_level_below_full_and_whole_at_full() {
+    fn lights_are_ored_scaled_by_level_below_full_and_whole_at_full() {
         // The stock triangle, 10 to 31, never full: the original draws
-        // every level with its translucent blit, which adds the lights
+        // every level with its translucent blit, which ORs in the lights
         // scaled by level/32 (see `lights_tint`).
         let triangle = Blink {
             mode: 2,
@@ -747,7 +743,7 @@ mod tests {
         assert!(levels.contains(&10), "the lowest level is drawn");
         assert!(levels.contains(&31), "the highest level is drawn");
 
-        // A steady light is full: added whole.
+        // A steady light is full: ORed whole.
         let catalog = FakeCatalog::with(vec![blinking(128, Blink::STEADY)]);
         let browser = ShipBrowser::new(&catalog);
         assert_eq!(

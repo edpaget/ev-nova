@@ -236,7 +236,8 @@ fn the_first_frame_draws_the_ship_its_layers_and_its_text() {
     let mut harness = Harness::new();
     let frame = harness.frame();
 
-    // The base is drawn normally, then the glow and lights added over it.
+    // The base is drawn normally, then the glow and lights ORed over it,
+    // each in its own batch since they overlap.
     assert!(
         matches!(
             &frame.batches[0],
@@ -245,14 +246,15 @@ fn the_first_frame_draws_the_ship_its_layers_and_its_text() {
         "{:?}",
         frame.batches[0]
     );
-    assert!(
-        matches!(
-            &frame.batches[1],
-            Batch::Sprites { blend: Blend::Additive, quads, .. } if quads.len() == 2
-        ),
-        "{:?}",
-        frame.batches[1]
-    );
+    for layer in &frame.batches[1..3] {
+        assert!(
+            matches!(
+                layer,
+                Batch::Sprites { blend: Blend::Or, quads, .. } if quads.len() == 1
+            ),
+            "{layer:?}"
+        );
+    }
     let quads = sprite_quads(&frame);
     let centre = |quad: &QuadInstance| {
         (
@@ -335,15 +337,16 @@ fn the_lights_blink_by_the_shan() {
     // 1/60 s, tick 0: the lights are off; the base and glow show.
     let first = harness.frame();
     assert_eq!(sprite_quads(&first).len(), 2, "{:?}", first.batches);
-    // 2/60 s, tick 1: the lights are added over the glow.
+    // 2/60 s, tick 1: the lights are ORed over the glow.
     let second = harness.frame();
     assert_eq!(sprite_quads(&second).len(), 3, "{:?}", second.batches);
-    assert!(
-        matches!(
-            &second.batches[1],
-            Batch::Sprites { blend: Blend::Additive, quads, .. } if quads.len() == 2
-        ),
-        "{:?}",
-        second.batches[1]
-    );
+    for layer in &second.batches[1..3] {
+        assert!(
+            matches!(
+                layer,
+                Batch::Sprites { blend: Blend::Or, quads, .. } if quads.len() == 1
+            ),
+            "{layer:?}"
+        );
+    }
 }

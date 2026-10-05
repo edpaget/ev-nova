@@ -44,12 +44,12 @@
 //! ticks after Up is released, and landing and beginning a jump put it
 //! out. The lights are drawn at the level [`nova_sim::lights_level`]
 //! gives for the sheet's blink at the flight's time in ticks. Each is
-//! added with that many 32nds of full alpha, or not at all while it is
-//! hidden or off. Both are added
-//! ([`Blend::Additive`](crate::Blend::Additive)) at every level, because
-//! the original's partial-level blit, `_BlitPixieRLETranslucent`
-//! (0xc1568), is its full-level `AddOver` applied to the layer scaled by
-//! level/32: see [`lights_tint`] for the full record. The flight's time
+//! drawn at [`lights_tint`] of its level, or not at all while it is hidden
+//! or off. Both are combined by OR with what is beneath
+//! ([`Blend::Or`](crate::Blend::Or)) at every level, scaled by level/32,
+//! like the original's `_BlitPixieRLETranslucent` (0xc1568) below full and
+//! `_BlitPixieRLEAddOver` (0xc24bf) at full: see [`lights_tint`] for the
+//! full record. The flight's time
 //! stops while the course map is open, so the lights blink and the glow
 //! flickers in game time. Random blinking rolls on [`HashedRolls`] from
 //! seed 0, and the glow's flicker on [`HashedRolls`] from seed 1. A layer
@@ -762,7 +762,7 @@ impl<C> FlightView<C> {
                 let lights = sheet.lights.zip(level.map(lights_tint));
                 for (layer, tint) in [glow, lights].into_iter().flatten() {
                     let layer_frame = frame % layer.frames.get();
-                    list.additive_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
+                    list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
                 }
             }
             Err(reason) => {
@@ -1844,24 +1844,30 @@ mod tests {
     }
 
     #[test]
-    fn a_thrusting_ships_glow_and_lights_add_to_its_normal_sprite() {
+    fn a_thrusting_ships_glow_and_lights_or_onto_its_normal_sprite() {
         let mut view = FlightView::new(layered());
         view.input(&key(Key::Up, true));
         ticks(&mut view, 6);
         assert_eq!(
             ship_blends(&view),
-            [
-                (2000, Blend::Normal),
-                (2100, Blend::Additive),
-                (2200, Blend::Additive),
-            ]
+            [(2000, Blend::Normal), (2100, Blend::Or), (2200, Blend::Or),]
+        );
+        assert!(
+            !drawn(&view).iter().any(|command| matches!(
+                command,
+                DrawCommand::Sprite {
+                    blend: Blend::Additive,
+                    ..
+                }
+            )),
+            "nothing in a thrusting, lit frame is added"
         );
         view.input(&key(Key::Up, false));
         ticks(&mut view, 6);
         assert_eq!(view.session().expect("flying").engine_glow(), 0);
         assert_eq!(
             ship_blends(&view),
-            [(2000, Blend::Normal), (2200, Blend::Additive)],
+            [(2000, Blend::Normal), (2200, Blend::Or)],
             "coasting"
         );
     }
@@ -1951,9 +1957,9 @@ mod tests {
             .collect()
     }
 
-    /// The glow commands for a base of `base` at `tick`: the glow added at
-    /// the level [`glow_level`] gives over the ship's centre, on its frame,
-    /// or none when it is hidden.
+    /// The glow commands for a base of `base` at `tick`: the glow drawn by
+    /// OR at the level [`glow_level`] gives over the ship's centre, on its
+    /// frame, or none when it is hidden.
     fn glow_for(view: &View, base: u8, tick: u64) -> Vec<DrawCommand> {
         let frame = view.frame().expect("a sheet") % 36;
         let center = view.camera().world_to_screen(view.shown_position());
@@ -1962,7 +1968,7 @@ mod tests {
                 image: ImageKey::sprite(2100, frame),
                 center,
                 tint: lights_tint(level),
-                blend: Blend::Additive,
+                blend: Blend::Or,
             })
             .into_iter()
             .collect()
@@ -2040,7 +2046,7 @@ mod tests {
         }
     }
 
-    /// The tints the lights, `rlëD` 2200, are added with.
+    /// The tints the lights, `rlëD` 2200, are drawn by OR with.
     fn lights_tints(view: &View) -> Vec<Color> {
         drawn(view)
             .iter()
@@ -2048,7 +2054,7 @@ mod tests {
                 DrawCommand::Sprite {
                     image,
                     tint,
-                    blend: Blend::Additive,
+                    blend: Blend::Or,
                     ..
                 } if image.id == 2200 => Some(*tint),
                 _ => None,
@@ -2077,7 +2083,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pulsing_light_is_added_at_its_level() {
+    fn a_pulsing_light_is_ored_at_its_level() {
         // The stock triangle: 10 to 31.
         let triangle = Blink {
             mode: 2,
@@ -2105,20 +2111,20 @@ mod tests {
             .collect()
     }
 
-    /// The lights added with `tint` over the coasting ship's centre.
+    /// The lights drawn by OR with `tint` over the coasting ship's centre.
     fn lights_at(tint: Color) -> DrawCommand {
         DrawCommand::Sprite {
             image: ImageKey::sprite(2200, 0),
             center: VIEW_CENTER,
             tint,
-            blend: Blend::Additive,
+            blend: Blend::Or,
         }
     }
 
     #[test]
-    fn lights_are_added_scaled_by_level_below_full_and_whole_at_full() {
+    fn lights_are_ored_scaled_by_level_below_full_and_whole_at_full() {
         // The stock triangle, 10 to 31, never full: the original draws
-        // every level with its translucent blit, which adds the lights
+        // every level with its translucent blit, which ORs in the lights
         // scaled by level/32 (see `lights_tint`).
         let triangle = Blink {
             mode: 2,
@@ -2143,13 +2149,13 @@ mod tests {
         assert!(levels.contains(&10), "the lowest level is drawn");
         assert!(levels.contains(&31), "the highest level is drawn");
 
-        // A steady light is full: added whole.
+        // A steady light is full: ORed whole.
         let view = FlightView::new(blinking(Blink::STEADY));
         assert_eq!(lights_commands(&view), [lights_at(Color::WHITE)]);
     }
 
     #[test]
-    fn steady_lights_are_added_at_full_from_the_start() {
+    fn steady_lights_are_ored_at_full_from_the_start() {
         let view = FlightView::new(blinking(Blink::STEADY));
         assert_eq!(lights_tints(&view), [Color::WHITE]);
     }
@@ -2164,7 +2170,7 @@ mod tests {
         assert!(view.session().expect("flying").thrusting());
         assert_eq!(
             ship_blends(&view),
-            [(2000, Blend::Normal), (2100, Blend::Additive)]
+            [(2000, Blend::Normal), (2100, Blend::Or)]
         );
         let glow = drawn(&view).iter().find_map(|command| match command {
             DrawCommand::Sprite { image, tint, .. } if image.id == 2100 => Some(*tint),

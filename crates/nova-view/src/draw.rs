@@ -13,9 +13,9 @@ pub enum Blend {
     /// Painted over what is beneath, by its alpha.
     #[default]
     Normal,
-    /// Adds its colour, scaled by its alpha, to what is beneath. It stands
-    /// in for the original's OR-based `AddOver` and translucent light and
-    /// glow blits (see [`lights_tint`]).
+    /// Adds its colour, scaled by its alpha, to what is beneath: a true
+    /// saturating add. No screen uses it since the glow and lights moved to
+    /// [`Blend::Or`].
     Additive,
     /// ORs its colour, scaled by a level from the tint, into what is
     /// beneath, bit for bit: the original's ship glow and lights blits,
@@ -298,10 +298,11 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
         .line(corners[1], corners[3], 1.0, color);
 }
 
-/// The tint the running lights are added with at `level` out of
-/// [`nova_sim::blink::FULL`] (32): white, with that many 32nds of full
-/// alpha, rounded to nearest, so level 32 adds the lights as they are.
-/// Levels past 32 are 32.
+/// The tint the running lights (and flight's engine glow) are drawn with
+/// at `level` out of [`nova_sim::blink::FULL`] (32): white, with that many
+/// 32nds of full alpha, rounded to nearest, so level 32 draws the layer as
+/// it is. Levels past 32 are 32. Under [`Blend::Or`] the alpha encodes n
+/// exactly: `round(a × 32 / 255) = n` for every n from 0 to 32.
 ///
 /// # The original's light blit
 ///
@@ -337,23 +338,16 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
 /// A black lights pixel adds nothing, and the destination is never
 /// dimmed: the lights draw no silhouette at any level. At 32 the formula
 /// is `src | dst`, the `AddOver` blit, so one operator covers every level:
-/// the lights scaled by n/32 and added into the screen. That is why both
-/// screens draw the lights [`Blend::Additive`] with this tint at every
-/// level rather than choosing the blend by level. The engine glow's sprite
-/// has the same draw proc and field writes (`_HandleShipDisplay` at
-/// 0x2c2b6-0x2c2d6), so flight adds the glow with this tint at its level
-/// too.
+/// the lights scaled by n/32 and combined into the screen by OR. That is
+/// why both screens draw the lights with [`Blend::Or`] at this tint at
+/// every level rather than choosing the blend by level; [`Blend::Or`]
+/// records how the renderer reproduces the formula, 5-bit floor included.
+/// The engine glow's sprite has the same draw proc and field writes
+/// (`_HandleShipDisplay` at 0x2c2b6-0x2c2d6), so flight ORs the glow in
+/// at this tint at its level too.
 ///
 /// Where this deviates from the original:
 ///
-/// - **Saturating add, not bitwise OR.** `a | b` is `a + b - (a & b)`, so
-///   ours matches exactly where the scaled light and the screen share no
-///   set bits in a channel (always where either is black), and elsewhere
-///   is brighter by `a & b` before saturating: 5-bit 16 over 16 is 16 in
-///   the original and 31 here. WebGPU has no logic-op blending.
-/// - **No 5-bit truncation.** The original floors `src_c * n / 32` to 5
-///   bits; we scale 8-bit colour by this alpha, which differs by less than
-///   one 5-bit step per channel.
 /// - **Cloaking is not modelled.** A cloaked ship's bias (+0xb0 ≠ 0)
 ///   mixes the lights toward a colour and keeps them off `AddOver` even at
 ///   level 32. Nor is the 8-bit depth, whose alpha-table blits were not
