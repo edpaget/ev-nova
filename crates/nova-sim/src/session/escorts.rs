@@ -1137,6 +1137,31 @@ mod tests {
     }
 
     #[test]
+    fn no_command_is_given_while_jumping() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Bible);
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session);
+        session.begin_jump().expect("jumps");
+        let before = session.pilot().clone();
+        let npcs: Vec<Npc> = escort_npcs(&session).into_iter().cloned().collect();
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            None
+        );
+        assert_eq!(session.pilot(), &before, "the records' orders unchanged");
+        assert_eq!(orders(&session), [Some(EscortOrder::Defend), None]);
+        assert_eq!(
+            escort_npcs(&session)
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            npcs,
+            "the NPCs' orders unchanged"
+        );
+    }
+
+    #[test]
     fn no_command_is_given_while_landed() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
