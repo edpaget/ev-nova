@@ -9,6 +9,9 @@
 //!   [`DEFAULT_HIT_RADIUS`] across.
 //! - A ship is disabled as a [`DisableRule`] says. Nova's,
 //!   [`NovaDisable`], is `_IsDisabled`'s.
+//! - Its `Flags` 0x1000, 0x2000 and 0x4000 ([`BLIND_SPOTS`]) blind its
+//!   turrets in front, to the sides and to the rear, as a weapon's own do
+//!   (`_TurretBlindSpot`, which reads them from the `shïp`).
 //! - Once its armour is gone it breaks up for its `DeathDelay` ticks
 //!   (its `Explode1` going off), then is destroyed (its `Explode2`). A
 //!   ship of [`DEATH_SIZE_MASS`] tons or more dies in an explosion sized
@@ -35,6 +38,8 @@ pub const TOUGH: u16 = 0x0010;
 pub const DISABLE_PERCENT: f64 = 33.333;
 /// The percentage for a ship type with [`TOUGH`] set.
 pub const TOUGH_DISABLE_PERCENT: f64 = 10.0;
+/// The `shïp` `Flags` bits that blind its turrets, as a `wëap`'s do.
+pub const BLIND_SPOTS: u16 = 0x7000;
 /// The mass, in tons, from which a ship's death explosion has a size.
 pub const DEATH_SIZE_MASS: f32 = 100.0;
 /// The death explosion's size per ton (the double @0xdd588).
@@ -57,6 +62,9 @@ pub struct HullSpec {
     pub explosion: Option<Explosion>,
     /// Its mass, in tons.
     pub mass: f32,
+    /// Where its turrets cannot fire: its `Flags` 0x1000 (front), 0x2000
+    /// (sides) and 0x4000 (rear), as a weapon's `Flags` mark them.
+    pub blind_spots: u16,
 }
 
 impl Default for HullSpec {
@@ -70,6 +78,7 @@ impl Default for HullSpec {
             breakup: None,
             explosion: None,
             mass: 0.0,
+            blind_spots: 0,
         }
     }
 }
@@ -91,6 +100,7 @@ impl HullSpec {
             breakup: Explosion::decode(record.explode1),
             explosion: Explosion::decode(record.explode2),
             mass: f32::from(record.mass.max(0)),
+            blind_spots: record.flags & BLIND_SPOTS,
         }
     }
 
@@ -259,6 +269,23 @@ mod tests {
         assert_eq!((trader.death_delay, trader.mass), (0, 0.0));
         assert_eq!((trader.breakup, trader.explosion), (None, None));
         assert_eq!(TOUGH, 0x0010);
+    }
+
+    #[test]
+    fn a_hulls_turret_blind_spots_are_its_flags_0x7000() {
+        let destroyer = HullSpec::new(&HullRecord {
+            flags: 0x4130,
+            ..hull(141)
+        });
+        assert_eq!(destroyer.blind_spots, 0x4000);
+        let carrier = HullSpec::new(&HullRecord {
+            flags: 0xffff,
+            ..hull(222)
+        });
+        assert_eq!(carrier.blind_spots, 0x7000);
+        assert_eq!(HullSpec::new(&hull(128)).blind_spots, 0);
+        assert_eq!(HullSpec::default().blind_spots, 0);
+        assert_eq!(BLIND_SPOTS, 0x7000);
     }
 
     #[test]

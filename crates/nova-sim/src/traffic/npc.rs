@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::ai::Goal;
 use crate::catalog::{GovtId, ShipId, WeaponId};
+use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::flight::ShipState;
@@ -102,6 +103,8 @@ pub struct Npc {
     pub rounds: BTreeMap<WeaponId, u32>,
     /// The fire command it holds, as it last decided.
     pub trigger: Trigger,
+    /// The ship it targets, as it last decided.
+    pub target: Option<ShipRef>,
 }
 
 impl Npc {

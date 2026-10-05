@@ -157,7 +157,7 @@ impl Effects {
         chance: &mut dyn Chance,
     ) {
         match *event {
-            CombatEvent::Fired { ship, weapon } => {
+            CombatEvent::Fired { ship, weapon, .. } => {
                 let Some(look) = looks.weapon(weapon) else {
                     return;
                 };
@@ -183,7 +183,9 @@ impl Effects {
                 }
                 self.scatter(point(at), point(velocity), chance);
             }
-            CombatEvent::Disabled { .. } | CombatEvent::BreakingUp { .. } => {}
+            CombatEvent::Disabled { .. }
+            | CombatEvent::BreakingUp { .. }
+            | CombatEvent::ShotDown { .. } => {}
         }
     }
 
@@ -799,6 +801,7 @@ mod tests {
         CombatEvent::Fired {
             ship,
             weapon: WeaponId(weapon),
+            at: Vec2::ZERO,
         }
     }
 

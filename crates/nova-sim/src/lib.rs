@@ -16,10 +16,14 @@
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
-//!   [`Trigger`], shots and beams flying and hitting, damage to shields
-//!   then armour, the [`DisableRule`] port with Nova's [`NovaDisable`], and
-//!   destruction, reported as [`CombatEvent`]s, with each weapon feature
-//!   not done yet reported once as a [`SimDiagnostic`].
+//!   [`Trigger`] at their target, shots and beams flying and hitting,
+//!   homing missiles steering, turrets aiming in their arcs, point defence
+//!   shooting missiles down, sub-munitions, damage to shields then armour,
+//!   the fight's [`Rules`]: the [`DisableRule`] port with Nova's
+//!   [`NovaDisable`] and the [`PointDefenceRule`] port with the interim
+//!   [`OtherFleets`], and destruction, reported as [`CombatEvent`]s, with
+//!   each weapon feature not done yet reported once as a
+//!   [`SimDiagnostic`].
 //! - [`clock`]: the fixed-step clock, Nova's 1/30 s tick, which turns
 //!   display frames of any length into whole simulation steps.
 //! - [`data`]: the catalog ports' adapters over `nova_data`'s `GameData`.
@@ -125,9 +129,10 @@ pub use catalog::{
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
 pub use combat::armament::{Armament, Trigger};
+pub use combat::defence::{OtherFleets, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
-pub use combat::{CombatEvent, ShipRef};
+pub use combat::{CombatEvent, Rules, ShipRef};
 pub use date::GameDate;
 pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};

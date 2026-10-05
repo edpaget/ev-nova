@@ -111,11 +111,11 @@ use std::time::Duration;
 
 use nova_sim::{
     Behaviour, Chance, CombatCatalog, Condition, Controls, DisableRule, FixedStep, GovtId,
-    JumpRefusal, LandingRefusal, Market, NeverFires, NovaDisable, Npc, NpcId, Order, OutfitOrder,
-    OutfitRefusal, Outfitter, Peaceful, Pilot, PilotCatalog, RechargeRefusal, Reserves, Session,
-    ShipId, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps,
-    TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2, WeaponId, flight::normalized,
-    flight::shortest_turn,
+    JumpRefusal, LandingRefusal, Market, NeverFires, NovaDisable, Npc, NpcId, Order, OtherFleets,
+    OutfitOrder, OutfitRefusal, Outfitter, Peaceful, Pilot, PilotCatalog, RechargeRefusal,
+    Reserves, Rules, Session, ShipId, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
+    StartError, StellarId, Steps, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2, WeaponId,
+    flight::normalized, flight::shortest_turn,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -1102,7 +1102,11 @@ impl<
                     .iter()
                     .map(|beam| (beam.firer, beam.weapon.id))
                     .collect();
-                session.tick_combat(&*self.disable_rule, &mut self.chance);
+                let rules = Rules {
+                    disable: &*self.disable_rule,
+                    defence: &OtherFleets,
+                };
+                session.tick_combat(rules, &mut self.chance);
                 let player = point(session.player().position);
                 let dying = dying(session, &self.sheet, &self.npc_sheets);
                 let chance = &mut self.effects_chance;
@@ -3944,6 +3948,12 @@ mod tests {
             beam_length: 0,
             burst_count: 0,
             burst_reload: 0,
+            guided_turn: 0,
+            durability: 0,
+            sub_count: 0,
+            sub_type: None,
+            sub_theta: 0,
+            sub_limit: 0,
         };
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
@@ -4061,6 +4071,12 @@ mod tests {
             beam_length: 50,
             burst_count: 0,
             burst_reload: 0,
+            guided_turn: 0,
+            durability: 0,
+            sub_count: 0,
+            sub_type: None,
+            sub_theta: 0,
+            sub_limit: 0,
         }
     }
 

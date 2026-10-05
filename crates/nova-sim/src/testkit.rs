@@ -168,6 +168,12 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         beam_length: 0,
         burst_count: 0,
         burst_reload: 0,
+        guided_turn: 0,
+        durability: 0,
+        sub_count: 0,
+        sub_type: None,
+        sub_theta: 0,
+        sub_limit: 0,
     }
 }
 
@@ -206,6 +212,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         armament: Armament::default(),
         rounds: std::collections::BTreeMap::new(),
         trigger: Trigger::default(),
+        target: None,
     }
 }
 

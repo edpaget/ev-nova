@@ -14,7 +14,8 @@
 //! [`Traffic`] holds a system's NPCs. Entering a system
 //! ([`Traffic::enter`]) replaces them with its initial population. Each
 //! tick ([`Traffic::tick`]), in order: the arrival roll; the decisions due
-//! on the AI timer (each NPC's goal and the fire command it holds), never
+//! on the AI timer (each NPC's goal, the fire command it holds and the
+//! ship it targets), never
 //! for a ship still jumping in or one that is not intact; the autopilot
 //! and a flight step for every NPC; and the removal of those that landed
 //! or jumped out. The fight ([`combat`](crate::combat)) damages them, and
@@ -128,13 +129,15 @@ impl Traffic {
                 && decision_due(self.ticks, npc.id, self.interval);
             decisions.push(due.then(|| {
                 let goal = behaviour.decide(npc, &around, &mut &mut *chance);
-                (goal, behaviour.trigger(npc, &around))
+                let trigger = behaviour.trigger(npc, &around);
+                (goal, trigger, behaviour.target(npc, &around))
             }));
         }
         for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
-            if let Some((goal, trigger)) = decision {
+            if let Some((goal, trigger, target)) = decision {
                 npc.goal = goal;
                 npc.trigger = trigger;
+                npc.target = target;
             }
         }
         let states: Vec<(NpcId, ShipState)> =
@@ -224,6 +227,7 @@ impl Traffic {
                 armament: kind.armament.clone(),
                 rounds: kind.rounds.clone(),
                 trigger: Trigger::default(),
+                target: None,
             });
         }
     }
@@ -238,6 +242,7 @@ mod tests {
     use super::*;
     use crate::catalog::WeaponId;
     use crate::catalog::{DudeId, EscortRecord, FleetId, FleetRecord, GovtId, StellarId};
+    use crate::combat::ShipRef;
     use crate::combat::armament::Armament;
     use crate::combat::hull::HullSpec;
     use crate::combat::weapon::WeaponSpec;
@@ -247,11 +252,13 @@ mod tests {
     use crate::traffic::npc::AiType;
     use crate::traffic::table::{ShipKind, SpawnDude};
 
-    /// Decides `goal` and `trigger` for everyone, recording who decided.
+    /// Decides `goal`, `trigger` and `target` for everyone, recording who
+    /// decided.
     #[derive(Debug)]
     struct Recording {
         goal: Goal,
         trigger: Trigger,
+        target: Option<ShipRef>,
         decided: RefCell<Vec<NpcId>>,
     }
 
@@ -260,6 +267,7 @@ mod tests {
             Self {
                 goal,
                 trigger: Trigger::default(),
+                target: None,
                 decided: RefCell::default(),
             }
         }
@@ -278,6 +286,11 @@ mod tests {
 
         fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
             self.trigger
+        }
+
+        fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+            assert!(around.npcs.iter().any(|other| other.id == npc.id));
+            self.target
         }
     }
 
@@ -578,6 +591,25 @@ mod tests {
         );
         traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[1].trigger, behaviour.trigger);
+    }
+
+    #[test]
+    fn the_target_decided_is_held_on_the_ai_timer() {
+        let mut traffic = populated(2, 2);
+        assert_eq!(traffic.npcs()[0].target, None, "none to start with");
+        let behaviour = Recording {
+            target: Some(ShipRef::Player),
+            ..Recording::deciding(Goal::Idle)
+        };
+        traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].target, Some(ShipRef::Player));
+        assert_eq!(traffic.npcs()[1].target, None, "not its turn");
+        traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
+        let letting_go = Recording::deciding(Goal::Idle);
+        traffic.tick(&letting_go, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].target, None);
+        assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
     }
 
     #[test]

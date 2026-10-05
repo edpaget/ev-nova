@@ -9,8 +9,19 @@
 //!   a tick.
 //! - `Count` is a shot's or beam's life in ticks, so a projectile's range
 //!   from a resting firer is its speed times its life.
-//! - `Guidance` -1, 0, 5 and 6 are the [`Guidance`] this simulation flies;
-//!   any other is [`Guidance::Other`].
+//! - `Guidance` -1, 0, 1, 3-10 are the [`Guidance`] this simulation
+//!   flies; any other (2, the carried ships' 99, or anything undocumented)
+//!   is [`Guidance::Other`].
+//! - `GuidedTurn` is a homing shot's turn a tick in tenths of a degree
+//!   ([`GUIDED_TURN_PER_DEGREE`]): the IR Missile's 70 is 7 degrees.
+//! - `Durability` is what point defence must take off a shot before the
+//!   next hit destroys it.
+//! - `SubCount`, `SubType`, `SubTheta` and `SubLimit` are its
+//!   [`Submunitions`]: none without a count above none and a type, and no
+//!   limit at none or below.
+//! - Its range is a beam's (0, 3 and 10) `BeamLength`, and any other's
+//!   `Speed` times its `Count`. (The original adds the range of its
+//!   sub-munitions' chain, which no stock point defence has.)
 //! - `AmmoType` is decoded as [`Ammo`]: -1 unlimited, 0-255 the rounds
 //!   of `wëap` 128+n, and -1000 and below fuel, |n + 1000| / 10 units a
 //!   shot.
@@ -29,14 +40,30 @@ pub enum Guidance {
     Unguided,
     /// 0: a beam.
     Beam,
+    /// 1: a homing shot, steering at its target.
+    Homing,
+    /// 3: a turreted beam, held on its target.
+    TurretBeam,
+    /// 4: a turret, firing at its target at the lead angle.
+    Turret,
     /// 5: a freefall bomb, launched at 80% of the firer's velocity, that
     /// turns into the wind.
     FreefallBomb,
     /// 6: a freeflight rocket, launched straight ahead, that accelerates
     /// to its top speed.
     Rocket,
-    /// Any other: guided weapons, turrets and fighter bays, which later
-    /// phases fly.
+    /// 7: a front-quadrant turret: at a target within 45 degrees of the
+    /// nose, otherwise straight ahead.
+    FrontTurret,
+    /// 8: a rear-quadrant turret: only at a target within 45 degrees of
+    /// the tail.
+    RearTurret,
+    /// 9: a point-defence turret, firing at missiles.
+    PointDefence,
+    /// 10: a point-defence beam.
+    PointDefenceBeam,
+    /// Any other: carried ships (99), which a later phase flies, and
+    /// anything undocumented.
     Other(i16),
 }
 
@@ -47,8 +74,15 @@ impl Guidance {
         match raw {
             -1 => Self::Unguided,
             0 => Self::Beam,
+            1 => Self::Homing,
+            3 => Self::TurretBeam,
+            4 => Self::Turret,
             5 => Self::FreefallBomb,
             6 => Self::Rocket,
+            7 => Self::FrontTurret,
+            8 => Self::RearTurret,
+            9 => Self::PointDefence,
+            10 => Self::PointDefenceBeam,
             other => Self::Other(other),
         }
     }
@@ -65,6 +99,43 @@ pub const FUEL_AMMO: i16 = -1000;
 /// How many steps of `AmmoType` below [`FUEL_AMMO`] are a unit of fuel a
 /// shot (the Bible: "-1005 = 0.5 units per shot").
 pub const FUEL_AMMO_PER_UNIT: f32 = 10.0;
+
+/// A weapon's sub-munitions, released by each of its shots on a hit and
+/// at the end of its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Submunitions {
+    /// Their weapon, its `SubType`.
+    pub weapon: WeaponId,
+    /// How many each shot releases, its `SubCount`.
+    pub count: u32,
+    /// Their spread, its `SubTheta`, in degrees: within this either way,
+    /// or a starburst this far apart when negative.
+    pub theta: i16,
+    /// How many generations there may be, its `SubLimit`; none for no
+    /// limit.
+    pub limit: Option<u32>,
+}
+
+impl Submunitions {
+    /// The sub-munitions `record` releases: none without a `SubCount` or
+    /// a `SubType`.
+    fn of(record: &WeaponRecord) -> Option<Self> {
+        let count = u32::try_from(record.sub_count).ok().filter(|&n| n > 0)?;
+        Some(Self {
+            weapon: record.sub_type?,
+            count,
+            theta: record.sub_theta,
+            limit: u32::try_from(record.sub_limit).ok().filter(|&n| n > 0),
+        })
+    }
+
+    /// Whether a shot of `generation` (0 for one a ship fired) releases
+    /// them.
+    #[must_use]
+    pub fn releases_at(&self, generation: u32) -> bool {
+        self.limit.is_none_or(|limit| generation < limit)
+    }
+}
 
 /// What a weapon spends on each shot, from its `AmmoType`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -171,6 +242,13 @@ pub struct WeaponSpec {
     pub flags2: u16,
     /// Its `Flags3`.
     pub flags3: u16,
+    /// A homing shot's turn a tick, in degrees.
+    pub turn: f32,
+    /// What point defence must take off a shot of it before the next hit
+    /// destroys it.
+    pub durability: f32,
+    /// Its sub-munitions, if any.
+    pub submunitions: Option<Submunitions>,
 }
 
 /// `Flags`: fired by the second trigger.
@@ -186,6 +264,18 @@ pub const AMMO_AT_BURST_END: u16 = 0x0001;
 /// `Flags2`: hidden when out of ammo, so selecting a secondary skips it
 /// while it has no rounds.
 pub const HIDE_WHEN_EMPTY: u16 = 0x0800;
+/// `Flags`: point defence cannot target its shots.
+pub const PD_IMMUNE: u16 = 0x0080;
+/// `Flags2`: a homing shot's proximity fuse is set off by other ships
+/// than its target.
+pub const PROXIMITY_BY_OTHERS: u16 = 0x0008;
+/// `Flags2`: its sub-munitions are aimed at the nearest ship they can
+/// hit.
+pub const SUBS_SEEK_NEAREST: u16 = 0x0010;
+/// `Flags2`: its shots release no sub-munitions at the end of their life.
+pub const NO_SUBS_ON_EXPIRY: u16 = 0x0020;
+/// `GuidedTurn` is in tenths of a degree.
+pub const GUIDED_TURN_PER_DEGREE: f32 = 10.0;
 
 impl WeaponSpec {
     /// The weapon `record` describes (see the module docs).
@@ -213,7 +303,46 @@ impl WeaponSpec {
             seeker: record.seeker,
             flags2: record.flags2,
             flags3: record.flags3,
+            turn: f32::from(record.guided_turn) / GUIDED_TURN_PER_DEGREE,
+            durability: ticks(record.durability),
+            submunitions: Submunitions::of(record),
         }
+    }
+
+    /// Whether it fires beams: guidance 0, 3 and 10.
+    #[must_use]
+    pub fn is_beam(&self) -> bool {
+        matches!(
+            self.guidance,
+            Guidance::Beam | Guidance::TurretBeam | Guidance::PointDefenceBeam
+        )
+    }
+
+    /// Whether point defence cannot target its shots.
+    #[must_use]
+    pub fn pd_immune(&self) -> bool {
+        self.flags & PD_IMMUNE != 0
+    }
+
+    /// Whether its sub-munitions are aimed at the nearest ship they can
+    /// hit.
+    #[must_use]
+    pub fn seeks_with_subs(&self) -> bool {
+        self.flags2 & SUBS_SEEK_NEAREST != 0
+    }
+
+    /// Whether its shots release their sub-munitions at the end of their
+    /// life.
+    #[must_use]
+    pub fn subs_on_expiry(&self) -> bool {
+        self.flags2 & NO_SUBS_ON_EXPIRY == 0
+    }
+
+    /// Whether a homing shot of it is set off by other ships than its
+    /// target.
+    #[must_use]
+    pub fn proximity_by_others(&self) -> bool {
+        self.flags2 & PROXIMITY_BY_OTHERS != 0
     }
 
     /// Whether the second trigger fires it.
@@ -256,9 +385,10 @@ impl WeaponSpec {
     /// speed for its life (from a resting firer, at its top speed).
     #[must_use]
     pub fn range(&self) -> f32 {
-        match self.guidance {
-            Guidance::Beam => self.beam_length,
-            _ => self.speed * self.lifetime as f32,
+        if self.is_beam() {
+            self.beam_length
+        } else {
+            self.speed * self.lifetime as f32
         }
     }
 }
@@ -320,19 +450,147 @@ mod tests {
         for (raw, guidance) in [
             (-1, Guidance::Unguided),
             (0, Guidance::Beam),
+            (1, Guidance::Homing),
+            (2, Guidance::Other(2)),
+            (3, Guidance::TurretBeam),
+            (4, Guidance::Turret),
             (5, Guidance::FreefallBomb),
             (6, Guidance::Rocket),
-            (1, Guidance::Other(1)),
-            (2, Guidance::Other(2)),
-            (3, Guidance::Other(3)),
-            (4, Guidance::Other(4)),
-            (7, Guidance::Other(7)),
-            (10, Guidance::Other(10)),
+            (7, Guidance::FrontTurret),
+            (8, Guidance::RearTurret),
+            (9, Guidance::PointDefence),
+            (10, Guidance::PointDefenceBeam),
+            (11, Guidance::Other(11)),
             (99, Guidance::Other(99)),
             (-2, Guidance::Other(-2)),
         ] {
             assert_eq!(Guidance::decode(raw), guidance, "{raw}");
         }
+    }
+
+    #[test]
+    fn beams_are_guidance_0_3_and_10_and_reach_their_length() {
+        for raw in [-1, 1, 2, 4, 5, 6, 7, 8, 9, 99] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                guidance: raw,
+                count: 10,
+                speed: 300,
+                beam_length: 400,
+                ..weapon(146)
+            });
+            assert!(!spec.is_beam(), "{raw}");
+            assert_eq!(spec.range(), 30.0, "{raw}");
+        }
+        for raw in [0, 3, 10] {
+            let spec = WeaponSpec::new(&WeaponRecord {
+                guidance: raw,
+                count: 10,
+                speed: 300,
+                beam_length: 400,
+                ..weapon(146)
+            });
+            assert!(spec.is_beam(), "{raw}");
+            assert_eq!(spec.range(), 400.0, "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_guided_turn_of_70_is_7_degrees_a_tick() {
+        let spec = WeaponSpec::new(&WeaponRecord {
+            guided_turn: 70,
+            durability: 4,
+            ..weapon(134)
+        });
+        assert_eq!(spec.turn, 7.0);
+        assert_eq!(spec.durability, 4.0);
+        assert_eq!(GUIDED_TURN_PER_DEGREE, 10.0);
+        let unsteered = WeaponSpec::new(&WeaponRecord {
+            guided_turn: 25,
+            durability: -1,
+            ..weapon(134)
+        });
+        assert_eq!(unsteered.turn, 2.5);
+        assert_eq!(unsteered.durability, 0.0, "none below none");
+    }
+
+    #[test]
+    fn sub_munitions_need_a_count_and_a_type() {
+        let polaron = |sub_count, sub_type: Option<i16>| {
+            WeaponSpec::new(&WeaponRecord {
+                sub_count,
+                sub_type: sub_type.map(WeaponId),
+                sub_theta: 45,
+                sub_limit: 2,
+                ..weapon(182)
+            })
+            .submunitions
+        };
+        assert_eq!(
+            polaron(5, Some(148)),
+            Some(Submunitions {
+                weapon: WeaponId(148),
+                count: 5,
+                theta: 45,
+                limit: Some(2)
+            })
+        );
+        assert_eq!(polaron(0, Some(148)), None, "none of them");
+        assert_eq!(polaron(-1, Some(148)), None, "unused");
+        assert_eq!(polaron(1, None), None, "no type");
+        assert_eq!(polaron(1, Some(148)).map(|subs| subs.count), Some(1));
+        let unlimited = |sub_limit| {
+            WeaponSpec::new(&WeaponRecord {
+                sub_count: 1,
+                sub_type: Some(WeaponId(229)),
+                sub_limit,
+                ..weapon(163)
+            })
+            .submunitions
+            .map(|subs| subs.limit)
+        };
+        assert_eq!(unlimited(0), Some(None));
+        assert_eq!(unlimited(-1), Some(None));
+        assert_eq!(unlimited(1), Some(Some(1)));
+    }
+
+    #[test]
+    fn sub_munitions_are_released_by_generations_below_their_limit() {
+        let subs = |limit| Submunitions {
+            weapon: WeaponId(148),
+            count: 1,
+            theta: 0,
+            limit,
+        };
+        assert!(subs(None).releases_at(0));
+        assert!(subs(None).releases_at(1_000));
+        assert!(subs(Some(2)).releases_at(0));
+        assert!(subs(Some(2)).releases_at(1));
+        assert!(!subs(Some(2)).releases_at(2));
+        assert!(!subs(Some(2)).releases_at(3));
+    }
+
+    #[test]
+    fn the_guided_flags_say_what_they_do() {
+        let flagged = |flags, flags2| {
+            WeaponSpec::new(&WeaponRecord {
+                flags,
+                flags2,
+                ..weapon(148)
+            })
+        };
+        let plain = flagged(0, 0);
+        assert!(!plain.pd_immune() && !plain.seeks_with_subs());
+        assert!(plain.subs_on_expiry() && !plain.proximity_by_others());
+        assert!(flagged(0x0080, 0).pd_immune());
+        assert!(flagged(0, 0x0010).seeks_with_subs());
+        assert!(!flagged(0, 0x0020).subs_on_expiry());
+        assert!(flagged(0, 0x0008).proximity_by_others());
+        let all = flagged(!0, !0);
+        assert!(all.pd_immune() && all.seeks_with_subs());
+        assert!(!all.subs_on_expiry() && all.proximity_by_others());
+        let others = flagged(!0x0080, !0x0038);
+        assert!(!others.pd_immune() && !others.seeks_with_subs());
+        assert!(others.subs_on_expiry() && !others.proximity_by_others());
     }
 
     #[test]

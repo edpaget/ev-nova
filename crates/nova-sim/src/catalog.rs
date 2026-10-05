@@ -371,6 +371,21 @@ pub struct WeaponRecord {
     pub burst_count: i16,
     /// Its `BurstReload`, in ticks.
     pub burst_reload: i16,
+    /// Its `GuidedTurn`: a homing shot's turn a tick, in tenths of a
+    /// degree.
+    pub guided_turn: i16,
+    /// Its `Durability`: what point defence must take off a shot of it.
+    pub durability: i16,
+    /// Its `SubCount`: how many sub-munitions a shot releases.
+    pub sub_count: i16,
+    /// Its `SubType`: the sub-munitions' `wëap`, if any.
+    pub sub_type: Option<WeaponId>,
+    /// Its `SubTheta`, in degrees: the sub-munitions' spread, negative
+    /// for a starburst.
+    pub sub_theta: i16,
+    /// Its `SubLimit`: how many generations of sub-munitions there may
+    /// be; none or below for no limit.
+    pub sub_limit: i16,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`

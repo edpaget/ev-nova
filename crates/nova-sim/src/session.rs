@@ -79,11 +79,15 @@
 //! the player's own ship does.
 //!
 //! Ships fight ([`combat`](crate::combat)): the player holds a fire
-//! command ([`Session::hold_trigger`]), and each NPC the one its
-//! [`Behaviour`] last decided, and [`Session::tick_combat`] advances the
-//! fight a tick among the player and the NPCs, with each ship's weapons,
-//! read when the session starts, and disabling ships as a
-//! [`DisableRule`] says. The player's weapons are its ship's stock weapons
+//! command ([`Session::hold_trigger`]) and aims at its target, and each
+//! NPC holds the fire command and aims at the target its [`Behaviour`]
+//! last decided, and [`Session::tick_combat`] advances the fight a tick
+//! among the player and the NPCs, with each ship's weapons, read when the
+//! session starts, by the fight's [`Rules`]: disabling ships as a
+//! [`DisableRule`](crate::combat::hull::DisableRule) says, and every
+//! ship's point defence engaging the missiles fired at it, with no target
+//! needed, as a [`PointDefenceRule`](crate::combat::defence::PointDefenceRule)
+//! says. The player's weapons are its ship's stock weapons
 //! and its weapon outfits, firing the rounds of its ammunition outfits and
 //! its fuel, so a fight changes the pilot only in its shield, armour and
 //! fuel and the ammunition it owns. The fight stands still while the
@@ -123,11 +127,11 @@ use crate::combat::armament::{
     Armament, Arsenal, OutfitRounds, Trigger, next_secondary, outfit_rounds,
 };
 use crate::combat::beam::Beam;
-use crate::combat::hull::{Condition, DisableRule, HullSpec};
+use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
 use crate::combat::weapon::Ammo;
-use crate::combat::{Combat, CombatEvent, Fighter, ShipRef};
+use crate::combat::{Combat, CombatEvent, Fighter, Rules, ShipRef};
 use crate::date::GameDate;
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
@@ -454,16 +458,12 @@ impl Session {
         }
     }
 
-    /// Advances the fight a tick among the player and the NPCs, disabling
-    /// ships as `rule` says and drawing each shot's inaccuracy on
-    /// `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
+    /// Advances the fight a tick among the player and the NPCs, each aimed
+    /// at its target, by `rules`, drawing each shot's inaccuracy and
+    /// spread on `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
     /// the system, and the target is let go once it is breaking up or
     /// gone. While the ship is landed or jumping, it stands still.
-    pub fn tick_combat(
-        &mut self,
-        rule: &(impl DisableRule + ?Sized),
-        chance: &mut (impl Chance + ?Sized),
-    ) {
+    pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         if self.landed.is_some() || self.jumping.is_some() {
             return;
         }
@@ -481,6 +481,7 @@ impl Session {
             shield_regen: self.stats.shield_regen,
             armor_regen: self.stats.armor_regen,
             trigger: self.trigger,
+            target: self.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
             condition: &mut self.condition,
             armament: &mut self.armament,
@@ -495,6 +496,7 @@ impl Session {
                 state,
                 hull,
                 trigger,
+                target,
                 reserves,
                 condition,
                 armament,
@@ -510,13 +512,15 @@ impl Session {
                 shield_regen: stats.shield_regen,
                 armor_regen: stats.armor_regen,
                 trigger: *trigger,
+                target: *target,
                 reserves,
                 condition,
                 armament,
                 rounds,
             });
         }
-        self.combat.tick(&mut fighters, rule, chance);
+        self.combat
+            .tick(&mut fighters, &self.arsenal, rules, chance);
         let destroyed: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -3448,7 +3452,8 @@ mod tests {
     use crate::ai::{Behaviour, Goal, Surroundings};
     use crate::catalog::{HullRecord, StockWeapon, WeaponRecord};
     use crate::combat::armament::MOD_AMMO;
-    use crate::combat::hull::NovaDisable;
+    use crate::combat::defence::OtherFleets;
+    use crate::combat::hull::DisableRule;
     use crate::combat::weapon::Explosion;
     use crate::testkit::{hull, weapon};
     use crate::traffic::npc::Npc;
@@ -3530,7 +3535,7 @@ mod tests {
         let mut gauges = Vec::new();
         let mut events = Vec::new();
         for _ in 0..60 {
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
             events.extend(session.take_combat_events());
             let Some(npc) = session.npcs().first() else {
                 break;
@@ -3561,11 +3566,12 @@ mod tests {
         );
         assert!(events.contains(&CombatEvent::Fired {
             ship: ShipRef::Player,
-            weapon: WeaponId(128)
+            weapon: WeaponId(128),
+            at: Vec2::ZERO
         }));
         assert_eq!(session.npcs().len(), 1, "disabled, and still alive");
         for _ in 0..60 {
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
             events.extend(session.take_combat_events());
         }
         let ending: Vec<_> = about_the_npc(&events);
@@ -3611,12 +3617,13 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..12 {
             session.tick_traffic(&catalog, &Firing, &mut NeverFires);
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
             events.extend(session.take_combat_events());
         }
         assert!(events.contains(&CombatEvent::Fired {
             ship: ShipRef::Npc(NpcId(0)),
-            weapon: WeaponId(128)
+            weapon: WeaponId(128),
+            at: Vec2::new(0.0, -100.0)
         }));
         assert!(
             session.reserves().shield.now < 30.0,
@@ -3651,7 +3658,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
         for _ in 0..8 {
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
         }
         assert_eq!(session.pilot().outfits().count(), 0, "both rockets fired");
         assert_eq!(session.shots().len(), 2);
@@ -3663,7 +3670,7 @@ mod tests {
         catalog.hulls = vec![armed_hull(128, 128)];
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.reserves().fuel.now, 290.0, "10 units a shot");
     }
 
@@ -3681,7 +3688,7 @@ mod tests {
         };
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.beams().len(), 1);
         assert_eq!(session.beams()[0].firer, ShipRef::Player);
         assert_eq!(session.shots(), []);
@@ -3693,14 +3700,14 @@ mod tests {
         catalog.traffic.push((SystemId(131), catalog.traffic[0].1));
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.shots().len(), 1);
         session.land().expect("lands on planet 128");
         assert_eq!(session.shots(), [], "gone on landing");
         session.take_combat_events();
         let mut chance = Draws::of(&[]);
         for _ in 0..3 {
-            session.tick_combat(&NovaDisable, &mut chance);
+            session.tick_combat(Rules::default(), &mut chance);
         }
         assert_eq!(session.take_combat_events(), [], "landed, though reloaded");
         assert_eq!(session.shots(), []);
@@ -3708,12 +3715,12 @@ mod tests {
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
         session.hold_trigger(FIRE);
-        session.tick_combat(&NovaDisable, &mut chance);
+        session.tick_combat(Rules::default(), &mut chance);
         assert_eq!(session.shots().len(), 1);
         session.begin_jump().expect("jumps");
         session.take_combat_events();
         for _ in 0..3 {
-            session.tick_combat(&NovaDisable, &mut chance);
+            session.tick_combat(Rules::default(), &mut chance);
         }
         assert_eq!(session.take_combat_events(), [], "jumping, though reloaded");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
@@ -3731,6 +3738,11 @@ mod tests {
         }
     }
 
+    const DISABLING: Rules = Rules {
+        disable: &Disabling,
+        defence: &OtherFleets,
+    };
+
     #[test]
     fn a_disabled_player_drifts_ignoring_the_controls() {
         let catalog = armed();
@@ -3741,7 +3753,7 @@ mod tests {
         });
         session.take_sounds();
         let moving = *session.player();
-        session.tick_combat(&Disabling, &mut NeverFires);
+        session.tick_combat(DISABLING, &mut NeverFires);
         assert_eq!(session.player_condition(), Condition::Disabled);
         session.tick(Controls {
             thrust: true,
@@ -3754,7 +3766,7 @@ mod tests {
         assert_eq!(drifted.position, moving.position + moving.velocity);
         assert_eq!(session.take_sounds(), [SimSound::ThrustStopped]);
         session.hold_trigger(FIRE);
-        session.tick_combat(&Disabling, &mut NeverFires);
+        session.tick_combat(DISABLING, &mut NeverFires);
         assert_eq!(session.shots(), [], "nor fires");
     }
 
@@ -3762,7 +3774,7 @@ mod tests {
     fn a_ship_that_is_not_intact_can_neither_land_nor_jump() {
         let catalog = armed();
         let mut session = Session::start(&catalog).expect("starts");
-        session.tick_combat(&Disabling, &mut NeverFires);
+        session.tick_combat(DISABLING, &mut NeverFires);
         assert_eq!(
             session.land(),
             Err(LandingRefusal::Disabled),
@@ -3774,7 +3786,7 @@ mod tests {
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
         session.take_sounds();
-        session.tick_combat(&Disabling, &mut NeverFires);
+        session.tick_combat(DISABLING, &mut NeverFires);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Disabled));
         assert_eq!(session.jumping(), None);
         assert_eq!(session.take_sounds(), [], "a refusal emits nothing");
@@ -3799,7 +3811,7 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..20 {
             session.tick_traffic(&catalog, &Firing, &mut NeverFires);
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
             events.extend(session.take_combat_events());
         }
         assert_eq!(session.player_condition(), Condition::Destroyed);
@@ -3829,7 +3841,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
         for _ in 0..5 {
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
         }
         assert_eq!(
             session.take_diagnostics(),
@@ -3855,13 +3867,13 @@ mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         for _ in 0..12 {
             session.tick_traffic(&catalog, &Firing, &mut NeverFires);
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
         }
         let hurt = session.reserves().shield.now;
         assert!(hurt < 30.0);
         session.traffic.remove(NpcId(0));
         session.combat.clear();
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.reserves().shield.now, hurt + 1.0);
     }
 
@@ -3879,6 +3891,7 @@ mod tests {
                 CombatEvent::Fired {
                     ship: ShipRef::Player,
                     weapon,
+                    ..
                 } => Some(*weapon),
                 _ => None,
             })
@@ -3895,12 +3908,12 @@ mod tests {
         catalog.outfits.push(outfit(305, &[(MOD_WEAPON, 128)]));
         let mut session = Session::start(&catalog).expect("starts");
         session.hold_trigger(FIRE);
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.take_combat_events(), [], "no weapon yet");
         session.land().expect("lands at the outfitter");
         session.outfit(buy(OutfitId(305))).expect("bought");
         session.take_off().expect("took off");
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
             fired_by_the_player(&session.take_combat_events()),
             [WeaponId(128)]
@@ -3967,7 +3980,7 @@ mod tests {
         session.buy_ship(NEW).expect("bought");
         session.take_off().expect("took off");
         session.hold_trigger(FIRE);
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
             fired_by_the_player(&session.take_combat_events()),
             [WeaponId(129)],
@@ -3984,7 +3997,7 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..20 {
             session.tick_traffic(&catalog, &Firing, &mut NeverFires);
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
             events.extend(session.take_combat_events());
         }
         assert_eq!(session.player_condition(), Condition::Destroyed);
@@ -4090,7 +4103,7 @@ mod tests {
         assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
         assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
         session.tick_traffic(&catalog, &Idling, &mut NeverFires);
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(target_id(&session), Some(NpcId(0)), "kept while jumping");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert!(!session.npcs().is_empty());
@@ -4106,10 +4119,10 @@ mod tests {
         for _ in 0..5 {
             session.tick(Controls::default());
             session.tick_traffic(&catalog, &Idling, &mut NeverFires);
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
         }
         assert_eq!(target_id(&session), Some(NpcId(0)));
-        session.tick_combat(&Disabling, &mut NeverFires);
+        session.tick_combat(DISABLING, &mut NeverFires);
         assert_eq!(session.npcs()[0].condition, Condition::Disabled);
         assert_eq!(target_id(&session), Some(NpcId(0)), "a disabled target");
         assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
@@ -4122,7 +4135,7 @@ mod tests {
         session.select_target(TargetPick::Next);
         session.hold_trigger(FIRE);
         for _ in 0..200 {
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
             let events = session.take_combat_events();
             if events
                 .iter()
@@ -4145,7 +4158,7 @@ mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         session.select_target(TargetPick::Next);
         session.traffic.npcs_mut()[0].reserves.armor.now = 0.0;
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(npc_ids(&session), [], "destroyed at once");
         assert_eq!(session.target, None);
     }
@@ -4281,7 +4294,7 @@ mod tests {
         ] {
             let mut session = Session::start(&catalog).expect("starts");
             session.hold_fire(primary, secondary);
-            session.tick_combat(&NovaDisable, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(
                 fired_by_the_player(&session.take_combat_events()),
                 fired,
@@ -4291,7 +4304,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.select_secondary(false);
         session.hold_fire(false, true);
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
             fired_by_the_player(&session.take_combat_events()),
             [MISSILE]
@@ -4303,7 +4316,7 @@ mod tests {
         let mut session = Session::start(&with_secondaries(catalog())).expect("starts");
         assert_eq!(session.secondary_rounds(), Some(3));
         session.hold_fire(false, true);
-        session.tick_combat(&NovaDisable, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.secondary_rounds(), Some(2));
         session.select_secondary(false);
         assert_eq!(session.secondary_rounds(), None, "missiles: unlimited");
@@ -4331,5 +4344,169 @@ mod tests {
         session.select_secondary(false);
         session.buy_ship(NEW).expect("bought");
         assert_eq!(session.secondary(), Some(MISSILE), "still carried");
+    }
+
+    // Guided weapons, turrets and point defence.
+
+    /// `weapon` 130 (with blaster damage) of `guidance`, firing every
+    /// `reload` ticks.
+    fn guided(guidance: i16, reload: i16) -> WeaponRecord {
+        WeaponRecord {
+            id: WeaponId(130),
+            reload,
+            guidance,
+            ..blaster()
+        }
+    }
+
+    /// [`trafficked`] with the player carrying `player` and its traffic
+    /// carrying `npc`, the player's ship type's `Flags` `flags`.
+    fn arming(player: WeaponRecord, npc: WeaponRecord, flags: u16) -> FakePilotCatalog {
+        FakePilotCatalog {
+            weapons: vec![player, npc],
+            hulls: vec![
+                HullRecord {
+                    flags,
+                    ..armed_hull(128, player.id.0)
+                },
+                armed_hull(129, npc.id.0),
+            ],
+            ..trafficked(130, 1, 1)
+        }
+    }
+
+    /// `catalog`'s session with its one NPC at (`x`, `y`) from the player
+    /// (at the centre, facing up), facing `heading`.
+    fn with_an_npc_at(catalog: &FakePilotCatalog, x: u32, y: u32, heading: u32) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, x, y, heading]));
+        session
+    }
+
+    #[test]
+    fn the_player_fires_a_turret_at_its_target_astern_unless_its_ship_is_blind_there() {
+        for (flags, fires) in [(0, true), (0x4000, false)] {
+            let catalog = arming(guided(4, 2), blaster(), flags);
+            let mut session = with_an_npc_at(&catalog, 750, 850, 0);
+            assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, 100.0));
+            session.select_target(TargetPick::Nearest);
+            session.hold_fire(true, false);
+            for _ in 0..12 {
+                session.tick_combat(Rules::default(), &mut NeverFires);
+            }
+            let shield = session.npcs()[0].reserves.shield.now;
+            assert_eq!(shield < 30.0, fires, "{flags:#x}: {shield}");
+        }
+        let catalog = arming(guided(4, 2), blaster(), 0);
+        let mut session = with_an_npc_at(&catalog, 750, 850, 0);
+        session.hold_fire(true, false);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.shots(), [], "no target, no fire");
+    }
+
+    /// A homing missile: 10 pixels a tick for 60 ticks, turning 7 degrees
+    /// a tick, standing 4 of point defence.
+    fn homing_missile(id: i16, reload: i16) -> WeaponRecord {
+        WeaponRecord {
+            id: WeaponId(id),
+            guidance: 1,
+            reload,
+            count: 60,
+            speed: 1000,
+            guided_turn: 70,
+            durability: 4,
+            ..blaster()
+        }
+    }
+
+    #[test]
+    fn the_players_homing_missile_hits_its_target_and_without_one_flies_through_it() {
+        for (targeted, hit) in [(true, true), (false, false)] {
+            let catalog = arming(homing_missile(134, 1000), blaster(), 0);
+            let mut session = facing_an_npc(&catalog, 180);
+            if targeted {
+                session.select_target(TargetPick::Nearest);
+            }
+            session.hold_fire(true, false);
+            for _ in 0..30 {
+                session.tick_combat(Rules::default(), &mut NeverFires);
+                session.hold_fire(false, false);
+            }
+            let shield = session.npcs()[0].reserves.shield.now;
+            assert_eq!(shield < 30.0, hit, "{targeted}: {shield}");
+            assert_eq!(
+                session.shots().is_empty(),
+                hit,
+                "{targeted}: spent or flying on"
+            );
+        }
+    }
+
+    /// Every NPC idles, targets the player and holds its trigger.
+    #[derive(Debug)]
+    struct Attacking;
+
+    impl Behaviour for Attacking {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            FIRE
+        }
+
+        fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            Some(ShipRef::Player)
+        }
+    }
+
+    #[test]
+    fn the_players_point_defence_shoots_down_an_npcs_missile_with_no_target_of_its_own() {
+        let quad = WeaponRecord {
+            id: WeaponId(133),
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..blaster()
+        };
+        let slow = WeaponRecord {
+            speed: 500,
+            count: 200,
+            ..homing_missile(134, 1000)
+        };
+        let catalog = arming(quad, slow, 0);
+        let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+        assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -200.0));
+        let mut events = Vec::new();
+        for _ in 0..40 {
+            session.tick_traffic(&catalog, &Attacking, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            events.extend(session.take_combat_events());
+        }
+        assert_eq!(session.target(), None, "the player targets nothing");
+        assert!(
+            events.contains(&CombatEvent::Fired {
+                ship: ShipRef::Npc(NpcId(0)),
+                weapon: WeaponId(134),
+                at: Vec2::new(0.0, -200.0)
+            }),
+            "{events:?}"
+        );
+        let downed = events
+            .iter()
+            .filter(|event| matches!(event, CombatEvent::ShotDown { .. }))
+            .count();
+        assert_eq!(downed, 1, "{events:?}");
+        assert_eq!(session.reserves().shield.now, 30.0, "untouched");
+        assert!(
+            session
+                .shots()
+                .iter()
+                .all(|shot| shot.weapon.id != WeaponId(134)),
+            "the missile is gone"
+        );
     }
 }

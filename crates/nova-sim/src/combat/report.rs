@@ -21,8 +21,8 @@ pub enum SimDiagnostic {
         /// The bit.
         bit: u16,
     },
-    /// A weapon of a guidance a later phase flies was fired, and did not
-    /// fire.
+    /// A weapon of a guidance a later phase flies (carried ships, 99) or
+    /// that is undocumented was fired, and did not fire.
     UnimplementedGuidance {
         /// The weapon.
         weapon: WeaponId,

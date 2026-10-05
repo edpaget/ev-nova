@@ -3,62 +3,88 @@
 //!
 //! - [`weapon`]: a weapon's [`WeaponSpec`](weapon::WeaponSpec), its `wëap`
 //!   in the simulation's units.
+//! - [`aim`]: which way each guidance fires, and at what: the bearing, the
+//!   lead angle, the turrets' arcs and blind spots.
 //! - [`armament`]: a ship's [`Armament`](armament::Armament), firing its
-//!   weapons on a [`Trigger`](armament::Trigger), and the
-//!   [`Arsenal`](armament::Arsenal) armaments are built from.
+//!   weapons on a [`Trigger`](armament::Trigger) and its point defence,
+//!   and the [`Arsenal`](armament::Arsenal) armaments are built from.
 //! - [`beam`]: a [`Beam`](beam::Beam), held on its firer and hitting the
 //!   nearest ship along it.
 //! - [`damage`]: what a [`Hit`](damage::Hit) does to a ship's reserves,
 //!   and which ships a [`Blast`](damage::Blast) reaches.
+//! - [`defence`]: point defence, which missiles it engages, as the
+//!   [`PointDefenceRule`](defence::PointDefenceRule) port says, and what
+//!   its hits do to them.
 //! - [`flags`]: what the simulation does with each documented weapon flag,
 //!   and which of a weapon's are not done yet.
 //! - [`hull`]: a ship type's [`HullSpec`](hull::HullSpec), its
 //!   [`Condition`](hull::Condition), and the [`DisableRule`](hull::DisableRule)
 //!   port with Nova's [`NovaDisable`](hull::NovaDisable).
-//! - [`projectile`]: a [`Shot`](projectile::Shot) in flight, and the
-//!   [`Target`](projectile::Target)s it may hit.
+//! - [`projectile`]: a [`Shot`](projectile::Shot) in flight, homing ones
+//!   steering at their target, and the [`Target`](projectile::Target)s it
+//!   may hit.
 //! - [`report`]: the [`SimDiagnostic`](report::SimDiagnostic)s a session
 //!   reports once each about game data it does not handle yet.
+//! - [`submunition`]: the shots a shot releases on a hit and at the end
+//!   of its life.
 //!
 //! [`Combat`] holds the shots and beams in flight. Each tick
 //! ([`Combat::tick`]) runs over every ship in the fight, each a
-//! [`Fighter`], in this order:
+//! [`Fighter`] with the ship it targets, by the fight's [`Rules`], in this
+//! order:
 //!
-//! 1. Each ship fires the weapons its trigger holds that are ready.
-//! 2. Every reload timer counts down a tick.
-//! 3. Shots fly a tick, and beams follow their firers; a beam whose firer
-//!    is gone, or no longer intact, goes with it.
-//! 4. Hits, blasts and expiries are resolved: a shot that hits a ship
-//!    damages it, explodes and blasts the ships around it, and is gone; a
-//!    shot at the end of its life detonates (blasting the same way) or
-//!    vanishes; a beam damages the nearest ship along it, every tick, until
-//!    its life is over.
-//! 5. Conditions follow the damage: a ship with no armour left (of the
+//! 1. Each ship fires the weapons its trigger holds that are ready, each
+//!    as its guidance aims it at the ship's target ([`aim`]); a turret
+//!    that cannot fire spends nothing.
+//! 2. Each ship's point defence fires at the missile it picks, with no
+//!    target needed ([`defence`]).
+//! 3. Every reload timer counts down a tick.
+//! 4. Shots fly a tick, homing ones steering at their target, and beams
+//!    follow their firers, each held ahead, on its target or on its
+//!    missile; a beam whose firer is gone or no longer intact, or whose
+//!    target or missile is gone, goes with it.
+//! 5. A point-defence shot that passed within
+//!    [`INTERCEPT_RADIUS`](defence::INTERCEPT_RADIUS) of a missile is
+//!    spent on it; a missile hit after its durability is used up is shot
+//!    down.
+//! 6. A point-defence beam hits the missile it is held on the same way.
+//! 7. Hits, blasts and expiries are resolved: a shot that hits a ship
+//!    damages it, explodes and blasts the ships around it, releases its
+//!    sub-munitions at that ship, and is gone; a shot at the end of its
+//!    life detonates (blasting the same way) or vanishes, and releases its
+//!    sub-munitions at its own target; a beam damages the nearest ship
+//!    along it, every tick, until its life is over.
+//! 8. Conditions follow the damage: a ship with no armour left (of the
 //!    armour it holds) starts breaking up, and any other that holds armour
 //!    is disabled, or not, as the [`DisableRule`](hull::DisableRule) says;
 //!    a ship that holds none is never disabled.
-//! 6. A ship breaking up counts down its `DeathDelay`, then is destroyed.
-//! 7. Shields regenerate on an intact or disabled ship, armour only on an
-//!    intact one, each up to what it holds.
+//! 9. A ship breaking up counts down its `DeathDelay`, then is destroyed.
+//! 10. Shields regenerate on an intact or disabled ship, armour only on an
+//!     intact one, each up to what it holds.
 //!
 //! Each step is reported as a [`CombatEvent`] for the view to show, and
 //! each unimplemented weapon feature once as a
-//! [`SimDiagnostic`](report::SimDiagnostic).
+//! [`SimDiagnostic`](report::SimDiagnostic). Nothing here is saved: the
+//! shots, their targets, durability and generations live only in flight.
 
+pub mod aim;
 pub mod armament;
 pub mod beam;
 pub mod damage;
+pub mod defence;
 pub mod flags;
 pub mod hull;
 pub mod projectile;
 pub mod report;
+pub mod submunition;
 pub mod weapon;
 
-use armament::{Armament, Rounds, Trigger};
-use beam::Beam;
+use armament::{Armament, Arsenal, Launch, Rounds, Trigger};
+use beam::{Aiming, Beam};
 use damage::{Blast, Hit};
+use defence::{INTERCEPT_RADIUS, PointDefenceRule, Side};
 use hull::{Condition, DisableRule, HullSpec};
-use projectile::{Shot, Target};
+use projectile::{Shot, ShotId, Target, contact};
 use report::{Reports, SimDiagnostic};
 use weapon::{Explosion, Guidance};
 
@@ -81,12 +107,19 @@ pub enum ShipRef {
 /// Something that happened in a fight, for the view to show.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CombatEvent {
-    /// A ship fired a weapon.
+    /// A ship fired a weapon, or a shot of its released sub-munitions.
     Fired {
         /// The ship.
         ship: ShipRef,
         /// The weapon.
         weapon: WeaponId,
+        /// Where it was fired from: the ship, or the shot releasing them.
+        at: Vec2,
+    },
+    /// Point defence destroyed a missile.
+    ShotDown {
+        /// Where.
+        at: Vec2,
     },
     /// A shot or beam exploded where it hit, or a shot detonated.
     Exploded {
@@ -146,6 +179,8 @@ pub struct Fighter<'a> {
     pub armor_regen: f32,
     /// The fire command it holds.
     pub trigger: Trigger,
+    /// The ship it targets, if any.
+    pub target: Option<ShipRef>,
     /// Its shield, armour and fuel.
     pub reserves: &'a mut Reserves,
     /// How it is holding up.
@@ -156,6 +191,27 @@ pub struct Fighter<'a> {
     pub rounds: &'a mut dyn Rounds,
 }
 
+/// The rules a fight is fought by: when a ship is disabled, and which
+/// missiles point defence engages.
+#[derive(Clone, Copy, Debug)]
+pub struct Rules<'a> {
+    /// When a ship is disabled.
+    pub disable: &'a dyn DisableRule,
+    /// Which missiles point defence engages.
+    pub defence: &'a dyn PointDefenceRule,
+}
+
+impl Default for Rules<'static> {
+    /// Nova's: [`NovaDisable`](hull::NovaDisable), and point defence
+    /// against [`OtherFleets`](defence::OtherFleets).
+    fn default() -> Self {
+        Self {
+            disable: &hull::NovaDisable,
+            defence: &defence::OtherFleets,
+        }
+    }
+}
+
 /// The shots and beams in flight, and what the fight has reported.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Combat {
@@ -163,41 +219,103 @@ pub struct Combat {
     beams: Vec<Beam>,
     events: Vec<CombatEvent>,
     reports: Reports,
+    /// The next shot's number.
+    next_shot: u32,
 }
 
 impl Combat {
     /// Advances the fight among `fighters` a tick (see the module docs),
-    /// disabling ships as `rule` says and drawing each shot's inaccuracy
-    /// on `chance`.
+    /// by `rules`, each sub-munition's weapon read from `arsenal` and each
+    /// shot's inaccuracy and spread drawn on `chance`.
     pub fn tick(
         &mut self,
         fighters: &mut [Fighter],
-        rule: &(impl DisableRule + ?Sized),
+        arsenal: &Arsenal,
+        rules: Rules,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.fire(fighters, &mut &mut *chance);
+        // A `dyn` source over the caller's, which may be unsized.
+        let mut source = &mut *chance;
+        let chance: &mut dyn Chance = &mut source;
+        let targets: Vec<Target> = fighters.iter().map(Fighter::as_target).collect();
+        self.fire(fighters, &targets, chance);
+        self.defend(fighters, rules.defence, chance);
         for fighter in fighters.iter_mut() {
             fighter.armament.reload();
         }
-        let was: Vec<Vec2> = self.shots.iter_mut().map(Shot::step).collect();
+        let was: Vec<Vec2> = self
+            .shots
+            .iter_mut()
+            .map(|shot| shot.step(&targets))
+            .collect();
+        let shots = &self.shots;
         self.beams.retain_mut(|beam| {
             let firer = fighters.iter().find(|fighter| {
                 fighter.ship == beam.firer && *fighter.condition == Condition::Intact
             });
-            firer.inspect(|firer| beam.follow(&firer.state)).is_some()
+            firer.is_some_and(|firer| beam.follow(&firer.state, &targets, shots))
         });
-        self.resolve(fighters, &was);
+        let mut gone = vec![false; self.shots.len()];
+        self.intercept(&was, &mut gone);
+        self.hold_on_missiles(&mut gone);
+        self.resolve(fighters, &targets, &was, &gone, arsenal, chance);
         for fighter in fighters.iter_mut() {
-            self.update_condition(fighter, rule);
+            self.update_condition(fighter, rules.disable);
         }
         for fighter in fighters.iter_mut() {
             regenerate(fighter);
         }
     }
 
-    /// Step 1: each ship fires what its trigger holds.
-    fn fire(&mut self, fighters: &mut [Fighter], chance: &mut dyn Chance) {
+    /// The next shot's number.
+    fn next_id(&mut self) -> ShotId {
+        let id = ShotId(self.next_shot);
+        self.next_shot += 1;
+        id
+    }
+
+    /// Puts `launch` in flight from `ship` of `fleet`, at `from`: a beam
+    /// held on the missile `quarry`, on its target, or ahead, or a shot.
+    fn launch(
+        &mut self,
+        (ship, fleet): (ShipRef, ShipRef),
+        from: &ShipState,
+        launch: Launch,
+        quarry: Option<ShotId>,
+    ) {
+        self.events.push(CombatEvent::Fired {
+            ship,
+            weapon: launch.weapon.id,
+            at: from.position,
+        });
+        if launch.weapon.is_beam() {
+            let aiming = match (quarry, launch.target) {
+                (Some(missile), _) => Aiming::Shot(missile),
+                (None, Some(target)) => Aiming::Ship(target),
+                (None, None) => Aiming::Ahead,
+            };
+            let beam = Beam::launch(launch.weapon, ship, fleet, from, launch.heading, aiming);
+            self.beams.push(beam);
+        } else {
+            let shot = Shot {
+                id: self.next_id(),
+                target: launch.target,
+                ..Shot::launch(launch.weapon, ship, fleet, from, launch.heading)
+            };
+            self.shots.push(shot);
+        }
+    }
+
+    /// Step 1: each ship fires what its trigger holds, aimed at its target
+    /// among `targets` while that can be hit.
+    fn fire(&mut self, fighters: &mut [Fighter], targets: &[Target], chance: &mut dyn Chance) {
         for fighter in fighters.iter_mut() {
+            let (state, hull) = (fighter.state, fighter.hull);
+            let target = fighter.target.and_then(|ship| {
+                targets
+                    .iter()
+                    .find(|target| target.ship == ship && target.condition.hittable())
+            });
             let launches = fighter.armament.fire(
                 fighter.trigger,
                 *fighter.condition,
@@ -205,56 +323,136 @@ impl Combat {
                 &mut fighter.reserves.fuel,
                 chance,
                 &mut self.reports,
+                &mut |spec| aim::aim(spec, &state, &hull, target),
             );
             for launch in launches {
-                self.events.push(CombatEvent::Fired {
-                    ship: fighter.ship,
-                    weapon: launch.weapon.id,
-                });
-                let (ship, fleet, state) = (fighter.ship, fighter.fleet, &fighter.state);
-                if launch.weapon.guidance == Guidance::Beam {
-                    self.beams.push(Beam::launch(
-                        launch.weapon,
-                        ship,
-                        fleet,
-                        state,
-                        launch.offset,
-                    ));
-                } else {
-                    self.shots.push(Shot::launch(
-                        launch.weapon,
-                        ship,
-                        fleet,
-                        state,
-                        launch.offset,
-                    ));
+                self.launch((fighter.ship, fighter.fleet), &state, launch, None);
+            }
+        }
+    }
+
+    /// Step 2: each ship's point defence fires at the missile it picks,
+    /// as `rule` says which are hostile.
+    fn defend(
+        &mut self,
+        fighters: &mut [Fighter],
+        rule: &dyn PointDefenceRule,
+        chance: &mut dyn Chance,
+    ) {
+        for fighter in fighters.iter_mut() {
+            let (state, hull) = (fighter.state, fighter.hull);
+            let side = Side {
+                ship: fighter.ship,
+                fleet: fighter.fleet,
+            };
+            let shots = &self.shots;
+            let fired = fighter.armament.fire_point_defence(
+                *fighter.condition,
+                fighter.rounds,
+                &mut fighter.reserves.fuel,
+                chance,
+                &mut self.reports,
+                &mut |spec| {
+                    let missile = defence::choose(side, &state, &hull, spec, shots, rule)?;
+                    Some((aim::bearing(state.position, missile.position), missile.id))
+                },
+            );
+            if let Some((launch, missile)) = fired {
+                self.launch((side.ship, side.fleet), &state, launch, Some(missile));
+            }
+        }
+    }
+
+    /// Step 5: each point-defence shot, having flown from `was`, meets
+    /// the first missile it passes within [`INTERCEPT_RADIUS`] of, and is
+    /// spent on it; a missile destroyed is shot down. What is spent or
+    /// destroyed is marked `gone`.
+    fn intercept(&mut self, was: &[Vec2], gone: &mut [bool]) {
+        for pd in 0..self.shots.len() {
+            if gone[pd] || self.shots[pd].weapon.guidance != Guidance::PointDefence {
+                continue;
+            }
+            let defender = &self.shots[pd];
+            let met = self
+                .shots
+                .iter()
+                .enumerate()
+                .filter(|&(missile, shot)| !gone[missile] && interceptable(defender, shot))
+                .filter_map(|(missile, shot)| {
+                    let from = was[pd] - was[missile];
+                    let to = defender.position - shot.position;
+                    Some((contact(from, to, Vec2::ZERO, INTERCEPT_RADIUS)?, missile))
+                })
+                .min_by(|(a, _), (b, _)| a.total_cmp(b));
+            if let Some((t, missile)) = met {
+                gone[pd] = true;
+                let damage = defence::pd_damage(&self.shots[pd].weapon);
+                if self.shots[missile].take_pd_hit(damage) {
+                    gone[missile] = true;
+                    let flown = self.shots[missile].position - was[missile];
+                    self.events.push(CombatEvent::ShotDown {
+                        at: was[missile] + flown * t,
+                    });
                 }
             }
         }
     }
 
-    /// Step 4: hits, blasts and expiries, the shots having flown from
-    /// `was`.
-    fn resolve(&mut self, fighters: &mut [Fighter], was: &[Vec2]) {
-        let targets: Vec<Target> = fighters
-            .iter()
-            .map(|fighter| Target {
-                ship: fighter.ship,
-                fleet: fighter.fleet,
-                position: fighter.state.position,
-                radius: fighter.hull.hit_radius,
-                condition: *fighter.condition,
-            })
-            .collect();
+    /// Step 6: each point-defence beam hits the missile it is held on; a
+    /// missile destroyed is shot down and marked `gone`, and the beam goes
+    /// with it.
+    fn hold_on_missiles(&mut self, gone: &mut [bool]) {
+        for beam in &self.beams {
+            let Aiming::Shot(id) = beam.aiming else {
+                continue;
+            };
+            let Some(missile) = self.shots.iter().position(|shot| shot.id == id) else {
+                continue;
+            };
+            if !gone[missile] && self.shots[missile].take_pd_hit(defence::pd_damage(&beam.weapon)) {
+                gone[missile] = true;
+                self.events.push(CombatEvent::ShotDown {
+                    at: self.shots[missile].position,
+                });
+            }
+        }
+        let shots = &self.shots;
+        self.beams.retain(|beam| match beam.aiming {
+            Aiming::Shot(id) => shots
+                .iter()
+                .zip(gone.iter())
+                .any(|(shot, gone)| shot.id == id && !gone),
+            _ => true,
+        });
+    }
+
+    /// Step 7: hits, blasts, expiries and sub-munitions, the shots having
+    /// flown from `was`, those `gone` taken out first; each sub-munition's
+    /// weapon is read from `arsenal`, its spread drawn on `chance`.
+    fn resolve(
+        &mut self,
+        fighters: &mut [Fighter],
+        targets: &[Target],
+        was: &[Vec2],
+        gone: &[bool],
+        arsenal: &Arsenal,
+        chance: &mut dyn Chance,
+    ) {
         let mut hits: Vec<(ShipRef, Hit)> = Vec::new();
         let mut kept = Vec::with_capacity(self.shots.len());
-        for (mut shot, &from) in self.shots.drain(..).zip(was) {
-            let blast = if let Some((ship, at)) = shot.hit(from, &targets) {
+        let mut released: Vec<(Shot, Option<ShipRef>)> = Vec::new();
+        let flown = self.shots.drain(..).zip(was).zip(gone);
+        for ((mut shot, &from), &gone) in flown {
+            if gone {
+                continue;
+            }
+            let (blast, subs) = if let Some((ship, at)) = shot.hit(from, targets) {
                 hits.push((ship, Hit::of(&shot.weapon)));
                 shot.position = at;
-                Some(shot.blast(Some(ship)))
+                (Some(shot.blast(Some(ship))), Some(Some(ship)))
             } else if shot.expired() {
-                shot.weapon.detonates().then(|| shot.blast(None))
+                let blast = shot.weapon.detonates().then(|| shot.blast(None));
+                (blast, shot.weapon.subs_on_expiry().then_some(shot.target))
             } else {
                 kept.push(shot);
                 continue;
@@ -266,17 +464,23 @@ impl Combat {
                         explosion,
                     });
                 }
-                let reached = reached(&blast, &targets);
+                let reached = reached(&blast, targets);
                 hits.extend(
                     reached
                         .into_iter()
                         .map(|ship| (ship, Hit::of(&shot.weapon))),
                 );
             }
+            if let Some(target) = subs {
+                released.push((shot, target));
+            }
         }
         self.shots = kept;
+        for (parent, target) in released {
+            self.release(&parent, target, targets, arsenal, chance);
+        }
         for beam in &mut self.beams {
-            if let Some((ship, at)) = beam.hit(&targets) {
+            if let Some((ship, at)) = beam.hit(targets) {
                 hits.push((ship, Hit::of(&beam.weapon)));
                 if let Some(explosion) = beam.weapon.explosion {
                     self.events.push(CombatEvent::Exploded { at, explosion });
@@ -292,9 +496,42 @@ impl Combat {
         }
     }
 
-    /// Steps 5 and 6: `fighter`'s condition follows its damage, as `rule`
+    /// Puts in flight the sub-munitions `parent` releases at `target`
+    /// among `targets`, their weapon read from `arsenal` (none when it
+    /// cannot be read), heard from where the parent is.
+    fn release(
+        &mut self,
+        parent: &Shot,
+        target: Option<ShipRef>,
+        targets: &[Target],
+        arsenal: &Arsenal,
+        chance: &mut dyn Chance,
+    ) {
+        let Some(sub) = parent
+            .weapon
+            .submunitions
+            .and_then(|subs| arsenal.weapon(subs.weapon))
+        else {
+            return;
+        };
+        let shots = submunition::release(parent, sub, target, targets, chance);
+        if shots.is_empty() {
+            return;
+        }
+        self.events.push(CombatEvent::Fired {
+            ship: parent.firer,
+            weapon: sub.id,
+            at: parent.position,
+        });
+        for shot in shots {
+            let id = self.next_id();
+            self.shots.push(Shot { id, ..shot });
+        }
+    }
+
+    /// Steps 8 and 9: `fighter`'s condition follows its damage, as `rule`
     /// says, and a ship breaking up counts down to its destruction.
-    fn update_condition(&mut self, fighter: &mut Fighter, rule: &(impl DisableRule + ?Sized)) {
+    fn update_condition(&mut self, fighter: &mut Fighter, rule: &dyn DisableRule) {
         let ship = fighter.ship;
         let at = fighter.state.position;
         match *fighter.condition {
@@ -375,6 +612,28 @@ impl Combat {
     }
 }
 
+impl Fighter<'_> {
+    /// The ship as shots and beams see it.
+    fn as_target(&self) -> Target {
+        Target {
+            ship: self.ship,
+            fleet: self.fleet,
+            position: self.state.position,
+            velocity: self.state.velocity,
+            radius: self.hull.hit_radius,
+            condition: *self.condition,
+        }
+    }
+}
+
+/// Whether point-defence shot `defender` can meet `missile`: a homing
+/// shot point defence can target, of another fleet.
+fn interceptable(defender: &Shot, missile: &Shot) -> bool {
+    missile.weapon.guidance == Guidance::Homing
+        && !missile.weapon.pd_immune()
+        && missile.fleet != defender.fleet
+}
+
 /// Whether `armor` is gone: at or below none, on a ship that holds any.
 fn armour_gone(armor: Gauge) -> bool {
     armor.now <= 0.0 && holds_armour(armor)
@@ -398,7 +657,7 @@ fn reached(blast: &Blast, targets: &[Target]) -> Vec<ShipRef> {
     )
 }
 
-/// Step 7: `fighter`'s shields regenerate unless it is breaking up or
+/// Step 10: `fighter`'s shields regenerate unless it is breaking up or
 /// destroyed, and its armour only while it is intact.
 fn regenerate(fighter: &mut Fighter) {
     let condition = *fighter.condition;
@@ -424,6 +683,7 @@ mod tests {
     use super::*;
     use crate::catalog::{BoomId, WeaponRecord};
     use crate::chance::NeverFires;
+    use crate::combat::defence::Side;
     use crate::combat::hull::NovaDisable;
     use crate::combat::weapon::WeaponSpec;
     use crate::testkit::weapon;
@@ -431,6 +691,8 @@ mod tests {
     /// A ship in a test fight, owning what a fighter borrows.
     struct Ship {
         id: ShipRef,
+        fleet: ShipRef,
+        target: Option<ShipRef>,
         state: ShipState,
         hull: HullSpec,
         shield_regen: f32,
@@ -448,6 +710,8 @@ mod tests {
         fn at(id: u32, x: f32, y: f32) -> Self {
             Self {
                 id: ShipRef::Npc(NpcId(id)),
+                fleet: ShipRef::Npc(NpcId(id)),
+                target: None,
                 state: ShipState {
                     position: Vec2::new(x, y),
                     velocity: Vec2::ZERO,
@@ -480,12 +744,13 @@ mod tests {
             Fighter {
                 ship: self.id,
                 ship_type: ShipId(128),
-                fleet: self.id,
+                fleet: self.fleet,
                 state: self.state,
                 hull: self.hull,
                 shield_regen: self.shield_regen,
                 armor_regen: self.armor_regen,
                 trigger: self.trigger,
+                target: self.target,
                 reserves: &mut self.reserves,
                 condition: &mut self.condition,
                 armament: &mut self.armament,
@@ -495,8 +760,16 @@ mod tests {
     }
 
     fn tick(combat: &mut Combat, ships: &mut [Ship], rule: &dyn DisableRule) {
+        let rules = Rules {
+            disable: rule,
+            ..Rules::default()
+        };
+        tick_with(combat, ships, &Arsenal::default(), rules);
+    }
+
+    fn tick_with(combat: &mut Combat, ships: &mut [Ship], arsenal: &Arsenal, rules: Rules) {
         let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-        combat.tick(&mut fighters, rule, &mut NeverFires);
+        combat.tick(&mut fighters, arsenal, rules, &mut NeverFires);
     }
 
     /// A blaster firing every tick, 15 pixels a tick for 13 ticks, doing
@@ -545,7 +818,8 @@ mod tests {
             combat.take_events(),
             [CombatEvent::Fired {
                 ship: A,
-                weapon: WeaponId(128)
+                weapon: WeaponId(128),
+                at: Vec2::ZERO
             }]
         );
         assert_eq!(combat.take_events(), [], "taken");
@@ -1035,6 +1309,463 @@ mod tests {
         assert_eq!(combat.take_diagnostics(), []);
     }
 
+    // Guided weapons and turrets.
+
+    impl Ship {
+        /// The ship facing `heading`.
+        fn facing(self, heading: f32) -> Self {
+            Self {
+                state: ShipState {
+                    heading,
+                    ..self.state
+                },
+                ..self
+            }
+        }
+
+        /// The ship targeting `target`.
+        fn targeting(self, target: ShipRef) -> Self {
+            Self {
+                target: Some(target),
+                ..self
+            }
+        }
+    }
+
+    /// A turret of `guidance` firing every 5 ticks, 20 pixels a tick for
+    /// 30, doing 5 mass and 10 energy damage.
+    fn turret(guidance: i16) -> WeaponRecord {
+        WeaponRecord {
+            guidance,
+            reload: 5,
+            count: 30,
+            speed: 2000,
+            mass_dmg: 5,
+            energy_dmg: 10,
+            ..weapon(130)
+        }
+    }
+
+    #[test]
+    fn a_turret_destroys_a_target_behind_its_firer() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(turret(4)).targeting(B),
+            Ship::at(2, -150.0, 0.0),
+        ];
+        for _ in 0..60 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+        }
+        assert_eq!(ships[1].condition, Condition::Destroyed);
+        let mut idle = [
+            Ship::at(1, 0.0, 0.0).armed(turret(4)),
+            Ship::at(2, -150.0, 0.0),
+        ];
+        let mut combat = Combat::default();
+        tick(&mut combat, &mut idle, &NovaDisable);
+        assert_eq!(combat.take_events(), [], "no target, no fire");
+        assert_eq!(combat.shots(), []);
+    }
+
+    #[test]
+    fn a_front_quadrant_turret_without_a_target_fires_along_the_heading() {
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(turret(7)).facing(30.0)];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.shots().len(), 1);
+        assert_eq!(combat.shots()[0].heading, 30.0);
+        assert_eq!(combat.shots()[0].target, None);
+    }
+
+    #[test]
+    fn a_turreted_beam_follows_its_target_and_ends_with_it() {
+        let beam = WeaponRecord {
+            guidance: 3,
+            count: 10,
+            beam_length: 300,
+            energy_dmg: 1,
+            ..weapon(142)
+        };
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(beam).targeting(B),
+            Ship::at(2, 0.0, 100.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        ships[0].trigger = Trigger::default();
+        ships[1].state.position = Vec2::new(100.0, 0.0);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let end = combat.beams()[0].end;
+        assert!((end - Vec2::new(300.0, 0.0)).length() < 1e-3, "{end:?}");
+        assert_eq!(ships[1].reserves.shield.now, 8.0, "hit both ticks");
+        ships[1].condition = Condition::Dying { ticks_left: 9 };
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(combat.beams(), [], "its target breaking up");
+    }
+
+    /// A missile 10 pixels a tick for 100 ticks, turning 7 degrees a tick,
+    /// doing 20 mass and 10 energy damage, standing 4 of point defence.
+    fn missile() -> WeaponRecord {
+        WeaponRecord {
+            guidance: 1,
+            reload: 1000,
+            count: 100,
+            speed: 1000,
+            guided_turn: 70,
+            durability: 4,
+            mass_dmg: 20,
+            energy_dmg: 10,
+            ..weapon(134)
+        }
+    }
+
+    #[test]
+    fn a_homing_missile_chases_and_hits_a_crossing_target() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0)
+                .armed(missile())
+                .facing(0.0)
+                .targeting(B),
+            Ship::at(2, 0.0, -300.0),
+        ];
+        let mut hit = false;
+        for _ in 0..100 {
+            ships[1].state.velocity = Vec2::new(3.0, 0.0);
+            ships[1].state.position = ships[1].state.position + ships[1].state.velocity;
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = Trigger::default();
+            if ships[1].reserves.shield.now < 10.0 {
+                hit = true;
+                break;
+            }
+        }
+        assert!(hit, "{:?}", combat.shots());
+        assert_eq!(combat.shots(), [], "spent");
+    }
+
+    #[test]
+    fn a_missile_whose_target_is_destroyed_flies_on_and_hits_nothing() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0)
+                .armed(missile())
+                .facing(90.0)
+                .targeting(B),
+            Ship::at(2, 0.0, 500.0),
+            Ship::at(3, 400.0, 0.0),
+        ];
+        for _ in 0..10 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            ships[0].trigger = Trigger::default();
+        }
+        assert_eq!(combat.shots()[0].target, Some(B), "fired at B");
+        ships[1].condition = Condition::Destroyed;
+        let mut flown = 0;
+        while !combat.shots().is_empty() {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            flown += 1;
+        }
+        assert_eq!(flown, 90, "flew its life");
+        assert_eq!(
+            ships[2].reserves,
+            Reserves::full(10.0, 30.0, 100.0),
+            "flown through"
+        );
+    }
+
+    /// The Quad Light Blaster Turret: point defence firing every 5 ticks,
+    /// 20 pixels a tick for 12, doing 1 mass and 4 energy damage (3 to a
+    /// missile).
+    fn quad() -> WeaponRecord {
+        WeaponRecord {
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..weapon(133)
+        }
+    }
+
+    /// Says every missile is `hostile`, recording what it was asked.
+    #[derive(Debug, Default)]
+    struct Hostility {
+        hostile: bool,
+        asked: RefCell<Vec<(Side, Side)>>,
+    }
+
+    impl PointDefenceRule for Hostility {
+        fn hostile(&self, defender: Side, firer: Side) -> bool {
+            self.asked.borrow_mut().push((defender, firer));
+            self.hostile
+        }
+    }
+
+    /// The defender A at the centre with `defence`, no target and no
+    /// trigger, and B 200 pixels above, facing it, firing a missile at
+    /// it on the first tick.
+    fn missile_attack(defence: WeaponRecord) -> [Ship; 2] {
+        let mut defender = Ship::at(1, 0.0, 0.0).armed(defence).facing(0.0);
+        defender.trigger = Trigger::default();
+        [
+            defender,
+            Ship::at(2, 0.0, -200.0)
+                .armed(WeaponRecord {
+                    speed: 500,
+                    ..missile()
+                })
+                .facing(180.0)
+                .targeting(A),
+        ]
+    }
+
+    /// The durability of the one missile in flight, if any.
+    fn missile_durability(combat: &Combat) -> Option<f32> {
+        let missiles: Vec<_> = combat
+            .shots()
+            .iter()
+            .filter(|shot| shot.weapon.id == WeaponId(134))
+            .collect();
+        assert!(missiles.len() <= 1);
+        missiles.first().map(|shot| shot.durability)
+    }
+
+    #[test]
+    fn point_defence_shoots_down_a_missile_by_the_hit_after_its_durability_is_gone() {
+        let mut combat = Combat::default();
+        let mut ships = missile_attack(quad());
+        let rule = Hostility {
+            hostile: true,
+            ..Hostility::default()
+        };
+        let rules = Rules {
+            defence: &rule,
+            ..Rules::default()
+        };
+        let mut durabilities = Vec::new();
+        let mut events = Vec::new();
+        for _ in 0..30 {
+            tick_with(&mut combat, &mut ships, &Arsenal::default(), rules);
+            ships[1].trigger = Trigger::default();
+            let new = combat.take_events();
+            let defended = new
+                .iter()
+                .filter(|e| matches!(e, CombatEvent::Fired { ship: A, .. }))
+                .count();
+            let spent_before = combat
+                .shots()
+                .iter()
+                .filter(|s| s.weapon.id == WeaponId(133))
+                .count();
+            events.extend(new);
+            durabilities.push((missile_durability(&combat), defended, spent_before));
+        }
+        // 3 to a missile of 4: 4, 1, -2, then gone. Its shots meet it on
+        // ticks 7, 11 and 15, each fired 5 ticks apart.
+        let seen: Vec<Option<f32>> = durabilities.iter().map(|(d, _, _)| *d).collect();
+        assert_eq!(&seen[..7], [Some(4.0); 7]);
+        assert_eq!(&seen[7..11], [Some(1.0); 4]);
+        assert_eq!(&seen[11..15], [Some(-2.0); 4]);
+        assert_eq!(&seen[15..], [None; 15]);
+        let downed: Vec<CombatEvent> = events
+            .iter()
+            .filter(|e| matches!(e, CombatEvent::ShotDown { .. }))
+            .copied()
+            .collect();
+        assert_eq!(downed.len(), 1, "{events:?}");
+        let CombatEvent::ShotDown { at } = downed[0] else {
+            unreachable!()
+        };
+        assert!((at - Vec2::new(0.0, -120.0)).length() < 5.0, "{at:?}");
+        let fired: Vec<usize> = durabilities.iter().map(|(_, f, _)| *f).collect();
+        assert_eq!(
+            &fired[..16],
+            [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+        );
+        assert_eq!(&fired[16..], [0; 14], "nothing left to shoot at");
+        let pd_shots: Vec<usize> = durabilities.iter().map(|(_, _, s)| *s).collect();
+        assert_eq!(pd_shots[6], 2, "two in flight");
+        assert_eq!(pd_shots[7], 1, "the first spent on the missile");
+        assert_eq!(
+            ships[0].reserves,
+            Reserves::full(10.0, 30.0, 100.0),
+            "untouched"
+        );
+        let asked = rule.asked.take();
+        assert!(asked.contains(&(Side { ship: A, fleet: A }, Side { ship: B, fleet: B })));
+    }
+
+    #[test]
+    fn point_defence_spares_a_missile_the_rule_does_not_call_hostile() {
+        let mut combat = Combat::default();
+        let mut ships = missile_attack(quad());
+        let rule = Hostility::default();
+        let rules = Rules {
+            defence: &rule,
+            ..Rules::default()
+        };
+        for _ in 0..3 {
+            tick_with(&mut combat, &mut ships, &Arsenal::default(), rules);
+            ships[1].trigger = Trigger::default();
+        }
+        assert_eq!(combat.shots().len(), 1, "only the missile");
+        assert_eq!(rule.asked.take().len(), 3, "asked each tick");
+    }
+
+    #[test]
+    fn a_point_defence_beam_shoots_down_a_missile_a_tick_at_a_time() {
+        let beam = WeaponRecord {
+            guidance: 10,
+            reload: 30,
+            count: 5,
+            beam_length: 300,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..weapon(150)
+        };
+        let mut combat = Combat::default();
+        let mut ships = missile_attack(beam);
+        let mut seen = Vec::new();
+        let mut events = Vec::new();
+        for _ in 0..4 {
+            tick_with(
+                &mut combat,
+                &mut ships,
+                &Arsenal::default(),
+                Rules::default(),
+            );
+            ships[1].trigger = Trigger::default();
+            seen.push((missile_durability(&combat), combat.beams().len()));
+            events.extend(combat.take_events());
+        }
+        assert_eq!(
+            seen,
+            [(Some(1.0), 1), (Some(-2.0), 1), (None, 0), (None, 0)]
+        );
+        let downed: Vec<Vec2> = events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::ShotDown { at } => Some(at),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(downed.len(), 1, "{events:?}");
+        assert!(
+            (downed[0] - Vec2::new(0.0, -185.0)).length() < 1e-3,
+            "{downed:?}"
+        );
+        assert_eq!(ships[0].reserves, Reserves::full(10.0, 30.0, 100.0));
+    }
+
+    /// A shell 10 pixels a tick for 3 ticks releasing 2 of weapon 148 with
+    /// `flags2`, and that weapon.
+    fn cluster(flags2: u16) -> (WeaponRecord, Arsenal) {
+        let shell = WeaponRecord {
+            reload: 1000,
+            count: 3,
+            speed: 1000,
+            energy_dmg: 1,
+            sub_count: 2,
+            sub_type: Some(WeaponId(148)),
+            sub_theta: -10,
+            flags2,
+            ..weapon(182)
+        };
+        let sub = WeaponRecord {
+            count: 50,
+            speed: 500,
+            ..weapon(148)
+        };
+        (shell, Arsenal::new(&[shell, sub], Vec::new()))
+    }
+
+    fn sub_shots(combat: &Combat) -> Vec<&Shot> {
+        combat
+            .shots()
+            .iter()
+            .filter(|shot| shot.weapon.id == WeaponId(148))
+            .collect()
+    }
+
+    #[test]
+    fn a_shot_releases_its_sub_munitions_at_the_end_of_its_life() {
+        let (shell, arsenal) = cluster(0);
+        let turret_shell = WeaponRecord {
+            guidance: 4,
+            ..shell
+        };
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(turret_shell).targeting(C),
+            Ship::at(3, 500.0, 0.0),
+        ];
+        let mut events = Vec::new();
+        for _ in 0..3 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+            events.extend(combat.take_events());
+        }
+        let subs = sub_shots(&combat);
+        assert_eq!(subs.len(), 2);
+        let at = subs[0].position;
+        assert!((at - Vec2::new(30.0, 0.0)).length() < 1e-3, "{at:?}");
+        for sub in &subs {
+            assert_eq!(sub.position, at);
+            assert_eq!(sub.generation, 1);
+            assert_eq!(sub.target, Some(C), "the shell's target");
+        }
+        assert_eq!((subs[0].heading, subs[1].heading), (85.0, 95.0));
+        assert_ne!(subs[0].id, subs[1].id);
+        assert_eq!(
+            events.last(),
+            Some(&CombatEvent::Fired {
+                ship: A,
+                weapon: WeaponId(148),
+                at
+            })
+        );
+        let (shell, arsenal) = cluster(0x0020);
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
+        for _ in 0..3 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+        }
+        assert_eq!(sub_shots(&combat).len(), 0, "none on expiry");
+        let (shell, _) = cluster(0);
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
+        for _ in 0..3 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+        }
+        assert_eq!(combat.shots(), [], "a sub-munition that cannot be read");
+    }
+
+    #[test]
+    fn a_shot_releases_its_sub_munitions_where_it_hits_aimed_at_the_ship_hit() {
+        let (shell, arsenal) = cluster(0x0020);
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell), Ship::at(2, 30.0, 0.0)];
+        let mut events = Vec::new();
+        for _ in 0..2 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+            events.extend(combat.take_events());
+        }
+        let subs = sub_shots(&combat);
+        assert_eq!(subs.len(), 2, "{events:?}");
+        assert_eq!(subs[0].target, Some(B));
+        let at = subs[0].position;
+        assert!(
+            (at - Vec2::new(14.0, 0.0)).length() < 1e-3,
+            "where it met B: {at:?}"
+        );
+        assert!(events.contains(&CombatEvent::Fired {
+            ship: A,
+            weapon: WeaponId(148),
+            at
+        }));
+    }
+
     #[test]
     fn clearing_takes_the_shots_and_beams_away() {
         let mut combat = Combat::default();
@@ -1046,6 +1777,5 @@ mod tests {
         assert_eq!((combat.shots().len(), combat.beams().len()), (1, 1));
         combat.clear();
         assert_eq!((combat.shots().len(), combat.beams().len()), (0, 0));
-        let _ = C;
     }
 }

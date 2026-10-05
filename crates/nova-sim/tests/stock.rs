@@ -752,10 +752,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use nova_sim::combat::armament::{Arsenal, Rounds};
 use nova_sim::combat::flags::FlagField;
 use nova_sim::combat::weapon::{Ammo, Guidance, WeaponSpec};
-use nova_sim::combat::{Combat, Fighter};
+use nova_sim::combat::{Combat, Fighter, Rules};
 use nova_sim::{
-    Armament, CombatCatalog, CombatEvent, Condition, HullSpec, NovaDisable, Reserves, ShipRef,
-    SimDiagnostic, Trigger, Vec2, WeaponId,
+    Armament, CombatCatalog, CombatEvent, Condition, HullSpec, Reserves, ShipRef, SimDiagnostic,
+    Trigger, Vec2, WeaponId,
 };
 
 /// Draws the middle outcome: every shot leaves straight ahead.
@@ -775,6 +775,7 @@ impl nova_sim::Chance for Straight {
 struct Combatant {
     id: ShipRef,
     ship_type: ShipId,
+    target: Option<ShipRef>,
     state: ShipState,
     hull: HullSpec,
     trigger: Trigger,
@@ -795,6 +796,7 @@ impl Combatant {
             shield_regen: 0.0,
             armor_regen: 0.0,
             trigger: self.trigger,
+            target: self.target,
             reserves: &mut self.reserves,
             condition: &mut self.condition,
             armament: &mut self.armament,
@@ -804,8 +806,13 @@ impl Combatant {
 }
 
 fn fight(combat: &mut Combat, ships: &mut [Combatant]) {
+    fight_with(combat, ships, &Arsenal::default());
+}
+
+/// A tick of `combat` among `ships`, sub-munitions read from `arsenal`.
+fn fight_with(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
     let mut fighters: Vec<Fighter> = ships.iter_mut().map(Combatant::fighter).collect();
-    combat.tick(&mut fighters, &NovaDisable, &mut Straight);
+    combat.tick(&mut fighters, arsenal, Rules::default(), &mut Straight);
 }
 
 /// The player at the centre, at rest, facing right, firing one of
@@ -818,6 +825,7 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
     Combatant {
         id: ShipRef::Player,
         ship_type: ShipId(128),
+        target: None,
         state: ShipState {
             heading: 90.0,
             ..ShipState::default()
@@ -862,6 +870,7 @@ fn target(data: &GameData, arsenal: &Arsenal, ship: ShipId, x: f32) -> Combatant
     Combatant {
         id: ShipRef::Npc(nova_sim::NpcId(0)),
         ship_type: ship,
+        target: None,
         state: ShipState {
             position: Vec2::new(x, 0.0),
             ..ShipState::default()
@@ -1119,4 +1128,347 @@ fn a_stock_trader_beaten_in_combat_is_disabled_and_still_alive() {
         assert_eq!(ships[1].condition, Condition::Disabled, "shïp {}", ship.0);
         assert!(reserves.armor.now > 0.0, "shïp {}: {reserves:?}", ship.0);
     }
+}
+
+// Guided weapons, turrets and point defence over the stock data.
+
+use nova_sim::combat::aim::{BLIND_REAR, BLIND_SIDES};
+use nova_sim::combat::defence::{engagement_range, pd_damage};
+use nova_sim::flight::facing;
+
+/// NPC 0, the target.
+const QUARRY: ShipRef = ShipRef::Npc(nova_sim::NpcId(0));
+
+/// Every stock weapon of `guidance`, by ID.
+fn guided(data: &GameData, guidance: &[Guidance]) -> Vec<WeaponSpec> {
+    data.weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| guidance.contains(&spec.guidance))
+        .collect()
+}
+
+/// A ship that soaks up any damage, NPC 0 at (`x`, `y`), at rest.
+fn sponge(x: f32, y: f32) -> Combatant {
+    Combatant {
+        id: QUARRY,
+        ship_type: ShipId(128),
+        target: None,
+        state: ShipState {
+            position: Vec2::new(x, y),
+            ..ShipState::default()
+        },
+        hull: HullSpec::default(),
+        trigger: Trigger::default(),
+        reserves: Reserves::full(100_000.0, 100_000.0, 0.0),
+        condition: Condition::Intact,
+        armament: Armament::default(),
+        rounds: BTreeMap::new(),
+    }
+}
+
+/// `shooter(weapon)` targeting NPC 0.
+fn aiming(weapon: &WeaponSpec) -> Combatant {
+    Combatant {
+        target: Some(QUARRY),
+        ..shooter(weapon)
+    }
+}
+
+/// Each stock homing weapon, fired at a stock ship dead ahead within its
+/// range, flies at `Speed`/100 and hits it; fired at a ship that then
+/// moves 90 degrees off, it flies straight for 15 ticks, then turns
+/// `GuidedTurn`/10 degrees a tick.
+#[test]
+fn every_stock_homing_weapon_flies_its_speed_hits_its_target_and_turns_its_turn() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let homing = guided(&data, &[Guidance::Homing]);
+    let ids: Vec<i16> = homing.iter().map(|spec| spec.id.0).collect();
+    assert_eq!(
+        ids,
+        [
+            134, 135, 136, 137, 148, 160, 182, 184, 185, 199, 229, 230, 234
+        ]
+    );
+    for spec in homing {
+        let id = spec.id.0;
+        let ahead = (spec.range() / 2.0).min(300.0);
+        let mut combat = Combat::default();
+        let mut ships = [aiming(&spec), target(&data, &arsenal, ShipId(128), ahead)];
+        let full = ships[1].reserves;
+        fight_with(&mut combat, &mut ships, &arsenal);
+        ships[0].trigger = Trigger::default();
+        let speed = combat.shots()[0].velocity.length();
+        assert!((speed - spec.speed).abs() < 1e-3, "{id}: {speed}");
+        for _ in 0..spec.lifetime {
+            fight_with(&mut combat, &mut ships, &arsenal);
+        }
+        assert_ne!(ships[1].reserves, full, "wëap {id} hit");
+
+        let mut combat = Combat::default();
+        let mut ships = [aiming(&spec), sponge(5000.0, 0.0)];
+        fight_with(&mut combat, &mut ships, &arsenal);
+        ships[0].trigger = Trigger::default();
+        ships[1].state.position = Vec2::new(0.0, 5000.0);
+        let mut headings = vec![combat.shots()[0].heading];
+        for _ in 0..17 {
+            fight_with(&mut combat, &mut ships, &arsenal);
+            headings.push(combat.shots()[0].heading);
+        }
+        assert!(
+            headings[..15].iter().all(|&h| (h - 90.0).abs() < 1e-6),
+            "{id}: {headings:?}"
+        );
+        for (tick, pair) in headings[14..].windows(2).enumerate() {
+            let turned = pair[1] - pair[0];
+            assert!(
+                (turned - spec.turn).abs() < 1e-3,
+                "{id} on {tick}: {headings:?}"
+            );
+        }
+    }
+}
+
+/// Whether `spec`, on a ship of `hull`, facing right, fires at a ship
+/// 100 pixels away at `bearing`, and which way: a shot's heading, or, for
+/// a beam (over within the tick when it lasts a tick), the bearing when
+/// it hit that ship.
+fn fires_at(spec: &WeaponSpec, hull: HullSpec, bearing: f32) -> Option<f32> {
+    let at = facing(bearing) * 100.0;
+    let mut combat = Combat::default();
+    let mut ships = [
+        Combatant {
+            hull,
+            ..aiming(spec)
+        },
+        sponge(at.x, at.y),
+    ];
+    let full = ships[1].reserves;
+    fight(&mut combat, &mut ships);
+    let fired = combat
+        .take_events()
+        .iter()
+        .any(|event| matches!(event, CombatEvent::Fired { .. }));
+    if !fired {
+        return None;
+    }
+    match combat.shots().first() {
+        Some(shot) => Some(shot.heading),
+        None => Some(if ships[1].reserves == full {
+            f32::NAN
+        } else {
+            bearing
+        }),
+    }
+}
+
+/// Each stock turret (3 and 4) fires at a target astern unless it or its
+/// ship is blind to the rear, and at one abeam unless it is blind to the
+/// sides (162), which fires ahead.
+#[test]
+fn every_stock_turret_fires_at_its_target_outside_its_blind_spots() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let rear_blind_hull = arsenal.hull(ShipId(141));
+    assert_eq!(rear_blind_hull.blind_spots, BLIND_REAR, "the Fed Destroyer");
+    let turrets = guided(&data, &[Guidance::TurretBeam, Guidance::Turret]);
+    assert_eq!(turrets.len(), 17);
+    for spec in turrets {
+        let id = spec.id.0;
+        let astern = fires_at(&spec, HullSpec::default(), 270.0);
+        assert_eq!(astern.is_some(), spec.flags & BLIND_REAR == 0, "{id}");
+        if let Some(heading) = astern {
+            assert!((heading - 270.0).abs() < 1e-3, "{id}: {heading}");
+        }
+        assert_eq!(fires_at(&spec, rear_blind_hull, 270.0), None, "{id}");
+        let abeam = fires_at(&spec, HullSpec::default(), 180.0);
+        assert_eq!(abeam.is_some(), spec.flags & BLIND_SIDES == 0, "{id}");
+        assert!(
+            fires_at(&spec, HullSpec::default(), 90.0).is_some(),
+            "{id} ahead"
+        );
+    }
+}
+
+/// Each stock front-quadrant turret (7) fires at a target 30 degrees off
+/// its nose at the lead angle, and at one 90 degrees off straight ahead.
+#[test]
+fn every_stock_front_quadrant_turret_leads_a_target_in_its_arc_and_otherwise_fires_ahead() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let front = guided(&data, &[Guidance::FrontTurret]);
+    let ids: Vec<i16> = front.iter().map(|spec| spec.id.0).collect();
+    assert_eq!(ids, [143, 145, 155, 156, 157, 158, 183, 200, 219]);
+    for spec in front {
+        let id = spec.id.0;
+        let in_arc = fires_at(&spec, HullSpec::default(), 120.0).expect("fires");
+        assert!((in_arc - 120.0).abs() < 1e-3, "{id}: {in_arc}");
+        let out = fires_at(&spec, HullSpec::default(), 180.0).expect("fires");
+        assert!((out - 90.0).abs() < 1e-3, "{id}: {out}");
+    }
+}
+
+/// Each stock point-defence turret (9) engages an IR Missile fired at its
+/// ship once it is within its engagement range, with no target of its
+/// own, and each hit takes its point-defence damage off the missile.
+#[test]
+fn every_stock_point_defence_turret_engages_an_ir_missile_in_range() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let ir = *arsenal.weapon(WeaponId(134)).expect("the IR Missile");
+    let defences = guided(&data, &[Guidance::PointDefence, Guidance::PointDefenceBeam]);
+    let ids: Vec<i16> = defences.iter().map(|spec| spec.id.0).collect();
+    assert_eq!(ids, [133, 161]);
+    for spec in defences {
+        let id = spec.id.0;
+        let range = engagement_range(&spec);
+        let mut defender = shooter(&spec);
+        defender.trigger = Trigger::default();
+        let mut attacker = Combatant {
+            id: QUARRY,
+            target: Some(ShipRef::Player),
+            ..shooter(&ir)
+        };
+        attacker.state = ShipState {
+            position: Vec2::new(range + 100.0, 0.0),
+            velocity: Vec2::ZERO,
+            heading: 270.0,
+        };
+        let mut combat = Combat::default();
+        let mut ships = [defender, attacker];
+        let mut engaged = None;
+        let mut durability = ir.durability;
+        let mut hits = 0;
+        for tick in 0..60 {
+            let before = combat
+                .shots()
+                .iter()
+                .find(|shot| shot.weapon.id == WeaponId(134))
+                .map(|shot| shot.position.length());
+            fight_with(&mut combat, &mut ships, &arsenal);
+            ships[1].trigger = Trigger::default();
+            let fired = combat.take_events().iter().any(|event| {
+                matches!(
+                    event,
+                    CombatEvent::Fired {
+                        ship: ShipRef::Player,
+                        ..
+                    }
+                )
+            });
+            if fired && engaged.is_none() {
+                engaged = Some((tick, before));
+            }
+            match combat
+                .shots()
+                .iter()
+                .find(|shot| shot.weapon.id == WeaponId(134))
+            {
+                Some(missile) if missile.durability < durability => {
+                    assert!(
+                        (durability - missile.durability - pd_damage(&spec)).abs() < 1e-3,
+                        "{id}"
+                    );
+                    durability = missile.durability;
+                    hits += 1;
+                }
+                Some(_) => {}
+                None => break,
+            }
+        }
+        let (tick, at) = engaged.expect("engaged");
+        let at = at.expect("the missile in flight");
+        assert!(at <= range, "{id}: engaged at {at} of {range}");
+        assert!(at + ir.speed > range, "{id}: not before, on tick {tick}");
+        assert!(hits >= 1, "{id}");
+        assert!(
+            combat
+                .shots()
+                .iter()
+                .all(|shot| shot.weapon.id != WeaponId(134)),
+            "{id}: shot down"
+        );
+        assert_eq!(
+            ships[0].reserves.armor,
+            Gauge::full(1_000_000.0),
+            "{id}: never reached"
+        );
+    }
+}
+
+/// Stock weapons, and the unimplemented flags each reports.
+type Row = (&'static [i16], &'static [(FlagField, u16)]);
+
+/// Every stock guided weapon and turret, fired again and again at a ship
+/// ahead, reports exactly its unimplemented flags, each once.
+#[test]
+fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
+    use FlagField::{Flags2, Flags3, Seeker};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let weapons = guided(
+        &data,
+        &[
+            Guidance::Homing,
+            Guidance::TurretBeam,
+            Guidance::Turret,
+            Guidance::FrontTurret,
+            Guidance::RearTurret,
+            Guidance::PointDefence,
+            Guidance::PointDefenceBeam,
+        ],
+    );
+    let mut ships: Vec<Combatant> = weapons.iter().map(aiming).collect();
+    ships.push(sponge(200.0, 0.0));
+    let mut combat = Combat::default();
+    let mut diagnostics = Vec::new();
+    for _ in 0..200 {
+        fight_with(&mut combat, &mut ships, &arsenal);
+        diagnostics.extend(combat.take_diagnostics());
+    }
+    let rows: [Row; 11] = [
+        (&[134, 136], &[(Seeker, 0x2)]),
+        (&[135, 160], &[(Seeker, 0x2), (Seeker, 0x8)]),
+        (&[137], &[(Seeker, 0x1), (Seeker, 0x8)]),
+        (&[148, 182, 229], &[(Seeker, 0x1)]),
+        (&[184, 185, 199], &[(Seeker, 0x1), (Flags2, 0x4000)]),
+        (&[183], &[(Flags2, 0x4000)]),
+        (&[142, 201], &[(Flags2, 0x1000), (Flags3, 0x10)]),
+        (&[233], &[(Flags2, 0x1000)]),
+        (&[234], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x1000)]),
+        (&[196, 197, 198], &[(Flags2, 0x8000)]),
+        (&[230], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x8000)]),
+    ];
+    let expected: BTreeSet<SimDiagnostic> = rows
+        .iter()
+        .flat_map(|(weapons, flags)| {
+            weapons.iter().flat_map(move |&weapon| {
+                flags.iter().map(
+                    move |&(field, bit)| SimDiagnostic::UnimplementedWeaponFlag {
+                        weapon: WeaponId(weapon),
+                        field,
+                        bit,
+                    },
+                )
+            })
+        })
+        .collect();
+    assert_eq!(expected.len(), 32);
+    assert_eq!(diagnostics.len(), 32, "each once: {diagnostics:?}");
+    assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
 }

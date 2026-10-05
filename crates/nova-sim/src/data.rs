@@ -313,6 +313,12 @@ impl CombatCatalog for GameData {
                     beam_length: record.beam_length,
                     burst_count: record.burst_count,
                     burst_reload: record.burst_reload,
+                    guided_turn: record.guided_turn,
+                    durability: record.durability,
+                    sub_count: record.sub_count,
+                    sub_type: record.sub_type,
+                    sub_theta: record.sub_theta,
+                    sub_limit: record.sub_limit,
                 })
             })
             .collect()
@@ -1282,6 +1288,8 @@ mod tests {
         bytes[0x48..0x4A].copy_from_slice(&0x8200_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x5A, &[60, 30]);
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2]);
+        put_i16s(&mut bytes, 0x68, &[4, 70]);
         bytes
     }
 
@@ -1314,6 +1322,12 @@ mod tests {
             beam_length: 300,
             burst_count: 60,
             burst_reload: 30,
+            guided_turn: 70,
+            durability: 4,
+            sub_count: 5,
+            sub_type: Some(WeaponId(148)),
+            sub_theta: -10,
+            sub_limit: 2,
         };
         assert_eq!(
             data.weapons(),
@@ -1321,6 +1335,15 @@ mod tests {
             "by ID, the undecodable one left out"
         );
         assert_eq!(store(&[]).weapons(), []);
+    }
+
+    #[test]
+    fn a_wëap_without_a_sub_type_has_none() {
+        let mut bytes = weapon_bytes();
+        put_i16s(&mut bytes, 0x40, &[-1]);
+        let data = store(&[(Weapon::TYPE, 128, bytes)]);
+        assert_eq!(data.weapons()[0].sub_type, None);
+        assert_eq!(data.weapons()[0].sub_count, 5);
     }
 
     /// A `shïp` with every combat field set to something of its own: two

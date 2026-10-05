@@ -1,14 +1,16 @@
 //! NPC decisions: what each NPC sets out to do, on a timer kept apart from
 //! the physics step (see [`traffic`](crate::traffic)).
 //!
-//! A [`Behaviour`] decides an NPC's [`Goal`] from what is around it;
-//! [`Peaceful`] is Nova's default. The [`traffic`](crate::traffic)
+//! A [`Behaviour`] decides an NPC's [`Goal`] from what is around it, and
+//! the fire command it holds and the ship it targets; [`Peaceful`] is
+//! Nova's default, which never fires and targets nothing. The [`traffic`](crate::traffic)
 //! autopilot then flies each goal, every tick.
 
 use std::fmt::Debug;
 
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
+use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::hyperspace::JUMP_FUEL;
 use crate::landing::landable;
@@ -46,6 +48,12 @@ pub trait Behaviour: Debug {
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
         let _ = (npc, around);
         Trigger::default()
+    }
+
+    /// The ship `npc` targets now, among `around`: none by default.
+    fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+        let _ = (npc, around);
+        None
     }
 }
 
@@ -222,6 +230,18 @@ mod tests {
                 alone,
                 "{ai_type:?} without its lead"
             );
+        }
+    }
+
+    #[test]
+    fn peaceful_traffic_targets_nothing() {
+        let npcs = [npc(1, AiType::Warship), npc(2, AiType::Interceptor)];
+        let around = Surroundings {
+            sites: &sites(),
+            npcs: &npcs,
+        };
+        for npc in &npcs {
+            assert_eq!(Peaceful.target(npc, &around), None);
         }
     }
 

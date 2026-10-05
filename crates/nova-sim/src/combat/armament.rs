@@ -1,5 +1,5 @@
 //! A ship's armament: the weapons it carries, how many of each, and
-//! firing them when its trigger is pulled.
+//! firing them when its trigger is pulled, and its point defence.
 //!
 //! Firing is the original's (`_FirePlayerWeapon`, `_WeaponBurstInterval`
 //! and `_SpawnShot` in the `EV Nova` executable), which every ship goes
@@ -18,12 +18,21 @@
 //!   store, or its fuel, and does not fire without it. A weapon that uses
 //!   ammo only at the end of a burst (`Flags3` 0x0001) spends it each
 //!   time the shots in the burst reach a multiple of its `BurstCount`.
-//! - It leaves up to its `Inaccuracy` off its heading either way: the
-//!   draw `below(2n) - n`, never asked of a weapon that is accurate.
+//! - Its guidance aims it ([`aim`](super::aim)): a weapon that does not
+//!   fire (a turret with no target, or one in a blind spot or out of its
+//!   arc, and point defence on the trigger) spends nothing and does not
+//!   reload.
+//! - It leaves up to its `Inaccuracy` off its aim either way: the draw
+//!   `below(2n) - n`, never asked of a weapon that is accurate.
 //! - Nothing fires unless the ship is [`Condition::Intact`].
-//! - A weapon of a guidance a later phase flies does not fire; firing one
-//!   is reported once ([`SimDiagnostic::UnimplementedGuidance`]), and so is
-//!   each flag a weapon that does fire sets and the simulation ignores.
+//! - A weapon of a guidance a later phase flies (carried ships) does not
+//!   fire; firing one is reported once
+//!   ([`SimDiagnostic::UnimplementedGuidance`]), and so is each flag a
+//!   weapon that does fire sets and the simulation ignores.
+//! - Point defence ([`Armament::fire_point_defence`]) fires, each tick,
+//!   only the ready point-defence weapon the ship can pay for with the
+//!   lowest weapon ID, and only at a missile it picks; it pays, bursts and
+//!   reloads like any weapon, and a beam (10) draws no inaccuracy.
 //!
 //! The player's armament ([`Arsenal::player`]) is its ship's stock weapons
 //! and the weapons among its outfits ([`MOD_WEAPON`]), firing the rounds
@@ -34,13 +43,17 @@
 
 use std::collections::BTreeMap;
 
+use super::ShipRef;
+use super::aim::Aim;
 use super::hull::{Condition, HullSpec};
+use super::projectile::ShotId;
 use super::report::{Reports, SimDiagnostic};
 use super::weapon::{Ammo, Guidance, WeaponSpec};
 use crate::catalog::{
     CombatCatalog, HullRecord, OutfitId, OutfitRecord, ShipId, WeaponId, WeaponRecord,
 };
 use crate::chance::Chance;
+use crate::flight::normalized;
 use crate::reserves::Gauge;
 
 /// The `oütf` `ModType` that is a weapon: its `ModVal` is the `wëap`.
@@ -170,6 +183,24 @@ impl Mount {
         }
     }
 
+    /// Fires a shot: reports the flags it ignores to `reports`, counts it
+    /// in the burst, pays for it from `rounds` and `fuel` when it spends,
+    /// and sets the reload (see the module docs).
+    fn discharge(&mut self, rounds: &mut dyn Rounds, fuel: &mut Gauge, reports: &mut Reports) {
+        reports.fired(&self.spec);
+        if self.spec.burst_count > 0 {
+            self.burst += 1;
+        }
+        if self.spends() {
+            self.pay(rounds, fuel);
+        }
+        self.reload = self.spec.reload / self.count as f32;
+        if self.spec.burst_count > 0 && self.burst >= self.spec.burst_count * self.count {
+            self.burst = 0;
+            self.reload = self.spec.burst_reload;
+        }
+    }
+
     /// Whether this shot, the burst's `burst`th, spends ammo.
     fn spends(&self) -> bool {
         if self.spec.ammo_at_burst_end() {
@@ -185,8 +216,10 @@ impl Mount {
 pub struct Launch {
     /// The weapon.
     pub weapon: WeaponSpec,
-    /// How far off the ship's heading it leaves, in degrees clockwise.
-    pub offset: f32,
+    /// The heading it leaves along, its inaccuracy included, in degrees.
+    pub heading: f32,
+    /// The ship it is fired at, if any.
+    pub target: Option<ShipRef>,
 }
 
 /// The weapons a ship carries, in the order they were mounted.
@@ -230,10 +263,13 @@ impl Armament {
         secondaries(&self.mounts)
     }
 
-    /// Fires every weapon `trigger` picks that is ready, on a ship in
-    /// `condition`, paying from `rounds` and `fuel`, the inaccuracy drawn
-    /// on `chance`, and gives what it launched; what it reports goes to
-    /// `reports` (see the module docs).
+    /// Fires every weapon `trigger` picks that is ready and that `aim`
+    /// aims, on a ship in `condition`, paying from `rounds` and `fuel`, the
+    /// inaccuracy drawn on `chance`, and gives what it launched; what it
+    /// reports goes to `reports` (see the module docs).
+    // Each is a separate borrow the fight holds: the ship's command, its
+    // condition and stores, the dice, the reports and its aim.
+    #[allow(clippy::too_many_arguments)]
     pub fn fire(
         &mut self,
         trigger: Trigger,
@@ -242,6 +278,7 @@ impl Armament {
         fuel: &mut Gauge,
         chance: &mut dyn Chance,
         reports: &mut Reports,
+        aim: &mut dyn FnMut(&WeaponSpec) -> Option<Aim>,
     ) -> Vec<Launch> {
         let mut launches = Vec::new();
         if condition != Condition::Intact {
@@ -258,28 +295,65 @@ impl Armament {
                 });
                 continue;
             }
+            let Some(aimed) = aim(&mount.spec) else {
+                continue;
+            };
             if !mount.affords(rounds, *fuel) {
                 continue;
             }
             let offset = inaccuracy(mount.spec.inaccuracy, chance);
-            reports.fired(&mount.spec);
-            if mount.spec.burst_count > 0 {
-                mount.burst += 1;
-            }
-            if mount.spends() {
-                mount.pay(rounds, fuel);
-            }
-            mount.reload = mount.spec.reload / mount.count as f32;
-            if mount.spec.burst_count > 0 && mount.burst >= mount.spec.burst_count * mount.count {
-                mount.burst = 0;
-                mount.reload = mount.spec.burst_reload;
-            }
+            mount.discharge(rounds, fuel, reports);
             launches.push(Launch {
                 weapon: mount.spec,
-                offset,
+                heading: normalized(aimed.heading + offset),
+                target: aimed.target,
             });
         }
         launches
+    }
+
+    /// Fires the point defence of a ship in `condition`, paying from
+    /// `rounds` and `fuel`, the inaccuracy drawn on `chance`: the ready
+    /// point-defence weapon it can pay for with the lowest ID, at the
+    /// heading and missile `pick` gives it, if any. Nothing fires, and
+    /// nothing is spent, when `pick` gives none. What it reports goes to
+    /// `reports`.
+    pub fn fire_point_defence(
+        &mut self,
+        condition: Condition,
+        rounds: &mut dyn Rounds,
+        fuel: &mut Gauge,
+        chance: &mut dyn Chance,
+        reports: &mut Reports,
+        pick: &mut dyn FnMut(&WeaponSpec) -> Option<(f32, ShotId)>,
+    ) -> Option<(Launch, ShotId)> {
+        if condition != Condition::Intact {
+            return None;
+        }
+        let mount = self
+            .mounts
+            .iter_mut()
+            .filter(|mount| {
+                matches!(
+                    mount.spec.guidance,
+                    Guidance::PointDefence | Guidance::PointDefenceBeam
+                ) && mount.reload <= 0.0
+                    && mount.affords(rounds, *fuel)
+            })
+            .min_by_key(|mount| mount.spec.id)?;
+        let (bearing, missile) = pick(&mount.spec)?;
+        let offset = if mount.spec.guidance == Guidance::PointDefenceBeam {
+            0.0
+        } else {
+            inaccuracy(mount.spec.inaccuracy, chance)
+        };
+        mount.discharge(rounds, fuel, reports);
+        let launch = Launch {
+            weapon: mount.spec,
+            heading: normalized(bearing + offset),
+            target: None,
+        };
+        Some((launch, missile))
     }
 
     /// Counts every weapon's reload timer down a tick.
@@ -479,8 +553,11 @@ mod tests {
     use super::*;
     use crate::catalog::StockWeapon;
     use crate::chance::NeverFires;
+    use crate::combat::ShipRef;
     use crate::combat::flags::FlagField;
+    use crate::flight::ShipState;
     use crate::testkit::{Draws, hull, outfit, weapon};
+    use crate::traffic::npc::NpcId;
 
     /// A blaster reloading every `reload` ticks, unlimited and accurate.
     fn blaster(id: i16, reload: i16) -> WeaponRecord {
@@ -524,6 +601,7 @@ mod tests {
                 &mut self.fuel,
                 &mut NeverFires,
                 &mut self.reports,
+                &mut ahead,
             );
             armament.reload();
             launches
@@ -535,6 +613,15 @@ mod tests {
                 .filter(|_| !self.tick(armament, trigger).is_empty())
                 .collect()
         }
+    }
+
+    /// Every weapon fires straight up, at nothing.
+    #[allow(clippy::unnecessary_wraps)]
+    fn ahead(_spec: &WeaponSpec) -> Option<Aim> {
+        Some(Aim {
+            heading: 0.0,
+            target: None,
+        })
     }
 
     // Selecting the secondary.
@@ -837,13 +924,24 @@ mod tests {
         assert_eq!(fired(&mut armament, Trigger::default()), Vec::<i16>::new());
     }
 
+    /// Every weapon fires at 100 degrees, at NPC 7.
+    #[allow(clippy::unnecessary_wraps)]
+    fn at_seven(_spec: &WeaponSpec) -> Option<Aim> {
+        Some(Aim {
+            heading: 100.0,
+            target: Some(SEVEN),
+        })
+    }
+
+    const SEVEN: ShipRef = ShipRef::Npc(NpcId(7));
+
     #[test]
-    fn inaccuracy_draws_twice_it_and_offsets_by_minus_it_up_to_one_less() {
+    fn inaccuracy_draws_twice_it_and_turns_the_aim_by_minus_it_up_to_one_less() {
         let wild = WeaponRecord {
             inaccuracy: 9,
             ..blaster(128, 0)
         };
-        for (draw, offset) in [(0, -9.0), (9, 0.0), (17, 8.0)] {
+        for (draw, heading) in [(0, 91.0), (9, 100.0), (17, 108.0)] {
             let mut armament = mounted(wild, 1);
             let mut chance = Draws::of(&[draw]);
             let launches = armament.fire(
@@ -853,8 +951,10 @@ mod tests {
                 &mut Gauge::default(),
                 &mut chance,
                 &mut Reports::default(),
+                &mut at_seven,
             );
-            assert_eq!(launches[0].offset, offset, "{draw}");
+            assert_eq!(launches[0].heading, heading, "{draw}");
+            assert_eq!(launches[0].target, Some(SEVEN), "{draw}");
             assert_eq!(chance.asked, [18]);
         }
         let mut accurate = mounted(blaster(128, 0), 1);
@@ -866,9 +966,64 @@ mod tests {
             &mut Gauge::default(),
             &mut chance,
             &mut Reports::default(),
+            &mut at_seven,
         );
-        assert_eq!(launches[0].offset, 0.0);
+        assert_eq!(launches[0].heading, 100.0);
         assert!(chance.asked.is_empty(), "never asked");
+        let mut wrapping = mounted(wild, 1);
+        let launches = wrapping.fire(
+            PRIMARY,
+            Condition::Intact,
+            &mut BTreeMap::new(),
+            &mut Gauge::default(),
+            &mut Draws::of(&[0]),
+            &mut Reports::default(),
+            &mut ahead,
+        );
+        assert_eq!(launches[0].heading, 351.0, "wrapped");
+    }
+
+    #[test]
+    fn a_weapon_with_no_aim_does_not_fire_reload_or_spend_and_fires_once_aimed() {
+        let turret = WeaponRecord {
+            guidance: 4,
+            ammo_type: 10,
+            reload: 10,
+            ..blaster(139, 10)
+        };
+        let mut armament = mounted(turret, 1);
+        let mut rounds = BTreeMap::from([(WeaponId(138), 3)]);
+        let mut reports = Reports::default();
+        let mut asked = Vec::new();
+        let mut unaimed = |spec: &WeaponSpec| {
+            asked.push(spec.id);
+            None
+        };
+        let launches = armament.fire(
+            PRIMARY,
+            Condition::Intact,
+            &mut rounds,
+            &mut Gauge::default(),
+            &mut NeverFires,
+            &mut reports,
+            &mut unaimed,
+        );
+        assert_eq!(launches, []);
+        assert_eq!(asked, [WeaponId(139)]);
+        assert_eq!(armament.mounts()[0].reload, 0.0, "no reload");
+        assert_eq!(rounds[&WeaponId(138)], 3, "no round spent");
+        let launches = armament.fire(
+            PRIMARY,
+            Condition::Intact,
+            &mut rounds,
+            &mut Gauge::default(),
+            &mut NeverFires,
+            &mut reports,
+            &mut at_seven,
+        );
+        assert_eq!(launches.len(), 1, "fired the next tick, aimed");
+        assert_eq!(rounds[&WeaponId(138)], 2);
+        assert_eq!(armament.mounts()[0].reload, 10.0);
     }
 
     #[test]
@@ -886,6 +1041,7 @@ mod tests {
                 &mut Gauge::default(),
                 &mut NeverFires,
                 &mut Reports::default(),
+                &mut ahead,
             );
             assert_eq!(launches, [], "{condition:?}");
         }
@@ -913,27 +1069,304 @@ mod tests {
 
     #[test]
     fn a_weapon_of_another_guidance_is_reported_once_and_never_fires() {
-        let homing = WeaponRecord {
-            guidance: 1,
+        let bay = |guidance| WeaponRecord {
+            guidance,
             flags: 0x0040,
             ..blaster(131, 0)
         };
-        let mut armament = mounted(homing, 1);
+        for guidance in [99, 2] {
+            let mut armament = mounted(bay(guidance), 1);
+            let mut supplies = Supplies::none();
+            assert_eq!(supplies.firing(&mut armament, PRIMARY, 5), [0_u32; 0]);
+            assert_eq!(
+                supplies.reports.take(),
+                [SimDiagnostic::UnimplementedGuidance {
+                    weapon: WeaponId(131),
+                    guidance
+                }],
+                "its flags never reported, as it never fires"
+            );
+        }
+        let mut armament = mounted(bay(99), 1);
         let mut supplies = Supplies::none();
-        assert_eq!(supplies.firing(&mut armament, PRIMARY, 5), [0_u32; 0]);
-        assert_eq!(
-            supplies.reports.take(),
-            [SimDiagnostic::UnimplementedGuidance {
-                weapon: WeaponId(131),
-                guidance: 1
-            }],
-            "its flags never reported, as it never fires"
-        );
+        supplies.firing(&mut armament, PRIMARY, 1);
+        supplies.reports.take();
         assert_eq!(
             supplies.firing(&mut armament, Trigger::default(), 1),
             [0_u32; 0]
         );
         assert_eq!(supplies.reports.take(), [], "nor when not fired");
+    }
+
+    #[test]
+    fn guided_weapons_and_turrets_are_flown_and_not_reported() {
+        for guidance in [1, 3, 4, 7, 8] {
+            let mut armament = mounted(
+                WeaponRecord {
+                    guidance,
+                    ..blaster(131, 0)
+                },
+                1,
+            );
+            let mut supplies = Supplies::none();
+            assert_eq!(
+                supplies.firing(&mut armament, PRIMARY, 2),
+                [0, 1],
+                "{guidance}"
+            );
+            assert_eq!(supplies.reports.take(), [], "{guidance}");
+        }
+    }
+
+    // Point defence.
+
+    /// A point-defence weapon `id` of `guidance` reloading every `reload`
+    /// ticks, `inaccuracy` degrees off.
+    fn defence(id: i16, guidance: i16, reload: i16, inaccuracy: i16) -> WeaponRecord {
+        WeaponRecord {
+            guidance,
+            inaccuracy,
+            ..blaster(id, reload)
+        }
+    }
+
+    /// Fires `armament`'s point defence on `chance`, `pick` giving the
+    /// missile to fire at, recording each weapon it is asked of.
+    fn defend(
+        armament: &mut Armament,
+        supplies: &mut Supplies,
+        chance: &mut dyn Chance,
+        pick: Option<(f32, ShotId)>,
+        asked: &mut Vec<WeaponId>,
+    ) -> Option<(Launch, ShotId)> {
+        armament.fire_point_defence(
+            Condition::Intact,
+            &mut supplies.rounds,
+            &mut supplies.fuel,
+            chance,
+            &mut supplies.reports,
+            &mut |spec: &WeaponSpec| {
+                asked.push(spec.id);
+                pick
+            },
+        )
+    }
+
+    #[test]
+    fn point_defence_fires_its_lowest_ready_weapon_at_the_pick() {
+        let mut armament = Armament::new(
+            [
+                blaster(128, 0),
+                defence(161, 9, 4, 0),
+                defence(133, 9, 5, 0),
+                defence(150, 10, 3, 0),
+            ]
+            .iter()
+            .map(|record| (WeaponSpec::new(record), 1)),
+        );
+        let mut supplies = Supplies::none();
+        let mut asked = Vec::new();
+        let missile = Some((30.0, ShotId(4)));
+        let (launch, shot) = defend(
+            &mut armament,
+            &mut supplies,
+            &mut NeverFires,
+            missile,
+            &mut asked,
+        )
+        .expect("fires");
+        assert_eq!(asked, [WeaponId(133)], "the lowest ID, asked alone");
+        assert_eq!(
+            (launch.weapon.id, launch.heading, launch.target),
+            (WeaponId(133), 30.0, None)
+        );
+        assert_eq!(shot, ShotId(4));
+        let reloads: Vec<f32> = armament.mounts().iter().map(|mount| mount.reload).collect();
+        assert_eq!(reloads, [0.0, 0.0, 5.0, 0.0], "its reload");
+        asked.clear();
+        let next = defend(
+            &mut armament,
+            &mut supplies,
+            &mut NeverFires,
+            missile,
+            &mut asked,
+        );
+        assert_eq!(
+            next.map(|(launch, _)| launch.weapon.id),
+            Some(WeaponId(150))
+        );
+        assert_eq!(asked, [WeaponId(150)], "the next ready");
+        asked.clear();
+        defend(
+            &mut armament,
+            &mut supplies,
+            &mut NeverFires,
+            missile,
+            &mut asked,
+        );
+        defend(
+            &mut armament,
+            &mut supplies,
+            &mut NeverFires,
+            missile,
+            &mut asked,
+        );
+        assert_eq!(asked, [WeaponId(161)], "and none ready after");
+    }
+
+    #[test]
+    fn point_defence_with_nothing_to_shoot_fires_and_spends_nothing() {
+        let mut armament = mounted(
+            WeaponRecord {
+                ammo_type: 27,
+                burst_count: 3,
+                burst_reload: 10,
+                ..defence(161, 9, 4, 20)
+            },
+            1,
+        );
+        let mut supplies = Supplies::none();
+        supplies.rounds.insert(WeaponId(155), 2);
+        let mut chance = Draws::of(&[]);
+        let mut asked = Vec::new();
+        assert_eq!(
+            defend(&mut armament, &mut supplies, &mut chance, None, &mut asked),
+            None
+        );
+        assert_eq!(asked, [WeaponId(161)]);
+        assert_eq!(armament.mounts()[0].reload, 0.0);
+        assert_eq!(armament.mounts()[0].burst, 0);
+        assert_eq!(supplies.rounds[&WeaponId(155)], 2);
+        assert!(chance.asked.is_empty(), "no inaccuracy drawn");
+        let mut chance = Draws::of(&[0]);
+        let (launch, _) = defend(
+            &mut armament,
+            &mut supplies,
+            &mut chance,
+            Some((90.0, ShotId(1))),
+            &mut asked,
+        )
+        .expect("fires");
+        assert_eq!(launch.heading, 70.0, "its inaccuracy");
+        assert_eq!(chance.asked, [40]);
+        assert_eq!(supplies.rounds[&WeaponId(155)], 1, "a round");
+        assert_eq!(armament.mounts()[0].burst, 1, "a shot of its burst");
+        assert_eq!(armament.mounts()[0].reload, 4.0);
+        supplies.rounds.insert(WeaponId(155), 0);
+        armament.reload();
+        armament.reload();
+        armament.reload();
+        armament.reload();
+        asked.clear();
+        assert_eq!(
+            defend(
+                &mut armament,
+                &mut supplies,
+                &mut NeverFires,
+                Some((90.0, ShotId(1))),
+                &mut asked
+            ),
+            None,
+            "out of rounds"
+        );
+        assert_eq!(asked, [0_i16; 0].map(WeaponId), "not asked");
+    }
+
+    #[test]
+    fn a_point_defence_beam_draws_no_inaccuracy() {
+        let mut armament = mounted(defence(150, 10, 3, 20), 1);
+        let mut chance = Draws::of(&[]);
+        let (launch, _) = defend(
+            &mut armament,
+            &mut Supplies::none(),
+            &mut chance,
+            Some((45.0, ShotId(2))),
+            &mut Vec::new(),
+        )
+        .expect("fires");
+        assert_eq!(launch.heading, 45.0);
+        assert!(chance.asked.is_empty());
+    }
+
+    #[test]
+    fn point_defence_fires_only_on_an_intact_ship_and_only_point_defence() {
+        let mut armament = mounted(defence(133, 9, 5, 0), 1);
+        let mut supplies = Supplies::none();
+        for condition in [Condition::Disabled, Condition::Dying { ticks_left: 3 }] {
+            let fired = armament.fire_point_defence(
+                condition,
+                &mut supplies.rounds,
+                &mut supplies.fuel,
+                &mut NeverFires,
+                &mut supplies.reports,
+                &mut |_: &WeaponSpec| Some((0.0, ShotId(0))),
+            );
+            assert_eq!(fired, None, "{condition:?}");
+        }
+        for guidance in [-1, 0, 1, 4] {
+            let mut other = mounted(defence(133, guidance, 5, 0), 1);
+            let mut asked = Vec::new();
+            let fired = defend(
+                &mut other,
+                &mut supplies,
+                &mut NeverFires,
+                Some((0.0, ShotId(0))),
+                &mut asked,
+            );
+            assert_eq!(fired, None, "{guidance}");
+            assert_eq!(asked, [0_i16; 0].map(WeaponId), "{guidance}");
+        }
+    }
+
+    #[test]
+    fn point_defence_reports_its_flags_as_it_fires() {
+        let mut armament = mounted(
+            WeaponRecord {
+                flags2: 0x8000,
+                ..defence(133, 9, 5, 0)
+            },
+            1,
+        );
+        let mut supplies = Supplies::none();
+        defend(
+            &mut armament,
+            &mut supplies,
+            &mut NeverFires,
+            None,
+            &mut Vec::new(),
+        );
+        assert_eq!(supplies.reports.take(), [], "not before it fires");
+        defend(
+            &mut armament,
+            &mut supplies,
+            &mut NeverFires,
+            Some((0.0, ShotId(0))),
+            &mut Vec::new(),
+        );
+        assert_eq!(supplies.reports.take().len(), 1);
+    }
+
+    #[test]
+    fn the_triggers_never_fire_point_defence() {
+        for guidance in [9, 10] {
+            let mut armament = mounted(defence(133, guidance, 0, 0), 1);
+            let mut supplies = Supplies::none();
+            let mut asked = Vec::new();
+            let launches = armament.fire(
+                PRIMARY,
+                Condition::Intact,
+                &mut supplies.rounds,
+                &mut supplies.fuel,
+                &mut NeverFires,
+                &mut supplies.reports,
+                &mut |spec: &WeaponSpec| {
+                    asked.push(spec.id);
+                    super::super::aim::aim(spec, &ShipState::default(), &HullSpec::default(), None)
+                },
+            );
+            assert_eq!(launches, [], "{guidance}");
+            assert_eq!(armament.mounts()[0].reload, 0.0, "{guidance}");
+        }
     }
 
     #[test]

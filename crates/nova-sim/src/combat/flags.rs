@@ -71,9 +71,20 @@ impl Scope {
     fn covers(self, guidance: Guidance) -> bool {
         match self {
             Self::Any => true,
-            Self::Guided => guidance == Guidance::Other(1),
-            Self::Turret => matches!(guidance, Guidance::Other(3 | 4 | 7..=10)),
-            Self::Beam => matches!(guidance, Guidance::Beam | Guidance::Other(3 | 10)),
+            Self::Guided => guidance == Guidance::Homing,
+            Self::Turret => matches!(
+                guidance,
+                Guidance::TurretBeam
+                    | Guidance::Turret
+                    | Guidance::FrontTurret
+                    | Guidance::RearTurret
+                    | Guidance::PointDefence
+                    | Guidance::PointDefenceBeam
+            ),
+            Self::Beam => matches!(
+                guidance,
+                Guidance::Beam | Guidance::TurretBeam | Guidance::PointDefenceBeam
+            ),
         }
     }
 }
@@ -100,7 +111,7 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     // Copies fire simultaneously.
     (Flags, 0x0040, Any, Unimplemented),
     // Homing: point defence can't target it.
-    (Flags, 0x0080, Guided, Unimplemented),
+    (Flags, 0x0080, Guided, Implemented),
     // Blast doesn't hurt the player.
     (Flags, 0x0100, Any, Implemented),
     // Small smoke, big smoke, persistent smoke.
@@ -108,9 +119,9 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags, 0x0400, Any, Presentation),
     (Flags, 0x0800, Any, Presentation),
     // Turret blind spots: front, sides, rear.
-    (Flags, 0x1000, Turret, Unimplemented),
-    (Flags, 0x2000, Turret, Unimplemented),
-    (Flags, 0x4000, Turret, Unimplemented),
+    (Flags, 0x1000, Turret, Implemented),
+    (Flags, 0x2000, Turret, Implemented),
+    (Flags, 0x4000, Turret, Implemented),
     // Detonates at the end of its life.
     (Flags, 0x8000, Any, Implemented),
     // Guided weapons' behaviour.
@@ -127,10 +138,10 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     // Proximity detonator ignores asteroids.
     (Flags2, 0x0004, Any, Unimplemented),
     // Guided: proximity detonator set off by other ships.
-    (Flags2, 0x0008, Guided, Unimplemented),
+    (Flags2, 0x0008, Guided, Implemented),
     // Submunitions aimed at the nearest target; none on expiry.
-    (Flags2, 0x0010, Any, Unimplemented),
-    (Flags2, 0x0020, Any, Unimplemented),
+    (Flags2, 0x0010, Any, Implemented),
+    (Flags2, 0x0020, Any, Implemented),
     // Ammo hidden on the status display.
     (Flags2, 0x0040, Any, Presentation),
     // Needs a KeyCarried ship aboard.
@@ -220,14 +231,14 @@ mod tests {
         (Flags, 0x0010, [Presentation; 4]),
         (Flags, 0x0020, [Implemented; 4]),
         (Flags, 0x0040, [Unimplemented; 4]),
-        (Flags, 0x0080, [NA, NA, Unimplemented, NA]),
+        (Flags, 0x0080, [NA, NA, Implemented, NA]),
         (Flags, 0x0100, [Implemented; 4]),
         (Flags, 0x0200, [Presentation; 4]),
         (Flags, 0x0400, [Presentation; 4]),
         (Flags, 0x0800, [Presentation; 4]),
-        (Flags, 0x1000, [NA, NA, NA, Unimplemented]),
-        (Flags, 0x2000, [NA, NA, NA, Unimplemented]),
-        (Flags, 0x4000, [NA, NA, NA, Unimplemented]),
+        (Flags, 0x1000, [NA, NA, NA, Implemented]),
+        (Flags, 0x2000, [NA, NA, NA, Implemented]),
+        (Flags, 0x4000, [NA, NA, NA, Implemented]),
         (Flags, 0x8000, [Implemented; 4]),
         (Seeker, 0x0001, [NA, NA, Unimplemented, NA]),
         (Seeker, 0x0002, [NA, NA, Unimplemented, NA]),
@@ -239,9 +250,9 @@ mod tests {
         (Flags2, 0x0001, [Presentation; 4]),
         (Flags2, 0x0002, [Presentation; 4]),
         (Flags2, 0x0004, [Unimplemented; 4]),
-        (Flags2, 0x0008, [NA, NA, Unimplemented, NA]),
-        (Flags2, 0x0010, [Unimplemented; 4]),
-        (Flags2, 0x0020, [Unimplemented; 4]),
+        (Flags2, 0x0008, [NA, NA, Implemented, NA]),
+        (Flags2, 0x0010, [Implemented; 4]),
+        (Flags2, 0x0020, [Implemented; 4]),
         (Flags2, 0x0040, [Presentation; 4]),
         (Flags2, 0x0080, [Unimplemented; 4]),
         (Flags2, 0x0100, [Unimplemented; 4]),
@@ -262,8 +273,8 @@ mod tests {
     const KINDS: [Guidance; 4] = [
         Guidance::Unguided,
         Guidance::Beam,
-        Guidance::Other(1),
-        Guidance::Other(4),
+        Guidance::Homing,
+        Guidance::Turret,
     ];
 
     #[test]
@@ -295,20 +306,30 @@ mod tests {
     #[test]
     fn each_turret_and_beam_guidance_is_one() {
         for raw in [3, 4, 7, 8, 9, 10] {
-            let turret = Guidance::Other(raw);
-            assert_eq!(status(Flags, 0x1000, turret), Some(Unimplemented), "{raw}");
+            let turret = Guidance::decode(raw);
+            for bit in [0x1000, 0x2000, 0x4000] {
+                assert_eq!(status(Flags, bit, turret), Some(Implemented), "{raw}");
+            }
         }
-        for raw in [2, 5, 6, 11, 99] {
+        for raw in [-1, 0, 1, 2, 5, 6, 11, 99] {
             let other = Guidance::decode(raw);
-            assert_eq!(status(Flags, 0x1000, other), Some(NA), "{raw}");
+            for bit in [0x1000, 0x2000, 0x4000] {
+                assert_eq!(status(Flags, bit, other), Some(NA), "{raw}");
+            }
         }
-        for beam in [Guidance::Beam, Guidance::Other(3), Guidance::Other(10)] {
-            assert_eq!(status(Flags2, 0x2000, beam), Some(Presentation), "{beam:?}");
+        for raw in [0, 3, 10] {
+            let beam = Guidance::decode(raw);
+            assert_eq!(status(Flags2, 0x2000, beam), Some(Presentation), "{raw}");
         }
-        for not_beam in [Guidance::Other(4), Guidance::Other(9), Guidance::Rocket] {
-            assert_eq!(status(Flags2, 0x2000, not_beam), Some(NA), "{not_beam:?}");
+        for raw in [-1, 1, 4, 7, 8, 9, 6] {
+            let not_beam = Guidance::decode(raw);
+            assert_eq!(status(Flags2, 0x2000, not_beam), Some(NA), "{raw}");
         }
-        assert_eq!(status(Seeker, 0x0001, Guidance::Other(2)), Some(NA));
+        for raw in [-1, 0, 2, 3, 4, 7, 8, 9, 10, 99] {
+            let unguided = Guidance::decode(raw);
+            assert_eq!(status(Seeker, 0x0001, unguided), Some(NA), "{raw}");
+            assert_eq!(status(Flags, 0x0080, unguided), Some(NA), "{raw}");
+        }
     }
 
     #[test]
@@ -390,12 +411,49 @@ mod tests {
     }
 
     #[test]
-    fn a_turrets_blind_spots_are_phase_4s() {
+    fn a_turrets_blind_spots_are_implemented() {
         assert_eq!(unimplemented(&spec(-1, 0x7000, 0, 0)), []);
+        assert_eq!(unimplemented(&spec(4, 0x7000, 0, 0)), []);
+    }
+
+    /// A weapon of `guidance` with these flag words.
+    fn guided(guidance: i16, flags: u16, seeker: u16, flags2: u16, flags3: u16) -> WeaponSpec {
+        WeaponSpec::new(&WeaponRecord {
+            guidance,
+            flags,
+            seeker,
+            flags2,
+            flags3,
+            ..weapon(128)
+        })
+    }
+
+    #[test]
+    fn stock_shaped_guided_weapons_and_turrets_report_their_rows() {
+        // The IR Missile: secondary, detonates, seeks asteroids.
         assert_eq!(
-            unimplemented(&spec(4, 0x7000, 0, 0)),
-            [(Flags, 0x1000), (Flags, 0x2000), (Flags, 0x4000)]
+            unimplemented(&guided(1, 0x8002, 0x0002, 0, 0)),
+            [(Seeker, 0x0002)]
         );
+        // The Ion Cannon: a looped, rear-blind turreted beam that disables
+        // and fires from the exit point nearest the target.
+        assert_eq!(
+            unimplemented(&guided(3, 0x4010, 0, 0x1200, 0x0011)),
+            [(Flags2, 0x1000), (Flags3, 0x0010)]
+        );
+        // The Polaron Multi-Torp: point defence can't target it, and its
+        // sub-munitions seek the nearest; it fires while cloaked.
+        assert_eq!(
+            unimplemented(&guided(1, 0x0182, 0x0001, 0x4010, 0x0002)),
+            [(Seeker, 0x0001), (Flags2, 0x4000)]
+        );
+        // A rear-blind Fusion Pulse Turret that disables.
+        assert_eq!(
+            unimplemented(&guided(4, 0x4001, 0, 0x1200, 0x0002)),
+            [(Flags2, 0x1000)]
+        );
+        // The Nanites turret's Seeker bit does not apply to it.
+        assert_eq!(unimplemented(&guided(4, 0x0021, 0x0001, 0x0010, 0)), []);
     }
 
     #[test]
