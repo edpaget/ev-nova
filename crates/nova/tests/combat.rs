@@ -14,6 +14,12 @@
 //! lead angle at a trader targeted 30 degrees off the nose; and the
 //! player's point defence shoots down a trader's missile, as the router's
 //! point-defence rule says.
+//!
+//! Patrolled, by Nova's AI and law: the player firing on a wimpy trader
+//! puts it to flight and brings the police, allied with the traders, down
+//! on the player, whose shield drops; once the trader is disabled the
+//! player's record with its government is lower, and R targets the
+//! police, a threat, in red brackets, not the nearer disabled trader.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -33,6 +39,7 @@ use nova_data::graphics::{PICT, RLED};
 use nova_data::records::boom::Boom;
 use nova_data::records::character::Character;
 use nova_data::records::dude::Dude;
+use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::ship::Ship;
@@ -470,7 +477,7 @@ impl Harness {
         // The first frame runs no step; the second's sets the system up.
         harness.frame();
         harness.frame();
-        assert_eq!(harness.session().npcs().len(), 1);
+        assert!(!harness.session().npcs().is_empty());
         harness
     }
 
@@ -781,4 +788,226 @@ fn the_routers_point_defence_rule_decides_for_the_flight() {
     }
     assert!(rule.asked.get() > 0);
     assert_eq!(missiles(&harness), 1, "never hostile, never shot down");
+}
+
+// Patrolled, by Nova's AI and law.
+
+/// A `gövt` of `class`, allied with the class `allies` (-1 for none);
+/// disabling one of its ships costs 3, destroying one 7.
+fn govt(class: i16, allies: i16) -> Vec<u8> {
+    let mut bytes = vec![0; Govt::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x08, &[6, 0, 3, 0, 7, 0, 0, 100]);
+    put_i16s(&mut bytes, 0x18, &[class, -1, -1, -1]);
+    put_i16s(&mut bytes, 0x20, &[allies, -1, -1, -1]);
+    put_i16s(&mut bytes, 0x28, &[-1; 4]);
+    bytes
+}
+
+/// A `düde` of AI type `ai_type` and government `govt` flying `ship`.
+fn dude_of(ai_type: i16, govt: i16, ship: i16) -> Vec<u8> {
+    let mut bytes = vec![0; Dude::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[ai_type, govt]);
+    put_i16s(&mut bytes, 0x08, &[-1; 16]);
+    put_i16s(&mut bytes, 0x08, &[ship]);
+    put_i16s(&mut bytes, 0x28, &[100]);
+    bytes
+}
+
+/// An independent `sÿst` with no stellars, with `düde`s 128 and 129 at
+/// half each and two ships on average.
+fn patrolled_system() -> Vec<u8> {
+    let mut bytes = system();
+    put_i16s(&mut bytes, 0x44, &[128, 129, -1, -1, -1, -1, -1, -1]);
+    put_i16s(&mut bytes, 0x54, &[50, 50]);
+    put_i16s(&mut bytes, 0x64, &[2, -1]);
+    bytes
+}
+
+/// The Gunship (ship 128) carries the blaster; Alpha flies wimpy traders
+/// of `gövt` 128 in the "Trader" (ship 129: no shield, 300 armour) and
+/// police interceptors of `gövt` 129, allied with the traders, in the
+/// "Patrol" (ship 130: 30 shield, 45 armour, a gun, `wëap` 129, firing
+/// every 10 ticks for 5 mass and 10 energy damage).
+fn patrolled() -> Rc<GameData> {
+    let mut gun = weapon(10, 5, -1, 0, 8, 0);
+    put_i16s(&mut gun, 0x06, &[10]);
+    let fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
+        .resource(
+            Ship::TYPE,
+            128,
+            Some(b"Gunship"),
+            &ship(30, 45, &[128], &[]),
+        )
+        .resource(Ship::TYPE, 129, Some(b"Trader"), &ship(0, 300, &[], &[]))
+        .resource(Ship::TYPE, 130, Some(b"Patrol"), &ship(30, 45, &[129], &[]))
+        .resource(
+            Weapon::TYPE,
+            128,
+            Some(b"Blaster"),
+            &weapon(0, 5, -1, 0, 8, 0),
+        )
+        .resource(Weapon::TYPE, 129, Some(b"Gun"), &gun)
+        .resource(Govt::TYPE, 128, Some(b"Traders"), &govt(1, -1))
+        .resource(Govt::TYPE, 129, Some(b"Police"), &govt(2, 1))
+        .resource(Dude::TYPE, 128, Some(b"Traders"), &dude_of(1, 128, 129))
+        .resource(Dude::TYPE, 129, Some(b"Police"), &dude_of(4, 129, 130))
+        .resource(System::TYPE, 128, Some(b"Alpha"), &patrolled_system())
+        .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
+        .resource(ShipAnim::TYPE, 129, None, &ship_anim(2001))
+        .resource(ShipAnim::TYPE, 130, None, &ship_anim(2001))
+        .resource(RLED, 2000, None, &sheet(36, 1))
+        .resource(RLED, 2001, None, &sheet(36, 2))
+        .resource(Spin::TYPE, 3000, None, &spin(3000, 6))
+        .resource(RLED, 3000, None, &sheet(36, 3))
+        .resource(
+            Interface::TYPE,
+            128,
+            Some(b"Default status bar"),
+            &interface(),
+        )
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
+    let file = OneFile(fork.build().bytes);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
+/// The red solid quads at most 17 units across each way: the hostile
+/// brackets' lines.
+fn red_lines(frame: &Frame) -> usize {
+    frame
+        .batches
+        .iter()
+        .flat_map(|batch| match batch {
+            Batch::Solid(quads) => quads.clone(),
+            _ => Vec::new(),
+        })
+        .filter(|quad| {
+            let xs = quad.corners.map(|corner| corner.x);
+            let ys = quad.corners.map(|corner| corner.y);
+            let span = |values: [f32; 4]| {
+                values.iter().copied().fold(f32::MIN, f32::max)
+                    - values.iter().copied().fold(f32::MAX, f32::min)
+            };
+            quad.color == [1.0, 0.0, 0.0, 1.0] && span(xs) <= 17.0 && span(ys) <= 17.0
+        })
+        .count()
+}
+
+#[test]
+fn attacking_a_trader_brings_the_police_costs_the_record_and_r_finds_the_threat() {
+    // The trader 100 above the player, facing it; the police 699 below.
+    let placing = [6, 6, 0, 0, 750, 650, 180, 0, 6, 6, 50, 0, 750, 1449, 0, 0];
+    let mut harness = Harness::flying_over(patrolled(), &placing, |screen| {
+        screen.with_disable_rule(Rc::new(nova_sim::NovaDisable))
+    });
+    let (trader, police) = (NpcId(0), NpcId(1));
+    let goal_of = |harness: &Harness, id| {
+        harness
+            .session()
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .map(|npc| (npc.goal, npc.condition))
+    };
+    harness.key(Key::Space, true);
+    let (mut fled, mut answered, mut disabled) = (false, false, false);
+    for _ in 0..1200 {
+        harness.frame();
+        fled |= goal_of(&harness, trader).map(|(goal, _)| goal)
+            == Some(Goal::Flee(nova_sim::ShipRef::Player));
+        answered |= goal_of(&harness, police).map(|(goal, _)| goal)
+            == Some(Goal::Attack(nova_sim::ShipRef::Player));
+        if goal_of(&harness, trader).map(|(_, condition)| condition)
+            == Some(nova_sim::Condition::Disabled)
+        {
+            disabled = true;
+            break;
+        }
+    }
+    harness.key(Key::Space, false);
+    assert!(fled, "the trader fled from the player");
+    assert!(answered, "the police turned on the player");
+    assert!(disabled, "the trader was disabled");
+    assert_eq!(
+        harness
+            .session()
+            .pilot()
+            .legal_record(nova_sim::GovtId(128)),
+        -3
+    );
+    assert_eq!(
+        harness
+            .session()
+            .pilot()
+            .legal_record(nova_sim::GovtId(129)),
+        -3,
+        "the traders' allies hear of it"
+    );
+    for _ in 0..1200 {
+        harness.frame();
+        if harness.session().reserves().shield.now < 30.0 {
+            break;
+        }
+    }
+    assert!(
+        harness.session().reserves().shield.now < 30.0,
+        "the police's shots reached the player"
+    );
+    harness.key(Key::Char('r'), true);
+    harness.key(Key::Char('r'), false);
+    assert_eq!(
+        harness.session().target().map(|npc| npc.id),
+        Some(police),
+        "the threat, not the disabled trader"
+    );
+    let frame = harness.frame();
+    assert_eq!(red_lines(&frame), 8, "the hostile brackets");
+}
+
+/// Records each crime, and changes nothing.
+#[derive(Debug, Default)]
+struct Witness {
+    seen: RefCell<Vec<nova_sim::Crime>>,
+}
+
+impl nova_sim::LegalCode for Witness {
+    fn penalties(
+        &self,
+        crime: nova_sim::Crime,
+        _victim: Option<nova_sim::GovtId>,
+        _govts: &nova_sim::Governments,
+    ) -> Vec<(nova_sim::GovtId, i32)> {
+        self.seen.borrow_mut().push(crime);
+        Vec::new()
+    }
+}
+
+#[test]
+fn the_routers_law_judges_the_flights_crimes() {
+    let witness = Rc::new(Witness::default());
+    let law: Rc<dyn nova_sim::LegalCode> = witness.clone();
+    let mut harness =
+        Harness::flying_over(patrolled(), &[6, 6, 0, 0, 750, 650, 180, 0], |screen| {
+            screen
+                .with_behaviour(Rc::new(Still))
+                .with_disable_rule(Rc::new(nova_sim::NovaDisable))
+                .with_law(law)
+        });
+    harness.key(Key::Space, true);
+    for _ in 0..1200 {
+        harness.frame();
+        if !witness.seen.borrow().is_empty() {
+            break;
+        }
+    }
+    harness.key(Key::Space, false);
+    assert_eq!(*witness.seen.borrow(), [nova_sim::Crime::Disable]);
+    assert_eq!(
+        harness
+            .session()
+            .pilot()
+            .legal_record(nova_sim::GovtId(128)),
+        0,
+        "as the witness says"
+    );
 }

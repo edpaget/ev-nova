@@ -71,7 +71,7 @@ use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
-use nova_sim::{Allegiance, Chance, NovaDisable, Peaceful, PilotKeeper, PilotStore};
+use nova_sim::{Allegiance, Chance, NovaAi, NovaDisable, NovaLaw, PilotKeeper, PilotStore};
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
@@ -130,9 +130,10 @@ fn main() -> ExitCode {
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects))
-        .with_behaviour(Rc::new(Peaceful))
+        .with_behaviour(Rc::new(NovaAi::default()))
         .with_disable_rule(Rc::new(NovaDisable))
-        .with_point_defence_rule(Rc::new(Allegiance));
+        .with_point_defence_rule(Rc::new(Allegiance))
+        .with_law(Rc::new(NovaLaw));
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);

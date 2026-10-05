@@ -86,12 +86,14 @@
 //! flight's HUD lays out its text with the router's metrics, the
 //! dialogs' or the main menu's. Every flight's NPCs
 //! decide as the router's behaviour says ([`AppScreen::with_behaviour`]),
-//! Nova's peaceful traffic until another is given, and their ships are
+//! Nova's combat AI until another is given, and their ships are
 //! disabled as the router's rule says ([`AppScreen::with_disable_rule`]),
 //! Nova's own until another is given; their point defence engages the
 //! missiles the router's point-defence rule calls hostile
-//! ([`AppScreen::with_point_defence_rule`]), any from another fleet until
-//! another is given. The flight's diagnostics about game
+//! ([`AppScreen::with_point_defence_rule`]), by governments' allegiance
+//! until another is given; and the player's crimes are judged by the
+//! router's law ([`AppScreen::with_law`]), Nova's until another is given.
+//! The flight's diagnostics about game
 //! data it could not read or the simulation does not handle yet come
 //! through [`Screen::take_diagnostics`].
 //!
@@ -118,8 +120,8 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::{
-    Allegiance, Behaviour, DisableRule, NovaDisable, Peaceful, Pilot, PilotKeeper, PilotStore,
-    PointDefenceRule, pilot_key,
+    Allegiance, Behaviour, DisableRule, LegalCode, NovaAi, NovaDisable, NovaLaw, Pilot,
+    PilotKeeper, PilotStore, PointDefenceRule, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::flight::{FlightView, SharedChance};
@@ -227,6 +229,8 @@ pub struct AppScreen {
     disable_rule: Rc<dyn DisableRule>,
     /// Which missiles each flight's point defence engages.
     defence_rule: Rc<dyn PointDefenceRule>,
+    /// What each flight's player's crimes do to its legal record.
+    law: Rc<dyn LegalCode>,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -287,9 +291,10 @@ impl AppScreen {
             warnings: Vec::new(),
             chance: SharedChance::default(),
             effects_chance: SharedChance::default(),
-            behaviour: Rc::new(Peaceful),
+            behaviour: Rc::new(NovaAi::default()),
             disable_rule: Rc::new(NovaDisable),
             defence_rule: Rc::new(Allegiance),
+            law: Rc::new(NovaLaw),
         }
     }
 
@@ -335,11 +340,17 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's player's crimes judged by `law`.
+    #[must_use]
+    pub fn with_law(self, law: Rc<dyn LegalCode>) -> Self {
+        Self { law, ..self }
+    }
+
     /// A flight over the game data, `new` from it, rolling on the router's
     /// chance, its effects on the router's effects chance, deciding as its
-    /// behaviour says, disabling ships and engaging missiles as its rules
-    /// say, and laying out its HUD's text with the router's metrics, if it
-    /// has any.
+    /// behaviour says, disabling ships, engaging missiles and judging
+    /// crimes as its rules say, and laying out its HUD's text with the
+    /// router's metrics, if it has any.
     fn flight(
         &self,
         new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
@@ -349,7 +360,8 @@ impl AppScreen {
             .with_effects_chance(self.effects_chance.clone())
             .with_behaviour(Rc::clone(&self.behaviour))
             .with_disable_rule(Rc::clone(&self.disable_rule))
-            .with_point_defence_rule(Rc::clone(&self.defence_rule));
+            .with_point_defence_rule(Rc::clone(&self.defence_rule))
+            .with_law(Rc::clone(&self.law));
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
