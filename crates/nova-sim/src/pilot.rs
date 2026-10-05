@@ -11,8 +11,9 @@
 //! has no escorts.
 //!
 //! The fleet is a list of [`Escort`] records, each a ship class with its
-//! reserves, in the order the ships joined; a ship captured joins it
-//! ([`Session::assign`](crate::Session::assign)).
+//! reserves and its standing order, in the order the ships joined; a ship
+//! captured joins it ([`Session::assign`](crate::Session::assign)). In
+//! flight the session flies each as an NPC beside the player.
 //!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.

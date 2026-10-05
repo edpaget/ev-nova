@@ -17,7 +17,30 @@
 //! "Formation". The player commands ([`EscortCommand`]) the whole fleet
 //! or one class ([`EscortGroup`]): F attacks the player's target, D
 //! defends the player, V holds position and C recalls the escorts to
-//! formation.
+//! formation. Each escort keeps its own order, saved with the pilot. The
+//! original keeps four class orders, saves them, and resets them to
+//! Formation on every system entry (`_RespawnEscort` @0x3d546,
+//! `_HandlePlayer` @0x6e3bb-0x6e44b); here that reset is the engine's
+//! reading of the rulebook's
+//! [`RuleKey::EscortOrders`](crate::RuleKey::EscortOrders), and the
+//! other reading keeps the orders (see the session).
+//!
+//! **Formation** ([`spacing`], [`slot_offset`], [`slot_position`];
+//! `_AICalcFormationPositions` @0x85040, `_AICalcShipFormPos` @0x84cb8):
+//! the player leads, in slot 1, and its escorts take slots 2, 3, … in
+//! fleet order, each a number of spacings behind and beside the player
+//! along its heading. The spacing is six tenths of the widest sprite,
+//! held between 24 and 60 pixels. An escort within [`KEEP_FORMATION`] of
+//! its slot moves with the player, nudged back towards the slot
+//! (`_AIMaintainFormation` @0x84f04); farther off it flies there.
+//!
+//! **Threats** ([`threats`], [`threat_score`], [`best_threat`];
+//! `_IsShipANearbyThreatToParent` @0x836a4): an escort fights the ships
+//! threatening the player, scored by distance, a ship of another class
+//! counting half, and a fighter against a warship escort a quarter; a
+//! defending one looks within [`DEFEND_RADIUS`] of the player and keeps
+//! its target within [`DEFEND_KEEP_SQ`] (see
+//! [`ai::escort`](crate::ai::escort)).
 //!
 //! The strings are `STR#` 2002's: #51, #133, #134 and #154 the constants
 //! below, and the labels each type gives.
