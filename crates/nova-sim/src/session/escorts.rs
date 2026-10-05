@@ -389,6 +389,7 @@ mod tests {
                 ship: ShipId(128),
                 reserves: Reserves::full(30.0, 45.0, 300.0),
                 order: Some(EscortOrder::Defend),
+                carried: false,
             };
             2
         ];
@@ -552,6 +553,7 @@ mod tests {
             ship,
             reserves,
             order,
+            carried: false,
         }
     }
 

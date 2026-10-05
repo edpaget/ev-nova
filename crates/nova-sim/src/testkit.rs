@@ -182,6 +182,7 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         sub_type: None,
         sub_theta: 0,
         sub_limit: 0,
+        max_ammo: 0,
     }
 }
 

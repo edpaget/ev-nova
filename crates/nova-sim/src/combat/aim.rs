@@ -18,7 +18,8 @@
 //! - What each guidance fires ([`aim`]):
 //!   - -1, 0, 5 and 6 fire along the ship's heading, at nothing.
 //!   - 1 fires along the heading at the target, when there is one, and
-//!     without one too.
+//!     without one too; so does a fighter bay (99 carrying a ship), whose
+//!     fighter leaves along the heading with the firer's target.
 //!   - 3 (a turreted beam) fires along the bearing, and 4 (a turret) at
 //!     the lead angle, only with a target not in a blind spot.
 //!   - 7 fires at the lead angle at a target within [`FRONT_ARC`] of the
@@ -126,7 +127,7 @@ pub fn aim(
         target: Some(target.ship),
     };
     match spec.guidance {
-        Guidance::Homing => Some(Aim {
+        Guidance::Homing | Guidance::FighterBay => Some(Aim {
             target: target.map(|target| target.ship),
             ..ahead
         }),
@@ -318,6 +319,30 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_fighter_bay_launches_ahead_with_the_firers_target_or_without_one() {
+        let bay = WeaponSpec::new(&WeaponRecord {
+            guidance: 99,
+            ammo_type: 144,
+            ..weapon(149)
+        });
+        assert_eq!(
+            aimed(&bay, 30.0, BLIND_FRONT, true),
+            Some(Aim {
+                heading: 30.0,
+                target: Some(TARGET)
+            }),
+            "no blind spot"
+        );
+        assert_eq!(
+            aimed(&bay, 200.0, 0, false),
+            Some(Aim {
+                heading: 200.0,
+                target: None
+            })
+        );
     }
 
     #[test]

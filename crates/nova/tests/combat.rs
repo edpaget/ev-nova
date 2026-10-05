@@ -2287,7 +2287,8 @@ fn with_fleet(pilot: &Pilot, ships: &[i16]) -> Pilot {
             serde_json::json!({
                 "ship": ship,
                 "reserves": {"shield": gauge(30.0), "armor": gauge(45.0), "fuel": gauge(300.0)},
-                "order": null
+                "order": null,
+                "carried": false
             })
         })
         .collect();

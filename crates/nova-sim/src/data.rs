@@ -326,6 +326,7 @@ impl CombatCatalog for GameData {
                     sub_type: record.sub_type,
                     sub_theta: record.sub_theta,
                     sub_limit: record.sub_limit,
+                    max_ammo: record.max_ammo,
                 })
             })
             .collect()
@@ -1377,7 +1378,7 @@ mod tests {
         put_i16s(&mut bytes, 0x5A, &[60, 30]);
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2]);
-        put_i16s(&mut bytes, 0x68, &[4, 70]);
+        put_i16s(&mut bytes, 0x68, &[4, 70, 6]);
         bytes
     }
 
@@ -1416,6 +1417,7 @@ mod tests {
             sub_type: Some(WeaponId(148)),
             sub_theta: -10,
             sub_limit: 2,
+            max_ammo: 6,
         };
         assert_eq!(
             data.weapons(),

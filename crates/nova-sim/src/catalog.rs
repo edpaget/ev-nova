@@ -402,6 +402,9 @@ pub struct WeaponRecord {
     /// Its `SubLimit`: how many generations of sub-munitions there may
     /// be; none or below for no limit.
     pub sub_limit: i16,
+    /// Its `MaxAmmo`: how many rounds each launcher of it holds at most;
+    /// none or below for no limit of its own.
+    pub max_ammo: i16,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`

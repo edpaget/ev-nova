@@ -156,6 +156,7 @@
 //! [`Session::take_diagnostics`].
 
 mod escorts;
+mod fighters;
 mod hail;
 
 use std::collections::BTreeMap;
@@ -164,9 +165,9 @@ use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, BoardTarget, Boarding, BoardingRule,
     CAPTURE_TRIP, CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE,
-    EscortCrew, FIGHTER_BAY, HeldRounds, MARINES, MAX_ESCORTS, MAX_SHIPS_IN_SYSTEM, Plunder,
-    PlunderView, Prize, SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE,
-    TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken, check_board,
+    EscortCrew, HeldRounds, MARINES, MAX_ESCORTS, MAX_SHIPS_IN_SYSTEM, Plunder, PlunderView, Prize,
+    SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE, TOUGH_TAKEOVER_ARMOR_SHARE,
+    Take, Taken, check_board,
 };
 use crate::catalog::{
     CombatCatalog, GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord,
@@ -180,7 +181,7 @@ use crate::combat::beam::Beam;
 use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
-use crate::combat::weapon::{Ammo, Guidance};
+use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
 use crate::date::GameDate;
 use crate::escort::EscortDuty;
@@ -284,6 +285,12 @@ pub struct Session {
     /// Whether the escorts' standing orders are reset on entering a
     /// system (see [`Session::with_escort_orders`]).
     escort_orders: RuleSource,
+    /// What a fighter the player launches does first (see
+    /// [`Session::with_fighter_launch`]).
+    fighter_launch: RuleSource,
+    /// What becomes of the player's fighters out as it leaves the system
+    /// (see [`Session::with_fighter_recall`]).
+    fighter_recall: RuleSource,
     /// Each escort of the fleet's NPC in the system, lined up with the
     /// pilot's escorts while in flight; none for one not placed.
     fleet: Vec<Option<NpcId>>,
@@ -374,6 +381,8 @@ impl Session {
             talk: None,
             comm: Vec::new(),
             escort_orders: RuleSource::Engine,
+            fighter_launch: RuleSource::Engine,
+            fighter_recall: RuleSource::Engine,
             fleet: Vec::new(),
             pilot,
         };
@@ -1305,10 +1314,10 @@ impl Session {
         let record = self.ship_record(npc.ship);
         let fields = record.map(|record| record.fields).unwrap_or_default();
         let fires = |armament: &Armament, ammo: WeaponId, bay: bool| {
-            armament.mounts().iter().any(|mount| {
-                mount.spec.ammo == Ammo::Rounds(ammo)
-                    && (!bay || mount.spec.guidance == Guidance::Other(FIGHTER_BAY))
-            })
+            armament
+                .mounts()
+                .iter()
+                .any(|mount| mount.spec.ammo == Ammo::Rounds(ammo) && (!bay || mount.spec.is_bay()))
         };
         Prize {
             booty: npc.booty,
@@ -1360,7 +1369,7 @@ impl Session {
             target_crew: i32::from(self.crew(npc.ship)),
             target_strength: npc.hull.strength as i32,
             derelict: self.govts.derelict(npc.govt),
-            fleet_room: self.pilot.escorts.len() < MAX_ESCORTS,
+            fleet_room: self.pilot.escort_count() < MAX_ESCORTS,
         }
     }
 
@@ -1494,7 +1503,7 @@ impl Session {
             self.self_destruct(aboard.npc);
             return Taken::Tripped;
         }
-        if self.pilot.escorts.len() >= MAX_ESCORTS {
+        if self.pilot.escort_count() >= MAX_ESCORTS {
             self.aboard = Some(aboard);
             return Taken::FleetFull;
         }
@@ -1556,6 +1565,7 @@ impl Session {
             ship: npc.ship,
             reserves: npc.reserves,
             order: None,
+            carried: false,
         };
         self.drop_quarry(id);
         for other in self.traffic.npcs_mut() {
@@ -1609,6 +1619,7 @@ impl Session {
             ship: self.pilot.ship,
             reserves: stock.full(),
             order: None,
+            carried: false,
         };
         let defaults = pilot::tally(record.defaults.iter().copied());
         let records = &self.outfits;
@@ -6187,6 +6198,7 @@ mod tests {
             ship: ShipId(ship),
             reserves: Reserves::default(),
             order: None,
+            carried: false,
         };
         session.pilot.escorts = vec![escort(130), escort(130), escort(131)];
         // Crew 10, 3 from each interceptor escort (ship 130), none from
@@ -6204,6 +6216,7 @@ mod tests {
                 ship: ShipId(130),
                 reserves: Reserves::default(),
                 order: None,
+                carried: false,
             };
             MAX_ESCORTS
         ];
@@ -6571,6 +6584,7 @@ mod tests {
                 ship: ShipId(130),
                 reserves: Reserves::default(),
                 order: None,
+                carried: false,
             };
             MAX_ESCORTS
         ];
@@ -6580,6 +6594,43 @@ mod tests {
         );
         assert_eq!(session.boarding(), Some(ON_BOARD));
         assert_eq!(session.pilot().escorts().len(), MAX_ESCORTS);
+    }
+
+    #[test]
+    fn carried_fighters_do_not_fill_the_fleet_for_a_capture() {
+        let catalog = boardable();
+        let escort = |carried| Escort {
+            ship: ShipId(130),
+            reserves: Reserves::default(),
+            order: None,
+            carried,
+        };
+        let fleet = |escorts: usize, fighters: usize| {
+            let mut fleet = vec![escort(false); escorts];
+            fleet.extend(vec![escort(true); fighters]);
+            fleet
+        };
+        let mut session = aboard(&catalog);
+        session.pilot.escorts = fleet(MAX_ESCORTS, 2);
+        assert_eq!(
+            take(&mut session, Take::Capture, &[43, 1]).0,
+            Taken::FleetFull,
+            "6 escorts and 2 fighters out"
+        );
+        let mut session = aboard(&catalog);
+        session.pilot.escorts = fleet(MAX_ESCORTS - 1, 3);
+        assert_eq!(
+            take(&mut session, Take::Capture, &[43, 1]).0,
+            Taken::Captured,
+            "5 escorts and 3 fighters out"
+        );
+        let mut session = alongside(&catalog);
+        session.pilot.escorts = fleet(MAX_ESCORTS - 1, 3);
+        let opened = board_by(&mut session, &NovaLaw::default());
+        assert!(
+            !matches!(opened, Ok(Boarding::Opened(PlunderView { odds: 0, .. }))),
+            "the fleet has room: {opened:?}"
+        );
     }
 
     #[test]
@@ -6625,6 +6676,7 @@ mod tests {
                 ..trader_reserves()
             },
             order: None,
+            carried: false,
         }
     }
 
@@ -6860,6 +6912,7 @@ mod tests {
                 ship: ShipId(128),
                 reserves: Reserves::full(300.0, 450.0, 300.0),
                 order: None,
+                carried: false,
             }],
             "the old ship, stock and full"
         );
@@ -6924,21 +6977,36 @@ mod tests {
             Ok(Boarding::Opened(ON_BOARD)),
             "no rockets to fire them: no ammo, and no draw for it"
         );
+        // Both ships carry a bay of ship 144, and the player's fighter
+        // outfit is its rounds.
         let mut bay = ammo_aboard(1, 20);
         bay.weapons.push(WeaponRecord {
             guidance: crate::board::FIGHTER_BAY,
-            ..secondary(150, 12)
+            ..secondary(150, 144)
         });
+        bay.outfits.push(outfit(311, &[(MOD_AMMO, 150)]));
+        let bays = |ammo| StockWeapon {
+            weapon: WeaponId(150),
+            count: 1,
+            ammo,
+        };
         for hull in &mut bay.hulls {
+            if hull.id == ShipId(128) {
+                hull.weapons.push(bays(0));
+            }
             if hull.id == ShipId(129) {
-                hull.weapons = vec![StockWeapon {
-                    weapon: WeaponId(150),
-                    count: 1,
-                    ammo: 9,
-                }];
+                hull.weapons = vec![bays(9)];
             }
         }
         let mut session = alongside(&bay);
+        assert!(
+            session
+                .armament
+                .mounts()
+                .iter()
+                .any(|mount| mount.spec.is_bay()),
+            "the player can launch them"
+        );
         assert_eq!(
             board_by(&mut session, &NovaLaw::default()),
             Ok(Boarding::Opened(ON_BOARD)),

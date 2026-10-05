@@ -4503,6 +4503,7 @@ mod tests {
             sub_type: None,
             sub_theta: 0,
             sub_limit: 0,
+            max_ammo: 0,
         };
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
@@ -4629,6 +4630,7 @@ mod tests {
             sub_type: None,
             sub_theta: 0,
             sub_limit: 0,
+            max_ammo: 0,
         }
     }
 
@@ -6278,7 +6280,8 @@ mod tests {
                 serde_json::json!({
                     "ship": ship,
                     "reserves": {"shield": gauge(40.0), "armor": gauge(60.0), "fuel": gauge(250.0)},
-                    "order": null
+                    "order": null,
+                    "carried": false
                 })
             })
             .collect();

@@ -10,8 +10,18 @@
 //! - `Count` is a shot's or beam's life in ticks, so a projectile's range
 //!   from a resting firer is its speed times its life.
 //! - `Guidance` -1, 0, 1, 3-10 are the [`Guidance`] this simulation
-//!   flies; any other (2, the carried ships' 99, or anything undocumented)
-//!   is [`Guidance::Other`].
+//!   flies; any other (2, or anything undocumented) is
+//!   [`Guidance::Other`].
+//! - `Guidance` 99 is a fighter bay ([`Guidance::FighterBay`]) when its
+//!   `AmmoType` is a `shïp` ID, 128 or more (the Bible: "Carried ship
+//!   (`AmmoType` is the ID of the ship class)"): it launches that ship
+//!   ([`WeaponSpec::carried`]), and its rounds are its own, the fighters
+//!   aboard, as the original spends the bay's own slot (`_WeaponHasAmmo`
+//!   @0xba87-0xbaa1, `_FirePlayerWeapon` @0x62cd5-0x62cf0). Guidance 99
+//!   with any other `AmmoType` is [`Guidance::Other`], and fires nothing
+//!   (see [`bay`](crate::bay)).
+//! - `MaxAmmo` is how many rounds each launcher holds at most, none at
+//!   none or below (see [`bay::capacity`](crate::bay::capacity)).
 //! - `GuidedTurn` is a homing shot's turn a tick in tenths of a degree
 //!   ([`GUIDED_TURN_PER_DEGREE`]): the IR Missile's 70 is 7 degrees.
 //! - `Durability` is what point defence must take off a shot before the
@@ -30,7 +40,8 @@
 //!   type-0 explosions around it, anything else none.
 //! - Negative reloads, lives, radii, inaccuracies and bursts count as none.
 
-use crate::catalog::{BoomId, WeaponId, WeaponRecord};
+use crate::bay::{FIGHTER_BAY, FIRST_SHIP};
+use crate::catalog::{BoomId, ShipId, WeaponId, WeaponRecord};
 use crate::handling::SPEED_PER_PIXEL_PER_TICK;
 
 /// How a weapon's shots fly, from its `Guidance`.
@@ -62,13 +73,17 @@ pub enum Guidance {
     PointDefence,
     /// 10: a point-defence beam.
     PointDefenceBeam,
-    /// Any other: carried ships (99), which a later phase flies, and
-    /// anything undocumented.
+    /// 99 with a `shïp` ID for its `AmmoType`: a fighter bay, launching
+    /// that ship (see [`bay`](crate::bay)). [`Guidance::decode`] never
+    /// gives it, as it needs the `AmmoType`; [`WeaponSpec::new`] does.
+    FighterBay,
+    /// Any other: 99 without a ship to carry, and anything undocumented.
     Other(i16),
 }
 
 impl Guidance {
-    /// The guidance `raw` means.
+    /// The guidance `raw` means, 99 as [`Guidance::Other`] (see
+    /// [`Guidance::FighterBay`]).
     #[must_use]
     pub fn decode(raw: i16) -> Self {
         match raw {
@@ -258,6 +273,11 @@ pub struct WeaponSpec {
     pub durability: f32,
     /// Its sub-munitions, if any.
     pub submunitions: Option<Submunitions>,
+    /// The ship a fighter bay launches; none for any other weapon.
+    pub carried: Option<ShipId>,
+    /// Its `MaxAmmo`: the rounds each launcher holds at most; none for no
+    /// limit of its own.
+    pub max_ammo: u32,
 }
 
 /// `Flags`: fired by the second trigger.
@@ -292,15 +312,24 @@ impl WeaponSpec {
     pub fn new(record: &WeaponRecord) -> Self {
         let ticks = |raw: i16| f32::from(raw.max(0));
         let count = |raw: i16| u32::try_from(raw).unwrap_or(0);
+        let carried = (record.guidance == FIGHTER_BAY && record.ammo_type >= FIRST_SHIP)
+            .then_some(ShipId(record.ammo_type));
+        let (guidance, ammo) = match carried {
+            Some(_) => (Guidance::FighterBay, Ammo::Rounds(record.id)),
+            None => (
+                Guidance::decode(record.guidance),
+                Ammo::decode(record.ammo_type),
+            ),
+        };
         Self {
             id: record.id,
-            guidance: Guidance::decode(record.guidance),
+            guidance,
             reload: ticks(record.reload),
             lifetime: count(record.count),
             mass_damage: f32::from(record.mass_dmg),
             energy_damage: f32::from(record.energy_dmg),
             speed: f32::from(record.speed) / SPEED_PER_PIXEL_PER_TICK,
-            ammo: Ammo::decode(record.ammo_type),
+            ammo,
             inaccuracy: count(record.inaccuracy),
             explosion: Explosion::decode(record.explod_type),
             prox_radius: ticks(record.prox_radius),
@@ -315,7 +344,15 @@ impl WeaponSpec {
             turn: f32::from(record.guided_turn) / GUIDED_TURN_PER_DEGREE,
             durability: ticks(record.durability),
             submunitions: Submunitions::of(record),
+            carried,
+            max_ammo: count(record.max_ammo),
         }
+    }
+
+    /// Whether it is a fighter bay ([`Guidance::FighterBay`]).
+    #[must_use]
+    pub fn is_bay(&self) -> bool {
+        self.guidance == Guidance::FighterBay
     }
 
     /// Whether it fires beams: guidance 0, 3 and 10.
@@ -725,5 +762,60 @@ mod tests {
         );
         assert_eq!((spec.seeker, spec.flags2, spec.flags3), (0x21, 0x8200, 2));
         assert_eq!((spec.burst_count, spec.burst_reload), (60, 30.0));
+        assert_eq!((spec.carried, spec.max_ammo), (None, 0));
+        assert!(!spec.is_bay());
+    }
+
+    /// A Viper Bay: guidance 99 carrying `AmmoType` `ammo_type`, of
+    /// `MaxAmmo` `max_ammo`.
+    fn bay(ammo_type: i16, max_ammo: i16) -> WeaponSpec {
+        WeaponSpec::new(&WeaponRecord {
+            guidance: 99,
+            ammo_type,
+            max_ammo,
+            reload: 60,
+            ..weapon(149)
+        })
+    }
+
+    #[test]
+    fn guidance_99_with_a_ship_id_is_a_fighter_bay_firing_its_own_rounds() {
+        let viper = bay(144, 4);
+        assert_eq!(viper.guidance, Guidance::FighterBay);
+        assert_eq!(viper.carried, Some(ShipId(144)));
+        assert_eq!(viper.ammo, Ammo::Rounds(WeaponId(149)));
+        assert_eq!(viper.max_ammo, 4);
+        assert!(viper.is_bay());
+        assert_eq!(bay(128, 0).carried, Some(ShipId(128)), "the first ship");
+        assert_eq!(bay(i16::MAX, 0).carried, Some(ShipId(i16::MAX)));
+    }
+
+    #[test]
+    fn guidance_99_without_a_ship_id_still_fires_nothing() {
+        for (ammo_type, ammo) in [
+            (12, Ammo::Rounds(WeaponId(140))),
+            (127, Ammo::Rounds(WeaponId(255))),
+            (-1, Ammo::Unlimited),
+        ] {
+            let spec = bay(ammo_type, 4);
+            assert_eq!(spec.guidance, Guidance::Other(99), "{ammo_type}");
+            assert_eq!(spec.carried, None, "{ammo_type}");
+            assert_eq!(spec.ammo, ammo, "{ammo_type}");
+            assert!(!spec.is_bay(), "{ammo_type}");
+        }
+        let other = WeaponSpec::new(&WeaponRecord {
+            guidance: 4,
+            ammo_type: 144,
+            ..weapon(150)
+        });
+        assert_eq!(other.carried, None, "only a bay carries ships");
+        assert!(!other.is_bay());
+    }
+
+    #[test]
+    fn a_max_ammo_of_none_or_below_is_none() {
+        assert_eq!(bay(144, -1).max_ammo, 0);
+        assert_eq!(bay(144, 0).max_ammo, 0);
+        assert_eq!(bay(144, 2).max_ammo, 2);
     }
 }

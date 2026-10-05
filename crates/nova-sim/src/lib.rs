@@ -11,6 +11,10 @@
 //!   come to each other's help, and which weapon they fire; and the
 //!   player's escorts to [`EscortAi`], which flies them by their standing
 //!   orders.
+//! - [`bay`]: fighter bays: the fighters a bay holds ([`capacity`]), how
+//!   one is launched, the window it docks in ([`dock_window`]) with its
+//!   [`Carrier`], and what the flight is told of fighters abandoned
+//!   ([`FighterNote`]).
 //! - [`board`]: boarding a disabled ship: whether the player can
 //!   ([`BoardRefusal`]), the [`Plunder`] rolled for it, the plunder
 //!   dialog's [`Take`]s and what each [`Taken`] did, capturing it, and
@@ -126,6 +130,7 @@
 //!   sweep and the rows' order.
 
 pub mod ai;
+pub mod bay;
 pub mod board;
 pub mod catalog;
 pub mod chance;
@@ -167,6 +172,7 @@ pub use ai::{
     Behaviour, BraveTrader, EscortAi, Goal, Interceptor, NovaAi, Peaceful, PlayerSide, Reaction,
     Surroundings, Warship, WimpyTrader,
 };
+pub use bay::{Carrier, FighterNote, capacity, dock_window};
 pub use board::{
     Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, NovaBoarding, Plunder, PlunderView,
     Take, Taken,

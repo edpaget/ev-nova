@@ -12,8 +12,11 @@
 //!
 //! The fleet is a list of [`Escort`] records, each a ship class with its
 //! reserves and its standing order, in the order the ships joined; a ship
-//! captured joins it ([`Session::assign`](crate::Session::assign)). In
-//! flight the session flies each as an NPC beside the player.
+//! captured joins it ([`Session::assign`](crate::Session::assign)), and
+//! so does each fighter launched from the player's bays, marked
+//! `carried`, until it docks again. In flight the session flies each as
+//! an NPC beside the player. The carried fighters do not count towards
+//! the fleet's most ([`Pilot::escort_count`]).
 //!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
@@ -83,6 +86,10 @@ pub struct Escort {
     /// Its standing order; none keeps formation (see
     /// [`escort`](crate::escort)).
     pub order: Option<EscortOrder>,
+    /// Whether it is a fighter launched from one of the player's bays,
+    /// out of its bay (see [`bay`](crate::bay)), rather than an escort of
+    /// its own.
+    pub carried: bool,
 }
 
 impl Pilot {
@@ -129,6 +136,14 @@ impl Pilot {
     #[must_use]
     pub fn escorts(&self) -> &[Escort] {
         &self.escorts
+    }
+
+    /// How many escorts the fleet holds, leaving out the carried
+    /// fighters, which do not count towards its most (`_CanHireEscorts`
+    /// counts AI type 6 alone).
+    #[must_use]
+    pub fn escort_count(&self) -> usize {
+        self.escorts.iter().filter(|escort| !escort.carried).count()
     }
 
     /// The pilot's name; empty for a pilot that is never saved.
@@ -424,9 +439,26 @@ mod tests {
             ship: ShipId(130),
             reserves: Reserves::full(10.0, 20.0, 30.0),
             order: Some(EscortOrder::Hold),
+            carried: false,
         };
         pilot.escorts.push(escort);
         assert_eq!(pilot.escorts(), [escort]);
+    }
+
+    #[test]
+    fn the_escort_count_leaves_out_the_carried_fighters() {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert_eq!(pilot.escort_count(), 0);
+        let escort = |carried| Escort {
+            ship: ShipId(130),
+            reserves: Reserves::full(10.0, 20.0, 30.0),
+            order: None,
+            carried,
+        };
+        pilot.escorts = vec![escort(true), escort(false), escort(true), escort(false)];
+        assert_eq!(pilot.escort_count(), 2);
+        pilot.escorts.push(escort(false));
+        assert_eq!(pilot.escort_count(), 3);
     }
 
     #[test]

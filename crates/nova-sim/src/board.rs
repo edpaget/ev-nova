@@ -294,7 +294,7 @@ pub const ENERGY_GROWTH: f64 = 1.5;
 pub const SELF_DESTRUCT_ROLL: u32 = 100;
 /// The guidance of a fighter bay: its rounds are fighters, never
 /// plundered.
-pub const FIGHTER_BAY: i16 = 99;
+pub use crate::bay::FIGHTER_BAY;
 /// The draw a successful capture rolls: the ship blows up on 0, a flat 1
 /// in 10 (@0x942de).
 pub const CAPTURE_TRIP: u32 = 10;

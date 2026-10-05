@@ -22,11 +22,14 @@
 //! | [`LongAdvice`](RuleKey::LongAdvice) | `long_advice` | an advice line exactly 42 characters long reads "Nice to meet you." ([`hail::reply`](crate::hail::reply)) | it is shown as written\* |
 //! | [`EscortAi`](RuleKey::EscortAi) | `escort_ai` | an escort with no standing command keeps formation and fires its turrets at a threat to the player ([`EscortAi`](crate::EscortAi)) | it flies as its `InherentAI`: a warship or interceptor attacks the threat, a trader keeps formation |
 //! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation ([`Session`](crate::Session)) | the orders are kept\* |
+//! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command ([`Session`](crate::Session)) | it attacks the player's target at once\* |
+//! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed ([`Session`](crate::Session)) | every fighter out goes back into its bay on arrival and on landing\* |
 //!
-//! \* The Bible says nothing of `long_advice` or `escort_orders`: for
-//! them, the reading other than the engine's (`"bible"` in the settings)
-//! is the intended behaviour, not the engine's bug or quirk, and not
-//! anything the Bible says.
+//! \* The Bible says nothing of `long_advice`, `escort_orders`,
+//! `fighter_launch` or `fighter_recall`: for them, the reading other
+//! than the engine's (`"bible"` in the settings) is the intended
+//! behaviour, not the engine's bug or quirk, and not anything the Bible
+//! says.
 //!
 //! # Adding a rule
 //!
@@ -146,6 +149,26 @@ rule_keys! {
     /// intended behaviour, not anything the Bible says (see
     /// [`Session::with_escort_orders`](crate::Session::with_escort_orders)).
     EscortOrders => "escort_orders",
+    /// What a fighter the player launches from a bay does first: by the
+    /// engine, it takes the standing order of the first ship of its class
+    /// already in the fleet (Return to Hangar excepted) and no target, so
+    /// it attacks the player's target once commanded; otherwise it
+    /// attacks the player's target at once, as the help page has it
+    /// ("choose a target and then launch your fighters"). The Bible is
+    /// silent here, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see
+    /// [`Session::with_fighter_launch`](crate::Session::with_fighter_launch)).
+    FighterLaunch => "fighter_launch",
+    /// What becomes of the player's fighters out when it leaves the
+    /// system: by the engine, those whose ship type holds a jump's fuel
+    /// follow it through a jump and the rest are abandoned, and landed
+    /// they stay out; otherwise every one goes back into its bay at once
+    /// on each arrival and landing, as the original's uncalled
+    /// `_InstantFighterRecall` does. The Bible is silent here, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says (see
+    /// [`Session::with_fighter_recall`](crate::Session::with_fighter_recall)).
+    FighterRecall => "fighter_recall",
 }
 
 impl RuleKey {
@@ -271,9 +294,13 @@ mod tests {
                 RuleKey::QuietHails,
                 RuleKey::LongAdvice,
                 RuleKey::EscortAi,
-                RuleKey::EscortOrders
+                RuleKey::EscortOrders,
+                RuleKey::FighterLaunch,
+                RuleKey::FighterRecall
             ]
         );
+        assert_eq!(RuleKey::FighterLaunch.key(), "fighter_launch");
+        assert_eq!(RuleKey::FighterRecall.key(), "fighter_recall");
         assert_eq!(RuleKey::CrimeGains.key(), "crime_gains");
         assert_eq!(RuleKey::EmptyBooty.key(), "empty_booty");
         assert_eq!(RuleKey::CrewlessCapture.key(), "crewless_capture");

@@ -134,6 +134,10 @@ pub enum EscortOrder {
     Attack,
     /// 4: it holds position.
     Hold,
+    /// 3: Return to Hangar: a carried fighter flies back and docks with
+    /// its carrier (see [`bay`](crate::bay)); any other escort keeps
+    /// formation.
+    Dock,
 }
 
 /// The escort menu's label for `order` (`STR#` 2002 #145-#149): none
@@ -144,6 +148,7 @@ pub const fn order_label(order: Option<EscortOrder>) -> &'static str {
         None => "Formation",
         Some(EscortOrder::Defend) => "Defend",
         Some(EscortOrder::Attack) => "Attack",
+        Some(EscortOrder::Dock) => "Return to Hangar",
         Some(EscortOrder::Hold) => "Hold Position",
     }
 }
@@ -159,6 +164,9 @@ pub enum EscortCommand {
     Hold,
     /// C: back to formation.
     Recall,
+    /// Option-C: Return to Hangar, for the carried fighters; the other
+    /// escorts it reaches go back to formation.
+    Dock,
 }
 
 impl EscortCommand {
@@ -169,11 +177,12 @@ impl EscortCommand {
             Self::Attack => Some(EscortOrder::Attack),
             Self::Defend => Some(EscortOrder::Defend),
             Self::Hold => Some(EscortOrder::Hold),
+            Self::Dock => Some(EscortOrder::Dock),
             Self::Recall => None,
         }
     }
 
-    /// What its message says the escorts do (`STR#` 2002 #156-#159).
+    /// What its message says the escorts do (`STR#` 2002 #155-#159).
     #[must_use]
     pub const fn doing(self) -> &'static str {
         match self {
@@ -181,6 +190,7 @@ impl EscortCommand {
             Self::Defend => "defending.",
             Self::Hold => "holding position.",
             Self::Recall => "returning to formation.",
+            Self::Dock => "returning to hangar.",
         }
     }
 }
@@ -474,6 +484,7 @@ mod tests {
         assert_eq!(EscortCommand::Defend.order(), Some(EscortOrder::Defend));
         assert_eq!(EscortCommand::Hold.order(), Some(EscortOrder::Hold));
         assert_eq!(EscortCommand::Recall.order(), None);
+        assert_eq!(EscortCommand::Dock.order(), Some(EscortOrder::Dock));
     }
 
     #[test]
@@ -503,24 +514,33 @@ mod tests {
                 None,
                 Some(EscortOrder::Defend),
                 Some(EscortOrder::Attack),
-                Some(EscortOrder::Hold)
+                Some(EscortOrder::Hold),
+                Some(EscortOrder::Dock)
             ]
             .map(order_label),
-            ["Formation", "Defend", "Attack", "Hold Position"]
+            [
+                "Formation",
+                "Defend",
+                "Attack",
+                "Hold Position",
+                "Return to Hangar"
+            ]
         );
         assert_eq!(
             [
                 EscortCommand::Attack,
                 EscortCommand::Defend,
                 EscortCommand::Hold,
-                EscortCommand::Recall
+                EscortCommand::Recall,
+                EscortCommand::Dock
             ]
             .map(EscortCommand::doing),
             [
                 "attacking target.",
                 "defending.",
                 "holding position.",
-                "returning to formation."
+                "returning to formation.",
+                "returning to hangar."
             ]
         );
         assert_eq!(NEW_ORDERS, "New escort orders assigned:  ");
