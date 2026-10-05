@@ -1472,3 +1472,50 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
     assert_eq!(diagnostics.len(), 32, "each once: {diagnostics:?}");
     assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
 }
+
+/// Every stock weapon that releases sub-munitions, fired alone again and
+/// again at a ship ahead, with its sub-munition's weapon mounted nowhere:
+/// the sub-munitions released report their unimplemented flags, each
+/// once.
+#[test]
+fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let parents: Vec<WeaponSpec> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(|spec| spec.submunitions.is_some())
+        .collect();
+    let released: Vec<(i16, Vec<SimDiagnostic>)> = parents
+        .iter()
+        .map(|parent| {
+            let mut ships = vec![aiming(parent), sponge(200.0, 0.0)];
+            let mut combat = Combat::default();
+            let mut diagnostics = Vec::new();
+            for _ in 0..400 {
+                fight_with(&mut combat, &mut ships, &arsenal);
+                diagnostics.extend(combat.take_diagnostics());
+            }
+            diagnostics.retain(|diagnostic| match diagnostic {
+                SimDiagnostic::UnimplementedWeaponFlag { weapon, .. }
+                | SimDiagnostic::UnimplementedGuidance { weapon, .. } => *weapon != parent.id,
+            });
+            (parent.id.0, diagnostics)
+        })
+        .collect();
+    let seeker = |weapon| {
+        vec![SimDiagnostic::UnimplementedWeaponFlag {
+            weapon: WeaponId(weapon),
+            field: FlagField::Seeker,
+            bit: 0x0001,
+        }]
+    };
+    assert_eq!(
+        released,
+        [(163, seeker(229)), (182, seeker(148)), (185, seeker(148))]
+    );
+}

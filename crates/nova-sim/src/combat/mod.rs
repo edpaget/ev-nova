@@ -498,7 +498,9 @@ impl Combat {
 
     /// Puts in flight the sub-munitions `parent` releases at `target`
     /// among `targets`, their weapon read from `arsenal` (none when it
-    /// cannot be read), heard from where the parent is.
+    /// cannot be read), heard from where the parent is. Released, they
+    /// report their weapon's unimplemented flags as a weapon fired does;
+    /// of a guidance not flown yet, they report it and none fly.
     fn release(
         &mut self,
         parent: &Shot,
@@ -518,6 +520,14 @@ impl Combat {
         if shots.is_empty() {
             return;
         }
+        if let Guidance::Other(guidance) = sub.guidance {
+            self.reports.report(SimDiagnostic::UnimplementedGuidance {
+                weapon: sub.id,
+                guidance,
+            });
+            return;
+        }
+        self.reports.fired(sub);
         self.events.push(CombatEvent::Fired {
             ship: parent.firer,
             weapon: sub.id,
@@ -1939,6 +1949,86 @@ mod tests {
             weapon: WeaponId(148),
             at
         }));
+    }
+
+    /// A shell like [`cluster`]'s, fired every tick, releasing 2 of `sub`
+    /// at the end of its life, and that sub-munition.
+    fn cluster_of(sub: WeaponRecord) -> (WeaponRecord, Arsenal) {
+        let (shell, _) = cluster(0);
+        let shell = WeaponRecord { reload: 0, ..shell };
+        let sub = WeaponRecord {
+            id: WeaponId(148),
+            ..sub
+        };
+        (shell, Arsenal::new(&[shell, sub], Vec::new()))
+    }
+
+    #[test]
+    fn a_sub_munition_reports_its_unimplemented_flags_once_when_first_released() {
+        let (shell, arsenal) = cluster_of(WeaponRecord {
+            guidance: 1,
+            count: 50,
+            speed: 500,
+            seeker: 0x0001,
+            ..weapon(148)
+        });
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
+        for _ in 0..2 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+        }
+        assert_eq!(combat.take_diagnostics(), [], "not before it is released");
+        for _ in 0..5 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+        }
+        assert!(sub_shots(&combat).len() > 2, "released more than once");
+        assert_eq!(
+            combat.take_diagnostics(),
+            [SimDiagnostic::UnimplementedWeaponFlag {
+                weapon: WeaponId(148),
+                field: flags::FlagField::Seeker,
+                bit: 0x0001,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_sub_munition_of_an_unimplemented_guidance_is_reported_and_not_released() {
+        let (shell, arsenal) = cluster_of(WeaponRecord {
+            guidance: 2,
+            count: 50,
+            speed: 500,
+            ..weapon(148)
+        });
+        let mut combat = Combat::default();
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(shell)];
+        let mut events = Vec::new();
+        for _ in 0..2 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+        }
+        assert_eq!(combat.take_diagnostics(), [], "not before it is released");
+        for _ in 0..5 {
+            tick_with(&mut combat, &mut ships, &arsenal, Rules::default());
+            events.extend(combat.take_events());
+        }
+        assert_eq!(sub_shots(&combat).len(), 0, "none in flight");
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                CombatEvent::Fired {
+                    weapon: WeaponId(148),
+                    ..
+                }
+            )),
+            "{events:?}"
+        );
+        assert_eq!(
+            combat.take_diagnostics(),
+            [SimDiagnostic::UnimplementedGuidance {
+                weapon: WeaponId(148),
+                guidance: 2,
+            }]
+        );
     }
 
     #[test]
