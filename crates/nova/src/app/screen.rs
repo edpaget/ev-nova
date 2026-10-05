@@ -854,7 +854,8 @@ impl AppScreen {
     /// The comm dialog's input: each option pressed goes through flight,
     /// and the dialog shows what came of it, opening the haggle dialog
     /// over it when a price is asked; Close Channel hangs up and resumes
-    /// flight, keeping the dialog's sounds, as does the ship leaving.
+    /// flight, keeping the dialog's sounds, as does a press with nothing
+    /// to show (the ship gone).
     fn comm_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.comm.as_mut().expect("open");
         dialog.input(input);
@@ -866,22 +867,18 @@ impl AppScreen {
             CommPress::Option(place) => flight.answer(place),
             CommPress::Close => None,
         };
-        match shown {
-            Some(view) => {
-                if let Some(dialog) = &mut self.comm {
-                    dialog.set_hail(&view);
-                }
-                if let Some(price) = view.asking {
-                    self.open_haggle(price, view.pay_me);
-                }
+        if let Some(view) = shown {
+            if let Some(dialog) = &mut self.comm {
+                dialog.set_hail(&view);
             }
-            None if press == CommPress::Close || flight.hailing().is_none() => {
-                flight.hang_up();
-                if let Some(mut dialog) = self.comm.take() {
-                    self.sounds.extend(dialog.take_sounds());
-                }
+            if let Some(price) = view.asking {
+                self.open_haggle(price, view.pay_me);
             }
-            None => {}
+        } else {
+            flight.hang_up();
+            if let Some(mut dialog) = self.comm.take() {
+                self.sounds.extend(dialog.take_sounds());
+            }
         }
         ScreenAction::None
     }

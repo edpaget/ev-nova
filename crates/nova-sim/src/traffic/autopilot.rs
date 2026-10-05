@@ -594,6 +594,20 @@ mod tests {
                 assert_eq!(ship.state, idle.state, "{help:?} {other:?}");
             }
         }
+        let moving = at(0.0, 0.0, 1.0, 0.0, 0.0);
+        let mut ship = npc(
+            FAST,
+            Goal::Assist(Help::Refuel),
+            at(-100.0, 0.0, 0.0, 0.0, 90.0),
+        );
+        for _ in 0..30 {
+            fly(&mut ship, &[], Some(&moving));
+        }
+        assert_eq!(
+            ship.state.position,
+            Vec2::new(-100.0, 0.0),
+            "within reach of a moving player it does not chase"
+        );
         let far = at(-1000.0, 0.0, 2.0, 0.0, 30.0);
         let mut ship = npc(FAST, Goal::Assist(Help::Repair), far);
         let mut idle = npc(FAST, Goal::Idle, far);

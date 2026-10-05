@@ -79,6 +79,14 @@ exclude_re = [
     # answer"; replacing it with `Default::default()` builds the same
     # value, so it cannot be observed.
     "replace Behaviour::react -> Reaction with Default::default\\(\\)",
+    # A hail's mood is an f32 compared as an f64 against 0.8 and 1.2,
+    # neither of which any f32 widens to exactly, so `<` and `<=` (and `>`
+    # and `>=`) give the same answer for every mood.
+    "replace (<|>) with (<=|>=) in Mood::of",
+    # A repair's loop is bounded by the points up to the armour's most only
+    # so it always ends; a larger bound changes nothing, as the loop stops
+    # once the player flies and the armour is held at its most.
+    "replace - with \\+ in repair",
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour.
     "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::create_page)",

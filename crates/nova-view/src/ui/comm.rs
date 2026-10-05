@@ -355,26 +355,20 @@ pub fn column(template: &DialogTemplate, count: usize) -> DialogTemplate {
     let items = template.items.len();
     for index in 0..count {
         let bounds = place(index);
-        let item = option_item(index, items);
-        if item > laid.items.len() {
-            laid.items.push(ItemTemplate {
+        match index {
+            0 | 1 => laid.items[option_item(index, items) - 1].bounds = bounds,
+            _ => laid.items.push(ItemTemplate {
                 bounds,
                 enabled: true,
                 kind: ItemSpec::User,
-            });
-        } else {
-            laid.items[item - 1].bounds = bounds;
-            laid.items[item - 1].enabled = true;
+            }),
         }
     }
-    let grown = close_top - close.min.y;
-    if grown > 0.0 {
-        laid.bounds = Bounds::at(
-            template.bounds.min,
-            template.bounds.width(),
-            template.bounds.height() + grown,
-        );
-    }
+    laid.bounds = Bounds::at(
+        template.bounds.min,
+        template.bounds.width(),
+        template.bounds.height() + (close_top - close.min.y),
+    );
     laid
 }
 
@@ -828,6 +822,30 @@ mod tests {
     }
 
     #[test]
+    fn the_column_follows_item_3_and_its_buttons_work_however_the_template_has_them() {
+        let mut moved = stock();
+        moved.items[MIDDLE_ITEM - 1].bounds = Bounds::at(Point::new(300.0, 10.0), 50.0, 20.0);
+        for item in [CLOSE_ITEM, MIDDLE_ITEM, FIRST_ITEM] {
+            moved.items[item - 1].enabled = false;
+        }
+        let mut dialog = CommDialog::new(&moved, &view(), ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        assert_eq!(
+            dialog.dialog().item_bounds(MIDDLE_ITEM),
+            Some(at(21.0, 153.0))
+        );
+        for (item, press) in [
+            (FIRST_ITEM, CommPress::Option(0)),
+            (MIDDLE_ITEM, CommPress::Option(1)),
+            (CLOSE_ITEM, CommPress::Close),
+        ] {
+            let at = dialog.dialog().item_bounds(item).expect("an item").center();
+            click(&mut dialog, at);
+            assert_eq!(dialog.take_press(), Some(press), "{item}");
+        }
+    }
+
+    #[test]
     fn a_third_option_stands_at_item_1s_place_and_pushes_close_down() {
         let three = HailView {
             options: vec![
@@ -991,16 +1009,27 @@ mod tests {
             ..view()
         };
         let dialog = dialog(&hostile);
-        let status: Vec<(String, Color)> = drawn(&dialog)
+        let status: Vec<(String, Point, Color)> = drawn(&dialog)
             .into_iter()
             .filter_map(|command| match command {
-                DrawCommand::Text { text, color, .. } if text.contains(HOSTILE) => {
-                    Some((text, color))
-                }
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    ..
+                } if text.contains(HOSTILE) => Some((text, origin, color)),
                 _ => None,
             })
             .collect();
-        assert_eq!(status, [("Status: Hostile".to_owned(), HOSTILE_COLOR)]);
+        assert_eq!(
+            status,
+            [(
+                "Status: Hostile".to_owned(),
+                Point::new(40.0, 96.0),
+                HOSTILE_COLOR
+            )],
+            "halfway down item 12"
+        );
     }
 
     #[test]
@@ -1033,6 +1062,13 @@ mod tests {
         assert!(drawn(&fallback)
             .iter()
             .all(|command| !matches!(command, DrawCommand::StretchedPicture { image, .. } if *image == COMM_PICTURE)));
+    }
+
+    #[test]
+    fn its_debug_names_it_and_its_hail() {
+        let shown = format!("{:?}", dialog(&view()));
+        assert!(shown.starts_with("CommDialog"), "{shown}");
+        assert!(shown.contains("Channel open."), "{shown}");
     }
 
     #[test]
@@ -1122,6 +1158,80 @@ mod tests {
             assert_eq!(dialog.take_choice(), Some(choice), "{item}");
             assert_eq!(dialog.take_choice(), None, "once");
         }
+    }
+
+    #[test]
+    fn a_click_abandoned_presses_nothing() {
+        let mut dialog = dialog(&view());
+        let at = dialog
+            .dialog()
+            .item_bounds(CLOSE_ITEM)
+            .expect("an item")
+            .center();
+        for pressed in [true, false] {
+            if !pressed {
+                dialog.cancel_pointer();
+            }
+            dialog.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+        assert_eq!(dialog.take_press(), None);
+    }
+
+    #[test]
+    fn the_haggle_buttons_work_however_the_template_has_them() {
+        let mut template = DialogTemplate {
+            placement: Placement::Fixed,
+            ..haggle_template()
+        };
+        for item in &mut template.items {
+            item.enabled = false;
+        }
+        for (item, choice) in [
+            (ACCEPT_ITEM, Haggle::Accept),
+            (LOWER_ITEM, Haggle::LowerPrice),
+        ] {
+            let mut dialog = HaggleDialog::new(
+                &template,
+                3000,
+                true,
+                ButtonStyle::STOCK,
+                Rc::new(MonoMetrics),
+            )
+            .expect("builds");
+            let at = dialog.dialog().item_bounds(item).expect("an item").center();
+            click(&mut dialog, at);
+            assert_eq!(dialog.take_choice(), Some(choice), "{item}");
+        }
+    }
+
+    #[test]
+    fn a_haggle_button_sounds_as_it_is_clicked_and_an_abandoned_click_chooses_nothing() {
+        let mut dialog = haggle(3000);
+        let at = dialog
+            .dialog()
+            .item_bounds(ACCEPT_ITEM)
+            .expect("an item")
+            .center();
+        assert_eq!(
+            click(&mut dialog, at),
+            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
+        );
+        dialog.take_choice();
+        for pressed in [true, false] {
+            if !pressed {
+                dialog.cancel_pointer();
+            }
+            dialog.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+        assert_eq!(dialog.take_choice(), None);
     }
 
     #[test]

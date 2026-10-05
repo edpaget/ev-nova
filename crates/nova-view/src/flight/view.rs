@@ -6059,6 +6059,43 @@ mod tests {
         assert_eq!(view.answer(0), None);
     }
 
+    /// An option that asks a price, saying nothing.
+    #[derive(Debug)]
+    struct Sell;
+
+    impl nova_sim::HailOption for Sell {
+        fn label(&self) -> String {
+            "Sell".to_owned()
+        }
+
+        fn applies(&self, _hail: &nova_sim::Hail) -> bool {
+            true
+        }
+
+        fn press(&self, _hail: &nova_sim::Hail, _chance: &mut dyn Chance) -> nova_sim::Answer {
+            let line = nova_sim::Reply::Line { list: 1, index: 1 };
+            nova_sim::Answer {
+                ask: Some(nova_sim::Ask {
+                    paid: (line, None),
+                    declined: (line, None),
+                    short: line,
+                }),
+                ..nova_sim::Answer::default()
+            }
+        }
+    }
+
+    #[test]
+    fn a_price_asked_is_haggled_over_through_the_session() {
+        let mut view = hailable(true).with_hail_options(HailOptions::empty().with(Rc::new(Sell)));
+        tap(&mut view, HAIL_KEY);
+        view.take_hail().expect("hailed");
+        let asked = view.answer(0).expect("open");
+        assert!(asked.asking.is_some(), "{asked:?}");
+        let settled = view.haggle(Haggle::Accept).expect("open");
+        assert_eq!(settled.asking, None, "settled");
+    }
+
     #[test]
     fn the_screens_hail_options_are_listed() {
         let mut view = hailable(true);

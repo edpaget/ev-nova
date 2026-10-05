@@ -330,7 +330,7 @@ impl Session {
 /// [`assist::REFUEL_UNTIL`], no further than its most, and is done above
 /// that or full.
 fn refuel(fuel: &mut crate::reserves::Gauge) -> bool {
-    if fuel.now <= assist::REFUEL_UNTIL && fuel.now < fuel.max {
+    if fuel.now <= assist::REFUEL_UNTIL {
         fuel.now = (fuel.now + assist::REFUEL_STEP).min(fuel.max);
     }
     fuel.now > assist::REFUEL_UNTIL || fuel.now >= fuel.max
@@ -343,7 +343,13 @@ fn repair(
     hull: &crate::combat::hull::HullSpec,
     rule: &dyn DisableRule,
 ) {
-    while rule.disabled(*armor, hull) && armor.now < armor.max {
+    // At most the steps up to its most (a step is a point), so a rule
+    // that never lets it fly still ends.
+    let steps = (armor.max - armor.now).ceil().max(0.0) as u32;
+    for _ in 0..steps {
+        if !rule.disabled(*armor, hull) {
+            return;
+        }
         armor.now = (armor.now + assist::REPAIR_STEP).min(armor.max);
     }
 }
@@ -1185,6 +1191,16 @@ mod tests {
     }
 
     #[test]
+    fn a_player_already_above_a_jumps_fuel_gains_nothing_and_the_refuel_is_done() {
+        let catalog = hailable();
+        let mut session = helped(&catalog, Help::Refuel, 0.0);
+        session.pilot.reserves.fuel.now = 150.0;
+        session.tick_assistance(&NovaDisable);
+        assert_eq!(session.reserves().fuel.now, 150.0);
+        assert_eq!(session.take_comm().len(), 1);
+    }
+
+    #[test]
     fn a_refuel_stops_at_the_tanks_most() {
         let catalog = hailable();
         let mut session = helped(&catalog, Help::Refuel, 0.0);
@@ -1246,6 +1262,27 @@ mod tests {
         );
         assert_eq!(session.npcs()[0].goal, Goal::Idle);
         assert_eq!(session.npcs()[0].assisting, 0);
+    }
+
+    /// Has every ship disabled, whatever its armour.
+    #[derive(Debug)]
+    struct Always;
+
+    impl DisableRule for Always {
+        fn disabled(&self, _armor: Gauge, _hull: &HullSpec) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_repair_raises_the_armour_no_further_than_its_most() {
+        let catalog = hailable();
+        let mut session = repairing(&catalog);
+        for _ in 0..100 {
+            session.tick_assistance(&Always);
+        }
+        assert_eq!(session.reserves().armor.now, 45.0, "full, and done");
+        assert_eq!(session.take_comm().len(), 1);
     }
 
     #[test]
