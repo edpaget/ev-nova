@@ -127,12 +127,13 @@ use std::time::Duration;
 
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
-    CombatCatalog, Condition, Controls, DisableRule, FixedStep, GovtId, JumpRefusal,
+    CombatCatalog, Condition, Controls, DisableRule, FixedStep, Good, GovtId, JumpRefusal,
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
-    NpcId, Order, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, PlunderView,
-    PointDefenceRule, RechargeRefusal, Reserves, Rules, Session, ShipId, ShipPurchase, ShipRef,
-    ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps, Take, Taken, TargetPick,
-    TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
+    NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
+    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, Rules, Session, ShipId, ShipPurchase,
+    ShipRef, ShipRefusal, ShipState, Shipyard, StartError, StellarId, Steps, Take, Taken,
+    TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
+    flight::shortest_turn,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -149,6 +150,7 @@ use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::system::starfield;
 use crate::text::TextMetrics;
+use crate::ui::PlunderShown;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction, Sound,
 };
@@ -362,6 +364,20 @@ pub fn plunder_message(taken: Taken, good: Option<&str>, outfit: Option<&str>) -
         Taken::Captured | Taken::Aborted | Taken::Nothing => return None,
     };
     Some(text)
+}
+
+/// The names `session` gives `good` and `outfit`: one rule for the
+/// plunder dialog ([`FlightView::plunder_shown`]) and the messages
+/// ([`FlightView::plunder`]).
+fn names(
+    session: &Session,
+    good: Option<Good>,
+    outfit: Option<OutfitId>,
+) -> (Option<&str>, Option<&str>) {
+    (
+        good.and_then(|good| session.good_name(good)),
+        outfit.and_then(|outfit| session.outfit_name(outfit)),
+    )
 }
 
 /// What the player is told of an assignment that did `assigned`.
@@ -849,13 +865,13 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// What is on board the ship just boarded, once: the router takes it
-    /// to open the plunder dialog.
-    pub fn take_boarding(&mut self) -> Option<PlunderView> {
+    /// What is on board the ship just boarded, named, once: the router
+    /// takes it to open the plunder dialog.
+    pub fn take_boarding(&mut self) -> Option<PlunderShown> {
         if !std::mem::take(&mut self.pending_boarding) {
             return None;
         }
-        self.boarding()
+        self.plunder_shown()
     }
 
     /// What is on board the ship being boarded, while the plunder dialog
@@ -865,6 +881,25 @@ impl<C> FlightView<C> {
         self.session.as_ref().ok()?.boarding()
     }
 
+    /// What the plunder dialog shows while it is open: [`Self::boarding`]
+    /// with its cargo's good and its ammunition's outfit named, as
+    /// [`Self::plunder`]'s messages name them.
+    #[must_use]
+    pub fn plunder_shown(&self) -> Option<PlunderShown> {
+        let session = self.session.as_ref().ok()?;
+        let view = session.boarding()?;
+        let (good, outfit) = names(
+            session,
+            view.cargo.map(|(good, _)| good),
+            view.ammo.map(|(outfit, _)| outfit),
+        );
+        Some(PlunderShown {
+            view,
+            good: good.map(str::to_owned),
+            outfit: outfit.map(str::to_owned),
+        })
+    }
+
     /// Presses `take` in the plunder dialog, through the session
     /// ([`Session::plunder`]), and says what it did.
     pub fn plunder(&mut self, take: Take) -> Taken {
@@ -872,13 +907,10 @@ impl<C> FlightView<C> {
             return Taken::Nothing;
         };
         let taken = session.plunder(take, &*self.boarding_rule, &mut self.chance);
-        let good = match taken {
-            Taken::Cargo { good, .. } => session.good_name(good),
-            _ => None,
-        };
-        let outfit = match taken {
-            Taken::Ammo { outfit, .. } => session.outfit_name(outfit),
-            _ => None,
+        let (good, outfit) = match taken {
+            Taken::Cargo { good, .. } => names(session, Some(good), None),
+            Taken::Ammo { outfit, .. } => names(session, None, Some(outfit)),
+            _ => (None, None),
         };
         if let Some(text) = plunder_message(taken, good, outfit) {
             self.say(text);
@@ -5492,7 +5524,7 @@ mod tests {
         let mut view = beside(750, 750, 0, false);
         assert_eq!(view.take_boarding(), None);
         tap(&mut view, BOARD_KEY);
-        let boarding = view.take_boarding().expect("boarded");
+        let boarding = view.take_boarding().expect("boarded").view;
         assert_eq!((boarding.npc, boarding.ship), (NpcId(0), ShipId(129)));
         assert!(boarding.credits >= 1000, "{boarding:?}");
         assert_eq!(view.take_boarding(), None, "once");
@@ -5546,7 +5578,7 @@ mod tests {
     fn plundering_goes_through_the_session_and_says_what_it_took() {
         let mut view = beside(750, 750, 0, false);
         tap(&mut view, BOARD_KEY);
-        let boarding = view.take_boarding().expect("boarded");
+        let boarding = view.take_boarding().expect("boarded").view;
         let cash = view.pilot().expect("a pilot").cash();
         assert_eq!(
             view.plunder(Take::Credits),
@@ -5667,7 +5699,7 @@ mod tests {
         view.tick(TICK);
         tap(&mut view, TARGET_KEY);
         tap(&mut view, BOARD_KEY);
-        let boarding = view.take_boarding().expect("boarded");
+        let boarding = view.take_boarding().expect("boarded").view;
         assert_eq!(boarding.odds, 75, "by the rule given");
         assert_eq!(view.plunder(Take::Capture), Taken::Captured);
         assert_eq!(view.message(), None, "the assignment dialog says it");
@@ -5763,18 +5795,29 @@ mod tests {
         tap(&mut view, TARGET_KEY);
         tap(&mut view, BOARD_KEY);
         let boarding = view.take_boarding().expect("boarded");
-        assert_eq!(boarding.cargo, Some((Good::Commodity(0), 19)));
-        assert_eq!(boarding.ammo, Some((OutfitId(310), 2)));
+        assert_eq!(boarding.view.cargo, Some((Good::Commodity(0), 19)));
+        assert_eq!(boarding.view.ammo, Some((OutfitId(310), 2)));
+        let named = |shown: &PlunderShown| (shown.good.clone(), shown.outfit.clone());
+        assert_eq!(
+            named(&boarding),
+            (Some("Food".to_owned()), Some("Rockets".to_owned())),
+            "the dialog names them as the messages do"
+        );
+        assert_eq!(view.plunder_shown().as_ref(), Some(&boarding));
         view.plunder(Take::Cargo);
         assert_eq!(
             view.message(),
             Some("You salvaged 19 tons of Food from this ship.")
         );
+        let shown = view.plunder_shown().expect("still under way");
+        assert_eq!(named(&shown), (None, Some("Rockets".to_owned())));
         view.plunder(Take::Ammo);
         assert_eq!(
             view.message(),
             Some("You salvaged 2 Rockets from this ship.")
         );
+        let shown = view.plunder_shown().expect("still under way");
+        assert_eq!(named(&shown), (None, None), "nothing left to name");
     }
 
     #[test]

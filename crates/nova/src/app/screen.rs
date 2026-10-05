@@ -135,7 +135,7 @@ use std::time::Duration;
 use nova_data::GameData;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, DisableRule, LegalCode, NovaAi, NovaBoarding, NovaDisable,
-    NovaLaw, Pilot, PilotKeeper, PilotStore, PlunderView, PointDefenceRule, Take, Taken, pilot_key,
+    NovaLaw, Pilot, PilotKeeper, PilotStore, PointDefenceRule, Take, Taken, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::flight::{FlightView, SharedChance};
@@ -764,38 +764,17 @@ impl AppScreen {
         if let Some(stellar) = flight.take_landing() {
             self.show_spaceport(stellar);
         }
-        if let Some(view) = self.flight.as_mut().and_then(FlightView::take_boarding) {
-            self.open_plunder(view);
+        if let Some(shown) = self.flight.as_mut().and_then(FlightView::take_boarding) {
+            self.open_plunder(&shown);
         }
         ScreenAction::None
     }
 
-    /// What the plunder dialog shows of `view`: the cargo's good and the
-    /// ammunition's outfit named by the flight's session.
-    fn plunder_names(&self, view: PlunderView) -> (Option<String>, Option<String>) {
-        let Some(session) = self
-            .flight
-            .as_ref()
-            .and_then(|flight| flight.session().ok())
-        else {
-            return (None, None);
-        };
-        let good = view
-            .cargo
-            .and_then(|(good, _)| session.good_name(good))
-            .map(str::to_owned);
-        let outfit = view
-            .ammo
-            .and_then(|(outfit, _)| session.outfit_name(outfit))
-            .map(str::to_owned);
-        (good, outfit)
-    }
-
-    /// Opens the plunder dialog on `view` over flight, which pauses: the
+    /// Opens the plunder dialog on `shown` over flight, which pauses: the
     /// interface file's, or the built-in one without it (with a warning
     /// when the interface file has none). With no metrics to lay it out,
     /// the boarding is let go, with a warning.
-    fn open_plunder(&mut self, view: PlunderView) {
+    fn open_plunder(&mut self, shown: &PlunderShown) {
         let Some(metrics) = self.metrics() else {
             if let Some(flight) = &mut self.flight {
                 flight.plunder(Take::Abort);
@@ -804,19 +783,13 @@ impl AppScreen {
                 .push("nova: cannot show the plunder dialog: no metrics to lay it out".to_owned());
             return;
         };
-        let (good, outfit) = self.plunder_names(view);
-        let shown = PlunderShown {
-            view,
-            good: good.as_deref(),
-            outfit: outfit.as_deref(),
-        };
         let style = self.data.button_style();
         let built = self.dialogs.as_ref().map(|dialogs| {
             dialogs
                 .resources
                 .dialog_template(PLUNDER_DIALOG)
                 .and_then(|template| {
-                    PlunderDialog::new(&template, &shown, style, Rc::clone(&metrics))
+                    PlunderDialog::new(&template, shown, style, Rc::clone(&metrics))
                 })
         });
         let dialog = match built {
@@ -826,7 +799,7 @@ impl AppScreen {
                     self.warnings
                         .push(format!("nova: using the built-in plunder dialog: {reason}"));
                 }
-                PlunderDialog::fallback(&shown, style, metrics)
+                PlunderDialog::fallback(shown, style, metrics)
             }
         };
         self.plunder = Some(dialog);
@@ -844,14 +817,8 @@ impl AppScreen {
         };
         let flight = self.flight.as_mut().expect(ENTERED);
         let taken = flight.plunder(take);
-        match flight.boarding() {
-            Some(view) => {
-                let (good, outfit) = self.plunder_names(view);
-                let shown = PlunderShown {
-                    view,
-                    good: good.as_deref(),
-                    outfit: outfit.as_deref(),
-                };
+        match flight.plunder_shown() {
+            Some(shown) => {
                 if let Some(dialog) = &mut self.plunder {
                     dialog.set_plunder(&shown);
                 }

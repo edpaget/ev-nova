@@ -92,14 +92,14 @@ pub const QUESTION: &str = "Do you want to use this ship as an escort, or would 
 
 /// What the plunder dialog shows: what is on board, with the cargo's
 /// good and the ammunition's outfit named.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PlunderShown<'a> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlunderShown {
     /// What is on board.
     pub view: PlunderView,
     /// The cargo's good's name, if it has one.
-    pub good: Option<&'a str>,
+    pub good: Option<String>,
     /// The ammunition outfit's name, if it has one.
-    pub outfit: Option<&'a str>,
+    pub outfit: Option<String>,
 }
 
 /// Item 5's text for `shown`: the prompt, then the cargo, the ammunition
@@ -111,12 +111,15 @@ pub fn plunder_text(shown: &PlunderShown) -> String {
         || NONE.to_owned(),
         |(_, tons)| {
             let unit = if tons == 1 { "ton" } else { "tons" };
-            format!("{tons} {unit} of {}", shown.good.unwrap_or("cargo"))
+            format!(
+                "{tons} {unit} of {}",
+                shown.good.as_deref().unwrap_or("cargo")
+            )
         },
     );
     let ammo = view.ammo.map_or_else(
         || NONE.to_owned(),
-        |(_, rounds)| format!("{rounds} {}", shown.outfit.unwrap_or("rounds")),
+        |(_, rounds)| format!("{rounds} {}", shown.outfit.as_deref().unwrap_or("rounds")),
     );
     format!(
         "{PROMPT}\r\r{CARGO_LABEL} {cargo}\r{AMMO_LABEL} {ammo}\r{ODDS_LABEL} {}%",
@@ -478,11 +481,11 @@ mod tests {
         }
     }
 
-    fn shown(view: PlunderView) -> PlunderShown<'static> {
+    fn shown(view: PlunderView) -> PlunderShown {
         PlunderShown {
             view,
-            good: Some("Food"),
-            outfit: Some("Rockets"),
+            good: Some("Food".to_owned()),
+            outfit: Some("Rockets".to_owned()),
         }
     }
 
