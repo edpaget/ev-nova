@@ -20,6 +20,9 @@
 //! on the player, whose shield drops; once the trader is disabled the
 //! player's record with its government is lower, and R targets the
 //! police, a threat, in red brackets, not the nearer disabled trader.
+//! The law is the one the settings file at the platform's settings path
+//! chooses: by the engine's crime gains, the default, disabling the
+//! trader pleases a neutral government; by the Bible's, it does not.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -850,6 +853,7 @@ fn patrolled() -> Rc<GameData> {
         .resource(Weapon::TYPE, 129, Some(b"Gun"), &gun)
         .resource(Govt::TYPE, 128, Some(b"Traders"), &govt(1, -1))
         .resource(Govt::TYPE, 129, Some(b"Police"), &govt(2, 1))
+        .resource(Govt::TYPE, 130, Some(b"Neutrals"), &govt(3, -1))
         .resource(Dude::TYPE, 128, Some(b"Traders"), &dude_of(1, 128, 129))
         .resource(Dude::TYPE, 129, Some(b"Police"), &dude_of(4, 129, 130))
         .resource(System::TYPE, 128, Some(b"Alpha"), &patrolled_system())
@@ -1010,4 +1014,61 @@ fn the_routers_law_judges_the_flights_crimes() {
         0,
         "as the witness says"
     );
+}
+
+/// The law that the settings file at `path`, holding `text`, chooses,
+/// read as `main` reads it: through the file adapter.
+fn saved_law(path: &Path, text: &str) -> nova_sim::NovaLaw {
+    std::fs::create_dir_all(path.parent().expect("in a directory")).expect("creates");
+    std::fs::write(path, text).expect("writes");
+    let mut store: Option<Box<dyn nova_audio::SettingsStore>> =
+        Some(Box::new(nova_audio::FileSettings::new(path)));
+    let (law, warning) = nova::law::game_law(store.as_deref_mut());
+    assert_eq!(warning, None, "{text}");
+    law
+}
+
+#[test]
+fn the_saved_crime_gains_choose_whether_the_flights_crimes_please_a_neutral() {
+    for (text, neutral) in [
+        ("{}", 1),
+        (r#"{"sound": false, "crime_gains": "engine"}"#, 1),
+        (r#"{"crime_gains": "bible"}"#, 0),
+    ] {
+        let home = tempfile::tempdir().expect("a temporary directory");
+        let env = |name: &str| {
+            matches!(name, "HOME" | "APPDATA" | "XDG_CONFIG_HOME")
+                .then(|| home.path().as_os_str().to_owned())
+        };
+        let path =
+            nova::config::settings_path(nova::config::Os::current(), env).expect("a settings path");
+        let law = saved_law(&path, text);
+        let mut harness =
+            Harness::flying_over(patrolled(), &[6, 6, 0, 0, 750, 650, 180, 0], |screen| {
+                screen
+                    .with_behaviour(Rc::new(Still))
+                    .with_disable_rule(Rc::new(nova_sim::NovaDisable))
+                    .with_law(Rc::new(law))
+            });
+        let record = |harness: &Harness, govt| {
+            harness
+                .session()
+                .pilot()
+                .legal_record(nova_sim::GovtId(govt))
+        };
+        harness.key(Key::Space, true);
+        for _ in 0..1200 {
+            harness.frame();
+            if record(&harness, 128) != 0 {
+                break;
+            }
+        }
+        harness.key(Key::Space, false);
+        assert_eq!(
+            [128, 129, 130].map(|govt| record(&harness, govt)),
+            [-3, -3, neutral],
+            "{text}: the traders and their allied police lower; the neutrals, \
+             their own DisabPenalty 3, by the engine's law up 1"
+        );
+    }
 }

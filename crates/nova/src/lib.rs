@@ -15,6 +15,7 @@
 //!   window could not be opened.
 //! - [`fonts`]: the fonts text is drawn in, from the result of loading the
 //!   game's Charcoal.
+//! - [`law`]: the law crimes are judged by, as the settings file chooses.
 //! - [`saves`]: the pilot files, one JSON file per pilot in a directory.
 //! - [`platform`]: the thin winit adapter: event translation, the window
 //!   port over a real window, and the event-loop runner.
@@ -31,5 +32,6 @@ pub mod config;
 pub mod devtools;
 pub mod exit;
 pub mod fonts;
+pub mod law;
 pub mod platform;
 pub mod saves;

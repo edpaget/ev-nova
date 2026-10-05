@@ -128,7 +128,8 @@ impl SettingsStore for Box<dyn SettingsStore> {
 }
 
 /// The settings as saved: JSON, every field optional (a missing one takes
-/// its default) and unknown fields ignored.
+/// its default). Other fields are the game's other settings: kept, and
+/// saved back as they were.
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct Saved {
@@ -136,7 +137,12 @@ struct Saved {
     music: bool,
     effects_volume: f32,
     music_volume: f32,
+    #[serde(flatten)]
+    others: Others,
 }
+
+/// The fields of the settings file that are not the sound's.
+type Others = serde_json::Map<String, serde_json::Value>;
 
 impl Default for Saved {
     fn default() -> Self {
@@ -151,6 +157,7 @@ impl From<AudioSettings> for Saved {
             music: settings.music,
             effects_volume: settings.effects_volume.amplitude(),
             music_volume: settings.music_volume.amplitude(),
+            others: Others::new(),
         }
     }
 }
@@ -174,6 +181,7 @@ impl From<Saved> for AudioSettings {
 pub struct SettingsKeeper<S: SettingsStore> {
     store: S,
     settings: AudioSettings,
+    others: Others,
 }
 
 impl<S: SettingsStore> SettingsKeeper<S> {
@@ -183,13 +191,18 @@ impl<S: SettingsStore> SettingsKeeper<S> {
     /// Nothing saved gives the defaults, silently. Text that cannot be
     /// read, or is not settings (not JSON, or a field of the wrong type),
     /// gives the defaults and a warning naming the store's location. A
-    /// missing field takes its default, unknown fields are ignored, and
-    /// volumes are clamped to silent through full.
+    /// missing field takes its default, and volumes are clamped to silent
+    /// through full. Other fields, the game's other settings, are saved
+    /// back with each change.
     pub fn open(mut store: S) -> (Self, Option<String>) {
+        let mut others = Others::new();
         let (settings, warning) = match store.read() {
             Ok(None) => (AudioSettings::default(), None),
             Ok(Some(text)) => match serde_json::from_str::<Saved>(&text) {
-                Ok(saved) => (AudioSettings::from(saved), None),
+                Ok(mut saved) => {
+                    others = std::mem::take(&mut saved.others);
+                    (AudioSettings::from(saved), None)
+                }
                 Err(error) => (
                     AudioSettings::default(),
                     Some(format!(
@@ -207,7 +220,14 @@ impl<S: SettingsStore> SettingsKeeper<S> {
                 )),
             ),
         };
-        (Self { store, settings }, warning)
+        (
+            Self {
+                store,
+                settings,
+                others,
+            },
+            warning,
+        )
     }
 
     /// The settings.
@@ -234,8 +254,11 @@ impl<S: SettingsStore> SettingsKeeper<S> {
             return Ok(());
         }
         self.settings = settings;
-        let text = serde_json::to_string_pretty(&Saved::from(settings))
-            .expect("plain values always serialise");
+        let saved = Saved {
+            others: self.others.clone(),
+            ..Saved::from(settings)
+        };
+        let text = serde_json::to_string_pretty(&saved).expect("plain values always serialise");
         self.store
             .write(&text)
             .map_err(|error| format!("nova: cannot save the settings: {error}"))
@@ -389,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_fields_take_their_defaults_and_unknown_ones_are_ignored() {
+    fn missing_fields_take_their_defaults_and_other_fields_leave_the_sound_alone() {
         let text = r#"{"music": false, "effects_volume": 0.5, "theme": "dark"}"#;
         let (keeper, warning) = SettingsKeeper::open(MemorySettings::holding(text));
         assert_eq!(warning, None);
@@ -434,6 +457,33 @@ mod tests {
                 "music_volume": 0.5,
             })
         );
+    }
+
+    #[test]
+    fn a_change_keeps_the_other_settings_saved_beside_the_sounds() {
+        let text = r#"{"music": false, "crime_gains": "bible", "theme": {"dark": true}}"#;
+        let store = MemorySettings::holding(text);
+        let (mut keeper, _) = SettingsKeeper::open(store.clone());
+        keeper.change(quiet()).expect("saves");
+        let saved: serde_json::Value =
+            serde_json::from_str(&store.text().expect("saved")).expect("JSON");
+        assert_eq!(
+            saved,
+            serde_json::json!({
+                "sound": false,
+                "music": true,
+                "effects_volume": 0.25,
+                "music_volume": 0.5,
+                "crime_gains": "bible",
+                "theme": {"dark": true},
+            })
+        );
+        let unusable = MemorySettings::holding(r#"{"sound": "yes", "crime_gains": "bible"}"#);
+        let (mut keeper, _) = SettingsKeeper::open(unusable.clone());
+        keeper.change(quiet()).expect("saves");
+        let saved: serde_json::Value =
+            serde_json::from_str(&unusable.text().expect("saved")).expect("JSON");
+        assert_eq!(saved.get("crime_gains"), None, "unusable text is replaced");
     }
 
     #[test]
