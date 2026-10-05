@@ -70,12 +70,18 @@ pub struct Trigger {
     pub primary: bool,
     /// The secondary trigger, on this secondary weapon.
     pub secondary: Option<WeaponId>,
+    /// This weapon alone, primary or secondary, whatever the triggers
+    /// say: an NPC's pick. The player's trigger never sets it.
+    pub only: Option<WeaponId>,
 }
 
 impl Trigger {
     /// Whether it fires `weapon`.
     #[must_use]
     pub fn fires(self, weapon: &WeaponSpec) -> bool {
+        if let Some(only) = self.only {
+            return weapon.id == only;
+        }
         if weapon.secondary() {
             self.secondary == Some(weapon.id)
         } else {
@@ -166,7 +172,8 @@ pub struct Mount {
 
 impl Mount {
     /// Whether the ship can pay for a shot from `rounds` and `fuel`.
-    fn affords(&self, rounds: &dyn Rounds, fuel: Gauge) -> bool {
+    #[must_use]
+    pub fn affords(&self, rounds: &dyn Rounds, fuel: Gauge) -> bool {
         match self.spec.ammo {
             Ammo::Unlimited | Ammo::Other(_) => true,
             Ammo::Rounds(ammo) => rounds.held(ammo) > 0,
@@ -574,6 +581,7 @@ mod tests {
     const PRIMARY: Trigger = Trigger {
         primary: true,
         secondary: None,
+        only: None,
     };
 
     /// What `armament` has to fire with.
@@ -906,22 +914,41 @@ mod tests {
         let second = Trigger {
             primary: false,
             secondary: Some(WeaponId(140)),
+            only: None,
         };
         assert_eq!(fired(&mut armament, second), [140]);
         let both = Trigger {
             primary: true,
             secondary: Some(WeaponId(138)),
+            only: None,
         };
         assert_eq!(fired(&mut armament, both), [128, 138, 129]);
         let primary_as_secondary = Trigger {
             primary: false,
             secondary: Some(WeaponId(128)),
+            only: None,
         };
         assert_eq!(
             fired(&mut armament, primary_as_secondary),
             Vec::<i16>::new()
         );
         assert_eq!(fired(&mut armament, Trigger::default()), Vec::<i16>::new());
+        for (only, alone) in [(140, 140), (129, 129)] {
+            let trigger = Trigger {
+                only: Some(WeaponId(only)),
+                ..both
+            };
+            assert_eq!(
+                fired(&mut armament, trigger),
+                [alone],
+                "that weapon alone, primary or secondary"
+            );
+        }
+        let missing = Trigger {
+            only: Some(WeaponId(999)),
+            ..both
+        };
+        assert_eq!(fired(&mut armament, missing), Vec::<i16>::new());
     }
 
     /// Every weapon fires at 100 degrees, at NPC 7.

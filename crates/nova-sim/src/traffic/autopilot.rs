@@ -21,12 +21,13 @@
 //!   [`JUMP_IN_TICKS`](crate::traffic::spawn::JUMP_IN_TICKS); then it flies
 //!   on at its top speed.
 
-use crate::ai::Goal;
+use crate::ai::{Goal, fire};
 use crate::catalog::{LandingSite, StellarId};
 use crate::combat::hull::Condition;
 use crate::flight::{self, AT_REST_SPEED, Controls, ShipState, Turn, heading_of, shortest_turn};
 use crate::geometry::Vec2;
 use crate::handling::Handling;
+use crate::hyperspace::JUMP_FUEL;
 use crate::landing::{LANDING_SPEED, landing_radius};
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::spawn::{JUMP_IN_TICKS, glide_speed};
@@ -35,6 +36,18 @@ use crate::traffic::spawn::{JUMP_IN_TICKS, glide_speed};
 pub const FOLLOW_DISTANCE: f32 = 100.0;
 /// How far off its course, in degrees, a ship still thrusts.
 pub const ALIGNED: f32 = 5.0;
+/// How many turns' worth off the heading it wants an attacker approaching
+/// still thrusts (4.0 @0xdd680).
+pub const APPROACH_THRUST: f32 = 4.0;
+/// How far beyond a turn, in degrees, a dogfighter still thrusts (15.0
+/// @0xdda30).
+pub const DOGFIGHT_THRUST: f32 = 15.0;
+/// How far beyond a turn, in degrees, a ship fleeing close still thrusts
+/// (20.0 @0xdd668).
+pub const FLEE_THRUST: f32 = 20.0;
+/// How near, in pixels on either axis, an attacker must be for a ship
+/// fleeing to turn straight away from it (low mode 5, @0x85c62).
+pub const FLEE_CLOSE: f32 = 250.0;
 
 /// What became of an NPC this tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,9 +60,10 @@ pub enum Outcome {
     JumpedOut,
 }
 
-/// Flies `npc` one tick towards its goal, among `sites`, its lead (if it
-/// follows one) at `lead`.
-pub fn fly(npc: &mut Npc, sites: &[LandingSite], lead: Option<&ShipState>) -> Outcome {
+/// Flies `npc` one tick towards its goal, among `sites`, the ship its
+/// goal is about (the lead it follows, the ship it fights or inspects)
+/// at `other`, when it is there.
+pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> Outcome {
     if npc.condition != Condition::Intact {
         flight::step(&mut npc.state, &npc.stats.handling, Controls::default());
         return Outcome::Flying;
@@ -67,26 +81,94 @@ pub fn fly(npc: &mut Npc, sites: &[LandingSite], lead: Option<&ShipState>) -> Ou
             None => brake(&state, &handling),
         },
         Goal::JumpOut => {
-            let out = state.position.length();
-            if out >= npc.stats.jump_distance {
+            if state.position.length() >= npc.stats.jump_distance {
                 return Outcome::JumpedOut;
             }
-            // Straight out from the centre; from the centre itself, ahead.
-            let away = if out > 0.0 {
-                heading_of(state.position)
-            } else {
-                state.heading
-            };
-            match_velocity(&state, &handling, flight::facing(away) * handling.max_speed)
+            run_out(&state, &handling)
         }
-        Goal::Follow(_) => match lead {
-            Some(lead) => follow(&state, &handling, lead),
+        Goal::Follow(_) | Goal::Inspect(_) => match other {
+            Some(other) => follow(&state, &handling, other),
+            None => brake(&state, &handling),
+        },
+        Goal::Attack(_) => match other {
+            Some(target) => attack(npc, target),
+            None => brake(&state, &handling),
+        },
+        Goal::Snipe(_) => match other {
+            Some(target) if state.velocity.length() <= AT_REST_SPEED => Controls {
+                turn: steer(state.heading, fire::wanted_heading(npc, target), &handling),
+                ..Controls::default()
+            },
+            _ => brake(&state, &handling),
+        },
+        Goal::Flee(_) => match other {
+            Some(attacker) => {
+                let off = state.position - attacker.position;
+                if off.x.abs() <= FLEE_CLOSE && off.y.abs() <= FLEE_CLOSE {
+                    let away = heading_of(off);
+                    Controls {
+                        thrust: shortest_turn(state.heading, away).abs()
+                            <= handling.turn_rate + FLEE_THRUST,
+                        turn: steer(state.heading, away, &handling),
+                        reverse: false,
+                    }
+                } else {
+                    let out = state.position.length();
+                    if out >= npc.stats.jump_distance && npc.reserves.fuel.now >= JUMP_FUEL {
+                        return Outcome::JumpedOut;
+                    }
+                    run_out(&state, &handling)
+                }
+            }
             None => brake(&state, &handling),
         },
         Goal::Idle => brake(&state, &handling),
     };
     flight::step(&mut npc.state, &handling, controls);
     Outcome::Flying
+}
+
+/// Heads straight out from the centre at full speed; from the centre
+/// itself, ahead.
+fn run_out(state: &ShipState, handling: &Handling) -> Controls {
+    let away = if state.position.length() > 0.0 {
+        heading_of(state.position)
+    } else {
+        state.heading
+    };
+    match_velocity(state, handling, flight::facing(away) * handling.max_speed)
+}
+
+/// Turns from `heading` towards `wanted`, not at all within half a tick's
+/// turn, where turning would only overshoot.
+fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
+    let off = shortest_turn(heading, wanted);
+    let half_turn = handling.turn_rate / 2.0;
+    if off > half_turn {
+        Turn::Right
+    } else if off < -half_turn {
+        Turn::Left
+    } else {
+        Turn::None
+    }
+}
+
+/// Attacks a target at `target`: faces the heading it wants to fire along
+/// ([`fire::wanted_heading`]), thrusting within [`APPROACH_THRUST`] turns
+/// of it approaching from beyond the dogfight box, and within a turn and
+/// [`DOGFIGHT_THRUST`] dogfighting inside it.
+fn attack(npc: &Npc, target: &ShipState) -> Controls {
+    let handling = npc.stats.handling;
+    let wanted = fire::wanted_heading(npc, target);
+    let window = match fire::manoeuvre(npc.goal, &npc.state, target) {
+        Some(fire::Manoeuvre::Dogfight) => handling.turn_rate + DOGFIGHT_THRUST,
+        _ => APPROACH_THRUST * handling.turn_rate,
+    };
+    Controls {
+        thrust: shortest_turn(npc.state.heading, wanted).abs() <= window,
+        turn: steer(npc.state.heading, wanted, &handling),
+        reverse: false,
+    }
 }
 
 /// One tick of `npc`'s glide in from hyperspace, `ticks_left` of it left:
@@ -192,19 +274,11 @@ fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Cont
     if change.length() <= handling.accel / 2.0 {
         return Controls::default();
     }
-    let off = shortest_turn(state.heading, heading_of(change));
-    // Within half a tick's turn, turning would only overshoot.
-    let half_turn = handling.turn_rate / 2.0;
-    let turn = if off > half_turn {
-        Turn::Right
-    } else if off < -half_turn {
-        Turn::Left
-    } else {
-        Turn::None
-    };
+    let wanted = heading_of(change);
+    let off = shortest_turn(state.heading, wanted);
     Controls {
         thrust: off.abs() <= ALIGNED.max(handling.turn_rate),
-        turn,
+        turn: steer(state.heading, wanted, handling),
         reverse: false,
     }
 }
@@ -647,5 +721,177 @@ mod tests {
         }
         let off = shortest_turn(30.0, heading_of(last));
         assert!(off.abs() < 1e-3, "{off}: {last:?}");
+    }
+
+    // Fights.
+
+    use crate::combat::ShipRef;
+
+    const FOE: ShipRef = ShipRef::Player;
+
+    /// A ship at rest at the centre facing `heading`, 3 degrees a tick,
+    /// with `goal`.
+    fn fighter(goal: Goal, heading: f32) -> Npc {
+        npc(FAST, goal, at(0.0, 0.0, 0.0, 0.0, heading))
+    }
+
+    fn controls_of(ship: &Npc, other: &ShipState) -> Controls {
+        let mut flown = ship.clone();
+        let before = flown.state;
+        fly(&mut flown, &[], Some(other));
+        // Undo the step to read the controls from the change it made.
+        let turned = shortest_turn(before.heading, flown.state.heading);
+        let speed_change = (flown.state.velocity - before.velocity).length();
+        Controls {
+            thrust: speed_change > 0.0,
+            turn: if turned > 0.0 {
+                Turn::Right
+            } else if turned < 0.0 {
+                Turn::Left
+            } else {
+                Turn::None
+            },
+            reverse: false,
+        }
+    }
+
+    #[test]
+    fn attacking_from_afar_it_turns_to_the_lead_and_thrusts_within_four_turns() {
+        // 3 degrees a tick: thrust within 12 of the target 1000 above.
+        let target = at(0.0, -1000.0, 0.0, 0.0, 0.0);
+        let thrusting = controls_of(&fighter(Goal::Attack(FOE), 12.0), &target);
+        assert_eq!((thrusting.thrust, thrusting.turn), (true, Turn::Left));
+        let turning = controls_of(&fighter(Goal::Attack(FOE), 12.1), &target);
+        assert_eq!((turning.thrust, turning.turn), (false, Turn::Left));
+        let other_way = controls_of(&fighter(Goal::Attack(FOE), 300.0), &target);
+        assert_eq!(other_way.turn, Turn::Right);
+    }
+
+    #[test]
+    fn dogfighting_within_165_it_thrusts_within_a_turn_and_15_degrees() {
+        // 3 + 15: within 18 of the target 165 above.
+        let target = at(165.0, -165.0, 0.0, 0.0, 0.0);
+        let bearing = 45.0;
+        let thrusting = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.0), &target);
+        assert!(thrusting.thrust);
+        let turning = controls_of(&fighter(Goal::Attack(FOE), bearing + 18.1), &target);
+        assert!(!turning.thrust);
+        let afar = at(165.1, -165.0, 0.0, 0.0, 0.0);
+        let approaching = controls_of(&fighter(Goal::Attack(FOE), bearing + 13.0), &afar);
+        assert!(!approaching.thrust, "outside the box, within 12 only");
+    }
+
+    #[test]
+    fn an_attacker_leads_a_moving_target_with_its_gun() {
+        use crate::catalog::WeaponRecord;
+        use crate::combat::armament::Armament;
+        use crate::combat::weapon::WeaponSpec;
+        let mut ship = fighter(Goal::Attack(FOE), 0.0);
+        ship.armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                speed: 1000,
+                count: 50,
+                ..crate::testkit::weapon(128)
+            }),
+            1,
+        )]);
+        // 1000 above crossing right at 10 a tick: led 1000 to the right,
+        // 45 degrees.
+        let crossing = at(0.0, -1000.0, 10.0, 0.0, 0.0);
+        let mut flown = ship.clone();
+        for _ in 0..30 {
+            fly(&mut flown, &[], Some(&crossing));
+        }
+        assert!(
+            (flown.state.heading - 45.0).abs() < 3.0,
+            "{:?}",
+            flown.state
+        );
+    }
+
+    #[test]
+    fn sniping_it_brakes_to_a_stop_then_faces_its_target() {
+        let target = at(-300.0, 0.0, 0.0, 0.0, 0.0);
+        let mut moving = npc(FAST, Goal::Snipe(FOE), at(0.0, 0.0, 0.0, -3.0, 0.0));
+        for _ in 0..200 {
+            fly(&mut moving, &[], Some(&target));
+        }
+        assert!(moving.state.velocity.length() <= crate::flight::AT_REST_SPEED);
+        let bearing = crate::combat::aim::bearing(moving.state.position, target.position);
+        assert!(
+            shortest_turn(moving.state.heading, bearing).abs() < 3.0,
+            "{:?}",
+            moving.state
+        );
+        let still = fighter(Goal::Snipe(FOE), 0.0);
+        let controls = controls_of(&still, &target);
+        assert_eq!((controls.thrust, controls.turn), (false, Turn::Left));
+    }
+
+    #[test]
+    fn fleeing_close_it_turns_straight_away_and_thrusts_within_a_turn_and_20() {
+        // The attacker 250 below: away is up, 0; thrust within 23.
+        let attacker = at(0.0, 250.0, 0.0, 0.0, 0.0);
+        let thrusting = controls_of(&fighter(Goal::Flee(FOE), 23.0), &attacker);
+        assert_eq!((thrusting.thrust, thrusting.turn), (true, Turn::Left));
+        let turning = controls_of(&fighter(Goal::Flee(FOE), 23.1), &attacker);
+        assert!(!turning.thrust);
+    }
+
+    #[test]
+    fn fleeing_from_afar_it_runs_out_from_the_centre_and_jumps_with_the_fuel() {
+        // The attacker 251 right: run straight out, up from (0, -10).
+        let attacker = at(251.0, -10.0, 0.0, 0.0, 0.0);
+        let mut runner = npc(FAST, Goal::Flee(FOE), at(0.0, -10.0, 0.0, 0.0, 0.0));
+        let (outcome, _) = (0..1000)
+            .find_map(|tick| {
+                let outcome = fly(&mut runner, &[planet(140, 0.0, -10.0)], Some(&attacker));
+                (outcome != Outcome::Flying).then_some((outcome, tick))
+            })
+            .expect("leaves");
+        assert_eq!(outcome, Outcome::JumpedOut, "never lands");
+        assert!(runner.state.position.x.abs() < 1.0, "{:?}", runner.state);
+        let mut dry = npc(FAST, Goal::Flee(FOE), at(0.0, -1000.0, 0.0, -6.0, 0.0));
+        dry.reserves.fuel.now = 99.0;
+        for _ in 0..30 {
+            assert_eq!(fly(&mut dry, &[], Some(&attacker)), Outcome::Flying);
+        }
+        assert!(dry.state.position.y < -1100.0, "runs on: {:?}", dry.state);
+    }
+
+    #[test]
+    fn inspecting_it_closes_in_and_keeps_alongside() {
+        let target = at(400.0, 0.0, 0.0, 0.0, 0.0);
+        let mut inspector = fighter(Goal::Inspect(FOE), 0.0);
+        for _ in 0..600 {
+            fly(&mut inspector, &[], Some(&target));
+        }
+        let apart = (inspector.state.position - target.position).length();
+        assert!(
+            apart <= FOLLOW_DISTANCE * 1.1,
+            "{apart}: {:?}",
+            inspector.state
+        );
+        assert!(inspector.state.velocity.length() < 0.5);
+    }
+
+    #[test]
+    fn a_fight_whose_ship_is_gone_brakes() {
+        for goal in [
+            Goal::Attack(FOE),
+            Goal::Snipe(FOE),
+            Goal::Flee(FOE),
+            Goal::Inspect(FOE),
+        ] {
+            let mut ship = npc(FAST, goal, at(0.0, 0.0, 4.0, -3.0, 10.0));
+            for _ in 0..200 {
+                assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
+            }
+            assert!(
+                ship.state.velocity.length() < 0.5,
+                "{goal:?}: {:?}",
+                ship.state
+            );
+        }
     }
 }

@@ -18,8 +18,10 @@
 //!   player by squared distance (@0x9368-0x93ba), with no limit; only a
 //!   strictly nearer ship replaces the best, so a tie goes to the earlier.
 //!   Option-R takes any ship (`_FindNearestShipToPlayer` @0x923f) and plain
-//!   R only the threats (`_FindNearestThreatToPlayer` @0x93f9), so
-//!   [`nearest`] takes the filter.
+//!   R only the threats (`_FindNearestThreatToPlayer` @0x93f9, with
+//!   `_IsThreatToPlayer` @0x7f501: an intact ship attacking, sniping at or
+//!   fleeing from the player, [`Npc::threatens_player`]), so [`nearest`]
+//!   takes the filter.
 
 use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
@@ -30,6 +32,9 @@ use crate::traffic::npc::{Npc, NpcId};
 pub enum TargetPick {
     /// The candidate nearest the player.
     Nearest,
+    /// The candidate nearest the player that threatens it
+    /// ([`Npc::threatens_player`]).
+    NearestThreat,
     /// The next candidate after the target ([`next`]).
     Next,
 }

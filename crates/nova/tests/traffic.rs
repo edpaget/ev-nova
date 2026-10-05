@@ -297,6 +297,7 @@ impl Behaviour for Firing {
         Trigger {
             primary: true,
             secondary: None,
+            only: None,
         }
     }
 }

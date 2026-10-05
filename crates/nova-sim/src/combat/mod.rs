@@ -832,6 +832,7 @@ mod tests {
                 trigger: Trigger {
                     primary: true,
                     secondary: None,
+                    only: None,
                 },
                 ..self
             }
@@ -1787,6 +1788,7 @@ mod tests {
         attacker.trigger = Trigger {
             primary: true,
             secondary: None,
+            only: None,
         };
         let mut defender = Ship::at(1, 0.0, 0.0).armed(quad()).facing(0.0);
         defender.trigger = Trigger::default();
@@ -1825,6 +1827,7 @@ mod tests {
         ships[0].trigger = Trigger {
             primary: true,
             secondary: None,
+            only: None,
         };
         for _ in 0..12 {
             tick(&mut combat, &mut ships, &NovaDisable);

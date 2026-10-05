@@ -59,6 +59,14 @@ pub struct Governments {
 }
 
 impl Governments {
+    /// No governments at all.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            records: BTreeMap::new(),
+        }
+    }
+
     /// The table of `records`.
     #[must_use]
     pub fn new(records: impl IntoIterator<Item = GovtRecord>) -> Self {
@@ -465,6 +473,12 @@ mod tests {
         );
         assert_eq!(govts.penalty(None, Crime::Kill), 0);
         assert_eq!(govts.penalty(UNKNOWN, Crime::Kill), 0);
+    }
+
+    #[test]
+    fn the_empty_table_holds_none() {
+        assert_eq!(Governments::empty(), Governments::default());
+        assert_eq!(Governments::empty().ids().count(), 0);
     }
 
     #[test]

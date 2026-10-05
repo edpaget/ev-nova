@@ -720,6 +720,7 @@ impl Behaviour for Attacking {
         nova_sim::Trigger {
             primary: true,
             secondary: None,
+            only: None,
         }
     }
 

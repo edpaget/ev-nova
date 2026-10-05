@@ -3,8 +3,12 @@
 //! one fixed step at a time.
 //!
 //! - [`ai`]: NPC decisions: the [`Behaviour`] port that sets each NPC's
-//!   [`Goal`], and [`Peaceful`], Nova's default: traders land, others jump
-//!   out, escorts follow their lead.
+//!   [`Goal`] from its [`Surroundings`] and answers hits; [`Peaceful`],
+//!   traffic that never fights; and [`NovaAi`], Nova's combat AI, routing
+//!   each NPC by its AI type to [`WimpyTrader`], [`BraveTrader`],
+//!   [`Warship`] or [`Interceptor`]: whom they attack by governments'
+//!   relations and the player's legal record, when they flee, how they
+//!   come to each other's help, and which weapon they fire.
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
@@ -83,7 +87,8 @@
 //!   capacities, fuel, shield and armour regeneration and cargo space come
 //!   from.
 //! - [`targeting`]: which NPC the player's target command picks
-//!   ([`TargetPick`]): the nearest, or the next in turn.
+//!   ([`TargetPick`]): the nearest, the nearest threat, or the next in
+//!   turn.
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
@@ -125,7 +130,10 @@ mod testkit;
 pub mod traffic;
 pub mod wares;
 
-pub use ai::{Behaviour, Goal, Peaceful, Surroundings};
+pub use ai::{
+    Behaviour, BraveTrader, Goal, Interceptor, NovaAi, Peaceful, PlayerSide, Reaction,
+    Surroundings, Warship, WimpyTrader,
+};
 pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommodityStrings, DisasterId, DisasterRecord, DudeId,
     DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord, HullRecord, JunkId,
@@ -161,5 +169,5 @@ pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;
 pub use targeting::TargetPick;
-pub use traffic::Traffic;
 pub use traffic::npc::{AiType, Npc, NpcId};
+pub use traffic::{Traffic, World};

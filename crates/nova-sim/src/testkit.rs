@@ -232,6 +232,9 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         rounds: std::collections::BTreeMap::new(),
         trigger: Trigger::default(),
         target: None,
+        provoked: 0.0,
+        aggression: 0,
+        inspected: None,
     }
 }
 

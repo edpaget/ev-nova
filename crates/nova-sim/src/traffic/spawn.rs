@@ -33,6 +33,11 @@
 //!   [`JUMP_IN_SPEED`]. A ship with no fuel capacity is not brought in by
 //!   hyperspace; nor is a fleet whose lead has none.
 //!
+//! - **Aggression** ([`aggression`]): every ship spawned draws
+//!   `Rand(3) ^ 2` last, after its place (@0x3c55b, @0x3cb04): 2, 3 or 0.
+//!   It decides how far a warship hunts a player wanted by its
+//!   government, and when it retreats (see [`ai`](crate::ai)).
+//!
 //! A ship type with no record spawns nothing, a `Max` below `Min` gives
 //! `Min`, a negative count none, and a draw is never asked over 0.
 
@@ -69,6 +74,11 @@ pub const JUMP_IN_SPEED: f32 = 50.0;
 pub const JUMP_IN_SLOWING: f32 = 1.165;
 /// How far from the centre the glide ends.
 pub const JUMP_IN_END: f32 = 1000.0;
+/// `Rand(3)`: the draw a ship's aggression is made from.
+pub const AGGRESSION_DRAW: u32 = 3;
+/// What the aggression draw is combined with, bit by bit, by exclusive
+/// or.
+const AGGRESSION_XOR: u32 = 2;
 
 /// A ship to add to the system.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,6 +95,8 @@ pub struct NewShip {
     pub state: ShipState,
     /// Whether it glides in from hyperspace.
     pub jumping_in: bool,
+    /// How aggressive it is: 0, 2 or 3.
+    pub aggression: u8,
 }
 
 /// How fast a ship glides on tick `k` (from 0) of its jump in.
@@ -112,13 +124,15 @@ pub fn initial(table: &SpawnTable, chance: &mut (impl Chance + ?Sized)) -> Vec<N
             continue;
         }
         if let Some((ship, govt, ai_type, _)) = dude_ship(table, chance) {
+            let state = in_system(chance);
             out.push(NewShip {
                 ship,
                 govt,
                 ai_type,
                 lead: None,
-                state: in_system(chance),
+                state,
                 jumping_in: false,
+                aggression: aggression(chance),
             });
         }
     }
@@ -177,13 +191,15 @@ fn hyper_ship(table: &SpawnTable, chance: &mut (impl Chance + ?Sized), out: &mut
     if let Some((ship, govt, ai_type, kind)) = dude_ship(table, chance)
         && can_jump(kind)
     {
+        let state = hyperspace_entry(chance);
         out.push(NewShip {
             ship,
             govt,
             ai_type,
             lead: None,
-            state: hyperspace_entry(chance),
+            state,
             jumping_in: true,
+            aggression: aggression(chance),
         });
     }
 }
@@ -243,6 +259,7 @@ pub fn fleet(
         lead: None,
         state,
         jumping_in: true,
+        aggression: aggression(chance),
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -250,13 +267,15 @@ pub fn fleet(
             continue;
         };
         for _ in 0..count {
+            let placed = escort_offset(&state, chance);
             out.push(NewShip {
                 ship: escort.ship,
                 govt: record.govt,
                 ai_type: AiType::from_raw(kind.inherent_ai),
                 lead: Some(lead),
-                state: escort_offset(&state, chance),
+                state: placed,
                 jumping_in: true,
+                aggression: aggression(chance),
             });
         }
     }
@@ -308,6 +327,11 @@ pub fn escort_offset(lead: &ShipState, chance: &mut (impl Chance + ?Sized)) -> S
         position: lead.position + Vec2::new(x, y),
         ..*lead
     }
+}
+
+/// A ship's aggression: `Rand(3) ^ 2`.
+pub fn aggression(chance: &mut (impl Chance + ?Sized)) -> u8 {
+    u8::try_from(chance.below(AGGRESSION_DRAW) ^ AGGRESSION_XOR).unwrap_or(0)
 }
 
 /// A draw of `Rand(spread) - spread / 2`.
@@ -450,10 +474,11 @@ mod tests {
     #[test]
     fn a_setup_pass_drawing_a_fleet_rolls_the_linksyst_slot() {
         // Not a person, a fleet, slot 13 (fleet 141), at angle 0, its two
-        // escorts at (-150, -150) and (149, 149) from the lead.
-        let mut chance = Draws::of(&[6, 0, 13, 0, 0, 0, 299, 299]);
+        // escorts at (-150, -150) and (149, 149) from the lead, each ship's
+        // aggression drawn after its place.
+        let mut chance = Draws::of(&[6, 0, 13, 0, 2, 0, 0, 2, 299, 299, 2]);
         let ships = initial(&one_pass(), &mut chance);
-        assert_eq!(chance.asked, [7, 7, 256, 360, 300, 300, 300, 300]);
+        assert_eq!(chance.asked, [7, 7, 256, 360, 3, 300, 300, 3, 300, 300, 3]);
         let lead = ships[0];
         assert_eq!(
             (lead.ship, lead.lead, lead.jumping_in),
@@ -484,10 +509,10 @@ mod tests {
         // 1 is neither: a düde ship.
         let mut chance = Draws::of(&[1, 1, 0, 0, 0, 0, 0]);
         assert_eq!(initial(&one_pass(), &mut chance).len(), 1);
-        assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360]);
+        assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
         let mut chance = Draws::of(&[0, 1, 1, 0, 0, 0]);
         assert_eq!(arrivals(&table(), 0, &mut chance).len(), 1);
-        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360]);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
     }
 
     #[test]
@@ -496,7 +521,7 @@ mod tests {
         // facing 90.
         let mut chance = Draws::of(&[6, 6, 0, 0, 0, 1499, 90]);
         let ships = initial(&one_pass(), &mut chance);
-        assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360]);
+        assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
         assert_eq!(
             ships,
             [NewShip {
@@ -510,6 +535,7 @@ mod tests {
                     heading: 90.0,
                 },
                 jumping_in: false,
+                aggression: 0,
             }]
         );
     }
@@ -592,7 +618,7 @@ mod tests {
         // 0, not a person, not a fleet, düde 128, ship 201, at angle 90.
         let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90]);
         let ships = arrivals(&table(), 1, &mut chance);
-        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360]);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
         assert_eq!(ships.len(), 1);
         let ship = ships[0];
         assert_eq!(
@@ -628,11 +654,16 @@ mod tests {
     #[test]
     fn on_1_a_named_fleet_comes_when_the_percentage_roll_is_within_its_odds() {
         // 1, then Rand(100) + 1 = 30, at the fleets' 30: fleet 140, at
-        // angle 0, with Rand(3) = 2, so three escorts.
-        let mut chance = Draws::of(&[1, 29, 0, 0, 2]);
+        // angle 0, its lead's aggression, then Rand(3) = 2, so three
+        // escorts.
+        let mut chance = Draws::of(&[1, 29, 0, 0, 0, 2]);
         let ships = arrivals(&table(), 0, &mut chance);
-        assert_eq!(&chance.asked[..5], [500, 100, 30, 360, 3]);
-        assert_eq!(chance.asked.len(), 5 + 3 * 2, "each escort's offset");
+        assert_eq!(&chance.asked[..6], [500, 100, 30, 360, 3, 3]);
+        assert_eq!(
+            chance.asked.len(),
+            6 + 3 * 3,
+            "each escort's offset and aggression"
+        );
         assert_eq!(ships.len(), 4);
         assert_eq!(
             (ships[0].ship, ships[0].govt, ships[0].ai_type),
@@ -657,7 +688,7 @@ mod tests {
         // Through to a düde ship.
         let mut chance = Draws::of(&[1, 30, 6, 6, 0, 0, 0]);
         let ships = arrivals(&table(), 0, &mut chance);
-        assert_eq!(chance.asked, [500, 100, 7, 7, 100, 100, 360]);
+        assert_eq!(chance.asked, [500, 100, 7, 7, 100, 100, 360, 3]);
         assert_eq!(ships.len(), 1);
     }
 
@@ -715,7 +746,7 @@ mod tests {
         let mut chance = Draws::of(&[]);
         fleet(&table, FleetId(141), &mut chance, &mut out);
         assert_eq!(out.len(), 1);
-        assert_eq!(chance.asked, [360]);
+        assert_eq!(chance.asked, [360, 3]);
     }
 
     #[test]
@@ -775,6 +806,39 @@ mod tests {
         let mut chance = Draws::of(&[1]);
         assert_eq!(escort_count(-2, 1, &mut chance), 1, "none below none");
         assert_eq!(chance.asked, [2]);
+    }
+
+    // Aggression.
+
+    #[test]
+    fn a_ships_aggression_is_its_last_draw_of_3_xor_2() {
+        for (draw, aggression) in [(0, 2), (1, 3), (2, 0)] {
+            // A düde ship placed at setup.
+            let mut chance = Draws::of(&[6, 6, 0, 0, 0, 0, 0, draw]);
+            let ships = initial(&one_pass(), &mut chance);
+            assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
+            assert_eq!(ships[0].aggression, aggression, "{draw}");
+            // One jumping in.
+            let mut chance = Draws::of(&[0, 6, 6, 0, 0, 0, draw]);
+            let ships = arrivals(&table(), 0, &mut chance);
+            assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
+            assert_eq!(ships[0].aggression, aggression, "{draw}");
+        }
+        assert_eq!(AGGRESSION_DRAW, 3);
+    }
+
+    #[test]
+    fn each_ship_of_a_fleet_draws_its_aggression_after_its_place() {
+        // Fleet 141: its lead at angle 0 (aggression 3), then its two
+        // escorts, each placed and then its aggression drawn (0, then 2).
+        let mut out = Vec::new();
+        let mut chance = Draws::of(&[0, 1, 150, 150, 2, 150, 150, 0]);
+        fleet(&table(), FleetId(141), &mut chance, &mut out);
+        assert_eq!(chance.asked, [360, 3, 300, 300, 3, 300, 300, 3]);
+        assert_eq!(
+            out.iter().map(|ship| ship.aggression).collect::<Vec<_>>(),
+            [3, 0, 2]
+        );
     }
 
     // Placement.

@@ -105,6 +105,13 @@ pub struct Npc {
     pub trigger: Trigger,
     /// The ship it targets, as it last decided.
     pub target: Option<ShipRef>,
+    /// The shield and armour damage it has taken while it fights: none
+    /// once it goes back to an idle goal or is disabled.
+    pub provoked: f32,
+    /// How aggressive it is: 0, 2 or 3 for traffic.
+    pub aggression: u8,
+    /// The ship it last inspected, if any.
+    pub inspected: Option<ShipRef>,
 }
 
 impl Npc {
@@ -112,6 +119,23 @@ impl Npc {
     #[must_use]
     pub fn fleet(&self) -> NpcId {
         self.leader.unwrap_or(self.id)
+    }
+
+    /// Whether it threatens `ship` (`_ExtendedIsThreatToShip`): it is
+    /// intact, flying, and attacking, sniping at or fleeing from it.
+    #[must_use]
+    pub fn threatens(&self, ship: ShipRef) -> bool {
+        self.condition == Condition::Intact
+            && self.mode == Mode::Flying
+            && self.goal.quarry() == Some(ship)
+    }
+
+    /// Whether it threatens the player (`_IsThreatToPlayer` @0x7f501):
+    /// intact and attacking, sniping at or fleeing from the player. There
+    /// is no legal or government test; inspecting is no threat.
+    #[must_use]
+    pub fn threatens_player(&self) -> bool {
+        self.threatens(ShipRef::Player)
     }
 }
 
@@ -145,6 +169,55 @@ mod tests {
             ..crate::testkit::npc(5, ShipStats::default())
         };
         assert_eq!(escort.fleet(), NpcId(3));
+    }
+
+    #[test]
+    fn an_npc_threatens_the_ship_it_attacks_snipes_at_or_flees_from_while_intact() {
+        let other = ShipRef::Npc(NpcId(9));
+        for goal in [
+            Goal::Attack(ShipRef::Player),
+            Goal::Snipe(ShipRef::Player),
+            Goal::Flee(ShipRef::Player),
+        ] {
+            let npc = Npc {
+                goal,
+                ..crate::testkit::npc(1, ShipStats::default())
+            };
+            assert!(npc.threatens_player(), "{goal:?}");
+            assert!(!npc.threatens(other), "{goal:?}");
+            for condition in [
+                Condition::Disabled,
+                Condition::Dying { ticks_left: 1 },
+                Condition::Destroyed,
+            ] {
+                let downed = Npc {
+                    condition,
+                    ..npc.clone()
+                };
+                assert!(!downed.threatens_player(), "{goal:?} {condition:?}");
+            }
+            let arriving = Npc {
+                mode: Mode::JumpingIn { ticks_left: 2 },
+                ..npc.clone()
+            };
+            assert!(!arriving.threatens_player());
+        }
+        for goal in [
+            Goal::Inspect(ShipRef::Player),
+            Goal::Idle,
+            Goal::Attack(other),
+        ] {
+            let npc = Npc {
+                goal,
+                ..crate::testkit::npc(1, ShipStats::default())
+            };
+            assert!(!npc.threatens_player(), "{goal:?}");
+        }
+        let hunter = Npc {
+            goal: Goal::Attack(other),
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        assert!(hunter.threatens(other));
     }
 
     #[test]

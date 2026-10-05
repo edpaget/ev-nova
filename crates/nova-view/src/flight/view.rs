@@ -3600,9 +3600,9 @@ mod tests {
     }
 
     /// One setup pass placing the düde's ship at (`x` - 750, `y` - 750)
-    /// facing `heading`.
-    fn placed(x: u32, y: u32, heading: u32) -> [u32; 7] {
-        [6, 6, 0, 0, x, y, heading]
+    /// facing `heading`, of aggression 0.
+    fn placed(x: u32, y: u32, heading: u32) -> [u32; 8] {
+        [6, 6, 0, 0, x, y, heading, 2]
     }
 
     /// Decides nothing: every NPC idles.
@@ -3921,6 +3921,7 @@ mod tests {
             nova_sim::Trigger {
                 primary: true,
                 secondary: None,
+                only: None,
             }
         }
     }
@@ -4474,6 +4475,7 @@ mod tests {
             nova_sim::Trigger {
                 primary: true,
                 secondary: None,
+                only: None,
             }
         }
     }
@@ -4935,6 +4937,7 @@ mod tests {
             nova_sim::Trigger {
                 primary: true,
                 secondary: None,
+                only: None,
             }
         }
 

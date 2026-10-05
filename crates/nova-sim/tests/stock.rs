@@ -6,8 +6,11 @@
 //! their names without the designers' notes. Port Kane sells
 //! fuel and uninhabited Reflex-ion sells none. NPC traffic flies the
 //! ships and governments its system's `düde`s and fleets give, and
-//! Alphara's `DudeTypes` fleet comes when its roll fires. Skips, passing,
-//! when `NOVA_DATA` is unset.
+//! Alphara's `DudeTypes` fleet comes when its roll fires. The governments
+//! stand as their `gövt`s say, and in Fomalhaut the player's attack on a
+//! Civvies trader puts it to flight, brings the Federation down on the
+//! player and costs it 3 with each. Skips, passing, when `NOVA_DATA` is
+//! unset.
 
 mod common;
 
@@ -841,6 +844,7 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
         trigger: Trigger {
             primary: !weapon.secondary(),
             secondary: weapon.secondary().then_some(weapon.id),
+            only: None,
         },
         reserves: Reserves::full(0.0, 1_000_000.0, 1_000_000.0),
         condition: Condition::Intact,
@@ -1525,4 +1529,175 @@ fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released()
         released,
         [(163, seeker(229)), (182, seeker(148)), (185, seeker(148))]
     );
+}
+
+// Combat AI and legal status over the stock data.
+
+use nova_sim::ai::{Goal, NovaAi};
+use nova_sim::legal::{Crime, LegalCode, NovaLaw};
+use nova_sim::{Governments, GovtId};
+
+const FEDERATION: GovtId = GovtId(128);
+const PIRATES: GovtId = GovtId(137);
+const CIVVIES: GovtId = GovtId(157);
+const MARAUDERS: GovtId = GovtId(178);
+
+/// The Federation and the Civvies are allies, the Federation and the
+/// Pirates enemies, the Pirates and the Marauders xenophobes; disabling a
+/// Civvies ship costs 3 with the Civvies and the Federation.
+#[test]
+fn stock_governments_stand_as_the_gövts_say() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let govts = Governments::read(&data);
+    assert!(govts.allies(Some(FEDERATION), Some(CIVVIES)));
+    assert!(govts.enemies(Some(FEDERATION), Some(PIRATES)));
+    assert!(govts.xenophobic(Some(PIRATES)));
+    assert!(govts.xenophobic(Some(MARAUDERS)));
+    assert!(!govts.xenophobic(Some(FEDERATION)));
+    let changes = NovaLaw.penalties(Crime::Disable, Some(CIVVIES), &govts);
+    assert!(changes.contains(&(CIVVIES, -3)), "{changes:?}");
+    assert!(changes.contains(&(FEDERATION, -3)), "{changes:?}");
+}
+
+/// A new stock pilot flying the Fed Destroyer (`shïp` 141), in flight at
+/// the centre of Fomalhaut (`sÿst` 136), its reserves full.
+fn destroyer_in_fomalhaut(data: &GameData) -> Session {
+    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["system"] = serde_json::json!(136);
+    save["stellar"] = serde_json::Value::Null;
+    save["ship"] = serde_json::json!(141);
+    save["outfits"] = serde_json::Value::Null;
+    for gauge in ["shield", "armor", "fuel"] {
+        save["reserves"][gauge]["now"] = serde_json::json!(1_000_000.0);
+        save["reserves"][gauge]["max"] = serde_json::json!(1_000_000.0);
+    }
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let session = Session::fly(data, pilot).expect("flies");
+    assert_eq!(session.landed(), None, "in flight");
+    session
+}
+
+/// The NPC numbered `id`, if it is still in the system.
+fn npc_of(session: &Session, id: nova_sim::NpcId) -> Option<&nova_sim::Npc> {
+    session.npcs().iter().find(|npc| npc.id == id)
+}
+
+/// Whether no NPC but `quarry` is within 80 pixels of the line from the
+/// player to it, so a shot at it hits nothing else on the way.
+fn clear_shot(session: &Session, quarry: &nova_sim::Npc) -> bool {
+    let from = session.player().position;
+    let line = quarry.state.position - from;
+    let length = line.length().max(1.0);
+    session
+        .npcs()
+        .iter()
+        .filter(|npc| npc.id != quarry.id && npc.condition.hittable())
+        .all(|npc| {
+            let off = npc.state.position - from;
+            let along = ((off.x * line.x + off.y * line.y) / length).clamp(0.0, length);
+            let nearest = from + line * (along / length);
+            (npc.state.position - nearest).length() > 80.0
+        })
+}
+
+/// The player's controls to face `quarry` and close in, and whether to
+/// fire: facing it, with a clear shot and none of its own shots in
+/// flight.
+fn closing_on(session: &Session, quarry: &nova_sim::Npc) -> (nova_sim::Controls, bool) {
+    let player = *session.player();
+    let off = quarry.state.position - player.position;
+    let turn = nova_sim::flight::shortest_turn(player.heading, nova_sim::flight::heading_of(off));
+    let controls = nova_sim::Controls {
+        thrust: turn.abs() < 10.0 && off.length() > 150.0,
+        turn: if turn > 2.0 {
+            nova_sim::Turn::Right
+        } else if turn < -2.0 {
+            nova_sim::Turn::Left
+        } else {
+            nova_sim::Turn::None
+        },
+        reverse: false,
+    };
+    let quiet = session
+        .shots()
+        .iter()
+        .all(|shot| shot.firer != ShipRef::Player);
+    (
+        controls,
+        turn.abs() < 5.0 && quiet && clear_shot(session, quarry),
+    )
+}
+
+/// The Done scenario, short of boarding: in Fomalhaut, where a Civvies
+/// trader (`düde` 129, AI 1) and a Lone Federation Ship (`düde` 128, AI
+/// 4) fly, the player's attack on the trader puts it to flight and
+/// brings the Federation down on the player; disabling the trader costs
+/// 3 with the Civvies and with the Federation, and it is left alive.
+#[test]
+fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = destroyer_in_fomalhaut(&data);
+    let mut chance = Seeded(0x5EED_F00D);
+    let (trader, police) = (1..=200)
+        .find_map(|seed| {
+            session.populate(&data, &mut Seeded(seed));
+            let find = |govt, wanted: &[nova_sim::AiType]| {
+                session
+                    .npcs()
+                    .iter()
+                    .find(|npc| npc.govt == Some(govt) && wanted.contains(&npc.ai_type))
+                    .map(|npc| npc.id)
+            };
+            let trader = find(CIVVIES, &[nova_sim::AiType::WimpyTrader])?;
+            let police = find(
+                FEDERATION,
+                &[nova_sim::AiType::Warship, nova_sim::AiType::Interceptor],
+            )?;
+            Some((trader, police))
+        })
+        .expect("a seed brings a Civvies trader and the Federation");
+    let before = [CIVVIES, FEDERATION].map(|govt| session.pilot().legal_record(govt));
+    let (mut fled, mut answered, mut disabled) = (false, false, false);
+    for _ in 0..3000 {
+        let Some(quarry) = npc_of(&session, trader) else {
+            break;
+        };
+        let (controls, fire) = closing_on(&session, quarry);
+        disabled |= quarry.condition == Condition::Disabled;
+        session.hold_fire(fire && !disabled, false);
+        session.tick(controls);
+        session.tick_combat(nova_sim::Rules::default(), &mut chance);
+        session.tick_traffic(&data, &NovaAi::default(), &mut chance);
+        fled |= npc_of(&session, trader).is_some_and(|npc| npc.goal == Goal::Flee(ShipRef::Player));
+        answered |= session
+            .npcs()
+            .iter()
+            .any(|npc| npc.govt == Some(FEDERATION) && npc.goal == Goal::Attack(ShipRef::Player));
+        if disabled && answered {
+            break;
+        }
+    }
+    assert!(fled, "the trader fled from the player");
+    assert!(
+        answered,
+        "the Federation (NPC {}) attacked the player",
+        police.0
+    );
+    assert!(disabled, "the trader was disabled");
+    for _ in 0..30 {
+        session.hold_fire(false, false);
+        session.tick(nova_sim::Controls::default());
+        session.tick_combat(nova_sim::Rules::default(), &mut chance);
+    }
+    assert!(npc_of(&session, trader).is_some(), "not destroyed");
+    let after = [CIVVIES, FEDERATION].map(|govt| session.pilot().legal_record(govt));
+    assert_eq!(after, before.map(|record| record - 3));
 }

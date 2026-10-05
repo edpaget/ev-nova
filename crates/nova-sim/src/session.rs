@@ -75,8 +75,11 @@
 //! starts and after each take-off, as the original sets a system up on
 //! arrival and on take-off. [`Session::tick_traffic`] advances it a tick,
 //! NPCs deciding as a [`Behaviour`] says and rolling on the caller's
-//! [`Chance`]; it stands still while the player is landed or jumping, as
-//! the player's own ship does.
+//! [`Chance`], seeing the player's ship, the governments read when the
+//! session starts, the system's government and the player's legal record
+//! with it, and answering the fight's strikes since the last traffic
+//! tick; it stands still while the player is landed or jumping, as the
+//! player's own ship does.
 //!
 //! Ships fight ([`combat`](crate::combat)): the player holds a fire
 //! command ([`Session::hold_trigger`]) and aims at its target, and each
@@ -122,7 +125,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ai::Behaviour;
+use crate::ai::{Behaviour, PlayerSide};
 use crate::catalog::{
     CombatCatalog, GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord,
     StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
@@ -155,10 +158,10 @@ use crate::shipyard::{self, Quote, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::targeting::{self, TargetPick};
-use crate::traffic::Traffic;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::table::SpawnTable;
+use crate::traffic::{Traffic, World};
 
 /// The player's ship, flying in one system.
 #[derive(Clone, Debug, PartialEq)]
@@ -221,6 +224,9 @@ pub struct Session {
     target: Option<NpcId>,
     /// The secondary weapon the player has selected, if any.
     secondary: Option<WeaponId>,
+    /// The fight's strikes since the last traffic tick, for the NPCs to
+    /// answer.
+    strikes: Vec<Strike>,
 }
 
 impl Session {
@@ -303,6 +309,7 @@ impl Session {
             combat: Combat::default(),
             target: None,
             secondary: None,
+            strikes: Vec::new(),
             pilot,
         };
         session.refit(false);
@@ -392,6 +399,7 @@ impl Session {
         );
         self.traffic.enter(table, chance);
         self.traffic_due = false;
+        self.strikes.clear();
         self.clear_lost_target();
     }
 
@@ -412,7 +420,22 @@ impl Session {
             if self.traffic_due {
                 self.populate(catalog, chance);
             } else {
-                self.traffic.tick(behaviour, &self.sites, chance);
+                let system_govt = self.star_map.govt(self.pilot.system);
+                let world = World {
+                    sites: &self.sites,
+                    player: Some(PlayerSide {
+                        state: self.player,
+                        condition: self.condition,
+                        reserves: self.pilot.reserves,
+                        hull: self.hull,
+                        handling: self.stats.handling,
+                    }),
+                    govts: &self.govts,
+                    system_govt,
+                    record: system_govt.map_or(0, |govt| self.pilot.legal_record(govt)),
+                };
+                let strikes = std::mem::take(&mut self.strikes);
+                self.traffic.tick_in(behaviour, world, &strikes, chance);
             }
         }
         self.clear_lost_target();
@@ -429,6 +452,7 @@ impl Session {
         self.hold_trigger(Trigger {
             primary,
             secondary: self.secondary.filter(|_| secondary),
+            only: None,
         });
     }
 
@@ -544,6 +568,7 @@ impl Session {
             .tick(&mut fighters, &self.arsenal, &self.govts, rules, chance);
         let strikes = self.combat.take_strikes();
         self.punish(&strikes, &was, rules.law);
+        self.strikes.extend(strikes);
         let destroyed: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -599,15 +624,20 @@ impl Session {
     }
 
     /// Picks the player's target as `pick` says (see
-    /// [`targeting`](crate::targeting)), and gives it: the nearest NPC,
-    /// the target unchanged when there is none, or the next. While the
-    /// ship is landed or jumping, nothing changes.
+    /// [`targeting`](crate::targeting)), and gives it: the nearest NPC, or
+    /// the nearest threat, the target unchanged when there is none; or the
+    /// next. While the ship is landed or jumping, nothing changes.
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
         if self.landed.is_none() && self.jumping.is_none() {
             let npcs = self.traffic.npcs();
+            let from = self.player.position;
             match pick {
                 TargetPick::Nearest => {
-                    let nearest = targeting::nearest(npcs, self.player.position, |_| true);
+                    let nearest = targeting::nearest(npcs, from, |_| true);
+                    self.target = nearest.or(self.target);
+                }
+                TargetPick::NearestThreat => {
+                    let nearest = targeting::nearest(npcs, from, Npc::threatens_player);
                     self.target = nearest.or(self.target);
                 }
                 TargetPick::Next => self.target = targeting::next(npcs, self.target),
@@ -3286,13 +3316,9 @@ mod tests {
     }
 
     #[test]
-    fn traders_land_and_others_jump_out() {
-        for (ai_type, how) in [
-            (1, Outcome::Landed(StellarId(129))),
-            (2, Outcome::Landed(StellarId(129))),
-            (3, Outcome::JumpedOut),
-            (4, Outcome::JumpedOut),
-        ] {
+    fn every_ai_type_lands_peacefully() {
+        for ai_type in 1..=4 {
+            let how = Outcome::Landed(StellarId(129));
             let catalog = trafficked(130, 1, ai_type);
             let mut session = Session::start(&catalog).expect("starts");
             session.populate(&catalog, &mut NeverFires);
@@ -3564,6 +3590,7 @@ mod tests {
     const FIRE: Trigger = Trigger {
         primary: true,
         secondary: None,
+        only: None,
     };
 
     /// The fight's events about NPC 0, other than its firing.
@@ -3799,6 +3826,98 @@ mod tests {
         law: &NovaLaw,
     };
 
+    // What NPCs see.
+
+    /// What an NPC sees: the player, the system's government, the record
+    /// there, and how many governments there are.
+    type Seen = (Option<crate::ai::PlayerSide>, Option<GovtId>, i16, usize);
+
+    /// Records what each NPC sees as it decides, and each strike it
+    /// answers; decides nothing new.
+    #[derive(Debug, Default)]
+    struct Spy {
+        seen: std::cell::RefCell<Vec<Seen>>,
+        struck: std::cell::RefCell<Vec<crate::combat::Strike>>,
+    }
+
+    impl Behaviour for Spy {
+        fn decide(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            self.seen.borrow_mut().push((
+                around.player,
+                around.system_govt,
+                around.record,
+                around.govts.ids().count(),
+            ));
+            npc.goal
+        }
+
+        fn react(
+            &self,
+            _npc: &Npc,
+            strike: &crate::combat::Strike,
+            _around: &Surroundings,
+        ) -> crate::ai::Reaction {
+            self.struck.borrow_mut().push(*strike);
+            crate::ai::Reaction::default()
+        }
+    }
+
+    #[test]
+    fn npcs_see_the_player_the_governments_and_the_record_in_the_system() {
+        let mut catalog = armed();
+        catalog.star_map[0].govt = Some(GovtId(150));
+        catalog.govts = vec![crate::testkit::govt(150), crate::testkit::govt(151)];
+        let mut session = facing_an_npc(&catalog, 180);
+        session.pilot.set_legal_record(GovtId(150), -20);
+        session.pilot.set_legal_record(GovtId(151), 30);
+        let spy = Spy::default();
+        session.tick_traffic(&catalog, &spy, &mut NeverFires);
+        let seen = spy.seen.take();
+        assert_eq!(seen.len(), 1);
+        let (player, system, record, govts) = seen[0];
+        let player = player.expect("the player flies here");
+        assert_eq!(player.state, *session.player());
+        assert_eq!(player.condition, Condition::Intact);
+        assert_eq!(player.reserves, session.reserves());
+        assert_eq!(player.hull, session.hull());
+        assert_eq!(player.handling, session.handling());
+        assert_eq!((system, record, govts), (Some(GovtId(150)), -20, 2));
+        catalog.star_map[0].govt = None;
+        let mut session = facing_an_npc(&catalog, 180);
+        session.pilot.set_legal_record(GovtId(150), -20);
+        session.tick_traffic(&catalog, &spy, &mut NeverFires);
+        let (_, system, record, _) = spy.seen.take()[0];
+        assert_eq!((system, record), (None, 0), "an independent system");
+    }
+
+    #[test]
+    fn npcs_answer_the_fights_strikes_on_the_next_traffic_tick_once() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let spy = Spy::default();
+        let mut hits = 0;
+        for _ in 0..30 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.tick_traffic(&catalog, &spy, &mut NeverFires);
+            let struck = spy.struck.take();
+            hits += struck.len();
+            assert!(struck.len() <= 1, "each strike once: {struck:?}");
+            for strike in struck {
+                assert_eq!(
+                    (strike.ship, strike.by),
+                    (ShipRef::Npc(NpcId(0)), ShipRef::Player)
+                );
+            }
+        }
+        assert!(hits > 3, "{hits}");
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.land().expect("lands");
+        session.take_off();
+        session.tick_traffic(&catalog, &spy, &mut NeverFires);
+        assert_eq!(spy.struck.take(), [], "gone with the system's traffic");
+    }
+
     // Crimes.
 
     /// The NPCs' government 140 (class 1: disabling costs 3, killing 7),
@@ -3967,7 +4086,7 @@ mod tests {
         // NPC 0 at (0, -100) and NPC 1 at (100, -100), both facing right.
         session.populate(
             &catalog,
-            &mut Draws::of(&[6, 6, 0, 0, 750, 650, 90, 6, 6, 0, 0, 850, 650, 90]),
+            &mut Draws::of(&[6, 6, 0, 0, 750, 650, 90, 2, 6, 6, 0, 0, 850, 650, 90, 2]),
         );
         let witness = Witness::default();
         let rules = Rules {
@@ -4275,7 +4394,7 @@ mod tests {
     /// (-50, 0), nearer the player at the centre.
     fn two_npcs(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
-        let draws = [6, 6, 0, 0, 850, 650, 0, 6, 6, 0, 0, 700, 750, 0];
+        let draws = [6, 6, 0, 0, 850, 650, 0, 2, 6, 6, 0, 0, 700, 750, 0, 2];
         session.populate(catalog, &mut Draws::of(&draws));
         assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)]);
         session
@@ -4309,6 +4428,46 @@ mod tests {
         assert_eq!(target_id(&session), Some(NpcId(1)));
         session.player.position = Vec2::new(90.0, -90.0);
         assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
+    }
+
+    #[test]
+    fn selecting_the_nearest_threat_picks_the_nearest_npc_fighting_the_player() {
+        let catalog = trafficked(130, 2, 3);
+        let mut session = two_npcs(&catalog);
+        // NPC 1 is nearer; NPC 0 attacks the player.
+        let threatened = |session: &mut Session, goal: Goal| {
+            session.traffic.npcs_mut()[0].goal = goal;
+            session.target = None;
+            session.select_target(TargetPick::NearestThreat)
+        };
+        assert_eq!(
+            threatened(&mut session, Goal::Attack(ShipRef::Player)),
+            Some(NpcId(0))
+        );
+        assert_eq!(
+            threatened(&mut session, Goal::Flee(ShipRef::Player)),
+            Some(NpcId(0)),
+            "fleeing from it is a threat, as _IsThreatToPlayer says"
+        );
+        assert_eq!(
+            threatened(&mut session, Goal::Inspect(ShipRef::Player)),
+            None
+        );
+        session.target = Some(NpcId(1));
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(NpcId(1)),
+            "none: the target unchanged"
+        );
+        session.traffic.npcs_mut()[0].goal = Goal::Attack(ShipRef::Player);
+        session.traffic.npcs_mut()[0].condition = Condition::Disabled;
+        session.target = None;
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            None,
+            "a disabled ship is no threat"
+        );
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(1)));
     }
 
     #[test]
@@ -4747,5 +4906,358 @@ mod tests {
                 .all(|shot| shot.weapon.id != WeaponId(134)),
             "the missile is gone"
         );
+    }
+
+    // Fights, by Nova's AI.
+
+    /// Traders (140, class 1: disabling costs 3), police allied with them
+    /// (141, retreating by `Flags` 0x0010, `MaxOdds` 200), xenophobes
+    /// (142) and neutrals (143, `CrimeTol` 6).
+    fn skirmish_govts() -> Vec<GovtRecord> {
+        let tolerant = |id| GovtRecord {
+            crime_tol: 6,
+            penalties: crate::catalog::Penalties {
+                disable: 3,
+                kill: 7,
+                ..crate::catalog::Penalties::default()
+            },
+            ..crate::testkit::govt(id)
+        };
+        vec![
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..tolerant(140)
+            },
+            GovtRecord {
+                flags: crate::govt::WARSHIPS_RETREAT,
+                allies: [1, -1, -1, -1],
+                classes: [2, -1, -1, -1],
+                max_odds: 200,
+                ..tolerant(141)
+            },
+            GovtRecord {
+                flags: crate::govt::XENOPHOBIC,
+                ..tolerant(142)
+            },
+            tolerant(143),
+        ]
+    }
+
+    /// A point-defence turret firing every 5 ticks at missiles within
+    /// 360 pixels.
+    fn point_defence() -> WeaponRecord {
+        WeaponRecord {
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..weapon(133)
+        }
+    }
+
+    /// A homing missile, 5 pixels a tick for 100 ticks, fired every 30.
+    fn homing() -> WeaponRecord {
+        WeaponRecord {
+            guidance: 1,
+            reload: 30,
+            count: 100,
+            speed: 500,
+            guided_turn: 70,
+            mass_dmg: 20,
+            energy_dmg: 10,
+            ..weapon(134)
+        }
+    }
+
+    /// Ship `id` of strength `strength` carrying one of each of `weapons`.
+    fn fitted(id: i16, strength: i16, weapons: &[i16]) -> HullRecord {
+        HullRecord {
+            strength,
+            weapons: weapons
+                .iter()
+                .map(|&weapon| StockWeapon {
+                    weapon: WeaponId(weapon),
+                    count: 1,
+                    ammo: 0,
+                })
+                .collect(),
+            ..hull(id)
+        }
+    }
+
+    /// System 130 (governed by `system_govt`) trafficked by `dudes`, each
+    /// (AI type, government, ship) at an equal share; the player's tough
+    /// ship 128 (300 shield, 450 armour) carries a blaster and point
+    /// defence. Ship 129 is an unarmed trader, 130-132 carry a blaster,
+    /// 133 and 134 a homing missile and 135 point defence.
+    fn skirmish(dudes: &[(i16, i16, i16)], system_govt: Option<i16>) -> FakePilotCatalog {
+        let mut dude_types = [(-1, 0); 8];
+        for (slot, _) in dudes.iter().enumerate() {
+            dude_types[slot] = (128 + slot as i16, 100 / dudes.len() as i16);
+        }
+        let mut catalog = FakePilotCatalog {
+            ships: vec![(
+                ShipId(128),
+                Ok(ShipFields {
+                    shield: 300,
+                    armor: 450,
+                    ..FAST
+                }),
+            )],
+            weapons: vec![blaster(), point_defence(), homing()],
+            hulls: vec![
+                fitted(128, 100, &[128, 133]),
+                fitted(129, 10, &[]),
+                fitted(130, 100, &[128]),
+                fitted(131, 100, &[128]),
+                fitted(132, 100, &[128]),
+                fitted(133, 100, &[134]),
+                fitted(134, 10, &[134]),
+                fitted(135, 100, &[133]),
+            ],
+            govts: skirmish_govts(),
+            traffic: vec![(
+                SystemId(130),
+                SystemTraffic {
+                    dude_types,
+                    avg_ships: dudes.len() as i16,
+                },
+            )],
+            dudes: dudes
+                .iter()
+                .enumerate()
+                .map(|(slot, &(ai_type, govt, ship))| {
+                    (
+                        DudeId(128 + slot as i16),
+                        DudeRecord {
+                            ai_type,
+                            govt: Some(GovtId(govt)),
+                            ships: vec![(ShipId(ship), 1)],
+                        },
+                    )
+                })
+                .collect(),
+            ship_records: (129..=135).map(|id| ship(id, FAST)).collect(),
+            ..catalog()
+        };
+        catalog.star_map[0].govt = system_govt.map(GovtId);
+        catalog
+    }
+
+    /// Setup draws placing, in order, düde `slot` of `of` at (`x`, `y`)
+    /// facing `heading`, each of aggression 2.
+    fn placing(of: usize, ships: &[(usize, i32, i32, u32)]) -> Draws {
+        let share = 100 / of as u32;
+        let draws: Vec<u32> = ships
+            .iter()
+            .flat_map(|&(slot, x, y, heading)| {
+                [
+                    6,
+                    6,
+                    slot as u32 * share,
+                    0,
+                    (x + 750) as u32,
+                    (y + 750) as u32,
+                    heading,
+                    0,
+                ]
+            })
+            .collect();
+        Draws::of(&draws)
+    }
+
+    /// A tick of the fight, then of Nova's traffic.
+    fn fight(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.tick_traffic(catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+    }
+
+    #[test]
+    fn the_players_attack_on_a_trader_puts_it_to_flight_and_brings_the_police() {
+        // The trader 100 ahead of the player; the police far behind.
+        let catalog = skirmish(&[(1, 140, 129), (4, 141, 130)], Some(140));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(
+            &catalog,
+            &mut placing(2, &[(0, 0, -100, 0), (1, 0, 740, 0)]),
+        );
+        let (trader, police) = (NpcId(0), NpcId(1));
+        let goal_of = |session: &Session, id| {
+            session
+                .npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .map(|npc| npc.goal)
+        };
+        session.hold_trigger(FIRE);
+        let mut fled = false;
+        let mut picked_while_fleeing = None;
+        let mut disabled_at = None;
+        for tick in 0..400 {
+            fight(&mut session, &catalog);
+            if goal_of(&session, trader) == Some(Goal::Flee(ShipRef::Player)) && !fled {
+                fled = true;
+                picked_while_fleeing = session.select_target(TargetPick::NearestThreat);
+            }
+            let downed = session
+                .npcs()
+                .iter()
+                .any(|npc| npc.id == trader && npc.condition == Condition::Disabled);
+            if downed && disabled_at.is_none() {
+                disabled_at = Some(tick);
+                session.hold_trigger(Trigger::default());
+                assert_eq!(
+                    [140, 141, 142, 143].map(|govt| session.pilot().legal_record(GovtId(govt))),
+                    [-3, -3, 1, 0],
+                    "the traders and their allies the police lower; the xenophobes, at \
+                     war with all, pleased by half theirs; the neutrals alone"
+                );
+                let npc_at = |id| {
+                    session
+                        .npcs()
+                        .iter()
+                        .find(|npc| npc.id == id)
+                        .map(|npc| npc.state.position.length())
+                };
+                assert!(npc_at(trader) < npc_at(police), "the trader is nearer");
+                assert_eq!(
+                    session.select_target(TargetPick::NearestThreat),
+                    Some(police),
+                    "the disabled trader is no threat; the police are"
+                );
+            }
+            if disabled_at.is_some() && session.reserves().shield.now < 300.0 {
+                break;
+            }
+        }
+        assert!(fled, "the trader fled from the player");
+        assert_eq!(
+            picked_while_fleeing,
+            Some(trader),
+            "a ship fleeing from the player is a threat to it"
+        );
+        assert!(disabled_at.is_some(), "the trader was disabled");
+        assert_eq!(
+            goal_of(&session, police),
+            Some(Goal::Attack(ShipRef::Player))
+        );
+        assert!(
+            session.reserves().shield.now < 300.0,
+            "the police's shots reached the player: {:?}",
+            session.reserves()
+        );
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
+        assert_eq!(&saved, session.pilot());
+    }
+
+    #[test]
+    fn a_neutral_warship_hunts_a_player_wanted_below_its_tolerance() {
+        let catalog = skirmish(&[(3, 143, 132)], Some(143));
+        for (record, hunted) in [(-6, false), (-7, true)] {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.pilot.set_legal_record(GovtId(143), record);
+            session.populate(&catalog, &mut placing(1, &[(0, 300, 0, 0)]));
+            fight(&mut session, &catalog);
+            assert_eq!(
+                session.npcs()[0].goal == Goal::Attack(ShipRef::Player),
+                hunted,
+                "{record}: {:?}",
+                session.npcs()[0].goal
+            );
+        }
+    }
+
+    #[test]
+    fn a_xenophobes_warship_attacks_the_player_and_the_police_whichever_is_nearer() {
+        let catalog = skirmish(&[(3, 142, 131), (4, 141, 130)], Some(140));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(
+            &catalog,
+            &mut placing(2, &[(0, 0, -300, 0), (1, 700, 700, 0)]),
+        );
+        fight(&mut session, &catalog);
+        assert_eq!(session.npcs()[0].goal, Goal::Attack(ShipRef::Player));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(
+            &catalog,
+            &mut placing(2, &[(0, 0, -300, 0), (1, 0, -350, 0)]),
+        );
+        fight(&mut session, &catalog);
+        assert_eq!(session.npcs()[0].goal, Goal::Attack(ShipRef::Npc(NpcId(1))));
+    }
+
+    /// Every NPC of AI type 1 attacks NPC `at`, firing its missile; the
+    /// rest idle.
+    #[derive(Debug)]
+    struct Volley {
+        at: ShipRef,
+    }
+
+    impl Behaviour for Volley {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            if npc.ai_type == crate::traffic::npc::AiType::WimpyTrader {
+                Goal::Attack(self.at)
+            } else {
+                Goal::Idle
+            }
+        }
+
+        fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+            if npc.ai_type == crate::traffic::npc::AiType::WimpyTrader {
+                Trigger {
+                    only: Some(WeaponId(134)),
+                    ..Trigger::default()
+                }
+            } else {
+                Trigger::default()
+            }
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.goal.quarry()
+        }
+    }
+
+    /// Whether point defence shot a missile down over `ticks` of `session`
+    /// under `volley`.
+    fn shot_down(session: &mut Session, catalog: &FakePilotCatalog, volley: &Volley) -> bool {
+        let mut downed = false;
+        for _ in 0..60 {
+            session.tick_traffic(catalog, volley, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            downed |= session
+                .take_combat_events()
+                .iter()
+                .any(|event| matches!(event, CombatEvent::ShotDown { .. }));
+        }
+        downed
+    }
+
+    #[test]
+    fn point_defence_engages_a_xenophobes_missile_but_not_an_allys() {
+        // A xenophobe's missile boat (AI 1 here, so the volley fires it)
+        // 300 above the player.
+        let catalog = skirmish(&[(1, 142, 133)], Some(140));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut placing(1, &[(0, 0, -300, 180)]));
+        let at_player = Volley {
+            at: ShipRef::Player,
+        };
+        assert!(shot_down(&mut session, &catalog, &at_player));
+        // A trader's missile at the police, allied: their point defence
+        // lets it be, and it hits.
+        let catalog = skirmish(&[(1, 140, 134), (4, 141, 135)], Some(140));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(
+            &catalog,
+            &mut placing(2, &[(0, 0, -600, 180), (1, 0, -300, 0)]),
+        );
+        let at_police = Volley {
+            at: ShipRef::Npc(NpcId(1)),
+        };
+        assert!(!shot_down(&mut session, &catalog, &at_police));
+        assert!(session.npcs()[1].reserves.shield.now < 30.0, "it hit");
     }
 }

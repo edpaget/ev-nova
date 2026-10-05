@@ -6,20 +6,33 @@
 //! - [`spawn`]: the rolls: the initial population, the arrivals over time
 //!   and the fleets, and where each ship starts.
 //! - [`npc`]: an [`Npc`]: its ship, government, AI type, stats,
-//!   reserves, flight state and goal, and its condition, armament and fire
-//!   command.
+//!   reserves, flight state and goal, its condition, armament and fire
+//!   command, and its provocation, aggression and the ship it last
+//!   inspected.
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
 //!
 //! [`Traffic`] holds a system's NPCs. Entering a system
 //! ([`Traffic::enter`]) replaces them with its initial population. Each
-//! tick ([`Traffic::tick`]), in order: the arrival roll; the decisions due
-//! on the AI timer (each NPC's goal, the fire command it holds and the
-//! ship it targets), never
-//! for a ship still jumping in or one that is not intact; the autopilot
-//! and a flight step for every NPC; and the removal of those that landed
-//! or jumped out. The fight ([`combat`](crate::combat)) damages them, and
-//! its session takes out each one destroyed ([`Traffic::remove`]).
+//! tick ([`Traffic::tick_in`]) in its [`World`] (the stellars, the player,
+//! the governments and the player's legal record there), in order:
+//!
+//! 1. the arrival roll;
+//! 2. each flying, intact NPC answers the fight's strikes since the last
+//!    tick ([`Behaviour::react`]): the ship it targets, its provocation,
+//!    and any goal it takes at once;
+//! 3. an NPC not intact loses its provocation;
+//! 4. the decisions due on the AI timer, never for a ship still jumping
+//!    in or one that is not intact: first every goal, then, each NPC
+//!    seeing the new goals, the fire command it holds and the ship it
+//!    targets. An NPC that goes back to an idle goal (not fighting) loses
+//!    its provocation, and one that stops inspecting a ship remembers it;
+//! 5. the autopilot and a flight step for every NPC, each flying towards
+//!    the ship its goal is about, the player's included;
+//! 6. and the removal of those that landed or jumped out.
+//!
+//! The fight ([`combat`](crate::combat)) damages them, and its session
+//! takes out each one destroyed ([`Traffic::remove`]).
 //!
 //! The AI timer is the original's (`_AIDispatch`): an NPC decides on the
 //! ticks where `tick % interval == id % interval`, so decisions are
@@ -32,12 +45,14 @@ pub mod npc;
 pub mod spawn;
 pub mod table;
 
-use crate::ai::{Behaviour, Goal, Surroundings};
-use crate::catalog::{LandingSite, ShipId};
+use crate::ai::{Behaviour, Goal, PlayerSide, Reaction, Surroundings};
+use crate::catalog::{GovtId, LandingSite, ShipId};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
+use crate::combat::{ShipRef, Strike};
 use crate::flight::ShipState;
+use crate::govt::Governments;
 use autopilot::Outcome;
 use npc::{Mode, Npc, NpcId};
 use spawn::{JUMP_IN_TICKS, NewShip};
@@ -53,6 +68,50 @@ pub const DECISION_INTERVAL: u32 = 1;
 pub fn decision_due(tick: u64, id: NpcId, interval: u32) -> bool {
     let interval = u64::from(interval.max(1));
     tick % interval == u64::from(id.0) % interval
+}
+
+/// What the traffic flies among besides itself: the system's stellars,
+/// the player, the governments, and the player's legal record there.
+#[derive(Clone, Copy, Debug)]
+pub struct World<'a> {
+    /// The system's stellars.
+    pub sites: &'a [LandingSite],
+    /// The player's ship, while it flies in the system.
+    pub player: Option<PlayerSide>,
+    /// Every government and their relations.
+    pub govts: &'a Governments,
+    /// The system's government, or `None` when it is independent.
+    pub system_govt: Option<GovtId>,
+    /// The player's legal record with the system's government; none in an
+    /// independent system.
+    pub record: i16,
+}
+
+impl<'a> World<'a> {
+    /// `sites` alone: no player, no governments and no record.
+    #[must_use]
+    pub fn new(sites: &'a [LandingSite]) -> Self {
+        let bare = Surroundings::new(sites, &[]);
+        Self {
+            sites,
+            player: None,
+            govts: bare.govts,
+            system_govt: None,
+            record: 0,
+        }
+    }
+
+    /// What `npcs` see in this world.
+    fn around(self, npcs: &'a [Npc]) -> Surroundings<'a> {
+        Surroundings {
+            sites: self.sites,
+            npcs,
+            player: self.player,
+            govts: self.govts,
+            system_govt: self.system_govt,
+            record: self.record,
+        }
+    }
 }
 
 /// A system's NPCs, and what more of them are drawn from.
@@ -108,52 +167,105 @@ impl Traffic {
         self.add(ships);
     }
 
-    /// Advances the traffic one tick among `sites`, NPCs deciding as
-    /// `behaviour` says, rolling on `chance` (see the module docs).
+    /// Advances the traffic one tick among `sites` alone, NPCs deciding
+    /// as `behaviour` says, rolling on `chance` (see
+    /// [`Traffic::tick_in`]).
     pub fn tick(
         &mut self,
         behaviour: &(impl Behaviour + ?Sized),
         sites: &[LandingSite],
         chance: &mut (impl Chance + ?Sized),
     ) {
+        self.tick_in(behaviour, World::new(sites), &[], chance);
+    }
+
+    /// Advances the traffic one tick in `world`, NPCs answering the
+    /// `strikes` since the last tick and deciding as `behaviour` says,
+    /// rolling on `chance` (see the module docs).
+    pub fn tick_in(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        world: World,
+        strikes: &[Strike],
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         let arrivals = spawn::arrivals(&self.table, self.npcs.len(), chance);
         self.add(arrivals);
-        let around = Surroundings {
-            sites,
-            npcs: &self.npcs,
-        };
-        let mut decisions = Vec::with_capacity(self.npcs.len());
-        for npc in &self.npcs {
-            let due = npc.mode == Mode::Flying
-                && npc.condition == Condition::Intact
-                && decision_due(self.ticks, npc.id, self.interval);
-            decisions.push(due.then(|| {
-                let goal = behaviour.decide(npc, &around, &mut &mut *chance);
-                let trigger = behaviour.trigger(npc, &around);
-                (goal, trigger, behaviour.target(npc, &around))
-            }));
+        self.react(behaviour, world, strikes);
+        for npc in &mut self.npcs {
+            if npc.condition != Condition::Intact {
+                npc.provoked = 0.0;
+            }
         }
-        for (npc, decision) in self.npcs.iter_mut().zip(decisions) {
-            if let Some((goal, trigger, target)) = decision {
-                npc.goal = goal;
+        let due: Vec<bool> = self
+            .npcs
+            .iter()
+            .map(|npc| {
+                npc.mode == Mode::Flying
+                    && npc.condition == Condition::Intact
+                    && decision_due(self.ticks, npc.id, self.interval)
+            })
+            .collect();
+        let around = world.around(&self.npcs);
+        let goals: Vec<Option<Goal>> = self
+            .npcs
+            .iter()
+            .zip(&due)
+            .map(|(npc, &due)| due.then(|| behaviour.decide(npc, &around, &mut &mut *chance)))
+            .collect();
+        for (npc, goal) in self.npcs.iter_mut().zip(goals) {
+            let Some(goal) = goal else {
+                continue;
+            };
+            if let Goal::Inspect(ship) = npc.goal
+                && goal != npc.goal
+            {
+                npc.inspected = Some(ship);
+            }
+            if !goal.fights() {
+                npc.provoked = 0.0;
+            }
+            npc.goal = goal;
+        }
+        let around = world.around(&self.npcs);
+        let commands: Vec<Option<(Trigger, Option<ShipRef>)>> = self
+            .npcs
+            .iter()
+            .zip(&due)
+            .map(|(npc, &due)| {
+                due.then(|| {
+                    (
+                        behaviour.trigger(npc, &around),
+                        behaviour.target(npc, &around),
+                    )
+                })
+            })
+            .collect();
+        for (npc, command) in self.npcs.iter_mut().zip(commands) {
+            if let Some((trigger, target)) = command {
                 npc.trigger = trigger;
                 npc.target = target;
             }
         }
         let states: Vec<(NpcId, ShipState)> =
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
+        let player = world.player.map(|player| player.state);
         let outcomes: Vec<Outcome> = self
             .npcs
             .iter_mut()
             .map(|npc| {
-                let lead = match npc.goal {
-                    Goal::Follow(lead) => states
-                        .iter()
-                        .find(|(id, _)| *id == lead)
-                        .map(|(_, state)| state),
-                    _ => None,
+                let other = match npc.goal {
+                    Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
+                    goal => goal.quarry().or(goal.inspecting()),
                 };
-                autopilot::fly(npc, sites, lead)
+                let other = other.and_then(|ship| match ship {
+                    ShipRef::Player => player,
+                    ShipRef::Npc(id) => states
+                        .iter()
+                        .find(|(other, _)| *other == id)
+                        .map(|(_, state)| *state),
+                });
+                autopilot::fly(npc, world.sites, other.as_ref())
             })
             .collect();
         self.departed = self
@@ -166,6 +278,39 @@ impl Traffic {
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
         self.ticks += 1;
+    }
+
+    /// Each flying, intact NPC answers each of `strikes` in `world`, as
+    /// `behaviour` says, all against the NPCs as they were before.
+    fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: World, strikes: &[Strike]) {
+        if strikes.is_empty() {
+            return;
+        }
+        let around = world.around(&self.npcs);
+        let reactions: Vec<Vec<Reaction>> = self
+            .npcs
+            .iter()
+            .map(|npc| {
+                if npc.mode != Mode::Flying || npc.condition != Condition::Intact {
+                    return Vec::new();
+                }
+                strikes
+                    .iter()
+                    .map(|strike| behaviour.react(npc, strike, &around))
+                    .collect()
+            })
+            .collect();
+        for (npc, reactions) in self.npcs.iter_mut().zip(reactions) {
+            for reaction in reactions {
+                if let Some(target) = reaction.target {
+                    npc.target = Some(target);
+                }
+                npc.provoked += reaction.provoked;
+                if let Some(goal) = reaction.goal {
+                    npc.goal = goal;
+                }
+            }
+        }
     }
 
     /// The NPCs, in the order they appeared.
@@ -228,6 +373,9 @@ impl Traffic {
                 rounds: kind.rounds.clone(),
                 trigger: Trigger::default(),
                 target: None,
+                provoked: 0.0,
+                aggression: ship.aggression,
+                inspected: None,
             });
         }
     }
@@ -336,9 +484,9 @@ mod tests {
     }
 
     /// One setup pass placing ship 200 in the system at
-    /// (`x` - 750, `y` - 750), facing up.
-    fn placed(x: u32, y: u32) -> [u32; 7] {
-        [6, 6, 0, 0, x, y, 0]
+    /// (`x` - 750, `y` - 750), facing up, of aggression 0.
+    fn placed(x: u32, y: u32) -> [u32; 8] {
+        [6, 6, 0, 0, x, y, 0, 2]
     }
 
     /// Traffic deciding every `interval` ticks, entered into a system with
@@ -578,6 +726,7 @@ mod tests {
             trigger: Trigger {
                 primary: true,
                 secondary: Some(WeaponId(138)),
+                only: None,
             },
             ..Recording::deciding(Goal::Idle)
         };
@@ -682,5 +831,292 @@ mod tests {
         }
         let escort = &traffic.npcs()[1];
         assert!(escort.state.position.x < 450.0, "{:?}", escort.state);
+    }
+
+    #[test]
+    fn each_npc_keeps_the_aggression_it_drew() {
+        let mut traffic = Traffic::new();
+        traffic.enter(table(1), &mut Draws::of(&[6, 6, 0, 0, 0, 0, 0, 1]));
+        assert_eq!(traffic.npcs()[0].aggression, 3);
+        assert_eq!(traffic.npcs()[0].provoked, 0.0);
+        assert_eq!(traffic.npcs()[0].inspected, None);
+    }
+
+    // Fights.
+
+    use crate::ai::{PlayerSide, Reaction};
+    use crate::combat::Strike;
+
+    /// Records the order of its reactions and decisions; reacts to a
+    /// strike on an NPC by taking its attacker, provoked by the damage;
+    /// decides `goal`; and fires and targets as the goal it was given
+    /// says.
+    #[derive(Debug)]
+    struct Fighting {
+        goal: Goal,
+        log: RefCell<Vec<String>>,
+    }
+
+    impl Fighting {
+        fn deciding(goal: Goal) -> Self {
+            Self {
+                goal,
+                log: RefCell::default(),
+            }
+        }
+    }
+
+    impl Behaviour for Fighting {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            self.log.borrow_mut().push(format!(
+                "decide {} {:?} {}",
+                npc.id.0, npc.target, npc.provoked
+            ));
+            self.goal
+        }
+
+        fn trigger(&self, npc: &Npc, _around: &Surroundings) -> Trigger {
+            self.log
+                .borrow_mut()
+                .push(format!("trigger {} {:?}", npc.id.0, npc.goal));
+            Trigger::default()
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.goal.quarry()
+        }
+
+        fn react(&self, npc: &Npc, strike: &Strike, _around: &Surroundings) -> Reaction {
+            self.log
+                .borrow_mut()
+                .push(format!("react {} {:?}", npc.id.0, strike.ship));
+            if strike.ship == ShipRef::Npc(npc.id) {
+                Reaction {
+                    target: Some(strike.by),
+                    provoked: strike.damage,
+                    goal: None,
+                }
+            } else {
+                Reaction::default()
+            }
+        }
+    }
+
+    fn struck(ship: u32, damage: f32) -> Strike {
+        Strike {
+            ship: ShipRef::Npc(NpcId(ship)),
+            by: ShipRef::Player,
+            damage,
+            downed: None,
+        }
+    }
+
+    #[test]
+    fn strikes_are_answered_before_the_decisions_and_goals_before_the_triggers() {
+        let mut traffic = populated(2, 1);
+        let fighting = Fighting::deciding(Goal::Attack(ShipRef::Player));
+        traffic.tick_in(
+            &fighting,
+            World::new(&[]),
+            &[struck(1, 4.0)],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(
+            *fighting.log.borrow(),
+            [
+                "react 0 Npc(NpcId(1))",
+                "react 1 Npc(NpcId(1))",
+                "decide 0 None 0",
+                "decide 1 Some(Player) 4",
+                "trigger 0 Attack(Player)",
+                "trigger 1 Attack(Player)",
+            ]
+        );
+        assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
+        assert_eq!(traffic.npcs()[1].provoked, 4.0, "kept while it fights");
+    }
+
+    #[test]
+    fn a_reaction_may_set_a_goal_at_once() {
+        /// Attacks the player as soon as anything is hit.
+        #[derive(Debug)]
+        struct Samaritan;
+        impl Behaviour for Samaritan {
+            fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+                npc.goal
+            }
+            fn react(&self, _: &Npc, _: &Strike, _: &Surroundings) -> Reaction {
+                Reaction {
+                    target: Some(ShipRef::Player),
+                    provoked: 0.0,
+                    goal: Some(Goal::Attack(ShipRef::Player)),
+                }
+            }
+        }
+        let mut traffic = populated(1, 4);
+        traffic.ticks = 1;
+        traffic.tick_in(
+            &Samaritan,
+            World::new(&[]),
+            &[struck(5, 1.0)],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(
+            traffic.npcs()[0].goal,
+            Goal::Attack(ShipRef::Player),
+            "not its turn"
+        );
+        assert_eq!(traffic.npcs()[0].target, Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn only_a_flying_intact_npc_answers_a_strike() {
+        let mut traffic = populated(3, 1);
+        traffic.npcs[1].condition = Condition::Disabled;
+        traffic.npcs[2].mode = Mode::JumpingIn { ticks_left: 9 };
+        let fighting = Fighting::deciding(Goal::Idle);
+        traffic.tick_in(
+            &fighting,
+            World::new(&[]),
+            &[struck(0, 1.0)],
+            &mut Draws::of(&[]),
+        );
+        let reacted: Vec<String> = fighting
+            .log
+            .borrow()
+            .iter()
+            .filter(|line| line.starts_with("react"))
+            .cloned()
+            .collect();
+        assert_eq!(reacted, ["react 0 Npc(NpcId(0))"]);
+    }
+
+    #[test]
+    fn provocation_clears_on_an_idle_goal_or_when_disabled() {
+        let mut traffic = populated(2, 1);
+        for npc in traffic.npcs_mut() {
+            npc.provoked = 9.0;
+        }
+        traffic.npcs[1].condition = Condition::Disabled;
+        let fleeing = Fighting::deciding(Goal::Flee(ShipRef::Player));
+        traffic.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].provoked, 9.0, "still fighting");
+        assert_eq!(traffic.npcs()[1].provoked, 0.0, "disabled");
+        let calm = Fighting::deciding(Goal::Idle);
+        traffic.tick_in(&calm, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].provoked, 0.0, "idle");
+        traffic.npcs_mut()[0].provoked = 2.0;
+        let inspecting = Fighting::deciding(Goal::Inspect(ShipRef::Player));
+        traffic.tick_in(&inspecting, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].provoked, 0.0, "inspecting is idle");
+    }
+
+    #[test]
+    fn an_npc_that_stops_inspecting_a_ship_remembers_it() {
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].goal = Goal::Inspect(ShipRef::Player);
+        let still = Fighting::deciding(Goal::Inspect(ShipRef::Player));
+        traffic.tick_in(&still, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].inspected, None, "still at it");
+        let next = Fighting::deciding(Goal::Inspect(ShipRef::Npc(NpcId(7))));
+        traffic.tick_in(&next, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].inspected, Some(ShipRef::Player));
+    }
+
+    /// The player at (`x`, `y`), at rest.
+    fn player_at(x: f32, y: f32) -> PlayerSide {
+        PlayerSide {
+            state: ShipState {
+                position: Vec2::new(x, y),
+                ..ShipState::default()
+            },
+            condition: Condition::Intact,
+            reserves: crate::reserves::Reserves::full(10.0, 10.0, 10.0),
+            hull: HullSpec::default(),
+            handling: ShipStats::new(FAST, &[]).handling,
+        }
+    }
+
+    #[test]
+    fn an_npc_fights_the_player_where_the_player_is() {
+        // NPC 0 at the centre facing up, the player 500 to its right.
+        let mut traffic = populated(1, 1);
+        let attacking = Fighting::deciding(Goal::Attack(ShipRef::Player));
+        let world = World {
+            player: Some(player_at(500.0, 0.0)),
+            ..World::new(&[])
+        };
+        for _ in 0..40 {
+            traffic.tick_in(&attacking, world, &[], &mut Draws::of(&[]));
+        }
+        let heading = traffic.npcs()[0].state.heading;
+        assert!((heading - 90.0).abs() < 3.0, "{heading}");
+        let mut alone = populated(1, 1);
+        alone.npcs[0].state.velocity = Vec2::new(1.0, 0.0);
+        for _ in 0..100 {
+            alone.tick_in(&attacking, World::new(&[]), &[], &mut Draws::of(&[]));
+        }
+        assert!(
+            alone.npcs()[0].state.velocity.length() < 0.5,
+            "no player: it brakes"
+        );
+    }
+
+    #[test]
+    fn an_npc_fights_another_where_it_is() {
+        /// NPC 0 attacks NPC 1, which stays put.
+        #[derive(Debug)]
+        struct Duel;
+        impl Behaviour for Duel {
+            fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+                if npc.id == NpcId(0) {
+                    Goal::Attack(ShipRef::Npc(NpcId(1)))
+                } else {
+                    Goal::Idle
+                }
+            }
+        }
+        let mut traffic = populated(2, 1);
+        traffic.npcs[1].state.position = Vec2::new(-500.0, 0.0);
+        for _ in 0..40 {
+            traffic.tick_in(&Duel, World::new(&[]), &[], &mut Draws::of(&[]));
+        }
+        let heading = traffic.npcs()[0].state.heading;
+        assert!((heading - 270.0).abs() < 3.0, "{heading}");
+    }
+
+    #[test]
+    fn a_warship_jumping_in_with_no_enemies_heads_for_a_stellar_and_stays() {
+        // npc-jump-in-turns-at-edge: under Nova's AI an arrival heads in
+        // for a stellar rather than turning back out at the edge.
+        let mut traffic = Traffic::new();
+        let mut warships = table(1);
+        warships
+            .dude_records
+            .get_mut(&DudeId(128))
+            .expect("düde")
+            .ai_type = 3;
+        traffic.enter(warships, &mut Draws::of(&[0]));
+        let sites = [planet(140, 0.0, 0.0)];
+        let ai = crate::ai::NovaAi::default();
+        // An arrival: 0, not a person, not a fleet, düde 128, ship 200, at
+        // angle 0, aggression 0.
+        traffic.tick(&ai, &sites, &mut Draws::of(&[0, 6, 6, 0, 0, 0, 2]));
+        assert_eq!(traffic.npcs()[0].ai_type, AiType::Warship);
+        let mut nearest = f32::INFINITY;
+        for _ in 0..=JUMP_IN_TICKS {
+            traffic.tick(&ai, &sites, &mut Draws::of(&[]));
+        }
+        let after_glide = traffic.npcs()[0].clone();
+        assert_eq!(after_glide.mode, Mode::Flying);
+        assert_eq!(after_glide.goal, Goal::Land(StellarId(140)));
+        assert_eq!(traffic.departed(), []);
+        for _ in 0..200 {
+            traffic.tick(&ai, &sites, &mut Draws::of(&[]));
+            if let Some(npc) = traffic.npcs().first() {
+                nearest = nearest.min(npc.state.position.length());
+            }
+        }
+        assert!(nearest < 500.0, "well inside 1000: {nearest}");
     }
 }
