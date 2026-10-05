@@ -41,7 +41,9 @@ pub struct QuadInstance {
     pub dest: Rect,
     /// The image's texture coordinates on its page.
     pub uv: Uv,
-    /// RGBA multiplier, 0 to 1.
+    /// RGBA multiplier, 0 to 1. In a [`Blend::Or`] batch it is instead
+    /// each colour channel's level as a fraction of 32 (`n / 32`, exact in
+    /// `f32`), with alpha 1.
     pub tint: [f32; 4],
 }
 
@@ -85,7 +87,9 @@ pub enum Batch {
         page: PageId,
         /// How the quads combine with what is beneath them.
         blend: Blend,
-        /// The quads, in draw order.
+        /// The quads, in draw order. In a [`Blend::Or`] batch no two
+        /// overlap, and each tint holds levels in 32nds (see
+        /// [`QuadInstance::tint`]).
         quads: Vec<QuadInstance>,
     },
     /// Untextured quads.

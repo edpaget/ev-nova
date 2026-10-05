@@ -17,6 +17,53 @@ pub enum Blend {
     /// in for the original's OR-based `AddOver` and translucent light and
     /// glow blits (see [`lights_tint`]).
     Additive,
+    /// ORs its colour, scaled by a level from the tint, into what is
+    /// beneath, bit for bit: the original's ship glow and lights blits,
+    /// `_BlitPixieRLEAddOver` (0xc24bf; the copy loop at 0xc2560) at full
+    /// level and `_BlitPixieRLETranslucent` (0xc1568) with
+    /// `_BlitPixieTranslucentCopy` (0xc1110; per pixel at 0xc11cc–0xc1275)
+    /// below it, which compute `((src_c × n) >> 5) | dst_c` per 5-bit
+    /// channel. `_HandleShipDisplay` (0x2b514) sets n for the lights at
+    /// 0x2c672–0x2c692 and for the glow at 0x2c2b6–0x2c2d6. See
+    /// [`lights_tint`] for the full trace.
+    ///
+    /// # The level
+    ///
+    /// The tint is the per-channel level in 32nds:
+    /// `n_c = round(tint_c × tint_a × 32 / 255²)`, so [`Color::WHITE`] is
+    /// 32 (the layer as it is) and [`lights_tint`]`(n)` is exactly n in
+    /// every channel, for every n from 0 to 32.
+    ///
+    /// # The bit depth
+    ///
+    /// Per channel, with the layer's texel `t` (straight RGBA, 0 to 1) and
+    /// the destination `d8` (0 to 255):
+    ///
+    /// ```text
+    /// s8  = round(t.rgb × t.a × 255)   // premultiplied: transparent adds 0
+    /// s5  = s8 >> 3                    // the 5-bit source
+    /// t5  = (s5 × n) >> 5              // the original's floor, exactly
+    /// t8  = (t5 << 3) | (t5 >> 2)      // widened by bit replication
+    /// out = d8 | t8 ;  out.a = d.a
+    /// ```
+    ///
+    /// The source is scaled in 5 bits and the OR is taken at 8 bits
+    /// against the destination as it is:
+    ///
+    /// - Stock layer texels are 5-bit values widened by replication, so
+    ///   `s8 >> 3` recovers the original's 5-bit value and `(s5 × n) >> 5`
+    ///   is its own truncation. Scaling in 8 bits would miss that floor by
+    ///   up to one 5-bit step (blue 5 at level 10 is 1 in the original, 2
+    ///   if rounded).
+    /// - Replication distributes over OR: `w(a) | w(b) = w(a | b)`. Where
+    ///   the destination is itself a widened 5-bit colour (every stock hull
+    ///   pixel), the 8-bit OR is exactly the original's 5-bit OR, widened.
+    ///   Where it is not (antialiased text, blended or tinted draws), its
+    ///   low bits survive, and a black or transparent layer pixel leaves
+    ///   any destination unchanged bit for bit. Quantising the destination
+    ///   to 5 bits as well would posterise every such pixel under the
+    ///   layer's black area, which is the whole ship frame.
+    Or,
 }
 
 /// One thing to draw, in logical coordinates.
@@ -145,6 +192,16 @@ impl DrawList {
             center,
             tint,
             blend: Blend::Additive,
+        })
+    }
+
+    /// Appends a [`DrawCommand::Sprite`] drawn with [`Blend::Or`].
+    pub fn or_sprite(&mut self, image: ImageKey, center: Point, tint: Color) -> &mut Self {
+        self.push(DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend: Blend::Or,
         })
     }
 
@@ -371,6 +428,22 @@ mod tests {
             ]
         );
         assert_eq!(Blend::default(), Blend::Normal);
+    }
+
+    #[test]
+    fn an_or_sprite_asks_for_the_or_composite() {
+        let tint = lights_tint(10);
+        let mut list = DrawList::new();
+        list.or_sprite(ImageKey::sprite(202, 5), at(50.0, 60.0), tint);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [DrawCommand::Sprite {
+                image: ImageKey::sprite(202, 5),
+                center: at(50.0, 60.0),
+                tint,
+                blend: Blend::Or,
+            }]
+        );
     }
 
     #[test]

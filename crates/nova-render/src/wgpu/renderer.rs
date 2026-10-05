@@ -24,11 +24,15 @@ use crate::viewport::PixelRect;
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// The offscreen texture a frame is drawn into before one blit copies it
-/// to the target, with the bind group the blit reads it through.
+/// to the target, with the bind group the blit reads it through, and the
+/// same-sized backdrop an OR batch reads what is beneath it from.
 struct Scene {
     size: (u32, u32),
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
     blit_group: wgpu::BindGroup,
+    backdrop: wgpu::Texture,
+    backdrop_group: wgpu::BindGroup,
 }
 
 /// Whether a scene of size `current` (`None` before the first frame) can
@@ -59,21 +63,37 @@ enum Draw {
     },
 }
 
+/// A render pass over the scene and the draws it encodes.
+#[derive(Debug, PartialEq)]
+struct Pass {
+    /// For a pass opened by an OR batch, the scene pixels the batch can
+    /// touch, copied into the backdrop (at the same place) before it.
+    backdrop: Option<PixelRect>,
+    /// Its draws, as indices into [`Layout::draws`].
+    draws: Range<usize>,
+}
+
 /// The wgpu half of a [`Gpu`](crate::Gpu): pipelines, atlas page textures,
 /// per-frame buffers and glyphon's text state. Both GPU adapters delegate
 /// to it.
 ///
 /// Every frame is drawn into an offscreen scene texture in
-/// [`SCENE_FORMAT`], then copied to the target by one blit.
+/// [`SCENE_FORMAT`], then copied to the target by one blit. An OR batch
+/// ([`Blend::Or`]) reads what is beneath it, which a pass cannot do with
+/// its own attachment, so each one ends the pass: the rectangle the core
+/// says it covers ([`Frame::pixels_covered`]) is copied from the scene to
+/// the backdrop, and a new pass draws the batch with a shader that ORs
+/// into the backdrop's texel.
 pub struct WgpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     sprite_pipeline: wgpu::RenderPipeline,
     additive_pipeline: wgpu::RenderPipeline,
+    or_pipeline: wgpu::RenderPipeline,
     solid_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
     page_layout: wgpu::BindGroupLayout,
-    blit_layout: wgpu::BindGroupLayout,
+    texture_layout: wgpu::BindGroupLayout,
     scene: Option<Scene>,
     sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
@@ -101,7 +121,7 @@ impl WgpuRenderer {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let globals_layout = globals_layout(device);
         let page_layout = page_layout(device);
-        let blit_layout = unfiltered_texture_layout(device, "nova scene");
+        let texture_layout = unfiltered_texture_layout(device);
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("nova globals"),
             size: 16,
@@ -116,35 +136,34 @@ impl WgpuRenderer {
                 resource: globals.as_entire_binding(),
             }],
         });
-        let sprite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("nova sprites"),
-            bind_group_layouts: &[Some(&globals_layout), Some(&page_layout)],
-            immediate_size: 0,
-        });
-        let solid_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("nova solids"),
-            bind_group_layouts: &[Some(&globals_layout)],
-            immediate_size: 0,
-        });
+        let sprite_layout =
+            pipeline_layout(device, "nova sprites", &[&globals_layout, &page_layout]);
+        let or_layout = pipeline_layout(
+            device,
+            "nova or sprites",
+            &[&globals_layout, &page_layout, &texture_layout],
+        );
+        let solid_layout = pipeline_layout(device, "nova solids", &[&globals_layout]);
         let sprite_attributes =
             wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
         let solid_attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
-        let sprite_pipeline_with = |blend| {
+        let sprite_pipeline_with = |layout, fragment, blend| {
             pipeline(
                 device,
-                &sprite_layout,
+                layout,
                 &shader,
-                ("sprite_vs", "sprite_fs"),
+                ("sprite_vs", fragment),
                 &[Some(wgpu::VertexBufferLayout {
                     array_stride: size_of::<SpriteInstance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &sprite_attributes,
                 })],
-                (SCENE_FORMAT, Some(blend_state(blend))),
+                (SCENE_FORMAT, blend_state(blend)),
             )
         };
-        let sprite_pipeline = sprite_pipeline_with(Blend::Normal);
-        let additive_pipeline = sprite_pipeline_with(Blend::Additive);
+        let sprite_pipeline = sprite_pipeline_with(&sprite_layout, "sprite_fs", Blend::Normal);
+        let additive_pipeline = sprite_pipeline_with(&sprite_layout, "sprite_fs", Blend::Additive);
+        let or_pipeline = sprite_pipeline_with(&or_layout, "or_fs", Blend::Or);
         let solid_pipeline = pipeline(
             device,
             &solid_layout,
@@ -155,9 +174,9 @@ impl WgpuRenderer {
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &solid_attributes,
             })],
-            (SCENE_FORMAT, Some(blend_state(Blend::Normal))),
+            (SCENE_FORMAT, blend_state(Blend::Normal)),
         );
-        let blit_pipeline = blit_pipeline(device, &blit_layout, format);
+        let blit_pipeline = blit_pipeline(device, &texture_layout, format);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("nova nearest"),
             mag_filter: wgpu::FilterMode::Nearest,
@@ -174,10 +193,11 @@ impl WgpuRenderer {
             queue: queue.clone(),
             sprite_pipeline,
             additive_pipeline,
+            or_pipeline,
             solid_pipeline,
             blit_pipeline,
             page_layout,
-            blit_layout,
+            texture_layout,
             scene: None,
             sampler,
             globals,
@@ -289,18 +309,27 @@ impl WgpuRenderer {
         let vertex_buffer = self.vertex_buffer("nova solid vertices", &layout.vertices);
 
         let scene = self.scene.as_ref().expect("ensured above");
+        let buffers = (&instance_buffer, &vertex_buffer);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        for (index, pass) in layout.passes.iter().enumerate() {
+            if let Some(rect) = pass.backdrop {
+                copy_to_backdrop(&mut encoder, scene, rect);
+            }
+            let load = if index == 0 {
+                wgpu::LoadOp::Clear(clear_color(frame.clear))
+            } else {
+                wgpu::LoadOp::Load
+            };
+            let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("nova frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &scene.view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear_color(frame.clear)),
+                        load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -309,55 +338,73 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            let content = frame.viewport;
-            let full = PixelRect {
-                x: 0,
-                y: 0,
-                w: frame.target.0,
-                h: frame.target.1,
-            };
-            for draw in &layout.draws {
-                match draw {
-                    Draw::Sprites {
-                        page,
-                        blend,
-                        instances,
-                    } => {
-                        let Some(page) = self.pages.get(page) else {
-                            continue;
-                        };
-                        set_viewport(&mut pass, content);
-                        pass.set_pipeline(match blend {
-                            Blend::Normal => &self.sprite_pipeline,
-                            Blend::Additive => &self.additive_pipeline,
-                        });
-                        pass.set_bind_group(0, &self.globals_group, &[]);
-                        pass.set_bind_group(1, &page.bind_group, &[]);
-                        pass.set_vertex_buffer(0, instance_buffer.slice(..));
-                        pass.draw(0..6, instances.clone());
-                    }
-                    Draw::Solid { vertices } => {
-                        set_viewport(&mut pass, content);
-                        pass.set_pipeline(&self.solid_pipeline);
-                        pass.set_bind_group(0, &self.globals_group, &[]);
-                        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                        pass.draw(vertices.clone(), 0..1);
-                    }
-                    Draw::Text { renderer } => {
-                        set_viewport(&mut pass, full);
-                        // A failed render draws nothing; the frame goes on.
-                        let _ = self.text_renderers[*renderer].render(
-                            &self.text_atlas,
-                            &self.text_viewport,
-                            &mut pass,
-                        );
-                    }
-                }
-            }
+            let draws = &layout.draws[pass.draws.clone()];
+            self.encode(&mut render, frame, draws, buffers, scene);
         }
         blit(&mut encoder, &self.blit_pipeline, &scene.blit_group, view);
         self.queue.submit(Some(encoder.finish()));
         self.text_atlas.trim();
+    }
+
+    /// Encodes `draws` into `pass`, reading sprite instances and solid
+    /// vertices from `buffers`, and an OR batch's backdrop from `scene`.
+    fn encode(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        frame: &Frame,
+        draws: &[Draw],
+        (instance_buffer, vertex_buffer): (&wgpu::Buffer, &wgpu::Buffer),
+        scene: &Scene,
+    ) {
+        let content = frame.viewport;
+        let full = PixelRect {
+            x: 0,
+            y: 0,
+            w: frame.target.0,
+            h: frame.target.1,
+        };
+        for draw in draws {
+            match draw {
+                Draw::Sprites {
+                    page,
+                    blend,
+                    instances,
+                } => {
+                    let Some(page) = self.pages.get(page) else {
+                        continue;
+                    };
+                    set_viewport(pass, content);
+                    pass.set_pipeline(match blend {
+                        Blend::Normal => &self.sprite_pipeline,
+                        Blend::Additive => &self.additive_pipeline,
+                        Blend::Or => &self.or_pipeline,
+                    });
+                    pass.set_bind_group(0, &self.globals_group, &[]);
+                    pass.set_bind_group(1, &page.bind_group, &[]);
+                    if *blend == Blend::Or {
+                        pass.set_bind_group(2, &scene.backdrop_group, &[]);
+                    }
+                    pass.set_vertex_buffer(0, instance_buffer.slice(..));
+                    pass.draw(0..6, instances.clone());
+                }
+                Draw::Solid { vertices } => {
+                    set_viewport(pass, content);
+                    pass.set_pipeline(&self.solid_pipeline);
+                    pass.set_bind_group(0, &self.globals_group, &[]);
+                    pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                    pass.draw(vertices.clone(), 0..1);
+                }
+                Draw::Text { renderer } => {
+                    set_viewport(pass, full);
+                    // A failed render draws nothing; the frame goes on.
+                    let _ = self.text_renderers[*renderer].render(
+                        &self.text_atlas,
+                        &self.text_viewport,
+                        pass,
+                    );
+                }
+            }
+        }
     }
 
     /// Makes sure the scene is `target`-sized, creating it on the first
@@ -366,44 +413,60 @@ impl WgpuRenderer {
         if reuse_scene(self.scene.as_ref().map(|scene| scene.size), target) {
             return;
         }
+        let (texture, view, blit_group) = self.scene_texture(
+            "nova scene",
+            target,
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+        );
+        let (backdrop, _, backdrop_group) = self.scene_texture(
+            "nova backdrop",
+            target,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        self.scene = Some(Scene {
+            size: target,
+            texture,
+            view,
+            blit_group,
+            backdrop,
+            backdrop_group,
+        });
+    }
+
+    /// A `size` texture in [`SCENE_FORMAT`] with `usage`, its view, and a
+    /// bind group that reads it with `textureLoad`.
+    fn scene_texture(
+        &self,
+        label: &str,
+        size: (u32, u32),
+        usage: wgpu::TextureUsages,
+    ) -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("nova scene"),
+            label: Some(label),
             size: wgpu::Extent3d {
-                width: target.0,
-                height: target.1,
+                width: size.0,
+                height: size.1,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: SCENE_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let blit_group = self.texture_group("nova scene", &self.blit_layout, &view);
-        self.scene = Some(Scene {
-            size: target,
-            view,
-            blit_group,
-        });
-    }
-
-    /// A bind group of `layout` holding `view` alone.
-    fn texture_group(
-        &self,
-        label: &str,
-        layout: &wgpu::BindGroupLayout,
-        view: &wgpu::TextureView,
-    ) -> wgpu::BindGroup {
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
-            layout,
+            layout: &self.texture_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(view),
+                resource: wgpu::BindingResource::TextureView(&view),
             }],
-        })
+        });
+        (texture, view, group)
     }
 
     /// Shapes every text batch and prepares one glyphon renderer for each.
@@ -542,10 +605,10 @@ fn page_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 }
 
 /// A layout of one texture read with `textureLoad` (no sampler) in the
-/// fragment stage.
-fn unfiltered_texture_layout(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
+/// fragment stage: the scene for the blit, the backdrop for an OR batch.
+fn unfiltered_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some(label),
+        label: Some("nova scene texture"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -567,11 +630,7 @@ fn blit_pipeline(
     format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::include_wgsl!("blit.wgsl"));
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("nova blit"),
-        bind_group_layouts: &[Some(scene_layout)],
-        immediate_size: 0,
-    });
+    let layout = pipeline_layout(device, "nova blit", &[scene_layout]);
     pipeline(
         device,
         &layout,
@@ -580,6 +639,29 @@ fn blit_pipeline(
         &[],
         (format, None),
     )
+}
+
+/// Copies `rect` of the scene to the same place in its backdrop.
+fn copy_to_backdrop(encoder: &mut wgpu::CommandEncoder, scene: &Scene, rect: PixelRect) {
+    let at = |texture| wgpu::TexelCopyTextureInfo {
+        texture,
+        mip_level: 0,
+        origin: wgpu::Origin3d {
+            x: rect.x,
+            y: rect.y,
+            z: 0,
+        },
+        aspect: wgpu::TextureAspect::All,
+    };
+    encoder.copy_texture_to_texture(
+        at(&scene.texture),
+        at(&scene.backdrop),
+        wgpu::Extent3d {
+            width: rect.w,
+            height: rect.h,
+            depth_or_array_layers: 1,
+        },
+    );
 }
 
 /// Copies the scene (read through `scene_group`) onto `view`, every
@@ -621,16 +703,39 @@ struct Layout<'a> {
     text: Vec<&'a [TextRun]>,
     /// What to draw for each batch, in order.
     draws: Vec<Draw>,
+    /// The render passes the draws are split into, in order: the first
+    /// clears the scene, and each OR batch opens another.
+    passes: Vec<Pass>,
 }
 
 /// Lays a frame's batches out in one instance buffer, one vertex buffer
-/// and a list of text batches, with what to draw for each batch in order.
+/// and a list of text batches, with what to draw for each batch in order,
+/// split into passes at each OR batch. An OR batch that covers no pixel
+/// is left out.
 fn lay_out(frame: &Frame) -> Layout<'_> {
     let mut instances: Vec<SpriteInstance> = Vec::new();
     let mut vertices: Vec<SolidVertex> = Vec::new();
     let mut text_batches: Vec<&[TextRun]> = Vec::new();
     let mut draws = Vec::new();
+    let mut passes = vec![Pass {
+        backdrop: None,
+        draws: 0..0,
+    }];
     for batch in &frame.batches {
+        if let Batch::Sprites {
+            blend: Blend::Or,
+            quads,
+            ..
+        } = batch
+        {
+            let Some(rect) = frame.pixels_covered(quads) else {
+                continue;
+            };
+            passes.push(Pass {
+                backdrop: Some(rect),
+                draws: draws.len()..draws.len(),
+            });
+        }
         draws.push(match batch {
             Batch::Sprites { page, blend, quads } => {
                 let start = instances.len() as u32;
@@ -655,12 +760,16 @@ fn lay_out(frame: &Frame) -> Layout<'_> {
                 }
             }
         });
+        if let Some(pass) = passes.last_mut() {
+            pass.draws.end = draws.len();
+        }
     }
     Layout {
         instances,
         vertices,
         text: text_batches,
         draws,
+        passes,
     }
 }
 
@@ -687,11 +796,14 @@ fn set_viewport(pass: &mut wgpu::RenderPass<'_>, rect: PixelRect) {
 
 /// How `blend` combines a fragment with the target. The fragment shaders
 /// output straight (unpremultiplied) alpha, so additive is destination +
-/// source x source alpha, keeping the destination's alpha.
-fn blend_state(blend: Blend) -> wgpu::BlendState {
+/// source x source alpha, keeping the destination's alpha. An OR batch's
+/// shader has already combined it with the backdrop, so it is written as
+/// it is.
+fn blend_state(blend: Blend) -> Option<wgpu::BlendState> {
     match blend {
-        Blend::Normal => wgpu::BlendState::ALPHA_BLENDING,
-        Blend::Additive => wgpu::BlendState {
+        Blend::Normal => Some(wgpu::BlendState::ALPHA_BLENDING),
+        Blend::Or => None,
+        Blend::Additive => Some(wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
                 dst_factor: wgpu::BlendFactor::One,
@@ -702,8 +814,22 @@ fn blend_state(blend: Blend) -> wgpu::BlendState {
                 dst_factor: wgpu::BlendFactor::One,
                 operation: wgpu::BlendOperation::Add,
             },
-        },
+        }),
     }
+}
+
+/// A pipeline layout of `groups`, in order.
+fn pipeline_layout(
+    device: &wgpu::Device,
+    label: &str,
+    groups: &[&wgpu::BindGroupLayout],
+) -> wgpu::PipelineLayout {
+    let groups: Vec<Option<&wgpu::BindGroupLayout>> = groups.iter().copied().map(Some).collect();
+    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(label),
+        bind_group_layouts: &groups,
+        immediate_size: 0,
+    })
 }
 
 /// A pipeline drawing triangles from `buffers` into `format`, combined
@@ -871,6 +997,128 @@ mod tests {
             .collect();
         assert_eq!(layout.vertices, vertices);
         assert_eq!(layout.text, [&first_text[..], &second_text[..]]);
+        assert_eq!(
+            layout.passes,
+            [Pass {
+                backdrop: None,
+                draws: 0..7
+            }]
+        );
+    }
+
+    fn sprites(blend: Blend, quads: Vec<QuadInstance>) -> Batch {
+        Batch::Sprites {
+            page: PageId(0),
+            blend,
+            quads,
+        }
+    }
+
+    #[test]
+    fn lay_out_breaks_the_pass_at_each_or_batch() {
+        let frame = frame_of(vec![
+            sprites(Blend::Normal, vec![quad(0.0)]),
+            sprites(Blend::Or, vec![quad(1.0), quad(3.0)]),
+            Batch::Solid(vec![solid(10.0)]),
+            Batch::Text(vec![run("a")]),
+            sprites(Blend::Or, vec![quad(5.0)]),
+            sprites(Blend::Normal, vec![quad(6.0)]),
+        ]);
+        let covered = |quads: &[QuadInstance]| frame.pixels_covered(quads);
+
+        let layout = lay_out(&frame);
+
+        assert_eq!(
+            layout.passes,
+            [
+                Pass {
+                    backdrop: None,
+                    draws: 0..1
+                },
+                Pass {
+                    backdrop: covered(&[quad(1.0), quad(3.0)]),
+                    draws: 1..4
+                },
+                Pass {
+                    backdrop: covered(&[quad(5.0)]),
+                    draws: 4..6
+                },
+            ]
+        );
+        assert_eq!(
+            covered(&[quad(1.0), quad(3.0)]),
+            Some(PixelRect {
+                x: 2,
+                y: 2,
+                w: 6,
+                h: 6
+            })
+        );
+        assert_eq!(layout.draws.len(), 6);
+    }
+
+    #[test]
+    fn a_frame_opening_with_an_or_batch_clears_first() {
+        let frame = frame_of(vec![sprites(Blend::Or, vec![quad(2.0)])]);
+
+        let layout = lay_out(&frame);
+
+        assert_eq!(
+            layout.passes,
+            [
+                Pass {
+                    backdrop: None,
+                    draws: 0..0
+                },
+                Pass {
+                    backdrop: frame.pixels_covered(&[quad(2.0)]),
+                    draws: 0..1
+                },
+            ]
+        );
+        assert_eq!(
+            layout.draws,
+            [Draw::Sprites {
+                page: PageId(0),
+                blend: Blend::Or,
+                instances: 0..1,
+            }]
+        );
+    }
+
+    #[test]
+    fn an_or_batch_off_the_viewport_is_left_out() {
+        let frame = frame_of(vec![
+            sprites(Blend::Normal, vec![quad(0.0)]),
+            sprites(Blend::Or, vec![quad(40.0)]),
+            sprites(Blend::Normal, vec![quad(1.0)]),
+        ]);
+
+        let layout = lay_out(&frame);
+
+        assert_eq!(
+            layout.passes,
+            [Pass {
+                backdrop: None,
+                draws: 0..2
+            }]
+        );
+        assert_eq!(
+            layout.draws,
+            [
+                Draw::Sprites {
+                    page: PageId(0),
+                    blend: Blend::Normal,
+                    instances: 0..1,
+                },
+                Draw::Sprites {
+                    page: PageId(0),
+                    blend: Blend::Normal,
+                    instances: 1..2,
+                },
+            ]
+        );
+        assert_eq!(layout.instances.len(), 2);
     }
 
     fn frame_of(batches: Vec<Batch>) -> Frame {
@@ -921,11 +1169,15 @@ mod tests {
     }
 
     #[test]
-    fn blend_state_adds_source_times_its_alpha() {
-        assert_eq!(blend_state(Blend::Normal), wgpu::BlendState::ALPHA_BLENDING);
+    fn blend_state_adds_source_times_its_alpha_and_writes_or_as_it_is() {
+        assert_eq!(
+            blend_state(Blend::Normal),
+            Some(wgpu::BlendState::ALPHA_BLENDING)
+        );
+        assert_eq!(blend_state(Blend::Or), None);
         assert_eq!(
             blend_state(Blend::Additive),
-            wgpu::BlendState {
+            Some(wgpu::BlendState {
                 color: wgpu::BlendComponent {
                     src_factor: wgpu::BlendFactor::SrcAlpha,
                     dst_factor: wgpu::BlendFactor::One,
@@ -936,7 +1188,7 @@ mod tests {
                     dst_factor: wgpu::BlendFactor::One,
                     operation: wgpu::BlendOperation::Add,
                 },
-            }
+            })
         );
     }
 

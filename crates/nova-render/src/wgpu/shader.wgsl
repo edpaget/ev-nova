@@ -20,7 +20,9 @@ fn to_clip(p: vec2<f32>) -> vec4<f32> {
 struct SpriteOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    @location(1) tint: vec4<f32>,
+    // The same for every vertex of a quad; flat, so no interpolation can
+    // nudge an OR level off its exact 32nd.
+    @location(1) @interpolate(flat) tint: vec4<f32>,
 };
 
 // Six vertices per instance: two triangles over the unit square.
@@ -46,6 +48,27 @@ fn sprite_vs(
 @fragment
 fn sprite_fs(in: SpriteOut) -> @location(0) vec4<f32> {
     return textureSample(page, page_sampler, in.uv) * in.tint;
+}
+
+// What an OR batch reads from beneath it: a copy of the scene, at the
+// fragment's own pixel.
+@group(2) @binding(0) var backdrop: texture_2d<f32>;
+
+// ORs the texel, scaled by the tint's level (n/32 per channel), into the
+// backdrop: the original's `((src_c * n) >> 5) | dst_c` with a 5-bit source
+// and an 8-bit destination. The arithmetic and why are on `Blend::Or`.
+@fragment
+fn or_fs(in: SpriteOut) -> @location(0) vec4<f32> {
+    let t = textureSampleLevel(page, page_sampler, in.uv, 0.0);
+    let d = textureLoad(backdrop, vec2<u32>(in.position.xy), 0);
+    // Premultiplied, so a transparent texel contributes nothing.
+    let s8 = vec3<u32>(round(t.rgb * t.a * 255.0));
+    let s5 = s8 >> vec3<u32>(3u);
+    // n/32 and s5 * n/32 are exact in f32, so this is the original's floor.
+    let t5 = vec3<u32>(floor(vec3<f32>(s5) * in.tint.rgb));
+    let t8 = (t5 << vec3<u32>(3u)) | (t5 >> vec3<u32>(2u));
+    let d8 = vec3<u32>(round(d.rgb * 255.0));
+    return vec4<f32>(vec3<f32>(d8 | t8) / 255.0, d.a);
 }
 
 struct SolidOut {

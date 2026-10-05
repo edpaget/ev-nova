@@ -96,7 +96,7 @@ impl<S: ImageSource> Renderer<S> {
                             w,
                             h,
                         };
-                        push_quad(&mut batches, &entry, dest, rgba(tint), blend);
+                        push_quad(&mut batches, &entry, dest, tint, blend);
                     }
                 }
                 DrawCommand::Picture { image, top_left } => {
@@ -193,7 +193,7 @@ impl<S: ImageSource> Renderer<S> {
                 w,
                 h,
             };
-            push_quad(batches, &entry, dest, rgba(Color::WHITE), Blend::Normal);
+            push_quad(batches, &entry, dest, Color::WHITE, Blend::Normal);
         }
     }
 
@@ -256,15 +256,35 @@ fn rgba(color: Color) -> [f32; 4] {
     [color.r, color.g, color.b, color.a].map(|c| f32::from(c) / 255.0)
 }
 
+/// The per-channel levels, in 32nds, that `tint` asks a [`Blend::Or`]
+/// sprite to be scaled by: `round(c × a × 32 / 255²)` for each colour
+/// channel `c` and the alpha `a`. [`lights_tint`](nova_view::draw::lights_tint)
+/// `(n)` is exactly n in every channel.
+fn or_levels(tint: Color) -> [u8; 3] {
+    const FULL: u32 = 255 * 255;
+    let alpha = u32::from(tint.a);
+    [tint.r, tint.g, tint.b].map(|c| ((u32::from(c) * alpha * 32 + FULL / 2) / FULL) as u8)
+}
+
+/// Whether `a` and `b` share any area; rectangles that only touch along
+/// an edge do not.
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+}
+
 /// Appends a quad, extending the last batch when it is the same page's
-/// and blends the same way.
-fn push_quad(
-    batches: &mut Vec<Batch>,
-    entry: &AtlasEntry,
-    dest: Rect,
-    tint: [f32; 4],
-    blend: Blend,
-) {
+/// and blends the same way. An [`Blend::Or`] quad's tint becomes its
+/// levels as fractions of 32 (alpha 1), and it starts a new batch when it
+/// overlaps a quad already in the last one: every quad of an OR batch
+/// reads the same copy of what is beneath, so a later overlapping one
+/// would not see the earlier.
+fn push_quad(batches: &mut Vec<Batch>, entry: &AtlasEntry, dest: Rect, tint: Color, blend: Blend) {
+    let tint = if blend == Blend::Or {
+        let [r, g, b] = or_levels(tint).map(|n| f32::from(n) / 32.0);
+        [r, g, b, 1.0]
+    } else {
+        rgba(tint)
+    };
     let quad = QuadInstance {
         dest,
         uv: entry.uv,
@@ -277,6 +297,7 @@ fn push_quad(
     }) = batches.last_mut()
         && *page == entry.page
         && *last == blend
+        && !(blend == Blend::Or && quads.iter().any(|q| overlaps(q.dest, dest)))
     {
         quads.push(quad);
         return;
@@ -337,6 +358,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use nova_data::graphics::Image;
+    use nova_view::draw::lights_tint;
     use nova_view::{Blend, Color, DrawList, Font, ImageKey, ImageKind, Point};
 
     use super::*;
@@ -664,13 +686,20 @@ mod tests {
         list.sprite(sprite(0), at(10.0, 10.0), Color::WHITE)
             .additive_sprite(sprite(1), at(20.0, 10.0), Color::WHITE)
             .additive_sprite(sprite(2), at(30.0, 10.0), Color::WHITE)
-            .sprite(sprite(0), at(40.0, 10.0), Color::WHITE);
+            .or_sprite(sprite(1), at(40.0, 10.0), Color::WHITE)
+            .or_sprite(sprite(2), at(50.0, 10.0), Color::WHITE)
+            .sprite(sprite(0), at(60.0, 10.0), Color::WHITE);
 
         let frame = render_one(&list, &viewport());
 
         assert_eq!(
             sprite_blends(&frame),
-            [(Blend::Normal, 1), (Blend::Additive, 2), (Blend::Normal, 1)]
+            [
+                (Blend::Normal, 1),
+                (Blend::Additive, 2),
+                (Blend::Or, 2),
+                (Blend::Normal, 1)
+            ]
         );
         let xs: Vec<f32> = frame
             .batches
@@ -680,7 +709,99 @@ mod tests {
                 _ => Vec::new(),
             })
             .collect();
-        assert_eq!(xs, [7.5, 17.5, 27.5, 37.5]);
+        assert_eq!(xs, [7.5, 17.5, 27.5, 37.5, 47.5, 57.5]);
+    }
+
+    /// Every sprite quad's tint, in draw order.
+    fn tints(frame: &Frame) -> Vec<[f32; 4]> {
+        frame
+            .batches
+            .iter()
+            .flat_map(|batch| match batch {
+                Batch::Sprites { quads, .. } => quads.iter().map(|q| q.tint).collect(),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn or_tints_become_exact_levels() {
+        let sprite = ImageKey::sprite(200, 0);
+        let mut list = DrawList::new();
+        list.or_sprite(sprite, at(10.0, 10.0), lights_tint(10))
+            .or_sprite(sprite, at(20.0, 10.0), Color::WHITE)
+            .or_sprite(sprite, at(30.0, 10.0), Color::rgba(255, 0, 0, 128))
+            .sprite(sprite, at(40.0, 10.0), Color::rgba(255, 0, 0, 128));
+
+        let frame = render_one(&list, &viewport());
+
+        let level = 10.0 / 32.0;
+        assert_eq!(
+            tints(&frame),
+            [
+                [level, level, level, 1.0],
+                [1.0; 4],
+                [0.5, 0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0, 128.0 / 255.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn lights_tint_levels_round_trip() {
+        for n in 0..=32 {
+            assert_eq!(or_levels(lights_tint(n)), [n; 3], "level {n}");
+        }
+        assert_eq!(or_levels(Color::rgba(128, 64, 0, 255)), [16, 8, 0]);
+    }
+
+    #[test]
+    fn overlapping_or_sprites_split_into_batches_in_order() {
+        let sprite = ImageKey::sprite(200, 0);
+        let mut list = DrawList::new();
+        list.or_sprite(sprite, at(20.0, 10.0), Color::WHITE)
+            .or_sprite(sprite, at(20.0, 10.0), Color::WHITE)
+            .or_sprite(sprite, at(40.0, 10.0), Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        // The third overlaps neither quad in the second batch, so joins it.
+        assert_eq!(sprite_blends(&frame), [(Blend::Or, 1), (Blend::Or, 2)]);
+    }
+
+    #[test]
+    fn or_sprites_touching_edge_to_edge_share_a_batch() {
+        // The 5x6 frame centred on (20, 10) spans (17.5..22.5, 7..13).
+        let sprite = ImageKey::sprite(200, 0);
+        for (side, beside) in [
+            ("left", at(15.0, 10.0)),
+            ("right", at(25.0, 10.0)),
+            ("above", at(20.0, 4.0)),
+            ("below", at(20.0, 16.0)),
+        ] {
+            let mut list = DrawList::new();
+            list.or_sprite(sprite, at(20.0, 10.0), Color::WHITE)
+                .or_sprite(sprite, beside, Color::WHITE);
+            let frame = render_one(&list, &viewport());
+            assert_eq!(sprite_blends(&frame), [(Blend::Or, 2)], "{side}");
+        }
+    }
+
+    #[test]
+    fn overlapping_normal_and_additive_sprites_still_merge() {
+        let sprite = ImageKey::sprite(200, 0);
+        let mut list = DrawList::new();
+        list.sprite(sprite, at(20.0, 10.0), Color::WHITE)
+            .sprite(sprite, at(20.0, 10.0), Color::WHITE)
+            .additive_sprite(sprite, at(20.0, 10.0), Color::WHITE)
+            .additive_sprite(sprite, at(20.0, 10.0), Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(
+            sprite_blends(&frame),
+            [(Blend::Normal, 2), (Blend::Additive, 2)]
+        );
     }
 
     #[test]

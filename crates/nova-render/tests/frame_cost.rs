@@ -133,10 +133,21 @@ fn a_lit_ship_frame_costs() {
         Err(error) => panic!("offscreen GPU: {error}"),
     };
     let additive = scene(DrawList::additive_sprite);
-    let mut additive_ms = Vec::new();
+    let or = scene(DrawList::or_sprite);
+    // The arms alternate, so both see the same clocks and temperatures.
+    let (mut additive_ms, mut or_ms) = (Vec::new(), Vec::new());
     for _ in 0..TRIALS {
         additive_ms.push(ms_per_frame(&mut gpu, &additive));
+        or_ms.push(ms_per_frame(&mut gpu, &or));
     }
-    let (min, mean) = min_mean(&additive_ms);
-    println!("additive: {mean:.3} ms/frame (min {min:.3}) over {TRIALS} trials of {TIMED}");
+    let (additive_min, additive_mean) = min_mean(&additive_ms);
+    let (or_min, or_mean) = min_mean(&or_ms);
+    println!(
+        "additive: {additive_mean:.3} ms/frame (min {additive_min:.3}) over {TRIALS} trials of {TIMED}"
+    );
+    println!("or: {or_mean:.3} ms/frame (min {or_min:.3}) over {TRIALS} trials of {TIMED}");
+    assert!(
+        or_mean <= additive_mean + 1.0,
+        "the OR composite costs {or_mean:.3} ms/frame, over 1 ms more than additive's {additive_mean:.3}"
+    );
 }
