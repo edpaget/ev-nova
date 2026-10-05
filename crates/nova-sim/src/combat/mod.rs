@@ -44,9 +44,9 @@
 //!    missile; a beam whose firer is gone or no longer intact, or whose
 //!    target or missile is gone, goes with it.
 //! 5. A point-defence shot that passed within
-//!    [`INTERCEPT_RADIUS`](defence::INTERCEPT_RADIUS) of a missile is
-//!    spent on it; a missile hit after its durability is used up is shot
-//!    down.
+//!    [`INTERCEPT_RADIUS`](defence::INTERCEPT_RADIUS) of a missile the
+//!    rules call hostile is spent on it; a missile hit after its
+//!    durability is used up is shot down.
 //! 6. A point-defence beam hits the missile it is held on the same way.
 //! 7. Hits, blasts and expiries are resolved: a shot that hits a ship
 //!    damages it, explodes and blasts the ships around it, releases its
@@ -256,7 +256,7 @@ impl Combat {
             firer.is_some_and(|firer| beam.follow(&firer.state, &targets, shots))
         });
         let mut gone = vec![false; self.shots.len()];
-        self.intercept(&was, &mut gone);
+        self.intercept(&was, &mut gone, rules.defence);
         self.hold_on_missiles(&mut gone);
         self.resolve(fighters, &targets, &was, &gone, arsenal, chance);
         for fighter in fighters.iter_mut() {
@@ -364,10 +364,10 @@ impl Combat {
     }
 
     /// Step 5: each point-defence shot, having flown from `was`, meets
-    /// the first missile it passes within [`INTERCEPT_RADIUS`] of, and is
-    /// spent on it; a missile destroyed is shot down. What is spent or
-    /// destroyed is marked `gone`.
-    fn intercept(&mut self, was: &[Vec2], gone: &mut [bool]) {
+    /// the first missile `rule` calls hostile that it passes within
+    /// [`INTERCEPT_RADIUS`] of, and is spent on it; a missile destroyed is
+    /// shot down. What is spent or destroyed is marked `gone`.
+    fn intercept(&mut self, was: &[Vec2], gone: &mut [bool], rule: &dyn PointDefenceRule) {
         for pd in 0..self.shots.len() {
             if gone[pd] || self.shots[pd].weapon.guidance != Guidance::PointDefence {
                 continue;
@@ -377,7 +377,7 @@ impl Combat {
                 .shots
                 .iter()
                 .enumerate()
-                .filter(|&(missile, shot)| !gone[missile] && interceptable(defender, shot))
+                .filter(|&(missile, shot)| !gone[missile] && interceptable(defender, shot, rule))
                 .filter_map(|(missile, shot)| {
                     let from = was[pd] - was[missile];
                     let to = defender.position - shot.position;
@@ -627,11 +627,21 @@ impl Fighter<'_> {
 }
 
 /// Whether point-defence shot `defender` can meet `missile`: a homing
-/// shot point defence can target, of another fleet.
-fn interceptable(defender: &Shot, missile: &Shot) -> bool {
+/// shot point defence can target, whose firer `rule` calls hostile to
+/// the defender's.
+fn interceptable(defender: &Shot, missile: &Shot, rule: &dyn PointDefenceRule) -> bool {
     missile.weapon.guidance == Guidance::Homing
         && !missile.weapon.pd_immune()
-        && missile.fleet != defender.fleet
+        && rule.hostile(
+            Side {
+                ship: defender.firer,
+                fleet: defender.fleet,
+            },
+            Side {
+                ship: missile.firer,
+                fleet: missile.fleet,
+            },
+        )
 }
 
 /// Whether `armor` is gone: at or below none, on a ship that holds any.
@@ -1615,7 +1625,7 @@ mod tests {
     }
 
     #[test]
-    fn a_point_defence_shot_meets_only_a_homing_missile_of_another_fleet_it_can_target() {
+    fn a_point_defence_shot_meets_only_a_hostile_homing_missile_it_can_target() {
         // B fires, together and along the same line at A: a shell, a
         // missile point defence cannot target, and one it can, in that
         // order.
@@ -1728,6 +1738,55 @@ mod tests {
         }
         assert_eq!(combat.shots().len(), 1, "only the missile");
         assert_eq!(rule.asked.take().len(), 3, "asked each tick");
+    }
+
+    /// Calls hostile only a missile `ship` fired.
+    #[derive(Debug)]
+    struct FiredBy(ShipRef);
+
+    impl PointDefenceRule for FiredBy {
+        fn hostile(&self, _defender: Side, firer: Side) -> bool {
+            firer.ship == self.0
+        }
+    }
+
+    #[test]
+    fn a_point_defence_shot_flies_through_a_missile_the_rule_does_not_call_hostile() {
+        // B and C, each its own fleet, fire missiles down the same line at
+        // A, C's nearer, and C moves off the line. Only B's missile is
+        // hostile, so A's shot, fired at it, passes through C's on the way.
+        let [defender, attacker] = missile_attack(quad());
+        let ally = Ship::at(3, 0.0, -100.0)
+            .armed(WeaponRecord {
+                speed: 500,
+                ..missile()
+            })
+            .facing(180.0)
+            .targeting(A);
+        let mut ships = [defender, attacker, ally];
+        let rule = FiredBy(B);
+        let rules = Rules {
+            defence: &rule,
+            ..Rules::default()
+        };
+        let mut combat = Combat::default();
+        let mut events = Vec::new();
+        for _ in 0..8 {
+            tick_with(&mut combat, &mut ships, &Arsenal::default(), rules);
+            ships[1].trigger = Trigger::default();
+            ships[2].trigger = Trigger::default();
+            ships[2].state.position = Vec2::new(500.0, 0.0);
+            events.extend(combat.take_events());
+        }
+        let durability = |firer| {
+            combat
+                .shots()
+                .iter()
+                .find(|shot| shot.firer == firer && shot.weapon.id == WeaponId(134))
+                .map(|shot| shot.durability)
+        };
+        assert_eq!(durability(C), Some(4.0), "flown through: {events:?}");
+        assert_eq!(durability(B), Some(1.0), "met: {events:?}");
     }
 
     #[test]
