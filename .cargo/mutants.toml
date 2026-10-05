@@ -68,4 +68,9 @@ exclude_re = [
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour.
     "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::create_page)",
+    # The glow ramp's thrust step raises the base only below cruise (24).
+    # With `<=` a thrusting base of 24 steps to 25, and the next step, the
+    # decay above cruise, takes it straight back to 24: the same result for
+    # every base, so the mutant cannot be observed.
+    "replace < with <= in ramp_glow",
 ]
