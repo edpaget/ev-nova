@@ -770,6 +770,21 @@ mod tests {
     }
 
     #[test]
+    fn an_or_sprite_overlapping_from_near_the_top_splits() {
+        // The first spans y 5..11 and the second 0.5..6.5: they overlap
+        // in y 5..6.5, which only the sum of the second's top and height
+        // shows (their product, 3, is above neither).
+        let sprite = ImageKey::sprite(200, 0);
+        let mut list = DrawList::new();
+        list.or_sprite(sprite, at(20.0, 8.0), Color::WHITE)
+            .or_sprite(sprite, at(20.0, 3.5), Color::WHITE);
+
+        let frame = render_one(&list, &viewport());
+
+        assert_eq!(sprite_blends(&frame), [(Blend::Or, 1), (Blend::Or, 1)]);
+    }
+
+    #[test]
     fn or_sprites_touching_edge_to_edge_share_a_batch() {
         // The 5x6 frame centred on (20, 10) spans (17.5..22.5, 7..13).
         let sprite = ImageKey::sprite(200, 0);
