@@ -9,8 +9,11 @@
 //! Alphara's `DudeTypes` fleet comes when its roll fires. The governments
 //! stand as their `gövt`s say, and in Fomalhaut the player's attack on a
 //! Civvies trader puts it to flight, brings the Federation down on the
-//! player and costs it 3 with each. Skips, passing, when `NOVA_DATA` is
-//! unset.
+//! player and costs it 3 with each. A Federation ship hailed there
+//! greets with its government's line, and one hunting a wanted player is
+//! bought off; the ship comm strings, the 42-character advice lines and
+//! the governments' hail flags are where hailing reads them. Skips,
+//! passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -1946,4 +1949,202 @@ fn stock_boarding_reads_the_civvies_booty_and_the_drones_crew() {
         .find(|record| record.id == ShipId(130))
         .expect("shïp 130");
     assert_eq!(drone.crew, 0);
+}
+
+// Hailing.
+
+use nova_sim::hail::nova::{BEG_FOR_MERCY, GREETINGS, REQUEST_ASSISTANCE};
+use nova_sim::hail::{
+    BRIBABLE_TRADERS, BRIBABLE_WARSHIPS, GREEDY, Haggle, HailOptions, QUIET, UNTALKATIVE,
+};
+use nova_sim::{CommCatalog, Reply, TargetPick};
+
+const HYPERGATE: GovtId = GovtId(183);
+
+/// The stock ship comm strings, hail lines and button labels hailing
+/// reads: `STR#` 3000's first, "Nice to meet you." (group 9) and last
+/// strings, the Federation's first hail line, and `STR#` 150's labels.
+#[test]
+fn stock_hail_strings_are_where_hailing_reads_them() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let comm = data.string_list(3000);
+    assert_eq!(comm[0], "Channel open.");
+    assert_eq!(comm[45], "Nice to meet you.");
+    assert_eq!(comm[185], "Goodbye, captain.");
+    assert_eq!(
+        data.string_list(7000)[0],
+        "We wish only to help.  If you need anything, just call us."
+    );
+    let labels = data.string_list(150);
+    assert_eq!(labels[20], "Close Channel");
+    assert_eq!(labels[21], GREETINGS);
+    assert_eq!(labels[22], REQUEST_ASSISTANCE);
+    assert_eq!(labels[24], BEG_FOR_MERCY);
+}
+
+/// The three stock advice lines exactly 42 characters long read "Nice to
+/// meet you." in the conversation's variant by the engine, and are shown
+/// as written by the other reading of `long_advice`.
+#[test]
+fn the_three_stock_42_character_advice_lines_follow_long_advice() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let comm = data.string_list(3000);
+    for (list, index) in [(7009, 8), (7018, 4), (7041, 1)] {
+        let line = data.string_list(list)[usize::from(index) - 1].clone();
+        assert_eq!(line.chars().count(), 42, "{line:?}");
+        for variant in 0..5 {
+            let advice = |long_advice| Reply::Advice {
+                list,
+                index,
+                greet_if_blank: false,
+                long_advice,
+            };
+            assert_eq!(
+                advice(RuleSource::Engine).say(variant, &data),
+                comm[45 + usize::from(variant)],
+                "STR# {list} #{index}"
+            );
+            assert_eq!(advice(RuleSource::Bible).say(variant, &data), line);
+        }
+    }
+}
+
+/// The stock governments' flags hailing reads: the Federation (`Flags`
+/// 0xE2B0) is greedy and its warships and traders take bribes, the
+/// pirates' warships take them, and the Hypergates are quiet but
+/// talkative.
+#[test]
+fn stock_governments_hail_as_their_flags_say() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let govts = Governments::read(&data);
+    assert_eq!(govts.get(FEDERATION).map(|govt| govt.flags), Some(0xE2B0));
+    assert!(govts.flag(Some(FEDERATION), GREEDY));
+    assert!(govts.flag(Some(FEDERATION), BRIBABLE_WARSHIPS));
+    assert!(govts.flag(Some(FEDERATION), BRIBABLE_TRADERS));
+    assert!(govts.flag(Some(PIRATES), BRIBABLE_WARSHIPS));
+    assert!(govts.flag2(Some(HYPERGATE), QUIET));
+    assert!(!govts.flag2(Some(HYPERGATE), UNTALKATIVE));
+}
+
+/// A new stock pilot flying the Fed Destroyer in flight at the centre of
+/// Fomalhaut, its record with the Federation `record`, and the
+/// Federation warship or interceptor (of some aggression) that some seed
+/// brings, targeted.
+fn hailing_the_federation(data: &GameData, record: i16) -> (Session, nova_sim::NpcId) {
+    let mut session = destroyer_in_fomalhaut(data);
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(session.pilot())).expect("JSON");
+    save["legal"] = serde_json::json!([{ "govt": 128, "record": record }]);
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    session = Session::fly(data, pilot).expect("flies");
+    let fed = (1..=200)
+        .find_map(|seed| {
+            session.populate(data, &mut Seeded(seed));
+            session
+                .npcs()
+                .iter()
+                .find(|npc| {
+                    npc.govt == Some(FEDERATION) && npc.aggression > 0 && !npc.ai_type.trades()
+                })
+                .map(|npc| npc.id)
+        })
+        .expect("a seed brings the Federation");
+    for _ in 0..=session.npcs().len() {
+        if session.select_target(TargetPick::Next) == Some(fed) {
+            return (session, fed);
+        }
+    }
+    panic!("never targeted NPC {}", fed.0);
+}
+
+/// In Fomalhaut, a Federation ship hailed by a pilot of clean record
+/// opens with group 0 ("Channel open." or one of its variants) and greets
+/// with one of the Federation's hail lines.
+#[test]
+fn a_federation_ship_hailed_in_fomalhaut_greets_with_its_governments_line() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let (mut session, fed) = hailing_the_federation(&data, 0);
+    let options = HailOptions::default();
+    let mut chance = Seeded(7);
+    let view = session
+        .hail(&data, &options, &mut chance)
+        .expect("answered");
+    assert_eq!(view.npc, fed);
+    let channel_open = &data.string_list(3000)[..5];
+    assert_eq!(channel_open[0], "Channel open.");
+    assert!(channel_open.contains(&view.reply), "{:?}", view.reply);
+    assert_eq!(view.govt_name.as_deref(), Some("Federation"));
+    assert_eq!(view.options[0].label, GREETINGS);
+    assert_eq!(view.options[1].label, REQUEST_ASSISTANCE);
+    let view = session
+        .answer(0, &data, &options, &mut chance)
+        .expect("open");
+    assert!(
+        data.string_list(7000).contains(&view.reply),
+        "{:?}",
+        view.reply
+    );
+}
+
+/// A wanted pilot hailing the Federation warship hunting it in Fomalhaut
+/// can beg for mercy at a price of whole thousands from 1000 to 20,000;
+/// paid, the ship does not attack it over the next 300 ticks.
+#[test]
+fn a_wanted_pilot_buys_off_a_hunting_federation_ship() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let (mut session, fed) = hailing_the_federation(&data, -100);
+    let mut chance = Seeded(0x5EED);
+    let hunting = (0..600).any(|_| {
+        session.tick_traffic(&data, &NovaAi::default(), &mut chance);
+        npc_of(&session, fed).is_some_and(|npc| npc.goal == Goal::Attack(ShipRef::Player))
+    });
+    assert!(hunting, "the Federation hunts the wanted pilot");
+    let options = HailOptions::default();
+    let view = session
+        .hail(&data, &options, &mut chance)
+        .expect("answered");
+    let labels: Vec<&str> = view
+        .options
+        .iter()
+        .map(|button| button.label.as_str())
+        .collect();
+    assert_eq!(labels, [GREETINGS, BEG_FOR_MERCY]);
+    let view = session
+        .answer(1, &data, &options, &mut chance)
+        .expect("open");
+    let price = view.asking.expect("a price");
+    assert!(
+        (1000..=20_000).contains(&price) && price % 1000 == 0,
+        "{price}"
+    );
+    let cash = session.pilot().cash();
+    session
+        .haggle(Haggle::Accept, &data, &options)
+        .expect("open");
+    assert_eq!(session.pilot().cash(), cash - price);
+    session.hang_up();
+    for _ in 0..300 {
+        session.tick(nova_sim::Controls::default());
+        session.tick_combat(nova_sim::Rules::default(), &mut chance);
+        session.tick_traffic(&data, &NovaAi::default(), &mut chance);
+        if let Some(npc) = npc_of(&session, fed) {
+            assert!(npc.goal.attacking().is_none(), "{:?}", npc.goal);
+            assert_ne!(npc.target, Some(ShipRef::Player));
+        }
+    }
 }

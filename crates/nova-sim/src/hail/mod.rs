@@ -36,6 +36,7 @@
 //! disagreement: 0x0010's "always … for free" means for free, and the
 //! ship must still like the player and be free.
 
+pub mod assist;
 pub mod deal;
 pub mod like;
 pub mod nova;
@@ -44,11 +45,13 @@ pub mod reply;
 use std::fmt::Debug;
 use std::rc::Rc;
 
-use crate::catalog::GovtId;
+use crate::ai::{Goal, Surroundings};
+use crate::catalog::{GovtId, ShipId};
 use crate::chance::Chance;
+use crate::combat::ShipRef;
 use crate::govt::{Governments, XENOPHOBIC};
 use crate::rulebook::Rulebook;
-use crate::traffic::npc::Npc;
+use crate::traffic::npc::{Npc, NpcId};
 
 pub use crate::ai::Help;
 pub use deal::{Conversation, Haggle, Mood, Settled};
@@ -150,6 +153,42 @@ pub struct Hail<'a> {
     pub need: Option<Help>,
 }
 
+impl<'a> Hail<'a> {
+    /// The hail of `npc` among `around`, of `dispositions`, in
+    /// conversation `talk`, the player needing `need`. It is busy while
+    /// it attacks, snipes at, flees from or assists a ship, or an NPC
+    /// attacks or snipes at it (`_AIIsShipBusy` @0x82fac,
+    /// `_IsShipThreatened` @0x82068); the player is threatened while any
+    /// NPC threatens it.
+    #[must_use]
+    pub fn new(
+        npc: &'a Npc,
+        around: &Surroundings,
+        dispositions: Dispositions,
+        talk: &Conversation,
+        need: Option<Help>,
+    ) -> Self {
+        let me = ShipRef::Npc(npc.id);
+        let assisting_player = matches!(npc.goal, Goal::Assist(_));
+        let attacked = around
+            .npcs
+            .iter()
+            .any(|other| other.id != npc.id && other.goal.attacking() == Some(me));
+        Self {
+            npc,
+            attitude: attitude(npc, around),
+            variant: talk.variant,
+            advice: talk.advice,
+            mood: talk.mood,
+            dispositions,
+            busy: npc.goal.fights() || assisting_player || attacked,
+            assisting_player,
+            player_threatened: around.npcs.iter().any(Npc::threatens_player),
+            need,
+        }
+    }
+}
+
 /// What a ship does at an option's press, or once the player pays or
 /// declines its price.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,6 +232,67 @@ impl Answer {
             ..Self::default()
         }
     }
+}
+
+/// Why a hail went unanswered (`_HandlePlayerCommunication` @0x61f48).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HailRefusal {
+    /// There is no ship to hail: no ship target, or the player is landed,
+    /// jumping or breaking up. Nothing is said. (With no ship target the
+    /// original hails the navigation planet; that is not done here.)
+    NoTarget,
+    /// "No response." (`STR#` 2002 #53): the target is disabled, or mute
+    /// (see [`Dispositions`]).
+    NoResponse,
+    /// "Unable to send hail - target ship is entering hyperspace."
+    /// (`STR#` 2002 #54): the target is still jumping in.
+    InHyperspace,
+}
+
+/// One of the comm dialog's buttons, an option that applies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HailButton {
+    /// Its label.
+    pub label: String,
+    /// Its hotkey, if it has one.
+    pub key: Option<char>,
+}
+
+/// The comm dialog's contents: the ship hailed, its reply, and the
+/// options that apply.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HailView {
+    /// The NPC hailed.
+    pub npc: NpcId,
+    /// Its ship type.
+    pub ship: ShipId,
+    /// What it last said.
+    pub reply: String,
+    /// Its ship type's `CommName`.
+    pub comm_name: String,
+    /// Its government's `CommName`; none for an independent.
+    pub govt_name: Option<String>,
+    /// Whether it is hostile to the player.
+    pub hostile: bool,
+    /// The options that apply, in order: the buttons above Close Channel.
+    pub options: Vec<HailButton>,
+    /// The price it asks while the player haggles, if any.
+    pub asking: Option<i64>,
+    /// Whether the haggle dialog says "Pay me" (a ship), rather than "Pay
+    /// us" (a planet, which is not hailed here).
+    pub pay_me: bool,
+}
+
+/// What an NPC assisting the player has done, for the flight's message
+/// line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommNote {
+    /// The NPC that helped.
+    pub from: NpcId,
+    /// Its ship type's `CommName`.
+    pub comm_name: String,
+    /// The help it gave.
+    pub done: Help,
 }
 
 /// One of the comm dialog's options, a button with its hotkey: an open
@@ -298,13 +398,14 @@ pub(crate) mod fixture {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::fixture::{hail, ship};
     use super::*;
     use crate::catalog::GovtRecord;
     use crate::rulebook::{RuleKey, RuleSource};
     use crate::testkit::govt;
-    use crate::traffic::npc::AiType;
+    use crate::traffic::npc::{AiType, NpcId};
 
     const G: GovtId = GovtId(140);
     const INHERENT: GovtId = GovtId(141);
@@ -416,6 +517,112 @@ mod tests {
         assert!(of(AiType::Interceptor, Some(G), &govts).plunderer);
         assert!(!of(AiType::BraveTrader, Some(G), &govts).plunderer);
         assert!(!of(AiType::Warship, Some(G), &inherited()).plunderer);
+    }
+
+    /// NPC `id` of government 140, flying `goal`.
+    fn flying(id: u32, goal: Goal) -> Npc {
+        let mut npc = crate::testkit::npc(id, crate::stats::ShipStats::default());
+        npc.govt = Some(G);
+        npc.goal = goal;
+        npc
+    }
+
+    /// The hail of `npcs[0]` among `npcs`, in a system of 140 with the
+    /// player's record `record`, its conversation `talk`.
+    fn hailing<'a>(npcs: &'a [Npc], record: i16, talk: &Conversation) -> Hail<'a> {
+        let govts = govts(0, 0, (0, 0));
+        let around = Surroundings {
+            govts: &govts,
+            system_govt: Some(G),
+            record,
+            ..Surroundings::new(&[], npcs)
+        };
+        Hail::new(
+            &npcs[0],
+            &around,
+            Dispositions::default(),
+            talk,
+            Some(Help::Refuel),
+        )
+    }
+
+    fn talk() -> Conversation {
+        let mut chance = crate::testkit::Draws::of(&[3, 40, 1, 1, 0, 1]);
+        Conversation::open(100_000, false, 0xC000, &mut chance)
+    }
+
+    #[test]
+    fn a_hail_carries_the_conversations_variant_mood_and_advice() {
+        let npcs = [flying(1, Goal::Idle)];
+        let talk = talk();
+        let hail = hailing(&npcs, 0, &talk);
+        assert_eq!(hail.npc.id, NpcId(1));
+        assert_eq!(hail.variant, 3);
+        assert_eq!(hail.mood, talk.mood);
+        assert_eq!(hail.advice, Some(0x8000));
+        assert_eq!(hail.need, Some(Help::Refuel));
+        assert_eq!(hail.dispositions, Dispositions::default());
+    }
+
+    #[test]
+    fn a_hail_reads_the_ships_attitude() {
+        let npcs = [flying(1, Goal::Idle)];
+        assert_eq!(hailing(&npcs, 0, &talk()).attitude, Attitude::Friendly);
+        assert_eq!(hailing(&npcs, -100, &talk()).attitude, Attitude::Unfriendly);
+        let hunting = [flying(1, Goal::Attack(ShipRef::Player))];
+        assert_eq!(hailing(&hunting, 0, &talk()).attitude, Attitude::Hostile);
+    }
+
+    #[test]
+    fn a_ship_fighting_assisting_or_attacked_is_busy() {
+        for goal in [
+            Goal::Attack(ShipRef::Npc(NpcId(5))),
+            Goal::Snipe(ShipRef::Npc(NpcId(5))),
+            Goal::Flee(ShipRef::Npc(NpcId(5))),
+            Goal::Assist(Help::Repair),
+        ] {
+            let npcs = [flying(1, goal)];
+            assert!(hailing(&npcs, 0, &talk()).busy, "{goal:?}");
+        }
+        for goal in [
+            Goal::Idle,
+            Goal::JumpOut,
+            Goal::Inspect(ShipRef::Npc(NpcId(5))),
+        ] {
+            let npcs = [flying(1, goal)];
+            assert!(!hailing(&npcs, 0, &talk()).busy, "{goal:?}");
+        }
+        for goal in [
+            Goal::Attack(ShipRef::Npc(NpcId(1))),
+            Goal::Snipe(ShipRef::Npc(NpcId(1))),
+        ] {
+            let npcs = [flying(1, Goal::Idle), flying(2, goal)];
+            assert!(hailing(&npcs, 0, &talk()).busy, "attacked: {goal:?}");
+        }
+        for goal in [
+            Goal::Flee(ShipRef::Npc(NpcId(1))),
+            Goal::Attack(ShipRef::Npc(NpcId(3))),
+        ] {
+            let npcs = [flying(1, Goal::Idle), flying(2, goal)];
+            assert!(!hailing(&npcs, 0, &talk()).busy, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_hail_knows_whether_the_ship_assists_the_player_and_whether_the_player_is_threatened() {
+        let npcs = [flying(1, Goal::Assist(Help::Refuel))];
+        let hail = hailing(&npcs, 0, &talk());
+        assert!(hail.assisting_player);
+        assert!(!hail.player_threatened);
+        let npcs = [
+            flying(1, Goal::Idle),
+            flying(2, Goal::Snipe(ShipRef::Player)),
+        ];
+        let hail = hailing(&npcs, 0, &talk());
+        assert!(!hail.assisting_player);
+        assert!(hail.player_threatened);
+        let hunting = [flying(1, Goal::Attack(ShipRef::Player))];
+        assert!(hailing(&hunting, 0, &talk()).player_threatened, "itself");
     }
 
     #[test]

@@ -57,7 +57,8 @@
 //!   [`Reply`] it says, and the [`HailOption`] port the comm dialog lists
 //!   ([`HailOptions`]), with Nova's Greetings, Request Assistance and Beg
 //!   For Mercy, which answer each press with an [`Answer`]: a reply, a
-//!   [`Deed`] and a price asked ([`Ask`]).
+//!   [`Deed`] and a price asked ([`Ask`]); and the [`Help`] a ship gives
+//!   the player once asked.
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
@@ -93,7 +94,8 @@
 //!   opens them.
 //! - [`session`]: a flight [`Session`], a pilot's ship flying
 //!   from its starting system, landing, jumping along a plotted course,
-//!   fighting, and boarding and capturing ships.
+//!   fighting, boarding and capturing ships, and hailing them
+//!   ([`HailView`], [`HailRefusal`], [`CommNote`]).
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -179,7 +181,8 @@ pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
 pub use govt::Governments;
 pub use hail::{
-    Answer, Ask, Attitude, Conversation, Deed, Haggle, Hail, HailOption, HailOptions, Help, Reply,
+    Answer, Ask, Attitude, CommNote, Conversation, Deed, Haggle, Hail, HailButton, HailOption,
+    HailOptions, HailRefusal, HailView, Help, Reply,
 };
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};

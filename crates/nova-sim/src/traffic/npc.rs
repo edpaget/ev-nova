@@ -120,6 +120,11 @@ pub struct Npc {
     /// Its `düde`'s `InfoTypes` flags, what it says when hailed (see
     /// [`hail`](crate::hail)); none for a fleet's ship.
     pub info_types: u16,
+    /// Whether the player has paid it to spare it: it never targets the
+    /// player again.
+    pub spared: bool,
+    /// The ticks it has spent within reach of the player, repairing it.
+    pub assisting: u32,
 }
 
 impl Npc {
@@ -214,6 +219,7 @@ mod tests {
             Goal::Inspect(ShipRef::Player),
             Goal::Idle,
             Goal::Attack(other),
+            Goal::Assist(crate::ai::Help::Refuel),
         ] {
             let npc = Npc {
                 goal,

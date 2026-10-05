@@ -1,6 +1,10 @@
 //! What a hailed ship says: the [`Reply`] an option asks for, which the
 //! session turns into words with the conversation's variant.
 //!
+//! The session says each reply ([`Reply::say`]), reading the strings
+//! from a [`CommCatalog`]; a string that is missing, or of a list that
+//! is missing, is none.
+//!
 //! **Ship comm strings** (`_LoadResponse` @0x90a0b in the `EV Nova`
 //! executable). The replies come in groups of [`VARIANTS`], one group a
 //! situation; a conversation says every reply in the same variant r (see
@@ -28,6 +32,7 @@
 //! written.
 
 use super::like::Attitude;
+use crate::catalog::CommCatalog;
 use crate::rulebook::RuleSource;
 
 /// How many variants each group of ship comm strings has.
@@ -141,6 +146,37 @@ impl Reply {
             (MORE_COMM_STRINGS, index - MORE_COMM_OFFSET - 1)
         }
     }
+
+    /// The reply's words in `variant`, read from `catalog` (see the
+    /// module docs): a string missing, or of a list missing, is none.
+    #[must_use]
+    pub fn say(self, variant: u8, catalog: &(impl CommCatalog + ?Sized)) -> String {
+        let line = |(list, index): (i16, u16)| {
+            let at = usize::from(index.checked_sub(1)?);
+            catalog.string_list(list).into_iter().nth(at)
+        };
+        let line = |at| line(at).unwrap_or_default();
+        match self {
+            Self::Comm(group) => line(Self::locate(group, variant)),
+            Self::Line { list, index } => line((list, index)),
+            Self::Advice {
+                list,
+                index,
+                greet_if_blank,
+                long_advice,
+            } => {
+                let mut text = line((list, index));
+                if text.is_empty() && greet_if_blank {
+                    text = line(GREETINGS);
+                }
+                if advice_fallback(&text, long_advice) {
+                    line(Self::locate(NICE_TO_MEET_YOU, variant))
+                } else {
+                    text
+                }
+            }
+        }
+    }
 }
 
 /// The group a ship opens with when hailed (see the module docs).
@@ -166,6 +202,146 @@ pub fn advice_fallback(line: &str, long_advice: RuleSource) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `STR#` 3000 is "c<n>" for each string n up to 200, and 3001 "d<n>"
+    /// up to 20; 2002 #175 is "Greetings."; 7000 holds `line` as #1, a
+    /// blank #2 and "Hi" as #3; 7001 is empty.
+    struct Strings {
+        line: String,
+    }
+
+    impl CommCatalog for Strings {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            match id {
+                3000 => (1..=200).map(|n| format!("c{n}")).collect(),
+                3001 => (1..=20).map(|n| format!("d{n}")).collect(),
+                2002 => (1..=200)
+                    .map(|n| {
+                        if n == 175 {
+                            "Greetings.".to_owned()
+                        } else {
+                            format!("m{n}")
+                        }
+                    })
+                    .collect(),
+                7000 => vec![self.line.clone(), String::new(), "Hi".to_owned()],
+                _ => Vec::new(),
+            }
+        }
+    }
+
+    fn strings(line: &str) -> Strings {
+        Strings {
+            line: line.to_owned(),
+        }
+    }
+
+    fn advice(list: i16, index: u16, greet_if_blank: bool, long_advice: RuleSource) -> Reply {
+        Reply::Advice {
+            list,
+            index,
+            greet_if_blank,
+            long_advice,
+        }
+    }
+
+    #[test]
+    fn a_comm_reply_is_said_in_the_variant() {
+        let catalog = strings("Fine.");
+        assert_eq!(Reply::Comm(0).say(3, &catalog), "c4");
+        assert_eq!(Reply::Comm(9).say(0, &catalog), "c46");
+        assert_eq!(Reply::Comm(38).say(2, &catalog), "d3");
+    }
+
+    #[test]
+    fn a_line_is_its_string_as_it_is_or_none() {
+        let catalog = strings("*Hidden");
+        let line = |list, index| Reply::Line { list, index }.say(4, &catalog);
+        assert_eq!(line(7000, 1), "*Hidden", "no check");
+        assert_eq!(line(7000, 2), "");
+        assert_eq!(line(7000, 4), "", "past the end");
+        assert_eq!(line(7000, 0), "", "there is no string 0");
+        assert_eq!(line(7001, 1), "", "an empty list");
+        assert_eq!(line(9999, 1), "", "a missing list");
+    }
+
+    #[test]
+    fn an_advice_line_is_shown_as_written() {
+        let catalog = strings("Welcome to Federation space.");
+        assert_eq!(
+            advice(7000, 1, false, RuleSource::Engine).say(2, &catalog),
+            "Welcome to Federation space."
+        );
+        assert_eq!(
+            advice(7000, 3, false, RuleSource::Engine).say(2, &catalog),
+            "Hi",
+            "a two-character line is shown"
+        );
+    }
+
+    #[test]
+    fn an_advice_line_passed_over_is_nice_to_meet_you_in_the_variant() {
+        let long = "x".repeat(42);
+        for (line, index) in [("*", 1), ("*Fed", 1), (long.as_str(), 1), ("", 2), ("", 4)] {
+            let catalog = strings(line);
+            for variant in [0, 4] {
+                assert_eq!(
+                    advice(7000, index, false, RuleSource::Engine).say(variant, &catalog),
+                    format!("c{}", 46 + u16::from(variant)),
+                    "{line:?} #{index}"
+                );
+            }
+        }
+        assert_eq!(
+            advice(7001, 1, false, RuleSource::Engine).say(1, &strings("")),
+            "c47",
+            "an empty list"
+        );
+        assert_eq!(
+            advice(9999, 1, true, RuleSource::Engine).say(1, &strings("")),
+            "Greetings.",
+            "a missing list, greeted"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_long_advice_line_is_shown_as_written() {
+        let long = "x".repeat(42);
+        let catalog = strings(&long);
+        assert_eq!(
+            advice(7000, 1, false, RuleSource::Bible).say(0, &catalog),
+            long
+        );
+        assert_eq!(
+            advice(7000, 2, false, RuleSource::Bible).say(0, &catalog),
+            "c46",
+            "a blank line still is not"
+        );
+    }
+
+    #[test]
+    fn a_blank_advice_line_greets_when_asked_to_before_the_check() {
+        let catalog = strings("");
+        assert_eq!(
+            advice(7000, 2, true, RuleSource::Engine).say(3, &catalog),
+            "Greetings."
+        );
+        assert_eq!(
+            advice(7000, 1, true, RuleSource::Engine).say(3, &catalog),
+            "Greetings."
+        );
+        assert_eq!(
+            advice(7000, 3, true, RuleSource::Engine).say(3, &catalog),
+            "Hi",
+            "only a blank one"
+        );
+        let starred = strings("*Secret");
+        assert_eq!(
+            advice(7000, 1, true, RuleSource::Engine).say(3, &starred),
+            "c49",
+            "a starred line is not blank"
+        );
+    }
 
     #[test]
     fn a_group_and_variant_locate_a_ship_comm_string() {

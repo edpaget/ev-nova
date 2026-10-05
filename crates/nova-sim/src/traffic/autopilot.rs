@@ -11,8 +11,11 @@
 //!   speed, and jumps once it is its stats' jump distance out.
 //! - [`Goal::Follow`]: it keeps within [`FOLLOW_DISTANCE`] of its lead,
 //!   matching its lead's velocity there.
-//! - [`Goal::Idle`], or a goal it cannot fly (a stellar or lead that is
-//!   not there): it brakes to a stop.
+//! - [`Goal::Assist`]: outside its reach of the player (see
+//!   [`assist`]) it follows the player as an escort its lead; within it,
+//!   it brakes.
+//! - [`Goal::Idle`], or a goal it cannot fly (a stellar, lead or player
+//!   that is not there): it brakes to a stop.
 //! - A ship that is not [`Condition::Intact`] (disabled, breaking up or
 //!   destroyed) drifts: it flies on with no controls, and never lands or
 //!   jumps.
@@ -26,6 +29,7 @@ use crate::catalog::{LandingSite, StellarId};
 use crate::combat::hull::Condition;
 use crate::flight::{self, AT_REST_SPEED, Controls, ShipState, Turn, heading_of, shortest_turn};
 use crate::geometry::Vec2;
+use crate::hail::assist;
 use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
 use crate::landing::{LANDING_SPEED, landing_radius};
@@ -121,6 +125,14 @@ pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> O
                 }
             }
             None => brake(&state, &handling),
+        },
+        Goal::Assist(help) => match other {
+            Some(player)
+                if !assist::within(&state, player, assist::reach(help, handling.turn_rate)) =>
+            {
+                follow(&state, &handling, player)
+            }
+            _ => brake(&state, &handling),
         },
         Goal::Idle => brake(&state, &handling),
     };
@@ -287,6 +299,7 @@ fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Cont
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::hail::{Help, assist};
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, planet};
@@ -528,6 +541,65 @@ mod tests {
                 ship.state
             );
         }
+    }
+
+    #[test]
+    fn an_assisting_ship_comes_to_the_player_and_waits_docked_within_its_reach() {
+        for help in [Help::Refuel, Help::Repair] {
+            let player = at(0.0, 0.0, 0.0, 0.0, 0.0);
+            let mut ship = npc(FAST, Goal::Assist(help), at(-600.0, 400.0, 0.0, 0.0, 0.0));
+            for _ in 0..600 {
+                assert_eq!(fly(&mut ship, &[], Some(&player)), Outcome::Flying);
+            }
+            let reach = assist::reach(help, ship.stats.handling.turn_rate);
+            assert!(
+                assist::within(&ship.state, &player, reach),
+                "{help:?} {:?}",
+                ship.state
+            );
+            assert!(assist::docked(&ship.state), "{help:?} {:?}", ship.state);
+        }
+    }
+
+    #[test]
+    fn outside_its_reach_an_assisting_ship_follows_the_player() {
+        let player = at(0.0, 0.0, 1.0, 0.0, 0.0);
+        // FAST turns 3° a tick: a refuel's reach is 105.
+        for start in [
+            at(-106.0, 0.0, 0.0, 0.0, 0.0),
+            at(0.0, 300.0, 2.0, 1.0, 45.0),
+        ] {
+            let mut ship = npc(FAST, Goal::Assist(Help::Refuel), start);
+            let mut escort = npc(FAST, Goal::Follow(NpcId(0)), start);
+            fly(&mut ship, &[], Some(&player));
+            fly(&mut escort, &[], Some(&player));
+            assert_eq!(ship.state, escort.state, "{start:?}");
+        }
+    }
+
+    #[test]
+    fn within_its_reach_or_with_the_player_gone_an_assisting_ship_brakes() {
+        let player = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let start = at(-105.0, 105.0, 2.0, -1.0, 30.0);
+        for (help, other) in [
+            (Help::Refuel, Some(&player)),
+            (Help::Repair, Some(&player)),
+            (Help::Refuel, None),
+        ] {
+            let mut ship = npc(FAST, Goal::Assist(help), start);
+            let mut idle = npc(FAST, Goal::Idle, start);
+            for _ in 0..30 {
+                fly(&mut ship, &[], other);
+                fly(&mut idle, &[], other);
+                assert_eq!(ship.state, idle.state, "{help:?} {other:?}");
+            }
+        }
+        let far = at(-1000.0, 0.0, 2.0, 0.0, 30.0);
+        let mut ship = npc(FAST, Goal::Assist(Help::Repair), far);
+        let mut idle = npc(FAST, Goal::Idle, far);
+        fly(&mut ship, &[], None);
+        fly(&mut idle, &[], None);
+        assert_eq!(ship.state, idle.state, "gone, from afar");
     }
 
     #[test]

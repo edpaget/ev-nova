@@ -55,6 +55,12 @@
 //! weapons; or a ship it spares: an NPC allied with it (the player's
 //! escorts aside, which do not exist yet; @0x8e2af) or of its own fleet.
 //!
+//! **A ship the player paid off** ([`Npc::spared`], see
+//! [`hail`](crate::hail)) spares the player too: no step gives the
+//! player, it keeps no player target, and drops one. The original makes
+//! such a ship a wimpy trader that leaves, which never targets the
+//! player unprovoked; this holds for any behaviour that asks here.
+//!
 //! Steps 3 and 5 never give a ship it spares. The original checks
 //! neither there (nor does `_ExtendedIsThreatToShip` @0x81a27), so its
 //! police, seeing an allied trader that a stray police shot provoked,
@@ -155,7 +161,8 @@ pub fn select_target(
     current: Option<ShipRef>,
     around: &Surroundings,
 ) -> Option<ShipRef> {
-    if let Some(kept) = current.filter(|&ship| around.live(ship)) {
+    let paid_off = |ship| ship == ShipRef::Player && npc.spared;
+    if let Some(kept) = current.filter(|&ship| around.live(ship) && !paid_off(ship)) {
         return Some(kept);
     }
     let govts = around.govts;
@@ -167,7 +174,8 @@ pub fn select_target(
             .filter(move |other| other.id != npc.id && around.live(ShipRef::Npc(other.id)))
     };
     if govts.xenophobic(npc.govt) {
-        let player = xenophobe_hunts_player(npc, around).then_some(ShipRef::Player);
+        let player =
+            (xenophobe_hunts_player(npc, around) && !npc.spared).then_some(ShipRef::Player);
         let enemies = others()
             .filter(|other| {
                 govts.npc_enemies(npc.govt, other.govt)
@@ -197,7 +205,7 @@ pub fn select_target(
     if helped.is_some() {
         return helped;
     }
-    let player = hostile_to_player(npc, around).then_some(ShipRef::Player);
+    let player = (hostile_to_player(npc, around) && !npc.spared).then_some(ShipRef::Player);
     let destroys = fire::destroys(npc);
     let enemies = others()
         .filter(|other| {
@@ -219,11 +227,12 @@ pub fn select_target(
     nearest(npc, threats, around)
 }
 
-/// Whether `npc` spares `ship` among `around`: an NPC allied with it or
-/// of its own fleet (see the module docs).
+/// Whether `npc` spares `ship` among `around`: the player once it has
+/// paid to be spared, or an NPC allied with it or of its own fleet (see
+/// the module docs).
 fn spares(npc: &Npc, ship: ShipRef, around: &Surroundings) -> bool {
     match ship {
-        ShipRef::Player => false,
+        ShipRef::Player => npc.spared,
         ShipRef::Npc(id) => around.npc(id).is_some_and(|other| {
             around.govts.allies(npc.govt, other.govt) || other.fleet() == npc.fleet()
         }),
@@ -478,6 +487,65 @@ mod tests {
             Some(P),
             "always wins"
         );
+    }
+
+    #[test]
+    fn a_spared_ship_never_takes_the_player_but_still_its_npc_enemies() {
+        let govts = Governments::new([
+            GovtRecord {
+                flags: XENOPHOBIC | ALWAYS_ATTACKS_PLAYER,
+                crime_tol: 6,
+                ..govt(144)
+            },
+            govt(145),
+        ]);
+        let mut spared = ship(1, XENO, 0.0, 0.0);
+        spared.spared = true;
+        let rival = ship(2, RIVAL, 300.0, 0.0);
+        let choose = |npcs: &[Npc], current| {
+            let around = Surroundings {
+                player: Some(player(0.0, -100.0)),
+                govts: &govts,
+                system_govt: Some(XENO),
+                record: -100,
+                ..Surroundings::new(&[], npcs)
+            };
+            select_target(&npcs[0], current, &around)
+        };
+        let both = [spared.clone(), rival.clone()];
+        assert_eq!(choose(&both, Some(P)), Some(n(2)), "the player not kept");
+        assert_eq!(choose(&both, None), Some(n(2)), "an NPC enemy still");
+        assert_eq!(choose(&[spared.clone()], Some(P)), None, "never the player");
+        let unspared = [ship(1, XENO, 0.0, 0.0), rival];
+        assert_eq!(choose(&unspared, None), Some(P), "as before");
+        assert_eq!(choose(&unspared[..1], Some(P)), Some(P));
+    }
+
+    #[test]
+    fn a_spared_warship_neither_hunts_nor_helps_against_the_player_and_drops_it() {
+        let govts = govts(ALWAYS_ATTACKS_PLAYER);
+        let mut spared = ship(1, ME, 0.0, 0.0);
+        spared.spared = true;
+        let mut kin = ship(2, ME, 50.0, 0.0);
+        kin.goal = Goal::Attack(P);
+        let npcs = [spared.clone(), kin];
+        let around = Surroundings {
+            player: Some(player(0.0, -100.0)),
+            govts: &govts,
+            system_govt: Some(ME),
+            record: -100,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(select_target(&npcs[0], None, &around), None);
+        assert!(dropped(&npcs[0], P, &around));
+        let mut unspared = npcs.clone();
+        unspared[0].spared = false;
+        let around = Surroundings {
+            npcs: &unspared,
+            ..around
+        };
+        assert_eq!(select_target(&unspared[0], None, &around), Some(P));
+        assert!(!dropped(&unspared[0], P, &around));
     }
 
     #[test]

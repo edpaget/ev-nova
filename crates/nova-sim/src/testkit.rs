@@ -1,14 +1,14 @@
-//! A canned [`PilotCatalog`], [`TrafficCatalog`] and [`CombatCatalog`]
-//! for the crate's own tests.
+//! A canned [`PilotCatalog`], [`TrafficCatalog`], [`CombatCatalog`] and
+//! [`CommCatalog`] for the crate's own tests.
 
 use std::cell::RefCell;
 
 use crate::ai::Goal;
 use crate::catalog::{
-    CharacterStart, CombatCatalog, CommodityStrings, DisasterRecord, DudeId, DudeRecord,
-    FleetRecord, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, OutfitId, OutfitRecord,
-    Penalties, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError, StellarId,
-    SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterRecord, DudeId,
+    DudeRecord, FleetRecord, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, OutfitId,
+    OutfitRecord, Penalties, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError,
+    StellarId, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -63,6 +63,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) hulls: Vec<HullRecord>,
     /// Every `gövt`.
     pub(crate) govts: Vec<GovtRecord>,
+    /// Each `STR#`; any other is missing.
+    pub(crate) strings: Vec<(i16, Vec<String>)>,
 }
 
 pub(crate) const FAST: ShipFields = ShipFields {
@@ -242,6 +244,8 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         booty: 0,
         boarded: false,
         info_types: 0,
+        spared: false,
+        assisting: 0,
     }
 }
 
@@ -293,6 +297,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         weapons: Vec::new(),
         hulls: Vec::new(),
         govts: Vec::new(),
+        strings: Vec::new(),
     }
 }
 
@@ -421,6 +426,16 @@ impl CombatCatalog for FakePilotCatalog {
 
     fn governments(&self) -> Vec<GovtRecord> {
         self.govts.clone()
+    }
+}
+
+/// No strings unless a test sets them.
+impl CommCatalog for FakePilotCatalog {
+    fn string_list(&self, id: i16) -> Vec<String> {
+        self.strings
+            .iter()
+            .find(|(list, _)| *list == id)
+            .map_or_else(Vec::new, |(_, strings)| strings.clone())
     }
 }
 

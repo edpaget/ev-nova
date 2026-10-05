@@ -115,6 +115,17 @@
 //! becomes the player's own ship ([`Session::assign`]), which makes a
 //! save due. The boarding under way is never saved.
 //!
+//! The player hails its target ([`Session::hail`]), as the
+//! [`hail`](crate::hail) rules say: the ship answers by its attitude to
+//! the player, and the comm dialog lists the [`HailOption`](crate::HailOption)s
+//! that apply ([`Session::hailing`]). A press ([`Session::answer`]) says
+//! the ship's reply and does its deed: a ship paid to spare the player
+//! never targets it again and leaves; one declined attacks; one asked for
+//! help flies over to refuel or repair the player
+//! ([`Session::tick_assistance`], [`Session::take_comm`]). A price asked is
+//! haggled over and paid from the cash ([`Session::haggle`]), which makes
+//! no save due. The hail under way, and the help, are never saved.
+//!
 //! The player targets an NPC ([`Session::select_target`]), the nearest,
 //! the nearest threat or the next in turn as the
 //! [`targeting`](crate::targeting) rules say, and
@@ -134,6 +145,8 @@
 //! [`Session::take_combat_events`], and the [`SimDiagnostic`]s about game
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
+
+mod hail;
 
 use std::collections::BTreeMap;
 
@@ -164,6 +177,7 @@ use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
 use crate::landing::{LandingRefusal, check_landing};
@@ -250,6 +264,11 @@ pub struct Session {
     strikes: Vec<Strike>,
     /// The boarding under way, if any.
     aboard: Option<Aboard>,
+    /// The hail under way, if any.
+    talk: Option<hail::Talk>,
+    /// What the NPCs assisting the player have done since this was last
+    /// taken.
+    comm: Vec<CommNote>,
 }
 
 impl Session {
@@ -334,6 +353,8 @@ impl Session {
             secondary: None,
             strikes: Vec::new(),
             aboard: None,
+            talk: None,
+            comm: Vec::new(),
             pilot,
         };
         session.refit(false);
@@ -425,6 +446,7 @@ impl Session {
         self.traffic_due = false;
         self.strikes.clear();
         self.aboard = None;
+        self.talk = None;
         self.clear_lost_target();
     }
 
@@ -448,13 +470,7 @@ impl Session {
                 let system_govt = self.star_map.govt(self.pilot.system);
                 let world = World {
                     sites: &self.sites,
-                    player: Some(PlayerSide {
-                        state: self.player,
-                        condition: self.condition,
-                        reserves: self.pilot.reserves,
-                        hull: self.hull,
-                        handling: self.stats.handling,
-                    }),
+                    player: Some(self.player_side()),
                     govts: &self.govts,
                     system_govt,
                     record: system_govt.map_or(0, |govt| self.pilot.legal_record(govt)),
@@ -464,6 +480,31 @@ impl Session {
             }
         }
         self.clear_lost_target();
+    }
+
+    /// What the traffic flies among in flight: the system's stellars, the
+    /// player, the governments, the system's government and the player's
+    /// legal record with it (none in an independent system).
+    fn world(&self) -> World<'_> {
+        let system_govt = self.star_map.govt(self.pilot.system);
+        World {
+            sites: &self.sites,
+            player: Some(self.player_side()),
+            govts: &self.govts,
+            system_govt,
+            record: system_govt.map_or(0, |govt| self.pilot.legal_record(govt)),
+        }
+    }
+
+    /// The player's ship as an NPC sees it.
+    fn player_side(&self) -> PlayerSide {
+        PlayerSide {
+            state: self.player,
+            condition: self.condition,
+            reserves: self.pilot.reserves,
+            hull: self.hull,
+            handling: self.stats.handling,
+        }
     }
 
     /// Holds `trigger`, the player's fire command, until another is held.
@@ -892,6 +933,7 @@ impl Session {
         self.pilot.stellar = Some(stellar);
         self.combat.clear();
         self.target = None;
+        self.talk = None;
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });

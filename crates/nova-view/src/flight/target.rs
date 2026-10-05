@@ -702,6 +702,8 @@ mod tests {
             booty: 0,
             boarded: false,
             info_types: 0,
+            spared: false,
+            assisting: 0,
         }
     }
 

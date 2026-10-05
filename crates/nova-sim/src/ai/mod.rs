@@ -73,6 +73,10 @@ pub enum Goal {
     Flee(ShipRef),
     /// Fly up to this ship to look it over.
     Inspect(ShipRef),
+    /// Fly over to the player and give it this help, once asked (see
+    /// [`hail`](crate::hail)): it fights nothing, and decides nothing
+    /// more until it is done or provoked.
+    Assist(Help),
 }
 
 impl Goal {
@@ -597,6 +601,8 @@ mod tests {
             Goal::JumpOut,
             Goal::Follow(NpcId(1)),
             Goal::Inspect(n),
+            Goal::Assist(Help::Refuel),
+            Goal::Assist(Help::Repair),
         ] {
             assert_eq!((idle.quarry(), idle.attacking()), (None, None), "{idle:?}");
             assert!(!idle.fights());

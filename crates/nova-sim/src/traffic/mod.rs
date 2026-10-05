@@ -23,12 +23,14 @@
 //!    and any goal it takes at once;
 //! 3. an NPC not intact loses its provocation;
 //! 4. the decisions due on the AI timer, never for a ship still jumping
-//!    in or one that is not intact: first every goal, then, each NPC
+//!    in, one that is not intact, or one assisting the player while
+//!    unprovoked (until it is done, or provoked): first every goal, then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
 //!    its provocation, and one that stops inspecting a ship remembers it;
 //! 5. the autopilot and a flight step for every NPC, each flying towards
-//!    the ship its goal is about, the player's included;
+//!    the ship its goal is about, the player's included (the one it
+//!    assists);
 //! 6. and the removal of those that landed or jumped out.
 //!
 //! The fight ([`combat`](crate::combat)) damages them, and its session
@@ -102,7 +104,8 @@ impl<'a> World<'a> {
     }
 
     /// What `npcs` see in this world.
-    fn around(self, npcs: &'a [Npc]) -> Surroundings<'a> {
+    #[must_use]
+    pub fn around(self, npcs: &'a [Npc]) -> Surroundings<'a> {
         Surroundings {
             sites: self.sites,
             npcs,
@@ -203,6 +206,7 @@ impl Traffic {
             .map(|npc| {
                 npc.mode == Mode::Flying
                     && npc.condition == Condition::Intact
+                    && !(matches!(npc.goal, Goal::Assist(_)) && npc.provoked <= 0.0)
                     && decision_due(self.ticks, npc.id, self.interval)
             })
             .collect();
@@ -256,6 +260,7 @@ impl Traffic {
             .map(|npc| {
                 let other = match npc.goal {
                     Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
+                    Goal::Assist(_) => Some(ShipRef::Player),
                     goal => goal.quarry().or(goal.inspecting()),
                 };
                 let other = other.and_then(|ship| match ship {
@@ -379,6 +384,8 @@ impl Traffic {
                 booty: ship.booty,
                 boarded: false,
                 info_types: ship.info_types,
+                spared: false,
+                assisting: 0,
             });
         }
     }
@@ -398,6 +405,7 @@ mod tests {
     use crate::combat::hull::HullSpec;
     use crate::combat::weapon::WeaponSpec;
     use crate::geometry::Vec2;
+    use crate::hail::Help;
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST, planet, weapon};
     use crate::traffic::npc::AiType;
@@ -545,6 +553,8 @@ mod tests {
         assert_eq!(first.goal, Goal::Idle);
         assert_eq!(first.booty, 0x0041, "its düde's");
         assert_eq!(first.info_types, 0x8000, "its düde's");
+        assert!(!first.spared);
+        assert_eq!(first.assisting, 0);
         assert!(!first.boarded);
         assert_eq!(npcs[1].state.position, Vec2::new(1.0, 0.0));
         traffic.enter(table(1), &mut Draws::of(&placed(0, 0)));
@@ -942,6 +952,84 @@ mod tests {
         );
         assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
         assert_eq!(traffic.npcs()[1].provoked, 4.0, "kept while it fights");
+    }
+
+    #[test]
+    fn an_assisting_npc_unprovoked_is_never_due_and_keeps_its_help() {
+        let mut traffic = populated(2, 1);
+        traffic.npcs[0].goal = Goal::Assist(Help::Refuel);
+        traffic.npcs[0].target = Some(ShipRef::Player);
+        let fighting = Fighting::deciding(Goal::Idle);
+        for _ in 0..30 {
+            traffic.tick_in(&fighting, World::new(&[]), &[], &mut Draws::of(&[]));
+        }
+        let decided: Vec<String> = fighting
+            .log
+            .borrow()
+            .iter()
+            .filter(|line| line.starts_with("decide") || line.starts_with("trigger"))
+            .cloned()
+            .collect();
+        assert!(
+            decided.iter().all(|line| !line.contains(" 0 ")),
+            "{decided:?}"
+        );
+        assert!(decided.iter().any(|line| line.starts_with("decide 1")));
+        let helper = &traffic.npcs()[0];
+        assert_eq!(helper.goal, Goal::Assist(Help::Refuel));
+        assert_eq!(helper.target, Some(ShipRef::Player));
+        assert_eq!(helper.trigger, Trigger::default());
+    }
+
+    #[test]
+    fn a_strike_that_provokes_an_assisting_npc_ends_its_help() {
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].goal = Goal::Assist(Help::Repair);
+        let fleeing = Fighting::deciding(Goal::Flee(ShipRef::Player));
+        traffic.tick_in(
+            &fleeing,
+            World::new(&[]),
+            &[struck(0, 0.0)],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(
+            traffic.npcs()[0].goal,
+            Goal::Assist(Help::Repair),
+            "a strike of no damage provokes nothing"
+        );
+        traffic.tick_in(
+            &fleeing,
+            World::new(&[]),
+            &[struck(0, 2.0)],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(traffic.npcs()[0].goal, Goal::Flee(ShipRef::Player));
+    }
+
+    #[test]
+    fn an_assisting_npc_flies_to_the_player() {
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].goal = Goal::Assist(Help::Refuel);
+        traffic.npcs[0].state.position = Vec2::new(-600.0, 0.0);
+        let player = PlayerSide {
+            state: ShipState::default(),
+            condition: Condition::Intact,
+            reserves: crate::reserves::Reserves::full(1.0, 1.0, 1.0),
+            hull: HullSpec::default(),
+            handling: ShipStats::new(FAST, &[]).handling,
+        };
+        let world = World {
+            player: Some(player),
+            ..World::new(&[])
+        };
+        for _ in 0..60 {
+            traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+        }
+        assert!(
+            traffic.npcs()[0].state.position.x > -500.0,
+            "{:?}",
+            traffic.npcs()[0].state
+        );
     }
 
     #[test]
