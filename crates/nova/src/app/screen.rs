@@ -4452,16 +4452,27 @@ mod tests {
     /// The traffic's setup draws: the trader under the player at the
     /// centre, facing up; then the last outcomes.
     fn under_the_player() -> SharedChance {
-        let script: Rc<RefCell<dyn Chance>> =
-            Rc::new(RefCell::new(Script([6, 6, 0, 0, 750, 750, 0, 0].into())));
-        SharedChance::new(script)
+        scripted_under_the_player().1
+    }
+
+    /// [`under_the_player`]'s chance, with its script, to draw more from.
+    fn scripted_under_the_player() -> (Rc<RefCell<Script>>, SharedChance) {
+        let script = Rc::new(RefCell::new(Script([6, 6, 0, 0, 750, 750, 0, 0].into())));
+        let shared: Rc<RefCell<dyn Chance>> = script.clone();
+        (script, SharedChance::new(shared))
+    }
+
+    /// [`boarding_data_with`] no cash.
+    fn boarding_data() -> Rc<GameData> {
+        boarding_data_with(0)
     }
 
     /// The first `chär` flies ship 128 ("First": average, a crew of 10)
-    /// in system 128, whose one `düde`, at 100 %, flies ship 129 ("Trader":
-    /// a crew of 3, 100 armour, 20 holds, 300 fuel, `Cost` 150,000) for
-    /// food and money (`Booty` 0x0041), independent. Food is commodity 0.
-    fn boarding_data() -> Rc<GameData> {
+    /// in system 128 with `cash`, whose one `düde`, at 100 %, flies ship
+    /// 129 ("Trader": a crew of 3, 100 armour, 20 holds, 300 fuel, `Cost`
+    /// 150,000) for food and money (`Booty` 0x0041), independent. Food is
+    /// commodity 0.
+    fn boarding_data_with(cash: i32) -> Rc<GameData> {
         let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
             for (i, value) in values.iter().enumerate() {
                 bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
@@ -4488,6 +4499,7 @@ mod tests {
             })
             .build();
         let mut character = vec![0; Character::SIZE.expect("fixed")];
+        character[0x00..0x04].copy_from_slice(&cash.to_be_bytes());
         put(&mut character, 0x04, &[128, 128, -1, -1, -1]);
         put(&mut character, 0x0E, &[-1; 4]);
         let mut system = vec![0; System::SIZE.expect("fixed")];
@@ -4875,7 +4887,7 @@ mod tests {
 
     use nova_sim::Reply;
     use nova_sim::hail::{Answer, Ask, Hail, HailOption};
-    use nova_view::ui::comm::{CLOSE_ITEM, COMM_DIALOG, HAGGLE_DIALOG};
+    use nova_view::ui::comm::{CLOSE_ITEM, COMM_DIALOG, HAGGLE_DIALOG, LOWER_ITEM};
 
     /// An option that asks a price, saying `STR#` 9000's strings: "Pay
     /// up." asked, "Paid." paid, "Declined." declined and "Short." short.
@@ -5008,6 +5020,77 @@ mod tests {
         assert_eq!(screen.showing(), Showing::Comm, "back to the comm dialog");
         assert!(screen.haggle().is_none());
         assert_eq!(reply(screen), "Short.", "no cash");
+    }
+
+    /// The router as [`hailing`] gives it, the pilot holding 10,000
+    /// credits, so the trader's price is 3,000 (3,600 at a mood of 1.2,
+    /// at most a third of the cash, in thousands), and Sell pressed with
+    /// the haggle roll `roll`.
+    fn haggling(roll: u32) -> AppScreen {
+        let (script, chance) = scripted_under_the_player();
+        let mut screen = hailable(with_dialogs(boarding_data_with(10_000))).with_chance(chance);
+        fly(&mut screen);
+        hail(&mut screen);
+        assert_eq!(screen.showing(), Showing::Comm);
+        script.borrow_mut().0 = [roll].into();
+        tap(&mut screen, Key::Char('s'));
+        assert_eq!(screen.showing(), Showing::Haggle);
+        let dialog = screen.haggle().expect("open");
+        assert_eq!(dialog.lines(), ["Pay me 3,000 credits."]);
+        screen
+    }
+
+    fn cash(screen: &AppScreen) -> i64 {
+        flight(screen).pilot().expect("a pilot").cash()
+    }
+
+    #[test]
+    fn a_won_haggle_keeps_the_haggle_dialog_open_at_the_lowered_price() {
+        let screen = &mut haggling(35);
+        tap(screen, Key::Char('l'));
+        assert_eq!(screen.showing(), Showing::Haggle, "still haggling");
+        let dialog = screen.haggle().expect("open");
+        assert_eq!(
+            dialog.lines(),
+            ["Pay me 2,200 credits."],
+            "0.75 of 3,000, in hundreds, of the ship"
+        );
+        assert_eq!(reply(screen), "Pay up.", "unchanged");
+        assert_eq!(cash(screen), 10_000);
+        tap(screen, Key::Enter);
+        assert_eq!(screen.showing(), Showing::Comm, "back to the comm dialog");
+        assert!(screen.haggle().is_none());
+        assert_eq!(reply(screen), "Paid.");
+        assert_eq!(cash(screen), 7_800, "the lowered price paid");
+    }
+
+    #[test]
+    fn a_lost_haggle_declines_and_the_comm_dialog_takes_the_next_press() {
+        let screen = &mut haggling(36);
+        let at = screen
+            .haggle()
+            .expect("open")
+            .dialog()
+            .item_bounds(LOWER_ITEM)
+            .expect("an item")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+        assert_eq!(screen.showing(), Showing::Comm, "back to the comm dialog");
+        assert!(screen.haggle().is_none());
+        assert_eq!(reply(screen), "Declined.");
+        assert_eq!(cash(screen), 10_000, "nothing paid");
+        tap(screen, Key::Char('g'));
+        assert_eq!(reply(screen), "Greetings.", "not stuck");
+        tap(screen, Key::Char('s'));
+        assert_eq!(screen.showing(), Showing::Haggle);
+        let dialog = screen.haggle().expect("open");
+        assert_eq!(dialog.lines(), ["Pay me 4,000 credits."], "raised");
     }
 
     #[test]
