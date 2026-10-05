@@ -1420,6 +1420,23 @@ mod tests {
     }
 
     #[test]
+    fn a_carried_fighter_answers_as_an_escort_with_no_release() {
+        let catalog = hailable();
+        let mut session = escorting(&catalog);
+        session.pilot.escorts[0].carried = true;
+        if let Some(npc) = session.npc_mut(NpcId(0)) {
+            npc.carrier = Some(crate::bay::Carrier {
+                ship: ShipRef::Player,
+                window: 100.0,
+                reach: 40.0,
+            });
+        }
+        let view = hail(&mut session, &catalog);
+        assert_eq!(view.reply, "What can I do for you?");
+        assert_eq!(labels(&view), []);
+    }
+
+    #[test]
     fn an_escort_of_a_mute_ship_type_is_hailed_all_the_same() {
         let mut catalog = hailable();
         catalog.ship_records[0].inherent_govt = Some(MUTED);

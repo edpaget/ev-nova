@@ -17,7 +17,11 @@
 //! "Formation". The player commands ([`EscortCommand`]) the whole fleet
 //! or one class ([`EscortGroup`]): F attacks the player's target, D
 //! defends the player, V holds position and C recalls the escorts to
-//! formation. Each escort keeps its own order, saved with the pilot. The
+//! formation. Option-C is Return to Hangar (command 3, `_HandlePlayer`
+//! @0x6e207, `STR#` 2002 #148 and #155): the carried fighters it reaches
+//! fly back to dock, and any other escort goes back to formation, the
+//! message then saying "returning to formation." (`_IssueNewEscortCommand`
+//! @0x6619b-0x661d4). Each escort keeps its own order, saved with the pilot. The
 //! original keeps four class orders, saves them, and resets them to
 //! Formation on every system entry (`_RespawnEscort` @0x3d546,
 //! `_HandlePlayer` @0x6e3bb-0x6e44b); here that reset is the engine's

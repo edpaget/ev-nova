@@ -28,10 +28,15 @@
 //! **Commands** ([`Session::command_escorts`], `_IssueNewEscortCommand`
 //! @0x660d5): a command goes to every escort of its group, each taking
 //! the command's order, and Attack copies the player's target to each,
-//! unless that is one of the player's own escorts. It reports what it
+//! unless that is one of the player's own escorts. Return to Hangar
+//! ([`EscortCommand::Dock`]) sends the carried fighters home and any
+//! other escort back to formation; its report says Recall when some such
+//! escort had another order. It reports what it
 //! changed ([`Commanded`]) only when some escort's order or target
 //! changed. The escort menu's rows ([`Session::escort_menu`]) give each
-//! class's presence and its first escort's order.
+//! class's presence and its first escort's order. A carried fighter is
+//! placed as any escort is, its carrier the player (see
+//! [`fighters`](super::fighters)).
 //!
 //! **Losing escorts** (`_DamageShip` @0x3af8f): an escort disabled or
 //! destroyed leaves the fleet at once; a disabled one stays in the system

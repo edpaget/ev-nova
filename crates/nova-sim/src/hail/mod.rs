@@ -160,6 +160,13 @@ impl Hail<'_> {
     pub fn escort(&self) -> bool {
         self.npc.escort.is_some()
     }
+
+    /// Whether the ship hailed is a fighter out of a bay (see
+    /// [`bay`](crate::bay)).
+    #[must_use]
+    pub fn carried(&self) -> bool {
+        self.npc.carrier.is_some()
+    }
 }
 
 impl<'a> Hail<'a> {

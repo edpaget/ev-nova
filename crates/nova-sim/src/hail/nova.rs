@@ -59,7 +59,9 @@
 //! the channel closes (`_releaseCommEscort` @0x96848). The escort's hail
 //! opens "What can I do for you?" (group 4). The original gives a hired
 //! or captured escort its own dialog (`DLOG` 1022), with Upgrade and
-//! Sell; that waits for hiring.
+//! Sell; that waits for hiring. A carried fighter out of the player's bay
+//! ([`Hail::carried`]) is hailed as an escort is, but never released
+//! (Release is for AI type 6 alone, @0x9604c): it lists no option.
 //!
 //! **Beg For Mercy** (item 2, @0x96107-0x96258, key R), the engine's
 //! bribe, listed for a talkative hostile ship. In order:
@@ -347,7 +349,7 @@ impl HailOption for Release {
     }
 
     fn applies(&self, hail: &Hail) -> bool {
-        hail.escort()
+        hail.escort() && !hail.carried()
     }
 
     fn press(&self, _hail: &Hail, _chance: &mut dyn Chance) -> Answer {
@@ -461,6 +463,24 @@ mod tests {
         }
         assert!(hail(&escort).escort());
         assert!(!hail(&stranger).escort());
+    }
+
+    #[test]
+    fn a_carried_fighter_is_hailed_as_an_escort_but_never_released() {
+        let mut fighter = escorting(ship());
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: crate::combat::ShipRef::Player,
+            window: 100.0,
+            reach: 40.0,
+        });
+        let hailed = hail(&fighter);
+        assert!(hailed.escort() && hailed.carried());
+        assert!(!Release.applies(&hailed));
+        for option in engine() {
+            assert!(!option.applies(&hailed), "{}", option.label());
+        }
+        assert!(!hail(&escorting(ship())).carried());
+        assert!(!hail(&ship()).carried());
     }
 
     #[test]

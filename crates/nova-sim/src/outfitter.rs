@@ -51,7 +51,10 @@
 //!
 //! Each order buys or sells one, and a refused one changes nothing. A buy
 //! is refused when the outfit cannot be bought here, the player owns its
-//! `Max` already, the ship's `Holds` is negative and the outfit adds mass
+//! `Max` already, it is a fighter whose bays have no room left (their
+//! [`capacity`](crate::bay::capacity), the fighters out counted against
+//! it, `_CanBuyFighter` @0x5a82; refused as `Max` owned), the ship's
+//! `Holds` is negative and the outfit adds mass
 //! space, there is not the free mass for it, or the player cannot pay. A
 //! buy pays the price and adds one, or with
 //! [`OutfitFlags::REMOVE_AFTER_PURCHASE`] only pays. A sale is refused
@@ -63,7 +66,8 @@
 //! shows no space free until enough is sold.
 //!
 //! Not modelled yet: the gun and turret limits (`MaxGun`, `MaxTur`, flags
-//! 0x0001 and 0x0002), selling a launcher before its ammunition,
+//! 0x0001 and 0x0002), `MaxAmmo` for ammunition other than fighters,
+//! selling a launcher before its ammunition,
 //! and `ModType` 27's raised maximums. Which outfits a ship bought in the
 //! [`shipyard`](crate::shipyard) keeps is the shipyard's (flag 0x0004);
 //! flag 0x0020 only concerns a mission's change of ship.
@@ -329,6 +333,9 @@ pub(crate) struct Shop<'a> {
     pub(crate) defaults: &'a BTreeMap<OutfitId, u16>,
     /// The stellar landed on.
     pub(crate) site: &'a LandingSite,
+    /// For every ammunition outfit of a fighter bay, the fighters the
+    /// ship's bays can still take (see [`bay`](crate::bay)).
+    pub(crate) fighter_room: &'a BTreeMap<OutfitId, u32>,
 }
 
 impl Shop<'_> {
@@ -371,6 +378,8 @@ impl Shop<'_> {
                 } else {
                     OutfitRefusal::MaxOwned
                 })
+            } else if self.fighter_room.get(&record.id) == Some(&0) {
+                Err(OutfitRefusal::MaxOwned)
             } else if mass < 0 && self.fields.holds < 0 {
                 Err(OutfitRefusal::NoExpansion)
             } else if mass > free {
@@ -494,6 +503,7 @@ mod tests {
     }
 
     const NO_DEFAULTS: BTreeMap<OutfitId, u16> = BTreeMap::new();
+    const NO_FIGHTERS: BTreeMap<OutfitId, u32> = BTreeMap::new();
 
     fn open_at(records: &[OutfitRecord], site: &LandingSite, pilot: &Pilot) -> Option<Outfitter> {
         Shop {
@@ -501,6 +511,7 @@ mod tests {
             fields: FAST,
             defaults: &NO_DEFAULTS,
             site,
+            fighter_room: &NO_FIGHTERS,
         }
         .outfitter(pilot)
     }
@@ -947,6 +958,53 @@ mod tests {
     }
 
     #[test]
+    fn a_fighter_outfit_is_refused_once_its_bays_have_no_room() {
+        let fighters = OutfitRecord {
+            mass: 0,
+            max: 9999,
+            ..heavy()
+        };
+        let room = |id: i16, n: u32| BTreeMap::from([(OutfitId(id), n)]);
+        let open_with = |fighter_room: &BTreeMap<OutfitId, u32>, pilot: &Pilot| {
+            Shop {
+                records: std::slice::from_ref(&fighters),
+                fields: FAST,
+                defaults: &NO_DEFAULTS,
+                site: &port(),
+                fighter_room,
+            }
+            .outfitter(pilot)
+            .expect("open")
+        };
+        assert_eq!(buy(&open_with(&room(128, 1), &pilot())), Ok(()));
+        assert_eq!(
+            buy(&open_with(&room(128, 0), &pilot())),
+            Err(OutfitRefusal::MaxOwned),
+            "the bays are full"
+        );
+        assert_eq!(
+            buy(&open_with(&room(129, 0), &pilot())),
+            Ok(()),
+            "another outfit's room"
+        );
+        assert_eq!(
+            buy(&open_with(&BTreeMap::new(), &owning(&[(128, 9998)]))),
+            Ok(()),
+            "not a fighter: its Max alone"
+        );
+        assert_eq!(
+            buy(&open_with(&room(128, 5), &owning(&[(128, 9999)]))),
+            Err(OutfitRefusal::MaxOwned),
+            "its Max still holds"
+        );
+        assert_eq!(
+            sell(&open_with(&room(128, 0), &owning(&[(128, 3)]))),
+            Ok(()),
+            "a full bay's fighters still sell"
+        );
+    }
+
+    #[test]
     fn a_buy_is_refused_by_max_alone() {
         assert_eq!(buy(&open(&[heavy()], &owning(&[(128, 1)]))), Ok(()));
         assert_eq!(
@@ -996,6 +1054,7 @@ mod tests {
             fields: ShipFields { holds: -1, ..FAST },
             defaults: &NO_DEFAULTS,
             site: &port(),
+            fighter_room: &NO_FIGHTERS,
         }
         .outfitter(&pilot())
         .expect("open");
@@ -1008,6 +1067,7 @@ mod tests {
             fields: ShipFields { holds: -1, ..FAST },
             defaults: &NO_DEFAULTS,
             site: &port(),
+            fighter_room: &NO_FIGHTERS,
         }
         .outfitter(&pilot())
         .expect("open");
@@ -1017,6 +1077,7 @@ mod tests {
             fields: ShipFields { holds: 0, ..FAST },
             defaults: &NO_DEFAULTS,
             site: &port(),
+            fighter_room: &NO_FIGHTERS,
         }
         .outfitter(&pilot())
         .expect("open");

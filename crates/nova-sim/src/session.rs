@@ -135,6 +135,18 @@
 //! where it is; an escort disabled or destroyed leaves it, and one hailed
 //! may be released. Each change to the fleet makes a save due.
 //!
+//! The player's fighter bays launch fighters into the fleet, which Return
+//! to Hangar brings back to dock, a round of their bay again; an NPC
+//! carrier launches its own while it attacks (see [`bay`](crate::bay)).
+//! What a fighter launched does first follows
+//! [`Session::with_fighter_launch`]; what becomes of the fighters out as
+//! the player jumps or lands follows [`Session::with_fighter_recall`],
+//! and the fighters abandoned are told ([`Session::take_fighter_notes`]).
+//! Launching and docking make no save due, as firing ammunition does
+//! not; losing or abandoning a fighter makes one. Buying a ship loses
+//! every fighter out, and the outfitter sells a fighter only while its
+//! bays have room, those out counted.
+//!
 //! The player targets an NPC ([`Session::select_target`]), the nearest,
 //! the nearest threat or the next in turn as the
 //! [`targeting`](crate::targeting) rules say, and
@@ -162,6 +174,7 @@ mod hail;
 use std::collections::BTreeMap;
 
 use crate::ai::{Behaviour, Goal, PlayerSide};
+use crate::bay::FighterNote;
 use crate::board::{
     AMMO_GROWTH, Assigned, Assignment, BoardRefusal, BoardTarget, Boarding, BoardingRule,
     CAPTURE_TRIP, CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE,
@@ -291,6 +304,9 @@ pub struct Session {
     /// What becomes of the player's fighters out as it leaves the system
     /// (see [`Session::with_fighter_recall`]).
     fighter_recall: RuleSource,
+    /// What the player's fighters met as it left systems since this was
+    /// last taken.
+    fighter_notes: Vec<FighterNote>,
     /// Each escort of the fleet's NPC in the system, lined up with the
     /// pilot's escorts while in flight; none for one not placed.
     fleet: Vec<Option<NpcId>>,
@@ -383,6 +399,7 @@ impl Session {
             escort_orders: RuleSource::Engine,
             fighter_launch: RuleSource::Engine,
             fighter_recall: RuleSource::Engine,
+            fighter_notes: Vec::new(),
             fleet: Vec::new(),
             pilot,
         };
@@ -935,6 +952,7 @@ impl Session {
         pilot.system = next;
         pilot.stellar = None;
         pilot.explore(next);
+        self.leave_with_fighters(false);
         self.sites = catalog.landing_sites(next);
         self.populate(catalog, chance);
         self.combat.clear();
@@ -997,6 +1015,7 @@ impl Session {
         self.combat.clear();
         self.target = None;
         self.talk = None;
+        self.leave_with_fighters(true);
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
@@ -1071,6 +1090,7 @@ impl Session {
             fields: self.fields,
             defaults: &self.defaults,
             site,
+            fighter_room: &self.fighter_room(),
         }
         .outfitter(&self.pilot)
     }
@@ -1129,6 +1149,7 @@ impl Session {
             trade_in: shipyard.trade_in,
         };
         let old_mass = self.fields.mass;
+        self.drop_fighters(|_, _| false);
         let outfits = std::mem::take(&mut self.outfits);
         let mut bought = None;
         self.transact(|pilot| {

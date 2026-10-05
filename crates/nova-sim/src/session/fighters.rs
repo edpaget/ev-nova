@@ -33,15 +33,19 @@
 //! gone from the system or not intact is left on its own AI type, with
 //! no carrier and no leader.
 
+use std::collections::BTreeMap;
+
 use super::Session;
 use crate::ai::Goal;
-use crate::bay::{Carrier, dock_window, launch_velocity};
+use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
 use crate::board::MAX_SHIPS_IN_SYSTEM;
-use crate::combat::armament::{OutfitRounds, Rounds, Trigger};
+use crate::catalog::OutfitId;
+use crate::combat::armament::{OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, NO_SPRITE};
 use crate::flight::ShipState;
+use crate::hyperspace::JUMP_FUEL;
 use crate::pilot::Escort;
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::Outcome;
@@ -235,6 +239,118 @@ impl Session {
         }
     }
 
+    /// The player leaves the system with its fighters out, as the
+    /// rulebook's [`RuleKey::FighterRecall`](crate::RuleKey::FighterRecall)
+    /// says (see the module docs): by the engine, on a jump's arrival
+    /// (`landing` false), those whose ship type holds a jump's fuel follow
+    /// and the rest are abandoned; by the other reading, on arrival and on
+    /// landing, every one goes back aboard.
+    pub(super) fn leave_with_fighters(&mut self, landing: bool) {
+        match self.fighter_recall {
+            RuleSource::Engine if !landing => self.abandon_fighters(),
+            RuleSource::Engine => {}
+            RuleSource::Bible => self.recall_fighters(),
+        }
+    }
+
+    /// Every fighter out whose ship type lacks a jump's fuel is abandoned
+    /// (`_HandlePlayer` @0x6c0b9-0x6c0f9): its record goes, with no round
+    /// back, and the flight is told how many; a save is due when any was.
+    fn abandon_fighters(&mut self) {
+        let fuelled = |session: &Self, escort: &Escort| {
+            session
+                .ship_record(escort.ship)
+                .is_some_and(|record| f32::from(record.fields.fuel) >= JUMP_FUEL)
+        };
+        let abandoned = self.drop_fighters(fuelled);
+        let count = u32::try_from(abandoned.len()).unwrap_or(u32::MAX);
+        if count > 0 {
+            self.fighter_notes.push(FighterNote::Abandoned(count));
+            self.save_due = true;
+        }
+    }
+
+    /// Every fighter out goes back aboard at once, a round to the bay
+    /// launching its type, as docking gives (`_InstantFighterRecall`
+    /// @0x5df3); one no bay launches is lost, which makes a save due.
+    fn recall_fighters(&mut self) {
+        for fighter in self.drop_fighters(|_, _| false) {
+            let mut rounds = OutfitRounds {
+                owned: &mut self.pilot.outfits,
+                sources: &self.ammo_outfits,
+            };
+            if !self.armament.stow(fighter.ship, &mut rounds) {
+                self.save_due = true;
+            }
+        }
+    }
+
+    /// Every fighter out leaves the fleet but those `kept`, its NPC gone
+    /// from the system and its record from the pilot; the records gone.
+    pub(super) fn drop_fighters(&mut self, kept: impl Fn(&Self, &Escort) -> bool) -> Vec<Escort> {
+        let mut dropped = Vec::new();
+        for index in (0..self.pilot.escorts.len()).rev() {
+            let escort = self.pilot.escorts[index];
+            if !escort.carried || kept(self, &escort) {
+                continue;
+            }
+            self.pilot.escorts.remove(index);
+            if index < self.fleet.len()
+                && let Some(id) = self.fleet.remove(index)
+            {
+                self.traffic.remove(id);
+            }
+            dropped.push(escort);
+        }
+        dropped.reverse();
+        self.reform();
+        dropped
+    }
+
+    /// For every ammunition outfit of a fighter bay, the fighters the
+    /// player's bays can still take ([`capacity`], `_CanBuyFighter`
+    /// @0x5a82): the most its bays hold, less the fighters aboard and out
+    /// of that type; none when the ship carries no such bay.
+    pub(super) fn fighter_room(&self) -> BTreeMap<OutfitId, u32> {
+        let mut room = BTreeMap::new();
+        for &(ammo, outfit) in &self.ammo_outfits {
+            let Some(bay) = self.arsenal.weapon(ammo).filter(|spec| spec.is_bay()) else {
+                continue;
+            };
+            let bays: u32 = self
+                .armament
+                .mounts()
+                .iter()
+                .filter(|mount| mount.spec.id == ammo)
+                .map(|mount| mount.count)
+                .sum();
+            let max = self
+                .outfits
+                .iter()
+                .find(|record| record.id == outfit)
+                .map_or(0, |record| record.max);
+            let out = self
+                .pilot
+                .escorts
+                .iter()
+                .filter(|escort| escort.carried && Some(escort.ship) == bay.carried)
+                .count();
+            let held = outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, ammo)
+                .saturating_add(u32::try_from(out).unwrap_or(u32::MAX));
+            room.insert(
+                outfit,
+                capacity(bay.max_ammo, bays, max).saturating_sub(held),
+            );
+        }
+        room
+    }
+
+    /// What the player's fighters met as it left systems since this was
+    /// last taken, in order; taking it empties the list.
+    pub fn take_fighter_notes(&mut self) -> Vec<FighterNote> {
+        std::mem::take(&mut self.fighter_notes)
+    }
+
     /// Puts the fighter of `sortie` back into its bay, a round again.
     fn put_back(&mut self, sortie: &Sortie) {
         match sortie.carrier {
@@ -330,7 +446,7 @@ mod tests {
 
     use super::*;
     use crate::ai::{Behaviour, Goal, NovaAi, Surroundings};
-    use crate::bay::{Carrier, dock_window, launch_velocity};
+    use crate::bay::{Carrier, FighterNote, dock_window, launch_velocity};
     use crate::catalog::{
         HullRecord, OutfitId, OutfitRecord, ShipId, ShipRecord, StockWeapon, WeaponId, WeaponRecord,
     };
@@ -1173,6 +1289,286 @@ mod tests {
         assert_eq!(session.traffic_ships(), [], "no bay yet");
         session.populate(&catalog, &mut NeverFires);
         assert_eq!(session.traffic_ships(), [VIPER, ShipId(160)]);
+    }
+
+    // Leaving the system.
+
+    /// The Dart's bay, 151, carrying ship 145.
+    const DART_BAY: WeaponId = WeaponId(151);
+    /// The Dart: a fighter holding no fuel.
+    const DART: ShipId = ShipId(145);
+    /// The Dart outfit, the Dart bay's rounds.
+    const DARTS: OutfitId = OutfitId(162);
+
+    /// [`carrying`], the player's ship carrying a Dart bay too.
+    fn two_bays() -> FakePilotCatalog {
+        let mut catalog = carrying();
+        catalog.weapons.push(WeaponRecord {
+            ammo_type: 145,
+            ..WeaponRecord {
+                id: DART_BAY,
+                ..bay()
+            }
+        });
+        catalog.ship_records.push(ShipRecord {
+            escort_type: 0,
+            inherent_ai: 4,
+            ..ship(
+                145,
+                ShipFields {
+                    fuel: 0,
+                    ..VIPER_FIELDS
+                },
+            )
+        });
+        catalog.hulls.push(HullRecord {
+            size: Some(20),
+            ..hull(145)
+        });
+        catalog.hulls[0].weapons.push(StockWeapon {
+            weapon: DART_BAY,
+            count: 1,
+            ammo: 0,
+        });
+        catalog.outfits.push(OutfitRecord {
+            mass: 0,
+            max: 9999,
+            ..outfit(162, &[(MOD_AMMO, 151)])
+        });
+        catalog
+    }
+
+    /// A Dart out of its bay.
+    fn dart_out() -> Escort {
+        Escort {
+            ship: DART,
+            ..out()
+        }
+    }
+
+    /// A Viper and a Dart out, by `recall`, the Viper's shield at 10.
+    fn both_out(catalog: &FakePilotCatalog, recall: RuleSource) -> Session {
+        let mut session = fleet(catalog, 0, vec![out(), dart_out()]).with_fighter_recall(recall);
+        let viper = session.fleet[0].expect("placed");
+        session.npc_mut(viper).expect("out").reserves.shield.now = 10.0;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.take_save_due();
+        session
+    }
+
+    #[test]
+    fn by_the_engine_a_fighter_with_a_jumps_fuel_follows_and_the_rest_are_abandoned() {
+        let catalog = two_bays();
+        let mut session = both_out(&catalog, RuleSource::Engine);
+        assert_eq!(session.pilot().escorts()[0].reserves.shield.now, 10.0);
+        assert_eq!(
+            crate::testkit::jump(&mut session, &catalog, 131),
+            Some(crate::catalog::SystemId(131))
+        );
+        assert_eq!(
+            session
+                .pilot()
+                .escorts()
+                .iter()
+                .map(|escort| escort.ship)
+                .collect::<Vec<_>>(),
+            [VIPER],
+            "the Dart's record is gone"
+        );
+        let npcs = fleet_npcs(&session);
+        assert_eq!(npcs.len(), 1);
+        let viper = &npcs[0];
+        let duty = viper.escort.expect("an escort");
+        assert_eq!(
+            viper.state.position,
+            crate::escort::slot_position(session.player(), duty.slot, duty.ships, duty.spacing),
+            "beside the player on its slot"
+        );
+        assert_eq!(viper.reserves.shield.now, 10.0, "as it was");
+        assert_eq!(session.npcs().len(), 1, "no Dart");
+        assert_eq!(session.pilot().owned(DARTS), 0, "no round back");
+        assert_eq!(session.take_fighter_notes(), [FighterNote::Abandoned(1)]);
+        assert_eq!(session.take_fighter_notes(), [], "taken");
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn by_the_engine_landed_the_fighters_stay_out_and_take_off_restocked() {
+        let catalog = two_bays();
+        let mut session = both_out(&catalog, RuleSource::Engine);
+        session.land().expect("lands");
+        assert_eq!(session.pilot().escorts().len(), 2, "still out");
+        assert_eq!(session.pilot().owned(VIPERS), 0);
+        session.take_off().expect("takes off");
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        let npcs = fleet_npcs(&session);
+        assert_eq!(
+            npcs.iter().map(|npc| npc.ship).collect::<Vec<_>>(),
+            [VIPER, DART]
+        );
+        assert_eq!(npcs[0].reserves.shield.now, 30.0, "restocked");
+        assert_eq!(session.take_fighter_notes(), []);
+    }
+
+    #[test]
+    fn by_the_other_reading_every_fighter_out_is_back_aboard_on_arrival() {
+        let catalog = two_bays();
+        let mut session = both_out(&catalog, RuleSource::Bible);
+        assert_eq!(session.fighter_recall(), RuleSource::Bible);
+        crate::testkit::jump(&mut session, &catalog, 131);
+        assert_eq!(session.pilot().escorts(), []);
+        assert_eq!(session.npcs(), [], "none out");
+        assert_eq!(
+            (session.pilot().owned(VIPERS), session.pilot().owned(DARTS)),
+            (1, 1)
+        );
+        assert_eq!(session.take_fighter_notes(), [], "none abandoned");
+        assert!(!session.take_save_due(), "as docking makes none");
+    }
+
+    #[test]
+    fn by_the_other_reading_landing_puts_every_fighter_out_back_aboard() {
+        let catalog = two_bays();
+        let mut session = fleet(&catalog, 0, vec![warship(None), out(), dart_out()])
+            .with_fighter_recall(RuleSource::Bible);
+        session.land().expect("lands");
+        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(
+            (session.pilot().owned(VIPERS), session.pilot().owned(DARTS)),
+            (1, 1)
+        );
+        assert!(
+            session.npcs().iter().all(|npc| npc.carrier.is_none()),
+            "their NPCs gone"
+        );
+        assert_eq!(session.fleet.len(), 1);
+    }
+
+    #[test]
+    fn a_fighter_out_survives_a_save_and_reload_and_docks_again() {
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 3, Vec::new()), RuleSource::Engine);
+        launch(&mut session);
+        let fighter = session.fleet[0].expect("out");
+        session.npc_mut(fighter).expect("out").reserves.shield.now = 5.0;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let saved = crate::save::encode(session.pilot());
+        let pilot = crate::save::decode(&saved).expect("loads");
+        assert_eq!(pilot.owned(VIPERS), 2);
+        assert_eq!(pilot.escorts().len(), 1);
+        assert!(pilot.escorts()[0].carried);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        let npcs = fleet_npcs(&session);
+        assert_eq!(npcs.len(), 1, "placed on the first traffic tick");
+        assert_eq!(npcs[0].reserves.shield.now, 30.0, "restocked");
+        assert_eq!(
+            npcs[0].carrier.map(|carrier| carrier.ship),
+            Some(ShipRef::Player)
+        );
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        assert!(until_docked(&mut session, &catalog, 600).is_some());
+        assert_eq!(session.pilot().owned(VIPERS), 3);
+    }
+
+    #[test]
+    fn by_the_other_reading_a_pilot_landed_is_saved_with_every_fighter_aboard() {
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 3, Vec::new()), RuleSource::Engine)
+            .with_fighter_recall(RuleSource::Bible);
+        launch(&mut session);
+        assert_eq!(session.pilot().owned(VIPERS), 2);
+        session.land().expect("lands");
+        let pilot = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
+        assert_eq!(pilot.owned(VIPERS), 3);
+        assert_eq!(pilot.escorts(), []);
+    }
+
+    /// [`two_bays`], planet 128 an outfitter and a shipyard selling ship
+    /// 129, and the pilot rich.
+    fn spaceport() -> FakePilotCatalog {
+        let mut catalog = two_bays();
+        catalog.sites[0].1[0].flags |=
+            crate::landing::StellarFlags::OUTFITTER | crate::landing::StellarFlags::SHIPYARD;
+        catalog.sites[0].1[0].tech_level = 5;
+        catalog.ships.push((ShipId(129), Ok(FAST)));
+        catalog.ship_records.push(ship(129, FAST));
+        catalog
+    }
+
+    #[test]
+    fn buying_a_ship_loses_every_fighter_out_but_keeps_the_escorts() {
+        let catalog = spaceport();
+        let mut session = fleet(&catalog, 1, vec![out(), warship(None), dart_out()]);
+        session.pilot.cash = 1_000_000;
+        session.land().expect("lands");
+        session.buy_ship(ShipId(129)).expect("bought");
+        assert_eq!(session.pilot().escorts(), [warship(None)]);
+        assert_eq!(session.pilot().owned(DARTS), 0, "no rounds");
+        session.take_off().expect("takes off");
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        assert_eq!(
+            fleet_npcs(&session)
+                .iter()
+                .map(|npc| npc.ship)
+                .collect::<Vec<_>>(),
+            [WARSHIP]
+        );
+    }
+
+    /// Whether the outfitter sells another Viper to a pilot with `aboard`
+    /// Vipers aboard and `out` out.
+    fn viper_for_sale(
+        catalog: &FakePilotCatalog,
+        aboard: u16,
+        out_: usize,
+    ) -> Result<(), crate::outfitter::OutfitRefusal> {
+        let mut session = fleet(catalog, aboard, vec![out(); out_]);
+        session.pilot.cash = 1_000_000;
+        session.land().expect("lands");
+        session
+            .outfitter()
+            .expect("an outfitter")
+            .check(crate::outfitter::OutfitOrder {
+                outfit: VIPERS,
+                direction: crate::market::Direction::Buy,
+            })
+    }
+
+    #[test]
+    fn the_outfitter_sells_fighters_only_while_the_bays_have_room_counting_those_out() {
+        let catalog = spaceport();
+        let full = Err(crate::outfitter::OutfitRefusal::MaxOwned);
+        assert_eq!(viper_for_sale(&catalog, 3, 1), full, "MaxAmmo 4, one bay");
+        assert_eq!(viper_for_sale(&catalog, 3, 0), Ok(()));
+        assert_eq!(viper_for_sale(&catalog, 0, 4), full);
+        let mut two = spaceport();
+        two.hulls[0].weapons[0].count = 2;
+        assert_eq!(viper_for_sale(&two, 7, 0), Ok(()), "two bays hold 8");
+        assert_eq!(viper_for_sale(&two, 8, 0), full);
+        let mut by_outfit = spaceport();
+        by_outfit.weapons[0].max_ammo = 0;
+        by_outfit.outfits[0].max = 5;
+        assert_eq!(viper_for_sale(&by_outfit, 4, 0), Ok(()), "the outfit's Max");
+        assert_eq!(viper_for_sale(&by_outfit, 4, 1), full);
+        let mut no_bay = spaceport();
+        no_bay.hulls[0].weapons.retain(|stock| stock.weapon != BAY);
+        assert_eq!(viper_for_sale(&no_bay, 0, 0), full, "no bay for it");
+        // Each bay's fighters are counted on their own.
+        let mut session = fleet(&catalog, 0, vec![out(); 4]);
+        session.pilot.cash = 1_000_000;
+        session.land().expect("lands");
+        assert_eq!(
+            session
+                .outfitter()
+                .expect("an outfitter")
+                .check(crate::outfitter::OutfitOrder {
+                    outfit: DARTS,
+                    direction: crate::market::Direction::Buy,
+                }),
+            Ok(()),
+            "the Dart bay has room, the Viper bay none"
+        );
     }
 
     #[test]

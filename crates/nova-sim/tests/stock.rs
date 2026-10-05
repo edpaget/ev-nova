@@ -12,7 +12,8 @@
 //! player and costs it 3 with each. A Federation ship hailed there
 //! greets with its government's line, and one hunting a wanted player is
 //! bought off; the ship comm strings, the 42-character advice lines and
-//! the governments' hail flags are where hailing reads them. Skips,
+//! the governments' hail flags are where hailing reads them. The fighter
+//! bays launch their fighters as the extracted rules say. Skips,
 //! passing, when `NOVA_DATA` is unset.
 
 mod common;
@@ -2269,4 +2270,75 @@ fn a_wanted_pilot_buys_off_a_hunting_federation_ship() {
             assert_ne!(npc.target, Some(ShipRef::Player));
         }
     }
+}
+
+/// The stock fighter bays: the Viper Bay (149) carries the Fed Viper
+/// (144), four a bay, its rounds the Viper outfit (158); the Fed Carrier
+/// (143) starts with 4 Vipers and 2 Anacondas aboard; a Viper docks
+/// within 100 pixels and a Thunderhead within 250; every stock fighter
+/// holds a jump's fuel; and the Return to Hangar and abandoned-fighter
+/// strings are `STR#` 2002's.
+#[test]
+#[allow(clippy::float_cmp)]
+fn stock_fighter_bays_launch_their_fighters_as_the_extracted_rules_say() {
+    use nova_sim::bay::{ABANDONED_MANY, ABANDONED_ONE, capacity, dock_window};
+    use nova_sim::combat::armament::Arsenal;
+    use nova_sim::combat::weapon::{Ammo, Guidance, WeaponSpec};
+    use nova_sim::escort::order_label;
+    use nova_sim::{CombatCatalog, CommCatalog, EscortCommand, EscortOrder, WeaponId};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    let viper_bay = *arsenal.weapon(WeaponId(149)).expect("the Viper Bay");
+    assert_eq!(viper_bay.guidance, Guidance::FighterBay);
+    assert_eq!(viper_bay.carried, Some(ShipId(144)));
+    assert_eq!(viper_bay.ammo, Ammo::Rounds(WeaponId(149)));
+    assert_eq!((viper_bay.max_ammo, viper_bay.reload), (4, 60.0));
+    assert!(viper_bay.secondary());
+    let outfits = data.outfits();
+    let (_, rounds) = arsenal.npc(ShipId(143), &BTreeMap::new(), &outfits);
+    assert_eq!(
+        rounds.get(&WeaponId(149)),
+        Some(&4),
+        "the Fed Carrier's Vipers"
+    );
+    assert_eq!(rounds.get(&WeaponId(150)), Some(&2), "and Anacondas");
+    assert!(Arsenal::ammo_outfits(&outfits).contains(&(WeaponId(149), OutfitId(158))));
+    let vipers = outfits
+        .iter()
+        .find(|record| record.id == OutfitId(158))
+        .expect("the Viper outfit");
+    assert_eq!(capacity(viper_bay.max_ammo, 1, vipers.max), 4);
+    let ships = data.ships();
+    let fields = |id: i16| {
+        ships
+            .iter()
+            .find(|record| record.id == ShipId(id))
+            .map(|record| record.fields)
+            .expect("a stock shïp")
+    };
+    assert_eq!(dock_window(fields(144).maneuver), 100.0, "the Fed Viper");
+    assert_eq!(dock_window(fields(157).maneuver), 250.0, "the Thunderhead");
+    let bays: Vec<WeaponSpec> = data
+        .weapons()
+        .iter()
+        .map(WeaponSpec::new)
+        .filter(WeaponSpec::is_bay)
+        .collect();
+    assert!(bays.len() >= 20, "{}", bays.len());
+    for bay in &bays {
+        let carried = bay.carried.expect("a bay carries a ship");
+        assert!(
+            fields(carried.0).fuel >= 100,
+            "{:?} launches {carried:?}",
+            bay.id
+        );
+    }
+    let messages = CommCatalog::string_list(&data, 2002);
+    assert_eq!(messages[148 - 1], order_label(Some(EscortOrder::Dock)));
+    assert_eq!(messages[155 - 1], EscortCommand::Dock.doing());
+    assert_eq!(messages[164 - 1], ABANDONED_ONE);
+    assert_eq!(messages[165 - 1], ABANDONED_MANY);
 }
