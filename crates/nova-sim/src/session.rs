@@ -104,8 +104,9 @@
 //! disabling it too when it was intact), each against the NPC's
 //! government. A mere hit is no crime, as in the original.
 //!
-//! The player targets an NPC ([`Session::select_target`]), the nearest or
-//! the next in turn as the [`targeting`](crate::targeting) rules say, and
+//! The player targets an NPC ([`Session::select_target`]), the nearest,
+//! the nearest threat or the next in turn as the
+//! [`targeting`](crate::targeting) rules say, and
 //! fires its primary weapons and the secondary selected
 //! ([`Session::hold_fire`], [`Session::select_secondary`]): the first the
 //! ship carries to start with, kept through a refit while the ship still
