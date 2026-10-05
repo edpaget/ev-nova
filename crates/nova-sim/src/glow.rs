@@ -67,14 +67,18 @@ pub const GLOW_CRUISE: u8 = 24;
 /// down to 0, and a base above [`GLOW_CRUISE`] then falls by 1 more.
 #[must_use]
 pub fn ramp_glow(base: u8, thrusting: bool) -> u8 {
-    let base = if thrusting && base < GLOW_CRUISE {
-        base + 1
-    } else if thrusting {
-        base
-    } else {
-        base.saturating_sub(1)
+    // Thrust or coast (at 0x6cd2e and 0x6cd40).
+    let stepped = match (thrusting, base < GLOW_CRUISE) {
+        (true, true) => base + 1,
+        (true, false) => base,
+        (false, _) => base.saturating_sub(1),
     };
-    if base > GLOW_CRUISE { base - 1 } else { base }
+    // Above cruise, with no afterburner, one step more down (at 0x6fd3f).
+    if stepped > GLOW_CRUISE {
+        stepped - 1
+    } else {
+        stepped
+    }
 }
 
 /// The glow's level at `tick` for a base level of `base`:
