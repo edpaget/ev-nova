@@ -18,7 +18,8 @@ nova-render.workspace = true
 nova-sim.workspace = true
 nova-view.workspace = true
 pollster.workspace = true
-# The settings file's `crime_gains` field, read beside the sound settings.
+# The settings file's `rules` and `rule_overrides`, read beside the sound
+# settings.
 serde_json.workspace = true
 thiserror.workspace = true
 winit.workspace = true

@@ -18,11 +18,11 @@
 //!   @0x9a23);
 //! - **+0.5 S.P**, S's own penalty halved, when S is not allied with V,
 //!   whether its enemy or neutral (@0x9a51; 0.5 @0xdd128). That is the
-//!   engine's rule, [`CrimeGains::Engine`], and the default. The Bible's,
-//!   [`CrimeGains::Bible`] ("evil deeds to one government will improve
-//!   your rating with its enemies... allied governments also communicate
-//!   your actions"), gives +0.5 S.P only to an enemy of V, and leaves a
-//!   neutral alone;
+//!   engine's rule, and the default. The Bible's ("evil deeds to one
+//!   government will improve your rating with its enemies... allied
+//!   governments also communicate your actions") gives +0.5 S.P only to
+//!   an enemy of V, and leaves a neutral alone. Which applies is the
+//!   [`Rulebook`]'s [`RuleKey::CrimeGains`] entry;
 //! - for an independent victim, **+0.5 S.P** when S is xenophobic, else
 //!   **-0.5 S.P** when S is nosy (`Flags` 0x0002);
 //! - and nothing otherwise.
@@ -44,6 +44,7 @@ use std::fmt::Debug;
 use crate::catalog::GovtId;
 use crate::govt::{Governments, NOSY};
 use crate::pilot::Pilot;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 /// How far either way of none a legal record goes.
 pub const RECORD_LIMIT: i32 = 32_000;
@@ -77,23 +78,23 @@ pub trait LegalCode: Debug {
     ) -> Vec<(GovtId, i32)>;
 }
 
-/// Which governments a crime against a ship of government V improves the
-/// record with (see the module docs).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CrimeGains {
-    /// The original engine's: every government not allied with V, by
-    /// half its own penalty.
-    #[default]
-    Engine,
-    /// The Bible's: only V's enemies, by half their own penalty.
-    Bible,
-}
-
 /// Nova's law (see the module docs): the engine's by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NovaLaw {
-    /// Which governments a crime improves the record with.
-    pub gains: CrimeGains,
+    /// Which governments a crime against a ship of government V improves
+    /// the record with, by half their own penalty: by the engine, every
+    /// government not allied with V; by the Bible, only V's enemies.
+    pub crime_gains: RuleSource,
+}
+
+impl NovaLaw {
+    /// The law `rulebook` chooses: its [`RuleKey::CrimeGains`] entry.
+    #[must_use]
+    pub fn from_rulebook(rulebook: &Rulebook) -> Self {
+        Self {
+            crime_gains: rulebook.source_for(RuleKey::CrimeGains),
+        }
+    }
 }
 
 impl LegalCode for NovaLaw {
@@ -115,7 +116,7 @@ impl LegalCode for NovaLaw {
                 let change = match victim {
                     Some(_) if govts.enemies(victim, other) => ENEMY_SHARE * theirs(id),
                     Some(_) if govts.allies(victim, other) => -own,
-                    Some(_) if self.gains == CrimeGains::Engine => ENEMY_SHARE * theirs(id),
+                    Some(_) if self.crime_gains == RuleSource::Engine => ENEMY_SHARE * theirs(id),
                     None if govts.xenophobic(other) => ENEMY_SHARE * theirs(id),
                     None if govts.flag(other, NOSY) => -ENEMY_SHARE * theirs(id),
                     // By the Bible, a neutral is left alone.
@@ -190,15 +191,30 @@ mod tests {
     }
 
     const ENGINE: NovaLaw = NovaLaw {
-        gains: CrimeGains::Engine,
+        crime_gains: RuleSource::Engine,
     };
     const BIBLE: NovaLaw = NovaLaw {
-        gains: CrimeGains::Bible,
+        crime_gains: RuleSource::Bible,
     };
 
     #[test]
+    fn the_law_takes_its_crime_gains_from_the_rulebook() {
+        use crate::rulebook::{RuleKey, Rulebook};
+        assert_eq!(NovaLaw::from_rulebook(&Rulebook::default()), ENGINE);
+        assert_eq!(
+            NovaLaw::from_rulebook(&Rulebook::new(RuleSource::Bible)),
+            BIBLE
+        );
+        let overridden =
+            Rulebook::new(RuleSource::Bible).with_override(RuleKey::CrimeGains, RuleSource::Engine);
+        assert_eq!(NovaLaw::from_rulebook(&overridden), ENGINE);
+        let overridden =
+            Rulebook::new(RuleSource::Engine).with_override(RuleKey::CrimeGains, RuleSource::Bible);
+        assert_eq!(NovaLaw::from_rulebook(&overridden), BIBLE);
+    }
+
+    #[test]
     fn nova_law_follows_the_engine_by_default() {
-        assert_eq!(CrimeGains::default(), CrimeGains::Engine);
         assert_eq!(NovaLaw::default(), ENGINE);
         assert_eq!(
             NovaLaw::default().penalties(Crime::Disable, Some(VICTIM), &four()),

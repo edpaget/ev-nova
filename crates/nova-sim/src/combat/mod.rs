@@ -99,8 +99,9 @@ use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
-use crate::legal::{CrimeGains, LegalCode, NovaLaw};
+use crate::legal::{LegalCode, NovaLaw};
 use crate::reserves::{Gauge, Reserves};
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::NpcId;
 
 /// A ship in a fight: the player's, or an NPC.
@@ -246,7 +247,7 @@ impl Default for Rules<'static> {
             disable: &hull::NovaDisable,
             defence: &defence::Allegiance,
             law: &NovaLaw {
-                gains: CrimeGains::Engine,
+                crime_gains: RuleSource::Engine,
             },
         }
     }

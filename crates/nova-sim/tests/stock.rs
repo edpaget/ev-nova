@@ -1534,7 +1534,8 @@ fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released()
 // Combat AI and legal status over the stock data.
 
 use nova_sim::ai::{Goal, NovaAi};
-use nova_sim::legal::{Crime, CrimeGains, LegalCode, NovaLaw};
+use nova_sim::legal::{Crime, LegalCode, NovaLaw};
+use nova_sim::rulebook::RuleSource;
 use nova_sim::{Governments, GovtId};
 
 const FEDERATION: GovtId = GovtId(128);
@@ -1582,7 +1583,7 @@ fn stock_governments_stand_as_the_gövts_say() {
         "{pleased:?}"
     );
     let bible = NovaLaw {
-        gains: CrimeGains::Bible,
+        crime_gains: RuleSource::Bible,
     }
     .penalties(Crime::Disable, Some(CIVVIES), &govts);
     assert_eq!(gains(&bible), [], "{bible:?}");

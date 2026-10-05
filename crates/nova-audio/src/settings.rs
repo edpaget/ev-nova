@@ -461,7 +461,8 @@ mod tests {
 
     #[test]
     fn a_change_keeps_the_other_settings_saved_beside_the_sounds() {
-        let text = r#"{"music": false, "crime_gains": "bible", "theme": {"dark": true}}"#;
+        let text = r#"{"music": false, "rules": "bible",
+            "rule_overrides": {"crime_gains": "engine", "nested": {"deeper": [1, {"x": null}]}}}"#;
         let store = MemorySettings::holding(text);
         let (mut keeper, _) = SettingsKeeper::open(store.clone());
         keeper.change(quiet()).expect("saves");
@@ -474,16 +475,16 @@ mod tests {
                 "music": true,
                 "effects_volume": 0.25,
                 "music_volume": 0.5,
-                "crime_gains": "bible",
-                "theme": {"dark": true},
+                "rules": "bible",
+                "rule_overrides": {"crime_gains": "engine", "nested": {"deeper": [1, {"x": null}]}},
             })
         );
-        let unusable = MemorySettings::holding(r#"{"sound": "yes", "crime_gains": "bible"}"#);
+        let unusable = MemorySettings::holding(r#"{"sound": "yes", "rules": "bible"}"#);
         let (mut keeper, _) = SettingsKeeper::open(unusable.clone());
         keeper.change(quiet()).expect("saves");
         let saved: serde_json::Value =
             serde_json::from_str(&unusable.text().expect("saved")).expect("JSON");
-        assert_eq!(saved.get("crime_gains"), None, "unusable text is replaced");
+        assert_eq!(saved.get("rules"), None, "unusable text is replaced");
     }
 
     #[test]

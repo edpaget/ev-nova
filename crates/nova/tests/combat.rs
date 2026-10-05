@@ -20,9 +20,10 @@
 //! on the player, whose shield drops; once the trader is disabled the
 //! player's record with its government is lower, and R targets the
 //! police, a threat, in red brackets, not the nearer disabled trader.
-//! The law is the one the settings file at the platform's settings path
-//! chooses: by the engine's crime gains, the default, disabling the
-//! trader pleases a neutral government; by the Bible's, it does not.
+//! The law follows the rulebook the settings file at the platform's
+//! settings path chooses: by the engine's crime gains, the default,
+//! disabling the trader pleases a neutral government; by the Bible's, it
+//! does not.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -1017,23 +1018,29 @@ fn the_routers_law_judges_the_flights_crimes() {
 }
 
 /// The law that the settings file at `path`, holding `text`, chooses,
-/// read as `main` reads it: through the file adapter.
+/// read as `main` reads it: through the file adapter, into the rulebook
+/// the law is built from.
 fn saved_law(path: &Path, text: &str) -> nova_sim::NovaLaw {
     std::fs::create_dir_all(path.parent().expect("in a directory")).expect("creates");
     std::fs::write(path, text).expect("writes");
     let mut store: Option<Box<dyn nova_audio::SettingsStore>> =
         Some(Box::new(nova_audio::FileSettings::new(path)));
-    let (law, warning) = nova::law::game_law(store.as_deref_mut());
-    assert_eq!(warning, None, "{text}");
-    law
+    let (rulebook, warnings) = nova::rulebook::game_rulebook(store.as_deref_mut());
+    assert_eq!(warnings, Vec::<String>::new(), "{text}");
+    nova_sim::NovaLaw::from_rulebook(&rulebook)
 }
 
 #[test]
 fn the_saved_crime_gains_choose_whether_the_flights_crimes_please_a_neutral() {
     for (text, neutral) in [
         ("{}", 1),
-        (r#"{"sound": false, "crime_gains": "engine"}"#, 1),
-        (r#"{"crime_gains": "bible"}"#, 0),
+        (r#"{"sound": false, "rules": "engine"}"#, 1),
+        (r#"{"rules": "bible"}"#, 0),
+        (
+            r#"{"rules": "bible", "rule_overrides": {"crime_gains": "engine"}}"#,
+            1,
+        ),
+        (r#"{"rule_overrides": {"crime_gains": "bible"}}"#, 0),
     ] {
         let home = tempfile::tempdir().expect("a temporary directory");
         let env = |name: &str| {

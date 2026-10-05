@@ -48,12 +48,14 @@
 //! `~/.config`) elsewhere. Missing settings start at the defaults, and so
 //! do settings that cannot be read, with a warning.
 //!
-//! The same file chooses the law the player's crimes are judged by: its
-//! `crime_gains` field, `"engine"` (the default) or `"bible"`, says
-//! whether a crime against a government's ship improves the record with
-//! every government not allied with it, as the original engine does, or
-//! only with its enemies, as the Bible says. It is set by editing the
-//! file; a sound change in the Preferences dialog keeps it.
+//! The same file chooses, for each rule where the Nova Bible and the
+//! original engine disagree, which one the game follows: `"rules"`,
+//! `"engine"` (the default) or `"bible"`, for all of them, and
+//! `"rule_overrides"`, an object, for any one by its key (so far only
+//! `"crime_gains"`: whether a crime against a government's ship improves
+//! the record with every government not allied with it, as the engine
+//! does, or only with its enemies, as the Bible says). They are set by
+//! editing the file; a sound change in the Preferences dialog keeps them.
 //!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
@@ -70,8 +72,8 @@ use nova::audio::{game_audio, game_settings, music_warning};
 use nova::chance::SplitMix;
 use nova::config::{Os, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
-use nova::law::game_law;
 use nova::platform::Runner;
+use nova::rulebook::game_rulebook;
 use nova::saves::FilePilots;
 use nova::{cli, exit};
 use nova_audio::{FileSettings, KiraAudio, SettingsStore};
@@ -79,7 +81,7 @@ use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
-use nova_sim::{Allegiance, Chance, NovaAi, NovaDisable, PilotKeeper, PilotStore};
+use nova_sim::{Allegiance, Chance, NovaAi, NovaDisable, NovaLaw, PilotKeeper, PilotStore};
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
@@ -109,8 +111,8 @@ fn main() -> ExitCode {
     let data = Rc::new(data);
     let mut store = settings_path(Os::current(), |name| std::env::var_os(name))
         .map(|path| Box::new(FileSettings::new(path)) as Box<dyn SettingsStore>);
-    let (law, warning) = game_law(store.as_deref_mut());
-    if let Some(warning) = warning {
+    let (rulebook, warnings) = game_rulebook(store.as_deref_mut());
+    for warning in warnings {
         eprintln!("{warning}");
     }
     let (keeper, settings, warning) = game_settings(store);
@@ -145,7 +147,7 @@ fn main() -> ExitCode {
         .with_behaviour(Rc::new(NovaAi::default()))
         .with_disable_rule(Rc::new(NovaDisable))
         .with_point_defence_rule(Rc::new(Allegiance))
-        .with_law(Rc::new(law));
+        .with_law(Rc::new(NovaLaw::from_rulebook(&rulebook)));
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);

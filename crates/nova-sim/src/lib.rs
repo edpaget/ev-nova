@@ -68,6 +68,9 @@
 //!   [`RechargeRefusal`].
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full when it starts.
+//! - [`rulebook`]: the rules where the Nova Bible and the original engine
+//!   disagree: each follows a [`RuleSource`], the engine's by default, as
+//!   the [`Rulebook`] says, by its [`RuleKey`].
 //! - [`save`]: the save schema: a pilot as versioned JSON and back,
 //!   upgrading older saves.
 //! - [`saves`]: the [`PilotStore`] port pilots are saved through, the key
@@ -118,6 +121,7 @@ pub mod outfitter;
 pub mod pilot;
 pub mod recharge;
 pub mod reserves;
+pub mod rulebook;
 pub mod save;
 pub mod saves;
 pub mod session;
@@ -156,12 +160,13 @@ pub use govt::Governments;
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
-pub use legal::{Crime, CrimeGains, LegalCode, NovaLaw};
+pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use pilot::Pilot;
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use reserves::{Gauge, Reserves};
+pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::Session;

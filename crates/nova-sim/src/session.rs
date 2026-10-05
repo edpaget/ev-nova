@@ -3536,7 +3536,8 @@ mod tests {
     use crate::combat::defence::Allegiance;
     use crate::combat::hull::DisableRule;
     use crate::combat::weapon::Explosion;
-    use crate::legal::{Crime, CrimeGains, LegalCode, NovaLaw};
+    use crate::legal::{Crime, LegalCode, NovaLaw};
+    use crate::rulebook::RuleSource;
     use crate::testkit::{hull, weapon};
     use crate::traffic::npc::Npc;
 
@@ -3825,7 +3826,7 @@ mod tests {
         disable: &Disabling,
         defence: &Allegiance,
         law: &NovaLaw {
-            gains: CrimeGains::Engine,
+            crime_gains: RuleSource::Engine,
         },
     };
 
