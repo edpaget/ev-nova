@@ -100,6 +100,9 @@ pub struct NewShip {
     /// Its `düde`'s `Booty` flags; none for a fleet's ship, which has no
     /// `düde`.
     pub booty: u16,
+    /// Its `düde`'s `InfoTypes` flags, what it says when hailed; none for
+    /// a fleet's ship.
+    pub info_types: u16,
 }
 
 /// How fast a ship glides on tick `k` (from 0) of its jump in.
@@ -137,6 +140,7 @@ pub fn initial(table: &SpawnTable, chance: &mut (impl Chance + ?Sized)) -> Vec<N
                 jumping_in: false,
                 aggression: aggression(chance),
                 booty: dude.booty,
+                info_types: dude.info_types,
             });
         }
     }
@@ -205,6 +209,7 @@ fn hyper_ship(table: &SpawnTable, chance: &mut (impl Chance + ?Sized), out: &mut
             jumping_in: true,
             aggression: aggression(chance),
             booty: dude.booty,
+            info_types: dude.info_types,
         });
     }
 }
@@ -267,6 +272,7 @@ pub fn fleet(
         jumping_in: true,
         aggression: aggression(chance),
         booty: 0,
+        info_types: 0,
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -284,6 +290,7 @@ pub fn fleet(
                 jumping_in: true,
                 aggression: aggression(chance),
                 booty: 0,
+                info_types: 0,
             });
         }
     }
@@ -406,6 +413,7 @@ mod tests {
                     govt: Some(GovtId(130)),
                     ships: vec![(ShipId(200), 50), (ShipId(201), 50)],
                     booty: 0x0041,
+                    info_types: 0x4005,
                 },
             )]),
             dude_fleets: vec![(FleetId(140), 30)],
@@ -545,6 +553,7 @@ mod tests {
                 jumping_in: false,
                 aggression: 0,
                 booty: 0x0041,
+                info_types: 0x4005,
             }]
         );
     }
@@ -604,6 +613,22 @@ mod tests {
         let ships = arrivals(&table(), 0, &mut Draws::of(&[1, 29, 0, 0, 0, 2]));
         assert_eq!(ships.len(), 4);
         assert!(ships.iter().all(|ship| ship.booty == 0), "{ships:?}");
+    }
+
+    #[test]
+    fn a_dude_ship_carries_its_dudes_info_types() {
+        let ship_201 = [6, 6, 0, 99, 0, 0, 0];
+        let ships = initial(&one_pass(), &mut Draws::of(&ship_201));
+        assert_eq!(ships[0].info_types, 0x4005);
+        let arrived = arrivals(&table(), 1, &mut Draws::of(&[0, 6, 6, 0, 99, 90]));
+        assert_eq!(arrived[0].info_types, 0x4005, "a düde ship jumping in too");
+    }
+
+    #[test]
+    fn a_fleet_ship_has_no_info_types() {
+        let ships = arrivals(&table(), 0, &mut Draws::of(&[1, 29, 0, 0, 0, 2]));
+        assert_eq!(ships.len(), 4);
+        assert!(ships.iter().all(|ship| ship.info_types == 0), "{ships:?}");
     }
 
     #[test]

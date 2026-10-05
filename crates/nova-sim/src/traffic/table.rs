@@ -164,6 +164,8 @@ pub struct SpawnDude {
     pub ships: Vec<(ShipId, u32)>,
     /// Its `Booty` flags.
     pub booty: u16,
+    /// Its `InfoTypes` flags.
+    pub info_types: u16,
 }
 
 /// A ship type the traffic can spawn: how it performs, with its default
@@ -240,6 +242,7 @@ impl SpawnTable {
                         govt: dude.govt,
                         ships,
                         booty: dude.booty,
+                        info_types: dude.info_types,
                     },
                 ))
             })
@@ -537,6 +540,7 @@ mod tests {
                 govt: Some(GovtId(130)),
                 ships: vec![(ShipId(200), 70), (ShipId(999), 30), (ShipId(201), -5)],
                 booty: 0x0041,
+                info_types: 0x4005,
             })
         }
 
@@ -627,8 +631,9 @@ mod tests {
                 govt: Some(GovtId(130)),
                 ships: vec![(ShipId(200), 70), (ShipId(999), 30), (ShipId(201), 0)],
                 booty: 0x0041,
+                info_types: 0x4005,
             },
-            "its booty with it"
+            "its booty and info types with it"
         );
         assert_eq!(table.dude_fleets, [(FleetId(140), 20)]);
         assert_eq!(

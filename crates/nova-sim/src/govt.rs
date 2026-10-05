@@ -193,22 +193,23 @@ impl Governments {
         self.records.get(&govt?)
     }
 
-    /// `govt`'s record for relations: a government, not derelict, with
-    /// the default (no classes) for one the table does not hold.
-    fn related(&self, govt: Option<GovtId>) -> Option<GovtRecord> {
+    /// `govt`'s classes, allies and enemies: a government, not derelict,
+    /// with none for one the table does not hold.
+    fn related(&self, govt: Option<GovtId>) -> Option<Relations> {
         let id = govt?;
-        let record = self.records.get(&id).copied().unwrap_or(GovtRecord {
-            id,
-            flags: 0,
-            flags2: 0,
-            crime_tol: 0,
-            penalties: crate::catalog::Penalties::default(),
-            max_odds: 0,
-            classes: [UNUSED; 4],
-            allies: [UNUSED; 4],
-            enemies: [UNUSED; 4],
-        });
-        (record.flags & DERELICT == 0).then_some(record)
+        match self.records.get(&id) {
+            Some(record) if record.flags & DERELICT != 0 => None,
+            Some(record) => Some(Relations {
+                classes: record.classes,
+                allies: record.allies,
+                enemies: record.enemies,
+            }),
+            None => Some(Relations {
+                classes: [UNUSED; 4],
+                allies: [UNUSED; 4],
+                enemies: [UNUSED; 4],
+            }),
+        }
     }
 
     /// `govt`'s `Flags`: none for an independent or a government the
@@ -220,6 +221,14 @@ impl Governments {
 
 /// An unused class slot.
 const UNUSED: i16 = -1;
+
+/// A government's `Class1-4`, `Ally1-4` and `Enemy1-4`.
+#[derive(Clone, Copy)]
+struct Relations {
+    classes: [i16; 4],
+    allies: [i16; 4],
+    enemies: [i16; 4],
+}
 
 /// Whether `list` names any of `classes`, unused slots aside.
 fn lists_a_class(list: [i16; 4], classes: [i16; 4]) -> bool {

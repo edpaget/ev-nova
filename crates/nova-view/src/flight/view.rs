@@ -3766,6 +3766,8 @@ mod tests {
                 length: 0,
                 crew: 0,
                 inherent_ai: 1,
+                comm_name: String::new(),
+                inherent_govt: None,
             }],
             ..outfitting()
         }
@@ -3903,6 +3905,8 @@ mod tests {
             length: 0,
             crew: 0,
             inherent_ai: 1,
+            comm_name: String::new(),
+            inherent_govt: None,
         };
         FakeCatalog {
             traffic: systems
@@ -3924,6 +3928,7 @@ mod tests {
                     govt: None,
                     ships: vec![(ShipId(ship), 1)],
                     booty: 0,
+                    info_types: 0,
                 },
             )],
             ships: vec![record(129), record(130)],
@@ -5367,6 +5372,7 @@ mod tests {
                 classes: [-1; 4],
                 allies: [-1; 4],
                 enemies: [-1; 4],
+                comm_name: String::new(),
             }],
             ..catalog
         }

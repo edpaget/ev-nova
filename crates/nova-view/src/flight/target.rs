@@ -701,6 +701,7 @@ mod tests {
             inspected: None,
             booty: 0,
             boarded: false,
+            info_types: 0,
         }
     }
 

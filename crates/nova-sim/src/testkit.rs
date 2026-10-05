@@ -120,8 +120,8 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
 }
 
 /// `shïp` `id` with `fields`: 10,000 credits, tech level 1, for sale
-/// every day (`BuyRandom` 100), requiring nothing, with no default items
-/// and no `Flags3`.
+/// every day (`BuyRandom` 100), requiring nothing, with no default items,
+/// no `Flags3` and no inherent government, hailed as "ship `id`".
 pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
     ShipRecord {
         id: ShipId(id),
@@ -142,6 +142,8 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         length: 20,
         crew: 3,
         inherent_ai: 1,
+        comm_name: format!("ship {id}"),
+        inherent_govt: None,
     }
 }
 
@@ -196,7 +198,8 @@ pub(crate) fn hull(id: i16) -> HullRecord {
 }
 
 /// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
-/// for crime, no penalties, and `MaxOdds` 100 (even odds).
+/// for crime, no penalties, and `MaxOdds` 100 (even odds), hailed as
+/// "Govt `id`".
 pub(crate) fn govt(id: i16) -> GovtRecord {
     GovtRecord {
         id: GovtId(id),
@@ -208,6 +211,7 @@ pub(crate) fn govt(id: i16) -> GovtRecord {
         classes: [-1; 4],
         allies: [-1; 4],
         enemies: [-1; 4],
+        comm_name: format!("Govt {id}"),
     }
 }
 
@@ -237,6 +241,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         inspected: None,
         booty: 0,
         boarded: false,
+        info_types: 0,
     }
 }
 

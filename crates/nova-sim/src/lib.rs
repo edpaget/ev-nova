@@ -20,8 +20,10 @@
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
 //!   `jünk` and `öops` the exchange trades and is moved by; the
 //!   [`TrafficCatalog`] port, the `sÿst` traffic, `düde`s and `flët`s NPC
-//!   traffic is spawned from; and the [`CombatCatalog`] port, the `wëap`s,
-//!   each `shïp`'s combat fields and the `gövt`s ships fight by.
+//!   traffic is spawned from; the [`CombatCatalog`] port, the `wëap`s,
+//!   each `shïp`'s combat fields and the `gövt`s ships fight by; and the
+//!   [`CommCatalog`] port, the string lists a hailed ship's words come
+//!   from.
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
@@ -150,11 +152,11 @@ pub use board::{
     Take, Taken,
 };
 pub use catalog::{
-    BoomId, CharacterStart, CombatCatalog, CommodityStrings, DisasterId, DisasterRecord, DudeId,
-    DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord, HullRecord, JunkId,
-    JunkRecord, LandingSite, OutfitId, OutfitRecord, Penalties, PilotCatalog, ShipId, ShipRecord,
-    SoundId, StarSystem, StartDate, StartError, StellarId, StockWeapon, SystemId, SystemTraffic,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterId,
+    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord,
+    HullRecord, JunkId, JunkRecord, LandingSite, OutfitId, OutfitRecord, Penalties, PilotCatalog,
+    ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StockWeapon,
+    SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};

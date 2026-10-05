@@ -1,7 +1,7 @@
-//! The pilot, traffic and combat catalogs over the game data: a thin
-//! mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`, `wëap`,
+//! The pilot, traffic, combat and comm catalogs over the game data: a
+//! thin mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`, `wëap`,
 //! `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët` and `gövt` records, its
-//! commodity string lists and its stellar sprites.
+//! string lists and its stellar sprites.
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
@@ -19,11 +19,11 @@ use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
 
 use crate::catalog::{
-    CharacterStart, CombatCatalog, CommodityStrings, DisasterId, DisasterRecord, DudeId,
-    DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord, HullRecord, JunkRecord,
-    LandingSite, OutfitId, OutfitRecord, Penalties, PilotCatalog, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StockWeapon, SystemId, SystemTraffic, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterId, DisasterRecord,
+    DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord, HullRecord,
+    JunkRecord, LandingSite, OutfitId, OutfitRecord, Penalties, PilotCatalog, ShipId, ShipRecord,
+    SoundId, StarSystem, StartDate, StartError, StockWeapon, SystemId, SystemTraffic,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -99,6 +99,8 @@ impl PilotCatalog for GameData {
                     length: record.length,
                     crew: record.crew,
                     inherent_ai: record.inherent_ai,
+                    comm_name: record.comm_name.as_str().to_owned(),
+                    inherent_govt: inherent_govt(record.inherent_govt),
                 })
             })
             .collect()
@@ -259,6 +261,7 @@ impl TrafficCatalog for GameData {
                 .filter_map(|(ship, probability)| Some(((*ship)?, probability)))
                 .collect(),
             booty: dude.booty.0,
+            info_types: dude.info_types.0,
         })
     }
 
@@ -370,9 +373,33 @@ impl CombatCatalog for GameData {
                     classes: record.class,
                     allies: record.ally,
                     enemies: record.enemy,
+                    comm_name: record.comm_name.as_str().to_owned(),
                 })
             })
             .collect()
+    }
+}
+
+/// Reads the string list afresh on every call.
+impl CommCatalog for GameData {
+    fn string_list(&self, id: i16) -> Vec<String> {
+        strings(self, id)
+    }
+}
+
+/// The most a `shïp`'s `InherentGovt` adds to a `gövt` ID to say it
+/// takes on that government's attributes only.
+const ATTRIBUTES_ONLY: i16 = 1000;
+
+/// A `shïp`'s `InherentGovt` as the government whose attributes it takes
+/// on: a `gövt` ID as it is, or less [`ATTRIBUTES_ONLY`] when it is in
+/// that range; none for -1, or a government it fights as only (+2000),
+/// whose attributes it does not take on.
+fn inherent_govt(raw: i16) -> Option<GovtId> {
+    match raw {
+        0..ATTRIBUTES_ONLY => Some(GovtId(raw)),
+        ATTRIBUTES_ONLY..2000 => Some(GovtId(raw - ATTRIBUTES_ONLY)),
+        _ => None,
     }
 }
 
@@ -775,6 +802,8 @@ mod tests {
         bytes[0x5CE..0x5DD].copy_from_slice(b"Heavy\\nShuttle!");
         bytes[0x62E..0x63D].copy_from_slice(b"A Heavy Shuttle");
         bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x48, &[1129]);
+        bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
         bytes
     }
 
@@ -813,6 +842,8 @@ mod tests {
             length: 41,
             crew: 3,
             inherent_ai: 2,
+            comm_name: "heavy shuttle".to_owned(),
+            inherent_govt: Some(GovtId(129)),
         };
         assert_eq!(
             data.ships(),
@@ -831,6 +862,31 @@ mod tests {
             "the same default items"
         );
         assert_eq!(store(&[]).ships(), []);
+    }
+
+    #[test]
+    fn a_shïps_inherent_government_is_its_gövt_attributes_or_none() {
+        let inheriting = |raw: i16| {
+            let mut bytes = for_sale();
+            put_i16s(&mut bytes, 0x48, &[raw]);
+            bytes
+        };
+        for (raw, govt) in [
+            (-1, None),
+            (128, Some(128)),
+            (383, Some(383)),
+            (1128, Some(128)),
+            (1999, Some(999)),
+            (2130, None),
+            (0, Some(0)),
+        ] {
+            let data = store(&[(Ship::TYPE, 128, inheriting(raw))]);
+            assert_eq!(
+                data.ships()[0].inherent_govt,
+                govt.map(GovtId),
+                "InherentGovt {raw}"
+            );
+        }
     }
 
     #[test]
@@ -1456,6 +1512,7 @@ mod tests {
         put_i16s(&mut bytes, 0x18, &[1, -1, 4, -1]);
         put_i16s(&mut bytes, 0x20, &[0, 1, 12, 13]);
         put_i16s(&mut bytes, 0x28, &[2, 10, 16, 9]);
+        bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
         bytes
     }
 
@@ -1482,6 +1539,7 @@ mod tests {
             classes: [1, -1, 4, -1],
             allies: [0, 1, 12, 13],
             enemies: [2, 10, 16, 9],
+            comm_name: "Federation".to_owned(),
         };
         assert_eq!(
             data.governments(),
@@ -1566,6 +1624,7 @@ mod tests {
                 govt: Some(GovtId(129)),
                 ships: vec![(ShipId(140), 60), (ShipId(141), 10)],
                 booty: 0,
+                info_types: 0,
             }),
             "the unused slot is left out"
         );
@@ -1576,6 +1635,7 @@ mod tests {
                 govt: None,
                 ships: Vec::new(),
                 booty: 0,
+                info_types: 0,
             })
         );
         assert_eq!(data.dude(DudeId(130)), None, "undecodable");
@@ -1591,6 +1651,38 @@ mod tests {
         let data = store(&[(Dude::TYPE, 128, looted), (Dude::TYPE, 129, every)]);
         assert_eq!(data.dude(DudeId(128)).map(|dude| dude.booty), Some(0x0041));
         assert_eq!(data.dude(DudeId(129)).map(|dude| dude.booty), Some(0xFFFF));
+    }
+
+    #[test]
+    fn a_dudes_info_types_are_its_hail_information_bits() {
+        let mut advising = dude(1, 128, &[(140, 100)]);
+        put_i16s(&mut advising, 0x06, &[0x4005]);
+        let mut every = dude(1, 128, &[(140, 100)]);
+        put_i16s(&mut every, 0x06, &[-1]);
+        let data = store(&[(Dude::TYPE, 128, advising), (Dude::TYPE, 129, every)]);
+        assert_eq!(
+            data.dude(DudeId(128)).map(|dude| dude.info_types),
+            Some(0x4005)
+        );
+        assert_eq!(
+            data.dude(DudeId(129)).map(|dude| dude.info_types),
+            Some(0xFFFF)
+        );
+    }
+
+    #[test]
+    fn a_string_list_is_its_str_whole_and_none_when_missing_or_undecodable() {
+        let data = store(&[
+            (StrList::TYPE, 3000, str_list(&["Channel open.", "", "*Hi"])),
+            (StrList::TYPE, 3001, short(str_list(&["Broken"]))),
+        ]);
+        assert_eq!(
+            data.string_list(3000),
+            ["Channel open.", "", "*Hi"],
+            "every string, raw"
+        );
+        assert!(data.string_list(3001).is_empty(), "undecodable");
+        assert!(data.string_list(3002).is_empty(), "missing");
     }
 
     /// A `flët` led by `lead`, with these escorts (type, min, max) in its

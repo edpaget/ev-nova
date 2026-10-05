@@ -378,6 +378,7 @@ impl Traffic {
                 inspected: None,
                 booty: ship.booty,
                 boarded: false,
+                info_types: ship.info_types,
             });
         }
     }
@@ -467,6 +468,7 @@ mod tests {
                     govt: Some(GovtId(130)),
                     ships: vec![(ShipId(200), 1)],
                     booty: 0x0041,
+                    info_types: 0x8000,
                 },
             )]),
             ships: BTreeMap::from([(
@@ -542,6 +544,7 @@ mod tests {
         assert_eq!(first.mode, Mode::Flying);
         assert_eq!(first.goal, Goal::Idle);
         assert_eq!(first.booty, 0x0041, "its düde's");
+        assert_eq!(first.info_types, 0x8000, "its düde's");
         assert!(!first.boarded);
         assert_eq!(npcs[1].state.position, Vec2::new(1.0, 0.0));
         traffic.enter(table(1), &mut Draws::of(&placed(0, 0)));

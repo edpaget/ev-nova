@@ -1,7 +1,8 @@
 //! The catalog ports: what a flight session starts from
 //! ([`PilotCatalog`]), what its NPC traffic is spawned from
-//! ([`TrafficCatalog`]) and what its ships fight with
-//! ([`CombatCatalog`]), in the simulation's own terms.
+//! ([`TrafficCatalog`]), what its ships fight with ([`CombatCatalog`]) and
+//! the words a hailed ship answers with ([`CommCatalog`]), in the
+//! simulation's own terms.
 
 use std::rc::Rc;
 
@@ -168,6 +169,12 @@ pub struct ShipRecord {
     /// Its `InherentAI`, raw: the AI type (1-4) it flies with when no
     /// `düde` gives one, and always as a fleet's ship.
     pub inherent_ai: i16,
+    /// Its `CommName`: what it is called when hailed.
+    pub comm_name: String,
+    /// The government whose attributes (its flags) it takes on, from its
+    /// `InherentGovt`: a `gövt` ID, or one + 1000 ("attributes only");
+    /// none for -1 or + 2000 ("combat only").
+    pub inherent_govt: Option<GovtId>,
 }
 
 /// The standard commodities, raw from their string lists: `STR#` 4000
@@ -255,6 +262,9 @@ pub struct DudeRecord {
     /// Its `Booty` flags: what boarding one of its ships yields (see
     /// [`board`](crate::board)).
     pub booty: u16,
+    /// Its `InfoTypes` flags: what its ships say when hailed (see
+    /// [`hail`](crate::hail)).
+    pub info_types: u16,
 }
 
 /// One of a fleet's escort types, raw from its `flët`.
@@ -447,7 +457,7 @@ pub struct Penalties {
 
 /// A government, raw from its `gövt`: the [`govt`](crate::govt) and
 /// [`legal`](crate::legal) rules decide what the values mean.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GovtRecord {
     /// The `gövt`'s ID.
     pub id: GovtId,
@@ -469,6 +479,8 @@ pub struct GovtRecord {
     /// Its `Enemy1-4`: the classes it is at war with, -1 for an unused
     /// slot.
     pub enemies: [i16; 4],
+    /// Its `CommName`: what its ships are called by when hailed.
+    pub comm_name: String,
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each
@@ -510,6 +522,28 @@ impl<T: CombatCatalog + ?Sized> CombatCatalog for Rc<T> {
 
     fn governments(&self) -> Vec<GovtRecord> {
         (**self).governments()
+    }
+}
+
+/// The game data a hailed ship's words come from: string lists, read
+/// whole.
+pub trait CommCatalog {
+    /// Every string of `STR#` `id`, in order; none when it is missing or
+    /// cannot be read.
+    fn string_list(&self, id: i16) -> Vec<String>;
+}
+
+/// A borrowed catalog is a catalog.
+impl<T: CommCatalog + ?Sized> CommCatalog for &T {
+    fn string_list(&self, id: i16) -> Vec<String> {
+        (**self).string_list(id)
+    }
+}
+
+/// A shared catalog is a catalog.
+impl<T: CommCatalog + ?Sized> CommCatalog for Rc<T> {
+    fn string_list(&self, id: i16) -> Vec<String> {
+        (**self).string_list(id)
     }
 }
 
@@ -734,6 +768,8 @@ mod tests {
         fn ships(&self) -> Vec<ShipRecord> {
             vec![ShipRecord {
                 name: "Shuttle".to_owned(),
+                comm_name: "shuttle".to_owned(),
+                inherent_govt: Some(GovtId(129)),
                 ..crate::testkit::ship(128, ShipFields::default())
             }]
         }
@@ -843,6 +879,8 @@ mod tests {
         assert!(direct[12].contains("food surplus"), "{direct:?}");
         assert!(direct[13].contains("Scoop"), "{direct:?}");
         assert!(direct[14].contains("Shuttle"), "{direct:?}");
+        assert!(direct[14].contains("\"shuttle\""), "{direct:?}");
+        assert!(direct[14].contains("Some(GovtId(129))"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }
@@ -872,6 +910,7 @@ mod tests {
                 govt: Some(GovtId(128)),
                 ships: vec![(ShipId(128), 100)],
                 booty: 0,
+                info_types: 0x4005,
             })
         }
 
@@ -909,6 +948,7 @@ mod tests {
         assert!(direct[0].contains("avg_ships: 5"), "{direct:?}");
         assert_eq!(direct[1], "None");
         assert!(direct[2].contains("ShipId(128), 100"), "{direct:?}");
+        assert!(direct[2].contains("info_types: 16389"), "{direct:?}");
         assert_eq!(direct[3], "None");
         assert!(direct[4].contains("FleetId(129)"), "{direct:?}");
         assert_eq!(traffic(&One), direct);
@@ -943,6 +983,7 @@ mod tests {
         fn governments(&self) -> Vec<GovtRecord> {
             vec![GovtRecord {
                 crime_tol: 6,
+                comm_name: "Federation".to_owned(),
                 ..crate::testkit::govt(128)
             }]
         }
@@ -965,8 +1006,34 @@ mod tests {
         assert!(direct[1].contains("WeaponId(128), count: 2"), "{direct:?}");
         assert!(direct[1].contains("strength: 250"), "{direct:?}");
         assert!(direct[2].contains("crime_tol: 6"), "{direct:?}");
+        assert!(direct[2].contains("\"Federation\""), "{direct:?}");
         assert_eq!(combat(&One), direct);
         assert_eq!(combat(Rc::new(One)), direct);
+    }
+
+    /// `STR#` 3000 holds two replies; no other list exists.
+    impl CommCatalog for One {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            if id == 3000 {
+                vec!["Channel open.".to_owned(), "Hello.".to_owned()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    /// `STR#` 3000 and 3001, as `catalog` gives them.
+    fn comm(catalog: impl CommCatalog) -> Vec<Vec<String>> {
+        vec![catalog.string_list(3000), catalog.string_list(3001)]
+    }
+
+    #[test]
+    fn borrowed_and_shared_comm_catalogs_are_catalogs() {
+        let direct = comm(One);
+        assert_eq!(direct[0], ["Channel open.", "Hello."]);
+        assert!(direct[1].is_empty(), "{direct:?}");
+        assert_eq!(comm(&One), direct);
+        assert_eq!(comm(Rc::new(One)), direct);
     }
 
     #[test]

@@ -3692,6 +3692,7 @@ mod tests {
                     govt: Some(GovtId(140)),
                     ships: vec![(ShipId(129), 1)],
                     booty: 0,
+                    info_types: 0,
                 },
             )],
             ship_records: vec![ship(129, FAST)],
@@ -4785,6 +4786,7 @@ mod tests {
                     govt: Some(GovtId(140)),
                     ships: vec![(ShipId(130), 1)],
                     booty: 0,
+                    info_types: 0,
                 },
             )],
             ..shipbuying()
@@ -5505,6 +5507,7 @@ mod tests {
                             govt: Some(GovtId(govt)),
                             ships: vec![(ShipId(ship), 1)],
                             booty: 0,
+                            info_types: 0,
                         },
                     )
                 })
