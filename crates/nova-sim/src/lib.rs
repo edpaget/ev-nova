@@ -24,6 +24,10 @@
 //!   `shïp` and its outfits' fuel scoops.
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
+//! - [`glow`]: how bright a ship's engine glow is: its base level, which
+//!   thrust ramps up and coasting down ([`ramp_glow`]), and the level
+//!   drawn at a tick, flickering on the [`BlinkChance`] port
+//!   ([`glow_level`]).
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
@@ -80,6 +84,7 @@ pub mod fixture;
 pub mod flight;
 pub mod fuel;
 pub mod geometry;
+pub mod glow;
 pub mod handling;
 pub mod hyperspace;
 pub mod landing;
@@ -111,6 +116,7 @@ pub use date::GameDate;
 pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
+pub use glow::{GLOW_CRUISE, glow_level, ramp_glow};
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{
