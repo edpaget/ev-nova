@@ -1536,7 +1536,7 @@ fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released()
 use nova_sim::ai::{Goal, NovaAi};
 use nova_sim::legal::{Crime, LegalCode, NovaLaw};
 use nova_sim::rulebook::RuleSource;
-use nova_sim::{Governments, GovtId};
+use nova_sim::{Assigned, Assignment, Governments, GovtId, NovaBoarding, Take, Taken};
 
 const FEDERATION: GovtId = GovtId(128);
 const PIRATES: GovtId = GovtId(137);
@@ -1663,30 +1663,44 @@ fn closing_on(session: &Session, quarry: &nova_sim::Npc) -> (nova_sim::Controls,
     )
 }
 
-/// The Done scenario, short of boarding: in Fomalhaut, where a Civvies
+/// The Fomalhaut fight: the session, the trader attacked and the
+/// Federation ship that came, the dice, and what was seen.
+struct Fomalhaut {
+    session: Session,
+    trader: nova_sim::NpcId,
+    police: nova_sim::NpcId,
+    chance: Seeded,
+    fled: bool,
+    answered: bool,
+    disabled: bool,
+}
+
+/// The Done scenario up to the disabling: in Fomalhaut, where a Civvies
 /// trader (`düde` 129, AI 1) and a Lone Federation Ship (`düde` 128, AI
-/// 4) fly, the player's attack on the trader puts it to flight and
-/// brings the Federation down on the player; disabling the trader costs
-/// 3 with the Civvies and with the Federation, and it is left alive. By
-/// the engine's law (the default) the record also changes with the
-/// Civvies' other allies (down 3) and rises with the 20 governments
-/// not allied with them that it pleases.
-#[test]
-fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
-    let Some(dir) = common::nova_data() else {
-        return;
-    };
-    let data = GameData::open(&dir, None).expect("the stock data opens");
-    let mut session = destroyer_in_fomalhaut(&data);
+/// 4) fly, the player picks a seed that brings a trader of 1 to 6 crew
+/// (so it can be boarded, and the Destroyer's 50 crew cap the odds) and
+/// the Federation, attacks the trader until it is disabled and the
+/// Federation answers, then holds its fire for 30 ticks.
+fn trader_disabled_in_fomalhaut(data: &GameData) -> Fomalhaut {
+    let crews: BTreeMap<ShipId, i16> = PilotCatalog::ships(data)
+        .into_iter()
+        .map(|record| (record.id, record.crew))
+        .collect();
+    let mut session = destroyer_in_fomalhaut(data);
     let mut chance = Seeded(0x5EED_F00D);
     let (trader, police) = (1..=200)
         .find_map(|seed| {
-            session.populate(&data, &mut Seeded(seed));
+            session.populate(data, &mut Seeded(seed));
             let find = |govt, wanted: &[nova_sim::AiType]| {
                 session
                     .npcs()
                     .iter()
-                    .find(|npc| npc.govt == Some(govt) && wanted.contains(&npc.ai_type))
+                    .find(|npc| {
+                        npc.govt == Some(govt)
+                            && wanted.contains(&npc.ai_type)
+                            && (govt != CIVVIES
+                                || (1..=6).contains(&crews.get(&npc.ship).copied().unwrap_or(0)))
+                    })
                     .map(|npc| npc.id)
             };
             let trader = find(CIVVIES, &[nova_sim::AiType::WimpyTrader])?;
@@ -1696,15 +1710,7 @@ fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
             )?;
             Some((trader, police))
         })
-        .expect("a seed brings a Civvies trader and the Federation");
-    let before = [CIVVIES, FEDERATION].map(|govt| session.pilot().legal_record(govt));
-    let all: Vec<GovtId> = Governments::read(&data).ids().collect();
-    let records = |session: &Session| -> Vec<i16> {
-        all.iter()
-            .map(|&govt| session.pilot().legal_record(govt))
-            .collect()
-    };
-    let before_all = records(&session);
+        .expect("a seed brings a Civvies trader with a crew and the Federation");
     let (mut fled, mut answered, mut disabled) = (false, false, false);
     for _ in 0..3000 {
         let Some(quarry) = npc_of(&session, trader) else {
@@ -1715,7 +1721,7 @@ fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
         session.hold_fire(fire && !disabled, false);
         session.tick(controls);
         session.tick_combat(nova_sim::Rules::default(), &mut chance);
-        session.tick_traffic(&data, &NovaAi::default(), &mut chance);
+        session.tick_traffic(data, &NovaAi::default(), &mut chance);
         fled |= npc_of(&session, trader).is_some_and(|npc| npc.goal == Goal::Flee(ShipRef::Player));
         answered |= session
             .npcs()
@@ -1725,24 +1731,56 @@ fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
             break;
         }
     }
-    assert!(fled, "the trader fled from the player");
-    assert!(
-        answered,
-        "the Federation (NPC {}) attacked the player",
-        police.0
-    );
-    assert!(disabled, "the trader was disabled");
     for _ in 0..30 {
         session.hold_fire(false, false);
         session.tick(nova_sim::Controls::default());
         session.tick_combat(nova_sim::Rules::default(), &mut chance);
     }
-    assert!(npc_of(&session, trader).is_some(), "not destroyed");
+    Fomalhaut {
+        session,
+        trader,
+        police,
+        chance,
+        fled,
+        answered,
+        disabled,
+    }
+}
+
+/// The Done scenario, short of boarding: the player's attack on the
+/// trader puts it to flight and brings the Federation down on the player;
+/// disabling the trader costs 3 with the Civvies and with the Federation,
+/// and it is left alive. By the engine's law (the default) the record
+/// also changes with the Civvies' other allies (down 3) and rises with
+/// the 20 governments not allied with them that it pleases.
+#[test]
+fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let all: Vec<GovtId> = Governments::read(&data).ids().collect();
+    let records = |session: &Session| -> Vec<i16> {
+        all.iter()
+            .map(|&govt| session.pilot().legal_record(govt))
+            .collect()
+    };
+    let before_all = records(&destroyer_in_fomalhaut(&data));
+    let fight = trader_disabled_in_fomalhaut(&data);
+    assert!(fight.fled, "the trader fled from the player");
+    assert!(
+        fight.answered,
+        "the Federation (NPC {}) attacked the player",
+        fight.police.0
+    );
+    assert!(fight.disabled, "the trader was disabled");
+    let session = &fight.session;
+    assert!(npc_of(session, fight.trader).is_some(), "not destroyed");
     let after = [CIVVIES, FEDERATION].map(|govt| session.pilot().legal_record(govt));
-    assert_eq!(after, before.map(|record| record - 3));
+    assert_eq!(after, [-3, -3]);
     let changed: Vec<(GovtId, i32)> = all
         .iter()
-        .zip(records(&session).into_iter().zip(before_all))
+        .zip(records(session).into_iter().zip(before_all))
         .filter(|(_, (after, before))| after != before)
         .map(|(&govt, (after, before))| (govt, i32::from(after) - i32::from(before)))
         .collect();
@@ -1752,4 +1790,154 @@ fn attacking_a_stock_trader_puts_it_to_flight_brings_the_police_and_costs_3() {
         changed,
         NovaLaw::default().penalties(Crime::Disable, Some(CIVVIES), &Governments::read(&data))
     );
+}
+
+/// The player's controls to come over `quarry` at its velocity, closing
+/// in more slowly the nearer it is, then to face its heading or the
+/// reverse, whichever is nearer.
+fn boarding(session: &Session, quarry: &nova_sim::Npc) -> nova_sim::Controls {
+    use nova_sim::flight::{heading_of, shortest_turn};
+    let player = *session.player();
+    let accel = session.handling().accel;
+    let off = quarry.state.position - player.position;
+    let distance = off.length();
+    let wanted = if distance > 0.0 {
+        off * ((distance * 0.02).min(1.5) / distance)
+    } else {
+        nova_sim::Vec2::ZERO
+    };
+    let error = wanted - (player.velocity - quarry.state.velocity);
+    let toward = |heading: f32| {
+        let turn = shortest_turn(player.heading, heading);
+        let side = if turn > 1.5 {
+            nova_sim::Turn::Right
+        } else if turn < -1.5 {
+            nova_sim::Turn::Left
+        } else {
+            nova_sim::Turn::None
+        };
+        (turn, side)
+    };
+    if error.length() > accel || distance > quarry.hull.board_reach / 3.0 {
+        let (turn, side) = toward(heading_of(error));
+        return nova_sim::Controls {
+            thrust: turn.abs() < 10.0 && error.length() > accel / 2.0,
+            turn: side,
+            reverse: false,
+        };
+    }
+    let ahead = toward(quarry.state.heading);
+    let back = toward((quarry.state.heading + 180.0) % 360.0);
+    let (turn, side) = if ahead.0.abs() <= back.0.abs() {
+        ahead
+    } else {
+        back
+    };
+    nova_sim::Controls {
+        turn: if turn.abs() <= 20.0 {
+            nova_sim::Turn::None
+        } else {
+            side
+        },
+        ..nova_sim::Controls::default()
+    }
+}
+
+/// The Done scenario, to the end: once the trader is disabled, the player
+/// flies over it and boards it, which costs 5 more with the Civvies and
+/// with the Federation (the Civvies' `BoardPenalty`); its plunder offers
+/// at least 1000 credits and some cargo, and the credits taken go to the
+/// cash; then, at odds of 75 (the Destroyer's crew of 50 against a
+/// trader's), the player captures it into the fleet, and the pilot saves
+/// and opens again as it is.
+#[test]
+fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut fight = trader_disabled_in_fomalhaut(&data);
+    assert!(fight.disabled && fight.answered, "the scenario so far");
+    let session = &mut fight.session;
+    session.select_target(nova_sim::TargetPick::Nearest);
+    while session.target().is_some_and(|npc| npc.id != fight.trader) {
+        session.select_target(nova_sim::TargetPick::Next);
+    }
+    assert_eq!(session.target().map(|npc| npc.id), Some(fight.trader));
+    let class = session.target().map(|npc| npc.ship).expect("targeted");
+    let mut opened = None;
+    for _ in 0..3000 {
+        let tried = session.board(
+            &NovaLaw::default(),
+            &NovaBoarding::default(),
+            &mut fight.chance,
+        );
+        if let Ok(boarding) = tried {
+            opened = Some(boarding);
+            break;
+        }
+        let Some(quarry) = npc_of(session, fight.trader) else {
+            break;
+        };
+        let controls = boarding(session, quarry);
+        session.tick(controls);
+        session.tick_traffic(&data, &NovaAi::default(), &mut fight.chance);
+    }
+    let Some(nova_sim::Boarding::Opened(view)) = opened else {
+        panic!("boarded: {opened:?}");
+    };
+    assert_eq!(
+        [CIVVIES, FEDERATION].map(|govt| session.pilot().legal_record(govt)),
+        [-8, -8],
+        "3 for the disabling, 5 for the boarding"
+    );
+    assert!(view.credits >= 1000, "{view:?}");
+    assert!(view.cargo.is_some(), "{view:?}");
+    assert_eq!(view.odds, 75);
+    let cash = session.pilot().cash();
+    assert_eq!(
+        session.plunder(Take::Credits, &NovaBoarding::default(), &mut fight.chance),
+        Taken::Credits(view.credits)
+    );
+    assert_eq!(session.pilot().cash(), cash + view.credits);
+    // No self-destruct (99), the capture (1 against 75), and not the
+    // capture's 1 in 10 (1).
+    let mut capture = Script([99, 1, 1].into());
+    assert_eq!(
+        session.plunder(Take::Capture, &NovaBoarding::default(), &mut capture),
+        Taken::Captured
+    );
+    assert_eq!(
+        session.assign(Assignment::Escort, &mut fight.chance),
+        Some(Assigned::Escort)
+    );
+    assert_eq!(
+        session
+            .pilot()
+            .escorts()
+            .iter()
+            .map(|escort| escort.ship)
+            .collect::<Vec<_>>(),
+        [class]
+    );
+    let saved = nova_sim::save::decode(&nova_sim::save::encode(session.pilot())).expect("reads");
+    assert_eq!(&saved, session.pilot());
+}
+
+/// The stock `düde` and `shïp` fields boarding reads: the Civvies
+/// trader's booty names all six commodities and money (127), and the
+/// Cargo Drone (`shïp` 130) has no crew, so it cannot be boarded.
+#[test]
+fn stock_boarding_reads_the_civvies_booty_and_the_drones_crew() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let dude = nova_sim::TrafficCatalog::dude(&data, nova_sim::DudeId(129)).expect("düde 129");
+    assert_eq!(dude.booty, 127);
+    let drone = PilotCatalog::ships(&data)
+        .into_iter()
+        .find(|record| record.id == ShipId(130))
+        .expect("shïp 130");
+    assert_eq!(drone.crew, 0);
 }

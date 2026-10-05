@@ -7,11 +7,15 @@ use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, provoked_by
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
 /// Nova's wimpy trader (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct WimpyTrader;
+pub struct WimpyTrader {
+    /// Who comes to a ship's help ([`react::answer`]).
+    pub piracy_police: RuleSource,
+}
 
 impl Behaviour for WimpyTrader {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
@@ -27,7 +31,7 @@ impl Behaviour for WimpyTrader {
     }
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
-        react::answer(npc, strike, around)
+        react::answer(npc, strike, around, self.piracy_police)
     }
 }
 
@@ -50,11 +54,14 @@ mod tests {
         let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
         let mut chance = Draws::of(&[0]);
         assert_eq!(
-            WimpyTrader.decide(&npcs[0], &around, &mut chance),
+            WimpyTrader::default().decide(&npcs[0], &around, &mut chance),
             Goal::Land(StellarId(128))
         );
-        assert_eq!(WimpyTrader.target(&npcs[0], &around), None);
-        assert_eq!(WimpyTrader.trigger(&npcs[0], &around), Trigger::default());
+        assert_eq!(WimpyTrader::default().target(&npcs[0], &around), None);
+        assert_eq!(
+            WimpyTrader::default().trigger(&npcs[0], &around),
+            Trigger::default()
+        );
     }
 
     #[test]
@@ -68,7 +75,7 @@ mod tests {
         let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
         let mut chance = Draws::of(&[]);
         assert_eq!(
-            WimpyTrader.decide(&npcs[0], &around, &mut chance),
+            WimpyTrader::default().decide(&npcs[0], &around, &mut chance),
             Goal::Flee(n(2))
         );
         let fleeing = Npc {
@@ -76,7 +83,7 @@ mod tests {
             ..npcs[0].clone()
         };
         assert_eq!(
-            WimpyTrader.target(&fleeing, &around),
+            WimpyTrader::default().target(&fleeing, &around),
             Some(n(2)),
             "its attacker"
         );
@@ -94,7 +101,7 @@ mod tests {
         let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
         let mut chance = Draws::of(&[0]);
         assert_eq!(
-            WimpyTrader.decide(&npcs[0], &around, &mut chance),
+            WimpyTrader::default().decide(&npcs[0], &around, &mut chance),
             Goal::Land(StellarId(128))
         );
     }
@@ -117,7 +124,7 @@ mod tests {
         let npcs = [trader, ship(2, PIRATES, AiType::Warship, 0.0, 100.0)];
         let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
         assert_eq!(
-            WimpyTrader.trigger(&npcs[0], &around).only,
+            WimpyTrader::default().trigger(&npcs[0], &around).only,
             Some(crate::catalog::WeaponId(130))
         );
     }
@@ -138,9 +145,14 @@ mod tests {
             downed: None,
         };
         assert_eq!(
-            WimpyTrader.react(&npcs[0], &strike, &around),
-            react::answer(&npcs[0], &strike, &around)
+            WimpyTrader::default().react(&npcs[0], &strike, &around),
+            react::answer(&npcs[0], &strike, &around, RuleSource::Engine)
         );
-        assert_eq!(WimpyTrader.react(&npcs[0], &strike, &around).provoked, 7.0);
+        assert_eq!(
+            WimpyTrader::default()
+                .react(&npcs[0], &strike, &around)
+                .provoked,
+            7.0
+        );
     }
 }

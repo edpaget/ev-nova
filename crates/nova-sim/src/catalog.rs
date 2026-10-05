@@ -252,6 +252,9 @@ pub struct DudeRecord {
     /// Its `ShipType` slots that name a ship, each with its
     /// `Probability`, in record order; the unused (-1) slots left out.
     pub ships: Vec<(ShipId, i16)>,
+    /// Its `Booty` flags: what boarding one of its ships yields (see
+    /// [`board`](crate::board)).
+    pub booty: u16,
 }
 
 /// One of a fleet's escort types, raw from its `flët`.
@@ -868,6 +871,7 @@ mod tests {
                 ai_type: 1,
                 govt: Some(GovtId(128)),
                 ships: vec![(ShipId(128), 100)],
+                booty: 0,
             })
         }
 

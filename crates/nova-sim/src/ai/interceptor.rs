@@ -22,6 +22,7 @@ use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
 use crate::govt::INTERCEPTORS_RETREAT;
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::{AiType, Npc};
 
 /// How near, in pixels on either axis, an interceptor comes to the ship
@@ -36,7 +37,10 @@ pub const INTERCEPTOR_RETREAT: Retreat = Retreat {
 
 /// Nova's interceptor (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Interceptor;
+pub struct Interceptor {
+    /// Who comes to a ship's help ([`react::answer`]).
+    pub piracy_police: RuleSource,
+}
 
 impl Behaviour for Interceptor {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
@@ -63,7 +67,7 @@ impl Behaviour for Interceptor {
     }
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
-        react::answer(npc, strike, around)
+        react::answer(npc, strike, around, self.piracy_police)
     }
 }
 
@@ -124,7 +128,7 @@ mod tests {
         let sites = sites();
         let around = around(&sites, npcs, govts, player, record);
         let mut chance = Draws::of(draws);
-        let goal = Interceptor.decide(&npcs[0], &around, &mut chance);
+        let goal = Interceptor::default().decide(&npcs[0], &around, &mut chance);
         (goal, chance.asked)
     }
 
@@ -265,7 +269,7 @@ mod tests {
             ..crate::ai::Surroundings::new(&sites, &npcs)
         };
         assert_eq!(
-            Interceptor.decide(&npcs[0], &around, &mut Draws::of(&[0])),
+            Interceptor::default().decide(&npcs[0], &around, &mut Draws::of(&[0])),
             Goal::Land(StellarId(128))
         );
     }
@@ -286,18 +290,18 @@ mod tests {
         )]);
         let npcs = [hunter.clone()];
         let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
-        assert_eq!(Interceptor.target(&npcs[0], &around), Some(P));
+        assert_eq!(Interceptor::default().target(&npcs[0], &around), Some(P));
         assert_eq!(
-            Interceptor.trigger(&npcs[0], &around).only,
+            Interceptor::default().trigger(&npcs[0], &around).only,
             Some(WeaponId(128))
         );
         let inspecting = Npc {
             goal: Goal::Inspect(P),
             ..hunter
         };
-        assert_eq!(Interceptor.target(&inspecting, &around), None);
+        assert_eq!(Interceptor::default().target(&inspecting, &around), None);
         assert_eq!(
-            Interceptor.trigger(&inspecting, &around),
+            Interceptor::default().trigger(&inspecting, &around),
             Trigger::default()
         );
         let hit = Strike {
@@ -306,6 +310,11 @@ mod tests {
             damage: 3.0,
             downed: None,
         };
-        assert_eq!(Interceptor.react(&npcs[0], &hit, &around).provoked, 3.0);
+        assert_eq!(
+            Interceptor::default()
+                .react(&npcs[0], &hit, &around)
+                .provoked,
+            3.0
+        );
     }
 }

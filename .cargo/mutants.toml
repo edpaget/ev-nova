@@ -82,8 +82,4 @@ exclude_re = [
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour.
     "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::create_page)",
-    # While `RuleKey` has a single variant its index is 0, so returning 0
-    # cannot be observed. Remove this once a second rule joins: the
-    # rulebook's override test then catches it.
-    "replace RuleKey::index -> usize with 0",
 ]

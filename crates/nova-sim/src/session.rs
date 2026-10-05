@@ -104,6 +104,17 @@
 //! disabling it too when it was intact), each against the NPC's
 //! government. A mere hit is no crime, as in the original.
 //!
+//! The player boards its target once it is disabled
+//! ([`Session::board`]), as the [`board`](crate::board) rules say: the
+//! boarding is the [`Crime::Board`] against the target's government, and
+//! the NPCs come to its help as for a hit. Then the player plunders it
+//! ([`Session::plunder`]): its cargo into the hold, its credits, its
+//! ammunition as outfits and its energy into the tank, each once, at the
+//! risk of its self-destruct; and captures it, with odds from the crews,
+//! by a [`BoardingRule`]. A ship captured joins the pilot's fleet or
+//! becomes the player's own ship ([`Session::assign`]), which makes a
+//! save due. The boarding under way is never saved.
+//!
 //! The player targets an NPC ([`Session::select_target`]), the nearest,
 //! the nearest threat or the next in turn as the
 //! [`targeting`](crate::targeting) rules say, and
@@ -126,7 +137,14 @@
 
 use std::collections::BTreeMap;
 
-use crate::ai::{Behaviour, PlayerSide};
+use crate::ai::{Behaviour, Goal, PlayerSide};
+use crate::board::{
+    AMMO_GROWTH, Assigned, Assignment, BoardRefusal, BoardTarget, Boarding, BoardingRule,
+    CAPTURE_TRIP, CARGO_GROWTH, CREDITS_GROWTH, CaptureCrew, ENERGY_GROWTH, ESCORT_ARMOR_SHARE,
+    EscortCrew, FIGHTER_BAY, HeldRounds, MARINES, MAX_ESCORTS, MAX_SHIPS_IN_SYSTEM, Plunder,
+    PlunderView, Prize, SELF_DESTRUCT_ROLL, TAKEOVER_ARMOR_BASE, TAKEOVER_ARMOR_SHARE,
+    TOUGH_TAKEOVER_ARMOR_SHARE, Take, Taken, check_board,
+};
 use crate::catalog::{
     CombatCatalog, GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord,
     StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
@@ -139,7 +157,7 @@ use crate::combat::beam::Beam;
 use crate::combat::hull::{Condition, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
-use crate::combat::weapon::Ammo;
+use crate::combat::weapon::{Ammo, Guidance};
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
 use crate::date::GameDate;
 use crate::flight::{Controls, ShipState, step};
@@ -151,8 +169,10 @@ use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, ch
 use crate::landing::{LandingRefusal, check_landing};
 use crate::legal::{self, Crime, LegalCode};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
-use crate::outfitter::{self, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods};
-use crate::pilot::{self, Pilot};
+use crate::outfitter::{
+    self, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
+};
+use crate::pilot::{self, Escort, Pilot};
 use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
 use crate::shipyard::{self, Quote, ShipPurchase, ShipRefusal, Shipyard, Yard};
@@ -228,6 +248,8 @@ pub struct Session {
     /// The fight's strikes since the last traffic tick, for the NPCs to
     /// answer.
     strikes: Vec<Strike>,
+    /// The boarding under way, if any.
+    aboard: Option<Aboard>,
 }
 
 impl Session {
@@ -311,6 +333,7 @@ impl Session {
             target: None,
             secondary: None,
             strikes: Vec::new(),
+            aboard: None,
             pilot,
         };
         session.refit(false);
@@ -401,6 +424,7 @@ impl Session {
         self.traffic.enter(table, chance);
         self.traffic_due = false;
         self.strikes.clear();
+        self.aboard = None;
         self.clear_lost_target();
     }
 
@@ -1096,6 +1120,426 @@ impl Session {
     #[must_use]
     pub fn government(&self) -> Option<GovtId> {
         None
+    }
+
+    /// Ship class `ship`'s record, if the session has it.
+    fn ship_record(&self, ship: ShipId) -> Option<&ShipRecord> {
+        self.ships.iter().find(|record| record.id == ship)
+    }
+
+    /// Ship class `ship`'s `Crew`; none without a record.
+    fn crew(&self, ship: ShipId) -> i16 {
+        self.ship_record(ship).map_or(0, |record| record.crew)
+    }
+
+    /// Boards the player's target, if it is not landed or jumping and the
+    /// [`board`](crate::board) checks allow it, and gives what is on
+    /// board: the player matches the target's velocity, `law` convicts it
+    /// of the [`Crime::Board`] against the target's government, the
+    /// NPCs come to the target's help as for a hit by the player (a
+    /// strike of no damage, answered on the next traffic tick), the
+    /// target is marked boarded, and every other NPC after it lets it go
+    /// and decides again (`_AIShipBoardedByPlayer`). Then, unless `rule`
+    /// says its crew repels the boarders, its plunder is rolled on
+    /// `chance` and the boarding is under way ([`Session::plunder`]).
+    ///
+    /// # Errors
+    ///
+    /// The [`BoardRefusal`] that applies, and nothing changes;
+    /// [`BoardRefusal::NoTarget`] while landed or jumping.
+    pub fn board(
+        &mut self,
+        law: &dyn LegalCode,
+        rule: &dyn BoardingRule,
+        chance: &mut dyn Chance,
+    ) -> Result<Boarding, BoardRefusal> {
+        if self.landed.is_some() || self.jumping.is_some() {
+            return Err(BoardRefusal::NoTarget);
+        }
+        let target = self.target().map(|npc| BoardTarget {
+            state: npc.state,
+            condition: npc.condition,
+            boarded: npc.boarded,
+            crew: self.crew(npc.ship),
+            reach: npc.hull.board_reach,
+        });
+        check_board(&self.player, self.condition, target)?;
+        let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
+        self.player.velocity = npc.state.velocity;
+        let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
+        legal::convict(&mut self.pilot, &changes);
+        self.strikes.push(Strike {
+            ship: ShipRef::Npc(npc.id),
+            by: ShipRef::Player,
+            damage: 0.0,
+            downed: None,
+        });
+        for other in self.traffic.npcs_mut() {
+            if other.id == npc.id {
+                other.boarded = true;
+            }
+        }
+        self.drop_quarry(npc.id);
+        if rule.repels(npc.booty) {
+            return Ok(Boarding::Repelled);
+        }
+        let mut plunder = Plunder::roll(&self.prize(&npc), chance);
+        plunder.odds = rule.capture_odds(&self.capture_crew(&npc), chance);
+        let aboard = Aboard {
+            npc: npc.id,
+            ship: npc.ship,
+            plunder,
+            captured: false,
+        };
+        self.aboard = Some(aboard);
+        Ok(Boarding::Opened(aboard.view()))
+    }
+
+    /// Every NPC other than `id` that targets it, or fights it, lets it go
+    /// and decides again, its provocation gone.
+    fn drop_quarry(&mut self, id: NpcId) {
+        let quarry = ShipRef::Npc(id);
+        for other in self.traffic.npcs_mut() {
+            if other.id != id
+                && (other.target == Some(quarry) || other.goal.quarry() == Some(quarry))
+            {
+                other.target = None;
+                other.goal = Goal::Idle;
+                other.provoked = 0.0;
+            }
+        }
+    }
+
+    /// What `npc` has on board to plunder.
+    fn prize(&self, npc: &Npc) -> Prize {
+        let record = self.ship_record(npc.ship);
+        let fields = record.map(|record| record.fields).unwrap_or_default();
+        let fires = |armament: &Armament, ammo: WeaponId, bay: bool| {
+            armament.mounts().iter().any(|mount| {
+                mount.spec.ammo == Ammo::Rounds(ammo)
+                    && (!bay || mount.spec.guidance == Guidance::Other(FIGHTER_BAY))
+            })
+        };
+        Prize {
+            booty: npc.booty,
+            cost: record.map_or(0, |record| record.cost),
+            holds: fields.holds,
+            fuel: fields.fuel,
+            rounds: npc
+                .rounds
+                .iter()
+                .map(|(&ammo, &rounds)| HeldRounds {
+                    ammo,
+                    rounds,
+                    bay: fires(&npc.armament, ammo, true),
+                    outfit: fires(&self.armament, ammo, false)
+                        .then(|| {
+                            self.ammo_outfits
+                                .iter()
+                                .find(|&&(of, _)| of == ammo)
+                                .map(|&(_, outfit)| outfit)
+                        })
+                        .flatten(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The crews the odds of capturing `npc` are worked out from.
+    fn capture_crew(&self, npc: &Npc) -> CaptureCrew {
+        CaptureCrew {
+            crew: i32::from(self.crew(self.pilot.ship)),
+            strength: self.hull.strength as i32,
+            escorts: self
+                .pilot
+                .escorts
+                .iter()
+                .map(|escort| EscortCrew {
+                    crew: i32::from(self.crew(escort.ship)),
+                    strength: self.arsenal.hull(escort.ship).strength as i32,
+                    inherent_ai: self
+                        .ship_record(escort.ship)
+                        .map_or(0, |record| record.inherent_ai),
+                })
+                .collect(),
+            marines: outfit_mods(&self.pilot.outfits, &self.outfits)
+                .into_iter()
+                .filter(|outfit| outfit.mod_type == MARINES && outfit.mod_val != 0)
+                .map(|outfit| (outfit.mod_val, outfit.count))
+                .collect(),
+            target_crew: i32::from(self.crew(npc.ship)),
+            target_strength: npc.hull.strength as i32,
+            derelict: self.govts.derelict(npc.govt),
+            fleet_room: self.pilot.escorts.len() < MAX_ESCORTS,
+        }
+    }
+
+    /// What is on board the ship being boarded, while the plunder dialog
+    /// is open: none once the boarding is over, or a capture awaits its
+    /// assignment.
+    #[must_use]
+    pub fn boarding(&self) -> Option<PlunderView> {
+        self.aboard
+            .filter(|aboard| !aboard.captured)
+            .map(|aboard| aboard.view())
+    }
+
+    /// Presses `take` in the plunder dialog, and gives what it did (see
+    /// [`board`](crate::board)): a press whose value is not on board, or
+    /// with no boarding under way, does nothing. Any press but Abort right
+    /// after a take first rolls the self-destruct on `chance`; a capture
+    /// is rolled as `rule` says.
+    pub fn plunder(
+        &mut self,
+        take: Take,
+        rule: &dyn BoardingRule,
+        chance: &mut dyn Chance,
+    ) -> Taken {
+        let Some(mut aboard) = self.aboard.filter(|aboard| !aboard.captured) else {
+            return Taken::Nothing;
+        };
+        if take == Take::Abort || !self.npcs().iter().any(|npc| npc.id == aboard.npc) {
+            self.aboard = None;
+            return Taken::Aborted;
+        }
+        if !aboard.view().offers(take) {
+            return Taken::Nothing;
+        }
+        let plunder = &mut aboard.plunder;
+        if std::mem::take(&mut plunder.armed)
+            && chance.below(SELF_DESTRUCT_ROLL) <= plunder.threshold
+        {
+            self.self_destruct(aboard.npc);
+            return Taken::Tripped;
+        }
+        let (taken, growth) = match take {
+            Take::Cargo => {
+                let Some((good, tons)) = plunder.cargo.take() else {
+                    return Taken::Nothing;
+                };
+                let held: u32 = self.pilot.cargo.values().sum();
+                let stored = tons.min(self.stats.capacity.saturating_sub(held));
+                if stored > 0 {
+                    *self.pilot.cargo.entry(good).or_default() += stored;
+                }
+                (Taken::Cargo { good, stored }, CARGO_GROWTH)
+            }
+            Take::Credits => {
+                let credits = std::mem::take(&mut plunder.credits);
+                self.pilot.cash = self.pilot.cash.saturating_add(credits);
+                (Taken::Credits(credits), CREDITS_GROWTH)
+            }
+            Take::Ammo => {
+                let Some((outfit, rounds)) = plunder.ammo.take() else {
+                    return Taken::Nothing;
+                };
+                let count = self.take_ammo(outfit, rounds);
+                (Taken::Ammo { outfit, count }, AMMO_GROWTH)
+            }
+            Take::Energy => {
+                let offered = std::mem::take(&mut plunder.fuel);
+                let fuel = &mut self.pilot.reserves.fuel;
+                let stored = (offered as f32).min((fuel.max - fuel.now).max(0.0));
+                fuel.now += stored;
+                let stored = stored as u32;
+                (Taken::Energy { offered, stored }, ENERGY_GROWTH)
+            }
+            Take::Capture => return self.capture(aboard, rule, chance),
+            Take::Abort => return Taken::Nothing,
+        };
+        plunder.threshold = (f64::from(plunder.threshold) * growth) as u32;
+        plunder.armed = true;
+        self.aboard = Some(aboard);
+        taken
+    }
+
+    /// Takes up to `rounds` of ammunition outfit `outfit`, one at a time
+    /// while the free mass covers it and it is below its `Max`, and gives
+    /// how many; the ship is refitted with them.
+    fn take_ammo(&mut self, outfit: OutfitId, rounds: u32) -> u32 {
+        let Some(record) = self
+            .outfits
+            .iter()
+            .find(|record| record.id == outfit)
+            .cloned()
+        else {
+            return 0;
+        };
+        let unit = outfitter::unit_mass(&record, self.fields.mass);
+        let mut count = 0;
+        while count < rounds
+            && i32::from(self.pilot.owned(outfit)) < i32::from(record.max)
+            && outfitter::free_mass(
+                self.fields,
+                &self.defaults,
+                &self.pilot.outfits,
+                &self.outfits,
+            ) >= unit
+        {
+            *self.pilot.outfits.entry(outfit).or_default() += 1;
+            count += 1;
+        }
+        self.refit(true);
+        count
+    }
+
+    /// Rolls the capture of the ship `aboard` boards, at its odds as
+    /// `rule` says on `chance`, and gives what came of it.
+    fn capture(
+        &mut self,
+        mut aboard: Aboard,
+        rule: &dyn BoardingRule,
+        chance: &mut dyn Chance,
+    ) -> Taken {
+        if !rule.captures(aboard.plunder.odds, chance) {
+            self.aboard = None;
+            return Taken::CaptureFailed;
+        }
+        if chance.below(CAPTURE_TRIP) == 0 {
+            self.self_destruct(aboard.npc);
+            return Taken::Tripped;
+        }
+        if self.pilot.escorts.len() >= MAX_ESCORTS {
+            self.aboard = Some(aboard);
+            return Taken::FleetFull;
+        }
+        if self.crew(self.pilot.ship) > 0 {
+            aboard.captured = true;
+            self.aboard = Some(aboard);
+            return Taken::Captured;
+        }
+        self.aboard = None;
+        self.join_fleet(aboard.npc);
+        Taken::Escorted
+    }
+
+    /// Trips the self-destruct of NPC `id`: its shield and armour are
+    /// gone, so the fight breaks it up, and the boarding is over.
+    fn self_destruct(&mut self, id: NpcId) {
+        for npc in self.traffic.npcs_mut() {
+            if npc.id == id {
+                npc.reserves.shield.now = 0.0;
+                npc.reserves.armor.now = 0.0;
+            }
+        }
+        self.aboard = None;
+    }
+
+    /// NPC `id` joins the fleet, its armour at half its most, and leaves
+    /// the system; a save is due.
+    fn join_fleet(&mut self, id: NpcId) {
+        let Some(npc) = self.npcs().iter().find(|npc| npc.id == id).cloned() else {
+            return;
+        };
+        let mut reserves = npc.reserves;
+        reserves.armor.now = reserves.armor.max * ESCORT_ARMOR_SHARE;
+        self.pilot.escorts.push(Escort {
+            ship: npc.ship,
+            reserves,
+        });
+        self.leave(id);
+        self.save_due = true;
+    }
+
+    /// NPC `id` leaves the system: every other NPC after it lets it go,
+    /// and so does the player.
+    fn leave(&mut self, id: NpcId) {
+        self.drop_quarry(id);
+        self.traffic.remove(id);
+        self.clear_lost_target();
+    }
+
+    /// Assigns the ship captured, as `choice` says, and gives what it
+    /// did: none when no capture awaits its assignment (see
+    /// [`board`](crate::board)). "Use As Escort" adds it to the fleet;
+    /// "Use As My Ship" swaps the player into it, the old ship joining the
+    /// fleet, its fuel drawn on `chance`, unless no ship slot is free in
+    /// the system for the old ship, when the prize is lost and nothing
+    /// else changes. Either change makes a save due.
+    pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
+        let aboard = self.aboard.filter(|aboard| aboard.captured)?;
+        self.aboard = None;
+        let npc = self
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == aboard.npc)
+            .cloned()?;
+        if choice == Assignment::Escort {
+            self.join_fleet(npc.id);
+            return Some(Assigned::Escort);
+        }
+        let record = self.ship_record(npc.ship).cloned();
+        let Some(record) = record.filter(|_| self.npcs().len() + 1 < MAX_SHIPS_IN_SYSTEM) else {
+            return Some(Assigned::Abandoned);
+        };
+        let stock = ShipStats::new(self.fields, &outfit_mods(&self.defaults, &self.outfits));
+        self.pilot.escorts.push(Escort {
+            ship: self.pilot.ship,
+            reserves: stock.full(),
+        });
+        let defaults = pilot::tally(record.defaults.iter().copied());
+        let records = &self.outfits;
+        self.pilot.outfits.retain(|id, _| {
+            records
+                .iter()
+                .any(|record| record.id == *id && record.flags & OutfitFlags::PERSISTENT != 0)
+        });
+        for (&id, &count) in &defaults {
+            let owned = self.pilot.outfits.entry(id).or_default();
+            *owned = owned.saturating_add(count);
+        }
+        self.pilot.ship = record.id;
+        self.fields = record.fields;
+        self.defaults = defaults;
+        self.player = npc.state;
+        let share = if self.arsenal.hull(record.id).tough {
+            TOUGH_TAKEOVER_ARMOR_SHARE
+        } else {
+            TAKEOVER_ARMOR_SHARE
+        };
+        let reserves = &mut self.pilot.reserves;
+        reserves.shield.now = 0.0;
+        reserves.armor.now =
+            f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
+        reserves.fuel.now = u32::try_from(record.fields.fuel)
+            .ok()
+            .filter(|&fuel| fuel > 0)
+            .map_or(0.0, |fuel| chance.below(fuel) as f32);
+        self.refit(false);
+        for other in self.traffic.npcs_mut() {
+            if other.leader == Some(npc.id) {
+                other.leader = None;
+            }
+        }
+        self.leave(npc.id);
+        self.save_due = true;
+        Some(Assigned::MyShip)
+    }
+}
+
+/// A boarding under way: the NPC boarded, its ship class, the plunder
+/// rolled for it, and whether a capture awaits its assignment.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Aboard {
+    npc: NpcId,
+    ship: ShipId,
+    plunder: Plunder,
+    captured: bool,
+}
+
+impl Aboard {
+    /// What is on board, as the plunder dialog shows it.
+    fn view(&self) -> PlunderView {
+        let plunder = &self.plunder;
+        PlunderView {
+            npc: self.npc,
+            ship: self.ship,
+            credits: plunder.credits,
+            cargo: plunder.cargo,
+            ammo: plunder.ammo,
+            fuel: plunder.fuel,
+            odds: plunder.odds,
+        }
     }
 }
 
@@ -3228,6 +3672,7 @@ mod tests {
                     ai_type,
                     govt: Some(GovtId(140)),
                     ships: vec![(ShipId(129), 1)],
+                    booty: 0,
                 },
             )],
             ship_records: vec![ship(129, FAST)],
@@ -4320,6 +4765,7 @@ mod tests {
                     ai_type: 1,
                     govt: Some(GovtId(140)),
                     ships: vec![(ShipId(130), 1)],
+                    booty: 0,
                 },
             )],
             ..shipbuying()
@@ -5039,6 +5485,7 @@ mod tests {
                             ai_type,
                             govt: Some(GovtId(govt)),
                             ships: vec![(ShipId(ship), 1)],
+                            booty: 0,
                         },
                     )
                 })
@@ -5263,5 +5710,888 @@ mod tests {
         };
         assert!(!shot_down(&mut session, &catalog, &at_police));
         assert!(session.npcs()[1].reserves.shield.now < 30.0, "it hit");
+    }
+
+    // Boarding and capture.
+
+    use crate::board::{
+        Assigned, Assignment, BoardRefusal, Boarding, MAX_ESCORTS, NovaBoarding, PlunderView, Take,
+        Taken,
+    };
+    use crate::pilot::Escort;
+
+    /// [`skirmish`]'s traders (140, `BoardPenalty` 5), whose wimpy trader
+    /// ship 129 (crew 3, `Cost` 150,000, 20 holds, 300 fuel, strength 10)
+    /// carries food and money (`Booty` 0x0041), and the police allied with
+    /// them (141) flying interceptor 130; the player's ship 128 (strength
+    /// 100, 20 holds, 300 fuel, 30 free mass) has a crew of 10.
+    fn boardable() -> FakePilotCatalog {
+        let mut catalog = skirmish(&[(1, 140, 129), (4, 141, 130)], Some(140));
+        catalog.dudes[0].1.booty = 0x0041;
+        catalog.govts[0].penalties.board = 5;
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(129) {
+                record.cost = 150_000;
+            }
+        }
+        catalog.ship_records.push(ShipRecord {
+            crew: 10,
+            ..ship(128, FAST)
+        });
+        catalog
+    }
+
+    /// `catalog`'s session with the trader (NPC 0) disabled (armour 10 of
+    /// 45) under the player at the centre, both at rest facing up, and
+    /// targeted, and the police (NPC 1) 740 below.
+    fn alongside(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.populate(catalog, &mut placing(2, &[(0, 0, 0, 0), (1, 0, 740, 0)]));
+        let trader = &mut session.traffic.npcs_mut()[0];
+        assert_eq!(trader.state.position, Vec2::ZERO);
+        trader.condition = Condition::Disabled;
+        trader.reserves.armor.now = 10.0;
+        session.target = Some(NpcId(0));
+        session
+    }
+
+    /// The boarding's draws: the threshold 15, credits 3.75 + 2 thousand,
+    /// food, 10 + 3 tons, 170 energy and no jitter.
+    const BOARD_DRAWS: [u32; 6] = [0, 2, 0, 3, 17, 5];
+
+    /// What [`BOARD_DRAWS`] put on board the trader: odds of 10 / 30
+    /// (33), and 10 for the player's strength over five times the
+    /// trader's.
+    const ON_BOARD: PlunderView = PlunderView {
+        npc: NpcId(0),
+        ship: ShipId(129),
+        credits: 5750,
+        cargo: Some((Good::Commodity(0), 13)),
+        ammo: None,
+        fuel: 170,
+        odds: 43,
+    };
+
+    /// Boards by `law` and Nova's boarding rules, on [`BOARD_DRAWS`].
+    fn board_by(session: &mut Session, law: &dyn LegalCode) -> Result<Boarding, BoardRefusal> {
+        session.board(law, &NovaBoarding::default(), &mut Draws::of(&BOARD_DRAWS))
+    }
+
+    /// [`alongside`], boarded by Nova's law.
+    fn aboard(catalog: &FakePilotCatalog) -> Session {
+        let mut session = alongside(catalog);
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Opened(ON_BOARD))
+        );
+        session
+    }
+
+    fn take(session: &mut Session, take: Take, draws: &[u32]) -> (Taken, Vec<u32>) {
+        let mut chance = Draws::of(draws);
+        let taken = session.plunder(take, &NovaBoarding::default(), &mut chance);
+        (taken, chance.asked)
+    }
+
+    #[test]
+    fn boarding_matches_the_targets_velocity_raises_the_crime_once_and_opens_its_plunder() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.traffic.npcs_mut()[0].state.velocity = Vec2::new(0.3, -0.2);
+        let witness = Witness::default();
+        assert_eq!(
+            board_by(&mut session, &witness),
+            Ok(Boarding::Opened(ON_BOARD))
+        );
+        assert_eq!(*witness.seen.borrow(), [(Crime::Board, Some(GovtId(140)))]);
+        assert_eq!(session.player().velocity, Vec2::new(0.3, -0.2));
+        assert!(session.npcs()[0].boarded);
+        assert!(!session.npcs()[1].boarded);
+        assert_eq!(session.boarding(), Some(ON_BOARD));
+        assert!(!session.take_save_due(), "nothing to save yet");
+    }
+
+    #[test]
+    fn a_refused_boarding_changes_nothing() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.traffic.npcs_mut()[0].condition = Condition::Intact;
+        let witness = Witness::default();
+        assert_eq!(
+            board_by(&mut session, &witness),
+            Err(BoardRefusal::CantBoard)
+        );
+        let mut session = alongside(&catalog);
+        session.player.velocity = Vec2::new(0.0, 0.6);
+        assert_eq!(board_by(&mut session, &witness), Err(BoardRefusal::TooFast));
+        assert_eq!(session.player().velocity, Vec2::new(0.0, 0.6));
+        assert_eq!(*witness.seen.borrow(), [], "no crime");
+        assert!(!session.npcs()[0].boarded);
+        assert_eq!(session.boarding(), None);
+        assert_eq!(session.strikes, [], "no one is called");
+        session.target = None;
+        assert_eq!(
+            board_by(&mut session, &witness),
+            Err(BoardRefusal::NoTarget)
+        );
+    }
+
+    #[test]
+    fn a_ship_with_no_crew_cannot_be_boarded() {
+        let mut catalog = boardable();
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(129) {
+                record.crew = 0;
+            }
+        }
+        let mut session = alongside(&catalog);
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::CantBoard)
+        );
+    }
+
+    #[test]
+    fn nothing_is_boarded_while_landed_or_jumping() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.jumping = Some(SystemId(131));
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::NoTarget)
+        );
+        session.jumping = None;
+        session.landed = Some(StellarId(128));
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::NoTarget)
+        );
+    }
+
+    #[test]
+    fn a_ship_boarded_cannot_be_boarded_again() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        assert_eq!(
+            take(&mut session, Take::Abort, &[]),
+            (Taken::Aborted, vec![])
+        );
+        assert_eq!(session.boarding(), None);
+        let witness = Witness::default();
+        assert_eq!(
+            board_by(&mut session, &witness),
+            Err(BoardRefusal::CantBoard)
+        );
+        assert_eq!(*witness.seen.borrow(), []);
+    }
+
+    #[test]
+    fn boarding_brings_the_police_as_an_attack_does() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        assert_eq!(
+            session.strikes,
+            [Strike {
+                ship: ShipRef::Npc(NpcId(0)),
+                by: ShipRef::Player,
+                damage: 0.0,
+                downed: None,
+            }]
+        );
+        session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);
+        assert_eq!(session.npcs()[1].goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(session.npcs()[1].target, Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn boarding_a_ship_turns_every_other_ship_off_it() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let hunter = &mut session.traffic.npcs_mut()[1];
+        hunter.target = Some(ShipRef::Npc(NpcId(0)));
+        hunter.goal = Goal::Attack(ShipRef::Npc(NpcId(0)));
+        hunter.provoked = 5.0;
+        board_by(&mut session, &NovaLaw::default()).expect("boards");
+        let hunter = &session.npcs()[1];
+        assert_eq!(
+            (hunter.target, hunter.goal, hunter.provoked),
+            (None, Goal::Idle, 0.0)
+        );
+    }
+
+    #[test]
+    fn by_the_bible_an_empty_booty_repels_the_boarders_but_the_crime_stands() {
+        let mut catalog = boardable();
+        catalog.dudes[0].1.booty = 0;
+        let bible = NovaBoarding {
+            empty_booty: RuleSource::Bible,
+            ..NovaBoarding::default()
+        };
+        let mut session = alongside(&catalog);
+        let witness = Witness::default();
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            session.board(&witness, &bible, &mut chance),
+            Ok(Boarding::Repelled)
+        );
+        assert_eq!(*witness.seen.borrow(), [(Crime::Board, Some(GovtId(140)))]);
+        assert!(chance.asked.is_empty(), "no plunder rolled");
+        assert_eq!(session.boarding(), None);
+        assert!(session.npcs()[0].boarded);
+        assert_eq!(session.strikes.len(), 1, "the police still come");
+        // By the engine, the dialog opens with no credits and no cargo.
+        let mut session = alongside(&catalog);
+        let opened = board_by(&mut session, &NovaLaw::default());
+        let Ok(Boarding::Opened(view)) = opened else {
+            panic!("{opened:?}");
+        };
+        assert_eq!((view.credits, view.cargo), (0, None));
+    }
+
+    #[test]
+    fn boarding_a_trader_by_novas_law_costs_its_board_penalty_with_it_and_its_allies() {
+        let catalog = boardable();
+        let session = aboard(&catalog);
+        assert_eq!(
+            [140, 141, 142, 143].map(|govt| session.pilot().legal_record(GovtId(govt))),
+            [-5, -5, 0, 0]
+        );
+    }
+
+    #[test]
+    fn the_capture_odds_count_the_fleet_and_the_marines() {
+        let mut catalog = boardable();
+        catalog.outfits.push(outfit(320, &[(25, 1)]));
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(130) {
+                record.crew = 30;
+                record.inherent_ai = 4;
+            }
+            if record.id == ShipId(131) {
+                record.crew = 300;
+            }
+        }
+        let mut session = alongside(&catalog);
+        session.pilot.outfits.insert(OutfitId(320), 2);
+        let escort = |ship| Escort {
+            ship: ShipId(ship),
+            reserves: Reserves::default(),
+        };
+        session.pilot.escorts = vec![escort(130), escort(130), escort(131)];
+        // Crew 10, 3 from each interceptor escort (ship 130), none from
+        // the trader escort (131, `InherentAI` 1) and 2 marines: 18
+        // against 3 is 60, and 10 for the strength.
+        let opened = board_by(&mut session, &NovaLaw::default());
+        let Ok(Boarding::Opened(view)) = opened else {
+            panic!("{opened:?}");
+        };
+        assert_eq!(view.odds, 70);
+        // A derelict government, or a full fleet, gives none.
+        let mut session = alongside(&catalog);
+        session.pilot.escorts = vec![
+            Escort {
+                ship: ShipId(130),
+                reserves: Reserves::default(),
+            };
+            MAX_ESCORTS
+        ];
+        let opened = board_by(&mut session, &NovaLaw::default());
+        assert!(matches!(
+            opened,
+            Ok(Boarding::Opened(PlunderView { odds: 0, .. }))
+        ));
+        let mut catalog = boardable();
+        catalog.govts[0].flags = crate::govt::DERELICT;
+        let mut session = alongside(&catalog);
+        let opened = board_by(&mut session, &NovaLaw::default());
+        assert!(matches!(
+            opened,
+            Ok(Boarding::Opened(PlunderView { odds: 0, .. }))
+        ));
+    }
+
+    // The plunder.
+
+    #[test]
+    fn the_cargo_is_stored_up_to_the_free_space_once() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        assert_eq!(
+            take(&mut session, Take::Cargo, &[]),
+            (
+                Taken::Cargo {
+                    good: Good::Commodity(0),
+                    stored: 13
+                },
+                vec![]
+            ),
+            "the first take is never rolled"
+        );
+        assert_eq!(session.pilot().held(Good::Commodity(0)), 13);
+        assert_eq!(session.boarding().map(|view| view.cargo), Some(None));
+        assert_eq!(
+            take(&mut session, Take::Cargo, &[]),
+            (Taken::Nothing, vec![]),
+            "taken once; an ignored press rolls nothing"
+        );
+        let mut session = aboard(&catalog);
+        session.pilot.cargo.insert(Good::Commodity(3), 10);
+        assert_eq!(
+            take(&mut session, Take::Cargo, &[]).0,
+            Taken::Cargo {
+                good: Good::Commodity(0),
+                stored: 10
+            }
+        );
+        let mut session = aboard(&catalog);
+        session.pilot.cargo.insert(Good::Commodity(3), 20);
+        assert_eq!(
+            take(&mut session, Take::Cargo, &[]).0,
+            Taken::Cargo {
+                good: Good::Commodity(0),
+                stored: 0
+            }
+        );
+        assert_eq!(session.pilot().held(Good::Commodity(0)), 0);
+        assert_eq!(session.boarding().map(|view| view.cargo), Some(None));
+    }
+
+    #[test]
+    fn the_credits_are_added_to_the_cash() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        session.pilot.cash = 100;
+        assert_eq!(
+            take(&mut session, Take::Credits, &[]).0,
+            Taken::Credits(5750)
+        );
+        assert_eq!(session.pilot().cash(), 5850);
+        assert_eq!(session.boarding().map(|view| view.credits), Some(0));
+        assert_eq!(take(&mut session, Take::Credits, &[]).0, Taken::Nothing);
+        assert_eq!(session.pilot().cash(), 5850);
+    }
+
+    #[test]
+    fn the_energy_fills_the_tank_up_to_its_room() {
+        let catalog = boardable();
+        for (now, stored) in [(300.0, 0), (200.0, 100), (0.0, 170)] {
+            let mut session = aboard(&catalog);
+            session.pilot.reserves.fuel.now = now;
+            assert_eq!(
+                take(&mut session, Take::Energy, &[]).0,
+                Taken::Energy {
+                    offered: 170,
+                    stored
+                },
+                "{now}"
+            );
+            assert_eq!(session.reserves().fuel.now, now + stored as f32);
+            assert_eq!(session.boarding().map(|view| view.fuel), Some(0));
+        }
+    }
+
+    /// [`boardable`] with rockets (weapon 140, firing rounds of their own)
+    /// on both ships, the trader holding 9 rounds, and ammunition outfit
+    /// 310 for them of `mass` and `max`.
+    fn ammo_aboard(mass: i16, max: i16) -> FakePilotCatalog {
+        let mut catalog = boardable();
+        catalog.weapons.push(secondary(140, 12));
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.weapons.push(StockWeapon {
+                    weapon: ROCKET,
+                    count: 1,
+                    ammo: 0,
+                });
+            }
+            if hull.id == ShipId(129) {
+                hull.weapons.push(StockWeapon {
+                    weapon: ROCKET,
+                    count: 1,
+                    ammo: 9,
+                });
+            }
+        }
+        catalog.outfits.push(OutfitRecord {
+            mass,
+            max,
+            ..outfit(310, &[(MOD_AMMO, 140)])
+        });
+        catalog
+    }
+
+    /// The ammunition boarding's draws: [`BOARD_DRAWS`] with the rockets
+    /// drawn before the energy.
+    const AMMO_DRAWS: [u32; 7] = [0, 2, 0, 3, 0, 17, 5];
+
+    fn ammo_session(catalog: &FakePilotCatalog) -> Session {
+        let mut session = alongside(catalog);
+        let opened = session.board(
+            &NovaLaw::default(),
+            &NovaBoarding::default(),
+            &mut Draws::of(&AMMO_DRAWS),
+        );
+        assert_eq!(
+            opened,
+            Ok(Boarding::Opened(PlunderView {
+                ammo: Some((OutfitId(310), 9)),
+                ..ON_BOARD
+            }))
+        );
+        session
+    }
+
+    #[test]
+    fn the_ammo_is_taken_an_outfit_at_a_time_up_to_the_rounds_the_mass_and_the_max() {
+        let session = ammo_session(&ammo_aboard(1, 20));
+        let mut by_rounds = session.clone();
+        assert_eq!(by_rounds.secondary_rounds(), Some(0));
+        assert_eq!(
+            take(&mut by_rounds, Take::Ammo, &[]).0,
+            Taken::Ammo {
+                outfit: OutfitId(310),
+                count: 9
+            }
+        );
+        assert_eq!(by_rounds.pilot().owned(OutfitId(310)), 9);
+        assert_eq!(by_rounds.secondary_rounds(), Some(9), "refitted");
+        assert_eq!(by_rounds.boarding().map(|view| view.ammo), Some(None));
+        // 30 tons free: seven of 4 tons, not eight.
+        let mut by_mass = ammo_session(&ammo_aboard(4, 20));
+        assert_eq!(
+            take(&mut by_mass, Take::Ammo, &[]).0,
+            Taken::Ammo {
+                outfit: OutfitId(310),
+                count: 7
+            }
+        );
+        // Up to a `Max` of 12 with 5 owned.
+        let mut by_max = ammo_session(&ammo_aboard(1, 12));
+        by_max.pilot.outfits.insert(OutfitId(310), 5);
+        assert_eq!(
+            take(&mut by_max, Take::Ammo, &[]).0,
+            Taken::Ammo {
+                outfit: OutfitId(310),
+                count: 7
+            }
+        );
+        assert_eq!(by_max.pilot().owned(OutfitId(310)), 12);
+        let mut full = ammo_session(&ammo_aboard(1, 12));
+        full.pilot.outfits.insert(OutfitId(310), 12);
+        assert_eq!(
+            take(&mut full, Take::Ammo, &[]).0,
+            Taken::Ammo {
+                outfit: OutfitId(310),
+                count: 0
+            }
+        );
+        assert_eq!(full.boarding().map(|view| view.ammo), Some(None));
+    }
+
+    #[test]
+    fn each_take_grows_the_self_destruct_threshold_truncated() {
+        let catalog = ammo_aboard(1, 20);
+        let mut session = ammo_session(&catalog);
+        let threshold = |session: &Session| session.aboard.map(|aboard| aboard.plunder.threshold);
+        assert_eq!(threshold(&session), Some(15));
+        for (press, after) in [
+            (Take::Cargo, 30),
+            (Take::Credits, 37),
+            (Take::Energy, 55),
+            (Take::Ammo, 110),
+        ] {
+            take(&mut session, press, &[99]);
+            assert_eq!(threshold(&session), Some(after), "{press:?}");
+        }
+    }
+
+    #[test]
+    fn the_press_after_a_take_rolls_the_self_destruct_before_it_is_handled() {
+        let catalog = boardable();
+        for (draw, taken) in [(31, Taken::Credits(5750)), (30, Taken::Tripped)] {
+            let mut session = aboard(&catalog);
+            take(&mut session, Take::Cargo, &[]);
+            let cash = session.pilot().cash();
+            let (outcome, asked) = take(&mut session, Take::Credits, &[draw]);
+            assert_eq!(
+                (outcome, asked),
+                (taken, vec![100]),
+                "threshold 30, drew {draw}"
+            );
+            if taken == Taken::Tripped {
+                assert_eq!(session.pilot().cash(), cash, "not handled");
+                assert_eq!(session.boarding(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn abort_never_rolls() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        take(&mut session, Take::Cargo, &[]);
+        assert_eq!(
+            take(&mut session, Take::Abort, &[0]),
+            (Taken::Aborted, vec![])
+        );
+        assert_eq!(session.boarding(), None);
+        assert_eq!(
+            take(&mut session, Take::Credits, &[]),
+            (Taken::Nothing, vec![]),
+            "no boarding under way"
+        );
+    }
+
+    #[test]
+    fn a_tripped_self_destruct_breaks_the_ship_up_through_the_fight_and_is_no_crime() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let witness = Witness::default();
+        board_by(&mut session, &witness).expect("boards");
+        take(&mut session, Take::Cargo, &[]);
+        assert_eq!(take(&mut session, Take::Credits, &[0]).0, Taken::Tripped);
+        let trader = &session.npcs()[0];
+        assert_eq!(
+            (trader.reserves.shield.now, trader.reserves.armor.now),
+            (0.0, 0.0)
+        );
+        let rules = Rules {
+            law: &witness,
+            ..Rules::default()
+        };
+        session.tick_combat(rules, &mut NeverFires);
+        assert!(
+            session
+                .take_combat_events()
+                .iter()
+                .any(|event| matches!(event, CombatEvent::BreakingUp { ship, .. } if *ship == ShipRef::Npc(NpcId(0)))),
+            "it breaks up"
+        );
+        assert_eq!(
+            *witness.seen.borrow(),
+            [(Crime::Board, Some(GovtId(140)))],
+            "the boarding alone"
+        );
+    }
+
+    // Capture.
+
+    #[test]
+    fn a_failed_capture_ends_the_boarding_and_leaves_the_ship_boarded() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        assert_eq!(
+            take(&mut session, Take::Capture, &[44]),
+            (Taken::CaptureFailed, vec![100])
+        );
+        assert_eq!(session.boarding(), None);
+        assert_eq!(session.npcs().len(), 2, "still there");
+        assert!(session.npcs()[0].boarded);
+        assert_eq!(session.pilot().escorts(), []);
+    }
+
+    #[test]
+    fn a_capture_at_the_odds_trips_on_a_tenth() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        assert_eq!(
+            take(&mut session, Take::Capture, &[43, 0]),
+            (Taken::Tripped, vec![100, 10])
+        );
+        let trader = &session.npcs()[0];
+        assert_eq!(trader.reserves.armor.now, 0.0);
+        assert_eq!(session.boarding(), None);
+    }
+
+    #[test]
+    fn a_capture_with_the_fleet_full_changes_nothing_and_the_boarding_goes_on() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        session.pilot.escorts = vec![
+            Escort {
+                ship: ShipId(130),
+                reserves: Reserves::default(),
+            };
+            MAX_ESCORTS
+        ];
+        assert_eq!(
+            take(&mut session, Take::Capture, &[43, 1]).0,
+            Taken::FleetFull
+        );
+        assert_eq!(session.boarding(), Some(ON_BOARD));
+        assert_eq!(session.pilot().escorts().len(), MAX_ESCORTS);
+    }
+
+    #[test]
+    fn a_capture_awaits_its_assignment_and_ignores_any_other_press() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        assert_eq!(
+            take(&mut session, Take::Capture, &[43, 1]).0,
+            Taken::Captured
+        );
+        assert_eq!(
+            take(&mut session, Take::Credits, &[]),
+            (Taken::Nothing, vec![])
+        );
+        assert_eq!(
+            take(&mut session, Take::Abort, &[]),
+            (Taken::Nothing, vec![])
+        );
+        assert_eq!(session.pilot().escorts(), []);
+        assert!(!session.take_save_due(), "nothing changed yet");
+    }
+
+    /// The trader's reserves once the boarding set its armour at 10.
+    fn trader_reserves() -> Reserves {
+        Reserves {
+            armor: Gauge {
+                now: 10.0,
+                max: 45.0,
+            },
+            ..Reserves::full(30.0, 45.0, 300.0)
+        }
+    }
+
+    /// The trader as an escort: armour at half its most.
+    fn trader_escort() -> Escort {
+        Escort {
+            ship: ShipId(129),
+            reserves: Reserves {
+                armor: Gauge {
+                    now: 22.5,
+                    max: 45.0,
+                },
+                ..trader_reserves()
+            },
+        }
+    }
+
+    #[test]
+    fn a_crewless_player_captures_straight_into_its_fleet() {
+        let mut catalog = boardable();
+        if let Some(record) = catalog
+            .ship_records
+            .iter_mut()
+            .find(|r| r.id == ShipId(128))
+        {
+            record.crew = 0;
+        }
+        let mut session = alongside(&catalog);
+        let opened = board_by(&mut session, &NovaLaw::default());
+        assert_eq!(
+            opened,
+            Ok(Boarding::Opened(PlunderView {
+                odds: 10,
+                ..ON_BOARD
+            })),
+            "none for the crew, 10 for the strength"
+        );
+        assert_eq!(
+            take(&mut session, Take::Capture, &[10, 1]).0,
+            Taken::Escorted
+        );
+        assert_eq!(session.pilot().escorts(), [trader_escort()]);
+        assert_eq!(session.npcs().len(), 1, "it left the system");
+        assert_eq!(session.target(), None);
+        assert_eq!(session.boarding(), None);
+        assert!(session.take_save_due());
+    }
+
+    /// [`aboard`], captured and awaiting its assignment.
+    fn captured(catalog: &FakePilotCatalog) -> Session {
+        let mut session = aboard(catalog);
+        assert_eq!(
+            take(&mut session, Take::Capture, &[43, 1]).0,
+            Taken::Captured
+        );
+        session
+    }
+
+    #[test]
+    fn use_as_escort_adds_the_ship_to_the_fleet_at_half_its_armour() {
+        let catalog = boardable();
+        let mut session = captured(&catalog);
+        let records = session.pilot().legal_records().collect::<Vec<_>>();
+        session.take_save_due();
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::of(&[])),
+            Some(Assigned::Escort)
+        );
+        assert_eq!(session.pilot().escorts(), [trader_escort()]);
+        assert_eq!(
+            session.npcs().iter().map(|npc| npc.id).collect::<Vec<_>>(),
+            [NpcId(1)],
+            "the trader left"
+        );
+        assert_eq!(session.target(), None);
+        assert_eq!(session.boarding(), None);
+        assert_eq!(
+            session.pilot().legal_records().collect::<Vec<_>>(),
+            records,
+            "no crime"
+        );
+        assert!(session.take_save_due());
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::of(&[])),
+            None,
+            "nothing awaits"
+        );
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
+        assert_eq!(&saved, session.pilot());
+    }
+
+    /// [`boardable`] with outfits: 400 persistent, 401 not, and 402 the
+    /// trader's default item.
+    fn kitted() -> FakePilotCatalog {
+        let mut catalog = boardable();
+        catalog.outfits.extend([
+            OutfitRecord {
+                flags: OutfitFlags::PERSISTENT,
+                ..outfit(400, &[])
+            },
+            outfit(401, &[]),
+            outfit(402, &[]),
+        ]);
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(129) {
+                record.defaults = vec![(OutfitId(402), 1)];
+            }
+        }
+        catalog
+    }
+
+    #[test]
+    fn use_as_my_ship_swaps_the_player_into_the_captured_ship_and_keeps_the_old_one() {
+        let catalog = kitted();
+        let mut session = alongside(&catalog);
+        session.pilot.outfits = BTreeMap::from([(OutfitId(400), 1), (OutfitId(401), 2)]);
+        session.pilot.cargo.insert(Good::Commodity(2), 4);
+        session.pilot.cash = 777;
+        let trader = &mut session.traffic.npcs_mut()[0];
+        trader.state.position = Vec2::new(5.0, -3.0);
+        trader.state.velocity = Vec2::new(0.25, 0.0);
+        trader.state.heading = 180.0;
+        session.traffic.npcs_mut()[1].leader = Some(NpcId(0));
+        board_by(&mut session, &NovaLaw::default()).expect("boards");
+        // Cargo first: the hold holds 20, 4 of them used.
+        take(&mut session, Take::Cargo, &[]);
+        assert_eq!(
+            take(&mut session, Take::Capture, &[99, 0, 1]).0,
+            Taken::Captured
+        );
+        let held = session.pilot().cargo().collect::<Vec<_>>();
+        let mut chance = Draws::of(&[123]);
+        assert_eq!(
+            session.assign(Assignment::MyShip, &mut chance),
+            Some(Assigned::MyShip)
+        );
+        assert_eq!(chance.asked, [300], "the fuel drawn below its Fuel");
+        assert_eq!(session.ship(), ShipId(129));
+        assert_eq!(
+            *session.player(),
+            ShipState {
+                position: Vec2::new(5.0, -3.0),
+                velocity: Vec2::new(0.25, 0.0),
+                heading: 180.0,
+            }
+        );
+        let reserves = session.reserves();
+        assert_eq!(
+            reserves.shield,
+            Gauge {
+                now: 0.0,
+                max: 30.0
+            }
+        );
+        assert!((reserves.armor.now - 16.9985).abs() < 1e-4, "{reserves:?}");
+        assert_eq!(reserves.armor.max, 45.0);
+        assert_eq!(
+            reserves.fuel,
+            Gauge {
+                now: 123.0,
+                max: 300.0
+            }
+        );
+        assert_eq!(
+            session.pilot().outfits().collect::<Vec<_>>(),
+            [(OutfitId(400), 1), (OutfitId(402), 1)],
+            "the persistent kept, the rest gone, the new ship's default items fitted"
+        );
+        assert_eq!(session.pilot().cargo().collect::<Vec<_>>(), held);
+        assert_eq!(session.pilot().cash(), 777);
+        assert_eq!(session.stats(), ShipStats::new(FAST, &[]));
+        assert_eq!(session.hull(), session.arsenal.hull(ShipId(129)));
+        assert_eq!(
+            session.pilot().escorts(),
+            [Escort {
+                ship: ShipId(128),
+                reserves: Reserves::full(300.0, 450.0, 300.0),
+            }],
+            "the old ship, stock and full"
+        );
+        assert_eq!(session.npcs().len(), 1, "the captured ship left");
+        assert_eq!(session.npcs()[0].leader, None, "its escort let go");
+        assert_eq!(session.player_condition(), Condition::Intact);
+        assert_eq!(session.boarding(), None);
+        assert!(session.take_save_due());
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
+        assert_eq!(&saved, session.pilot());
+    }
+
+    #[test]
+    fn a_tough_ship_taken_over_holds_a_tenth_of_its_armour_and_2() {
+        let mut catalog = boardable();
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(129) {
+                hull.flags = crate::combat::hull::TOUGH;
+            }
+        }
+        let mut session = alongside(&catalog);
+        session.traffic.npcs_mut()[0].hull.tough = true;
+        board_by(&mut session, &NovaLaw::default()).expect("boards");
+        take(&mut session, Take::Capture, &[43, 1]);
+        session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+        assert!((session.reserves().armor.now - 6.5).abs() < 1e-4);
+        assert_eq!(session.reserves().fuel.now, 0.0);
+    }
+
+    /// [`boardable`] with `others` police besides the trader in the
+    /// system.
+    fn crowded(others: usize) -> Session {
+        let mut catalog = boardable();
+        catalog.traffic[0].1.avg_ships = (others + 1) as i16;
+        let mut placed = vec![(0, 0, 0, 0)];
+        placed.extend(std::iter::repeat_n((1, 0, 740, 0), others));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut placing(2, &placed));
+        assert_eq!(session.npcs().len(), others + 1);
+        let trader = &mut session.traffic.npcs_mut()[0];
+        trader.condition = Condition::Disabled;
+        session.target = Some(NpcId(0));
+        board_by(&mut session, &NovaLaw::default()).expect("boards");
+        take(&mut session, Take::Capture, &[43, 1]);
+        session
+    }
+
+    #[test]
+    fn with_no_ship_slot_free_for_the_old_ship_the_swap_is_dropped() {
+        let mut full = crowded(62);
+        let pilot = full.pilot().clone();
+        assert_eq!(
+            full.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::Abandoned),
+            "63 NPCs and the player: no slot"
+        );
+        assert_eq!(full.pilot(), &pilot, "nothing changes");
+        assert_eq!(full.npcs().len(), 63);
+        assert_eq!(full.boarding(), None, "the prize is lost");
+        assert!(!full.take_save_due());
+        let mut roomy = crowded(61);
+        assert_eq!(
+            roomy.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::MyShip),
+            "62 NPCs and the player: one slot"
+        );
     }
 }

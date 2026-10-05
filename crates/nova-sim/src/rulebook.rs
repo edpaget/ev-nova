@@ -15,6 +15,9 @@
 //! | [`RuleKey`] | settings key | engine | Bible |
 //! |---|---|---|---|
 //! | [`CrimeGains`](RuleKey::CrimeGains) | `crime_gains` | a crime pleases every government not allied with the victim's ([`NovaLaw`](crate::NovaLaw)) | only the victim's enemies |
+//! | [`EmptyBooty`](RuleKey::EmptyBooty) | `empty_booty` | boarding a ship of `Booty` 0 opens the plunder dialog anyway ([`NovaBoarding`](crate::NovaBoarding)) | the player is repelled |
+//! | [`CrewlessCapture`](RuleKey::CrewlessCapture) | `crewless_capture` | a player of no crew still has odds of 1 or more ([`NovaBoarding`](crate::NovaBoarding)) | no odds: it cannot capture |
+//! | [`PiracyPolice`](RuleKey::PiracyPolice) | `piracy_police` | warships and interceptors answer the player's attack or boarding ([`NovaAi`](crate::NovaAi)) | interceptors only |
 //!
 //! # Adding a rule
 //!
@@ -29,9 +32,7 @@
 //!    make the decision there.
 //! 3. Test both readings, [`RuleSource::Engine`] and [`RuleSource::Bible`],
 //!    and that the rule follows its rulebook entry; extend this module's
-//!    key test to the new key. The second rule to join also drops the
-//!    `RuleKey::index` exclusion from `.cargo/mutants.toml`, which only
-//!    holds while there is one rule.
+//!    key test to the new key.
 //!
 //! At the edge of the program, every rule is built from the one rulebook
 //! the settings give (see `nova::rulebook`).
@@ -98,6 +99,19 @@ rule_keys! {
     /// victim's; by the Bible, only its enemies (see
     /// [`legal`](crate::legal)).
     CrimeGains => "crime_gains",
+    /// Boarding a ship whose `düde` `Booty` is 0: by the engine, the
+    /// plunder dialog opens anyway; by the Bible, the player is repelled
+    /// (see [`board`](crate::board)).
+    EmptyBooty => "empty_booty",
+    /// Capturing with a ship of no crew: by the engine, the odds are held
+    /// at 1 or more; by the Bible, it cannot capture (see
+    /// [`board`](crate::board)).
+    CrewlessCapture => "crewless_capture",
+    /// Which NPCs come to the help of a ship the player fires on or
+    /// boards: by the engine, warships and interceptors; by the Bible,
+    /// interceptors only, the "piracy police" (see
+    /// [`react`](crate::ai::react)).
+    PiracyPolice => "piracy_police",
 }
 
 impl RuleKey {
@@ -197,9 +211,35 @@ mod tests {
     }
 
     #[test]
+    fn an_override_on_one_rule_leaves_the_others_on_the_default() {
+        for rule in RuleKey::ALL {
+            let rulebook = Rulebook::default().with_override(rule, RuleSource::Bible);
+            for other in RuleKey::ALL {
+                let expected = if other == rule {
+                    RuleSource::Bible
+                } else {
+                    RuleSource::Engine
+                };
+                assert_eq!(rulebook.source_for(other), expected, "{rule:?}: {other:?}");
+            }
+        }
+    }
+
+    #[test]
     fn each_rule_has_a_settings_key_found_by_name() {
-        assert_eq!(RuleKey::ALL, [RuleKey::CrimeGains]);
+        assert_eq!(
+            RuleKey::ALL,
+            [
+                RuleKey::CrimeGains,
+                RuleKey::EmptyBooty,
+                RuleKey::CrewlessCapture,
+                RuleKey::PiracyPolice
+            ]
+        );
         assert_eq!(RuleKey::CrimeGains.key(), "crime_gains");
+        assert_eq!(RuleKey::EmptyBooty.key(), "empty_booty");
+        assert_eq!(RuleKey::CrewlessCapture.key(), "crewless_capture");
+        assert_eq!(RuleKey::PiracyPolice.key(), "piracy_police");
         for rule in RuleKey::ALL {
             assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
         }

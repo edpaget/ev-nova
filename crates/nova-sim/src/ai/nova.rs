@@ -1,8 +1,10 @@
 //! [`NovaAi`]: Nova's combat AI, routing each NPC by its AI type to the
 //! behaviour for it (`_AIDispatch` @0x8fb52 in the `EV Nova` executable),
 //! by default [`WimpyTrader`], [`BraveTrader`], [`Warship`] and
-//! [`Interceptor`]. `_PirateWarshipAI` (a warship of `Flags` 0x1000,
-//! which disables and plunders) waits for boarding.
+//! [`Interceptor`], each answering the player's attacks and boardings as
+//! the rulebook's [`RuleKey::PiracyPolice`] entry says
+//! ([`NovaAi::from_rulebook`]). `_PirateWarshipAI` (a warship of `Flags`
+//! 0x1000, which disables and plunders) waits for NPC boarding.
 
 use std::rc::Rc;
 
@@ -12,6 +14,7 @@ use crate::ai::{
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
+use crate::rulebook::{RuleKey, Rulebook};
 use crate::traffic::npc::{AiType, Npc};
 
 /// Nova's combat AI (see the module docs).
@@ -24,18 +27,26 @@ pub struct NovaAi {
 }
 
 impl Default for NovaAi {
-    /// Nova's four.
+    /// Nova's four, by the engine.
     fn default() -> Self {
-        Self {
-            wimpy: Rc::new(WimpyTrader),
-            brave: Rc::new(BraveTrader),
-            warship: Rc::new(Warship),
-            interceptor: Rc::new(Interceptor),
-        }
+        Self::from_rulebook(&Rulebook::default())
     }
 }
 
 impl NovaAi {
+    /// Nova's four as `rulebook` chooses: each answers the player's
+    /// attack or boarding as its [`RuleKey::PiracyPolice`] entry says.
+    #[must_use]
+    pub fn from_rulebook(rulebook: &Rulebook) -> Self {
+        let piracy_police = rulebook.source_for(RuleKey::PiracyPolice);
+        Self {
+            wimpy: Rc::new(WimpyTrader { piracy_police }),
+            brave: Rc::new(BraveTrader { piracy_police }),
+            warship: Rc::new(Warship { piracy_police }),
+            interceptor: Rc::new(Interceptor { piracy_police }),
+        }
+    }
+
     /// This AI with `behaviour` for NPCs of `ai_type`.
     #[must_use]
     pub fn with(mut self, ai_type: AiType, behaviour: Rc<dyn Behaviour>) -> Self {
@@ -89,6 +100,7 @@ mod tests {
 
     use super::*;
     use crate::catalog::WeaponId;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST};
     use crate::traffic::npc::NpcId;
@@ -204,9 +216,58 @@ mod tests {
         );
         assert_eq!(
             ai.decide(&npcs[1], &around, &mut Draws::of(&[])),
-            WimpyTrader.decide(&npcs[1], &around, &mut Draws::of(&[]))
+            WimpyTrader::default().decide(&npcs[1], &around, &mut Draws::of(&[]))
         );
         assert_eq!(*mark.asked.borrow(), [NpcId(1)]);
+    }
+
+    /// How each of a police warship and a police interceptor answers the
+    /// player's hit on a trader allied with the police, by `ai`.
+    fn police_answers(ai: &NovaAi) -> [Option<Goal>; 2] {
+        use crate::ai::fixture::{POLICE, TRADERS, govts, ship};
+        let govts = govts(0, 0);
+        let npcs = [
+            ship(1, TRADERS, AiType::WimpyTrader, 0.0, 0.0),
+            ship(2, POLICE, AiType::Warship, 500.0, 0.0),
+            ship(3, POLICE, AiType::Interceptor, 900.0, 0.0),
+        ];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&[], &npcs)
+        };
+        let hit = Strike {
+            ship: ShipRef::Npc(NpcId(1)),
+            by: ShipRef::Player,
+            damage: 0.0,
+            downed: None,
+        };
+        [&npcs[1], &npcs[2]].map(|npc| ai.react(npc, &hit, &around).goal)
+    }
+
+    #[test]
+    fn nova_ai_polices_piracy_as_its_rulebook_says() {
+        let both = [Some(Goal::Attack(ShipRef::Player)); 2];
+        assert_eq!(police_answers(&NovaAi::default()), both);
+        assert_eq!(
+            police_answers(&NovaAi::from_rulebook(&Rulebook::default())),
+            both
+        );
+        let bible = Rulebook::default().with_override(RuleKey::PiracyPolice, RuleSource::Bible);
+        assert_eq!(
+            police_answers(&NovaAi::from_rulebook(&bible)),
+            [None, Some(Goal::Attack(ShipRef::Player))],
+            "the interceptor only"
+        );
+        for source in RuleSource::ALL {
+            let rulebook = Rulebook::default().with_override(RuleKey::PiracyPolice, source);
+            let ai = NovaAi::from_rulebook(&rulebook);
+            let expected = format!("piracy_police: {source:?}");
+            assert_eq!(
+                format!("{ai:?}").matches(&expected).count(),
+                4,
+                "all four types: {ai:?}"
+            );
+        }
     }
 
     #[test]

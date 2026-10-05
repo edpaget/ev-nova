@@ -18,7 +18,17 @@
 //!   W is neither allied with the victim nor nosy (`Flags` 0x0002). For
 //!   an independent W, only the derelict, 0x0020 and xenophobe tests
 //!   apply; for an independent victim, only a nosy W answers. There is
-//!   no limit on range.
+//!   no limit on range. The original calls the same `_DoGoodSamaritan`
+//!   when the player boards a ship, after the crime
+//!   (`_HandlePlayerBoardAttempt`), so the session queues a strike of no
+//!   damage for a boarding ([`Session::board`](crate::Session::board)).
+//!   The Bible's "piracy police" are the interceptors alone: "acts as
+//!   'piracy police' by attacking any ship that fires on or attempts to
+//!   board another, non-enemy ship" (`düde` AI type 4). Which applies is
+//!   the [`Rulebook`](crate::Rulebook)'s
+//!   [`RuleKey::PiracyPolice`](crate::RuleKey::PiracyPolice) entry,
+//!   passed to [`answer`]: by the engine, warships and interceptors
+//!   answer; by the Bible, interceptors only.
 //!
 //! So Federation police answer the player's attack on a Civvies trader,
 //! since the Civvies are Federation allies. The original's distress
@@ -30,7 +40,8 @@ use crate::ai::{Goal, Reaction, Surroundings};
 use crate::combat::aim::{angle_off, bearing};
 use crate::combat::{ShipRef, Strike};
 use crate::govt::{DERELICT, IGNORED_WHEN_ATTACKED, NOSY};
-use crate::traffic::npc::{Mode, Npc};
+use crate::rulebook::RuleSource;
+use crate::traffic::npc::{AiType, Mode, Npc};
 
 /// The share of the attacker's distance squared within which a ship
 /// keeps attacking its own target (0.25 @0x3bc3b).
@@ -39,9 +50,15 @@ pub const FOCUS: f32 = 0.25;
 /// have it.
 pub const FOCUS_ANGLE: f32 = 44.0;
 
-/// How `npc` answers `strike` among `around` (see the module docs).
+/// How `npc` answers `strike` among `around`, the Good Samaritans being
+/// those `piracy_police` says (see the module docs).
 #[must_use]
-pub fn answer(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
+pub fn answer(
+    npc: &Npc,
+    strike: &Strike,
+    around: &Surroundings,
+    piracy_police: RuleSource,
+) -> Reaction {
     let me = ShipRef::Npc(npc.id);
     let escort_hit = match strike.ship {
         ShipRef::Npc(id) => around.npc(id).is_some_and(|hit| hit.leader == Some(npc.id)),
@@ -58,7 +75,11 @@ pub fn answer(npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
             }
         };
     }
-    if strike.by == ShipRef::Player && good_samaritan(npc, strike.ship, around) {
+    let polices = match piracy_police {
+        RuleSource::Engine => true,
+        RuleSource::Bible => npc.ai_type == AiType::Interceptor,
+    };
+    if strike.by == ShipRef::Player && polices && good_samaritan(npc, strike.ship, around) {
         return Reaction {
             target: Some(ShipRef::Player),
             provoked: 0.0,
@@ -135,6 +156,7 @@ mod tests {
     use crate::catalog::{GovtId, GovtRecord};
     use crate::geometry::Vec2;
     use crate::govt::{DERELICT, Governments, IGNORED_WHEN_ATTACKED, NOSY, XENOPHOBIC};
+    use crate::rulebook::RuleSource;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, govt};
     use crate::traffic::npc::{AiType, NpcId};
@@ -199,11 +221,21 @@ mod tests {
     }
 
     fn answered(govts: &Governments, npcs: &[Npc], who: usize, hit: &Strike) -> Reaction {
+        answered_by(RuleSource::Engine, govts, npcs, who, hit)
+    }
+
+    fn answered_by(
+        police: RuleSource,
+        govts: &Governments,
+        npcs: &[Npc],
+        who: usize,
+        hit: &Strike,
+    ) -> Reaction {
         let around = Surroundings {
             govts,
             ..Surroundings::new(&[], npcs)
         };
-        answer(&npcs[who], hit, &around)
+        answer(&npcs[who], hit, &around, police)
     }
 
     const TAKES: fn(ShipRef) -> Reaction = |attacker| Reaction {
@@ -374,6 +406,34 @@ mod tests {
                 "{ai_type:?}"
             );
         }
+    }
+
+    #[test]
+    fn by_the_bible_only_interceptors_police_piracy() {
+        let govts = relations(0, 0);
+        let answer_of = |police, ai_type| {
+            let npcs = [
+                ship(1, Some(TRADERS), AiType::WimpyTrader, 0.0),
+                ship(2, Some(POLICE), ai_type, 3000.0),
+            ];
+            answered_by(police, &govts, &npcs, 1, &strike(n(1), ShipRef::Player))
+        };
+        assert_eq!(answer_of(RuleSource::Engine, AiType::Warship), ANSWERS);
+        assert_eq!(answer_of(RuleSource::Engine, AiType::Interceptor), ANSWERS);
+        assert_eq!(answer_of(RuleSource::Bible, AiType::Interceptor), ANSWERS);
+        assert_eq!(
+            answer_of(RuleSource::Bible, AiType::Warship),
+            Reaction::default()
+        );
+        // A warship hit itself still answers by the Bible.
+        let npcs = [
+            ship(1, Some(TRADERS), AiType::Warship, 0.0),
+            ship(2, Some(PIRATES), AiType::Warship, 500.0),
+        ];
+        assert_eq!(
+            answered_by(RuleSource::Bible, &govts, &npcs, 0, &strike(n(1), n(2))),
+            TAKES(n(2))
+        );
     }
 
     #[test]

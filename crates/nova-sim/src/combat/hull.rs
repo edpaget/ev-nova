@@ -7,6 +7,11 @@
 //!   original tests shots against sprite masks, which the simulation does
 //!   not have. A ship type without a `shän` is a placeholder
 //!   [`DEFAULT_HIT_RADIUS`] across.
+//! - Its board reach, how far off its centre on either axis the player
+//!   can board it, is half its `shän`'s size ([`BOARD_REACH_PER_SIZE`],
+//!   0.5 @0xdd128 x the sprite's width and height in
+//!   `_HandlePlayerBoardAttempt`; the simulation reads only the width),
+//!   and [`DEFAULT_BOARD_REACH`] without a `shän`.
 //! - A ship is disabled as a [`DisableRule`] says. Nova's,
 //!   [`NovaDisable`], is `_IsDisabled`'s.
 //! - Its `Flags` 0x1000, 0x2000 and 0x4000 ([`BLIND_SPOTS`]) blind its
@@ -31,6 +36,11 @@ use crate::reserves::Gauge;
 pub const DEFAULT_HIT_RADIUS: f32 = 16.0;
 /// A ship's hit radius per pixel of its `shän`'s `BaseXSize`.
 pub const HIT_RADIUS_PER_SIZE: f32 = 0.33;
+/// The board reach of a ship type without a `shän`, in pixels: half a
+/// 48-pixel sprite, a placeholder.
+pub const DEFAULT_BOARD_REACH: f32 = 24.0;
+/// A ship's board reach per pixel of its `shän`'s `BaseXSize`.
+pub const BOARD_REACH_PER_SIZE: f32 = 0.5;
 /// The `shïp` `Flags` bit that disables it at [`TOUGH_DISABLE_PERCENT`]
 /// of its armour instead of [`DISABLE_PERCENT`].
 pub const TOUGH: u16 = 0x0010;
@@ -67,6 +77,9 @@ pub struct HullSpec {
     pub blind_spots: u16,
     /// How strong it counts in a fight, its `Strength`; none below none.
     pub strength: f32,
+    /// How far off its centre, in pixels on either axis, the player can
+    /// board it.
+    pub board_reach: f32,
 }
 
 impl Default for HullSpec {
@@ -82,6 +95,7 @@ impl Default for HullSpec {
             mass: 0.0,
             blind_spots: 0,
             strength: 0.0,
+            board_reach: DEFAULT_BOARD_REACH,
         }
     }
 }
@@ -90,12 +104,9 @@ impl HullSpec {
     /// The hull `record` describes (see the module docs).
     #[must_use]
     pub fn new(record: &HullRecord) -> Self {
-        let hit_radius = record
-            .size
-            .filter(|&size| size > 0)
-            .map_or(DEFAULT_HIT_RADIUS, |size| {
-                f32::from(size) * HIT_RADIUS_PER_SIZE
-            });
+        let size = record.size.filter(|&size| size > 0).map(f32::from);
+        let hit_radius = size.map_or(DEFAULT_HIT_RADIUS, |size| size * HIT_RADIUS_PER_SIZE);
+        let board_reach = size.map_or(DEFAULT_BOARD_REACH, |size| size * BOARD_REACH_PER_SIZE);
         Self {
             hit_radius,
             tough: record.flags & TOUGH != 0,
@@ -105,6 +116,7 @@ impl HullSpec {
             mass: f32::from(record.mass.max(0)),
             blind_spots: record.flags & BLIND_SPOTS,
             strength: f32::from(record.strength.max(0)),
+            board_reach,
         }
     }
 
@@ -234,6 +246,22 @@ mod tests {
         }
         assert_eq!(DEFAULT_HIT_RADIUS, 16.0);
         assert_eq!(HullSpec::default().hit_radius, 16.0);
+    }
+
+    #[test]
+    fn the_board_reach_is_half_the_shäns_size() {
+        let shuttle = HullSpec::new(&HullRecord {
+            size: Some(25),
+            ..hull(128)
+        });
+        assert_eq!(shuttle.board_reach, 12.5);
+        assert_eq!(BOARD_REACH_PER_SIZE, 0.5);
+        for size in [None, Some(0), Some(-5)] {
+            let placeholder = HullSpec::new(&HullRecord { size, ..hull(128) });
+            assert_eq!(placeholder.board_reach, DEFAULT_BOARD_REACH, "{size:?}");
+        }
+        assert_eq!(DEFAULT_BOARD_REACH, 24.0);
+        assert_eq!(HullSpec::default().board_reach, 24.0);
     }
 
     #[test]

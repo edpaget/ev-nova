@@ -112,6 +112,11 @@ pub struct Npc {
     pub aggression: u8,
     /// The ship it last inspected, if any.
     pub inspected: Option<ShipRef>,
+    /// Its `düde`'s `Booty` flags, what boarding it yields; none for a
+    /// fleet's ship.
+    pub booty: u16,
+    /// Whether the player has boarded it: it cannot be boarded again.
+    pub boarded: bool,
 }
 
 impl Npc {

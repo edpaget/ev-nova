@@ -699,6 +699,8 @@ mod tests {
             provoked: 0.0,
             aggression: 0,
             inspected: None,
+            booty: 0,
+            boarded: false,
         }
     }
 

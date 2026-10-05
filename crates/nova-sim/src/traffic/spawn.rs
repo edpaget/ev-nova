@@ -46,7 +46,7 @@ use crate::chance::Chance;
 use crate::flight::{ShipState, facing, heading_of};
 use crate::geometry::Vec2;
 use crate::traffic::npc::AiType;
-use crate::traffic::table::{ShipKind, SpawnTable, pick};
+use crate::traffic::table::{ShipKind, SpawnDude, SpawnTable, pick};
 
 /// `Rand(7) == 0`: a person, rather than anything else.
 pub const PERSON_ODDS: u32 = 7;
@@ -97,6 +97,9 @@ pub struct NewShip {
     pub jumping_in: bool,
     /// How aggressive it is: 0, 2 or 3.
     pub aggression: u8,
+    /// Its `düde`'s `Booty` flags; none for a fleet's ship, which has no
+    /// `düde`.
+    pub booty: u16,
 }
 
 /// How fast a ship glides on tick `k` (from 0) of its jump in.
@@ -123,16 +126,17 @@ pub fn initial(table: &SpawnTable, chance: &mut (impl Chance + ?Sized)) -> Vec<N
             link_fleet(table, chance, &mut out);
             continue;
         }
-        if let Some((ship, govt, ai_type, _)) = dude_ship(table, chance) {
+        if let Some((ship, dude, ai_type, _)) = dude_ship(table, chance) {
             let state = in_system(chance);
             out.push(NewShip {
                 ship,
-                govt,
+                govt: dude.govt,
                 ai_type,
                 lead: None,
                 state,
                 jumping_in: false,
                 aggression: aggression(chance),
+                booty: dude.booty,
             });
         }
     }
@@ -188,28 +192,30 @@ fn hyper_ship(table: &SpawnTable, chance: &mut (impl Chance + ?Sized), out: &mut
         link_fleet(table, chance, out);
         return;
     }
-    if let Some((ship, govt, ai_type, kind)) = dude_ship(table, chance)
+    if let Some((ship, dude, ai_type, kind)) = dude_ship(table, chance)
         && can_jump(kind)
     {
         let state = hyperspace_entry(chance);
         out.push(NewShip {
             ship,
-            govt,
+            govt: dude.govt,
             ai_type,
             lead: None,
             state,
             jumping_in: true,
             aggression: aggression(chance),
+            booty: dude.booty,
         });
     }
 }
 
 /// A `düde` ship: a `düde` by weight, a ship of it by `Probability`, and
-/// its government, AI and kind; `None` when either has no record.
+/// the `düde`, its AI and the ship's kind; `None` when either has no
+/// record.
 fn dude_ship<'a>(
     table: &'a SpawnTable,
     chance: &mut (impl Chance + ?Sized),
-) -> Option<(ShipId, Option<GovtId>, AiType, &'a ShipKind)> {
+) -> Option<(ShipId, &'a SpawnDude, AiType, &'a ShipKind)> {
     let dude = table.dude_records.get(&pick(&table.dudes, chance)?)?;
     let ship = pick(&dude.ships, chance)?;
     let kind = table.ships.get(&ship)?;
@@ -218,7 +224,7 @@ fn dude_ship<'a>(
     } else {
         kind.inherent_ai
     };
-    Some((ship, dude.govt, AiType::from_raw(ai_type), kind))
+    Some((ship, dude, AiType::from_raw(ai_type), kind))
 }
 
 /// The `LinkSyst` fleet roll: one of 256 slots, and the fleet there, if
@@ -260,6 +266,7 @@ pub fn fleet(
         state,
         jumping_in: true,
         aggression: aggression(chance),
+        booty: 0,
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -276,6 +283,7 @@ pub fn fleet(
                 state: placed,
                 jumping_in: true,
                 aggression: aggression(chance),
+                booty: 0,
             });
         }
     }
@@ -354,7 +362,6 @@ mod tests {
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST};
-    use crate::traffic::table::SpawnDude;
 
     fn kind(inherent_ai: i16, fields: ShipFields) -> ShipKind {
         ShipKind {
@@ -398,6 +405,7 @@ mod tests {
                     ai_type: 0,
                     govt: Some(GovtId(130)),
                     ships: vec![(ShipId(200), 50), (ShipId(201), 50)],
+                    booty: 0x0041,
                 },
             )]),
             dude_fleets: vec![(FleetId(140), 30)],
@@ -536,6 +544,7 @@ mod tests {
                 },
                 jumping_in: false,
                 aggression: 0,
+                booty: 0x0041,
             }]
         );
     }
@@ -579,6 +588,22 @@ mod tests {
             .ai_type = 1;
         let ships = initial(&table, &mut Draws::of(&ship_201));
         assert_eq!(ships[0].ai_type, AiType::WimpyTrader, "1 is above 0");
+    }
+
+    #[test]
+    fn a_dude_ship_carries_its_dudes_booty() {
+        let ship_201 = [6, 6, 0, 99, 0, 0, 0];
+        let ships = initial(&one_pass(), &mut Draws::of(&ship_201));
+        assert_eq!(ships[0].booty, 0x0041);
+        let arrived = arrivals(&table(), 1, &mut Draws::of(&[0, 6, 6, 0, 99, 90]));
+        assert_eq!(arrived[0].booty, 0x0041, "a düde ship jumping in too");
+    }
+
+    #[test]
+    fn a_fleet_ship_has_no_booty() {
+        let ships = arrivals(&table(), 0, &mut Draws::of(&[1, 29, 0, 0, 0, 2]));
+        assert_eq!(ships.len(), 4);
+        assert!(ships.iter().all(|ship| ship.booty == 0), "{ships:?}");
     }
 
     #[test]

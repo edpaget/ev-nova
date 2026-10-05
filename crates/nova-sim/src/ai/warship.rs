@@ -29,6 +29,7 @@ use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
 use crate::govt::WARSHIPS_RETREAT;
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
 /// The share of its shields below which a ship outnumbered retreats
@@ -96,7 +97,10 @@ fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
 
 /// Nova's warship (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Warship;
+pub struct Warship {
+    /// Who comes to a ship's help ([`react::answer`]).
+    pub piracy_police: RuleSource,
+}
 
 /// A warship's retreat: when outnumbered or its shields run low, both by
 /// `Flags` 0x0010.
@@ -119,7 +123,7 @@ impl Behaviour for Warship {
     }
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
-        react::answer(npc, strike, around)
+        react::answer(npc, strike, around, self.piracy_police)
     }
 }
 
@@ -149,7 +153,7 @@ mod tests {
     fn decided_by(govts: &Governments, npcs: &[Npc], record: i16) -> Goal {
         let sites = sites();
         let around = around(&sites, npcs, govts, (0.0, -100.0), record);
-        Warship.decide(&npcs[0], &around, &mut Draws::of(&[0]))
+        Warship::default().decide(&npcs[0], &around, &mut Draws::of(&[0]))
     }
 
     fn decided(npcs: &[Npc], record: i16) -> Goal {
@@ -366,8 +370,11 @@ mod tests {
         )]);
         let npcs = [hunter];
         let seen = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
-        assert_eq!(Warship.target(&npcs[0], &seen), Some(P));
-        assert_eq!(Warship.trigger(&npcs[0], &seen).only, Some(WeaponId(128)));
+        assert_eq!(Warship::default().target(&npcs[0], &seen), Some(P));
+        assert_eq!(
+            Warship::default().trigger(&npcs[0], &seen).only,
+            Some(WeaponId(128))
+        );
         let hit = Strike {
             ship: n(9),
             by: P,
@@ -378,7 +385,7 @@ mod tests {
         let npcs = [ship(1, POLICE, AiType::Warship, 0.0, 0.0), victim];
         let seen = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
         assert_eq!(
-            Warship.react(&npcs[0], &hit, &seen).goal,
+            Warship::default().react(&npcs[0], &hit, &seen).goal,
             Some(Goal::Attack(P)),
             "a Good Samaritan"
         );

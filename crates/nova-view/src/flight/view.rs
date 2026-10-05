@@ -3684,6 +3684,7 @@ mod tests {
                     ai_type,
                     govt: None,
                     ships: vec![(ShipId(ship), 1)],
+                    booty: 0,
                 },
             )],
             ships: vec![record(129), record(130)],

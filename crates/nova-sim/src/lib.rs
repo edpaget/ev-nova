@@ -9,6 +9,12 @@
 //!   [`Warship`] or [`Interceptor`]: whom they attack by governments'
 //!   relations and the player's legal record, when they flee, how they
 //!   come to each other's help, and which weapon they fire.
+//! - [`board`]: boarding a disabled ship: whether the player can
+//!   ([`BoardRefusal`]), the [`Plunder`] rolled for it, the plunder
+//!   dialog's [`Take`]s and what each [`Taken`] did, capturing it, and
+//!   assigning a ship captured ([`Assignment`]); the [`BoardingRule`]
+//!   port with Nova's [`NovaBoarding`]: who repels boarders, the capture
+//!   odds and the capture roll.
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
@@ -77,8 +83,8 @@
 //!   each is saved under, and the [`PilotKeeper`] that saves, lists and
 //!   opens them.
 //! - [`session`]: a flight [`Session`], a pilot's ship flying
-//!   from its starting system, landing, jumping along a plotted course, and
-//!   fighting.
+//!   from its starting system, landing, jumping along a plotted course,
+//!   fighting, and boarding and capturing ships.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -100,6 +106,7 @@
 //!   sweep and the rows' order.
 
 pub mod ai;
+pub mod board;
 pub mod catalog;
 pub mod chance;
 pub mod clock;
@@ -137,6 +144,10 @@ pub mod wares;
 pub use ai::{
     Behaviour, BraveTrader, Goal, Interceptor, NovaAi, Peaceful, PlayerSide, Reaction,
     Surroundings, Warship, WimpyTrader,
+};
+pub use board::{
+    Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, NovaBoarding, Plunder, PlunderView,
+    Take, Taken,
 };
 pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommodityStrings, DisasterId, DisasterRecord, DudeId,

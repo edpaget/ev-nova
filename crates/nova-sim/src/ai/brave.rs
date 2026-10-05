@@ -10,6 +10,7 @@ use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, provoked_by
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
 /// How near, in pixels on either axis, a brave trader's attacker must be
@@ -18,7 +19,10 @@ pub const STAND_AND_FIGHT: f32 = 1250.0;
 
 /// Nova's brave trader (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct BraveTrader;
+pub struct BraveTrader {
+    /// Who comes to a ship's help ([`react::answer`]).
+    pub piracy_police: RuleSource,
+}
 
 impl Behaviour for BraveTrader {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
@@ -45,7 +49,7 @@ impl Behaviour for BraveTrader {
     }
 
     fn react(&self, npc: &Npc, strike: &Strike, around: &Surroundings) -> Reaction {
-        react::answer(npc, strike, around)
+        react::answer(npc, strike, around, self.piracy_police)
     }
 }
 
@@ -77,7 +81,7 @@ mod tests {
         let govts = govts(0, 0);
         let sites = sites();
         let around = around(&sites, npcs, &govts, (0.0, -5000.0), 0);
-        BraveTrader.decide(&npcs[0], &around, &mut Draws::of(&[0]))
+        BraveTrader::default().decide(&npcs[0], &around, &mut Draws::of(&[0]))
     }
 
     #[test]
@@ -124,9 +128,9 @@ mod tests {
             1,
         )]);
         let around = around(&sites, &npcs, &govts, (0.0, -5000.0), 0);
-        assert_eq!(BraveTrader.target(&npcs[0], &around), Some(n(2)));
+        assert_eq!(BraveTrader::default().target(&npcs[0], &around), Some(n(2)));
         assert_eq!(
-            BraveTrader.trigger(&npcs[0], &around).only,
+            BraveTrader::default().trigger(&npcs[0], &around).only,
             Some(WeaponId(128))
         );
         let strike = Strike {
@@ -136,7 +140,9 @@ mod tests {
             downed: None,
         };
         assert_eq!(
-            BraveTrader.react(&npcs[0], &strike, &around).target,
+            BraveTrader::default()
+                .react(&npcs[0], &strike, &around)
+                .target,
             Some(n(2))
         );
     }

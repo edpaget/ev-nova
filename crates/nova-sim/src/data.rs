@@ -258,6 +258,7 @@ impl TrafficCatalog for GameData {
                 .zip(dude.probability)
                 .filter_map(|(ship, probability)| Some(((*ship)?, probability)))
                 .collect(),
+            booty: dude.booty.0,
         })
     }
 
@@ -1564,6 +1565,7 @@ mod tests {
                 ai_type: 3,
                 govt: Some(GovtId(129)),
                 ships: vec![(ShipId(140), 60), (ShipId(141), 10)],
+                booty: 0,
             }),
             "the unused slot is left out"
         );
@@ -1573,10 +1575,22 @@ mod tests {
                 ai_type: -1,
                 govt: None,
                 ships: Vec::new(),
+                booty: 0,
             })
         );
         assert_eq!(data.dude(DudeId(130)), None, "undecodable");
         assert_eq!(data.dude(DudeId(131)), None, "missing");
+    }
+
+    #[test]
+    fn a_dudes_booty_is_its_booty_flags() {
+        let mut looted = dude(1, 128, &[(140, 100)]);
+        put_i16s(&mut looted, 0x04, &[0x0041]);
+        let mut every = dude(1, 128, &[(140, 100)]);
+        put_i16s(&mut every, 0x04, &[-1]);
+        let data = store(&[(Dude::TYPE, 128, looted), (Dude::TYPE, 129, every)]);
+        assert_eq!(data.dude(DudeId(128)).map(|dude| dude.booty), Some(0x0041));
+        assert_eq!(data.dude(DudeId(129)).map(|dude| dude.booty), Some(0xFFFF));
     }
 
     /// A `flët` led by `lead`, with these escorts (type, min, max) in its
