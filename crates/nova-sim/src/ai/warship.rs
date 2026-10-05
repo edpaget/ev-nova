@@ -236,6 +236,22 @@ mod tests {
         assert_eq!(decided(&[hunter, escort], 0), Goal::Land(StellarId(128)));
     }
 
+    #[test]
+    fn a_warship_never_attacks_its_own_kind_or_an_ally_for_an_ally_or_as_a_threat() {
+        // A stray shot from police NPC 2 provoked the allied trader NPC 3.
+        let kin = ship(2, POLICE, AiType::Warship, 0.0, 300.0);
+        let mut trader = ship(3, TRADERS, AiType::WimpyTrader, 0.0, 500.0);
+        trader.goal = Goal::Flee(n(2));
+        let npcs = [police(), kin, trader];
+        assert_eq!(decided(&npcs, 0), Goal::Land(StellarId(128)), "fled");
+        let mut fought = npcs.clone();
+        fought[2].goal = Goal::Attack(n(2));
+        assert_eq!(decided(&fought, 0), Goal::Land(StellarId(128)), "fought");
+        let mut at_it = npcs.clone();
+        at_it[2].goal = Goal::Attack(n(1));
+        assert_eq!(decided(&at_it, 0), Goal::Land(StellarId(128)), "threat");
+    }
+
     /// The police warship (with `police_flags`) fighting a pirate of
     /// strength `foe` 300 below, at `shield` of its 30.
     fn outgunned(police_flags: u16, shield: f32, foe: f32, aggression: u8) -> Goal {

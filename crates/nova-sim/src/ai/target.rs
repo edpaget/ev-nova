@@ -39,20 +39,27 @@
 //! 3. **Help allies** (@0x8a418): the ship T that the first other ship of
 //!    a government allied with its own (its own included) attacks or
 //!    flees from, when its own friend strength times its government's
-//!    `MaxOdds` is no less than T's. T may be the player. This is how
-//!    police come to a trader's defence.
+//!    `MaxOdds` is no less than T's. T may be the player, but never a
+//!    ship it spares (below). This is how police come to a trader's
+//!    defence.
 //! 4. **The player** when it is hostile, and **every NPC enemy**: the
 //!    nearest of them, each dropped when its friend strength is above the
 //!    ship's own times its `MaxOdds`, and a disabled NPC skipped unless
 //!    the ship has destroying weapons. The original's heaviest candidate
 //!    for a ship with escorts is a placeholder: nearest always.
 //! 5. **Threats**: the nearest NPC attacking, sniping at or fleeing from
-//!    it.
+//!    it, other than one it spares.
 //!
 //! **A target is dropped** ([`dropped`], @0x8bc73, @0x8e3ef) when it is
 //! gone or breaking up; disabled while the ship has no destroying
-//! weapons; an NPC allied with it (the player's escorts aside, which do
-//! not exist yet); or of its own fleet.
+//! weapons; or a ship it spares: an NPC allied with it (the player's
+//! escorts aside, which do not exist yet; @0x8e2af) or of its own fleet.
+//!
+//! Steps 3 and 5 never give a ship it spares. The original checks
+//! neither there (nor does `_ExtendedIsThreatToShip` @0x81a27), so its
+//! police, seeing an allied trader that a stray police shot provoked,
+//! turn on their own kind until the drop at @0x8e2af clears the goal a
+//! frame later, and then take it up again. Here they never do.
 
 use crate::ai::odds::friend_strength;
 use crate::ai::{Surroundings, fire};
@@ -181,7 +188,11 @@ pub fn select_target(
         })
         .find_map(|ally| {
             let foe = ally.goal.quarry()?;
-            (foe != me && around.live(foe) && own >= friend_strength(foe, around)).then_some(foe)
+            (foe != me
+                && around.live(foe)
+                && !spares(npc, foe, around)
+                && own >= friend_strength(foe, around))
+            .then_some(foe)
         });
     if helped.is_some() {
         return helped;
@@ -203,8 +214,20 @@ pub fn select_target(
     }
     let threats = others()
         .filter(|other| other.threatens(me))
-        .map(|other| ShipRef::Npc(other.id));
+        .map(|other| ShipRef::Npc(other.id))
+        .filter(|&ship| !spares(npc, ship, around));
     nearest(npc, threats, around)
+}
+
+/// Whether `npc` spares `ship` among `around`: an NPC allied with it or
+/// of its own fleet (see the module docs).
+fn spares(npc: &Npc, ship: ShipRef, around: &Surroundings) -> bool {
+    match ship {
+        ShipRef::Player => false,
+        ShipRef::Npc(id) => around.npc(id).is_some_and(|other| {
+            around.govts.allies(npc.govt, other.govt) || other.fleet() == npc.fleet()
+        }),
+    }
 }
 
 /// Whether `npc` drops `target` among `around` (see the module docs).
@@ -216,12 +239,7 @@ pub fn dropped(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
     if around.condition_of(target) == Some(Condition::Disabled) && !fire::destroys(npc) {
         return true;
     }
-    match target {
-        ShipRef::Player => false,
-        ShipRef::Npc(id) => around.npc(id).is_some_and(|other| {
-            around.govts.allies(npc.govt, other.govt) || other.fleet() == npc.fleet()
-        }),
-    }
+    spares(npc, target, around)
 }
 
 #[cfg(test)]
@@ -693,9 +711,57 @@ mod tests {
         at_me[1].goal = Goal::Attack(n(1));
         assert_eq!(
             chosen(0, &at_me, None, 0, NEAR),
-            Some(n(2)),
-            "no help against itself, but a threat"
+            None,
+            "no help against itself, and an ally is no threat"
         );
+    }
+
+    #[test]
+    fn a_ship_never_helps_an_ally_against_its_own_kind_an_ally_or_its_fleet() {
+        // NPC 2, an allied trader, flees from or fights NPC 3; NPC 4, a
+        // later ally, fights the pirate NPC 5.
+        let mut trader = ship(2, ALLY, 1000.0, 0.0);
+        trader.goal = Goal::Flee(n(3));
+        let foe = ship(3, ME, 2000.0, 0.0);
+        let mut later = ship(4, ALLY, 1500.0, 0.0);
+        later.goal = Goal::Attack(n(5));
+        let pirate = ship(5, NEUTRAL, 3000.0, 0.0);
+        let npcs = [me(), trader, foe, later, pirate];
+        assert_eq!(
+            chosen(0, &npcs, None, 0, NEAR),
+            Some(n(5)),
+            "not its own kind, but the next ally's foe"
+        );
+        let mut fought = npcs.clone();
+        fought[1].goal = Goal::Attack(n(3));
+        assert_eq!(chosen(0, &fought, None, 0, NEAR), Some(n(5)), "fought");
+        let mut allied = npcs.clone();
+        allied[1].govt = Some(ME);
+        allied[2].govt = Some(ALLY);
+        assert_eq!(chosen(0, &allied, None, 0, NEAR), Some(n(5)), "an ally");
+        let mut escort = npcs.clone();
+        escort[2].govt = Some(NEUTRAL);
+        escort[2].leader = Some(NpcId(1));
+        assert_eq!(chosen(0, &escort, None, 0, NEAR), Some(n(5)), "its fleet");
+        let mut alone = npcs.clone();
+        alone[3].goal = Goal::Idle;
+        assert_eq!(chosen(0, &alone, None, 0, NEAR), None, "nothing else");
+    }
+
+    #[test]
+    fn an_ally_or_its_fleet_fighting_the_ship_is_no_threat_to_turn_on() {
+        let mut ally = ship(2, ALLY, 10.0, 0.0);
+        ally.goal = Goal::Attack(n(1));
+        let mut kin = ship(3, ME, 20.0, 0.0);
+        kin.goal = Goal::Flee(n(1));
+        let mut escort = ship(4, NEUTRAL, 30.0, 0.0);
+        escort.leader = Some(NpcId(1));
+        escort.goal = Goal::Snipe(n(1));
+        let mut stranger = ship(5, NEUTRAL, 900.0, 0.0);
+        stranger.goal = Goal::Attack(n(1));
+        let npcs = [me(), ally, kin, escort, stranger];
+        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(5)));
+        assert_eq!(chosen(0, &npcs[..4], None, 0, NEAR), None);
     }
 
     #[test]
