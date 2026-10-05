@@ -1,5 +1,7 @@
 //! Draw commands and draw lists.
 
+use nova_sim::blink::FULL;
+
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
@@ -237,6 +239,16 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
         .line(corners[1], corners[3], 1.0, color);
 }
 
+/// The tint the running lights are added with at `level` out of
+/// [`nova_sim::blink::FULL`] (32): white, with that many 32nds of full
+/// alpha, rounded to nearest, so level 32 adds the lights as they are.
+/// Levels past 32 are 32.
+pub(crate) fn lights_tint(level: u8) -> Color {
+    let full = u16::from(FULL);
+    let level = u16::from(level).min(full);
+    Color::rgba(255, 255, 255, ((level * 255 + full / 2) / full) as u8)
+}
+
 /// Fills `area` with `color`. There is no rectangle command: a horizontal
 /// line as thick as the area, along its middle, is one.
 pub fn fill_rect(list: &mut DrawList, area: Bounds, color: Color) {
@@ -264,6 +276,16 @@ mod tests {
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
+    }
+
+    #[test]
+    fn a_lights_level_is_white_at_that_many_32nds_of_full_alpha() {
+        let alphas = [32, 31, 16, 10, 1, 0].map(|level| lights_tint(level).a);
+        assert_eq!(alphas, [255, 247, 128, 80, 8, 0]);
+        assert_eq!(lights_tint(32), Color::WHITE);
+        assert_eq!(lights_tint(16), Color::rgba(255, 255, 255, 128));
+        assert_eq!(lights_tint(33), Color::WHITE, "past full is full");
+        assert_eq!(lights_tint(u8::MAX), Color::WHITE);
     }
 
     #[test]

@@ -38,8 +38,12 @@
 //! The ship is drawn as its sheet's rotation frame for the heading shown,
 //! then, at the same centre and on the same frame (modulo the layer's
 //! frame count), its engine glow while the session is thrusting, and its
-//! running lights always. A layer that cannot be shown is left out
-//! silently.
+//! running lights at the level [`nova_sim::lights_level`] gives for the
+//! sheet's blink at the flight's time in ticks, added with that many 32nds
+//! of full alpha, or not at all while they are off. The flight's time stops
+//! while the course map is open, so the lights blink in game time. Random
+//! blinking rolls on [`HashedRolls`] from seed 0. A layer that cannot be
+//! shown is left out silently.
 //!
 //! Input, the original's default keys:
 //!
@@ -84,22 +88,24 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Chance, Clearance, Controls, FixedStep, JumpRefusal, LandOutcome, LandingRefusal, Market,
-    NeverFires, Order, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog, RechargeRefusal,
-    Reserves, Session, ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard, StartError,
-    StellarId, Steps, TradeRefusal, Turn, flight::normalized, flight::shortest_turn,
+    Chance, Clearance, Controls, FixedStep, HashedRolls, JumpRefusal, LandOutcome, LandingRefusal,
+    Market, NeverFires, Order, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
+    RechargeRefusal, Reserves, Session, ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard,
+    StartError, StellarId, Steps, TradeRefusal, Turn, flight::normalized, flight::shortest_turn,
+    lights_level,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
 use super::hud::{self, HudState, NavDisplay, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
 use super::sprite::rotation_frame;
-use crate::draw::crossed_box;
+use crate::draw::{crossed_box, lights_tint};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap};
 use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::system::starfield;
+use crate::time::ticks;
 use crate::{Color, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction, Sound};
 
 /// The overlay: the system's title and the help line.
@@ -298,7 +304,8 @@ pub struct FlightView<C> {
     previous: ShipState,
     /// How far the display is from `previous` to the session's ship.
     alpha: f32,
-    /// Time since the view opened, which drives the stellars' animations.
+    /// Time since the view opened, which drives the stellars' animations
+    /// and the running lights' blinking. It stops while the map is open.
     elapsed: Duration,
     /// The flight keys held down.
     held: HashSet<Key>,
@@ -314,6 +321,8 @@ pub struct FlightView<C> {
     jump: Option<JumpEffect>,
     /// What each day's events are rolled on.
     chance: SharedChance,
+    /// What random running lights roll on.
+    blink_rolls: HashedRolls,
 }
 
 impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog> FlightView<C> {
@@ -370,6 +379,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             pending_landing,
             message: None,
             chance: SharedChance::default(),
+            blink_rolls: HashedRolls::new(0),
         }
     }
 
@@ -730,14 +740,16 @@ impl<C> FlightView<C> {
                 let frame = rotation_frame(self.shown_heading(), sheet.rotations);
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
                 let thrusting = self.session.as_ref().is_ok_and(Session::thrusting);
-                let glow = sheet.glow.filter(|_| thrusting);
-                for layer in [glow, sheet.lights].into_iter().flatten() {
+                let glow = sheet
+                    .glow
+                    .filter(|_| thrusting)
+                    .map(|glow| (glow, Color::WHITE));
+                let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+                let level = lights_level(&sheet.blink, tick, &self.blink_rolls);
+                let lights = sheet.lights.zip(level.map(lights_tint));
+                for (layer, tint) in [glow, lights].into_iter().flatten() {
                     let layer_frame = frame % layer.frames.get();
-                    list.additive_sprite(
-                        ImageKey::sprite(layer.image_id, layer_frame),
-                        at,
-                        Color::WHITE,
-                    );
+                    list.additive_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
                 }
             }
             Err(reason) => {
@@ -937,7 +949,8 @@ mod tests {
     };
 
     use super::*;
-    use crate::flight::catalog::{GovtId, LayerSheet, StatusBarLayout};
+    use crate::draw::lights_tint;
+    use crate::flight::catalog::{Blink, GovtId, LayerSheet, StatusBarLayout};
     use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::sound::Sound;
@@ -947,6 +960,7 @@ mod tests {
     };
     use crate::{Blend, DrawCommand, Font};
     use nova_sim::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
+    use nova_sim::{BlinkChance, HashedRolls};
 
     /// The first `chär` flies ship 128 (an average ship that turns 3° a
     /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system
@@ -1000,6 +1014,7 @@ mod tests {
             frame_height: 40,
             glow: None,
             lights: None,
+            blink: Blink::STEADY,
         }
     }
 
@@ -1903,6 +1918,141 @@ mod tests {
         view.input(&key(Key::Up, true));
         ticks(&mut view, 3);
         assert_eq!(ship_sprites(&view), []);
+    }
+
+    // The running lights' blinking.
+
+    /// The Shuttle's blink: a double flash every 40 ticks, lit at ticks
+    /// 1-3 and 10-12.
+    const SHUTTLE: Blink = Blink {
+        mode: 1,
+        a: 4,
+        b: 1,
+        c: 2,
+        d: 20,
+    };
+
+    /// [`layered`], with the lights blinking by `blink`.
+    fn blinking(blink: Blink) -> FakeCatalog {
+        FakeCatalog {
+            sheet: Ok(ShipSheet {
+                glow: Some(layer(2100, 36)),
+                lights: Some(layer(2200, 12)),
+                blink,
+                ..sheet()
+            }),
+            ..catalog()
+        }
+    }
+
+    /// The tints the lights, `rlëD` 2200, are added with.
+    fn lights_tints(view: &View) -> Vec<Color> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite {
+                    image,
+                    tint,
+                    blend: Blend::Additive,
+                    ..
+                } if image.id == 2200 => Some(*tint),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The lights' alphas drawn: one, or none when they are off.
+    fn lights_alphas(view: &View) -> Vec<u8> {
+        lights_tints(view).iter().map(|tint| tint.a).collect()
+    }
+
+    #[test]
+    fn the_shuttles_lights_blink_with_game_time() {
+        let mut view = FlightView::new(blinking(SHUTTLE));
+        assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 0: off");
+        assert_eq!(ship_sprites(&view)[0].0.id, 2000, "the ship is drawn");
+        ticks(&mut view, 1);
+        assert_eq!(lights_tints(&view), [Color::WHITE], "tick 1: on");
+        ticks(&mut view, 3);
+        assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 4: off");
+        ticks(&mut view, 6);
+        assert_eq!(lights_alphas(&view), [255], "tick 10: on again");
+        ticks(&mut view, 3);
+        assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 13: the gap");
+    }
+
+    #[test]
+    fn a_pulsing_light_is_added_at_its_level() {
+        // The stock triangle: 10 to 31.
+        let triangle = Blink {
+            mode: 2,
+            a: 10,
+            b: 75,
+            c: 32,
+            d: 75,
+        };
+        let mut view = FlightView::new(blinking(triangle));
+        assert_eq!(lights_alphas(&view), [0_u8; 0], "0.75: not drawn");
+        ticks(&mut view, 1);
+        assert_eq!(lights_alphas(&view), [8], "level 1");
+        ticks(&mut view, 40);
+        assert_eq!(lights_alphas(&view), [247], "level 31");
+    }
+
+    #[test]
+    fn steady_lights_are_added_at_full_from_the_start() {
+        let view = FlightView::new(blinking(Blink::STEADY));
+        assert_eq!(lights_tints(&view), [Color::WHITE]);
+    }
+
+    #[test]
+    fn the_glow_still_shows_while_the_lights_are_off() {
+        let mut view = FlightView::new(blinking(SHUTTLE));
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 4);
+        assert!(view.session().expect("flying").thrusting());
+        assert_eq!(
+            ship_blends(&view),
+            [(2000, Blend::Normal), (2100, Blend::Additive)]
+        );
+        let glow = drawn(&view).iter().find_map(|command| match command {
+            DrawCommand::Sprite { image, tint, .. } if image.id == 2100 => Some(*tint),
+            _ => None,
+        });
+        assert_eq!(glow, Some(Color::WHITE));
+    }
+
+    #[test]
+    fn the_blink_pauses_while_the_map_is_open() {
+        let mut view = FlightView::new(blinking(SHUTTLE));
+        ticks(&mut view, 3);
+        assert_eq!(lights_alphas(&view), [255], "tick 3");
+        view.input(&key(MAP_KEY, true));
+        assert!(view.map_open());
+        // Tick 103 would be dark.
+        ticks(&mut view, 100);
+        view.close_map();
+        assert_eq!(lights_alphas(&view), [255], "still tick 3");
+        ticks(&mut view, 1);
+        assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 4");
+    }
+
+    #[test]
+    fn random_lights_roll_on_hashed_rolls() {
+        // A=5 B=12 C=3: one of 8 levels from 5, every 4 ticks.
+        let random = Blink {
+            mode: 3,
+            a: 5,
+            b: 12,
+            c: 3,
+            d: 0,
+        };
+        let rolls = HashedRolls::new(0);
+        let expected = |change| lights_tint(5 + rolls.roll(change, 8) as u8).a;
+        let mut view = FlightView::new(blinking(random));
+        assert_eq!(lights_alphas(&view), [expected(0)]);
+        ticks(&mut view, 4);
+        assert_eq!(lights_alphas(&view), [expected(1)]);
     }
 
     // The HUD.

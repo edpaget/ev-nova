@@ -7,10 +7,11 @@ use std::num::NonZeroU16;
 use nova_data::graphics::{PICT, decode_pict};
 use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
+use nova_data::records::ship_anim::ShipAnim;
 use nova_data::{GameData, LayerError, LayerSprite};
 
 use super::catalog::{
-    GovtId, LayerSheet, ShipId, ShipSheet, ShipSprites, StatusBarLayout, StatusBars,
+    Blink, GovtId, LayerSheet, ShipId, ShipSheet, ShipSprites, StatusBarLayout, StatusBars,
 };
 use crate::color::Color;
 use crate::font::Font;
@@ -40,7 +41,16 @@ impl ShipSprites for GameData {
             frame_height: sheet.frame_height(),
             glow,
             lights,
+            blink: blink(self, id),
         })
+    }
+}
+
+/// Ship `id`'s `shän` blink fields; steady when the `shän` cannot be read.
+fn blink(data: &GameData, id: ShipId) -> Blink {
+    match data.get::<ShipAnim>(id.0) {
+        Some(Ok(anim)) => Blink::from(anim.record),
+        _ => Blink::STEADY,
     }
 }
 
@@ -122,6 +132,7 @@ mod tests {
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
+    use nova_sim::Blink;
 
     use super::*;
 
@@ -214,6 +225,32 @@ mod tests {
                 frame_height: 2,
                 glow: None,
                 lights: None,
+                blink: Blink::STEADY,
+            })
+        );
+    }
+
+    #[test]
+    fn a_ships_sheet_carries_its_shans_blink() {
+        // The Shuttle's: mode 1, A=4 B=1 C=2 D=20.
+        let mut shan = layered(1000, 1, 8, 0, 1200);
+        for (at, value) in [(0x36, 1), (0x38, 4), (0x3A, 1), (0x3C, 2), (0x3E, 20)] {
+            put_i16(&mut shan, at, value);
+        }
+        let data = store(&[
+            (Ship::TYPE, 128, ship()),
+            (ShipAnim::TYPE, 128, shan),
+            (RLED, 1000, sheet(8)),
+            (RLED, 1200, sheet(8)),
+        ]);
+        assert_eq!(
+            data.ship_sheet(ShipId(128)).map(|sheet| sheet.blink),
+            Ok(Blink {
+                mode: 1,
+                a: 4,
+                b: 1,
+                c: 2,
+                d: 20,
             })
         );
     }

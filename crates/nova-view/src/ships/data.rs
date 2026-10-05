@@ -5,9 +5,10 @@ use std::num::NonZeroU16;
 
 use nova_data::graphics::SpriteSheet;
 use nova_data::records::ship::Ship;
+use nova_data::records::ship_anim::ShipAnim;
 use nova_data::{GameData, LayerError, LayerSprite, Record, StoreEntry};
 
-use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
+use super::catalog::{Blink, SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
 
 /// Each lookup is decoded afresh on every call; the browser asks once per
 /// selection.
@@ -36,6 +37,10 @@ impl ShipCatalog for GameData {
         let (glow, lights) = self.ship_layers(id).map_or((None, None), |layers| {
             (layers.glow.map(layer_info), layers.lights.map(layer_info))
         });
+        let blink = match self.get::<ShipAnim>(id.0) {
+            Some(Ok(anim)) => Blink::from(anim.record),
+            _ => Blink::STEADY,
+        };
         ShipEntry {
             id,
             name,
@@ -44,6 +49,7 @@ impl ShipCatalog for GameData {
             sprite,
             glow,
             lights,
+            blink,
         }
     }
 }
@@ -103,6 +109,7 @@ mod tests {
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
+    use nova_sim::Blink;
 
     use super::*;
     use crate::ships::catalog::{SheetInfo, ShipStats};
@@ -223,8 +230,48 @@ mod tests {
                 sprite: Ok(info(1000, 4)),
                 glow: Some(Ok(info(1100, 1))),
                 lights: Some(Ok(info(1200, 4))),
+                blink: Blink::STEADY,
             }
         );
+    }
+
+    #[test]
+    fn a_ship_carries_its_shans_blink() {
+        // The Shuttle's: mode 1, A=4 B=1 C=2 D=20.
+        let mut shan = anim(1000, 4, 0, 1200);
+        for (at, value) in [(0x36, 1_i16), (0x38, 4), (0x3A, 1), (0x3C, 2), (0x3E, 20)] {
+            put(&mut shan, at, &value.to_be_bytes());
+        }
+        let data = store(&[
+            (Ship::TYPE, 128, Some("Shuttle"), ship(STATS, "")),
+            (ShipAnim::TYPE, 128, None, shan),
+            (RLED, 1000, None, sheet(4)),
+            (RLED, 1200, None, sheet(4)),
+        ]);
+        assert_eq!(
+            data.ship(ShipId(128)).blink,
+            Blink {
+                mode: 1,
+                a: 4,
+                b: 1,
+                c: 2,
+                d: 20,
+            }
+        );
+    }
+
+    #[test]
+    fn a_ship_without_a_readable_shan_blinks_steadily() {
+        let mut short = anim(1000, 4, 0, 1200);
+        short[0x36..0x38].copy_from_slice(&1_i16.to_be_bytes());
+        short.pop();
+        let data = store(&[
+            (Ship::TYPE, 128, Some("Shuttle"), ship(STATS, "")),
+            (Ship::TYPE, 129, Some("Short"), ship(STATS, "")),
+            (ShipAnim::TYPE, 129, None, short),
+        ]);
+        assert_eq!(data.ship(ShipId(128)).blink, Blink::STEADY, "no shän");
+        assert_eq!(data.ship(ShipId(129)).blink, Blink::STEADY, "undecodable");
     }
 
     #[test]

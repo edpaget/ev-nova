@@ -116,6 +116,26 @@ fn data() -> Rc<GameData> {
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
+/// Ship 128 alone, with base, glow and lights sheets, its lights
+/// blinking as the Shuttle's do (`BlinkMode` 1, A=4 B=1 C=2 D=20): lit at
+/// ticks 1-3 and 10-12 of every 40.
+fn blinking_data() -> Rc<GameData> {
+    let mut shan = anim(1000, 1100, 1200);
+    for (at, value) in [(0x36, 1_i16), (0x38, 4), (0x3A, 1), (0x3C, 2), (0x3E, 20)] {
+        put(&mut shan, at, &value.to_be_bytes());
+    }
+    let fork = ForkBuilder::new()
+        .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship())
+        .resource(ShipAnim::TYPE, 128, None, &shan)
+        .resource(RLED, 1000, None, &sheet(8))
+        .resource(RLED, 1100, None, &sheet(16))
+        .resource(RLED, 1200, None, &sheet(16))
+        .build()
+        .bytes;
+    let file = OneFile(fork);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
 struct Harness {
     app: App<Rc<GameData>>,
     gpu: RecordingGpu,
@@ -124,7 +144,11 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
-        let data = data();
+        Self::over(data())
+    }
+
+    /// The app opening on the ship browser over `data`.
+    fn over(data: Rc<GameData>) -> Self {
         let app = App::new(&FakeWindow, Rc::clone(&data), start_screen(data));
         Self {
             app,
@@ -303,4 +327,23 @@ fn later_redraws_turn_the_ship() {
     assert_eq!(first[0].dest, second[0].dest);
     assert_ne!(first[0].uv, second[0].uv, "the base shows its next frame");
     assert_ne!(first[1].uv, second[1].uv, "the glow follows it");
+}
+
+#[test]
+fn the_lights_blink_by_the_shan() {
+    let mut harness = Harness::over(blinking_data());
+    // 1/60 s, tick 0: the lights are off; the base and glow show.
+    let first = harness.frame();
+    assert_eq!(sprite_quads(&first).len(), 2, "{:?}", first.batches);
+    // 2/60 s, tick 1: the lights are added over the glow.
+    let second = harness.frame();
+    assert_eq!(sprite_quads(&second).len(), 3, "{:?}", second.batches);
+    assert!(
+        matches!(
+            &second.batches[1],
+            Batch::Sprites { blend: Blend::Additive, quads, .. } if quads.len() == 2
+        ),
+        "{:?}",
+        second.batches[1]
+    );
 }

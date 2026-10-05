@@ -5,7 +5,7 @@
 use std::num::NonZeroU16;
 use std::rc::Rc;
 
-pub use nova_sim::{GovtId, ShipId};
+pub use nova_sim::{Blink, GovtId, ShipId};
 
 use crate::color::Color;
 use crate::font::Font;
@@ -23,8 +23,8 @@ pub struct LayerSheet {
 }
 
 /// A ship's resolved sprite sheet: its `rlëD`, how many frames make one
-/// turn, each frame's size, and the engine glow and running lights drawn
-/// over it.
+/// turn, each frame's size, the engine glow and running lights drawn over
+/// it, and how the lights blink.
 ///
 /// A layer the `shän` names but whose image cannot be resolved is `None`,
 /// like a layer it does not name: flight draws the ship without it and
@@ -42,8 +42,11 @@ pub struct ShipSheet {
     pub frame_height: u32,
     /// The engine glow, drawn while the ship thrusts.
     pub glow: Option<LayerSheet>,
-    /// The running lights, drawn always.
+    /// The running lights, drawn at the level [`nova_sim::lights_level`]
+    /// gives for `blink`.
     pub lights: Option<LayerSheet>,
+    /// The `shän`'s blink fields, which the lights blink by.
+    pub blink: Blink,
 }
 
 /// The ships' sprite sheets.
@@ -167,6 +170,7 @@ mod tests {
                 frame_height: 48,
                 glow: None,
                 lights: None,
+                blink: Blink::STEADY,
             })
         }
     }
