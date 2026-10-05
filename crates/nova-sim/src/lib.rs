@@ -124,6 +124,7 @@ pub mod clock;
 pub mod combat;
 pub mod data;
 pub mod date;
+pub mod escort;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod flight;

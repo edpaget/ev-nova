@@ -3916,6 +3916,7 @@ mod tests {
                 inherent_ai: 1,
                 comm_name: String::new(),
                 inherent_govt: None,
+                escort_type: -1,
             }],
             ..outfitting()
         }
@@ -4055,6 +4056,7 @@ mod tests {
             inherent_ai: 1,
             comm_name: String::new(),
             inherent_govt: None,
+            escort_type: -1,
         };
         FakeCatalog {
             traffic: systems

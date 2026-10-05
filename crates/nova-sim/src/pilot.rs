@@ -23,6 +23,7 @@ use crate::catalog::{
     DisasterId, GovtId, OutfitId, PilotCatalog, ShipId, StartError, StellarId, SystemId,
 };
 use crate::date::GameDate;
+use crate::escort::EscortOrder;
 use crate::market::Good;
 use crate::outfitter::outfit_mods;
 use crate::reserves::Reserves;
@@ -68,15 +69,19 @@ pub struct Pilot {
     pub(crate) escorts: Vec<Escort>,
 }
 
-/// A ship in the player's fleet: its class and its shield, armour and
-/// fuel. For now only a record, kept with the pilot and saved; flying the
-/// fleet comes later.
+/// A ship in the player's fleet: its class, its shield, armour and fuel,
+/// and the standing order it follows. In flight the session flies it as
+/// an NPC beside the player ([`Session`](crate::Session)); the record
+/// keeps what a save keeps.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Escort {
     /// The escort's ship class.
     pub ship: ShipId,
     /// Its shield, armour and fuel.
     pub reserves: Reserves,
+    /// Its standing order; none keeps formation (see
+    /// [`escort`](crate::escort)).
+    pub order: Option<EscortOrder>,
 }
 
 impl Pilot {
@@ -417,6 +422,7 @@ mod tests {
         let escort = Escort {
             ship: ShipId(130),
             reserves: Reserves::full(10.0, 20.0, 30.0),
+            order: Some(EscortOrder::Hold),
         };
         pilot.escorts.push(escort);
         assert_eq!(pilot.escorts(), [escort]);

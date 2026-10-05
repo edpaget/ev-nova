@@ -101,6 +101,7 @@ impl PilotCatalog for GameData {
                     inherent_ai: record.inherent_ai,
                     comm_name: record.comm_name.as_str().to_owned(),
                     inherent_govt: inherent_govt(record.inherent_govt),
+                    escort_type: record.escort_type,
                 })
             })
             .collect()
@@ -804,6 +805,7 @@ mod tests {
         bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x48, &[1129]);
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
+        put_i16s(&mut bytes, 0x732, &[2]);
         bytes
     }
 
@@ -844,6 +846,7 @@ mod tests {
             inherent_ai: 2,
             comm_name: "heavy shuttle".to_owned(),
             inherent_govt: Some(GovtId(129)),
+            escort_type: 2,
         };
         assert_eq!(
             data.ships(),

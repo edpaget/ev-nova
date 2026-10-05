@@ -685,6 +685,7 @@ mod tests {
             govt: None,
             ai_type: nova_sim::AiType::Warship,
             leader: None,
+            class: nova_sim::escort::EscortClass::Warship,
             stats: nova_sim::ShipStats::default(),
             reserves: Reserves::full(1.0, 1.0, 1.0),
             state: nova_sim::ShipState::default(),

@@ -123,7 +123,8 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
 
 /// `shïp` `id` with `fields`: 10,000 credits, tech level 1, for sale
 /// every day (`BuyRandom` 100), requiring nothing, with no default items,
-/// no `Flags3` and no inherent government, hailed as "ship `id`".
+/// no `Flags3` and no inherent government, hailed as "ship `id`", a wimpy
+/// trader whose escort class is worked out (`EscortType` -1).
 pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
     ShipRecord {
         id: ShipId(id),
@@ -146,6 +147,7 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         inherent_ai: 1,
         comm_name: format!("ship {id}"),
         inherent_govt: None,
+        escort_type: -1,
     }
 }
 
@@ -227,6 +229,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         govt: None,
         ai_type: AiType::WimpyTrader,
         leader: None,
+        class: crate::escort::EscortClass::Freighter,
         stats,
         reserves: stats.full(),
         state: ShipState::default(),

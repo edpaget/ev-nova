@@ -361,6 +361,7 @@ impl Traffic {
                 govt: ship.govt,
                 ai_type: ship.ai_type,
                 leader: ship.lead.map(|lead| NpcId(first + lead as u32)),
+                class: kind.escort_class,
                 stats: kind.stats,
                 reserves: kind.stats.full(),
                 state: ship.state,
@@ -404,6 +405,7 @@ mod tests {
     use crate::combat::armament::Armament;
     use crate::combat::hull::HullSpec;
     use crate::combat::weapon::WeaponSpec;
+    use crate::escort::EscortClass;
     use crate::geometry::Vec2;
     use crate::hail::Help;
     use crate::stats::ShipStats;
@@ -484,6 +486,7 @@ mod tests {
                 ShipKind {
                     stats: ShipStats::new(FAST, &[]),
                     inherent_ai: 3,
+                    escort_class: EscortClass::Medium,
                     hull: HullSpec {
                         hit_radius: 9.0,
                         ..HullSpec::default()
@@ -540,6 +543,7 @@ mod tests {
         assert_eq!(first.ship, ShipId(200));
         assert_eq!(first.govt, Some(GovtId(130)));
         assert_eq!(first.ai_type, AiType::WimpyTrader);
+        assert_eq!(first.class, EscortClass::Medium, "its ship type's");
         assert_eq!(first.leader, None);
         assert_eq!(first.stats, ShipStats::new(FAST, &[]));
         assert_eq!(first.reserves, first.stats.full());

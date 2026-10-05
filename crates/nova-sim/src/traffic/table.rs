@@ -24,6 +24,7 @@ use crate::catalog::{
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::HullSpec;
+use crate::escort::EscortClass;
 use crate::govt::Governments;
 use crate::outfitter::outfit_mods;
 use crate::pilot::tally;
@@ -176,6 +177,8 @@ pub struct ShipKind {
     pub stats: ShipStats,
     /// Its `InherentAI`, raw.
     pub inherent_ai: i16,
+    /// Its class as an escort.
+    pub escort_class: EscortClass,
     /// Its hull.
     pub hull: HullSpec,
     /// Its weapons: its stock weapons and those among its default items.
@@ -293,12 +296,13 @@ impl SpawnTable {
 }
 
 /// A ship of `record`, carrying its default items, armed from `arsenal`.
-fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) -> ShipKind {
+pub(crate) fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arsenal) -> ShipKind {
     let defaults = tally(record.defaults.iter().copied());
     let (armament, rounds) = arsenal.npc(record.id, &defaults, outfits);
     ShipKind {
         stats: ShipStats::new(record.fields, &outfit_mods(&defaults, outfits)),
         inherent_ai: record.inherent_ai,
+        escort_class: EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass),
         hull: arsenal.hull(record.id),
         armament,
         rounds,
@@ -314,6 +318,8 @@ mod tests {
     use crate::catalog::{
         DudeRecord, EscortRecord, HullRecord, OutfitId, StockWeapon, SystemTraffic,
     };
+    use crate::escort::EscortClass;
+    use crate::handling::ShipFields;
     use crate::stats::MORE_SPEED;
     use crate::testkit::{Draws, FAST, govt, hull, outfit, ship, weapon};
 
@@ -579,6 +585,7 @@ mod tests {
             })
             .collect();
         records[0].defaults = vec![(OutfitId(300), 1), (OutfitId(301), 6)];
+        records[2].escort_type = 2;
         records
     }
 
@@ -678,6 +685,34 @@ mod tests {
                 .map(|kind| kind.inherent_ai)
                 .collect::<Vec<_>>(),
             [1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn each_ship_type_named_gets_its_escort_class() {
+        let table = resolved();
+        assert_eq!(
+            table
+                .ships
+                .values()
+                .map(|kind| kind.escort_class)
+                .collect::<Vec<_>>(),
+            [
+                EscortClass::Freighter,
+                EscortClass::Freighter,
+                EscortClass::Warship
+            ],
+            "worked out for the traders, and 202's own"
+        );
+        let heavy = ShipRecord {
+            inherent_ai: 3,
+            fields: ShipFields { mass: 120, ..FAST },
+            ..ship(204, FAST)
+        };
+        assert_eq!(
+            kind(&heavy, &[], &arsenal()).escort_class,
+            EscortClass::Medium,
+            "by its mass"
         );
     }
 

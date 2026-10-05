@@ -1497,6 +1497,7 @@ impl Session {
         self.pilot.escorts.push(Escort {
             ship: npc.ship,
             reserves,
+            order: None,
         });
         self.leave(id);
         self.save_due = true;
@@ -1537,6 +1538,7 @@ impl Session {
         self.pilot.escorts.push(Escort {
             ship: self.pilot.ship,
             reserves: stock.full(),
+            order: None,
         });
         let defaults = pilot::tally(record.defaults.iter().copied());
         let records = &self.outfits;
@@ -6070,6 +6072,7 @@ mod tests {
         let escort = |ship| Escort {
             ship: ShipId(ship),
             reserves: Reserves::default(),
+            order: None,
         };
         session.pilot.escorts = vec![escort(130), escort(130), escort(131)];
         // Crew 10, 3 from each interceptor escort (ship 130), none from
@@ -6086,6 +6089,7 @@ mod tests {
             Escort {
                 ship: ShipId(130),
                 reserves: Reserves::default(),
+                order: None,
             };
             MAX_ESCORTS
         ];
@@ -6452,6 +6456,7 @@ mod tests {
             Escort {
                 ship: ShipId(130),
                 reserves: Reserves::default(),
+                order: None,
             };
             MAX_ESCORTS
         ];
@@ -6505,6 +6510,7 @@ mod tests {
                 },
                 ..trader_reserves()
             },
+            order: None,
         }
     }
 
@@ -6668,6 +6674,7 @@ mod tests {
             [Escort {
                 ship: ShipId(128),
                 reserves: Reserves::full(300.0, 450.0, 300.0),
+                order: None,
             }],
             "the old ship, stock and full"
         );

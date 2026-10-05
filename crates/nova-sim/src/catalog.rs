@@ -175,6 +175,9 @@ pub struct ShipRecord {
     /// `InherentGovt`: a `gövt` ID, or one + 1000 ("attributes only");
     /// none for -1 or + 2000 ("combat only").
     pub inherent_govt: Option<GovtId>,
+    /// Its `EscortType`, raw: the class it has as the player's escort
+    /// (see [`EscortClass::of`](crate::escort::EscortClass::of)).
+    pub escort_type: i16,
 }
 
 /// The standard commodities, raw from their string lists: `STR#` 4000

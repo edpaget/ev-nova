@@ -8,6 +8,7 @@ use crate::catalog::{GovtId, ShipId, WeaponId};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
+use crate::escort::EscortClass;
 use crate::flight::ShipState;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
@@ -83,6 +84,9 @@ pub struct Npc {
     pub ai_type: AiType,
     /// The fleet lead it escorts, if it is an escort.
     pub leader: Option<NpcId>,
+    /// Its ship type's class as an escort, which the escorts' threat
+    /// scores weigh (see [`escort`](crate::escort)).
+    pub class: EscortClass,
     /// How it performs, its default items included.
     pub stats: ShipStats,
     /// Its shield, armour and fuel (100 is one jump).
