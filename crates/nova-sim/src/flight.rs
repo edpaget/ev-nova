@@ -67,13 +67,7 @@ pub fn step(state: &mut ShipState, handling: &Handling, controls: Controls) {
         Turn::Left => normalized(state.heading - rate),
         Turn::Right => normalized(state.heading + rate),
         Turn::None if controls.reverse && state.velocity.length() > AT_REST_SPEED => {
-            let behind = heading_of(state.velocity * -1.0);
-            let off = shortest_turn(state.heading, behind);
-            if off.abs() <= rate {
-                behind
-            } else {
-                normalized(rate.copysign(off) + state.heading)
-            }
+            turn_toward(state.heading, heading_of(state.velocity * -1.0), rate)
         }
         Turn::None => state.heading,
     };
@@ -88,6 +82,18 @@ pub fn step(state: &mut ShipState, handling: &Handling, controls: Controls) {
         state.velocity = direction * handling.max_speed;
     }
     state.position = state.position + state.velocity;
+}
+
+/// Heading `from` turned towards heading `to` the short way, by at most
+/// `rate` degrees: exactly `to` once it is within one turn.
+#[must_use]
+pub fn turn_toward(from: f32, to: f32, rate: f32) -> f32 {
+    let off = shortest_turn(from, to);
+    if off.abs() <= rate {
+        to
+    } else {
+        normalized(rate.copysign(off) + from)
+    }
 }
 
 /// The unit vector a ship heading `heading` degrees faces.
@@ -227,6 +233,20 @@ mod tests {
     }
 
     // Turning.
+
+    #[test]
+    fn turn_toward_turns_by_the_rate_the_short_way_and_lands_on_the_target() {
+        assert_eq!(turn_toward(0.0, 90.0, 3.0), 3.0, "clockwise");
+        assert_eq!(turn_toward(90.0, 0.0, 3.0), 87.0, "anticlockwise");
+        assert_eq!(turn_toward(350.0, 10.0, 3.0), 353.0, "clockwise across 0");
+        assert_eq!(turn_toward(10.0, 350.0, 3.0), 7.0, "anticlockwise");
+        assert_eq!(turn_toward(1.0, 350.0, 3.0), 358.0, "wrapping below 0");
+        assert_eq!(turn_toward(88.5, 90.0, 3.0), 90.0, "within one turn");
+        assert_eq!(turn_toward(87.0, 90.0, 3.0), 90.0, "exactly one turn");
+        assert_eq!(turn_toward(358.0, 0.0, 3.0), 0.0, "onto 0");
+        assert_eq!(turn_toward(90.0, 90.0, 3.0), 90.0, "already there");
+        assert_eq!(turn_toward(0.0, 90.0, 0.0), 0.0, "cannot turn");
+    }
 
     #[test]
     fn right_turns_clockwise_and_left_anticlockwise_at_the_turn_rate() {

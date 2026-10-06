@@ -48,6 +48,9 @@
 //!   ship, location, date, cash, reserves, course, explored systems,
 //!   legal records, cargo, the events under way and the outfits owned,
 //!   starting from the first `chär`.
+//! - [`pre_jump`]: what the ship does between the jump key and the jump:
+//!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
+//!   turns to the bearing of the next system.
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
 //!   fuel ([`sells_fuel`]), what filling the tank costs, and each
 //!   [`RechargeRefusal`].
@@ -92,6 +95,7 @@ pub mod market;
 pub mod navigation;
 pub mod outfitter;
 pub mod pilot;
+pub mod pre_jump;
 pub mod recharge;
 pub mod reserves;
 pub mod save;
