@@ -2900,6 +2900,21 @@ mod tests {
     }
 
     #[test]
+    fn an_engine_multi_jump_chains_on_with_no_fuel_left_after_the_first_hop() {
+        let catalog = chained(catalog(), 10);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        session.pilot.reserves.fuel.now = 100.0;
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(134))
+        );
+        assert_eq!(session.course(), []);
+        assert_eq!(session.reserves().fuel.now, 0.0, "one jump's fuel");
+        assert_eq!(dmy(&session), (24, 6, 1177), "one jump's day");
+    }
+
+    #[test]
     fn a_multi_jump_modval_of_one_makes_a_single_hop() {
         let catalog = chained(catalog(), 1);
         let mut session = bound_for_134(&catalog, MultiJumpRule::default());
