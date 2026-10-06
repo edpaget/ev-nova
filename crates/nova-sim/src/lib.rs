@@ -8,9 +8,9 @@
 //!   each NPC by its AI type to [`WimpyTrader`], [`BraveTrader`],
 //!   [`Warship`] or [`Interceptor`]: whom they attack by governments'
 //!   relations and the player's legal record, when they flee, how they
-//!   come to each other's help, and which weapon they fire; and the
+//!   come to each other's help, and which weapon they fire; the
 //!   player's escorts to [`EscortAi`], which flies them by their standing
-//!   orders.
+//!   orders; and an NPC carrier's fighters to [`CarriedAi`].
 //! - [`bay`]: fighter bays: the fighters a bay holds ([`capacity`]), how
 //!   one is launched, the window it docks in ([`dock_window`]) with its
 //!   [`Carrier`], and what the flight is told of fighters abandoned
@@ -107,8 +107,9 @@
 //! - [`session`]: a flight [`Session`], a pilot's ship flying
 //!   from its starting system, landing, jumping along a plotted course,
 //!   fighting, boarding and capturing ships, hailing them
-//!   ([`HailView`], [`HailRefusal`], [`CommNote`]), and flying and
-//!   commanding its escorts.
+//!   ([`HailView`], [`HailRefusal`], [`CommNote`]), flying and
+//!   commanding its escorts, and launching and docking the fighters of
+//!   its bays and the NPC carriers' ([`Sortie`]).
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the

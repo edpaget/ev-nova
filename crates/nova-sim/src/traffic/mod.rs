@@ -7,8 +7,9 @@
 //!   and the fleets, and where each ship starts.
 //! - [`npc`]: an [`Npc`]: its ship, government, AI type, escort class
 //!   and duty as the player's escort, stats, reserves, flight state and
-//!   goal, its condition, armament and fire command, and its provocation,
-//!   aggression and the ship it last inspected.
+//!   goal, its condition, armament and fire command, its provocation,
+//!   aggression and the ship it last inspected, and the carrier that
+//!   launched it from a fighter bay, if any.
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
 //!
@@ -30,8 +31,10 @@
 //!    its provocation, and one that stops inspecting a ship remembers it;
 //! 5. the autopilot and a flight step for every NPC, each flying towards
 //!    the ship its goal is about, the player's included (the one it
-//!    assists, or escorts in formation);
-//! 6. and the removal of those that landed or jumped out.
+//!    assists, or escorts in formation), a fighter docking its carrier;
+//! 6. and the removal of those that landed, jumped out or docked, each
+//!    in [`Traffic::departed`] with how it left, for its session to take
+//!    a fighter docked aboard.
 //!
 //! The fight ([`combat`](crate::combat)) damages them, and its session
 //! takes out each one destroyed ([`Traffic::remove`]).
