@@ -17,6 +17,9 @@
 //!   distance (at least the standard one) plus [`ARRIVAL_MARGIN`] from the
 //!   centre, on the side facing the system it came from, at rest and
 //!   facing the centre, so it can jump on at once.
+//! - [`hops_per_jump`] is how many systems along the course one jump
+//!   passes, from the ship's multi-jump total and the [`MultiJumpRule`]
+//!   it follows.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -56,6 +59,33 @@ pub fn base_jump_days(mass: i16) -> u32 {
         ..=99 => 1,
         100..=199 => 2,
         _ => 3,
+    }
+}
+
+/// How a multi-jump outfit (`oütf` `ModType` 32) chains a jump's hops.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MultiJumpRule {
+    /// The original engine's reading, and the organ's own text ("multiple
+    /// jumps to be performed as if performing a single jump ... a maximum
+    /// of ten jumps"): the multi-jump total is the number of hops, at least
+    /// one (`_ShipJumpsPerJump` @0x77b4), all for one jump's fuel (@0x6be31)
+    /// and days (`_ShipHyperTransitTime` @0x6c0a7), the chain passing along
+    /// the course until it runs out (`_HandlePlayer` @0x6bd8f-0x6bdfa).
+    #[default]
+    Engine,
+    /// The Bible-style reading: one hop plus one for each of the
+    /// multi-jump total, each taking a jump's fuel and days, the chain
+    /// stopping at a hop the ship has no fuel for.
+    PerHop,
+}
+
+/// How many hops one jump makes along the course, for a ship whose
+/// outfits give `multi_jump`, under `rule`: at least one.
+#[must_use]
+pub fn hops_per_jump(multi_jump: u32, rule: MultiJumpRule) -> u32 {
+    match rule {
+        MultiJumpRule::Engine => multi_jump.max(1),
+        MultiJumpRule::PerHop => multi_jump.saturating_add(1),
     }
 }
 
@@ -249,6 +279,18 @@ pub fn arrival(from: Vec2, to: Vec2, jump_distance: f32) -> ShipState {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hops_per_jump_reads_the_rule() {
+        use MultiJumpRule::{Engine, PerHop};
+        assert_eq!(MultiJumpRule::default(), Engine);
+        for (multi_jump, hops) in [(0, 1), (1, 1), (2, 2), (10, 10)] {
+            assert_eq!(hops_per_jump(multi_jump, Engine), hops, "{multi_jump}");
+        }
+        for (multi_jump, hops) in [(0, 1), (1, 2), (10, 11), (u32::MAX, u32::MAX)] {
+            assert_eq!(hops_per_jump(multi_jump, PerHop), hops, "{multi_jump}");
+        }
+    }
 
     #[test]
     fn the_jumps_fuel_holds_are_whole_jumps_of_it() {

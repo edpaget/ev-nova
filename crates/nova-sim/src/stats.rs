@@ -94,7 +94,7 @@ pub struct ShipStats {
     /// Whether it jumps without slowing down first.
     pub fast_jump: bool,
     /// How many systems a jump passes along the course, as the outfits
-    /// give it.
+    /// give it (see [`hops_per_jump`](crate::hyperspace::hops_per_jump)).
     pub multi_jump: u32,
 }
 
