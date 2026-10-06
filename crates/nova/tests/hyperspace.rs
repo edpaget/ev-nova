@@ -623,7 +623,7 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     assert_eq!(session.course(), [SystemId(130)]);
     assert_eq!(session.reserves().fuel.now, 200.0);
     assert_eq!(date(&harness), (24, 6, 1177));
-    assert_eq!(harness.ship().position, nova_sim::Vec2::new(-1000.0, 0.0));
+    assert_eq!(harness.ship().position, nova_sim::Vec2::new(-1001.0, 0.0));
     assert_eq!(
         harness.session().pilot().events().count(),
         0,
@@ -632,13 +632,10 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     assert!(shows(&arrived, "Beta (sÿst 129)"), "{:?}", texts(&arrived));
     assert_eq!(quads(&arrived)[0].dest, stellar_drawn(&harness));
 
-    // It drifts in from the edge; out again, and J goes on to Gamma, the
+    // It rests at the edge, so J goes straight on to Gamma, the
     // destination.
     harness.run(1);
-    assert!(harness.ship().position.length() < MIN_JUMP_DISTANCE);
-    harness.press(Key::Char('j'));
-    assert!(harness.flight().jump_effect().is_none(), "too close");
-    harness.fly_out();
+    assert_eq!(harness.ship().position, nova_sim::Vec2::new(-1001.0, 0.0));
     harness.press(Key::Char('j'));
     let last = harness.run(2);
     let session = harness.session();
@@ -648,6 +645,30 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     assert_eq!(date(&harness), (25, 6, 1177));
     assert!(shows(&last, "Gamma (sÿst 130)"), "{:?}", texts(&last));
     assert_eq!(quads(&last)[0].dest, stellar_drawn(&harness));
+}
+
+#[test]
+fn j_straight_after_arriving_jumps_on_to_the_next_system() {
+    let mut harness = Harness::flying();
+    harness.out_towards(130);
+    harness.arrive_in(129);
+    // Input is accepted again once the jump effect is over.
+    let mut frames = 0;
+    while harness.flight().jump_effect().is_some() {
+        frames += 1;
+        assert!(frames <= 120, "the jump effect never ended");
+        harness.frame();
+    }
+    // A second later, J goes straight on to Gamma.
+    harness.run(1);
+    harness.press(Key::Char('j'));
+    let pressed = harness.frame();
+    assert!(!shows(&pressed, TOO_CLOSE), "{:?}", texts(&pressed));
+    assert!(harness.flight().jump_effect().is_some(), "jumping on");
+    harness.run(2);
+    let session = harness.session();
+    assert_eq!(session.system(), SystemId(130));
+    assert_eq!(session.reserves().fuel.now, 100.0);
 }
 
 #[test]
@@ -794,7 +815,7 @@ fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     // A first jump drains the tank below full, so the second jump's
     // `before` sits where regen is free to show, not clamped at the top.
     harness.jump_to_beta();
-    // It drifts in from the edge, so it has to fly out again to jump.
+    // It rests at the edge, so plotting on to Gamma needs no flying out.
     harness.run(1);
     harness.out_towards(130);
     let bar_before = fuel_bar(&harness.frame());

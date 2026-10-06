@@ -11,16 +11,16 @@
 //!   the ship is nearer the system's centre than its jump distance
 //!   ([`MIN_JUMP_DISTANCE`] standard, the Bible's "Jump Distance 1000
 //!   pixels", which outfits can move), or it has less than [`JUMP_FUEL`].
-//! - [`arrival`] places the ship in the system it jumps to:
-//!   [`ARRIVAL_DISTANCE`] from the centre, on the side facing the system
-//!   it came from, heading for the centre at its top speed.
+//! - [`arrival`] places the ship in the system it jumps to: its jump
+//!   distance (at least the standard one) plus [`ARRIVAL_MARGIN`] from the
+//!   centre, on the side facing the system it came from, at rest and
+//!   facing the centre, so it can jump on at once.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::catalog::{GovtId, StarSystem, SystemId};
 use crate::flight::{ShipState, heading_of};
 use crate::geometry::Vec2;
-use crate::handling::Handling;
 
 /// How far from the system's centre, in pixels, a ship must be to jump
 /// unless its outfits say otherwise (the Bible: "Jump Distance 1000
@@ -35,9 +35,13 @@ pub fn max_jumps(fuel: f32) -> u32 {
     // `as` saturates a float into an integer: a negative becomes 0.
     (fuel / JUMP_FUEL).floor() as u32
 }
-/// How far from the centre of the system it jumps to the ship arrives: the
-/// system's edge, where it could jump out again.
-pub const ARRIVAL_DISTANCE: f32 = MIN_JUMP_DISTANCE;
+/// How far outside its no-jump zone, in pixels, a ship arrives, so that
+/// rounding in the bearing it arrives on can never leave it inside.
+pub const ARRIVAL_MARGIN: f32 = 1.0;
+/// How far from the centre of the system it jumps to a ship with the
+/// standard jump distance arrives: just outside the no-jump zone, where it
+/// can jump out again.
+pub const ARRIVAL_DISTANCE: f32 = MIN_JUMP_DISTANCE + ARRIVAL_MARGIN;
 /// How many days pass in a jump.
 pub const DAYS_PER_JUMP: u32 = 1;
 
@@ -193,14 +197,15 @@ pub fn check_jump(
     Ok(next)
 }
 
-/// Where a ship that flies as `handling` allows arrives, jumping from the
-/// system at map position `from` to the one at `to`: [`ARRIVAL_DISTANCE`]
-/// from the centre on the side facing `from`, facing the centre and moving
-/// towards it at its top speed, as it drops out of hyperspace. Two systems
-/// at the same map position give no side, so it arrives from below, facing
-/// up.
+/// Where a ship that must be `jump_distance` from the centre to jump
+/// arrives, jumping from the system at map position `from` to the one at
+/// `to`: [`ARRIVAL_MARGIN`] outside that distance, or [`ARRIVAL_DISTANCE`]
+/// when that is further, on the side facing `from`, at rest and facing the
+/// centre, as it drops out of hyperspace. It can jump on at once. Two
+/// systems at the same map position give no side, so it arrives from
+/// below, facing up.
 #[must_use]
-pub fn arrival(from: Vec2, to: Vec2, handling: &Handling) -> ShipState {
+pub fn arrival(from: Vec2, to: Vec2, jump_distance: f32) -> ShipState {
     let away = from - to;
     let length = away.length();
     let outward = if length > 0.0 {
@@ -210,8 +215,8 @@ pub fn arrival(from: Vec2, to: Vec2, handling: &Handling) -> ShipState {
     };
     let inward = outward * -1.0;
     ShipState {
-        position: outward * ARRIVAL_DISTANCE,
-        velocity: inward * handling.max_speed,
+        position: outward * ARRIVAL_DISTANCE.max(jump_distance + ARRIVAL_MARGIN),
+        velocity: Vec2::ZERO,
         heading: heading_of(inward),
     }
 }
@@ -466,43 +471,42 @@ mod tests {
     fn the_named_values_are_pinned() {
         assert_eq!(MIN_JUMP_DISTANCE, 1000.0);
         assert_eq!(JUMP_FUEL, 100.0);
-        assert_eq!(ARRIVAL_DISTANCE, MIN_JUMP_DISTANCE);
+        assert_eq!(ARRIVAL_MARGIN, 1.0);
+        assert_eq!(ARRIVAL_DISTANCE, 1001.0);
         assert_eq!(DAYS_PER_JUMP, 1);
     }
 
     // Arriving.
-
-    const HANDLING: Handling = Handling {
-        max_speed: 6.0,
-        accel: 0.3,
-        turn_rate: 3.0,
-    };
 
     fn close(a: Vec2, b: Vec2) -> bool {
         (a - b).length() < 1e-3
     }
 
     #[test]
-    fn from_the_east_the_ship_arrives_at_the_east_edge_heading_west() {
-        let arrived = arrival(Vec2::new(600.0, 0.0), Vec2::new(0.0, 0.0), &HANDLING);
-        assert_eq!(arrived.position, Vec2::new(1000.0, 0.0));
-        assert_eq!(arrived.velocity, Vec2::new(-6.0, 0.0));
+    fn from_the_east_the_ship_arrives_at_the_east_edge_facing_west() {
+        let arrived = arrival(
+            Vec2::new(600.0, 0.0),
+            Vec2::new(0.0, 0.0),
+            MIN_JUMP_DISTANCE,
+        );
+        assert_eq!(arrived.position, Vec2::new(1001.0, 0.0));
+        assert_eq!(arrived.velocity, Vec2::ZERO);
         assert_eq!(arrived.heading, 270.0);
     }
 
     #[test]
     fn from_the_north_west_the_ship_arrives_at_the_north_west_edge() {
-        let arrived = arrival(Vec2::new(100.0, 50.0), Vec2::new(400.0, 350.0), &HANDLING);
-        let diagonal = 1000.0 / 2.0_f32.sqrt();
+        let arrived = arrival(
+            Vec2::new(100.0, 50.0),
+            Vec2::new(400.0, 350.0),
+            MIN_JUMP_DISTANCE,
+        );
+        let diagonal = ARRIVAL_DISTANCE / 2.0_f32.sqrt();
         assert!(
             close(arrived.position, Vec2::new(-diagonal, -diagonal)),
             "{arrived:?}"
         );
-        let speed = 6.0 / 2.0_f32.sqrt();
-        assert!(
-            close(arrived.velocity, Vec2::new(speed, speed)),
-            "{arrived:?}"
-        );
+        assert_eq!(arrived.velocity, Vec2::ZERO);
         assert!((arrived.heading - 135.0).abs() < 1e-3, "{arrived:?}");
         assert!((arrived.position.length() - ARRIVAL_DISTANCE).abs() < 1e-3);
     }
@@ -510,17 +514,55 @@ mod tests {
     #[test]
     fn from_the_same_map_position_the_ship_arrives_from_below_facing_up() {
         let here = Vec2::new(20.0, -30.0);
-        let arrived = arrival(here, here, &HANDLING);
-        assert_eq!(arrived.position, Vec2::new(0.0, 1000.0));
-        assert_eq!(arrived.velocity, Vec2::new(0.0, -6.0));
+        let arrived = arrival(here, here, MIN_JUMP_DISTANCE);
+        assert_eq!(arrived.position, Vec2::new(0.0, 1001.0));
+        assert_eq!(arrived.velocity, Vec2::ZERO);
         assert_eq!(arrived.heading, 0.0);
     }
 
     #[test]
-    fn a_ship_that_cannot_move_arrives_at_rest() {
-        let arrived = arrival(Vec2::new(0.0, -10.0), Vec2::ZERO, &Handling::default());
-        assert_eq!(arrived.position, Vec2::new(0.0, -1000.0));
-        assert_eq!(arrived.velocity.length(), 0.0);
-        assert_eq!(arrived.heading, 180.0);
+    fn the_ship_arrives_at_rest_facing_the_centre() {
+        let arrived = arrival(Vec2::new(0.0, -10.0), Vec2::ZERO, MIN_JUMP_DISTANCE);
+        assert_eq!(arrived.position, Vec2::new(0.0, -1001.0));
+        assert_eq!(arrived.velocity, Vec2::ZERO);
+        assert_eq!(arrived.heading, 180.0, "facing down, to the centre");
+    }
+
+    #[test]
+    fn a_raised_jump_distance_moves_the_arrival_out_and_a_lowered_one_does_not() {
+        let from = Vec2::new(600.0, 0.0);
+        let raised = arrival(from, Vec2::ZERO, 1250.0);
+        assert_eq!(raised.position, Vec2::new(1250.0 + ARRIVAL_MARGIN, 0.0));
+        let lowered = arrival(from, Vec2::ZERO, 500.0);
+        assert_eq!(lowered.position, Vec2::new(ARRIVAL_DISTANCE, 0.0));
+        let none = arrival(from, Vec2::ZERO, 0.0);
+        assert_eq!(none.position, Vec2::new(ARRIVAL_DISTANCE, 0.0));
+    }
+
+    #[test]
+    fn from_any_bearing_the_ship_arrives_where_it_can_jump() {
+        // Before the margin, several of these bearings (and the first odd
+        // pair) left the ship at 999.99994, inside the zone.
+        let around = (0..48u8).map(|step| {
+            let angle = (f32::from(step) * 7.5).to_radians();
+            (
+                Vec2::new(500.0 * angle.cos(), 500.0 * angle.sin()),
+                Vec2::ZERO,
+            )
+        });
+        let odd = [
+            (Vec2::new(100.0, 50.0), Vec2::new(400.0, 350.0)),
+            (Vec2::new(-37.0, 211.0), Vec2::new(13.0, -5.0)),
+        ];
+        for (from, to) in around.chain(odd) {
+            for jump_distance in [MIN_JUMP_DISTANCE, 1250.0, 500.0, 0.0] {
+                let arrived = arrival(from, to, jump_distance);
+                assert_eq!(
+                    check_jump(&arrived, JUMP_FUEL, NEXT, jump_distance),
+                    Ok(SystemId(129)),
+                    "{from:?} to {to:?} at {jump_distance}: {arrived:?}"
+                );
+            }
+        }
     }
 }

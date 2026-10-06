@@ -331,9 +331,10 @@ impl Session {
 
     /// Ends the jump under way, if any, and gives the system arrived in:
     /// the jump's fuel is used, the date advances by the days the stats give
-    /// a jump, the system is taken off the course, and the ship is placed at
-    /// its edge facing the system it came from (see [`arrival`]) with its
-    /// reserves as they were. Each day
+    /// a jump, the system is taken off the course, and the ship is placed
+    /// just outside its no-jump zone, at rest on the side facing the system
+    /// it came from (see [`arrival`]), with its reserves as they were, so it
+    /// can jump on at once. Each day
     /// steps the planetary events, rolled on `chance`. The new system's
     /// stellars are read from `catalog`. `None`, and nothing changes, when
     /// no jump is under way.
@@ -353,7 +354,7 @@ impl Session {
             pilot.course.remove(0);
         }
         let map = |id| self.star_map.position(id).unwrap_or_default();
-        self.player = arrival(map(pilot.system), map(next), &self.stats.handling);
+        self.player = arrival(map(pilot.system), map(next), self.stats.jump_distance);
         pilot.system = next;
         pilot.stellar = None;
         pilot.explore(next);
@@ -708,6 +709,7 @@ mod tests {
     use crate::catalog::{CharacterStart, LandingSite, SoundId, StellarId};
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
     use crate::chance::NeverFires;
+    use crate::clock::TICKS_PER_SECOND;
     use crate::flight::Turn;
     use crate::fuel::FUEL_SCOOP;
     use crate::geometry::Vec2;
@@ -1324,9 +1326,13 @@ mod tests {
         assert_eq!(session.jumping(), None);
         assert_eq!(
             *session.player(),
-            crate::hyperspace::arrival(Vec2::ZERO, Vec2::new(600.0, 0.0), &session.handling())
+            crate::hyperspace::arrival(
+                Vec2::ZERO,
+                Vec2::new(600.0, 0.0),
+                crate::hyperspace::MIN_JUMP_DISTANCE
+            )
         );
-        assert_eq!(session.player().position, Vec2::new(-1000.0, 0.0));
+        assert_eq!(session.player().position, Vec2::new(-1001.0, 0.0));
     }
 
     #[test]
@@ -1366,9 +1372,9 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         session.tick(Controls::default());
         assert_eq!(
-            session.begin_jump(),
-            Err(JumpRefusal::TooClose { distance: 994.0 }),
-            "drifting in from the edge"
+            session.player().position,
+            Vec2::new(-ARRIVAL_DISTANCE, 0.0),
+            "resting at the edge"
         );
         assert_eq!(jump(&mut session, &catalog, 132), Some(SystemId(132)));
         assert_eq!(session.system(), SystemId(132));
@@ -1376,7 +1382,7 @@ mod tests {
         assert_eq!(session.reserves().fuel.now, 100.0);
         assert_eq!(dmy(&session), (25, 6, 1177));
         // From 131, north of 132 on screen: it arrives at the top edge.
-        assert_eq!(session.player().position, Vec2::new(0.0, -1000.0));
+        assert_eq!(session.player().position, Vec2::new(0.0, -1001.0));
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
     }
 
@@ -2285,6 +2291,37 @@ mod tests {
             Err(JumpRefusal::TooClose { distance: 600.0 })
         );
         assert_eq!(plain.jumping(), None);
+    }
+
+    #[test]
+    fn after_arriving_and_a_second_of_flight_the_ship_can_jump_on() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(jump(&mut session, &catalog, 132), Some(SystemId(131)));
+        for _ in 0..TICKS_PER_SECOND {
+            session.tick(Controls::default());
+        }
+        assert_eq!(session.begin_jump(), Ok(SystemId(132)));
+    }
+
+    #[test]
+    fn with_a_raised_jump_distance_the_ship_arrives_outside_it_and_can_jump_on() {
+        let raised = owning(catalog(), HYPERSPACE_DISTANCE, 250, 1);
+        let mut session = Session::start(&raised).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        session.player.position = Vec2::new(0.0, 1300.0);
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(
+            session.arrive(&raised, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        let distance = session.player().position.length();
+        assert!(distance >= 1250.0, "outside the raised zone: {distance}");
+        for _ in 0..TICKS_PER_SECOND {
+            session.tick(Controls::default());
+        }
+        assert_eq!(session.begin_jump(), Ok(SystemId(132)));
     }
 
     #[test]

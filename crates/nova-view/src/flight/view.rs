@@ -3151,9 +3151,10 @@ mod tests {
         assert_eq!(view.course_map().current(), Some(SystemId(131)));
         assert_eq!(view.course_map().route(), []);
         let arrived = player(&view);
-        assert_eq!(arrived.position, Vec2::new(-1000.0, 0.0));
+        assert_eq!(arrived.position, Vec2::new(-1001.0, 0.0));
+        assert_eq!(arrived.velocity, Vec2::ZERO, "at rest");
         assert_eq!(reserves(&view).fuel.now, fuel_leaving - 100.0);
-        assert_eq!(view.shown_position(), at(-1000.0, 0.0));
+        assert_eq!(view.shown_position(), at(-1001.0, 0.0));
         let list = drawn(&view);
         let (at_fade, color) = fade(&list).expect("a fade");
         assert_eq!(color.a, 230);
@@ -3164,7 +3165,7 @@ mod tests {
             &mut hud,
             view.status_bar().expect("a status bar"),
             &HudState {
-                position: at(-1000.0, 0.0),
+                position: at(-1001.0, 0.0),
                 stellars: &[at(0.0, 0.0)],
                 reserves: reserves(&view),
                 nav: NavDisplay::None,
@@ -3187,8 +3188,9 @@ mod tests {
         let mut stars = DrawList::new();
         starfield::draw(&mut stars, &view.camera());
         assert!(list.iter().take(stars.len()).eq(stars.iter()));
+        view.input(&key(Key::Up, true));
         ticks(&mut view, 3);
-        assert_eq!(player(&view), stepped(arrived, Controls::default(), 3));
+        assert_eq!(player(&view), stepped(arrived, THRUST, 3));
         assert_ne!(player(&view), arrived, "it flies again");
     }
 
