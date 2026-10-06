@@ -61,6 +61,7 @@ pub(crate) const FAST: ShipFields = ShipFields {
     mass: 40,
     free_mass: 30,
     contribute: 0x1,
+    flags2: 0,
 };
 
 /// A landable planet at (`x`, `y`), 100 x 100 (radius 50).

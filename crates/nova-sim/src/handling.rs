@@ -9,8 +9,8 @@
 //! number for number.
 
 /// A `shïp`'s `Speed`, `Accel`, `Maneuver`, `Shield`, `Armor`, `Fuel`,
-/// `FuelRegen`, `Holds`, `Mass`, `FreeMass` and `Contribute`, raw from the
-/// record.
+/// `FuelRegen`, `Holds`, `Mass`, `FreeMass`, `Contribute` and `Flags2`, raw
+/// from the record.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShipFields {
     /// `Speed`: top speed; 300 is average.
@@ -39,6 +39,8 @@ pub struct ShipFields {
     pub free_mass: i16,
     /// `Contribute`: the bits the ship meets an outfit's `Require` with.
     pub contribute: u64,
+    /// `Flags2`: the raw flag word, decoded in [`crate::stats::ShipStats`].
+    pub flags2: u16,
 }
 
 /// `Speed` per pixel a tick. The Bible gives a weapon's speed in "pixels

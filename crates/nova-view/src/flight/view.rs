@@ -1048,6 +1048,7 @@ mod tests {
         mass: 15,
         free_mass: 8,
         contribute: 1,
+        flags2: 0,
     };
 
     fn sheet() -> ShipSheet {

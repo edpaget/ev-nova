@@ -98,6 +98,7 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         holds: ship.holds,
         mass: ship.mass,
         free_mass: ship.free_mass,
+        flags2: ship.flags2.bits(),
         contribute: ship.contribute.bits(),
     };
     assert_eq!(data.ship_fields(session.ship()), Ok(fields));

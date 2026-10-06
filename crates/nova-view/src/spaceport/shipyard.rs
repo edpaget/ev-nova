@@ -815,6 +815,7 @@ mod tests {
             mass: 25,
             free_mass: 12,
             contribute: 0,
+            flags2: 0,
         },
         max_gun: 2,
         max_tur: 1,

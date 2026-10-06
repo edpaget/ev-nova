@@ -277,6 +277,7 @@ fn ship_fields(ship: &Ship) -> ShipFields {
         mass: ship.mass,
         free_mass: ship.free_mass,
         contribute: ship.contribute.bits(),
+        flags2: ship.flags2.bits(),
     }
 }
 
@@ -575,6 +576,14 @@ mod tests {
         put_i16s(&mut bytes, 0x5E, &[8]);
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.fuel_regen), Ok(8));
+    }
+
+    #[test]
+    fn a_ships_fields_include_its_flags2() {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x62, &[0x4021]);
+        let data = store(&[(Ship::TYPE, 128, bytes)]);
+        assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.flags2), Ok(0x4021));
     }
 
     /// A `shïp` carrying `items` in its `DefaultItems` 1-4 and `more` in

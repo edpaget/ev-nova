@@ -142,6 +142,7 @@ mod tests {
         mass: 15,
         free_mass: 8,
         contribute: 1,
+        flags2: 0,
     };
 
     fn outfit(mod_type: i16, mod_val: i16, count: u16) -> OutfitMod {
