@@ -29,11 +29,14 @@
 //! - [`FAST_JUMP`] (37), carried at all, whatever its `ModVal`, or a
 //!   `shïp` whose `Flags2` has [`FAST_JUMP_HULL`] (0x0020) set, lets the
 //!   ship jump without slowing down first.
+//! - [`MULTI_JUMP`] (32) is how many systems a jump passes along the
+//!   course. It is the one total that is not `ModVal` x count: each
+//!   outfit carried adds its `ModVal` once, whatever its count, as the
+//!   engine's `_ShipJumpsPerJump` does.
 //!
 //! Each total is summed wide, and none goes below none, so no mix of
-//! outfits can overflow or turn a figure negative. Multi-jump (32), the
-//! inertial dampener (38) and every other `ModType` change nothing here
-//! yet.
+//! outfits can overflow or turn a figure negative. The inertial dampener
+//! (38) and every other `ModType` change nothing here yet.
 
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
 use crate::handling::{Handling, ShipFields};
@@ -57,6 +60,9 @@ pub const MORE_FUEL: i16 = 12;
 pub const HYPERSPACE_DAYS: i16 = 22;
 /// The `oütf` `ModType` that moves the no-jump zone's edge, in pixels.
 pub const HYPERSPACE_DISTANCE: i16 = 23;
+/// The `oütf` `ModType` whose `ModVal` is how many systems a jump passes
+/// along the course.
+pub const MULTI_JUMP: i16 = 32;
 /// The `oütf` `ModType` that lets the ship jump without slowing down.
 pub const FAST_JUMP: i16 = 37;
 /// The `shïp` `Flags2` bit for a hull that jumps without slowing down.
@@ -87,6 +93,9 @@ pub struct ShipStats {
     pub jump_days: u32,
     /// Whether it jumps without slowing down first.
     pub fast_jump: bool,
+    /// How many systems a jump passes along the course, as the outfits
+    /// give it.
+    pub multi_jump: u32,
 }
 
 impl ShipStats {
@@ -123,6 +132,15 @@ impl ShipStats {
                 || outfits
                     .iter()
                     .any(|outfit| outfit.mod_type == FAST_JUMP && outfit.count > 0),
+            multi_jump: u32::try_from(
+                outfits
+                    .iter()
+                    .filter(|outfit| outfit.mod_type == MULTI_JUMP && outfit.count > 0)
+                    .map(|outfit| i64::from(outfit.mod_val))
+                    .sum::<i64>()
+                    .max(0),
+            )
+            .unwrap_or(u32::MAX),
         }
     }
 
@@ -374,9 +392,36 @@ mod tests {
     }
 
     #[test]
+    fn a_multi_jump_outfit_gives_its_modval_once_whatever_the_count() {
+        assert_eq!(MULTI_JUMP, 32);
+        let total = |outfits: &[OutfitMod]| ShipStats::new(AVERAGE, outfits).multi_jump;
+        // The stock Multi-Jumping Organ: 10.
+        assert_eq!(total(&[outfit(MULTI_JUMP, 10, 1)]), 10);
+        assert_eq!(total(&[outfit(MULTI_JUMP, 10, 2)]), 10, "not x count");
+        assert_eq!(
+            total(&[outfit(MULTI_JUMP, 3, 1), outfit(MULTI_JUMP, 4, 5)]),
+            7,
+            "summed over the outfits"
+        );
+        assert_eq!(total(&[outfit(MULTI_JUMP, 10, 0)]), 0, "none carried");
+        assert_eq!(total(&[]), 0);
+    }
+
+    #[test]
+    fn a_negative_multi_jump_total_is_none() {
+        let stats = ShipStats::new(AVERAGE, &[outfit(MULTI_JUMP, -5, 1)]);
+        assert_eq!(stats.multi_jump, 0);
+        let mixed = ShipStats::new(
+            AVERAGE,
+            &[outfit(MULTI_JUMP, -5, 1), outfit(MULTI_JUMP, 8, 1)],
+        );
+        assert_eq!(mixed.multi_jump, 3);
+    }
+
+    #[test]
     fn every_other_mod_type_changes_nothing() {
         let plain = ShipStats::new(AVERAGE, &[]);
-        for mod_type in [-1, 0, 1, 3, 5, 10, 11, 13, 15, 17, 32, 38, 45, 99] {
+        for mod_type in [-1, 0, 1, 3, 5, 10, 11, 13, 15, 17, 38, 45, 99] {
             assert_eq!(
                 ShipStats::new(AVERAGE, &[outfit(mod_type, 500, 3)]),
                 plain,
