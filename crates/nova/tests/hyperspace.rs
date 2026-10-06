@@ -35,12 +35,12 @@ use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
-use nova_render::{Batch, Frame, QuadInstance, Rect};
+use nova_render::{Batch, Frame, QuadInstance, Rect, SolidQuad};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight::shortest_turn;
-use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
+use nova_sim::hyperspace::{JUMP_FUEL, MIN_JUMP_DISTANCE};
 use nova_sim::{Chance, DisasterId, PilotKeeper, PilotStore, Session, ShipState, SystemId};
 use nova_view::flight::view::TOO_CLOSE;
 use nova_view::flight::{FlightView, SharedChance};
@@ -104,11 +104,18 @@ fn character() -> Vec<u8> {
 
 /// A fast `shïp`: `Accel` 1500, `Speed` 1000 and `Maneuver` 30, so 10
 /// pixels a tick at most, 0.5 more a tick and 3° a tick. Its `Shield` is
-/// 30, `Fuel` 300 (three jumps) and `Armor` 45.
+/// 30, `Fuel` 300 (three jumps) and `Armor` 45, and it regenerates no fuel.
 fn ship() -> Vec<u8> {
+    ship_with_regen(0)
+}
+
+/// [`ship`], with a `FuelRegen` of `regen`: a unit of fuel every `regen`
+/// ticks.
+fn ship_with_regen(regen: i16) -> Vec<u8> {
     let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x02, &[30, 1500, 1000, 30, 300]);
     put_i16s(&mut bytes, 0x0E, &[45]);
+    put_i16s(&mut bytes, 0x5E, &[regen]);
     bytes
 }
 
@@ -197,9 +204,14 @@ fn food_surplus() -> Vec<u8> {
 /// Alpha. The status bar is `ïntf` 128, over a 194 x 16 `PICT` 700. A
 /// food surplus can break out at Beta Prime.
 fn data() -> Rc<GameData> {
+    data_with(&ship())
+}
+
+/// [`data`], with `ship` as `shïp` 128.
+fn data_with(ship: &[u8]) -> Rc<GameData> {
     let fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
-        .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
+        .resource(Ship::TYPE, 128, Some(b"Courier"), ship)
         .resource(ShipAnim::TYPE, 128, None, &ship_anim())
         .resource(RLED, 2000, None, &sheet(36, 1))
         .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[129], 128))
@@ -247,7 +259,12 @@ impl Harness {
     /// The app rolling chances on `chance`, in flight, entered from the
     /// ship browser with F.
     fn flying_with(chance: SharedChance) -> Self {
-        let data = data();
+        Self::flying_over(data(), chance)
+    }
+
+    /// The app over `data`, rolling chances on `chance`, in flight, entered
+    /// from the ship browser with F.
+    fn flying_over(data: Rc<GameData>, chance: SharedChance) -> Self {
         let screen = start_screen(Rc::clone(&data)).with_chance(chance);
         let mut harness = Self {
             app: App::new(&FakeWindow, data, screen),
@@ -302,17 +319,36 @@ impl Harness {
         assert_eq!(self.showing(), Showing::Flight);
     }
 
-    /// Plots a course to Beta on flight's map, flies out and jumps there.
-    fn jump_to_beta(&mut self) {
+    /// Plots a course to Beta on flight's map and flies out far enough to
+    /// jump.
+    fn out_towards_beta(&mut self) {
         self.frame();
         self.press(Key::Char('m'));
         let beta = self.on_map(129);
         self.click(beta);
         self.press(Key::Char('m'));
         self.fly_out();
+    }
+
+    /// Plots a course to Beta on flight's map, flies out and jumps there.
+    fn jump_to_beta(&mut self) {
+        self.out_towards_beta();
         self.press(Key::Char('j'));
         self.run(2);
         assert_eq!(self.session().system(), SystemId(129));
+    }
+
+    /// Presses J and sends redraws until the ship is in Beta, and returns
+    /// the first frame drawn there.
+    fn arrive_in_beta(&mut self) -> Frame {
+        self.press(Key::Char('j'));
+        for _ in 0..600 {
+            let frame = self.frame();
+            if self.session().system() == SystemId(129) {
+                return frame;
+            }
+        }
+        panic!("never arrived: {:?}", self.session().system());
     }
 
     fn send(&mut self, event: WindowEvent) {
@@ -450,7 +486,7 @@ fn shows(frame: &Frame, expected: &str) -> bool {
 }
 
 /// The solid quads in `color`.
-fn solids_in(frame: &Frame, color: nova_view::Color) -> usize {
+fn solids(frame: &Frame, color: nova_view::Color) -> Vec<SolidQuad> {
     let rgba = [color.r, color.g, color.b, color.a].map(|c| f32::from(c) / 255.0);
     frame
         .batches
@@ -460,7 +496,33 @@ fn solids_in(frame: &Frame, color: nova_view::Color) -> usize {
             _ => Vec::new(),
         })
         .filter(|quad| quad.color == rgba)
-        .count()
+        .collect()
+}
+
+/// How many solid quads are in `color`.
+fn solids_in(frame: &Frame, color: nova_view::Color) -> usize {
+    solids(frame, color).len()
+}
+
+/// The status bar's whole-jumps fuel colour, the fixture `ïntf`'s
+/// `FuelFull`.
+const FUEL_FULL: nova_view::Color = nova_view::Color::from_rgb24(0x00FF_FF00);
+
+/// How wide the status bar's whole-jumps fuel bar is drawn: from the
+/// leftmost to the rightmost corner of its quads, 0 when there are none.
+fn fuel_bar(frame: &Frame) -> f32 {
+    let xs: Vec<f32> = solids(frame, FUEL_FULL)
+        .iter()
+        .flat_map(|quad| quad.corners.map(|corner| corner.x))
+        .collect();
+    let min = xs.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    if xs.is_empty() { 0.0 } else { max - min }
+}
+
+/// Whether `a` and `b` are within a thousandth of each other.
+fn close(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1e-3
 }
 
 fn quads(frame: &Frame) -> Vec<QuadInstance> {
@@ -687,4 +749,71 @@ fn an_opened_pilots_jump_rolls_the_events_on_the_apps_chance() {
         harness.session().pilot().events().collect::<Vec<_>>(),
         [(DisasterId(128), 30)]
     );
+}
+
+#[test]
+fn a_jump_takes_a_jumps_fuel_off_the_gauge_and_the_hud_bar_and_it_stays_off() {
+    let mut harness = Harness::flying();
+    harness.out_towards_beta();
+    let before = harness.session().reserves().fuel;
+    assert_eq!(before.now, 300.0);
+    let bar_before = fuel_bar(&harness.frame());
+    assert!(close(bar_before, 149.0), "the whole bar: {bar_before}");
+
+    let arrived = harness.arrive_in_beta();
+    let after = before.now - JUMP_FUEL;
+    assert_eq!(harness.session().reserves().fuel.now, after);
+    let bar = fuel_bar(&arrived);
+    assert!(close(bar, bar_before * after / before.max), "{bar}");
+
+    let later = harness.run(5);
+    assert_eq!(harness.session().reserves().fuel.now, after);
+    assert!(close(fuel_bar(&later), bar), "{}", fuel_bar(&later));
+}
+
+#[test]
+fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
+    // A unit every 30 ticks: a unit a second.
+    let data = data_with(&ship_with_regen(30));
+    let mut harness = Harness::flying_over(data, SharedChance::default());
+    harness.out_towards_beta();
+    let before = harness.session().reserves().fuel.now;
+    assert_eq!(before, 300.0, "full, regen capped at the top");
+    let bar_before = fuel_bar(&harness.frame());
+
+    let arrived = harness.arrive_in_beta();
+    assert_eq!(
+        harness.session().reserves().fuel.now,
+        before - JUMP_FUEL,
+        "none regained during the jump or as a lump on arrival"
+    );
+    assert!(fuel_bar(&arrived) < bar_before, "{}", fuel_bar(&arrived));
+
+    harness.run(5);
+    let fuel = harness.session().reserves().fuel.now;
+    assert!(
+        before - JUMP_FUEL < fuel && fuel < before,
+        "creeping back, still short of where it was: {fuel}"
+    );
+}
+
+#[test]
+fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
+    let store = MemoryPilots::new();
+    let mut first = Harness::on_the_menu(SharedChance::default(), &store);
+    first.new_pilot("Ada");
+    first.jump_to_beta();
+    assert_eq!(first.session().reserves().fuel.now, 300.0 - JUMP_FUEL);
+    first.press(Key::Escape);
+    assert_ne!(first.showing(), Showing::Flight, "left flight, saving");
+
+    let mut harness = Harness::on_the_menu(SharedChance::default(), &store);
+    harness.choose(MenuChoice::OpenPilot);
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    let session = harness.session();
+    assert_eq!(session.system(), SystemId(129));
+    assert_eq!(session.reserves().fuel.now, 300.0 - JUMP_FUEL);
+    let bar = fuel_bar(&harness.frame());
+    assert!(close(bar, 149.0 * 2.0 / 3.0), "{bar}");
 }
