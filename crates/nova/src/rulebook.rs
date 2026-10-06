@@ -224,6 +224,43 @@ mod tests {
     }
 
     #[test]
+    fn the_hiring_rules_are_overridden_by_their_keys() {
+        let text = r#"{"rule_overrides": {"hire_require": "bible", "take_off_pay": "bible", "hire_fee": "bible", "escort_wage": "bible"}}"#;
+        let (rulebook, warnings) = rulebook_of(text);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine()
+                .with_override(RuleKey::HireRequire, RuleSource::Bible)
+                .with_override(RuleKey::TakeOffPay, RuleSource::Bible)
+                .with_override(RuleKey::HireFee, RuleSource::Bible)
+                .with_override(RuleKey::EscortWage, RuleSource::Bible)
+        );
+        assert_eq!(
+            nova_sim::NovaHire::from_rulebook(&rulebook).hire_fee,
+            RuleSource::Bible,
+            "the hire_fee override reaches Nova's hire terms"
+        );
+        let text = r#"{"rules": "bible", "rule_overrides": {"take_off_pay": "engine"}}"#;
+        let (rulebook, _) = rulebook_of(text);
+        assert_eq!(
+            [
+                RuleKey::HireRequire,
+                RuleKey::TakeOffPay,
+                RuleKey::HireFee,
+                RuleKey::EscortWage
+            ]
+            .map(|key| rulebook.source_for(key)),
+            [
+                RuleSource::Bible,
+                RuleSource::Engine,
+                RuleSource::Bible,
+                RuleSource::Bible
+            ]
+        );
+    }
+
+    #[test]
     fn the_boarding_and_piracy_rules_are_overridden_by_their_keys() {
         let text = r#"{"rule_overrides": {"empty_booty": "bible", "crewless_capture": "bible", "piracy_police": "bible"}}"#;
         let (rulebook, warnings) = rulebook_of(text);

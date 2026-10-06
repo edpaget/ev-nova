@@ -1,10 +1,12 @@
 //! Landing through the whole app: synthetic game data (a pilot flying over
 //! a planet with a trade center and a bar, its landscape and description,
-//! the spaceport background and Nova's button pictures) and a synthetic
-//! interface file holding the stock "Spaceport" dialog, laid out by the
-//! real glyphon metrics, drawn through the renderer into the recording Gpu
-//! and driven only by window events: L lands and shows the spaceport, and
-//! Leave takes off back into flight. With a recording audio port, landing
+//! the spaceport and bar backgrounds and Nova's button pictures) and a
+//! synthetic interface file holding the stock "Spaceport" and "Bar"
+//! dialogs, laid out by the real glyphon metrics, drawn through the
+//! renderer into the recording Gpu and driven only by window events: L
+//! lands and shows the spaceport, and Leave takes off back into flight.
+//! The Bar opens the bar's own dialog, with its Hire Escort button, and
+//! the Mission BBS its placeholder. With a recording audio port, landing
 //! and Leave play their sounds and the music follows the screen.
 
 use std::io;
@@ -177,7 +179,8 @@ type Resource = (ResType, i16, Option<&'static [u8]>, Vec<u8>);
 
 /// The pilot flies ship 128 from Alpha (128), whose one stellar, Alpha
 /// Prime (128), is at (0, `y`), an 8 x 8 sprite; with its landscape, its
-/// description, the spaceport background and the button pictures.
+/// description, the spaceport and bar backgrounds and the button
+/// pictures.
 fn game_data(y: i16) -> Rc<GameData> {
     let mut resources: Vec<Resource> = vec![
         (Character::TYPE, 128, None, character()),
@@ -190,6 +193,7 @@ fn game_data(y: i16) -> Rc<GameData> {
         (RLED, 1000, None, sheet(1, 8)),
         (Desc::TYPE, 128, None, description()),
         (PICT, 8500, Some(b"Spaceport"), pict(6, 5, [40, 40, 40])),
+        (PICT, 8503, Some(b"Bar"), pict(6, 5, [60, 30, 10])),
         (PICT, 10_004, None, pict(6, 3, [0, 90, 0])),
     ];
     for state in [7500, 7503, 7506] {
@@ -219,7 +223,8 @@ fn user_item((x, y, w, h): (i16, i16, i16, i16), enabled: bool) -> Vec<u8> {
 }
 
 /// Stock "Spaceport": `DLOG` 1000, 618 x 517 and centred, and its fifteen
-/// user items.
+/// user items; and stock "Bar": `DLOG` 1013, 263 x 185 and centred, and
+/// its ten user items, all disabled, 4, 6 and 8-10 parked outside it.
 fn interface() -> InterfaceData {
     let mut dlog = be(&[-201, 60, 316, 678, 2]);
     dlog.extend([1, 0, 0, 0, 0, 0, 0, 0]);
@@ -246,13 +251,38 @@ fn interface() -> InterfaceData {
     for (bounds, enabled) in items {
         ditl.extend(user_item(bounds, enabled));
     }
-    let bytes = [(Dlog::TYPE, 1000, dlog), (Ditl::TYPE, 1000, ditl)]
-        .iter()
-        .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
-            fork.resource(*ty, *id, None, data)
-        })
-        .build()
-        .bytes;
+    let mut bar_dlog = be(&[40, 40, 225, 303, 2]);
+    bar_dlog.extend([1, 0, 0, 0, 0, 0, 0, 0]);
+    bar_dlog.extend(be(&[1013]));
+    bar_dlog.extend([0, 0, 0xA8, 0x0A]);
+    let bar_items = [
+        (156, 154, 99, 26),
+        (156, 125, 99, 26),
+        (6, 154, 146, 26),
+        (54, 214, 121, 25),
+        (6, 125, 146, 26),
+        (105, 227, 121, 25),
+        (16, 10, 230, 106),
+        (61, 303, 32, 32),
+        (103, 303, 32, 32),
+        (146, 303, 32, 32),
+    ];
+    let mut bar_ditl = be(&[bar_items.len() as i16 - 1]);
+    for bounds in bar_items {
+        bar_ditl.extend(user_item(bounds, false));
+    }
+    let bytes = [
+        (Dlog::TYPE, 1000, dlog),
+        (Ditl::TYPE, 1000, ditl),
+        (Dlog::TYPE, 1013, bar_dlog),
+        (Ditl::TYPE, 1013, bar_ditl),
+    ]
+    .iter()
+    .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
+        fork.resource(*ty, *id, None, data)
+    })
+    .build()
+    .bytes;
     InterfaceData::load(&OneFile(bytes), Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
@@ -446,15 +476,42 @@ fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
 }
 
 #[test]
-fn a_service_opens_its_placeholder_and_done_returns() {
+fn the_bar_opens_over_the_spaceport_with_its_hire_escort_button() {
     let mut harness = Harness::flying(0);
     harness.press(Key::Char('l'));
-    // The bar: the Trade Center opens the exchange instead (`trade.rs`).
     let bar = harness.item(10).center();
     harness.click(bar);
     let frame = harness.frame();
     let texts = texts(&frame);
-    assert!(texts.iter().any(|t| t == "Bar"), "{texts:?}");
+    for shown in ["Hire Escort", "Gamble", "Holovid", "Leave", "Alpha Prime"] {
+        assert!(texts.iter().any(|t| t == shown), "{shown}: {texts:?}");
+    }
+    assert!(!texts.iter().any(|t| t == "Not available yet"), "{texts:?}");
+    harness.press(Key::Escape);
+    assert_eq!(harness.showing(), Showing::Spaceport);
+    assert!(
+        harness
+            .app
+            .screen()
+            .spaceport_view()
+            .expect("landed")
+            .open_bar()
+            .is_none(),
+        "Escape leaves the bar alone"
+    );
+}
+
+#[test]
+fn a_service_opens_its_placeholder_and_done_returns() {
+    let mut harness = Harness::flying(0);
+    harness.press(Key::Char('l'));
+    // The Mission BBS: the Trade Center opens the exchange instead
+    // (`trade.rs`), and the Bar the bar.
+    let bbs = harness.item(11).center();
+    harness.click(bbs);
+    let frame = harness.frame();
+    let texts = texts(&frame);
+    assert!(texts.iter().any(|t| t == "Mission BBS"), "{texts:?}");
     assert!(texts.iter().any(|t| t == "Not available yet"), "{texts:?}");
     assert!(!texts.iter().any(|t| t == "Leave"), "{texts:?}");
 

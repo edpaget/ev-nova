@@ -71,6 +71,17 @@
 //! ship the cargo space, the free mass and the outfits), and saves the
 //! pilot after the input.
 //!
+//! At a bar, the spaceport's Bar opens the stellar's bar, laid out by the
+//! interface file's bar dialog (`DLOG` 1013), its hire screen by
+//! "Shipyard" and "Shipyard Info"; Hire Escort is greyed while the fleet
+//! is full. Its Hire Escort asks the session for the ships for hire, the
+//! day's rolls drawn on the router's chance, and the router opens them on
+//! the hire screen; H there hires the selected ship through the session,
+//! and the router builds the list afresh (which draws the hired class's
+//! roll again), closes the hire screen back to the bar, hands the
+//! exchange, the outfitter and the shipyard back with the cash as it now
+//! is, and saves the pilot after the input.
+//!
 //! Where fuel is sold, the spaceport's Recharge fills the tank through the
 //! session; the router tells the screen how it went (a refusal says why in
 //! the description box), hands the exchange, the outfitter and the
@@ -95,7 +106,11 @@
 //! router's law ([`AppScreen::with_law`]), Nova's until another is given;
 //! and the escorts' standing orders are reset, or kept, on entering a
 //! system as the router says ([`AppScreen::with_escort_orders`]), reset
-//! (the engine's) until another is given.
+//! (the engine's) until another is given. Each flight hires escorts by
+//! the router's hiring rules ([`AppScreen::with_hire_require`],
+//! [`AppScreen::with_take_off_pay`], [`AppScreen::with_escort_wage`],
+//! [`AppScreen::with_hire_terms`], [`AppScreen::with_control_bits`]),
+//! the engine's and Nova's until others are given.
 //! The flight's diagnostics about game
 //! data it could not read or the simulation does not handle yet come
 //! through [`Screen::take_diagnostics`].
@@ -136,10 +151,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_data::GameData;
+use nova_sim::board::MAX_ESCORTS;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, DisableRule, HailOptions, HailView, LegalCode, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, Pilot, PilotKeeper, PilotStore, PointDefenceRule,
-    RuleSource, Take, Taken, pilot_key,
+    Allegiance, Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HailView,
+    HireTerms, LegalCode, NoControlBits, NovaAi, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
+    Pilot, PilotKeeper, PilotStore, PointDefenceRule, RuleSource, Take, Taken, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::flight::{FlightView, SharedChance};
@@ -147,6 +163,7 @@ use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
+use nova_view::spaceport::bar::BAR_DIALOG;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
@@ -271,6 +288,17 @@ pub struct AppScreen {
     /// What becomes of each flight's fighters out as the player leaves a
     /// system.
     fighter_recall: RuleSource,
+    /// Whether an unmet `Require` refuses a hire in each flight.
+    hire_require: RuleSource,
+    /// Whether each take-off pays each flight's hired escorts a day.
+    take_off_pay: RuleSource,
+    /// Which wage each flight's hired escorts are paid.
+    escort_wage: RuleSource,
+    /// The fee and wage of a hire in each flight.
+    hire_terms: Rc<dyn HireTerms>,
+    /// The control-bit test a ship for hire's `Availability` goes
+    /// through in each flight.
+    control_bits: Rc<dyn ControlBits>,
     /// The comm dialog, while a hail is under way.
     comm: Option<CommDialog>,
     /// The haggle dialog, over the comm dialog, while a price is asked.
@@ -346,6 +374,11 @@ impl AppScreen {
             escort_orders: RuleSource::Engine,
             fighter_launch: RuleSource::Engine,
             fighter_recall: RuleSource::Engine,
+            hire_require: RuleSource::Engine,
+            take_off_pay: RuleSource::Engine,
+            escort_wage: RuleSource::Engine,
+            hire_terms: Rc::new(NovaHire::default()),
+            control_bits: Rc::new(NoControlBits),
             comm: None,
             haggle: None,
         }
@@ -452,6 +485,59 @@ impl AppScreen {
         }
     }
 
+    /// The router with an unmet `Require` refusing a hire in each flight,
+    /// or not, as `source` says ([`FlightView::with_hire_require`]); the
+    /// engine's (not) until another is given.
+    #[must_use]
+    pub fn with_hire_require(self, source: RuleSource) -> Self {
+        Self {
+            hire_require: source,
+            ..self
+        }
+    }
+
+    /// The router with each take-off paying each flight's hired escorts a
+    /// day's wages, or not, as `source` says
+    /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
+    /// another is given.
+    #[must_use]
+    pub fn with_take_off_pay(self, source: RuleSource) -> Self {
+        Self {
+            take_off_pay: source,
+            ..self
+        }
+    }
+
+    /// The router with each flight's hired escorts paid the wage `source`
+    /// says ([`FlightView::with_escort_wage`]); the engine's until
+    /// another is given.
+    #[must_use]
+    pub fn with_escort_wage(self, source: RuleSource) -> Self {
+        Self {
+            escort_wage: source,
+            ..self
+        }
+    }
+
+    /// The router with `terms` giving the fee and wage of a hire in each
+    /// flight ([`FlightView::with_hire_terms`]); Nova's until others are
+    /// given.
+    #[must_use]
+    pub fn with_hire_terms(self, hire_terms: Rc<dyn HireTerms>) -> Self {
+        Self { hire_terms, ..self }
+    }
+
+    /// The router with `bits` testing a ship for hire's `Availability` in
+    /// each flight ([`FlightView::with_control_bits`]); none hold false
+    /// until others are given.
+    #[must_use]
+    pub fn with_control_bits(self, control_bits: Rc<dyn ControlBits>) -> Self {
+        Self {
+            control_bits,
+            ..self
+        }
+    }
+
     /// The comm dialog, while a hail is under way.
     #[must_use]
     pub fn comm(&self) -> Option<&CommDialog> {
@@ -496,7 +582,12 @@ impl AppScreen {
             .with_hail_options(self.hail_options.clone())
             .with_escort_orders(self.escort_orders)
             .with_fighter_launch(self.fighter_launch)
-            .with_fighter_recall(self.fighter_recall);
+            .with_fighter_recall(self.fighter_recall)
+            .with_hire_require(self.hire_require)
+            .with_take_off_pay(self.take_off_pay)
+            .with_escort_wage(self.escort_wage)
+            .with_hire_terms(Rc::clone(&self.hire_terms))
+            .with_control_bits(Rc::clone(&self.control_bits));
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -1123,14 +1214,24 @@ impl AppScreen {
             let art: Rc<dyn OutfitterCatalog> = Rc::clone(&self.data) as Rc<dyn OutfitterCatalog>;
             spaceport = spaceport.with_outfitter(template, outfitter, art);
         }
+        let template_of = |id| template(id).map(|(template, _)| template);
         if let Some(shipyard) = self.flight.as_ref().and_then(FlightView::shipyard) {
-            let template_of = |id| template(id).map(|(template, _)| template);
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport.with_shipyard(
                 template_of(SHIPYARD_DIALOG),
                 template_of(SHIP_INFO_DIALOG),
                 shipyard,
                 art,
+            );
+        }
+        if let Some(pilot) = self.flight.as_ref().and_then(FlightView::pilot) {
+            let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
+            spaceport = spaceport.with_bar(
+                template_of(BAR_DIALOG),
+                template_of(SHIPYARD_DIALOG),
+                template_of(SHIP_INFO_DIALOG),
+                art,
+                pilot.escort_count() < MAX_ESCORTS,
             );
         }
         self.spaceport = Some(spaceport);
@@ -1355,7 +1456,13 @@ impl AppScreen {
         let outfit = spaceport.take_outfit();
         let ship = spaceport.take_ship();
         let recharge = spaceport.take_recharge();
-        if trade.is_some() || outfit.is_some() || ship.is_some() || recharge {
+        let hire = spaceport.take_hire();
+        if spaceport.take_hire_request()
+            && let Some(list) = self.flight.as_mut().expect(ENTERED).escorts_for_hire()
+        {
+            spaceport.open_hire(list);
+        }
+        if trade.is_some() || outfit.is_some() || ship.is_some() || recharge || hire.is_some() {
             let flight = self.flight.as_mut().expect(ENTERED);
             // A refused order changes nothing; the screen greys what it can.
             if let Some(order) = trade {
@@ -1366,6 +1473,14 @@ impl AppScreen {
             }
             if let Some(ship) = ship {
                 let _ = flight.buy_ship(ship);
+            }
+            // A hire draws the class's roll again, so the list is built
+            // afresh; the hire screen closes back to the bar.
+            if let Some(ship) = hire {
+                let _ = flight.hire(ship);
+                if let Some(list) = flight.escorts_for_hire() {
+                    spaceport.set_hire(&list);
+                }
             }
             // A refused refill says why in the spaceport.
             if recharge {
@@ -5307,6 +5422,28 @@ mod tests {
             let session = flight(&screen).session().expect("flying");
             assert_eq!(session.fighter_recall(), source);
             assert_eq!(session.fighter_launch(), RuleSource::Engine);
+        }
+    }
+
+    #[test]
+    fn the_routers_hiring_rules_reach_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_hire_require(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.hire_require(), source);
+            assert_eq!(session.take_off_pay(), RuleSource::Engine);
+            assert_eq!(session.escort_wage(), RuleSource::Engine);
+            let mut screen = AppScreen::new(data()).with_take_off_pay(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.take_off_pay(), source);
+            assert_eq!(session.hire_require(), RuleSource::Engine);
+            let mut screen = AppScreen::new(data()).with_escort_wage(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.escort_wage(), source);
+            assert_eq!(session.take_off_pay(), RuleSource::Engine);
         }
     }
 
