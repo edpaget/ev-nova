@@ -120,9 +120,6 @@ use crate::shipyard::{self, Quote, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 
-/// Whether the pre-jump stage slows the ship down before it turns.
-const SLOW_DOWN: bool = true;
-
 /// A jump, from J being accepted until the ship arrives.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Jump {
@@ -288,7 +285,8 @@ impl Session {
             }
             Some(Jump::PreJump { to, bearing }) => {
                 let handling = &self.stats.handling;
-                let thrust = pre_jump::fly(&mut self.player, handling, bearing, SLOW_DOWN);
+                let thrust =
+                    pre_jump::fly(&mut self.player, handling, bearing, !self.stats.fast_jump);
                 self.thrust(thrust);
                 self.start_jump_if_ready(to, bearing);
             }
@@ -383,7 +381,8 @@ impl Session {
     /// goes out.
     fn start_jump_if_ready(&mut self, to: SystemId, bearing: Option<f32>) {
         let handling = &self.stats.handling;
-        if pre_jump::stage(&self.player, handling, bearing, SLOW_DOWN) == PreJump::Ready {
+        if pre_jump::stage(&self.player, handling, bearing, !self.stats.fast_jump) == PreJump::Ready
+        {
             self.jump = Some(Jump::Hyperspace(to));
             self.stop_thrust();
             self.sounds.push(SimSound::JumpBegan);
@@ -809,7 +808,7 @@ mod tests {
     use crate::market::{Direction, Good, Lot, Order, TradeRefusal};
     use crate::pre_jump::slow_enough;
     use crate::reserves::{Gauge, Reserves};
-    use crate::stats::{HYPERSPACE_DAYS, HYPERSPACE_DISTANCE};
+    use crate::stats::{FAST_JUMP, FAST_JUMP_HULL, HYPERSPACE_DAYS, HYPERSPACE_DISTANCE};
     use crate::testkit::{
         FAST, FakePilotCatalog, START, Scripted, begin_jump_now, catalog, edge_lander, fly_out,
         jump, jump_with, land_now, outfit, planet, starting,
@@ -1518,9 +1517,55 @@ mod tests {
         assert_eq!(session.player().position, OUT, "at rest throughout");
     }
 
+    /// Flies out with `catalog`'s ship, begins a jump and checks that it
+    /// turns to the bearing and jumps without ever slowing down.
+    fn assert_fast_jumps(catalog: &FakePilotCatalog) {
+        let mut session = bound_for_131(catalog, Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session);
+        let racing = session.player().velocity.length();
+        assert!(racing > 5.0, "{:?}", session.player());
+        session.begin_jump().expect("jumps");
+        for _ in 0..1000 {
+            if session.jumping().is_some() {
+                break;
+            }
+            session.tick(Controls::default());
+            let now = *session.player();
+            assert!(now.velocity.length() >= racing, "slowed: {now:?}");
+        }
+        assert_eq!(session.jumping(), Some(SystemId(131)));
+        let leaving = *session.player();
+        assert_eq!(leaving.heading, 90.0, "it still turned");
+        assert!(!slow_enough(leaving.velocity), "{leaving:?}");
+    }
+
+    #[test]
+    fn a_ship_with_a_fast_jump_outfit_jumps_without_slowing() {
+        assert_fast_jumps(&FakePilotCatalog {
+            defaults: vec![(ShipId(128), vec![(OutfitId(200), 1)])],
+            outfits: vec![outfit(200, &[(FAST_JUMP, 1)])],
+            ..catalog()
+        });
+    }
+
+    #[test]
+    fn a_fast_jumping_hull_jumps_without_slowing() {
+        assert_fast_jumps(&FakePilotCatalog {
+            ships: vec![(
+                ShipId(128),
+                Ok(ShipFields {
+                    flags2: FAST_JUMP_HULL,
+                    ..FAST
+                }),
+            )],
+            ..catalog()
+        });
+    }
+
     #[test]
     fn a_jump_begun_while_moving_slows_the_ship_before_it_begins() {
-        // AC2: fly_out leaves the ship racing north, facing it.
+        // AC2: fly_out leaves the ship racing north, facing it. A ship with
+        // neither a fast-jump outfit nor a fast-jumping hull slows first.
         let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
         fly_out(&mut session);
         let racing = session.player().velocity.length();
