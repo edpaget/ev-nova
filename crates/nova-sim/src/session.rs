@@ -23,10 +23,15 @@
 //! one land.
 //!
 //! The player plots a course to a system on the star map, read once when
-//! the session starts: the fewest jumps along the hyperlinks. A jump to
-//! the next system on it begins when the [`hyperspace`](crate::hyperspace)
-//! rules allow, and while it lasts ticks move nothing. When the jump is
-//! over ([`Session::arrive`]) the ship is in the next system, at its edge,
+//! the session starts: the fewest jumps along the hyperlinks. J
+//! ([`Session::begin_jump`]) is accepted when the
+//! [`hyperspace`](crate::hyperspace) rules allow a jump to the next system
+//! on it. The ship then flies the pre-jump stage on its own, the player's
+//! controls ignored: it brakes and turns to the map bearing of that system
+//! as [`pre_jump`] says ([`Session::preparing_jump`]), and the jump begins
+//! once it is ready ([`Session::jumping`]), at once if it already is. A
+//! jump accepted is committed. While the jump lasts ticks move nothing.
+//! When it is over ([`Session::arrive`]) the ship is in the next system, at its edge,
 //! with a jump's fuel used and the days its stats give a jump gone by, and
 //! the rest of the course still ahead. In flight, fuel regenerates each tick at the rate the ship
 //! and its outfits give.
@@ -100,17 +105,33 @@ use crate::fuel::regenerate;
 use crate::geometry::Vec2;
 use crate::glow::ramp_glow;
 use crate::handling::{Handling, ShipFields};
-use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
+use crate::hyperspace::{
+    JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump, jump_bearing,
+};
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
 use crate::navigation::next_stellar;
 use crate::outfitter::{self, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods};
 use crate::pilot::{self, Pilot};
+use crate::pre_jump::{self, PreJump};
 use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
 use crate::shipyard::{self, Quote, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
+
+/// Whether the pre-jump stage slows the ship down before it turns.
+const SLOW_DOWN: bool = true;
+
+/// A jump, from J being accepted until the ship arrives.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Jump {
+    /// The ship brakes and turns towards `bearing`, the map bearing of
+    /// `to` (none when there is nothing to turn to), before it jumps.
+    PreJump { to: SystemId, bearing: Option<f32> },
+    /// The jump to the system has begun.
+    Hyperspace(SystemId),
+}
 
 /// The player's ship, flying in one system.
 #[derive(Clone, Debug, PartialEq)]
@@ -136,8 +157,8 @@ pub struct Session {
     nav_target: Option<StellarId>,
     /// The star map, read when the session starts.
     star_map: StarMap,
-    /// The system being jumped to, while a jump is under way.
-    jumping: Option<SystemId>,
+    /// The jump under way, from J being accepted until the ship arrives.
+    jump: Option<Jump>,
     /// The goods traded and the events that move their prices, read when
     /// the session starts.
     goods: Goods,
@@ -213,7 +234,7 @@ impl Session {
             landed,
             nav_target: None,
             star_map: StarMap::new(catalog.star_map()),
-            jumping: None,
+            jump: None,
             goods: Goods::read(catalog),
             thrusting: false,
             engine_glow: 0,
@@ -251,23 +272,43 @@ impl Session {
     }
 
     /// Advances the session one tick under the player's `controls`, ramps
-    /// the engine glow with the thrust, then regenerates fuel. A landed
-    /// ship, or one jumping, does not move, glows not at all, and gains no
-    /// fuel.
+    /// the engine glow with the thrust, then regenerates fuel. During the
+    /// pre-jump stage the controls are ignored: the ship flies the stage
+    /// ([`pre_jump::fly`]) instead, and the jump begins on the tick it is
+    /// ready. A landed ship, or one in hyperspace, does not move, glows not
+    /// at all, and gains no fuel.
     pub fn tick(&mut self, controls: Controls) {
-        if self.landed.is_none() && self.jumping.is_none() {
-            if controls.thrust != self.thrusting {
-                self.thrusting = controls.thrust;
-                self.sounds.push(if controls.thrust {
-                    SimSound::ThrustStarted
-                } else {
-                    SimSound::ThrustStopped
-                });
-            }
-            self.engine_glow = ramp_glow(self.engine_glow, controls.thrust);
-            step(&mut self.player, &self.stats.handling, controls);
-            regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
+        if self.landed.is_some() {
+            return;
         }
+        match self.jump {
+            None => {
+                self.thrust(controls.thrust);
+                step(&mut self.player, &self.stats.handling, controls);
+            }
+            Some(Jump::PreJump { to, bearing }) => {
+                let handling = &self.stats.handling;
+                let thrust = pre_jump::fly(&mut self.player, handling, bearing, SLOW_DOWN);
+                self.thrust(thrust);
+                self.start_jump_if_ready(to, bearing);
+            }
+            Some(Jump::Hyperspace(_)) => return,
+        }
+        regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
+    }
+
+    /// Sounds the thrust starting or stopping as `thrust` says, and ramps
+    /// the engine glow with it.
+    fn thrust(&mut self, thrust: bool) {
+        if thrust != self.thrusting {
+            self.thrusting = thrust;
+            self.sounds.push(if thrust {
+                SimSound::ThrustStarted
+            } else {
+                SimSound::ThrustStopped
+            });
+        }
+        self.engine_glow = ramp_glow(self.engine_glow, thrust);
     }
 
     /// Stops the thrust, if the ship was thrusting, and puts the engine
@@ -303,13 +344,24 @@ impl Session {
         &self.pilot.course
     }
 
-    /// Begins a jump to the next system on the course, if the ship has not
-    /// landed and the [`hyperspace`](crate::hyperspace) rules allow it, and
-    /// gives that system; otherwise the refusal says why. Until it arrives,
-    /// ticks move nothing.
+    /// Presses the jump key: accepts a jump to the next system on the
+    /// course, if the ship has not landed and the
+    /// [`hyperspace`](crate::hyperspace) rules allow it, and gives that
+    /// system; otherwise the refusal says why.
+    ///
+    /// An accepted jump starts the pre-jump stage: the ship brakes and
+    /// turns to the map bearing of that system as [`pre_jump`] says, and
+    /// the jump itself begins on the tick it is ready, or here and now if
+    /// it is ready already. Once accepted the jump is committed: J again
+    /// during the stage gives the same system and changes nothing, without
+    /// asking the rules again, so a ship that brakes into its no-jump zone
+    /// still jumps. Until it arrives, ticks in hyperspace move nothing.
     pub fn begin_jump(&mut self) -> Result<SystemId, JumpRefusal> {
         if self.landed.is_some() {
             return Err(JumpRefusal::Landed);
+        }
+        if let Some(Jump::PreJump { to, .. }) = self.jump {
+            return Ok(to);
         }
         let next = check_jump(
             &self.player,
@@ -317,16 +369,46 @@ impl Session {
             self.pilot.course.first().copied(),
             self.stats.jump_distance,
         )?;
-        self.jumping = Some(next);
-        self.stop_thrust();
-        self.sounds.push(SimSound::JumpBegan);
+        let map = |id| self.star_map.position(id);
+        let bearing = map(self.pilot.system)
+            .zip(map(next))
+            .and_then(|(from, to)| jump_bearing(from, to));
+        self.jump = Some(Jump::PreJump { to: next, bearing });
+        self.start_jump_if_ready(next, bearing);
         Ok(next)
     }
 
-    /// The system being jumped to, while a jump is under way.
+    /// Begins the jump to `to`, if the ship is ready to turn no further
+    /// towards `bearing` and slow no more: the thrust stops and the glow
+    /// goes out.
+    fn start_jump_if_ready(&mut self, to: SystemId, bearing: Option<f32>) {
+        let handling = &self.stats.handling;
+        if pre_jump::stage(&self.player, handling, bearing, SLOW_DOWN) == PreJump::Ready {
+            self.jump = Some(Jump::Hyperspace(to));
+            self.stop_thrust();
+            self.sounds.push(SimSound::JumpBegan);
+        }
+    }
+
+    /// The system being jumped to, once the jump itself has begun and
+    /// until the ship arrives; `None` during the pre-jump stage.
     #[must_use]
     pub fn jumping(&self) -> Option<SystemId> {
-        self.jumping
+        match self.jump {
+            Some(Jump::Hyperspace(to)) => Some(to),
+            _ => None,
+        }
+    }
+
+    /// The system a jump is bound for while the ship brakes and turns
+    /// before it (see [`Session::begin_jump`]); `None` before J and once
+    /// the jump has begun.
+    #[must_use]
+    pub fn preparing_jump(&self) -> Option<SystemId> {
+        match self.jump {
+            Some(Jump::PreJump { to, .. }) => Some(to),
+            _ => None,
+        }
     }
 
     /// Ends the jump under way, if any, and gives the system arrived in:
@@ -337,13 +419,16 @@ impl Session {
     /// can jump on at once. Each day
     /// steps the planetary events, rolled on `chance`. The new system's
     /// stellars are read from `catalog`. `None`, and nothing changes, when
-    /// no jump is under way.
+    /// no jump has begun, during the pre-jump stage too.
     pub fn arrive(
         &mut self,
         catalog: &impl PilotCatalog,
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<SystemId> {
-        let next = self.jumping.take()?;
+        let Some(Jump::Hyperspace(next)) = self.jump else {
+            return None;
+        };
+        self.jump = None;
         let pilot = &mut self.pilot;
         pilot.reserves.fuel.now -= JUMP_FUEL;
         for _ in 0..self.stats.jump_days {
@@ -410,7 +495,8 @@ impl Session {
         self.stats.fuel_regen
     }
 
-    /// Presses the land key, unless the ship is jumping: as the
+    /// Presses the land key, unless a jump is under way, its pre-jump stage
+    /// included: as the
     /// [`landing`](crate::landing) rules say, with the navigation target
     /// and the pilot's legal record with the stellar's government, or the
     /// system's on the star map when the stellar has none. A press that
@@ -420,7 +506,7 @@ impl Session {
     /// so that once it takes off L requests clearance again. Otherwise the
     /// ship flies on, its target kept, and the refusal says why.
     pub fn land(&mut self) -> Result<LandOutcome, LandingRefusal> {
-        if self.jumping.is_some() {
+        if self.jump.is_some() {
             return Err(LandingRefusal::Jumping);
         }
         let outcome = land_or_select(
@@ -715,15 +801,18 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::glow::GLOW_CRUISE;
     use crate::handling::ShipFields;
-    use crate::hyperspace::{ARRIVAL_DISTANCE, DAYS_PER_JUMP, JumpRefusal, RouteError, StarMap};
+    use crate::hyperspace::{
+        ARRIVAL_DISTANCE, DAYS_PER_JUMP, JumpRefusal, MIN_JUMP_DISTANCE, RouteError, StarMap,
+    };
     use crate::landing::StellarFlags;
     use crate::landing::{Clearance, LandOutcome, LandingRefusal};
     use crate::market::{Direction, Good, Lot, Order, TradeRefusal};
+    use crate::pre_jump::slow_enough;
     use crate::reserves::{Gauge, Reserves};
     use crate::stats::{HYPERSPACE_DAYS, HYPERSPACE_DISTANCE};
     use crate::testkit::{
-        FAST, FakePilotCatalog, START, Scripted, catalog, edge_lander, fly_out, jump, jump_with,
-        land_now, outfit, planet, starting,
+        FAST, FakePilotCatalog, START, Scripted, begin_jump_now, catalog, edge_lander, fly_out,
+        jump, jump_with, land_now, outfit, planet, starting,
     };
 
     #[test]
@@ -1283,7 +1372,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
-        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
         assert_eq!(session.jumping(), Some(SystemId(131)));
         let leaving = *session.player();
         for _ in 0..10 {
@@ -1316,7 +1405,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         fly_out(&mut session);
-        session.begin_jump().expect("jumps");
+        begin_jump_now(&mut session).expect("jumps");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(131))
@@ -1384,6 +1473,243 @@ mod tests {
         // From 131, north of 132 on screen: it arrives at the top edge.
         assert_eq!(session.player().position, Vec2::new(0.0, -1001.0));
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+    }
+
+    // The pre-jump stage.
+
+    /// A session on course for 131, due east on the map, with the ship
+    /// put at `position`, moving at `velocity` and facing `heading`.
+    fn bound_for_131(
+        catalog: &FakePilotCatalog,
+        position: Vec2,
+        velocity: Vec2,
+        heading: f32,
+    ) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        session.player = ShipState {
+            position,
+            velocity,
+            heading,
+        };
+        session
+    }
+
+    /// Far enough out to jump, below the centre.
+    const OUT: Vec2 = Vec2 { x: 0.0, y: 1200.0 };
+
+    #[test]
+    fn a_jump_begun_facing_away_turns_at_the_turn_rate_and_begins_facing_the_bearing() {
+        // AC1: at rest facing up, 90 degrees off east, at 3 degrees a tick.
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        assert_eq!(session.jumping(), None);
+        for k in 1..=29_u8 {
+            session.tick(Controls::default());
+            assert_eq!(session.player().heading, 3.0 * f32::from(k), "tick {k}");
+            assert_eq!(session.jumping(), None, "tick {k}");
+            assert_eq!(session.preparing_jump(), Some(SystemId(131)), "tick {k}");
+        }
+        session.tick(Controls::default());
+        assert_eq!(session.player().heading, 90.0);
+        assert_eq!(session.jumping(), Some(SystemId(131)), "facing the bearing");
+        assert_eq!(session.preparing_jump(), None);
+        assert_eq!(session.player().position, OUT, "at rest throughout");
+    }
+
+    #[test]
+    fn a_jump_begun_while_moving_slows_the_ship_before_it_begins() {
+        // AC2: fly_out leaves the ship racing north, facing it.
+        let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session);
+        let racing = session.player().velocity.length();
+        assert!(racing > 5.0, "{:?}", session.player());
+        session.begin_jump().expect("jumps");
+        let mut slowest = racing;
+        for _ in 0..1000 {
+            if session.jumping().is_some() {
+                break;
+            }
+            let before = *session.player();
+            assert!(
+                !(slow_enough(before.velocity) && before.heading == 90.0),
+                "ready but still waiting: {before:?}"
+            );
+            session.tick(Controls::default());
+            slowest = slowest.min(session.player().velocity.length());
+        }
+        assert_eq!(session.jumping(), Some(SystemId(131)));
+        let leaving = *session.player();
+        assert!(slow_enough(leaving.velocity), "{leaving:?}");
+        assert!(leaving.velocity.length() < racing - 3.0, "{leaving:?}");
+        assert_eq!(leaving.velocity.length(), slowest, "{leaving:?}");
+        assert_eq!(leaving.heading, 90.0);
+    }
+
+    #[test]
+    fn a_jump_begun_at_rest_facing_the_bearing_begins_at_once() {
+        // AC3.
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(session.jumping(), Some(SystemId(131)));
+        assert_eq!(session.preparing_jump(), None);
+        assert_eq!(session.take_sounds(), [SimSound::JumpBegan]);
+    }
+
+    #[test]
+    fn a_jump_begun_drifting_slowly_facing_the_bearing_begins_at_once() {
+        let drifting = Vec2::new(1.9, -1.9);
+        let mut session = bound_for_131(&catalog(), OUT, drifting, 90.0);
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(session.jumping(), Some(SystemId(131)));
+    }
+
+    #[test]
+    fn the_players_controls_are_ignored_during_the_pre_jump_stage() {
+        let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session);
+        session.begin_jump().expect("jumps");
+        let mut steered = session.clone();
+        let fighting = Controls {
+            thrust: true,
+            turn: Turn::Left,
+            reverse: false,
+        };
+        while session.jumping().is_none() {
+            session.tick(Controls::default());
+            steered.tick(fighting);
+            assert_eq!(steered, session);
+        }
+    }
+
+    #[test]
+    fn braking_sounds_its_thrust_and_glows_and_the_jump_puts_both_out() {
+        let mut session = bound_for_131(&catalog(), Vec2::ZERO, Vec2::ZERO, 0.0);
+        fly_out(&mut session);
+        session.tick(Controls::default());
+        session.take_sounds();
+        session.begin_jump().expect("jumps");
+        assert_eq!(session.take_sounds(), [], "nothing until it begins");
+        let mut sounds = Vec::new();
+        let mut brightest = 0;
+        while session.jumping().is_none() {
+            session.tick(Controls::default());
+            brightest = brightest.max(session.engine_glow());
+            sounds.extend(session.take_sounds());
+        }
+        assert_eq!(sounds.first(), Some(&SimSound::ThrustStarted), "braking");
+        assert_eq!(sounds.last(), Some(&SimSound::JumpBegan));
+        let began = sounds.iter().filter(|s| **s == SimSound::JumpBegan).count();
+        assert_eq!(began, 1);
+        assert!(brightest > 0, "the brake glows");
+        assert_eq!(session.engine_glow(), 0, "jumping");
+        assert!(!session.thrusting());
+    }
+
+    #[test]
+    fn a_jump_that_begins_mid_thrust_stops_the_thrust_first() {
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
+        session.tick(THRUST);
+        session.take_sounds();
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::ThrustStopped, SimSound::JumpBegan]
+        );
+        assert_eq!(session.engine_glow(), 0);
+    }
+
+    #[test]
+    fn fuel_regenerates_during_the_pre_jump_stage() {
+        let catalog = regenerating(2);
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+        session.pilot.reserves.fuel.now = 150.0;
+        session.begin_jump().expect("jumps");
+        for _ in 0..10 {
+            session.tick(Controls::default());
+        }
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        assert_eq!(session.reserves().fuel.now, 155.0);
+    }
+
+    #[test]
+    fn j_again_during_the_pre_jump_stage_changes_nothing() {
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
+        session.begin_jump().expect("jumps");
+        session.tick(Controls::default());
+        session.take_sounds();
+        let turning = session.clone();
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(session, turning, "no restart, no sound");
+    }
+
+    #[test]
+    fn a_jump_is_committed_even_once_braking_carries_the_ship_inside_the_no_jump_zone() {
+        // Just outside the zone, racing inward and facing along its motion:
+        // it coasts a long way in while it turns to brake.
+        let edge = Vec2::new(0.0, -ARRIVAL_DISTANCE);
+        let mut session = bound_for_131(&catalog(), edge, Vec2::new(0.0, 6.0), 180.0);
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        for _ in 0..30 {
+            session.tick(Controls::default());
+        }
+        let inside = session.player().position.length();
+        assert!(inside < MIN_JUMP_DISTANCE, "inside: {inside}");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        session.take_sounds();
+        let braking = session.clone();
+        assert_eq!(session.begin_jump(), Ok(SystemId(131)), "J again");
+        assert_eq!(session, braking, "no restart, no sound, not refused");
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(session.jumping(), Some(SystemId(131)), "still goes ahead");
+    }
+
+    #[test]
+    fn landing_is_refused_during_the_pre_jump_stage() {
+        let mut session = bound_for_131(&catalog(), Vec2::new(30.0, -40.0), Vec2::ZERO, 0.0);
+        session.stats.jump_distance = 0.0;
+        session.begin_jump().expect("jumps from over planet 128");
+        session.take_sounds();
+        let turning = session.clone();
+        assert_eq!(land_now(&mut session), Err(LandingRefusal::Jumping));
+        assert_eq!(session, turning, "nothing changes");
+    }
+
+    #[test]
+    fn arriving_during_the_pre_jump_stage_does_nothing() {
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+        session.begin_jump().expect("jumps");
+        let turning = session.clone();
+        assert_eq!(session.arrive(&catalog, &mut NeverFires), None);
+        assert_eq!(session, turning);
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+    }
+
+    #[test]
+    fn the_jump_goes_where_it_was_bound_when_j_was_pressed() {
+        let catalog = catalog();
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 0.0);
+        session.begin_jump().expect("jumps");
+        assert_eq!(
+            session.plot_course(SystemId(133)),
+            Err(RouteError::Unreachable)
+        );
+        assert_eq!(session.course(), [], "the course is gone");
+        session.tick(Controls::default());
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(session.jumping(), Some(SystemId(131)));
+        assert_eq!(session.player().heading, 90.0, "the bearing to 131");
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
     }
 
     /// The catalog with ship 128 regenerating a unit of fuel every
@@ -1469,7 +1795,7 @@ mod tests {
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Landed));
         assert_eq!(session, docked, "nothing changes");
         session.take_off();
-        assert_eq!(session.begin_jump(), Ok(SystemId(132)), "once off");
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(132)), "once off");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
             Some(SystemId(132))
@@ -1482,7 +1808,7 @@ mod tests {
         let catalog = edge_lander();
         let mut session = landed_at_the_edge(&catalog);
         session.take_off();
-        session.begin_jump().expect("jumps from over planet 140");
+        begin_jump_now(&mut session).expect("jumps from over planet 140");
         let jumping = session.clone();
         assert_eq!(land_now(&mut session), Err(LandingRefusal::Jumping));
         assert_eq!(session, jumping, "nothing changes");
@@ -1509,11 +1835,12 @@ mod tests {
         session.tick(Controls::default());
         assert_eq!(session.reserves().fuel.now, 201.0);
 
-        session.begin_jump().expect("jumps from the edge");
+        begin_jump_now(&mut session).expect("jumps from the edge");
+        let leaving = session.reserves().fuel.now;
         for _ in 0..10 {
             session.tick(Controls::default());
         }
-        assert_eq!(session.reserves().fuel.now, 201.0);
+        assert_eq!(session.reserves().fuel.now, leaving, "in hyperspace");
     }
 
     // The pilot.
@@ -1587,7 +1914,7 @@ mod tests {
         );
         session.take_off();
         session.take_save_due();
-        session.begin_jump().expect("jumps from the edge");
+        begin_jump_now(&mut session).expect("jumps from the edge");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         let pilot = session.pilot();
         assert_eq!(pilot.system(), SystemId(132));
@@ -1711,12 +2038,12 @@ mod tests {
 
     #[test]
     fn beginning_a_jump_stops_the_session_thrusting() {
-        let mut session = Session::start(&catalog()).expect("starts");
-        session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        // At rest facing east, the bearing to 131: the jump begins on J.
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 90.0);
         session.tick(THRUST);
         assert!(session.thrusting());
         session.begin_jump().expect("jumps");
+        assert_eq!(session.jumping(), Some(SystemId(131)));
         assert!(!session.thrusting());
         session.tick(THRUST);
         assert!(!session.thrusting(), "jumping, nothing thrusts");
@@ -1781,7 +2108,7 @@ mod tests {
         session.tick(Controls::default());
         assert!(!session.thrusting());
         assert!(session.engine_glow() > 0, "glowing as it coasts");
-        session.begin_jump().expect("jumps");
+        begin_jump_now(&mut session).expect("jumps");
         assert_eq!(session.engine_glow(), 0, "jumping");
         session.tick(THRUST);
         assert_eq!(session.engine_glow(), 0, "jumping, nothing glows");
@@ -1905,9 +2232,8 @@ mod tests {
     #[test]
     fn a_jump_emits_jump_began_then_arrived_stopping_the_thrust_first() {
         let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        // At rest facing east, the bearing to 131: the jump begins on J.
+        let mut session = bound_for_131(&catalog, OUT, Vec2::ZERO, 90.0);
         session.tick(THRUST);
         let thrusting = session.take_sounds();
         assert_eq!(thrusting.last(), Some(&SimSound::ThrustStarted));
@@ -1926,13 +2252,11 @@ mod tests {
 
     #[test]
     fn a_jump_without_thrust_emits_only_jump_began() {
-        let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        session.plot_course(SystemId(131)).expect("a route");
-        fly_out(&mut session);
+        // Turning at rest to the bearing, it never thrusts.
+        let mut session = bound_for_131(&catalog(), OUT, Vec2::ZERO, 0.0);
         session.tick(Controls::default());
         session.take_sounds();
-        session.begin_jump().expect("jumps");
+        begin_jump_now(&mut session).expect("jumps");
         assert_eq!(session.take_sounds(), [SimSound::JumpBegan]);
     }
 
@@ -2271,7 +2595,7 @@ mod tests {
         let mut session = Session::start(&booster).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
         session.player.position = Vec2::new(0.0, 600.0);
-        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(&booster, &mut NeverFires),
             Some(SystemId(131))
@@ -2311,7 +2635,7 @@ mod tests {
         let mut session = Session::start(&raised).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         session.player.position = Vec2::new(0.0, 1300.0);
-        assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
         assert_eq!(
             session.arrive(&raised, &mut NeverFires),
             Some(SystemId(131))
@@ -3108,7 +3432,7 @@ mod tests {
         session.select_next_stellar();
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
-        session.begin_jump().expect("jumps");
+        begin_jump_now(&mut session).expect("jumps");
         assert_eq!(
             session.nav_target(),
             Some(StellarId(131)),

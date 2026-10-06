@@ -341,9 +341,22 @@ impl Harness {
     /// Plots a course to Beta on flight's map, flies out and jumps there.
     fn jump_to_beta(&mut self) {
         self.out_towards_beta();
-        self.press(Key::Char('j'));
-        self.run(2);
+        self.jump_into(129);
         assert_eq!(self.session().system(), SystemId(129));
+    }
+
+    /// Presses J and sends redraws while the ship turns and slows to jump,
+    /// jumps and arrives in system `id`, until the jump's effect is over,
+    /// and returns the last frame.
+    fn jump_into(&mut self, id: i16) -> Frame {
+        self.press(Key::Char('j'));
+        for _ in 0..1200 {
+            let frame = self.frame();
+            if self.session().system() == SystemId(id) && self.flight().jump_effect().is_none() {
+                return frame;
+            }
+        }
+        panic!("never arrived in {id}: {:?}", self.ship());
     }
 
     /// Presses J and sends redraws until the ship is in Beta, and returns
@@ -612,8 +625,7 @@ fn flights_map_plots_a_course_and_j_jumps_along_it_to_the_destination() {
     harness.fly_out();
     let fuel = harness.session().reserves().fuel.now;
     assert_eq!(fuel, 300.0);
-    harness.press(Key::Char('j'));
-    let arrived = harness.run(2);
+    let arrived = harness.jump_into(129);
     assert!(
         harness.flight().jump_effect().is_none(),
         "the effect is over"
@@ -696,8 +708,7 @@ fn a_jump_through_the_app_sounds_warp_up_then_warp_out() {
     harness.press(Key::Char('m'));
     harness.fly_out();
     log.borrow_mut().clear();
-    harness.press(Key::Char('j'));
-    harness.run(2);
+    harness.jump_into(129);
     assert_eq!(harness.session().system(), SystemId(129));
     let plays: Vec<AudioCommand> = log
         .borrow()
@@ -743,8 +754,7 @@ fn each_day_of_a_jump_rolls_the_events_on_the_apps_chance() {
         asked.borrow().is_empty(),
         "nothing rolled before a day goes by"
     );
-    harness.press(Key::Char('j'));
-    harness.run(2);
+    harness.jump_into(129);
     assert_eq!(harness.session().system(), SystemId(129));
     assert_eq!(*asked.borrow(), [35], "the surplus, once for the day");
     assert_eq!(

@@ -642,6 +642,12 @@ fn a_horizontal_booster_bought_in_the_outfitter_lets_the_ship_jump_from_half_as_
     game.halfway_out();
 
     game.press(KeyCode::KeyJ);
+    for _ in 0..600 {
+        if game.jumping() {
+            break;
+        }
+        game.frame();
+    }
     assert!(game.jumping(), "the jump effect begins");
     for _ in 0..600 {
         game.frame();

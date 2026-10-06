@@ -813,10 +813,11 @@ impl Harness {
         assert_eq!(self.session().course(), [SystemId(129)]);
         self.fly_out();
         self.press(KeyCode::KeyJ);
-        for _ in 0..600 {
+        for _ in 0..1200 {
             self.frame();
             let flight = self.app.screen().flight_view().expect("flying");
-            if flight.jump_effect().is_none() {
+            let arrived = self.session().system() == SystemId(129);
+            if arrived && flight.jump_effect().is_none() {
                 assert_eq!(self.session().system(), SystemId(129));
                 return;
             }

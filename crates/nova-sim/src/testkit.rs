@@ -11,7 +11,7 @@ use crate::chance::{Chance, NeverFires};
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
-use crate::hyperspace::MIN_JUMP_DISTANCE;
+use crate::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
 use crate::landing::{LandOutcome, LandingRefusal, StellarFlags};
 use crate::session::Session;
 
@@ -345,8 +345,21 @@ pub(crate) fn jump_with(
         session.plot_course(SystemId(to)).expect("a route");
     }
     fly_out(session);
-    session.begin_jump().expect("jumps");
+    begin_jump_now(session).expect("jumps");
     session.arrive(catalog, chance)
+}
+
+/// Presses J, and if the jump is accepted, ticks with no keys held through
+/// the pre-jump stage until the jump has begun. Gives what J gave.
+pub(crate) fn begin_jump_now(session: &mut Session) -> Result<SystemId, JumpRefusal> {
+    let next = session.begin_jump()?;
+    for _ in 0..1000 {
+        if session.jumping().is_some() {
+            return Ok(next);
+        }
+        session.tick(Controls::default());
+    }
+    panic!("the jump never began: {:?}", session.player());
 }
 
 /// A [`Chance`] that answers from a script (no once it runs out) and

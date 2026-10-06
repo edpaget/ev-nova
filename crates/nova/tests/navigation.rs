@@ -332,11 +332,17 @@ impl Harness {
         frame
     }
 
-    /// Sends `seconds` of redraws.
-    fn run(&mut self, seconds: u64) {
-        for _ in 0..seconds * 60 {
+    /// Presses J and sends redraws while the ship turns and slows to jump,
+    /// jumps and arrives in system `id`, until the jump's effect is over.
+    fn jump_into(&mut self, id: i16) {
+        self.press(KeyCode::KeyJ);
+        for _ in 0..1200 {
             self.frame();
+            if self.session().system() == SystemId(id) && self.flight().jump_effect().is_none() {
+                return;
+            }
         }
+        panic!("never arrived in {id}: {:?}", self.ship());
     }
 
     /// Flies out from the centre until the ship is at least the minimum
@@ -429,8 +435,7 @@ fn tab_and_the_course_map_set_what_the_hud_navigation_area_shows() {
 
     // Arriving clears the target, and the course is done.
     game.fly_out();
-    game.press(KeyCode::KeyJ);
-    game.run(2);
+    game.jump_into(129);
     assert_eq!(game.session().system(), SystemId(129));
     assert_eq!(game.nav(), [NAV_NO_DESTINATION]);
 
@@ -448,15 +453,13 @@ fn the_hud_date_moves_on_a_day_with_each_jump() {
 
     game.plot(129);
     game.fly_out();
-    game.press(KeyCode::KeyJ);
-    game.run(2);
+    game.jump_into(129);
     assert_eq!(game.session().system(), SystemId(129));
     assert_eq!(game.date(), ["June 24, 1177 NC"]);
 
     game.plot(128);
     game.fly_out();
-    game.press(KeyCode::KeyJ);
-    game.run(2);
+    game.jump_into(128);
     assert_eq!(game.session().system(), SystemId(128));
     assert_eq!(game.date(), ["June 25, 1177 NC"]);
 }

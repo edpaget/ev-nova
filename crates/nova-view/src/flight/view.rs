@@ -82,13 +82,17 @@
 //!   [`navigation`](nova_sim::navigation) says. The HUD's nav area shows
 //!   the target, or else the next system on the course (see
 //!   [`hud`](super::hud)).
-//! - J (a press) jumps to the next system on the course when the session
-//!   allows it, and otherwise says why in the original's words (`STR#`
-//!   2002), as a refused landing does. A jump plays its [`JumpEffect`]:
-//!   the keys are let go and ignored and the session waits while the stars
-//!   streak and the screen fades out; then the ship arrives, the new
-//!   system is read and laid out, and it fades in. The HUD stays on top
-//!   throughout.
+//! - J (a press) begins the pre-jump turn and slow-down towards the next
+//!   system on the course when the session allows a jump, and otherwise
+//!   says why in the original's words (`STR#` 2002), as a refused landing
+//!   does. Once J is accepted the keys are let go and ignored while the
+//!   session flies the ship round to the jump's bearing
+//!   ([`Session::preparing_jump`]). The stars streak when the session says
+//!   the jump has begun ([`Session::jumping`]), at once for a ship already
+//!   facing that way and slow enough. The jump plays its [`JumpEffect`]:
+//!   the session waits while the stars streak and the screen fades out;
+//!   then the ship arrives, the new system is read and laid out, and it
+//!   fades in. The HUD stays on top throughout.
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -456,16 +460,37 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         let Ok(session) = &mut self.session else {
             return;
         };
-        let from = session.system();
         match session.begin_jump() {
-            Ok(next) => {
-                let position = |id| session.star_map().position(id).unwrap_or_default();
-                self.jump = Some(JumpEffect::toward(position(from), position(next)));
+            Ok(_) => {
                 self.held.clear();
                 self.message = None;
+                self.start_streak_if_jumping();
             }
             Err(refusal) => self.show(jump_refusal_message(&refusal).to_owned()),
         }
+    }
+
+    /// Starts the jump's streak, from the current system towards the next,
+    /// once the session says the jump has begun, unless it is playing
+    /// already.
+    fn start_streak_if_jumping(&mut self) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        if let (None, Some(next)) = (&self.jump, session.jumping()) {
+            let position = |id| session.star_map().position(id).unwrap_or_default();
+            self.jump = Some(JumpEffect::toward(
+                position(session.system()),
+                position(next),
+            ));
+        }
+    }
+
+    /// Whether the ship is braking and turning before a jump.
+    fn preparing_jump(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_ok_and(|session| session.preparing_jump().is_some())
     }
 
     /// Ends the jump: the ship arrives in the next system, which is read
@@ -788,7 +813,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
 {
     /// Never quits: Escape is the router's.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if self.jump.is_some() {
+        if self.jump.is_some() || self.preparing_jump() {
             return ScreenAction::None;
         }
         let press = match *input {
@@ -838,9 +863,11 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
     }
 
     /// Runs the simulation's steps for `dt` with the keys held, and advances
-    /// the stellars' animations. While the map is open nothing moves; while
-    /// a jump plays only its effect does, and the ship arrives when the
-    /// effect says.
+    /// the stellars' animations. While the map is open nothing moves. During
+    /// the pre-jump stage the session flies on, and the streak starts on
+    /// the step the session begins the jump, which is the last step run.
+    /// While a jump plays only its effect moves, and the ship arrives when
+    /// the effect says.
     fn tick(&mut self, dt: Duration) {
         if self.map_open {
             return;
@@ -864,9 +891,13 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             for _ in 0..steps {
                 self.previous = *session.player();
                 session.tick(controls);
+                if session.jumping().is_some() {
+                    break;
+                }
             }
         }
         self.alpha = alpha;
+        self.start_streak_if_jumping();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -1918,8 +1949,7 @@ mod tests {
         view.input(&key(Key::Up, true));
         ticks(&mut view, 6);
         assert_eq!(ship_sprites(&view).len(), 3, "glowing");
-        view.input(&key(JUMP_KEY, true));
-        assert!(view.jump_effect().is_some(), "jumping");
+        jump_now(&mut view);
         assert_eq!(view.session().expect("flying").engine_glow(), 0);
         let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
         assert_eq!(ids, [2000, 2200], "jumping");
@@ -3105,9 +3135,9 @@ mod tests {
         let mut view = flight();
         plot(&mut view, 131);
         fly_out(&mut view);
+        jump_now(&mut view);
         let leaving = player(&view);
         let fuel_leaving = reserves(&view).fuel.now;
-        assert_eq!(view.input(&key(JUMP, true)), ScreenAction::None);
         assert_eq!(view.message(), None);
         let effect = view.jump_effect().expect("jumping");
         assert_eq!(effect.direction(), at(1.0, 0.0), "east, to Alpha Centauri");
@@ -3194,13 +3224,126 @@ mod tests {
         assert_ne!(player(&view), arrived, "it flies again");
     }
 
+    /// Presses J and ticks until the streak begins, as the session says
+    /// the jump has begun.
+    fn jump_now(view: &mut View) {
+        view.input(&key(JUMP, true));
+        for _ in 0..1000 {
+            if view.jump_effect().is_some() {
+                return;
+            }
+            view.tick(TICK);
+        }
+        panic!("the jump never began: {:?}", player(view));
+    }
+
+    /// Ticks until the ship has arrived in another system and the jump's
+    /// effect is over.
+    fn arrive_now(view: &mut View) {
+        let leaving = view.session().expect("flying").system();
+        for _ in 0..1000 {
+            let arrived = view.session().expect("flying").system() != leaving;
+            if arrived && view.jump_effect().is_none() {
+                return;
+            }
+            view.tick(TICK);
+        }
+        panic!("never arrived: {:?}", player(view));
+    }
+
+    #[test]
+    fn the_streak_waits_for_the_session_to_begin_the_jump() {
+        // fly_out leaves the ship racing north, facing it; Alpha Centauri
+        // is east.
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert_eq!(view.jump_effect(), None, "not on J");
+        assert_eq!(view.message(), None);
+        let session = view.session().expect("flying");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        assert_eq!(session.jumping(), None);
+        let pressed = player(&view);
+        view.tick(TICK);
+        assert_ne!(player(&view), pressed, "the session keeps ticking");
+        let mut waited = 1;
+        while view.session().expect("flying").jumping().is_none() {
+            assert_eq!(view.jump_effect(), None, "tick {waited}");
+            view.tick(TICK);
+            waited += 1;
+            assert!(waited < 1000, "the jump never began");
+        }
+        let effect = view.jump_effect().expect("the streak, on that tick");
+        assert_eq!(effect.direction(), at(1.0, 0.0), "east, to Alpha Centauri");
+        assert_eq!(player(&view).heading, 90.0, "facing it");
+        assert!(waited > 30, "braked and turned first: {waited}");
+    }
+
+    #[test]
+    fn a_ship_ready_to_jump_streaks_on_j() {
+        // Turned east at rest, then drifting out slowly that way: facing
+        // Alpha Centauri and slow enough, it needs no pre-jump stage.
+        let mut view = flight();
+        plot(&mut view, 131);
+        view.input(&key(Key::Right, true));
+        ticks(&mut view, 30);
+        view.input(&key(Key::Right, false));
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 10);
+        view.input(&key(Key::Up, false));
+        for _ in 0..2000 {
+            if player(&view).position.length() >= MIN_JUMP_DISTANCE {
+                break;
+            }
+            view.tick(TICK);
+        }
+        let ship = player(&view);
+        assert_eq!(ship.heading, 90.0, "{ship:?}");
+        assert!(ship.position.length() >= MIN_JUMP_DISTANCE, "{ship:?}");
+        view.input(&key(JUMP, true));
+        let effect = view.jump_effect().expect("streaking on J");
+        assert_eq!(effect.direction(), at(1.0, 0.0));
+        view.tick(TICK);
+        assert_eq!(player(&view), ship, "frozen at once");
+    }
+
+    #[test]
+    fn keys_are_ignored_while_the_ship_turns_to_jump() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        let pressed = player(&view);
+        let mut alongside = flight();
+        plot(&mut alongside, 131);
+        fly_out(&mut alongside);
+        alongside.input(&key(JUMP, true));
+        for k in [Key::Up, Key::Left, Key::Down, MAP, LAND, JUMP, Key::Tab] {
+            assert_eq!(view.input(&key(k, true)), ScreenAction::None);
+        }
+        assert!(!view.map_open());
+        assert_eq!(view.message(), None);
+        for _ in 0..10 {
+            view.tick(TICK);
+            alongside.tick(TICK);
+        }
+        assert_eq!(player(&view), player(&alongside), "flown alike");
+        assert_ne!(player(&view), pressed, "the session flies on");
+        assert_eq!(view.jump_effect(), None);
+        let session = view.session().expect("flying");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(view.take_landing(), None);
+    }
+
     #[test]
     fn keys_are_ignored_while_the_jump_plays() {
         let mut view = flight();
         plot(&mut view, 131);
         fly_out(&mut view);
         view.input(&key(Key::Up, true));
-        view.input(&key(JUMP, true));
+        jump_now(&mut view);
         view.tick(ms(300));
         view.input(&key(Key::Up, false));
         view.input(&key(Key::Left, true));
@@ -3256,7 +3399,7 @@ mod tests {
         let mut view = flight();
         plot(&mut view, 131);
         fly_out(&mut view);
-        view.input(&key(JUMP, true));
+        jump_now(&mut view);
         let moon = |view: &View| sprites(&drawn(view))[1].0.frame;
         let before = moon(&view);
         view.tick(TICK);
@@ -3385,9 +3528,7 @@ mod tests {
         plot(&mut view, 131);
         fly_out(&mut view);
         view.input(&key(JUMP, true));
-        for _ in 0..90 {
-            view.tick(TICK);
-        }
+        arrive_now(&mut view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
         assert_eq!(explored(&view), Some(vec![SystemId(130), SystemId(131)]));
     }
@@ -3575,9 +3716,7 @@ mod tests {
         plot(view, 131);
         fly_out(view);
         view.input(&key(JUMP, true));
-        for _ in 0..90 {
-            view.tick(TICK);
-        }
+        arrive_now(view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
     }
 
@@ -3837,7 +3976,7 @@ mod tests {
         tap(&mut view, Key::Tab);
         plot(&mut view, 131);
         fly_out(&mut view);
-        view.input(&key(JUMP, true));
+        jump_now(&mut view);
         view.tick(ms(300));
         tap(&mut view, Key::Tab);
         assert_eq!(nav_target(&view), Some(StellarId(128)));
