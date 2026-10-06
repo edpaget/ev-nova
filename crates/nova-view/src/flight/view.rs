@@ -92,7 +92,9 @@
 //!   facing that way and slow enough. The jump plays its [`JumpEffect`]:
 //!   the session waits while the stars streak and the screen fades out;
 //!   then the ship arrives, the new system is read and laid out, and it
-//!   fades in. The HUD stays on top throughout.
+//!   fades in. The HUD stays on top throughout. A multi-jump plays one
+//!   effect, toward the first system, and the scene loaded is the last
+//!   system it passes.
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -1011,8 +1013,8 @@ mod tests {
     /// 130, Sol: Earth at (0, -600) and Moon at (300, -200), which animates
     /// a frame a tick. On the map Sol is at (0, 0), linked to Alpha
     /// Centauri (131) at (600, 0), which holds Proxima at its centre;
-    /// Barnard (132) at (0, 600) is linked to nothing. Records the systems
-    /// read.
+    /// Barnard (132) at (0, 600) is linked to nothing, unless `onward`.
+    /// Records the systems read.
     struct FakeCatalog {
         character: Result<CharacterStart, StartError>,
         fields: ShipFields,
@@ -1032,6 +1034,11 @@ mod tests {
         ships: Vec<ShipRecord>,
         /// The ships whose sheets were asked for.
         sheets_asked: RefCell<Vec<ShipId>>,
+        /// Ship 128's default items: none, by default.
+        defaults: Vec<(OutfitId, u16)>,
+        /// Whether Alpha Centauri links on to Barnard, which has no
+        /// stellars: not by default.
+        onward: bool,
     }
 
     type View = FlightView<FakeCatalog>;
@@ -1088,6 +1095,8 @@ mod tests {
             outfits: Vec::new(),
             ships: Vec::new(),
             sheets_asked: RefCell::default(),
+            defaults: Vec::new(),
+            onward: false,
         }
     }
 
@@ -1148,7 +1157,7 @@ mod tests {
 
         fn default_outfits(&self, id: ShipId) -> Vec<(OutfitId, u16)> {
             assert_eq!(id, ShipId(128));
-            Vec::new()
+            self.defaults.clone()
         }
 
         fn outfits(&self) -> Vec<OutfitRecord> {
@@ -1167,6 +1176,7 @@ mod tests {
             match system.0 {
                 130 => self.sites.clone(),
                 131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
+                132 if self.onward => Vec::new(),
                 other => panic!("asked for sÿst {other}'s sites"),
             }
         }
@@ -1178,9 +1188,10 @@ mod tests {
                 links: links.iter().copied().map(SystemId).collect(),
                 govt: None,
             };
+            let onward: &[i16] = if self.onward { &[132] } else { &[] };
             vec![
                 star(130, (0.0, 0.0), &[131]),
-                star(131, (600.0, 0.0), &[]),
+                star(131, (600.0, 0.0), onward),
                 star(132, (0.0, 600.0), &[]),
             ]
         }
@@ -1238,6 +1249,7 @@ mod tests {
                     ],
                 ),
                 131 => ("Alpha Centauri", vec![stellar(140, "Proxima", (0, 0), 1)]),
+                132 if self.onward => ("Barnard", Vec::new()),
                 other => panic!("asked for sÿst {other}"),
             };
             SystemContents {
@@ -1260,10 +1272,11 @@ mod tests {
                 govt: None,
                 stellars: Vec::new(),
             };
+            let onward: &[i16] = if self.onward { &[132] } else { &[] };
             Galaxy {
                 systems: vec![
                     entry(130, "Sol", (0, 0), &[131]),
-                    entry(131, "Alpha Centauri", (600, 0), &[]),
+                    entry(131, "Alpha Centauri", (600, 0), onward),
                     entry(132, "Barnard", (0, 600), &[]),
                 ],
                 ..Galaxy::default()
@@ -3223,6 +3236,70 @@ mod tests {
         ticks(&mut view, 3);
         assert_eq!(player(&view), stepped(arrived, THRUST, 3));
         assert_ne!(player(&view), arrived, "it flies again");
+    }
+
+    /// Ship 128 carrying the stock Multi-Jumping Organ (`oütf` 275,
+    /// multi-jump 10), with Alpha Centauri linked on to Barnard.
+    fn multi_jumping() -> FakeCatalog {
+        FakeCatalog {
+            outfits: vec![OutfitRecord {
+                id: OutfitId(275),
+                name: "Multi-Jumping Organ".to_owned(),
+                short_name: "Multi-Jumping Organ".to_owned(),
+                disp_weight: 0,
+                mass: 0,
+                tech_level: 1,
+                max: 1,
+                flags: 0,
+                cost: 0,
+                mods: [(32, 10), (0, 0), (0, 0), (0, 0)],
+                contribute: 0,
+                require: 0,
+                require_govt: -1,
+                availability: String::new(),
+            }],
+            defaults: vec![(OutfitId(275), 1)],
+            onward: true,
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
+        let mut view = FlightView::new(multi_jumping());
+        plot(&mut view, 132);
+        assert_eq!(
+            view.session().expect("flying").course(),
+            [SystemId(131), SystemId(132)]
+        );
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let fuel_leaving = reserves(&view).fuel.now;
+        let effect = view.jump_effect().expect("jumping");
+        assert_eq!(effect.direction(), at(1.0, 0.0), "east, to the first hop");
+
+        view.tick(ms(1550));
+        let session = view.session().expect("flying");
+        assert_eq!(session.system(), SystemId(132));
+        assert_eq!(session.course(), []);
+        assert_eq!(
+            *view.catalog().systems_read.borrow(),
+            [SystemId(130), SystemId(132)],
+            "Alpha Centauri is never loaded"
+        );
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(132)));
+        assert_eq!(reserves(&view).fuel.now, fuel_leaving - 100.0);
+        assert!(texts(&drawn(&view)).contains(&"Barnard (sÿst 132)".to_owned()));
+        assert!(view.jump_effect().is_some(), "fading in");
+
+        view.tick(ms(1000));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(view.session().expect("flying").jumping(), None);
+        for _ in 0..30 {
+            view.tick(TICK);
+            assert_eq!(view.jump_effect(), None, "no second effect");
+        }
+        assert_eq!(view.session().expect("flying").system(), SystemId(132));
     }
 
     /// Presses J and ticks until the streak begins, as the session says

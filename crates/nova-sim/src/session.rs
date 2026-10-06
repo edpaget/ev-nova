@@ -33,7 +33,12 @@
 //! jump accepted is committed. While the jump lasts ticks move nothing.
 //! When it is over ([`Session::arrive`]) the ship is in the next system, at its edge,
 //! with a jump's fuel used and the days its stats give a jump gone by, and
-//! the rest of the course still ahead. In flight, fuel regenerates each tick at the rate the ship
+//! the rest of the course still ahead. A ship with a multi-jump outfit
+//! passes on along the course in the same jump, as many systems as
+//! [`hops_per_jump`] gives, and enters only the last; the session's
+//! [`MultiJumpRule`] (the engine's unless [`Session::with_multi_jump`]
+//! says otherwise) decides whether the chain costs one jump's fuel and
+//! days or each hop's. In flight, fuel regenerates each tick at the rate the ship
 //! and its outfits give.
 //!
 //! Everything about how the ship performs (its handling, the most shield,
@@ -106,7 +111,8 @@ use crate::geometry::Vec2;
 use crate::glow::ramp_glow;
 use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{
-    JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump, jump_bearing,
+    JUMP_FUEL, JumpRefusal, MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump,
+    jump_bearing,
 };
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
@@ -156,6 +162,8 @@ pub struct Session {
     star_map: StarMap,
     /// The jump under way, from J being accepted until the ship arrives.
     jump: Option<Jump>,
+    /// The rule a multi-jump follows.
+    multi_jump: MultiJumpRule,
     /// The goods traded and the events that move their prices, read when
     /// the session starts.
     goods: Goods,
@@ -232,6 +240,7 @@ impl Session {
             nav_target: None,
             star_map: StarMap::new(catalog.star_map()),
             jump: None,
+            multi_jump: MultiJumpRule::default(),
             goods: Goods::read(catalog),
             thrusting: false,
             engine_glow: 0,
@@ -242,6 +251,14 @@ impl Session {
         };
         session.refit(false);
         Ok(session)
+    }
+
+    /// This session with multi-jumps following `rule`; the engine's by
+    /// default.
+    #[must_use]
+    pub fn with_multi_jump(mut self, rule: MultiJumpRule) -> Self {
+        self.multi_jump = rule;
+        self
     }
 
     /// The ship's stats with the outfits the pilot owns.
@@ -354,6 +371,8 @@ impl Session {
     /// during the stage gives the same system and changes nothing, without
     /// asking the rules again, so a ship that brakes into its no-jump zone
     /// still jumps. Until it arrives, ticks in hyperspace move nothing.
+    /// Only this first hop of a multi-jump turns and slows: the rest are
+    /// made in hyperspace, on arrival.
     pub fn begin_jump(&mut self) -> Result<SystemId, JumpRefusal> {
         if self.landed.is_some() {
             return Err(JumpRefusal::Landed);
@@ -410,42 +429,75 @@ impl Session {
         }
     }
 
-    /// Ends the jump under way, if any, and gives the system arrived in:
-    /// the jump's fuel is used, the date advances by the days the stats give
-    /// a jump, the system is taken off the course, and the ship is placed
-    /// just outside its no-jump zone, at rest on the side facing the system
-    /// it came from (see [`arrival`]), with its reserves as they were, so it
-    /// can jump on at once. Each day
-    /// steps the planetary events, rolled on `chance`. The new system's
-    /// stellars are read from `catalog`. `None`, and nothing changes, when
-    /// no jump has begun, during the pre-jump stage too.
+    /// Ends the jump under way, if any, and gives the system arrived in.
+    /// `None`, and nothing changes, when no jump has begun, during the
+    /// pre-jump stage too.
+    ///
+    /// The jump makes as many hops along the course as
+    /// [`hops_per_jump`] gives for the ship's multi-jump total and the
+    /// session's [`MultiJumpRule`]: one without a multi-jump outfit. It
+    /// chains only when its first hop was to the course's next system (a
+    /// course replotted during the jump is not followed), and stops early
+    /// where the course ends. Under [`MultiJumpRule::Engine`] the whole
+    /// chain uses one jump's fuel and the days the stats give one jump;
+    /// under [`MultiJumpRule::PerHop`] every hop does, and the chain stops
+    /// at a hop the ship has not the fuel for. Each day steps the planetary
+    /// events, rolled on `chance`.
+    ///
+    /// The systems hopped are taken off the course. Those passed through
+    /// on the way are not entered; only the last is: explored, its
+    /// stellars read from `catalog`, the navigation target cleared, and
+    /// the ship placed just outside its no-jump zone, at rest on the side
+    /// facing the system it last left (see [`arrival`]), with its reserves
+    /// as they were, so it can jump on at once.
     pub fn arrive(
         &mut self,
         catalog: &impl PilotCatalog,
         chance: &mut (impl Chance + ?Sized),
     ) -> Option<SystemId> {
-        let Some(Jump::Hyperspace(next)) = self.jump else {
+        let Some(Jump::Hyperspace(first)) = self.jump else {
             return None;
         };
         self.jump = None;
+        self.take_jump_cost(chance);
+        let (mut from, mut at) = (self.pilot.system, first);
+        if self.pilot.course.first() == Some(&first) {
+            self.pilot.course.remove(0);
+            for _ in 1..hops_per_jump(self.stats.multi_jump, self.multi_jump) {
+                let Some(&next) = self.pilot.course.first() else {
+                    break;
+                };
+                if self.multi_jump == MultiJumpRule::PerHop {
+                    if self.pilot.reserves.fuel.now < JUMP_FUEL {
+                        break;
+                    }
+                    self.take_jump_cost(chance);
+                }
+                self.pilot.course.remove(0);
+                (from, at) = (at, next);
+            }
+        }
+        let map = |id| self.star_map.position(id).unwrap_or_default();
+        self.player = arrival(map(from), map(at), self.stats.jump_distance);
+        let pilot = &mut self.pilot;
+        pilot.system = at;
+        pilot.stellar = None;
+        pilot.explore(at);
+        self.sites = catalog.landing_sites(at);
+        self.nav_target = None;
+        self.sounds.push(SimSound::Arrived);
+        Some(at)
+    }
+
+    /// Uses a jump's fuel and lets the days the stats give a jump go by,
+    /// each stepping the planetary events, rolled on `chance`.
+    fn take_jump_cost(&mut self, chance: &mut (impl Chance + ?Sized)) {
         let pilot = &mut self.pilot;
         pilot.reserves.fuel.now -= JUMP_FUEL;
         for _ in 0..self.stats.jump_days {
             pilot.date = pilot.date.next_day();
             market::step_day(&self.goods, &mut pilot.events, chance);
         }
-        if pilot.course.first() == Some(&next) {
-            pilot.course.remove(0);
-        }
-        let map = |id| self.star_map.position(id).unwrap_or_default();
-        self.player = arrival(map(pilot.system), map(next), self.stats.jump_distance);
-        pilot.system = next;
-        pilot.stellar = None;
-        pilot.explore(next);
-        self.sites = catalog.landing_sites(next);
-        self.nav_target = None;
-        self.sounds.push(SimSound::Arrived);
-        Some(next)
     }
 
     /// Selects the next of the system's stellars as the navigation target,
@@ -808,10 +860,12 @@ mod tests {
     use crate::market::{Direction, Good, Lot, Order, TradeRefusal};
     use crate::pre_jump::slow_enough;
     use crate::reserves::{Gauge, Reserves};
-    use crate::stats::{FAST_JUMP, FAST_JUMP_HULL, HYPERSPACE_DAYS, HYPERSPACE_DISTANCE};
+    use crate::stats::{
+        FAST_JUMP, FAST_JUMP_HULL, HYPERSPACE_DAYS, HYPERSPACE_DISTANCE, MULTI_JUMP,
+    };
     use crate::testkit::{
         FAST, FakePilotCatalog, START, Scripted, begin_jump_now, catalog, edge_lander, fly_out,
-        jump, jump_with, land_now, outfit, planet, starting,
+        jump, jump_with, land_now, outfit, planet, star, starting,
     };
 
     #[test]
@@ -2736,6 +2790,209 @@ mod tests {
         jump_with(&mut session, &dampened, 131, &mut chance);
         assert_eq!(chance.asked, [35, 35]);
         assert_eq!(dmy(&session), (25, 6, 1177));
+    }
+
+    // Multi-jump.
+
+    /// `base` on a longer map: 130 (0, 0) links to 131 (600, 0) and 133
+    /// (-600, 0), 131 to 132 (600, 600) and 132 to 134 (1200, 600), so the
+    /// course to 134 is 131, 132, 134; ship 128 carries one outfit of
+    /// multi-jump `mod_val`.
+    fn chained(base: FakePilotCatalog, mod_val: i16) -> FakePilotCatalog {
+        FakePilotCatalog {
+            star_map: vec![
+                star(130, (0.0, 0.0), &[131, 133]),
+                star(131, (600.0, 0.0), &[132]),
+                star(132, (600.0, 600.0), &[134]),
+                star(133, (-600.0, 0.0), &[]),
+                star(134, (1200.0, 600.0), &[]),
+            ],
+            ..owning(base, MULTI_JUMP, mod_val, 1)
+        }
+    }
+
+    /// Plots a course to 134, flies out and begins the jump.
+    fn bound_for_134(catalog: &FakePilotCatalog, rule: MultiJumpRule) -> Session {
+        let mut session = Session::start(catalog)
+            .expect("starts")
+            .with_multi_jump(rule);
+        session.plot_course(SystemId(134)).expect("a route");
+        assert_eq!(session.course(), ids(&[131, 132, 134]));
+        fly_out(&mut session);
+        session
+    }
+
+    fn arrivals(session: &mut Session) -> usize {
+        session
+            .take_sounds()
+            .into_iter()
+            .filter(|sound| *sound == SimSound::Arrived)
+            .count()
+    }
+
+    #[test]
+    fn a_multi_jump_passes_modval_systems_along_the_course_for_one_jumps_fuel_and_days() {
+        let catalog = chained(catalog(), 2);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        assert_eq!(session.jumping(), Some(SystemId(131)), "the first hop");
+        session.take_sounds();
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(132))
+        );
+        assert_eq!(session.system(), SystemId(132));
+        assert_eq!(session.course(), ids(&[134]));
+        assert_eq!(session.jumping(), None);
+        assert_eq!(session.reserves().fuel.now, 200.0, "one jump's fuel");
+        assert_eq!(dmy(&session), (24, 6, 1177), "one jump's day");
+        assert_eq!(
+            session.pilot().explored().collect::<Vec<_>>(),
+            [SystemId(130), SystemId(132)],
+            "131 passed through"
+        );
+        assert_eq!(
+            *catalog.sites_asked.borrow(),
+            [SystemId(130), SystemId(132)]
+        );
+        assert_eq!(arrivals(&mut session), 1);
+        assert_eq!(
+            *session.player(),
+            crate::hyperspace::arrival(
+                Vec2::new(600.0, 0.0),
+                Vec2::new(600.0, 600.0),
+                MIN_JUMP_DISTANCE
+            ),
+            "facing the system it last left"
+        );
+        assert_eq!(session.player().position, Vec2::new(0.0, -1001.0));
+    }
+
+    #[test]
+    fn a_multi_jump_rolls_the_events_for_one_jumps_days() {
+        let catalog = chained(surplus(), 2);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        begin_jump_now(&mut session).expect("jumps");
+        let mut chance = Scripted::default();
+        assert_eq!(session.arrive(&catalog, &mut chance), Some(SystemId(132)));
+        assert_eq!(chance.asked, [35], "one roll for the one day");
+    }
+
+    #[test]
+    fn the_chain_stops_where_the_course_ends() {
+        // The stock Multi-Jumping Organ: 10.
+        let catalog = chained(catalog(), 10);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(134))
+        );
+        assert_eq!(session.course(), []);
+        assert_eq!(session.reserves().fuel.now, 200.0);
+        assert_eq!(dmy(&session), (24, 6, 1177));
+        assert_eq!(
+            session.player().position,
+            Vec2::new(-1001.0, 0.0),
+            "facing 132, west of 134"
+        );
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+    }
+
+    #[test]
+    fn a_multi_jump_modval_of_one_makes_a_single_hop() {
+        let catalog = chained(catalog(), 1);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert_eq!(session.course(), ids(&[132, 134]));
+    }
+
+    #[test]
+    fn a_course_replotted_during_the_jump_is_not_chained() {
+        let catalog = chained(catalog(), 10);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        begin_jump_now(&mut session).expect("jumps");
+        session.plot_course(SystemId(133)).expect("a route");
+        assert_eq!(session.course(), ids(&[133]));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert_eq!(session.course(), ids(&[133]));
+        assert_eq!(session.reserves().fuel.now, 200.0);
+    }
+
+    #[test]
+    fn per_hop_makes_one_plus_modval_hops_each_taking_fuel_and_days() {
+        let catalog = chained(catalog(), 1);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::PerHop);
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(132))
+        );
+        assert_eq!(session.course(), ids(&[134]));
+        assert_eq!(session.reserves().fuel.now, 100.0, "two jumps' fuel");
+        assert_eq!(dmy(&session), (25, 6, 1177), "two jumps' days");
+
+        let catalog = chained(surplus(), 1);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::PerHop);
+        begin_jump_now(&mut session).expect("jumps");
+        let mut chance = Scripted::default();
+        session.arrive(&catalog, &mut chance);
+        assert_eq!(chance.asked, [35, 35], "one roll for each hop's day");
+    }
+
+    #[test]
+    fn per_hop_stops_cleanly_when_a_hop_lacks_fuel() {
+        let catalog = chained(catalog(), 10);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::PerHop);
+        session.pilot.reserves.fuel.now = 250.0;
+        begin_jump_now(&mut session).expect("jumps");
+        session.take_sounds();
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(132))
+        );
+        assert_eq!(session.reserves().fuel.now, 50.0);
+        assert_eq!(dmy(&session), (25, 6, 1177));
+        assert_eq!(session.course(), ids(&[134]));
+        assert_eq!(
+            session.pilot().explored().collect::<Vec<_>>(),
+            [SystemId(130), SystemId(132)]
+        );
+        assert_eq!(arrivals(&mut session), 1);
+    }
+
+    #[test]
+    fn per_hop_takes_a_hop_with_exactly_a_jumps_fuel() {
+        let catalog = chained(catalog(), 10);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::PerHop);
+        session.pilot.reserves.fuel.now = 200.0;
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(132))
+        );
+        assert_eq!(session.reserves().fuel.now, 0.0);
+    }
+
+    #[test]
+    fn per_hop_stops_where_the_course_ends() {
+        let catalog = chained(catalog(), 10);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::PerHop);
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(134))
+        );
+        assert_eq!(session.course(), []);
+        assert_eq!(session.reserves().fuel.now, 0.0);
+        assert_eq!(dmy(&session), (26, 6, 1177));
     }
 
     #[test]
