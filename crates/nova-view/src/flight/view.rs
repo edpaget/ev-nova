@@ -155,6 +155,14 @@
 //!   ([`FlightView::with_fighter_launch`],
 //!   [`FlightView::with_fighter_recall`]); fighters abandoned in a jump
 //!   are told on arrival ([`fighters_abandoned_message`]).
+//! - Landed at a bar, the router asks the flight for the ships for hire
+//!   and hires them ([`FlightView::escorts_for_hire`],
+//!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance;
+//!   the session's hiring rules are set on the screen
+//!   ([`FlightView::with_hire_require`], [`FlightView::with_take_off_pay`],
+//!   [`FlightView::with_escort_wage`], [`FlightView::with_hire_terms`],
+//!   [`FlightView::with_control_bits`]). Hired escorts who defect unpaid
+//!   on arrival or at take-off are told ([`defection_message`]).
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -163,6 +171,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
     ClassRow, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
@@ -174,6 +183,7 @@ use nova_sim::{
     StartError, StellarId, Steps, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn,
     Vec2, flight::normalized, flight::shortest_turn,
 };
+use nova_sim::{ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote};
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
@@ -481,6 +491,26 @@ pub fn assigned_message(assigned: Assigned) -> &'static str {
     }
 }
 
+/// What the player is told when `count` hired escorts defected for want
+/// of pay: `STR#` 2002 #302 for one, #303 for more.
+#[must_use]
+pub fn defection_message(count: u32) -> &'static str {
+    if count == 1 {
+        DEFECTED_ONE
+    } else {
+        DEFECTED_SOME
+    }
+}
+
+/// What the player is told of each of `notes`, in order.
+#[must_use]
+pub fn pay_notes_message(notes: &[PayNote]) -> Vec<String> {
+    notes
+        .iter()
+        .map(|&PayNote::Defected(count)| defection_message(count).to_owned())
+        .collect()
+}
+
 /// What the player is told when `refusal` stops a jump: the original's
 /// words for it.
 #[must_use]
@@ -748,6 +778,60 @@ impl<
         }
     }
 
+    /// The flight with an unmet `Require` refusing a hire, or not, as
+    /// `source` says ([`Session::with_hire_require`]).
+    #[must_use]
+    pub fn with_hire_require(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_hire_require(source)),
+            ..self
+        }
+    }
+
+    /// The flight with each take-off paying the hired escorts a day's
+    /// wages, or not, as `source` says ([`Session::with_take_off_pay`]).
+    #[must_use]
+    pub fn with_take_off_pay(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_take_off_pay(source)),
+            ..self
+        }
+    }
+
+    /// The flight with a hired escort paid the wage `source` says
+    /// ([`Session::with_escort_wage`]).
+    #[must_use]
+    pub fn with_escort_wage(self, source: RuleSource) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_escort_wage(source)),
+            ..self
+        }
+    }
+
+    /// The flight with `terms` giving the fee and wage of a hire
+    /// ([`Session::with_hire_terms`]).
+    #[must_use]
+    pub fn with_hire_terms(self, terms: Rc<dyn HireTerms>) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_hire_terms(terms)),
+            ..self
+        }
+    }
+
+    /// The flight with `bits` testing a ship's `Availability` for hire
+    /// ([`Session::with_control_bits`]).
+    #[must_use]
+    pub fn with_control_bits(self, bits: Rc<dyn ControlBits>) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_control_bits(bits)),
+            ..self
+        }
+    }
+
     /// The flight with its explosions and debris rolled on `chance`, apart
     /// from the simulation's.
     #[must_use]
@@ -940,7 +1024,8 @@ impl<
 
     /// Ends the jump: the ship arrives in the next system, which is read
     /// and laid out, and drawn from where the ship arrives; the flight
-    /// says how many fighters were abandoned, if any.
+    /// says how many fighters were abandoned and how many hired escorts
+    /// defected unpaid, if any, in one message, the fighters first.
     fn arrive(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
@@ -949,6 +1034,7 @@ impl<
             return;
         };
         let notes = session.take_fighter_notes();
+        let pay = session.take_pay_notes();
         self.scene = Some(SystemScene::load(&self.catalog, system));
         self.map.show_course(system, session.course());
         self.map.show_explored(session.pilot().explored());
@@ -958,9 +1044,13 @@ impl<
         self.npc_previous.clear();
         self.effects.clear();
         self.read_npc_sheets();
-        for note in notes {
-            let FighterNote::Abandoned(count) = note;
-            self.say(fighters_abandoned_message(count));
+        let mut said: Vec<String> = notes
+            .into_iter()
+            .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count))
+            .collect();
+        said.extend(pay_notes_message(&pay));
+        if !said.is_empty() {
+            self.say(said.join("  "));
         }
     }
 }
@@ -1029,13 +1119,21 @@ impl<C> FlightView<C> {
     /// Takes off from the stellar landed on, and gives it; `None` when the
     /// ship has not landed. The next frame draws the ship where it is, at
     /// the stellar, not on its way from where it was, and shows no message
-    /// from before the landing; the session populates the system's
-    /// traffic afresh on its next tick ([`Session::take_off`]).
+    /// from before the landing, but says how many hired escorts defected
+    /// for want of the take-off's pay ([`defection_message`]); the
+    /// session populates the system's traffic afresh on its next tick
+    /// ([`Session::take_off`]).
     pub fn take_off(&mut self) -> Option<StellarId> {
-        let stellar = self.session.as_mut().ok()?.take_off()?;
+        let session = self.session.as_mut().ok()?;
+        let stellar = session.take_off()?;
+        let pay = session.take_pay_notes();
         self.previous = self.current();
         self.alpha = 0.0;
         self.message = None;
+        let said = pay_notes_message(&pay);
+        if !said.is_empty() {
+            self.say(said.join("  "));
+        }
         Some(stellar)
     }
 
@@ -1205,6 +1303,25 @@ impl<C> FlightView<C> {
         match &mut self.session {
             Ok(session) => session.recharge(),
             Err(_) => Err(RechargeRefusal::NoFuel),
+        }
+    }
+
+    /// The ships for hire in the bar of the stellar landed on, as
+    /// [`Session::escorts_for_hire`] gives them, the day's rolls drawn on
+    /// the flight's chance; none for a session that failed.
+    pub fn escorts_for_hire(&mut self) -> Option<HireList> {
+        self.session
+            .as_mut()
+            .ok()?
+            .escorts_for_hire(&mut self.chance)
+    }
+
+    /// Hires a ship as [`Session::hire`] does, on the flight's chance; a
+    /// session that failed has no bar.
+    pub fn hire(&mut self, ship: ShipId) -> Result<Hired, HireRefusal> {
+        match &mut self.session {
+            Ok(session) => session.hire(ship, &mut self.chance),
+            Err(_) => Err(HireRefusal::NoBar),
         }
     }
 
@@ -6671,5 +6788,222 @@ mod tests {
             let view = flight().with_escort_orders(source);
             assert_eq!(view.session().expect("flying").escort_orders(), source);
         }
+    }
+
+    // Hiring escorts and paying them.
+
+    use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
+    use nova_sim::{ControlBits, HireRefusal, HireTerms, PayNote};
+
+    #[test]
+    fn a_defection_is_said_as_the_original_says_it() {
+        assert_eq!(defection_message(1), DEFECTED_ONE);
+        assert_eq!(defection_message(2), DEFECTED_SOME);
+        assert_eq!(defection_message(5), DEFECTED_SOME);
+        assert_eq!(
+            pay_notes_message(&[PayNote::Defected(1), PayNote::Defected(3)]),
+            vec![DEFECTED_ONE.to_owned(), DEFECTED_SOME.to_owned()]
+        );
+    }
+
+    /// [`shipbuying`] with its stellar a bar too, and ship 129 (`Cost`
+    /// 900) for hire half the days.
+    fn hiring() -> FakeCatalog {
+        let mut catalog = shipbuying();
+        catalog.sites[0].flags |= StellarFlags::BAR;
+        for record in &mut catalog.ships {
+            if record.id == ShipId(129) {
+                record.hire_random = 50;
+            }
+        }
+        catalog
+    }
+
+    #[test]
+    fn hiring_goes_through_the_session_on_the_flights_chance() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let mut view = FlightView::new(hiring()).with_chance(SharedChance::new(shared));
+        assert_eq!(view.escorts_for_hire(), None, "in flight");
+        assert_eq!(view.hire(ShipId(129)), Err(HireRefusal::NoBar));
+        tap(&mut view, LAND_KEY);
+        view.take_save_due();
+        let list = view.escorts_for_hire().expect("a bar");
+        let row = list.row(ShipId(129)).expect("for hire");
+        assert_eq!((row.fee, row.wage), (90, 9));
+        assert_eq!(always.borrow().asked, [50]);
+        let hired = view.hire(ShipId(129)).expect("hired");
+        assert_eq!((hired.fee, hired.wage), (90, 9));
+        assert_eq!(view.pilot().map(Pilot::cash), Some(1000 - 90));
+        assert_eq!(view.pilot().expect("flying").escorts()[0].wage, Some(9));
+        assert!(view.take_save_due());
+        let mut broken = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..hiring()
+        });
+        assert_eq!(broken.escorts_for_hire(), None);
+        assert_eq!(broken.hire(ShipId(129)), Err(HireRefusal::NoBar));
+    }
+
+    /// `pilot`, saved and read back with `escorts`, each a ship, whether
+    /// it is carried and its wage, each full.
+    fn with_paid_fleet(pilot: &Pilot, escorts: &[(i16, bool, Option<i64>)]) -> Pilot {
+        let mut save: serde_json::Value =
+            serde_json::from_str(&nova_sim::save::encode(pilot)).expect("JSON");
+        let gauge = |max: f32| serde_json::json!({"now": max, "max": max});
+        save["escorts"] = escorts
+            .iter()
+            .map(|&(ship, carried, wage)| {
+                serde_json::json!({
+                    "ship": ship,
+                    "reserves": {"shield": gauge(40.0), "armor": gauge(60.0), "fuel": gauge(250.0)},
+                    "order": null,
+                    "carried": carried,
+                    "wage": wage
+                })
+            })
+            .collect();
+        nova_sim::save::decode(&save.to_string()).expect("a pilot")
+    }
+
+    /// [`boardable`] with ship 130 of `Cost` 10,000 (a wage of 100), and
+    /// a pilot holding `cash` whose fleet is one hired ship 130, docked
+    /// at stellar 128 when `docked`; its flight, its first tick done.
+    fn paying(cash: i64, docked: bool) -> View {
+        let mut catalog = boardable();
+        for record in &mut catalog.ships {
+            if record.id == ShipId(130) {
+                record.cost = 10_000;
+            }
+        }
+        let mut pilot = with_paid_fleet(
+            &Pilot::new(&catalog, "Payer").expect("starts"),
+            &[(130, false, Some(100))],
+        );
+        pilot.set_cash(cash);
+        if docked {
+            let text =
+                nova_sim::save::encode(&pilot).replace("\"stellar\": null", "\"stellar\": 128");
+            pilot = nova_sim::save::decode(&text).expect("a pilot");
+        }
+        let (_, chance) = scripted(&placed(750, 650, 0));
+        let mut view = FlightView::with_pilot(catalog, pilot)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        view
+    }
+
+    #[test]
+    fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
+        let mut view = paying(50, false);
+        assert_eq!(view.pilot().expect("flying").escorts().len(), 1);
+        jump_to_alpha(&mut view);
+        assert_eq!(view.message(), Some(DEFECTED_ONE));
+        assert_eq!(view.pilot().expect("flying").escorts(), []);
+        let mut paid = paying(100, false);
+        jump_to_alpha(&mut paid);
+        assert_eq!(paid.message(), None);
+        assert_eq!(paid.pilot().map(Pilot::cash), Some(0));
+    }
+
+    #[test]
+    fn by_the_engine_an_escort_left_unpaid_at_take_off_defects_and_the_flight_says_so() {
+        let mut view = paying(50, true);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(view.message(), Some(DEFECTED_ONE));
+        assert_eq!(view.pilot().expect("flying").escorts(), []);
+        let mut kept = paying(50, true).with_take_off_pay(RuleSource::Bible);
+        kept.take_off().expect("took off");
+        assert_eq!(kept.message(), None);
+        assert_eq!(kept.pilot().expect("flying").escorts().len(), 1);
+    }
+
+    #[test]
+    fn fighters_abandoned_and_escorts_defected_on_one_arrival_are_said_together() {
+        let mut catalog = boardable();
+        for record in &mut catalog.ships {
+            if record.id == ShipId(130) {
+                record.escort_type = 0;
+                record.fields.fuel = 0;
+            }
+        }
+        let pilot = with_paid_fleet(
+            &Pilot::new(&catalog, "Carrier").expect("starts"),
+            &[
+                (130, true, None),
+                (130, true, None),
+                (129, false, Some(1500)),
+            ],
+        );
+        let (_, chance) = scripted(&placed(750, 650, 0));
+        let mut view = FlightView::with_pilot(catalog, pilot)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        jump_to_alpha(&mut view);
+        assert_eq!(
+            view.message(),
+            Some("(Two fighters abandoned)  Due to lack of pay, one of your escorts has defected.")
+        );
+        assert_eq!(view.pilot().expect("flying").escorts(), []);
+    }
+
+    /// Terms of a fee of 7 and a wage of 3 for every ship.
+    #[derive(Debug)]
+    struct Sevens;
+
+    impl HireTerms for Sevens {
+        fn fee(&self, _ship: &ShipRecord, _site: &LandingSite) -> i64 {
+            7
+        }
+
+        fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _cash: i64) -> i64 {
+            7
+        }
+
+        fn wage(&self, _ship: &ShipRecord) -> i64 {
+            3
+        }
+    }
+
+    /// Control bits where nothing holds.
+    #[derive(Debug)]
+    struct Nothing;
+
+    impl ControlBits for Nothing {
+        fn allows(&self, _expression: &str) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn the_hiring_rules_reach_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_hire_require(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.hire_require(), source);
+            assert_eq!(session.take_off_pay(), RuleSource::Engine);
+            assert_eq!(session.escort_wage(), RuleSource::Engine);
+            let view = flight().with_take_off_pay(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.take_off_pay(), source);
+            assert_eq!(session.hire_require(), RuleSource::Engine);
+            let view = flight().with_escort_wage(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.escort_wage(), source);
+            assert_eq!(session.take_off_pay(), RuleSource::Engine);
+        }
+        let always: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
+        let mut view = FlightView::new(hiring())
+            .with_chance(SharedChance::new(always))
+            .with_hire_terms(Rc::new(Sevens))
+            .with_control_bits(Rc::new(Nothing));
+        tap(&mut view, LAND_KEY);
+        let list = view.escorts_for_hire().expect("a bar");
+        let row = list.row(ShipId(129)).expect("listed: no Flags3 hides it");
+        assert_eq!((row.fee, row.wage), (7, 3));
+        assert_eq!(row.hire, Err(HireRefusal::NotForHire));
     }
 }

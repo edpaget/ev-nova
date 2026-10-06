@@ -8,7 +8,12 @@
 //! **The comm dialog** shows a [`HailView`]: the ship's reply in item 10,
 //! its picture (`PICT` 5000 + its ID - 128) in item 11, and in item 12
 //! "Class: <ship> (<government>)" (`STR#` 2002 #195), with "Status:
-//! Hostile" (#196, #174) in red below for a hostile ship. Its buttons
+//! Hostile" (#196, #174) in red below for a hostile ship, and for the
+//! player's own escort "Status: Hired Escort" (#166) and its daily pay,
+//! "Pay: <wage> credits per day" (#297, #267), or "Status: Escort"
+//! (#168), in bright green (`_CommDialogUpdate` @0x90688-0x90704; the
+//! pay line is the original's escort dialog's, shown here, as the help
+//! says the comm window shows a hired escort's cost per day). Its buttons
 //! stand in a column, [`BUTTON_STEP`] apart, at item 3's left, width and
 //! height: the options listed, in order, the first at item 3's top (so
 //! the second stands at item 2's place), and "Close Channel" (`STR#` 150
@@ -36,6 +41,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::hire::{ESCORT, HIRED_ESCORT, PAY_LABEL, PER_DAY};
 use nova_sim::{Haggle, HailView, ShipId};
 
 use crate::color::Color;
@@ -87,6 +93,8 @@ pub const STATUS_LABEL: &str = "Status:";
 pub const HOSTILE: &str = "Hostile";
 /// The hostile status's colour.
 pub const HOSTILE_COLOR: Color = Color::rgba(0xFF, 0x00, 0x00, 255);
+/// The colour of the player's escort's status and pay: bright green.
+pub const ESCORT_COLOR: Color = Color::rgba(0x00, 0xFF, 0x00, 255);
 /// The comm dialog's key that closes the channel, besides Return, Enter
 /// and Escape.
 pub const CLOSE_KEY: char = 'e';
@@ -159,6 +167,36 @@ pub fn class_text(view: &HailView) -> String {
     match &view.govt_name {
         Some(govt) => format!("{CLASS_LABEL} {} ({govt})", view.comm_name),
         None => format!("{CLASS_LABEL} {}", view.comm_name),
+    }
+}
+
+/// A hired escort's pay line for `wage` a day: "Pay: <wage> credits per
+/// day" (`STR#` 2002 #297 and #267), "credit" for a wage of 1.
+#[must_use]
+pub fn pay_text(wage: i64) -> String {
+    let unit = if wage == 1 { "credit" } else { "credits" };
+    format!("{PAY_LABEL} {} {unit} {PER_DAY}", grouped(wage))
+}
+
+/// The status lines item 12 shows below the class for `view`, each with
+/// its colour: for the player's escort "Status: Hired Escort" (`STR#`
+/// 2002 #166) and its pay, or "Status: Escort" (#168), in bright green;
+/// for a hostile ship "Status: Hostile", in red; otherwise none.
+#[must_use]
+pub fn status_lines(view: &HailView) -> Vec<(String, Color)> {
+    match view.escort {
+        Some(status) => {
+            let what = if status.wage.is_some() {
+                HIRED_ESCORT
+            } else {
+                ESCORT
+            };
+            let mut lines = vec![(format!("{STATUS_LABEL} {what}"), ESCORT_COLOR)];
+            lines.extend(status.wage.map(|wage| (pay_text(wage), ESCORT_COLOR)));
+            lines
+        }
+        None if view.hostile => vec![(format!("{STATUS_LABEL} {HOSTILE}"), HOSTILE_COLOR)],
+        None => Vec::new(),
     }
 }
 
@@ -470,7 +508,8 @@ impl Screen for CommDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The picture (or the backdrop), the ship's picture, then the dialog
-    /// and, for a hostile ship, its status.
+    /// and the ship's status lines ([`status_lines`]), halfway down item
+    /// 12, a line apart.
     fn draw(&self, list: &mut DrawList) {
         backdrop(list, self.dialog.bounds(), self.picture);
         if let Some(at) = self.dialog.item_bounds(PICTURE_ITEM) {
@@ -482,17 +521,18 @@ impl Screen for CommDialog {
             );
         }
         self.dialog.draw(list);
-        if self.view.hostile
-            && let Some(at) = self.dialog.item_bounds(CLASS_ITEM)
-        {
-            let origin = Point::new(at.min.x, at.min.y + at.height() / 2.0);
-            list.text(
-                format!("{STATUS_LABEL} {HOSTILE}"),
-                origin,
-                TEXT_SIZE,
-                Some(at.width()),
-                HOSTILE_COLOR,
-            );
+        if let Some(at) = self.dialog.item_bounds(CLASS_ITEM) {
+            let line_height = self.metrics.line_height(Font::Geneva, TEXT_SIZE);
+            for (n, (text, color)) in status_lines(&self.view).into_iter().enumerate() {
+                let y = at.min.y + at.height() / 2.0 + line_height * n as f32;
+                list.text(
+                    text,
+                    Point::new(at.min.x, y),
+                    TEXT_SIZE,
+                    Some(at.width()),
+                    color,
+                );
+            }
         }
     }
 
@@ -691,7 +731,7 @@ impl Screen for HaggleDialog {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::{HailButton, NpcId};
+    use nova_sim::{EscortStatus, HailButton, NpcId};
 
     use super::*;
     use crate::draw::DrawCommand;
@@ -1031,6 +1071,78 @@ mod tests {
             )],
             "halfway down item 12"
         );
+    }
+
+    /// The status lines `view`'s dialog draws in item 12: each text, its
+    /// origin and colour.
+    fn status_lines_drawn(view: &HailView) -> Vec<(String, Point, Color)> {
+        drawn(&dialog(view))
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    ..
+                } if text.starts_with(STATUS_LABEL) || text.starts_with(PAY_LABEL) => {
+                    Some((text, origin, color))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_hired_escort_shows_its_status_and_daily_pay_in_bright_green() {
+        let hired = HailView {
+            escort: Some(EscortStatus { wage: Some(1000) }),
+            ..view()
+        };
+        let below = 96.0 + MonoMetrics.line_height(Font::Geneva, TEXT_SIZE);
+        assert_eq!(
+            status_lines_drawn(&hired),
+            [
+                (
+                    "Status: Hired Escort".to_owned(),
+                    Point::new(40.0, 96.0),
+                    ESCORT_COLOR
+                ),
+                (
+                    "Pay: 1,000 credits per day".to_owned(),
+                    Point::new(40.0, below),
+                    ESCORT_COLOR
+                ),
+            ]
+        );
+        assert_eq!(ESCORT_COLOR, Color::rgba(0x00, 0xFF, 0x00, 255));
+    }
+
+    #[test]
+    fn an_escort_not_hired_shows_its_status_alone() {
+        let captured = HailView {
+            escort: Some(EscortStatus { wage: None }),
+            hostile: true,
+            ..view()
+        };
+        assert_eq!(
+            status_lines_drawn(&captured),
+            [(
+                "Status: Escort".to_owned(),
+                Point::new(40.0, 96.0),
+                ESCORT_COLOR
+            )],
+            "an escort, never hostile"
+        );
+        assert_eq!(status_lines_drawn(&view()), [], "a ship that is neither");
+    }
+
+    #[test]
+    fn a_days_pay_of_one_credit_is_singular() {
+        assert_eq!(pay_text(1), "Pay: 1 credit per day");
+        assert_eq!(pay_text(0), "Pay: 0 credits per day");
+        assert_eq!(pay_text(2), "Pay: 2 credits per day");
+        assert_eq!(pay_text(175), "Pay: 175 credits per day");
+        assert_eq!(pay_text(12_000), "Pay: 12,000 credits per day");
     }
 
     #[test]

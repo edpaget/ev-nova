@@ -22,7 +22,14 @@
 //! [`SpaceportView::take_outfit`], [`SpaceportView::set_outfitter`]), and
 //! the Shipyard's the stellar's shipyard, a [`ShipyardScreen`]
 //! ([`SpaceportView::with_shipyard`], [`SpaceportView::take_ship`],
-//! [`SpaceportView::set_shipyard`]).
+//! [`SpaceportView::set_shipyard`]). The Bar's opens the stellar's bar
+//! likewise, a [`BarScreen`] over it, when given one
+//! ([`SpaceportView::with_bar`]): its Hire Escort asks for the ships for
+//! hire ([`SpaceportView::take_hire_request`]), whoever flies the ship
+//! answers with them ([`SpaceportView::open_hire`]), the ship the hire
+//! screen asks for is taken through the spaceport
+//! ([`SpaceportView::take_hire`]), and after the hire the hire screen
+//! closes back to the bar ([`SpaceportView::set_hire`]).
 //!
 //! Where the stellar sells fuel, Recharge (item 4) asks for a refill,
 //! taken through the spaceport ([`SpaceportView::take_recharge`]). A
@@ -37,10 +44,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Market, Order, OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, Shipyard, sells_fuel,
-    services,
+    HireList, Market, Order, OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, Shipyard,
+    sells_fuel, services,
 };
 
+use super::bar::{BarScreen, Hiring};
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::layout::{
     BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, LEAVE_LABEL, NAME_FONT, NAME_ITEM, NAME_SIZE,
@@ -136,6 +144,8 @@ enum Open {
     Outfitter(Box<OutfitterScreen>),
     /// The shipyard.
     Shipyard(Box<ShipyardScreen>),
+    /// The bar, and the hire screen over it.
+    Bar(Box<BarScreen>),
 }
 
 impl Open {
@@ -145,6 +155,7 @@ impl Open {
             Self::Trade(screen) => screen.as_mut(),
             Self::Outfitter(screen) => screen.as_mut(),
             Self::Shipyard(screen) => screen.as_mut(),
+            Self::Bar(screen) => screen.as_mut(),
         }
     }
 
@@ -154,6 +165,7 @@ impl Open {
             Self::Trade(screen) => screen.closed(),
             Self::Outfitter(screen) => screen.closed(),
             Self::Shipyard(screen) => screen.closed(),
+            Self::Bar(screen) => screen.closed(),
         }
     }
 }
@@ -196,6 +208,15 @@ impl std::fmt::Debug for Shipbuying {
     }
 }
 
+/// The bar given: its dialog template (or why there is none), what its
+/// hire screen is built from, and whether the fleet has room.
+#[derive(Clone, Debug)]
+struct Barkeeping {
+    template: Result<DialogTemplate, String>,
+    hiring: Hiring,
+    room: bool,
+}
+
 /// The spaceport of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct SpaceportView {
@@ -211,6 +232,8 @@ pub struct SpaceportView {
     outfitting: Option<Outfitting>,
     /// The shipyard, once given.
     shipbuying: Option<Shipbuying>,
+    /// The bar, once given.
+    barkeeping: Option<Barkeeping>,
     left: bool,
     /// Whether Recharge has been clicked since this was last taken.
     recharge: bool,
@@ -287,6 +310,7 @@ impl SpaceportView {
             trade: None,
             outfitting: None,
             shipbuying: None,
+            barkeeping: None,
             left: false,
             recharge: false,
             sounds: Vec::new(),
@@ -465,6 +489,84 @@ impl SpaceportView {
         }
     }
 
+    /// The spaceport with the stellar's bar, which the Bar opens laid out
+    /// by `template`, the bar dialog (or saying why there is none), its
+    /// text and the ships' pictures and descriptions read from `catalog`;
+    /// its hire screen is laid out by `hire_template`, the "Shipyard"
+    /// dialog, with its info panel by `info_template`, "Shipyard Info".
+    /// Hire Escort is greyed unless the fleet has `room`. Without it, the
+    /// Bar opens its placeholder.
+    #[must_use]
+    pub fn with_bar(
+        self,
+        template: Result<DialogTemplate, String>,
+        hire_template: Result<DialogTemplate, String>,
+        info_template: Result<DialogTemplate, String>,
+        catalog: Rc<dyn ShipyardCatalog>,
+        room: bool,
+    ) -> Self {
+        Self {
+            barkeeping: Some(Barkeeping {
+                template,
+                hiring: Hiring {
+                    template: hire_template,
+                    info: info_template,
+                    catalog,
+                },
+                room,
+            }),
+            ..self
+        }
+    }
+
+    /// The bar open, if it is.
+    #[must_use]
+    pub fn open_bar(&self) -> Option<&BarScreen> {
+        match &self.open {
+            Some(Open::Bar(screen)) => Some(screen),
+            _ => None,
+        }
+    }
+
+    /// Whether the bar's Hire Escort has asked for the ships for hire
+    /// since this was last asked: whoever flies the ship answers with
+    /// [`SpaceportView::open_hire`].
+    pub fn take_hire_request(&mut self) -> bool {
+        match &mut self.open {
+            Some(Open::Bar(screen)) => screen.take_hire_request(),
+            _ => false,
+        }
+    }
+
+    /// Opens the hire screen over the bar open on `list`, or, with nothing
+    /// for hire, has the bar say so.
+    pub fn open_hire(&mut self, list: HireList) {
+        if let Some(Open::Bar(screen)) = &mut self.open {
+            screen.open_hire(list);
+        }
+    }
+
+    /// The ship the hire screen open asked for since it was last taken,
+    /// once.
+    pub fn take_hire(&mut self) -> Option<ShipId> {
+        match &mut self.open {
+            Some(Open::Bar(screen)) => screen.take_hire(),
+            _ => None,
+        }
+    }
+
+    /// After a hire, with `list` the ships for hire now: the hire screen
+    /// closes back to the bar, and the bar's Hire Escort, and the next
+    /// bar's, is greyed unless the fleet still has room.
+    pub fn set_hire(&mut self, list: &HireList) {
+        if let Some(Open::Bar(screen)) = &mut self.open {
+            screen.set_hire(list);
+        }
+        if let Some(barkeeping) = &mut self.barkeeping {
+            barkeeping.room = list.room;
+        }
+    }
+
     /// The stellar landed on.
     #[must_use]
     pub fn stellar(&self) -> StellarId {
@@ -539,6 +641,20 @@ impl SpaceportView {
         port.show_description();
         let port = &*port;
         let metrics = Rc::clone(&port.metrics.0);
+        if let (Some(barkeeping), Service::Bar) = (&self.barkeeping, service) {
+            let layout = barkeeping
+                .template
+                .clone()
+                .map(|template| (template, metrics));
+            self.open = Some(Open::Bar(Box::new(BarScreen::new(
+                layout,
+                self.stellar,
+                barkeeping.hiring.clone(),
+                port.style,
+                barkeeping.room,
+            ))));
+            return;
+        }
         self.open = Some(
             match (&self.trade, &self.outfitting, &self.shipbuying, service) {
                 (Some((template, market)), _, _, Service::TradeCenter) => {
@@ -657,6 +773,7 @@ impl Screen for SpaceportView {
             Some(Open::Trade(screen)) => screen.draw(list),
             Some(Open::Outfitter(screen)) => screen.draw(list),
             Some(Open::Shipyard(screen)) => screen.draw(list),
+            Some(Open::Bar(screen)) => screen.draw(list),
             _ => {}
         }
     }
@@ -1971,5 +2088,165 @@ mod tests {
         let debug = format!("{view:?}");
         assert!(debug.contains("Shipbuying"), "{debug}");
         assert!(debug.contains("Heavy Shuttle"), "{debug}");
+    }
+
+    // The Bar.
+
+    use crate::spaceport::bar::BarScreen;
+    use nova_sim::hire::NONE_FOR_HIRE;
+    use nova_sim::{HireList, HireRow};
+
+    /// "Bar": 263 x 185, centred, with Leave (1), Gamble (2), Holovid (3),
+    /// Hire Escort (5) and the text (7), all disabled as stock has them.
+    fn bar_template() -> Template {
+        let mut items: Vec<ItemTemplate> = (0..10)
+            .map(|_| ItemTemplate {
+                bounds: rect(0.0, 300.0, 1.0, 1.0),
+                enabled: false,
+                kind: ItemSpec::User,
+            })
+            .collect();
+        let mut place = |number: usize, x, y, w, h| {
+            items[number - 1].bounds = rect(x, y, w, h);
+        };
+        place(1, 156.0, 154.0, 99.0, 26.0);
+        place(2, 156.0, 125.0, 99.0, 26.0);
+        place(3, 6.0, 154.0, 146.0, 26.0);
+        place(5, 6.0, 125.0, 146.0, 26.0);
+        place(7, 16.0, 10.0, 230.0, 106.0);
+        Template {
+            bounds: rect(40.0, 40.0, 263.0, 185.0),
+            placement: Placement::Center,
+            items,
+        }
+    }
+
+    /// `rows` ships for hire, the fleet with `room` or not.
+    fn hirelings(rows: usize, room: bool) -> HireList {
+        HireList {
+            rows: (0..rows)
+                .map(|n| HireRow {
+                    id: ShipId(128 + n as i16),
+                    name: format!("Ship {n}"),
+                    short_name: format!("Ship {n}"),
+                    fee: 970,
+                    wage: 100,
+                    specs: ShipSpecs {
+                        fields: nova_sim::ShipFields::default(),
+                        max_gun: 0,
+                        max_tur: 0,
+                        length: 0,
+                        crew: 0,
+                    },
+                    hire: Ok(()),
+                })
+                .collect(),
+            cash: 25_000,
+            room,
+        }
+    }
+
+    /// Earth with its bar given, the fleet with `room` or not.
+    fn drinking(room: bool) -> SpaceportView {
+        let art: Rc<dyn ShipyardCatalog> = Rc::new(catalog());
+        earth().with_bar(
+            Ok(bar_template()),
+            Ok(shipyard_template()),
+            Err("no DLOG 1005".to_owned()),
+            art,
+            room,
+        )
+    }
+
+    fn bar_item(view: &SpaceportView, number: usize) -> Point {
+        view.open_bar()
+            .expect("in the bar")
+            .dialog()
+            .expect("laid out")
+            .item_bounds(number)
+            .expect("an item")
+            .center()
+    }
+
+    #[test]
+    fn with_a_bar_its_button_opens_it_over_the_spaceport() {
+        let mut view = drinking(true);
+        assert!(view.open_bar().is_none());
+        click_item(&mut view, 10);
+        let bar = view.open_bar().expect("in the bar");
+        assert!(view.open_service().is_none());
+        assert_eq!(
+            bar.dialog()
+                .and_then(|dialog| dialog.scroll_text())
+                .map(|text| text.lines().join(" ")),
+            Some("Blue and green. Home.".to_owned()),
+            "its text, dësc 10012, read through the catalog given"
+        );
+        let mut expected: Vec<DrawCommand> = drawn(&earth());
+        let mut over = DrawList::new();
+        bar.draw(&mut over);
+        expected.extend(over.iter().cloned());
+        assert_eq!(drawn(&view), expected);
+        view.input(&key(Key::Escape));
+        assert!(view.open_bar().is_none(), "Escape leaves the bar");
+        assert!(!view.left());
+    }
+
+    #[test]
+    fn hire_escort_asks_through_the_spaceport_and_the_list_opens_the_hire_screen() {
+        let mut view = drinking(true);
+        assert!(!view.take_hire_request(), "nothing open");
+        view.open_hire(hirelings(1, true));
+        assert_eq!(view.take_hire(), None);
+        click_item(&mut view, 10);
+        view.input(&key(Key::Char('h')));
+        assert!(view.take_hire_request());
+        assert!(!view.take_hire_request(), "once");
+        view.open_hire(hirelings(2, true));
+        let hire = view
+            .open_bar()
+            .and_then(BarScreen::hire_screen)
+            .expect("the hire screen");
+        assert_eq!(hire.list().rows.len(), 2);
+        assert_eq!(hire.problem(), None, "laid out by DLOG 1004");
+        view.input(&key(Key::Char('h')));
+        assert_eq!(view.take_hire(), Some(ShipId(128)));
+        assert_eq!(view.take_hire(), None, "once");
+        assert_eq!(view.take_ship(), None, "not a ship bought");
+        view.set_hire(&hirelings(2, false));
+        let bar = view.open_bar().expect("back in the bar");
+        assert!(bar.hire_screen().is_none());
+        let hire_label = bar_item(&view, 5);
+        click(&mut view, hire_label);
+        assert!(!view.take_hire_request(), "the fleet is full");
+        view.input(&key(Key::Escape));
+        click_item(&mut view, 10);
+        view.input(&key(Key::Char('e')));
+        assert!(
+            !view.take_hire_request(),
+            "the bar opened next knows it too"
+        );
+    }
+
+    #[test]
+    fn with_nothing_for_hire_the_bar_says_so() {
+        let mut view = drinking(true);
+        click_item(&mut view, 10);
+        view.input(&key(Key::Char('h')));
+        assert!(view.take_hire_request());
+        view.open_hire(hirelings(0, true));
+        let bar = view.open_bar().expect("in the bar");
+        assert!(bar.hire_screen().is_none());
+        assert_eq!(bar.message(), Some(NONE_FOR_HIRE));
+    }
+
+    #[test]
+    fn a_full_fleet_greys_hire_escort_when_the_bar_opens() {
+        let mut view = drinking(false);
+        click_item(&mut view, 10);
+        view.input(&key(Key::Char('h')));
+        assert!(!view.take_hire_request());
+        let debug = format!("{view:?}");
+        assert!(debug.contains("Barkeeping"), "{debug}");
     }
 }

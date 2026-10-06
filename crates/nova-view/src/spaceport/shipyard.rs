@@ -46,7 +46,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::hyperspace::max_jumps;
-use nova_sim::{ShipId, ShipRow, Shipyard};
+use nova_sim::{ShipId, ShipRow, ShipSpecs, Shipyard};
 
 use super::catalog::SpaceportCatalog;
 use super::grid::{
@@ -167,7 +167,14 @@ pub fn ship_picture(
 /// The info panel's lines for `row`'s ship.
 #[must_use]
 pub fn stat_lines(row: &ShipRow) -> Vec<String> {
-    let specs = row.specs;
+    spec_lines(row.specs)
+}
+
+/// The info panel's lines for a ship of `specs`: its speed,
+/// acceleration, turn rate, guns, turrets, free space, length, mass, crew
+/// and how many jumps its fuel holds.
+#[must_use]
+pub fn spec_lines(specs: ShipSpecs) -> Vec<String> {
     let fields = specs.fields;
     let values = [
         fields.speed.to_string(),
@@ -238,11 +245,77 @@ struct Laid {
     info: Option<DialogTemplate>,
 }
 
-/// The info panel, open.
+/// The info panel, open: "Shipyard Info" over [`INFO_BACKGROUND`], the
+/// ship's name centred in its title and its lines in its text. The hire
+/// screen opens it too.
 #[derive(Clone, Debug)]
-struct Panel {
+pub(super) struct Panel {
     dialog: Dialog,
     title: String,
+}
+
+impl Panel {
+    /// The panel laid out by `template`, titled `title` and showing
+    /// `lines`, its Done enabled and labelled in `style`, its text
+    /// measured by `metrics`.
+    pub(super) fn open(
+        template: &DialogTemplate,
+        title: String,
+        lines: &[String],
+        metrics: &Rc<dyn TextMetrics>,
+        style: ButtonStyle,
+    ) -> Self {
+        let roles = [
+            (PANEL_DONE_ITEM, Role::Button(DONE_LABEL.to_owned())),
+            (
+                PANEL_TEXT_ITEM,
+                Role::ScrollText {
+                    text: lines.join("\r"),
+                    font: TEXT_FONT,
+                    size: TEXT_SIZE,
+                    color: TEXT_COLOR,
+                },
+            ),
+        ];
+        let mut template = template.clone();
+        if let Some(done) = template.items.get_mut(PANEL_DONE_ITEM - 1) {
+            done.enabled = true;
+        }
+        let dialog = Dialog::new(&template, &roles, Rc::clone(metrics))
+            .with_buttons(ButtonSkin::NOVA, style)
+            .with_default(Some(PANEL_DONE_ITEM))
+            .with_cancel(Some(PANEL_DONE_ITEM));
+        Self { dialog, title }
+    }
+
+    /// Its dialog.
+    pub(super) fn dialog(&self) -> &Dialog {
+        &self.dialog
+    }
+
+    /// Its input, its sounds added to `sounds`: whether Done, Return or
+    /// Escape closed it.
+    pub(super) fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> bool {
+        let event = self.dialog.input(input);
+        sounds.extend(self.dialog.take_sound().map(Sound::Ui));
+        event == Some(DialogEvent::Item(PANEL_DONE_ITEM))
+    }
+
+    /// Abandons any click in progress on it.
+    pub(super) fn cancel_pointer(&mut self) {
+        self.dialog.cancel_pointer();
+    }
+
+    /// Draws it, its title measured by `metrics`.
+    pub(super) fn draw(&self, list: &mut DrawList, metrics: &dyn TextMetrics) {
+        list.picture(INFO_BACKGROUND, self.dialog.bounds().min);
+        if let Some(title) = self.dialog.item_bounds(PANEL_TITLE_ITEM) {
+            let width = metrics.width(Font::Charcoal, 12.0, &self.title);
+            let origin = Point::new(title.center().x - width / 2.0, title.min.y + INSET);
+            list.text_in(Font::Charcoal, &self.title, origin, 12.0, None, TEXT_COLOR);
+        }
+        self.dialog.draw(list);
+    }
 }
 
 /// The Shipyard of the stellar landed on.
@@ -362,7 +435,7 @@ impl ShipyardScreen {
     /// The info panel's dialog, while it is open.
     #[must_use]
     pub fn info_panel(&self) -> Option<&Dialog> {
-        self.panel.as_ref().map(|panel| &panel.dialog)
+        self.panel.as_ref().map(Panel::dialog)
     }
 
     /// Why the shipyard cannot be shown, if it cannot.
@@ -455,27 +528,13 @@ impl ShipyardScreen {
         let Some(template) = &laid.info else {
             return;
         };
-        let roles = [
-            (PANEL_DONE_ITEM, Role::Button(DONE_LABEL.to_owned())),
-            (
-                PANEL_TEXT_ITEM,
-                Role::ScrollText {
-                    text: lines.join("\r"),
-                    font: TEXT_FONT,
-                    size: TEXT_SIZE,
-                    color: TEXT_COLOR,
-                },
-            ),
-        ];
-        let mut template = template.clone();
-        if let Some(done) = template.items.get_mut(PANEL_DONE_ITEM - 1) {
-            done.enabled = true;
-        }
-        let dialog = Dialog::new(&template, &roles, Rc::clone(&laid.metrics.0))
-            .with_buttons(ButtonSkin::NOVA, self.style)
-            .with_default(Some(PANEL_DONE_ITEM))
-            .with_cancel(Some(PANEL_DONE_ITEM));
-        self.panel = Some(Panel { dialog, title });
+        self.panel = Some(Panel::open(
+            template,
+            title,
+            &lines,
+            &laid.metrics.0,
+            self.style,
+        ));
     }
 
     /// Activates dialog item `item`: Done closes, Buy Ship asks, Info
@@ -504,9 +563,7 @@ impl ShipyardScreen {
         let Some(panel) = &mut self.panel else {
             return;
         };
-        let event = panel.dialog.input(input);
-        self.sounds.extend(panel.dialog.take_sound().map(Sound::Ui));
-        if event == Some(DialogEvent::Item(PANEL_DONE_ITEM)) {
+        if panel.input(input, &mut self.sounds) {
             self.panel = None;
         }
     }
@@ -563,17 +620,9 @@ impl ShipyardScreen {
     }
 
     fn draw_panel(&self, laid: &Laid, list: &mut DrawList) {
-        let Some(panel) = &self.panel else {
-            return;
-        };
-        list.picture(INFO_BACKGROUND, panel.dialog.bounds().min);
-        if let Some(title) = panel.dialog.item_bounds(PANEL_TITLE_ITEM) {
-            let metrics = &laid.metrics.0;
-            let width = metrics.width(Font::Charcoal, 12.0, &panel.title);
-            let origin = Point::new(title.center().x - width / 2.0, title.min.y + INSET);
-            list.text_in(Font::Charcoal, &panel.title, origin, 12.0, None, TEXT_COLOR);
+        if let Some(panel) = &self.panel {
+            panel.draw(list, &*laid.metrics.0);
         }
-        panel.dialog.draw(list);
     }
 }
 
@@ -662,7 +711,7 @@ impl Screen for ShipyardScreen {
 
     fn cancel_pointer(&mut self) {
         if let Some(panel) = &mut self.panel {
-            panel.dialog.cancel_pointer();
+            panel.cancel_pointer();
         } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
