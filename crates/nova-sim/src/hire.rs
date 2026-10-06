@@ -225,12 +225,17 @@ pub fn price_flux(price: i32, ship_tech: i16, stellar_tech: i16) -> i64 {
         return 0;
     }
     let mut price = i64::from(price);
-    if ship_tech <= LOW_TECH && stellar_tech <= LOW_TECH && ship_tech < stellar_tech && price > 99 {
+    // A price above 99: written `>= 100` so that `>` stands for the
+    // rounding thresholds alone.
+    if ship_tech <= LOW_TECH && stellar_tech <= LOW_TECH && ship_tech < stellar_tech && price >= 100
+    {
         let percent =
             100 - i32::from(TECH_DISCOUNT) * (i32::from(stellar_tech) - i32::from(ship_tech));
         price = (price as f64 * (f64::from(percent) * 0.01)) as i64;
     }
-    let price = (price as f32 * 1.0_f32) as i64;
+    // The multiplier, 1.0 until ranks exist, is applied in single
+    // precision, as the original does: the price goes through an f32.
+    let price = price as f32 as i64;
     let step = if price > 100_000 {
         1000
     } else if price > 10_000 {

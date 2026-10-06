@@ -20,7 +20,10 @@
 //! jumps to Beta; "Due to lack of pay, one of your escorts has defected."
 //! shows, no escort is drawn there, and the saved pilot has none. With
 //! `take_off_pay` set to the other reading in the settings file, a
-//! take-off costs nothing.
+//! take-off costs nothing. The router's hire terms set the fee and pay
+//! the hire screen shows and a hire takes, and its control bits can make
+//! a ship's `Availability` refuse the hire. With six escorts, the bar's
+//! Hire Escort asks for nothing.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -689,6 +692,12 @@ fn ada() -> Pilot {
 /// `pilot`, holding `cash`, docked at the pad when `docked`, with a hired
 /// Hireling at a wage of 100, full.
 fn hiring_already(pilot: &Pilot, cash: i64, docked: bool) -> Pilot {
+    with_hirelings(pilot, cash, docked, 1)
+}
+
+/// `pilot`, holding `cash`, docked at the pad when `docked`, with `count`
+/// hired Hirelings at a wage of 100, full.
+fn with_hirelings(pilot: &Pilot, cash: i64, docked: bool, count: usize) -> Pilot {
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(pilot)).expect("JSON");
     let gauge = |max: f32| serde_json::json!({"now": max, "max": max});
@@ -696,13 +705,14 @@ fn hiring_already(pilot: &Pilot, cash: i64, docked: bool) -> Pilot {
     if docked {
         save["stellar"] = serde_json::json!(128);
     }
-    save["escorts"] = serde_json::json!([{
+    let hireling = serde_json::json!({
         "ship": 129,
         "reserves": {"shield": gauge(30.0), "armor": gauge(45.0), "fuel": gauge(300.0)},
         "order": null,
         "carried": false,
         "wage": 100
-    }]);
+    });
+    save["escorts"] = serde_json::Value::Array(vec![hireling; count]);
     nova_sim::save::decode(&save.to_string()).expect("a pilot")
 }
 
@@ -845,5 +855,82 @@ fn a_take_off_pays_a_days_wages_unless_the_settings_choose_the_other_reading() {
         assert_eq!(game.showing(), Showing::Flight, "{text}");
         assert_eq!(game.pilot().cash(), cash, "{text}");
         assert_eq!(game.pilot().escorts().len(), 1, "{text}");
+    }
+}
+
+/// Terms of a fee of 7 and a wage of 3 for every ship.
+#[derive(Debug)]
+struct Sevens;
+
+impl nova_sim::HireTerms for Sevens {
+    fn fee(&self, _ship: &nova_sim::ShipRecord, _site: &nova_sim::LandingSite) -> i64 {
+        7
+    }
+
+    fn charge(
+        &self,
+        _ship: &nova_sim::ShipRecord,
+        _site: &nova_sim::LandingSite,
+        _cash: i64,
+    ) -> i64 {
+        7
+    }
+
+    fn wage(&self, _ship: &nova_sim::ShipRecord) -> i64 {
+        3
+    }
+}
+
+/// Control bits where nothing holds.
+#[derive(Debug)]
+struct NothingHolds;
+
+impl nova_sim::ControlBits for NothingHolds {
+    fn allows(&self, _expression: &str) -> bool {
+        false
+    }
+}
+
+#[test]
+fn the_routers_hire_terms_and_control_bits_decide_the_bar() {
+    let store = MemoryPilots::new();
+    let pilot = hiring_already(&ada(), 25_000, true);
+    let mut game = Game::with_pilot(&store, &pilot, Showing::Spaceport, |screen| {
+        screen.with_hire_terms(Rc::new(Sevens))
+    });
+    game.open_bar();
+    game.tap(Key::Char('h'));
+    let shown = texts(&game.frame());
+    for text in ["Hiring Price: 7", "Pay: 3 credits per day"] {
+        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
+    game.tap(Key::Char('h'));
+    assert_eq!(game.pilot().cash(), 25_000 - 7);
+
+    let store = MemoryPilots::new();
+    let mut game = Game::with_pilot(&store, &pilot, Showing::Spaceport, |screen| {
+        screen.with_control_bits(Rc::new(NothingHolds))
+    });
+    game.open_bar();
+    game.tap(Key::Char('h'));
+    assert!(game.hiring());
+    game.tap(Key::Char('h'));
+    assert_eq!(
+        game.pilot().cash(),
+        25_000,
+        "its Availability does not hold"
+    );
+    assert_eq!(game.pilot().escorts().len(), 1, "the one hired already");
+}
+
+#[test]
+fn with_a_full_fleet_the_bars_hire_escort_asks_nothing() {
+    for (count, opens) in [(5, true), (6, false)] {
+        let store = MemoryPilots::new();
+        let pilot = with_hirelings(&ada(), 25_000, true, count);
+        let mut game = Game::with_pilot(&store, &pilot, Showing::Spaceport, |screen| screen);
+        game.open_bar();
+        game.tap(Key::Char('h'));
+        assert_eq!(game.hiring(), opens, "{count} escorts");
     }
 }

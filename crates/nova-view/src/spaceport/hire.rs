@@ -212,6 +212,12 @@ impl HireScreen {
         self.selected().map(|index| &self.list.rows[index])
     }
 
+    /// The grid's first row shown.
+    #[must_use]
+    pub fn top_row(&self) -> usize {
+        self.grid.top_row()
+    }
+
     /// The dialog, if it could be laid out.
     #[must_use]
     pub fn dialog(&self) -> Option<&Dialog> {
@@ -481,7 +487,7 @@ mod tests {
     use nova_sim::{HireRefusal, ShipFields, ShipSpecs};
 
     use super::*;
-    use crate::draw::DrawCommand;
+    use crate::draw::{DrawCommand, fill_rect};
     use crate::input::MouseButton;
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog, StellarId};
     use crate::spaceport::shipyard::ShipBaseImages;
@@ -867,5 +873,86 @@ mod tests {
         assert_eq!(empty.selected(), None);
         assert!(!enabled(&empty, HIRE_ESCORT));
         assert_eq!(info_box(&empty), Vec::<String>::new());
+    }
+
+    /// `count` ships, numbered from 200, two lines each.
+    fn long(count: usize) -> HireList {
+        HireList {
+            rows: (0..count)
+                .map(|n| row(200 + i16::try_from(n).expect("few"), 10, 1, Ok(())))
+                .collect(),
+            ..list()
+        }
+    }
+
+    fn click_item(screen: &mut HireScreen, number: usize) {
+        let at = item(screen, number).center();
+        click(screen, at);
+    }
+
+    #[test]
+    fn the_grid_shows_each_ships_lines_in_its_cell_and_highlights_the_selected() {
+        let screen = screen();
+        let commands = drawn(&screen);
+        let cell = |index: usize, dy: f32| {
+            let bounds = screen.cell_bounds(index).expect("a cell");
+            Point::new(bounds.min.x + INSET, bounds.min.y + dy)
+        };
+        let line = MonoMetrics.line_height(TEXT_FONT, TEXT_SIZE);
+        let shown = texts(&screen);
+        for expected in [
+            ("Ship".to_owned(), cell(0, INSET), TEXT_COLOR),
+            ("128".to_owned(), cell(0, INSET + line), TEXT_COLOR),
+            ("Ship".to_owned(), cell(1, INSET), TEXT_COLOR),
+            ("140".to_owned(), cell(1, INSET + line), TEXT_COLOR),
+        ] {
+            assert!(shown.contains(&expected), "{expected:?}: {shown:?}");
+        }
+        let highlight = |index: usize| {
+            let mut list = DrawList::new();
+            fill_rect(
+                &mut list,
+                screen.cell_bounds(index).expect("a cell"),
+                SELECTED_COLOR,
+            );
+            list.iter().cloned().collect::<Vec<_>>()
+        };
+        assert!(commands.windows(1).any(|w| w == highlight(0)));
+        assert!(!commands.windows(1).any(|w| w == highlight(1)), "one");
+        let mut frame = DrawList::new();
+        outline(&mut frame, screen.cell_bounds(1).expect("a cell"), GREY);
+        let frame: Vec<_> = frame.iter().cloned().collect();
+        assert!(commands.windows(frame.len()).any(|w| w == frame));
+    }
+
+    #[test]
+    fn the_arrows_scroll_the_grid_a_row_at_a_time() {
+        let mut screen = screen_of(&art(), long(22));
+        assert_eq!(screen.top_row(), 0);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!(screen.top_row(), 1);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        click_item(&mut screen, SCROLL_DOWN_ITEM);
+        assert_eq!(screen.top_row(), 2, "never past the end");
+        click_item(&mut screen, SCROLL_UP_ITEM);
+        assert_eq!(screen.top_row(), 1);
+        screen.input(&key(Key::Down, false));
+        assert_eq!(screen.selected(), Some(4));
+    }
+
+    #[test]
+    fn info_clicked_opens_the_panel() {
+        let mut screen = screen();
+        click_item(&mut screen, INFO_ITEM);
+        assert!(screen.info_panel().is_some());
+        assert!(!screen.closed());
+    }
+
+    #[test]
+    fn its_debug_names_what_it_holds() {
+        let debug = format!("{:?}", screen());
+        for part in ["HireScreen", "ShipyardCatalog", "TextMetrics", "Ship 128"] {
+            assert!(debug.contains(part), "{part}: {debug}");
+        }
     }
 }

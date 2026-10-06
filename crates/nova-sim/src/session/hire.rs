@@ -39,7 +39,7 @@ use std::rc::Rc;
 
 use super::Session;
 use crate::board::MAX_ESCORTS;
-use crate::catalog::ShipId;
+use crate::catalog::{LandingSite, ShipId};
 use crate::chance::Chance;
 use crate::hire::{Bar, ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote};
 use crate::landing::StellarFlags;
@@ -203,14 +203,10 @@ impl Session {
     /// the day not drawn yet; `None` when it has not landed at a stellar
     /// with a bar.
     pub fn escorts_for_hire(&mut self, chance: &mut dyn Chance) -> Option<HireList> {
-        let stellar = self.landed?;
-        let site = self.sites.iter().find(|site| site.id == stellar)?;
-        if site.flags & StellarFlags::BAR == 0 {
-            return None;
-        }
+        let site = self.bar_site()?;
         let bar = Bar {
             ships: &self.ships,
-            site,
+            site: &site,
             contributed: wares::contributed(
                 self.fields.contribute,
                 &self.pilot.outfits,
@@ -224,6 +220,16 @@ impl Session {
         };
         let rolls = &mut self.hire_rolls;
         Some(bar.list(|ship, percent| *rolls.entry(ship).or_insert_with(|| chance.fires(percent))))
+    }
+
+    /// The stellar the ship is docked at, if it has a bar.
+    fn bar_site(&self) -> Option<LandingSite> {
+        let stellar = self.landed?;
+        self.sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .filter(|site| site.flags & StellarFlags::BAR != 0)
+            .copied()
     }
 
     /// Hires a ship of class `ship` in the bar (see the module docs), the
@@ -240,11 +246,7 @@ impl Session {
             .ship_record(ship)
             .cloned()
             .ok_or(HireRefusal::NotListed)?;
-        let site = self
-            .landed
-            .and_then(|stellar| self.sites.iter().find(|site| site.id == stellar))
-            .copied()
-            .ok_or(HireRefusal::NoBar)?;
+        let site = self.bar_site().ok_or(HireRefusal::NoBar)?;
         let fee = self.hire_terms.0.charge(&record, &site, self.pilot.cash);
         let wage = self.hire_terms.0.wage(&record);
         let reserves = table::kind(&record, &self.outfits, &self.arsenal)
@@ -907,6 +909,42 @@ mod tests {
             [(129, None, false), (129, None, true)],
             "both hired escorts defected on the second"
         );
+        assert_eq!(session.take_pay_notes(), [PayNote::Defected(2)]);
+    }
+
+    #[test]
+    fn a_defector_leaves_the_system_with_the_fleet_lined_up_with_its_records() {
+        let mut session = payer(350, payroll(), 1, RuleSource::Engine);
+        let defector = session.fleet[1].expect("placed");
+        let others = [session.fleet[0], session.fleet[2], session.fleet[3]];
+        session.pay_escorts(1);
+        assert_eq!(session.pilot().cash(), 250);
+        assert_eq!(session.fleet, others, "the fleet lined up with the records");
+        assert!(session.npc(defector).is_none(), "gone from the system");
+        assert_eq!(placed_ships(&session), [129, 129, 129]);
+        let slots: Vec<u8> = session
+            .fleet
+            .iter()
+            .flatten()
+            .filter_map(|&id| session.npc(id))
+            .filter_map(|npc| npc.escort.map(|duty| duty.slot))
+            .collect();
+        assert_eq!(slots, [2, 3, 4], "re-formed");
+        assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
+    }
+
+    #[test]
+    fn defectors_before_the_fleet_is_placed_leave_their_records_alone() {
+        let catalog = paying();
+        let mut pilot = crate::Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.cash = 50;
+        pilot.escorts = payroll();
+        pilot.stellar = Some(BAR_AT);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.landed(), Some(BAR_AT), "resumed docked");
+        assert_eq!(session.fleet, [], "none placed yet");
+        session.take_off().expect("takes off");
+        assert_eq!(ships(&session), [(129, None, false), (129, None, true)]);
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(2)]);
     }
 

@@ -796,4 +796,96 @@ mod tests {
         screen.input(&key(Key::Escape, false));
         assert!(screen.closed());
     }
+
+    const DOWN: Sound = Sound::Ui(crate::sound::UiSound::ButtonDown);
+    const UP: Sound = Sound::Ui(crate::sound::UiSound::ButtonUp);
+
+    #[test]
+    fn its_buttons_sound_and_a_click_abandoned_does_nothing() {
+        let mut screen = bar();
+        click_item(&mut screen, HIRE_ITEM);
+        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+        assert_eq!(screen.take_sounds(), [], "taken");
+        assert!(screen.take_hire_request());
+        let at = screen
+            .dialog()
+            .expect("laid out")
+            .item_bounds(HIRE_ITEM)
+            .expect("an item")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert!(!screen.take_hire_request(), "the click was abandoned");
+        assert_eq!(screen.take_sounds(), [DOWN]);
+    }
+
+    #[test]
+    fn the_hire_screens_sounds_and_pointer_go_through_the_bar() {
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+        });
+        let mut screen = BarScreen::new(
+            Ok((template(), Rc::new(MonoMetrics))),
+            StellarId(157),
+            Hiring {
+                template: Ok(DialogTemplate {
+                    bounds: rect(100.0, 100.0, 765.0, 323.0),
+                    placement: Placement::Center,
+                    items: items(&[
+                        (365.0, 289.0, 109.0, 25.0),
+                        (248.0, 440.0, 68.0, 30.0),
+                        (201.0, 380.0, 102.0, 18.0),
+                        (144.0, 438.0, 69.0, 22.0),
+                        (9.0, 8.0, 333.0, 271.0),
+                        (354.0, 10.0, 192.0, 267.0),
+                        (480.0, 289.0, 109.0, 25.0),
+                        (557.0, 8.0, 200.0, 200.0),
+                        (614.0, 214.0, 143.0, 100.0),
+                        (253.0, 289.0, 89.0, 25.0),
+                        (365.0, 431.0, 69.0, 22.0),
+                        (141.0, 288.0, 25.0, 25.0),
+                        (171.0, 288.0, 25.0, 25.0),
+                    ]),
+                }),
+                ..hiring(&art)
+            },
+            ButtonStyle::STOCK,
+            true,
+        );
+        screen.open_hire(list(1));
+        let hire = screen
+            .hire_screen()
+            .and_then(HireScreen::dialog)
+            .and_then(|dialog| dialog.item_bounds(7))
+            .expect("Hire Escort")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: hire,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert_eq!(screen.take_hire(), None, "the click was abandoned");
+        assert_eq!(screen.take_sounds(), [DOWN]);
+        screen.input(&button(true));
+        screen.input(&button(false));
+        assert_eq!(screen.take_hire(), Some(ShipId(128)));
+        assert_eq!(screen.take_sounds(), [DOWN, UP]);
+    }
+
+    #[test]
+    fn its_debug_names_what_it_holds() {
+        let debug = format!("{:?}", bar());
+        for part in ["BarScreen", "Hiring", "no DLOG 1004", "TextMetrics"] {
+            assert!(debug.contains(part), "{part}: {debug}");
+        }
+    }
 }
