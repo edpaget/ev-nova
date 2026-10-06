@@ -41,7 +41,9 @@ use nova_rsrc::{Fork, ForkReader};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::flight::shortest_turn;
 use nova_sim::hyperspace::{JUMP_FUEL, MIN_JUMP_DISTANCE};
-use nova_sim::{Chance, DisasterId, PilotKeeper, PilotStore, Session, ShipState, SystemId};
+use nova_sim::{
+    Chance, DisasterId, PilotKeeper, PilotStore, Session, ShipState, SystemId, TICKS_PER_SECOND,
+};
 use nova_view::flight::view::TOO_CLOSE;
 use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::map::{COURSE_HELP, ENTER_LABEL, ROUTE};
@@ -322,10 +324,16 @@ impl Harness {
     /// Plots a course to Beta on flight's map and flies out far enough to
     /// jump.
     fn out_towards_beta(&mut self) {
+        self.out_towards(129);
+    }
+
+    /// Plots a course to system `id` on flight's map and flies out far
+    /// enough to jump.
+    fn out_towards(&mut self, id: i16) {
         self.frame();
         self.press(Key::Char('m'));
-        let beta = self.on_map(129);
-        self.click(beta);
+        let system = self.on_map(id);
+        self.click(system);
         self.press(Key::Char('m'));
         self.fly_out();
     }
@@ -341,10 +349,16 @@ impl Harness {
     /// Presses J and sends redraws until the ship is in Beta, and returns
     /// the first frame drawn there.
     fn arrive_in_beta(&mut self) -> Frame {
+        self.arrive_in(129)
+    }
+
+    /// Presses J and sends redraws until the ship is in system `id`, and
+    /// returns the first frame drawn there.
+    fn arrive_in(&mut self, id: i16) -> Frame {
         self.press(Key::Char('j'));
         for _ in 0..600 {
             let frame = self.frame();
-            if self.session().system() == SystemId(129) {
+            if self.session().system() == SystemId(id) {
                 return frame;
             }
         }
@@ -774,14 +788,20 @@ fn a_jump_takes_a_jumps_fuel_off_the_gauge_and_the_hud_bar_and_it_stays_off() {
 #[test]
 fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     // A unit every 30 ticks: a unit a second.
-    let data = data_with(&ship_with_regen(30));
+    const REGEN_TICKS: i16 = 30;
+    let data = data_with(&ship_with_regen(REGEN_TICKS));
     let mut harness = Harness::flying_over(data, SharedChance::default());
-    harness.out_towards_beta();
-    let before = harness.session().reserves().fuel.now;
-    assert_eq!(before, 300.0, "full, regen capped at the top");
+    // A first jump drains the tank below full, so the second jump's
+    // `before` sits where regen is free to show, not clamped at the top.
+    harness.jump_to_beta();
+    // It drifts in from the edge, so it has to fly out again to jump.
+    harness.run(1);
+    harness.out_towards(130);
     let bar_before = fuel_bar(&harness.frame());
+    let before = harness.session().reserves().fuel.now;
+    assert!(before < 300.0, "below full, so regen could show: {before}");
 
-    let arrived = harness.arrive_in_beta();
+    let arrived = harness.arrive_in(130);
     assert_eq!(
         harness.session().reserves().fuel.now,
         before - JUMP_FUEL,
@@ -789,11 +809,17 @@ fn a_regenerating_ship_arrives_a_jumps_fuel_down_and_regen_only_creeps_back() {
     );
     assert!(fuel_bar(&arrived) < bar_before, "{}", fuel_bar(&arrived));
 
-    harness.run(5);
+    let seconds: u16 = 5;
+    harness.run(u64::from(seconds));
+    // The normal rate over the time flown, plus a unit for the frame
+    // boundaries the fixed step may fall either side of.
+    let ticks = f32::from(seconds) * TICKS_PER_SECOND as f32;
+    let regen_over_the_run = ticks / f32::from(REGEN_TICKS);
+    let at_most = before - JUMP_FUEL + regen_over_the_run + 1.0;
     let fuel = harness.session().reserves().fuel.now;
     assert!(
-        before - JUMP_FUEL < fuel && fuel < before,
-        "creeping back, still short of where it was: {fuel}"
+        before - JUMP_FUEL < fuel && fuel <= at_most,
+        "creeping back at its normal rate, at most {at_most}: {fuel}"
     );
 }
 
