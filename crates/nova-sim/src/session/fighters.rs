@@ -135,6 +135,7 @@ impl Session {
             reserves: npc.reserves,
             order,
             carried: true,
+            wage: None,
         };
         let id = self.traffic.add_npc(npc);
         self.pilot.escorts.push(escort);
@@ -765,6 +766,7 @@ mod tests {
             reserves: Reserves::full(30.0, 45.0, 300.0),
             order,
             carried: false,
+            wage: None,
         };
         let mut session = Session::fly(&catalog, pilot(&catalog, 2, vec![warship]))
             .expect("flies")
@@ -862,6 +864,7 @@ mod tests {
             reserves: ShipStats::new(VIPER_FIELDS, &[]).full(),
             order: None,
             carried: true,
+            wage: None,
         }
     }
 
@@ -872,6 +875,7 @@ mod tests {
             reserves: Reserves::full(30.0, 45.0, 300.0),
             order,
             carried: false,
+            wage: None,
         }
     }
 

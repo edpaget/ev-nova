@@ -14,7 +14,9 @@
 //! reserves and its standing order, in the order the ships joined; a ship
 //! captured joins it ([`Session::assign`](crate::Session::assign)), and
 //! so does each fighter launched from the player's bays, marked
-//! `carried`, until it docks again. In flight the session flies each as
+//! `carried`, until it docks again, and each ship hired in the bar
+//! ([`Session::hire`](crate::Session::hire)), with the daily `wage` it
+//! was hired at. In flight the session flies each as
 //! an NPC beside the player. The carried fighters do not count towards
 //! the fleet's most ([`Pilot::escort_count`]).
 //!
@@ -90,6 +92,20 @@ pub struct Escort {
     /// out of its bay (see [`bay`](crate::bay)), rather than an escort of
     /// its own.
     pub carried: bool,
+    /// The daily wage it was hired at in the bar, which may be none; `None`
+    /// for an escort that was not hired (a ship captured, or the old ship
+    /// kept after "Use As My Ship"). Which wage a hired escort is paid
+    /// each day follows [`Session::with_escort_wage`](crate::Session::with_escort_wage)
+    /// (see [`hire`](crate::hire)).
+    pub wage: Option<i64>,
+}
+
+impl Escort {
+    /// Whether it was hired in the bar: it has a wage, even of none.
+    #[must_use]
+    pub fn hired(&self) -> bool {
+        self.wage.is_some()
+    }
 }
 
 impl Pilot {
@@ -440,6 +456,7 @@ mod tests {
             reserves: Reserves::full(10.0, 20.0, 30.0),
             order: Some(EscortOrder::Hold),
             carried: false,
+            wage: None,
         };
         pilot.escorts.push(escort);
         assert_eq!(pilot.escorts(), [escort]);
@@ -454,11 +471,26 @@ mod tests {
             reserves: Reserves::full(10.0, 20.0, 30.0),
             order: None,
             carried,
+            wage: None,
         };
         pilot.escorts = vec![escort(true), escort(false), escort(true), escort(false)];
         assert_eq!(pilot.escort_count(), 2);
         pilot.escorts.push(escort(false));
         assert_eq!(pilot.escort_count(), 3);
+    }
+
+    #[test]
+    fn an_escort_is_hired_only_with_a_wage_even_of_none() {
+        let escort = |wage| Escort {
+            ship: ShipId(130),
+            reserves: Reserves::full(10.0, 20.0, 30.0),
+            order: None,
+            carried: false,
+            wage,
+        };
+        assert!(!escort(None).hired(), "captured");
+        assert!(escort(Some(0)).hired());
+        assert!(escort(Some(100)).hired());
     }
 
     #[test]

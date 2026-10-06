@@ -150,6 +150,9 @@ pub struct ShipRecord {
     pub tech_level: i16,
     /// Its `BuyRandom`: the percent chance a day it is for sale.
     pub buy_random: i16,
+    /// Its `HireRandom`: the percent chance a day it is for hire in the
+    /// bar (see [`hire`](crate::hire)).
+    pub hire_random: i16,
     /// Its `Require` bits.
     pub require: u64,
     /// Its `Availability` control-bit expression.

@@ -90,6 +90,7 @@ impl PilotCatalog for GameData {
                     cost: record.cost,
                     tech_level: record.tech_level,
                     buy_random: record.buy_random,
+                    hire_random: record.hire_random,
                     require: record.require.bits(),
                     availability: record.availability.as_str().to_owned(),
                     flags3: record.flags3.bits(),
@@ -800,7 +801,7 @@ mod tests {
         bytes[0x64..0x6C].copy_from_slice(&0x10_u64.to_be_bytes());
         bytes[0x6C..0x70].copy_from_slice(b"b422");
         bytes[0x380..0x388].copy_from_slice(&0x0000_0002_0000_0001_u64.to_be_bytes());
-        put_i16s(&mut bytes, 0x388, &[45]);
+        put_i16s(&mut bytes, 0x388, &[45, 40]);
         bytes[0x5CE..0x5DD].copy_from_slice(b"Heavy\\nShuttle!");
         bytes[0x62E..0x63D].copy_from_slice(b"A Heavy Shuttle");
         bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
@@ -836,6 +837,7 @@ mod tests {
             cost: 17_500,
             tech_level: 6,
             buy_random: 45,
+            hire_random: 40,
             require: 0x0000_0002_0000_0001,
             availability: "b422".to_owned(),
             flags3: 0x4100,

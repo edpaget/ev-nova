@@ -1609,6 +1609,7 @@ impl Session {
             reserves: npc.reserves,
             order: None,
             carried: false,
+            wage: None,
         };
         self.drop_quarry(id);
         for other in self.traffic.npcs_mut() {
@@ -1663,6 +1664,7 @@ impl Session {
             reserves: stock.full(),
             order: None,
             carried: false,
+            wage: None,
         };
         let defaults = pilot::tally(record.defaults.iter().copied());
         let records = &self.outfits;
@@ -6243,6 +6245,7 @@ mod tests {
             reserves: Reserves::default(),
             order: None,
             carried: false,
+            wage: None,
         };
         session.pilot.escorts = vec![escort(130), escort(130), escort(131)];
         // Crew 10, 3 from each interceptor escort (ship 130), none from
@@ -6261,6 +6264,7 @@ mod tests {
                 reserves: Reserves::default(),
                 order: None,
                 carried: false,
+                wage: None,
             };
             MAX_ESCORTS
         ];
@@ -6629,6 +6633,7 @@ mod tests {
                 reserves: Reserves::default(),
                 order: None,
                 carried: false,
+                wage: None,
             };
             MAX_ESCORTS
         ];
@@ -6648,6 +6653,7 @@ mod tests {
             reserves: Reserves::default(),
             order: None,
             carried,
+            wage: None,
         };
         let fleet = |escorts: usize, fighters: usize| {
             let mut fleet = vec![escort(false); escorts];
@@ -6721,6 +6727,7 @@ mod tests {
             },
             order: None,
             carried: false,
+            wage: None,
         }
     }
 
@@ -6957,6 +6964,7 @@ mod tests {
                 reserves: Reserves::full(300.0, 450.0, 300.0),
                 order: None,
                 carried: false,
+                wage: None,
             }],
             "the old ship, stock and full"
         );

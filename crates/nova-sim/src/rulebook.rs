@@ -24,12 +24,16 @@
 //! | [`EscortOrders`](RuleKey::EscortOrders) | `escort_orders` | entering a system resets every escort's standing order to formation ([`Session`](crate::Session)) | the orders are kept\* |
 //! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command ([`Session`](crate::Session)) | it attacks the player's target at once\* |
 //! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed ([`Session`](crate::Session)) | every fighter out goes back into its bay on arrival and on landing\* |
+//! | [`HireRequire`](RuleKey::HireRequire) | `hire_require` | hiring ignores a ship's `Require`, which hides it only with `Flags3` 0x0200 ([`Session`](crate::Session)) | an unmet `Require` makes a listed ship greyed and refused\* |
+//! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage ([`Session`](crate::Session)) | wages are paid only for the days that pass, a jump's\* |
+//! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
+//! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
-//! `fighter_launch` or `fighter_recall`: for them, the reading other
-//! than the engine's (`"bible"` in the settings) is the intended
-//! behaviour, not the engine's bug or quirk, and not anything the Bible
-//! says.
+//! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
+//! `hire_fee` or `escort_wage`: for them, the reading other than the
+//! engine's (`"bible"` in the settings) is the intended behaviour, not
+//! the engine's bug or quirk, and not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -169,6 +173,40 @@ rule_keys! {
     /// says (see
     /// [`Session::with_fighter_recall`](crate::Session::with_fighter_recall)).
     FighterRecall => "fighter_recall",
+    /// Whether a ship's `Require` gates hiring it in the bar: by the
+    /// engine, it does not (`_CalcShipCanBuy`'s hire branch never checks
+    /// it), and an unmet `Require` only hides the ship when its `Flags3`
+    /// has 0x0200; otherwise an unmet `Require` makes a listed ship
+    /// greyed and refused, as it does in the shipyard. The Bible speaks
+    /// of `Require` only for purchase, so the other reading is the
+    /// intended behaviour, not anything the Bible says (see
+    /// [`Session::with_hire_require`](crate::Session::with_hire_require)).
+    HireRequire => "hire_require",
+    /// Whether leaving the spaceport costs the hired escorts' wages for a
+    /// day: by the engine, each take-off pays every hired escort a day's
+    /// wage, an escort the player cannot pay defecting
+    /// (`_DoEscortLand` @0x40853); otherwise wages are paid only for the
+    /// days that pass, which here means a jump's. The Bible is silent
+    /// here, so the other reading is the intended behaviour, not anything
+    /// the Bible says (see
+    /// [`Session::with_take_off_pay`](crate::Session::with_take_off_pay)).
+    TakeOffPay => "take_off_pay",
+    /// What hiring an escort takes from the cash: by the engine, a tenth
+    /// of the hire price worked out in floating point and the cash cut
+    /// down to whole credits, which can take one credit more than the
+    /// fee shown (`_DoShipyardDialog` @0x5f168-0x5f1d1); otherwise
+    /// exactly the fee shown. The Bible gives no fee, so the other
+    /// reading is the intended behaviour, not anything the Bible says
+    /// (see [`NovaHire`](crate::NovaHire)).
+    HireFee => "hire_fee",
+    /// Which wage a hired escort is paid each day, and shows when hailed:
+    /// by the engine, the wage its ship type's record gives now, worked
+    /// out from its `Cost` on every pay day as `_DoEscortPayment` does;
+    /// otherwise the wage kept on its record when it was hired, as the
+    /// phase has it. The Bible is silent here, so the other reading is
+    /// the intended behaviour, not anything the Bible says (see
+    /// [`Session::with_escort_wage`](crate::Session::with_escort_wage)).
+    EscortWage => "escort_wage",
 }
 
 impl RuleKey {
@@ -296,9 +334,17 @@ mod tests {
                 RuleKey::EscortAi,
                 RuleKey::EscortOrders,
                 RuleKey::FighterLaunch,
-                RuleKey::FighterRecall
+                RuleKey::FighterRecall,
+                RuleKey::HireRequire,
+                RuleKey::TakeOffPay,
+                RuleKey::HireFee,
+                RuleKey::EscortWage
             ]
         );
+        assert_eq!(RuleKey::HireRequire.key(), "hire_require");
+        assert_eq!(RuleKey::TakeOffPay.key(), "take_off_pay");
+        assert_eq!(RuleKey::HireFee.key(), "hire_fee");
+        assert_eq!(RuleKey::EscortWage.key(), "escort_wage");
         assert_eq!(RuleKey::FighterLaunch.key(), "fighter_launch");
         assert_eq!(RuleKey::FighterRecall.key(), "fighter_recall");
         assert_eq!(RuleKey::CrimeGains.key(), "crime_gains");

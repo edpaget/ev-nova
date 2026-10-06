@@ -420,6 +420,7 @@ mod tests {
                 reserves: Reserves::full(30.0, 45.0, 300.0),
                 order: Some(EscortOrder::Defend),
                 carried: false,
+                wage: None,
             };
             2
         ];
@@ -584,6 +585,7 @@ mod tests {
             reserves,
             order,
             carried: false,
+            wage: None,
         }
     }
 

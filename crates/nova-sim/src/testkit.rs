@@ -122,9 +122,10 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
 }
 
 /// `shïp` `id` with `fields`: 10,000 credits, tech level 1, for sale
-/// every day (`BuyRandom` 100), requiring nothing, with no default items,
-/// no `Flags3` and no inherent government, hailed as "ship `id`", a wimpy
-/// trader whose escort class is worked out (`EscortType` -1).
+/// every day (`BuyRandom` 100), never for hire (`HireRandom` 0),
+/// requiring nothing, with no default items, no `Flags3` and no inherent
+/// government, hailed as "ship `id`", a wimpy trader whose escort class
+/// is worked out (`EscortType` -1).
 pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
     ShipRecord {
         id: ShipId(id),
@@ -136,6 +137,7 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         cost: 10_000,
         tech_level: 1,
         buy_random: 100,
+        hire_random: 0,
         require: 0,
         availability: String::new(),
         flags3: 0,

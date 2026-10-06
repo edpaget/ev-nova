@@ -4079,6 +4079,7 @@ mod tests {
                 cost: 900,
                 tech_level: 1,
                 buy_random: 100,
+                hire_random: 0,
                 require: 0,
                 availability: String::new(),
                 flags3: 0,
@@ -4219,6 +4220,7 @@ mod tests {
             cost: 1,
             tech_level: 1,
             buy_random: 100,
+            hire_random: 0,
             require: 0,
             availability: String::new(),
             flags3: 0,
@@ -6333,7 +6335,8 @@ mod tests {
                     "ship": ship,
                     "reserves": {"shield": gauge(40.0), "armor": gauge(60.0), "fuel": gauge(250.0)},
                     "order": null,
-                    "carried": carried
+                    "carried": carried,
+                    "wage": null
                 })
             })
             .collect();
