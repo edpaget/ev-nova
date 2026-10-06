@@ -1352,6 +1352,32 @@ mod tests {
         let mut both = docking(FAST, at(50.0, 60.0, 0.0, 0.0, 135.0));
         fly(&mut both, &[], Some(&carrier));
         assert_eq!(both.state.position, Vec2::new(47.0, 57.0));
+        // An axis exactly the pull off is within it, and stays.
+        let pull = ShipStats::new(FAST, &[]).handling.accel * FORMATION_NUDGE;
+        let mut edge = docking(FAST, at(-pull, 60.0, 0.0, 0.0, 135.0));
+        fly(&mut edge, &[], Some(&carrier));
+        assert_eq!(edge.state.position.x, -pull, "not farther than the pull");
+        assert_eq!(edge.state.position.y, 60.0 - pull);
+    }
+
+    #[test]
+    fn a_sluggish_fighter_far_off_on_one_axis_flies_at_full_speed() {
+        // 0.01 of acceleration and half a degree a tick: it could not
+        // brake from its top speed within 700.
+        const SLUGGISH: ShipFields = ShipFields {
+            accel: 30,
+            maneuver: 5,
+            ..AVERAGE
+        };
+        let carrier = at(0.0, 0.0, 0.0, 0.0, 0.0);
+        let start = at(0.0, -700.0, 0.0, 3.0, 180.0);
+        let mut far = docking(SLUGGISH, start);
+        fly(&mut far, &[], Some(&carrier));
+        assert_eq!(far.state.heading, 180.0, "700 off on y, it keeps going");
+        assert_eq!(far.state.velocity, start.velocity);
+        let mut near = docking(SLUGGISH, at(0.0, -500.0, 0.0, 3.0, 180.0));
+        fly(&mut near, &[], Some(&carrier));
+        assert_ne!(near.state.heading, 180.0, "500 off, it turns to brake");
     }
 
     #[test]

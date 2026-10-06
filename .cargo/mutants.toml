@@ -96,4 +96,8 @@ exclude_re = [
     # wgpu usage flags are disjoint bits, so `A | B` and `A ^ B` are the
     # same value: these mutants cannot change behaviour.
     "replace \\| with \\^ in (OffscreenGpu::read_pixels|WgpuRenderer::create_page)",
+    # A launch's push on an axis is compared with none only to pick which
+    # way the top speed bounds it; a push of none adds nothing either way,
+    # so `>` and `>=` give the same velocity.
+    "replace > with >= in launch_velocity",
 ]

@@ -1516,6 +1516,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_pilot_resumed_docked_with_fighters_out_loses_them_buying_a_ship() {
+        let catalog = spaceport();
+        let mut pilot = pilot(&catalog, 0, vec![out(), warship(None), dart_out()]);
+        pilot.cash = 1_000_000;
+        pilot.stellar = Some(crate::catalog::StellarId(128));
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(session.landed().is_some(), "resumed docked");
+        assert!(session.fleet.is_empty(), "none placed yet");
+        session.buy_ship(ShipId(129)).expect("bought");
+        assert_eq!(session.pilot().escorts(), [warship(None)]);
+    }
+
     /// Whether the outfitter sells another Viper to a pilot with `aboard`
     /// Vipers aboard and `out` out.
     fn viper_for_sale(
