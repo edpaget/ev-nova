@@ -26,11 +26,14 @@
 //! - [`HYPERSPACE_DISTANCE`] (23) moves the edge of the no-jump zone from
 //!   its standard [`MIN_JUMP_DISTANCE`] (the Bible: "the standard radius
 //!   is 1000").
+//! - [`FAST_JUMP`] (37), carried at all, whatever its `ModVal`, or a
+//!   `shïp` whose `Flags2` has [`FAST_JUMP_HULL`] (0x0020) set, lets the
+//!   ship jump without slowing down first.
 //!
 //! Each total is summed wide, and none goes below none, so no mix of
-//! outfits can overflow or turn a figure negative. Multi-jump (32), fast
-//! jumping (37), the inertial dampener (38) and every other `ModType`
-//! change nothing here yet.
+//! outfits can overflow or turn a figure negative. Multi-jump (32), the
+//! inertial dampener (38) and every other `ModType` change nothing here
+//! yet.
 
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
 use crate::handling::{Handling, ShipFields};
@@ -54,6 +57,10 @@ pub const MORE_FUEL: i16 = 12;
 pub const HYPERSPACE_DAYS: i16 = 22;
 /// The `oütf` `ModType` that moves the no-jump zone's edge, in pixels.
 pub const HYPERSPACE_DISTANCE: i16 = 23;
+/// The `oütf` `ModType` that lets the ship jump without slowing down.
+pub const FAST_JUMP: i16 = 37;
+/// The `shïp` `Flags2` bit for a hull that jumps without slowing down.
+pub const FAST_JUMP_HULL: u16 = 0x0020;
 
 /// A [`TURN_CHANGE`] `ModVal` per unit of `Maneuver`: the Bible's "100 =
 /// 30°/sec" for the outfit and "10 is about 30°/s" for the ship.
@@ -78,6 +85,8 @@ pub struct ShipStats {
     pub jump_distance: f32,
     /// How many days each of its jumps takes; at least one.
     pub jump_days: u32,
+    /// Whether it jumps without slowing down first.
+    pub fast_jump: bool,
 }
 
 impl ShipStats {
@@ -108,6 +117,10 @@ impl ShipStats {
             jump_distance: positive(MIN_JUMP_DISTANCE as i64 + total(HYPERSPACE_DISTANCE)),
             jump_days: u32::try_from((i64::from(DAYS_PER_JUMP) + total(HYPERSPACE_DAYS)).max(1))
                 .unwrap_or(u32::MAX),
+            fast_jump: fields.flags2 & FAST_JUMP_HULL != 0
+                || outfits
+                    .iter()
+                    .any(|outfit| outfit.mod_type == FAST_JUMP && outfit.count > 0),
         }
     }
 
@@ -300,9 +313,36 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_ship_does_not_fast_jump() {
+        assert!(!ShipStats::new(AVERAGE, &[]).fast_jump);
+    }
+
+    #[test]
+    fn a_fast_jump_outfit_makes_the_ship_fast_jump() {
+        assert_eq!(FAST_JUMP, 37);
+        // ModVal is ignored.
+        assert!(ShipStats::new(AVERAGE, &[outfit(FAST_JUMP, 0, 1)]).fast_jump);
+        assert!(
+            !ShipStats::new(AVERAGE, &[outfit(FAST_JUMP, 1, 0)]).fast_jump,
+            "none carried"
+        );
+    }
+
+    #[test]
+    fn a_hull_with_flags2_0x0020_fast_jumps() {
+        assert_eq!(FAST_JUMP_HULL, 0x0020);
+        let hull = |flags2| ShipFields { flags2, ..AVERAGE };
+        assert!(ShipStats::new(hull(0x0020), &[]).fast_jump);
+        assert!(
+            !ShipStats::new(hull(0xFFDF), &[]).fast_jump,
+            "every other bit"
+        );
+    }
+
+    #[test]
     fn every_other_mod_type_changes_nothing() {
         let plain = ShipStats::new(AVERAGE, &[]);
-        for mod_type in [-1, 0, 1, 3, 5, 10, 11, 13, 15, 17, 32, 37, 38, 45, 99] {
+        for mod_type in [-1, 0, 1, 3, 5, 10, 11, 13, 15, 17, 32, 38, 45, 99] {
             assert_eq!(
                 ShipStats::new(AVERAGE, &[outfit(mod_type, 500, 3)]),
                 plain,
