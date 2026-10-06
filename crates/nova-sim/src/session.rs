@@ -801,7 +801,7 @@ mod tests {
     use crate::glow::GLOW_CRUISE;
     use crate::handling::ShipFields;
     use crate::hyperspace::{
-        ARRIVAL_DISTANCE, DAYS_PER_JUMP, JumpRefusal, MIN_JUMP_DISTANCE, RouteError, StarMap,
+        ARRIVAL_DISTANCE, JumpRefusal, MIN_JUMP_DISTANCE, RouteError, StarMap,
     };
     use crate::landing::StellarFlags;
     use crate::landing::{Clearance, LandOutcome, LandingRefusal};
@@ -2611,10 +2611,8 @@ mod tests {
         jump(&mut session, &catalog, 131);
         assert_eq!(
             session.pilot().events().collect::<Vec<_>>(),
-            [(
-                DisasterId(128),
-                5 - u16::try_from(DAYS_PER_JUMP).expect("few")
-            )]
+            [(DisasterId(128), 4)],
+            "a light hull's one day"
         );
     }
 
@@ -2710,6 +2708,34 @@ mod tests {
         jump_with(&mut session, &quicker, 131, &mut chance);
         assert_eq!(chance.asked, [35]);
         assert_eq!(dmy(&session), (24, 6, 1177));
+    }
+
+    #[test]
+    fn a_heavy_hull_jumps_for_three_days_and_the_dampener_takes_one_off() {
+        let heavy = |catalog: FakePilotCatalog| FakePilotCatalog {
+            ships: vec![(ShipId(128), Ok(ShipFields { mass: 250, ..FAST }))],
+            ..catalog
+        };
+        let catalog = heavy(surplus());
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = Scripted::default();
+        jump_with(&mut session, &catalog, 131, &mut chance);
+        assert_eq!(
+            chance.asked,
+            [35, 35, 35],
+            "one roll for each of three days"
+        );
+        assert_eq!(dmy(&session), (26, 6, 1177));
+        let fuel = session.reserves().fuel;
+        assert_eq!(fuel.max - fuel.now, 100.0, "one jump's fuel");
+
+        // The stock Sutherland Alluvial Dampener: -1.
+        let dampened = heavy(owning(surplus(), HYPERSPACE_DAYS, -1, 1));
+        let mut session = Session::start(&dampened).expect("starts");
+        let mut chance = Scripted::default();
+        jump_with(&mut session, &dampened, 131, &mut chance);
+        assert_eq!(chance.asked, [35, 35]);
+        assert_eq!(dmy(&session), (25, 6, 1177));
     }
 
     #[test]

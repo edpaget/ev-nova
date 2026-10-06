@@ -17,7 +17,8 @@
 //! - `fixture` (with the `fixture` feature, and in this crate's tests):
 //!   `MemoryPilots`, a pilot store in memory.
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
-//!   one day a jump, and [`date::date_text`], how it is displayed.
+//!   a day for each day a jump takes, and [`date::date_text`], how it is
+//!   displayed.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its

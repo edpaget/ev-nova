@@ -44,8 +44,20 @@ pub const ARRIVAL_MARGIN: f32 = 1.0;
 /// standard jump distance arrives: just outside the no-jump zone, where it
 /// can jump out again.
 pub const ARRIVAL_DISTANCE: f32 = MIN_JUMP_DISTANCE + ARRIVAL_MARGIN;
-/// How many days pass in a jump.
-pub const DAYS_PER_JUMP: u32 = 1;
+/// How many days pass in a jump before any outfit changes it, from the
+/// hull's `shïp` `Mass` alone: the Nova Bible's bands, 1-99 tons take one
+/// day, 100-199 take two and 200 or more take three. The original's
+/// `_ShipHyperTransitTime` (@0x43d0) reads the same bands from the
+/// ship type's `Mass` and no outfit mass, and gives a `Mass` of 0 or less
+/// one day too.
+#[must_use]
+pub fn base_jump_days(mass: i16) -> u32 {
+    match mass {
+        ..=99 => 1,
+        100..=199 => 2,
+        _ => 3,
+    }
+}
 
 /// Why no route can be plotted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -485,7 +497,19 @@ mod tests {
         assert_eq!(JUMP_FUEL, 100.0);
         assert_eq!(ARRIVAL_MARGIN, 1.0);
         assert_eq!(ARRIVAL_DISTANCE, 1001.0);
-        assert_eq!(DAYS_PER_JUMP, 1);
+    }
+
+    #[test]
+    fn a_jumps_base_days_come_from_the_hulls_mass() {
+        for mass in [i16::MIN, -1, 0, 1, 99] {
+            assert_eq!(base_jump_days(mass), 1, "{mass}");
+        }
+        for mass in [100, 199] {
+            assert_eq!(base_jump_days(mass), 2, "{mass}");
+        }
+        for mass in [200, i16::MAX] {
+            assert_eq!(base_jump_days(mass), 3, "{mass}");
+        }
     }
 
     // The bearing.

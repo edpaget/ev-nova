@@ -21,8 +21,8 @@
 //! - [`FUEL_SCOOP`](crate::fuel::FUEL_SCOOP) (18) regenerates fuel, as
 //!   [`fuel_regen_per_tick`] says.
 //! - [`HYPERSPACE_DAYS`] (22) adds days to each jump's
-//!   [`DAYS_PER_JUMP`], which never goes below one (the Bible: "still
-//!   can't go below 1 day/jump").
+//!   [`base_jump_days`], from the hull's `Mass`, and the total never goes
+//!   below one (the Bible: "still can't go below 1 day/jump").
 //! - [`HYPERSPACE_DISTANCE`] (23) moves the edge of the no-jump zone from
 //!   its standard [`MIN_JUMP_DISTANCE`] (the Bible: "the standard radius
 //!   is 1000").
@@ -37,7 +37,7 @@
 
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
 use crate::handling::{Handling, ShipFields};
-use crate::hyperspace::{DAYS_PER_JUMP, MIN_JUMP_DISTANCE};
+use crate::hyperspace::{MIN_JUMP_DISTANCE, base_jump_days};
 use crate::market::cargo_capacity;
 use crate::reserves::{Reserves, shield_points};
 
@@ -115,8 +115,10 @@ impl ShipStats {
             fuel_regen: fuel_regen_per_tick(fields.fuel_regen, outfits),
             capacity: cargo_capacity(fields.holds, outfits),
             jump_distance: positive(MIN_JUMP_DISTANCE as i64 + total(HYPERSPACE_DISTANCE)),
-            jump_days: u32::try_from((i64::from(DAYS_PER_JUMP) + total(HYPERSPACE_DAYS)).max(1))
-                .unwrap_or(u32::MAX),
+            jump_days: u32::try_from(
+                (i64::from(base_jump_days(fields.mass)) + total(HYPERSPACE_DAYS)).max(1),
+            )
+            .unwrap_or(u32::MAX),
             fast_jump: fields.flags2 & FAST_JUMP_HULL != 0
                 || outfits
                     .iter()
@@ -136,7 +138,7 @@ impl ShipStats {
 mod tests {
     use super::*;
     use crate::fuel::FUEL_SCOOP;
-    use crate::hyperspace::{DAYS_PER_JUMP, MIN_JUMP_DISTANCE};
+    use crate::hyperspace::MIN_JUMP_DISTANCE;
     use crate::market::MORE_CARGO;
     use crate::reserves::Gauge;
 
@@ -276,7 +278,6 @@ mod tests {
 
     #[test]
     fn a_jump_takes_a_day_unless_a_hyperspace_speed_mod_changes_it() {
-        assert_eq!(ShipStats::new(AVERAGE, &[]).jump_days, DAYS_PER_JUMP);
         assert_eq!(ShipStats::new(AVERAGE, &[]).jump_days, 1);
         let slower = ShipStats::new(AVERAGE, &[outfit(HYPERSPACE_DAYS, 1, 2)]);
         assert_eq!(slower.jump_days, 3, "ModVal x count");
@@ -288,6 +289,39 @@ mod tests {
             ],
         );
         assert_eq!(mixed.jump_days, 3);
+    }
+
+    #[test]
+    fn a_light_a_medium_and_a_heavy_hull_jump_in_1_2_and_3_days() {
+        for (mass, days) in [(15, 1), (150, 2), (250, 3)] {
+            let hull = ShipFields { mass, ..AVERAGE };
+            assert_eq!(ShipStats::new(hull, &[]).jump_days, days, "mass {mass}");
+        }
+    }
+
+    #[test]
+    fn a_heavy_hull_with_the_dampener_jumps_in_fewer_days_but_at_least_one() {
+        let heavy = ShipFields {
+            mass: 250,
+            ..AVERAGE
+        };
+        // The stock Sutherland Alluvial Dampener: -1.
+        let dampener = ShipStats::new(heavy, &[outfit(HYPERSPACE_DAYS, -1, 1)]);
+        assert_eq!(dampener.jump_days, 2);
+        let two = ShipStats::new(heavy, &[outfit(HYPERSPACE_DAYS, -1, 2)]);
+        assert_eq!(two.jump_days, 1);
+        for (mod_val, count) in [(-1, 5), (i16::MIN, u16::MAX)] {
+            let least = ShipStats::new(heavy, &[outfit(HYPERSPACE_DAYS, mod_val, count)]);
+            assert_eq!(least.jump_days, 1, "{mod_val} x {count}");
+        }
+        let medium = ShipFields {
+            mass: 150,
+            ..AVERAGE
+        };
+        let medium_dampened = ShipStats::new(medium, &[outfit(HYPERSPACE_DAYS, -1, 1)]);
+        assert_eq!(medium_dampened.jump_days, 1);
+        let slower = ShipStats::new(heavy, &[outfit(HYPERSPACE_DAYS, 1, 2)]);
+        assert_eq!(slower.jump_days, 5, "ModVal x count on top of three");
     }
 
     #[test]
