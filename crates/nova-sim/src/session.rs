@@ -147,6 +147,12 @@
 //! every fighter out, and the outfitter sells a fighter only while its
 //! bays have room, those out counted.
 //!
+//! Landed at a stellar with a bar, the player hires escorts
+//! ([`Session::escorts_for_hire`], [`Session::hire`]) as the
+//! [`hire`](crate::hire) rules say, by the session's [`HireTerms`] and
+//! [`ControlBits`]: a hire pays its fee and joins the fleet with its daily
+//! wage, which makes a save due.
+//!
 //! The player targets an NPC ([`Session::select_target`]), the nearest,
 //! the nearest threat or the next in turn as the
 //! [`targeting`](crate::targeting) rules say, and
@@ -170,8 +176,10 @@
 mod escorts;
 mod fighters;
 mod hail;
+mod hire;
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::bay::FighterNote;
@@ -204,6 +212,7 @@ use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
+use crate::hire::{ControlBits, HireTerms, NoControlBits, NovaHire};
 use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
 use crate::landing::{LandingRefusal, check_landing};
 use crate::legal::{self, Crime, LegalCode};
@@ -310,6 +319,17 @@ pub struct Session {
     /// Each escort of the fleet's NPC in the system, lined up with the
     /// pilot's escorts while in flight; none for one not placed.
     fleet: Vec<Option<NpcId>>,
+    /// The fee and wage of a hire (see [`Session::with_hire_terms`]).
+    hire_terms: hire::Shared<dyn HireTerms>,
+    /// The control-bit test a ship's `Availability` for hire goes through
+    /// (see [`Session::with_control_bits`]).
+    control_bits: hire::Shared<dyn ControlBits>,
+    /// Whether an unmet `Require` refuses a hire (see
+    /// [`Session::with_hire_require`]).
+    hire_require: RuleSource,
+    /// Each ship class's roll for hire since the last landing, drawn the
+    /// first time the bar's list asks it.
+    hire_rolls: BTreeMap<ShipId, bool>,
 }
 
 impl Session {
@@ -401,6 +421,10 @@ impl Session {
             fighter_recall: RuleSource::Engine,
             fighter_notes: Vec::new(),
             fleet: Vec::new(),
+            hire_terms: hire::Shared(Rc::new(NovaHire::default())),
+            control_bits: hire::Shared(Rc::new(NoControlBits)),
+            hire_require: RuleSource::Engine,
+            hire_rolls: BTreeMap::new(),
             pilot,
         };
         session.refit(false);
@@ -1016,6 +1040,7 @@ impl Session {
         self.target = None;
         self.talk = None;
         self.leave_with_fighters(true);
+        self.hire_rolls.clear();
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });

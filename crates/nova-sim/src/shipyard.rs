@@ -85,6 +85,9 @@
 //! which are neither fitted nor counted in the trade-in; the gun and turret
 //! limits (`MaxGun`, `MaxTur`); `OnPurchase` and `OnRetire`; naming the new
 //! ship and its `Long Name` message; `MovieFile`; and escorts' `UpgradeTo`.
+//! Nor does the shipyard roll `BuyRandom` or price a ship through the
+//! original's tech-level flux, as hiring in the bar does with its own
+//! `HireRandom` roll and price rule ([`hire`](crate::hire)).
 
 use std::collections::BTreeMap;
 

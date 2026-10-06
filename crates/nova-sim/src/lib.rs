@@ -73,6 +73,12 @@
 //!   ([`Ask`]); and the [`Help`] a ship gives the player once asked.
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
+//! - [`hire`]: hiring escorts in the bar: which ships are for hire today
+//!   ([`HireList`], [`HireRow`], [`HireRefusal`]), the [`HireTerms`] port
+//!   with Nova's [`NovaHire`] fee and daily wage ([`price_flux`]), the
+//!   [`ControlBits`] port a ship's `Availability` goes through
+//!   ([`NoControlBits`] until control bits exist), what a hire did
+//!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
 //! - [`landing`]: whether the ship can land, [`check_landing`], each
@@ -108,8 +114,9 @@
 //!   from its starting system, landing, jumping along a plotted course,
 //!   fighting, boarding and capturing ships, hailing them
 //!   ([`HailView`], [`HailRefusal`], [`CommNote`]), flying and
-//!   commanding its escorts, and launching and docking the fighters of
-//!   its bays and the NPC carriers' ([`Sortie`]).
+//!   commanding its escorts, launching and docking the fighters of its
+//!   bays and the NPC carriers' ([`Sortie`]), and hiring escorts in the
+//!   bar and paying their wages.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -148,6 +155,7 @@ pub mod geometry;
 pub mod govt;
 pub mod hail;
 pub mod handling;
+pub mod hire;
 pub mod hyperspace;
 pub mod landing;
 pub mod legal;
@@ -205,6 +213,10 @@ pub use hail::{
     HailOptions, HailRefusal, HailView, Help, Release, Reply,
 };
 pub use handling::{Handling, ShipFields};
+pub use hire::{
+    ControlBits, HireList, HireRefusal, HireRow, HireTerms, Hired, NoControlBits, NovaHire,
+    PayNote, price_flux,
+};
 pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
 pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
 pub use legal::{Crime, LegalCode, NovaLaw};

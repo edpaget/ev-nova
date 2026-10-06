@@ -13,8 +13,9 @@
 //! greets with its government's line, and one hunting a wanted player is
 //! bought off; the ship comm strings, the 42-character advice lines and
 //! the governments' hail flags are where hailing reads them. The fighter
-//! bays launch their fighters as the extracted rules say. Skips,
-//! passing, when `NOVA_DATA` is unset.
+//! bays launch their fighters as the extracted rules say. Viking's bar
+//! hires the Shuttle at Nova's fee and wage. Skips, passing, when
+//! `NOVA_DATA` is unset.
 
 mod common;
 
@@ -2341,4 +2342,99 @@ fn stock_fighter_bays_launch_their_fighters_as_the_extracted_rules_say() {
     assert_eq!(messages[155 - 1], EscortCommand::Dock.doing());
     assert_eq!(messages[164 - 1], ABANDONED_ONE);
     assert_eq!(messages[165 - 1], ABANDONED_MANY);
+}
+
+use nova_sim::hire::{
+    DEFECTED_ONE, DEFECTED_SOME, ESCORT, HIRE_ESCORT, HIRED_ESCORT, HIRING_PRICE, NONE_FOR_HIRE,
+    PAY_LABEL, PER_DAY, YOU_HAVE,
+};
+use nova_sim::{HireTerms, LandingSite, NovaHire};
+
+/// Stellar `id`, as its system's landing sites give it.
+fn stellar_site(data: &GameData, id: i16) -> LandingSite {
+    data.star_map()
+        .into_iter()
+        .flat_map(|system| data.landing_sites(system.id))
+        .find(|site| site.id == StellarId(id))
+        .expect("a stock stellar")
+}
+
+/// A chance that always fires.
+struct Always;
+
+impl nova_sim::Chance for Always {
+    fn fires(&mut self, _percent: u8) -> bool {
+        true
+    }
+
+    fn below(&mut self, _n: u32) -> u32 {
+        0
+    }
+}
+
+/// The Shuttle (128) is for hire 40 % of days; hired at Viking (tech
+/// level 4) its fee is 970, a tenth of its 10,000 `Cost` less the
+/// low-tech discount, and at Earth (tech level 7) 1000; its wage is 100 a
+/// day. Docked at Viking, with every roll firing, the bar lists it so.
+#[test]
+fn the_shuttles_fee_and_wage_are_nova_hires() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let ships = data.ships();
+    let shuttle = ships
+        .iter()
+        .find(|record| record.id == ShipId(128))
+        .expect("the Shuttle");
+    assert_eq!(shuttle.hire_random, 40);
+    assert_eq!((shuttle.cost, shuttle.tech_level), (10_000, 3));
+    let viking = stellar_site(&data, 157);
+    let earth = stellar_site(&data, 128);
+    assert_eq!((viking.tech_level, earth.tech_level), (4, 7));
+    let nova = NovaHire::default();
+    assert_eq!(nova.fee(shuttle, &viking), 970);
+    assert_eq!(nova.fee(shuttle, &earth), 1000);
+    assert_eq!(nova.wage(shuttle), 100);
+    let heavy = ships
+        .iter()
+        .find(|record| record.id == ShipId(129))
+        .expect("the Heavy Shuttle");
+    assert_eq!(nova.wage(heavy), 175);
+
+    let mut session = at_viking(&data);
+    let list = session
+        .escorts_for_hire(&mut Always)
+        .expect("Viking has a bar");
+    let row = list.row(ShipId(128)).expect("the Shuttle is for hire");
+    assert_eq!((row.fee, row.wage), (970, 100));
+}
+
+/// The bar's and the hire dialog's descriptions and strings are where
+/// hiring reads them.
+#[test]
+fn the_hire_descriptions_and_strings_are_where_hiring_reads_them() {
+    use nova_data::records::desc::Desc;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    for id in [14_000, 10_029] {
+        assert!(matches!(data.get::<Desc>(id), Some(Ok(_))), "dësc {id}");
+    }
+    assert_eq!(CommCatalog::string_list(&data, 150)[13 - 1], HIRE_ESCORT);
+    let messages = CommCatalog::string_list(&data, 2002);
+    for (n, text) in [
+        (166, HIRED_ESCORT),
+        (168, ESCORT),
+        (217, YOU_HAVE),
+        (224, NONE_FOR_HIRE),
+        (228, HIRING_PRICE),
+        (267, PER_DAY),
+        (297, PAY_LABEL),
+        (302, DEFECTED_ONE),
+        (303, DEFECTED_SOME),
+    ] {
+        assert_eq!(messages[n - 1], text, "#{n}");
+    }
 }
