@@ -70,7 +70,9 @@
 //!   ([`HailOptions`]), with Nova's Greetings, Request Assistance and Beg
 //!   For Mercy, and [`Release`] for the player's escort, which answer each
 //!   press with an [`Answer`]: a reply, a [`Deed`] and a price asked
-//!   ([`Ask`]); and the [`Help`] a ship gives the player once asked.
+//!   ([`Ask`]); the [`Help`] a ship gives the player once asked; and what
+//!   the comm dialog shows of the player's own escort ([`EscortStatus`]),
+//!   a hired one's daily pay among it.
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hire`]: hiring escorts in the bar: which ships are for hire today
@@ -209,8 +211,8 @@ pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
 pub use govt::Governments;
 pub use hail::{
-    Answer, Ask, Attitude, CommNote, Conversation, Deed, Haggle, Hail, HailButton, HailOption,
-    HailOptions, HailRefusal, HailView, Help, Release, Reply,
+    Answer, Ask, Attitude, CommNote, Conversation, Deed, EscortStatus, Haggle, Hail, HailButton,
+    HailOption, HailOptions, HailRefusal, HailView, Help, Release, Reply,
 };
 pub use handling::{Handling, ShipFields};
 pub use hire::{

@@ -42,8 +42,8 @@ use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::{Condition, DisableRule};
 use crate::hail::{
-    Ask, Attitude, CommNote, Conversation, Deed, Dispositions, Haggle, Hail, HailButton,
-    HailOptions, HailRefusal, HailView, Help, Reply, Settled, assist, attitude, reply,
+    Ask, Attitude, CommNote, Conversation, Deed, Dispositions, EscortStatus, Haggle, Hail,
+    HailButton, HailOptions, HailRefusal, HailView, Help, Reply, Settled, assist, attitude, reply,
 };
 use crate::hyperspace::JUMP_FUEL;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
@@ -117,6 +117,16 @@ impl Session {
         self.hailing(catalog, options).ok_or(HailRefusal::NoTarget)
     }
 
+    /// What NPC `id` is as the player's escort: its wage paid a day when
+    /// hired; none for an NPC not of the fleet.
+    fn escort_status(&self, id: NpcId) -> Option<EscortStatus> {
+        let index = self.fleet.iter().position(|&placed| placed == Some(id))?;
+        let escort = self.pilot.escorts.get(index)?;
+        Some(EscortStatus {
+            wage: escort.hired().then(|| self.paid_wage(escort)),
+        })
+    }
+
     /// What `npc`'s government and ship type make of hails.
     fn dispositions(&self, npc: &Npc) -> Dispositions {
         let inherent = self
@@ -169,6 +179,7 @@ impl Session {
             options: buttons,
             asking: talk.conversation.asking(),
             pay_me: true,
+            escort: self.escort_status(npc.id),
         })
     }
 
@@ -1420,6 +1431,35 @@ mod tests {
     }
 
     #[test]
+    fn hailing_a_hired_escort_shows_its_daily_pay() {
+        let catalog = hailable();
+        let mut session = escorting(&catalog);
+        session.pilot.escorts[0].wage = Some(100);
+        let view = hail(&mut session, &catalog);
+        assert_eq!(
+            view.escort,
+            Some(crate::hail::EscortStatus { wage: Some(100) })
+        );
+        assert_eq!(labels(&view), [("Release", Some('R'))]);
+    }
+
+    #[test]
+    fn hailing_a_captured_escort_shows_it_is_an_escort_with_no_pay() {
+        let catalog = hailable();
+        let mut session = escorting(&catalog);
+        let view = hail(&mut session, &catalog);
+        assert_eq!(view.escort, Some(crate::hail::EscortStatus { wage: None }));
+        assert_eq!(labels(&view), [("Release", Some('R'))]);
+    }
+
+    #[test]
+    fn hailing_a_ship_of_the_traffic_shows_no_escort_status() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        assert_eq!(hail(&mut session, &catalog).escort, None);
+    }
+
+    #[test]
     fn a_carried_fighter_answers_as_an_escort_with_no_release() {
         let catalog = hailable();
         let mut session = escorting(&catalog);
@@ -1434,6 +1474,7 @@ mod tests {
         let view = hail(&mut session, &catalog);
         assert_eq!(view.reply, "What can I do for you?");
         assert_eq!(labels(&view), []);
+        assert_eq!(view.escort, Some(crate::hail::EscortStatus { wage: None }));
     }
 
     #[test]

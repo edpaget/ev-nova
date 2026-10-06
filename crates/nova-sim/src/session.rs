@@ -151,7 +151,11 @@
 //! ([`Session::escorts_for_hire`], [`Session::hire`]) as the
 //! [`hire`](crate::hire) rules say, by the session's [`HireTerms`] and
 //! [`ControlBits`]: a hire pays its fee and joins the fleet with its daily
-//! wage, which makes a save due.
+//! wage, which makes a save due. Each hired escort is paid its wage for
+//! each day of a jump, and for a day at each take-off as
+//! [`Session::with_take_off_pay`] says; one left unpaid defects
+//! ([`Session::take_pay_notes`]). Which wage it is paid follows
+//! [`Session::with_escort_wage`], and hailing it shows it.
 //!
 //! The player targets an NPC ([`Session::select_target`]), the nearest,
 //! the nearest threat or the next in turn as the
@@ -212,7 +216,7 @@ use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
-use crate::hire::{ControlBits, HireTerms, NoControlBits, NovaHire};
+use crate::hire::{ControlBits, HireTerms, NoControlBits, NovaHire, PayNote};
 use crate::hyperspace::{JUMP_FUEL, JumpRefusal, RouteError, StarMap, arrival, check_jump};
 use crate::landing::{LandingRefusal, check_landing};
 use crate::legal::{self, Crime, LegalCode};
@@ -330,6 +334,14 @@ pub struct Session {
     /// Each ship class's roll for hire since the last landing, drawn the
     /// first time the bar's list asks it.
     hire_rolls: BTreeMap<ShipId, bool>,
+    /// Whether each take-off pays the hired escorts a day's wages (see
+    /// [`Session::with_take_off_pay`]).
+    take_off_pay: RuleSource,
+    /// Which wage a hired escort is paid (see
+    /// [`Session::with_escort_wage`]).
+    escort_wage: RuleSource,
+    /// What paying the escorts did since this was last taken.
+    pay_notes: Vec<PayNote>,
 }
 
 impl Session {
@@ -425,6 +437,9 @@ impl Session {
             control_bits: hire::Shared(Rc::new(NoControlBits)),
             hire_require: RuleSource::Engine,
             hire_rolls: BTreeMap::new(),
+            take_off_pay: RuleSource::Engine,
+            escort_wage: RuleSource::Engine,
+            pay_notes: Vec::new(),
             pilot,
         };
         session.refit(false);
@@ -968,6 +983,8 @@ impl Session {
             pilot.date = pilot.date.next_day();
             market::step_day(&self.goods, &mut pilot.events, chance);
         }
+        self.pay_escorts(self.stats.jump_days);
+        let pilot = &mut self.pilot;
         if pilot.course.first() == Some(&next) {
             pilot.course.remove(0);
         }
@@ -1055,6 +1072,9 @@ impl Session {
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         self.traffic_due = true;
+        if self.take_off_pay == RuleSource::Engine {
+            self.pay_escorts(1);
+        }
         self.restock_fleet();
         self.fleet.clear();
         self.sounds.push(SimSound::TookOff);

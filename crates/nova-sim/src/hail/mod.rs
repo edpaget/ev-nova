@@ -13,7 +13,9 @@
 //! price it asks ([`Ask`]), which the player may haggle over. The session
 //! turns replies into words and does the deeds, so an option needs no
 //! catalog and no session code; adding one means registering it in
-//! [`HailOptions`] at the edge.
+//! [`HailOptions`] at the edge. Hailing the player's own escort, the
+//! dialog also shows its status ([`EscortStatus`]): a hired escort's
+//! daily pay, as the original's comm dialog does for its "Hired Escort".
 //!
 //! **What a ship's government and type make of hails** ([`Dispositions`],
 //! `_HandlePlayerCommunication` @0x61f48 and `_DoCommDialog`
@@ -300,6 +302,20 @@ pub struct HailView {
     /// Whether the haggle dialog says "Pay me" (a ship), rather than "Pay
     /// us" (a planet, which is not hailed here).
     pub pay_me: bool,
+    /// What it is as the player's escort, carried fighters included; none
+    /// for a ship that is not.
+    pub escort: Option<EscortStatus>,
+}
+
+/// What the comm dialog shows of the player's own escort hailed
+/// (`_CommDialogUpdate` @0x90688-0x90704): "Hired Escort" with its daily
+/// pay, or "Escort".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EscortStatus {
+    /// The wage a hired escort is paid a day, as
+    /// [`Session::with_escort_wage`](crate::Session::with_escort_wage)
+    /// says; none for one not hired.
+    pub wage: Option<i64>,
 }
 
 /// What an NPC assisting the player has done, for the flight's message

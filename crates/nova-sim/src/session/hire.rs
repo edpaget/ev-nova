@@ -20,6 +20,16 @@
 //! ([`Escort::wage`]): a change made in the spaceport, so a save is due.
 //! A refused hire changes nothing.
 //!
+//! **Paying.** Each hired escort is paid its wage for each day of a jump,
+//! once the date has moved on, and for one day at each take-off as
+//! [`Session::with_take_off_pay`] says; the wage it is paid follows
+//! [`Session::with_escort_wage`]. One the cash does not cover defects,
+//! its record and its NPC gone at once, so it is never placed in the next
+//! system, and the flight is told how many defected
+//! ([`Session::take_pay_notes`]), which makes a save due; paying alone
+//! makes none, as paying a haggled price makes none. Hailing a hired
+//! escort shows the wage it is paid ([`EscortStatus`](crate::hail::EscortStatus)).
+//!
 //! The session keeps its [`HireTerms`] and [`ControlBits`] rather than
 //! being passed them on each call, a deliberate departure from
 //! [`BoardingRule`](crate::BoardingRule) and
@@ -31,7 +41,7 @@ use super::Session;
 use crate::board::MAX_ESCORTS;
 use crate::catalog::ShipId;
 use crate::chance::Chance;
-use crate::hire::{Bar, ControlBits, HireList, HireRefusal, HireTerms, Hired};
+use crate::hire::{Bar, ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote};
 use crate::landing::StellarFlags;
 use crate::pilot::Escort;
 use crate::rulebook::RuleSource;
@@ -93,6 +103,99 @@ impl Session {
     #[must_use]
     pub fn hire_require(&self) -> RuleSource {
         self.hire_require
+    }
+
+    /// This session with each take-off paying the hired escorts a day's
+    /// wages, or not, as `source` says
+    /// ([`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay)): by the
+    /// engine's default it does.
+    #[must_use]
+    pub fn with_take_off_pay(mut self, source: RuleSource) -> Self {
+        self.take_off_pay = source;
+        self
+    }
+
+    /// Whether each take-off pays the hired escorts a day's wages: by the
+    /// engine ([`RuleSource::Engine`]) it does; otherwise only a jump's
+    /// days are paid.
+    #[must_use]
+    pub fn take_off_pay(&self) -> RuleSource {
+        self.take_off_pay
+    }
+
+    /// This session with a hired escort paid, and showing when hailed,
+    /// the wage `source` says
+    /// ([`RuleKey::EscortWage`](crate::RuleKey::EscortWage)): by the
+    /// engine's default, the wage its ship type's record gives now.
+    #[must_use]
+    pub fn with_escort_wage(mut self, source: RuleSource) -> Self {
+        self.escort_wage = source;
+        self
+    }
+
+    /// Which wage a hired escort is paid: by the engine
+    /// ([`RuleSource::Engine`]), its ship type's now; otherwise the wage
+    /// it was hired at.
+    #[must_use]
+    pub fn escort_wage(&self) -> RuleSource {
+        self.escort_wage
+    }
+
+    /// What paying the escorts did since this was last taken, in order;
+    /// taking it empties the list.
+    pub fn take_pay_notes(&mut self) -> Vec<PayNote> {
+        std::mem::take(&mut self.pay_notes)
+    }
+
+    /// The wage hired `escort` is paid a day (see
+    /// [`Session::with_escort_wage`]): by the engine, the terms' wage of
+    /// its ship type's record, or the wage it was hired at when there is
+    /// none; otherwise the wage it was hired at. None for an escort not
+    /// hired.
+    pub(super) fn paid_wage(&self, escort: &Escort) -> i64 {
+        let kept = escort.wage.unwrap_or(0);
+        match self.escort_wage {
+            RuleSource::Engine => self
+                .ship_record(escort.ship)
+                .map_or(kept, |record| self.hire_terms.0.wage(record)),
+            RuleSource::Bible => kept,
+        }
+    }
+
+    /// Pays every hired escort its wage for each of `days`, in fleet
+    /// order (see [`hire`](crate::hire)): one the cash does not cover
+    /// defects, leaving the fleet and the system at once. When any
+    /// defected the flight is told how many, and a save is due.
+    pub(super) fn pay_escorts(&mut self, days: u32) {
+        let mut defected = 0_u32;
+        for _ in 0..days {
+            let mut index = 0;
+            while index < self.pilot.escorts.len() {
+                let escort = self.pilot.escorts[index];
+                if !escort.hired() {
+                    index += 1;
+                    continue;
+                }
+                let wage = self.paid_wage(&escort);
+                if wage <= self.pilot.cash {
+                    self.pilot.cash -= wage;
+                    index += 1;
+                    continue;
+                }
+                self.pilot.escorts.remove(index);
+                if index < self.fleet.len()
+                    && let Some(id) = self.fleet.remove(index)
+                {
+                    self.traffic.remove(id);
+                }
+                defected = defected.saturating_add(1);
+            }
+        }
+        if defected > 0 {
+            self.reform();
+            self.pay_notes.push(PayNote::Defected(defected));
+            self.save_due = true;
+        }
     }
 
     /// The ships for hire in the bar of the stellar the ship is docked at
@@ -171,8 +274,10 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
     use crate::escort::{EscortCommand, EscortDuty, EscortGroup, slot_position};
-    use crate::hire::{HireRow, NovaHire};
+    use crate::hail::{EscortStatus, HailOptions};
+    use crate::hire::{HireRow, NovaHire, PayNote};
     use crate::reserves::Reserves;
+    use crate::stats::HYPERSPACE_DAYS;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
     use crate::testkit::{FAST, FakePilotCatalog, Scripted, catalog, jump, planet, ship};
@@ -665,6 +770,296 @@ mod tests {
                 .is_some()
         );
         assert_eq!(placed(&session).target, Some(ShipRef::Npc(quarry)));
+    }
+
+    // Paying the escorts.
+
+    /// [`barred`] with ship 129 of `Cost` 10,000 and 130 of 30,000, both
+    /// for hire, and outfit 300 adding a day to each jump.
+    fn paying() -> FakePilotCatalog {
+        let mut catalog = barred(vec![
+            hireable(129, 100),
+            ShipRecord {
+                cost: 30_000,
+                ..hireable(130, 100)
+            },
+        ]);
+        catalog.outfits = vec![crate::testkit::outfit(300, &[(HYPERSPACE_DAYS, 1)])];
+        catalog
+    }
+
+    /// An escort of `ship` at `wage`, `carried` or not.
+    fn paid(ship: i16, wage: Option<i64>, carried: bool) -> Escort {
+        Escort {
+            ship: ShipId(ship),
+            wage,
+            ..escort(carried)
+        }
+    }
+
+    /// The fleet: hired escorts at wages 100 and 300, a captured one and
+    /// a carried fighter.
+    fn payroll() -> Vec<Escort> {
+        vec![
+            paid(129, Some(100), false),
+            paid(130, Some(300), false),
+            paid(129, None, false),
+            paid(129, None, true),
+        ]
+    }
+
+    /// [`paying`]'s session holding `cash`, with `escorts`, flying with
+    /// its fleet placed, `rule` choosing take-off pay, and each jump
+    /// taking `days`.
+    fn payer(cash: i64, escorts: Vec<Escort>, days: u16, rule: RuleSource) -> Session {
+        let catalog = paying();
+        let mut pilot = crate::Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.cash = cash;
+        pilot.escorts = escorts;
+        if days > 1 {
+            pilot
+                .outfits
+                .insert(crate::catalog::OutfitId(300), days - 1);
+        }
+        let mut session = Session::fly(&catalog, pilot)
+            .expect("flies")
+            .with_take_off_pay(rule);
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(session.stats().jump_days, u32::from(days));
+        session.take_save_due();
+        session
+    }
+
+    fn ships(session: &Session) -> Vec<(i16, Option<i64>, bool)> {
+        session
+            .pilot()
+            .escorts()
+            .iter()
+            .map(|escort| (escort.ship.0, escort.wage, escort.carried))
+            .collect()
+    }
+
+    /// The ship types of the fleet's NPCs in the system, in fleet order.
+    fn placed_ships(session: &Session) -> Vec<i16> {
+        session
+            .fleet
+            .iter()
+            .flatten()
+            .filter_map(|&id| session.npc(id))
+            .map(|npc| npc.ship.0)
+            .collect()
+    }
+
+    #[test]
+    fn each_day_of_a_jump_pays_every_hired_escort_its_wage() {
+        let mut session = payer(1000, payroll(), 1, RuleSource::Engine);
+        jump(&mut session, &paying(), 131).expect("arrives");
+        assert_eq!(session.pilot().cash(), 600);
+        assert_eq!(session.pilot().escorts(), payroll(), "all stay");
+        assert_eq!(session.take_pay_notes(), []);
+        assert!(!session.take_save_due(), "paying alone makes none");
+
+        let mut session = payer(1000, payroll(), 2, RuleSource::Engine);
+        jump(&mut session, &paying(), 131).expect("arrives");
+        assert_eq!(session.pilot().cash(), 200, "two days");
+    }
+
+    #[test]
+    fn cash_equal_to_the_wages_pays_them_leaving_none() {
+        let mut session = payer(400, payroll(), 1, RuleSource::Engine);
+        jump(&mut session, &paying(), 131).expect("arrives");
+        assert_eq!(session.pilot().cash(), 0);
+        assert_eq!(session.pilot().escorts().len(), 4);
+        assert_eq!(session.take_pay_notes(), []);
+    }
+
+    #[test]
+    fn an_escort_the_player_cannot_pay_defects_and_leaves_the_fleet() {
+        let mut session = payer(350, payroll(), 1, RuleSource::Engine);
+        jump(&mut session, &paying(), 131).expect("arrives");
+        assert_eq!(session.pilot().cash(), 250, "the first paid");
+        assert_eq!(
+            ships(&session),
+            [
+                (129, Some(100), false),
+                (129, None, false),
+                (129, None, true)
+            ],
+            "the second gone, the others in order"
+        );
+        assert_eq!(placed_ships(&session), [129, 129, 129]);
+        assert!(
+            session.npcs().iter().all(|npc| npc.ship != ShipId(130)),
+            "not placed in the new system"
+        );
+        assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
+        assert_eq!(session.take_pay_notes(), [], "taken");
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn each_day_pays_in_turn_and_those_unpaid_on_a_later_day_defect() {
+        let mut session = payer(450, payroll(), 2, RuleSource::Engine);
+        jump(&mut session, &paying(), 131).expect("arrives");
+        assert_eq!(session.pilot().cash(), 50, "the first day paid both");
+        assert_eq!(
+            ships(&session),
+            [(129, None, false), (129, None, true)],
+            "both hired escorts defected on the second"
+        );
+        assert_eq!(session.take_pay_notes(), [PayNote::Defected(2)]);
+    }
+
+    #[test]
+    fn with_no_hired_escort_nothing_is_paid() {
+        let unpaid = vec![paid(129, None, false), paid(129, None, true)];
+        let mut session = payer(10, unpaid.clone(), 1, RuleSource::Engine);
+        jump(&mut session, &paying(), 131).expect("arrives");
+        assert_eq!(session.pilot().cash(), 10);
+        assert_eq!(session.pilot().escorts(), unpaid);
+        assert_eq!(session.take_pay_notes(), []);
+        assert!(!session.take_save_due());
+    }
+
+    /// [`payer`]'s session, landed at the bar.
+    fn docked(cash: i64, rule: RuleSource) -> Session {
+        let mut session = payer(cash, payroll(), 1, rule);
+        assert_eq!(session.land(), Ok(BAR_AT));
+        session.take_save_due();
+        session
+    }
+
+    #[test]
+    fn by_the_engine_each_take_off_pays_a_days_wages() {
+        let mut session = docked(1000, RuleSource::Engine);
+        assert_eq!(session.pilot().cash(), 1000, "landing pays nothing");
+        session.take_off().expect("takes off");
+        assert_eq!(session.pilot().cash(), 600);
+        assert_eq!(session.take_pay_notes(), []);
+        assert_eq!(
+            Session::start(&catalog()).expect("starts").take_off_pay(),
+            RuleSource::Engine,
+            "by default"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_an_escort_unpaid_at_take_off_is_gone_before_the_fleet_is_placed() {
+        let mut session = docked(350, RuleSource::Engine);
+        assert_eq!(session.take_off_pay(), RuleSource::Engine);
+        session.take_off().expect("takes off");
+        assert_eq!(session.pilot().cash(), 250);
+        assert_eq!(session.pilot().escorts().len(), 3);
+        assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
+        session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
+        assert_eq!(placed_ships(&session), [129, 129, 129]);
+    }
+
+    #[test]
+    fn by_the_other_reading_only_the_days_of_a_jump_are_paid() {
+        let mut session = docked(1000, RuleSource::Bible);
+        assert_eq!(session.take_off_pay(), RuleSource::Bible);
+        session.take_off().expect("takes off");
+        assert_eq!(session.pilot().cash(), 1000);
+        session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
+        jump(&mut session, &paying(), 131).expect("arrives");
+        assert_eq!(session.pilot().cash(), 600);
+    }
+
+    /// A pilot who hired ship 129 (`Cost` 10,000, so a wage of 100) and
+    /// was saved and loaded, flying with `catalog`, where its ship
+    /// type's record may have changed, by `rule`; and its escort's NPC,
+    /// none when its ship type has no record.
+    fn rehired(catalog: &FakePilotCatalog, rule: RuleSource) -> (Session, Option<crate::NpcId>) {
+        let original = barred(vec![hireable(129, 100)]);
+        let mut session = landed(&original, 25_000);
+        session.hire(ShipId(129), &mut NeverFires).expect("hires");
+        let saved = crate::save::encode(session.pilot());
+        let mut pilot = crate::save::decode(&saved).expect("loads");
+        pilot.cash = 1000;
+        pilot.stellar = None;
+        let mut session = Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_escort_wage(rule);
+        assert_eq!(session.escort_wage(), rule);
+        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        let id = session.fleet[0];
+        (session, id)
+    }
+
+    /// What hailing NPC `id` says of it as an escort.
+    fn status(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        id: crate::NpcId,
+    ) -> Option<EscortStatus> {
+        session.target = Some(id);
+        session
+            .hail(catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answered")
+            .escort
+    }
+
+    /// What one jump day pays, and the hail shows, for a hired escort
+    /// whose ship type's `Cost` is now `cost` (none: no record), by
+    /// `rule`; and its record's wage.
+    fn wage_paid(cost: Option<i32>, rule: RuleSource) -> (i64, Option<EscortStatus>, Option<i64>) {
+        let mut catalog = barred(vec![hireable(129, 100)]);
+        match cost {
+            Some(cost) => catalog.ship_records[1].cost = cost,
+            None => {
+                catalog.ship_records.pop();
+            }
+        }
+        let (mut session, id) = rehired(&catalog, rule);
+        let shown = id.and_then(|id| status(&mut session, &catalog, id));
+        session.hang_up();
+        jump(&mut session, &catalog, 131).expect("arrives");
+        let wage = session.pilot().escorts()[0].wage;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&crate::save::encode(session.pilot()))
+                .expect("JSON")["escorts"][0]["wage"],
+            100,
+            "the wage it was hired at is kept"
+        );
+        (1000 - session.pilot().cash(), shown, wage)
+    }
+
+    #[test]
+    fn by_the_engine_a_hired_escort_is_paid_the_wage_its_type_gives_now() {
+        assert_eq!(
+            wage_paid(Some(30_000), RuleSource::Engine),
+            (300, Some(EscortStatus { wage: Some(300) }), Some(100))
+        );
+        assert_eq!(
+            wage_paid(None, RuleSource::Engine).0,
+            100,
+            "with no record, the wage it was hired at"
+        );
+        assert_eq!(
+            Session::start(&catalog()).expect("starts").escort_wage(),
+            RuleSource::Engine,
+            "by default"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_hired_escort_is_paid_the_wage_it_was_hired_at() {
+        assert_eq!(
+            wage_paid(Some(30_000), RuleSource::Bible),
+            (100, Some(EscortStatus { wage: Some(100) }), Some(100))
+        );
+    }
+
+    #[test]
+    fn with_the_data_unchanged_both_readings_pay_alike() {
+        for rule in RuleSource::ALL {
+            assert_eq!(
+                wage_paid(Some(10_000), rule),
+                (100, Some(EscortStatus { wage: Some(100) }), Some(100)),
+                "{rule:?}"
+            );
+        }
     }
 
     #[test]
