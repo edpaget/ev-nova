@@ -988,7 +988,6 @@ fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
     assert!(close(bar, 149.0 * 2.0 / 3.0), "{bar}");
 }
 
-/// The alphas of the white quads covering the whole screen: a jump's fade.
 /// `ïntf` 128's bright text colour.
 const BRIGHT: nova_view::Color = nova_view::Color::from_rgb24(0x00FF_FFFF);
 /// `ïntf` 128's dim text colour.
@@ -1026,6 +1025,7 @@ fn a_ship_without_a_jumps_fuel_keeps_the_destination_dim_out_past_the_jump_dista
     assert!(game.ship().position.length() >= MIN_JUMP_DISTANCE);
 }
 
+/// The alphas of the white quads covering the whole screen: a jump's fade.
 fn screen_whites(frame: &Frame) -> Vec<f32> {
     frame
         .batches
