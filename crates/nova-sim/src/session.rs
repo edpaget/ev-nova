@@ -57,6 +57,12 @@
 //! and it is independent of the course.
 //! Arriving in another system clears it.
 //!
+//! Hyper Select ([`Session::select_next_system`], the original's `\`
+//! key) cycles the course through the systems linked with the one the
+//! ship is in, as the session's [`HyperSelectRule`] says (the engine's
+//! unless [`Session::with_hyper_select`] says otherwise), each press
+//! leaving a one-jump course and clearing the navigation target.
+//!
 //! Each day that goes by steps the planetary events (see
 //! [`market`](crate::market)), rolling whether each can start on the
 //! [`Chance`] the caller passes to [`Session::arrive`].
@@ -111,8 +117,8 @@ use crate::geometry::Vec2;
 use crate::glow::ramp_glow;
 use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{
-    JUMP_FUEL, JumpRefusal, MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump,
-    jump_bearing,
+    HyperSelectRule, JUMP_FUEL, JumpRefusal, MultiJumpRule, RouteError, StarMap, arrival,
+    check_jump, hops_per_jump, jump_bearing, next_hyper_destination,
 };
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
@@ -165,6 +171,8 @@ pub struct Session {
     jump: Option<Jump>,
     /// The rule a multi-jump follows.
     multi_jump: MultiJumpRule,
+    /// The rule Hyper Select follows.
+    hyper_select: HyperSelectRule,
     /// The goods traded and the events that move their prices, read when
     /// the session starts.
     goods: Goods,
@@ -244,6 +252,7 @@ impl Session {
             star_map: StarMap::new(catalog.star_map()),
             jump: None,
             multi_jump: MultiJumpRule::default(),
+            hyper_select: HyperSelectRule::default(),
             goods: Goods::read(catalog),
             thrusting: false,
             engine_glow: 0,
@@ -262,6 +271,14 @@ impl Session {
     #[must_use]
     pub fn with_multi_jump(mut self, rule: MultiJumpRule) -> Self {
         self.multi_jump = rule;
+        self
+    }
+
+    /// This session with Hyper Select following `rule`; the engine's by
+    /// default.
+    #[must_use]
+    pub fn with_hyper_select(mut self, rule: HyperSelectRule) -> Self {
+        self.hyper_select = rule;
         self
     }
 
@@ -513,6 +530,33 @@ impl Session {
         let stellars: Vec<StellarId> = self.sites.iter().map(|site| site.id).collect();
         self.nav_target = next_stellar(&stellars, self.nav_target);
         self.nav_target
+    }
+
+    /// Presses Hyper Select (the original's `\` key): plots a one-jump
+    /// course to the next system the session's [`HyperSelectRule`] cycles
+    /// to ([`next_hyper_destination`]) and gives it, clearing the stellar
+    /// navigation target, as the original switches its nav selection to
+    /// hyperspace. `None`, and nothing changes, during a jump (pre-jump
+    /// stage too) or when the system has no links to offer.
+    ///
+    /// The original keeps the plotted route and only moves its selection,
+    /// so cycling back to the route's first hop there keeps the whole
+    /// route; here the course is the jump target, so a press always
+    /// leaves a one-jump course.
+    pub fn select_next_system(&mut self) -> Option<SystemId> {
+        if self.jump.is_some() {
+            return None;
+        }
+        let next = next_hyper_destination(
+            &self.star_map,
+            self.pilot.system,
+            &self.pilot.course,
+            self.nav_target.is_some(),
+            self.hyper_select,
+        )?;
+        self.pilot.course = vec![next];
+        self.nav_target = None;
+        Some(next)
     }
 
     /// The stellar selected as the navigation target, if any.
@@ -865,7 +909,7 @@ mod tests {
     use crate::glow::GLOW_CRUISE;
     use crate::handling::ShipFields;
     use crate::hyperspace::{
-        ARRIVAL_DISTANCE, JumpRefusal, MIN_JUMP_DISTANCE, RouteError, StarMap,
+        ARRIVAL_DISTANCE, HyperSelectRule, JumpRefusal, MIN_JUMP_DISTANCE, RouteError, StarMap,
     };
     use crate::landing::StellarFlags;
     use crate::landing::{Clearance, LandOutcome, LandingRefusal};
@@ -3836,5 +3880,121 @@ mod tests {
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(session.nav_target(), None);
         assert_eq!(session.select_next_stellar(), Some(StellarId(140)));
+    }
+
+    // Hyper Select.
+
+    /// [`three_stellars`] with 130 a hub: it lists 134, 131 (twice),
+    /// itself, a missing 999 and 135, in that Con order; 136 lists 130
+    /// one way; 131 lists 132; 133 lists nothing and exists too.
+    fn hub() -> FakePilotCatalog {
+        let mut catalog = three_stellars();
+        catalog.star_map = vec![
+            star(130, (0.0, 0.0), &[134, 131, 131, 130, 999, 135]),
+            star(131, (600.0, 0.0), &[132]),
+            star(132, (600.0, 600.0), &[]),
+            star(133, (-600.0, 0.0), &[]),
+            star(134, (0.0, -600.0), &[]),
+            star(135, (0.0, 600.0), &[]),
+            star(136, (-600.0, -600.0), &[130]),
+        ];
+        catalog.systems.push(SystemId(133));
+        catalog
+    }
+
+    #[test]
+    fn the_hyper_select_key_cycles_the_listed_systems_and_wraps() {
+        let mut session = Session::start(&hub()).expect("starts");
+        for expected in [134, 131, 135, 134] {
+            assert_eq!(session.select_next_system(), Some(SystemId(expected)));
+            assert_eq!(session.course(), ids(&[expected]));
+        }
+    }
+
+    #[test]
+    fn a_hyper_select_replaces_a_multi_jump_course_with_one_jump() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.course(), ids(&[131, 132]));
+        assert_eq!(session.select_next_system(), Some(SystemId(135)));
+        assert_eq!(session.course(), ids(&[135]));
+    }
+
+    #[test]
+    fn a_hyper_select_clears_the_stellar_nav_target() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        session.select_next_stellar();
+        assert_eq!(
+            session.select_next_system(),
+            Some(SystemId(134)),
+            "a stellar targeted: the first listed, not the one after 131"
+        );
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(session.select_next_system(), Some(SystemId(131)));
+    }
+
+    #[test]
+    fn a_hyper_select_makes_no_save_due() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.select_next_system();
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_jump_goes_to_the_selected_system() {
+        let catalog = hub();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.select_next_system(), Some(SystemId(134)));
+        assert_eq!(session.select_next_system(), Some(SystemId(131)));
+        fly_out(&mut session);
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.course(), []);
+    }
+
+    #[test]
+    fn no_hyper_select_during_a_jump() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.select_next_system();
+        fly_out(&mut session);
+        session.player.heading = 90.0;
+        assert_eq!(session.begin_jump(), Ok(SystemId(134)));
+        assert_eq!(session.preparing_jump(), Some(SystemId(134)));
+        assert_eq!(session.select_next_system(), None, "pre-jump");
+        assert_eq!(session.course(), ids(&[134]));
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(session.jumping(), Some(SystemId(134)));
+        assert_eq!(session.select_next_system(), None, "in hyperspace");
+        assert_eq!(session.course(), ids(&[134]));
+    }
+
+    #[test]
+    fn a_system_with_no_listed_links_selects_nothing() {
+        let mut catalog = hub();
+        catalog.character = starting([Some(133), None, None, None]).character;
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.system(), SystemId(133));
+        assert_eq!(session.select_next_system(), None);
+        assert_eq!(session.course(), []);
+    }
+
+    #[test]
+    fn hyper_select_by_the_one_jump_course_reading_cycles_every_neighbour() {
+        let mut session = Session::start(&hub())
+            .expect("starts")
+            .with_hyper_select(HyperSelectRule::OneJumpCourse);
+        assert_eq!(session.select_next_system(), Some(SystemId(131)));
+        assert_eq!(session.select_next_system(), Some(SystemId(134)));
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(
+            session.select_next_system(),
+            Some(SystemId(131)),
+            "a multi-jump course: the first"
+        );
     }
 }
