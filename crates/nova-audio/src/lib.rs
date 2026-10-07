@@ -8,9 +8,9 @@
 //! - [`table`]: the [`SoundTable`] of which `snd ` each event plays, and
 //!   the original game's, [`SoundTable::ORIGINAL`].
 //! - [`settings`]: the player's [`AudioSettings`] (sound and music on or
-//!   off, and their separate volumes), the [`SettingsStore`] port they are
-//!   saved through, and the [`SettingsKeeper`], which reads them (falling
-//!   back to the defaults) and saves each change.
+//!   off, and their separate volumes), and the [`SettingsStore`] port
+//!   settings are saved through. The keeper that reads and saves them,
+//!   with the game's other settings, is `nova`'s.
 //! - [`file`]: the settings store's adapter, [`FileSettings`], over one
 //!   file on disk.
 //! - [`core`](mod@core): the [`AudioCore`], which turns each frame's
@@ -38,5 +38,5 @@ pub use crate::core::AudioCore;
 pub use crate::file::FileSettings;
 pub use crate::kira::{KiraAudio, OpenError, SoundBank};
 pub use port::{Audio, AudioCommand, Volume};
-pub use settings::{AudioSettings, SettingsKeeper, SettingsStore};
+pub use settings::{AudioSettings, SettingsStore};
 pub use table::SoundTable;

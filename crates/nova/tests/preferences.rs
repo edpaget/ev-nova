@@ -14,11 +14,11 @@ use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
+use nova::settings::{GameSettings, SettingsKeeper, game_settings};
 use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
 use nova_audio::settings::level_volume;
 use nova_audio::{
-    Audio, AudioCommand, AudioCore, AudioSettings, SettingsKeeper, SettingsStore, SoundTable,
-    Volume,
+    Audio, AudioCommand, AudioCore, AudioSettings, SettingsStore, SoundTable, Volume,
 };
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
@@ -231,11 +231,14 @@ fn seeded() -> MemorySettings {
     let store = MemorySettings::new();
     let (mut keeper, _) = SettingsKeeper::open(store.clone());
     keeper
-        .change(AudioSettings {
-            sound: true,
-            music: true,
-            effects_volume: level_volume(4),
-            music_volume: level_volume(6),
+        .change(GameSettings {
+            audio: AudioSettings {
+                sound: true,
+                music: true,
+                effects_volume: level_volume(4),
+                music_volume: level_volume(6),
+            },
+            hyperspace_effects: true,
         })
         .expect("seeds");
     store
@@ -259,23 +262,20 @@ impl Harness {
     /// The game started over `store`, its audio core playing `table`.
     fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
         let data = game_data();
-        let (keeper, warning) =
-            SettingsKeeper::open(Box::new(store.clone()) as Box<dyn SettingsStore>);
+        let (keeper, settings, warning) =
+            game_settings(Some(Box::new(store.clone()) as Box<dyn SettingsStore>));
         assert_eq!(warning, None);
-        let settings = keeper.settings();
+        let keeper = keeper.expect("a keeper");
         let screen = start_screen(Rc::clone(&data))
             .with_dialogs(
                 Rc::new(interface()),
                 Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
             )
-            .with_prefs(nova_view::Prefs {
-                sound: settings.prefs(),
-                ..nova_view::Prefs::default()
-            });
+            .with_prefs(settings.prefs());
         let audio = RecordingAudio::new();
         let log = audio.log();
-        let core =
-            AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, table).with_settings(settings);
+        let core = AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, table)
+            .with_settings(settings.audio);
         let window = FakeWindow;
         Self {
             app: App::new(&window, data, screen)
@@ -468,7 +468,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     let (restarted, warning) = SettingsKeeper::open(store.clone());
     assert_eq!(warning, None);
     assert_eq!(
-        restarted.settings(),
+        restarted.settings().audio,
         AudioSettings {
             sound: true,
             music: false,
@@ -505,7 +505,10 @@ fn a_failed_save_is_a_warning_and_the_change_still_plays() {
         ["nova: cannot save the settings: the disk is full".to_owned()]
     );
     let (unchanged, _) = SettingsKeeper::open(store.clone());
-    assert!(unchanged.settings().music, "the old settings stay saved");
+    assert!(
+        unchanged.settings().audio.music,
+        "the old settings stay saved"
+    );
 }
 
 /// An engine sound, for a table that has one.

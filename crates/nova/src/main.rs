@@ -53,12 +53,13 @@ use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nova::app::start_screen;
-use nova::audio::{game_audio, game_settings, music_warning};
+use nova::audio::{game_audio, music_warning};
 use nova::chance::SplitMix;
 use nova::config::{Os, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
 use nova::platform::Runner;
 use nova::saves::FilePilots;
+use nova::settings::game_settings;
 use nova::{cli, exit};
 use nova_audio::{FileSettings, KiraAudio, SettingsStore};
 use nova_data::fonts::open_charcoal;
@@ -117,10 +118,7 @@ fn main() -> ExitCode {
         });
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(SplitMix::new(seed)));
     let mut screen = start_screen(Rc::clone(&data))
-        .with_prefs(nova_view::Prefs {
-            sound: settings.prefs(),
-            ..nova_view::Prefs::default()
-        })
+        .with_prefs(settings.prefs())
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance));
     match open_interface(&dir) {
@@ -140,7 +138,7 @@ fn main() -> ExitCode {
     }
     let runner = Runner::new(Rc::clone(&data), screen, fonts);
     let runner = match audio {
-        Some(core) => runner.with_audio(core.with_settings(settings)),
+        Some(core) => runner.with_audio(core.with_settings(settings.audio)),
         None => runner,
     };
     let runner = match keeper {

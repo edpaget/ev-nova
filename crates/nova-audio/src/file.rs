@@ -73,8 +73,6 @@ impl SettingsStore for FileSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::port::Volume;
-    use crate::settings::{AudioSettings, SettingsKeeper};
 
     #[test]
     fn a_missing_file_is_nothing_saved() {
@@ -119,22 +117,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unusable_file_is_named_in_the_warning() {
-        let dir = tempfile::tempdir().expect("a temporary directory");
-        let path = dir.path().join("settings.json");
-        fs::write(&path, "not json").expect("writes");
-        let (_, warning) = SettingsKeeper::open(FileSettings::new(&path));
-        let warning = warning.expect("a warning");
-        assert!(
-            warning.starts_with(&format!(
-                "nova: the saved settings in {} are not usable (",
-                path.display()
-            )),
-            "{warning}"
-        );
-    }
-
-    #[test]
     fn other_read_errors_pass_through_naming_the_file() {
         let dir = tempfile::tempdir().expect("a temporary directory");
         // A directory where the file should be cannot be read as text.
@@ -161,26 +143,5 @@ mod tests {
             error.to_string().starts_with(&path.display().to_string()),
             "{error}"
         );
-    }
-
-    #[test]
-    fn settings_saved_to_the_file_survive_a_restart() {
-        let dir = tempfile::tempdir().expect("a temporary directory");
-        let path = dir.path().join("nova").join("settings.json");
-        let quiet = AudioSettings {
-            sound: false,
-            music: false,
-            effects_volume: Volume::new(0.25),
-            music_volume: Volume::new(0.75),
-        };
-        let (mut keeper, warning) = SettingsKeeper::open(FileSettings::new(&path));
-        assert_eq!(
-            (keeper.settings(), warning),
-            (AudioSettings::default(), None)
-        );
-        keeper.change(quiet).expect("saves");
-        drop(keeper);
-        let (restarted, warning) = SettingsKeeper::open(FileSettings::new(&path));
-        assert_eq!((restarted.settings(), warning), (quiet, None));
     }
 }

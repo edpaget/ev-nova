@@ -33,3 +33,4 @@ pub mod exit;
 pub mod fonts;
 pub mod platform;
 pub mod saves;
+pub mod settings;

@@ -32,8 +32,10 @@
 //!
 //! When the screen reports new preferences
 //! ([`Screen::take_prefs`], from the Preferences dialog), the app
-//! applies them to the audio core, if it has one, and saves them through
-//! the settings keeper it was built [`App::with_settings`], if any. The
+//! applies the sound ones to the audio core, if it has one, and saves
+//! them all, sound and Hyperspace Effects alike, as one
+//! [`GameSettings`] through the settings keeper it was built
+//! [`App::with_settings`], if any. The
 //! app prints nothing: a save that fails is kept as a warning until the
 //! caller takes it ([`App::take_warnings`]) and shows it. So are the
 //! warnings the screen reports ([`Screen::take_warnings`]), which the app
@@ -47,7 +49,7 @@
 
 use std::time::Duration;
 
-use nova_audio::{Audio, AudioCore, AudioSettings, SettingsKeeper, SettingsStore};
+use nova_audio::{Audio, AudioCore};
 use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, Routing};
 use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
@@ -55,6 +57,8 @@ use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenActio
 pub mod screen;
 
 pub use screen::{AppScreen, Showing, start_screen};
+
+use crate::settings::{GameKeeper, GameSettings};
 
 /// What the app needs from the window.
 pub trait WindowPort {
@@ -147,7 +151,7 @@ pub struct App<S, C = AppScreen> {
     failures: Vec<(ImageKey, ImageError)>,
     overlay: Option<DevOverlay>,
     audio: Option<AudioCore<Box<dyn Audio>>>,
-    settings: Option<SettingsKeeper<Box<dyn SettingsStore>>>,
+    settings: Option<GameKeeper>,
     warnings: Vec<String>,
 }
 
@@ -186,9 +190,9 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     }
 
     /// The app with the player's settings kept by `keeper`: each change
-    /// of the sound preferences is saved through it.
+    /// of the preferences is saved through it.
     #[must_use]
-    pub fn with_settings(mut self, keeper: SettingsKeeper<Box<dyn SettingsStore>>) -> Self {
+    pub fn with_settings(mut self, keeper: GameKeeper) -> Self {
         self.settings = Some(keeper);
         self
     }
@@ -202,19 +206,22 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// Gives the audio core, if there is one, the screen shown and the
     /// sounds the screen has made; without one, the sounds are let go.
     ///
-    /// First, a change of the sound preferences the screen reports is
-    /// applied to the core and saved through the keeper, each when there
-    /// is one; a failed save is kept as a warning.
+    /// First, a change of the preferences the screen reports is applied to
+    /// the core (the sound ones) and saved through the keeper (all of
+    /// them), each when there is one; a failed save is kept as a warning.
     fn feed_audio(&mut self) {
         if let Some(prefs) = self.screen.take_prefs() {
             let current = match (&self.settings, &self.audio) {
                 (Some(keeper), _) => keeper.settings(),
-                (None, Some(core)) => core.settings(),
-                (None, None) => AudioSettings::default(),
+                (None, Some(core)) => GameSettings {
+                    audio: core.settings(),
+                    ..GameSettings::default()
+                },
+                (None, None) => GameSettings::default(),
             };
-            let settings = current.with_prefs(prefs.sound);
+            let settings = current.with_prefs(prefs);
             if let Some(core) = &mut self.audio {
-                core.apply(settings);
+                core.apply(settings.audio);
             }
             if let Some(keeper) = &mut self.settings
                 && let Err(warning) = keeper.change(settings)
@@ -437,7 +444,7 @@ mod tests {
     use std::time::Duration;
 
     use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
-    use nova_audio::{Audio, AudioCommand, AudioCore, SettingsKeeper, SettingsStore, Volume};
+    use nova_audio::{Audio, AudioCommand, AudioCore, AudioSettings, SettingsStore, Volume};
     use nova_data::graphics::Image;
     use nova_render::recording::RecordingGpu;
     use nova_render::{ImageError, ImageSource, PixelRect};
@@ -1291,9 +1298,10 @@ mod tests {
         App::new(window, NoImages, screen)
     }
 
-    fn keeper(store: &MemorySettings) -> SettingsKeeper<Box<dyn SettingsStore>> {
-        let (keeper, warning) =
-            SettingsKeeper::open(Box::new(store.clone()) as Box<dyn SettingsStore>);
+    fn keeper(store: &MemorySettings) -> GameKeeper {
+        let (keeper, warning) = crate::settings::SettingsKeeper::open(
+            Box::new(store.clone()) as Box<dyn SettingsStore>
+        );
         assert_eq!(warning, None);
         keeper
     }
@@ -1333,16 +1341,55 @@ mod tests {
         let mut gpu = RecordingGpu::new();
         app.handle(key(Key::Space, true), &mut window, &mut gpu);
         assert_eq!(*log.borrow(), [], "music was not playing");
-        let (saved, _) = SettingsKeeper::open(store.clone());
-        assert!(!saved.settings().music);
+        let (saved, _) = crate::settings::SettingsKeeper::open(store.clone());
+        assert!(!saved.settings().audio.music);
         assert_eq!(store.writes(), 1);
         app.handle(key(Key::Space, true), &mut window, &mut gpu);
         assert_eq!(store.writes(), 2);
-        let (saved, _) = SettingsKeeper::open(store.clone());
-        assert_eq!(saved.settings().effects_volume, Volume::new(4.0 / 7.0));
+        let (saved, _) = crate::settings::SettingsKeeper::open(store.clone());
+        assert_eq!(
+            saved.settings().audio.effects_volume,
+            Volume::new(4.0 / 7.0)
+        );
         app.handle(key(Key::Space, true), &mut window, &mut gpu);
         assert_eq!(store.writes(), 2, "no change, no save");
         assert_eq!(app.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_hyperspace_change_is_saved_with_the_audio_settings() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
+        let store = MemorySettings::new();
+        let mut app = prefs_app(&window, &[MUSIC_OFF, effects_at(4)])
+            .with_audio(core)
+            .with_settings(keeper(&store));
+        let mut gpu = RecordingGpu::new();
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        log.borrow_mut().clear();
+        let no_effects = Prefs {
+            hyperspace_effects: false,
+            ..effects_at(4)
+        };
+        app.screen.prefs = vec![no_effects];
+        app.handle(key(Key::Space, true), &mut window, &mut gpu);
+        assert_eq!(*log.borrow(), [], "the audio is unchanged");
+        assert_eq!(store.writes(), 3);
+        let (saved, _) = crate::settings::SettingsKeeper::open(store.clone());
+        assert_eq!(
+            saved.settings(),
+            GameSettings {
+                audio: AudioSettings::default().with_prefs(effects_at(4).sound),
+                hyperspace_effects: false,
+            }
+        );
+        let saved: serde_json::Value =
+            serde_json::from_str(&store.text().expect("saved")).expect("JSON");
+        assert_eq!(saved["hyperspace_effects"], false);
+        assert_eq!(saved["music"], false);
     }
 
     /// With no keeper: the change still plays.
@@ -1417,8 +1464,8 @@ mod tests {
         let store = MemorySettings::new();
         let mut app = prefs_app(&window, &[MUSIC_OFF]).with_settings(keeper(&store));
         app.handle(key(Key::Space, true), &mut window, &mut RecordingGpu::new());
-        let (saved, _) = SettingsKeeper::open(store);
-        assert!(!saved.settings().music);
+        let (saved, _) = crate::settings::SettingsKeeper::open(store);
+        assert!(!saved.settings().audio.music);
     }
 
     #[test]

@@ -18,6 +18,9 @@ nova-render.workspace = true
 nova-sim.workspace = true
 nova-view.workspace = true
 pollster.workspace = true
+# The settings file's format: JSON, through a private record.
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 winit.workspace = true
 # The developer tools overlay, only with the `dev-tools` feature.
