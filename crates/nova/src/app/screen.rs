@@ -1417,15 +1417,16 @@ impl AppScreen {
     }
 
     /// The New Pilot dialog's input. A name already saved, or one no file
-    /// can be saved under, is refused; any other creates the pilot, saves
-    /// it at once (so Open Pilot lists it before it lands) and flies it.
+    /// can be saved under, is refused; any other creates the pilot with the
+    /// gender chosen, saves it at once (so Open Pilot lists it before it
+    /// lands) and flies it.
     fn new_pilot_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.new_pilot.as_mut().expect("open");
         dialog.input(input);
         let outcome = dialog.take_outcome();
         match outcome {
             Some(NewPilotOutcome::Cancel) => self.close_new_pilot(),
-            Some(NewPilotOutcome::Create(name)) => {
+            Some(NewPilotOutcome::Create { name, gender }) => {
                 let keeper = self.keeper();
                 let refusal = if pilot_key(&name).is_none() {
                     Some(UNUSABLE_NAME.to_owned())
@@ -1440,6 +1441,7 @@ impl AppScreen {
                 }
                 match Pilot::new(self.data.as_ref(), &name) {
                     Ok(pilot) => {
+                        let pilot = pilot.with_gender(gender);
                         if let Some(keeper) = keeper
                             && let Err(warning) = keeper.save(&pilot)
                         {
@@ -3821,6 +3823,35 @@ mod tests {
         assert_eq!(store.keys(), ["Ada"], "saved at once");
         assert_eq!(saved(&store, "Ada"), *pilot(&screen));
         assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_new_pilot_flies_and_is_saved_with_the_gender_chosen() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        choose(&mut screen, MenuChoice::NewPilot);
+        let at = screen
+            .new_pilot()
+            .expect("open")
+            .dialog()
+            .item_bounds(nova_view::ui::new_pilot::GENDER_ITEM)
+            .expect("the gender control")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+        type_text(&mut screen, "Ada");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(pilot(&screen).gender(), nova_sim::Gender::Female);
+        assert_eq!(saved(&store, "Ada").gender(), nova_sim::Gender::Female);
+        let mut screen = menu(&store);
+        create(&mut screen, "Bob");
+        assert_eq!(pilot(&screen).gender(), nova_sim::Gender::Male);
     }
 
     #[test]
