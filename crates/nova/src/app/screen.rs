@@ -89,8 +89,8 @@
 //! P, on any side, opens the Preferences dialog ("new prefs dialog") over
 //! the screen shown when the router has dialogs. Like the About dialog it
 //! is modal, and flight pauses under it. It opens on the player's sound
-//! preferences ([`AppScreen::with_sound_prefs`]), and each change is
-//! reported once through [`Screen::take_sound_prefs`] for the app to play
+//! preferences ([`AppScreen::with_prefs`]), and each change is
+//! reported once through [`Screen::take_prefs`] for the app to play
 //! and save. OK, Return or Escape closes it.
 //!
 //! The router reports every live screen's sounds through
@@ -122,7 +122,7 @@ use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, New
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::{DescDialog, DescriptionSource, DialogResources, PrefsDialog};
 use nova_view::{
-    Color, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction, Sound, SoundPrefs,
+    Color, DrawList, Input, Key, Navigator, Point, Prefs, Screen, ScreenAction, Sound,
 };
 
 /// The hint the router draws over every screen, where it goes, its size and
@@ -185,12 +185,12 @@ pub struct AppScreen {
     spaceport: Option<SpaceportView>,
     /// The sounds of screens closed since the sounds were last taken.
     sounds: Vec<Sound>,
-    /// The player's sound preferences, as last chosen.
-    sound_prefs: SoundPrefs,
+    /// The player's preferences, as last chosen.
+    prefs: Prefs,
     /// The Preferences dialog, while it is open.
     preferences: Option<PrefsDialog>,
     /// The preferences chosen since they were last taken, if they changed.
-    prefs_change: Option<SoundPrefs>,
+    prefs_change: Option<Prefs>,
     /// The main menu and where pilots are kept, once given.
     menu: Option<Menu>,
     /// The New Pilot dialog, while it is open over the main menu.
@@ -252,7 +252,7 @@ impl AppScreen {
             about: None,
             spaceport: None,
             sounds: Vec::new(),
-            sound_prefs: SoundPrefs::default(),
+            prefs: Prefs::default(),
             preferences: None,
             prefs_change: None,
             menu: None,
@@ -337,20 +337,17 @@ impl AppScreen {
         }
     }
 
-    /// The router with the player's sound preferences, `prefs`, which the
+    /// The router with the player's preferences, `prefs`, which the
     /// Preferences dialog opens on.
     #[must_use]
-    pub fn with_sound_prefs(self, prefs: SoundPrefs) -> Self {
-        Self {
-            sound_prefs: prefs,
-            ..self
-        }
+    pub fn with_prefs(self, prefs: Prefs) -> Self {
+        Self { prefs, ..self }
     }
 
-    /// The player's sound preferences, as last chosen.
+    /// The player's preferences, as last chosen.
     #[must_use]
-    pub fn sound_prefs(&self) -> SoundPrefs {
-        self.sound_prefs
+    pub fn prefs(&self) -> Prefs {
+        self.prefs
     }
 
     /// The About dialog, while it is open.
@@ -502,7 +499,7 @@ impl AppScreen {
             .and_then(|template| {
                 PrefsDialog::new(
                     &template,
-                    self.sound_prefs,
+                    self.prefs,
                     self.data.button_style(),
                     Rc::clone(&dialogs.metrics),
                 )
@@ -524,7 +521,7 @@ impl AppScreen {
         if let Some(dialog) = &mut self.preferences {
             dialog.input(input);
             if let Some(prefs) = dialog.take_change() {
-                self.sound_prefs = prefs;
+                self.prefs = prefs;
                 self.prefs_change = Some(prefs);
             }
             if dialog.closed() {
@@ -1125,9 +1122,9 @@ impl Screen for AppScreen {
         sounds
     }
 
-    /// The sound preferences chosen in the Preferences dialog, once after
-    /// each change.
-    fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+    /// The preferences chosen in the Preferences dialog, once after each
+    /// change.
+    fn take_prefs(&mut self) -> Option<Prefs> {
         self.prefs_change.take()
     }
 
@@ -2653,12 +2650,15 @@ mod tests {
         }
     }
 
-    fn quiet() -> SoundPrefs {
-        SoundPrefs {
-            sound: true,
-            music: false,
-            effects_level: 3,
-            music_level: 5,
+    fn quiet() -> Prefs {
+        Prefs {
+            sound: nova_view::SoundPrefs {
+                sound: true,
+                music: false,
+                effects_level: 3,
+                music_level: 5,
+            },
+            hyperspace_effects: true,
         }
     }
 
@@ -2695,36 +2695,42 @@ mod tests {
 
     #[test]
     fn the_dialog_opens_on_the_prefs_the_router_was_given() {
-        let mut screen = with_dialogs(data()).with_sound_prefs(quiet());
-        assert_eq!(screen.sound_prefs(), quiet());
+        let mut screen = with_dialogs(data()).with_prefs(quiet());
+        assert_eq!(screen.prefs(), quiet());
         open_prefs(&mut screen);
         assert_eq!(prefs_dialog(&screen).prefs(), quiet());
-        assert_eq!(AppScreen::new(data()).sound_prefs(), SoundPrefs::default());
+        assert_eq!(AppScreen::new(data()).prefs(), Prefs::default());
     }
 
     #[test]
     fn each_change_comes_out_once_and_the_dialog_reopens_on_it() {
-        let mut screen = with_dialogs(data()).with_sound_prefs(quiet());
-        assert_eq!(screen.take_sound_prefs(), None);
+        let mut screen = with_dialogs(data()).with_prefs(quiet());
+        assert_eq!(screen.take_prefs(), None);
         open_prefs(&mut screen);
         let music = prefs_dialog(&screen).music().rect().center();
         click_at(&mut screen, music);
-        let changed = SoundPrefs {
-            music: true,
+        let changed = Prefs {
+            sound: nova_view::SoundPrefs {
+                music: true,
+                ..quiet().sound
+            },
             ..quiet()
         };
-        assert_eq!(screen.take_sound_prefs(), Some(changed));
-        assert_eq!(screen.take_sound_prefs(), None, "once");
-        assert_eq!(screen.sound_prefs(), changed);
+        assert_eq!(screen.take_prefs(), Some(changed));
+        assert_eq!(screen.take_prefs(), None, "once");
+        assert_eq!(screen.prefs(), changed);
         let up = prefs_dialog(&screen).effects_volume().rects().up.center();
         click_at(&mut screen, up);
         screen.input(&key(Key::Enter, true));
         assert!(screen.preferences().is_none(), "closed");
-        let louder = SoundPrefs {
-            effects_level: 4,
+        let louder = Prefs {
+            sound: nova_view::SoundPrefs {
+                effects_level: 4,
+                ..changed.sound
+            },
             ..changed
         };
-        assert_eq!(screen.take_sound_prefs(), Some(louder));
+        assert_eq!(screen.take_prefs(), Some(louder));
         open_prefs(&mut screen);
         assert_eq!(prefs_dialog(&screen).prefs(), louder);
     }

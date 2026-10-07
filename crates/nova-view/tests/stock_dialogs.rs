@@ -13,8 +13,8 @@ use std::rc::Rc;
 use nova_data::graphics::{Image, PICT, decode_pict};
 use nova_data::records::dialog::Dlog;
 use nova_data::{GameData, InterfaceData, Record};
+use nova_view::Prefs;
 use nova_view::geometry::{Bounds, Point};
-use nova_view::sound::SoundPrefs;
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
 use nova_view::ui::new_pilot::{
@@ -353,7 +353,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
             .expect("converts");
         let prefs = PrefsDialog::new(
             &template,
-            SoundPrefs::default(),
+            Prefs::default(),
             ButtonStyle::STOCK,
             Rc::new(MonoMetrics),
         )

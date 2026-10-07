@@ -268,7 +268,10 @@ impl Harness {
                 Rc::new(interface()),
                 Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
             )
-            .with_sound_prefs(settings.prefs());
+            .with_prefs(nova_view::Prefs {
+                sound: settings.prefs(),
+                ..nova_view::Prefs::default()
+            });
         let audio = RecordingAudio::new();
         let log = audio.log();
         let core =
@@ -427,15 +430,15 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
 
     let music = harness.dialog().music().rect().center();
     harness.click(music);
-    assert!(!harness.dialog().prefs().music);
+    assert!(!harness.dialog().prefs().sound.music);
     let up = harness.dialog().effects_volume().rects().up.center();
     harness.click(up);
-    assert_eq!(harness.dialog().prefs().effects_level, 5);
+    assert_eq!(harness.dialog().prefs().sound.effects_level, 5);
     for _ in 0..4 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
-    assert_eq!(harness.dialog().prefs().music_level, 5);
+    assert_eq!(harness.dialog().prefs().sound.music_level, 5);
     let changed = harness.frame();
     assert!(texts(&changed).iter().any(|text| text == "5"));
     harness.press(Key::Enter);
@@ -476,7 +479,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     let mut again = Harness::new(&store);
     again.press(Key::Char('p'));
     assert_eq!(
-        again.dialog().prefs(),
+        again.dialog().prefs().sound,
         nova_view::SoundPrefs {
             sound: true,
             music: false,

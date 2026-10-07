@@ -117,7 +117,10 @@ fn main() -> ExitCode {
         });
     let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(SplitMix::new(seed)));
     let mut screen = start_screen(Rc::clone(&data))
-        .with_sound_prefs(settings.prefs())
+        .with_prefs(nova_view::Prefs {
+            sound: settings.prefs(),
+            ..nova_view::Prefs::default()
+        })
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance));
     match open_interface(&dir) {

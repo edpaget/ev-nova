@@ -50,7 +50,8 @@
 //!
 //! Screens report the sounds they make as events ([`sound`]): a button
 //! pressed or released, and the flight session's own. The audio side
-//! decides what each plays.
+//! decides what each plays. The player's preferences, sound and
+//! hyperspace effects alike, are reported as a [`Prefs`] ([`preferences`]).
 //!
 //! # Developer tools
 //!
@@ -68,6 +69,7 @@ pub mod image;
 pub mod input;
 pub mod menu;
 pub mod navigator;
+pub mod preferences;
 pub mod screen;
 pub mod ships;
 pub mod sound;
@@ -84,5 +86,6 @@ pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
 pub use input::{Input, Key, MouseButton};
 pub use navigator::Navigator;
+pub use preferences::Prefs;
 pub use screen::{Screen, ScreenAction, Showing};
 pub use sound::{Sound, SoundPrefs, UiSound};

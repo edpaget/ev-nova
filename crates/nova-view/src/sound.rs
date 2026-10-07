@@ -6,8 +6,8 @@
 //! - [`Sound`]: either, as a screen reports it through
 //!   [`Screen::take_sounds`](crate::Screen::take_sounds).
 //! - [`SoundPrefs`]: the player's sound preferences as the Preferences
-//!   dialog shows them, which a screen reports through
-//!   [`Screen::take_sound_prefs`](crate::Screen::take_sound_prefs).
+//!   dialog shows them, part of the [`Prefs`](crate::Prefs) a screen
+//!   reports through [`Screen::take_prefs`](crate::Screen::take_prefs).
 
 pub use nova_sim::SimSound;
 

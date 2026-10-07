@@ -26,6 +26,7 @@ use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
+use crate::preferences::Prefs;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, SoundPrefs};
 use crate::text::TextMetrics;
@@ -136,6 +137,7 @@ pub struct PrefsDialog {
     sound: Toggle,
     effects_volume: VolumeControl,
     music_volume: VolumeControl,
+    hyperspace_effects: bool,
     /// The check boxes for options that do not work yet, greyed.
     inert: Vec<Toggle>,
     style: ButtonStyle,
@@ -165,7 +167,7 @@ impl PrefsDialog {
     /// When the template lacks one of the items the dialog is built from.
     pub fn new(
         template: &DialogTemplate,
-        prefs: SoundPrefs,
+        prefs: Prefs,
         style: ButtonStyle,
         metrics: Rc<dyn TextMetrics>,
     ) -> Result<Self, String> {
@@ -196,6 +198,8 @@ impl PrefsDialog {
             down: place(VOLUME_DOWN_ITEM)?,
         };
         let music_rects = effects.offset(Point::new(0.0, MUSIC_VOLUME_OFFSET));
+        let hyperspace_effects = prefs.hyperspace_effects;
+        let prefs = prefs.sound;
         let music = Toggle::new(place(MUSIC_ITEM)?, MUSIC_LABEL, prefs.music);
         let sound = Toggle::new(place(SOUND_ITEM)?, SOUND_LABEL, prefs.sound);
         let size = (template.bounds.width(), template.bounds.height());
@@ -221,6 +225,7 @@ impl PrefsDialog {
             sound,
             effects_volume: VolumeControl::new(effects, EFFECTS_VOLUME_LABEL, prefs.effects_level),
             music_volume: VolumeControl::new(music_rects, MUSIC_VOLUME_LABEL, prefs.music_level),
+            hyperspace_effects,
             inert,
             dialog,
             style,
@@ -234,18 +239,21 @@ impl PrefsDialog {
 
     /// The preferences as the dialog shows them.
     #[must_use]
-    pub fn prefs(&self) -> SoundPrefs {
-        SoundPrefs {
-            sound: self.sound.on(),
-            music: self.music.on(),
-            effects_level: self.effects_volume.level(),
-            music_level: self.music_volume.level(),
+    pub fn prefs(&self) -> Prefs {
+        Prefs {
+            sound: SoundPrefs {
+                sound: self.sound.on(),
+                music: self.music.on(),
+                effects_level: self.effects_volume.level(),
+                music_level: self.music_volume.level(),
+            },
+            hyperspace_effects: self.hyperspace_effects,
         }
     }
 
     /// The preferences, once after each change: `None` when nothing has
     /// changed since they were last taken.
-    pub fn take_change(&mut self) -> Option<SoundPrefs> {
+    pub fn take_change(&mut self) -> Option<Prefs> {
         std::mem::take(&mut self.changed).then(|| self.prefs())
     }
 
@@ -418,7 +426,7 @@ impl Screen for PrefsDialog {
     }
 
     /// The preferences once after each change.
-    fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+    fn take_prefs(&mut self) -> Option<Prefs> {
         self.take_change()
     }
 }
@@ -512,12 +520,15 @@ mod tests {
         ltrb(left, top, right, bottom).offset(ORIGIN)
     }
 
-    fn start() -> SoundPrefs {
-        SoundPrefs {
-            sound: true,
-            music: false,
-            effects_level: 4,
-            music_level: 2,
+    fn start() -> Prefs {
+        Prefs {
+            sound: SoundPrefs {
+                sound: true,
+                music: false,
+                effects_level: 4,
+                music_level: 2,
+            },
+            hyperspace_effects: true,
         }
     }
 
@@ -676,15 +687,18 @@ mod tests {
         let mut dialog = prefs();
         let point = dialog.music().rect().center();
         click(&mut dialog, point);
-        assert!(dialog.prefs().music);
+        assert!(dialog.prefs().sound.music);
         let point = dialog.sound().rect().center();
         click(&mut dialog, point);
-        assert!(!dialog.prefs().sound);
+        assert!(!dialog.prefs().sound.sound);
         assert_eq!(
             dialog.take_change(),
-            Some(SoundPrefs {
-                music: true,
-                sound: false,
+            Some(Prefs {
+                sound: SoundPrefs {
+                    music: true,
+                    sound: false,
+                    ..start().sound
+                },
                 ..start()
             })
         );
@@ -710,8 +724,8 @@ mod tests {
         click(&mut dialog, effects.up.center());
         click(&mut dialog, effects.up.center());
         click(&mut dialog, music.down.center());
-        assert_eq!(dialog.prefs().effects_level, 6);
-        assert_eq!(dialog.prefs().music_level, 1);
+        assert_eq!(dialog.prefs().sound.effects_level, 6);
+        assert_eq!(dialog.prefs().sound.music_level, 1);
     }
 
     #[test]
@@ -802,14 +816,14 @@ mod tests {
         assert_eq!(dialog.prefs(), start(), "nothing focused");
         dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Space));
-        assert!(dialog.prefs().music);
+        assert!(dialog.prefs().sound.music);
         dialog.input(&held(Key::Space));
-        assert!(dialog.prefs().music, "a repeat does nothing");
+        assert!(dialog.prefs().sound.music, "a repeat does nothing");
         dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Space));
-        assert!(!dialog.prefs().sound);
+        assert!(!dialog.prefs().sound.sound);
         dialog.input(&key(Key::Up));
-        assert_eq!(dialog.prefs().effects_level, 4, "not a volume");
+        assert_eq!(dialog.prefs().sound.effects_level, 4, "not a volume");
     }
 
     #[test]
@@ -822,12 +836,15 @@ mod tests {
         }
         dialog.input(&key(Key::Up));
         dialog.input(&held(Key::Right));
-        assert_eq!(dialog.prefs().effects_level, 6);
+        assert_eq!(dialog.prefs().sound.effects_level, 6);
         dialog.input(&key(Key::Space));
         assert_eq!(
             dialog.prefs(),
-            SoundPrefs {
-                effects_level: 6,
+            Prefs {
+                sound: SoundPrefs {
+                    effects_level: 6,
+                    ..start().sound
+                },
                 ..start()
             }
         );
@@ -835,10 +852,10 @@ mod tests {
         dialog.input(&key(Key::Down));
         dialog.input(&held(Key::Left));
         dialog.input(&held(Key::Left));
-        assert_eq!(dialog.prefs().music_level, 0);
+        assert_eq!(dialog.prefs().sound.music_level, 0);
         dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Down));
-        assert_eq!(dialog.prefs().music_level, 0, "OK is focused");
+        assert_eq!(dialog.prefs().sound.music_level, 0, "OK is focused");
         assert!(!dialog.closed());
     }
 
@@ -871,15 +888,18 @@ mod tests {
     #[test]
     fn a_change_is_reported_once() {
         let mut dialog = prefs();
-        assert_eq!(dialog.take_sound_prefs(), None, "no change yet");
+        assert_eq!(dialog.take_prefs(), None, "no change yet");
         let point = dialog.effects_volume().rects().down.center();
         click(&mut dialog, point);
-        let changed = SoundPrefs {
-            effects_level: 3,
+        let changed = Prefs {
+            sound: SoundPrefs {
+                effects_level: 3,
+                ..start().sound
+            },
             ..start()
         };
-        assert_eq!(dialog.take_sound_prefs(), Some(changed));
-        assert_eq!(dialog.take_sound_prefs(), None, "once");
+        assert_eq!(dialog.take_prefs(), Some(changed));
+        assert_eq!(dialog.take_prefs(), None, "once");
         // A step that changes nothing is not a change.
         for _ in 0..3 {
             dialog.input(&key(Key::Tab));
@@ -887,9 +907,9 @@ mod tests {
         for _ in 0..3 {
             dialog.input(&key(Key::Down));
         }
-        dialog.take_sound_prefs();
+        dialog.take_prefs();
         dialog.input(&key(Key::Down));
-        assert_eq!(dialog.take_sound_prefs(), None, "already silent");
+        assert_eq!(dialog.take_prefs(), None, "already silent");
     }
 
     #[test]
@@ -903,25 +923,35 @@ mod tests {
             dialog.take_change()
         };
         let music = focused(1, key(Key::Space)).expect("Space on Music");
-        assert!(music.music);
+        assert!(music.sound.music);
         let sound = focused(2, key(Key::Space)).expect("Space on Sound");
-        assert!(!sound.sound);
+        assert!(!sound.sound.sound);
         let effects = focused(3, key(Key::Up)).expect("Up on the sound volume");
-        assert_eq!(effects.effects_level, 5);
+        assert_eq!(effects.sound.effects_level, 5);
         let volume = focused(4, key(Key::Down)).expect("Down on the music volume");
-        assert_eq!(volume.music_level, 1);
+        assert_eq!(volume.sound.music_level, 1);
         let clicked = |part: fn(&PrefsDialog) -> Point| {
             let mut dialog = prefs();
             let point = part(&dialog);
             click(&mut dialog, point);
             dialog.take_change()
         };
-        assert!(clicked(|d| d.music().rect().center()).expect("Music").music);
-        assert!(!clicked(|d| d.sound().rect().center()).expect("Sound").sound);
+        assert!(
+            clicked(|d| d.music().rect().center())
+                .expect("Music")
+                .sound
+                .music
+        );
+        assert!(
+            !clicked(|d| d.sound().rect().center())
+                .expect("Sound")
+                .sound
+                .sound
+        );
         let up = clicked(|d| d.effects_volume().rects().up.center());
-        assert_eq!(up.expect("the sound volume").effects_level, 5);
+        assert_eq!(up.expect("the sound volume").sound.effects_level, 5);
         let up = clicked(|d| d.music_volume().rects().up.center());
-        assert_eq!(up.expect("the music volume").music_level, 3);
+        assert_eq!(up.expect("the music volume").sound.music_level, 3);
     }
 
     #[test]
@@ -1093,10 +1123,7 @@ mod tests {
     #[test]
     fn debug_shows_the_prefs_and_the_focus() {
         let debug = format!("{:?}", prefs());
-        assert!(
-            debug.starts_with("PrefsDialog { prefs: SoundPrefs"),
-            "{debug}"
-        );
+        assert!(debug.starts_with("PrefsDialog { prefs: Prefs"), "{debug}");
         assert!(debug.contains("focus: None"), "{debug}");
         assert!(debug.contains("closed: false"), "{debug}");
     }

@@ -30,8 +30,8 @@
 //!
 //! # Settings
 //!
-//! When the screen reports new sound preferences
-//! ([`Screen::take_sound_prefs`], from the Preferences dialog), the app
+//! When the screen reports new preferences
+//! ([`Screen::take_prefs`], from the Preferences dialog), the app
 //! applies them to the audio core, if it has one, and saves them through
 //! the settings keeper it was built [`App::with_settings`], if any. The
 //! app prints nothing: a save that fails is kept as a warning until the
@@ -206,13 +206,13 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// applied to the core and saved through the keeper, each when there
     /// is one; a failed save is kept as a warning.
     fn feed_audio(&mut self) {
-        if let Some(prefs) = self.screen.take_sound_prefs() {
+        if let Some(prefs) = self.screen.take_prefs() {
             let current = match (&self.settings, &self.audio) {
                 (Some(keeper), _) => keeper.settings(),
                 (None, Some(core)) => core.settings(),
                 (None, None) => AudioSettings::default(),
             };
-            let settings = current.with_prefs(prefs);
+            let settings = current.with_prefs(prefs.sound);
             if let Some(core) = &mut self.audio {
                 core.apply(settings);
             }
@@ -443,8 +443,8 @@ mod tests {
     use nova_render::{ImageError, ImageSource, PixelRect};
     use nova_view::sound::SimSound;
     use nova_view::{
-        Color, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Point, Screen, ScreenAction,
-        Showing, Sound, SoundPrefs, UiSound,
+        Color, DrawList, ImageKey, ImageKind, Input, Key, MouseButton, Point, Prefs, Screen,
+        ScreenAction, Showing, Sound, SoundPrefs, UiSound,
     };
 
     use super::*;
@@ -1258,8 +1258,8 @@ mod tests {
 
     /// Reports `prefs` once, after the next input.
     struct PrefsScreen {
-        prefs: Vec<SoundPrefs>,
-        pending: Option<SoundPrefs>,
+        prefs: Vec<Prefs>,
+        pending: Option<Prefs>,
     }
 
     impl Screen for PrefsScreen {
@@ -1274,7 +1274,7 @@ mod tests {
 
         fn draw(&self, _list: &mut DrawList) {}
 
-        fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+        fn take_prefs(&mut self) -> Option<Prefs> {
             self.pending.take()
         }
 
@@ -1283,7 +1283,7 @@ mod tests {
         }
     }
 
-    fn prefs_app(window: &FakeWindow, prefs: &[SoundPrefs]) -> App<NoImages, PrefsScreen> {
+    fn prefs_app(window: &FakeWindow, prefs: &[Prefs]) -> App<NoImages, PrefsScreen> {
         let screen = PrefsScreen {
             prefs: prefs.to_vec(),
             pending: None,
@@ -1298,12 +1298,26 @@ mod tests {
         keeper
     }
 
-    const MUSIC_OFF: SoundPrefs = SoundPrefs {
-        sound: true,
-        music: false,
-        effects_level: 7,
-        music_level: 7,
+    const MUSIC_OFF: Prefs = Prefs {
+        sound: SoundPrefs {
+            sound: true,
+            music: false,
+            effects_level: 7,
+            music_level: 7,
+        },
+        hyperspace_effects: true,
     };
+
+    /// `MUSIC_OFF` with the sound effects at `level`.
+    fn effects_at(level: u8) -> Prefs {
+        Prefs {
+            sound: SoundPrefs {
+                effects_level: level,
+                ..MUSIC_OFF.sound
+            },
+            ..MUSIC_OFF
+        }
+    }
 
     #[test]
     fn a_change_of_prefs_plays_and_is_saved() {
@@ -1312,10 +1326,7 @@ mod tests {
         let log = audio.log();
         let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>);
         let store = MemorySettings::new();
-        let quieter = SoundPrefs {
-            effects_level: 4,
-            ..MUSIC_OFF
-        };
+        let quieter = effects_at(4);
         let mut app = prefs_app(&window, &[MUSIC_OFF, quieter])
             .with_audio(core)
             .with_settings(keeper(&store));
@@ -1367,7 +1378,7 @@ mod tests {
     /// A sounding screen that also reports `prefs` once, after an input.
     struct PrefsAndSounds {
         screen: SoundingScreen,
-        prefs: Option<SoundPrefs>,
+        prefs: Option<Prefs>,
     }
 
     impl Screen for PrefsAndSounds {
@@ -1387,7 +1398,7 @@ mod tests {
             self.screen.take_sounds()
         }
 
-        fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+        fn take_prefs(&mut self) -> Option<Prefs> {
             if self.screen.sounds.is_empty() {
                 None
             } else {
@@ -1414,11 +1425,8 @@ mod tests {
     fn each_failed_save_is_one_warning_until_taken() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let store = MemorySettings::new();
-        let quieter = SoundPrefs {
-            effects_level: 1,
-            ..MUSIC_OFF
-        };
-        let mut app = prefs_app(&window, &[MUSIC_OFF, quieter, SoundPrefs::default()])
+        let quieter = effects_at(1);
+        let mut app = prefs_app(&window, &[MUSIC_OFF, quieter, Prefs::default()])
             .with_settings(keeper(&store));
         store.fail_writes(true);
         let mut gpu = RecordingGpu::new();
