@@ -1633,6 +1633,15 @@ impl AppScreen {
         if self.open_pilot.is_some() {
             return self.open_pilot_input(input);
         }
+        // A ship's name is typed into its prompt, P and all.
+        if self
+            .spaceport
+            .as_ref()
+            .and_then(SpaceportView::open_shipyard)
+            .is_some_and(|shipyard| shipyard.naming().is_some())
+        {
+            return self.spaceport_input(input);
+        }
         if let Input::Key {
             key: Key::Char('p'),
             pressed,
@@ -4825,6 +4834,28 @@ mod tests {
             "no message follows"
         );
         assert!(spaceport(&screen).open_shipyard().is_some());
+    }
+
+    #[test]
+    fn typing_a_ship_name_never_opens_the_dialogs_under_it() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard(&store);
+        click_port_item(&mut screen, 9);
+        press_b(&mut screen);
+        for c in ['p', 'i', 'f'] {
+            screen.input(&key(Key::Char(c), true));
+            screen.input(&Input::Text(c));
+            screen.input(&key(Key::Char(c), false));
+        }
+        assert!(screen.preferences().is_none(), "no Preferences");
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        let prompt = name_prompt(&screen).expect("the name prompt");
+        assert_eq!(prompt.field().text(), "pif");
+        // Once it is closed, P opens Preferences again.
+        click_cancel(&mut screen);
+        assert!(name_prompt(&screen).is_none(), "declined");
+        screen.input(&key(Key::Char('p'), true));
+        assert!(screen.preferences().is_some(), "P is Preferences again");
     }
 
     #[test]
