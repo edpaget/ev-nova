@@ -2101,10 +2101,15 @@ mod tests {
             let back = ((to.x - tail.x).powi(2) + (to.y - tail.y).powi(2)).sqrt();
             assert!((back - ARROW_SIZE).abs() < 1e-3, "{back}");
         }
-        assert!(
-            arrows[1].0.y < to.y && arrows[2].0.y > to.y
-                || arrows[1].0.y > to.y && arrows[2].0.y < to.y
-        );
+        // The shaft points right, so the head's strokes splay 30° back
+        // from it: below, then above.
+        let near = |a: Point, b: Point| (a.x - b.x).abs() < 1e-3 && (a.y - b.y).abs() < 1e-3;
+        let back = ARROW_SIZE * 30_f32.to_radians().cos();
+        let aside = ARROW_SIZE * 30_f32.to_radians().sin();
+        let below = Point::new(to.x - back, to.y + aside);
+        let above = Point::new(to.x - back, to.y - aside);
+        assert!(near(arrows[1].0, below), "{arrows:?}");
+        assert!(near(arrows[2].0, above), "{arrows:?}");
         assert_eq!(arrows[3], (from, dot(&map, 130), GATE_WIDTH));
         assert_eq!(ARROW_SIZE, 10.0);
         let texts = texts(&list);
