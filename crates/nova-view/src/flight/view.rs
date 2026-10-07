@@ -96,7 +96,11 @@
 //!   out, and it fades in from white, and the message line says so in the
 //!   original's words ([`arrival_message`]). A multi-jump plays one
 //!   effect, toward the first system, and the scene loaded is the last
-//!   system it passes.
+//!   system it passes. With the Hyperspace Effects preference off
+//!   ([`FlightView::with_hyperspace_effects`],
+//!   [`FlightView::set_hyperspace_effects`]) a jump skips the fades, as
+//!   the original's does: the stars streak, the ship arrives as the streak
+//!   ends, and the arrival frame shows solid white once.
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -358,6 +362,9 @@ pub struct FlightView<C> {
     map_open: bool,
     /// The jump's effect, while it plays.
     jump: Option<JumpEffect>,
+    /// Whether jumps play their white fades, as the Hyperspace Effects
+    /// preference says.
+    hyperspace_effects: bool,
     /// What each day's events are rolled on.
     chance: SharedChance,
     /// What random running lights roll on.
@@ -409,6 +416,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             map,
             map_open: false,
             jump: None,
+            hyperspace_effects: true,
             session,
             scene,
             sheet,
@@ -430,6 +438,28 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
     #[must_use]
     pub fn with_chance(self, chance: SharedChance) -> Self {
         Self { chance, ..self }
+    }
+
+    /// The flight with jumps playing their white fades or not, as the
+    /// Hyperspace Effects preference is on (the default) or off.
+    #[must_use]
+    pub fn with_hyperspace_effects(self, hyperspace_effects: bool) -> Self {
+        Self {
+            hyperspace_effects,
+            ..self
+        }
+    }
+
+    /// Sets whether the next jump plays its white fades; a jump already
+    /// playing keeps its own.
+    pub fn set_hyperspace_effects(&mut self, hyperspace_effects: bool) {
+        self.hyperspace_effects = hyperspace_effects;
+    }
+
+    /// Whether jumps play their white fades.
+    #[must_use]
+    pub fn hyperspace_effects(&self) -> bool {
+        self.hyperspace_effects
     }
 
     /// The catalog the screen reads.
@@ -504,10 +534,10 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         };
         if let (None, Some(next)) = (&self.jump, session.jumping()) {
             let position = |id| session.star_map().position(id).unwrap_or_default();
-            self.jump = Some(JumpEffect::toward(
-                position(session.system()),
-                position(next),
-            ));
+            self.jump = Some(
+                JumpEffect::toward(position(session.system()), position(next))
+                    .with_fades(self.hyperspace_effects),
+            );
         }
     }
 
@@ -3277,6 +3307,89 @@ mod tests {
         ticks(&mut view, 3);
         assert_eq!(player(&view), stepped(arrived, THRUST, 3));
         assert_ne!(player(&view), arrived, "it flies again");
+    }
+
+    #[test]
+    fn hyperspace_effects_default_on() {
+        let mut view = flight();
+        assert!(view.hyperspace_effects());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(1250));
+        assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(128), "fading out");
+    }
+
+    /// Whether `list` draws the fade quad translucent: part of a fade.
+    fn translucent_fade(list: &DrawList) -> bool {
+        fade(list).is_some_and(|(_, color)| color.a < u8::MAX)
+    }
+
+    #[test]
+    fn with_effects_off_a_jump_streaks_then_arrives_without_fading() {
+        let mut view = flight().with_hyperspace_effects(false);
+        assert!(!view.hyperspace_effects());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let leaving = player(&view);
+
+        // The stars streak, with no fade over them.
+        view.tick(ms(500));
+        assert_eq!(player(&view), leaving, "frozen");
+        let list = drawn(&view);
+        let mut streaks = DrawList::new();
+        starfield::draw_streaked(&mut streaks, &view.camera(), at(1.0, 0.0), 256.0);
+        assert!(list.iter().take(streaks.len()).eq(streaks.iter()));
+        assert_eq!(fade(&list), None);
+        view.tick(ms(499));
+        assert_eq!(fade(&drawn(&view)), None);
+        assert_eq!(view.session().expect("flying").system(), SystemId(130));
+
+        // As the streak ends, the ship arrives and the screen is white once.
+        view.tick(ms(1));
+        let session = view.session().expect("flying");
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.jumping(), None);
+        let list = drawn(&view);
+        assert_eq!(
+            fade(&list),
+            Some((list.len() - 1, Color::WHITE)),
+            "opaque white over everything"
+        );
+        assert!(view.jump_effect().is_some(), "flashing");
+        assert_eq!(player(&view).position, Vec2::new(-1001.0, 0.0));
+
+        // Then plain flight, with no fade in.
+        view.tick(ms(33));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(fade(&drawn(&view)), None);
+    }
+
+    #[test]
+    fn set_hyperspace_effects_changes_the_next_jump() {
+        let mut view = flight().with_hyperspace_effects(false);
+        view.set_hyperspace_effects(true);
+        assert!(view.hyperspace_effects());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(1250));
+        assert!(translucent_fade(&drawn(&view)), "fading");
+
+        let mut view = flight();
+        view.set_hyperspace_effects(false);
+        assert!(!view.hyperspace_effects());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let mut faded = false;
+        for _ in 0..200 {
+            view.tick(TICK);
+            faded |= translucent_fade(&drawn(&view));
+        }
+        assert!(!faded, "never fades");
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
     }
 
     /// Ship 128 carrying the stock Multi-Jumping Organ (`oütf` 275,
