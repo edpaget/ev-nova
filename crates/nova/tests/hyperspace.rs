@@ -1,7 +1,8 @@
 //! The app jumping through hyperspace over synthetic game data, wired to
 //! the renderer and the recording Gpu and driven only by key and mouse
 //! events and redraws, as the window sends them: flight's map, opened with
-//! M, plots a course two jumps long, and J jumps along it. Each day a jump
+//! M, plots a course two jumps long, and J jumps along it, pressed again as
+//! soon as the new system fades in from white. Each day a jump
 //! takes rolls the planetary events on the app's source of chance, whether
 //! flight was entered with the developer's F or a pilot flies it, new from
 //! New Pilot or resumed from Open Pilot.
@@ -772,20 +773,42 @@ fn j_straight_after_arriving_jumps_on_to_the_next_system() {
     let mut harness = Harness::flying();
     harness.out_towards(130);
     harness.arrive_in(129);
-    // Input is accepted again once the jump effect is over.
+    // Once the jump effect is over, and a second later, J still goes on.
     let mut frames = 0;
     while harness.flight().jump_effect().is_some() {
         frames += 1;
         assert!(frames <= 120, "the jump effect never ended");
         harness.frame();
     }
-    // A second later, J goes straight on to Gamma.
     harness.run(1);
     harness.press(Key::Char('j'));
     let pressed = harness.frame();
     assert!(!shows(&pressed, TOO_CLOSE), "{:?}", texts(&pressed));
     assert!(harness.flight().jump_effect().is_some(), "jumping on");
     harness.run(2);
+    let session = harness.session();
+    assert_eq!(session.system(), SystemId(130));
+    assert_eq!(session.reserves().fuel.now, 100.0);
+}
+
+#[test]
+fn j_as_the_new_system_fades_in_jumps_on_to_the_next_system() {
+    let mut harness = Harness::flying();
+    harness.out_towards(130);
+    let first = harness.arrive_in(129);
+    assert!(white(&first) || fading(&first), "fading in from white");
+    harness.press(Key::Char('j'));
+    let pressed = harness.frame();
+    assert!(fading(&pressed), "still fading in");
+    assert!(!shows(&pressed, TOO_CLOSE), "{:?}", texts(&pressed));
+    let session = harness.session();
+    assert!(
+        session.preparing_jump() == Some(SystemId(130)) || session.jumping() == Some(SystemId(130)),
+        "jumping on: {:?} {:?}",
+        session.preparing_jump(),
+        session.jumping()
+    );
+    harness.run(4);
     let session = harness.session();
     assert_eq!(session.system(), SystemId(130));
     assert_eq!(session.reserves().fuel.now, 100.0);

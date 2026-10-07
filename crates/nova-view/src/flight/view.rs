@@ -111,14 +111,18 @@
 //!   the session waits while the stars streak and the screen, HUD
 //!   included, fades to white, as the original's whole-display fade does;
 //!   then the ship arrives at full white, the new system is read and laid
-//!   out, and it fades in from white, and the message line says so in the
-//!   original's words ([`arrival_message`]). A multi-jump plays one
+//!   out, and the message line says so in the original's words
+//!   ([`arrival_message`]). Flight resumes as the new system fades in
+//!   from white: the keys work again and the session flies, J included,
+//!   as under the original's asynchronous display fade. Only the streak
+//!   and the fade-out ignore the keys. A multi-jump plays one
 //!   effect, toward the first system, and the scene loaded is the last
 //!   system it passes. With the Hyperspace Effects preference off
 //!   ([`FlightView::with_hyperspace_effects`],
 //!   [`FlightView::set_hyperspace_effects`]) a jump skips the fades, as
 //!   the original's does: the stars streak, the ship arrives as the streak
-//!   ends, and the arrival frame shows solid white once.
+//!   ends, and the arrival frame shows solid white once, with flight
+//!   going on under it.
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -462,8 +466,12 @@ pub struct FlightView<C> {
     map: GalaxyMap,
     /// Whether the course map is shown.
     map_open: bool,
-    /// The jump's effect, while it plays.
+    /// The jump's effect, while it holds flight: the streak and the
+    /// fade-out, until the ship arrives.
     jump: Option<JumpEffect>,
+    /// The rest of an arrival's effect, once the ship has arrived: the
+    /// fade-in from white, or the white flash. Flight goes on under it.
+    fade_in: Option<JumpEffect>,
     /// Whether jumps play their white fades, as the Hyperspace Effects
     /// preference says.
     hyperspace_effects: bool,
@@ -518,6 +526,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             map,
             map_open: false,
             jump: None,
+            fade_in: None,
             hyperspace_effects: true,
             session,
             scene,
@@ -568,6 +577,14 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
     #[must_use]
     pub fn catalog(&self) -> &C {
         &self.catalog
+    }
+
+    /// Covers the screen in the arrival's fade-in, then in the jump's
+    /// fade-out, as far as each shows.
+    fn draw_fades(&self, list: &mut DrawList) {
+        for effect in [&self.fade_in, &self.jump].into_iter().flatten() {
+            effect.draw_fade(list);
+        }
     }
 
     /// Lets go of the flight keys and shows the course map.
@@ -695,7 +712,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
     fn came_through(&mut self, system: SystemId, effect: JumpEffect) {
         self.held.clear();
         self.load_arrival(system);
-        self.jump = Some(effect);
+        self.fade_in = Some(effect);
     }
 
     /// Presses the land key: requests clearance and shows the reply,
@@ -826,10 +843,12 @@ impl<C> FlightView<C> {
         &self.map
     }
 
-    /// The jump's effect, while it plays.
+    /// The jump's effect, while it plays: the streak and the fade-out
+    /// that hold flight, or else the arrival's fade-in (or flash) that
+    /// flight goes on under.
     #[must_use]
     pub fn jump_effect(&self) -> Option<&JumpEffect> {
-        self.jump.as_ref()
+        self.jump.as_ref().or(self.fade_in.as_ref())
     }
 
     /// The stellar the ship has just landed on, once: the router takes it
@@ -1124,21 +1143,26 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
     /// the stellars' animations. While the map is open nothing moves. During
     /// the pre-jump stage the session flies on, and the streak starts on
     /// the step the session begins the jump, which is the last step run.
-    /// While a jump plays only its effect moves, and the ship arrives when
-    /// the effect says.
+    /// While the stars streak and the old system fades out only the
+    /// jump's effect moves, and the ship arrives when the effect says.
+    /// From then on the session flies again while the rest of the effect,
+    /// the fade-in or the white flash, plays over it; that plays on with
+    /// the map open too, as the original's display fade does.
     fn tick(&mut self, dt: Duration) {
+        if let Some(effect) = &mut self.fade_in {
+            effect.advance(dt);
+            if effect.done() {
+                self.fade_in = None;
+            }
+        }
         if self.map_open {
             return;
         }
         if let Some(effect) = &mut self.jump {
             self.elapsed += dt;
-            let arrived = effect.advance(dt);
-            let done = effect.done();
-            if arrived {
+            if effect.advance(dt) {
                 self.arrive();
-            }
-            if done {
-                self.jump = None;
+                self.fade_in = self.jump.take().filter(|effect| !effect.done());
             }
             return;
         }
@@ -1161,6 +1185,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
             self.map.draw(list);
+            self.draw_fades(list);
             return;
         }
         let Some(scene) = &self.scene else {
@@ -1210,9 +1235,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             }
             Err(reason) => hud::draw_unavailable(list, reason),
         }
-        if let Some(effect) = &self.jump {
-            effect.draw_fade(list);
-        }
+        self.draw_fades(list);
     }
 
     /// Abandons any gesture on the course map.
@@ -3501,7 +3524,7 @@ mod tests {
         );
         view.tick(ms(100));
         assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(204), "shrinking");
-        assert_eq!(player(&view), arrived, "still frozen");
+        assert_eq!(player(&view), arrived, "at rest, no keys held");
 
         // Then plain flight.
         view.tick(ms(1200));
@@ -3809,6 +3832,128 @@ mod tests {
             stepped(arrived, Controls::default(), 5),
             "neither thrusting nor turning"
         );
+    }
+
+    #[test]
+    fn keys_are_ignored_while_the_old_system_fades_out() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(1250));
+        assert!(matches!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeOut(_))
+        ));
+        for k in [Key::Up, Key::Left, MAP, LAND, JUMP] {
+            assert_eq!(view.input(&key(k, true)), ScreenAction::None);
+        }
+        assert!(!view.map_open());
+        assert_eq!(view.message(), None);
+        assert_eq!(view.take_landing(), None);
+        arrive_now(&mut view);
+        let arrived = player(&view);
+        ticks(&mut view, 5);
+        assert_eq!(
+            player(&view),
+            stepped(arrived, Controls::default(), 5),
+            "neither thrusting nor turning"
+        );
+        assert_eq!(view.session().expect("flying").preparing_jump(), None);
+    }
+
+    /// Jumps from Sol to Alpha Centauri, on a course on to Barnard, and
+    /// stops 50 ms into the arrival's fade-in.
+    fn fading_in_on_course_to_barnard() -> View {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        plot(&mut view, 132);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(1550));
+        assert_eq!(system_of(&view), SystemId(131));
+        assert!(matches!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeIn(_))
+        ));
+        view
+    }
+
+    /// The fade's alpha as drawn, if it is.
+    fn fade_alpha(view: &View) -> Option<u8> {
+        fade(&drawn(view)).map(|(_, color)| color.a)
+    }
+
+    #[test]
+    fn j_during_the_arrival_fade_in_begins_the_next_jump() {
+        let mut view = fading_in_on_course_to_barnard();
+        view.input(&key(JUMP, true));
+        assert_eq!(view.message(), None, "not refused");
+        let session = view.session().expect("flying");
+        assert!(
+            session.preparing_jump() == Some(SystemId(132))
+                || session.jumping() == Some(SystemId(132)),
+            "{:?} {:?}",
+            session.preparing_jump(),
+            session.jumping()
+        );
+        let pressed = fade_alpha(&view).expect("still fading in");
+        view.tick(TICK);
+        let fading = fade_alpha(&view).expect("the old fade plays on");
+        assert!(fading < pressed, "{fading} < {pressed}");
+        for _ in 0..1000 {
+            if view.session().expect("flying").jumping().is_some() {
+                break;
+            }
+            view.tick(TICK);
+        }
+        assert_eq!(
+            view.session().expect("flying").jumping(),
+            Some(SystemId(132))
+        );
+        let effect = view.jump_effect().expect("the next jump's streak");
+        assert!(matches!(effect.phase(), JumpPhase::Streak(_)));
+        let toward = JumpEffect::toward(Vec2::new(600.0, 0.0), Vec2::new(0.0, 600.0));
+        assert_eq!(
+            effect.direction(),
+            toward.direction(),
+            "south-west, to Barnard"
+        );
+        arrive_now(&mut view);
+        assert_eq!(system_of(&view), SystemId(132));
+    }
+
+    #[test]
+    fn the_ship_flies_under_the_arrival_fade_in() {
+        let mut view = fading_in_on_course_to_barnard();
+        let arrived = player(&view);
+        let before = fade_alpha(&view).expect("fading in");
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert_eq!(player(&view), stepped(arrived, THRUST, 3));
+        let after = fade_alpha(&view).expect("still fading in");
+        assert!(after < before, "{after} < {before}");
+    }
+
+    #[test]
+    fn the_arrival_fade_plays_on_and_shows_over_the_map() {
+        let mut view = fading_in_on_course_to_barnard();
+        tap(&mut view, MAP);
+        assert!(view.map_open(), "the map opens under the fade");
+        let list = drawn(&view);
+        let (at_fade, color) = fade(&list).expect("the fade, over the map");
+        assert_eq!(at_fade, list.len() - 1, "drawn last");
+        let before = color.a;
+        view.tick(ms(100));
+        let after = fade_alpha(&view).expect("fading on with the map open");
+        assert!(after < before, "{after} < {before}");
+        view.tick(crate::flight::jump::FADE_IN_FOR);
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(view.jump_effect(), None, "the fade played out");
+        assert_eq!(fade(&drawn(&view)), None);
     }
 
     #[test]
@@ -4848,6 +4993,26 @@ mod tests {
             Some(SystemId(131)),
             "the map follows"
         );
+    }
+
+    #[test]
+    fn the_ship_flies_under_a_hypergates_fade_in() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        assert_eq!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeIn(0.0))
+        );
+        let arrived = player(&view);
+        assert_eq!(arrived.position, Vec2::new(100.0, 200.0));
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert_eq!(player(&view), stepped(arrived, THRUST, 3));
+        assert_ne!(player(&view).position, arrived.position, "it flies");
+        assert!(translucent_fade(&drawn(&view)), "still fading in");
     }
 
     #[test]

@@ -42,6 +42,28 @@
 //!   @0x54d1 fades the display back from white over 1.5 s, which
 //!   [`FADE_IN_FOR`] matches.
 //!
+//! # Input
+//!
+//! Only the streak and the fade-out hold flight; the player steers, fires
+//! and jumps again under the fade-in, as in the original:
+//!
+//! - `_FadeWhiteOut` @0x54d1-0x5527 calls `CGDisplayFade` with
+//!   `synchronous = 0`, so it returns at once, and clears `_screenFaded`
+//!   (@0x551e) before the fade has played.
+//! - `_HandlePlayer` @0x683bf-0x6841f calls it on the first frame after
+//!   arrival and falls through to @0x68424, the frame's flight and key
+//!   handling. Arrival (@0x6c1e3-0x6c20b) leaves the ship's jump state
+//!   (`ship+0x50`) at 0, and the key handlers gate only on it being
+//!   `<= 0`: the hyperspace key, `_QuickKeyCheck(keyPrefs+0x1c)`
+//!   @0x6b0da-0x6b0e6, among them.
+//! - `_ignoreKeys` is set only around the warm-up frame on entering play
+//!   (`_PlayGame` @0x457ff, `_EnterGameFromMainScreen` @0x1a37d) and
+//!   cleared in `_InitObjects` @0x1d3ce; `_QuickKeyCheck` @0xa0f5 masks
+//!   keys only for it and for the escort menu. No key handler reads
+//!   `_hyperGamma`.
+//! - `_PlayerEnterHypergate` @0x63c25-0x63c40 uses the same asynchronous
+//!   `_FadeWhiteOut`, so a gate's fade-in takes input too.
+//!
 //! The preference: `Keys.nib` binds the Hyperspace Effects check box to the
 //! `HyperspaceEffects` default through `NSNegateBoolean`, so a set default
 //! (settings+0x14) means "skip the effects", and a fresh install has them
