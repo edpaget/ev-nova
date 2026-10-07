@@ -21,8 +21,12 @@
 //! given one ([`SpaceportView::with_outfitter`],
 //! [`SpaceportView::take_outfit`], [`SpaceportView::set_outfitter`]), and
 //! the Shipyard's the stellar's shipyard, a [`ShipyardScreen`]
-//! ([`SpaceportView::with_shipyard`], [`SpaceportView::take_ship`],
-//! [`SpaceportView::set_shipyard`]). The Bar's opens the stellar's bar
+//! ([`SpaceportView::with_shipyard`], [`SpaceportView::set_shipyard`]):
+//! its Buy Ship asks for a ship ([`SpaceportView::take_ship_request`]),
+//! whoever flies the ship answers with its name prompt
+//! ([`SpaceportView::open_ship_naming`]), and the ship named at the
+//! prompt is taken through the spaceport ([`SpaceportView::take_ship`]),
+//! or the ship declined there ([`SpaceportView::take_declined_ship`]). The Bar's opens the stellar's bar
 //! likewise, a [`BarScreen`] over it, when given one
 //! ([`SpaceportView::with_bar`]): its Hire Escort asks for the ships for
 //! hire ([`SpaceportView::take_hire_request`]), whoever flies the ship
@@ -44,8 +48,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    HireList, Market, Order, OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, Shipyard,
-    sells_fuel, services,
+    HireList, Market, Order, OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, ShipNaming,
+    Shipyard, sells_fuel, services,
 };
 
 use super::bar::{BarScreen, Hiring};
@@ -56,7 +60,7 @@ use super::layout::{
 };
 use super::outfitter::{OutfitterCatalog, OutfitterScreen};
 use super::service::ServiceScreen;
-use super::shipyard::{ShipyardCatalog, ShipyardScreen};
+use super::shipyard::{ShipOrder, ShipyardCatalog, ShipyardScreen};
 use super::trade::TradeScreen;
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -194,6 +198,7 @@ impl std::fmt::Debug for Outfitting {
 struct Shipbuying {
     template: Result<DialogTemplate, String>,
     info: Result<DialogTemplate, String>,
+    text_input: Result<DialogTemplate, String>,
     shipyard: Shipyard,
     catalog: Rc<dyn ShipyardCatalog>,
 }
@@ -203,6 +208,7 @@ impl std::fmt::Debug for Shipbuying {
         f.debug_struct("Shipbuying")
             .field("template", &self.template)
             .field("info", &self.info)
+            .field("text_input", &self.text_input)
             .field("shipyard", &self.shipyard)
             .finish_non_exhaustive()
     }
@@ -439,14 +445,16 @@ impl SpaceportView {
 
     /// The spaceport with the stellar's shipyard, `shipyard`, which the
     /// Shipyard opens laid out by `template`, the "Shipyard" dialog, with
-    /// its info panel laid out by `info`, "Shipyard Info" (or saying why
-    /// there are none), each ship's picture and description read from
-    /// `catalog`. Without it, the Shipyard opens its placeholder.
+    /// its info panel laid out by `info`, "Shipyard Info", and its name
+    /// prompt by `text_input`, "Text Input" (or saying why there are
+    /// none), each ship's picture and description read from `catalog`.
+    /// Without it, the Shipyard opens its placeholder.
     #[must_use]
     pub fn with_shipyard(
         self,
         template: Result<DialogTemplate, String>,
         info: Result<DialogTemplate, String>,
+        text_input: Result<DialogTemplate, String>,
         shipyard: Shipyard,
         catalog: Rc<dyn ShipyardCatalog>,
     ) -> Self {
@@ -454,6 +462,7 @@ impl SpaceportView {
             shipbuying: Some(Shipbuying {
                 template,
                 info,
+                text_input,
                 shipyard,
                 catalog,
             }),
@@ -470,10 +479,36 @@ impl SpaceportView {
         }
     }
 
-    /// The ship the shipyard open asked for since it was last taken, once.
-    pub fn take_ship(&mut self) -> Option<ShipId> {
+    /// The ship the shipyard open requested with Buy Ship since it was
+    /// last taken, once.
+    pub fn take_ship_request(&mut self) -> Option<ShipId> {
+        match &mut self.open {
+            Some(Open::Shipyard(screen)) => screen.take_request(),
+            _ => None,
+        }
+    }
+
+    /// Opens `naming`'s name prompt over the shipyard open, if one is.
+    pub fn open_ship_naming(&mut self, naming: &ShipNaming) {
+        if let Some(Open::Shipyard(screen)) = &mut self.open {
+            screen.open_naming(naming);
+        }
+    }
+
+    /// The ship the shipyard open ordered at its name prompt, with its
+    /// name, since it was last taken, once.
+    pub fn take_ship(&mut self) -> Option<ShipOrder> {
         match &mut self.open {
             Some(Open::Shipyard(screen)) => screen.take_order(),
+            _ => None,
+        }
+    }
+
+    /// The ship declined at the shipyard open's name prompt since it was
+    /// last taken, once.
+    pub fn take_declined_ship(&mut self) -> Option<ShipId> {
+        match &mut self.open {
+            Some(Open::Shipyard(screen)) => screen.take_declined(),
             _ => None,
         }
     }
@@ -673,6 +708,7 @@ impl SpaceportView {
                     Open::Shipyard(Box::new(ShipyardScreen::new(
                         layout,
                         shipbuying.info.clone(),
+                        shipbuying.text_input.clone(),
                         shipbuying.shipyard.clone(),
                         Rc::clone(&shipbuying.catalog),
                         port.style,
@@ -1886,7 +1922,9 @@ mod tests {
     // The Shipyard.
 
     use crate::spaceport::shipyard::{ShipBaseImages, ShipyardCatalog, ShipyardScreen};
-    use nova_sim::{ShipId, ShipRow, ShipSpecs, Shipyard};
+    use nova_sim::{ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
+
+    use crate::spaceport::shipyard::ShipOrder;
 
     impl ShipBaseImages for FakePort {
         fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
@@ -1965,6 +2003,7 @@ mod tests {
         view_of(&shipyard_port()).with_shipyard(
             template,
             Err("no DLOG 1005".to_owned()),
+            Err("no DLOG 3001".to_owned()),
             yard(17_500),
             art,
         )
@@ -2016,7 +2055,10 @@ mod tests {
             Some(Service::Shipyard)
         );
         assert!(view.open_shipyard().is_none());
+        assert_eq!(view.take_ship_request(), None);
+        view.open_ship_naming(&naming());
         assert_eq!(view.take_ship(), None);
+        assert_eq!(view.take_declined_ship(), None);
     }
 
     #[test]
@@ -2045,7 +2087,26 @@ mod tests {
             "it opens on the latest"
         );
         view.input(&key(Key::Char('b')));
-        assert_eq!(view.take_ship(), Some(ShipId(129)));
+        assert_eq!(view.take_ship_request(), Some(ShipId(129)));
+        assert_eq!(view.take_ship_request(), None, "once");
+        assert_eq!(view.take_ship(), None, "not named yet");
+        view.open_ship_naming(&naming());
+        let prompt = view
+            .open_shipyard()
+            .and_then(ShipyardScreen::naming)
+            .expect("the prompt");
+        assert_eq!(prompt.field().text(), "Ship 129 491");
+        view.input(&Input::Text('b'));
+        view.input(&Input::Text('K'));
+        view.input(&key(Key::Enter));
+        assert_eq!(
+            view.take_ship(),
+            Some(ShipOrder {
+                ship: ShipId(129),
+                name: "K".to_owned(),
+            }),
+            "the B that asked typed nothing"
+        );
         assert_eq!(view.take_ship(), None, "once");
         assert_eq!(view.take_outfit(), None, "not an outfit");
         assert_eq!(view.take_trade(), None, "nor a trade");
@@ -2065,6 +2126,35 @@ mod tests {
         );
     }
 
+    fn naming() -> ShipNaming {
+        ShipNaming {
+            ship: ShipId(129),
+            prompt: "Please name your new Heavy Shuttle: ".to_owned(),
+            default: "Ship 129 491".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_ship_declined_at_its_prompt_is_taken_through_the_spaceport() {
+        let mut view = shipbuying(Ok(shipyard_template()));
+        click_item(&mut view, 9);
+        let buy = shipyard_item(&view, 7);
+        click(&mut view, buy);
+        assert_eq!(view.take_ship_request(), Some(ShipId(129)));
+        view.open_ship_naming(&naming());
+        let cancel = view
+            .open_shipyard()
+            .and_then(ShipyardScreen::naming)
+            .and_then(|prompt| prompt.dialog().item_bounds(6))
+            .expect("Cancel")
+            .center();
+        click(&mut view, cancel);
+        assert_eq!(view.take_declined_ship(), Some(ShipId(129)));
+        assert_eq!(view.take_declined_ship(), None, "once");
+        assert_eq!(view.take_ship(), None);
+        assert!(view.open_shipyard().is_some(), "back in the shipyard");
+    }
+
     #[test]
     fn the_shipyard_takes_cancel_pointer_and_its_sounds_are_kept() {
         let mut view = shipbuying(Ok(shipyard_template()));
@@ -2079,7 +2169,7 @@ mod tests {
         view.input(&button(true));
         view.cancel_pointer();
         view.input(&button(false));
-        assert_eq!(view.take_ship(), None, "the click was abandoned");
+        assert_eq!(view.take_ship_request(), None, "the click was abandoned");
         assert_eq!(view.take_sounds(), [DOWN]);
         let done = shipyard_item(&view, 1);
         click(&mut view, done);
@@ -2212,7 +2302,7 @@ mod tests {
         view.input(&key(Key::Char('h')));
         assert_eq!(view.take_hire(), Some(ShipId(128)));
         assert_eq!(view.take_hire(), None, "once");
-        assert_eq!(view.take_ship(), None, "not a ship bought");
+        assert_eq!(view.take_ship_request(), None, "not a ship bought");
         view.set_hire(&hirelings(2, false));
         let bar = view.open_bar().expect("back in the bar");
         assert!(bar.hire_screen().is_none());

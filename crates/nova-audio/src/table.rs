@@ -26,6 +26,8 @@ pub struct SoundTable {
     pub button_down: Option<SoundId>,
     /// Plays as a pressed interface button comes back up.
     pub button_up: Option<SoundId>,
+    /// Plays as the interface refuses what was asked of it.
+    pub alert: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -47,6 +49,10 @@ impl SoundTable {
     /// - `button_down`: 600, "Menu button down" (the resource's name, and
     ///   the guide's).
     /// - `button_up`: 601, "Menu button up" (likewise).
+    /// - `alert`: none. The original calls `SysBeep`, the system's alert
+    ///   (as the Text Input dialog refuses a name too long,
+    ///   `_EVTextInputDialog` @0x554a9-0x554e7), which no stock `snd `
+    ///   holds.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -55,6 +61,7 @@ impl SoundTable {
         arrival: Some(SoundId(130)),
         button_down: Some(SoundId(600)),
         button_up: Some(SoundId(601)),
+        alert: None,
     };
 }
 
@@ -72,5 +79,6 @@ mod tests {
         assert_eq!(table.arrival, Some(SoundId(130)), "Warp out");
         assert_eq!(table.button_down, Some(SoundId(600)), "Menu button down");
         assert_eq!(table.button_up, Some(SoundId(601)), "Menu button up");
+        assert_eq!(table.alert, None, "the system's alert");
     }
 }

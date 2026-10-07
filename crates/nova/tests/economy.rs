@@ -935,7 +935,9 @@ fn outfit_for_the_ship(game: &mut Harness, store: &MemoryPilots) {
 fn buy_the_ship(game: &mut Harness, store: &MemoryPilots) {
     // 6. The shipyard again: the licence meets the ship's Require, and the
     //    tank adds half its price to the trade-in; the licence, persistent,
-    //    adds nothing. B buys the ship: 6,650 - 8,000 + 3,500.
+    //    adds nothing. B asks the ship's name, in the built-in prompt
+    //    without the interface file's "Text Input", and Return takes the
+    //    default and buys the ship: 6,650 - 8,000 + 3,500.
     game.open(9);
     assert_eq!(game.shipyard().shipyard().check(NEW), Ok(()));
     let shown = texts(&game.frame());
@@ -943,7 +945,10 @@ fn buy_the_ship(game: &mut Harness, store: &MemoryPilots) {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
     let writes = store.writes();
-    game.press(KeyCode::KeyB);
+    game.type_key(KeyCode::KeyB, Some("b"));
+    assert!(game.shipyard().naming().is_some(), "the name prompt");
+    assert_eq!(store.writes(), writes, "nothing bought yet");
+    game.press(KeyCode::Enter);
     assert_eq!(game.pilot().cash(), 2150);
     assert_eq!(store.writes(), writes + 1, "saved");
 

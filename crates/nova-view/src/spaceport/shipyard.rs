@@ -23,14 +23,23 @@
 //! info box shows its price, what the player's ship trades in for, and
 //! the final price (#225-227).
 //!
-//! Buy Ship, clicked or with B, asks for the selected ship, and is greyed
+//! Buy Ship, clicked or with B, requests the selected ship, and is greyed
 //! when it cannot be bought (the original has no words for why). B acts
 //! on a press only, never a key repeat, unlike the Outfitter's: a held B
 //! would otherwise trade the ship just bought for another of its class,
-//! and its outfits with it. The screen only records the order
-//! ([`ShipyardScreen::take_order`]): whoever holds the session makes it
-//! and gives back the shipyard as it now is
-//! ([`ShipyardScreen::set_shipyard`]).
+//! and its outfits with it. The screen only records the request
+//! ([`ShipyardScreen::take_request`]): whoever holds the session asks for
+//! the new ship's name ([`ShipNaming`]) and opens the "Text Input" prompt
+//! with it ([`ShipyardScreen::open_naming`], [`TextInputDialog`]), as the
+//! original asks before it buys (`_DoShipyardDialog` @0x5eb6c). The
+//! prompt takes every input while it is open; when B asked, the B typed
+//! is dropped, as the original flushes it. OK records the order, the ship
+//! and the name confirmed ([`ShipyardScreen::take_order`]): whoever holds
+//! the session makes it and gives back the shipyard as it now is
+//! ([`ShipyardScreen::set_shipyard`]). Cancel records the ship declined
+//! ([`ShipyardScreen::take_declined`]), whose roll the session draws
+//! again. Without the "Text Input" dialog, the prompt is laid out by
+//! [`TextInputDialog::fallback`].
 //!
 //! Info, clicked or with I, opens the "Shipyard Info" panel (`DLOG`/`DITL`
 //! 1005 over `PICT` 8506) over the shipyard: the ship's name in item 3,
@@ -46,7 +55,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::hyperspace::max_jumps;
-use nova_sim::{ShipId, ShipRow, ShipSpecs, Shipyard};
+use nova_sim::shipyard::SHIP_NAME_CHARS;
+use nova_sim::{ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
 
 use super::catalog::SpaceportCatalog;
 use super::grid::{
@@ -67,6 +77,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::text_input::{TextInputDialog, TextInputOutcome};
 
 /// The "Shipyard" dialog's `DLOG` (and `DITL`) ID.
 pub const SHIPYARD_DIALOG: i16 = 1004;
@@ -243,6 +254,24 @@ struct Laid {
     shown: Option<(ShipId, Shown)>,
     /// The info panel's template, if there is one.
     info: Option<DialogTemplate>,
+    /// The name prompt's template, if there is one.
+    text_input: Option<DialogTemplate>,
+}
+
+/// A ship to buy, and the name the player confirmed for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShipOrder {
+    /// The ship class.
+    pub ship: ShipId,
+    /// The name, as typed.
+    pub name: String,
+}
+
+/// The name prompt, open, and the ship it names.
+#[derive(Clone, Debug)]
+struct Naming {
+    ship: ShipId,
+    prompt: TextInputDialog,
 }
 
 /// The info panel, open: "Shipyard Info" over [`INFO_BACKGROUND`], the
@@ -331,8 +360,16 @@ pub struct ShipyardScreen {
     grid: CellGrid,
     /// The info panel, while it is open.
     panel: Option<Panel>,
-    /// The ship asked for, until it is taken.
-    order: Option<ShipId>,
+    /// The ship requested, until it is taken, and whether B asked.
+    request: Option<(ShipId, bool)>,
+    /// Whether the request last taken was asked by B.
+    asked_by_key: bool,
+    /// The name prompt, while it is open.
+    naming: Option<Naming>,
+    /// The ship ordered, named, until it is taken.
+    order: Option<ShipOrder>,
+    /// The ship declined at its name prompt, until it is taken.
+    declined: Option<ShipId>,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -341,13 +378,15 @@ impl ShipyardScreen {
     /// The shipyard `shipyard`, laid out by `layout`: the "Shipyard"
     /// dialog's template and the metrics its text is measured by, or why
     /// there are none; the info panel by `info`, "Shipyard Info" (Info is
-    /// greyed without it). Its buttons are labelled in `style`, and each
+    /// greyed without it); and the name prompt by `text_input`, "Text
+    /// Input" (or else its fallback). Its buttons are labelled in `style`, and each
     /// ship's picture and description read from `catalog`, which gives
     /// the ships' base images once, now. The first cell is selected.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
         info: Result<DialogTemplate, String>,
+        text_input: Result<DialogTemplate, String>,
         shipyard: Shipyard,
         catalog: Rc<dyn ShipyardCatalog>,
         style: ButtonStyle,
@@ -380,6 +419,7 @@ impl ShipyardScreen {
                 metrics: MetricsHandle(metrics),
                 shown: None,
                 info,
+                text_input: text_input.ok(),
             }
         });
         let bases = if laid.is_ok() {
@@ -395,7 +435,11 @@ impl ShipyardScreen {
             style,
             grid: CellGrid::default(),
             panel: None,
+            request: None,
+            asked_by_key: false,
+            naming: None,
             order: None,
+            declined: None,
             closed: false,
             sounds: Vec::new(),
         };
@@ -450,9 +494,65 @@ impl ShipyardScreen {
         self.closed
     }
 
-    /// The ship asked for since it was last taken, once.
-    pub fn take_order(&mut self) -> Option<ShipId> {
+    /// The ship requested with Buy Ship since it was last taken, once.
+    pub fn take_request(&mut self) -> Option<ShipId> {
+        let (ship, by_key) = self.request.take()?;
+        self.asked_by_key = by_key;
+        Some(ship)
+    }
+
+    /// Opens the name prompt for `naming`'s ship over the shipyard, laid
+    /// out by the "Text Input" dialog or its fallback. When B asked for
+    /// it, the B typed is dropped. Nothing opens when the shipyard could
+    /// not be laid out.
+    pub fn open_naming(&mut self, naming: &ShipNaming) {
+        let Ok(laid) = &self.laid else {
+            return;
+        };
+        let metrics = Rc::clone(&laid.metrics.0);
+        let built = laid.text_input.as_ref().and_then(|template| {
+            TextInputDialog::new(
+                template,
+                &naming.prompt,
+                &naming.default,
+                SHIP_NAME_CHARS,
+                self.style,
+                Rc::clone(&metrics),
+            )
+            .ok()
+        });
+        let mut prompt = built.unwrap_or_else(|| {
+            TextInputDialog::fallback(
+                &naming.prompt,
+                &naming.default,
+                SHIP_NAME_CHARS,
+                self.style,
+                metrics,
+            )
+        });
+        if self.asked_by_key {
+            prompt.flush_typed_key();
+        }
+        self.naming = Some(Naming {
+            ship: naming.ship,
+            prompt,
+        });
+    }
+
+    /// The name prompt, while it is open.
+    #[must_use]
+    pub fn naming(&self) -> Option<&TextInputDialog> {
+        self.naming.as_ref().map(|naming| &naming.prompt)
+    }
+
+    /// The ship ordered at its name prompt since it was last taken, once.
+    pub fn take_order(&mut self) -> Option<ShipOrder> {
         self.order.take()
+    }
+
+    /// The ship declined at its name prompt since it was last taken, once.
+    pub fn take_declined(&mut self) -> Option<ShipId> {
+        self.declined.take()
     }
 
     /// Where cell `index` (counted from the grid's first row shown) is,
@@ -508,10 +608,11 @@ impl ShipyardScreen {
         laid.shown = Some((ship, shown));
     }
 
-    /// Asks for the selected ship, if it can be bought.
-    fn ask(&mut self) {
+    /// Requests the selected ship, if it can be bought, saying whether B
+    /// asked.
+    fn ask(&mut self, by_key: bool) {
         if let Some(row) = self.selected_row().filter(|row| row.buy.is_ok()) {
-            self.order = Some(row.id);
+            self.request = Some((row.id, by_key));
         }
     }
 
@@ -544,7 +645,7 @@ impl ShipyardScreen {
         let count = self.shipyard.rows.len();
         match item {
             DONE_ITEM => self.closed = true,
-            BUY_ITEM => self.ask(),
+            BUY_ITEM => self.ask(false),
             INFO_ITEM => self.open_info(),
             SCROLL_UP_ITEM => self.grid.scroll(false, count),
             SCROLL_DOWN_ITEM => self.grid.scroll(true, count),
@@ -565,6 +666,30 @@ impl ShipyardScreen {
         };
         if panel.input(input, &mut self.sounds) {
             self.panel = None;
+        }
+    }
+
+    /// The name prompt's input: OK orders the ship, and Cancel declines
+    /// it, each closing the prompt.
+    fn naming_input(&mut self, input: &Input) {
+        let Some(naming) = &mut self.naming else {
+            return;
+        };
+        naming.prompt.input(input);
+        self.sounds.extend(naming.prompt.take_sounds());
+        match naming.prompt.take_outcome() {
+            Some(TextInputOutcome::Confirm(name)) => {
+                self.order = Some(ShipOrder {
+                    ship: naming.ship,
+                    name,
+                });
+                self.naming = None;
+            }
+            Some(TextInputOutcome::Cancel) => {
+                self.declined = Some(naming.ship);
+                self.naming = None;
+            }
+            None => {}
         }
     }
 
@@ -627,8 +752,8 @@ impl ShipyardScreen {
 }
 
 impl Screen for ShipyardScreen {
-    /// Every input goes to the shipyard, or to its info panel while that
-    /// is open; it never quits.
+    /// Every input goes to the shipyard, or to its name prompt or info
+    /// panel while that is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.laid.is_err() {
             if let Input::Key {
@@ -639,6 +764,10 @@ impl Screen for ShipyardScreen {
             {
                 self.closed = true;
             }
+            return ScreenAction::None;
+        }
+        if self.naming.is_some() {
+            self.naming_input(input);
             return ScreenAction::None;
         }
         if self.panel.is_some() {
@@ -656,7 +785,7 @@ impl Screen for ShipyardScreen {
         if arrow {
             self.selected_changed();
         } else if pressed_once(BUY_KEY) {
-            self.ask();
+            self.ask(true);
         } else if pressed_once(INFO_KEY) {
             self.open_info();
         } else if let Some(index) = match *input {
@@ -707,10 +836,15 @@ impl Screen for ShipyardScreen {
         );
         laid.dialog.draw(list);
         self.draw_panel(laid, list);
+        if let Some(naming) = &self.naming {
+            naming.prompt.draw(list);
+        }
     }
 
     fn cancel_pointer(&mut self) {
-        if let Some(panel) = &mut self.panel {
+        if let Some(naming) = &mut self.naming {
+            naming.prompt.cancel_pointer();
+        } else if let Some(panel) = &mut self.panel {
             panel.cancel_pointer();
         } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
@@ -917,6 +1051,7 @@ mod tests {
         ShipyardScreen::new(
             Ok(layout()),
             Ok(info_template()),
+            Ok(text_input_template()),
             shipyard,
             catalog,
             ButtonStyle::STOCK,
@@ -1358,26 +1493,26 @@ mod tests {
         press(&mut screen, Key::Right);
         assert!(!enabled(&screen, BUY_SHIP_LABEL), "not for sale");
         press(&mut screen, BUY_KEY);
-        assert_eq!(screen.take_order(), None, "greyed asks for nothing");
+        assert_eq!(screen.take_request(), None, "greyed asks for nothing");
         assert!(enabled(&screen, DONE_LABEL));
         assert!(enabled(&screen, INFO_LABEL));
     }
 
     #[test]
-    fn buy_ship_asks_for_the_selected_ship_and_b_only_on_a_press() {
+    fn buy_ship_requests_the_selected_ship_and_b_only_on_a_press() {
         let mut screen = screen();
         press(&mut screen, Key::Right);
         click_item(&mut screen, BUY_ITEM);
-        assert_eq!(screen.take_order(), Some(ShipId(129)));
-        assert_eq!(screen.take_order(), None, "once");
+        assert_eq!(screen.take_request(), Some(ShipId(129)));
+        assert_eq!(screen.take_request(), None, "once");
         press(&mut screen, BUY_KEY);
-        assert_eq!(screen.take_order(), Some(ShipId(129)));
+        assert_eq!(screen.take_request(), Some(ShipId(129)));
         for _ in 0..3 {
             screen.input(&key(BUY_KEY, true, true));
-            assert_eq!(screen.take_order(), None, "a repeat buys nothing");
+            assert_eq!(screen.take_request(), None, "a repeat buys nothing");
         }
         screen.input(&key(BUY_KEY, false, false));
-        assert_eq!(screen.take_order(), None, "nor a release");
+        assert_eq!(screen.take_request(), None, "nor a release");
     }
 
     #[test]
@@ -1413,9 +1548,243 @@ mod tests {
         press(&mut screen, BUY_KEY);
         press(&mut screen, INFO_KEY);
         click_item(&mut screen, INFO_ITEM);
-        assert_eq!(screen.take_order(), None);
+        assert_eq!(screen.take_request(), None);
         assert!(screen.info_panel().is_none());
         assert_eq!(*art.asked.borrow(), ["bases"], "nothing else to read");
+    }
+
+    // Naming the ship.
+
+    /// Stock "Text Input": `DLOG` 3001, 360 x 138 and centred, with OK
+    /// (1), a parked picture (2), the prompt (3), a picture (4), the field
+    /// (5) and Cancel (6).
+    fn text_input_template() -> DialogTemplate {
+        let item = |x, y, w, h, enabled, kind| ItemTemplate {
+            bounds: rect(x, y, w, h),
+            enabled,
+            kind,
+        };
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 360.0, 138.0),
+            placement: Placement::Center,
+            items: vec![
+                item(
+                    252.0,
+                    106.0,
+                    70.0,
+                    20.0,
+                    true,
+                    ItemSpec::Button("OK".into()),
+                ),
+                item(7.0, 147.0, 32.0, 32.0, false, ItemSpec::Picture(129)),
+                item(
+                    52.0,
+                    5.0,
+                    295.0,
+                    50.0,
+                    false,
+                    ItemSpec::StaticText(String::new()),
+                ),
+                item(7.0, 5.0, 32.0, 32.0, false, ItemSpec::Picture(130)),
+                item(
+                    91.0,
+                    64.0,
+                    200.0,
+                    16.0,
+                    true,
+                    ItemSpec::EditText(String::new()),
+                ),
+                item(
+                    170.0,
+                    106.0,
+                    70.0,
+                    20.0,
+                    true,
+                    ItemSpec::Button("Cancel".into()),
+                ),
+            ],
+        }
+    }
+
+    fn naming() -> ShipNaming {
+        ShipNaming {
+            ship: ShipId(129),
+            prompt: "Please name your new The Heavy Shuttle: ".to_owned(),
+            default: "Ship 129 491".to_owned(),
+        }
+    }
+
+    fn typed(screen: &mut ShipyardScreen, text: &str) {
+        for c in text.chars() {
+            press(screen, Key::Char(c.to_ascii_lowercase()));
+            screen.input(&Input::Text(c));
+        }
+    }
+
+    /// The screen with B pressed on ship 129 and its prompt open.
+    fn naming_by_key() -> ShipyardScreen {
+        let mut screen = screen();
+        press(&mut screen, Key::Right);
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_request(), Some(ShipId(129)));
+        screen.open_naming(&naming());
+        screen
+    }
+
+    fn naming_click(screen: &mut ShipyardScreen, item: usize) {
+        let at = screen
+            .naming()
+            .expect("open")
+            .dialog()
+            .item_bounds(item)
+            .expect("an item")
+            .center();
+        click(screen, at);
+    }
+
+    #[test]
+    fn opening_the_naming_routes_input_to_it_and_ok_orders_the_ship_with_the_name() {
+        let mut screen = naming_by_key();
+        let prompt = screen.naming().expect("open");
+        assert_eq!(prompt.field().text(), "Ship 129 491");
+        screen.input(&Input::Text('b'));
+        assert_eq!(
+            screen.naming().expect("open").field().text(),
+            "Ship 129 491",
+            "the B that asked types nothing"
+        );
+        typed(&mut screen, "Kestrel");
+        press(&mut screen, INFO_KEY);
+        assert!(screen.info_panel().is_none(), "the prompt takes the keys");
+        assert_eq!(screen.take_order(), None);
+        press(&mut screen, Key::Enter);
+        assert_eq!(
+            screen.take_order(),
+            Some(ShipOrder {
+                ship: ShipId(129),
+                name: "Kestrel".to_owned(),
+            })
+        );
+        assert_eq!(screen.take_order(), None, "once");
+        assert!(screen.naming().is_none(), "closed");
+        assert!(!screen.closed(), "Return went to the prompt alone");
+        assert_eq!(screen.take_declined(), None);
+    }
+
+    #[test]
+    fn ok_clicked_orders_the_ship_with_its_sounds() {
+        let mut screen = naming_by_key();
+        screen.take_sounds();
+        naming_click(&mut screen, crate::ui::text_input::OK_ITEM);
+        assert_eq!(
+            screen.take_sounds(),
+            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
+        );
+        assert_eq!(
+            screen.take_order(),
+            Some(ShipOrder {
+                ship: ShipId(129),
+                name: "Ship 129 491".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_name_too_long_alerts_and_keeps_the_prompt_open() {
+        let mut screen = naming_by_key();
+        typed(&mut screen, &"x".repeat(65));
+        screen.take_sounds();
+        press(&mut screen, Key::Enter);
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::Alert)]);
+        assert_eq!(screen.take_order(), None);
+        assert!(screen.naming().is_some());
+    }
+
+    #[test]
+    fn cancel_declines_the_ship() {
+        let mut screen = naming_by_key();
+        press(&mut screen, Key::Escape);
+        assert!(screen.naming().is_some(), "Escape does nothing");
+        assert!(!screen.closed());
+        naming_click(&mut screen, crate::ui::text_input::CANCEL_ITEM);
+        assert_eq!(screen.take_declined(), Some(ShipId(129)));
+        assert_eq!(screen.take_declined(), None, "once");
+        assert_eq!(screen.take_order(), None);
+        assert!(screen.naming().is_none(), "closed");
+        press(&mut screen, Key::Escape);
+        assert!(screen.closed(), "the shipyard takes the keys again");
+    }
+
+    #[test]
+    fn a_click_on_buy_ship_does_not_flush_text() {
+        let mut screen = screen();
+        press(&mut screen, Key::Right);
+        click_item(&mut screen, BUY_ITEM);
+        assert_eq!(screen.take_request(), Some(ShipId(129)));
+        screen.open_naming(&naming());
+        screen.input(&Input::Text('K'));
+        assert_eq!(screen.naming().expect("open").field().text(), "K");
+    }
+
+    #[test]
+    fn the_naming_falls_back_without_the_text_input_dialog() {
+        let mut screen = ShipyardScreen::new(
+            Ok(layout()),
+            Ok(info_template()),
+            Err("no DLOG 3001".to_owned()),
+            shipyard(),
+            art(),
+            ButtonStyle::STOCK,
+        );
+        press(&mut screen, Key::Right);
+        click_item(&mut screen, BUY_ITEM);
+        screen.take_request();
+        screen.open_naming(&naming());
+        let prompt = screen.naming().expect("open");
+        let bounds = prompt.dialog().bounds();
+        assert_eq!((bounds.width(), bounds.height()), (360.0, 138.0));
+        press(&mut screen, Key::Enter);
+        assert_eq!(
+            screen.take_order().map(|order| order.name),
+            Some("Ship 129 491".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_prompt_is_drawn_over_the_shipyard() {
+        let mut screen = screen();
+        let under = drawn(&screen);
+        screen.open_naming(&naming());
+        let commands = drawn(&screen);
+        assert_eq!(commands[..under.len()], under[..]);
+        let mut prompt = DrawList::new();
+        screen.naming().expect("open").draw(&mut prompt);
+        assert_eq!(
+            commands[under.len()..],
+            prompt.iter().cloned().collect::<Vec<_>>()[..]
+        );
+    }
+
+    #[test]
+    fn cancelling_the_pointer_abandons_a_click_on_the_prompt() {
+        let mut screen = naming_by_key();
+        let at = screen
+            .naming()
+            .expect("open")
+            .dialog()
+            .item_bounds(crate::ui::text_input::OK_ITEM)
+            .expect("OK")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert_eq!(screen.take_order(), None);
+        assert!(screen.naming().is_some());
     }
 
     // The info panel.
@@ -1530,7 +1899,7 @@ mod tests {
             press(&mut screen, INFO_KEY);
             press(&mut screen, BUY_KEY);
             press(&mut screen, Key::Right);
-            assert_eq!(screen.take_order(), None, "the panel takes it");
+            assert_eq!(screen.take_request(), None, "the panel takes it");
             assert_eq!(screen.selected(), Some(0));
             screen.input(&key(k, true, true));
             assert!(screen.info_panel().is_some(), "not a repeat");
@@ -1559,6 +1928,7 @@ mod tests {
         let mut screen = ShipyardScreen::new(
             Ok(layout()),
             Err("no DLOG 1005".to_owned()),
+            Ok(text_input_template()),
             shipyard(),
             art(),
             ButtonStyle::STOCK,
@@ -1580,7 +1950,7 @@ mod tests {
             let mut screen = screen_of(shipyard());
             assert_eq!(screen.input(&key(k, true, false)), ScreenAction::None);
             assert!(screen.closed(), "{k:?}");
-            assert_eq!(screen.take_order(), None);
+            assert_eq!(screen.take_request(), None);
         }
         let mut held = screen_of(shipyard());
         held.input(&key(Key::Escape, true, true));
@@ -1601,7 +1971,7 @@ mod tests {
         assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
         screen.cancel_pointer();
         screen.input(&button(false));
-        assert_eq!(screen.take_order(), None);
+        assert_eq!(screen.take_request(), None);
         press(&mut screen, BUY_KEY);
         press(&mut screen, Key::Enter);
         assert_eq!(screen.take_sounds(), [], "keys are silent");
@@ -1630,6 +2000,7 @@ mod tests {
             let mut screen = ShipyardScreen::new(
                 Err("no DLOG 1004".to_owned()),
                 Ok(info_template()),
+                Ok(text_input_template()),
                 shipyard(),
                 Rc::clone(&art) as Rc<dyn ShipyardCatalog>,
                 ButtonStyle::STOCK,
@@ -1649,8 +2020,10 @@ mod tests {
             click(&mut screen, Point::new(500.0, 500.0));
             screen.cancel_pointer();
             assert!(!screen.closed());
-            assert_eq!(screen.take_order(), None);
+            assert_eq!(screen.take_request(), None);
             assert!(screen.info_panel().is_none());
+            screen.open_naming(&naming());
+            assert!(screen.naming().is_none(), "nothing to open it over");
             assert_eq!(*art.asked.borrow(), Vec::<String>::new());
             screen.input(&key(k, true, false));
             assert!(screen.closed(), "{k:?}");

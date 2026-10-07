@@ -185,6 +185,7 @@ use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
+use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, CommPress, DescDialog, DescriptionSource, DialogResources,
     HaggleDialog, PlunderDialog, PlunderShown, PrefsDialog,
@@ -1300,6 +1301,7 @@ impl AppScreen {
             spaceport = spaceport.with_shipyard(
                 template_of(SHIPYARD_DIALOG),
                 template_of(SHIP_INFO_DIALOG),
+                template_of(TEXT_INPUT_DIALOG),
                 shipyard,
                 art,
             );
@@ -1527,8 +1529,11 @@ impl AppScreen {
 
     /// The spaceport's input, all of it: an order on its exchange trades,
     /// and one in its outfitter buys or sells, and the exchange and the
-    /// outfitter as they then are go back to it. Once it is left, the ship
-    /// takes off and flight shows.
+    /// outfitter as they then are go back to it. A ship asked for in its
+    /// shipyard opens the prompt for its name, when it can be bought; the
+    /// ship named there is bought, and one declined there draws its roll
+    /// again, changing nothing else. Once it is left, the ship takes off
+    /// and flight shows.
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
@@ -1542,6 +1547,15 @@ impl AppScreen {
         {
             spaceport.open_hire(list);
         }
+        if let Some(ship) = spaceport.take_ship_request()
+            && let Ok(naming) = self.flight.as_mut().expect(ENTERED).ship_naming(ship)
+        {
+            spaceport.open_ship_naming(&naming);
+        }
+        // The list is kept for the visit, as the original keeps it.
+        if let Some(ship) = spaceport.take_declined_ship() {
+            self.flight.as_mut().expect(ENTERED).decline_ship(ship);
+        }
         if trade.is_some() || outfit.is_some() || ship.is_some() || recharge || hire.is_some() {
             let flight = self.flight.as_mut().expect(ENTERED);
             // A refused order changes nothing; the screen greys what it can.
@@ -1551,8 +1565,8 @@ impl AppScreen {
             if let Some(order) = outfit {
                 let _ = flight.outfit(order);
             }
-            if let Some(ship) = ship {
-                let _ = flight.buy_ship(ship);
+            if let Some(order) = ship {
+                let _ = flight.buy_ship(order.ship, &order.name);
             }
             // A hire draws the class's roll again, so the list is built
             // afresh; the hire screen closes back to the bar.
@@ -2065,6 +2079,7 @@ mod tests {
                 ship[0x370 + 2 * slot..0x372 + 2 * slot].copy_from_slice(&(-1_i16).to_be_bytes());
             }
             ship[0x5CE..0x5D4].copy_from_slice(b"Second");
+            ship[0x62E..0x63D].copy_from_slice(b"Second Shipyard");
         }
         character[0x04..0x06].copy_from_slice(&128_i16.to_be_bytes());
         character[0x06..0x08].copy_from_slice(&128_i16.to_be_bytes());
@@ -4613,13 +4628,39 @@ mod tests {
         }
     }
 
-    /// [`EveryDialog`], with "Shipyard" and "Shipyard Info" too.
+    /// "Text Input", as stock lays it out: 360 x 138, centred, with OK
+    /// (1), the prompt (3), the field (5) and Cancel (6).
+    fn text_input_template() -> DialogTemplate {
+        let item = |x: f32, y: f32, w: f32, h: f32, kind| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind,
+        };
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 360.0, 138.0),
+            placement: Placement::Center,
+            items: vec![
+                item(252.0, 106.0, 70.0, 20.0, ItemSpec::Button("OK".into())),
+                item(7.0, 147.0, 32.0, 32.0, ItemSpec::Picture(129)),
+                item(52.0, 5.0, 295.0, 50.0, ItemSpec::StaticText(String::new())),
+                item(7.0, 5.0, 32.0, 32.0, ItemSpec::Picture(130)),
+                item(91.0, 64.0, 200.0, 16.0, ItemSpec::EditText(String::new())),
+                item(170.0, 106.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
+            ],
+        }
+    }
+
+    /// [`EveryDialog`], with "Shipyard", "Shipyard Info" and "Text Input"
+    /// too.
     struct ShipyardDialogs;
 
     impl DialogResources for ShipyardDialogs {
         fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
             if id == SHIPYARD_DIALOG || id == SHIP_INFO_DIALOG {
                 return Ok(shipyard_template());
+            }
+            if id == TEXT_INPUT_DIALOG {
+                return Ok(text_input_template());
             }
             EveryDialog.dialog_template(id)
         }
@@ -4657,13 +4698,29 @@ mod tests {
         assert_eq!(drawn(&screen), drawn(spaceport(&screen)));
     }
 
+    /// Presses B, as the platform sends it: the key, then its character.
+    fn press_b(screen: &mut AppScreen) {
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&Input::Text('b'));
+        screen.input(&key(Key::Char('b'), false));
+    }
+
+    /// The name prompt open over the shipyard, if it is.
+    fn name_prompt(screen: &AppScreen) -> Option<&nova_view::ui::TextInputDialog> {
+        spaceport(screen)
+            .open_shipyard()
+            .and_then(nova_view::spaceport::ShipyardScreen::naming)
+    }
+
     #[test]
     fn a_ship_order_changes_the_pilots_ship_refreshes_the_shops_and_saves() {
         let store = MemoryPilots::new();
         let mut screen = landed_shipyard(&store);
         click_port_item(&mut screen, 9);
         let writes = store.writes();
-        screen.input(&key(Key::Char('b'), true));
+        press_b(&mut screen);
+        assert_eq!(pilot(&screen).ship(), ShipId(128), "named first");
+        screen.input(&key(Key::Enter, true));
         assert_eq!(pilot(&screen).ship(), ShipId(129));
         assert_eq!(pilot(&screen).cash(), 200);
         assert_eq!(pilot(&screen).owned(BOOSTER), 1, "its default booster");
@@ -4699,13 +4756,90 @@ mod tests {
         let store = MemoryPilots::new();
         let mut screen = landed_shipyard(&store);
         click_port_item(&mut screen, 9);
-        screen.input(&key(Key::Char('b'), true));
+        press_b(&mut screen);
+        screen.input(&key(Key::Enter, true));
         let writes = store.writes();
         let before = pilot(&screen).clone();
         // Ship 129 again: 200 and a 400 trade-in do not cover 800.
-        screen.input(&key(Key::Char('b'), true));
+        press_b(&mut screen);
+        assert!(name_prompt(&screen).is_none(), "nothing to name");
+        screen.input(&key(Key::Enter, true));
         assert_eq!(*pilot(&screen), before);
         assert_eq!(store.writes(), writes, "nothing to save");
+    }
+
+    #[test]
+    fn buying_a_ship_asks_its_name_and_keeps_the_name_confirmed() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard(&store);
+        click_port_item(&mut screen, 9);
+        assert_eq!(pilot(&screen).ship_name(), Some("First"));
+        let writes = store.writes();
+        press_b(&mut screen);
+        let prompt = name_prompt(&screen).expect("the name prompt");
+        let default = prompt.field().text().to_owned();
+        let digits = default.strip_prefix("Second ").expect("the class's name");
+        assert_eq!(digits.len(), 3, "{default}");
+        assert!(
+            digits.chars().all(|digit| ('1'..='9').contains(&digit)),
+            "{default}"
+        );
+        assert!(prompt.field().selected(), "the B typed nothing");
+        let texts: Vec<String> = drawn(&screen)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("Please name your new Second Shipyard:")),
+            "{texts:?}"
+        );
+        assert_eq!(store.writes(), writes, "nothing bought yet");
+        let message = flight(&screen).message().map(str::to_owned);
+        type_text(&mut screen, "The Kestrel");
+        screen.input(&key(Key::Enter, true));
+        assert!(name_prompt(&screen).is_none(), "closed");
+        assert_eq!(pilot(&screen).ship(), ShipId(129));
+        assert_eq!(pilot(&screen).ship_name(), Some("Kestrel"));
+        assert_eq!(store.writes(), writes + 1, "saved after the input");
+        assert_eq!(saved(&store, "Ada").ship_name(), Some("Kestrel"));
+        assert_eq!(
+            flight(&screen).message().map(str::to_owned),
+            message,
+            "no message follows"
+        );
+        assert!(spaceport(&screen).open_shipyard().is_some());
+    }
+
+    #[test]
+    fn cancelling_the_name_prompt_buys_nothing_and_saves_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard(&store);
+        click_port_item(&mut screen, 9);
+        let writes = store.writes();
+        let before = pilot(&screen).clone();
+        press_b(&mut screen);
+        let cancel = name_prompt(&screen)
+            .expect("the name prompt")
+            .dialog()
+            .item_bounds(6)
+            .expect("Cancel")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: cancel,
+            });
+        }
+        assert!(name_prompt(&screen).is_none(), "closed");
+        assert_eq!(*pilot(&screen), before);
+        assert_eq!(store.writes(), writes, "nothing to save");
+        assert!(spaceport(&screen).open_shipyard().is_some());
     }
 
     #[test]

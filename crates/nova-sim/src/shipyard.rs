@@ -92,6 +92,23 @@
 //! the date, the course, its legal records and the events under way)
 //! stays as it was.
 //!
+//! # Naming the ship
+//!
+//! The original asks for the new ship's name *before* it buys it: Buy
+//! Ship checks that the class can be bought, then opens the "Text Input"
+//! prompt (`_EVTextInputDialog`, `_DoShipyardDialog` @0x5eb6c), and makes
+//! the purchase only when the prompt is confirmed (@0x5ebc2). The prompt
+//! reads [`NAME_PROMPT`] (`STR#` 2002 #120), a space, the class's
+//! `LongName` and ": " (@0x5ea1c-0x5eac6), so the Long Name is part of the
+//! question, and no message follows the purchase. Its default is the
+//! class's name, a space and three digits, each `_Rand(9) + 1`, drawn left
+//! to right (@0x5eacb-0x5eb4c): "Shuttle 482" ([`ShipNaming`], [`Session::ship_naming`](crate::Session::ship_naming)). The name
+//! confirmed is kept on the pilot through `_CullNameString`, which drops a
+//! leading "the " and nothing else ([`cull_name`], @0x5ed5a-0x5ed74).
+//! Cancelling buys nothing, but still draws the class's roll again
+//! (@0x5ebc2 to @0x5f0d5-0x5f0f8). The prompt refuses a name longer than
+//! [`SHIP_NAME_CHARS`] (@0x554a9-0x554e7), and accepts an empty one.
+//!
 //! # Stock weapons
 //!
 //! A ship's stock weapons (`WeapType`/`WeapCount`) and their `AmmoLoad`
@@ -125,8 +142,7 @@
 //! than the new ship pays the difference.
 //!
 //! Not modelled yet: the gun and turret limits (`MaxGun`, `MaxTur`);
-//! `OnPurchase` and `OnRetire`; naming the new ship and its `Long Name`
-//! message; `MovieFile`; and escorts' `UpgradeTo`.
+//! `OnPurchase` and `OnRetire`; `MovieFile`; and escorts' `UpgradeTo`.
 //! Nor does the shipyard price a ship through the original's tech-level
 //! flux, as hiring in the bar does with its own price rule
 //! ([`hire`](crate::hire)).
@@ -388,6 +404,51 @@ impl Yard<'_> {
     }
 }
 
+/// The name prompt's opening words, `STR#` 2002 #120.
+pub const NAME_PROMPT: &str = "Please name your new";
+
+/// The longest name the original's name prompt takes, in characters
+/// (`_EVTextInputDialog`'s most, 0x40 @0x5eb5d, checked @0x554b3).
+pub const SHIP_NAME_CHARS: usize = 64;
+
+/// The prompt for naming a ship about to be bought.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShipNaming {
+    /// The ship class to buy.
+    pub ship: ShipId,
+    /// The prompt's text: [`NAME_PROMPT`], a space, the class's
+    /// `LongName`, then ": ".
+    pub prompt: String,
+    /// The name the prompt opens with: the class's name, a space and three
+    /// digits from 1 to 9.
+    pub default: String,
+}
+
+/// The prompt for naming a new ship of class `record`, its default's
+/// digits drawn on `chance`, as the module says.
+pub(crate) fn naming(record: &ShipRecord, chance: &mut dyn Chance) -> ShipNaming {
+    let mut default = format!("{} ", record.name);
+    for _ in 0..3 {
+        default.push_str(&(chance.roll(9) + 1).to_string());
+    }
+    ShipNaming {
+        ship: record.id,
+        prompt: format!("{NAME_PROMPT} {}: ", record.long_name),
+        default,
+    }
+}
+
+/// `name` as the original keeps a ship's name (`_CullNameString`
+/// @0xdbe2-0xdd2c): a leading "the " (the letters t, h and e in any case,
+/// then a space) is dropped, and nothing else changes (@0xdc54-0xdc9c).
+#[must_use]
+pub fn cull_name(name: &str) -> String {
+    match name.get(..4) {
+        Some(head) if head.eq_ignore_ascii_case("the ") => name[4..].to_owned(),
+        _ => name.to_owned(),
+    }
+}
+
 /// What buying a ship did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShipPurchase {
@@ -415,12 +476,13 @@ pub(crate) struct Quote {
 
 /// Buys `new`, whose stock weapons and ammunition are `fits`
 /// ([`Arsenal::stock_fits`](crate::combat::armament::Arsenal::stock_fits)),
-/// for `pilot`, at `quote`, from a ship of `old_mass`, as the module says,
-/// and gives what it did.
+/// for `pilot`, at `quote`, from a ship of `old_mass`, naming it `name`
+/// ([`cull_name`]), as the module says, and gives what it did.
 pub(crate) fn purchase(
     pilot: &mut Pilot,
     old_mass: i16,
     new: &ShipRecord,
+    name: &str,
     fits: &[StockFit],
     quote: Quote,
     records: &[OutfitRecord],
@@ -454,6 +516,7 @@ pub(crate) fn purchase(
     pilot.outfits = merged(&carried, &defaults);
     fit_stock(&mut pilot.outfits, fits, records);
     pilot.ship = new.id;
+    pilot.ship_name = Some(cull_name(name));
     pilot.cash = pilot
         .cash
         .saturating_sub(quote.price)
@@ -1130,7 +1193,17 @@ mod tests {
     };
 
     fn buy(pilot: &mut Pilot, new: &ShipRecord, records: &[OutfitRecord]) -> ShipPurchase {
-        buy_stocked(pilot, new, &[], records)
+        buy_named(pilot, new, "Kestrel", records)
+    }
+
+    /// Buys `new`, naming it `name`.
+    fn buy_named(
+        pilot: &mut Pilot,
+        new: &ShipRecord,
+        name: &str,
+        records: &[OutfitRecord],
+    ) -> ShipPurchase {
+        purchase(pilot, FAST.mass, new, name, &[], QUOTE, records)
     }
 
     /// Buys `new`, whose stock weapons and ammunition are `fits`.
@@ -1140,7 +1213,7 @@ mod tests {
         fits: &[StockFit],
         records: &[OutfitRecord],
     ) -> ShipPurchase {
-        purchase(pilot, FAST.mass, new, fits, QUOTE, records)
+        purchase(pilot, FAST.mass, new, "Kestrel", fits, QUOTE, records)
     }
 
     /// Two blasters (weapon 128) held by outfit 205, and 20 rockets
@@ -1260,6 +1333,7 @@ mod tests {
             &mut paid,
             40,
             &heavy(),
+            "Kestrel",
             &[],
             Quote {
                 price: 1000,
@@ -1499,6 +1573,51 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_names_the_long_name_and_the_default_is_the_class_name_and_three_digits() {
+        let mut chance = Scripted::rolling(&[3, 8, 0]);
+        let naming = naming(&ship(129, FAST), &mut chance);
+        assert_eq!(
+            naming,
+            ShipNaming {
+                ship: ShipId(129),
+                prompt: "Please name your new The Ship 129: ".to_owned(),
+                default: "Ship 129 491".to_owned(),
+            }
+        );
+        assert_eq!(chance.sides_asked, [9, 9, 9]);
+    }
+
+    #[test]
+    fn the_name_drops_a_leading_the_and_nothing_else() {
+        assert_eq!(cull_name("The Raven"), "Raven");
+        assert_eq!(cull_name("tHe Raven"), "Raven");
+        assert_eq!(cull_name("THE Raven"), "Raven");
+        for kept in [
+            "Theodore",
+            "the",
+            "The",
+            " the Raven",
+            "",
+            "thе Raven",
+            "Raven",
+        ] {
+            assert_eq!(cull_name(kept), kept);
+        }
+        assert_eq!(cull_name("the  two"), " two");
+        assert_eq!(cull_name("the "), "");
+    }
+
+    #[test]
+    fn buying_names_the_ship_as_confirmed() {
+        let mut pilot = pilot();
+        assert_eq!(pilot.ship_name(), Some(""));
+        buy_named(&mut pilot, &heavy(), "The Kestrel", &[]);
+        assert_eq!(pilot.ship_name(), Some("Kestrel"));
+        buy_named(&mut pilot, &heavy(), "", &[]);
+        assert_eq!(pilot.ship_name(), Some(""), "an empty name is kept");
+    }
+
+    #[test]
     fn buying_a_ship_leaves_everything_else_about_the_pilot_as_it_was() {
         let mut pilot = pilot();
         pilot.stellar = Some(StellarId(128));
@@ -1507,6 +1626,16 @@ mod tests {
         pilot.set_legal_record(GovtId(128), 40);
         pilot.events = BTreeMap::from([(DisasterId(128), 3)]);
         pilot.name = "Ada".to_owned();
+        pilot.escorts = vec![crate::pilot::Escort {
+            ship: ShipId(130),
+            reserves: Reserves::full(1.0, 2.0, 3.0),
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        }];
+        pilot.gone_persons = std::collections::BTreeSet::from([crate::catalog::PersonId(151)]);
+        pilot.grudges = std::collections::BTreeSet::from([crate::catalog::PersonId(152)]);
         let before = pilot.clone();
         buy(&mut pilot, &heavy(), &[]);
         assert_eq!(
@@ -1534,6 +1663,10 @@ mod tests {
                 before.default_outfits_pending,
                 before.stock_weapons_pending,
             )
+        );
+        assert_eq!(
+            (&pilot.escorts, &pilot.gone_persons, &pilot.grudges),
+            (&before.escorts, &before.gone_persons, &before.grudges)
         );
     }
 }

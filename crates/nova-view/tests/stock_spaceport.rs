@@ -200,6 +200,7 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
         let mut screen = ShipyardScreen::new(
             Ok((template, Rc::new(MonoMetrics))),
             Ok(info),
+            ui.dialog_template(nova_view::ui::text_input::TEXT_INPUT_DIALOG),
             shipyard,
             Rc::clone(&data) as Rc<dyn nova_view::spaceport::ShipyardCatalog>,
             data.button_style(),
@@ -283,5 +284,95 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
                 image: INFO_BACKGROUND,
                 top_left: Point::new(387.0, 241.0),
             }));
+    }
+}
+
+/// A chance that draws the last of each roll's outcomes.
+struct Highest;
+
+impl Chance for Highest {
+    fn fires(&mut self, _percent: u8) -> bool {
+        true
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        n - 1
+    }
+}
+
+/// Buying a Shuttle at Viking asks its name in the stock "Text Input"
+/// dialog: 360 x 138, centred, the prompt naming the Shuttle's Long Name
+/// over the default, selected, and OK and Cancel along the bottom.
+#[test]
+fn the_shuttles_name_is_asked_in_the_stock_text_input_dialog() {
+    use nova_view::ui::text_input::{
+        CANCEL_ITEM, FIELD_ITEM, OK_ITEM, PROMPT_ITEM, TEXT_INPUT_DIALOG, TextInputDialog,
+        TextInputOutcome,
+    };
+    for (dir, ui) in builds() {
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let ui = InterfaceData::open(&ui).expect("the interface file opens");
+        let template = ui.dialog_template(TEXT_INPUT_DIALOG).expect("Text Input");
+        let mut session = at_viking(&data);
+        session.shipyard(&mut Fires).expect("a shipyard");
+        let naming = session
+            .ship_naming(nova_sim::ShipId(128), &mut Highest)
+            .expect("the Shuttle can be bought");
+        assert_eq!(
+            naming.prompt,
+            "Please name your new Sigma Shipyards Alpha class Shuttle: "
+        );
+        assert_eq!(naming.default, "Shuttle 999");
+        let mut dialog = TextInputDialog::new(
+            &template,
+            &naming.prompt,
+            &naming.default,
+            nova_sim::shipyard::SHIP_NAME_CHARS,
+            data.button_style(),
+            Rc::new(MonoMetrics),
+        )
+        .expect("the stock dialog has its field");
+        let bounds = dialog.dialog().bounds();
+        assert_eq!(bounds, Bounds::at(Point::new(332.0, 315.0), 360.0, 138.0));
+        let at = |x: f32, y: f32, w, h| Bounds::at(Point::new(332.0 + x, 315.0 + y), w, h);
+        assert_eq!(dialog.field().rect(), at(91.0, 64.0, 200.0, 16.0));
+        for (item, bounds) in [
+            (OK_ITEM, at(252.0, 106.0, 70.0, 20.0)),
+            (PROMPT_ITEM, at(52.0, 5.0, 295.0, 50.0)),
+            (FIELD_ITEM, at(91.0, 64.0, 200.0, 16.0)),
+            (CANCEL_ITEM, at(170.0, 106.0, 70.0, 20.0)),
+        ] {
+            assert_eq!(dialog.dialog().item_bounds(item), Some(bounds), "{item}");
+            assert!(dialog.dialog().item_shown(item), "{item}");
+        }
+        assert!(!dialog.dialog().item_shown(2), "parked below");
+        assert!(dialog.field().selected());
+        let mut list = DrawList::new();
+        dialog.draw(&mut list);
+        let texts: Vec<String> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.starts_with("Please name your new")),
+            "{texts:?}"
+        );
+        for shown in ["OK", "Cancel", "Shuttle 999"] {
+            assert!(texts.contains(&shown.to_owned()), "{shown}: {texts:?}");
+        }
+        dialog.input(&nova_view::Input::Key {
+            key: nova_view::Key::Enter,
+            pressed: true,
+            repeat: false,
+        });
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(TextInputOutcome::Confirm("Shuttle 999".to_owned()))
+        );
     }
 }

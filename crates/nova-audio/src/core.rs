@@ -105,6 +105,7 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
                 Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
                 Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
+                Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
                 Sound::Combat(fight) => {
                     let gain = distance_gain(fight.offset);
                     let volume = self.settings.effects_volume.amplitude() * gain;
@@ -309,6 +310,7 @@ mod tests {
 
     const DOWN: Sound = Sound::Ui(UiSound::ButtonDown);
     const UP: Sound = Sound::Ui(UiSound::ButtonUp);
+    const ALERT: Sound = Sound::Ui(UiSound::Alert);
     const THRUST: Sound = Sound::Sim(SimSound::ThrustStarted);
     const COAST: Sound = Sound::Sim(SimSound::ThrustStopped);
     const TOOK_OFF: Sound = Sound::Sim(SimSound::TookOff);
@@ -398,6 +400,24 @@ mod tests {
         drain(&log);
         core.update(Some(Showing::Flight), &[THRUST, TOOK_OFF, COAST]);
         assert_eq!(drain(&log), []);
+    }
+
+    #[test]
+    fn an_alert_plays_the_tables_alert_and_the_original_none() {
+        let (mut core, log) = original();
+        core.update(Some(Showing::Spaceport), &[]);
+        drain(&log);
+        core.update(Some(Showing::Spaceport), &[ALERT]);
+        assert_eq!(drain(&log), []);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            alert: Some(SoundId(150)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::ShipBrowser), &[ALERT]);
+        assert_eq!(drain(&log), [play(150, 1.0)]);
     }
 
     #[test]

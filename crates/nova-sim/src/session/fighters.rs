@@ -1518,7 +1518,7 @@ mod tests {
         session.pilot.cash = 1_000_000;
         land_now(&mut session).expect("lands");
         session
-            .buy_ship(ShipId(129), &mut NeverFires)
+            .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
             .expect("bought");
         assert_eq!(session.pilot().escorts(), [warship(None)]);
         assert_eq!(session.pilot().owned(DARTS), 0, "no rounds");
@@ -1543,7 +1543,7 @@ mod tests {
         assert!(session.landed().is_some(), "resumed docked");
         assert!(session.fleet.is_empty(), "none placed yet");
         session
-            .buy_ship(ShipId(129), &mut NeverFires)
+            .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
             .expect("bought");
         assert_eq!(session.pilot().escorts(), [warship(None)]);
     }

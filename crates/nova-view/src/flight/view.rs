@@ -256,8 +256,8 @@ use nova_sim::{
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
     NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
     PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleSource, Rules, Session, ShipId,
-    ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError, StellarId,
-    Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2,
+    ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
+    StellarId, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2,
     flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules};
@@ -1585,12 +1585,13 @@ impl<
 }
 
 impl<C: ShipSprites> FlightView<C> {
-    /// Buys a ship as [`Session::buy_ship`] does, on the flight's chance,
-    /// and reads the new ship's sprite sheet, so the new hull is drawn
-    /// once it takes off; a session that failed has no shipyard.
-    pub fn buy_ship(&mut self, ship: ShipId) -> Result<ShipPurchase, ShipRefusal> {
+    /// Buys a ship named `name` as [`Session::buy_ship`] does, on the
+    /// flight's chance, and reads the new ship's sprite sheet, so the new
+    /// hull is drawn once it takes off; a session that failed has no
+    /// shipyard.
+    pub fn buy_ship(&mut self, ship: ShipId, name: &str) -> Result<ShipPurchase, ShipRefusal> {
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
-        let bought = session.buy_ship(ship, &mut self.chance)?;
+        let bought = session.buy_ship(ship, name, &mut self.chance)?;
         self.sheet = self.catalog.ship_sheet(ship);
         Ok(bought)
     }
@@ -1853,6 +1854,22 @@ impl<C> FlightView<C> {
     /// session that failed.
     pub fn shipyard(&mut self) -> Option<Shipyard> {
         self.session.as_mut().ok()?.shipyard(&mut self.chance)
+    }
+
+    /// The prompt for naming a ship of class `ship` before it is bought,
+    /// as [`Session::ship_naming`] gives it, on the flight's chance; a
+    /// session that failed has no shipyard.
+    pub fn ship_naming(&mut self, ship: ShipId) -> Result<ShipNaming, ShipRefusal> {
+        let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
+        session.ship_naming(ship, &mut self.chance)
+    }
+
+    /// Declines to buy a ship of class `ship`, as [`Session::decline_ship`]
+    /// does; nothing for a session that failed.
+    pub fn decline_ship(&mut self, ship: ShipId) {
+        if let Ok(session) = &mut self.session {
+            session.decline_ship(ship);
+        }
     }
 
     /// Whether the pilot should be saved, as [`Session::take_save_due`]
@@ -5874,20 +5891,28 @@ mod tests {
     fn the_shipyard_is_the_sessions_and_a_purchase_reloads_the_ships_sheet() {
         let mut view = FlightView::new(shipbuying());
         assert_eq!(view.shipyard(), None, "in flight");
-        assert_eq!(view.buy_ship(ShipId(129)), Err(ShipRefusal::NoShipyard));
+        assert_eq!(
+            view.buy_ship(ShipId(129), "Kestrel"),
+            Err(ShipRefusal::NoShipyard)
+        );
         land_now(&mut view);
         view.take_save_due();
         let shipyard = view.shipyard().expect("landed at a shipyard");
         assert_eq!(shipyard.row(ShipId(129)).map(|row| row.price), Some(900));
         assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
         assert_eq!(
-            view.buy_ship(ShipId(999)),
+            view.buy_ship(ShipId(999), "Kestrel"),
             Err(ShipRefusal::NotListed),
             "refused"
         );
         assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
-        let bought = view.buy_ship(ShipId(129)).expect("bought");
+        let bought = view.buy_ship(ShipId(129), "The Kestrel").expect("bought");
         assert_eq!(bought.price, 900);
+        assert_eq!(
+            view.pilot().and_then(Pilot::ship_name),
+            Some("Kestrel"),
+            "named as confirmed"
+        );
         assert!(view.take_save_due(), "a purchase");
         assert_eq!(view.pilot().map(Pilot::ship), Some(ShipId(129)));
         assert_eq!(view.pilot().map(Pilot::cash), Some(1000 - 900));
@@ -5919,7 +5944,10 @@ mod tests {
         };
         let mut broken = FlightView::new(broken);
         assert_eq!(broken.shipyard(), None);
-        assert_eq!(broken.buy_ship(ShipId(129)), Err(ShipRefusal::NoShipyard));
+        assert_eq!(
+            broken.buy_ship(ShipId(129), "Kestrel"),
+            Err(ShipRefusal::NoShipyard)
+        );
     }
 
     /// [`shipbuying`], with the fuel tank and ship 129 each for sale on a
@@ -5940,7 +5968,10 @@ mod tests {
         let shipyard = view.shipyard().expect("a shipyard");
         assert!(shipyard.row(ShipId(129)).is_none(), "off today");
         assert_eq!(view.outfit(BUY_TANK), Err(OutfitRefusal::NotListed));
-        assert_eq!(view.buy_ship(ShipId(129)), Err(ShipRefusal::NotListed));
+        assert_eq!(
+            view.buy_ship(ShipId(129), "Kestrel"),
+            Err(ShipRefusal::NotListed)
+        );
         let always = Rc::new(RefCell::new(Always::default()));
         let shared: Rc<RefCell<dyn Chance>> = always.clone();
         let mut view = FlightView::new(rolling()).with_chance(SharedChance::new(shared));
@@ -5951,7 +5982,49 @@ mod tests {
         let shipyard = view.shipyard().expect("a shipyard");
         assert!(shipyard.row(ShipId(129)).is_some(), "on today");
         assert_eq!(always.borrow().asked, [50, 50]);
-        assert!(view.buy_ship(ShipId(129)).is_ok());
+        assert!(view.buy_ship(ShipId(129), "Kestrel").is_ok());
+    }
+
+    #[test]
+    fn the_naming_is_the_sessions_on_the_flights_chance() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let mut view = FlightView::new(shipbuying()).with_chance(SharedChance::new(shared));
+        assert_eq!(view.ship_naming(ShipId(129)), Err(ShipRefusal::NoShipyard));
+        land_now(&mut view);
+        view.take_save_due();
+        assert_eq!(view.ship_naming(ShipId(999)), Err(ShipRefusal::NotListed));
+        let naming = view.ship_naming(ShipId(129)).expect("a naming");
+        assert_eq!(naming.ship, ShipId(129));
+        assert_eq!(naming.prompt, "Please name your new : ");
+        assert_eq!(naming.default, "Fast 999", "each digit the last of nine");
+        assert!(!view.take_save_due());
+        let mut broken = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..shipbuying()
+        });
+        assert_eq!(
+            broken.ship_naming(ShipId(129)),
+            Err(ShipRefusal::NoShipyard)
+        );
+        broken.decline_ship(ShipId(129));
+    }
+
+    #[test]
+    fn declining_a_ship_draws_its_roll_again_on_the_flights_chance() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let mut view = FlightView::new(rolling()).with_chance(SharedChance::new(shared));
+        land_now(&mut view);
+        view.take_save_due();
+        view.shipyard().expect("a shipyard");
+        always.borrow_mut().asked.clear();
+        view.shipyard().expect("a shipyard");
+        assert!(always.borrow().asked.is_empty(), "kept");
+        view.decline_ship(ShipId(129));
+        assert!(!view.take_save_due());
+        view.shipyard().expect("a shipyard");
+        assert_eq!(always.borrow().asked, [50], "drawn again");
     }
 
     #[test]

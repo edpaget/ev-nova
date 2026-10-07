@@ -18,6 +18,8 @@
 //!   a scrolling box with a Done button.
 //! - [`text_field`]: a one-line [`TextField`] that typed characters fill
 //!   and Backspace empties.
+//! - [`text_input`]: the "Text Input" dialog ([`TextInputDialog`]): a
+//!   prompt and a line of text to type, such as the new ship's name.
 //! - [`new_pilot`]: the New Pilot dialog ([`NewPilotDialog`], "Create a
 //!   new pilot:"): the new pilot's name.
 //! - [`toggle`]: an on/off check box with a label.
@@ -46,6 +48,7 @@ pub mod prefs;
 pub mod scroll_text;
 pub mod slice;
 pub mod text_field;
+pub mod text_input;
 pub mod toggle;
 pub mod volume;
 
@@ -62,3 +65,4 @@ pub use prefs::PrefsDialog;
 pub use scroll_text::ScrollText;
 pub use slice::{Axis, Piece, three_slice};
 pub use text_field::TextField;
+pub use text_input::{TextInputDialog, TextInputOutcome};

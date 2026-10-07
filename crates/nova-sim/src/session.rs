@@ -308,7 +308,7 @@ use crate::pre_jump::{self, PreJump};
 use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::RuleSource;
-use crate::shipyard::{self, Quote, ShipPurchase, ShipRefusal, Shipyard, Yard};
+use crate::shipyard::{self, Quote, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::targeting::{self, TargetPick};
@@ -527,7 +527,9 @@ impl Session {
     /// one whose ship still mounts its stock weapons beside its outfits,
     /// from a save before they were outfits, owns them and their
     /// `AmmoLoad` on top of its outfits, keeping the armament it flew
-    /// with; and the reserves hold no more than the stats allow.
+    /// with; one whose ship was never named, from a save before ships had
+    /// names, names it after its class (empty when the class has no
+    /// record); and the reserves hold no more than the stats allow.
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
     /// silently, as the original resumes a pilot at its last planet.
@@ -564,21 +566,15 @@ impl Session {
         let outfits = catalog.outfits();
         let arsenal = Arsenal::read(catalog);
         let stock = arsenal.stock_outfits(ship, &outfits);
-        if pilot.default_outfits_pending {
-            pilot.outfits.clone_from(&defaults);
-            pilot.default_outfits_pending = false;
-        }
-        if pilot.stock_weapons_pending {
-            pilot.outfits = pilot::merged(&pilot.outfits, &stock);
-            pilot.stock_weapons_pending = false;
-        }
+        let ships = catalog.ships();
+        fill_in(&mut pilot, &defaults, &stock, &ships);
         let mut session = Self {
             fields,
             defaults,
             stock,
             ammo_outfits: Arsenal::ammo_outfits(&outfits),
             outfits,
-            ships: catalog.ships(),
+            ships,
             // Refitted below, from the outfits the pilot owns.
             stats: ShipStats::default(),
             player,
@@ -1883,7 +1879,51 @@ impl Session {
         .shipyard(&self.pilot, &mut self.ship_rolls, chance)
     }
 
-    /// Buys a ship of class `ship`, trading in the one flown, and gives
+    /// The shipyard and the record of class `ship`, when it can be bought
+    /// there now, the rolls not drawn yet drawn on `chance`; otherwise why
+    /// not.
+    fn buyable(
+        &mut self,
+        ship: ShipId,
+        chance: &mut dyn Chance,
+    ) -> Result<(Shipyard, ShipRecord), ShipRefusal> {
+        let shipyard = self.shipyard(chance).ok_or(ShipRefusal::NoShipyard)?;
+        shipyard.check(ship)?;
+        let record = self
+            .ships
+            .iter()
+            .find(|record| record.id == ship)
+            .cloned()
+            .ok_or(ShipRefusal::NotListed)?;
+        Ok((shipyard, record))
+    }
+
+    /// The prompt for naming a ship of class `ship` before it is bought,
+    /// its default's digits drawn on `chance` ([`shipyard`]'s "Naming the
+    /// ship"). It is refused as [`buy_ship`](Self::buy_ship) would refuse
+    /// the purchase, and changes nothing about the pilot, so no save is
+    /// due. The shipyard's rolls not drawn yet are drawn on `chance`
+    /// first.
+    pub fn ship_naming(
+        &mut self,
+        ship: ShipId,
+        chance: &mut dyn Chance,
+    ) -> Result<ShipNaming, ShipRefusal> {
+        let (_, record) = self.buyable(ship, chance)?;
+        Ok(shipyard::naming(&record, chance))
+    }
+
+    /// Declines to buy a ship of class `ship`, as cancelling its name
+    /// prompt does: nothing is bought, but the class's roll is drawn
+    /// again, as the original does (`_DoShipyardDialog` @0x5ebc2 to
+    /// @0x5f0d5-0x5f0f8). Nothing about the pilot changes, so no save is
+    /// due.
+    pub fn decline_ship(&mut self, ship: ShipId) {
+        self.ship_rolls.redraw(&ship);
+    }
+
+    /// Buys a ship of class `ship`, named `name` ([`shipyard::cull_name`]
+    /// drops a leading "the "), trading in the one flown, and gives
     /// what the purchase did: a change made in the spaceport, so a save is
     /// due, and the session flies the new ship from then on, its fields,
     /// default items, stock weapons and stats read from its record. When the ship is not
@@ -1894,16 +1934,10 @@ impl Session {
     pub fn buy_ship(
         &mut self,
         ship: ShipId,
+        name: &str,
         chance: &mut dyn Chance,
     ) -> Result<ShipPurchase, ShipRefusal> {
-        let shipyard = self.shipyard(chance).ok_or(ShipRefusal::NoShipyard)?;
-        shipyard.check(ship)?;
-        let record = self
-            .ships
-            .iter()
-            .find(|record| record.id == ship)
-            .cloned()
-            .ok_or(ShipRefusal::NotListed)?;
+        let (shipyard, record) = self.buyable(ship, chance)?;
         let quote = Quote {
             price: shipyard.row(ship).map_or(0, |row| row.price),
             trade_in: shipyard.trade_in,
@@ -1915,7 +1949,7 @@ impl Session {
         let mut bought = None;
         self.transact(|pilot| {
             bought = Some(shipyard::purchase(
-                pilot, old_mass, &record, &fits, quote, &outfits,
+                pilot, old_mass, &record, name, &fits, quote, &outfits,
             ));
         });
         self.outfits = outfits;
@@ -2613,6 +2647,29 @@ fn refit(gauge: &mut Gauge, max: f32, gain: bool) {
     }
     gauge.max = max;
     gauge.now = gauge.now.min(max);
+}
+
+/// Fills in what an old save of `pilot` left to the game data: the ship's
+/// default items `defaults`, its stock weapons and their `AmmoLoad`
+/// `stock` (on top of its outfits), and its name, after its class among
+/// `ships`.
+fn fill_in(
+    pilot: &mut Pilot,
+    defaults: &BTreeMap<OutfitId, u16>,
+    stock: &BTreeMap<OutfitId, u16>,
+    ships: &[ShipRecord],
+) {
+    if pilot.default_outfits_pending {
+        pilot.outfits.clone_from(defaults);
+        pilot.default_outfits_pending = false;
+    }
+    if pilot.stock_weapons_pending {
+        pilot.outfits = pilot::merged(&pilot.outfits, stock);
+        pilot.stock_weapons_pending = false;
+    }
+    if pilot.ship_name.is_none() {
+        pilot.ship_name = Some(pilot::class_name(ships, pilot.ship));
+    }
 }
 
 #[cfg(test)]
@@ -5462,7 +5519,7 @@ mod tests {
     // The shipyard.
 
     use crate::catalog::ShipRecord;
-    use crate::shipyard::{ShipPurchase, ShipRefusal};
+    use crate::shipyard::{ShipNaming, ShipPurchase, ShipRefusal};
     use crate::testkit::ship;
 
     /// Ship 129: faster, with more shield, 15 tons of cargo space and 12
@@ -5514,7 +5571,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(session.shipyard(&mut NeverFires), None, "in flight");
         assert_eq!(
-            session.buy_ship(NEW, &mut NeverFires),
+            session.buy_ship(NEW, "Kestrel", &mut NeverFires),
             Err(ShipRefusal::NoShipyard)
         );
         land_now(&mut session).expect("lands");
@@ -5529,7 +5586,7 @@ mod tests {
         let mut session = outfitted(&plain);
         assert_eq!(session.shipyard(&mut NeverFires), None, "no shipyard here");
         assert_eq!(
-            session.buy_ship(NEW, &mut NeverFires),
+            session.buy_ship(NEW, "Kestrel", &mut NeverFires),
             Err(ShipRefusal::NoShipyard)
         );
     }
@@ -5543,15 +5600,20 @@ mod tests {
     }
 
     #[test]
-    fn a_session_reads_the_ship_records_once_when_it_starts() {
+    fn a_session_reads_the_ship_records_once_when_it_flies() {
         let catalog = shipbuying();
-        let mut session = outfitted(&catalog);
-        assert_eq!(*catalog.ship_record_reads.borrow(), 1);
-        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        let pilot = Pilot::new(&catalog, "").expect("starts");
+        assert_eq!(*catalog.ship_record_reads.borrow(), 1, "to name its ship");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        land_now(&mut session).expect("lands");
+        assert_eq!(*catalog.ship_record_reads.borrow(), 2);
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         session.shipyard(&mut NeverFires).expect("a shipyard");
         session.take_off();
         jump(&mut session, &catalog, 131);
-        assert_eq!(*catalog.ship_record_reads.borrow(), 1);
+        assert_eq!(*catalog.ship_record_reads.borrow(), 2);
     }
 
     #[test]
@@ -5560,14 +5622,14 @@ mod tests {
         let mut session = outfitted(&catalog);
         let before = session.clone();
         assert_eq!(
-            session.buy_ship(ShipId(999), &mut NeverFires),
+            session.buy_ship(ShipId(999), "Kestrel", &mut NeverFires),
             Err(ShipRefusal::NotListed)
         );
         let mut poor = session.clone();
         poor.pilot.cash = 14_999;
         let poorer = poor.clone();
         assert_eq!(
-            poor.buy_ship(NEW, &mut NeverFires),
+            poor.buy_ship(NEW, "Kestrel", &mut NeverFires),
             Err(ShipRefusal::CannotAfford)
         );
         assert_eq!(poor, poorer);
@@ -5575,7 +5637,7 @@ mod tests {
         assert_eq!(session, before);
         assert!(!session.take_save_due());
         assert_eq!(
-            session.buy_ship(NEW, &mut NeverFires),
+            session.buy_ship(NEW, "Kestrel", &mut NeverFires),
             Ok(ShipPurchase {
                 price: 17_500,
                 trade_in: 2500,
@@ -5591,11 +5653,81 @@ mod tests {
     }
 
     #[test]
+    fn flying_an_unnamed_ship_names_it_after_its_class() {
+        let catalog = shipbuying();
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.ship_name = None;
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.pilot().ship_name(), Some("Ship 128"));
+        assert!(!session.take_save_due());
+        let mut named = Pilot::new(&catalog, "Ada").expect("starts");
+        named.ship_name = Some("Kestrel".to_owned());
+        let session = Session::fly(&catalog, named).expect("flies");
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"), "kept");
+        let mut classless = Pilot::new(&catalog, "Ada").expect("starts");
+        classless.ship_name = None;
+        let bare = FakePilotCatalog {
+            ship_records: Vec::new(),
+            ..shipbuying()
+        };
+        let session = Session::fly(&bare, classless).expect("flies");
+        assert_eq!(session.pilot().ship_name(), Some(""), "no record");
+    }
+
+    #[test]
+    fn the_naming_is_refused_as_the_purchase_would_be() {
+        let catalog = shipbuying();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            session.ship_naming(NEW, &mut NeverFires),
+            Err(ShipRefusal::NoShipyard)
+        );
+        land_now(&mut session).expect("lands");
+        session.take_save_due();
+        assert_eq!(
+            session.ship_naming(ShipId(999), &mut NeverFires),
+            Err(ShipRefusal::NotListed)
+        );
+        let mut poor = session.clone();
+        poor.pilot.cash = 14_999;
+        assert_eq!(
+            poor.ship_naming(NEW, &mut NeverFires),
+            Err(ShipRefusal::CannotAfford)
+        );
+        let before = session.clone();
+        let mut chance = Scripted::rolling(&[0, 0, 0]);
+        assert_eq!(
+            session.ship_naming(NEW, &mut chance),
+            Ok(ShipNaming {
+                ship: NEW,
+                prompt: "Please name your new The Ship 129: ".to_owned(),
+                default: "Ship 129 111".to_owned(),
+            })
+        );
+        assert_eq!(chance.sides_asked, [9, 9, 9]);
+        assert_eq!(session, before, "naming changes nothing");
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn buying_names_the_ship() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session
+            .buy_ship(NEW, "The Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"));
+        assert!(session.take_save_due());
+    }
+
+    #[test]
     fn after_a_purchase_the_stats_are_the_new_ships_with_its_outfits() {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);
         session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
-        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         let stats = ShipStats::new(
             HEAVY,
             &[crate::fuel::OutfitMod {
@@ -5618,7 +5750,9 @@ mod tests {
     fn after_a_purchase_the_outfitter_reads_the_new_ships_free_mass_and_defaults() {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);
-        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
         assert_eq!(outfitter.free_mass, 12, "its tank is fitted on top");
         let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
@@ -5716,7 +5850,9 @@ mod tests {
     fn a_bought_ships_armament_mounts_each_stock_weapon_once() {
         let catalog = stock_weapons(shipbuying());
         let mut session = outfitted(&catalog);
-        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         assert_eq!(mounted(&session), [(150, 1), (138, 1)]);
         assert_eq!(
             session.pilot().outfits().collect::<Vec<_>>(),
@@ -5742,7 +5878,9 @@ mod tests {
         let mut session = outfitted(&catalog);
         let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
         assert_eq!(shipyard.trade_in, 2500 + 2 * 500, "two guns");
-        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
         assert_eq!(
             shipyard.trade_in,
@@ -5799,7 +5937,9 @@ mod tests {
     fn after_take_off_the_ship_flies_at_the_new_top_speed() {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);
-        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         session.take_off().expect("took off");
         let mut expected = *session.player();
         for _ in 0..200 {
@@ -5829,7 +5969,9 @@ mod tests {
         let mut session = outfitted(&catalog);
         assert_eq!(session.pilot().owned(PLATE), 1);
         assert_ne!(FAST.mass, HEAVY.mass);
-        let bought = session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        let bought = session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         assert_eq!(bought.sold_back, BTreeMap::from([(PLATE, 1)]));
         assert_eq!(bought.refund, 100 * i64::from(FAST.mass) / 2);
         assert_eq!(bought.trade_in, 2500, "persistent: not in the trade-in");
@@ -5844,7 +5986,9 @@ mod tests {
         session
             .trade(order(FOOD, Direction::Buy, Lot::Max))
             .expect("bought");
-        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         let text = crate::save::encode(session.pilot());
         let pilot = crate::save::decode(&text).expect("a pilot");
         assert_eq!(pilot, *session.pilot());
@@ -5927,8 +6071,24 @@ mod tests {
     fn buying_a_ship_draws_its_class_roll_again() {
         let mut session = outfitted(&rolling(100, 50));
         let mut firing = Scripted::answering(&[true]);
-        session.buy_ship(NEW, &mut firing).expect("bought");
+        session
+            .buy_ship(NEW, "Kestrel", &mut firing)
+            .expect("bought");
         assert_eq!(firing.asked, [50]);
+        let mut missing = Scripted::answering(&[false]);
+        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        assert_eq!(missing.asked, [50]);
+    }
+
+    #[test]
+    fn declining_draws_the_classs_roll_again_and_changes_nothing() {
+        let mut session = outfitted(&rolling(100, 50));
+        let mut firing = Scripted::answering(&[true]);
+        assert!(lists_new(&mut session, &mut firing));
+        let before = session.pilot().clone();
+        session.decline_ship(NEW);
+        assert_eq!(session.pilot(), &before);
+        assert!(!session.take_save_due());
         let mut missing = Scripted::answering(&[false]);
         assert!(!lists_new(&mut session, &mut missing), "drawn again");
         assert_eq!(missing.asked, [50]);
@@ -5943,7 +6103,7 @@ mod tests {
             Err(OutfitRefusal::NotListed)
         );
         assert_eq!(
-            session.buy_ship(NEW, &mut NeverFires),
+            session.buy_ship(NEW, "Kestrel", &mut NeverFires),
             Err(ShipRefusal::NotListed)
         );
         assert_eq!(session.pilot(), before.pilot());
@@ -7275,7 +7435,9 @@ mod tests {
     fn a_ship_bought_fights_with_its_own_weapons_size_and_explosion() {
         let catalog = armed_shipyard();
         let mut session = outfitted(&catalog);
-        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         session.take_off().expect("took off");
         session.hold_trigger(FIRE);
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -7681,7 +7843,9 @@ mod tests {
     fn a_ship_bought_keeps_the_secondary_it_carries_or_selects_its_first() {
         let catalog = with_secondaries(shipbuying());
         let mut session = outfitted(&catalog);
-        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         assert_eq!(
             session.secondary(),
             Some(MISSILE),
@@ -7691,7 +7855,9 @@ mod tests {
         session.select_secondary(false);
         session.select_secondary(false);
         assert_eq!(session.secondary(), Some(TORCH));
-        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
         assert_eq!(session.secondary(), Some(TORCH), "still carried");
     }
 

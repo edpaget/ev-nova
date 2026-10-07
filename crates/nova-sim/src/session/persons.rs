@@ -198,6 +198,7 @@ impl Session {
                     .map_or("", |person| &person.record.name),
                 pilot: &self.pilot.name,
                 ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
+                ship_name: self.pilot.ship_name().unwrap_or_default(),
             };
             let text = expand_tags(&line, &tags);
             self.quotes.push(PersonQuote { npc: id, text });
@@ -922,6 +923,26 @@ mod tests {
         }
         let quote = session.npcs()[0].person.expect("Ace");
         assert!(quote.quoted);
+    }
+
+    #[test]
+    fn a_quote_names_the_players_ship_by_the_name_it_was_given() {
+        let mut catalog = quoters([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
+        catalog.strings = vec![(7101, vec!["Nice <PST>, the <PSN>.".to_owned()])];
+        let mut pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
+        catalog
+            .ship_records
+            .push(crate::testkit::ship(pilot.ship().0, crate::testkit::FAST));
+        pilot.ship_name = Some("Kestrel".to_owned());
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        session.traffic.npcs_mut()[1].person = None;
+        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let (said, _) = quote_tick(&catalog, &mut session, &[77]);
+        assert_eq!(
+            said,
+            [format!("Nice Ship {}, the Kestrel.", session.ship().0)]
+        );
     }
 
     #[test]

@@ -531,7 +531,9 @@ fn a_heavy_shuttle_trades_in_the_shuttle() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let mut session = at_viking(&data);
-    let bought = session.buy_ship(ShipId(129), &mut Fires).expect("bought");
+    let bought = session
+        .buy_ship(ShipId(129), "Kestrel", &mut Fires)
+        .expect("bought");
     assert_eq!((bought.price, bought.trade_in), (17_500, 5000));
     assert_eq!(session.ship(), ShipId(129));
     assert_eq!(session.pilot().cash(), 12_500);
@@ -3101,6 +3103,7 @@ fn the_bounty_hunters_hail_quote_names_him_and_the_pilot() {
         person: "Bounty Hunter",
         pilot: "Stock",
         ship_type: "Shuttle",
+        ship_name: "Kestrel",
     };
     assert_eq!(
         expand_tags(line, &tags),

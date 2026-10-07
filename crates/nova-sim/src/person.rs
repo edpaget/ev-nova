@@ -187,9 +187,10 @@ pub struct QuoteTags<'a> {
     pub person: &'a str,
     /// The pilot's name: `<PN>`, and `<PNN>` with no nickname yet.
     pub pilot: &'a str,
-    /// The player's ship type's name: `<PST>`, and `<PSN>` until pilots
-    /// name their ships.
+    /// The player's ship type's name: `<PST>`.
     pub ship_type: &'a str,
+    /// The player's ship's name, as the player named it: `<PSN>`.
+    pub ship_name: &'a str,
 }
 
 /// `text` with its tags read as `tags` say: `<OSN>`, `<PN>`, `<PNN>`,
@@ -202,7 +203,7 @@ pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
         ("<PNN>", tags.pilot),
         ("<PN>", tags.pilot),
         ("<PST>", tags.ship_type),
-        ("<PSN>", tags.ship_type),
+        ("<PSN>", tags.ship_name),
         ("<PRK>", NO_RANK),
         ("<SRK>", NO_RANK),
     ]
@@ -1116,13 +1117,14 @@ mod tests {
             person: "Bounty Hunter",
             pilot: "Stock",
             ship_type: "Shuttle",
+            ship_name: "Kestrel",
         };
         assert_eq!(
             expand_tags("<OSN>: Prepare to die, <PN>!", &tags),
             "Bounty Hunter: Prepare to die, Stock!"
         );
         assert_eq!(expand_tags("Hey <PNN>.", &tags), "Hey Stock.");
-        assert_eq!(expand_tags("<PSN> or <PST>?", &tags), "Shuttle or Shuttle?");
+        assert_eq!(expand_tags("<PSN> or <PST>?", &tags), "Kestrel or Shuttle?");
         assert_eq!(
             expand_tags("Yes, <PRK>. No, <SRK>.", &tags),
             "Yes, captain. No, captain."

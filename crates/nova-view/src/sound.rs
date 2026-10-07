@@ -1,7 +1,8 @@
 //! The sounds screens make, as events: what happened, not what to play.
 //! The audio side decides which `snd ` each one plays, if any.
 //!
-//! - [`UiSound`]: the interface's own, a button pressed and released.
+//! - [`UiSound`]: the interface's own, a button pressed and released, and
+//!   the alert as something is refused.
 //! - [`SimSound`]: the flight session's, re-exported from `nova_sim`.
 //! - [`CombatSound`]: a fight's, a `snd ` heard from where it happened.
 //! - [`Sound`]: any of them, as a screen reports it through
@@ -20,6 +21,9 @@ pub enum UiSound {
     /// A pressed button popped back up: the pointer was let go, on the
     /// button or off it.
     ButtonUp,
+    /// The interface refused what was asked of it: the original's
+    /// `SysBeep`.
+    Alert,
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from

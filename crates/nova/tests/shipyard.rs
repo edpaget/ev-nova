@@ -3,7 +3,8 @@
 //! shipyard, it starts over; the shipyard sells the Shuttle and a Heavy
 //! Shuttle, twice as fast and carrying a fuel tank) and a synthetic
 //! interface file holding the stock "Create a new pilot:", "Spaceport",
-//! "Shipyard" and "Shipyard Info" dialogs, laid out by the real glyphon
+//! "Shipyard", "Shipyard Info" and "Text Input" dialogs, laid out by the
+//! real glyphon
 //! metrics, drawn through the renderer into the recording Gpu and driven
 //! only by window events, keys and typed text made by the platform's own
 //! translation. Pilots are kept in the in-memory store, so the test sees
@@ -11,10 +12,12 @@
 //!
 //! A new pilot lands and opens the Shipyard, whose info box shows each
 //! ship's price, the Shuttle's trade-in and the final price, and whose
-//! Info panel shows the Heavy Shuttle's stats. B buys the Heavy Shuttle:
-//! the pilot pays the price less the trade-in, flies the new ship with its
-//! fuel tank, and is saved; a held B buys nothing more. It takes off at
-//! the new ship's top speed, and in a new app the pilot still flies it.
+//! Info panel shows the Heavy Shuttle's stats. B asks the Heavy Shuttle's
+//! name, in a prompt naming its Long Name over a default the B does not
+//! type into; the name typed and Return buy it: the pilot pays the price
+//! less the trade-in, flies the new ship, named, with its fuel tank, and
+//! is saved; a held B buys nothing more. It takes off at the new ship's
+//! top speed, and in a new app the pilot still flies it, by its name.
 
 use std::io;
 use std::path::Path;
@@ -169,9 +172,12 @@ fn shuttle() -> Vec<u8> {
 }
 
 /// The Heavy Shuttle: 15 tons of cargo space, speed 600, 12 tons free,
-/// mass 25, 17,500 credits, carrying a fuel tank.
+/// mass 25, 17,500 credits, carrying a fuel tank, whose Long Name is
+/// "Heavy Shuttle".
 fn heavy_shuttle() -> Vec<u8> {
-    ship(15, 600, 12, 25, 17_500, "Heavy\\nShuttle", &[(128, 1)])
+    let mut bytes = ship(15, 600, 12, 25, 17_500, "Heavy\\nShuttle", &[(128, 1)]);
+    bytes[0x62E..0x62E + 13].copy_from_slice(b"Heavy Shuttle");
+    bytes
 }
 
 /// The Shuttle and the Heavy Shuttle.
@@ -329,9 +335,11 @@ fn user_items(items: &[(Place, bool)]) -> Vec<Vec<u8>> {
 }
 
 /// Stock "Shipyard" (`DLOG` 1004, 765 x 323, centred) and its thirteen
-/// user items, where 2, 3, 4 and 11 are parked outside it, and stock
+/// user items, where 2, 3, 4 and 11 are parked outside it; stock
 /// "Shipyard Info" (`DLOG` 1005, 250 x 285, centred) with its Done (1),
-/// title (3) and text (5).
+/// title (3) and text (5); and stock "Text Input" (`DLOG` 3001, 360 x
+/// 138, centred) with OK (1), a picture parked below it (2), the prompt
+/// (3), a picture (4), the field (5) and Cancel (6).
 fn shipyard_dialogs() -> Vec<(ResType, i16, Vec<u8>)> {
     let shipyard = user_items(&[
         ((365, 289, 109, 25), true),
@@ -355,7 +363,17 @@ fn shipyard_dialogs() -> Vec<(ResType, i16, Vec<u8>)> {
         ((300, 0, 1, 1), false),
         ((9, 32, 234, 214), false),
     ]);
+    let text_input = vec![
+        ditl_item((252, 106, 322, 126), BUTTON, b"OK"),
+        ditl_item((7, 147, 39, 179), PICTURE | DISABLED, &be(&[129])),
+        ditl_item((52, 5, 347, 55), STATIC_TEXT | DISABLED, b"^0"),
+        ditl_item((7, 5, 39, 37), PICTURE | DISABLED, &be(&[130])),
+        ditl_item((91, 64, 291, 80), EDIT_TEXT, b""),
+        ditl_item((170, 106, 240, 126), BUTTON, b"Cancel"),
+    ];
     vec![
+        (Dlog::TYPE, 3001, dlog((100, 100, 238, 460), 3001)),
+        (Ditl::TYPE, 3001, ditl(&text_input)),
         (Dlog::TYPE, 1004, dlog((100, 100, 423, 865), 1004)),
         (Ditl::TYPE, 1004, ditl(&shipyard)),
         (Dlog::TYPE, 1005, dlog((100, 100, 385, 350), 1005)),
@@ -468,8 +486,14 @@ impl Harness {
             let code = match c.to_ascii_lowercase() {
                 'a' => KeyCode::KeyA,
                 'd' => KeyCode::KeyD,
+                'e' => KeyCode::KeyE,
+                'h' => KeyCode::KeyH,
+                'k' => KeyCode::KeyK,
                 'l' => KeyCode::KeyL,
                 'p' => KeyCode::KeyP,
+                'r' => KeyCode::KeyR,
+                's' => KeyCode::KeyS,
+                't' => KeyCode::KeyT,
                 'x' => KeyCode::KeyX,
                 ' ' => KeyCode::Space,
                 other => panic!("no key listed for {other:?}"),
@@ -668,29 +692,7 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
     game.press(KeyCode::Escape);
     assert!(game.shipyard().info_panel().is_none(), "the panel alone");
 
-    // B buys it: the price less the trade-in, the new ship with its tank,
-    // and the pilot saved.
-    let writes = store.writes();
-    game.key(KeyCode::KeyB, true, false);
-    assert_eq!(game.pilot().ship(), HEAVY);
-    assert_eq!(game.pilot().cash(), 25_000 - 17_500 + 2500);
-    assert_eq!(game.pilot().owned(TANK), 1);
-    let fuel = game.pilot().reserves().fuel;
-    assert!((fuel.max - 400.0).abs() < 1e-3 && (fuel.now - 400.0).abs() < 1e-3);
-    assert_eq!(store.writes(), writes + 1);
-    assert_eq!(saved(&store, "Ada").ship(), HEAVY);
-    // Held, B buys nothing more.
-    for _ in 0..5 {
-        game.key(KeyCode::KeyB, true, true);
-    }
-    game.key(KeyCode::KeyB, false, false);
-    assert_eq!(game.pilot().cash(), 10_000);
-    assert_eq!(store.writes(), writes + 1, "nothing more to save");
-    let shown = texts(&game.frame());
-    assert!(
-        shown.contains(&"Trade-In: 5375".to_owned()),
-        "the Heavy Shuttle's quarter and its tank's half: {shown:?}"
-    );
+    buy_the_heavy_shuttle(&mut game, &store);
 
     // Done, then Leave: the ship takes off at the new top speed.
     game.press(KeyCode::Escape);
@@ -712,5 +714,61 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
     game.click(open_pilot);
     game.press(KeyCode::Enter);
     assert_eq!(game.pilot(), flown);
+    assert_eq!(game.pilot().ship_name(), Some("Kestrel"));
     assert!((game.top_speed() - 6.0).abs() < 1e-6);
+}
+
+/// Buys the Heavy Shuttle, selected in the open shipyard, naming it "The
+/// Kestrel" at its prompt, from 25,000 credits and a Shuttle.
+fn buy_the_heavy_shuttle(game: &mut Harness, store: &MemoryPilots) {
+    // B asks its name: the prompt names its Long Name, over a default the
+    // B does not type into. Nothing is bought yet.
+    let writes = store.writes();
+    game.type_key(KeyCode::KeyB, Some("b"));
+    let prompt = game.shipyard().naming().expect("the name prompt");
+    let default = prompt.field().text().to_owned();
+    assert!(prompt.field().selected(), "{default}");
+    let digits = &default[default.len() - 3..];
+    assert!(
+        digits.chars().all(|digit| ('1'..='9').contains(&digit)),
+        "{default}"
+    );
+    let shown = texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text.contains("Please name your new Heavy Shuttle:")),
+        "{shown:?}"
+    );
+    assert!(shown.contains(&default), "{default}: {shown:?}");
+    assert_eq!(game.pilot().ship(), SHUTTLE);
+    assert_eq!(store.writes(), writes);
+
+    // The name typed and Return buy it: the price less the trade-in, the
+    // new ship with its tank, named, and the pilot saved.
+    game.type_name("The Kestrel");
+    game.press(KeyCode::Enter);
+    assert!(game.shipyard().naming().is_none(), "closed");
+    assert_eq!(game.pilot().ship(), HEAVY);
+    assert_eq!(game.pilot().ship_name(), Some("Kestrel"));
+    assert_eq!(game.pilot().cash(), 25_000 - 17_500 + 2500);
+    assert_eq!(game.pilot().owned(TANK), 1);
+    let fuel = game.pilot().reserves().fuel;
+    assert!((fuel.max - 400.0).abs() < 1e-3 && (fuel.now - 400.0).abs() < 1e-3);
+    assert_eq!(store.writes(), writes + 1);
+    assert_eq!(saved(store, "Ada").ship(), HEAVY);
+    assert_eq!(saved(store, "Ada").ship_name(), Some("Kestrel"));
+    // Held, B buys nothing more, and opens no prompt.
+    for _ in 0..5 {
+        game.key(KeyCode::KeyB, true, true);
+    }
+    game.key(KeyCode::KeyB, false, false);
+    assert!(game.shipyard().naming().is_none());
+    assert_eq!(game.pilot().cash(), 10_000);
+    assert_eq!(store.writes(), writes + 1, "nothing more to save");
+    let shown = texts(&game.frame());
+    assert!(
+        shown.contains(&"Trade-In: 5375".to_owned()),
+        "the Heavy Shuttle's quarter and its tank's half: {shown:?}"
+    );
 }
