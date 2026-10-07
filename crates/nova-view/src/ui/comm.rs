@@ -507,18 +507,18 @@ impl Screen for CommDialog {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
-    /// The picture (or the backdrop), the ship's picture, then the dialog
+    /// The picture (or the backdrop), the ship's picture (a person's
+    /// `HailPict` in its place), then the dialog
     /// and the ship's status lines ([`status_lines`]), halfway down item
     /// 12, a line apart.
     fn draw(&self, list: &mut DrawList) {
         backdrop(list, self.dialog.bounds(), self.picture);
         if let Some(at) = self.dialog.item_bounds(PICTURE_ITEM) {
-            list.stretched_picture(
-                ship_picture(self.view.ship),
-                at.min,
-                at.width(),
-                at.height(),
-            );
+            let picture = self
+                .view
+                .portrait
+                .map_or_else(|| ship_picture(self.view.ship), ImageKey::picture);
+            list.stretched_picture(picture, at.min, at.width(), at.height());
         }
         self.dialog.draw(list);
         if let Some(at) = self.dialog.item_bounds(CLASS_ITEM) {
@@ -1042,6 +1042,45 @@ mod tests {
             ..view()
         };
         assert_eq!(class_text(&independent), "Class: Cruiser");
+    }
+
+    #[test]
+    fn a_person_with_a_hail_picture_shows_it_in_place_of_its_ships() {
+        let pictures = |view: &HailView| -> Vec<(ImageKey, Point, f32, f32)> {
+            drawn(&dialog(view))
+                .into_iter()
+                .filter_map(|command| match command {
+                    DrawCommand::StretchedPicture {
+                        image,
+                        top_left,
+                        width,
+                        height,
+                    } => Some((image, top_left, width, height)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let person = HailView {
+            portrait: Some(7800),
+            ..view()
+        };
+        assert_eq!(
+            pictures(&person)[..2],
+            [
+                (COMM_PICTURE, Point::new(0.0, 0.0), 423.0, 215.0),
+                (
+                    ImageKey::picture(7800),
+                    Point::new(216.0, 7.0),
+                    200.0,
+                    200.0
+                ),
+            ]
+        );
+        assert_eq!(
+            pictures(&view())[1].0,
+            ImageKey::picture(5001),
+            "without one, its ship's"
+        );
     }
 
     #[test]

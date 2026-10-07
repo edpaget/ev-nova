@@ -163,6 +163,13 @@
 //!   [`FlightView::with_escort_wage`], [`FlightView::with_hire_terms`],
 //!   [`FlightView::with_control_bits`]). Hired escorts who defect unpaid
 //!   on arrival or at take-off are told ([`defection_message`]).
+//! - Persons appear as the session's rules say
+//!   ([`FlightView::with_person_rules`]); the target panel shows a
+//!   person's own name and subtitle, a person hailed says its comm quote
+//!   as [`FlightView::with_comm_quote`] says, and each step a person may
+//!   say its hail quote ([`Session::tick_quotes`], right after the
+//!   traffic's tick), shown in the message line for
+//!   [`HAIL_QUOTE_SHOWN_FOR`], the last one said winning.
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
@@ -183,7 +190,7 @@ use nova_sim::{
     StartError, StellarId, Steps, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn,
     Vec2, flight::normalized, flight::shortest_turn,
 };
-use nova_sim::{ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote};
+use nova_sim::{ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules};
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
@@ -222,6 +229,9 @@ pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon 
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
 /// How long a message stays on screen.
 pub const MESSAGE_SHOWN_FOR: Duration = Duration::from_secs(4);
+/// How long a person's hail quote stays on screen: 420 frames at 30 a
+/// second (0x1a4 @0x4464d).
+pub const HAIL_QUOTE_SHOWN_FOR: Duration = Duration::from_secs(14);
 
 /// The keys flight holds: the original's defaults, and Alt, which turns
 /// the weapon select key back.
@@ -584,8 +594,9 @@ pub struct FlightView<C> {
     held: HashSet<Key>,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
-    /// The message shown, and `elapsed` when it was shown.
-    message: Option<(String, Duration)>,
+    /// The message shown, `elapsed` when it was shown, and how long it
+    /// stays.
+    message: Option<(String, Duration, Duration)>,
     /// Whether a boarding has opened that the router has not taken.
     pending_boarding: bool,
     /// The hail just answered, for the router.
@@ -818,6 +829,26 @@ impl<
     pub fn with_hire_terms(self, terms: Rc<dyn HireTerms>) -> Self {
         Self {
             session: self.session.map(|session| session.with_hire_terms(terms)),
+            ..self
+        }
+    }
+
+    /// The flight with `rules` deciding how persons appear
+    /// ([`Session::with_person_rules`]).
+    #[must_use]
+    pub fn with_person_rules(self, rules: Rc<dyn PersonRules>) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_person_rules(rules)),
+            ..self
+        }
+    }
+
+    /// The flight with a person's comm quote said as `source` says
+    /// ([`Session::with_comm_quote`]).
+    #[must_use]
+    pub fn with_comm_quote(self, source: RuleSource) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_comm_quote(source)),
             ..self
         }
     }
@@ -1140,13 +1171,18 @@ impl<C> FlightView<C> {
     /// The message on screen, if any.
     #[must_use]
     pub fn message(&self) -> Option<&str> {
-        let (text, shown_at) = self.message.as_ref()?;
-        (self.elapsed < *shown_at + MESSAGE_SHOWN_FOR).then_some(text.as_str())
+        let (text, shown_at, lasting) = self.message.as_ref()?;
+        (self.elapsed < *shown_at + *lasting).then_some(text.as_str())
     }
 
-    /// Shows `text` as the message, from now.
+    /// Shows `text` as the message, from now, for [`MESSAGE_SHOWN_FOR`].
     fn say(&mut self, text: impl Into<String>) {
-        self.message = Some((text.into(), self.elapsed));
+        self.say_for(text, MESSAGE_SHOWN_FOR);
+    }
+
+    /// Shows `text` as the message, from now, for `lasting`.
+    fn say_for(&mut self, text: impl Into<String>, lasting: Duration) {
+        self.message = Some((text.into(), self.elapsed, lasting));
     }
 
     /// Boards the target, or says why not: a boarding that opens is held
@@ -1587,7 +1623,8 @@ impl<C> FlightView<C> {
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         let unread = TargetCard::default();
         let shown = session.target().map(|npc| TargetShown {
-            name: session.ship_name(npc.ship).unwrap_or_default(),
+            name: session.npc_name(npc).unwrap_or_default(),
+            subtitle: session.npc_subtitle(npc),
             card: self.cards.get(&npc.ship).unwrap_or(&unread),
             code: npc.govt.and_then(|govt| self.codes.get(&govt)?.as_deref()),
             reserves: npc.reserves,
@@ -1758,6 +1795,7 @@ impl<
             self.held.contains(&SECONDARY_KEY),
         );
         let mut notes = Vec::new();
+        let mut quotes = Vec::new();
         if let Ok(session) = &mut self.session {
             session.hold_fire(fire.0, fire.1);
             for _ in 0..steps {
@@ -1769,6 +1807,8 @@ impl<
                     .collect();
                 session.tick(controls);
                 session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
+                session.tick_quotes(&self.catalog, &mut self.chance);
+                quotes.extend(session.take_quotes());
                 session.tick_assistance(&*self.disable_rule);
                 notes.extend(session.take_comm());
                 let rules = Rules {
@@ -1789,6 +1829,9 @@ impl<
         }
         for note in &notes {
             self.say(comm_message(note));
+        }
+        for quote in quotes {
+            self.say_for(quote.text, HAIL_QUOTE_SHOWN_FOR);
         }
         // The session may have populated its system afresh.
         self.read_npc_sheets();
@@ -2014,6 +2057,8 @@ mod tests {
         codes: Vec<(i16, String)>,
         /// The string lists: none, by default.
         strings: Vec<(i16, Vec<String>)>,
+        /// The persons: none, by default.
+        persons: Vec<nova_sim::PersonRecord>,
     }
 
     /// No strings unless a test sets them.
@@ -2084,6 +2129,7 @@ mod tests {
             cards: Vec::new(),
             codes: Vec::new(),
             strings: Vec::new(),
+            persons: Vec::new(),
         }
     }
 
@@ -2208,7 +2254,7 @@ mod tests {
         }
     }
 
-    /// The traffic and düdes given; no fleets and no persons.
+    /// The traffic, düdes and persons given; no fleets.
     impl TrafficCatalog for FakeCatalog {
         fn system_traffic(&self, id: SystemId) -> Option<nova_sim::SystemTraffic> {
             self.traffic
@@ -2229,7 +2275,7 @@ mod tests {
         }
 
         fn persons(&self) -> Vec<nova_sim::PersonRecord> {
-            Vec::new()
+            self.persons.clone()
         }
     }
 
@@ -5531,6 +5577,7 @@ mod tests {
             hud::bar_origin(bar),
             Some(&target::TargetShown {
                 name: "Ship 129",
+                subtitle: None,
                 card: &card,
                 code: Some("Fed."),
                 reserves: npc.reserves,
@@ -7015,5 +7062,103 @@ mod tests {
         let row = list.row(ShipId(129)).expect("listed: no Flags3 hides it");
         assert_eq!((row.fee, row.wage), (7, 3));
         assert_eq!(row.hire, Err(HireRefusal::NotForHire));
+    }
+
+    // Persons.
+
+    /// [`trafficked`] with no traffic of its own but a Person slot at
+    /// 100 %, "Ace" (`përs` 600, subtitle "Top Gun"), flying ship 129 and
+    /// saying `STR#` 7101 #1, "<OSN>: Prepare to die, <PN>!", now and
+    /// then.
+    fn peopled() -> FakeCatalog {
+        let mut catalog = trafficked(&[130], 0, 129, 3);
+        catalog.traffic[0].1.persons[0] = (Some(nova_sim::PersonId(600)), 100);
+        catalog.persons = vec![nova_sim::PersonRecord {
+            id: nova_sim::PersonId(600),
+            name: "Ace".to_owned(),
+            link_syst: -2,
+            govt: None,
+            ai_type: 3,
+            aggress: 2,
+            coward: 0,
+            ship: Some(ShipId(129)),
+            weapons: Vec::new(),
+            credits: 0,
+            shield_mod: 0,
+            hail_pict: None,
+            comm_quote: -1,
+            hail_quote: 1,
+            link_mission: None,
+            flags: 0,
+            active_on: String::new(),
+            subtitle: "Top Gun".to_owned(),
+            flags2: 0,
+        }];
+        catalog.strings = vec![(7101, vec!["<OSN>: Prepare to die, <PN>!".to_owned()])];
+        catalog
+    }
+
+    /// The draws that list Ace and place it 100 above the player, then
+    /// the first quote draw landing on 0.
+    const ACE: [u32; 5] = [99, 750, 650, 0, 0];
+
+    #[test]
+    fn a_person_targeted_shows_its_name_and_subtitle_on_the_panel() {
+        let (_, chance) = scripted(&ACE);
+        let mut view = FlightView::new(peopled())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        tap(&mut view, Key::Tab);
+        let texts: Vec<String> = drawn(&view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|text| text == "Ace"), "{texts:?}");
+        assert!(texts.iter().any(|text| text == "Top Gun"), "{texts:?}");
+    }
+
+    #[test]
+    fn a_hail_quote_shows_in_the_message_line_for_14_seconds() {
+        let (_, chance) = scripted(&ACE);
+        let mut view = FlightView::new(peopled())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        assert_eq!(
+            view.message(),
+            Some("Ace: Prepare to die, !"),
+            "an unnamed pilot"
+        );
+        let said = view.elapsed;
+        while view.elapsed + TICK < said + HAIL_QUOTE_SHOWN_FOR {
+            view.tick(TICK);
+        }
+        assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
+        while view.elapsed < said + HAIL_QUOTE_SHOWN_FOR {
+            view.tick(TICK);
+        }
+        assert_eq!(view.message(), None);
+        assert_eq!(HAIL_QUOTE_SHOWN_FOR, Duration::from_secs(14));
+    }
+
+    #[test]
+    fn the_persons_rules_reach_the_session() {
+        let rules = nova_sim::NovaPersons {
+            odds: RuleSource::Bible,
+            ..nova_sim::NovaPersons::default()
+        };
+        let view = flight().with_person_rules(Rc::new(rules));
+        assert_eq!(
+            format!("{:?}", view.session().expect("flying").person_rules()),
+            format!("{rules:?}")
+        );
+        for source in RuleSource::ALL {
+            let view = flight().with_comm_quote(source);
+            assert_eq!(view.session().expect("flying").comm_quote(), source);
+        }
     }
 }

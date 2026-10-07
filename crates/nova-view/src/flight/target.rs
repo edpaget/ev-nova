@@ -132,8 +132,11 @@ impl Pen<'_, '_> {
 /// What the panel shows of the target.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TargetShown<'a> {
-    /// Its ship type's name.
+    /// Its name: a person's own, or its ship type's.
     pub name: &'a str,
+    /// A person's subtitle, shown in place of its ship type's
+    /// (`_DrawStatusTarg` @0x4b860); none for any other ship.
+    pub subtitle: Option<&'a str>,
     /// Its ship type's subtitle and picture.
     pub card: &'a TargetCard,
     /// Its government's `TargetCode`, if any.
@@ -196,7 +199,7 @@ pub fn draw_target_panel(
         layout.bright_text,
     );
     pen.centred(
-        &card.subtitle,
+        target.subtitle.unwrap_or(&card.subtitle),
         left,
         right,
         top + SUBTITLE_BASELINE,
@@ -429,11 +432,40 @@ mod tests {
     fn shown(card: &TargetCard, reserves: Reserves, disabled: bool) -> TargetShown<'_> {
         TargetShown {
             name: "Shuttle",
+            subtitle: None,
             card,
             code: Some("Fed."),
             reserves,
             disabled,
         }
+    }
+
+    #[test]
+    fn a_person_shows_its_own_name_and_subtitle() {
+        let card = card(Some(3000));
+        let target = TargetShown {
+            name: "Ace",
+            subtitle: Some("Top Gun"),
+            code: None,
+            ..shown(&card, reserves(40.0, 50.0), false)
+        };
+        assert_eq!(
+            panel(Some(&target), Some(&MonoMetrics)),
+            [
+                DrawCommand::StretchedPicture {
+                    image: ImageKey::picture(3000),
+                    top_left: Point::new(862.0, 354.0),
+                    width: 128.0,
+                    height: 64.0,
+                },
+                // "Ace": 3 x 6 = 18 wide.
+                text("Ace", 917.0, 334.0, 12.0, BRIGHT),
+                // "Top Gun": 7 x 5 = 35 wide.
+                text("Top Gun", 908.5, 349.0, 10.0, BRIGHT),
+                text(SHIELD, 843.0, 424.0, 12.0, DIM),
+                text(" 100%", 885.0, 424.0, 12.0, BRIGHT),
+            ]
+        );
     }
 
     #[test]

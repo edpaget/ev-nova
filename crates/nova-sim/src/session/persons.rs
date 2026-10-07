@@ -78,6 +78,12 @@ impl Session {
         self
     }
 
+    /// How persons appear.
+    #[must_use]
+    pub fn person_rules(&self) -> &dyn PersonRules {
+        &*self.person_rules.0
+    }
+
     /// This session with a person's comm quote said as `source` says
     /// ([`RuleKey::CommQuote`](crate::RuleKey::CommQuote)): by the
     /// engine's default, as a friendly person's answer to Greetings;
