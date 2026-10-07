@@ -4580,7 +4580,8 @@ mod tests {
         }
     }
 
-    /// Never repels, gives odds of 75, and always captures.
+    /// Never repels, gives odds of 75, and always captures; a person
+    /// carries its `Credits`.
     #[derive(Debug)]
     struct Sure;
 
@@ -4599,6 +4600,10 @@ mod tests {
 
         fn captures(&self, _odds: u8, _chance: &mut dyn Chance) -> bool {
             true
+        }
+
+        fn person_credits(&self, credits: i32, _chance: &mut dyn Chance) -> i64 {
+            i64::from(credits)
         }
     }
 

@@ -44,16 +44,25 @@ impl Default for NovaAi {
 impl NovaAi {
     /// Nova's four and its escorts' AI as `rulebook` chooses: each of
     /// the four answers the player's attack or boarding as its
-    /// [`RuleKey::PiracyPolice`] entry says, and the escorts fly as its
-    /// [`RuleKey::EscortAi`] entry says.
+    /// [`RuleKey::PiracyPolice`] entry says, the warship and interceptor
+    /// persons run at their `Coward` as its [`RuleKey::PersonCoward`]
+    /// entry says, and the escorts fly as its [`RuleKey::EscortAi`] entry
+    /// says.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         let piracy_police = rulebook.source_for(RuleKey::PiracyPolice);
+        let person_coward = rulebook.source_for(RuleKey::PersonCoward);
         Self {
             wimpy: Rc::new(WimpyTrader { piracy_police }),
             brave: Rc::new(BraveTrader { piracy_police }),
-            warship: Rc::new(Warship { piracy_police }),
-            interceptor: Rc::new(Interceptor { piracy_police }),
+            warship: Rc::new(Warship {
+                piracy_police,
+                person_coward,
+            }),
+            interceptor: Rc::new(Interceptor {
+                piracy_police,
+                person_coward,
+            }),
             escorts: Rc::new(EscortAi {
                 escort_ai: rulebook.source_for(RuleKey::EscortAi),
             }),
@@ -456,6 +465,20 @@ mod tests {
                 format!("{ai:?}").matches(&expected).count(),
                 4,
                 "all four types: {ai:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nova_ai_runs_its_persons_as_its_rulebook_says() {
+        for source in RuleSource::ALL {
+            let rulebook = Rulebook::default().with_override(RuleKey::PersonCoward, source);
+            let ai = format!("{:?}", NovaAi::from_rulebook(&rulebook));
+            let expected = format!("person_coward: {source:?}");
+            assert_eq!(
+                ai.matches(&expected).count(),
+                2,
+                "the warship and the interceptor: {ai}"
             );
         }
     }

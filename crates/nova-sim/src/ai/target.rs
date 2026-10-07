@@ -33,21 +33,25 @@
 //! jumping in is never one.
 //!
 //! 1. **Keep** the live ship it attacks or flees from.
-//! 2. **A xenophobe**: the nearest of the player (unless `Flags` 0x0040,
+//! 2. **A grudge** (`_SelectWarshipTarget` @0x89ebc-0x89f20): a person
+//!    whose `Flags` has 0x0001 and who holds a grudge against the player
+//!    (see [`person`](crate::person)) picks the player, while it is in
+//!    the system and not breaking up, unless it spares it.
+//! 3. **A xenophobe**: the nearest of the player (unless `Flags` 0x0040,
 //!    or S is G and L is above none; always with 0x0004) and every NPC
 //!    enemy not allied with it and not of its own fleet.
-//! 3. **Help allies** (@0x8a418): the ship T that the first other ship of
+//! 4. **Help allies** (@0x8a418): the ship T that the first other ship of
 //!    a government allied with its own (its own included) attacks or
 //!    flees from, when its own friend strength times its government's
 //!    `MaxOdds` is no less than T's. T may be the player, but never a
 //!    ship it spares (below). This is how police come to a trader's
 //!    defence.
-//! 4. **The player** when it is hostile, and **every NPC enemy**: the
+//! 5. **The player** when it is hostile, and **every NPC enemy**: the
 //!    nearest of them, each dropped when its friend strength is above the
 //!    ship's own times its `MaxOdds`, and a disabled NPC skipped unless
 //!    the ship has destroying weapons. The original's heaviest candidate
 //!    for a ship with escorts is a placeholder: nearest always.
-//! 5. **Threats**: the nearest NPC attacking, sniping at or fleeing from
+//! 6. **Threats**: the nearest NPC attacking, sniping at or fleeing from
 //!    it, other than one it spares.
 //!
 //! **A target is dropped** ([`dropped`], @0x8bc73, @0x8e3ef) when it is
@@ -61,7 +65,7 @@
 //! such a ship a wimpy trader that leaves, which never targets the
 //! player unprovoked; this holds for any behaviour that asks here.
 //!
-//! Steps 3 and 5 never give a ship it spares. The original checks
+//! Steps 4 and 6 never give a ship it spares. The original checks
 //! neither there (nor does `_ExtendedIsThreatToShip` @0x81a27), so its
 //! police, seeing an allied trader that a stray police shot provoked,
 //! turn on their own kind until the drop at @0x8e2af clears the goal a
@@ -72,6 +76,7 @@ use crate::ai::{Surroundings, fire};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::govt::{ALWAYS_ATTACKS_PLAYER, NEVER_ATTACKS_PLAYER, NOSY};
+use crate::person::GRUDGE;
 use crate::traffic::npc::Npc;
 
 /// How far, in pixels on either axis per point of aggression, a warship
@@ -164,6 +169,12 @@ pub fn select_target(
     let paid_off = |ship| ship == ShipRef::Player && npc.spared;
     if let Some(kept) = current.filter(|&ship| around.live(ship) && !paid_off(ship)) {
         return Some(kept);
+    }
+    let grudging = npc
+        .person
+        .is_some_and(|person| person.grudge && person.flags & GRUDGE != 0);
+    if grudging && !npc.spared && around.live(ShipRef::Player) {
+        return Some(ShipRef::Player);
     }
     let govts = around.govts;
     let me = ShipRef::Npc(npc.id);
@@ -956,6 +967,76 @@ mod tests {
         assert!(
             !dropped(&npcs[0], n(2), &around(&npcs, &govts)),
             "it can finish it off"
+        );
+    }
+
+    // Persons.
+
+    /// The target of ship 1 of govt 140, a person of `flags` with a
+    /// grudge or not, spared or not, keeping `current`, with an enemy (NPC
+    /// 2) 50 below it, and the player far off with a clean record at home,
+    /// when it is in the system.
+    fn grudge_target(
+        flags: u16,
+        grudge: bool,
+        spared: bool,
+        current: Option<ShipRef>,
+        player_here: bool,
+    ) -> Option<ShipRef> {
+        let govts = govts(0);
+        let mut grudger = ship(1, ME, 0.0, 0.0);
+        grudger.spared = spared;
+        grudger.person = Some(crate::traffic::npc::NpcPerson {
+            id: crate::catalog::PersonId(510),
+            flags,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: -1,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge,
+            quoted: false,
+            quoted_at: None,
+        });
+        let npcs = [grudger, ship(2, ENEMY, 0.0, 50.0)];
+        let around = Surroundings {
+            player: player_here.then(|| player(0.0, -1000.0)),
+            govts: &govts,
+            system_govt: Some(ME),
+            ..Surroundings::new(&[], &npcs)
+        };
+        select_target(&npcs[0], current, &around)
+    }
+
+    #[test]
+    fn a_person_holding_a_grudge_picks_the_player_before_any_other() {
+        let grudge = crate::person::GRUDGE;
+        assert_eq!(grudge_target(grudge, true, false, None, true), Some(P));
+        assert_eq!(
+            grudge_target(grudge, false, false, None, true),
+            Some(n(2)),
+            "no grudge"
+        );
+        assert_eq!(
+            grudge_target(0, true, false, None, true),
+            Some(n(2)),
+            "no 0x0001"
+        );
+        assert_eq!(
+            grudge_target(grudge, true, true, None, true),
+            Some(n(2)),
+            "spared"
+        );
+        assert_eq!(
+            grudge_target(grudge, true, false, Some(n(2)), true),
+            Some(n(2)),
+            "it keeps the ship it fights"
+        );
+        assert_eq!(
+            grudge_target(grudge, true, false, None, false),
+            Some(n(2)),
+            "no player in the system"
         );
     }
 }

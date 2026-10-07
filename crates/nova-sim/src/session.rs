@@ -752,7 +752,9 @@ impl Session {
         }
         self.combat
             .tick(&mut fighters, &self.arsenal, &self.govts, rules, chance);
-        let strikes = self.combat.take_strikes();
+        let mut strikes = self.combat.take_strikes();
+        self.refill_invincible(&mut strikes);
+        self.hold_grudges(&strikes);
         self.punish(&strikes, &was, rules.law);
         self.strikes.extend(strikes);
         let sorties = self.combat.take_sorties();
@@ -767,7 +769,7 @@ impl Session {
             .map(|npc| npc.id)
             .collect();
         for id in destroyed {
-            self.traffic.remove(id);
+            self.lose_destroyed(id);
         }
         self.orphan_fighters();
         self.clear_lost_target();
@@ -1399,7 +1401,7 @@ impl Session {
         if rule.repels(npc.booty) {
             return Ok(Boarding::Repelled);
         }
-        let mut plunder = Plunder::roll(&self.prize(&npc), chance);
+        let mut plunder = Plunder::roll(&self.prize(&npc), rule, chance);
         plunder.odds = rule.capture_odds(&self.capture_crew(&npc), chance);
         let aboard = Aboard {
             npc: npc.id,
@@ -1458,6 +1460,10 @@ impl Session {
                         .flatten(),
                 })
                 .collect(),
+            person_credits: npc
+                .person
+                .and_then(|person| self.traffic.person(person.id))
+                .map(|person| person.record.credits),
         }
     }
 
@@ -1658,6 +1664,7 @@ impl Session {
             .find(|npc| npc.id == id)
             .and_then(|npc| self.ship_record(npc.ship))
             .map(|record| record.inherent_ai);
+        self.lose_captured(id);
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
@@ -1774,6 +1781,7 @@ impl Session {
                 other.leader = None;
             }
         }
+        self.lose_captured(npc.id);
         self.leave(npc.id);
         self.pilot.escorts.push(old);
         self.fleet.resize(self.pilot.escorts.len() - 1, None);

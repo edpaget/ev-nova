@@ -27,7 +27,17 @@
 //! named commodity, and would loop for ever on a booty naming none; here
 //! a booty with no commodity bit gives no cargo); all the rounds of one
 //! of its ammunitions the player can fire, other than a fighter bay's;
-//! and a draw of a tenth of its `Fuel`, in tens.
+//! and a draw of a tenth of its `Fuel`, in tens. A person (see
+//! [`person`](crate::person)) has no `düde`, so no booty and no cargo;
+//! the credits on board are its `Credits` as the
+//! [`BoardingRule::person_credits`] says ([`RuleKey::PersonCredits`]):
+//! by the engine (`_SetPlunderValues` @0x922f2-0x9238f), k = its
+//! `Credits` in whole thousands kept in 16 bits (so 32,768,000 or more
+//! wraps), x = k x [`PERSON_CREDITS_SHARE`], above
+//! [`CREDITS_DRAW_ABOVE`] a draw of `Rand(trunc(x))` more, and trunc(x x
+//! 1000) credits, none at or below none and with no floor; by the Bible
+//! ("This many credits, +/- 25%"), trunc(`Credits` x (75 + `Rand(51)`) /
+//! 100), none for `Credits` of none or less.
 //!
 //! **Capture odds** ([`NovaBoarding::capture_odds`]): ten times the ratio
 //! of the player's crew (its ship's `Crew`, a tenth of each warship or
@@ -142,6 +152,13 @@ pub const CREDITS_PER_THOUSAND: f64 = 0.025;
 pub const CREDITS_DRAW_ABOVE: f64 = 2.0;
 /// The fewest credits on board, when there are any.
 pub const MIN_CREDITS: i64 = 1000;
+/// A person's credits on board per thousand of its `Credits`, in
+/// thousands, by the engine (0.5 @0xdd128).
+pub const PERSON_CREDITS_SHARE: f64 = 0.5;
+/// The Bible's least share of a person's `Credits`, in percent.
+pub const BIBLE_CREDITS_LEAST: i64 = 75;
+/// The spread of the Bible's share: `Rand(51)` more percent.
+pub const BIBLE_CREDITS_SPREAD: u32 = 51;
 /// The self-destruct threshold before any take: this and a draw of
 /// [`THRESHOLD_SPREAD`] (@0x93037).
 pub const THRESHOLD_BASE: u32 = 15;
@@ -182,6 +199,9 @@ pub struct Prize {
     pub fuel: i16,
     /// The rounds of each ammunition it holds.
     pub rounds: Vec<HeldRounds>,
+    /// Its person's `Credits`, when a person flies it: they, not its
+    /// `Cost`, give the credits on board.
+    pub person_credits: Option<i32>,
 }
 
 /// What can be taken from a boarded ship, rolled once a boarding, and the
@@ -208,12 +228,14 @@ pub struct Plunder {
 
 impl Plunder {
     /// The plunder on board `prize`, rolled on `chance`, in the original's
-    /// order: the threshold, the credits, the cargo, the ammunition and
-    /// the energy (see the module docs). The odds are left at none, for
-    /// the [`BoardingRule`] to set.
-    pub fn roll(prize: &Prize, chance: &mut dyn Chance) -> Self {
+    /// order: the threshold, the credits (a person's as `rule` says), the
+    /// cargo, the ammunition and the energy (see the module docs). The
+    /// odds are left at none, for the [`BoardingRule`] to set.
+    pub fn roll(prize: &Prize, rule: &dyn BoardingRule, chance: &mut dyn Chance) -> Self {
         let threshold = THRESHOLD_BASE + chance.below(THRESHOLD_SPREAD);
-        let credits = if prize.booty & MONEY == 0 {
+        let credits = if let Some(credits) = prize.person_credits {
+            rule.person_credits(credits, chance)
+        } else if prize.booty & MONEY == 0 {
             0
         } else {
             let mut thousands = f64::from(prize.cost / 1000) * CREDITS_PER_THOUSAND;
@@ -518,6 +540,9 @@ pub trait BoardingRule: Debug {
     fn capture_odds(&self, crew: &CaptureCrew, chance: &mut dyn Chance) -> u8;
     /// Whether a capture at `odds` succeeds, rolled on `chance`.
     fn captures(&self, odds: u8, chance: &mut dyn Chance) -> bool;
+    /// The credits a person of `Credits` `credits` carries, drawn on
+    /// `chance`.
+    fn person_credits(&self, credits: i32, chance: &mut dyn Chance) -> i64;
 }
 
 /// Nova's boarding rules (see the module docs), the engine's by default.
@@ -530,16 +555,22 @@ pub struct NovaBoarding {
     /// are held at 1 or more; by the Bible, they are none
     /// ([`RuleKey::CrewlessCapture`]).
     pub crewless_capture: RuleSource,
+    /// The credits a person carries: by the engine, half its `Credits`
+    /// and a draw more; by the Bible, its `Credits` +/- 25 %
+    /// ([`RuleKey::PersonCredits`]).
+    pub person_credits: RuleSource,
 }
 
 impl NovaBoarding {
-    /// The rules `rulebook` chooses: its [`RuleKey::EmptyBooty`] and
-    /// [`RuleKey::CrewlessCapture`] entries.
+    /// The rules `rulebook` chooses: its [`RuleKey::EmptyBooty`],
+    /// [`RuleKey::CrewlessCapture`] and [`RuleKey::PersonCredits`]
+    /// entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
             empty_booty: rulebook.source_for(RuleKey::EmptyBooty),
             crewless_capture: rulebook.source_for(RuleKey::CrewlessCapture),
+            person_credits: rulebook.source_for(RuleKey::PersonCredits),
         }
     }
 }
@@ -589,6 +620,27 @@ impl BoardingRule for NovaBoarding {
     fn captures(&self, odds: u8, chance: &mut dyn Chance) -> bool {
         let draw = chance.below(CAPTURE_ROLL);
         odds > 0 && draw <= u32::from(odds)
+    }
+
+    fn person_credits(&self, credits: i32, chance: &mut dyn Chance) -> i64 {
+        match self.person_credits {
+            RuleSource::Engine => {
+                // `movswl` @0x92326: the thousands kept in 16 bits.
+                let thousands = (credits / 1000) as i16;
+                let mut x = f64::from(thousands) * PERSON_CREDITS_SHARE;
+                if x > CREDITS_DRAW_ABOVE {
+                    x += f64::from(chance.below(x as u32));
+                }
+                ((x * 1000.0) as i64).max(0)
+            }
+            RuleSource::Bible => {
+                if credits <= 0 {
+                    return 0;
+                }
+                let percent = BIBLE_CREDITS_LEAST + i64::from(chance.below(BIBLE_CREDITS_SPREAD));
+                i64::from(credits) * percent / 100
+            }
+        }
     }
 }
 
@@ -849,13 +901,116 @@ mod tests {
             holds: 15,
             fuel: 300,
             rounds: Vec::new(),
+            person_credits: None,
         }
     }
 
     fn roll(prize: &Prize, draws: &[u32]) -> (Plunder, Vec<u32>) {
+        roll_by(&NovaBoarding::default(), prize, draws)
+    }
+
+    fn roll_by(rule: &dyn BoardingRule, prize: &Prize, draws: &[u32]) -> (Plunder, Vec<u32>) {
         let mut chance = Draws::of(draws);
-        let plunder = Plunder::roll(prize, &mut chance);
+        let plunder = Plunder::roll(prize, rule, &mut chance);
         (plunder, chance.asked)
+    }
+
+    /// A person's credits by `rule` for `Credits` `credits`, drawn from
+    /// `draws`, and the bounds asked.
+    fn person_credits(rule: RuleSource, credits: i32, draws: &[u32]) -> (i64, Vec<u32>) {
+        let rule = NovaBoarding {
+            person_credits: rule,
+            ..NovaBoarding::default()
+        };
+        let mut chance = Draws::of(draws);
+        let credits = rule.person_credits(credits, &mut chance);
+        (credits, chance.asked)
+    }
+
+    #[test]
+    fn by_the_engine_a_person_carries_half_its_credits_in_thousands_and_a_draw_more() {
+        let engine = RuleSource::Engine;
+        assert_eq!(person_credits(engine, 8000, &[3]), (7000, vec![4]));
+        assert_eq!(person_credits(engine, 75_000, &[0]), (37_500, vec![37]));
+        assert_eq!(
+            person_credits(engine, 1000, &[]),
+            (500, vec![]),
+            "no draw at 0.5"
+        );
+        assert_eq!(
+            person_credits(engine, 4000, &[]),
+            (2000, vec![]),
+            "none at 2"
+        );
+        assert_eq!(
+            person_credits(engine, 4999, &[]),
+            (2000, vec![]),
+            "thousands truncated"
+        );
+        assert_eq!(person_credits(engine, 999, &[]), (0, vec![]));
+        assert_eq!(
+            person_credits(engine, 42_000_000, &[]),
+            (0, vec![]),
+            "42,000 thousands wrap in 16 bits below none"
+        );
+        assert_eq!(
+            person_credits(engine, 65_536_000, &[]),
+            (0, vec![]),
+            "65,536 thousands wrap to none"
+        );
+        assert_eq!(
+            person_credits(engine, 65_540_000, &[0]),
+            (2000, vec![]),
+            "and 65,540 to 4"
+        );
+        assert_eq!(person_credits(engine, 0, &[]), (0, vec![]));
+        assert_eq!(person_credits(engine, -8000, &[]), (0, vec![]));
+        assert_eq!(PERSON_CREDITS_SHARE, 0.5);
+    }
+
+    #[test]
+    fn by_the_bible_a_person_carries_its_credits_give_or_take_a_quarter() {
+        let bible = RuleSource::Bible;
+        assert_eq!(person_credits(bible, 8000, &[0]), (6000, vec![51]));
+        assert_eq!(person_credits(bible, 8000, &[50]), (10_000, vec![51]));
+        assert_eq!(person_credits(bible, 8000, &[25]), (8000, vec![51]));
+        assert_eq!(person_credits(bible, 7, &[0]), (5, vec![51]), "truncated");
+        assert_eq!(person_credits(bible, 0, &[]), (0, vec![]));
+        assert_eq!(person_credits(bible, -100, &[]), (0, vec![]));
+        assert_eq!(
+            person_credits(bible, 42_000_000, &[50]),
+            (52_500_000, vec![51]),
+            "no wrap"
+        );
+    }
+
+    #[test]
+    fn a_persons_plunder_rolls_the_threshold_then_its_credits_and_no_cargo() {
+        let person = Prize {
+            booty: 0,
+            person_credits: Some(8000),
+            ..prize(0x003f)
+        };
+        let (plunder, asked) = roll(&person, &[0, 3, 0]);
+        assert_eq!(asked, [26, 4, 30], "threshold, credits, then the energy");
+        assert_eq!(plunder.credits, 7000);
+        assert_eq!(plunder.cargo, None);
+        let bible = NovaBoarding {
+            person_credits: RuleSource::Bible,
+            ..NovaBoarding::default()
+        };
+        let (plunder, asked) = roll_by(&bible, &person, &[0, 50, 0]);
+        assert_eq!(asked, [26, 51, 30]);
+        assert_eq!(plunder.credits, 10_000);
+        let dude = Prize {
+            cost: 150_000,
+            ..prize(MONEY)
+        };
+        assert_eq!(
+            roll_by(&bible, &dude, &[0, 2]).0.credits,
+            5750,
+            "a düde ship's credits are as before"
+        );
     }
 
     #[test]
@@ -1177,8 +1332,20 @@ mod tests {
         );
         let bible = NovaBoarding::from_rulebook(&Rulebook::new(RuleSource::Bible));
         assert_eq!(
-            (bible.empty_booty, bible.crewless_capture),
-            (RuleSource::Bible, RuleSource::Bible)
+            (
+                bible.empty_booty,
+                bible.crewless_capture,
+                bible.person_credits
+            ),
+            (RuleSource::Bible, RuleSource::Bible, RuleSource::Bible)
+        );
+        let credits = Rulebook::default().with_override(RuleKey::PersonCredits, RuleSource::Bible);
+        assert_eq!(
+            NovaBoarding::from_rulebook(&credits),
+            NovaBoarding {
+                person_credits: RuleSource::Bible,
+                ..NovaBoarding::default()
+            }
         );
         let one = Rulebook::default().with_override(RuleKey::EmptyBooty, RuleSource::Bible);
         let rule = NovaBoarding::from_rulebook(&one);

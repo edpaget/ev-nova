@@ -18,6 +18,15 @@
 //!     shields below [`AGGRESSION_1_SHIELDS`] of their most at aggression
 //!     1, or [`AGGRESSION_2_SHIELDS`] at aggression 2. Any other
 //!     aggression never retreats.
+//!   - A person's shield retreat (@0x8be36-0x8bf35) is instead below
+//!     trunc(its shields' most x `Coward` x [`COWARD_SHARE`]), whatever
+//!     its aggression; a `Coward` of 0 or less never retreats. By the
+//!     engine only a warship person retreats so, as any warship, with no
+//!     fleet lead and by its government's `Flags` 0x0010 (an
+//!     independent never); an interceptor person never does. By the
+//!     Bible ([`RuleKey::PersonCoward`](crate::RuleKey::PersonCoward)),
+//!     any warship or interceptor person with no fleet lead does,
+//!     whatever its government.
 //! - **A hopeless chase** ([`hopeless_chase`]) stands off and snipes;
 //!   anything else is attacked.
 //! - With no target it goes about its business ([`idle`](super::idle)).
@@ -42,6 +51,10 @@ pub const AGGRESSION_1_SHIELDS: f32 = 0.3;
 /// retreats (0.15 @0xdda88).
 pub const AGGRESSION_2_SHIELDS: f32 = 0.15;
 
+/// A person's shield retreat's share of its shields per point of
+/// `Coward` (0.01 @0xdd098).
+pub const COWARD_SHARE: f64 = 0.01;
+
 /// How a hunter retreats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Retreat {
@@ -49,6 +62,9 @@ pub struct Retreat {
     pub odds_flag: u16,
     /// Whether it retreats when its shields run low.
     pub shields: bool,
+    /// Which persons retreat at their `Coward`
+    /// ([`RuleKey::PersonCoward`](crate::RuleKey::PersonCoward)).
+    pub person_coward: RuleSource,
 }
 
 /// What a hunter (a warship or interceptor) does, retreating as `retreat`
@@ -84,13 +100,24 @@ fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
         && npc.goal.attacking().is_some()
         && below(ODDS_RETREAT_SHIELDS)
         && odds_against(npc, around) > govts.max_odds(npc.govt);
-    let worn = retreat.shields
-        && govts.flag(npc.govt, WARSHIPS_RETREAT)
-        && npc.leader.is_none()
-        && match npc.aggression {
-            1 => below(AGGRESSION_1_SHIELDS),
-            2 => below(AGGRESSION_2_SHIELDS),
-            _ => false,
+    let by_government = retreat.shields && govts.flag(npc.govt, WARSHIPS_RETREAT);
+    let worn = npc.leader.is_none()
+        && match npc.person {
+            Some(person) => {
+                let threshold =
+                    (f64::from(shield.max) * f64::from(person.coward) * COWARD_SHARE).trunc();
+                (by_government || retreat.person_coward == RuleSource::Bible)
+                    && person.coward > 0
+                    && f64::from(shield.now) < threshold
+            }
+            None => {
+                by_government
+                    && match npc.aggression {
+                        1 => below(AGGRESSION_1_SHIELDS),
+                        2 => below(AGGRESSION_2_SHIELDS),
+                        _ => false,
+                    }
+            }
         };
     outnumbered || worn
 }
@@ -100,18 +127,25 @@ fn retreats(npc: &Npc, around: &Surroundings, retreat: Retreat) -> bool {
 pub struct Warship {
     /// Who comes to a ship's help ([`react::answer`]).
     pub piracy_police: RuleSource,
+    /// Which persons retreat at their `Coward`.
+    pub person_coward: RuleSource,
 }
 
 /// A warship's retreat: when outnumbered or its shields run low, both by
-/// `Flags` 0x0010.
+/// `Flags` 0x0010, a person at its `Coward` by the engine.
 pub const WARSHIP_RETREAT: Retreat = Retreat {
     odds_flag: WARSHIPS_RETREAT,
     shields: true,
+    person_coward: RuleSource::Engine,
 };
 
 impl Behaviour for Warship {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
-        hunt(npc, around, WARSHIP_RETREAT).unwrap_or_else(|| idle(npc, around, chance))
+        let retreat = Retreat {
+            person_coward: self.person_coward,
+            ..WARSHIP_RETREAT
+        };
+        hunt(npc, around, retreat).unwrap_or_else(|| idle(npc, around, chance))
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -138,6 +172,7 @@ mod tests {
     use crate::combat::weapon::WeaponSpec;
     use crate::geometry::Vec2;
     use crate::govt::Governments;
+    use crate::rulebook::RuleSource;
     use crate::testkit::{Draws, weapon};
     use crate::traffic::npc::{AiType, NpcId};
 
@@ -389,5 +424,198 @@ mod tests {
             Some(Goal::Attack(P)),
             "a Good Samaritan"
         );
+    }
+
+    // Persons.
+
+    /// A person (`Coward` `coward`) of `ai_type` flying for the police
+    /// (with `police_flags`), at `shield` of its 100 and aggression
+    /// `aggression`, fighting the pirate NPC 2, by `rule`; led by NPC 3
+    /// when `led`.
+    fn coward(
+        police_flags: u16,
+        ai_type: AiType,
+        coward: i16,
+        (shield, aggression): (f32, u8),
+        led: bool,
+        rule: RuleSource,
+    ) -> Goal {
+        let mut hunter = ship(1, POLICE, ai_type, 0.0, 0.0);
+        hunter.goal = Goal::Attack(n(2));
+        hunter.reserves.shield = crate::reserves::Gauge {
+            now: shield,
+            max: 100.0,
+        };
+        hunter.aggression = aggression;
+        hunter.leader = led.then_some(NpcId(3));
+        hunter.person = Some(crate::traffic::npc::NpcPerson { coward, ..person() });
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        let leader = ship(3, POLICE, AiType::Warship, 50.0, 0.0);
+        let govts = govts(0, police_flags);
+        let sites = sites();
+        let npcs = [hunter, pirate, leader];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        let behaviour: Box<dyn Behaviour> = match ai_type {
+            AiType::Interceptor => Box::new(crate::ai::Interceptor {
+                person_coward: rule,
+                ..crate::ai::Interceptor::default()
+            }),
+            _ => Box::new(Warship {
+                person_coward: rule,
+                ..Warship::default()
+            }),
+        };
+        behaviour.decide(&npcs[0], &around, &mut Draws::of(&[0]))
+    }
+
+    /// Person 600's traits, none of note.
+    fn person() -> crate::traffic::npc::NpcPerson {
+        crate::traffic::npc::NpcPerson {
+            id: crate::catalog::PersonId(600),
+            flags: 0,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: -1,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: false,
+            quoted: false,
+            quoted_at: None,
+        }
+    }
+
+    const ENGINE: RuleSource = RuleSource::Engine;
+    const BIBLE: RuleSource = RuleSource::Bible;
+    const FLEE: Goal = Goal::Flee(ShipRef::Npc(NpcId(2)));
+    const FIGHT: Goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
+
+    #[test]
+    fn by_the_engine_a_warship_person_of_0x0010_runs_below_its_coward_share() {
+        let w = AiType::Warship;
+        for aggression in [1, 2, 4] {
+            assert_eq!(
+                coward(WARSHIPS_RETREAT, w, 25, (24.0, aggression), false, ENGINE),
+                FLEE,
+                "{aggression}"
+            );
+            assert_eq!(
+                coward(WARSHIPS_RETREAT, w, 25, (26.0, aggression), false, ENGINE),
+                FIGHT,
+                "{aggression}"
+            );
+        }
+        assert_eq!(
+            coward(WARSHIPS_RETREAT, w, 25, (25.0, 4), false, ENGINE),
+            FIGHT,
+            "at its share it stays"
+        );
+        assert_eq!(
+            coward(0, w, 25, (24.0, 4), false, ENGINE),
+            FIGHT,
+            "no 0x0010"
+        );
+        assert_eq!(
+            coward(WARSHIPS_RETREAT, w, 0, (0.0, 1), false, ENGINE),
+            FIGHT,
+            "Coward 0 never runs"
+        );
+        assert_eq!(
+            coward(WARSHIPS_RETREAT, w, -5, (0.0, 1), false, ENGINE),
+            FIGHT
+        );
+        assert_eq!(
+            coward(WARSHIPS_RETREAT, w, 25, (24.0, 4), true, ENGINE),
+            FIGHT,
+            "led"
+        );
+        assert_eq!(
+            coward(
+                WARSHIPS_RETREAT,
+                AiType::Interceptor,
+                25,
+                (1.0, 4),
+                false,
+                ENGINE
+            ),
+            FIGHT,
+            "an interceptor person never runs for its shields"
+        );
+        assert_eq!(COWARD_SHARE, 0.01);
+    }
+
+    #[test]
+    fn a_coward_share_is_truncated() {
+        // Shields of 30 at Coward 25: trunc(7.5) = 7.
+        let mut hunter = ship(1, POLICE, AiType::Warship, 0.0, 0.0);
+        hunter.reserves.shield.now = 7.0;
+        hunter.goal = Goal::Attack(n(2));
+        hunter.person = Some(crate::traffic::npc::NpcPerson {
+            coward: 25,
+            ..person()
+        });
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        let govts = govts(0, WARSHIPS_RETREAT);
+        let npcs = [hunter, pirate];
+        assert_eq!(decided_by(&govts, &npcs, 0), FIGHT, "7 is not below 7");
+        let mut lower = npcs.clone();
+        lower[0].reserves.shield.now = 6.9;
+        assert_eq!(decided_by(&govts, &lower, 0), FLEE);
+    }
+
+    #[test]
+    fn an_independent_warship_person_never_runs_by_the_engine() {
+        let mut hunter = ship(1, POLICE, AiType::Warship, 0.0, 0.0);
+        hunter.govt = None;
+        hunter.goal = Goal::Attack(n(2));
+        hunter.reserves.shield.now = 0.5;
+        hunter.person = Some(crate::traffic::npc::NpcPerson {
+            coward: 50,
+            ..person()
+        });
+        let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
+        let govts = govts(0, WARSHIPS_RETREAT);
+        assert_eq!(
+            decided_by(&govts, &[hunter.clone(), pirate.clone()], 0),
+            FIGHT
+        );
+        let sites = sites();
+        let npcs = [hunter, pirate];
+        let around = around(&sites, &npcs, &govts, (0.0, -100.0), 0);
+        let bible = Warship {
+            person_coward: BIBLE,
+            ..Warship::default()
+        };
+        assert_eq!(
+            bible.decide(&npcs[0], &around, &mut Draws::of(&[0])),
+            FLEE,
+            "by the Bible, independents too"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_any_warship_or_interceptor_person_unled_runs_at_its_coward_share() {
+        for ai_type in [AiType::Warship, AiType::Interceptor] {
+            assert_eq!(
+                coward(0, ai_type, 25, (24.0, 4), false, BIBLE),
+                FLEE,
+                "{ai_type:?}"
+            );
+            assert_eq!(
+                coward(0, ai_type, 25, (26.0, 4), false, BIBLE),
+                FIGHT,
+                "{ai_type:?}"
+            );
+            assert_eq!(
+                coward(0, ai_type, 25, (24.0, 4), true, BIBLE),
+                FIGHT,
+                "{ai_type:?}"
+            );
+            assert_eq!(
+                coward(0, ai_type, 0, (0.0, 4), false, BIBLE),
+                FIGHT,
+                "{ai_type:?}"
+            );
+        }
     }
 }

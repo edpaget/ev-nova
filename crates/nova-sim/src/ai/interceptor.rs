@@ -1,8 +1,9 @@
 //! Nova's interceptor (AI type 4, `_InterceptorAI` @0x8c896 in the `EV
 //! Nova` executable): police.
 //!
-//! - It hunts as a warship does ([`hunt`]), but with no shield retreat,
-//!   and its odds retreat is gated on its government's `Flags` 0x0100
+//! - It hunts as a warship does ([`hunt`]), but with no shield retreat
+//!   (a person's at its `Coward` only by the Bible's
+//!   [`RuleKey::PersonCoward`](crate::RuleKey::PersonCoward)), and its odds retreat is gated on its government's `Flags` 0x0100
 //!   rather than 0x0010 (@0x8d180, likely a slip in the original, kept as
 //!   the default).
 //! - Idle with nothing to fight, it inspects (@0x8ce34): it flies up to a
@@ -33,6 +34,7 @@ pub const INSPECT_REACH: f32 = 100.0;
 pub const INTERCEPTOR_RETREAT: Retreat = Retreat {
     odds_flag: INTERCEPTORS_RETREAT,
     shields: false,
+    person_coward: RuleSource::Engine,
 };
 
 /// Nova's interceptor (see the module docs).
@@ -40,11 +42,17 @@ pub const INTERCEPTOR_RETREAT: Retreat = Retreat {
 pub struct Interceptor {
     /// Who comes to a ship's help ([`react::answer`]).
     pub piracy_police: RuleSource,
+    /// Which persons retreat at their `Coward`.
+    pub person_coward: RuleSource,
 }
 
 impl Behaviour for Interceptor {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
-        if let Some(goal) = hunt(npc, around, INTERCEPTOR_RETREAT) {
+        let retreat = Retreat {
+            person_coward: self.person_coward,
+            ..INTERCEPTOR_RETREAT
+        };
+        if let Some(goal) = hunt(npc, around, retreat) {
             return goal;
         }
         if let Goal::Inspect(ship) = npc.goal
