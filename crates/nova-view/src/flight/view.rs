@@ -608,7 +608,10 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
                 .then(|| self.map.model().system(next))
                 .flatten()
                 .map(|system| system.entry.name.clone());
-            NavDisplay::Hyperspace(name)
+            NavDisplay::Hyperspace {
+                name,
+                readiness: session.jump_readiness(),
+            }
         })
     }
 
@@ -4362,6 +4365,29 @@ mod tests {
             .collect()
     }
 
+    /// The texts drawn in the HUD's nav area, as [`nav`] gives them, each
+    /// with its colour.
+    fn nav_colored(view: &View) -> Vec<(String, Color)> {
+        let area = layout().nav.offset(at(830.0, 0.0));
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    ..
+                } if area.contains(*origin) => Some((text.clone(), *color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The colour the nav area's value, its second line, is drawn in.
+    fn nav_value_color(view: &View) -> Color {
+        nav_colored(view)[1].1
+    }
+
     /// The texts drawn in the cargo area, at the stock bar's (830, 0),
     /// with where each starts.
     fn cargo(view: &View) -> Vec<(String, Point)> {
@@ -4449,6 +4475,66 @@ mod tests {
         assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION], "arrived");
         plot(&mut view, 130);
         assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Sol"]);
+    }
+
+    #[test]
+    fn the_destination_is_dim_until_the_ship_is_out_far_enough_to_jump() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        let hyperspace = |value: Color| {
+            vec![
+                (hud::NAV_HYPERSPACE.to_owned(), Color::DIM),
+                (hud::NAV_UNEXPLORED.to_owned(), value),
+            ]
+        };
+        assert_eq!(nav_colored(&view), hyperspace(Color::DIM));
+        let clear_iff_out = |view: &View| {
+            let out = player(view).position.length() >= MIN_JUMP_DISTANCE;
+            let expected = if out { Color::WHITE } else { Color::DIM };
+            assert_eq!(nav_value_color(view), expected, "{:?}", player(view));
+            out
+        };
+        view.input(&key(Key::Up, true));
+        let mut dim_ticks = 0;
+        while !clear_iff_out(&view) {
+            dim_ticks += 1;
+            assert!(dim_ticks < 2000, "never got out");
+            view.tick(TICK);
+        }
+        assert!(dim_ticks > 0, "it started inside");
+        assert_eq!(nav_colored(&view), hyperspace(Color::WHITE));
+        // Back inside: Down turns against the motion, then Up thrusts.
+        view.input(&key(Key::Up, false));
+        view.input(&key(Key::Down, true));
+        for _ in 0..90 {
+            view.tick(TICK);
+            clear_iff_out(&view);
+        }
+        view.input(&key(Key::Down, false));
+        view.input(&key(Key::Up, true));
+        let mut out_ticks = 0;
+        while clear_iff_out(&view) {
+            out_ticks += 1;
+            assert!(out_ticks < 2000, "never got back in");
+            view.tick(TICK);
+        }
+        view.release_keys();
+        assert_eq!(nav_colored(&view), hyperspace(Color::DIM));
+    }
+
+    #[test]
+    fn once_j_is_accepted_the_hyperspace_label_turns_bright_too() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        tap(&mut view, JUMP);
+        assert_eq!(
+            nav_colored(&view),
+            [
+                (hud::NAV_HYPERSPACE.to_owned(), Color::WHITE),
+                (hud::NAV_UNEXPLORED.to_owned(), Color::WHITE),
+            ]
+        );
     }
 
     #[test]

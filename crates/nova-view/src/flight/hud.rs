@@ -6,7 +6,9 @@
 //! "Hyperspace") over the bright name of the selected stellar or of the
 //! next system on the course ("Unexplored System" for one not explored),
 //! or the dim "No Destination" alone, in the bar's `StatusFont` at its
-//! `StatFontSize`.
+//! `StatFontSize`. As in the original's `_DrawStatusNav`, the next
+//! system's name is dim until the ship is clear to jump, and "Hyperspace"
+//! turns bright too once a jump is under way.
 //!
 //! The date is shown on the last line of the `ïntf`'s `CargoArea`, bright,
 //! in the same font. The original shows it only on the player info screen
@@ -27,8 +29,8 @@
 //! as wide as its background picture (194 pixels in every stock bar) and
 //! sits against the right edge of the screen, at the top.
 
-use nova_sim::Reserves;
 use nova_sim::hyperspace::max_jumps;
+use nova_sim::{JumpReadiness, Reserves};
 
 use super::catalog::{GovtId, StatusBarLayout, StatusBars};
 use crate::geometry::{Bounds, Point};
@@ -141,9 +143,14 @@ pub enum NavDisplay {
     None,
     /// The stellar selected as the navigation target, by name.
     Stellar(String),
-    /// The next system on the course, by name, or `None` when the pilot
-    /// has not explored it.
-    Hyperspace(Option<String>),
+    /// The next system on the course, and whether the ship can jump to
+    /// it, which picks the colours (`_DrawStatusNav`).
+    Hyperspace {
+        /// Its name, or `None` when the pilot has not explored it.
+        name: Option<String>,
+        /// Whether the ship can jump there.
+        readiness: JumpReadiness,
+    },
 }
 
 /// What the HUD shows.
@@ -223,25 +230,35 @@ fn draw_date(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, date:
     );
 }
 
-/// Draws `nav` in the layout's nav area, at the bar's `origin`: a label in
-/// the dim text colour over a value in the bright one, both in the bar's
-/// font, or the dim "No Destination" alone.
+/// Draws `nav` in the layout's nav area, at the bar's `origin`: a label
+/// over a value, both in the bar's font, or the dim "No Destination"
+/// alone. The label is dim and the value bright, except as the original's
+/// `_DrawStatusNav` (@0x49f43-0x4a451) draws a jump: its destination is
+/// dim while the ship is blocked, and "Hyperspace" is bright once the jump
+/// is under way.
 fn draw_nav(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, nav: &NavDisplay) {
     let area = layout.nav.offset(origin);
+    let (dim, bright) = (layout.dim_text, layout.bright_text);
     let (label, value) = match nav {
-        NavDisplay::None => (NAV_NO_DESTINATION, None),
-        NavDisplay::Stellar(name) => (NAV_STELLAR, Some(name.as_str())),
-        NavDisplay::Hyperspace(name) => (
-            NAV_HYPERSPACE,
-            Some(name.as_deref().unwrap_or(NAV_UNEXPLORED)),
-        ),
+        NavDisplay::None => ((NAV_NO_DESTINATION, dim), None),
+        NavDisplay::Stellar(name) => ((NAV_STELLAR, dim), Some((name.as_str(), bright))),
+        NavDisplay::Hyperspace { name, readiness } => {
+            let (label, value) = match readiness {
+                JumpReadiness::Blocked => (dim, dim),
+                JumpReadiness::Clear => (dim, bright),
+                JumpReadiness::Underway => (bright, bright),
+            };
+            let name = name.as_deref().unwrap_or(NAV_UNEXPLORED);
+            ((NAV_HYPERSPACE, label), Some((name, value)))
+        }
     };
     let size = layout.font_size;
     let width = Some(area.width());
-    list.text_in(layout.font, label, area.min, size, width, layout.dim_text);
-    if let Some(value) = value {
+    let (label, color) = label;
+    list.text_in(layout.font, label, area.min, size, width, color);
+    if let Some((value, color)) = value {
         let below = Point::new(area.min.x, LINE_HEIGHT.mul_add(size, area.min.y));
-        list.text_in(layout.font, value, below, size, width, layout.bright_text);
+        list.text_in(layout.font, value, below, size, width, color);
     }
 }
 
@@ -812,21 +829,54 @@ mod tests {
         );
     }
 
+    fn hyperspace(name: Option<&str>, readiness: JumpReadiness) -> NavDisplay {
+        NavDisplay::Hyperspace {
+            name: name.map(str::to_owned),
+            readiness,
+        }
+    }
+
     #[test]
-    fn a_plotted_jump_is_hyperspace_over_the_systems_name() {
+    fn a_blocked_jump_draws_hyperspace_and_the_destination_dim() {
         assert_eq!(
-            nav_drawn(NavDisplay::Hyperspace(Some("Sol".to_owned()))),
+            nav_drawn(hyperspace(Some("Sol"), JumpReadiness::Blocked)),
+            [
+                nav_text(NAV_HYPERSPACE, 0, Color::DIM),
+                nav_text("Sol", 1, Color::DIM)
+            ]
+        );
+        assert_eq!(
+            nav_drawn(hyperspace(None, JumpReadiness::Blocked)),
+            [
+                nav_text(NAV_HYPERSPACE, 0, Color::DIM),
+                nav_text(NAV_UNEXPLORED, 1, Color::DIM)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clear_jump_draws_the_destination_bright() {
+        assert_eq!(
+            nav_drawn(hyperspace(Some("Sol"), JumpReadiness::Clear)),
             [
                 nav_text(NAV_HYPERSPACE, 0, Color::DIM),
                 nav_text("Sol", 1, TEXT)
             ]
         );
         assert_eq!(
-            nav_drawn(NavDisplay::Hyperspace(None)),
+            nav_drawn(hyperspace(None, JumpReadiness::Clear)),
             [
                 nav_text(NAV_HYPERSPACE, 0, Color::DIM),
                 nav_text(NAV_UNEXPLORED, 1, TEXT)
             ]
+        );
+    }
+
+    #[test]
+    fn an_underway_jump_draws_both_bright() {
+        assert_eq!(
+            nav_drawn(hyperspace(Some("Sol"), JumpReadiness::Underway)),
+            [nav_text(NAV_HYPERSPACE, 0, TEXT), nav_text("Sol", 1, TEXT)]
         );
     }
 

@@ -55,6 +55,7 @@ use nova_sim::hyperspace::{JUMP_FUEL, MIN_JUMP_DISTANCE};
 use nova_sim::{
     Chance, DisasterId, PilotKeeper, PilotStore, Session, ShipState, SystemId, TICKS_PER_SECOND,
 };
+use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_UNEXPLORED};
 use nova_view::flight::jump::{ARRIVAL_FLASH_FOR, STREAK_FOR};
 use nova_view::flight::view::TOO_CLOSE;
 use nova_view::flight::{FlightView, SharedChance};
@@ -131,6 +132,13 @@ fn ship_with_regen(regen: i16) -> Vec<u8> {
     put_i16s(&mut bytes, 0x02, &[30, 1500, 1000, 30, 300]);
     put_i16s(&mut bytes, 0x0E, &[45]);
     put_i16s(&mut bytes, 0x5E, &[regen]);
+    bytes
+}
+
+/// [`ship`], with a `Fuel` of `fuel`.
+fn ship_with_fuel(fuel: i16) -> Vec<u8> {
+    let mut bytes = ship();
+    put_i16s(&mut bytes, 0x02, &[30, 1500, 1000, 30, fuel]);
     bytes
 }
 
@@ -374,12 +382,17 @@ impl Harness {
     /// Plots a course to system `id` on flight's map and flies out far
     /// enough to jump.
     fn out_towards(&mut self, id: i16) {
+        self.plot(id);
+        self.fly_out();
+    }
+
+    /// Plots a course to system `id` on flight's map: M, a click on it, M.
+    fn plot(&mut self, id: i16) {
         self.frame();
         self.press(Key::Char('m'));
         let system = self.on_map(id);
         self.click(system);
         self.press(Key::Char('m'));
-        self.fly_out();
     }
 
     /// Plots a course to Beta on flight's map, flies out and jumps there.
@@ -519,25 +532,76 @@ impl Harness {
     /// the centre while drifting in, then Up.
     fn fly_out(&mut self) {
         for _ in 0..600 {
-            let ship = self.ship();
-            if ship.position.length() >= MIN_JUMP_DISTANCE {
+            if self.ship().position.length() >= MIN_JUMP_DISTANCE {
                 self.hold(&[]);
                 return;
             }
-            let moving_in =
-                ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y < 0.0;
-            let facing_out = ship.position.length() == 0.0 || {
-                let out = nova_sim::flight::heading_of(ship.position);
-                shortest_turn(ship.heading, out).abs() < 1e-3
-            };
-            if moving_in && !facing_out {
-                self.hold(&[Key::Down]);
-            } else {
-                self.hold(&[Key::Up]);
-            }
+            self.steer(true);
             self.frame();
         }
         panic!("never got out: {:?}", self.ship());
+    }
+
+    /// Flies back in towards the centre until the ship is nearer it than
+    /// the minimum jump distance, then lets go: first Down, to face the
+    /// centre while drifting out, then Up.
+    fn fly_in(&mut self) {
+        for _ in 0..600 {
+            if self.ship().position.length() < MIN_JUMP_DISTANCE {
+                self.hold(&[]);
+                return;
+            }
+            self.steer(false);
+            self.frame();
+        }
+        panic!("never got in: {:?}", self.ship());
+    }
+
+    /// Holds the keys for the next frame of flying `out` from the centre,
+    /// or in towards it: Down while drifting the wrong way and not yet
+    /// facing the right one, otherwise Up.
+    fn steer(&mut self, out: bool) {
+        let ship = self.ship();
+        let outward = ship.position.x * ship.velocity.x + ship.position.y * ship.velocity.y;
+        let drifting_wrong = if out { outward < 0.0 } else { outward > 0.0 };
+        let facing = ship.position.length() == 0.0 || {
+            let away = nova_sim::flight::heading_of(ship.position);
+            let way = if out { away } else { away + 180.0 };
+            shortest_turn(ship.heading, way).abs() < 1e-3
+        };
+        if drifting_wrong && !facing {
+            self.hold(&[Key::Down]);
+        } else {
+            self.hold(&[Key::Up]);
+        }
+    }
+
+    /// The texts the next frame draws in the nav area, stock `ïntf` 128's
+    /// (8, 254)-(184, 286) on the bar, each with its colour.
+    fn nav_runs(&mut self) -> Vec<(String, nova_view::Color)> {
+        let frame = self.frame();
+        frame
+            .batches
+            .iter()
+            .flat_map(|batch| match batch {
+                Batch::Text(runs) => runs.clone(),
+                _ => Vec::new(),
+            })
+            .filter(|run| {
+                let (x, y) = run.origin_px;
+                (838.0..=1014.0).contains(&x) && (254.0..=286.0).contains(&y)
+            })
+            .map(|run| (run.text, run.color))
+            .collect()
+    }
+
+    /// The colour the next frame draws the nav area's destination in.
+    fn destination_color(&mut self) -> nova_view::Color {
+        let runs = self.nav_runs();
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert_eq!(runs[0].0, NAV_HYPERSPACE, "{runs:?}");
+        assert_eq!(runs[1].0, NAV_UNEXPLORED, "{runs:?}");
+        runs[1].1
     }
 }
 
@@ -925,6 +989,43 @@ fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
 }
 
 /// The alphas of the white quads covering the whole screen: a jump's fade.
+/// `ïntf` 128's bright text colour.
+const BRIGHT: nova_view::Color = nova_view::Color::from_rgb24(0x00FF_FFFF);
+/// `ïntf` 128's dim text colour.
+const DIM: nova_view::Color = nova_view::Color::from_rgb24(0x0080_8080);
+
+#[test]
+fn the_hyperspace_destination_brightens_once_the_ship_is_out_far_enough_to_jump() {
+    let mut game = Harness::flying();
+    game.plot(129);
+    assert_eq!(game.destination_color(), DIM, "plotted at the centre");
+    let mut dim_frames = 0;
+    loop {
+        game.steer(true);
+        let color = game.destination_color();
+        let out = game.ship().position.length() >= MIN_JUMP_DISTANCE;
+        assert_eq!(color, if out { BRIGHT } else { DIM }, "{:?}", game.ship());
+        if out {
+            break;
+        }
+        dim_frames += 1;
+        assert!(dim_frames < 600, "never got out: {:?}", game.ship());
+    }
+    assert!(dim_frames > 0, "it was dim on the way out");
+    game.hold(&[]);
+    assert_eq!(game.destination_color(), BRIGHT, "still out");
+    game.fly_in();
+    assert_eq!(game.destination_color(), DIM, "back inside");
+}
+
+#[test]
+fn a_ship_without_a_jumps_fuel_keeps_the_destination_dim_out_past_the_jump_distance() {
+    let mut game = Harness::flying_over(data_with(&ship_with_fuel(99)), SharedChance::default());
+    game.out_towards(129);
+    assert_eq!(game.destination_color(), DIM);
+    assert!(game.ship().position.length() >= MIN_JUMP_DISTANCE);
+}
+
 fn screen_whites(frame: &Frame) -> Vec<f32> {
     frame
         .batches
