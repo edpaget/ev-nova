@@ -4,7 +4,7 @@
 //!   sheet, and the [`StatusBars`] port, the `ïntf` status bar layouts.
 //! - [`data`]: the ports' adapters over `nova_data`'s `GameData`.
 //! - [`jump`]: the hyperspace jump's [`JumpEffect`], the stars streaking
-//!   and the screen fading out and in.
+//!   and the screen fading to white and back.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows

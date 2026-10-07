@@ -1,5 +1,5 @@
-//! The hyperspace jump's effect: the stars streak, the screen fades out,
-//! and it fades in again on the new system.
+//! The hyperspace jump's effect: the stars streak, the screen fades to
+//! white, and the new system fades in from white.
 //!
 //! The effect runs on display time, in three phases:
 //!
@@ -7,12 +7,38 @@
 //!    lines trailing away from the jump's direction, growing to
 //!    [`STREAK_LENGTH`] (times each star layer's parallax factor).
 //! 2. [`JumpPhase::FadeOut`], for [`FADE_OUT_FOR`]: the streaked scene
-//!    fades to [`FADE_COLOR`].
+//!    fades to white ([`FADE_COLOR`]).
 //! 3. [`JumpPhase::FadeIn`], for [`FADE_IN_FOR`]: the new system fades in
-//!    from it.
+//!    from white.
 //!
 //! The ship arrives between the fade-out and the fade-in, the instant
 //! [`JumpEffect::advance`] reports.
+//!
+//! # The original's effect
+//!
+//! Checked against the original Mac executable (`EV Nova.app`, i386, read
+//! with its symbols):
+//!
+//! - `_HandlePlayer` @0x6d29c-0x6d2bf: once the jump begins the ship
+//!   accelerates away along its bearing, and `_hyperGamma` rises from its
+//!   warp speed past a threshold (`(speed - 55) * 5`). The stars rush past
+//!   because the ship itself moves; `_HandleStars` and `_ScrollStarfield`
+//!   draw no streak lines. The ship is frozen while our effect plays, so
+//!   the streak stands in for that motion.
+//! - `_HandlePlayer` @0x683a4-0x68409: once `_hyperGamma` is positive it
+//!   calls `_FadeWhiteIn` @0x546f, a `CGDisplayFade` of the whole display
+//!   to white (rgb 1,1,1) over 1.5 s. It is a display fade, so the HUD
+//!   whites out too; the flight view draws the fade over everything.
+//! - @0x6be44-0x6bf3a: the arrival frame is painted solid white.
+//! - `_HandlePlayer` @0x6840b-0x6841f: on the next frame `_FadeWhiteOut`
+//!   @0x54d1 fades the display back from white over 1.5 s, which
+//!   [`FADE_IN_FOR`] matches.
+//!
+//! The black fades (`_FadeScreenOut`, `_FadeScreenIn`) serve death, the
+//! intro and dialogs, never the jump. The streak and fade-out durations
+//! are ours: the original's fade-out starts from a warp speed we do not
+//! simulate, and the roadmap does not aim to match its timing. The Help
+//! Book and the Bible do not describe the effect.
 
 use std::time::Duration;
 
