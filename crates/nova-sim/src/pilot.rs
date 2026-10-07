@@ -26,6 +26,12 @@
 //! grudge against the player (see [`person`](crate::person)); a new pilot
 //! has neither.
 //!
+//! It holds the 10,000 control bits missions and storylines script with
+//! (see [`control`](crate::control)), every one clear on a new pilot, and
+//! its [`Gender`], which the new-pilot dialog asks for and the `G` test
+//! reads; a new pilot is male unless the dialog says otherwise, as the
+//! stock dialog's Gender menu starts on Male.
+//!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
 
@@ -34,6 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::catalog::{
     DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, ShipId, StartError, StellarId, SystemId,
 };
+use crate::control::{Bit, ControlBitSet};
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::Good;
@@ -84,6 +91,22 @@ pub struct Pilot {
     pub(crate) gone_persons: BTreeSet<PersonId>,
     /// The persons holding a grudge against the player.
     pub(crate) grudges: BTreeSet<PersonId>,
+    /// The control bits.
+    pub(crate) bits: ControlBitSet,
+    /// The player's gender.
+    pub(crate) gender: Gender,
+}
+
+/// The player's gender, which the `G` test reads (true when male). The
+/// stock new-pilot dialog's Gender menu lists Male, then Female, and starts
+/// on Male.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Gender {
+    /// Male: the `G` test holds.
+    #[default]
+    Male,
+    /// Female.
+    Female,
 }
 
 /// A ship in the player's fleet: its class, its shield, armour and fuel,
@@ -163,7 +186,33 @@ impl Pilot {
             escorts: Vec::new(),
             gone_persons: BTreeSet::new(),
             grudges: BTreeSet::new(),
+            bits: ControlBitSet::new(),
+            gender: Gender::default(),
         })
+    }
+
+    /// The pilot with `gender`, everything else unchanged.
+    #[must_use]
+    pub fn with_gender(self, gender: Gender) -> Self {
+        Self { gender, ..self }
+    }
+
+    /// The player's gender.
+    #[must_use]
+    pub fn gender(&self) -> Gender {
+        self.gender
+    }
+
+    /// Whether control bit `bit` is set.
+    #[must_use]
+    pub fn control_bit(&self, bit: Bit) -> bool {
+        self.bits.get(bit)
+    }
+
+    /// The control bits.
+    #[must_use]
+    pub fn control_bits(&self) -> &ControlBitSet {
+        &self.bits
     }
 
     /// The fleet: every ship escorting the player, in the order it joined.
@@ -502,6 +551,42 @@ mod tests {
         assert!(!pilot.grudge(PersonId(151)));
         assert_eq!(pilot.gone_persons().collect::<Vec<_>>(), [PersonId(151)]);
         assert_eq!(pilot.grudges().collect::<Vec<_>>(), [PersonId(510)]);
+    }
+
+    #[test]
+    fn a_new_pilot_has_no_control_bit_set_and_is_male() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert_eq!(pilot.bits, ControlBitSet::new());
+        assert!(!pilot.control_bit(Bit::new(0).expect("in range")));
+        assert_eq!(pilot.gender(), Gender::Male);
+        assert_eq!(Gender::default(), Gender::Male);
+    }
+
+    #[test]
+    fn a_pilot_with_a_gender_changes_only_that() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        let female = pilot.clone().with_gender(Gender::Female);
+        assert_eq!(female.gender(), Gender::Female);
+        assert_eq!(
+            Pilot {
+                gender: Gender::Male,
+                ..female.clone()
+            },
+            pilot
+        );
+        assert_eq!(female.with_gender(Gender::Male).gender(), Gender::Male);
+    }
+
+    #[test]
+    fn a_control_bit_reads_what_was_written() {
+        let mut pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        let bit = Bit::new(9999).expect("in range");
+        pilot.bits.set(bit);
+        assert!(pilot.control_bit(bit));
+        assert!(!pilot.control_bit(Bit::new(9998).expect("in range")));
+        assert_eq!(pilot.control_bits().iter().collect::<Vec<_>>(), [bit]);
+        pilot.bits.clear(bit);
+        assert!(!pilot.control_bit(bit));
     }
 
     #[test]

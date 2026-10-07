@@ -126,7 +126,8 @@
 //! - [`pilot`]: the [`Pilot`], everything about the player a save keeps:
 //!   ship, location, date, cash, reserves, course, explored systems,
 //!   legal records, cargo, the events under way, the outfits owned and
-//!   the fleet of [`Escort`]s, starting from the first `chär`.
+//!   the fleet of [`Escort`]s, the control bits and the player's
+//!   [`Gender`], starting from the first `chär`.
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
@@ -282,7 +283,7 @@ pub use person::{
     COMM_QUOTES, ESCAPE_POD, GRUDGE, HAIL_QUOTES, NovaPersons, PersonRoll, PersonRules,
     PersonWorld, QuoteTags, expand_tags,
 };
-pub use pilot::{Escort, Pilot};
+pub use pilot::{Escort, Gender, Pilot};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use reserves::{Gauge, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};

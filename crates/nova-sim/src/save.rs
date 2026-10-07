@@ -51,10 +51,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::catalog::{DisasterId, GovtId, JunkId, OutfitId, PersonId, ShipId, StellarId, SystemId};
+use crate::control::ControlBitSet;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::Good;
-use crate::pilot::{Escort, Pilot};
+use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
@@ -490,6 +491,8 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
             .collect(),
         gone_persons: saved.gone_persons.into_iter().map(PersonId).collect(),
         grudges: saved.grudges.into_iter().map(PersonId).collect(),
+        bits: ControlBitSet::new(),
+        gender: Gender::Male,
     })
 }
 
@@ -595,6 +598,8 @@ mod tests {
             ],
             gone_persons: BTreeSet::from([PersonId(151), PersonId(600)]),
             grudges: BTreeSet::from([PersonId(510)]),
+            bits: ControlBitSet::new(),
+            gender: Gender::Male,
         }
     }
 
