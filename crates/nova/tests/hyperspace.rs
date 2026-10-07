@@ -6,12 +6,18 @@
 //! flight was entered with the developer's F or a pilot flies it, new from
 //! New Pilot or resumed from Open Pilot.
 //!
+//! With the Hyperspace Effects preference turned off in the Preferences
+//! dialog, a jump streaks and arrives without its white fades; turned back
+//! on, they return.
+//!
 //! Play plots courses on the map opened from flight, which has no "Enter
 //! system" button; the Tab side's map keeps it as the developer's viewer
 //! (`galaxy_map.rs` and `system_view.rs` test that path).
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
+
+mod prefs_fixture;
 
 use std::cell::RefCell;
 use std::io;
@@ -35,7 +41,8 @@ use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, Record};
 use nova_render::recording::RecordingGpu;
-use nova_render::{Batch, Frame, QuadInstance, Rect, SolidQuad};
+use nova_render::wgpu::GlyphonMetrics;
+use nova_render::{Batch, FontFaces, Frame, QuadInstance, Rect, SolidQuad};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::fixture::MemoryPilots;
@@ -44,6 +51,7 @@ use nova_sim::hyperspace::{JUMP_FUEL, MIN_JUMP_DISTANCE};
 use nova_sim::{
     Chance, DisasterId, PilotKeeper, PilotStore, Session, ShipState, SystemId, TICKS_PER_SECOND,
 };
+use nova_view::flight::jump::{ARRIVAL_FLASH_FOR, STREAK_FOR};
 use nova_view::flight::view::TOO_CLOSE;
 use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::map::{COURSE_HELP, ENTER_LABEL, ROUTE};
@@ -295,6 +303,37 @@ impl Harness {
         };
         assert_eq!(harness.showing(), Showing::MainMenu);
         harness
+    }
+
+    /// The app on the main menu, keeping pilots in `store`, with the
+    /// Preferences dialog (and no other) from the interface file, laid out
+    /// by the bundled fonts' metrics.
+    fn on_the_menu_with_prefs(store: &MemoryPilots) -> Self {
+        let data = data();
+        let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
+        let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
+        let screen = start_screen(Rc::clone(&data))
+            .with_pilots(Some(keeper), Rc::new(MonoMetrics))
+            .with_dialogs(Rc::new(prefs_fixture::interface()), metrics);
+        let harness = Self {
+            app: App::new(&FakeWindow, data, screen),
+            gpu: RecordingGpu::new(),
+            frames: 0,
+            held: Vec::new(),
+        };
+        assert_eq!(harness.showing(), Showing::MainMenu);
+        harness
+    }
+
+    /// Where the Preferences dialog's Hyperspace Effects box is.
+    fn hyperspace_effects_box(&self) -> Point {
+        self.app
+            .screen()
+            .preferences()
+            .expect("the Preferences dialog is open")
+            .hyperspace_effects()
+            .rect()
+            .center()
     }
 
     /// Clicks the main menu's `choice` button.
@@ -873,4 +912,116 @@ fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
     assert_eq!(session.reserves().fuel.now, 300.0 - JUMP_FUEL);
     let bar = fuel_bar(&harness.frame());
     assert!(close(bar, 149.0 * 2.0 / 3.0), "{bar}");
+}
+
+/// The alphas of the white quads covering the whole screen: a jump's fade.
+fn screen_whites(frame: &Frame) -> Vec<f32> {
+    frame
+        .batches
+        .iter()
+        .flat_map(|batch| match batch {
+            Batch::Solid(quads) => quads.clone(),
+            _ => Vec::new(),
+        })
+        .filter(|quad| {
+            let xs = quad.corners.map(|corner| corner.x);
+            let ys = quad.corners.map(|corner| corner.y);
+            let spans = |values: [f32; 4], to: f32| {
+                values.iter().copied().fold(f32::INFINITY, f32::min) <= 0.0
+                    && values.iter().copied().fold(f32::NEG_INFINITY, f32::max) >= to
+            };
+            quad.color[..3] == [1.0, 1.0, 1.0] && spans(xs, 1024.0) && spans(ys, 768.0)
+        })
+        .map(|quad| quad.color[3])
+        .collect()
+}
+
+/// Whether `frame` is partway through a fade: a translucent white over the
+/// whole screen.
+fn fading(frame: &Frame) -> bool {
+    screen_whites(frame).iter().any(|&alpha| alpha < 1.0)
+}
+
+/// Whether `frame` is covered in solid white.
+fn white(frame: &Frame) -> bool {
+    screen_whites(frame).contains(&1.0)
+}
+
+#[test]
+fn with_hyperspace_effects_off_a_jump_streaks_and_arrives_without_fading() {
+    let mut harness = Harness::on_the_menu_with_prefs(&MemoryPilots::new());
+    harness.new_pilot("Ada");
+
+    // P, a click on Hyperspace Effects, and Return turn the effects off.
+    harness.press(Key::Char('p'));
+    assert_eq!(harness.showing(), Showing::Preferences);
+    let at = harness.hyperspace_effects_box();
+    harness.click(at);
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert!(!harness.flight().hyperspace_effects());
+
+    // J: the stars streak with no fade, the ship arrives as the streak
+    // ends, the arrival shows solid white once, and the jump is over.
+    harness.out_towards_beta();
+    harness.press(Key::Char('j'));
+    let mut streaking = None;
+    let mut arrived = None;
+    let mut whites = 0;
+    for n in 0..600_u64 {
+        let frame = harness.frame();
+        assert!(!fading(&frame), "frame {n} fades");
+        whites += usize::from(white(&frame));
+        if streaking.is_none() && harness.flight().jump_effect().is_some() {
+            streaking = Some(n);
+        }
+        if arrived.is_none() && harness.session().system() == SystemId(129) {
+            arrived = Some(n);
+            assert!(white(&frame), "the arrival frame is white");
+        }
+        if let Some(at) = arrived
+            && harness.flight().jump_effect().is_none()
+        {
+            let over = n - at;
+            let flash_frames = ARRIVAL_FLASH_FOR.as_millis() as u64 * 60 / 1000 + 1;
+            assert!(over <= flash_frames, "over {over} frames after arriving");
+            break;
+        }
+    }
+    let streaking = streaking.expect("streaked");
+    let arrived = arrived.expect("arrived in Beta");
+    let streak_frames = STREAK_FOR.as_millis() as u64 * 60 / 1000;
+    let took = arrived - streaking;
+    assert!(
+        streak_frames - 1 <= took && took <= streak_frames + 1,
+        "arrived {took} frames after the streak began"
+    );
+    assert!(whites >= 1, "a white arrival frame");
+    assert!(harness.flight().jump_effect().is_none(), "the jump is over");
+
+    // P, Tab to the box, Space and Return turn them back on: the next jump
+    // fades out and in again.
+    harness.press(Key::Char('p'));
+    for _ in 0..3 {
+        harness.press(Key::Tab);
+    }
+    harness.press(Key::Space);
+    harness.press(Key::Enter);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert!(harness.flight().hyperspace_effects());
+    harness.run(1);
+    harness.out_towards(130);
+    harness.press(Key::Char('j'));
+    let mut faded_out = false;
+    let mut faded_in = false;
+    for _ in 0..600 {
+        let frame = harness.frame();
+        let gamma = harness.session().system() == SystemId(130);
+        faded_out |= !gamma && fading(&frame);
+        faded_in |= gamma && fading(&frame);
+        if gamma && harness.flight().jump_effect().is_none() {
+            break;
+        }
+    }
+    assert!(faded_out && faded_in, "out {faded_out}, in {faded_in}");
 }
