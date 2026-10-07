@@ -213,6 +213,10 @@
 //! ([`Session::take_pay_notes`]). Which wage it is paid follows
 //! [`Session::with_escort_wage`], and hailing it shows it.
 //!
+//! The pilot's control bits are read with [`Session::control_bit`] and
+//! set or cleared with [`Session::set_control_bit`], which makes a save
+//! due.
+//!
 //! Persons (see [`person`](crate::person)) appear in the systems their
 //! records allow, by the session's [`PersonRules`]
 //! ([`Session::with_person_rules`]), named by their records
@@ -240,6 +244,7 @@
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
 
+mod control;
 mod escorts;
 mod fighters;
 mod hail;

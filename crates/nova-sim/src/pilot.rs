@@ -215,6 +215,11 @@ impl Pilot {
         &self.bits
     }
 
+    /// The control bits, to write.
+    pub(crate) fn bits_mut(&mut self) -> &mut ControlBitSet {
+        &mut self.bits
+    }
+
     /// The fleet: every ship escorting the player, in the order it joined.
     #[must_use]
     pub fn escorts(&self) -> &[Escort] {
