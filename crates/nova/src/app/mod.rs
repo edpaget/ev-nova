@@ -1422,6 +1422,46 @@ mod tests {
         );
     }
 
+    /// With no keeper, the change starts from the core's own settings: a
+    /// volume between two levels, at the level chosen, stays as it is.
+    #[test]
+    fn without_a_keeper_the_change_starts_from_the_cores_settings() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let between = Volume::new(0.5);
+        let core = AudioCore::new(Box::new(audio) as Box<dyn Audio>).with_settings(AudioSettings {
+            effects_volume: between,
+            ..AudioSettings::default()
+        });
+        let screen = SoundingScreen {
+            showing: Showing::GalaxyMap,
+            sounds: Vec::new(),
+        };
+        let mut app = App::new(
+            &window,
+            NoImages,
+            PrefsAndSounds {
+                screen,
+                prefs: Some(effects_at(4)),
+            },
+        )
+        .with_audio(core);
+        log.borrow_mut().clear();
+        app.handle(key(Key::Up, true), &mut window, &mut RecordingGpu::new());
+        assert_eq!(
+            *log.borrow(),
+            [
+                AudioCommand::StopMusic,
+                AudioCommand::Play {
+                    sound: nova_data::SoundId(600),
+                    volume: between,
+                },
+            ],
+            "level 4 already: the effects volume is kept"
+        );
+    }
+
     /// A sounding screen that also reports `prefs` once, after an input.
     struct PrefsAndSounds {
         screen: SoundingScreen,
