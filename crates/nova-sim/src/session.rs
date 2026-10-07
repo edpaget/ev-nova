@@ -23,7 +23,10 @@
 //! one land.
 //!
 //! The player plots a course to a system on the star map, read once when
-//! the session starts: the fewest jumps along the hyperlinks. J
+//! the session starts: the fewest jumps along the hyperlinks, which the
+//! session's [`HyperlinkRule`] (the engine's, one way along each system's
+//! own links, unless [`Session::with_hyperlinks`] says otherwise) lets it
+//! follow. J
 //! ([`Session::begin_jump`]) is accepted when the
 //! [`hyperspace`](crate::hyperspace) rules allow a jump to the next system
 //! on it. The ship then flies the pre-jump stage on its own, the player's
@@ -117,8 +120,8 @@ use crate::geometry::Vec2;
 use crate::glow::ramp_glow;
 use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{
-    HyperSelectRule, JUMP_FUEL, JumpRefusal, MultiJumpRule, RouteError, StarMap, arrival,
-    check_jump, hops_per_jump, jump_bearing, next_hyper_destination,
+    HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpRefusal, MultiJumpRule, RouteError, StarMap,
+    arrival, check_jump, hops_per_jump, jump_bearing, next_hyper_destination,
 };
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
@@ -173,6 +176,8 @@ pub struct Session {
     multi_jump: MultiJumpRule,
     /// The rule Hyper Select follows.
     hyper_select: HyperSelectRule,
+    /// The rule jumps along the hyperlinks follow.
+    hyperlinks: HyperlinkRule,
     /// The goods traded and the events that move their prices, read when
     /// the session starts.
     goods: Goods,
@@ -253,6 +258,7 @@ impl Session {
             jump: None,
             multi_jump: MultiJumpRule::default(),
             hyper_select: HyperSelectRule::default(),
+            hyperlinks: HyperlinkRule::default(),
             goods: Goods::read(catalog),
             thrusting: false,
             engine_glow: 0,
@@ -279,6 +285,14 @@ impl Session {
     #[must_use]
     pub fn with_hyper_select(mut self, rule: HyperSelectRule) -> Self {
         self.hyper_select = rule;
+        self
+    }
+
+    /// This session with jumps following the hyperlinks under `rule`; the
+    /// engine's by default.
+    #[must_use]
+    pub fn with_hyperlinks(mut self, rule: HyperlinkRule) -> Self {
+        self.hyperlinks = rule;
         self
     }
 
@@ -359,9 +373,10 @@ impl Session {
     }
 
     /// Plots a course from the system the ship is in to `to`, replacing any
-    /// course, and gives it. When there is no route the course is cleared.
+    /// course, and gives it: the session's [`HyperlinkRule`] decides which
+    /// links it follows. When there is no route the course is cleared.
     pub fn plot_course(&mut self, to: SystemId) -> Result<&[SystemId], RouteError> {
-        match self.star_map.route(self.pilot.system, to) {
+        match self.star_map.route(self.pilot.system, to, self.hyperlinks) {
             Ok(route) => {
                 self.pilot.course = route;
                 Ok(&self.pilot.course)
@@ -553,6 +568,7 @@ impl Session {
             &self.pilot.course,
             self.nav_target.is_some(),
             self.hyper_select,
+            self.hyperlinks,
         )?;
         self.pilot.course = vec![next];
         self.nav_target = None;
@@ -909,7 +925,8 @@ mod tests {
     use crate::glow::GLOW_CRUISE;
     use crate::handling::ShipFields;
     use crate::hyperspace::{
-        ARRIVAL_DISTANCE, HyperSelectRule, JumpRefusal, MIN_JUMP_DISTANCE, RouteError, StarMap,
+        ARRIVAL_DISTANCE, HyperSelectRule, HyperlinkRule, JumpRefusal, MIN_JUMP_DISTANCE,
+        RouteError, StarMap,
     };
     use crate::landing::StellarFlags;
     use crate::landing::{Clearance, LandOutcome, LandingRefusal};
@@ -3984,7 +4001,38 @@ mod tests {
     }
 
     #[test]
-    fn hyper_select_by_the_one_jump_course_reading_cycles_every_neighbour() {
+    fn plotting_a_course_follows_one_way_links_by_the_engines_reading() {
+        // 136 lists 130 one way: by the engine, 130 cannot jump to it.
+        let mut session = Session::start(&hub()).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        assert_eq!(
+            session.plot_course(SystemId(136)),
+            Err(RouteError::Unreachable)
+        );
+        assert_eq!(session.course(), [], "cleared");
+        let mut session = Session::start(&hub())
+            .expect("starts")
+            .with_hyperlinks(HyperlinkRule::BothWays);
+        assert_eq!(session.plot_course(SystemId(136)), Ok(&ids(&[136])[..]));
+    }
+
+    #[test]
+    fn hyper_select_by_the_one_jump_course_reading_never_jumps_against_a_one_way_link() {
+        let cycle = |hyperlinks| {
+            let mut session = Session::start(&hub())
+                .expect("starts")
+                .with_hyper_select(HyperSelectRule::OneJumpCourse)
+                .with_hyperlinks(hyperlinks);
+            (0..4)
+                .map(|_| session.select_next_system().expect("one"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(cycle(HyperlinkRule::Engine), ids(&[131, 134, 135, 131]));
+        assert_eq!(cycle(HyperlinkRule::BothWays), ids(&[131, 134, 135, 136]));
+    }
+
+    #[test]
+    fn hyper_select_by_the_one_jump_course_reading_cycles_every_jump() {
         let mut session = Session::start(&hub())
             .expect("starts")
             .with_hyper_select(HyperSelectRule::OneJumpCourse);

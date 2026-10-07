@@ -4,8 +4,11 @@
 //! - Each system's colour comes from its own government's map colour;
 //!   independent systems, and systems whose government is missing, are
 //!   [`NEUTRAL`].
-//! - The hyperlinks are the [`StarMap`]'s, the same graph the session
-//!   jumps along; a link to a missing system is reported as a problem.
+//! - The hyperlinks are the [`StarMap`]'s [`StarMap::links`]: every pair
+//!   either system lists, drawn once and undirected, as the original's
+//!   `_DrawMap` (@0xe7a8) draws them, while the session's jumps follow its
+//!   `HyperlinkRule` (by the engine's, one way along each system's own
+//!   links); a link to a missing system is reported as a problem.
 //! - Each nebula is drawn over its map rectangle at the current scale,
 //!   from whichever of its pictures is closest in size without being
 //!   enlarged.

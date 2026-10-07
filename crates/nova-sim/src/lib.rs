@@ -127,8 +127,8 @@ pub use geometry::Vec2;
 pub use glow::{GLOW_CRUISE, glow_level, ramp_glow};
 pub use handling::{Handling, ShipFields};
 pub use hyperspace::{
-    HyperSelectRule, JumpRefusal, MultiJumpRule, RouteError, StarMap, check_jump, hops_per_jump,
-    next_hyper_destination,
+    HyperSelectRule, HyperlinkRule, JumpRefusal, MultiJumpRule, RouteError, StarMap, check_jump,
+    hops_per_jump, next_hyper_destination,
 };
 pub use landing::{
     Clearance, LandOutcome, LandingRefusal, Service, check_landing, is_landable, land_or_select,

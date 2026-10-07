@@ -201,7 +201,12 @@ fn data() -> Rc<GameData> {
             Some(b"Alpha"),
             &system(0, &[129], &[131, 128]),
         )
-        .resource(System::TYPE, 129, Some(b"Beta"), &system(100, &[], &[129]))
+        .resource(
+            System::TYPE,
+            129,
+            Some(b"Beta"),
+            &system(100, &[128], &[129]),
+        )
         .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar(0, -300))
         .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &stellar(0, -300))
         .resource(Stellar::TYPE, 131, Some(b"Alpha Minor"), &stellar(0, 300))

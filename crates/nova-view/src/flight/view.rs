@@ -1089,7 +1089,7 @@ mod tests {
     /// The first `chär` flies ship 128 (an average ship that turns 3° a
     /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system
     /// 130, Sol: Earth at (0, -600) and Moon at (300, -200), which animates
-    /// a frame a tick. On the map Sol is at (0, 0), linked to Alpha
+    /// a frame a tick. On the map Sol is at (0, 0), linked both ways to Alpha
     /// Centauri (131) at (600, 0), which holds Proxima at its centre;
     /// Barnard (132) at (0, 600) is linked to nothing, unless `onward`.
     /// Records the systems read.
@@ -1270,7 +1270,7 @@ mod tests {
                 links: links.iter().copied().map(SystemId).collect(),
                 govt: None,
             };
-            let onward: &[i16] = if self.onward { &[132] } else { &[] };
+            let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
             vec![
                 star(130, (0.0, 0.0), sol),
@@ -1355,7 +1355,7 @@ mod tests {
                 govt: None,
                 stellars: Vec::new(),
             };
-            let onward: &[i16] = if self.onward { &[132] } else { &[] };
+            let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
             Galaxy {
                 systems: vec![
