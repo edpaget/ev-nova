@@ -452,12 +452,13 @@ mod tests {
     // Fighting persons.
 
     use crate::catalog::{HullRecord, StockWeapon, WeaponId, WeaponRecord};
+    use crate::combat::armament::MOD_WEAPON;
     use crate::combat::armament::Trigger;
     use crate::combat::hull::Condition;
     use crate::combat::{Rules, ShipRef, Strike};
     use crate::geometry::Vec2;
     use crate::person::{ESCAPE_POD, GRUDGE};
-    use crate::testkit::{Draws, hull, weapon};
+    use crate::testkit::{Draws, hull, outfit, weapon};
     use crate::traffic::npc::NpcId;
 
     /// A blaster firing every other tick, 20 pixels a tick for 30 ticks,
@@ -488,11 +489,13 @@ mod tests {
     }
 
     /// [`peopled`] with no setup passes, the player and Ace armed with a
-    /// blaster, and Ace of `flags` and `ShieldMod` `shield_mod`.
+    /// blaster (held by outfit 250), and Ace of `flags` and `ShieldMod`
+    /// `shield_mod`.
     fn duel(flags: u16, shield_mod: i16) -> FakePilotCatalog {
         let mut catalog = FakePilotCatalog {
             weapons: vec![blaster()],
             hulls: vec![armed_hull(128), armed_hull(129)],
+            outfits: vec![outfit(250, &[(MOD_WEAPON, 128)])],
             ..peopled(0)
         };
         catalog.persons[0].flags = flags;

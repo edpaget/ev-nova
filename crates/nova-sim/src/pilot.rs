@@ -4,9 +4,11 @@
 //! A new pilot starts as the first `chär` by ascending ID says: its ship,
 //! in the first of its starting systems that exists, on its starting date,
 //! with its cash (none, when the `chär`'s is negative) and its legal
-//! records, owning its ship's default items (repeated slots adding up),
-//! and with the ship's shield, armour and fuel full at what it and those
-//! items can hold ([`crate::stats`]). It has explored only the system it
+//! records, owning its ship's stock weapons and their `AmmoLoad` as
+//! outfits ([`Arsenal::stock_outfits`]) and then its default items
+//! (repeated slots adding up), as `_DoNewPilot` fits them (@0x18f48,
+//! @0x18f4d), and with the ship's shield, armour and fuel full at what it
+//! and those outfits can hold ([`crate::stats`]). It has explored only the system it
 //! starts in. It holds no cargo, no planetary event is under way, and it
 //! has no escorts.
 //!
@@ -32,8 +34,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
-    DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, ShipId, StartError, StellarId, SystemId,
+    CombatCatalog, DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, ShipId, StartError,
+    StellarId, SystemId,
 };
+use crate::combat::armament::Arsenal;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::Good;
@@ -77,6 +81,10 @@ pub struct Pilot {
     /// read into `outfits`: a save from before outfits were kept. Flying
     /// the pilot reads them.
     pub(crate) default_outfits_pending: bool,
+    /// Whether the ship still mounts its class's stock weapons and their
+    /// `AmmoLoad` beside `outfits`, not yet fitted as outfits: a save from
+    /// before stock weapons were outfits. Flying the pilot fits them.
+    pub(crate) stock_weapons_pending: bool,
     /// The fleet: every ship escorting the player, in the order it joined.
     pub(crate) escorts: Vec<Escort>,
     /// The persons gone for good, who never appear again (see
@@ -131,7 +139,10 @@ impl Pilot {
     ///
     /// When there is no `chär`, it cannot be read, it names no ship or one
     /// that cannot be read, or none of its starting systems exists.
-    pub fn new(catalog: &impl PilotCatalog, name: &str) -> Result<Self, StartError> {
+    pub fn new(
+        catalog: &(impl PilotCatalog + CombatCatalog),
+        name: &str,
+    ) -> Result<Self, StartError> {
         let character = catalog.first_character()?;
         let ship = character.ship.ok_or(StartError::NoShip)?;
         let fields = catalog
@@ -143,8 +154,10 @@ impl Pilot {
             .flatten()
             .find(|&id| catalog.system_exists(id))
             .ok_or(StartError::NoStartingSystem(character.systems))?;
-        let outfits = default_outfits(catalog, ship);
-        let stats = ShipStats::new(fields, &outfit_mods(&outfits, &catalog.outfits()));
+        let records = catalog.outfits();
+        let stock = Arsenal::read(catalog).stock_outfits(ship, &records);
+        let outfits = merged(&stock, &default_outfits(catalog, ship));
+        let stats = ShipStats::new(fields, &outfit_mods(&outfits, &records));
         Ok(Self {
             name: name.to_owned(),
             ship,
@@ -160,6 +173,7 @@ impl Pilot {
             events: BTreeMap::new(),
             outfits,
             default_outfits_pending: false,
+            stock_weapons_pending: false,
             escorts: Vec::new(),
             gone_persons: BTreeSet::new(),
             grudges: BTreeSet::new(),
@@ -326,6 +340,19 @@ pub(crate) fn default_outfits(
     tally(catalog.default_outfits(ship))
 }
 
+/// `a` and `b` together, saturating.
+pub(crate) fn merged(
+    a: &BTreeMap<OutfitId, u16>,
+    b: &BTreeMap<OutfitId, u16>,
+) -> BTreeMap<OutfitId, u16> {
+    let mut both = a.clone();
+    for (&id, &count) in b {
+        let owned = both.entry(id).or_default();
+        *owned = owned.saturating_add(count);
+    }
+    both
+}
+
 /// `items`, each an outfit with a count, as how many of each: repeats add
 /// up, saturating, and none of an item is not listed.
 pub(crate) fn tally(items: impl IntoIterator<Item = (OutfitId, u16)>) -> BTreeMap<OutfitId, u16> {
@@ -418,6 +445,45 @@ mod tests {
         assert_eq!(pilot.owned(OutfitId(201)), 0);
         assert_eq!(pilot.reserves().fuel, Gauge::full(600.0), "three tanks");
         assert!(!pilot.default_outfits_pending);
+    }
+
+    #[test]
+    fn a_new_pilot_owns_its_ships_stock_weapons_and_rounds_then_its_default_items() {
+        use crate::catalog::{HullRecord, OutfitId, StockWeapon, WeaponId, WeaponRecord};
+        use crate::combat::armament::{MOD_AMMO, MOD_WEAPON};
+        use crate::testkit::{hull, outfit, weapon};
+        let stock = |id, count, ammo| StockWeapon {
+            weapon: WeaponId(id),
+            count,
+            ammo,
+        };
+        let catalog = FakePilotCatalog {
+            weapons: vec![
+                weapon(150),
+                WeaponRecord {
+                    ammo_type: 10,
+                    ..weapon(138)
+                },
+            ],
+            hulls: vec![HullRecord {
+                weapons: vec![stock(150, 2, 0), stock(138, 1, 20)],
+                ..hull(128)
+            }],
+            outfits: vec![
+                outfit(200, &[(MOD_WEAPON, 150)]),
+                outfit(201, &[(MOD_AMMO, 138)]),
+                outfit(207, &[(MOD_WEAPON, 138)]),
+            ],
+            defaults: vec![(ShipId(128), vec![(OutfitId(200), 1)])],
+            ..catalog()
+        };
+        let pilot = Pilot::new(&catalog, "").expect("starts");
+        assert_eq!(
+            pilot.outfits().collect::<Vec<_>>(),
+            [(OutfitId(200), 3), (OutfitId(201), 20), (OutfitId(207), 1)],
+            "the stock weapons, then the default items on top"
+        );
+        assert!(!pilot.stock_weapons_pending);
     }
 
     #[test]

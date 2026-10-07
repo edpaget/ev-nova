@@ -43,11 +43,25 @@
 //!   lowest weapon ID, and only at a missile it picks; it pays, bursts and
 //!   reloads like any weapon, and a beam (10) draws no inaccuracy.
 //!
-//! The player's armament ([`Arsenal::player`]) is its ship's stock weapons
-//! and the weapons among its outfits ([`MOD_WEAPON`]), firing the rounds
-//! of the ammunition among its outfits ([`MOD_AMMO`], through
-//! [`OutfitRounds`]). An NPC's ([`Arsenal::npc`]) is its ship's stock
-//! weapons and default items, its rounds held on the NPC: each stock
+//! The player's armament ([`Arsenal::player`]) is the weapons among its
+//! outfits ([`MOD_WEAPON`]), firing the rounds of the ammunition among
+//! its outfits ([`MOD_AMMO`], through [`OutfitRounds`]). Its ship's stock
+//! weapons and their `AmmoLoad` are outfits it owns, as in the original,
+//! which keeps a weapon only through the outfit that holds it
+//! (`_ShipStatsToSystemInfo` @0xcaee): [`Arsenal::stock_fits`] gives each
+//! as the `oütf` of lowest ID with a [`MOD_WEAPON`] (or [`MOD_AMMO`])
+//! mod naming it, `WeapCount` of each weapon, a later slot
+//! naming the same weapon replacing an earlier one's count and load
+//! (`_LoadObjectData` @0x7aa72, @0x7aa90), and `AmmoLoad` rounds of its
+//! ammunition, whatever its `WeapCount`: the weapon its `AmmoType` names,
+//! or the weapon itself for a fighter bay or any other `AmmoType`
+//! (`_DoShipyardDialog` @0x5ef3e-0x5ef56), the largest load where two
+//! weapons share one. A new pilot owns them before its default items
+//! (`_DoNewPilot` @0x18f48, @0x18f4d); a ship bought or captured tops
+//! them up after its default items (`fit_stock`).
+//!
+//! An NPC's ([`Arsenal::npc`]) is its class's stock weapons and default
+//! items ([`Arsenal::of_class`]), its rounds held on the NPC: each stock
 //! weapon's `AmmoLoad`, and the ammunition among its default items.
 
 use std::collections::BTreeMap;
@@ -63,6 +77,7 @@ use crate::catalog::{
 };
 use crate::chance::Chance;
 use crate::flight::normalized;
+use crate::pilot::tally;
 use crate::reserves::Gauge;
 
 /// The `oütf` `ModType` that is a weapon: its `ModVal` is the `wëap`.
@@ -547,20 +562,32 @@ impl Arsenal {
         self.hulls.get(&ship).map(HullSpec::new).unwrap_or_default()
     }
 
-    /// The armament of a ship of type `ship` carrying `owned` of
-    /// `outfits`: its stock weapons, and its weapon outfits.
+    /// The player's armament, owning `owned` of `outfits`: its weapon
+    /// outfits, its stock weapons among them (see the module docs).
     #[must_use]
-    pub fn player(
+    pub fn player(&self, owned: &BTreeMap<OutfitId, u16>, outfits: &[OutfitRecord]) -> Armament {
+        self.mounted(mods(owned, outfits, MOD_WEAPON))
+    }
+
+    /// The armament of a ship of class `ship` carrying `carried` of
+    /// `outfits`: its class's stock weapons, and its weapon outfits.
+    #[must_use]
+    pub fn of_class(
         &self,
         ship: ShipId,
-        owned: &BTreeMap<OutfitId, u16>,
+        carried: &BTreeMap<OutfitId, u16>,
         outfits: &[OutfitRecord],
     ) -> Armament {
         let stock = self.stock(ship).map(|(weapon, count, _)| (weapon, count));
-        let fitted = mods(owned, outfits, MOD_WEAPON);
+        self.mounted(stock.chain(mods(carried, outfits, MOD_WEAPON)))
+    }
+
+    /// An armament of `weapons`, each with how many; one that cannot be
+    /// read mounts nothing.
+    fn mounted(&self, weapons: impl IntoIterator<Item = (WeaponId, u32)>) -> Armament {
         Armament::new(
-            stock
-                .chain(fitted)
+            weapons
+                .into_iter()
                 .filter_map(|(weapon, count)| Some((*self.weapon(weapon)?, count))),
         )
     }
@@ -575,7 +602,7 @@ impl Arsenal {
         defaults: &BTreeMap<OutfitId, u16>,
         outfits: &[OutfitRecord],
     ) -> (Armament, BTreeMap<WeaponId, u32>) {
-        let armament = self.player(ship, defaults, outfits);
+        let armament = self.of_class(ship, defaults, outfits);
         let mut rounds = BTreeMap::new();
         for (weapon, _, load) in self.stock(ship) {
             if let Some(Ammo::Rounds(ammo)) = self.weapon(weapon).map(|spec| spec.ammo)
@@ -608,17 +635,138 @@ impl Arsenal {
     /// rounds of, by ascending outfit ID.
     #[must_use]
     pub fn ammo_outfits(outfits: &[OutfitRecord]) -> Vec<(WeaponId, OutfitId)> {
-        outfits
-            .iter()
-            .flat_map(|record| {
-                record
-                    .mods
-                    .iter()
-                    .filter(|&&(mod_type, _)| mod_type == MOD_AMMO)
-                    .map(|&(_, weapon)| (WeaponId(weapon), record.id))
-            })
-            .collect()
+        holders(outfits, MOD_AMMO)
     }
+
+    /// Ship class `ship`'s stock weapons and their ammunition, each as
+    /// the outfit among `outfits` that holds it (see the module docs);
+    /// none for a class that cannot be read. The weapons come first, by
+    /// ascending weapon ID, then the ammunition.
+    #[must_use]
+    pub fn stock_fits(&self, ship: ShipId, outfits: &[OutfitRecord]) -> Vec<StockFit> {
+        let Some(hull) = self.hulls.get(&ship) else {
+            return Vec::new();
+        };
+        let slots: BTreeMap<WeaponId, (i16, i16)> = hull
+            .weapons
+            .iter()
+            .map(|stock| (stock.weapon, (stock.count, stock.ammo)))
+            .collect();
+        let weapon_holders = holders(outfits, MOD_WEAPON);
+        let mut fits = Vec::new();
+        let mut loads: BTreeMap<WeaponId, u16> = BTreeMap::new();
+        for (&weapon, &(count, load)) in &slots {
+            if let (Ok(count @ 1..), Some(outfit)) =
+                (u16::try_from(count), holder(&weapon_holders, weapon))
+            {
+                fits.push(StockFit {
+                    outfit,
+                    mod_type: MOD_WEAPON,
+                    weapon,
+                    count,
+                });
+            }
+            let (Ok(load @ 1..), Some(spec)) = (u16::try_from(load), self.weapon(weapon)) else {
+                continue;
+            };
+            let ammo = match spec.ammo {
+                Ammo::Rounds(ammo) => ammo,
+                _ => weapon,
+            };
+            let most = loads.entry(ammo).or_default();
+            *most = (*most).max(load);
+        }
+        let ammo_holders = holders(outfits, MOD_AMMO);
+        for (ammo, load) in loads {
+            if let Some(outfit) = holder(&ammo_holders, ammo) {
+                fits.push(StockFit {
+                    outfit,
+                    mod_type: MOD_AMMO,
+                    weapon: ammo,
+                    count: load,
+                });
+            }
+        }
+        fits
+    }
+
+    /// Ship class `ship`'s stock weapons and their ammunition as outfits
+    /// among `outfits` ([`Arsenal::stock_fits`]), each with how many,
+    /// saturating.
+    #[must_use]
+    pub fn stock_outfits(&self, ship: ShipId, outfits: &[OutfitRecord]) -> BTreeMap<OutfitId, u16> {
+        fitted(&self.stock_fits(ship, outfits))
+    }
+}
+
+/// The outfits of `fits`, each with how many, saturating.
+#[must_use]
+pub fn fitted(fits: &[StockFit]) -> BTreeMap<OutfitId, u16> {
+    tally(fits.iter().map(|fit| (fit.outfit, fit.count)))
+}
+
+/// One of a ship class's stock weapons, or its ammunition, as the `oütf`
+/// that holds it: the outfit of lowest ID whose mod of `mod_type`
+/// ([`MOD_WEAPON`] or [`MOD_AMMO`]) names the weapon, as
+/// `_ShipStatsToSystemInfo` picks (@0xcc28-0xccd7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StockFit {
+    /// The outfit holding it.
+    pub outfit: OutfitId,
+    /// [`MOD_WEAPON`] for the weapon, [`MOD_AMMO`] for its ammunition.
+    pub mod_type: i16,
+    /// The weapon, or the ammunition's weapon.
+    pub weapon: WeaponId,
+    /// Its `WeapCount`, or its `AmmoLoad`.
+    pub count: u16,
+}
+
+/// Tops `owned` of `outfits` up to each of `fits`, as `_DoShipyardDialog`
+/// does (@0x5eebc-0x5ef92): when the outfits owned hold fewer of a fit's
+/// weapon (or rounds) than its count, the fit's outfit makes up the
+/// difference; when they hold as many or more, nothing changes.
+pub(crate) fn fit_stock(
+    owned: &mut BTreeMap<OutfitId, u16>,
+    fits: &[StockFit],
+    outfits: &[OutfitRecord],
+) {
+    for fit in fits {
+        let held: u32 = mods(owned, outfits, fit.mod_type)
+            .into_iter()
+            .filter(|&(weapon, _)| weapon == fit.weapon)
+            .map(|(_, count)| count)
+            .sum();
+        let held = u16::try_from(held).unwrap_or(u16::MAX);
+        if fit.count > held {
+            let count = owned.entry(fit.outfit).or_default();
+            *count = count.saturating_add(fit.count - held);
+        }
+    }
+}
+
+/// Each outfit among `outfits` with a mod of `mod_type`, with the `wëap`
+/// it names, by ascending outfit ID.
+fn holders(outfits: &[OutfitRecord], mod_type: i16) -> Vec<(WeaponId, OutfitId)> {
+    let mut sorted: Vec<&OutfitRecord> = outfits.iter().collect();
+    sorted.sort_by_key(|record| record.id);
+    sorted
+        .into_iter()
+        .flat_map(|record| {
+            record
+                .mods
+                .iter()
+                .filter(move |&&(kind, _)| kind == mod_type)
+                .map(|&(_, weapon)| (WeaponId(weapon), record.id))
+        })
+        .collect()
+}
+
+/// The first outfit among `holders` naming `weapon`: the lowest ID.
+fn holder(holders: &[(WeaponId, OutfitId)], weapon: WeaponId) -> Option<OutfitId> {
+    holders
+        .iter()
+        .find(|&&(of, _)| of == weapon)
+        .map(|&(_, outfit)| outfit)
 }
 
 /// The `wëap` each of `owned` of `outfits` names in a mod of `mod_type`,
@@ -1606,13 +1754,183 @@ mod tests {
     }
 
     /// Outfit 200 is a weapon, 150; outfit 201 is rockets; outfit 202 is
-    /// a shield booster.
+    /// a shield booster; outfits 205 and 206 are blasters (128), 207 a
+    /// rocket launcher (138), and 208 weapon 999, which cannot be read.
     fn outfits() -> Vec<OutfitRecord> {
         vec![
             outfit(200, &[(MOD_WEAPON, 150)]),
             outfit(201, &[(MOD_AMMO, 138)]),
             outfit(202, &[(4, 100)]),
+            outfit(205, &[(MOD_WEAPON, 128)]),
+            outfit(206, &[(MOD_WEAPON, 128)]),
+            outfit(207, &[(MOD_WEAPON, 138)]),
+            outfit(208, &[(MOD_WEAPON, 999)]),
         ]
+    }
+
+    /// An arsenal of blasters (128), a rocket launcher (138) and
+    /// `weapons`, with ship 130 stocking `slots`, each a weapon with its
+    /// `WeapCount` and `AmmoLoad`.
+    fn stocking(weapons: &[WeaponRecord], slots: &[(i16, i16, i16)]) -> Arsenal {
+        let mut records = vec![
+            blaster(128, 10),
+            WeaponRecord {
+                ammo_type: 10,
+                ..blaster(138, 15)
+            },
+        ];
+        records.extend_from_slice(weapons);
+        let weapons = slots
+            .iter()
+            .map(|&(weapon, count, ammo)| StockWeapon {
+                weapon: WeaponId(weapon),
+                count,
+                ammo,
+            })
+            .collect();
+        Arsenal::new(
+            &records,
+            vec![HullRecord {
+                weapons,
+                ..hull(130)
+            }],
+        )
+    }
+
+    fn tallied(pairs: &[(i16, u16)]) -> BTreeMap<OutfitId, u16> {
+        pairs.iter().map(|&(id, n)| (OutfitId(id), n)).collect()
+    }
+
+    #[test]
+    fn a_classs_stock_weapons_are_held_by_the_lowest_id_outfit_naming_them() {
+        let arsenal = arsenal();
+        assert_eq!(
+            arsenal.stock_outfits(ShipId(128), &outfits()),
+            tallied(&[(201, 20), (205, 2), (207, 1), (208, 1)]),
+            "999 is fitted, but its rounds are not: it has no wëap; \
+             150 (-1, -4) and 140 (0) give nothing"
+        );
+        assert_eq!(arsenal.stock_outfits(ShipId(129), &outfits()), tallied(&[]));
+        assert_eq!(
+            arsenal.stock_fits(ShipId(128), &outfits()),
+            [
+                StockFit {
+                    outfit: OutfitId(205),
+                    mod_type: MOD_WEAPON,
+                    weapon: WeaponId(128),
+                    count: 2,
+                },
+                StockFit {
+                    outfit: OutfitId(207),
+                    mod_type: MOD_WEAPON,
+                    weapon: WeaponId(138),
+                    count: 1,
+                },
+                StockFit {
+                    outfit: OutfitId(208),
+                    mod_type: MOD_WEAPON,
+                    weapon: WeaponId(999),
+                    count: 1,
+                },
+                StockFit {
+                    outfit: OutfitId(201),
+                    mod_type: MOD_AMMO,
+                    weapon: WeaponId(138),
+                    count: 20,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_weapon_named_twice_keeps_its_later_slot() {
+        let arsenal = stocking(&[], &[(128, 1, 0), (128, 3, 0)]);
+        assert_eq!(
+            arsenal.stock_outfits(ShipId(130), &outfits()),
+            tallied(&[(205, 3)])
+        );
+        let rockets = stocking(&[], &[(138, 1, 20), (138, 1, 5)]);
+        assert_eq!(
+            rockets.stock_outfits(ShipId(130), &outfits()),
+            tallied(&[(201, 5), (207, 1)]),
+            "its load too"
+        );
+    }
+
+    #[test]
+    fn stock_ammunition_is_loaded_without_a_weapon_count_and_shared_ammunition_takes_the_larger_load()
+     {
+        let launcher = |id| WeaponRecord {
+            ammo_type: 10,
+            ..blaster(id, 15)
+        };
+        let shared = stocking(
+            &[launcher(160), launcher(161)],
+            &[(160, 1, 7), (161, 1, 12)],
+        );
+        assert_eq!(
+            shared.stock_outfits(ShipId(130), &outfits()),
+            tallied(&[(201, 12)]),
+            "neither launcher has an outfit of its own"
+        );
+        let larger_first = stocking(
+            &[launcher(160), launcher(161)],
+            &[(160, 1, 12), (161, 1, 7)],
+        );
+        assert_eq!(
+            larger_first.stock_outfits(ShipId(130), &outfits()),
+            tallied(&[(201, 12)])
+        );
+        let uncounted = stocking(&[], &[(138, 0, 5)]);
+        assert_eq!(
+            uncounted.stock_outfits(ShipId(130), &outfits()),
+            tallied(&[(201, 5)])
+        );
+    }
+
+    #[test]
+    fn an_unlimited_or_bay_weapons_load_is_its_own_ammunition() {
+        let unlimited = WeaponRecord {
+            ammo_type: -1,
+            ..blaster(170, 15)
+        };
+        let fuelled = WeaponRecord {
+            ammo_type: -1005,
+            ..blaster(172, 15)
+        };
+        let bays = stocking(
+            &[unlimited, bay(171, 300, 50), fuelled],
+            &[(170, 1, 3), (171, 1, 4), (172, 1, 6)],
+        );
+        let records = [
+            outfit(209, &[(MOD_AMMO, 170)]),
+            outfit(210, &[(MOD_AMMO, 171)]),
+            outfit(211, &[(MOD_AMMO, 172)]),
+            outfit(212, &[(MOD_AMMO, 128)]),
+        ];
+        assert_eq!(
+            bays.stock_outfits(ShipId(130), &records),
+            tallied(&[(209, 3), (210, 4), (211, 6)])
+        );
+    }
+
+    #[test]
+    fn stock_outfits_tally_their_fits_saturating() {
+        // One outfit holding both weapons and the rockets.
+        let records = [outfit(
+            213,
+            &[(MOD_WEAPON, 128), (MOD_WEAPON, 138), (MOD_AMMO, 138)],
+        )];
+        let arsenal = stocking(&[], &[(128, i16::MAX, 0), (138, i16::MAX, i16::MAX)]);
+        assert_eq!(
+            arsenal.stock_outfits(ShipId(130), &records),
+            tallied(&[(213, u16::MAX)])
+        );
+        let two = stocking(&[], &[(128, 2, 0), (138, 1, 20)]);
+        assert_eq!(
+            two.stock_outfits(ShipId(130), &records),
+            tallied(&[(213, 23)])
+        );
     }
 
     fn counts(armament: &Armament) -> Vec<(i16, u32)> {
@@ -1624,20 +1942,31 @@ mod tests {
     }
 
     #[test]
-    fn the_players_armament_is_its_stock_weapons_and_its_weapon_outfits() {
+    fn a_classs_armament_is_its_stock_weapons_and_its_weapon_outfits() {
         let arsenal = arsenal();
         let owned = BTreeMap::from([(OutfitId(200), 2), (OutfitId(201), 5), (OutfitId(202), 1)]);
         assert_eq!(
-            counts(&arsenal.player(ShipId(128), &owned, &outfits())),
+            counts(&arsenal.of_class(ShipId(128), &owned, &outfits())),
             [(128, 2), (138, 1), (150, 2)],
             "weapon 999 cannot be read, and none of 150 is stock"
         );
         assert_eq!(
-            counts(&arsenal.player(ShipId(129), &owned, &outfits())),
+            counts(&arsenal.of_class(ShipId(129), &owned, &outfits())),
             [(150, 2)],
             "a ship type that cannot be read has no stock weapons"
         );
         assert_eq!(MOD_WEAPON, 1);
+    }
+
+    #[test]
+    fn the_players_armament_is_its_weapon_outfits_alone() {
+        let arsenal = arsenal();
+        let owned = BTreeMap::from([(OutfitId(200), 2), (OutfitId(201), 5), (OutfitId(202), 1)]);
+        assert_eq!(
+            counts(&arsenal.player(&owned, &outfits())),
+            [(150, 2)],
+            "its stock weapons are outfits it owns"
+        );
     }
 
     #[test]
@@ -1674,6 +2003,70 @@ mod tests {
                 (WeaponId(140), OutfitId(203)),
                 (WeaponId(141), OutfitId(203))
             ]
+        );
+    }
+
+    #[test]
+    fn fit_stock_tops_up_what_is_already_held() {
+        let fits = [
+            StockFit {
+                outfit: OutfitId(205),
+                mod_type: MOD_WEAPON,
+                weapon: WeaponId(128),
+                count: 2,
+            },
+            StockFit {
+                outfit: OutfitId(201),
+                mod_type: MOD_AMMO,
+                weapon: WeaponId(138),
+                count: 20,
+            },
+        ];
+        let mut records = outfits();
+        records.push(outfit(204, &[(MOD_AMMO, 138)]));
+        let topped = |owned: &[(i16, u16)]| {
+            let mut owned = tallied(owned);
+            fit_stock(&mut owned, &fits, &records);
+            owned
+        };
+        assert_eq!(topped(&[]), tallied(&[(201, 20), (205, 2)]));
+        assert_eq!(
+            topped(&[(206, 1)]),
+            tallied(&[(201, 20), (205, 1), (206, 1)]),
+            "206 holds one blaster already"
+        );
+        assert_eq!(topped(&[(205, 3)]), tallied(&[(201, 20), (205, 3)]));
+        assert_eq!(topped(&[(205, 2)]), tallied(&[(201, 20), (205, 2)]));
+        assert_eq!(
+            topped(&[(204, 15), (207, 4)]),
+            tallied(&[(201, 5), (204, 15), (205, 2), (207, 4)]),
+            "the rockets of 204 count; the launchers of 207 are no blasters"
+        );
+        assert_eq!(
+            topped(&[(204, 25), (205, u16::MAX)]),
+            tallied(&[(204, 25), (205, u16::MAX)])
+        );
+    }
+
+    #[test]
+    fn holders_are_in_ascending_outfit_id_whatever_order_the_records_come_in() {
+        let records = [
+            outfit(206, &[(MOD_WEAPON, 128)]),
+            outfit(203, &[(MOD_AMMO, 140)]),
+            outfit(205, &[(MOD_WEAPON, 128)]),
+            outfit(201, &[(MOD_AMMO, 138)]),
+        ];
+        assert_eq!(
+            Arsenal::ammo_outfits(&records),
+            [
+                (WeaponId(138), OutfitId(201)),
+                (WeaponId(140), OutfitId(203))
+            ]
+        );
+        let arsenal = stocking(&[], &[(128, 2, 0)]);
+        assert_eq!(
+            arsenal.stock_outfits(ShipId(130), &records),
+            tallied(&[(205, 2)])
         );
     }
 

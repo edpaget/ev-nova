@@ -30,6 +30,12 @@
 //! - Version 9: adds the persons gone for good and those holding a
 //!   grudge against the player, none in an older save.
 //! - Version 10: adds the person each escort is, none in an older save.
+//! - Version 11: a ship's stock weapons and their `AmmoLoad` are outfits
+//!   it owns. An older save's ship mounted its class's stock weapons
+//!   beside its outfits, which only the game data knows, so the upgrade
+//!   marks them not fitted (`stock_weapons_fitted`), and flying the pilot
+//!   adds them to the outfits saved
+//!   ([`Session::fly`](crate::Session::fly)); the next save lists them.
 //!
 //! IDs are saved as their raw numbers, the date as its year, month and
 //! day, each reserve as how much the ship has and can hold, each good held
@@ -58,7 +64,7 @@ use crate::pilot::{Escort, Pilot};
 use crate::reserves::{Gauge, Reserves};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 10;
+pub const CURRENT: u64 = 11;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -248,6 +254,9 @@ struct Saved {
     /// `None` for the ship's default items, not yet read.
     #[serde(deserialize_with = "Option::deserialize")]
     outfits: Option<Vec<SavedOutfit>>,
+    /// Whether the ship's stock weapons are among `outfits`: not in a
+    /// save from before they were outfits.
+    stock_weapons_fitted: bool,
     escorts: Vec<SavedEscort>,
     gone_persons: Vec<i16>,
     grudges: Vec<i16>,
@@ -308,6 +317,7 @@ pub fn encode(pilot: &Pilot) -> String {
                 })
                 .collect()
         }),
+        stock_weapons_fitted: !pilot.stock_weapons_pending,
         escorts: pilot
             .escorts
             .iter()
@@ -338,6 +348,7 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     hired_escorts,
     persons,
     person_escorts,
+    stock_weapons,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -385,6 +396,13 @@ fn persons(save: &mut Value) {
 /// Version 9 to 10: no escort is a person.
 fn person_escorts(save: &mut Value) {
     add_to_escorts(save, "person", &Value::Null);
+}
+
+/// Version 10 to 11: the ship's stock weapons, not yet fitted as outfits.
+fn stock_weapons(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("stock_weapons_fitted".to_owned(), Value::Bool(false));
+    }
 }
 
 /// Adds `field` to every escort in `save`, as `value`.
@@ -470,6 +488,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
             .map(|saved| (DisasterId(saved.disaster), saved.days))
             .collect(),
         default_outfits_pending: saved.outfits.is_none(),
+        stock_weapons_pending: !saved.stock_weapons_fitted,
         outfits: saved
             .outfits
             .unwrap_or_default()
@@ -538,6 +557,7 @@ mod tests {
             events: BTreeMap::from([(DisasterId(128), 12), (DisasterId(130), 1)]),
             outfits: BTreeMap::from([(OutfitId(256), 3), (OutfitId(128), 1)]),
             default_outfits_pending: false,
+            stock_weapons_pending: false,
             escorts: vec![
                 Escort {
                     ship: ShipId(130),
@@ -652,7 +672,8 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 10);
+        assert_eq!(CURRENT, 11);
+        assert_eq!(value["stock_weapons_fitted"], true);
         assert_eq!(value["gone_persons"], serde_json::json!([151, 600]));
         assert_eq!(value["grudges"], serde_json::json!([510]));
         assert_eq!(value["name"], "Ada Lovelace");
@@ -707,7 +728,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 10"), "{text}");
+        assert!(text.contains("\n  \"version\": 11"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -1196,7 +1217,7 @@ mod tests {
         assert!(pilot.gone(PersonId(151)));
         assert!(pilot.grudge(PersonId(510)));
         let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
-        assert_eq!(value["version"], 10);
+        assert_eq!(value["version"], CURRENT);
         assert_eq!(value["escorts"][0]["person"], serde_json::Value::Null);
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
         for text in [
@@ -1208,6 +1229,65 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    /// A version 10 save: before stock weapons were outfits.
+    const VERSION_10: &str = r#"{
+        "version": 10,
+        "name": "Veteran",
+        "ship": 129,
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [],
+        "cargo": [],
+        "events": [],
+        "outfits": [{"outfit": 200, "count": 1}],
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": []
+    }"#;
+
+    #[test]
+    fn a_version_10_save_loads_with_its_stock_weapons_pending() {
+        let pilot = decode(VERSION_10).expect("loads");
+        assert_eq!(pilot.name(), "Veteran");
+        assert!(pilot.stock_weapons_pending);
+        assert!(!pilot.default_outfits_pending);
+        assert_eq!(pilot.owned(OutfitId(200)), 1);
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], 11);
+        assert_eq!(value["stock_weapons_fitted"], false);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [
+            VERSION_9, VERSION_8, VERSION_7, VERSION_6, VERSION_5, VERSION_4, VERSION_3, VERSION_2,
+            VERSION_1,
+        ] {
+            assert!(decode(text).expect("loads").stock_weapons_pending, "{text}");
+        }
+        assert!(
+            !decode(&encode(&seasoned()))
+                .expect("loads")
+                .stock_weapons_pending
+        );
+    }
+
+    #[test]
+    fn a_current_save_missing_whether_its_stock_weapons_are_fitted_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        if let Some(object) = value.as_object_mut() {
+            object.remove("stock_weapons_fitted");
+        }
+        assert!(unusable(&value.to_string()).contains("stock_weapons_fitted"));
     }
 
     #[test]
@@ -1343,12 +1423,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 10", "\"version\": 11");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 11 }));
+        let newer = encode(&seasoned()).replace("\"version\": 11", "\"version\": 12");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 12 }));
         assert_eq!(
-            SaveError::Newer { version: 11 }.to_string(),
+            SaveError::Newer { version: 12 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 11, and this version of Nova reads up to 10)."
+             (it is version 12, and this version of Nova reads up to 11)."
         );
     }
 

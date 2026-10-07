@@ -236,6 +236,22 @@ fn weapon(reload: i16, damage: i16, ammo: i16, graphic: i16, sound: i16, flags: 
     bytes
 }
 
+/// `oütf` 100 + `weapon`, which is one `wëap` `weapon` (`ModType` 1), up
+/// to 10, never for sale: how the player's ship holds a stock weapon.
+fn holder(weapon: i16) -> (i16, Vec<u8>) {
+    let mut bytes = vec![0; Outfit::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x06, &[1, weapon, 10]);
+    (100 + weapon, bytes)
+}
+
+/// `fork` with an [`holder`] for each of `weapons`.
+fn holding(fork: ForkBuilder, weapons: &[i16]) -> ForkBuilder {
+    weapons.iter().fold(fork, |fork, &weapon| {
+        let (id, bytes) = holder(weapon);
+        fork.resource(Outfit::TYPE, id, None, &bytes)
+    })
+}
+
 /// An `oütf` that is three rounds of `wëap` 138, up to 10.
 fn rockets() -> Vec<u8> {
     let mut bytes = vec![0; Outfit::SIZE.expect("fixed")];
@@ -345,6 +361,7 @@ const EXPLOSION: f32 = 5.0;
 /// mass damage a shot, its 3 x 3 shots sounding `snd ` 208; the rocket
 /// launcher (`wëap` 138, a secondary) fires its 4 x 4 rockets every 30
 /// ticks, each a round of its own. Explosion type 0 is 5 x 5 frames.
+/// Each weapon the player's ship may carry is held by its [`holder`].
 fn data() -> Rc<GameData> {
     data_arming(&[128, 138], &[])
 }
@@ -357,7 +374,7 @@ fn data() -> Rc<GameData> {
 /// (sound looped, `snd ` 205 lasting 14 ticks), its 3 x 3 shots 18 pixels
 /// a tick for 20.
 fn data_arming(player: &[i16], trader: &[i16]) -> Rc<GameData> {
-    let fork = ForkBuilder::new()
+    let fork = holding(ForkBuilder::new(), &[128, 133, 134, 138, 155])
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(
             Ship::TYPE,
@@ -883,7 +900,7 @@ fn patrolled_system() -> Vec<u8> {
 fn patrolled() -> Rc<GameData> {
     let mut gun = weapon(10, 5, -1, 0, 8, 0);
     put_i16s(&mut gun, 0x06, &[10]);
-    let fork = ForkBuilder::new()
+    let fork = holding(ForkBuilder::new(), &[128])
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(
             Ship::TYPE,
@@ -1163,7 +1180,7 @@ fn boarding_data() -> Rc<GameData> {
     put_i16s(&mut trader, 0x44, &[1]);
     let mut dude = dude();
     put_i16s(&mut dude, 0x04, &[0x0041]);
-    let mut fork = ForkBuilder::new()
+    let mut fork = holding(ForkBuilder::new(), &[128])
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &boarder)
         .resource(Ship::TYPE, 129, Some(b"Trader"), &trader)
@@ -2201,7 +2218,7 @@ fn escort_data(alpha_dudes: &[i16]) -> Rc<GameData> {
     for variant in 0..5 {
         "What can I do for you?".clone_into(&mut replies[20 + variant]);
     }
-    let mut fork = ForkBuilder::new()
+    let mut fork = holding(ForkBuilder::new(), &[128])
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &boarder)
         .resource(Ship::TYPE, 129, Some(b"Trader"), &trader)
@@ -2720,7 +2737,7 @@ fn fighter_data(alpha_dudes: &[i16]) -> Rc<GameData> {
     let mut fighters = vec![0; Outfit::SIZE.expect("fixed")];
     put_i16s(&mut fighters, 0x06, &[3, 130, 9999]);
     put_i16s(&mut fighters, 0x3F0, &[100]);
-    let mut fork = ForkBuilder::new()
+    let mut fork = holding(ForkBuilder::new(), &[128, 130])
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &boarder)
         .resource(Ship::TYPE, 131, Some(b"Raider"), &ship(30, 45, &[], &[]))

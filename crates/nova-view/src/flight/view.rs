@@ -6525,6 +6525,35 @@ mod tests {
         }
     }
 
+    /// `oütf` `id`, "Gun `id`", holding a `weapon`: a ton, 1000 credits.
+    fn holding(id: i16, weapon: WeaponId) -> OutfitRecord {
+        OutfitRecord {
+            id: OutfitId(id),
+            name: format!("Gun {id}"),
+            short_name: format!("Gun {id}"),
+            disp_weight: 0,
+            mass: 1,
+            tech_level: 1,
+            max: 10,
+            flags: 0,
+            cost: 1000,
+            mods: [
+                (nova_sim::combat::armament::MOD_WEAPON, weapon.0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+            ],
+            contribute: 0,
+            require: 0,
+            require_govt: -1,
+            buy_random: 100,
+            availability: String::new(),
+            item_class: 0,
+            lc_name: format!("gun {id}"),
+            lc_plural: format!("guns {id}"),
+        }
+    }
+
     fn effect_sheet(image_id: i16, frames: u16) -> EffectSheet {
         EffectSheet {
             image_id,
@@ -6544,8 +6573,8 @@ mod tests {
     }
 
     /// [`trafficked`] (ships of type 129, warships) where the player's
-    /// ship carries `weapons`; the blaster, rockets, missiles and torch
-    /// have looks, and `bööm` 128 shows `rlëD` 400's 3 frames at a frame
+    /// ship carries `weapons`, held by outfits 250 on, in that order; the
+    /// blaster, rockets, missiles and torch have looks, and `bööm` 128 shows `rlëD` 400's 3 frames at a frame
     /// a step, sounding `snd ` 302. Ship 129 is a "Light Transport" with
     /// picture 3001, and govt 140's code is "Fed.".
     fn armed(avg: i16, weapons: &[WeaponId]) -> FakeCatalog {
@@ -6562,6 +6591,10 @@ mod tests {
                 gun(UNSEEN, 0, -1, -1),
             ],
             hulls: vec![hull_of(128, weapons), hull_of(129, &[])],
+            outfits: (250..)
+                .zip(weapons)
+                .map(|(id, &weapon)| holding(id, weapon))
+                .collect(),
             looks: vec![
                 (128, Ok(look("Blaster", 208, Some(3500)))),
                 (140, Ok(look("Rocket", 209, Some(3501)))),
@@ -7424,10 +7457,10 @@ mod tests {
     const IR: WeaponId = WeaponId(134);
 
     /// [`armed`] with the player, over a planet at the centre, carrying a
-    /// point-defence turret, and its traffic a missile it fires once, 5
-    /// pixels a tick.
+    /// point-defence turret (held by outfit 250), and its traffic a
+    /// missile it fires once, 5 pixels a tick.
     fn defending() -> FakeCatalog {
-        let mut catalog = armed(1, &[]);
+        let mut catalog = armed(1, &[QUAD]);
         catalog.sites = vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)];
         catalog.weapons.push(nova_sim::WeaponRecord {
             reload: 5,
@@ -7941,31 +7974,34 @@ mod tests {
         };
         catalog.hulls = vec![rockets(128, 0), rockets(129, 2)];
         catalog.hulls[0].strength = 0;
-        catalog.outfits = vec![OutfitRecord {
-            id: OutfitId(310),
-            name: "Rockets".to_owned(),
-            short_name: "Rockets".to_owned(),
-            disp_weight: 0,
-            mass: 1,
-            tech_level: 1,
-            max: 10,
-            flags: 0,
-            cost: 100,
-            mods: [
-                (nova_sim::combat::armament::MOD_AMMO, 140),
-                (0, 0),
-                (0, 0),
-                (0, 0),
-            ],
-            contribute: 0,
-            require: 0,
-            require_govt: -1,
-            buy_random: 100,
-            availability: String::new(),
-            item_class: 0,
-            lc_name: "rocket".to_owned(),
-            lc_plural: "rockets".to_owned(),
-        }];
+        catalog.outfits = vec![
+            holding(250, ROCKET),
+            OutfitRecord {
+                id: OutfitId(310),
+                name: "Rockets".to_owned(),
+                short_name: "Rockets".to_owned(),
+                disp_weight: 0,
+                mass: 1,
+                tech_level: 1,
+                max: 10,
+                flags: 0,
+                cost: 100,
+                mods: [
+                    (nova_sim::combat::armament::MOD_AMMO, 140),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                ],
+                contribute: 0,
+                require: 0,
+                require_govt: -1,
+                buy_random: 100,
+                availability: String::new(),
+                item_class: 0,
+                lc_name: "rocket".to_owned(),
+                lc_plural: "rockets".to_owned(),
+            },
+        ];
         let (_, chance) = scripted(&placed(750, 750, 0));
         let mut view = FlightView::new(catalog)
             .with_chance(chance)

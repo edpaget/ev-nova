@@ -80,7 +80,8 @@
 //! rate, priced on the old ship, and the refund is credited on top (it
 //! does not count towards affording the ship). The new ship's default
 //! items are then added on top of those carried over, even beyond their
-//! `Max`, as the original fits them regardless.
+//! `Max`, as the original fits them regardless, and then its stock weapons
+//! and their `AmmoLoad` are topped up (see Stock weapons).
 //!
 //! The cargo that fits in the new ship's cargo space is kept, goods in
 //! [`Good`] order (commodities by number, then `jünk` by ID) until the
@@ -91,20 +92,41 @@
 //! the date, the course, its legal records and the events under way)
 //! stays as it was.
 //!
+//! # Stock weapons
+//!
+//! A ship's stock weapons (`WeapType`/`WeapCount`) and their `AmmoLoad`
+//! are outfits it owns, each held by the `oütf` of lowest ID naming it
+//! ([`StockFit`]), as the original holds them (`_ShipStatsToSystemInfo`
+//! @0xcaee-0xcce7). Buying a ship tops them up after the default items
+//! (`_DoShipyardDialog` @0x5eebc-0x5ef92): each weapon to at least its
+//! `WeapCount`, and its ammunition to at least its `AmmoLoad`, counting
+//! what the persistent outfits carried over and the default items already
+//! hold, never adding to it (`fit_stock`). Like the default items, they
+//! are fitted regardless: `FreeMass` leaves out their mass, which the
+//! original's loader adds to it (`_LoadObjectData` @0x7aaf7, @0x7ac61,
+//! @0x7ad8d), so they take no room, and a persistent outfit carries over
+//! only while it fits with them fitted. Owned, they trade in as any other
+//! outfit does: `_PlayerShipTradeInPrice` @0xb079 counts the outfits owned
+//! and nothing else.
+//!
 //! The evidence for the trade-in: the Bible's `Cost` says "the cost of the
 //! new ship minus 25% of the original cost of your current ship and
 //! upgrades"; an Ambrosia forum answer (Forum26 #004247, 2002) gives "25%
 //! their original cost, plus 50% the cost of all upgrades"; and the
 //! original engine's own debug log, reproduced from stock data, reads
-//! "Striker (262) has a trade-in value of 1163000", which is 25 % of its
-//! 1,000,000 plus 50 % of its outfits' 1,825,000. The forums add that the
+//! "Striker (262) has a trade-in value of 1163000". That is the loader's
+//! estimate (`_LoadObjectData` @0x7a9ef-0x7ae07, printed @0x7b3a0): 25 % of
+//! its 1,000,000, plus 50 % of its stock weapons and default items'
+//! 1,825,000, plus 500 for one of its 30 Wraithii, as the check counts the
+//! ammunition by `WeapCount` rather than `AmmoLoad` (@0x7aca2). The trade-in
+//! the player sees for a Striker owning its 30 rounds is 1,177,500, and
+//! exactly 1,163,000 once 29 have been fired. The forums add that the
 //! trade-in leaves persistent outfits out, and that a trade-in worth more
 //! than the new ship pays the difference.
 //!
-//! Not modelled yet: a ship's stock weapons (`WeapType`/`WeapCount`),
-//! which are neither fitted nor counted in the trade-in; the gun and turret
-//! limits (`MaxGun`, `MaxTur`); `OnPurchase` and `OnRetire`; naming the new
-//! ship and its `Long Name` message; `MovieFile`; and escorts' `UpgradeTo`.
+//! Not modelled yet: the gun and turret limits (`MaxGun`, `MaxTur`);
+//! `OnPurchase` and `OnRetire`; naming the new ship and its `Long Name`
+//! message; `MovieFile`; and escorts' `UpgradeTo`.
 //! Nor does the shipyard price a ship through the original's tech-level
 //! flux, as hiring in the bar does with its own price rule
 //! ([`hire`](crate::hire)).
@@ -113,11 +135,12 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord};
 use crate::chance::Chance;
+use crate::combat::armament::{StockFit, fit_stock, fitted};
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
 use crate::market::{Good, control_bits_allow};
 use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_mass, unit_price};
-use crate::pilot::{Pilot, tally};
+use crate::pilot::{Pilot, merged, tally};
 use crate::rulebook::RuleSource;
 use crate::stats::ShipStats;
 use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll};
@@ -390,26 +413,20 @@ pub(crate) struct Quote {
     pub(crate) trade_in: i64,
 }
 
-/// `a` and `b` together, saturating.
-fn merged(a: &BTreeMap<OutfitId, u16>, b: &BTreeMap<OutfitId, u16>) -> BTreeMap<OutfitId, u16> {
-    let mut both = a.clone();
-    for (&id, &count) in b {
-        let owned = both.entry(id).or_default();
-        *owned = owned.saturating_add(count);
-    }
-    both
-}
-
-/// Buys `new` for `pilot`, at `quote`, from a ship of `old_mass`, as the
-/// module says, and gives what it did.
+/// Buys `new`, whose stock weapons and ammunition are `fits`
+/// ([`Arsenal::stock_fits`](crate::combat::armament::Arsenal::stock_fits)),
+/// for `pilot`, at `quote`, from a ship of `old_mass`, as the module says,
+/// and gives what it did.
 pub(crate) fn purchase(
     pilot: &mut Pilot,
     old_mass: i16,
     new: &ShipRecord,
+    fits: &[StockFit],
     quote: Quote,
     records: &[OutfitRecord],
 ) -> ShipPurchase {
     let defaults = tally(new.defaults.iter().copied());
+    let standard = merged(&defaults, &fitted(fits));
     let mut carried: BTreeMap<OutfitId, u16> = BTreeMap::new();
     let mut sold_back: BTreeMap<OutfitId, u16> = BTreeMap::new();
     let mut refund: i64 = 0;
@@ -425,7 +442,7 @@ pub(crate) fn purchase(
             *trial.entry(record.id).or_default() += 1;
             let fits = unit < most
                 && !expansion_refused
-                && free_mass(new.fields, &defaults, &merged(&trial, &defaults), records) >= 0;
+                && free_mass(new.fields, &standard, &merged(&trial, &standard), records) >= 0;
             if fits {
                 carried = trial;
             } else {
@@ -435,6 +452,7 @@ pub(crate) fn purchase(
         }
     }
     pilot.outfits = merged(&carried, &defaults);
+    fit_stock(&mut pilot.outfits, fits, records);
     pilot.ship = new.id;
     pilot.cash = pilot
         .cash
@@ -467,8 +485,9 @@ pub(crate) fn purchase(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::{DisasterId, GovtId, JunkId, StellarId, SystemId};
+    use crate::catalog::{DisasterId, GovtId, JunkId, StellarId, SystemId, WeaponId};
     use crate::chance::NeverFires;
+    use crate::combat::armament::{MOD_AMMO, MOD_WEAPON};
     use crate::market::MORE_CARGO;
     use crate::reserves::Reserves;
     use crate::stats::{MORE_FUEL, MORE_SHIELD};
@@ -1111,7 +1130,112 @@ mod tests {
     };
 
     fn buy(pilot: &mut Pilot, new: &ShipRecord, records: &[OutfitRecord]) -> ShipPurchase {
-        purchase(pilot, FAST.mass, new, QUOTE, records)
+        buy_stocked(pilot, new, &[], records)
+    }
+
+    /// Buys `new`, whose stock weapons and ammunition are `fits`.
+    fn buy_stocked(
+        pilot: &mut Pilot,
+        new: &ShipRecord,
+        fits: &[StockFit],
+        records: &[OutfitRecord],
+    ) -> ShipPurchase {
+        purchase(pilot, FAST.mass, new, fits, QUOTE, records)
+    }
+
+    /// Two blasters (weapon 128) held by outfit 205, and 20 rockets
+    /// (weapon 138's rounds) by outfit 201.
+    const STOCK: [StockFit; 2] = [
+        StockFit {
+            outfit: OutfitId(205),
+            mod_type: MOD_WEAPON,
+            weapon: WeaponId(128),
+            count: 2,
+        },
+        StockFit {
+            outfit: OutfitId(201),
+            mod_type: MOD_AMMO,
+            weapon: WeaponId(138),
+            count: 20,
+        },
+    ];
+
+    /// Rockets (201), 10 credits each and massless; blasters (205 and 206),
+    /// 1000 credits each and a ton.
+    fn armoury() -> Vec<OutfitRecord> {
+        vec![
+            OutfitRecord {
+                cost: 10,
+                mass: 0,
+                max: 100,
+                ..outfit(201, &[(MOD_AMMO, 138)])
+            },
+            outfit(205, &[(MOD_WEAPON, 128)]),
+            outfit(206, &[(MOD_WEAPON, 128)]),
+        ]
+    }
+
+    #[test]
+    fn a_bought_ship_owns_its_stock_weapons_and_rounds_after_its_default_items() {
+        let mut pilot = pilot();
+        buy_stocked(&mut pilot, &heavy(), &STOCK, &armoury());
+        assert_eq!(pilot.outfits, map(&[(201, 20), (205, 2)]));
+        let with_a_blaster = ShipRecord {
+            defaults: vec![(OutfitId(206), 1)],
+            ..heavy()
+        };
+        let mut pilot = self::pilot();
+        buy_stocked(&mut pilot, &with_a_blaster, &STOCK, &armoury());
+        assert_eq!(
+            pilot.outfits,
+            map(&[(201, 20), (205, 1), (206, 1)]),
+            "its default blaster is one of the two"
+        );
+        assert_eq!(
+            pilot.reserves(),
+            ShipStats::new(HEAVY, &outfit_mods(&pilot.outfits, &armoury())).full()
+        );
+    }
+
+    #[test]
+    fn a_carried_persistent_weapon_counts_towards_the_stock_count() {
+        let mut records = armoury();
+        records.push(OutfitRecord {
+            flags: OutfitFlags::PERSISTENT,
+            ..outfit(140, &[(MOD_WEAPON, 128)])
+        });
+        let mut pilot = owning(&[(140, 1), (201, 30)]);
+        buy_stocked(&mut pilot, &heavy(), &STOCK, &records);
+        assert_eq!(
+            pilot.outfits,
+            map(&[(140, 1), (201, 20), (205, 1)]),
+            "1 + 1, not 1 + 2; the old rockets went with the old ship"
+        );
+    }
+
+    #[test]
+    fn the_new_stock_weapons_count_as_owned_when_carrying_over() {
+        // HEAVY has 12 tons free, and FreeMass leaves out its two 1-ton
+        // blasters: a persistent 12-ton outfit still fits, a 13-ton one
+        // does not.
+        let fitting = |mass| {
+            let mut records = armoury();
+            records.push(persistent(140, mass, 1));
+            let mut pilot = owning(&[(140, 1)]);
+            let bought = buy_stocked(&mut pilot, &heavy(), &STOCK, &records);
+            (pilot.owned(OutfitId(140)), bought.sold_back)
+        };
+        assert_eq!(fitting(12), (1, BTreeMap::new()));
+        assert_eq!(fitting(13), (0, map(&[(140, 1)])));
+    }
+
+    #[test]
+    fn the_old_ships_stock_weapons_go_in_its_trade_in() {
+        assert_eq!(
+            trade_in(10_000, 40, &map(&[(201, 20), (205, 2)]), &armoury()),
+            2500 + 2 * 500 + 20 * 5,
+            "half of each, like any outfit owned"
+        );
     }
 
     #[test]
@@ -1136,6 +1260,7 @@ mod tests {
             &mut paid,
             40,
             &heavy(),
+            &[],
             Quote {
                 price: 1000,
                 trade_in: 2500,
@@ -1395,6 +1520,7 @@ mod tests {
                 &pilot.legal,
                 &pilot.events,
                 pilot.default_outfits_pending,
+                pilot.stock_weapons_pending,
             ),
             (
                 &before.name,
@@ -1406,6 +1532,7 @@ mod tests {
                 &before.legal,
                 &before.events,
                 before.default_outfits_pending,
+                before.stock_weapons_pending,
             )
         );
     }

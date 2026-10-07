@@ -76,10 +76,12 @@
 //! An outfit's price is its `Cost`, times the ship's `Mass` with
 //! [`OutfitFlags::PRICE_BY_MASS`]; its mass is its `Mass`, or the ship's
 //! `Mass` times it over 100, truncated, with [`OutfitFlags::MASS_BY_MASS`]
-//! when it is positive. The ship's free mass is its `FreeMass`, plus its
-//! default items' mass (`FreeMass` is space on top of them), less the
-//! mass of every outfit it carries: a new ship has exactly its `FreeMass`
-//! free, and an outfit of negative mass adds space.
+//! when it is positive. The ship's free mass is its `FreeMass`, plus the
+//! mass of its standard equipment, its default items and its stock weapons
+//! and their `AmmoLoad` (`FreeMass` is space on top of them: the loader
+//! adds their mass to it, `_LoadObjectData` @0x7aaf7, @0x7ac61, @0x7ad8d),
+//! less the mass of every outfit it carries: a new ship has exactly its
+//! `FreeMass` free, and an outfit of negative mass adds space.
 //!
 //! # Buying and selling
 //!
@@ -359,16 +361,17 @@ fn mass_of(outfits: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord], ship_mas
         .sum()
 }
 
-/// The free mass of a ship with `fields` and these `defaults`, carrying
-/// `owned`.
+/// The free mass of a ship with `fields` and this `standard` equipment
+/// (its default items and stock weapons, whose mass `FreeMass` leaves
+/// out), carrying `owned`.
 #[must_use]
 pub(crate) fn free_mass(
     fields: ShipFields,
-    defaults: &BTreeMap<OutfitId, u16>,
+    standard: &BTreeMap<OutfitId, u16>,
     owned: &BTreeMap<OutfitId, u16>,
     records: &[OutfitRecord],
 ) -> i64 {
-    i64::from(fields.free_mass) + mass_of(defaults, records, fields.mass)
+    i64::from(fields.free_mass) + mass_of(standard, records, fields.mass)
         - mass_of(owned, records, fields.mass)
 }
 
@@ -378,8 +381,9 @@ pub(crate) struct Shop<'a> {
     pub(crate) records: &'a [OutfitRecord],
     /// The ship's fields.
     pub(crate) fields: ShipFields,
-    /// The ship's default items.
-    pub(crate) defaults: &'a BTreeMap<OutfitId, u16>,
+    /// The ship's standard equipment: its default items, and its stock
+    /// weapons and their ammunition as outfits.
+    pub(crate) standard: &'a BTreeMap<OutfitId, u16>,
     /// The stellar landed on.
     pub(crate) site: &'a LandingSite,
     /// For every ammunition outfit of a fighter bay, the fighters the
@@ -403,7 +407,7 @@ impl Shop<'_> {
             return None;
         }
         let contributed = wares::contributed(self.fields.contribute, &pilot.outfits, self.records);
-        let free = free_mass(self.fields, self.defaults, &pilot.outfits, self.records);
+        let free = free_mass(self.fields, self.standard, &pilot.outfits, self.records);
         let mut sorted: Vec<&OutfitRecord> = self.records.iter().collect();
         sorted.sort_by_key(|record| record.id);
         let mut sweep = HideHigher::default();
@@ -569,7 +573,7 @@ mod tests {
         }
     }
 
-    static NO_DEFAULTS: BTreeMap<OutfitId, u16> = BTreeMap::new();
+    static NO_STANDARD: BTreeMap<OutfitId, u16> = BTreeMap::new();
     static NO_FIGHTERS: BTreeMap<OutfitId, u32> = BTreeMap::new();
 
     /// The outfitter of `records` at `site`, reading `BuyRandom` by the
@@ -578,7 +582,7 @@ mod tests {
         Shop {
             records,
             fields: FAST,
-            defaults: &NO_DEFAULTS,
+            standard: &NO_STANDARD,
             site,
             fighter_room: &NO_FIGHTERS,
             buy_random: RuleSource::Engine,
@@ -1113,11 +1117,11 @@ mod tests {
             35
         );
         assert_eq!(
-            free_mass(FAST, &NO_DEFAULTS, &map(&[(130, 1)]), &records),
+            free_mass(FAST, &NO_STANDARD, &map(&[(130, 1)]), &records),
             10
         );
         assert_eq!(
-            free_mass(FAST, &NO_DEFAULTS, &map(&[(999, 4)]), &records),
+            free_mass(FAST, &NO_STANDARD, &map(&[(999, 4)]), &records),
             30
         );
         let outfitter = open(&records, &owning(&[(128, 3)]));
@@ -1242,7 +1246,7 @@ mod tests {
             Shop {
                 records: std::slice::from_ref(&fighters),
                 fields: FAST,
-                defaults: &NO_DEFAULTS,
+                standard: &NO_STANDARD,
                 site: &port(),
                 fighter_room,
                 buy_random: RuleSource::Engine,
@@ -1326,7 +1330,7 @@ mod tests {
         let negative = Shop {
             records: std::slice::from_ref(&expansion),
             fields: ShipFields { holds: -1, ..FAST },
-            defaults: &NO_DEFAULTS,
+            standard: &NO_STANDARD,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
             buy_random: RuleSource::Engine,
@@ -1340,7 +1344,7 @@ mod tests {
                 ..expansion.clone()
             }],
             fields: ShipFields { holds: -1, ..FAST },
-            defaults: &NO_DEFAULTS,
+            standard: &NO_STANDARD,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
             buy_random: RuleSource::Engine,
@@ -1351,7 +1355,7 @@ mod tests {
         let empty_holds = Shop {
             records: std::slice::from_ref(&expansion),
             fields: ShipFields { holds: 0, ..FAST },
-            defaults: &NO_DEFAULTS,
+            standard: &NO_STANDARD,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
             buy_random: RuleSource::Engine,

@@ -454,7 +454,7 @@ mod tests {
         HullRecord, OutfitId, OutfitRecord, ShipId, ShipRecord, StockWeapon, WeaponId, WeaponRecord,
     };
     use crate::chance::{Chance, NeverFires};
-    use crate::combat::armament::MOD_AMMO;
+    use crate::combat::armament::{MOD_AMMO, MOD_WEAPON};
     use crate::combat::hull::Condition;
     use crate::combat::{CombatEvent, Rules, ShipRef};
     use crate::escort::{Commanded, EscortClass, EscortCommand, EscortGroup, EscortOrder};
@@ -503,9 +503,9 @@ mod tests {
     }
 
     /// The test catalog ([`catalog`]) where the player's ship, 128, 40
-    /// across, carries a Viper Bay; the Viper (a fighter, an interceptor
-    /// by `InherentAI`, 20 across) carries a gun; and a warship escort
-    /// type, 150.
+    /// across, carries a Viper Bay (held by outfit 157); the Viper (a
+    /// fighter, an interceptor by `InherentAI`, 20 across) carries a gun;
+    /// and a warship escort type, 150.
     fn carrying() -> FakePilotCatalog {
         FakePilotCatalog {
             ship_records: vec![
@@ -556,11 +556,14 @@ mod tests {
                     ..hull(150)
                 },
             ],
-            outfits: vec![OutfitRecord {
-                mass: 0,
-                max: 9999,
-                ..outfit(158, &[(MOD_AMMO, 149)])
-            }],
+            outfits: vec![
+                outfit(157, &[(MOD_WEAPON, 149)]),
+                OutfitRecord {
+                    mass: 0,
+                    max: 9999,
+                    ..outfit(158, &[(MOD_AMMO, 149)])
+                },
+            ],
             ..catalog()
         }
     }
@@ -1310,7 +1313,8 @@ mod tests {
     /// The Dart outfit, the Dart bay's rounds.
     const DARTS: OutfitId = OutfitId(162);
 
-    /// [`carrying`], the player's ship carrying a Dart bay too.
+    /// [`carrying`], the player's ship carrying a Dart bay too, held by
+    /// outfit 161.
     fn two_bays() -> FakePilotCatalog {
         let mut catalog = carrying();
         catalog.weapons.push(WeaponRecord {
@@ -1345,6 +1349,7 @@ mod tests {
             max: 9999,
             ..outfit(162, &[(MOD_AMMO, 151)])
         });
+        catalog.outfits.push(outfit(161, &[(MOD_WEAPON, 151)]));
         catalog
     }
 
@@ -1575,7 +1580,12 @@ mod tests {
         assert_eq!(viper_for_sale(&two, 8, 0), full);
         let mut by_outfit = spaceport();
         by_outfit.weapons[0].max_ammo = 0;
-        by_outfit.outfits[0].max = 5;
+        by_outfit
+            .outfits
+            .iter_mut()
+            .find(|record| record.id == VIPERS)
+            .expect("the Viper outfit")
+            .max = 5;
         assert_eq!(viper_for_sale(&by_outfit, 4, 0), Ok(()), "the outfit's Max");
         assert_eq!(viper_for_sale(&by_outfit, 4, 1), full);
         let mut no_bay = spaceport();

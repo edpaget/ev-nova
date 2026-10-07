@@ -241,10 +241,12 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
                 _ => None,
             })
             .collect();
+        // The trade-in is a quarter of the Shuttle and half its Light
+        // Blaster, the stock weapon it owns.
         for shown in [
             "Ship Price: 10000",
-            "Trade-In: 2500",
-            "Final Price: 7500",
+            "Trade-In: 5000",
+            "Final Price: 5000",
             "Buy Ship",
             "Info",
             "Done",

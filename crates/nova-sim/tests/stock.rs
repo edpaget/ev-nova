@@ -123,7 +123,8 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         armor_rech: ship.armor_rech,
     };
     assert_eq!(data.ship_fields(session.ship()), Ok(fields));
-    // The Shuttle carries no default items: its own fields are its stats.
+    // The Shuttle carries no default items, and its one outfit, its Light
+    // Blaster, changes no stat: its own fields are its stats.
     let stats = ShipStats::new(fields, &[]);
     assert_eq!(session.stats(), stats);
     assert_eq!(session.handling(), stats.handling);
@@ -461,7 +462,11 @@ fn vikings_shipyard_sells_what_its_tech_levels_and_buy_random_allow() {
     for id in never {
         assert!(shipyard.row(id).is_none(), "{id:?}");
     }
-    assert_eq!(shipyard.trade_in, 2500, "a quarter of the Shuttle");
+    assert_eq!(
+        shipyard.trade_in,
+        2500 + 2500,
+        "a quarter of the Shuttle and half its Light Blaster"
+    );
     assert_eq!(shipyard.cash, 25_000);
     assert_eq!(shipyard.current, ShipId(128));
 }
@@ -515,8 +520,10 @@ fn stock_ships_are_named_without_their_designer_notes() {
     assert!(noted.is_empty(), "{noted:?}");
 }
 
-/// Buying the Heavy Shuttle (17,500 credits) trades the Shuttle in for
-/// 2,500 and leaves 10,000 credits, 15 tons of cargo space and 12 free.
+/// Buying the Heavy Shuttle (17,500 credits) trades the Shuttle and its
+/// Light Blaster in for 5,000 and leaves 12,500 credits, 15 tons of cargo
+/// space and 12 free, the Heavy Shuttle's own Light Blaster (`oütf` 128,
+/// 3 tons) owned and its mass on top of its `FreeMass`.
 #[test]
 fn a_heavy_shuttle_trades_in_the_shuttle() {
     let Some(dir) = common::nova_data() else {
@@ -525,14 +532,99 @@ fn a_heavy_shuttle_trades_in_the_shuttle() {
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let mut session = at_viking(&data);
     let bought = session.buy_ship(ShipId(129), &mut Fires).expect("bought");
-    assert_eq!((bought.price, bought.trade_in), (17_500, 2500));
+    assert_eq!((bought.price, bought.trade_in), (17_500, 5000));
     assert_eq!(session.ship(), ShipId(129));
-    assert_eq!(session.pilot().cash(), 10_000);
+    assert_eq!(session.pilot().cash(), 12_500);
     assert_eq!(session.capacity(), 15);
     assert_eq!(session.outfitter(&mut Fires).map(|o| o.free_mass), Some(12));
     let fields = data.ship_fields(ShipId(129)).expect("decodes");
     assert_eq!(session.stats(), ShipStats::new(fields, &[]));
-    assert_eq!(session.pilot().outfits().count(), 0);
+    assert_eq!(
+        session.pilot().outfits().collect::<Vec<_>>(),
+        [(OutfitId(128), 1)]
+    );
+}
+
+/// A new stock pilot owns its Shuttle's stock weapon, a Light Blaster
+/// (`wëap` 128, held by `oütf` 128), as an outfit, and mounts it once.
+#[test]
+fn a_new_stock_pilot_owns_its_shuttles_light_blaster() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    assert_eq!(pilot.ship(), ShipId(128));
+    assert_eq!(pilot.outfits().collect::<Vec<_>>(), [(OutfitId(128), 1)]);
+    let session = Session::fly(&data, pilot).expect("flies");
+    assert_eq!(session.secondary(), None, "the Light Blaster is a primary");
+}
+
+/// The Striker (`shïp` 262) stocks two `BioRelay` Lasers (`oütf` 154,
+/// 250,000 each), a Wraith Cannon (151, 200,000) and its 30 Wraithii
+/// (152, 1,000 each); its default items are the Nil'kemorya Jammer (245,
+/// 125,000) and the Cloaking Organ (269, 1,000,000). A Striker from a
+/// version 10 save owns its stock weapons once flown, and trades in for
+/// a quarter of its 1,000,000 and half of its 1,855,000 in outfits,
+/// 1,177,500. With 29 Wraithii fired it trades in for exactly the
+/// original's logged 1,163,000 ("Striker (262) has a trade-in value of
+/// 1163000"), the figure its loader's check reaches by counting a
+/// Wraithii for each Wraith Cannon (`_LoadObjectData` @0x7aca2).
+#[test]
+fn the_strikers_stock_weapons_are_its_outfits_and_it_trades_in_as_the_original_logs() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let outfits = data.outfits();
+    let ids = |pairs: &[(i16, u16)]| -> std::collections::BTreeMap<OutfitId, u16> {
+        pairs.iter().map(|&(id, n)| (OutfitId(id), n)).collect()
+    };
+    assert_eq!(
+        nova_sim::combat::armament::Arsenal::read(&data).stock_outfits(ShipId(262), &outfits),
+        ids(&[(151, 1), (152, 30), (154, 2)])
+    );
+    let pilot = Pilot::new(&data, "Striker").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["version"] = serde_json::json!(10);
+    save.as_object_mut()
+        .expect("an object")
+        .remove("stock_weapons_fitted");
+    save["system"] = serde_json::json!(129);
+    save["stellar"] = serde_json::json!(157);
+    save["ship"] = serde_json::json!(262);
+    save["outfits"] = serde_json::json!([
+        {"outfit": 245, "count": 1},
+        {"outfit": 269, "count": 1}
+    ]);
+    let old = nova_sim::save::decode(&save.to_string()).expect("a version 10 pilot");
+    let mut session = Session::fly(&data, old).expect("flies");
+    assert_eq!(session.landed(), Some(StellarId(157)), "docked at Viking");
+    let owned: std::collections::BTreeMap<OutfitId, u16> = session.pilot().outfits().collect();
+    assert_eq!(
+        owned,
+        ids(&[(151, 1), (152, 30), (154, 2), (245, 1), (269, 1)])
+    );
+    let shipyard = session.shipyard(&mut Fires).expect("a shipyard");
+    assert_eq!(shipyard.trade_in, 250_000 + 1_855_000 / 2);
+    assert_eq!(shipyard.trade_in, 1_177_500);
+
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(session.pilot())).expect("JSON");
+    assert_eq!(save["stock_weapons_fitted"], true);
+    let wraithii = save["outfits"]
+        .as_array_mut()
+        .expect("a list")
+        .iter_mut()
+        .find(|outfit| outfit["outfit"] == 152)
+        .expect("the Wraithii");
+    wraithii["count"] = serde_json::json!(1);
+    let fired = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(&data, fired).expect("flies");
+    assert_eq!(session.pilot().owned(OutfitId(152)), 1, "none added");
+    let shipyard = session.shipyard(&mut Fires).expect("a shipyard");
+    assert_eq!(shipyard.trade_in, 1_163_000);
 }
 
 /// A new stock pilot, docked at `stellar` in `system` with `fuel` units
@@ -1695,7 +1787,9 @@ fn stock_governments_stand_as_the_gövts_say() {
 }
 
 /// A new stock pilot flying the Fed Destroyer (`shïp` 141), in flight at
-/// the centre of Fomalhaut (`sÿst` 136), its reserves full.
+/// the centre of Fomalhaut (`sÿst` 136), its reserves full, owning the
+/// Destroyer's default items and stock weapons: a save that has read
+/// neither, which flying reads.
 fn destroyer_in_fomalhaut(data: &GameData) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
@@ -1704,6 +1798,7 @@ fn destroyer_in_fomalhaut(data: &GameData) -> Session {
     save["stellar"] = serde_json::Value::Null;
     save["ship"] = serde_json::json!(141);
     save["outfits"] = serde_json::Value::Null;
+    save["stock_weapons_fitted"] = serde_json::json!(false);
     for gauge in ["shield", "armor", "fuel"] {
         save["reserves"][gauge]["now"] = serde_json::json!(1_000_000.0);
         save["reserves"][gauge]["max"] = serde_json::json!(1_000_000.0);

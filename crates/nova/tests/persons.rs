@@ -1,5 +1,6 @@
 //! Persons through the whole app: synthetic game data (a `chär` flying
-//! the "Gunship", ship 128 with a blaster, from Alpha, whose one stellar,
+//! the "Gunship", ship 128 with a blaster held by `oütf` 228, from Alpha,
+//! whose one stellar,
 //! a pad at the centre, can be landed on; Alpha has no traffic of its own
 //! but two Person slots at 100 %: "Ace", `përs` 128, subtitle "Top Gun",
 //! of the Pirates, who always attack the player (`gövt` `Flags` 0x0004),
@@ -36,6 +37,7 @@ use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
 use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
+use nova_data::records::outfit::Outfit;
 use nova_data::records::person::Person;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -138,6 +140,14 @@ fn blaster() -> Vec<u8> {
     let mut bytes = vec![0; Weapon::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[10, 30, 10, 0, -1, 2000, -1, 0, 0, 8]);
     put_i16s(&mut bytes, 0x16, &[-1]);
+    bytes
+}
+
+/// `oütf` 228, the blaster (`wëap` 128, `ModType` 1), up to 10, never
+/// for sale: how the Gunship holds its stock blaster.
+fn blaster_outfit() -> Vec<u8> {
+    let mut bytes = vec![0; Outfit::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x06, &[1, 128, 10]);
     bytes
 }
 
@@ -295,6 +305,7 @@ fn game_data() -> Rc<GameData> {
         )
         .resource(Ship::TYPE, 130, Some(b"Yacht"), &ship(0, 10, &[], "Yacht"))
         .resource(Weapon::TYPE, 128, Some(b"Blaster"), &blaster())
+        .resource(Outfit::TYPE, 228, Some(b"Blaster"), &blaster_outfit())
         .resource(Govt::TYPE, 150, Some(b"Pirates"), &govt(0x0004))
         .resource(
             Person::TYPE,

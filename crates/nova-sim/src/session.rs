@@ -266,7 +266,7 @@ use crate::catalog::{
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
-    Armament, Arsenal, OutfitRounds, Trigger, next_secondary, outfit_rounds,
+    self, Armament, Arsenal, OutfitRounds, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Condition, HullSpec};
@@ -364,6 +364,9 @@ pub struct Session {
     fields: ShipFields,
     /// The ship's default items, read when the session starts.
     defaults: BTreeMap<OutfitId, u16>,
+    /// The ship's stock weapons and their ammunition, as outfits
+    /// ([`Arsenal::stock_outfits`]), read when the session starts.
+    stock: BTreeMap<OutfitId, u16>,
     /// Every `oütf`, read when the session starts.
     outfits: Vec<OutfitRecord>,
     /// Every `shïp`, read when the session starts.
@@ -520,8 +523,11 @@ impl Session {
     /// outfits, its system's stellars, the star map, the goods, and the
     /// weapons and ship types' combat fields read from `catalog`, with the
     /// system marked explored. A pilot whose ship
-    /// still carries its default items, from an old save, owns them now,
-    /// and the reserves hold no more than the stats allow.
+    /// still carries its default items, from an old save, owns them now;
+    /// one whose ship still mounts its stock weapons beside its outfits,
+    /// from a save before they were outfits, owns them and their
+    /// `AmmoLoad` on top of its outfits, keeping the armament it flew
+    /// with; and the reserves hold no more than the stats allow.
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
     /// silently, as the original resumes a pilot at its last planet.
@@ -555,14 +561,21 @@ impl Session {
         let landed = docked.map(|site| site.id);
         pilot.stellar = landed;
         let defaults = pilot::default_outfits(catalog, ship);
+        let outfits = catalog.outfits();
+        let arsenal = Arsenal::read(catalog);
+        let stock = arsenal.stock_outfits(ship, &outfits);
         if pilot.default_outfits_pending {
             pilot.outfits.clone_from(&defaults);
             pilot.default_outfits_pending = false;
         }
-        let outfits = catalog.outfits();
+        if pilot.stock_weapons_pending {
+            pilot.outfits = pilot::merged(&pilot.outfits, &stock);
+            pilot.stock_weapons_pending = false;
+        }
         let mut session = Self {
             fields,
             defaults,
+            stock,
             ammo_outfits: Arsenal::ammo_outfits(&outfits),
             outfits,
             ships: catalog.ships(),
@@ -590,7 +603,7 @@ impl Session {
             date_affixes: catalog.date_affixes(),
             traffic: Traffic::new(),
             traffic_due: true,
-            arsenal: Arsenal::read(catalog),
+            arsenal,
             govts: Governments::read(catalog),
             // Refitted below, from the ship and the outfits the pilot owns.
             hull: HullSpec::default(),
@@ -680,6 +693,13 @@ impl Session {
         self
     }
 
+    /// The ship's standard equipment: its default items and its stock
+    /// weapons and their ammunition, whose mass `FreeMass` leaves out
+    /// (`_LoadObjectData` @0x7aaf7, @0x7ac61, @0x7ad8d).
+    fn standard(&self) -> BTreeMap<OutfitId, u16> {
+        pilot::merged(&self.defaults, &self.stock)
+    }
+
     /// The ship's stats with the outfits the pilot owns.
     fn current_stats(&self) -> ShipStats {
         ShipStats::new(
@@ -694,9 +714,7 @@ impl Session {
     /// follow the ship and the outfits, ready to fire.
     fn refit(&mut self, gain: bool) {
         self.hull = self.arsenal.hull(self.pilot.ship);
-        self.armament = self
-            .arsenal
-            .player(self.pilot.ship, &self.pilot.outfits, &self.outfits);
+        self.armament = self.arsenal.player(&self.pilot.outfits, &self.outfits);
         let carried = self.secondary.filter(|&id| {
             self.armament
                 .secondaries()
@@ -1179,7 +1197,7 @@ impl Session {
             .filter_map(|&ship| self.ship_record(ship))
             .map(|record| {
                 let defaults = pilot::tally(record.defaults.iter().copied());
-                self.arsenal.player(record.id, &defaults, &self.outfits)
+                self.arsenal.of_class(record.id, &defaults, &self.outfits)
             })
             .collect();
         armaments.push(self.armament.clone());
@@ -1817,7 +1835,7 @@ impl Session {
         Shop {
             records: &self.outfits,
             fields: self.fields,
-            defaults: &self.defaults,
+            standard: &self.standard(),
             site,
             fighter_room: &self.fighter_room(),
             buy_random: self.buy_random,
@@ -1868,7 +1886,7 @@ impl Session {
     /// Buys a ship of class `ship`, trading in the one flown, and gives
     /// what the purchase did: a change made in the spaceport, so a save is
     /// due, and the session flies the new ship from then on, its fields,
-    /// default items and stats read from its record. When the ship is not
+    /// default items, stock weapons and stats read from its record. When the ship is not
     /// landed at a shipyard, or the purchase is refused, nothing changes
     /// and the refusal says why. The rolls not drawn yet are drawn on
     /// `chance`, and a purchase draws the class's roll again, as the
@@ -1893,15 +1911,17 @@ impl Session {
         let old_mass = self.fields.mass;
         self.drop_fighters(|_, _| false);
         let outfits = std::mem::take(&mut self.outfits);
+        let fits = self.arsenal.stock_fits(ship, &outfits);
         let mut bought = None;
         self.transact(|pilot| {
             bought = Some(shipyard::purchase(
-                pilot, old_mass, &record, quote, &outfits,
+                pilot, old_mass, &record, &fits, quote, &outfits,
             ));
         });
         self.outfits = outfits;
         self.fields = record.fields;
         self.defaults = pilot::tally(record.defaults.iter().copied());
+        self.stock = armament::fitted(&fits);
         self.refit(false);
         self.ship_rolls.redraw(&ship);
         bought.ok_or(ShipRefusal::NoShipyard)
@@ -2131,7 +2151,7 @@ impl Session {
             .collect();
         let free_mass = outfitter::free_mass(
             self.fields,
-            &self.defaults,
+            &self.standard(),
             &self.pilot.outfits,
             &self.outfits,
         );
@@ -2332,7 +2352,7 @@ impl Session {
             && i32::from(self.pilot.owned(outfit)) < i32::from(record.max)
             && outfitter::free_mass(
                 self.fields,
-                &self.defaults,
+                &self.standard(),
                 &self.pilot.outfits,
                 &self.outfits,
             ) >= unit
@@ -2478,7 +2498,10 @@ impl Session {
     /// "Use As My Ship" swaps the player into it, the old ship joining the
     /// fleet, its fuel drawn on `chance`, unless no ship slot is free in
     /// the system for the old ship, when the prize is lost and nothing
-    /// else changes. Either change makes a save due.
+    /// else changes. The player keeps its persistent outfits and gets the
+    /// captured class's default items, then its stock weapons and their
+    /// `AmmoLoad`, topped up as after a purchase. Either change makes a
+    /// save due.
     pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
         let aboard = self.aboard.filter(|aboard| aboard.captured)?;
         self.aboard = None;
@@ -2515,9 +2538,12 @@ impl Session {
             let owned = self.pilot.outfits.entry(id).or_default();
             *owned = owned.saturating_add(count);
         }
+        let fits = self.arsenal.stock_fits(record.id, records);
+        fit_stock(&mut self.pilot.outfits, &fits, records);
         self.pilot.ship = record.id;
         self.fields = record.fields;
         self.defaults = defaults;
+        self.stock = armament::fitted(&fits);
         self.player = npc.state;
         let share = if self.arsenal.hull(record.id).tough {
             TOUGH_TAKEOVER_ARMOR_SHARE
@@ -5600,6 +5626,175 @@ mod tests {
         assert_eq!(shipyard.trade_in, 17_500 / 4 + 500, "the hull and its tank");
     }
 
+    // Stock weapons.
+
+    /// A 5-ton gun (weapon 150), 1000 credits.
+    const GUN: OutfitId = OutfitId(305);
+    /// A rocket launcher (weapon 138), 2000 credits.
+    const LAUNCHER: OutfitId = OutfitId(306);
+    /// A rocket (weapon 138's rounds), 20 credits and massless.
+    const ROCKETS: OutfitId = OutfitId(307);
+
+    /// `catalog` with ship 128 stocking two guns, and ship 129 a gun and
+    /// a rocket launcher with 20 rockets, each held by its outfit.
+    fn stock_weapons(catalog: FakePilotCatalog) -> FakePilotCatalog {
+        let stock = |id, count, ammo| StockWeapon {
+            weapon: WeaponId(id),
+            count,
+            ammo,
+        };
+        let mut catalog = catalog;
+        catalog.weapons.extend([
+            weapon(150),
+            WeaponRecord {
+                ammo_type: 10,
+                flags: SECONDARY,
+                ..weapon(138)
+            },
+        ]);
+        catalog.hulls.extend([
+            HullRecord {
+                weapons: vec![stock(150, 2, 0)],
+                ..hull(128)
+            },
+            HullRecord {
+                weapons: vec![stock(150, 1, 0), stock(138, 1, 20)],
+                ..hull(129)
+            },
+        ]);
+        catalog.outfits.extend([
+            OutfitRecord {
+                mass: 5,
+                ..outfit(305, &[(MOD_WEAPON, 150)])
+            },
+            OutfitRecord {
+                cost: 2000,
+                ..outfit(306, &[(MOD_WEAPON, 138)])
+            },
+            OutfitRecord {
+                cost: 20,
+                mass: 0,
+                max: 100,
+                ..outfit(307, &[(MOD_AMMO, 138)])
+            },
+        ]);
+        catalog
+    }
+
+    #[test]
+    fn the_stock_weapons_mass_is_room_the_hull_already_has() {
+        let catalog = stock_weapons(outfitting());
+        let mut session = outfitted(&catalog);
+        assert_eq!(session.pilot().owned(GUN), 2);
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+        assert_eq!(
+            outfitter.free_mass,
+            i64::from(FAST.free_mass),
+            "FreeMass leaves out the 10 tons of guns"
+        );
+    }
+
+    /// Each weapon `session` mounts, with how many.
+    fn mounted(session: &Session) -> Vec<(i16, u32)> {
+        session
+            .armament
+            .mounts()
+            .iter()
+            .map(|mount| (mount.spec.id.0, mount.count))
+            .collect()
+    }
+
+    #[test]
+    fn a_new_pilots_armament_mounts_each_stock_weapon_once() {
+        let catalog = stock_weapons(shipbuying());
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(mounted(&session), [(150, 2)]);
+        assert_eq!(session.stock, BTreeMap::from([(GUN, 2)]));
+    }
+
+    #[test]
+    fn a_bought_ships_armament_mounts_each_stock_weapon_once() {
+        let catalog = stock_weapons(shipbuying());
+        let mut session = outfitted(&catalog);
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        assert_eq!(mounted(&session), [(150, 1), (138, 1)]);
+        assert_eq!(
+            session.pilot().outfits().collect::<Vec<_>>(),
+            [(TANK, 1), (GUN, 1), (LAUNCHER, 1), (ROCKETS, 20)]
+        );
+        assert_eq!(
+            session.stock,
+            BTreeMap::from([(GUN, 1), (LAUNCHER, 1), (ROCKETS, 20)])
+        );
+        assert_eq!(session.secondary(), Some(WeaponId(138)));
+        assert_eq!(session.secondary_rounds(), Some(20));
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+        assert_eq!(
+            outfitter.free_mass,
+            i64::from(HEAVY.free_mass),
+            "its tank, gun and launcher are fitted on top"
+        );
+    }
+
+    #[test]
+    fn the_trade_in_counts_stock_weapons_and_rounds_as_the_original_does() {
+        let catalog = stock_weapons(shipbuying());
+        let mut session = outfitted(&catalog);
+        let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
+        assert_eq!(shipyard.trade_in, 2500 + 2 * 500, "two guns");
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
+        assert_eq!(
+            shipyard.trade_in,
+            17_500 / 4 + 500 + 500 + 1000 + 20 * 10,
+            "a quarter of the hull, and half its tank, gun, launcher and rockets"
+        );
+    }
+
+    #[test]
+    fn flying_an_older_save_fits_its_stock_weapons_on_top_of_its_outfits() {
+        let catalog = stock_weapons(outfitting());
+        let mut pilot = Pilot::new(&catalog, "Old").expect("starts");
+        pilot.outfits = BTreeMap::from([(GUN, 1)]);
+        pilot.stock_weapons_pending = true;
+        let pilot = crate::save::decode(&crate::save::encode(&pilot)).expect("a pilot");
+        assert!(pilot.stock_weapons_pending);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(
+            session.pilot().outfits().collect::<Vec<_>>(),
+            [(GUN, 3)],
+            "the one bought and the two it mounted"
+        );
+        assert_eq!(mounted(&session), [(150, 3)]);
+        assert!(!session.pilot().stock_weapons_pending);
+        assert!(!session.take_save_due());
+        let saved: serde_json::Value =
+            serde_json::from_str(&crate::save::encode(session.pilot())).expect("JSON");
+        assert_eq!(saved["stock_weapons_fitted"], true);
+        assert_eq!(
+            saved["outfits"],
+            serde_json::json!([{"outfit": 305, "count": 3}])
+        );
+        land_now(&mut session).expect("lands");
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+        assert_eq!(outfitter.free_mass, 30 - 5, "the gun bought takes room");
+        // A save from before outfits: the default items, then the stock.
+        let catalog = FakePilotCatalog {
+            defaults: vec![(ShipId(128), vec![(TANK, 1)])],
+            ..stock_weapons(outfitting())
+        };
+        let mut pilot = Pilot::new(&catalog, "Older").expect("starts");
+        pilot.outfits.clear();
+        pilot.default_outfits_pending = true;
+        pilot.stock_weapons_pending = true;
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(
+            session.pilot().outfits().collect::<Vec<_>>(),
+            [(TANK, 1), (GUN, 2)]
+        );
+        assert!(!session.pilot().default_outfits_pending);
+    }
+
     #[test]
     fn after_take_off_the_ship_flies_at_the_new_top_speed() {
         let catalog = shipbuying();
@@ -6255,11 +6450,13 @@ mod tests {
     }
 
     /// [`trafficked`] with the player (ship 128) and its traffic (ship
-    /// 129, a trader: 30 shield, 45 armour) each carrying a blaster.
+    /// 129, a trader: 30 shield, 45 armour) each carrying a blaster, held
+    /// by outfit 250.
     fn armed() -> FakePilotCatalog {
         FakePilotCatalog {
             weapons: vec![blaster()],
             hulls: vec![armed_hull(128, 128), armed_hull(129, 128)],
+            outfits: vec![outfit(250, &[(MOD_WEAPON, 128)])],
             ..trafficked(130, 1, 1)
         }
     }
@@ -6456,7 +6653,11 @@ mod tests {
                 ..rocket
             }],
             hulls: vec![armed_hull(128, 138)],
-            outfits: vec![outfit(300, &[(MOD_AMMO, 138)])],
+            outfits: vec![
+                outfit(300, &[(MOD_AMMO, 138)]),
+                outfit(250, &[(MOD_WEAPON, 138)]),
+                outfit(251, &[(MOD_WEAPON, 128)]),
+            ],
             defaults: vec![(ShipId(128), vec![(OutfitId(300), 2)])],
             ..catalog()
         };
@@ -6465,7 +6666,11 @@ mod tests {
         for _ in 0..8 {
             session.tick_combat(Rules::default(), &mut NeverFires);
         }
-        assert_eq!(session.pilot().outfits().count(), 0, "both rockets fired");
+        assert_eq!(
+            session.pilot().outfits().collect::<Vec<_>>(),
+            [(OutfitId(250), 1)],
+            "both rockets fired"
+        );
         assert_eq!(session.shots().len(), 2);
         let fuelled = WeaponRecord {
             ammo_type: -1100,
@@ -7051,6 +7256,11 @@ mod tests {
             ..shipbuying()
         };
         catalog.ship_records.push(ship(130, FAST));
+        catalog.outfits.extend([
+            outfit(250, &[(MOD_WEAPON, 128)]),
+            outfit(251, &[(MOD_WEAPON, 129)]),
+            outfit(252, &[(MOD_WEAPON, 130)]),
+        ]);
         catalog
     }
 
@@ -7361,10 +7571,15 @@ mod tests {
     /// secondaries: rockets ([`ROCKET`]) firing rounds of their own, of
     /// which its default ammunition outfit 310 brings 3; missiles
     /// ([`MISSILE`]), unlimited; and a torch ([`TORCH`]) burning fuel. Ship
-    /// 129 carries a blaster, a torch and missiles, in that order.
+    /// 129 carries a blaster, a torch and missiles. Outfits 311-314 hold
+    /// the blaster and the three secondaries, in that order.
     fn with_secondaries(catalog: FakePilotCatalog) -> FakePilotCatalog {
         let mut outfits = catalog.outfits.clone();
         outfits.push(outfit(310, &[(MOD_AMMO, 140)]));
+        outfits.extend(
+            [(311, 128), (312, 140), (313, 141), (314, 142)]
+                .map(|(id, weapon)| outfit(id, &[(MOD_WEAPON, weapon)])),
+        );
         FakePilotCatalog {
             weapons: vec![
                 blaster(),
@@ -7467,11 +7682,17 @@ mod tests {
         let catalog = with_secondaries(shipbuying());
         let mut session = outfitted(&catalog);
         session.buy_ship(NEW, &mut NeverFires).expect("bought");
-        assert_eq!(session.secondary(), Some(TORCH), "its first");
+        assert_eq!(
+            session.secondary(),
+            Some(MISSILE),
+            "its first, in the order of the outfits holding them"
+        );
         let mut session = outfitted(&catalog);
         session.select_secondary(false);
+        session.select_secondary(false);
+        assert_eq!(session.secondary(), Some(TORCH));
         session.buy_ship(NEW, &mut NeverFires).expect("bought");
-        assert_eq!(session.secondary(), Some(MISSILE), "still carried");
+        assert_eq!(session.secondary(), Some(TORCH), "still carried");
     }
 
     // Guided weapons, turrets and point defence.
@@ -7488,10 +7709,12 @@ mod tests {
     }
 
     /// [`trafficked`] with the player carrying `player` and its traffic
-    /// carrying `npc`, the player's ship type's `Flags` `flags`.
+    /// carrying `npc`, the player's ship type's `Flags` `flags`; outfit
+    /// 250 holds the player's weapon.
     fn arming(player: WeaponRecord, npc: WeaponRecord, flags: u16) -> FakePilotCatalog {
         FakePilotCatalog {
             weapons: vec![player, npc],
+            outfits: vec![outfit(250, &[(MOD_WEAPON, player.id.0)])],
             hulls: vec![
                 HullRecord {
                     flags,
@@ -7721,7 +7944,8 @@ mod tests {
     /// (AI type, government, ship) at an equal share; the player's tough
     /// ship 128 (300 shield, 450 armour) carries a blaster and point
     /// defence. Ship 129 is an unarmed trader, 130-132 carry a blaster,
-    /// 133 and 134 a homing missile and 135 point defence.
+    /// 133 and 134 a homing missile and 135 point defence. Outfits 250,
+    /// 251 and 252 hold the blaster, the point defence and the missile.
     fn skirmish(dudes: &[(i16, i16, i16)], system_govt: Option<i16>) -> FakePilotCatalog {
         let mut dude_types = [(-1, 0); 8];
         for (slot, _) in dudes.iter().enumerate() {
@@ -7737,6 +7961,11 @@ mod tests {
                 }),
             )],
             weapons: vec![blaster(), point_defence(), homing()],
+            outfits: vec![
+                outfit(250, &[(MOD_WEAPON, 128)]),
+                outfit(251, &[(MOD_WEAPON, 133)]),
+                outfit(252, &[(MOD_WEAPON, 134)]),
+            ],
             hulls: vec![
                 fitted(128, 100, &[128, 133]),
                 fitted(129, 10, &[]),
@@ -8457,9 +8686,9 @@ mod tests {
         assert_eq!(session.outfit_name(OutfitId(311)), None);
     }
 
-    /// [`boardable`] with rockets (weapon 140, firing rounds of their own)
-    /// on both ships, the trader holding 9 rounds, and ammunition outfit
-    /// 310 for them of `mass` and `max`.
+    /// [`boardable`] with rockets (weapon 140, firing rounds of their own,
+    /// held by outfit 253) on both ships, the trader holding 9 rounds, and
+    /// ammunition outfit 310 for them of `mass` and `max`.
     fn ammo_aboard(mass: i16, max: i16) -> FakePilotCatalog {
         let mut catalog = boardable();
         catalog.weapons.push(secondary(140, 12));
@@ -8484,6 +8713,7 @@ mod tests {
             max,
             ..outfit(310, &[(MOD_AMMO, 140)])
         });
+        catalog.outfits.push(outfit(253, &[(MOD_WEAPON, 140)]));
         catalog
     }
 
@@ -9038,6 +9268,51 @@ mod tests {
     }
 
     #[test]
+    fn a_captured_ship_keeps_its_stock_weapons() {
+        // The trader stocks two blasters (held by 250) and a homing
+        // missile (252) with 6 rounds of its own (403).
+        let mut catalog = kitted();
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(129) {
+                hull.weapons = vec![
+                    StockWeapon {
+                        weapon: WeaponId(128),
+                        count: 2,
+                        ammo: 0,
+                    },
+                    StockWeapon {
+                        weapon: WeaponId(134),
+                        count: 1,
+                        ammo: 6,
+                    },
+                ];
+            }
+        }
+        catalog.outfits.push(outfit(403, &[(MOD_AMMO, 134)]));
+        let mut session = captured(&catalog);
+        assert_eq!(mounted(&session), [(128, 1), (133, 1)], "its own");
+        assert_eq!(
+            session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
+            Some(Assigned::MyShip)
+        );
+        assert_eq!(mounted(&session), [(128, 2), (134, 1)]);
+        assert_eq!(
+            session.pilot().outfits().collect::<Vec<_>>(),
+            [
+                (OutfitId(250), 2),
+                (OutfitId(252), 1),
+                (OutfitId(402), 1),
+                (OutfitId(403), 6)
+            ],
+            "its default item, then its stock weapons and rounds"
+        );
+        assert_eq!(
+            session.stock,
+            BTreeMap::from([(OutfitId(250), 2), (OutfitId(252), 1), (OutfitId(403), 6)])
+        );
+    }
+
+    #[test]
     fn a_ship_taken_over_with_no_fuel_tank_draws_no_fuel() {
         let mut catalog = boardable();
         for record in &mut catalog.ship_records {
@@ -9088,6 +9363,7 @@ mod tests {
             ..secondary(150, 144)
         });
         bay.outfits.push(outfit(311, &[(MOD_AMMO, 150)]));
+        bay.outfits.push(outfit(254, &[(MOD_WEAPON, 150)]));
         let bays = |ammo| StockWeapon {
             weapon: WeaponId(150),
             count: 1,
@@ -9274,8 +9550,13 @@ mod tests {
         let mut catalog = granting();
         // 20 tons raw, but 8 by the ship's 40 tons with Flags 0x0400: two
         // would fit the 30 tons free scaled, and only one raw.
-        catalog.outfits[0].mass = 20;
-        catalog.outfits[0].flags = OutfitFlags::MASS_BY_MASS;
+        let booster = catalog
+            .outfits
+            .iter_mut()
+            .find(|record| record.id == OutfitId(200))
+            .expect("the booster");
+        booster.mass = 20;
+        booster.flags = OutfitFlags::MASS_BY_MASS;
         let mut session = alongside_ace(&catalog);
         let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
         assert!(boarded.is_ok());
