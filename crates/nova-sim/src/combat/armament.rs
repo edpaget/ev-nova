@@ -2046,6 +2046,11 @@ mod tests {
             topped(&[(204, 25), (205, u16::MAX)]),
             tallied(&[(204, 25), (205, u16::MAX)])
         );
+        assert_eq!(
+            topped(&[(204, 20), (206, 2)]),
+            tallied(&[(204, 20), (206, 2)]),
+            "exactly as many: no outfit added, not even none of one"
+        );
     }
 
     #[test]
