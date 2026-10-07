@@ -316,6 +316,7 @@ use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Npc, NpcId};
 use crate::traffic::table::SpawnTable;
 use crate::traffic::{Traffic, World};
+use crate::wares::DayRolls;
 
 /// A jump, from J being accepted until the ship arrives.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -480,7 +481,7 @@ pub struct Session {
     hire_require: RuleSource,
     /// Each ship class's roll for hire since the last landing, drawn the
     /// first time the bar's list asks it.
-    hire_rolls: BTreeMap<ShipId, bool>,
+    hire_rolls: DayRolls<ShipId>,
     /// Whether each take-off pays the hired escorts a day's wages (see
     /// [`Session::with_take_off_pay`]).
     take_off_pay: RuleSource,
@@ -605,7 +606,7 @@ impl Session {
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
             control_bits: hire::Shared(Rc::new(NoControlBits)),
             hire_require: RuleSource::Engine,
-            hire_rolls: BTreeMap::new(),
+            hire_rolls: DayRolls::default(),
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),

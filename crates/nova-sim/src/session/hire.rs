@@ -46,7 +46,7 @@ use crate::landing::StellarFlags;
 use crate::pilot::Escort;
 use crate::rulebook::RuleSource;
 use crate::traffic::table;
-use crate::wares;
+use crate::wares::{self, Roll};
 
 /// A port the session keeps, shared: equal to another when it is the
 /// same one.
@@ -219,7 +219,7 @@ impl Session {
             hire_require: self.hire_require,
         };
         let rolls = &mut self.hire_rolls;
-        Some(bar.list(|ship, percent| *rolls.entry(ship).or_insert_with(|| chance.fires(percent))))
+        Some(bar.list(|ship, percent| rolls.today(ship, Roll::Chance(percent), chance)))
     }
 
     /// The stellar the ship is docked at, if it has a bar.
@@ -263,7 +263,7 @@ impl Session {
                 person: None,
             });
         });
-        self.hire_rolls.remove(&ship);
+        self.hire_rolls.redraw(&ship);
         Ok(Hired { ship, fee, wage })
     }
 }

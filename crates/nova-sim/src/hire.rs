@@ -120,7 +120,7 @@ use crate::catalog::{LandingSite, ShipId, ShipRecord};
 use crate::market::control_bits_allow;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::shipyard::{HIDE_BITS, ShipFlags3, ShipSpecs};
-use crate::wares::{self, HideHigher};
+use crate::wares::{self, HideHigher, Roll};
 
 /// The share of the hire price the fee is (@0xdd110).
 pub const HIRE_FEE_SHARE: f64 = 0.1;
@@ -128,7 +128,7 @@ pub const HIRE_FEE_SHARE: f64 = 0.1;
 pub const WAGE_SHARE: f64 = 0.01;
 /// The `HireRandom` from which a class is always for hire: above it
 /// counts as it (`_LoadObjectData` @0x7a35d-0x7a367).
-pub const MAX_HIRE_RANDOM: i16 = 100;
+pub const MAX_HIRE_RANDOM: i16 = wares::ALWAYS_RANDOM;
 /// The tech level at or below which both the ship's and the stellar's
 /// must be for the low-tech discount.
 pub const LOW_TECH: i16 = 5;
@@ -342,30 +342,6 @@ pub struct Hired {
 pub enum PayNote {
     /// So many hired escorts defected for want of pay.
     Defected(u32),
-}
-
-/// A class's roll for the day, by its `HireRandom`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Roll {
-    /// Never for hire: 0 or less.
-    Never,
-    /// Always for hire: [`MAX_HIRE_RANDOM`] or more.
-    Always,
-    /// For hire on a chance of so many percent.
-    Chance(u8),
-}
-
-impl Roll {
-    /// The roll of a class of `hire_random`.
-    pub(crate) fn of(hire_random: i16) -> Self {
-        if hire_random <= 0 {
-            Self::Never
-        } else if hire_random >= MAX_HIRE_RANDOM {
-            Self::Always
-        } else {
-            Self::Chance(hire_random as u8)
-        }
-    }
 }
 
 /// Everything the hire list reads about the bar and the player.
@@ -604,17 +580,6 @@ mod tests {
         assert!(NoControlBits.allows("b33"));
         assert!(NoControlBits.allows(""));
         assert!(NoControlBits.allows("!b1 & b2"));
-    }
-
-    #[test]
-    fn a_rolls_chance_is_its_hire_random_up_to_always() {
-        assert_eq!(Roll::of(-1), Roll::Never);
-        assert_eq!(Roll::of(0), Roll::Never);
-        assert_eq!(Roll::of(1), Roll::Chance(1));
-        assert_eq!(Roll::of(50), Roll::Chance(50));
-        assert_eq!(Roll::of(99), Roll::Chance(99));
-        assert_eq!(Roll::of(100), Roll::Always);
-        assert_eq!(Roll::of(250), Roll::Always);
     }
 
     #[test]

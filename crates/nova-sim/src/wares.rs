@@ -5,10 +5,79 @@
 //!
 //! The Bible gives the same rules for `oütf` and `shïp`, with different
 //! flag bits: each caller passes its own ([`HideBits`]).
+//!
+//! It also keeps the day's rolls the shipyard, the outfitter and the bar
+//! share: each item's `BuyRandom` or `HireRandom` read as never, always
+//! or a percent chance, and each chance drawn once a landing (see
+//! [`hire`](crate::hire)).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord};
+use crate::chance::Chance;
+
+/// The `BuyRandom` or `HireRandom` from which an item is always on offer:
+/// the original's loader clamps above it to it (`_LoadObjectData`).
+pub const ALWAYS_RANDOM: i16 = 100;
+
+/// An item's roll for the day, by its `BuyRandom` or `HireRandom`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Roll {
+    /// Never on offer.
+    Never,
+    /// Always on offer.
+    Always,
+    /// On offer on a chance of so many percent.
+    Chance(u8),
+}
+
+impl Roll {
+    /// The roll of an item of `random`, read plainly: 0 or less is never,
+    /// [`ALWAYS_RANDOM`] or more always, and any other a chance.
+    pub(crate) fn of(random: i16) -> Self {
+        if random <= 0 {
+            Self::Never
+        } else if random >= ALWAYS_RANDOM {
+            Self::Always
+        } else {
+            Self::Chance(random as u8)
+        }
+    }
+}
+
+/// Each item's roll since the last landing, keyed by `K`: a chance is
+/// drawn the first time it is asked and kept until cleared.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DayRolls<K>(BTreeMap<K, bool>);
+
+impl<K> Default for DayRolls<K> {
+    fn default() -> Self {
+        Self(BTreeMap::new())
+    }
+}
+
+impl<K: Ord> DayRolls<K> {
+    /// Whether `key`'s item, rolling `roll`, is on offer today: never and
+    /// always draw nothing; a chance is the answer kept, or else drawn on
+    /// `chance` and kept.
+    pub(crate) fn today(&mut self, key: K, roll: Roll, chance: &mut dyn Chance) -> bool {
+        match roll {
+            Roll::Never => false,
+            Roll::Always => true,
+            Roll::Chance(percent) => *self.0.entry(key).or_insert_with(|| chance.fires(percent)),
+        }
+    }
+
+    /// Forgets `key`'s roll, so it is drawn again when next asked.
+    pub(crate) fn redraw(&mut self, key: &K) {
+        self.0.remove(key);
+    }
+
+    /// Forgets every roll.
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+}
 
 /// Whether an item of `tech_level` is for sale, by tech level alone, at
 /// `site`: at or below its `TechLevel`, or exactly one of its eight
@@ -93,7 +162,8 @@ pub fn in_display_order<T>(rows: &mut [T], key: impl Fn(&T) -> (i16, i16)) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{outfit, planet};
+    use crate::chance::NeverFires;
+    use crate::testkit::{Scripted, outfit, planet};
 
     /// Tech level 4, with special tech 6 and 55.
     fn site() -> LandingSite {
@@ -192,6 +262,57 @@ mod tests {
         sweep.note(5, true, true);
         assert!(!sweep.on_sale(5));
         assert!(sweep.on_sale(6));
+    }
+
+    #[test]
+    fn a_rolls_chance_is_its_random_up_to_always() {
+        assert_eq!(Roll::of(-1), Roll::Never);
+        assert_eq!(Roll::of(0), Roll::Never);
+        assert_eq!(Roll::of(1), Roll::Chance(1));
+        assert_eq!(Roll::of(50), Roll::Chance(50));
+        assert_eq!(Roll::of(99), Roll::Chance(99));
+        assert_eq!(Roll::of(100), Roll::Always);
+        assert_eq!(Roll::of(250), Roll::Always);
+    }
+
+    #[test]
+    fn a_chance_roll_is_drawn_once_and_then_kept() {
+        let mut rolls = DayRolls::default();
+        let mut chance = Scripted::answering(&[true, false]);
+        assert!(rolls.today(7, Roll::Chance(40), &mut chance));
+        assert!(rolls.today(7, Roll::Chance(40), &mut chance), "kept");
+        assert_eq!(chance.asked, [40]);
+        assert!(!rolls.today(8, Roll::Chance(60), &mut chance));
+        assert!(!rolls.today(8, Roll::Chance(60), &mut chance), "kept");
+        assert_eq!(chance.asked, [40, 60]);
+    }
+
+    #[test]
+    fn never_and_always_draw_nothing() {
+        let mut rolls = DayRolls::default();
+        let mut chance = Scripted::answering(&[true]);
+        assert!(!rolls.today(7, Roll::Never, &mut chance));
+        assert!(rolls.today(8, Roll::Always, &mut NeverFires));
+        assert!(chance.asked.is_empty());
+        assert_eq!(rolls, DayRolls::default(), "nothing stored");
+        assert!(rolls.today(7, Roll::Chance(5), &mut chance));
+        assert_eq!(chance.asked, [5], "drawn afresh");
+    }
+
+    #[test]
+    fn a_roll_redrawn_is_drawn_again_and_cleared_ones_all_are() {
+        let mut rolls = DayRolls::default();
+        let mut chance = Scripted::answering(&[true, false, true, false]);
+        assert!(rolls.today(7, Roll::Chance(30), &mut chance));
+        assert!(!rolls.today(8, Roll::Chance(20), &mut chance));
+        rolls.redraw(&7);
+        assert!(rolls.today(7, Roll::Chance(30), &mut chance));
+        assert!(!rolls.today(8, Roll::Chance(20), &mut chance), "kept");
+        assert_eq!(chance.asked, [30, 20, 30]);
+        rolls.clear();
+        assert_eq!(rolls, DayRolls::default());
+        assert!(!rolls.today(7, Roll::Chance(30), &mut chance));
+        assert_eq!(chance.asked, [30, 20, 30, 30]);
     }
 
     #[test]
