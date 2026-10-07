@@ -139,6 +139,7 @@
 
 pub mod decode;
 pub mod error;
+pub mod expr;
 pub mod file;
 pub mod fonts;
 pub mod graphics;
