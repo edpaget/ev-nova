@@ -30,7 +30,12 @@
 //! [`Chance`] the first time the list is built after a landing, by
 //! ascending ID and only for a class that tech allows whose reading is a
 //! chance of 1-99, and kept until the next landing or until the class is
-//! bought; it is never saved, as the original rolls again on load. A
+//! bought or declined. The original builds the list once each time the
+//! shipyard opens (`_SetupPortAvailableShipTypes`, called only @0x5e68f),
+//! so a roll drawn again after a purchase or a decline is drawn the next
+//! time the list is built, and until then the class can be bought as
+//! listed ([`Session::shipyard`](crate::Session::shipyard)). A roll is
+//! never saved, as the original rolls again on load. A
 //! class off today is not listed and takes no higher one off sale.
 //!
 //! A ship for sale can be *bought* when its `Require` bits are met, by the
@@ -106,7 +111,7 @@
 //! confirmed is kept on the pilot through `_CullNameString`, which drops a
 //! leading "the " and nothing else ([`cull_name`], @0x5ed5a-0x5ed74).
 //! Cancelling buys nothing, but still draws the class's roll again
-//! (@0x5ebc2 to @0x5f0d5-0x5f0f8). The prompt refuses a name longer than
+//! (@0x5ebc2 to @0x5f0d5-0x5f0f8), when the list is next built. The prompt refuses a name longer than
 //! [`SHIP_NAME_CHARS`] (@0x554a9-0x554e7), and accepts an empty one.
 //!
 //! # Stock weapons

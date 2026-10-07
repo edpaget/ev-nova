@@ -1532,7 +1532,8 @@ impl AppScreen {
     /// outfitter as they then are go back to it. A ship asked for in its
     /// shipyard opens the prompt for its name, when it can be bought; the
     /// ship named there is bought, and one declined there draws its roll
-    /// again, changing nothing else. Once it is left, the ship takes off
+    /// again when the shipyard's list is next built, changing nothing
+    /// else. Once it is left, the ship takes off
     /// and flight shows.
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
         let spaceport = self.spaceport.as_mut().expect(LANDED);
@@ -1552,7 +1553,8 @@ impl AppScreen {
         {
             spaceport.open_ship_naming(&naming);
         }
-        // The list is kept for the visit, as the original keeps it.
+        // The list is kept for the visit, as the original keeps it; the
+        // roll is drawn again when it is next built.
         if let Some(ship) = spaceport.take_declined_ship() {
             self.flight.as_mut().expect(ENTERED).decline_ship(ship);
         }
@@ -2010,6 +2012,16 @@ mod tests {
     }
 
     fn game_data(trading: bool, outfitting: bool, shipbuying: bool) -> Rc<GameData> {
+        game_data_selling(trading, outfitting, shipbuying, 100)
+    }
+
+    /// [`game_data`], ship 129 for sale on a `BuyRandom` of `buy_random`.
+    fn game_data_selling(
+        trading: bool,
+        outfitting: bool,
+        shipbuying: bool,
+        buy_random: i16,
+    ) -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
         anim[0x04..0x06].copy_from_slice(&1_i16.to_be_bytes());
@@ -2064,7 +2076,7 @@ mod tests {
                 (0x08, 10),
                 (0x0C, 12),
                 (0x2E, 1),
-                (0x388, 100),
+                (0x388, buy_random),
             ] {
                 ship[at..at + 2].copy_from_slice(&value.to_be_bytes());
             }
@@ -4823,7 +4835,16 @@ mod tests {
         let writes = store.writes();
         let before = pilot(&screen).clone();
         press_b(&mut screen);
-        let cancel = name_prompt(&screen)
+        click_cancel(&mut screen);
+        assert!(name_prompt(&screen).is_none(), "closed");
+        assert_eq!(*pilot(&screen), before);
+        assert_eq!(store.writes(), writes, "nothing to save");
+        assert!(spaceport(&screen).open_shipyard().is_some());
+    }
+
+    /// Clicks the open name prompt's Cancel.
+    fn click_cancel(screen: &mut AppScreen) {
+        let cancel = name_prompt(screen)
             .expect("the name prompt")
             .dialog()
             .item_bounds(6)
@@ -4836,10 +4857,100 @@ mod tests {
                 at: cancel,
             });
         }
+    }
+
+    /// The `BuyRandom` ship 129 sells on in [`rolling_shipyard`]: a
+    /// chance no other draw asks.
+    const ROLLED: u8 = 37;
+
+    /// Answers each [`ROLLED`] % draw from its script, then misses, and
+    /// counts them; every other chance misses, as [`nova_sim::NeverFires`]
+    /// does.
+    #[derive(Default)]
+    struct BuyRolls {
+        script: VecDeque<bool>,
+        asked: usize,
+    }
+
+    impl Chance for BuyRolls {
+        fn fires(&mut self, percent: u8) -> bool {
+            if percent != ROLLED {
+                return false;
+            }
+            self.asked += 1;
+            self.script.pop_front().unwrap_or(false)
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            n.saturating_sub(1)
+        }
+
+        fn roll(&mut self, _sides: u16) -> u16 {
+            0
+        }
+    }
+
+    /// [`landed_shipyard`], ship 129 for sale on a chance of [`ROLLED`] %
+    /// drawn from `script`, and the draws.
+    fn rolling_shipyard(
+        store: &MemoryPilots,
+        script: &[bool],
+    ) -> (AppScreen, Rc<RefCell<BuyRolls>>) {
+        let rolls = Rc::new(RefCell::new(BuyRolls {
+            script: script.iter().copied().collect(),
+            asked: 0,
+        }));
+        let shared: Rc<RefCell<dyn Chance>> = rolls.clone();
+        let mut screen = AppScreen::new(game_data_selling(true, true, true, i16::from(ROLLED)))
+            .with_dialogs(Rc::new(ShipyardDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+            .with_chance(SharedChance::new(shared));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        (screen, rolls)
+    }
+
+    fn lists_second(screen: &AppScreen) -> bool {
+        let open = spaceport(screen).open_shipyard().expect("shipbuying");
+        open.shipyard().row(ShipId(129)).is_some()
+    }
+
+    #[test]
+    fn a_ship_declined_is_named_again_on_the_list_built_at_opening() {
+        let store = MemoryPilots::new();
+        let (mut screen, rolls) = rolling_shipyard(&store, &[true, false]);
+        click_port_item(&mut screen, 9);
+        assert!(lists_second(&screen));
+        assert_eq!(rolls.borrow().asked, 1, "drawn as the list was built");
+        press_b(&mut screen);
+        click_cancel(&mut screen);
         assert!(name_prompt(&screen).is_none(), "closed");
-        assert_eq!(*pilot(&screen), before);
-        assert_eq!(store.writes(), writes, "nothing to save");
-        assert!(spaceport(&screen).open_shipyard().is_some());
+        press_b(&mut screen);
+        assert!(name_prompt(&screen).is_some(), "the prompt opens again");
+        assert_eq!(rolls.borrow().asked, 1, "nothing drawn again yet");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(pilot(&screen).ship(), ShipId(129), "bought");
+    }
+
+    #[test]
+    fn a_ship_declined_draws_its_roll_again_when_the_list_is_next_built() {
+        let store = MemoryPilots::new();
+        let (mut screen, rolls) = rolling_shipyard(&store, &[true, false]);
+        click_port_item(&mut screen, 9);
+        press_b(&mut screen);
+        click_cancel(&mut screen);
+        assert!(lists_second(&screen), "the list is kept for the visit");
+        assert_eq!(rolls.borrow().asked, 1);
+        // An order builds the list again.
+        screen.input(&key(Key::Escape, true));
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the outfit was bought");
+        assert_eq!(rolls.borrow().asked, 2, "drawn again");
+        screen.input(&key(Key::Escape, true));
+        click_port_item(&mut screen, 9);
+        assert!(!lists_second(&screen), "the new roll missed");
     }
 
     #[test]

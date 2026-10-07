@@ -248,7 +248,7 @@ mod persons;
 
 pub use persons::PersonQuote;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::ai::{Behaviour, Goal, PlayerSide};
@@ -491,6 +491,12 @@ pub struct Session {
     /// Each ship class's roll for sale since the last landing, drawn the
     /// first time the shipyard's list asks it.
     ship_rolls: DayRolls<ShipId>,
+    /// The ship classes whose roll is drawn again the next time the
+    /// shipyard's list is built: each one bought or declined since it was
+    /// last built. The original builds the list once each time the
+    /// shipyard opens (`_SetupPortAvailableShipTypes`, called only
+    /// @0x5e68f), so a roll drawn again shows only then.
+    ship_redraws: BTreeSet<ShipId>,
     /// How `BuyRandom` reads (see [`Session::with_buy_random`]).
     buy_random: RuleSource,
     /// Whether each take-off pays the hired escorts a day's wages (see
@@ -626,6 +632,7 @@ impl Session {
             hire_rolls: DayRolls::default(),
             outfit_rolls: DayRolls::default(),
             ship_rolls: DayRolls::default(),
+            ship_redraws: BTreeSet::new(),
             buy_random: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
@@ -1739,6 +1746,7 @@ impl Session {
         self.hire_rolls.clear();
         self.outfit_rolls.clear();
         self.ship_rolls.clear();
+        self.ship_redraws.clear();
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
@@ -1865,8 +1873,20 @@ impl Session {
 
     /// The shipyard of the stellar the ship is docked at, if it has landed
     /// at one, drawing on `chance` each class's roll for the day not drawn
-    /// yet since the landing (see [`shipyard`]).
+    /// yet since the landing (see [`shipyard`]). This builds its list
+    /// afresh: the roll of each class bought or declined since it was last
+    /// built is drawn again first.
     pub fn shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
+        for ship in std::mem::take(&mut self.ship_redraws) {
+            self.ship_rolls.redraw(&ship);
+        }
+        self.listed_shipyard(chance)
+    }
+
+    /// The shipyard as its list was last built, each class bought or
+    /// declined since keeping its roll, the rolls not drawn yet drawn on
+    /// `chance`.
+    fn listed_shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
         let stellar = self.landed?;
         let site = self.sites.iter().find(|site| site.id == stellar)?;
         Yard {
@@ -1887,7 +1907,9 @@ impl Session {
         ship: ShipId,
         chance: &mut dyn Chance,
     ) -> Result<(Shipyard, ShipRecord), ShipRefusal> {
-        let shipyard = self.shipyard(chance).ok_or(ShipRefusal::NoShipyard)?;
+        let shipyard = self
+            .listed_shipyard(chance)
+            .ok_or(ShipRefusal::NoShipyard)?;
         shipyard.check(ship)?;
         let record = self
             .ships
@@ -1916,10 +1938,11 @@ impl Session {
     /// Declines to buy a ship of class `ship`, as cancelling its name
     /// prompt does: nothing is bought, but the class's roll is drawn
     /// again, as the original does (`_DoShipyardDialog` @0x5ebc2 to
-    /// @0x5f0d5-0x5f0f8). Nothing about the pilot changes, so no save is
-    /// due.
+    /// @0x5f0d5-0x5f0f8), the next time the shipyard's list is built
+    /// ([`shipyard`](Self::shipyard)); until then it can be named and
+    /// bought again. Nothing about the pilot changes, so no save is due.
     pub fn decline_ship(&mut self, ship: ShipId) {
-        self.ship_rolls.redraw(&ship);
+        self.ship_redraws.insert(ship);
     }
 
     /// Buys a ship of class `ship`, named `name` ([`shipyard::cull_name`]
@@ -1930,7 +1953,8 @@ impl Session {
     /// landed at a shipyard, or the purchase is refused, nothing changes
     /// and the refusal says why. The rolls not drawn yet are drawn on
     /// `chance`, and a purchase draws the class's roll again, as the
-    /// original does (`_DoShipyardDialog` @0x5f0d5-0x5f0f8).
+    /// original does (`_DoShipyardDialog` @0x5f0d5-0x5f0f8), the next time
+    /// the shipyard's list is built ([`shipyard`](Self::shipyard)).
     pub fn buy_ship(
         &mut self,
         ship: ShipId,
@@ -1957,7 +1981,7 @@ impl Session {
         self.defaults = pilot::tally(record.defaults.iter().copied());
         self.stock = armament::fitted(&fits);
         self.refit(false);
-        self.ship_rolls.redraw(&ship);
+        self.ship_redraws.insert(ship);
         bought.ok_or(ShipRefusal::NoShipyard)
     }
 
@@ -6092,6 +6116,51 @@ mod tests {
         let mut missing = Scripted::answering(&[false]);
         assert!(!lists_new(&mut session, &mut missing), "drawn again");
         assert_eq!(missing.asked, [50]);
+    }
+
+    #[test]
+    fn a_declined_class_keeps_its_roll_until_the_shipyard_is_listed_again() {
+        let mut session = outfitted(&rolling(100, 50));
+        let mut firing = Scripted::answering(&[true]);
+        assert!(lists_new(&mut session, &mut firing));
+        session.decline_ship(NEW);
+        let mut missing = Scripted::answering(&[false]);
+        assert!(
+            session.ship_naming(NEW, &mut missing).is_ok(),
+            "named again"
+        );
+        assert!(missing.asked.is_empty(), "the list's roll is kept");
+        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        assert_eq!(missing.asked, [50]);
+    }
+
+    #[test]
+    fn a_bought_class_keeps_its_roll_until_the_shipyard_is_listed_again() {
+        let mut session = outfitted(&rolling(100, 50));
+        let mut firing = Scripted::answering(&[true]);
+        session
+            .buy_ship(NEW, "Kestrel", &mut firing)
+            .expect("bought");
+        let mut missing = Scripted::answering(&[false]);
+        assert_ne!(
+            session.ship_naming(NEW, &mut missing).err(),
+            Some(ShipRefusal::NotListed),
+            "still listed"
+        );
+        assert!(missing.asked.is_empty(), "the list's roll is kept");
+    }
+
+    #[test]
+    fn a_landing_forgets_the_redraws_due() {
+        let mut session = outfitted(&rolling(100, 50));
+        let mut firing = Scripted::answering(&[true, true]);
+        assert!(lists_new(&mut session, &mut firing));
+        session.decline_ship(NEW);
+        relanded(&mut session);
+        assert!(lists_new(&mut session, &mut firing));
+        assert_eq!(firing.asked, [50, 50]);
+        assert!(lists_new(&mut session, &mut firing), "kept");
+        assert_eq!(firing.asked, [50, 50]);
     }
 
     #[test]
