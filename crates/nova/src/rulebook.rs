@@ -224,6 +224,28 @@ mod tests {
     }
 
     #[test]
+    fn the_persons_rules_are_overridden_by_their_keys() {
+        let text = r#"{"rule_overrides": {"person_odds": "bible", "system_persons": "bible", "link_syst_slip": "bible", "shield_mod": "bible", "person_coward": "bible", "person_credits": "bible", "comm_quote": "bible"}}"#;
+        let (rulebook, warnings) = rulebook_of(text);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine()
+                .with_override(RuleKey::PersonOdds, RuleSource::Bible)
+                .with_override(RuleKey::SystemPersons, RuleSource::Bible)
+                .with_override(RuleKey::LinkSystSlip, RuleSource::Bible)
+                .with_override(RuleKey::ShieldMod, RuleSource::Bible)
+                .with_override(RuleKey::PersonCoward, RuleSource::Bible)
+                .with_override(RuleKey::PersonCredits, RuleSource::Bible)
+                .with_override(RuleKey::CommQuote, RuleSource::Bible)
+        );
+        let (rulebook, _) =
+            rulebook_of(r#"{"rules": "bible", "rule_overrides": {"comm_quote": "engine"}}"#);
+        assert_eq!(rulebook.source_for(RuleKey::CommQuote), RuleSource::Engine);
+        assert_eq!(rulebook.source_for(RuleKey::PersonOdds), RuleSource::Bible);
+    }
+
+    #[test]
     fn the_hiring_rules_are_overridden_by_their_keys() {
         let text = r#"{"rule_overrides": {"hire_require": "bible", "take_off_pay": "bible", "hire_fee": "bible", "escort_wage": "bible"}}"#;
         let (rulebook, warnings) = rulebook_of(text);

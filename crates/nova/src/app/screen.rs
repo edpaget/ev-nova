@@ -110,7 +110,11 @@
 //! the router's hiring rules ([`AppScreen::with_hire_require`],
 //! [`AppScreen::with_take_off_pay`], [`AppScreen::with_escort_wage`],
 //! [`AppScreen::with_hire_terms`], [`AppScreen::with_control_bits`]),
-//! the engine's and Nova's until others are given.
+//! the engine's and Nova's until others are given. Each flight's persons
+//! appear as the router's rules say ([`AppScreen::with_person_rules`])
+//! and say their comm quotes as it says ([`AppScreen::with_comm_quote`]),
+//! the engine's and Nova's until others are given;
+//! [`AppScreen::with_rulebook`] sets every rule from one rulebook.
 //! The flight's diagnostics about game
 //! data it could not read or the simulation does not handle yet come
 //! through [`Screen::take_diagnostics`].
@@ -155,7 +159,8 @@ use nova_sim::board::MAX_ESCORTS;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HailView,
     HireTerms, LegalCode, NoControlBits, NovaAi, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
-    Pilot, PilotKeeper, PilotStore, PointDefenceRule, RuleSource, Take, Taken, pilot_key,
+    NovaPersons, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule, RuleKey,
+    RuleSource, Rulebook, Take, Taken, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::flight::{FlightView, SharedChance};
@@ -296,6 +301,10 @@ pub struct AppScreen {
     escort_wage: RuleSource,
     /// The fee and wage of a hire in each flight.
     hire_terms: Rc<dyn HireTerms>,
+    /// How persons appear in each flight.
+    person_rules: Rc<dyn PersonRules>,
+    /// When each flight's persons say their comm quotes.
+    comm_quote: RuleSource,
     /// The control-bit test a ship for hire's `Availability` goes
     /// through in each flight.
     control_bits: Rc<dyn ControlBits>,
@@ -379,6 +388,8 @@ impl AppScreen {
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
             control_bits: Rc::new(NoControlBits),
+            person_rules: Rc::new(NovaPersons::default()),
+            comm_quote: RuleSource::Engine,
             comm: None,
             haggle: None,
         }
@@ -538,6 +549,52 @@ impl AppScreen {
         }
     }
 
+    /// The router with `rules` deciding how persons appear in each flight
+    /// ([`FlightView::with_person_rules`]); Nova's until others are given.
+    #[must_use]
+    pub fn with_person_rules(self, person_rules: Rc<dyn PersonRules>) -> Self {
+        Self {
+            person_rules,
+            ..self
+        }
+    }
+
+    /// The router with each flight's persons saying their comm quotes as
+    /// `source` says ([`FlightView::with_comm_quote`]); the engine's until
+    /// another is given.
+    #[must_use]
+    pub fn with_comm_quote(self, source: RuleSource) -> Self {
+        Self {
+            comm_quote: source,
+            ..self
+        }
+    }
+
+    /// The router with Nova's rules, each disputed one as `rulebook`
+    /// chooses: the NPCs' behaviour, disabling, point defence, the law,
+    /// boarding, hailing, the escorts' and fighters' rules, hiring, and
+    /// the persons' rules. This is the edge where every [`RuleKey`] meets
+    /// its setting.
+    #[must_use]
+    pub fn with_rulebook(self, rulebook: &Rulebook) -> Self {
+        self.with_behaviour(Rc::new(NovaAi::from_rulebook(rulebook)))
+            .with_disable_rule(Rc::new(NovaDisable))
+            .with_point_defence_rule(Rc::new(Allegiance))
+            .with_law(Rc::new(NovaLaw::from_rulebook(rulebook)))
+            .with_boarding_rule(Rc::new(NovaBoarding::from_rulebook(rulebook)))
+            .with_hail_options(HailOptions::nova(rulebook))
+            .with_escort_orders(rulebook.source_for(RuleKey::EscortOrders))
+            .with_fighter_launch(rulebook.source_for(RuleKey::FighterLaunch))
+            .with_fighter_recall(rulebook.source_for(RuleKey::FighterRecall))
+            .with_hire_require(rulebook.source_for(RuleKey::HireRequire))
+            .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
+            .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
+            .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
+            .with_control_bits(Rc::new(NoControlBits))
+            .with_person_rules(Rc::new(NovaPersons::from_rulebook(rulebook)))
+            .with_comm_quote(rulebook.source_for(RuleKey::CommQuote))
+    }
+
     /// The comm dialog, while a hail is under way.
     #[must_use]
     pub fn comm(&self) -> Option<&CommDialog> {
@@ -587,7 +644,9 @@ impl AppScreen {
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
-            .with_control_bits(Rc::clone(&self.control_bits));
+            .with_control_bits(Rc::clone(&self.control_bits))
+            .with_person_rules(Rc::clone(&self.person_rules))
+            .with_comm_quote(self.comm_quote);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -5450,6 +5509,98 @@ mod tests {
             assert_eq!(session.escort_wage(), source);
             assert_eq!(session.take_off_pay(), RuleSource::Engine);
         }
+    }
+
+    #[test]
+    fn the_routers_persons_rules_reach_every_flight() {
+        let rules = nova_sim::NovaPersons {
+            slots: RuleSource::Bible,
+            ..nova_sim::NovaPersons::default()
+        };
+        let mut screen = AppScreen::new(data()).with_person_rules(Rc::new(rules));
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(
+            format!("{:?}", session.person_rules()),
+            format!("{rules:?}")
+        );
+        assert_eq!(session.comm_quote(), RuleSource::Engine);
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_comm_quote(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.comm_quote(), source);
+        }
+    }
+
+    /// The rule-bearing parts of `screen`, each by name, as they print.
+    fn rules_of(screen: &AppScreen) -> Vec<(&'static str, String)> {
+        vec![
+            ("behaviour", format!("{:?}", screen.behaviour)),
+            ("disable_rule", format!("{:?}", screen.disable_rule)),
+            ("defence_rule", format!("{:?}", screen.defence_rule)),
+            ("law", format!("{:?}", screen.law)),
+            ("boarding_rule", format!("{:?}", screen.boarding_rule)),
+            ("hail_options", format!("{:?}", screen.hail_options)),
+            ("escort_orders", format!("{:?}", screen.escort_orders)),
+            ("fighter_launch", format!("{:?}", screen.fighter_launch)),
+            ("fighter_recall", format!("{:?}", screen.fighter_recall)),
+            ("hire_require", format!("{:?}", screen.hire_require)),
+            ("take_off_pay", format!("{:?}", screen.take_off_pay)),
+            ("escort_wage", format!("{:?}", screen.escort_wage)),
+            ("hire_terms", format!("{:?}", screen.hire_terms)),
+            ("control_bits", format!("{:?}", screen.control_bits)),
+            ("person_rules", format!("{:?}", screen.person_rules)),
+            ("comm_quote", format!("{:?}", screen.comm_quote)),
+        ]
+    }
+
+    /// The setting each rule's key reaches.
+    fn setting_of(key: RuleKey) -> &'static str {
+        match key {
+            RuleKey::CrimeGains => "law",
+            RuleKey::EmptyBooty | RuleKey::CrewlessCapture | RuleKey::PersonCredits => {
+                "boarding_rule"
+            }
+            RuleKey::PiracyPolice | RuleKey::EscortAi | RuleKey::PersonCoward => "behaviour",
+            RuleKey::QuietHails | RuleKey::LongAdvice => "hail_options",
+            RuleKey::EscortOrders => "escort_orders",
+            RuleKey::FighterLaunch => "fighter_launch",
+            RuleKey::FighterRecall => "fighter_recall",
+            RuleKey::HireRequire => "hire_require",
+            RuleKey::TakeOffPay => "take_off_pay",
+            RuleKey::HireFee => "hire_terms",
+            RuleKey::EscortWage => "escort_wage",
+            RuleKey::PersonOdds
+            | RuleKey::SystemPersons
+            | RuleKey::LinkSystSlip
+            | RuleKey::ShieldMod => "person_rules",
+            RuleKey::CommQuote => "comm_quote",
+        }
+    }
+
+    #[test]
+    fn the_rulebook_routes_each_rule_to_its_own_setting() {
+        let engine = rules_of(&AppScreen::new(data()).with_rulebook(&Rulebook::default()));
+        assert_eq!(
+            engine,
+            rules_of(&AppScreen::new(data())),
+            "the engine's are the router's defaults"
+        );
+        for key in RuleKey::ALL {
+            let rulebook = Rulebook::default().with_override(key, RuleSource::Bible);
+            let bible = rules_of(&AppScreen::new(data()).with_rulebook(&rulebook));
+            let changed: Vec<&str> = engine
+                .iter()
+                .zip(&bible)
+                .filter(|(was, now)| was.1 != now.1)
+                .map(|(was, _)| was.0)
+                .collect();
+            assert_eq!(changed, [setting_of(key)], "{key:?}");
+        }
+        let all =
+            rules_of(&AppScreen::new(data()).with_rulebook(&Rulebook::new(RuleSource::Bible)));
+        assert!(all.contains(&("comm_quote", "Bible".to_owned())), "{all:?}");
     }
 
     #[test]

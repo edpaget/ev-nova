@@ -69,7 +69,15 @@
 //! escorts a day's wages), `"hire_fee"` (whether a hire takes the
 //! engine's extra credit or exactly the fee shown) and `"escort_wage"`
 //! (whether a hired escort is paid the wage its ship type gives now or
-//! the wage it was hired at); every key is listed in
+//! the wage it was hired at), and the persons' rules: `"person_odds"`
+//! (how often a person appears), `"system_persons"` (whether a system's
+//! Person slot always brings its person), `"link_syst_slip"` (whether a
+//! person linked to a system also appears in the one the engine's slip
+//! gives), `"shield_mod"` (whether `ShieldMod` scales the armour too),
+//! `"person_coward"` (which persons run at their `Coward`),
+//! `"person_credits"` (the credits a person carries) and `"comm_quote"`
+//! (whether a person's comm quote answers Greetings or opens the hail);
+//! every key is listed in
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!
@@ -83,7 +91,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nova::app::{AppScreen, start_screen};
+use nova::app::start_screen;
 use nova::audio::{game_audio, game_settings, music_warning};
 use nova::chance::SplitMix;
 use nova::config::{Os, pilots_dir, settings_path};
@@ -97,35 +105,11 @@ use nova_data::fonts::open_charcoal;
 use nova_data::music::open_music;
 use nova_data::{GameData, open_interface};
 use nova_render::wgpu::GlyphonMetrics;
-use nova_sim::{
-    Allegiance, Chance, HailOptions, NoControlBits, NovaAi, NovaBoarding, NovaDisable, NovaHire,
-    NovaLaw, PilotKeeper, PilotStore, RuleKey, Rulebook,
-};
+use nova_sim::{Chance, PilotKeeper, PilotStore};
 use nova_view::flight::SharedChance;
 use nova_view::text::TextMetrics;
 use nova_view::ui::DialogResources;
 use winit::event_loop::EventLoop;
-
-/// `screen` with Nova's rules, each disputed one as `rulebook` chooses:
-/// the NPCs' behaviour, disabling, point defence, the law, boarding,
-/// hailing, the escorts' and fighters' rules, and hiring.
-fn with_rules(screen: AppScreen, rulebook: &Rulebook) -> AppScreen {
-    screen
-        .with_behaviour(Rc::new(NovaAi::from_rulebook(rulebook)))
-        .with_disable_rule(Rc::new(NovaDisable))
-        .with_point_defence_rule(Rc::new(Allegiance))
-        .with_law(Rc::new(NovaLaw::from_rulebook(rulebook)))
-        .with_boarding_rule(Rc::new(NovaBoarding::from_rulebook(rulebook)))
-        .with_hail_options(HailOptions::nova(rulebook))
-        .with_escort_orders(rulebook.source_for(RuleKey::EscortOrders))
-        .with_fighter_launch(rulebook.source_for(RuleKey::FighterLaunch))
-        .with_fighter_recall(rulebook.source_for(RuleKey::FighterRecall))
-        .with_hire_require(rulebook.source_for(RuleKey::HireRequire))
-        .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
-        .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
-        .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
-        .with_control_bits(Rc::new(NoControlBits))
-}
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -185,7 +169,8 @@ fn main() -> ExitCode {
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))
         .with_effects_chance(SharedChance::new(effects));
-    let mut screen = with_rules(screen, &rulebook);
+    // Every disputed rule as the settings' rulebook chooses.
+    let mut screen = screen.with_rulebook(&rulebook);
     match open_interface(&dir) {
         Ok(interface) => {
             let dialogs: Rc<dyn DialogResources> = Rc::new(interface);
