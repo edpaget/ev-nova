@@ -36,6 +36,8 @@
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
+//! - [`control`]: the control bits missions and storylines script with,
+//!   held as a [`ControlBitSet`] indexed by [`Bit`].
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence
@@ -176,6 +178,7 @@ pub mod catalog;
 pub mod chance;
 pub mod clock;
 pub mod combat;
+pub mod control;
 pub mod data;
 pub mod date;
 pub mod escort;
@@ -241,6 +244,7 @@ pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
+pub use control::{Bit, BitWrite, ControlBitSet};
 pub use date::GameDate;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
