@@ -4,7 +4,7 @@
 //! tech levels allow; Viking's shipyard sells what its tech levels and the
 //! ships' `BuyRandom` allow, and trades the Shuttle in. Port Kane sells
 //! fuel and uninhabited Reflex-ion sells none. The date reads with the
-//! first `chär`'s affixes. Skips, passing,
+//! first `chär`'s affixes. HG-Kania leads to HG-Tichel. Skips, passing,
 //! when `NOVA_DATA` is unset.
 
 mod common;
@@ -15,9 +15,10 @@ use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::{
-    Direction, DisasterId, DisasterRecord, GameDate, Gauge, Good, JunkId, LandingRefusal, OutfitId,
-    OutfitMod, OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session,
-    ShipFields, ShipId, ShipState, ShipStats, StartDate, StellarId, check_landing, services,
+    Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good, GovtId,
+    JunkId, LandOutcome, LandingRefusal, NeverFires, OutfitId, OutfitMod, OutfitOrder,
+    OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields, ShipId,
+    ShipState, ShipStats, StartDate, StellarId, SystemId, Vec2, check_landing, services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -511,4 +512,76 @@ fn reflex_ion_sells_no_fuel() {
             max: 300.0
         }
     );
+}
+
+/// A new stock pilot in Kania, at rest over HG-Kania (`spöb` 1404, at
+/// (-70, 250)): docked there through a save that says so, then taken off,
+/// which leaves the ship at the gate's centre. Its record with the
+/// Hypergate government (183) is 32767, HG-Kania's `MinStatus`: the
+/// original never lets a record pass 32767 (task
+/// `landing-minstatus-32767-never`), which `check_landing` does not model
+/// yet.
+fn over_hg_kania(data: &GameData) -> Session {
+    let mut pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    pilot.set_legal_record(GovtId(183), 32767);
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["stellar"] = serde_json::json!(1404);
+    let parked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(data, parked).expect("flies");
+    assert_eq!(session.take_off(), Some(StellarId(1404)));
+    assert_eq!(session.player().position, Vec2::new(-70.0, 250.0));
+    session
+}
+
+/// L, L over HG-Kania enters it, offering Tichel, Dani and Koria; picking
+/// Tichel brings the Shuttle out of HG-Tichel at (-400, -500), heading
+/// 120° at half its top speed, on the same day and with a full tank.
+#[test]
+fn hg_kania_leads_to_hg_tichel() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = over_hg_kania(&data);
+    assert_eq!(session.system(), SystemId(128));
+    assert_eq!(
+        session.land(),
+        Ok(LandOutcome::Selected {
+            stellar: StellarId(1404),
+            station: true,
+            clearance: Clearance::Granted,
+        })
+    );
+    assert_eq!(
+        session.land(),
+        Ok(LandOutcome::AtGate {
+            stellar: StellarId(1404),
+            kind: GateKind::Hypergate,
+        })
+    );
+    assert_eq!(
+        session.hypergate_destinations(&data),
+        [SystemId(129), SystemId(298), SystemId(483)]
+    );
+    let full = session.reserves().fuel;
+    assert_eq!(
+        session.enter_hypergate(Some(SystemId(129)), &data, &mut NeverFires),
+        Ok(SystemId(129))
+    );
+    let player = *session.player();
+    assert_eq!(player.position, Vec2::new(-400.0, -500.0));
+    assert!(
+        (player.heading - 120.0).abs() < f32::EPSILON,
+        "{}",
+        player.heading
+    );
+    let speed = player.velocity.length();
+    assert!(
+        (speed - session.handling().max_speed / 2.0).abs() < 1e-4,
+        "{speed}"
+    );
+    assert_eq!(session.date_text(), "June 23, 1177 NC");
+    assert_eq!(session.reserves().fuel, full);
+    assert_eq!(full, Gauge::full(300.0));
 }
