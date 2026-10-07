@@ -10,6 +10,10 @@
 //! dialog, a jump streaks and arrives without its white fades; turned back
 //! on, they return.
 //!
+//! L, L over a hypergate opens flight's map as the hypergate map; a click
+//! on a linked system and M, or Escape, bring the ship out of the gate
+//! there.
+//!
 //! Play plots courses on the map opened from flight, which has no "Enter
 //! system" button; the Tab side's map keeps it as the developer's viewer
 //! (`galaxy_map.rs` and `system_view.rs` test that path).
@@ -54,6 +58,7 @@ use nova_sim::{
 use nova_view::flight::jump::{ARRIVAL_FLASH_FOR, STREAK_FOR};
 use nova_view::flight::view::TOO_CLOSE;
 use nova_view::flight::{FlightView, SharedChance};
+use nova_view::galaxy::MapMode;
 use nova_view::galaxy::map::{COURSE_HELP, ENTER_LABEL, ROUTE};
 use nova_view::menu::MenuChoice;
 use nova_view::text::fixture::MonoMetrics;
@@ -1029,4 +1034,141 @@ fn with_hyperspace_effects_off_a_jump_streaks_and_arrives_without_fading() {
         }
     }
     assert!(faded_out && faded_in, "out {faded_out}, in {faded_in}");
+}
+
+/// An independent `sÿst` at map (`x`, 0) with these hyperlinks and
+/// stellars; every other slot is -1.
+fn system_of(x: i16, links: &[i16], stellars: &[i16]) -> Vec<u8> {
+    let mut bytes = system(x, links, -1);
+    put_i16s(&mut bytes, 0x24, &[-1; 16]);
+    put_i16s(&mut bytes, 0x24, stellars);
+    bytes
+}
+
+/// A hypergate `spöb` (a landable station, `Flags2` 0x1000) at (`x`, `y`),
+/// heading ships out on `angle`, linked to `links`; every other slot -1.
+fn hypergate(x: i16, y: i16, angle: i16, links: &[i16]) -> Vec<u8> {
+    let mut bytes = stellar();
+    put_i16s(&mut bytes, 0x00, &[x, y]);
+    bytes[0x06..0x0A].copy_from_slice(&0x11_u32.to_be_bytes());
+    put_i16s(&mut bytes, 0x1A, &[angle]);
+    bytes[0x20..0x22].copy_from_slice(&0x1000_u16.to_be_bytes());
+    put_i16s(&mut bytes, 0x26, &[-1; 8]);
+    put_i16s(&mut bytes, 0x26, links);
+    bytes
+}
+
+/// [`data`]'s galaxy, with hypergate 131 at Alpha's centre, where the ship
+/// starts, linked to hypergate 132 in Gamma at (50, 60), which heads ships
+/// out on 90°.
+fn gate_data() -> Rc<GameData> {
+    let fork = ForkBuilder::new()
+        .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
+        .resource(Ship::TYPE, 128, Some(b"Courier"), &ship())
+        .resource(ShipAnim::TYPE, 128, None, &ship_anim())
+        .resource(RLED, 2000, None, &sheet(36, 1))
+        .resource(
+            System::TYPE,
+            128,
+            Some(b"Alpha"),
+            &system_of(0, &[129], &[128, 131]),
+        )
+        .resource(
+            System::TYPE,
+            129,
+            Some(b"Beta"),
+            &system_of(100, &[130], &[129]),
+        )
+        .resource(
+            System::TYPE,
+            130,
+            Some(b"Gamma"),
+            &system_of(200, &[], &[130, 132]),
+        )
+        .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar())
+        .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &stellar())
+        .resource(Stellar::TYPE, 130, Some(b"Gamma Prime"), &stellar())
+        .resource(
+            Stellar::TYPE,
+            131,
+            Some(b"HG-Alpha"),
+            &hypergate(0, 0, 120, &[132]),
+        )
+        .resource(
+            Stellar::TYPE,
+            132,
+            Some(b"HG-Gamma"),
+            &hypergate(50, 60, 90, &[131]),
+        )
+        .resource(Spin::TYPE, 1000, None, &spin(1000))
+        .resource(RLED, 1000, None, &sheet(1, 8))
+        .resource(
+            Interface::TYPE,
+            128,
+            Some(b"Default status bar"),
+            &interface(),
+        )
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
+        .build()
+        .bytes;
+    let file = OneFile(fork);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
+impl Harness {
+    /// In flight over [`gate_data`], L pressed twice over HG-Alpha: the
+    /// hypergate map is open, and Gamma clicked on it.
+    fn gamma_picked() -> Self {
+        let mut harness = Self::flying_over(gate_data(), SharedChance::default());
+        harness.frame();
+        harness.press(Key::Char('l'));
+        harness.press(Key::Char('l'));
+        assert_eq!(harness.showing(), Showing::FlightMap);
+        assert_eq!(harness.flight().course_map().mode(), MapMode::Hypergate);
+        let gamma = harness.on_map(130);
+        harness.click(gamma);
+        assert_eq!(harness.session().system(), SystemId(128), "not yet");
+        harness
+    }
+
+    /// Sends redraws until the gate's effect is over, and returns the
+    /// last frame.
+    fn come_out(&mut self) -> Frame {
+        for _ in 0..600 {
+            let frame = self.frame();
+            if self.flight().jump_effect().is_none() {
+                return frame;
+            }
+        }
+        panic!("the gate's effect never ended");
+    }
+}
+
+#[test]
+fn a_hypergate_picked_on_the_map_brings_the_ship_out_of_its_linked_gate() {
+    let mut harness = Harness::gamma_picked();
+    harness.press(Key::Char('m'));
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(harness.session().system(), SystemId(130));
+    assert_eq!(harness.ship().position, nova_sim::Vec2::new(50.0, 60.0));
+    assert_eq!(harness.ship().heading, 90.0);
+    assert_eq!(harness.session().reserves().fuel.now, 300.0, "no fuel");
+    let frame = harness.come_out();
+    assert!(
+        shows(
+            &frame,
+            "Exiting hypergate in the Gamma system on June 23, 1177."
+        ),
+        "{:?}",
+        texts(&frame)
+    );
+}
+
+#[test]
+fn escape_on_the_hypergate_map_enters_the_gate_too() {
+    let mut harness = Harness::gamma_picked();
+    harness.press(Key::Escape);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(harness.session().system(), SystemId(130));
+    assert_eq!(harness.ship().position, nova_sim::Vec2::new(50.0, 60.0));
 }

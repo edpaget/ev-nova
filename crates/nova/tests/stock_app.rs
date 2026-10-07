@@ -1,6 +1,7 @@
 //! App frames of the ship browser, the galaxy map and a system over the
-//! stock data, through the recording Gpu, and a course plotted from
-//! flight. Skips, passing, when `NOVA_DATA` is unset.
+//! stock data, through the recording Gpu, a course plotted from flight,
+//! and HG-Kania entered for Tichel. Skips, passing, when `NOVA_DATA` is
+//! unset.
 
 mod common;
 
@@ -395,4 +396,131 @@ fn i_shows_the_stock_about_text() {
         })
         .collect();
     assert!(texts.contains(&"Done".to_owned()), "{texts:?}");
+}
+
+/// The app driven as the window drives it: each event through the
+/// recording Gpu.
+struct Driver {
+    app: App<Rc<GameData>>,
+    gpu: RecordingGpu,
+    clock: Duration,
+}
+
+impl Driver {
+    fn send(&mut self, event: WindowEvent) {
+        let control = self.app.handle(event, &mut Window, &mut self.gpu);
+        assert_eq!(control, Control::Continue, "{event:?}");
+    }
+
+    fn press(&mut self, key: Key) {
+        for pressed in [true, false] {
+            self.send(WindowEvent::Key {
+                key,
+                pressed,
+                repeat: false,
+            });
+        }
+    }
+
+    fn click(&mut self, at: nova_view::Point) {
+        self.send(WindowEvent::PointerMoved {
+            px: (f64::from(at.x), f64::from(at.y)),
+        });
+        for pressed in [true, false] {
+            self.send(WindowEvent::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+            });
+        }
+    }
+
+    fn redraw(&mut self) {
+        self.clock += Duration::from_millis(50);
+        self.send(WindowEvent::Redraw {
+            elapsed: self.clock,
+        });
+    }
+
+    fn showing(&self) -> Showing {
+        self.app.screen().showing()
+    }
+
+    fn flight(&self) -> &nova_view::flight::FlightView<Rc<GameData>> {
+        self.app.screen().flight_view().expect("flying")
+    }
+}
+
+/// A pilot saved at HG-Kania (`spöb` 1404, at (-70, 250) in Kania) and
+/// opened from the main menu resumes docked there; leaving takes off over
+/// the gate. L, L opens the hypergate map, Tichel is clicked, and M brings
+/// the ship out of HG-Tichel at (-400, -500) in Tichel (129), still on
+/// 23 June 1177, saying so. Its record with the Hypergate government (183)
+/// is HG-Kania's `MinStatus`, 32767, which the original never lets a
+/// record pass (task `landing-minstatus-32767-never`).
+#[test]
+fn a_pilot_at_hg_kania_enters_it_for_tichel() {
+    use nova_sim::fixture::MemoryPilots;
+    use nova_sim::{GovtId, Pilot, PilotKeeper, PilotStore, Vec2};
+    use nova_view::galaxy::MapMode;
+    use nova_view::menu::MenuChoice;
+    use nova_view::text::fixture::MonoMetrics;
+
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let mut pilot = Pilot::new(data.as_ref(), "Gatekeeper").expect("the stock first chär starts");
+    pilot.set_legal_record(GovtId(183), 32767);
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["stellar"] = serde_json::json!(1404);
+    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let store = MemoryPilots::new();
+    let keeper = PilotKeeper::new(Box::new(store) as Box<dyn PilotStore>);
+    keeper.save(&docked).expect("saved");
+    let screen = start_screen(Rc::clone(&data)).with_pilots(Some(keeper), Rc::new(MonoMetrics));
+    let mut driver = Driver {
+        app: App::new(&Window, data, screen),
+        gpu: RecordingGpu::new(),
+        clock: Duration::ZERO,
+    };
+    let open = driver
+        .app
+        .screen()
+        .main_menu()
+        .expect("the main menu")
+        .button(MenuChoice::OpenPilot)
+        .rect
+        .center();
+    driver.click(open);
+    assert_eq!(driver.showing(), Showing::OpenPilot);
+    driver.press(Key::Enter);
+    assert_eq!(driver.showing(), Showing::Spaceport, "resumed docked");
+    driver.press(Key::Enter);
+    assert_eq!(driver.showing(), Showing::Flight, "left");
+    let session = driver.flight().session().expect("flying");
+    assert_eq!(session.system(), SystemId(128));
+    assert_eq!(session.player().position, Vec2::new(-70.0, 250.0));
+
+    driver.press(Key::Char('l'));
+    driver.press(Key::Char('l'));
+    assert_eq!(driver.showing(), Showing::FlightMap);
+    let map = driver.flight().course_map();
+    assert_eq!(map.mode(), MapMode::Hypergate);
+    let tichel = map.model().system(SystemId(129)).expect("Tichel");
+    let at = map.view().world_to_screen(tichel.position());
+    driver.click(at);
+    driver.press(Key::Char('m'));
+    assert_eq!(driver.showing(), Showing::Flight);
+    driver.redraw();
+    let flight = driver.flight();
+    let session = flight.session().expect("flying");
+    assert_eq!(session.system(), SystemId(129));
+    assert_eq!(session.player().position, Vec2::new(-400.0, -500.0));
+    let today = session.date();
+    assert_eq!((today.day(), today.month(), today.year()), (23, 6, 1177));
+    assert_eq!(
+        flight.message(),
+        Some("Exiting hypergate in the Tichel system on June 23, 1177 NC.")
+    );
 }
