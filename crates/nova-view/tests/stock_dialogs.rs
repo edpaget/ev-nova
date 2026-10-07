@@ -22,8 +22,9 @@ use nova_view::ui::new_pilot::{
     OK_ITEM as NEW_PILOT_OK_ITEM,
 };
 use nova_view::ui::prefs::{
-    KEY_SETTINGS_ITEM, MUSIC_ITEM, OK_ITEM, PREFS_DIALOG, SOUND_ITEM, VOLUME_DOWN_ITEM,
-    VOLUME_LABEL_ITEM, VOLUME_UP_ITEM, VOLUME_VALUE_ITEM,
+    HYPERSPACE_EFFECTS_ITEM, HYPERSPACE_EFFECTS_LABEL, KEY_SETTINGS_ITEM, MUSIC_ITEM, OK_ITEM,
+    PREFS_DIALOG, SOUND_ITEM, VOLUME_DOWN_ITEM, VOLUME_LABEL_ITEM, VOLUME_UP_ITEM,
+    VOLUME_VALUE_ITEM,
 };
 use nova_view::ui::{
     ButtonImages, ButtonSkin, ButtonStyle, DescDialog, DescriptionSource, Dialog, DialogEvent,
@@ -342,6 +343,11 @@ fn new_prefs_dialog_has_the_items_the_preferences_dialog_is_built_from() {
             ItemSpec::CheckBox("Ambient Sounds".into())
         );
         assert_eq!(item(SOUND_ITEM).bounds, ltrb(171.0, 121.0, 307.0, 139.0));
+        assert_eq!(
+            item(HYPERSPACE_EFFECTS_ITEM).kind,
+            ItemSpec::CheckBox(HYPERSPACE_EFFECTS_LABEL.into()),
+            "{name}"
+        );
     }
 }
 
@@ -360,6 +366,8 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         .expect("builds");
         let dialog = prefs.dialog();
         let music = prefs.music_volume().rects().bounds();
+        assert_eq!(prefs.hyperspace_effects().label(), HYPERSPACE_EFFECTS_LABEL);
+        assert!(prefs.hyperspace_effects().enabled(), "{}", path.display());
         let ok = dialog.item_bounds(OK_ITEM).expect("OK");
         let keys = dialog.item_bounds(KEY_SETTINGS_ITEM).expect("Key Settings");
         let name = path.display();
@@ -370,7 +378,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
         );
         assert!(dialog.bounds().contains(music.min) && dialog.bounds().contains(music.max));
         // Nothing else is drawn where the music volume is.
-        for toggle in prefs.inert() {
+        for toggle in prefs.inert().iter().chain([prefs.hyperspace_effects()]) {
             let rect = toggle.rect();
             let apart = rect.max.x <= music.min.x
                 || rect.min.x >= music.max.x
@@ -378,7 +386,7 @@ fn the_preferences_dialog_fits_its_music_volume_above_the_buttons() {
                 || rect.min.y >= music.max.y;
             assert!(apart, "{name}: {}", toggle.label());
         }
-        assert_eq!(prefs.inert().len(), 11, "{name}");
+        assert_eq!(prefs.inert().len(), 10, "{name}");
     }
 }
 

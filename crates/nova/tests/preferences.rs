@@ -434,7 +434,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     let up = harness.dialog().effects_volume().rects().up.center();
     harness.click(up);
     assert_eq!(harness.dialog().prefs().sound.effects_level, 5);
-    for _ in 0..4 {
+    for _ in 0..5 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
