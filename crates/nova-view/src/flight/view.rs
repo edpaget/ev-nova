@@ -732,16 +732,13 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             Ok(LandPress::AtGate {
                 kind: GateKind::Hypergate,
                 ..
-            }) => {
-                let offered = session.hypergate_destinations(&self.catalog);
-                if offered.is_empty() {
-                    let refused = session.enter_hypergate(None, &self.catalog, &mut self.chance);
-                    self.gate_refused(refused.err());
-                } else {
+            }) => match session.open_hypergate(&self.catalog) {
+                Ok(offered) => {
                     self.map.offer_gates(offered);
                     self.open_map();
                 }
-            }
+                Err(refusal) => self.gate_refused(Some(refusal)),
+            },
             Ok(LandPress::AtGate {
                 kind: GateKind::Wormhole,
                 ..
@@ -4825,12 +4822,19 @@ mod tests {
     }
 
     #[test]
-    fn a_hypergate_whose_links_lead_nowhere_cancels_at_once() {
+    fn a_hypergate_whose_links_lead_nowhere_opens_an_empty_map_that_cancels() {
         let mut catalog = gated();
         catalog.gates[0].links[0] = Some(StellarId(999));
         let mut view = FlightView::new(catalog);
         land_now(&mut view);
+        assert!(view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert_ne!(view.message(), Some(HYPERGATE_CANCELLED), "not yet");
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
         assert!(!view.map_open());
+        assert_eq!(system_of(&view), SystemId(130));
         assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
     }
 

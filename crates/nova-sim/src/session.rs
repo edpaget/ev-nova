@@ -47,7 +47,7 @@
 //! The land key's second press over a hypergate or wormhole, once
 //! cleared, enters it rather than docking ([`Session::land`]); the
 //! player then picks a hypergate's destination
-//! ([`Session::hypergate_destinations`], [`Session::enter_hypergate`]),
+//! ([`Session::open_hypergate`], [`Session::enter_hypergate`]),
 //! while a wormhole picks its own ([`Session::enter_wormhole`]), as the
 //! [`gate`](crate::gate) rules say. Neither uses fuel nor minds the
 //! no-jump zone, and the ship comes out as the session's
@@ -754,19 +754,34 @@ impl Session {
             .map_or([None; 8], |site| site.links)
     }
 
-    /// The systems the hypergate whose entry is pending offers, read from
-    /// `catalog`'s gate sites ([`gate::hypergate_destinations`]); none when
-    /// no hypergate entry is pending.
-    #[must_use]
-    pub fn hypergate_destinations(&self, catalog: &impl PilotCatalog) -> Vec<SystemId> {
-        let Some(stellar) = self.gate else {
-            return Vec::new();
-        };
-        if self.gate_kind(stellar) != Some(GateKind::Hypergate) {
-            return Vec::new();
-        }
+    /// Decides whether the hypergate whose entry is pending opens the
+    /// hypergate map, read from `catalog`'s gate sites. A hypergate with
+    /// links ([`has_links`], as `_StellarNumHyperLinks` counts them) offers
+    /// the systems its links lead to ([`gate::hypergate_destinations`]) for
+    /// the player to choose among, and the entry awaits
+    /// [`Session::enter_hypergate`]: even when none leads anywhere, the
+    /// map opens with nothing to pick, and closing it cancels. One without
+    /// links is refused ([`GateRefusal::NoLinks`]), which ends the entry
+    /// and clears the navigation target, as [`Session::enter_hypergate`]
+    /// refuses. [`GateRefusal::NotAtGate`] when no hypergate entry is
+    /// pending.
+    pub fn open_hypergate(
+        &mut self,
+        catalog: &impl PilotCatalog,
+    ) -> Result<Vec<SystemId>, GateRefusal> {
+        let here = self
+            .gate
+            .filter(|&stellar| self.gate_kind(stellar) == Some(GateKind::Hypergate))
+            .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
-        gate::hypergate_destinations(&Self::links_of(&sites, stellar), &sites)
+        let links = Self::links_of(&sites, here);
+        if has_links(&links) {
+            Ok(gate::hypergate_destinations(&links, &sites))
+        } else {
+            self.gate = None;
+            self.nav_target = None;
+            Err(GateRefusal::NoLinks)
+        }
     }
 
     /// Enters the hypergate whose entry is pending, for the system `to`
@@ -4372,8 +4387,8 @@ mod tests {
             "no landing sound"
         );
         assert_eq!(
-            session.hypergate_destinations(&catalog),
-            ids(&[131, 132]),
+            session.open_hypergate(&catalog),
+            Ok(ids(&[131, 132])),
             "each linked gate's system, in slot order"
         );
         assert_eq!(session.gate_kind(StellarId(300)), Some(GateKind::Hypergate));
@@ -4383,8 +4398,11 @@ mod tests {
     #[test]
     fn no_destinations_are_offered_without_an_entry_pending() {
         let catalog = gated();
-        let session = Session::start(&catalog).expect("starts");
-        assert_eq!(session.hypergate_destinations(&catalog), []);
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Err(GateRefusal::NotAtGate)
+        );
         assert_eq!(*catalog.gate_reads.borrow(), 0, "not read at the start");
     }
 
@@ -4393,7 +4411,10 @@ mod tests {
         let catalog = gated();
         let mut session = at_gate(&catalog);
         session.tick(Controls::default());
-        assert_eq!(session.hypergate_destinations(&catalog), []);
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Err(GateRefusal::NotAtGate)
+        );
         assert_eq!(
             session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
             Err(GateRefusal::NotAtGate)
@@ -4486,7 +4507,6 @@ mod tests {
             ..gated()
         };
         let mut session = at_gate(&catalog);
-        assert_eq!(session.hypergate_destinations(&catalog), []);
         assert_eq!(
             session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
             Err(GateRefusal::NoLinks)
@@ -4502,10 +4522,46 @@ mod tests {
             ..gated()
         };
         let mut session = at_gate(&catalog);
-        assert_eq!(session.hypergate_destinations(&catalog), []);
         assert_eq!(
             session.enter_hypergate(None, &catalog, &mut NeverFires),
             Err(GateRefusal::Cancelled)
+        );
+    }
+
+    #[test]
+    fn a_hypergate_with_links_offers_its_map_even_when_they_lead_nowhere() {
+        for (links, offered) in [(&[310, 320][..], ids(&[131, 132])), (&[999][..], vec![])] {
+            let mut catalog = gated();
+            catalog.gates[0] = gate_site(300, 130, (0.0, 0.0), HYPERGATE, links, 0);
+            let mut session = at_gate(&catalog);
+            assert_eq!(
+                session.open_hypergate(&catalog),
+                Ok(offered),
+                "choose among them: {links:?}"
+            );
+            assert_eq!(session.nav_target(), Some(StellarId(300)), "{links:?}");
+            assert_eq!(
+                session.enter_hypergate(None, &catalog, &mut NeverFires),
+                Err(GateRefusal::Cancelled),
+                "the entry still awaits the pick: {links:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hypergate_without_links_refuses_to_offer_its_map_and_ends_the_entry() {
+        let catalog = FakePilotCatalog {
+            gates: vec![gate_site(300, 130, (0.0, 0.0), HYPERGATE, &[0, -2], 0)],
+            ..gated()
+        };
+        let mut session = at_gate(&catalog);
+        assert_eq!(session.open_hypergate(&catalog), Err(GateRefusal::NoLinks));
+        assert_eq!(session.nav_target(), None, "the target cleared");
+        assert_eq!(session.system(), SystemId(130));
+        assert_eq!(
+            session.enter_hypergate(None, &catalog, &mut NeverFires),
+            Err(GateRefusal::NotAtGate),
+            "the entry is over"
         );
     }
 
@@ -4546,8 +4602,8 @@ mod tests {
         let catalog = wormholes();
         let mut session = at_wormhole(&catalog);
         assert_eq!(
-            session.hypergate_destinations(&catalog),
-            [],
+            session.open_hypergate(&catalog),
+            Err(GateRefusal::NotAtGate),
             "not a hypergate"
         );
         session.take_sounds();

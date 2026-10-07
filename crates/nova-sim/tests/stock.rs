@@ -562,8 +562,8 @@ fn hg_kania_leads_to_hg_tichel() {
         })
     );
     assert_eq!(
-        session.hypergate_destinations(&data),
-        [SystemId(129), SystemId(298), SystemId(483)]
+        session.open_hypergate(&data),
+        Ok(vec![SystemId(129), SystemId(298), SystemId(483)])
     );
     let full = session.reserves().fuel;
     assert_eq!(
