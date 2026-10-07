@@ -22,6 +22,12 @@
 //!   distance (at least the standard one) plus [`ARRIVAL_MARGIN`] from the
 //!   centre, on the side facing the system it came from, at rest and
 //!   facing the centre, so it can jump on at once.
+//! - [`next_hyper_destination`] is the system Hyper Select (the
+//!   original's `\` key) cycles the destination to, under the
+//!   [`HyperSelectRule`]: by the engine's, the current system's listed
+//!   links in Con order, after the course's first hop. The original also
+//!   skips a system its `sÿst` Visibility makes inactive; the map models
+//!   no visibility, so every listed system is offered.
 //! - [`hops_per_jump`] is how many systems along the course one jump
 //!   passes, from the ship's multi-jump total and the [`MultiJumpRule`]
 //!   it follows.
@@ -31,6 +37,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::catalog::{GovtId, StarSystem, SystemId};
 use crate::flight::{ShipState, heading_of};
 use crate::geometry::Vec2;
+use crate::navigation::next_after;
 
 /// How far from the system's centre, in pixels, a ship must be to jump
 /// unless its outfits say otherwise (the Bible: "Jump Distance 1000
@@ -91,6 +98,53 @@ pub fn hops_per_jump(multi_jump: u32, rule: MultiJumpRule) -> u32 {
     match rule {
         MultiJumpRule::Engine => multi_jump.max(1),
         MultiJumpRule::PerHop => multi_jump.saturating_add(1),
+    }
+}
+
+/// Which systems Hyper Select (the original's `\` key) cycles the
+/// hyperspace destination through, and where it starts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HyperSelectRule {
+    /// The original engine's reading: the current system's own `sÿst`
+    /// Con slots in record order ([`StarMap::listed_links`]), so a link
+    /// only the other system lists is never offered (`_HandlePlayer`
+    /// @0x69bb2-0x69ce7; `_FindActiveCoLocatedSystem` @0x4be0 skips an
+    /// empty or inactive slot). It starts after the course's first hop,
+    /// whatever the course's length, because the selection follows the
+    /// route (`_CueNextHyperRouteDest` @0xe2dc), or from the first slot
+    /// when a stellar is the nav target (the nav mode was not hyperspace).
+    #[default]
+    Engine,
+    /// The phase text's reading: every neighbour, linked either way, by
+    /// ascending ID ([`StarMap::neighbours`]), starting after the course
+    /// only when it is a single jump, and from the first otherwise.
+    OneJumpCourse,
+}
+
+/// The system Hyper Select picks next from `from`, under `rule`, given the
+/// plotted `course` and whether a stellar is the nav target: the next in
+/// the rule's cycle, wrapping around. `None` when `from` has no links to
+/// offer.
+#[must_use]
+pub fn next_hyper_destination(
+    map: &StarMap,
+    from: SystemId,
+    course: &[SystemId],
+    stellar_targeted: bool,
+    rule: HyperSelectRule,
+) -> Option<SystemId> {
+    match rule {
+        HyperSelectRule::Engine => {
+            let current = course.first().copied().filter(|_| !stellar_targeted);
+            next_after(map.listed_links(from), current)
+        }
+        HyperSelectRule::OneJumpCourse => {
+            let current = match course {
+                [only] => Some(*only),
+                _ => None,
+            };
+            next_after(&map.neighbours(from), current)
+        }
     }
 }
 
@@ -473,6 +527,69 @@ mod tests {
         assert_eq!(map.neighbours(SystemId(134)), ids(&[130]));
         assert_eq!(map.neighbours(SystemId(133)), ids(&[]));
         assert_eq!(map.neighbours(SystemId(7)), ids(&[]), "not on the map");
+    }
+
+    // Hyper Select.
+
+    /// The system Hyper Select picks in `hub` from 130 with `course`.
+    fn select(course: &[i16], stellar_targeted: bool, rule: HyperSelectRule) -> Option<SystemId> {
+        next_hyper_destination(&hub(), SystemId(130), &ids(course), stellar_targeted, rule)
+    }
+
+    #[test]
+    fn the_engine_cycles_the_listed_links_after_the_courses_first_hop() {
+        use HyperSelectRule::Engine;
+        assert_eq!(HyperSelectRule::default(), Engine);
+        assert_eq!(select(&[], false, Engine), Some(SystemId(134)), "no course");
+        assert_eq!(select(&[131], false, Engine), Some(SystemId(135)));
+        assert_eq!(select(&[135], false, Engine), Some(SystemId(134)), "wraps");
+        assert_eq!(
+            select(&[131, 132], false, Engine),
+            Some(SystemId(135)),
+            "after a multi-jump course's first hop"
+        );
+        assert_eq!(
+            select(&[131], true, Engine),
+            Some(SystemId(134)),
+            "a stellar targeted starts from the first"
+        );
+        assert_eq!(
+            select(&[136], false, Engine),
+            Some(SystemId(134)),
+            "136 is not listed by 130"
+        );
+    }
+
+    #[test]
+    fn the_one_jump_course_reading_cycles_every_neighbour_by_ascending_id() {
+        use HyperSelectRule::OneJumpCourse;
+        assert_eq!(select(&[], false, OneJumpCourse), Some(SystemId(131)));
+        assert_eq!(select(&[131], false, OneJumpCourse), Some(SystemId(134)));
+        assert_eq!(
+            select(&[136], false, OneJumpCourse),
+            Some(SystemId(131)),
+            "wraps"
+        );
+        assert_eq!(
+            select(&[131, 132], false, OneJumpCourse),
+            Some(SystemId(131)),
+            "not a single jump: the first"
+        );
+        assert_eq!(
+            select(&[134], true, OneJumpCourse),
+            Some(SystemId(135)),
+            "the nav target does not matter"
+        );
+    }
+
+    #[test]
+    fn a_system_with_no_links_has_no_hyper_select() {
+        for rule in [HyperSelectRule::Engine, HyperSelectRule::OneJumpCourse] {
+            assert_eq!(
+                next_hyper_destination(&hub(), SystemId(133), &[], false, rule),
+                None
+            );
+        }
     }
 
     #[test]
