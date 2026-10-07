@@ -136,6 +136,9 @@ impl PilotCatalog for GameData {
                     require: record.require.bits(),
                     require_govt: record.require_govt,
                     availability: record.availability.as_str().to_owned(),
+                    item_class: record.item_class,
+                    lc_name: record.lc_name.as_str().to_owned(),
+                    lc_plural: record.lc_plural.as_str().to_owned(),
                 })
             })
             .collect()
@@ -338,6 +341,9 @@ impl TrafficCatalog for GameData {
                     active_on: record.active_on.as_str().to_owned(),
                     subtitle: record.subtitle.as_str().to_owned(),
                     flags2: record.flags2.bits(),
+                    grant_class: record.grant_class,
+                    grant_count: record.grant_count,
+                    grant_prob: record.grant_prob,
                 })
             })
             .collect()
@@ -1036,6 +1042,9 @@ mod tests {
             require: 0x0000_0008_0000_0001,
             require_govt: 1128,
             availability: "b12".to_owned(),
+            item_class: 0,
+            lc_name: "big gun".to_owned(),
+            lc_plural: String::new(),
         };
         assert_eq!(
             data.outfits(),
@@ -1046,6 +1055,19 @@ mod tests {
             "a resource without a name goes by its LCName; an undecodable one is skipped"
         );
         assert_eq!(store(&[]).outfits(), []);
+    }
+
+    #[test]
+    fn an_oütfs_item_class_and_lower_case_names_are_read_raw() {
+        let mut bytes = outfit([(0, 0); 4]);
+        bytes[0x36B..0x36B + 11].copy_from_slice(b"spare part\0");
+        bytes[0x3AB..0x3AB + 12].copy_from_slice(b"spare parts\0");
+        put_i16s(&mut bytes, 0x3EC, &[7]);
+        let data = store(&[(Outfit::TYPE, 128, bytes)]);
+        let record = &data.outfits()[0];
+        assert_eq!(record.item_class, 7);
+        assert_eq!(record.lc_name, "spare part");
+        assert_eq!(record.lc_plural, "spare parts");
     }
 
     #[test]
@@ -1915,6 +1937,9 @@ mod tests {
                 active_on: "b0 & !b8".to_owned(),
                 subtitle: "Top Gun".to_owned(),
                 flags2: 0x0001,
+                grant_class: 0,
+                grant_count: 0,
+                grant_prob: 0,
             },
             "the -1 and 127 weapon slots left out, HailPict 127 none"
         );
@@ -1942,6 +1967,18 @@ mod tests {
             assert_eq!(person_name(resource), name, "{resource}");
         }
         assert_eq!(PERSON_NAME_CHARS, 29);
+    }
+
+    #[test]
+    fn a_persons_grant_is_its_grant_class_count_and_odds_raw() {
+        let mut granting = person(-1, -1, 140, [(-1, 0, 0); 4], -1);
+        put_i16s(&mut granting, 0x134, &[7, 3, 40]);
+        let data = store(&[(Person::TYPE, 128, granting)]);
+        let record = &data.persons()[0];
+        assert_eq!(
+            (record.grant_class, record.grant_count, record.grant_prob),
+            (7, 3, 40)
+        );
     }
 
     #[test]

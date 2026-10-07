@@ -35,14 +35,16 @@
 //! | [`PersonCoward`](RuleKey::PersonCoward) | `person_coward` | only a warship person of a government with `Flags` 0x0010 runs at `Coward` % ([`NovaAi`](crate::NovaAi)) | any warship or interceptor person |
 //! | [`PersonCredits`](RuleKey::PersonCredits) | `person_credits` | a person carries half its `Credits` in thousands, kept in 16 bits, and a draw of as many more ([`NovaBoarding`](crate::NovaBoarding)) | its `Credits`, ±25 % |
 //! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
+//! | [`GrantCount`](RuleKey::GrantCount) | `grant_count` | boarding a person grants trunc((50 + `Rand(51)`) x `GrantCount` / 100) outfits, at least 1 ([`NovaBoarding`](crate::NovaBoarding)) | 1 + `Rand(GrantCount)`\* |
+//! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a grant may take the player past the outfit's `Max` ([`NovaBoarding`](crate::NovaBoarding)) | it is held to `Max` less the owned\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
-//! `hire_fee`, `escort_wage` or `comm_quote` (only that the quote is
-//! "displayed in the communications dialog"): for them, the reading other
-//! than the engine's (`"bible"` in the settings) is the intended
-//! behaviour, not the engine's bug or quirk, and not anything the Bible
-//! says.
+//! `hire_fee`, `escort_wage`, `grant_max` or `comm_quote` (only that the
+//! quote is "displayed in the communications dialog"), and agrees with the
+//! engine on `grant_count`: for them, the reading other than the engine's
+//! (`"bible"` in the settings) is the intended behaviour, not the
+//! engine's bug or quirk, and not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -263,6 +265,22 @@ rule_keys! {
     /// behaviour, not anything the Bible says (see
     /// [`Session::with_comm_quote`](crate::Session::with_comm_quote)).
     CommQuote => "comm_quote",
+    /// How many outfits boarding a person grants: by the engine,
+    /// trunc((50 + `Rand(51)`) x `GrantCount` / 100), at least 1
+    /// (`_DoPlunderDialog` @0x9319b-0x931d6), between `GrantCount` / 2 and
+    /// `GrantCount`, as the Bible says too; otherwise 1 + `Rand(GrantCount)`,
+    /// between 1 and `GrantCount` evenly, as the phase has it. The Bible
+    /// agrees with the engine, so the other reading is the intended
+    /// behaviour, not anything the Bible says (see
+    /// [`grant`](crate::grant)).
+    GrantCount => "grant_count",
+    /// Whether a grant may take the player past the outfit's `Max`: by the
+    /// engine, it may, as only an outfit's owned count is tested before
+    /// the pick (`_DoPlunderDialog` @0x93119); otherwise the count is held
+    /// to `Max` less the owned. The Bible is silent here, so the other
+    /// reading is the obvious fix, not anything the Bible says (see
+    /// [`grant`](crate::grant)).
+    GrantMax => "grant_max",
 }
 
 impl RuleKey {
@@ -401,9 +419,13 @@ mod tests {
                 RuleKey::ShieldMod,
                 RuleKey::PersonCoward,
                 RuleKey::PersonCredits,
-                RuleKey::CommQuote
+                RuleKey::CommQuote,
+                RuleKey::GrantCount,
+                RuleKey::GrantMax
             ]
         );
+        assert_eq!(RuleKey::GrantCount.key(), "grant_count");
+        assert_eq!(RuleKey::GrantMax.key(), "grant_max");
         assert_eq!(RuleKey::PersonOdds.key(), "person_odds");
         assert_eq!(RuleKey::SystemPersons.key(), "system_persons");
         assert_eq!(RuleKey::LinkSystSlip.key(), "link_syst_slip");

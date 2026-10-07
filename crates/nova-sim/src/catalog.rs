@@ -122,6 +122,13 @@ pub struct OutfitRecord {
     pub require_govt: i16,
     /// Its `Availability` control-bit expression.
     pub availability: String,
+    /// Its `ItemClass`, raw: the class a person's `GrantClass` grants
+    /// from (see [`grant`](crate::grant)).
+    pub item_class: i16,
+    /// Its `LCName`, raw: its lower-case singular name.
+    pub lc_name: String,
+    /// Its `LCPlural`, raw: its lower-case plural name.
+    pub lc_plural: String,
 }
 
 /// A ship class, raw from its `shïp`: the [`shipyard`](crate::shipyard)
@@ -363,6 +370,13 @@ pub struct PersonRecord {
     pub subtitle: String,
     /// Its `Flags2`.
     pub flags2: u16,
+    /// Its `GrantClass`, raw: the `ItemClass` of the outfits boarding it
+    /// may grant (see [`grant`](crate::grant)).
+    pub grant_class: i16,
+    /// Its `GrantCount`, raw: the most outfits a grant gives.
+    pub grant_count: i16,
+    /// Its `GrantProb`, raw: the percent chance of a grant.
+    pub grant_prob: i16,
 }
 
 /// The game data a system's NPC traffic is spawned from: its `sÿst`'s
@@ -842,6 +856,9 @@ mod tests {
                 require: 0,
                 require_govt: -1,
                 availability: String::new(),
+                item_class: 0,
+                lc_name: "scoop".to_owned(),
+                lc_plural: "scoops".to_owned(),
             }]
         }
 

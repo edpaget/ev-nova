@@ -2534,6 +2534,79 @@ fn the_stock_persons_records_read_as_the_bible_lays_them_out() {
         nova_sim::CommCatalog::string_list(&data, HAIL_QUOTES)[7],
         "<OSN>: Prepare to die, <PN>!"
     );
+    let ralph = person_record(&data, 162);
+    assert_eq!(
+        (ralph.grant_class, ralph.grant_count, ralph.grant_prob),
+        (25, 1, 50),
+        "Dr Ralph grants one of class 25, half the time"
+    );
+    let persons = nova_sim::TrafficCatalog::persons(&data);
+    assert_eq!(
+        persons
+            .iter()
+            .filter(|person| person.grant_class == 0)
+            .count(),
+        511
+    );
+    let outfits = data.outfits();
+    let map = outfits
+        .iter()
+        .find(|outfit| outfit.id == OutfitId(272))
+        .expect("Dr Ralph's map");
+    assert_eq!(map.item_class, 25);
+    assert_eq!(map.lc_name, "Dr Ralph's exploration map");
+    assert_eq!(
+        outfits
+            .iter()
+            .filter(|outfit| outfit.item_class == 25)
+            .map(|outfit| outfit.id)
+            .collect::<Vec<_>>(),
+        [OutfitId(272)],
+        "the only outfit of class 25"
+    );
+}
+
+/// Boarding Dr Ralph (`përs` 162) grants his exploration map when
+/// `Rand(100)` is 49, within his odds of 50, and nothing at 50.
+#[test]
+fn boarding_dr_ralph_grants_his_map_half_the_time() {
+    use nova_sim::BoardingRule;
+    use nova_sim::grant::{GrantStock, Granted, PersonGrant};
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let grant = PersonGrant::of(&person_record(&data, 162)).expect("Dr Ralph grants");
+    let stock: Vec<GrantStock> = data
+        .outfits()
+        .iter()
+        .map(|outfit| GrantStock {
+            outfit: outfit.id,
+            item_class: outfit.item_class,
+            mass: outfit.mass,
+            owned: 0,
+            max: outfit.max,
+        })
+        .collect();
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    let free = data.ship_fields(pilot.ship()).expect("its ship").free_mass;
+    let rule = nova_sim::NovaBoarding::default();
+    let granted = |odds| {
+        let draws: &'static [(u32, u32)] = if odds == 49 {
+            &[(100, 49)]
+        } else {
+            &[(100, 50)]
+        };
+        rule.grant(&grant, &stock, i64::from(free), &mut ByBound(draws))
+    };
+    assert_eq!(
+        granted(49),
+        Some(Granted {
+            outfit: OutfitId(272),
+            count: 1,
+        })
+    );
+    assert_eq!(granted(50), None);
 }
 
 /// A new pilot, "Stock", flying in `sÿst` `system`, with `gone` gone for

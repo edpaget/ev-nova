@@ -77,11 +77,17 @@
 //! its class's stock loadout, full; with no slot free the whole swap is
 //! dropped. A player of no crew captures straight into the fleet.
 //!
+//! **A person's grant** ([`BoardingRule::grant`]): boarding a person may
+//! also give the player outfits of its `GrantClass`, as
+//! [`grant`](crate::grant) says, drawn after the plunder and the odds.
+//!
 //! **Bible versus engine** (the [`Rulebook`]'s entries):
 //! [`RuleKey::EmptyBooty`], whether a ship of `Booty` 0 repels boarders
 //! (the Bible) or opens the dialog anyway (the engine), and
 //! [`RuleKey::CrewlessCapture`], whether a player of no crew has no odds
-//! (the Bible) or odds held at 1 or more (the engine).
+//! (the Bible) or odds held at 1 or more (the engine); and for a grant,
+//! [`RuleKey::GrantCount`] and [`RuleKey::GrantMax`] (see
+//! [`grant`](crate::grant)).
 
 use std::fmt::Debug;
 
@@ -90,6 +96,7 @@ use crate::chance::Chance;
 use crate::combat::aim::angle_off;
 use crate::combat::hull::Condition;
 use crate::flight::ShipState;
+use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::market::Good;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::traffic::npc::NpcId;
@@ -543,6 +550,16 @@ pub trait BoardingRule: Debug {
     /// The credits a person of `Credits` `credits` carries, drawn on
     /// `chance`.
     fn person_credits(&self, credits: i32, chance: &mut dyn Chance) -> i64;
+    /// What boarding a person of `grant` gives the player from `stock`,
+    /// every outfit as the grant sees it, with `free_mass` free, drawn on
+    /// `chance`; none when nothing is granted (see [`grant`](crate::grant)).
+    fn grant(
+        &self,
+        grant: &PersonGrant,
+        stock: &[GrantStock],
+        free_mass: i64,
+        chance: &mut dyn Chance,
+    ) -> Option<Granted>;
 }
 
 /// Nova's boarding rules (see the module docs), the engine's by default.
@@ -559,18 +576,27 @@ pub struct NovaBoarding {
     /// and a draw more; by the Bible, its `Credits` +/- 25 %
     /// ([`RuleKey::PersonCredits`]).
     pub person_credits: RuleSource,
+    /// How many outfits a person grants: by the engine, half its
+    /// `GrantCount` to all of it; otherwise 1 to all of it evenly
+    /// ([`RuleKey::GrantCount`]).
+    pub grant_count: RuleSource,
+    /// Whether a grant may pass the outfit's `Max`: by the engine, it
+    /// may; otherwise it is held to it ([`RuleKey::GrantMax`]).
+    pub grant_max: RuleSource,
 }
 
 impl NovaBoarding {
     /// The rules `rulebook` chooses: its [`RuleKey::EmptyBooty`],
-    /// [`RuleKey::CrewlessCapture`] and [`RuleKey::PersonCredits`]
-    /// entries.
+    /// [`RuleKey::CrewlessCapture`], [`RuleKey::PersonCredits`],
+    /// [`RuleKey::GrantCount`] and [`RuleKey::GrantMax`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
             empty_booty: rulebook.source_for(RuleKey::EmptyBooty),
             crewless_capture: rulebook.source_for(RuleKey::CrewlessCapture),
             person_credits: rulebook.source_for(RuleKey::PersonCredits),
+            grant_count: rulebook.source_for(RuleKey::GrantCount),
+            grant_max: rulebook.source_for(RuleKey::GrantMax),
         }
     }
 }
@@ -642,6 +668,22 @@ impl BoardingRule for NovaBoarding {
             }
         }
     }
+
+    fn grant(
+        &self,
+        grant: &PersonGrant,
+        stock: &[GrantStock],
+        free_mass: i64,
+        chance: &mut dyn Chance,
+    ) -> Option<Granted> {
+        crate::grant::roll(
+            grant,
+            stock,
+            free_mass,
+            (self.grant_count, self.grant_max),
+            chance,
+        )
+    }
 }
 
 /// Whether the player's ship, at `player` and in `condition`, can board
@@ -687,6 +729,7 @@ pub fn check_board(
 mod tests {
     use super::*;
     use crate::geometry::Vec2;
+    use crate::grant::{COUNT_FLOOR_PERCENT, COUNT_PERCENT, COUNT_SPREAD, GRANT_ROLL};
     use crate::testkit::Draws;
 
     /// A disabled ship of crew 3 at the centre, at rest, facing up, never
@@ -1358,6 +1401,178 @@ mod tests {
         assert_eq!(
             (rule.empty_booty, rule.crewless_capture),
             (RuleSource::Engine, RuleSource::Bible)
+        );
+        assert_eq!(
+            (bible.grant_count, bible.grant_max),
+            (RuleSource::Bible, RuleSource::Bible)
+        );
+        for (key, expected) in [
+            (
+                RuleKey::GrantCount,
+                NovaBoarding {
+                    grant_count: RuleSource::Bible,
+                    ..NovaBoarding::default()
+                },
+            ),
+            (
+                RuleKey::GrantMax,
+                NovaBoarding {
+                    grant_max: RuleSource::Bible,
+                    ..NovaBoarding::default()
+                },
+            ),
+        ] {
+            let one = Rulebook::default().with_override(key, RuleSource::Bible);
+            assert_eq!(NovaBoarding::from_rulebook(&one), expected, "{key:?}");
+        }
+    }
+
+    /// A grant of `count` outfits of class 7 at odds `prob`.
+    fn grant_of(prob: u8, count: u16) -> PersonGrant {
+        PersonGrant {
+            class: 7,
+            prob,
+            count,
+        }
+    }
+
+    /// Outfit 200, of class 7 and `Mass` `mass`, `owned` of a `Max` of
+    /// `max` owned.
+    fn spare(mass: i16, owned: u16, max: i16) -> GrantStock {
+        GrantStock {
+            outfit: OutfitId(200),
+            item_class: 7,
+            mass,
+            owned,
+            max,
+        }
+    }
+
+    /// What `rule` grants of `grant` from outfit `stock` alone with
+    /// `free` mass free, drawn from `draws`, and the bounds asked.
+    fn granted(
+        rule: NovaBoarding,
+        grant: PersonGrant,
+        stock: GrantStock,
+        free: i64,
+        draws: &[u32],
+    ) -> (Option<u16>, Vec<u32>) {
+        let mut chance = Draws::of(draws);
+        let granted = rule.grant(&grant, &[stock], free, &mut chance);
+        assert!(granted.is_none_or(|granted| granted.outfit == OutfitId(200)));
+        (granted.map(|granted| granted.count), chance.asked)
+    }
+
+    /// The count the engine grants of `count`, its `Rand(51)` at `draw`.
+    fn engine_count(count: u16, draw: u32) -> Option<u16> {
+        granted(
+            NovaBoarding::default(),
+            grant_of(100, count),
+            spare(0, 0, 999),
+            100,
+            &[0, draw],
+        )
+        .0
+    }
+
+    #[test]
+    fn by_the_engine_a_grant_comes_at_its_odds() {
+        let rule = NovaBoarding::default();
+        assert_eq!(
+            granted(rule, grant_of(40, 4), spare(0, 0, 999), 100, &[39, 0]),
+            (Some(2), vec![100, 51]),
+            "39 + 1 is at most 40; then the count"
+        );
+        assert_eq!(
+            granted(rule, grant_of(40, 4), spare(0, 0, 999), 100, &[40]),
+            (None, vec![100]),
+            "41 is above 40, and nothing more is drawn"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_grant_is_half_its_count_to_all_of_it() {
+        assert_eq!(engine_count(4, 0), Some(2));
+        assert_eq!(engine_count(4, 50), Some(4));
+        assert_eq!(engine_count(4, 25), Some(3));
+        assert_eq!(engine_count(1, 0), Some(1), "held at least 1");
+        assert_eq!(engine_count(1, 50), Some(1));
+        assert_eq!(engine_count(3, 0), Some(1));
+        assert_eq!(engine_count(3, 50), Some(3));
+        assert_eq!(engine_count(3, 17), Some(2), "trunc(67 x 3 / 100)");
+        assert_eq!(
+            (COUNT_SPREAD, COUNT_FLOOR_PERCENT, COUNT_PERCENT, GRANT_ROLL),
+            (51, 50, 100.0, 100)
+        );
+    }
+
+    #[test]
+    fn by_the_phase_a_grant_is_one_to_its_count_evenly() {
+        let rule = NovaBoarding {
+            grant_count: RuleSource::Bible,
+            ..NovaBoarding::default()
+        };
+        assert_eq!(
+            granted(rule, grant_of(100, 4), spare(0, 0, 999), 100, &[0, 0]),
+            (Some(1), vec![100, 4])
+        );
+        assert_eq!(
+            granted(rule, grant_of(100, 4), spare(0, 0, 999), 100, &[0, 3]),
+            (Some(4), vec![100, 4])
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_grant_may_pass_the_outfits_max_and_otherwise_not() {
+        let near = spare(0, 9, 10);
+        assert_eq!(
+            granted(
+                NovaBoarding::default(),
+                grant_of(100, 3),
+                near,
+                100,
+                &[0, 50]
+            )
+            .0,
+            Some(3)
+        );
+        let held = NovaBoarding {
+            grant_max: RuleSource::Bible,
+            ..NovaBoarding::default()
+        };
+        assert_eq!(
+            granted(held, grant_of(100, 3), near, 100, &[0, 50]).0,
+            Some(1)
+        );
+        assert_eq!(
+            granted(held, grant_of(100, 3), spare(0, 7, 10), 100, &[0, 50]).0,
+            Some(3),
+            "room for all three"
+        );
+    }
+
+    #[test]
+    fn a_grant_is_cut_to_the_free_mass() {
+        let rule = NovaBoarding::default();
+        let all = |free| granted(rule, grant_of(100, 4), spare(5, 0, 999), free, &[0, 50]).0;
+        assert_eq!(all(20), Some(4));
+        assert_eq!(all(19), Some(3));
+        assert_eq!(all(14), Some(2));
+        assert_eq!(all(5), Some(1));
+        assert_eq!(all(4), None, "none fits: nothing is granted, nor said");
+        assert_eq!(
+            granted(rule, grant_of(100, 4), spare(0, 0, 999), -30, &[0, 50]).0,
+            Some(4),
+            "a negative free mass is none, which a massless outfit fits"
+        );
+        assert_eq!(
+            granted(rule, grant_of(100, 4), spare(-3, 0, 999), -30, &[0, 50]).0,
+            Some(4),
+            "a negative mass always fits"
+        );
+        assert_eq!(
+            granted(rule, grant_of(100, 4), spare(1, 0, 999), -30, &[0, 50]).0,
+            None
         );
     }
 

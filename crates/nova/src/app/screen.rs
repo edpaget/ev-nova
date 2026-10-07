@@ -4640,7 +4640,7 @@ mod tests {
     }
 
     /// Never repels, gives odds of 75, and always captures; a person
-    /// carries its `Credits`.
+    /// carries its `Credits`, and grants nothing.
     #[derive(Debug)]
     struct Sure;
 
@@ -4663,6 +4663,16 @@ mod tests {
 
         fn person_credits(&self, credits: i32, _chance: &mut dyn Chance) -> i64 {
             i64::from(credits)
+        }
+
+        fn grant(
+            &self,
+            _grant: &nova_sim::grant::PersonGrant,
+            _stock: &[nova_sim::grant::GrantStock],
+            _free_mass: i64,
+            _chance: &mut dyn Chance,
+        ) -> Option<nova_sim::grant::Granted> {
+            None
         }
     }
 
@@ -5559,9 +5569,11 @@ mod tests {
     fn setting_of(key: RuleKey) -> &'static str {
         match key {
             RuleKey::CrimeGains => "law",
-            RuleKey::EmptyBooty | RuleKey::CrewlessCapture | RuleKey::PersonCredits => {
-                "boarding_rule"
-            }
+            RuleKey::EmptyBooty
+            | RuleKey::CrewlessCapture
+            | RuleKey::PersonCredits
+            | RuleKey::GrantCount
+            | RuleKey::GrantMax => "boarding_rule",
             RuleKey::PiracyPolice | RuleKey::EscortAi | RuleKey::PersonCoward => "behaviour",
             RuleKey::QuietHails | RuleKey::LongAdvice => "hail_options",
             RuleKey::EscortOrders => "escort_orders",

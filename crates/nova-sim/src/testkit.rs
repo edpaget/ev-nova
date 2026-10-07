@@ -102,7 +102,8 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
 }
 
 /// `oütf` `id` with these mods (the unused ones none): tech level 1, a
-/// ton, 1000 credits, up to 10 owned, no flags, requiring nothing.
+/// ton, 1000 credits, up to 10 owned, no flags, requiring nothing, of
+/// `ItemClass` 0, its lower-case names "outfit `id`" and "outfits `id`".
 pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
     let mut pairs = [(0, 0); 4];
     pairs[..mods.len()].copy_from_slice(mods);
@@ -121,6 +122,9 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
         require: 0,
         require_govt: -1,
         availability: String::new(),
+        item_class: 0,
+        lc_name: format!("outfit {id}"),
+        lc_plural: format!("outfits {id}"),
     }
 }
 
@@ -228,7 +232,7 @@ pub(crate) fn govt(id: i16) -> GovtRecord {
 /// `përs` `id`, "Person `id`", flying ship `ship`: a warship of no
 /// government and `Aggress` 2 that may appear anywhere (`LinkSyst` -1),
 /// with no `Coward`, extra weapons, credits, `ShieldMod`, quotes,
-/// picture, mission, flags or `ActiveOn`.
+/// picture, mission, flags, `ActiveOn` or grant.
 pub(crate) fn person(id: i16, ship: i16) -> PersonRecord {
     PersonRecord {
         id: PersonId(id),
@@ -250,6 +254,9 @@ pub(crate) fn person(id: i16, ship: i16) -> PersonRecord {
         active_on: String::new(),
         subtitle: String::new(),
         flags2: 0,
+        grant_class: 0,
+        grant_count: 0,
+        grant_prob: 0,
     }
 }
 

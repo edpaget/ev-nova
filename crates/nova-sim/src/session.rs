@@ -113,7 +113,10 @@
 //! risk of its self-destruct; and captures it, with odds from the crews,
 //! by a [`BoardingRule`]. A ship captured joins the pilot's fleet or
 //! becomes the player's own ship ([`Session::assign`]), which makes a
-//! save due. The boarding under way is never saved.
+//! save due. The boarding under way is never saved. Boarding a person
+//! may grant outfits of its `GrantClass` as the [`BoardingRule`] says
+//! (see [`grant`](crate::grant)), added at once and told once
+//! ([`Session::take_grant`]); like plunder, a grant makes no save due.
 //!
 //! The player hails its target ([`Session::hail`]), as the
 //! [`hail`](crate::hail) rules say: the ship answers by its attitude to
@@ -227,6 +230,7 @@ use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
 use crate::hire::{ControlBits, HireTerms, NoControlBits, NovaHire, PayNote};
@@ -317,6 +321,8 @@ pub struct Session {
     strikes: Vec<Strike>,
     /// The boarding under way, if any.
     aboard: Option<Aboard>,
+    /// What the last boarding granted, until it is taken.
+    granted: Option<Granted>,
     /// The hail under way, if any.
     talk: Option<hail::Talk>,
     /// What the NPCs assisting the player have done since this was last
@@ -449,6 +455,7 @@ impl Session {
             secondary: None,
             strikes: Vec::new(),
             aboard: None,
+            granted: None,
             talk: None,
             comm: Vec::new(),
             escort_orders: RuleSource::Engine,
@@ -1362,6 +1369,14 @@ impl Session {
         Some(&record.name)
     }
 
+    /// Outfit `outfit`'s lower-case names, its `LCName` and `LCPlural`, if
+    /// the session has its record.
+    #[must_use]
+    pub fn outfit_names(&self, outfit: OutfitId) -> Option<(&str, &str)> {
+        let record = self.outfits.iter().find(|record| record.id == outfit)?;
+        Some((&record.lc_name, &record.lc_plural))
+    }
+
     /// Ship class `ship`'s record, if the session has it.
     fn ship_record(&self, ship: ShipId) -> Option<&ShipRecord> {
         self.ships.iter().find(|record| record.id == ship)
@@ -1425,6 +1440,7 @@ impl Session {
         }
         let mut plunder = Plunder::roll(&self.prize(&npc), rule, chance);
         plunder.odds = rule.capture_odds(&self.capture_crew(&npc), chance);
+        self.granted = self.grant(&npc, rule, chance);
         let aboard = Aboard {
             npc: npc.id,
             ship: npc.ship,
@@ -1433,6 +1449,47 @@ impl Session {
         };
         self.aboard = Some(aboard);
         Ok(Boarding::Opened(aboard.view()))
+    }
+
+    /// What boarding `npc` grants as `rule` says, drawn on `chance`, added
+    /// to the outfits the pilot owns and the ship refitted with them (see
+    /// [`grant`](crate::grant)): none, and nothing drawn, for a ship no
+    /// person flies or a person of no grant.
+    fn grant(
+        &mut self,
+        npc: &Npc,
+        rule: &dyn BoardingRule,
+        chance: &mut dyn Chance,
+    ) -> Option<Granted> {
+        let person = self.traffic.person(npc.person?.id)?;
+        let grant = PersonGrant::of(&person.record)?;
+        let stock: Vec<GrantStock> = self
+            .outfits
+            .iter()
+            .map(|record| GrantStock {
+                outfit: record.id,
+                item_class: record.item_class,
+                mass: record.mass,
+                owned: self.pilot.owned(record.id),
+                max: record.max,
+            })
+            .collect();
+        let free_mass = outfitter::free_mass(
+            self.fields,
+            &self.defaults,
+            &self.pilot.outfits,
+            &self.outfits,
+        );
+        let granted = rule.grant(&grant, &stock, free_mass, chance)?;
+        let owned = self.pilot.outfits.entry(granted.outfit).or_default();
+        *owned = owned.saturating_add(granted.count);
+        self.refit(true);
+        Some(granted)
+    }
+
+    /// What the last boarding granted, once: taking it leaves none.
+    pub fn take_grant(&mut self) -> Option<Granted> {
+        self.granted.take()
     }
 
     /// Every NPC other than `id` that targets it, or fights it, lets it go
@@ -7188,6 +7245,166 @@ mod tests {
         session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
         assert!((session.reserves().armor.now - 6.5).abs() < 1e-4);
         assert_eq!(session.reserves().fuel.now, 0.0);
+    }
+
+    // Boarding grants.
+
+    use crate::grant::Granted;
+    use crate::traffic::npc::NpcPerson;
+
+    /// [`boardable`] with "Ace" (`përs` 600, flying ship 129 anywhere)
+    /// granting up to 2 outfits of class 7 at odds of 40, and the shield
+    /// boosters of class 7 (`oütf` 200, 10 more shield each, a ton, up to
+    /// 10), "shield booster" and "shield boosters".
+    fn granting() -> FakePilotCatalog {
+        let mut catalog = boardable();
+        catalog.persons = vec![crate::catalog::PersonRecord {
+            grant_class: 7,
+            grant_prob: 40,
+            grant_count: 2,
+            ..crate::testkit::person(600, 129)
+        }];
+        catalog.outfits.push(OutfitRecord {
+            item_class: 7,
+            lc_name: "shield booster".to_owned(),
+            lc_plural: "shield boosters".to_owned(),
+            ..outfit(200, &[(crate::stats::MORE_SHIELD, 10)])
+        });
+        catalog
+    }
+
+    /// Person `id` as the NPC flying it carries it, with nothing of its
+    /// own.
+    fn flown_by(id: i16) -> NpcPerson {
+        NpcPerson {
+            id: crate::catalog::PersonId(id),
+            flags: 0,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: -1,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: false,
+            quoted: false,
+            quoted_at: None,
+        }
+    }
+
+    /// [`alongside`], the trader flown by Ace, so of no booty.
+    fn alongside_ace(catalog: &FakePilotCatalog) -> Session {
+        let mut session = alongside(catalog);
+        let trader = &mut session.traffic.npcs_mut()[0];
+        trader.booty = 0;
+        trader.person = Some(flown_by(600));
+        session
+    }
+
+    /// Boards by Nova's law and `rule`, drawing `draws`: what it did, and
+    /// the bounds asked.
+    fn board_drawing(
+        session: &mut Session,
+        rule: NovaBoarding,
+        draws: &[u32],
+    ) -> (Result<Boarding, BoardRefusal>, Vec<u32>) {
+        let mut chance = Draws::of(draws);
+        let boarded = session.board(&NovaLaw::default(), &rule, &mut chance);
+        (boarded, chance.asked)
+    }
+
+    /// Ace's boarding's draws: the threshold, 170 energy, no jitter, the
+    /// grant's odds at 39 (40, which grants) and its count at 50 (2).
+    const ACE_DRAWS: [u32; 5] = [0, 17, 5, 39, 50];
+
+    #[test]
+    fn boarding_a_granting_person_adds_its_grant_after_the_plunder_and_the_odds() {
+        let catalog = granting();
+        let mut session = alongside_ace(&catalog);
+        let shield = session.stats().shield;
+        let (boarded, asked) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
+        assert_eq!(
+            asked,
+            [26, 30, 11, 100, 51],
+            "the threshold, the energy and the jitter, then the grant"
+        );
+        assert_eq!(session.pilot().owned(OutfitId(200)), 2);
+        assert_eq!(session.stats().shield, shield + 20.0, "refitted");
+        assert_eq!(session.reserves().shield.now, shield + 20.0, "full");
+        let granted = Granted {
+            outfit: OutfitId(200),
+            count: 2,
+        };
+        assert_eq!(session.take_grant(), Some(granted));
+        assert_eq!(session.take_grant(), None, "taken once");
+        assert!(!session.take_save_due(), "as plunder, a grant makes none");
+        assert!(session.boarding().is_some(), "the plunder dialog opens");
+    }
+
+    #[test]
+    fn a_person_that_grants_nothing_or_misses_its_odds_draws_nothing_more() {
+        let mut catalog = granting();
+        let (_, asked) = board_drawing(
+            &mut alongside_ace(&catalog),
+            NovaBoarding::default(),
+            &[0, 17, 5, 40],
+        );
+        assert_eq!(asked, [26, 30, 11, 100], "41 misses the odds of 40");
+        catalog.persons[0].grant_class = 0;
+        let mut session = alongside_ace(&catalog);
+        let (_, asked) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert_eq!(asked, [26, 30, 11], "no grant of class 0");
+        assert_eq!(session.pilot().owned(OutfitId(200)), 0);
+        assert_eq!(session.take_grant(), None);
+    }
+
+    #[test]
+    fn a_ship_no_person_flies_draws_no_grant() {
+        let catalog = granting();
+        let mut session = alongside(&catalog);
+        let (_, asked) = board_drawing(&mut session, NovaBoarding::default(), &BOARD_DRAWS);
+        assert_eq!(asked, [26, 3, 1, 10, 30, 11]);
+        assert_eq!(session.take_grant(), None);
+    }
+
+    #[test]
+    fn boarders_repelled_are_granted_nothing() {
+        let catalog = granting();
+        let mut session = alongside_ace(&catalog);
+        let bible = NovaBoarding {
+            empty_booty: RuleSource::Bible,
+            ..NovaBoarding::default()
+        };
+        let (boarded, asked) = board_drawing(&mut session, bible, &ACE_DRAWS);
+        assert_eq!(boarded, Ok(Boarding::Repelled));
+        assert!(asked.is_empty(), "{asked:?}");
+        assert_eq!(session.pilot().owned(OutfitId(200)), 0);
+        assert_eq!(session.take_grant(), None);
+    }
+
+    #[test]
+    fn a_grant_weighs_each_outfit_by_its_raw_mass() {
+        let mut catalog = granting();
+        // 20 tons raw, but 8 by the ship's 40 tons with Flags 0x0400: two
+        // would fit the 30 tons free scaled, and only one raw.
+        catalog.outfits[0].mass = 20;
+        catalog.outfits[0].flags = OutfitFlags::MASS_BY_MASS;
+        let mut session = alongside_ace(&catalog);
+        let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert!(boarded.is_ok());
+        assert_eq!(session.pilot().owned(OutfitId(200)), 1);
+        assert_eq!(session.take_grant().map(|granted| granted.count), Some(1));
+    }
+
+    #[test]
+    fn an_outfits_lower_case_names_are_its_records() {
+        let catalog = granting();
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            session.outfit_names(OutfitId(200)),
+            Some(("shield booster", "shield boosters"))
+        );
+        assert_eq!(session.outfit_names(OutfitId(999)), None);
     }
 
     /// [`boardable`] with `others` police besides the trader in the

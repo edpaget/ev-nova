@@ -4083,6 +4083,9 @@ mod tests {
                 require: 0,
                 require_govt: -1,
                 availability: String::new(),
+                item_class: 0,
+                lc_name: "fuel tank".to_owned(),
+                lc_plural: "fuel tanks".to_owned(),
             }],
             ..catalog()
         }
@@ -5966,7 +5969,7 @@ mod tests {
     }
 
     /// Never repels, always gives odds of 75 and always captures; a person
-    /// carries its `Credits`.
+    /// carries its `Credits`, and grants nothing.
     #[derive(Debug)]
     struct Sure;
 
@@ -5989,6 +5992,16 @@ mod tests {
 
         fn person_credits(&self, credits: i32, _chance: &mut dyn Chance) -> i64 {
             i64::from(credits)
+        }
+
+        fn grant(
+            &self,
+            _grant: &nova_sim::grant::PersonGrant,
+            _stock: &[nova_sim::grant::GrantStock],
+            _free_mass: i64,
+            _chance: &mut dyn Chance,
+        ) -> Option<nova_sim::grant::Granted> {
+            None
         }
     }
 
@@ -6299,6 +6312,9 @@ mod tests {
             require: 0,
             require_govt: -1,
             availability: String::new(),
+            item_class: 0,
+            lc_name: "rocket".to_owned(),
+            lc_plural: "rockets".to_owned(),
         }];
         let (_, chance) = scripted(&placed(750, 750, 0));
         let mut view = FlightView::new(catalog)
@@ -7093,6 +7109,9 @@ mod tests {
             active_on: String::new(),
             subtitle: "Top Gun".to_owned(),
             flags2: 0,
+            grant_class: 0,
+            grant_count: 0,
+            grant_prob: 0,
         }];
         catalog.strings = vec![(7101, vec!["<OSN>: Prepare to die, <PN>!".to_owned()])];
         catalog

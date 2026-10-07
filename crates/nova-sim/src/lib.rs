@@ -20,7 +20,7 @@
 //!   dialog's [`Take`]s and what each [`Taken`] did, capturing it, and
 //!   assigning a ship captured ([`Assignment`]); the [`BoardingRule`]
 //!   port with Nova's [`NovaBoarding`]: who repels boarders, the capture
-//!   odds and the capture roll.
+//!   odds and the capture roll, a person's credits and its grant.
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
@@ -63,6 +63,9 @@
 //!   growing down.
 //! - [`govt`]: the [`Governments`] and their relations: allies, enemies,
 //!   xenophobes and the flags that say how their ships behave.
+//! - [`grant`]: boarding grants: what a person's record grants
+//!   ([`PersonGrant`]), the outfits a grant sees ([`GrantStock`]), and
+//!   what it gave ([`Granted`]).
 //! - [`hail`]: hailing a ship: whether it likes the player
 //!   ([`Attitude`]), the [`Conversation`] a hail rolls (its variant, mood,
 //!   price and advice) and haggling over a price ([`Haggle`]), the
@@ -159,6 +162,7 @@ pub mod flight;
 pub mod fuel;
 pub mod geometry;
 pub mod govt;
+pub mod grant;
 pub mod hail;
 pub mod handling;
 pub mod hire;
@@ -216,6 +220,7 @@ pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
 pub use geometry::Vec2;
 pub use govt::Governments;
+pub use grant::{GrantStock, Granted, PersonGrant};
 pub use hail::{
     Answer, Ask, Attitude, CommNote, Conversation, Deed, EscortStatus, Haggle, Hail, HailButton,
     HailOption, HailOptions, HailRefusal, HailView, Help, Release, Reply,
