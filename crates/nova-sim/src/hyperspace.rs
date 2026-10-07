@@ -5,7 +5,12 @@
 //!   joins its two systems both ways, whichever of them lists it (as the
 //!   galaxy map draws it); a system's link to itself, or to a system that
 //!   does not exist, is no link. [`StarMap::route`] is the fewest jumps
-//!   from one system to another.
+//!   from one system to another, and [`StarMap::neighbours`] every system
+//!   linked with one, by ascending ID. [`StarMap::listed_links`] is only
+//!   the links a system's own `sÿst` lists, in Con order: the original's
+//!   Hyper Select offers just these (`_HandlePlayer` @0x69bb2-0x69ce7
+//!   walks the current system's own Con slots), evidence that a link
+//!   listed by one system alone is one-way there.
 //! - [`check_jump`] gives the next system on the route, or the first
 //!   [`JumpRefusal`] that applies, in this order: there is no destination,
 //!   the ship is nearer the system's centre than its jump distance
@@ -128,6 +133,8 @@ struct Node {
     govt: Option<GovtId>,
     /// Its neighbours, by ascending ID.
     links: BTreeSet<SystemId>,
+    /// The systems its own `sÿst` lists, in Con order, each once.
+    listed: Vec<SystemId>,
 }
 
 /// Every system's map position and the hyperlinks between them.
@@ -147,17 +154,18 @@ impl StarMap {
         let mut nodes = BTreeMap::new();
         for system in systems {
             let from = system.id;
-            links.extend(
-                system
-                    .links
-                    .into_iter()
-                    .filter(|to| *to != from && known.contains(to))
-                    .map(|to| (from, to)),
-            );
+            let mut listed = Vec::new();
+            for to in system.links {
+                if to != from && known.contains(&to) && !listed.contains(&to) {
+                    listed.push(to);
+                }
+            }
+            links.extend(listed.iter().map(|&to| (from, to)));
             let node = Node {
                 position: system.position,
                 govt: system.govt,
                 links: BTreeSet::new(),
+                listed,
             };
             nodes.insert(from, node);
         }
@@ -175,6 +183,25 @@ impl StarMap {
     #[must_use]
     pub fn position(&self, id: SystemId) -> Option<Vec2> {
         self.nodes.get(&id).map(|node| node.position)
+    }
+
+    /// The systems `id`'s own `sÿst` lists as hyperlinks, in its Con
+    /// order, each once, without itself or a system not on the map: the
+    /// links the original's Hyper Select offers. Empty when it is not on
+    /// the map.
+    #[must_use]
+    pub fn listed_links(&self, id: SystemId) -> &[SystemId] {
+        self.nodes.get(&id).map_or(&[], |node| &node.listed)
+    }
+
+    /// Every system linked with `id`, whichever of the two lists the link,
+    /// by ascending ID. Empty when it is not on the map.
+    #[must_use]
+    pub fn neighbours(&self, id: SystemId) -> Vec<SystemId> {
+        self.nodes
+            .get(&id)
+            .map(|node| node.links.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     /// System `id`'s controlling government: `None` when it is
@@ -412,6 +439,40 @@ mod tests {
         ]);
         assert_eq!(route(&map, 1, 4), Err(RouteError::Unreachable));
         assert_eq!(route(&map, 4, 2), Err(RouteError::Unreachable));
+    }
+
+    // Listed links and neighbours.
+
+    /// 130 lists 134, 131 (twice), itself, a missing 999 and 135; 136
+    /// lists 130 one way; 131 lists 132; 133 lists nothing.
+    fn hub() -> StarMap {
+        StarMap::new(vec![
+            system(130, &[134, 131, 131, 130, 999, 135]),
+            system(131, &[132]),
+            system(132, &[]),
+            system(133, &[]),
+            system(134, &[]),
+            system(135, &[]),
+            system(136, &[130]),
+        ])
+    }
+
+    #[test]
+    fn listed_links_follow_the_systems_own_con_order() {
+        let map = hub();
+        assert_eq!(map.listed_links(SystemId(130)), ids(&[134, 131, 135]));
+        assert_eq!(map.listed_links(SystemId(136)), ids(&[130]));
+        assert_eq!(map.listed_links(SystemId(134)), ids(&[]), "lists none");
+        assert_eq!(map.listed_links(SystemId(7)), ids(&[]), "not on the map");
+    }
+
+    #[test]
+    fn neighbours_are_every_link_both_ways_by_ascending_id() {
+        let map = hub();
+        assert_eq!(map.neighbours(SystemId(130)), ids(&[131, 134, 135, 136]));
+        assert_eq!(map.neighbours(SystemId(134)), ids(&[130]));
+        assert_eq!(map.neighbours(SystemId(133)), ids(&[]));
+        assert_eq!(map.neighbours(SystemId(7)), ids(&[]), "not on the map");
     }
 
     #[test]
