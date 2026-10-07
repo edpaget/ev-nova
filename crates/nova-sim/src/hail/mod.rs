@@ -154,6 +154,11 @@ pub struct Hail<'a> {
     pub player_threatened: bool,
     /// The help the player needs, if any.
     pub need: Option<Help>,
+    /// The comm quote (an entry in `STR#` 7100) Greetings says in place
+    /// of a friendly ship's advice: a person's, under the engine's
+    /// reading of [`RuleKey::CommQuote`](crate::RuleKey::CommQuote); none
+    /// otherwise.
+    pub quote: Option<u16>,
 }
 
 impl Hail<'_> {
@@ -203,6 +208,7 @@ impl<'a> Hail<'a> {
             assisting_player,
             player_threatened: around.npcs.iter().any(Npc::threatens_player),
             need,
+            quote: None,
         }
     }
 }
@@ -305,6 +311,10 @@ pub struct HailView {
     /// What it is as the player's escort, carried fighters included; none
     /// for a ship that is not.
     pub escort: Option<EscortStatus>,
+    /// The `PICT` shown in place of its ship type's picture: a person's
+    /// `HailPict` (`_DoCommDialog` @0x95a77-0x95aa5); none for any other
+    /// ship.
+    pub portrait: Option<i16>,
 }
 
 /// What the comm dialog shows of the player's own escort hailed
@@ -429,6 +439,7 @@ pub(crate) mod fixture {
             assisting_player: false,
             player_threatened: false,
             need: None,
+            quote: None,
         }
     }
 }

@@ -46,6 +46,8 @@ use crate::hail::{
     HailButton, HailOptions, HailRefusal, HailView, Help, Reply, Settled, assist, attitude, reply,
 };
 use crate::hyperspace::JUMP_FUEL;
+use crate::person::COMM_QUOTES;
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 
 /// A hail under way: the NPC hailed, the conversation, what it last
@@ -107,10 +109,17 @@ impl Session {
                 attitude(npc, &self.world().around(self.npcs())),
             )
         };
+        let opening = match Self::quote_of(npc) {
+            Some(index) if self.comm_quote == RuleSource::Bible => Reply::Line {
+                list: COMM_QUOTES,
+                index,
+            },
+            _ => Reply::Comm(opening),
+        };
         self.talk = Some(Talk {
             npc: npc.id,
             conversation,
-            reply: Reply::Comm(opening),
+            reply: opening,
             ask: None,
             release: false,
         });
@@ -140,7 +149,11 @@ impl Session {
         let need = assist::need(self.condition, self.pilot.reserves.fuel);
         let around = self.world();
         let around = around.around(self.npcs());
-        Hail::new(npc, &around, self.dispositions(npc), talk, need)
+        let quote = Self::quote_of(npc).filter(|_| self.comm_quote == RuleSource::Engine);
+        Hail {
+            quote,
+            ..Hail::new(npc, &around, self.dispositions(npc), talk, need)
+        }
     }
 
     /// The comm dialog's contents while a hail is under way and its ship
@@ -180,6 +193,7 @@ impl Session {
             asking: talk.conversation.asking(),
             pay_me: true,
             escort: self.escort_status(npc.id),
+            portrait: npc.person.and_then(|person| person.portrait),
         })
     }
 

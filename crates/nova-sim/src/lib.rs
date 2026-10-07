@@ -96,8 +96,9 @@
 //!   ([`Outfitter`]), their price and mass, the ship's free mass, and
 //!   buying and selling one at a time ([`OutfitOrder`]).
 //! - [`person`]: persons (`përs`): where they may appear ([`PersonLink`](person::PersonLink)),
-//!   how often ([`PersonRules`], Nova's [`NovaPersons`]), and the ship
-//!   each flies ([`person::fit`]).
+//!   how often ([`PersonRules`], Nova's [`NovaPersons`]), the ship each
+//!   flies ([`person::fit`]), and when it says its hail quote
+//!   ([`person::quote_eligible`], [`expand_tags`]).
 //! - [`pilot`]: the [`Pilot`], everything about the player a save keeps:
 //!   ship, location, date, cash, reserves, course, explored systems,
 //!   legal records, cargo, the events under way, the outfits owned and
@@ -229,14 +230,17 @@ pub use landing::{LandingRefusal, Service, check_landing, landing_radius, servic
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
-pub use person::{NovaPersons, PersonRoll, PersonRules, PersonWorld};
+pub use person::{
+    COMM_QUOTES, ESCAPE_POD, GRUDGE, HAIL_QUOTES, NovaPersons, PersonRoll, PersonRules,
+    PersonWorld, QuoteTags, expand_tags,
+};
 pub use pilot::{Escort, Pilot};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use reserves::{Gauge, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
-pub use session::Session;
+pub use session::{PersonQuote, Session};
 pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;

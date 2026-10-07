@@ -77,6 +77,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 
+use crate::ai::Goal;
 use crate::catalog::{GovtId, PersonId, PersonRecord, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
@@ -86,6 +87,7 @@ use crate::govt::Governments;
 use crate::hire::{ControlBits, NoControlBits};
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::traffic::npc::{Mode, Npc, NpcPerson};
 use crate::traffic::table::ShipKind;
 
 /// `Flags`: it holds a grudge once the player hits it.
@@ -133,6 +135,123 @@ pub const DERELICT_ARMOR_SHARE: f32 = 0.33;
 pub const TOUGH_DERELICT_ARMOR_SHARE: f32 = 0.1;
 /// What a derelict person's armour is less (1.0 @0xdd0c0).
 pub const DERELICT_ARMOR_LESS: f32 = 1.0;
+
+/// The comm quotes, `STR#` 7100 (0x1bbc @0x91b2c).
+pub const COMM_QUOTES: i16 = 7100;
+/// The hail quotes, `STR#` 7101 (0x1bbd @0x445d6).
+pub const HAIL_QUOTES: i16 = 7101;
+
+/// What a person's quote tags read for a rank, which the player does
+/// not have yet (the Bible's word).
+pub const NO_RANK: &str = "captain";
+/// `Rand(140)` (0x8c @0x33f31): a hail quote said now and then.
+pub const QUOTE_ODDS: u32 = 140;
+/// How long a hail quote shows, and keeps any other from being said at
+/// random, in ticks (420 frames, 0x1a4 @0x4464d).
+pub const QUOTE_SHOWN_TICKS: u64 = 420;
+/// How long a person waits after its quote before it says it again at
+/// random, in ticks (2700 Mac ticks, 45 s, 0xa8c @0x33f5b).
+pub const QUOTE_GAP_TICKS: u64 = 1350;
+
+/// The names a quote's text tags read (`_MungeBriefing`, tags @0xdb198).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuoteTags<'a> {
+    /// The person's name: `<OSN>`.
+    pub person: &'a str,
+    /// The pilot's name: `<PN>`, and `<PNN>` with no nickname yet.
+    pub pilot: &'a str,
+    /// The player's ship type's name: `<PST>`, and `<PSN>` until pilots
+    /// name their ships.
+    pub ship_type: &'a str,
+}
+
+/// `text` with its tags read as `tags` say: `<OSN>`, `<PN>`, `<PNN>`,
+/// `<PST>` and `<PSN>`, and `<PRK>` and `<SRK>` as [`NO_RANK`]; any other
+/// tag stays as written.
+#[must_use]
+pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
+    [
+        ("<OSN>", tags.person),
+        ("<PNN>", tags.pilot),
+        ("<PN>", tags.pilot),
+        ("<PST>", tags.ship_type),
+        ("<PSN>", tags.ship_type),
+        ("<PRK>", NO_RANK),
+        ("<SRK>", NO_RANK),
+    ]
+    .iter()
+    .fold(text.to_owned(), |text, (tag, value)| {
+        text.replace(tag, value)
+    })
+}
+
+/// What a person's hail quote filters see of the player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuoteView {
+    /// Whether the person likes the player
+    /// ([`likes_player`](crate::hail::likes_player)).
+    pub liked: bool,
+    /// Whether the player is jumping out.
+    pub player_jumping: bool,
+    /// The player's ship type's `InherentAI`.
+    pub player_ai: i16,
+    /// Whether the person's mission is available: always, until
+    /// missions exist (rdm `missions-and-storylines`).
+    pub mission_available: bool,
+}
+
+/// Whether a person's hail quote may be said this tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Eligible {
+    /// Not this tick: nothing is drawn.
+    No,
+    /// On a draw of [`QUOTE_ODDS`] landing on 0, when no quote shows and
+    /// its last is [`QUOTE_GAP_TICKS`] back.
+    Yes,
+    /// Now: it has begun to attack the player.
+    Now,
+}
+
+/// Whether `npc`'s hail quote, flown by `person`, may be said this tick
+/// as `view` sees the player (`_HandleShip` @0x33bea-0x33f21; see the
+/// module docs).
+#[must_use]
+pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView) -> Eligible {
+    let flying = npc.mode == Mode::Flying
+        && !matches!(
+            npc.condition,
+            Condition::Dying { .. } | Condition::Destroyed
+        );
+    if person.hail_quote < 1 || view.player_jumping || !flying {
+        return Eligible::No;
+    }
+    let flag = |bit: u16| person.flags & bit != 0;
+    let disabled = npc.condition == Condition::Disabled;
+    let mut eligible = if flag(QUOTE_IF_DISABLED) {
+        disabled
+    } else {
+        !disabled
+    };
+    let mut now = false;
+    if flag(QUOTE_ON_ATTACK) && !disabled {
+        now = !person.quoted && npc.threatens_player();
+        eligible = now;
+    }
+    let held_back = (flag(QUOTE_IF_GRUDGE) && !person.grudge)
+        || (flag(QUOTE_IF_LIKED) && !view.liked)
+        // Missions: taken as available until missions-and-storylines.
+        || (person.mission && flag(QUOTE_IF_MISSION) && !view.mission_available)
+        || (flag(QUOTE_UNLESS_LEAVING) && npc.goal == Goal::JumpOut)
+        || (flag(NOT_TO_WIMPY) && view.player_ai == 1)
+        || (flag(NOT_TO_BRAVE) && view.player_ai == 2)
+        || (flag(NOT_TO_WARSHIP) && view.player_ai >= 3)
+        || (flag(QUOTE_ONCE) && person.quoted);
+    match (eligible && !held_back, now) {
+        (false, _) => Eligible::No,
+        (true, false) => Eligible::Yes,
+        (true, true) => Eligible::Now,
+    }
+}
 
 /// The highest `LinkSyst` the engine's slip compares with a system's
 /// index: the last system's.
@@ -927,5 +1046,234 @@ mod tests {
                 0x2000, 0x4000
             ]
         );
+    }
+
+    // Quotes.
+
+    #[test]
+    fn a_quotes_tags_are_the_persons_the_pilots_and_the_ship_types_names() {
+        let tags = QuoteTags {
+            person: "Bounty Hunter",
+            pilot: "Stock",
+            ship_type: "Shuttle",
+        };
+        assert_eq!(
+            expand_tags("<OSN>: Prepare to die, <PN>!", &tags),
+            "Bounty Hunter: Prepare to die, Stock!"
+        );
+        assert_eq!(expand_tags("Hey <PNN>.", &tags), "Hey Stock.");
+        assert_eq!(expand_tags("<PSN> or <PST>?", &tags), "Shuttle or Shuttle?");
+        assert_eq!(
+            expand_tags("Yes, <PRK>. No, <SRK>.", &tags),
+            "Yes, captain. No, captain."
+        );
+        assert_eq!(expand_tags("Off to <DSY>.", &tags), "Off to <DSY>.", "kept");
+        assert_eq!(expand_tags("No tags.", &tags), "No tags.");
+        assert_eq!(NO_RANK, "captain");
+    }
+
+    fn quoting(flags: u16) -> NpcPerson {
+        NpcPerson {
+            id: PersonId(151),
+            flags,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: 8,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: false,
+            quoted: false,
+            quoted_at: None,
+        }
+    }
+
+    /// The player liked, not jumping, in a ship of `InherentAI` 1, its
+    /// missions available.
+    const VIEW: QuoteView = QuoteView {
+        liked: true,
+        player_jumping: false,
+        player_ai: 1,
+        mission_available: true,
+    };
+
+    fn npc_of(condition: Condition, goal: crate::ai::Goal) -> Npc {
+        Npc {
+            goal,
+            condition,
+            ..crate::testkit::npc(1, crate::stats::ShipStats::new(FAST, &[]))
+        }
+    }
+
+    fn eligible(npc: &Npc, person: NpcPerson, view: QuoteView) -> Eligible {
+        quote_eligible(npc, &person, &view)
+    }
+
+    use crate::ai::Goal;
+    use crate::combat::ShipRef;
+    use crate::traffic::npc::{Mode, Npc, NpcPerson};
+
+    const IDLE: Goal = Goal::Idle;
+    const ATTACKING: Goal = Goal::Attack(ShipRef::Player);
+
+    #[test]
+    fn a_plain_persons_quote_is_eligible_while_it_is_intact_and_one_of_0x0020_while_disabled() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        let disabled = npc_of(Condition::Disabled, IDLE);
+        assert_eq!(eligible(&intact, quoting(0), VIEW), Eligible::Yes);
+        assert_eq!(eligible(&disabled, quoting(0), VIEW), Eligible::No);
+        let when_disabled = quoting(QUOTE_IF_DISABLED);
+        assert_eq!(eligible(&intact, when_disabled, VIEW), Eligible::No);
+        assert_eq!(eligible(&disabled, when_disabled, VIEW), Eligible::Yes);
+    }
+
+    #[test]
+    fn a_quote_on_attack_is_due_now_once_it_threatens_the_player() {
+        let on_attack = quoting(QUOTE_ON_ATTACK);
+        assert_eq!(
+            eligible(&npc_of(Condition::Intact, IDLE), on_attack, VIEW),
+            Eligible::No
+        );
+        let attacking = npc_of(Condition::Intact, ATTACKING);
+        assert_eq!(eligible(&attacking, on_attack, VIEW), Eligible::Now);
+        let quoted = NpcPerson {
+            quoted: true,
+            ..on_attack
+        };
+        assert_eq!(eligible(&attacking, quoted, VIEW), Eligible::No);
+        let both = quoting(QUOTE_ON_ATTACK | QUOTE_IF_DISABLED);
+        assert_eq!(
+            eligible(&npc_of(Condition::Disabled, ATTACKING), both, VIEW),
+            Eligible::Yes,
+            "disabled, step 1's"
+        );
+        assert_eq!(
+            eligible(&npc_of(Condition::Disabled, IDLE), on_attack, VIEW),
+            Eligible::No
+        );
+    }
+
+    #[test]
+    fn the_grudge_liking_mission_and_leaving_filters_each_hold_their_quote_back() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        let grudging = quoting(QUOTE_IF_GRUDGE);
+        assert_eq!(eligible(&intact, grudging, VIEW), Eligible::No);
+        let held = NpcPerson {
+            grudge: true,
+            ..grudging
+        };
+        assert_eq!(eligible(&intact, held, VIEW), Eligible::Yes);
+        let liking = quoting(QUOTE_IF_LIKED);
+        assert_eq!(eligible(&intact, liking, VIEW), Eligible::Yes);
+        let disliked = QuoteView {
+            liked: false,
+            ..VIEW
+        };
+        assert_eq!(eligible(&intact, liking, disliked), Eligible::No);
+        assert_eq!(eligible(&intact, quoting(0), disliked), Eligible::Yes);
+        let mission = NpcPerson {
+            mission: true,
+            ..quoting(QUOTE_IF_MISSION)
+        };
+        assert_eq!(
+            eligible(&intact, mission, VIEW),
+            Eligible::Yes,
+            "taken as available"
+        );
+        let unavailable = QuoteView {
+            mission_available: false,
+            ..VIEW
+        };
+        assert_eq!(eligible(&intact, mission, unavailable), Eligible::No);
+        assert_eq!(
+            eligible(&intact, quoting(QUOTE_IF_MISSION), unavailable),
+            Eligible::Yes,
+            "no mission, no test"
+        );
+        let leaving = npc_of(Condition::Intact, Goal::JumpOut);
+        assert_eq!(
+            eligible(&leaving, quoting(QUOTE_UNLESS_LEAVING), VIEW),
+            Eligible::No
+        );
+        assert_eq!(eligible(&leaving, quoting(0), VIEW), Eligible::Yes);
+    }
+
+    #[test]
+    fn the_players_ship_type_filters_hold_their_quote_back() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        let flying = |player_ai| QuoteView { player_ai, ..VIEW };
+        for (flag, silenced) in [
+            (NOT_TO_WIMPY, vec![1]),
+            (NOT_TO_BRAVE, vec![2]),
+            (NOT_TO_WARSHIP, vec![3, 4]),
+        ] {
+            for ai in 0..=4 {
+                let expected = if silenced.contains(&ai) {
+                    Eligible::No
+                } else {
+                    Eligible::Yes
+                };
+                assert_eq!(
+                    eligible(&intact, quoting(flag), flying(ai)),
+                    expected,
+                    "{flag:#x} {ai}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_quote_said_once_a_stay_is_not_said_again() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        let once = quoting(QUOTE_ONCE);
+        assert_eq!(eligible(&intact, once, VIEW), Eligible::Yes);
+        let said = NpcPerson {
+            quoted: true,
+            ..once
+        };
+        assert_eq!(eligible(&intact, said, VIEW), Eligible::No);
+        assert_eq!(
+            eligible(
+                &intact,
+                NpcPerson {
+                    quoted: true,
+                    ..quoting(0)
+                },
+                VIEW
+            ),
+            Eligible::Yes
+        );
+    }
+
+    #[test]
+    fn no_quote_without_one_while_the_player_jumps_or_the_npc_jumps_in_or_breaks_up() {
+        let intact = npc_of(Condition::Intact, IDLE);
+        for none in [-1, 0] {
+            let quiet = NpcPerson {
+                hail_quote: none,
+                ..quoting(0)
+            };
+            assert_eq!(eligible(&intact, quiet, VIEW), Eligible::No, "{none}");
+        }
+        let jumping = QuoteView {
+            player_jumping: true,
+            ..VIEW
+        };
+        assert_eq!(eligible(&intact, quoting(0), jumping), Eligible::No);
+        let arriving = Npc {
+            mode: Mode::JumpingIn { ticks_left: 3 },
+            ..intact.clone()
+        };
+        assert_eq!(eligible(&arriving, quoting(0), VIEW), Eligible::No);
+        for condition in [Condition::Dying { ticks_left: 2 }, Condition::Destroyed] {
+            let dying = npc_of(condition, IDLE);
+            assert_eq!(
+                eligible(&dying, quoting(QUOTE_IF_DISABLED), VIEW),
+                Eligible::No,
+                "{condition:?}"
+            );
+        }
+        assert_eq!([QUOTE_ODDS, HAIL_QUOTES as u32], [140, 7101]);
+        assert_eq!([QUOTE_SHOWN_TICKS, QUOTE_GAP_TICKS], [420, 1350]);
     }
 }

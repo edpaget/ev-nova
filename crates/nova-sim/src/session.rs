@@ -157,6 +157,16 @@
 //! ([`Session::take_pay_notes`]). Which wage it is paid follows
 //! [`Session::with_escort_wage`], and hailing it shows it.
 //!
+//! Persons (see [`person`](crate::person)) appear in the systems their
+//! records allow, by the session's [`PersonRules`]
+//! ([`Session::with_person_rules`]), named by their records
+//! ([`Session::npc_name`]); a destroyed unique person, or a captured one,
+//! is gone for good, and one the player hits may hold a grudge, both
+//! kept on the pilot with no save due. A person hailed says its comm
+//! quote as [`Session::with_comm_quote`] says, and in flight its hail
+//! quote on its trigger ([`Session::tick_quotes`],
+//! [`Session::take_quotes`]).
+//!
 //! The player targets an NPC ([`Session::select_target`]), the nearest,
 //! the nearest threat or the next in turn as the
 //! [`targeting`](crate::targeting) rules say, and
@@ -182,6 +192,8 @@ mod fighters;
 mod hail;
 mod hire;
 mod persons;
+
+pub use persons::PersonQuote;
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -346,6 +358,13 @@ pub struct Session {
     pay_notes: Vec<PayNote>,
     /// How persons appear (see [`Session::with_person_rules`]).
     person_rules: hire::Shared<dyn PersonRules>,
+    /// When a person's comm quote is said (see
+    /// [`Session::with_comm_quote`]).
+    comm_quote: RuleSource,
+    /// The hail quotes' clock.
+    quote_clock: persons::QuoteClock,
+    /// The hail quotes said since they were last taken.
+    quotes: Vec<persons::PersonQuote>,
 }
 
 impl Session {
@@ -445,6 +464,9 @@ impl Session {
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
+            comm_quote: RuleSource::Engine,
+            quote_clock: persons::QuoteClock::default(),
+            quotes: Vec::new(),
             pilot,
         };
         session.refit(false);

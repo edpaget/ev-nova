@@ -8,6 +8,22 @@
 //! its record, with its subtitle ([`Session::npc_name`],
 //! [`Session::npc_subtitle`]).
 //!
+//! **Hailed.** A person's comm quote (`STR#` 7100 #`CommQuote`, when it
+//! is above 0) is said as [`Session::with_comm_quote`] says: by the
+//! engine, as Greetings' answer from a friendly person, in place of its
+//! advice; otherwise as the hail's opening line, whatever its attitude.
+//! A person's `HailPict` shows in the comm dialog
+//! ([`HailView::portrait`](crate::HailView::portrait)).
+//!
+//! **Hail quotes.** Each tick in flight ([`Session::tick_quotes`]) a
+//! person may say its hail quote (`STR#` 7101 #`HailQuote`, its tags
+//! read), on the trigger its `Flags` give: when it begins to attack the
+//! player, now and then, and so on (see [`person`](crate::person)); the
+//! flight shows each in its message line ([`Session::take_quotes`]).
+//! "No quote showing" counts only the hail quotes, the last said
+//! [`QUOTE_SHOWN_TICKS`] or more ago. A person's quote state is never
+//! saved, and "once" is once for its stay.
+//!
 //! **In a fight.** A person whose `Flags` has 0x0001 holds a grudge
 //! against the player once a shot of the player's hits it, kept on the
 //! pilot, so every later appearance starts with it. A person destroyed
@@ -23,11 +39,34 @@
 use std::rc::Rc;
 
 use super::{Session, hire};
-use crate::catalog::PersonId;
+use crate::catalog::{CommCatalog, PersonId};
+use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
-use crate::person::{ESCAPE_POD, GRUDGE, PersonRules};
+use crate::hail::likes_player;
+use crate::person::{
+    ESCAPE_POD, Eligible, GRUDGE, HAIL_QUOTES, PersonRules, QUOTE_GAP_TICKS, QUOTE_ODDS,
+    QUOTE_SHOWN_TICKS, QuoteTags, QuoteView, expand_tags, quote_eligible,
+};
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::{Npc, NpcId};
+
+/// A person's hail quote said, for the flight's message line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PersonQuote {
+    /// The NPC that said it.
+    pub npc: NpcId,
+    /// Its words, its tags read.
+    pub text: String,
+}
+
+/// The hail quotes' clock: the quote ticks so far, and the tick until
+/// which a quote shows, keeping any other from being said at random.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct QuoteClock {
+    ticks: u64,
+    quiet_until: u64,
+}
 
 impl Session {
     /// This session with `rules` deciding how persons appear (see
@@ -37,6 +76,30 @@ impl Session {
     pub fn with_person_rules(mut self, rules: Rc<dyn PersonRules>) -> Self {
         self.person_rules = hire::Shared(rules);
         self
+    }
+
+    /// This session with a person's comm quote said as `source` says
+    /// ([`RuleKey::CommQuote`](crate::RuleKey::CommQuote)): by the
+    /// engine's default, as a friendly person's answer to Greetings;
+    /// otherwise in place of the hail's opening line.
+    #[must_use]
+    pub fn with_comm_quote(mut self, source: RuleSource) -> Self {
+        self.comm_quote = source;
+        self
+    }
+
+    /// When a person's comm quote is said.
+    #[must_use]
+    pub fn comm_quote(&self) -> RuleSource {
+        self.comm_quote
+    }
+
+    /// `npc`'s comm quote, an entry in `STR#` 7100, when it is a person
+    /// with one.
+    pub(super) fn quote_of(npc: &Npc) -> Option<u16> {
+        npc.person
+            .and_then(|person| u16::try_from(person.comm_quote).ok())
+            .filter(|&quote| quote > 0)
     }
 
     /// `npc`'s name: its person's, or its ship type's, if the session
@@ -54,6 +117,88 @@ impl Session {
     pub fn npc_subtitle(&self, npc: &Npc) -> Option<&str> {
         let person = self.traffic.person(npc.person?.id)?;
         Some(person.record.subtitle.as_str()).filter(|subtitle| !subtitle.is_empty())
+    }
+
+    /// A tick of the persons' hail quotes in flight, each drawn on
+    /// `chance` and read from `catalog` (see the module docs and
+    /// [`person`](crate::person)): in order, each person NPC whose quote
+    /// may be said draws `Rand(140)`, and says it when it is due now, or
+    /// on a draw of 0 when no quote has shown for [`QUOTE_SHOWN_TICKS`]
+    /// and its own last is more than [`QUOTE_GAP_TICKS`] back. While the
+    /// ship is landed nothing happens.
+    pub fn tick_quotes(&mut self, catalog: &(impl CommCatalog + ?Sized), chance: &mut dyn Chance) {
+        if self.landed.is_some() {
+            return;
+        }
+        let player_ai = self
+            .ship_record(self.pilot.ship)
+            .map_or(0, |record| record.inherent_ai);
+        let decided: Vec<(NpcId, Eligible)> = {
+            let world = self.world();
+            let around = world.around(self.npcs());
+            self.npcs()
+                .iter()
+                .filter_map(|npc| {
+                    let person = npc.person?;
+                    let view = QuoteView {
+                        liked: likes_player(npc, &around),
+                        player_jumping: self.jumping.is_some(),
+                        player_ai,
+                        // Missions: every mission is available until
+                        // missions-and-storylines brings them.
+                        mission_available: true,
+                    };
+                    Some((npc.id, quote_eligible(npc, &person, &view)))
+                })
+                .collect()
+        };
+        let lines = catalog.string_list(HAIL_QUOTES);
+        let ticks = self.quote_clock.ticks;
+        for (id, eligible) in decided {
+            if eligible == Eligible::No {
+                continue;
+            }
+            let draw = chance.below(QUOTE_ODDS);
+            let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
+                continue;
+            };
+            let Some(person) = npc.person.as_mut() else {
+                continue;
+            };
+            let quiet = ticks >= self.quote_clock.quiet_until;
+            let rested = person
+                .quoted_at
+                .is_none_or(|at| ticks > at + QUOTE_GAP_TICKS);
+            if eligible != Eligible::Now && !(draw == 0 && quiet && rested) {
+                continue;
+            }
+            person.quoted = true;
+            person.quoted_at = Some(ticks);
+            self.quote_clock.quiet_until = ticks + QUOTE_SHOWN_TICKS;
+            let (person, hail_quote) = (person.id, person.hail_quote);
+            let line = usize::try_from(hail_quote - 1)
+                .ok()
+                .and_then(|at| lines.get(at))
+                .cloned()
+                .unwrap_or_default();
+            let tags = QuoteTags {
+                person: self
+                    .traffic
+                    .person(person)
+                    .map_or("", |person| &person.record.name),
+                pilot: &self.pilot.name,
+                ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
+            };
+            let text = expand_tags(&line, &tags);
+            self.quotes.push(PersonQuote { npc: id, text });
+        }
+        self.quote_clock.ticks += 1;
+    }
+
+    /// The hail quotes said since they were last taken, in order; taking
+    /// them empties the list.
+    pub fn take_quotes(&mut self) -> Vec<PersonQuote> {
+        std::mem::take(&mut self.quotes)
     }
 
     /// Person `id` is gone for good: it never appears again, and its
@@ -523,5 +668,273 @@ mod tests {
             "never downed"
         );
         assert!(!session.pilot().gone(PersonId(600)));
+    }
+
+    // Talking to persons.
+
+    use crate::hail::HailOptions;
+
+    /// `STR#` 3000's groups: each variant of group g reads "c<g>", but
+    /// for "Channel open." (0) and "What is it you want?" (2).
+    fn comm_strings() -> Vec<String> {
+        (0..40)
+            .flat_map(|group| {
+                let said = match group {
+                    0 => "Channel open.".to_owned(),
+                    2 => "What is it you want?".to_owned(),
+                    _ => format!("c{group}"),
+                };
+                std::iter::repeat_n(said, 5)
+            })
+            .collect()
+    }
+
+    /// [`peopled`] with Ace quoting `comm_quote` (`STR#` 7100 #24 is
+    /// "Well met.") and showing `PICT` 7800 when hailed, and the replies.
+    fn talkative(comm_quote: i16) -> FakePilotCatalog {
+        let mut catalog = peopled(0);
+        catalog.persons[0].comm_quote = comm_quote;
+        catalog.persons[0].hail_pict = Some(7800);
+        let messages = (1..=200)
+            .map(|n| {
+                if n == 175 {
+                    "Greetings.".to_owned()
+                } else {
+                    format!("m{n}")
+                }
+            })
+            .collect();
+        let mut quotes: Vec<String> = (1..=30).map(|n| format!("q{n}")).collect();
+        quotes[23] = "Well met.".to_owned();
+        catalog.strings = vec![(3000, comm_strings()), (2002, messages), (7100, quotes)];
+        catalog
+    }
+
+    /// The hail of Ace by `catalog` under `rule`, hostile or not: its
+    /// opening line, then Greetings' answer.
+    fn greeted(catalog: &FakePilotCatalog, rule: RuleSource, hostile: bool) -> (String, String) {
+        let mut session = Session::start(catalog)
+            .expect("starts")
+            .with_comm_quote(rule);
+        session.populate(catalog, &mut NeverFires);
+        if hostile {
+            session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        }
+        session.target = Some(NpcId(0));
+        let options = HailOptions::default();
+        let opened = session
+            .hail(catalog, &options, &mut NeverFires)
+            .expect("answers");
+        let greeted = session
+            .answer(0, catalog, &options, &mut NeverFires)
+            .expect("answers");
+        (opened.reply, greeted.reply)
+    }
+
+    #[test]
+    fn by_the_engine_a_friendly_persons_greetings_says_its_comm_quote() {
+        let catalog = talkative(24);
+        assert_eq!(
+            greeted(&catalog, RuleSource::Engine, false),
+            ("Channel open.".to_owned(), "Well met.".to_owned())
+        );
+        assert_eq!(
+            greeted(&catalog, RuleSource::Engine, true),
+            ("What is it you want?".to_owned(), "c13".to_owned()),
+            "a hostile one: stop wasting my time"
+        );
+        for none in [-1, 0] {
+            assert_eq!(
+                greeted(&talkative(none), RuleSource::Engine, false).1,
+                "Greetings.",
+                "{none}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_person_opens_the_hail_with_its_comm_quote() {
+        let catalog = talkative(24);
+        assert_eq!(
+            greeted(&catalog, RuleSource::Bible, false),
+            ("Well met.".to_owned(), "Greetings.".to_owned())
+        );
+        assert_eq!(
+            greeted(&catalog, RuleSource::Bible, true).0,
+            "Well met.",
+            "even when hostile"
+        );
+        assert_eq!(
+            greeted(&talkative(-1), RuleSource::Bible, false),
+            ("Channel open.".to_owned(), "Greetings.".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_persons_hail_shows_its_picture() {
+        let catalog = talkative(24);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut NeverFires);
+        session.target = Some(NpcId(0));
+        let view = session
+            .hail(&catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answers");
+        assert_eq!(view.portrait, Some(7800));
+        let catalog = mixed("");
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut NeverFires);
+        session.target = Some(NpcId(0));
+        let view = session
+            .hail(&catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answers");
+        assert_eq!(view.portrait, None, "a ship has none");
+    }
+
+    // Hail quotes.
+
+    use crate::person::{QUOTE_ON_ATTACK, QUOTE_ONCE};
+
+    /// Two persons in System 130's Person slots at 100 %, "Ace" (600) and
+    /// "Bee" (601), of `flags` each, both saying `STR#` 7101 #1, "<OSN>:
+    /// Prepare to die, <PN>!".
+    fn quoters(flags: [u16; 2]) -> FakePilotCatalog {
+        let mut catalog = peopled(0);
+        catalog.traffic[0].1.persons[1] = (Some(PersonId(601)), 100);
+        catalog.persons[0].flags = flags[0];
+        catalog.persons[0].hail_quote = 1;
+        catalog.persons[0].active_on = String::new();
+        catalog.persons[1] = PersonRecord {
+            name: "Bee".to_owned(),
+            flags: flags[1],
+            hail_quote: 1,
+            link_syst: 131,
+            ..person(601, 129)
+        };
+        catalog.strings = vec![(7101, vec!["<OSN>: Prepare to die, <PN>!".to_owned()])];
+        catalog
+    }
+
+    /// A pilot named "Stock" flying among [`quoters`] of `flags`.
+    fn quoting(flags: [u16; 2]) -> (FakePilotCatalog, Session) {
+        let catalog = quoters(flags);
+        let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        assert_eq!(persons(&session), [Some(600), Some(601)]);
+        (catalog, session)
+    }
+
+    /// A quote tick drawing `draws`: what was said, and the bounds asked.
+    fn quote_tick(
+        catalog: &FakePilotCatalog,
+        session: &mut Session,
+        draws: &[u32],
+    ) -> (Vec<String>, Vec<u32>) {
+        let mut chance = Draws::of(draws);
+        session.tick_quotes(catalog, &mut chance);
+        let said = session
+            .take_quotes()
+            .into_iter()
+            .map(|quote| quote.text)
+            .collect();
+        (said, chance.asked)
+    }
+
+    /// Quote ticks with each person drawing 1, never saying a random
+    /// quote, `ticks` times.
+    fn quiet_ticks(catalog: &FakePilotCatalog, session: &mut Session, ticks: u64) {
+        for _ in 0..ticks {
+            assert_eq!(
+                quote_tick(catalog, session, &[1, 1]).0,
+                Vec::<String>::new()
+            );
+        }
+    }
+
+    #[test]
+    fn a_person_says_its_attack_quote_once_it_begins_to_attack_the_player() {
+        let (catalog, mut session) = quoting([QUOTE_ON_ATTACK | QUOTE_ONCE, QUOTE_ON_ATTACK]);
+        session.traffic.npcs_mut()[1].person = None;
+        assert_eq!(quote_tick(&catalog, &mut session, &[0]), (vec![], vec![]));
+        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let (said, asked) = quote_tick(&catalog, &mut session, &[77]);
+        assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
+        assert_eq!(asked, [140], "drawn whatever it gives");
+        for _ in 0..3 {
+            assert_eq!(quote_tick(&catalog, &mut session, &[0]), (vec![], vec![]));
+        }
+        let quote = session.npcs()[0].person.expect("Ace");
+        assert!(quote.quoted);
+    }
+
+    #[test]
+    fn a_plain_person_says_its_quote_on_a_draw_of_0_in_140() {
+        let (catalog, mut session) = quoting([0, 0]);
+        assert_eq!(
+            quote_tick(&catalog, &mut session, &[1, 1]),
+            (vec![], vec![140, 140]),
+            "each NPC its own draw, in order"
+        );
+        let (said, _) = quote_tick(&catalog, &mut session, &[1, 0]);
+        assert_eq!(said, ["Bee: Prepare to die, Stock!"]);
+    }
+
+    #[test]
+    fn no_random_quote_is_said_for_420_ticks_after_any_and_the_same_person_waits_1350() {
+        let (catalog, mut session) = quoting([0, 0]);
+        // Tick 0: Ace speaks.
+        assert_eq!(
+            quote_tick(&catalog, &mut session, &[0, 0]).0.len(),
+            1,
+            "Bee waits"
+        );
+        quiet_ticks(&catalog, &mut session, 418);
+        // Tick 419: still showing.
+        assert_eq!(quote_tick(&catalog, &mut session, &[1, 0]).0.len(), 0);
+        // Tick 420: Bee may speak.
+        let (said, _) = quote_tick(&catalog, &mut session, &[1, 0]);
+        assert_eq!(said, ["Bee: Prepare to die, Stock!"]);
+        quiet_ticks(&catalog, &mut session, 929);
+        // Tick 1350: Ace's last was 1350 ticks back, not more.
+        assert_eq!(quote_tick(&catalog, &mut session, &[0, 1]).0.len(), 0);
+        // Tick 1351: more.
+        let (said, _) = quote_tick(&catalog, &mut session, &[0, 1]);
+        assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
+    }
+
+    #[test]
+    fn a_quote_said_once_a_stay_draws_no_more() {
+        let (catalog, mut session) = quoting([QUOTE_ONCE, QUOTE_ONCE]);
+        assert_eq!(quote_tick(&catalog, &mut session, &[0, 1]).0.len(), 1);
+        quiet_ticks_one(&catalog, &mut session);
+    }
+
+    /// After Ace's quote, only Bee draws.
+    fn quiet_ticks_one(catalog: &FakePilotCatalog, session: &mut Session) {
+        for _ in 0..2000 {
+            let (said, asked) = quote_tick(catalog, session, &[1]);
+            assert_eq!((said.len(), asked), (0, vec![140]));
+        }
+    }
+
+    #[test]
+    fn nothing_is_said_or_drawn_without_a_person() {
+        let catalog = mixed("");
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut Draws::of(&[]));
+        for npc in session.traffic.npcs_mut() {
+            npc.person = None;
+        }
+        assert_eq!(quote_tick(&catalog, &mut session, &[0]), (vec![], vec![]));
+    }
+
+    #[test]
+    fn nothing_is_said_while_the_player_is_landed() {
+        let (catalog, mut session) = quoting([0, 0]);
+        session.landed = Some(crate::catalog::StellarId(128));
+        assert_eq!(
+            quote_tick(&catalog, &mut session, &[0, 0]),
+            (vec![], vec![])
+        );
     }
 }

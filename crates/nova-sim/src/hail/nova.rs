@@ -33,6 +33,10 @@
 //!
 //!   The line is then checked as [`reply`](super::reply) says, by the
 //!   rulebook's [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice) entry.
+//! - A friendly person with a comm quote ([`Hail::quote`], by the
+//!   engine's reading of [`RuleKey::CommQuote`](crate::RuleKey::CommQuote))
+//!   says it instead, `STR#` 7100 string `CommQuote`, as written with no
+//!   check (`_LoadAdvice` @0x91ae7-0x91b55).
 //!
 //! **Request Assistance** (item 2, @0x9625d-0x96643, key R), listed for a
 //! talkative ship that is not hostile. In order:
@@ -83,6 +87,7 @@ use super::reply::{
 use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply};
 use crate::catalog::GovtId;
 use crate::chance::Chance;
+use crate::person::COMM_QUOTES;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 /// Greetings' label, `STR#` 150 #22.
@@ -203,6 +208,11 @@ impl HailOption for Greetings {
             Reply::Comm(NO_RESPONSE)
         } else if hail.attitude != Attitude::Friendly {
             Reply::Comm(WASTING_TIME)
+        } else if let Some(index) = hail.quote {
+            Reply::Line {
+                list: COMM_QUOTES,
+                index,
+            }
         } else {
             self.advice(hail)
         };
@@ -619,6 +629,33 @@ mod tests {
                 "{kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_friendly_person_greets_with_its_comm_quote_as_written() {
+        let npc = ship();
+        let quoted = Hail {
+            quote: Some(24),
+            ..advising(&npc, 3, Some(GOVT_HAIL))
+        };
+        assert_eq!(
+            press(&Greetings::default(), &quoted),
+            Answer::say(Reply::Line {
+                list: 7100,
+                index: 24,
+            }),
+            "in place of its advice"
+        );
+        for attitude in [Attitude::Unfriendly, Attitude::Hostile] {
+            let hail = Hail { attitude, ..quoted };
+            assert_eq!(press(&Greetings::default(), &hail), says(WASTING_TIME));
+        }
+        let hail = Hail {
+            dispositions: untalkative(),
+            ..quoted
+        };
+        assert_eq!(press(&Greetings::default(), &hail), says(NO_RESPONSE));
+        assert_eq!(COMM_QUOTES, 7100);
     }
 
     #[test]

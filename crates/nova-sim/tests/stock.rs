@@ -14,8 +14,13 @@
 //! bought off; the ship comm strings, the 42-character advice lines and
 //! the governments' hail flags are where hailing reads them. The fighter
 //! bays launch their fighters as the extracted rules say. Viking's bar
-//! hires the Shuttle at Nova's fee and wage. Skips, passing, when
-//! `NOVA_DATA` is unset.
+//! hires the Shuttle at Nova's fee and wage. The persons read as their
+//! `përs` say: Kania's Person slot and the person roll bring the UFS
+//! Razorback on its ship and loadout where the Federation rules, and it
+//! greets with its comm quote; Jack Folstam appears in Nesre Primus and,
+//! by the engine's slip, in J'raphit; the Bounty Hunter's hail quote
+//! names him and the pilot, and once gone for good he never appears
+//! again. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -549,7 +554,8 @@ impl nova_sim::Chance for Seeded {
 
 /// Every (ship, government) system `id`'s traffic may fly, read straight
 /// from the records: each `düde` its `DudeTypes` name, each fleet they
-/// name, and each fleet whose `LinkSyst` matches it.
+/// name, each fleet whose `LinkSyst` matches it, and each person its
+/// `LinkSyst` or the system's Person slots allow.
 fn allowed(data: &GameData, id: i16) -> Vec<(ShipId, Option<nova_sim::GovtId>)> {
     use nova_data::records::dude::Dude;
     use nova_data::records::fleet::Fleet;
@@ -593,6 +599,21 @@ fn allowed(data: &GameData, id: i16) -> Vec<(ShipId, Option<nova_sim::GovtId>)> 
                 .into_iter()
                 .chain(fleet.escort_type.into_iter().flatten());
             allowed.extend(ships.map(|ship| (ship, fleet.govt)));
+        }
+    }
+    // Each person whose `LinkSyst` (by the engine's slip too) or a Person
+    // slot of the system allows it, flying its ship.
+    let govts = nova_sim::Governments::read(data);
+    for person in nova_sim::TrafficCatalog::persons(data) {
+        let linked = nova_sim::person::PersonLink::decode(person.link_syst).matches(
+            nova_sim::SystemId(id),
+            system.govt,
+            &govts,
+            nova_sim::RuleSource::Engine,
+        );
+        let slotted = system.person.contains(&Some(person.id));
+        if let Some(ship) = person.ship.filter(|_| linked || slotted) {
+            allowed.push((ship, person.govt));
         }
     }
     allowed
@@ -2458,5 +2479,311 @@ fn the_hire_descriptions_and_strings_are_where_hiring_reads_them() {
         (303, DEFECTED_SOME),
     ] {
         assert_eq!(messages[n - 1], text, "#{n}");
+    }
+}
+
+// Persons over the stock data.
+
+use nova_data::records::person::Person;
+use nova_sim::person::{ESCAPE_POD, HAIL_QUOTES, NovaPersons, QuoteTags, expand_tags};
+use nova_sim::traffic::table::SpawnTable;
+use nova_sim::{PersonId, RuleKey, Rulebook, TrafficCatalog};
+
+/// `përs` `id`'s record.
+fn person_record(data: &GameData, id: i16) -> nova_sim::PersonRecord {
+    data.persons()
+        .into_iter()
+        .find(|person| person.id == PersonId(id))
+        .expect("a stock person")
+}
+
+#[test]
+fn the_stock_persons_records_read_as_the_bible_lays_them_out() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    assert_eq!(data.records::<Person>().count(), 516);
+    let razorback = person_record(&data, 510);
+    assert_eq!(razorback.name, "UFS Razorback");
+    assert_eq!(razorback.link_syst, 10_000);
+    assert_eq!(razorback.ship, Some(ShipId(143)));
+    assert_eq!(
+        razorback
+            .weapons
+            .iter()
+            .map(|slot| (slot.weapon.0, slot.count))
+            .collect::<Vec<_>>(),
+        [(132, 2), (133, 2)]
+    );
+    assert_eq!(
+        (razorback.shield_mod, razorback.comm_quote, razorback.flags),
+        (250, 24, 0x0003)
+    );
+    let hunter = person_record(&data, 151);
+    assert_eq!(hunter.name, "Bounty Hunter");
+    assert_eq!((hunter.flags, hunter.hail_quote), (0x0090, 8));
+    let kania = data.system_traffic(nova_sim::SystemId(128)).expect("Kania");
+    assert_eq!(kania.persons[0], (Some(PersonId(510)), 50));
+    assert_eq!(
+        nova_sim::CommCatalog::string_list(&data, 7100)[23],
+        "Greetings from the U.F.S. Razorback, the newest and latest capital ship to enter \
+         Federation service."
+    );
+    assert_eq!(
+        nova_sim::CommCatalog::string_list(&data, HAIL_QUOTES)[7],
+        "<OSN>: Prepare to die, <PN>!"
+    );
+}
+
+/// A new pilot, "Stock", flying in `sÿst` `system`, with `gone` gone for
+/// good, its persons appearing as `rules` say.
+fn flying_in(data: &GameData, system: i16, gone: &[i16], rules: NovaPersons) -> Session {
+    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["system"] = serde_json::json!(system);
+    save["stellar"] = serde_json::Value::Null;
+    save["gone_persons"] = serde_json::json!(gone);
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    Session::fly(data, pilot)
+        .expect("flies")
+        .with_person_rules(std::rc::Rc::new(rules))
+}
+
+/// The persons `sÿst` `system` is populated with, drawing as `chance`
+/// says, by `rules`, with `gone` gone for good.
+fn persons_in(
+    data: &GameData,
+    system: i16,
+    gone: &[i16],
+    rules: NovaPersons,
+    chance: &mut ByBound,
+) -> Vec<i16> {
+    let mut session = flying_in(data, system, gone, rules);
+    session.populate(data, chance);
+    session
+        .npcs()
+        .iter()
+        .filter_map(|npc| Some(npc.person?.id.0))
+        .collect()
+}
+
+/// `sÿst` `system`'s spawn table, by the engine.
+fn table_of(data: &GameData, system: i16) -> SpawnTable {
+    use nova_data::records::system::System;
+    let govt = data
+        .get::<System>(system)
+        .expect("present")
+        .expect("decodes")
+        .record
+        .govt;
+    SpawnTable::resolve(
+        data,
+        nova_sim::SystemId(system),
+        govt,
+        &nova_sim::Governments::read(data),
+        &data.ships(),
+        &data.outfits(),
+        &nova_sim::combat::armament::Arsenal::read(data),
+        &NovaPersons::default(),
+    )
+}
+
+/// The count of each weapon `kind` carries.
+fn counts(kind: &nova_sim::traffic::table::ShipKind) -> BTreeMap<i16, u32> {
+    kind.armament
+        .mounts()
+        .iter()
+        .map(|mount| (mount.spec.id.0, mount.count))
+        .collect()
+}
+
+#[test]
+fn kanias_person_slot_brings_the_ufs_razorback_on_its_ship_and_loadout() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    // No person roll fires; the slot's 50 % lists it.
+    let mut session = flying_in(&data, 128, &[], NovaPersons::default());
+    session.populate(&data, &mut ByBound(&[(7, 1), (100, 49)]));
+    let persons: Vec<_> = session
+        .npcs()
+        .iter()
+        .filter(|npc| npc.person.is_some())
+        .collect();
+    assert_eq!(persons.len(), 1, "{persons:?}");
+    let razorback = persons[0];
+    assert_eq!(razorback.person.expect("a person").id, PersonId(510));
+    assert_eq!(session.npc_name(razorback), Some("UFS Razorback"));
+    assert_eq!(razorback.govt, Some(nova_sim::GovtId(128)));
+    assert_eq!(razorback.aggression, 4);
+    let table = table_of(&data, 128);
+    let carrier = &table.ships[&ShipId(143)];
+    let mut more = counts(carrier);
+    *more.entry(132).or_default() += 2;
+    *more.entry(133).or_default() += 2;
+    assert_eq!(
+        counts(&nova_sim::traffic::table::ShipKind {
+            armament: razorback.armament.clone(),
+            ..carrier.clone()
+        }),
+        more
+    );
+    assert_eq!((more[&132], more[&133]), (4, 4), "with the stock ones");
+    assert!((razorback.stats.shield - 2.5 * carrier.stats.shield).abs() < 1e-3);
+    assert!((razorback.stats.armor - 2.5 * carrier.stats.armor).abs() < 1e-3);
+}
+
+#[test]
+fn the_person_roll_brings_the_ufs_razorback_where_the_federation_rules() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let rolled = || ByBound(&[(7, 0), (1022, 382), (100, 99)]);
+    let engine = NovaPersons::default();
+    assert_eq!(
+        persons_in(&data, 128, &[], engine, &mut rolled()),
+        [510],
+        "Kania"
+    );
+    assert_eq!(
+        persons_in(&data, 130, &[], engine, &mut rolled()),
+        [510],
+        "Sol"
+    );
+    assert_eq!(
+        persons_in(&data, 260, &[], engine, &mut rolled()),
+        Vec::<i16>::new(),
+        "J'raphit, Polaris"
+    );
+}
+
+#[test]
+fn jack_folstam_appears_in_nesre_primus_and_by_the_engines_slip_in_jraphit() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let rolled = || ByBound(&[(7, 0), (1022, 3), (100, 99)]);
+    let engine = NovaPersons::default();
+    assert_eq!(persons_in(&data, 132, &[], engine, &mut rolled()), [131]);
+    assert_eq!(
+        persons_in(&data, 260, &[], engine, &mut rolled()),
+        [131],
+        "the slip"
+    );
+    let bible = NovaPersons::from_rulebook(
+        &Rulebook::default().with_override(RuleKey::LinkSystSlip, RuleSource::Bible),
+    );
+    assert_eq!(
+        persons_in(&data, 260, &[], bible, &mut rolled()),
+        Vec::<i16>::new(),
+        "no slip by the Bible"
+    );
+    let jack = person_record(&data, 131);
+    let table = table_of(&data, 132);
+    let valkyrie = &table.ships[&ShipId(279)];
+    let fitted = &table.persons[&PersonId(131)].kind;
+    let (before, after) = (counts(valkyrie), counts(fitted));
+    let arsenal = nova_sim::combat::armament::Arsenal::read(&data);
+    for slot in &jack.weapons {
+        let id = slot.weapon.0;
+        let was = before.get(&id).copied().unwrap_or(0);
+        assert_eq!(
+            after.get(&id).copied().unwrap_or(0),
+            was + u32::try_from(slot.count).expect("more"),
+            "wëap {id}"
+        );
+        if let Some(nova_sim::combat::weapon::Ammo::Rounds(ammo)) =
+            arsenal.weapon(slot.weapon).map(|spec| spec.ammo)
+            && slot.ammo > 0
+        {
+            assert_eq!(
+                fitted.rounds.get(&ammo).copied().unwrap_or(0),
+                valkyrie.rounds.get(&ammo).copied().unwrap_or(0)
+                    + u32::try_from(slot.ammo).expect("more"),
+                "the rounds of wëap {id}"
+            );
+        }
+    }
+    assert_eq!(
+        jack.weapons
+            .iter()
+            .map(|slot| (slot.weapon.0, slot.count, slot.ammo))
+            .collect::<Vec<_>>(),
+        [(133, 1, 0), (131, 1, 0), (129, 1, 0), (135, 2, 50)],
+        "three guns more and two missile launchers with 50 rounds"
+    );
+}
+
+#[test]
+fn the_ufs_razorback_hailed_greets_with_its_comm_quote() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = flying_in(&data, 128, &[], NovaPersons::default());
+    session.populate(&data, &mut ByBound(&[(7, 1), (100, 49)]));
+    let razorback = session
+        .npcs()
+        .iter()
+        .find(|npc| npc.person.is_some())
+        .expect("the Razorback")
+        .id;
+    while session.select_target(nova_sim::TargetPick::Next) != Some(razorback) {}
+    let options = nova_sim::HailOptions::default();
+    let opened = session
+        .hail(&data, &options, &mut ByBound(&[]))
+        .expect("answers");
+    assert_eq!(opened.reply, "Channel open.");
+    let greeted = session
+        .answer(0, &data, &options, &mut ByBound(&[]))
+        .expect("answers");
+    assert_eq!(
+        greeted.reply,
+        "Greetings from the U.F.S. Razorback, the newest and latest capital ship to enter \
+         Federation service."
+    );
+}
+
+#[test]
+fn the_bounty_hunters_hail_quote_names_him_and_the_pilot() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let line = &nova_sim::CommCatalog::string_list(&data, HAIL_QUOTES)[7];
+    let tags = QuoteTags {
+        person: "Bounty Hunter",
+        pilot: "Stock",
+        ship_type: "Shuttle",
+    };
+    assert_eq!(
+        expand_tags(line, &tags),
+        "Bounty Hunter: Prepare to die, Stock!"
+    );
+}
+
+#[test]
+fn the_bounty_hunter_gone_for_good_never_appears_again() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    assert_eq!(person_record(&data, 151).flags & ESCAPE_POD, 0, "unique");
+    assert_ne!(person_record(&data, 510).flags & ESCAPE_POD, 0);
+    let rolled = || ByBound(&[(7, 0), (1022, 23), (100, 99)]);
+    let engine = NovaPersons::default();
+    let start = Session::start(&data).expect("starts").system().0;
+    assert_eq!(persons_in(&data, start, &[], engine, &mut rolled()), [151]);
+    for system in [start, 128, 130, 132, 260] {
+        assert_eq!(
+            persons_in(&data, system, &[151], engine, &mut rolled()),
+            Vec::<i16>::new(),
+            "sÿst {system}"
+        );
     }
 }

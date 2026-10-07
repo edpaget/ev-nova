@@ -763,6 +763,7 @@ mod tests {
             asking: None,
             pay_me: true,
             escort: None,
+            portrait: None,
         }
     }
 
