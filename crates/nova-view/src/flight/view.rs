@@ -82,6 +82,10 @@
 //!   [`navigation`](nova_sim::navigation) says. The HUD's nav area shows
 //!   the target, or else the next system on the course (see
 //!   [`hud`](super::hud)).
+//! - `\` (a press, not its repeats), the original's Hyper Select, plots
+//!   a one-jump course to the next system linked with this one, as
+//!   [`Session::select_next_system`] says, and clears the navigation
+//!   target, so the nav area shows that system and J jumps there.
 //! - J (a press) begins the pre-jump turn and slow-down towards the next
 //!   system on the course when the session allows a jump, and otherwise
 //!   says why in the original's words (`STR#` 2002), as a refused landing
@@ -138,7 +142,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Up: thrust   Left/Right: turn   Down: reverse   Tab: target   L: land   M: map   J: jump   P: preferences   Esc: leave flight";
+pub const HELP: &str = "Up: thrust   Left/Right: turn   Down: reverse   Tab: target   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave flight";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
@@ -160,6 +164,11 @@ pub const JUMP_KEY: Key = Key::Char('j');
 /// The key that selects the next stellar as the navigation target: the
 /// original's default, Tab.
 pub const TARGET_KEY: Key = Key::Tab;
+/// The Hyper Select key, which cycles the hyperspace destination through
+/// the systems the current one links to: the original's default, `\`
+/// (`Keys.nib`'s `hyperSel`, "Hyper Select:", default keycode 0x2a in
+/// `_loadKeys`). H is the original's separate Hyperspace Mode key.
+pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
 
 /// `STR#` 2002 #29.
 pub const NO_DESTINATION: &str =
@@ -913,6 +922,12 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
                 }
                 return ScreenAction::None;
             }
+            Some(HYPER_SELECT_KEY) => {
+                if let Ok(session) = &mut self.session {
+                    session.select_next_system();
+                }
+                return ScreenAction::None;
+            }
             _ => {}
         }
         if let Input::Key { key, pressed, .. } = *input
@@ -1102,6 +1117,9 @@ mod tests {
         /// Whether Alpha Centauri links on to Barnard, which has no
         /// stellars: not by default.
         onward: bool,
+        /// Whether Sol lists Barnard too, after Alpha Centauri, so that
+        /// Hyper Select has two systems to cycle through: not by default.
+        fan: bool,
     }
 
     type View = FlightView<FakeCatalog>;
@@ -1160,6 +1178,7 @@ mod tests {
             sheets_asked: RefCell::default(),
             defaults: Vec::new(),
             onward: false,
+            fan: false,
         }
     }
 
@@ -1252,8 +1271,9 @@ mod tests {
                 govt: None,
             };
             let onward: &[i16] = if self.onward { &[132] } else { &[] };
+            let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
             vec![
-                star(130, (0.0, 0.0), &[131]),
+                star(130, (0.0, 0.0), sol),
                 star(131, (600.0, 0.0), onward),
                 star(132, (0.0, 600.0), &[]),
             ]
@@ -1336,9 +1356,10 @@ mod tests {
                 stellars: Vec::new(),
             };
             let onward: &[i16] = if self.onward { &[132] } else { &[] };
+            let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
             Galaxy {
                 systems: vec![
-                    entry(130, "Sol", (0, 0), &[131]),
+                    entry(130, "Sol", (0, 0), sol),
                     entry(131, "Alpha Centauri", (600, 0), onward),
                     entry(132, "Barnard", (0, 600), &[]),
                 ],
@@ -1785,7 +1806,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Up: thrust   Left/Right: turn   Down: reverse   Tab: target   L: land   M: map   J: jump   P: preferences   Esc: leave flight"
+            "Up: thrust   Left/Right: turn   Down: reverse   Tab: target   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave flight"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -4283,5 +4304,77 @@ mod tests {
         });
         assert_eq!(view.input(&key(Key::Tab, true)), ScreenAction::None);
         assert!(view.session().is_err());
+    }
+
+    // Hyper Select.
+
+    const HYPER_SELECT: Key = Key::Char('\\');
+
+    /// A flight from Sol, which lists Alpha Centauri then Barnard.
+    fn fanned() -> View {
+        FlightView::new(FakeCatalog {
+            fan: true,
+            ..catalog()
+        })
+    }
+
+    fn course(view: &View) -> Vec<SystemId> {
+        view.session().expect("flying").course().to_vec()
+    }
+
+    #[test]
+    fn the_hyper_select_key_plots_the_next_listed_system() {
+        let mut view = fanned();
+        assert_eq!(HYPER_SELECT_KEY, HYPER_SELECT);
+        for expected in [131, 132, 131] {
+            assert_eq!(view.input(&key(HYPER_SELECT, true)), ScreenAction::None);
+            view.input(&key(HYPER_SELECT, false));
+            assert_eq!(course(&view), [SystemId(expected)]);
+        }
+    }
+
+    #[test]
+    fn the_hud_nav_area_shows_the_selected_system() {
+        let mut view = flight();
+        tap(&mut view, Key::Tab);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Earth"]);
+        tap(&mut view, HYPER_SELECT);
+        assert_eq!(nav_target(&view), None);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+    }
+
+    #[test]
+    fn a_repeat_or_release_of_the_hyper_select_key_does_not_cycle() {
+        let mut view = fanned();
+        view.input(&held(HYPER_SELECT));
+        view.input(&key(HYPER_SELECT, false));
+        assert_eq!(course(&view), []);
+        tap(&mut view, HYPER_SELECT);
+        view.input(&held(HYPER_SELECT));
+        view.input(&key(HYPER_SELECT, false));
+        assert_eq!(course(&view), [SystemId(131)]);
+    }
+
+    #[test]
+    fn hyper_select_is_ignored_while_a_jump_prepares_or_plays() {
+        let mut view = fanned();
+        tap(&mut view, HYPER_SELECT);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.preparing_jump(), "braking and turning");
+        tap(&mut view, HYPER_SELECT);
+        assert_eq!(course(&view), [SystemId(131)]);
+        jump_now(&mut view);
+        tap(&mut view, HYPER_SELECT);
+        assert_eq!(course(&view), [SystemId(131)]);
+    }
+
+    #[test]
+    fn hyper_select_with_the_map_open_changes_nothing() {
+        let mut view = fanned();
+        tap(&mut view, MAP);
+        tap(&mut view, HYPER_SELECT);
+        assert!(view.map_open());
+        assert_eq!(course(&view), []);
     }
 }
