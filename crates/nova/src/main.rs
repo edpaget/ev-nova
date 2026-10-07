@@ -36,7 +36,7 @@
 //! device. Without the music the game plays none, with a warning; without
 //! an audio device it runs silently, with a warning.
 //!
-//! The sound settings are saved in `settings.json` in a `nova` directory
+//! The settings (sound, and Hyperspace Effects) are saved in `settings.json` in a `nova` directory
 //! under the platform's configuration directory: `~/Library/Application
 //! Support` on macOS, `%APPDATA%` on Windows, and `$XDG_CONFIG_HOME` (or
 //! `~/.config`) elsewhere. Missing settings start at the defaults, and so

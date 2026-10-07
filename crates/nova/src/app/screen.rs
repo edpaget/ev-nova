@@ -491,7 +491,7 @@ impl AppScreen {
     }
 
     /// Opens the Preferences dialog over the side shown, on the player's
-    /// sound preferences, first cancelling the side's pointer gesture and
+    /// preferences, first cancelling the side's pointer gesture and
     /// letting go of its keys. With no dialogs, nothing opens; when the
     /// dialog cannot be built, nothing opens and the reason goes to stderr.
     fn open_preferences(&mut self) {

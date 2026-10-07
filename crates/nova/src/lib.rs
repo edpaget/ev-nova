@@ -16,6 +16,8 @@
 //! - [`fonts`]: the fonts text is drawn in, from the result of loading the
 //!   game's Charcoal.
 //! - [`saves`]: the pilot files, one JSON file per pilot in a directory.
+//! - [`settings`]: the player's settings, sound and Hyperspace Effects,
+//!   and the one keeper that reads and saves them all.
 //! - [`platform`]: the thin winit adapter: event translation, the window
 //!   port over a real window, and the event-loop runner.
 //!
