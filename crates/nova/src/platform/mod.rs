@@ -110,6 +110,9 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::KeyM) => Key::Char('m'),
         // The jump key, by position: J on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyJ) => Key::Char('j'),
+        // Hyper Select, by position: `\` on a US-layout keyboard; the
+        // original's default.
+        PhysicalKey::Code(KeyCode::Backslash) => Key::Char('\\'),
         // The Preferences dialog's key, by position: P on a US-layout
         // keyboard.
         PhysicalKey::Code(KeyCode::KeyP) => Key::Char('p'),
@@ -190,6 +193,7 @@ mod tests {
             (KeyCode::AltLeft, Key::Alt),
             (KeyCode::AltRight, Key::Alt),
             (KeyCode::Backquote, Key::Char('`')),
+            (KeyCode::Backslash, Key::Char('\\')),
             (KeyCode::KeyQ, Key::Other),
             (KeyCode::F1, Key::Other),
         ];
@@ -204,13 +208,14 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 20] = [
+    const GAME_CHARACTER_KEYS: [Key; 21] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
         nova_view::flight::view::LAND_KEY,
         nova_view::flight::view::MAP_KEY,
         nova_view::flight::view::JUMP_KEY,
+        nova_view::flight::view::HYPER_SELECT_KEY,
         Key::Char('w'),
         Key::Char('a'),
         Key::Char('s'),
@@ -245,6 +250,7 @@ mod tests {
             '+' => KeyCode::NumpadAdd,
             '-' => KeyCode::Minus,
             '`' => KeyCode::Backquote,
+            '\\' => KeyCode::Backslash,
             other => panic!("no physical key listed for {other:?}"),
         }
     }
