@@ -3,6 +3,8 @@
 //! commodity string lists and its stellar sprites; and a `shän`'s blink
 //! fields as a [`Blink`].
 
+use std::collections::BTreeMap;
+
 use nova_data::GameData;
 use nova_data::records::character::Character;
 use nova_data::records::disaster::Disaster;
@@ -16,9 +18,9 @@ use nova_data::records::system::System;
 
 use crate::blink::Blink;
 use crate::catalog::{
-    CharacterStart, CommodityStrings, DateAffixes, DisasterId, DisasterRecord, JunkRecord,
-    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem,
-    StartDate, StartError, SystemId,
+    CharacterStart, CommodityStrings, DateAffixes, DisasterId, DisasterRecord, GateSite,
+    JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId,
+    StarSystem, StartDate, StartError, StellarId, SystemId,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -162,6 +164,7 @@ impl PilotCatalog for GameData {
                     tech_level: stellar.tech_level,
                     special_tech,
                     govt: stellar.govt,
+                    flags2: stellar.flags2.bits(),
                 })
             })
             .collect()
@@ -217,6 +220,34 @@ impl PilotCatalog for GameData {
             },
             _ => DateAffixes::default(),
         }
+    }
+
+    fn gate_sites(&self) -> Vec<GateSite> {
+        // Systems come by ascending ID, so the first to list a stellar is
+        // the lowest.
+        let mut listed: BTreeMap<StellarId, SystemId> = BTreeMap::new();
+        for (id, system) in self.records::<System>() {
+            let Ok(system) = system else {
+                continue;
+            };
+            for stellar in system.record.nav_def.into_iter().flatten() {
+                listed.entry(stellar).or_insert(SystemId(id));
+            }
+        }
+        listed
+            .into_iter()
+            .filter_map(|(id, system)| {
+                let stellar = self.get::<Stellar>(id.0)?.ok()?.record;
+                Some(GateSite {
+                    id,
+                    system,
+                    position: Vec2::new(f32::from(stellar.x_pos), f32::from(stellar.y_pos)),
+                    flags2: stellar.flags2.bits(),
+                    links: stellar.hyper_link,
+                    exit_angle: stellar.cust_snd_id,
+                })
+            })
+            .collect()
     }
 
     fn disasters(&self) -> Vec<DisasterRecord> {
@@ -342,7 +373,7 @@ mod tests {
     use nova_rsrc::{Fork, ForkReader, ResType};
 
     use super::*;
-    use crate::catalog::{DisasterId, GovtId, JunkId, StarSystem, StartDate, StellarId};
+    use crate::catalog::{DisasterId, GateSite, GovtId, JunkId, StarSystem, StartDate, StellarId};
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -836,12 +867,76 @@ mod tests {
             .build()
     }
 
+    /// `bytes`, a `spöb`, with this `Flags2`.
+    fn flagged2(mut bytes: Vec<u8>, flags2: u16) -> Vec<u8> {
+        bytes[0x20..0x22].copy_from_slice(&flags2.to_be_bytes());
+        bytes
+    }
+
+    /// A wormhole (`Flags2` 0x2000) at (`x`, `y`) heading out on
+    /// `angle`, with these `HyperLink`s, every other slot -1.
+    fn gate(x: i16, y: i16, angle: i16, links: &[i16]) -> Vec<u8> {
+        let mut bytes = flagged2(stellar(x, y, 0, 0x21, 0), 0x2000);
+        put_i16s(&mut bytes, 0x1A, &[angle]);
+        put_i16s(&mut bytes, 0x26, &[-1; 8]);
+        put_i16s(&mut bytes, 0x26, links);
+        bytes
+    }
+
+    #[test]
+    fn the_gate_sites_are_every_listed_stellar_by_id_in_the_lowest_system_listing_it() {
+        let data = store(&[
+            (System::TYPE, 131, system_with(&[129, 128])),
+            (System::TYPE, 130, system_with(&[129, 999])),
+            (System::TYPE, 132, short(system_with(&[133]))),
+            (Stellar::TYPE, 128, stellar(5, 6, 0, 1, 0)),
+            (Stellar::TYPE, 129, gate(-70, 250, 120, &[128, 0, 999])),
+            (Stellar::TYPE, 130, gate(0, 0, 0, &[])),
+            (Stellar::TYPE, 133, gate(0, 0, 0, &[])),
+        ]);
+        let links = |ids: &[i16]| {
+            let mut slots = [None; 8];
+            for (slot, &id) in slots.iter_mut().zip(ids) {
+                *slot = Some(StellarId(id));
+            }
+            slots
+        };
+        assert_eq!(
+            data.gate_sites(),
+            [
+                GateSite {
+                    id: StellarId(128),
+                    system: SystemId(131),
+                    position: Vec2::new(5.0, 6.0),
+                    flags2: 0,
+                    // Its zeroed links, kept raw.
+                    links: [Some(StellarId(0)); 8],
+                    exit_angle: 0,
+                },
+                GateSite {
+                    id: StellarId(129),
+                    system: SystemId(130),
+                    position: Vec2::new(-70.0, 250.0),
+                    flags2: 0x2000,
+                    links: links(&[128, 0, 999]),
+                    exit_angle: 120,
+                },
+            ],
+            "unlisted 130, missing 999, and 133 listed only by an undecodable system left out"
+        );
+        assert_eq!(store(&[]).gate_sites(), []);
+    }
+
     #[test]
     fn a_systems_landing_sites_are_its_readable_stellars_in_nav_order() {
         let data = store(&[
             (System::TYPE, 130, system_with(&[129, 999, 128, 131])),
             (Stellar::TYPE, 128, stellar(-300, 450, 7, 0x0000_0013, 25)),
-            (Stellar::TYPE, 129, stellar(10, -20, 0, 0x2001, -32767)),
+            (
+                Stellar::TYPE,
+                129,
+                flagged2(stellar(10, -20, 0, 0x2001, -32767), 0x1200),
+            ),
             (Stellar::TYPE, 131, short(stellar(0, 0, 0, 1, 0))),
             (Spin::TYPE, 1000, spin(1000)),
             (RLED, 1000, sheet(12, 30)),
@@ -859,6 +954,7 @@ mod tests {
                     tech_level: 0,
                     special_tech: [0; 8],
                     govt: None,
+                    flags2: 0x1200,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -870,6 +966,7 @@ mod tests {
                     tech_level: 0,
                     special_tech: [0; 8],
                     govt: None,
+                    flags2: 0,
                 },
             ]
         );

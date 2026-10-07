@@ -376,6 +376,7 @@ mod tests {
             tech_level: 0,
             special_tech: [0; 8],
             govt: None,
+            flags2: 0,
         }
     }
 

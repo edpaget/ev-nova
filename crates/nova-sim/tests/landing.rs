@@ -74,6 +74,10 @@ impl PilotCatalog for Pilot {
     fn date_affixes(&self) -> DateAffixes {
         DateAffixes::default()
     }
+
+    fn gate_sites(&self) -> Vec<nova_sim::GateSite> {
+        Vec::new()
+    }
 }
 
 /// Stellar 128 at the centre, where the ship starts, 200 x 200, with
@@ -89,6 +93,7 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         tech_level: 0,
         special_tech: [0; 8],
         govt: None,
+        flags2: 0,
     }
 }
 

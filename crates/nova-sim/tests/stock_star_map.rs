@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use nova_data::GameData;
 use nova_data::records::system::System;
-use nova_sim::{HyperlinkRule, PilotCatalog, StarMap, SystemId};
+use nova_sim::{HyperlinkRule, PilotCatalog, StarMap, StellarId, SystemId, Vec2};
 
 /// The stock links that stay one-way after allowing for replacement
 /// systems: a copy of `ONE_WAY_LINKS` in `crates/nova-data/tests/stock.rs`,
@@ -59,4 +59,37 @@ fn stock_links_listed_by_one_system_route_one_way_unless_listed_back_by_position
         }
     }
     assert_eq!(one_way, ONE_WAY_LINKS);
+}
+
+/// HG-Kania (`spöb` 1404) sits at (-70, 250) in Kania (128), a hypergate
+/// (`Flags2` 0x1200) linked to HG-Tichel, HG-Dani and HG-Koria, heading
+/// ships out on 120°; HG-Dani is in Dani (298), the lowest of the systems
+/// listing it, and wormhole 465 in Sol (130).
+#[test]
+fn stock_gate_sites_place_the_hypergates_and_wormholes() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let sites = data.gate_sites();
+    let site = |id| {
+        sites
+            .iter()
+            .find(|site| site.id == StellarId(id))
+            .unwrap_or_else(|| panic!("spöb {id} is listed"))
+    };
+    let kania = site(1404);
+    assert_eq!(kania.system, SystemId(128));
+    assert_eq!(kania.position, Vec2::new(-70.0, 250.0));
+    assert_eq!(kania.flags2, 0x1200);
+    assert_eq!(kania.exit_angle, 120);
+    let links: Vec<StellarId> = kania.links.iter().flatten().copied().collect();
+    assert_eq!(links, [StellarId(1405), StellarId(1413), StellarId(1418)]);
+    assert_eq!(site(1413).system, SystemId(298));
+    assert_eq!(site(465).system, SystemId(130));
+    assert_eq!(site(465).flags2 & 0x2000, 0x2000);
+    assert!(
+        sites.windows(2).all(|pair| pair[0].id < pair[1].id),
+        "by ascending ID"
+    );
 }

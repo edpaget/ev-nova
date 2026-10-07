@@ -71,6 +71,10 @@ impl PilotCatalog for Pilot {
     fn date_affixes(&self) -> DateAffixes {
         DateAffixes::default()
     }
+
+    fn gate_sites(&self) -> Vec<nova_sim::GateSite> {
+        Vec::new()
+    }
 }
 
 /// The script, by half-seconds: thrust for a second, turn right for half

@@ -3,9 +3,9 @@
 use std::cell::RefCell;
 
 use crate::catalog::{
-    CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, JunkRecord, LandingSite,
-    OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, SystemId,
+    CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, GateSite, JunkRecord,
+    LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate,
+    StartError, StellarId, SystemId,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::flight::{Controls, Turn};
@@ -47,6 +47,10 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) date_affixes: DateAffixes,
     /// How many times the date affixes were read.
     pub(crate) date_affix_reads: RefCell<usize>,
+    /// Every stellar a gate may lead to: none, by default.
+    pub(crate) gates: Vec<GateSite>,
+    /// How many times the gate sites were read.
+    pub(crate) gate_reads: RefCell<usize>,
 }
 
 pub(crate) const FAST: ShipFields = ShipFields {
@@ -76,6 +80,7 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         tech_level: 0,
         special_tech: [0; 8],
         govt: None,
+        flags2: 0,
     }
 }
 
@@ -174,6 +179,8 @@ pub(crate) fn catalog() -> FakePilotCatalog {
             suffix: " NC".to_owned(),
         },
         date_affix_reads: RefCell::default(),
+        gates: Vec::new(),
+        gate_reads: RefCell::default(),
     }
 }
 
@@ -270,6 +277,11 @@ impl PilotCatalog for FakePilotCatalog {
     fn date_affixes(&self) -> DateAffixes {
         *self.date_affix_reads.borrow_mut() += 1;
         self.date_affixes.clone()
+    }
+
+    fn gate_sites(&self) -> Vec<GateSite> {
+        *self.gate_reads.borrow_mut() += 1;
+        self.gates.clone()
     }
 }
 

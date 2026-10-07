@@ -91,6 +91,33 @@ pub struct LandingSite {
     pub special_tech: [i16; 8],
     /// Its `Govt`, or `None` when it is independent.
     pub govt: Option<GovtId>,
+    /// Its `Flags2`, raw: the [`gate`](crate::gate) rules read its
+    /// hypergate (0x1000) and wormhole (0x2000) bits.
+    pub flags2: u16,
+}
+
+/// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
+/// [`gate`](crate::gate) rules decide what the values mean. Any stellar a
+/// system lists may be one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GateSite {
+    /// The `spöb`'s ID.
+    pub id: StellarId,
+    /// The system it is in: the lowest-ID `sÿst` whose `NavDefs` list it,
+    /// as the original's `_FindSystemFromStellar` finds it when every
+    /// system is active.
+    pub system: SystemId,
+    /// Its centre, `xPos` and `yPos`, in pixels from the system's centre.
+    pub position: Vec2,
+    /// Its `Flags2`, raw.
+    pub flags2: u16,
+    /// Its `HyperLink1-8`, in slot order, `None` for an unused one (-1).
+    /// The Bible's other unused value, 0, is kept: no system lists a
+    /// stellar 0, so it leads nowhere.
+    pub links: [Option<StellarId>; 8],
+    /// Its `CustSndID`, raw: the heading a ship comes out of it on, when
+    /// it is 0 to 359.
+    pub exit_angle: i16,
 }
 
 /// An outfit, raw from its `oütf`: the [`outfitter`](crate::outfitter)
@@ -294,6 +321,10 @@ pub trait PilotCatalog {
     /// The first `chär`'s `DatePrefix` and `DateSuffix`, or none (both
     /// empty) when there is no `chär` or it does not decode.
     fn date_affixes(&self) -> DateAffixes;
+    /// Every stellar some system that can be read lists, that can be read
+    /// itself, by ascending ID, with the system it is in: where a
+    /// hypergate or wormhole may lead.
+    fn gate_sites(&self) -> Vec<GateSite>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -344,6 +375,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn date_affixes(&self) -> DateAffixes {
         (**self).date_affixes()
+    }
+
+    fn gate_sites(&self) -> Vec<GateSite> {
+        (**self).gate_sites()
     }
 }
 
@@ -396,6 +431,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn date_affixes(&self) -> DateAffixes {
         (**self).date_affixes()
+    }
+
+    fn gate_sites(&self) -> Vec<GateSite> {
+        (**self).gate_sites()
     }
 }
 
@@ -487,6 +526,21 @@ mod tests {
                 tech_level: 3,
                 special_tech: [0; 8],
                 govt: None,
+                flags2: 0,
+            }]
+        }
+
+        /// Hypergate 1400 in system 130, linked to 1405.
+        fn gate_sites(&self) -> Vec<GateSite> {
+            let mut links = [None; 8];
+            links[0] = Some(StellarId(1405));
+            vec![GateSite {
+                id: StellarId(1400),
+                system: SystemId(130),
+                position: Vec2::new(-70.0, 250.0),
+                flags2: 0x1200,
+                links,
+                exit_angle: 120,
             }]
         }
 
@@ -561,6 +615,7 @@ mod tests {
             format!("{:?}", catalog.outfits()),
             format!("{:?}", catalog.ships()),
             format!("{:?}", catalog.date_affixes()),
+            format!("{:?}", catalog.gate_sites()),
         ]
     }
 
@@ -585,6 +640,7 @@ mod tests {
             direct[15],
             r#"DateAffixes { prefix: "Year ", suffix: " NC" }"#
         );
+        assert!(direct[16].contains("StellarId(1405)"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

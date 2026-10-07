@@ -1072,9 +1072,10 @@ mod tests {
 
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
-        CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, Handling, JunkRecord,
-        LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats,
-        SimSound, SoundId, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
+        CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, GateSite, Handling,
+        JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord,
+        ShipStats, SimSound, SoundId, StarSystem, StartDate, StartError, SystemId, TICK, Vec2,
+        step,
     };
 
     use super::*;
@@ -1125,6 +1126,8 @@ mod tests {
         /// Whether Sol lists Barnard too, after Alpha Centauri, so that
         /// Hyper Select has two systems to cycle through: not by default.
         fan: bool,
+        /// Every stellar a gate may lead to: none, by default.
+        gates: Vec<GateSite>,
     }
 
     type View = FlightView<FakeCatalog>;
@@ -1184,6 +1187,7 @@ mod tests {
             defaults: Vec::new(),
             onward: false,
             fan: false,
+            gates: Vec::new(),
         }
     }
 
@@ -1199,6 +1203,7 @@ mod tests {
             tech_level: 1,
             special_tech: [0; 8],
             govt: None,
+            flags2: 0,
         }
     }
 
@@ -1302,6 +1307,10 @@ mod tests {
                 prefix: String::new(),
                 suffix: " NC".to_owned(),
             }
+        }
+
+        fn gate_sites(&self) -> Vec<GateSite> {
+            self.gates.clone()
         }
     }
 

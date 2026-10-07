@@ -114,9 +114,9 @@ pub mod wares;
 
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};
 pub use catalog::{
-    CharacterStart, CommodityStrings, DateAffixes, DisasterId, DisasterRecord, GovtId, JunkId,
-    JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, SystemId,
+    CharacterStart, CommodityStrings, DateAffixes, DisasterId, DisasterRecord, GateSite, GovtId,
+    JunkId, JunkRecord, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord,
+    SoundId, StarSystem, StartDate, StartError, StellarId, SystemId,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
