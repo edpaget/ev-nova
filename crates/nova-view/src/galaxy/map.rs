@@ -1197,6 +1197,27 @@ mod tests {
         );
     }
 
+    /// As the original's `_DrawMap` (@0xe7a8) draws it: a plain line
+    /// between the pair, whichever end lists the link, though by the
+    /// engine's `HyperlinkRule` the ship jumps along it one way only.
+    #[test]
+    fn a_link_listed_by_one_system_alone_is_drawn_once() {
+        for (lister, listed) in [(128, 129), (129, 128)] {
+            let mut systems = vec![system(128, 0, 0), system(129, 600, 0)];
+            let at = usize::try_from(lister - 128).expect("128 or 129");
+            systems[at].links = vec![SystemId(listed)];
+            let map = GalaxyMap::new(&FakeCatalog::new(Galaxy {
+                systems,
+                ..Galaxy::default()
+            }));
+            assert_eq!(
+                lines(&drawn(&map), LINK),
+                [(dot(&map, 128), dot(&map, 129), 1.0)],
+                "listed by {lister}"
+            );
+        }
+    }
+
     #[test]
     fn every_system_has_an_outline_then_a_dot_in_its_colour_highest_id_first() {
         let map = map();
