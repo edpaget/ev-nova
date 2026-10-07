@@ -770,6 +770,11 @@ impl Chance for Always {
         self.0.borrow_mut().push(percent);
         true
     }
+
+    /// The first outcome.
+    fn roll(&mut self, _sides: u16) -> u16 {
+        0
+    }
 }
 
 /// The percents asked of an always-firing chance, and that chance, shared.

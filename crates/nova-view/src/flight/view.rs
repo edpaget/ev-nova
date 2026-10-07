@@ -307,7 +307,8 @@ pub fn jump_refusal_message(refusal: &JumpRefusal) -> &'static str {
 }
 
 /// A [`Chance`] shared by whoever holds a copy: the app's one source of
-/// randomness, handed to each flight. The default never fires.
+/// randomness, handed to each flight. The default never fires and always
+/// rolls the first outcome.
 #[derive(Clone)]
 pub struct SharedChance(Rc<RefCell<dyn Chance>>);
 
@@ -334,6 +335,10 @@ impl std::fmt::Debug for SharedChance {
 impl Chance for SharedChance {
     fn fires(&mut self, percent: u8) -> bool {
         self.0.borrow_mut().fires(percent)
+    }
+
+    fn roll(&mut self, sides: u16) -> u16 {
+        self.0.borrow_mut().roll(sides)
     }
 }
 
@@ -4006,6 +4011,11 @@ mod tests {
             self.asked.push(percent);
             true
         }
+
+        /// The last of the outcomes.
+        fn roll(&mut self, sides: u16) -> u16 {
+            sides.saturating_sub(1)
+        }
     }
 
     /// A food surplus at Proxima, 35 % a day.
@@ -4053,6 +4063,13 @@ mod tests {
         assert_eq!(view.pilot().expect("a pilot").events().count(), 0);
         let mut shared = SharedChance::default();
         assert!(!shared.fires(100));
+        assert_eq!(shared.roll(8), 0);
+    }
+
+    #[test]
+    fn a_shared_chance_rolls_on_its_source() {
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
+        assert_eq!(SharedChance::new(shared).roll(360), 359);
     }
 
     use nova_sim::ShipRefusal;

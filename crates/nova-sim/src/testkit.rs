@@ -363,12 +363,15 @@ pub(crate) fn begin_jump_now(session: &mut Session) -> Result<SystemId, JumpRefu
     panic!("the jump never began: {:?}", session.player());
 }
 
-/// A [`Chance`] that answers from a script (no once it runs out) and
-/// records each percent it is asked.
+/// A [`Chance`] that answers and rolls from a script (no, and 0, once it
+/// runs out) and records each percent and each number of sides it is
+/// asked.
 #[derive(Debug, Default)]
 pub(crate) struct Scripted {
     answers: Vec<bool>,
+    rolls: Vec<u16>,
     pub(crate) asked: Vec<u8>,
+    pub(crate) sides_asked: Vec<u16>,
 }
 
 impl Scripted {
@@ -376,7 +379,7 @@ impl Scripted {
     pub(crate) fn answering(answers: &[bool]) -> Self {
         Self {
             answers: answers.iter().rev().copied().collect(),
-            asked: Vec::new(),
+            ..Self::default()
         }
     }
 }
@@ -385,6 +388,11 @@ impl Chance for Scripted {
     fn fires(&mut self, percent: u8) -> bool {
         self.asked.push(percent);
         self.answers.pop().unwrap_or(false)
+    }
+
+    fn roll(&mut self, sides: u16) -> u16 {
+        self.sides_asked.push(sides);
+        self.rolls.pop().unwrap_or(0)
     }
 }
 
