@@ -3,8 +3,8 @@
 //! background against the right edge, and every stock `ïntf` reads; and
 //! the combat looks: every weapon the simulation flies, every explosion
 //! type and a ship's target card read, and every looped weapon sound's
-//! length. Skips, passing, when `NOVA_DATA`
-//! is unset.
+//! length; and a boarding grant's message reads the strings it is built
+//! from. Skips, passing, when `NOVA_DATA` is unset.
 
 // The stock areas are small whole numbers, exact in floating point.
 #![allow(clippy::float_cmp)]
@@ -191,4 +191,19 @@ fn the_first_ships_target_card_has_its_picture() {
     };
     let card = data.target_card(ShipId(128));
     assert_eq!(card.picture, Some(3000));
+}
+
+/// A grant's message is built from `STR#` 2002 #106, #108, #393 and
+/// #394, as the stock strings read.
+#[test]
+fn a_grants_message_reads_its_stock_strings() {
+    use nova_view::flight::view::{ARTICLE_A, ARTICLE_AN, FROM_THIS_SHIP, RETRIEVED};
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(
+        [&strings[105], &strings[107], &strings[392], &strings[393]],
+        [RETRIEVED, FROM_THIS_SHIP, ARTICLE_A, ARTICLE_AN]
+    );
 }

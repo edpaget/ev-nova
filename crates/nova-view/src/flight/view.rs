@@ -116,7 +116,9 @@
 //!   dialog over the paused flight; each press there goes through
 //!   [`FlightView::plunder`], and a capture's assignment through
 //!   [`FlightView::assign`], each saying what it did as a message. After
-//!   "Use As My Ship" the new ship's sprite sheet is read.
+//!   "Use As My Ship" the new ship's sprite sheet is read. Boarding a
+//!   person that grants outfits says what it retrieved
+//!   ([`grant_message`]) for [`GRANT_SHOWN_FOR`].
 //! - Y (a press) hails the target ([`Session::hail`]), the comm dialog
 //!   listing the screen's [`HailOptions`]
 //!   ([`FlightView::with_hail_options`]; Nova's by default), its replies
@@ -195,8 +197,8 @@ use nova_sim::{ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, Pe
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{
-    EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, Toggled,
-    escort_command_message, fighters_abandoned_message,
+    EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
+    Toggled, escort_command_message, fighters_abandoned_message,
 };
 use super::hud::{self, HudState, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
@@ -475,6 +477,43 @@ pub fn plunder_message(taken: Taken, good: Option<&str>, outfit: Option<&str>) -
         Taken::Captured | Taken::Aborted | Taken::Nothing => return None,
     };
     Some(text)
+}
+
+/// `STR#` 2002 #106: a grant's message starts so.
+pub const RETRIEVED: &str = "You retrieved ";
+/// `STR#` 2002 #393: the article before one outfit of a consonant.
+pub const ARTICLE_A: &str = "a";
+/// `STR#` 2002 #394: the article before one outfit of a vowel.
+pub const ARTICLE_AN: &str = "an";
+/// `STR#` 2002 #108: a grant's message ends so.
+pub const FROM_THIS_SHIP: &str = "from this ship.";
+/// How long a grant's message stays on screen: 240 frames at 30 a
+/// second (0xf0 @0x9342c).
+pub const GRANT_SHOWN_FOR: Duration = Duration::from_secs(8);
+
+/// What the player is told of a grant of `count` outfits named
+/// `lc_name`, or `lc_plural` for more than one, as `_DoPlunderDialog`
+/// says it (@0x9322b-0x933ce): [`RETRIEVED`]; for one, [`ARTICLE_AN`]
+/// when the name's first letter, lowercased, is a vowel, else
+/// [`ARTICLE_A`]; for two to ten the count in words ([`NUMBER_WORDS`]),
+/// and above that in digits; the name; and [`FROM_THIS_SHIP`].
+#[must_use]
+pub fn grant_message(count: u16, lc_name: &str, lc_plural: &str) -> String {
+    let (number, name) = if count == 1 {
+        let vowel = lc_name
+            .chars()
+            .next()
+            .is_some_and(|first| "aeiou".contains(first.to_ascii_lowercase()));
+        let article = if vowel { ARTICLE_AN } else { ARTICLE_A };
+        (article.to_owned(), lc_name)
+    } else {
+        let words = usize::from(count)
+            .checked_sub(1)
+            .and_then(|index| NUMBER_WORDS.get(index));
+        let number = words.map_or_else(|| count.to_string(), |word| (*word).to_owned());
+        (number, lc_plural)
+    };
+    format!("{RETRIEVED}{number} {name} {FROM_THIS_SHIP}")
 }
 
 /// The names `session` gives `good` and `outfit`: one rule for the
@@ -1197,6 +1236,11 @@ impl<C> FlightView<C> {
                 self.pending_boarding = true;
                 self.message = None;
                 self.held.clear();
+                if let Some(granted) = session.take_grant() {
+                    let (name, plural) = session.outfit_names(granted.outfit).unwrap_or_default();
+                    let said = grant_message(granted.count, name, plural);
+                    self.say_for(said, GRANT_SHOWN_FOR);
+                }
             }
             Ok(Boarding::Repelled) => self.say(REPELLED),
             Err(refusal) => {
@@ -7182,5 +7226,179 @@ mod tests {
             let view = flight().with_comm_quote(source);
             assert_eq!(view.session().expect("flying").comm_quote(), source);
         }
+    }
+
+    // Boarding grants.
+
+    #[test]
+    fn a_grant_is_said_in_the_originals_words() {
+        let part = |count| grant_message(count, "spare part", "spare parts");
+        assert_eq!(part(1), "You retrieved a spare part from this ship.");
+        assert_eq!(
+            grant_message(1, "ion cannon", "ion cannons"),
+            "You retrieved an ion cannon from this ship."
+        );
+        assert_eq!(
+            grant_message(1, "Ion cannon", "Ion cannons"),
+            "You retrieved an Ion cannon from this ship.",
+            "its first letter lowercased for the article"
+        );
+        assert_eq!(part(2), "You retrieved two spare parts from this ship.");
+        assert_eq!(part(10), "You retrieved ten spare parts from this ship.");
+        assert_eq!(part(11), "You retrieved 11 spare parts from this ship.");
+        assert_eq!(
+            grant_message(
+                1,
+                "Dr Ralph's exploration map",
+                "Dr Ralph's exploration maps"
+            ),
+            "You retrieved a Dr Ralph's exploration map from this ship."
+        );
+        for vowel in ["a", "e", "i", "o", "u"] {
+            assert!(
+                grant_message(1, vowel, "").starts_with("You retrieved an "),
+                "{vowel}"
+            );
+        }
+        assert_eq!(grant_message(1, "", ""), "You retrieved a  from this ship.");
+        assert_eq!(
+            [RETRIEVED, ARTICLE_A, ARTICLE_AN, FROM_THIS_SHIP],
+            ["You retrieved ", "a", "an", "from this ship."]
+        );
+        assert_eq!(GRANT_SHOWN_FOR, Duration::from_secs(8));
+    }
+
+    /// Grants a person's `GrantCount` of the first outfit it may.
+    #[derive(Debug)]
+    struct Grants;
+
+    impl BoardingRule for Grants {
+        fn repels(&self, _booty: u16) -> bool {
+            false
+        }
+
+        fn capture_odds(
+            &self,
+            _crew: &nova_sim::board::CaptureCrew,
+            _chance: &mut dyn Chance,
+        ) -> u8 {
+            75
+        }
+
+        fn captures(&self, _odds: u8, _chance: &mut dyn Chance) -> bool {
+            true
+        }
+
+        fn person_credits(&self, credits: i32, _chance: &mut dyn Chance) -> i64 {
+            i64::from(credits)
+        }
+
+        fn grant(
+            &self,
+            grant: &nova_sim::grant::PersonGrant,
+            stock: &[nova_sim::grant::GrantStock],
+            _free_mass: i64,
+            _chance: &mut dyn Chance,
+        ) -> Option<nova_sim::grant::Granted> {
+            let first = nova_sim::grant::candidates(grant.class, stock)
+                .first()
+                .copied()?;
+            Some(nova_sim::grant::Granted {
+                outfit: first.outfit,
+                count: grant.count,
+            })
+        }
+    }
+
+    /// [`peopled`] with Ace a derelict (government 140), so disabled,
+    /// granting `count` spare parts (`oütf` 200, class 7), of no hail
+    /// quote; its ship 129 has a crew of 3 and a board reach.
+    fn granting(count: i16) -> FakeCatalog {
+        let mut catalog = peopled();
+        let ace = &mut catalog.persons[0];
+        ace.govt = Some(GovtId(140));
+        ace.hail_quote = -1;
+        ace.grant_class = 7;
+        ace.grant_prob = 100;
+        ace.grant_count = count;
+        catalog.govts = vec![nova_sim::GovtRecord {
+            id: GovtId(140),
+            flags: 0x0800,
+            flags2: 0,
+            crime_tol: 0,
+            penalties: nova_sim::Penalties::default(),
+            max_odds: 100,
+            classes: [-1; 4],
+            allies: [-1; 4],
+            enemies: [-1; 4],
+            comm_name: String::new(),
+        }];
+        for record in &mut catalog.ships {
+            record.crew = 3;
+        }
+        catalog.hulls = vec![hull_of(129, &[])];
+        catalog.outfits = vec![OutfitRecord {
+            id: OutfitId(200),
+            name: "Spare Part".to_owned(),
+            short_name: "Spare Part".to_owned(),
+            disp_weight: 0,
+            mass: 0,
+            tech_level: 1,
+            max: 10,
+            flags: 0,
+            cost: 100,
+            mods: [(0, 0); 4],
+            contribute: 0,
+            require: 0,
+            require_govt: -1,
+            availability: String::new(),
+            item_class: 7,
+            lc_name: "spare part".to_owned(),
+            lc_plural: "spare parts".to_owned(),
+        }];
+        catalog
+    }
+
+    /// [`granting`]'s flight, by `rule`, with Ace listed and placed on
+    /// the player, targeted and boarded.
+    fn boarded_ace(count: i16, rule: Rc<dyn BoardingRule>) -> View {
+        let (_, chance) = scripted(&[99, 750, 750, 0]);
+        let mut view = FlightView::new(granting(count))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still))
+            .with_boarding_rule(rule);
+        view.tick(TICK);
+        tap(&mut view, TARGET_KEY);
+        tap(&mut view, BOARD_KEY);
+        assert!(view.take_boarding().is_some(), "boarded");
+        view
+    }
+
+    #[test]
+    fn boarding_a_granting_person_says_what_it_retrieved_for_8_seconds() {
+        let mut view = boarded_ace(2, Rc::new(Grants));
+        let said = "You retrieved two spare parts from this ship.";
+        assert_eq!(view.message(), Some(said));
+        assert_eq!(view.pilot().expect("a pilot").owned(OutfitId(200)), 2);
+        let at = view.elapsed;
+        while view.elapsed + TICK < at + GRANT_SHOWN_FOR {
+            view.tick(TICK);
+        }
+        assert_eq!(view.message(), Some(said));
+        while view.elapsed < at + GRANT_SHOWN_FOR {
+            view.tick(TICK);
+        }
+        assert_eq!(view.message(), None);
+        let view = boarded_ace(1, Rc::new(Grants));
+        assert_eq!(
+            view.message(),
+            Some("You retrieved a spare part from this ship.")
+        );
+    }
+
+    #[test]
+    fn boarding_a_person_that_grants_nothing_says_nothing() {
+        let view = boarded_ace(2, Rc::new(Sure));
+        assert_eq!(view.message(), None);
     }
 }
