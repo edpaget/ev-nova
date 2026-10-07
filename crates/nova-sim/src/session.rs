@@ -116,6 +116,7 @@ use crate::hyperspace::{
 };
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
+use crate::message::SimMessage;
 use crate::navigation::next_stellar;
 use crate::outfitter::{self, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods};
 use crate::pilot::{self, Pilot};
@@ -173,6 +174,8 @@ pub struct Session {
     engine_glow: u8,
     /// The sounds emitted since they were last taken.
     sounds: Vec<SimSound>,
+    /// The messages raised since they were last taken.
+    messages: Vec<SimMessage>,
     /// Whether the pilot has changed in a way that should be saved since
     /// this was last taken.
     save_due: bool,
@@ -245,6 +248,7 @@ impl Session {
             thrusting: false,
             engine_glow: 0,
             sounds: Vec::new(),
+            messages: Vec::new(),
             save_due: false,
             date_affixes: catalog.date_affixes(),
             pilot,
@@ -449,7 +453,8 @@ impl Session {
     /// stellars read from `catalog`, the navigation target cleared, and
     /// the ship placed just outside its no-jump zone, at rest on the side
     /// facing the system it last left (see [`arrival`]), with its reserves
-    /// as they were, so it can jump on at once.
+    /// as they were, so it can jump on at once. It raises
+    /// [`SimMessage::Arrived`] for that last system.
     pub fn arrive(
         &mut self,
         catalog: &impl PilotCatalog,
@@ -486,6 +491,7 @@ impl Session {
         self.sites = catalog.landing_sites(at);
         self.nav_target = None;
         self.sounds.push(SimSound::Arrived);
+        self.messages.push(SimMessage::Arrived(at));
         Some(at)
     }
 
@@ -519,6 +525,12 @@ impl Session {
     /// them empties the list.
     pub fn take_sounds(&mut self) -> Vec<SimSound> {
         std::mem::take(&mut self.sounds)
+    }
+
+    /// The messages raised since they were last taken, in order; taking
+    /// them empties the list.
+    pub fn take_messages(&mut self) -> Vec<SimMessage> {
+        std::mem::take(&mut self.messages)
     }
 
     /// The star map, as read when the session started.
@@ -1492,6 +1504,34 @@ mod tests {
             matches!(refused, Err(LandingRefusal::TooFar { stellar, .. }) if stellar == StellarId(140)),
             "{refused:?}"
         );
+    }
+
+    #[test]
+    fn arriving_emits_an_arrived_message_naming_the_system() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131);
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::Arrived(SystemId(131))]
+        );
+        assert_eq!(session.take_messages(), [], "taking empties the list");
+    }
+
+    #[test]
+    fn no_message_before_arrival() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        assert_eq!(session.arrive(&catalog, &mut NeverFires), None);
+        assert_eq!(session.take_messages(), [], "no jump, no message");
+        fly_out(&mut session);
+        session.begin_jump().expect("pre-jump");
+        session.tick(Controls::default());
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        assert_eq!(session.take_messages(), [], "pre-jump");
+        begin_jump_now(&mut session).expect("jumps");
+        assert_eq!(session.take_messages(), [], "jumping");
     }
 
     #[test]
@@ -2866,6 +2906,18 @@ mod tests {
             "facing the system it last left"
         );
         assert_eq!(session.player().position, Vec2::new(0.0, -1001.0));
+    }
+
+    #[test]
+    fn a_multi_jump_emits_one_arrived_message_for_the_final_system() {
+        let catalog = chained(catalog(), 10);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        begin_jump_now(&mut session).expect("jumps");
+        session.arrive(&catalog, &mut NeverFires);
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::Arrived(SystemId(134))]
+        );
     }
 
     #[test]

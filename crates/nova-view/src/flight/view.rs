@@ -92,7 +92,8 @@
 //!   facing that way and slow enough. The jump plays its [`JumpEffect`]:
 //!   the session waits while the stars streak and the screen fades out;
 //!   then the ship arrives, the new system is read and laid out, and it
-//!   fades in. The HUD stays on top throughout. A multi-jump plays one
+//!   fades in, and the message line says so in the original's words
+//!   ([`arrival_message`]). The HUD stays on top throughout. A multi-jump plays one
 //!   effect, toward the first system, and the scene loaded is the last
 //!   system it passes.
 //! - Escape belongs to the app's router, which closes the map or leaves
@@ -107,8 +108,8 @@ use nova_sim::{
     Chance, Clearance, Controls, FixedStep, HashedRolls, JumpRefusal, LandOutcome, LandingRefusal,
     Market, NeverFires, Order, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
     RechargeRefusal, Reserves, Session, ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard,
-    StartError, StellarId, Steps, TradeRefusal, Turn, flight::normalized, flight::shortest_turn,
-    glow_level, lights_level,
+    SimMessage, StartError, StellarId, Steps, TradeRefusal, Turn, flight::normalized,
+    flight::shortest_turn, glow_level, lights_level,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -166,6 +167,27 @@ pub const NO_FUEL: &str = "Insufficient energy for hyperspace jump.";
 /// Not the original's, which never flies a landed ship: worded after
 /// `STR#` 2002 #42 and #73 ("Disengage cloaking device first.").
 pub const TAKE_OFF_FIRST: &str = "Can't initiate hyperspace jump - take off first.";
+
+/// `STR#` 2002 #44. The original picks #43, #44 or #45 ("Entering the",
+/// "Jumping into the", "Arriving in the") at random; this port always
+/// says #44, matching none of its random rolls.
+pub const JUMPING_INTO: &str = "Jumping into the";
+/// `STR#` 2002 #48.
+pub const SYSTEM_ON: &str = "system on";
+
+/// What the message line says on arriving from a jump in the system
+/// named `system` on `date`, as the original's `HandlePlayer` builds it,
+/// adding [`NO_STELLARS`] when the system has no stellars. The original's
+/// fighters-abandoned suffix and message-buoy override are left out.
+#[must_use]
+pub fn arrival_message(system: &str, date: &str, stellars: bool) -> String {
+    let mut text = format!("{JUMPING_INTO} {system} {SYSTEM_ON} {date}.");
+    if !stellars {
+        text.push(' ');
+        text.push_str(NO_STELLARS);
+    }
+    text
+}
 
 /// `STR#` 2002 #49.
 pub const NO_STELLARS: &str = "No stellar objects present.";
@@ -504,12 +526,22 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         let Some(system) = session.arrive(&self.catalog, &mut self.chance) else {
             return;
         };
-        self.scene = Some(SystemScene::load(&self.catalog, system));
+        let scene = SystemScene::load(&self.catalog, system);
         self.map.show_course(system, session.course());
         self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
         self.alpha = 0.0;
         self.message = None;
+        let date = session.date_text();
+        let arrived = session
+            .take_messages()
+            .into_iter()
+            .any(|message| matches!(message, SimMessage::Arrived(_)));
+        if arrived {
+            let text = arrival_message(scene.name(), &date, !scene.stellars().is_empty());
+            self.show(text);
+        }
+        self.scene = Some(scene);
     }
 }
 
@@ -3290,6 +3322,13 @@ mod tests {
         assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(132)));
         assert_eq!(reserves(&view).fuel.now, fuel_leaving - 100.0);
         assert!(texts(&drawn(&view)).contains(&"Barnard (sÿst 132)".to_owned()));
+        assert_eq!(
+            view.message(),
+            Some(
+                "Jumping into the Barnard system on June 24, 1177 NC. No stellar objects present."
+            ),
+            "names the final system"
+        );
         assert!(view.jump_effect().is_some(), "fading in");
 
         view.tick(ms(1000));
@@ -3443,6 +3482,56 @@ mod tests {
     }
 
     #[test]
+    fn arrival_message_reads_as_the_original() {
+        assert_eq!(
+            arrival_message("Sol", "June 23, 1177 NC", true),
+            "Jumping into the Sol system on June 23, 1177 NC."
+        );
+    }
+
+    #[test]
+    fn arrival_message_in_a_system_without_stellars_says_so() {
+        assert_eq!(
+            arrival_message("Sol", "June 23, 1177 NC", false),
+            "Jumping into the Sol system on June 23, 1177 NC. No stellar objects present."
+        );
+    }
+
+    #[test]
+    fn the_arrival_strings_are_the_originals() {
+        assert_eq!(JUMPING_INTO, "Jumping into the");
+        assert_eq!(SYSTEM_ON, "system on");
+    }
+
+    #[test]
+    fn arriving_shows_the_jump_message_on_the_message_line() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let session = view.session().expect("flying");
+        let leaving = session.system();
+        for _ in 0..1000 {
+            if view.session().expect("flying").system() != leaving {
+                break;
+            }
+            view.tick(TICK);
+        }
+        let date = view.session().expect("flying").date_text();
+        let name = view.scene().expect("arrived").name().to_owned();
+        let text = arrival_message(&name, &date, true);
+        assert!(text.contains("Alpha Centauri"), "{text}");
+        assert_eq!(view.message(), Some(text.as_str()));
+        assert_eq!(
+            message(&view),
+            Some(overlay(&text, MESSAGE_AT, OVERLAY_SIZE, Color::WHITE))
+        );
+        view.tick(MESSAGE_SHOWN_FOR);
+        assert_eq!(view.message(), None);
+        assert_eq!(message(&view), None);
+    }
+
+    #[test]
     fn a_refusal_shown_before_the_jump_is_gone_after_it() {
         let mut view = flight();
         fly_out(&mut view);
@@ -3453,6 +3542,10 @@ mod tests {
         assert_eq!(view.message(), Some(NO_DESTINATION), "still on screen");
         view.input(&key(JUMP, true));
         assert_eq!(view.message(), None);
+        jump_now(&mut view);
+        arrive_now(&mut view);
+        let shown = view.message().expect("the arrival message");
+        assert!(shown.starts_with(JUMPING_INTO), "{shown}");
     }
 
     #[test]

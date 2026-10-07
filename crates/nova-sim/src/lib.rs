@@ -40,6 +40,8 @@
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
+//! - [`message`]: the [`SimMessage`] events a session raises for the
+//!   message line, such as arriving from a jump; the view words them.
 //! - [`navigation`]: the navigation target Tab selects, [`next_stellar`]:
 //!   the system's stellars in their `NavDef` order, wrapping.
 //! - [`outfitter`]: the outfitter: which outfits a stellar lists and sells
@@ -93,6 +95,7 @@ pub mod handling;
 pub mod hyperspace;
 pub mod landing;
 pub mod market;
+pub mod message;
 pub mod navigation;
 pub mod outfitter;
 pub mod pilot;
@@ -129,6 +132,7 @@ pub use landing::{
     landing_radius, nearest_landable, services,
 };
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
+pub use message::SimMessage;
 pub use navigation::next_stellar;
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use pilot::Pilot;
