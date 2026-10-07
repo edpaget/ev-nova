@@ -35,6 +35,7 @@
 //!   it follows.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::ops::Bound::{Excluded, Unbounded};
 
 use crate::catalog::{GovtId, StarSystem, SystemId};
 use crate::flight::{ShipState, heading_of};
@@ -258,9 +259,10 @@ impl StarMap {
         self.nodes
             .iter()
             .flat_map(|(&from, node)| {
+                // Each link is listed by both its systems: keep it from the
+                // lower one only.
                 node.links
-                    .iter()
-                    .filter(move |&&to| to > from)
+                    .range((Excluded(from), Unbounded))
                     .map(move |&to| (from, to))
             })
             .collect()
