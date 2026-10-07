@@ -7,7 +7,8 @@
 //! Tab selects the next one, [`next_stellar`]: the first when none is
 //! selected (or the one selected is no longer in the system), and after
 //! the last the first again. There is no "no target" stop in the cycle,
-//! and a system with no stellars has nothing to select.
+//! and a system with no stellars has nothing to select. [`next_after`]
+//! is that cycle over any list, which Hyper Select shares.
 
 use crate::catalog::StellarId;
 
@@ -17,15 +18,25 @@ use crate::catalog::StellarId;
 /// `None` when there are no stellars.
 #[must_use]
 pub fn next_stellar(stellars: &[StellarId], current: Option<StellarId>) -> Option<StellarId> {
+    next_after(stellars, current)
+}
+
+/// The item after `current` in the cycle `items`: the one after it,
+/// wrapping from the last to the first, or the first when `current` is
+/// `None` or not among them. `None` when there are no items. Tab's
+/// stellars and Hyper Select's systems both cycle this way.
+#[must_use]
+pub fn next_after<T: Copy + PartialEq>(items: &[T], current: Option<T>) -> Option<T> {
     let after = current
-        .and_then(|current| stellars.iter().position(|&id| id == current))
+        .and_then(|current| items.iter().position(|&item| item == current))
         .map_or(0, |at| at + 1);
-    stellars.get(after).or_else(|| stellars.first()).copied()
+    items.get(after).or_else(|| items.first()).copied()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::SystemId;
 
     fn ids(ids: &[i16]) -> Vec<StellarId> {
         ids.iter().copied().map(StellarId).collect()
@@ -71,6 +82,27 @@ mod tests {
             next_stellar(&ids(&[131, 128]), Some(StellarId(150))),
             Some(StellarId(131))
         );
+    }
+
+    #[test]
+    fn next_after_cycles_any_list_and_restarts_from_a_missing_current() {
+        let systems = [SystemId(134), SystemId(131), SystemId(135)];
+        assert_eq!(next_after(&systems, None), Some(SystemId(134)));
+        assert_eq!(
+            next_after(&systems, Some(SystemId(134))),
+            Some(SystemId(131))
+        );
+        assert_eq!(
+            next_after(&systems, Some(SystemId(135))),
+            Some(SystemId(134)),
+            "wraps"
+        );
+        assert_eq!(
+            next_after(&systems, Some(SystemId(7))),
+            Some(SystemId(134)),
+            "missing"
+        );
+        assert_eq!(next_after::<SystemId>(&[], Some(SystemId(7))), None);
     }
 
     #[test]
