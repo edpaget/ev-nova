@@ -495,6 +495,28 @@ fn records_iterate_every_id_ascending_and_keep_going_past_errors() {
     assert_eq!(data.records::<crate::records::spin::Spin>().count(), 0);
 }
 
+#[test]
+fn each_test_expression_is_parsed_once_and_shared() {
+    let data = mixed_ships();
+    let first = data.test_expr("b1 & b2");
+    let again = data.test_expr("b1 & b2");
+    assert!(std::sync::Arc::ptr_eq(&first, &again), "parsed once");
+    assert_eq!(*first, crate::expr::TestExpr::parse("b1 & b2"));
+    let other = data.test_expr("b1 | b2");
+    assert!(!std::sync::Arc::ptr_eq(&first, &other), "another text");
+    assert_eq!(*other, crate::expr::TestExpr::parse("b1 | b2"));
+}
+
+#[test]
+fn a_malformed_test_expression_keeps_its_error_and_a_blank_one_always_holds() {
+    let data = mixed_ships();
+    let bad = data.test_expr("b1 &");
+    assert_eq!(*bad, crate::expr::TestExpr::parse("b1 &"));
+    assert!(bad.is_err());
+    assert!(std::sync::Arc::ptr_eq(&bad, &data.test_expr("b1 &")));
+    assert_eq!(*data.test_expr(""), Ok(crate::expr::TestExpr::Always));
+}
+
 /// The store can be shared across threads.
 const _: fn() = || {
     fn is<T: Send + Sync>() {}

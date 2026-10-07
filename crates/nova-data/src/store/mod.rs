@@ -135,6 +135,13 @@
 //! The store is read-only once built (no `&mut self` methods) and
 //! `Send + Sync`.
 //!
+//! # Parsed test expressions
+//!
+//! [`GameData::test_expr`] parses a control-bit test expression the first
+//! time its text is asked for and keeps the tree (or the error), so each
+//! distinct text is parsed once for the store's life however often its
+//! records are read, and records sharing a text share one tree.
+//!
 //! # Ship sprites
 //!
 //! [`GameData::ship_sprite`] follows a `shïp` to the `shän` with the same
@@ -167,16 +174,17 @@
 //! convention, [`ship_desc_id`]: `dësc` 13000 to 13767 describe `shïp` 128
 //! to 895. Many ships (mostly variants) have none, which is not an error.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use nova_rsrc::{ForkReader, LoadError, ResType, Resource, ResourceFile, StdForkReader};
 
 use self::fs::{DirLister, StdDirLister};
 use self::order::IgnoreReason;
 use crate::error::{DecodeError, DecodeWarning};
+use crate::expr::{ParseError, TestExpr};
 use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 
 #[cfg(test)]
@@ -329,7 +337,13 @@ pub struct GameData {
     failed: Vec<FailedFile>,
     ignored: Vec<IgnoredEntry>,
     index: BTreeMap<ResType, TypeIndex>,
+    /// Each test expression parsed so far, by its text.
+    tests: Mutex<HashMap<Box<str>, ParsedTest>>,
 }
+
+/// A test expression parsed once and shared: its tree, or why it did not
+/// parse.
+pub type ParsedTest = Arc<Result<TestExpr, ParseError>>;
 
 impl GameData {
     /// Opens `data_dir` (`Nova Files`) and, if given, the `plugins` tree
@@ -369,7 +383,23 @@ impl GameData {
             failed,
             ignored: walk.ignored,
             index,
+            tests: Mutex::default(),
         })
+    }
+
+    /// The test expression `text` parsed, or why it did not parse: parsed
+    /// the first time `text` is asked for and shared after.
+    #[must_use]
+    pub fn test_expr(&self, text: &str) -> ParsedTest {
+        // A poisoned lock still holds only whole entries: one is inserted
+        // after its parse, never half-way through.
+        let mut tests = self.tests.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(parsed) = tests.get(text) {
+            return Arc::clone(parsed);
+        }
+        let parsed = Arc::new(TestExpr::parse(text));
+        tests.insert(text.into(), Arc::clone(&parsed));
+        parsed
     }
 
     /// Every loaded file, in load order.
