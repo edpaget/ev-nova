@@ -13,7 +13,8 @@ use nova_data::records::system::System;
 use nova_sim::{HyperlinkRule, PilotCatalog, StarMap, SystemId};
 
 /// The stock links that stay one-way after allowing for replacement
-/// systems, as `nova-data/tests/stock.rs` lists them.
+/// systems: a copy of `ONE_WAY_LINKS` in `crates/nova-data/tests/stock.rs`,
+/// which another crate's test binary cannot import.
 const ONE_WAY_LINKS: &[(i16, i16)] = &[(558, 557), (561, 563), (584, 590), (585, 582), (625, 616)];
 
 #[test]
