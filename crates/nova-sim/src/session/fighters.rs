@@ -1512,7 +1512,9 @@ mod tests {
         let mut session = fleet(&catalog, 1, vec![out(), warship(None), dart_out()]);
         session.pilot.cash = 1_000_000;
         land_now(&mut session).expect("lands");
-        session.buy_ship(ShipId(129)).expect("bought");
+        session
+            .buy_ship(ShipId(129), &mut NeverFires)
+            .expect("bought");
         assert_eq!(session.pilot().escorts(), [warship(None)]);
         assert_eq!(session.pilot().owned(DARTS), 0, "no rounds");
         session.take_off().expect("takes off");
@@ -1535,7 +1537,9 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         assert!(session.landed().is_some(), "resumed docked");
         assert!(session.fleet.is_empty(), "none placed yet");
-        session.buy_ship(ShipId(129)).expect("bought");
+        session
+            .buy_ship(ShipId(129), &mut NeverFires)
+            .expect("bought");
         assert_eq!(session.pilot().escorts(), [warship(None)]);
     }
 
@@ -1550,7 +1554,7 @@ mod tests {
         session.pilot.cash = 1_000_000;
         land_now(&mut session).expect("lands");
         session
-            .outfitter()
+            .outfitter(&mut NeverFires)
             .expect("an outfitter")
             .check(crate::outfitter::OutfitOrder {
                 outfit: VIPERS,
@@ -1583,7 +1587,7 @@ mod tests {
         land_now(&mut session).expect("lands");
         assert_eq!(
             session
-                .outfitter()
+                .outfitter(&mut NeverFires)
                 .expect("an outfitter")
                 .check(crate::outfitter::OutfitOrder {
                     outfit: DARTS,

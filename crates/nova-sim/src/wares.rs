@@ -68,6 +68,12 @@ impl<K: Ord> DayRolls<K> {
         }
     }
 
+    /// Holds `key`'s item on offer for the rest of the stay, whatever a
+    /// chance would draw; a roll of never still never is.
+    pub(crate) fn hold(&mut self, key: K) {
+        self.0.insert(key, true);
+    }
+
     /// Forgets `key`'s roll, so it is drawn again when next asked.
     pub(crate) fn redraw(&mut self, key: &K) {
         self.0.remove(key);
@@ -297,6 +303,16 @@ mod tests {
         assert_eq!(rolls, DayRolls::default(), "nothing stored");
         assert!(rolls.today(7, Roll::Chance(5), &mut chance));
         assert_eq!(chance.asked, [5], "drawn afresh");
+    }
+
+    #[test]
+    fn a_held_roll_holds_without_a_draw_but_never_stays_never() {
+        let mut rolls = DayRolls::default();
+        let mut chance = Scripted::answering(&[false]);
+        rolls.hold(7);
+        assert!(rolls.today(7, Roll::Chance(30), &mut chance));
+        assert!(!rolls.today(7, Roll::Never, &mut chance));
+        assert!(chance.asked.is_empty());
     }
 
     #[test]

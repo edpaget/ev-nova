@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use nova_data::graphics::{PICT, decode_pict};
 use nova_data::{GameData, InterfaceData};
-use nova_sim::{Pilot, Service, Session};
+use nova_sim::{Chance, Pilot, Service, Session};
 use nova_view::geometry::{Bounds, Point};
 use nova_view::spaceport::layout::{BACKGROUND, LEAVE_ITEM, SPACEPORT_DIALOG};
 use nova_view::spaceport::trade::{
@@ -165,6 +165,20 @@ fn at_viking(data: &GameData) -> Session {
     Session::fly(data, docked).expect("flies")
 }
 
+/// A chance that fires every roll and draws 0: every ship's `BuyRandom`
+/// from 1 to 99 rolls on, so the Shuttle (35) is listed.
+struct Fires;
+
+impl Chance for Fires {
+    fn fires(&mut self, _percent: u8) -> bool {
+        true
+    }
+
+    fn below(&mut self, _n: u32) -> u32 {
+        0
+    }
+}
+
 /// Viking's Shipyard: its ships in the 765 x 323 "Shipyard" dialog,
 /// centred over its background, with Info, Done and Buy Ship along the
 /// bottom; the Shuttle's picture and description; and the info panel, the
@@ -182,7 +196,7 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
         let ui = InterfaceData::open(&ui).expect("the interface file opens");
         let template = ui.dialog_template(SHIPYARD_DIALOG).expect("Shipyard");
         let info = ui.dialog_template(SHIP_INFO_DIALOG).expect("Shipyard Info");
-        let shipyard = at_viking(&data).shipyard().expect("a shipyard");
+        let shipyard = at_viking(&data).shipyard(&mut Fires).expect("a shipyard");
         let mut screen = ShipyardScreen::new(
             Ok((template, Rc::new(MonoMetrics))),
             Ok(info),

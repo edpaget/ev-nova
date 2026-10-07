@@ -110,7 +110,10 @@
 //! the router's hiring rules ([`AppScreen::with_hire_require`],
 //! [`AppScreen::with_take_off_pay`], [`AppScreen::with_escort_wage`],
 //! [`AppScreen::with_hire_terms`], [`AppScreen::with_control_bits`]),
-//! the engine's and Nova's until others are given. Each flight's persons
+//! the engine's and Nova's until others are given. Each flight's
+//! outfitter and shipyard read `BuyRandom` as the router says
+//! ([`AppScreen::with_buy_random`]), the engine's until another is given.
+//! Each flight's persons
 //! appear as the router's rules say ([`AppScreen::with_person_rules`])
 //! and say their comm quotes as it says ([`AppScreen::with_comm_quote`]),
 //! the engine's and Nova's until others are given;
@@ -295,6 +298,8 @@ pub struct AppScreen {
     fighter_recall: RuleSource,
     /// Whether an unmet `Require` refuses a hire in each flight.
     hire_require: RuleSource,
+    /// How `BuyRandom` reads in each flight.
+    buy_random: RuleSource,
     /// Whether each take-off pays each flight's hired escorts a day.
     take_off_pay: RuleSource,
     /// Which wage each flight's hired escorts are paid.
@@ -384,6 +389,7 @@ impl AppScreen {
             fighter_launch: RuleSource::Engine,
             fighter_recall: RuleSource::Engine,
             hire_require: RuleSource::Engine,
+            buy_random: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
@@ -507,6 +513,17 @@ impl AppScreen {
         }
     }
 
+    /// The router with `BuyRandom` read in each flight as `source` says
+    /// ([`FlightView::with_buy_random`]); the engine's until another is
+    /// given.
+    #[must_use]
+    pub fn with_buy_random(self, source: RuleSource) -> Self {
+        Self {
+            buy_random: source,
+            ..self
+        }
+    }
+
     /// The router with each take-off paying each flight's hired escorts a
     /// day's wages, or not, as `source` says
     /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
@@ -572,8 +589,8 @@ impl AppScreen {
 
     /// The router with Nova's rules, each disputed one as `rulebook`
     /// chooses: the NPCs' behaviour, disabling, point defence, the law,
-    /// boarding, hailing, the escorts' and fighters' rules, hiring, and
-    /// the persons' rules. This is the edge where every [`RuleKey`] meets
+    /// boarding, hailing, the escorts' and fighters' rules, hiring, the
+    /// shops' `BuyRandom`, and the persons' rules. This is the edge where every [`RuleKey`] meets
     /// its setting.
     #[must_use]
     pub fn with_rulebook(self, rulebook: &Rulebook) -> Self {
@@ -587,6 +604,7 @@ impl AppScreen {
             .with_fighter_launch(rulebook.source_for(RuleKey::FighterLaunch))
             .with_fighter_recall(rulebook.source_for(RuleKey::FighterRecall))
             .with_hire_require(rulebook.source_for(RuleKey::HireRequire))
+            .with_buy_random(rulebook.source_for(RuleKey::BuyRandom))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
@@ -641,6 +659,7 @@ impl AppScreen {
             .with_fighter_launch(self.fighter_launch)
             .with_fighter_recall(self.fighter_recall)
             .with_hire_require(self.hire_require)
+            .with_buy_random(self.buy_random)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
@@ -1270,13 +1289,13 @@ impl AppScreen {
             let trade = template(TRADE_DIALOG).map(|(template, _)| template);
             spaceport = spaceport.with_trade(trade, market);
         }
-        if let Some(outfitter) = self.flight.as_ref().and_then(FlightView::outfitter) {
+        if let Some(outfitter) = self.flight.as_mut().and_then(FlightView::outfitter) {
             let template = template(OUTFIT_DIALOG).map(|(template, _)| template);
             let art: Rc<dyn OutfitterCatalog> = Rc::clone(&self.data) as Rc<dyn OutfitterCatalog>;
             spaceport = spaceport.with_outfitter(template, outfitter, art);
         }
         let template_of = |id| template(id).map(|(template, _)| template);
-        if let Some(shipyard) = self.flight.as_ref().and_then(FlightView::shipyard) {
+        if let Some(shipyard) = self.flight.as_mut().and_then(FlightView::shipyard) {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport.with_shipyard(
                 template_of(SHIPYARD_DIALOG),
@@ -2007,7 +2026,15 @@ mod tests {
             stellar[0x0C..0x0E].copy_from_slice(&1_i16.to_be_bytes());
             average[0x0C..0x0E].copy_from_slice(&10_i16.to_be_bytes());
             let mut booster = vec![0; Outfit::SIZE.expect("fixed")];
-            for (at, value) in [(0x02, 2_i16), (0x04, 1), (0x06, 8), (0x08, 300), (0x0A, 3)] {
+            // For sale every day: `BuyRandom` 100.
+            for (at, value) in [
+                (0x02, 2_i16),
+                (0x04, 1),
+                (0x06, 8),
+                (0x08, 300),
+                (0x0A, 3),
+                (0x3F0, 100),
+            ] {
                 booster[at..at + 2].copy_from_slice(&value.to_be_bytes());
             }
             booster[0x0E..0x12].copy_from_slice(&500_i32.to_be_bytes());
@@ -5619,6 +5646,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_buy_random_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_buy_random(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.buy_random(), source);
+            assert_eq!(session.hire_require(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.buy_random(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_persons_rules_reach_every_flight() {
         let rules = nova_sim::NovaPersons {
             slots: RuleSource::Bible,
@@ -5653,6 +5695,7 @@ mod tests {
             ("fighter_launch", format!("{:?}", screen.fighter_launch)),
             ("fighter_recall", format!("{:?}", screen.fighter_recall)),
             ("hire_require", format!("{:?}", screen.hire_require)),
+            ("buy_random", format!("{:?}", screen.buy_random)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
@@ -5677,6 +5720,7 @@ mod tests {
             RuleKey::FighterLaunch => "fighter_launch",
             RuleKey::FighterRecall => "fighter_recall",
             RuleKey::HireRequire => "hire_require",
+            RuleKey::BuyRandom => "buy_random",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
             RuleKey::EscortWage => "escort_wage",

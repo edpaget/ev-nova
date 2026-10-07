@@ -9,8 +9,11 @@
 //! ([`Session::with_control_bits`]). Each class's roll for the day is
 //! drawn on the caller's [`Chance`] the first time the list is built after
 //! a landing, and kept until the next; hiring a class draws its roll again
-//! when the list is next built. The rolls are never saved. Whether an
-//! unmet `Require` refuses a hire follows
+//! when the list is next built. The rolls are never saved. The
+//! outfitter's and the shipyard's `BuyRandom` rolls follow the same rule
+//! ([`Session::outfitter`], [`Session::shipyard`]), buying a ship drawing
+//! its class's roll again. Whether an unmet `Require` refuses a hire
+//! follows
 //! [`Session::with_hire_require`].
 //!
 //! **Hiring** ([`Session::hire`]) takes what the terms charge from the

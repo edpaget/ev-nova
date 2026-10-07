@@ -38,6 +38,7 @@
 //! | [`GrantCount`](RuleKey::GrantCount) | `grant_count` | boarding a person grants trunc((50 + `Rand(51)`) x `GrantCount` / 100) outfits, at least 1 ([`NovaBoarding`](crate::NovaBoarding)) | 1 + `Rand(GrantCount)`\* |
 //! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a grant may take the player past the outfit's `Max` ([`NovaBoarding`](crate::NovaBoarding)) | it is held to `Max` less the owned\* |
 //! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: the original offers its `LinkMission`, which waits for missions ([`JoinFleet`](crate::hail::nova::JoinFleet)) | a person whose record allows it lists Use As Escort and joins the fleet as itself, for good\* |
+//! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -47,6 +48,10 @@
 //! than the engine's (`"bible"` in the settings) is the intended
 //! behaviour, not the engine's bug or quirk, and not anything the Bible
 //! says.
+//!
+//! † The Bible gives an outfit's `BuyRandom` below 1 or above 100 as 100,
+//! and a ship's 0 as never, but is silent on a ship's negative value:
+//! its reading here takes that as never too.
 //!
 //! # Adding a rule
 //!
@@ -295,6 +300,15 @@ rule_keys! {
     /// anything the Bible says (see
     /// [`JoinFleet`](crate::hail::nova::JoinFleet)).
     PersonJoin => "person_join",
+    /// How a `BuyRandom` outside 1-100 reads: by the engine, an outfit's
+    /// below 1 is never for sale and a ship's below 0 always, as the
+    /// original's loader clamps them (`_LoadObjectData` @0x78b8d,
+    /// @0x7a340); by the Bible, an outfit's below 1 or above 100 is
+    /// always for sale and a ship's 0 or below never. The Bible is silent
+    /// on a ship's negative value, so for it "0 means never" is taken to
+    /// cover it (see [`outfitter`](crate::outfitter) and
+    /// [`shipyard`](crate::shipyard)).
+    BuyRandom => "buy_random",
 }
 
 impl RuleKey {
@@ -436,9 +450,12 @@ mod tests {
                 RuleKey::CommQuote,
                 RuleKey::GrantCount,
                 RuleKey::GrantMax,
-                RuleKey::PersonJoin
+                RuleKey::PersonJoin,
+                RuleKey::BuyRandom
             ]
         );
+        assert_eq!(RuleKey::BuyRandom.key(), "buy_random");
+        assert_eq!(RuleKey::from_key("buy_random"), Some(RuleKey::BuyRandom));
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
         assert_eq!(RuleKey::GrantCount.key(), "grant_count");
         assert_eq!(RuleKey::GrantMax.key(), "grant_max");

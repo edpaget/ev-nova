@@ -328,6 +328,20 @@ mod tests {
     }
 
     #[test]
+    fn the_shop_rules_are_overridden_by_their_keys() {
+        let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"buy_random": "bible"}}"#);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine().with_override(RuleKey::BuyRandom, RuleSource::Bible)
+        );
+        let (rulebook, _) =
+            rulebook_of(r#"{"rules": "bible", "rule_overrides": {"buy_random": "engine"}}"#);
+        assert_eq!(rulebook.source_for(RuleKey::BuyRandom), RuleSource::Engine);
+        assert_eq!(rulebook.source_for(RuleKey::CrimeGains), RuleSource::Bible);
+    }
+
+    #[test]
     fn a_source_that_is_neither_is_the_engines_with_a_warning_naming_its_key() {
         for value in [r#""Bible""#, r#""both""#, "1", "null", r#"{"bible": true}"#] {
             let text =

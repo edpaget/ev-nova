@@ -218,6 +218,12 @@
 //!   ([`FlightView::with_fighter_launch`],
 //!   [`FlightView::with_fighter_recall`]); fighters abandoned in a jump
 //!   are told on arrival ([`fighters_abandoned_message`]).
+//! - Landed at an outfitter or a shipyard, the router asks the flight
+//!   for its list ([`FlightView::outfitter`], [`FlightView::shipyard`])
+//!   and trades through it ([`FlightView::outfit`],
+//!   [`FlightView::buy_ship`]), each item's roll for the day drawn on the
+//!   flight's chance; how `BuyRandom` reads is set on the screen
+//!   ([`FlightView::with_buy_random`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
 //!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance;
@@ -1062,6 +1068,16 @@ impl<
         }
     }
 
+    /// The flight with `BuyRandom` read as `source` says
+    /// ([`Session::with_buy_random`]).
+    #[must_use]
+    pub fn with_buy_random(self, source: RuleSource) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_buy_random(source)),
+            ..self
+        }
+    }
+
     /// The flight with an unmet `Require` refusing a hire, or not, as
     /// `source` says ([`Session::with_hire_require`]).
     #[must_use]
@@ -1569,12 +1585,12 @@ impl<
 }
 
 impl<C: ShipSprites> FlightView<C> {
-    /// Buys a ship as [`Session::buy_ship`] does, and reads the new ship's
-    /// sprite sheet, so the new hull is drawn once it takes off; a session
-    /// that failed has no shipyard.
+    /// Buys a ship as [`Session::buy_ship`] does, on the flight's chance,
+    /// and reads the new ship's sprite sheet, so the new hull is drawn
+    /// once it takes off; a session that failed has no shipyard.
     pub fn buy_ship(&mut self, ship: ShipId) -> Result<ShipPurchase, ShipRefusal> {
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
-        let bought = session.buy_ship(ship)?;
+        let bought = session.buy_ship(ship, &mut self.chance)?;
         self.sheet = self.catalog.ship_sheet(ship);
         Ok(bought)
     }
@@ -1789,17 +1805,17 @@ impl<C> FlightView<C> {
     }
 
     /// The outfitter of the stellar landed on, as [`Session::outfitter`]
-    /// gives it; none for a session that failed.
-    #[must_use]
-    pub fn outfitter(&self) -> Option<Outfitter> {
-        self.session.as_ref().ok()?.outfitter()
+    /// gives it, the day's rolls drawn on the flight's chance; none for a
+    /// session that failed.
+    pub fn outfitter(&mut self) -> Option<Outfitter> {
+        self.session.as_mut().ok()?.outfitter(&mut self.chance)
     }
 
-    /// Buys or sells an outfit as [`Session::outfit`] does; a session that
-    /// failed has no outfitter.
+    /// Buys or sells an outfit as [`Session::outfit`] does, on the
+    /// flight's chance; a session that failed has no outfitter.
     pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
         match &mut self.session {
-            Ok(session) => session.outfit(order),
+            Ok(session) => session.outfit(order, &mut self.chance),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
         }
     }
@@ -1833,10 +1849,10 @@ impl<C> FlightView<C> {
     }
 
     /// The shipyard of the stellar landed on, as [`Session::shipyard`]
-    /// gives it; none for a session that failed.
-    #[must_use]
-    pub fn shipyard(&self) -> Option<Shipyard> {
-        self.session.as_ref().ok()?.shipyard()
+    /// gives it, the day's rolls drawn on the flight's chance; none for a
+    /// session that failed.
+    pub fn shipyard(&mut self) -> Option<Shipyard> {
+        self.session.as_mut().ok()?.shipyard(&mut self.chance)
     }
 
     /// Whether the pilot should be saved, as [`Session::take_save_due`]
@@ -5026,6 +5042,7 @@ mod tests {
                 contribute: 0,
                 require: 0,
                 require_govt: -1,
+                buy_random: 100,
                 availability: String::new(),
                 item_class: 0,
                 lc_name: "multi-jumping organ".to_owned(),
@@ -5657,6 +5674,7 @@ mod tests {
                 contribute: 0,
                 require: 0,
                 require_govt: -1,
+                buy_random: 100,
                 availability: String::new(),
                 item_class: 0,
                 lc_name: "fuel tank".to_owned(),
@@ -5902,6 +5920,52 @@ mod tests {
         let mut broken = FlightView::new(broken);
         assert_eq!(broken.shipyard(), None);
         assert_eq!(broken.buy_ship(ShipId(129)), Err(ShipRefusal::NoShipyard));
+    }
+
+    /// [`shipbuying`], with the fuel tank and ship 129 each for sale on a
+    /// `BuyRandom` of 50.
+    fn rolling() -> FakeCatalog {
+        let mut catalog = shipbuying();
+        catalog.outfits[0].buy_random = 50;
+        catalog.ships[0].buy_random = 50;
+        catalog
+    }
+
+    #[test]
+    fn the_outfitter_and_shipyard_roll_on_the_flights_chance() {
+        let mut view = FlightView::new(rolling()).with_chance(SharedChance::default());
+        land_now(&mut view);
+        let outfitter = view.outfitter().expect("an outfitter");
+        assert!(outfitter.row(OutfitId(200)).is_none(), "off today");
+        let shipyard = view.shipyard().expect("a shipyard");
+        assert!(shipyard.row(ShipId(129)).is_none(), "off today");
+        assert_eq!(view.outfit(BUY_TANK), Err(OutfitRefusal::NotListed));
+        assert_eq!(view.buy_ship(ShipId(129)), Err(ShipRefusal::NotListed));
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let mut view = FlightView::new(rolling()).with_chance(SharedChance::new(shared));
+        land_now(&mut view);
+        always.borrow_mut().asked.clear();
+        let outfitter = view.outfitter().expect("an outfitter");
+        assert!(outfitter.row(OutfitId(200)).is_some(), "on today");
+        let shipyard = view.shipyard().expect("a shipyard");
+        assert!(shipyard.row(ShipId(129)).is_some(), "on today");
+        assert_eq!(always.borrow().asked, [50, 50]);
+        assert!(view.buy_ship(ShipId(129)).is_ok());
+    }
+
+    #[test]
+    fn with_buy_random_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_buy_random(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.buy_random(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::buy_random),
+            Ok(RuleSource::Engine)
+        );
     }
     // Traffic.
 
@@ -7896,6 +7960,7 @@ mod tests {
             contribute: 0,
             require: 0,
             require_govt: -1,
+            buy_random: 100,
             availability: String::new(),
             item_class: 0,
             lc_name: "rocket".to_owned(),
@@ -8907,6 +8972,7 @@ mod tests {
             contribute: 0,
             require: 0,
             require_govt: -1,
+            buy_random: 100,
             availability: String::new(),
             item_class: 7,
             lc_name: "spare part".to_owned(),

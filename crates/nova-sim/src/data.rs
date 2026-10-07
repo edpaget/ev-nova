@@ -141,6 +141,7 @@ impl PilotCatalog for GameData {
                     contribute: record.contribute.bits(),
                     require: record.require.bits(),
                     require_govt: record.require_govt,
+                    buy_random: record.buy_random,
                     availability: record.availability.as_str().to_owned(),
                     item_class: record.item_class,
                     lc_name: record.lc_name.as_str().to_owned(),
@@ -1124,7 +1125,7 @@ mod tests {
         bytes[0x2E..0x31].copy_from_slice(b"b12");
         bytes[0x32B..0x334].copy_from_slice(b"Big\\nGun!");
         bytes[0x36B..0x372].copy_from_slice(b"big gun");
-        put_i16s(&mut bytes, 0x3F2, &[1128]);
+        put_i16s(&mut bytes, 0x3F0, &[75, 1128]);
         bytes
     }
 
@@ -1159,6 +1160,7 @@ mod tests {
             contribute: 0x10,
             require: 0x0000_0008_0000_0001,
             require_govt: 1128,
+            buy_random: 75,
             availability: "b12".to_owned(),
             item_class: 0,
             lc_name: "big gun".to_owned(),

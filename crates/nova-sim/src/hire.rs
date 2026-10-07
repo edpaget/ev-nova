@@ -37,6 +37,10 @@
 //! kept until the next landing; it is never saved, as the original rolls
 //! again on load. Hiring a class draws its roll again
 //! (`_DoShipyardDialog` @0x5f20d), so a second may no longer be on offer.
+//! The shipyard's and the outfitter's `BuyRandom` rolls follow the same
+//! rule, each a separate draw ([`shipyard`](crate::shipyard),
+//! [`outfitter`](crate::outfitter)); the three share
+//! `wares::DayRolls`.
 //!
 //! # Who can be hired (`_CalcShipCanBuy` @0x4f848-0x4f90a)
 //!

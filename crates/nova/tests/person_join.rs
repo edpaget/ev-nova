@@ -169,7 +169,8 @@ fn spare_part() -> Vec<u8> {
     put_i16s(&mut bytes, 0x0A, &[10]);
     bytes[0x36B..0x36B + 10].copy_from_slice(b"spare part");
     bytes[0x3AB..0x3AB + 11].copy_from_slice(b"spare parts");
-    put_i16s(&mut bytes, 0x3EC, &[7]);
+    // `ItemClass` 7, for sale every day (`BuyRandom` 100).
+    put_i16s(&mut bytes, 0x3EC, &[7, 0, 100]);
     bytes
 }
 

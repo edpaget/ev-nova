@@ -1,8 +1,10 @@
 //! A flight session over the stock data: the first `chär` starts a session
 //! with its ship's handling and reserves in a system that exists, Port
 //! Kane's exchange trades at its levels, and its outfitter sells what its
-//! tech levels allow; Viking's shipyard sells what its tech levels and the
-//! ships' `BuyRandom` allow, and trades the Shuttle in; the ships go by
+//! tech levels allow on a day every roll fires; Viking's shipyard sells
+//! what its tech levels and the ships' `BuyRandom` allow, and trades the
+//! Shuttle in; on a day no roll fires, both sell only their items of
+//! `BuyRandom` 100; the ships go by
 //! their names without the designers' notes. Port Kane sells
 //! fuel and uninhabited Reflex-ion sells none. The date reads with the
 //! first `chär`'s affixes. HG-Kania leads to HG-Tichel. NPC traffic flies the
@@ -31,10 +33,10 @@ use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::{
-    Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good, GovtId,
-    JunkId, LandOutcome, LandPress, LandingRefusal, NeverFires, OutfitId, OutfitMod, OutfitOrder,
-    OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields, ShipId,
-    ShipState, ShipStats, StartDate, StellarId, SystemId, Vec2, check_landing, services,
+    Chance, Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good,
+    GovtId, JunkId, LandOutcome, LandPress, LandingRefusal, NeverFires, OutfitId, OutfitMod,
+    OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields,
+    ShipId, ShipState, ShipStats, StartDate, StellarId, SystemId, Vec2, check_landing, services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -369,7 +371,9 @@ fn port_kanes_outfitter_sells_what_its_tech_levels_allow() {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
-    let outfitter = at_port_kane(&data).outfitter().expect("an outfitter");
+    let outfitter = at_port_kane(&data)
+        .outfitter(&mut Fires)
+        .expect("an outfitter");
     let row = |id| outfitter.row(OutfitId(id));
     let battery = row(256).expect("the Battery Pack");
     assert_eq!(
@@ -401,8 +405,8 @@ fn a_battery_pack_adds_a_jump_of_fuel_to_the_shuttle() {
         outfit: OutfitId(256),
         direction: Direction::Buy,
     };
-    assert_eq!(session.outfit(battery), Ok(()));
-    let outfitter = session.outfitter().expect("an outfitter");
+    assert_eq!(session.outfit(battery, &mut Fires), Ok(()));
+    let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
     assert_eq!((outfitter.cash, outfitter.free_mass), (15_000, 5));
     assert_eq!(session.pilot().owned(OutfitId(256)), 1);
     assert_eq!(
@@ -436,8 +440,8 @@ fn vikings_shipyard_sells_what_its_tech_levels_and_buy_random_allow() {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
-    let session = at_viking(&data);
-    let shipyard = session.shipyard().expect("a shipyard");
+    let mut session = at_viking(&data);
+    let shipyard = session.shipyard(&mut Fires).expect("a shipyard");
     for id in [128, 129, 136, 167] {
         assert!(shipyard.row(ShipId(id)).is_some(), "{id}: {shipyard:?}");
     }
@@ -460,6 +464,33 @@ fn vikings_shipyard_sells_what_its_tech_levels_and_buy_random_allow() {
     assert_eq!(shipyard.trade_in, 2500, "a quarter of the Shuttle");
     assert_eq!(shipyard.cash, 25_000);
     assert_eq!(shipyard.current, ShipId(128));
+}
+
+/// On a day no roll fires, Port Kane sells the Battery Pack (`oütf` 256,
+/// `BuyRandom` 100) but not the Fission Reactor (179, 75) or Carbon Fiber
+/// (180, 90), and Viking sells the Viper (`shïp` 167, 100) but not the
+/// Terrapin (136, 90) or the Shuttle (128, 35), though the Shuttle is the
+/// ship flown.
+#[test]
+fn port_kane_and_viking_sell_only_their_always_items_when_no_roll_fires() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let outfitter = at_port_kane(&data)
+        .outfitter(&mut NeverFires)
+        .expect("an outfitter");
+    let listed = |id| outfitter.row(OutfitId(id)).is_some();
+    assert!(listed(256), "the Battery Pack");
+    assert!(!listed(179), "the Fission Reactor");
+    assert!(!listed(180), "Carbon Fiber");
+    let shipyard = at_viking(&data)
+        .shipyard(&mut NeverFires)
+        .expect("a shipyard");
+    let listed = |id| shipyard.row(ShipId(id)).is_some();
+    assert!(listed(167), "the Viper");
+    assert!(!listed(136), "the Terrapin");
+    assert!(!listed(128), "the Shuttle");
 }
 
 /// The stock ships go by their names without the designers' notes after
@@ -493,12 +524,12 @@ fn a_heavy_shuttle_trades_in_the_shuttle() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let mut session = at_viking(&data);
-    let bought = session.buy_ship(ShipId(129)).expect("bought");
+    let bought = session.buy_ship(ShipId(129), &mut Fires).expect("bought");
     assert_eq!((bought.price, bought.trade_in), (17_500, 2500));
     assert_eq!(session.ship(), ShipId(129));
     assert_eq!(session.pilot().cash(), 10_000);
     assert_eq!(session.capacity(), 15);
-    assert_eq!(session.outfitter().map(|o| o.free_mass), Some(12));
+    assert_eq!(session.outfitter(&mut Fires).map(|o| o.free_mass), Some(12));
     let fields = data.ship_fields(ShipId(129)).expect("decodes");
     assert_eq!(session.stats(), ShipStats::new(fields, &[]));
     assert_eq!(session.pilot().outfits().count(), 0);
@@ -3086,4 +3117,18 @@ fn finish_pre_jump(session: &mut Session) {
         session.tick(nova_sim::Controls::default());
     }
     panic!("never began the jump");
+}
+
+/// A chance that fires every roll and draws 0: every `BuyRandom` from 1 to
+/// 99 rolls on.
+struct Fires;
+
+impl Chance for Fires {
+    fn fires(&mut self, _percent: u8) -> bool {
+        true
+    }
+
+    fn below(&mut self, _n: u32) -> u32 {
+        0
+    }
 }

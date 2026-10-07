@@ -3,15 +3,35 @@
 //!
 //! # What a stellar sells
 //!
-//! A ship is *for sale* at a stellar with a shipyard when its `BuyRandom`
-//! is above 0 and its `TechLevel` is allowed there, as an outfit's is
-//! ([`wares::tech_allows`]). The Bible's `shïp` gives `BuyRandom` as "the
-//! percent chance that a ship of this type will be available for purchase
-//! on a given day. A `BuyRandom` of 0 means this ship will never be made
-//! available for purchase": unlike an outfit's, 0 or below is never for
-//! sale (stock data has 200 such NPC-only ships). A value from 1 up is not
-//! rolled yet: every such ship is for sale every day, and a value above
-//! 100 would count as 100.
+//! A ship is *for sale* at a stellar with a shipyard when its `TechLevel`
+//! is allowed there, as an outfit's is ([`wares::tech_allows`]), and its
+//! `BuyRandom` roll holds today. The Bible's `shïp` gives `BuyRandom` as
+//! "the percent chance that a ship of this type will be available for
+//! purchase on a given day. A `BuyRandom` of 0 means this ship will never
+//! be made available for purchase" (stock data has 200 such NPC-only
+//! ships).
+//!
+//! The original (`EV Nova.app`) draws one buy roll per ship class,
+//! `_Rand(100) + 1`, for the whole galaxy each day, for a new pilot and on
+//! load, and never saves it (`_IncrementGameTime` @0xb7c4-0xb833, as
+//! [`outfitter`](crate::outfitter) says); `_SetupPortAvailableShipTypes`
+//! sells a class that passes its tech level when its `BuyRandom` is not 0
+//! and, compared unsigned, at least the day's roll (@0xbc88-0xbc9d). The
+//! class flown is rolled like any other. The loader clamps `BuyRandom`
+//! with an unsigned compare (`_LoadObjectData` @0x7a340-0x7a34a), so above
+//! 100 counts as 100 and so does any negative value: by the engine, 0 is
+//! never for sale, 1-99 a % chance, and 100 or more or below 0 always.
+//! The Bible says only that 0 means never; by its reading, 0 or below is
+//! never. The rulebook's [`RuleKey::BuyRandom`](crate::RuleKey::BuyRandom)
+//! chooses (`buy_roll`). Buying a ship draws its class's roll again
+//! (`_DoShipyardDialog` @0x5f0d5-0x5f0f8).
+//!
+//! Here each class's roll is drawn on the caller's
+//! [`Chance`] the first time the list is built after a landing, by
+//! ascending ID and only for a class that tech allows whose reading is a
+//! chance of 1-99, and kept until the next landing or until the class is
+//! bought; it is never saved, as the original rolls again on load. A
+//! class off today is not listed and takes no higher one off sale.
 //!
 //! A ship for sale can be *bought* when its `Require` bits are met, by the
 //! `Contribute` of the ship flown and of the outfits the player owns (a
@@ -85,20 +105,22 @@
 //! which are neither fitted nor counted in the trade-in; the gun and turret
 //! limits (`MaxGun`, `MaxTur`); `OnPurchase` and `OnRetire`; naming the new
 //! ship and its `Long Name` message; `MovieFile`; and escorts' `UpgradeTo`.
-//! Nor does the shipyard roll `BuyRandom` or price a ship through the
-//! original's tech-level flux, as hiring in the bar does with its own
-//! `HireRandom` roll and price rule ([`hire`](crate::hire)).
+//! Nor does the shipyard price a ship through the original's tech-level
+//! flux, as hiring in the bar does with its own price rule
+//! ([`hire`](crate::hire)).
 
 use std::collections::BTreeMap;
 
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord};
+use crate::chance::Chance;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
 use crate::market::{Good, control_bits_allow};
 use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_mass, unit_price};
 use crate::pilot::{Pilot, tally};
+use crate::rulebook::RuleSource;
 use crate::stats::ShipStats;
-use crate::wares::{self, HideBits, HideHigher};
+use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll};
 
 /// The `shïp` `Flags3` bits the shipyard reads (the Bible): not the same
 /// values as the `oütf` flags of the same meaning.
@@ -205,10 +227,18 @@ impl Shipyard {
     }
 }
 
-/// Whether a ship with this `BuyRandom` is ever for sale: above 0.
-#[must_use]
-pub fn buy_random_allows(buy_random: i16) -> bool {
-    buy_random > 0
+/// How a ship class of `buy_random` rolls for sale each day, read as
+/// `source` says ([`RuleKey::BuyRandom`](crate::RuleKey::BuyRandom)): by
+/// the engine, 0 never and below 0 or 100 or more always
+/// (`_LoadObjectData` clamps it unsigned, @0x7a340-0x7a34a, and
+/// `_SetupPortAvailableShipTypes` sells only when it is not 0,
+/// @0xbc88-0xbc9d); by the Bible, 0 or below never and 100 or more
+/// always. Any other is a `BuyRandom` % chance.
+pub(crate) fn buy_roll(buy_random: i16, source: RuleSource) -> Roll {
+    match source {
+        RuleSource::Engine if buy_random < 0 => Roll::Always,
+        _ => Roll::of(buy_random),
+    }
 }
 
 /// `ship`'s price: its `Cost`, never below none.
@@ -250,6 +280,8 @@ pub(crate) struct Yard<'a> {
     pub(crate) fields: ShipFields,
     /// The stellar landed on.
     pub(crate) site: &'a LandingSite,
+    /// How `BuyRandom` reads ([`buy_roll`]).
+    pub(crate) buy_random: RuleSource,
 }
 
 impl Yard<'_> {
@@ -264,8 +296,15 @@ impl Yard<'_> {
         trade_in(cost, self.fields.mass, &pilot.outfits, self.outfits)
     }
 
-    /// The shipyard, for `pilot`; `None` when the stellar has none.
-    pub(crate) fn shipyard(&self, pilot: &Pilot) -> Option<Shipyard> {
+    /// The shipyard, for `pilot`, each class's roll for the day kept in
+    /// `rolls` and any not drawn yet drawn on `chance` (see the module
+    /// docs); `None` when the stellar has none.
+    pub(crate) fn shipyard(
+        &self,
+        pilot: &Pilot,
+        rolls: &mut DayRolls<ShipId>,
+        chance: &mut dyn Chance,
+    ) -> Option<Shipyard> {
         if self.site.flags & StellarFlags::SHIPYARD == 0 {
             return None;
         }
@@ -278,8 +317,8 @@ impl Yard<'_> {
         for ship in sorted {
             let required = wares::requirement_met(ship.require, contributed);
             let available = control_bits_allow(&ship.availability);
-            let for_sale = buy_random_allows(ship.buy_random)
-                && wares::tech_allows(ship.tech_level, self.site)
+            let for_sale = wares::tech_allows(ship.tech_level, self.site)
+                && rolls.today(ship.id, buy_roll(ship.buy_random, self.buy_random), chance)
                 && sweep.on_sale(ship.disp_weight);
             let buyable = for_sale && required && available;
             sweep.note(
@@ -429,10 +468,11 @@ pub(crate) fn purchase(
 mod tests {
     use super::*;
     use crate::catalog::{DisasterId, GovtId, JunkId, StellarId, SystemId};
+    use crate::chance::NeverFires;
     use crate::market::MORE_CARGO;
     use crate::reserves::Reserves;
     use crate::stats::{MORE_FUEL, MORE_SHIELD};
-    use crate::testkit::{FAST, catalog, outfit, planet, ship};
+    use crate::testkit::{FAST, Scripted, catalog, outfit, planet, ship};
 
     /// A shipyard of tech level 4 with special tech 6 and 55.
     fn port() -> LandingSite {
@@ -466,19 +506,50 @@ mod tests {
         pairs.iter().map(|&(id, n)| (OutfitId(id), n)).collect()
     }
 
+    /// The shipyard of `ships` at `site`, reading `BuyRandom` by the
+    /// engine.
+    fn yard<'a>(
+        ships: &'a [ShipRecord],
+        outfits: &'a [OutfitRecord],
+        site: &'a LandingSite,
+    ) -> Yard<'a> {
+        Yard {
+            ships,
+            outfits,
+            fields: FAST,
+            site,
+            buy_random: RuleSource::Engine,
+        }
+    }
+
+    /// The shipyard at `site` with no roll drawn yet, and none that fires.
     fn open_at(
         ships: &[ShipRecord],
         outfits: &[OutfitRecord],
         site: &LandingSite,
         pilot: &Pilot,
     ) -> Option<Shipyard> {
-        Yard {
-            ships,
-            outfits,
-            fields: FAST,
-            site,
+        yard(ships, outfits, site).shipyard(pilot, &mut DayRolls::default(), &mut NeverFires)
+    }
+
+    /// The shipyard of `ships` at [`port`] on `rolls`, drawing on `chance`.
+    fn rolled(
+        ships: &[ShipRecord],
+        pilot: &Pilot,
+        rolls: &mut DayRolls<ShipId>,
+        chance: &mut dyn Chance,
+    ) -> Shipyard {
+        yard(ships, &[], &port())
+            .shipyard(pilot, rolls, chance)
+            .expect("a shipyard")
+    }
+
+    /// Ship `id` at 1000 credits, of `buy_random`.
+    fn buying(id: i16, buy_random: i16) -> ShipRecord {
+        ShipRecord {
+            buy_random,
+            ..cheap(id)
         }
-        .shipyard(pilot)
     }
 
     fn open(ships: &[ShipRecord], pilot: &Pilot) -> Shipyard {
@@ -541,22 +612,128 @@ mod tests {
     }
 
     #[test]
-    fn buy_random_of_0_or_below_is_never_for_sale_and_any_other_always() {
-        let random = |id, buy_random| ShipRecord {
-            buy_random,
-            ..cheap(id)
-        };
+    fn by_the_engine_a_ships_negative_buy_random_is_always() {
+        let engine = |buy_random| buy_roll(buy_random, RuleSource::Engine);
+        assert_eq!(engine(i16::MIN), Roll::Always);
+        assert_eq!(engine(-1), Roll::Always);
+        assert_eq!(engine(0), Roll::Never);
+        assert_eq!(engine(1), Roll::Chance(1));
+        assert_eq!(engine(35), Roll::Chance(35));
+        assert_eq!(engine(99), Roll::Chance(99));
+        assert_eq!(engine(100), Roll::Always);
+        assert_eq!(engine(200), Roll::Always);
+    }
+
+    #[test]
+    fn by_the_bible_a_ships_buy_random_of_0_or_below_is_never() {
+        let bible = |buy_random| buy_roll(buy_random, RuleSource::Bible);
+        assert_eq!(bible(i16::MIN), Roll::Never);
+        assert_eq!(bible(-1), Roll::Never);
+        assert_eq!(bible(0), Roll::Never);
+        assert_eq!(bible(1), Roll::Chance(1));
+        assert_eq!(bible(99), Roll::Chance(99));
+        assert_eq!(bible(100), Roll::Always);
+        assert_eq!(bible(150), Roll::Always);
+    }
+
+    #[test]
+    fn a_ship_whose_roll_misses_is_not_for_sale_today() {
+        let ships = [buying(129, 35), buying(130, 0), buying(131, 100)];
+        let mut chance = Scripted::answering(&[false]);
+        let off = rolled(&ships, &pilot(), &mut DayRolls::default(), &mut chance);
+        assert_eq!(listed(&off), [131]);
+        assert_eq!(chance.asked, [35]);
+        let mut chance = Scripted::answering(&[true]);
+        let on = rolled(&ships, &pilot(), &mut DayRolls::default(), &mut chance);
+        assert_eq!(listed(&on), [129, 131]);
+        assert_eq!(row(&on, 129).buy, Ok(()));
+        assert_eq!(chance.asked, [35]);
+    }
+
+    #[test]
+    fn a_ships_roll_is_kept_across_builds_of_one_stay() {
+        let ships = [buying(129, 35)];
+        let mut rolls = DayRolls::default();
+        let mut missing = Scripted::answering(&[false]);
+        assert_eq!(
+            listed(&rolled(&ships, &pilot(), &mut rolls, &mut missing)),
+            Vec::<i16>::new()
+        );
+        let mut firing = Scripted::answering(&[true]);
+        assert_eq!(
+            listed(&rolled(&ships, &pilot(), &mut rolls, &mut firing)),
+            Vec::<i16>::new()
+        );
+        assert!(firing.asked.is_empty(), "no second draw");
+    }
+
+    #[test]
+    fn the_class_flown_is_rolled_like_any_other() {
+        let ships = [buying(128, 40), buying(129, 60)];
+        let mut chance = Scripted::answering(&[false, true]);
+        let shipyard = rolled(&ships, &pilot(), &mut DayRolls::default(), &mut chance);
+        assert_eq!(shipyard.current, ShipId(128));
+        assert_eq!(listed(&shipyard), [129]);
+        assert_eq!(chance.asked, [40, 60]);
+    }
+
+    #[test]
+    fn a_class_tech_forbids_is_never_rolled() {
         let ships = [
-            random(129, 0),
-            random(130, -1),
-            random(131, 1),
-            random(132, 100),
-            random(133, 150),
-            random(134, i16::MIN),
+            ShipRecord {
+                tech_level: 9,
+                ..buying(129, 70)
+            },
+            buying(131, 30),
+            buying(130, 20),
         ];
-        assert_eq!(listed(&open(&ships, &pilot())), [131, 132, 133]);
-        assert!(!buy_random_allows(0));
-        assert!(buy_random_allows(1));
+        let mut chance = Scripted::answering(&[true, true]);
+        let shipyard = rolled(&ships, &pilot(), &mut DayRolls::default(), &mut chance);
+        assert_eq!(chance.asked, [20, 30], "by ascending ID");
+        assert_eq!(listed(&shipyard), [130, 131]);
+    }
+
+    #[test]
+    fn by_the_engine_a_ship_of_negative_buy_random_is_always_for_sale() {
+        let ships = [buying(129, -1), buying(130, i16::MIN), buying(131, 0)];
+        let mut chance = Scripted::default();
+        let shipyard = rolled(&ships, &pilot(), &mut DayRolls::default(), &mut chance);
+        assert_eq!(listed(&shipyard), [129, 130]);
+        assert!(chance.asked.is_empty());
+    }
+
+    #[test]
+    fn by_the_bible_it_never_is() {
+        let ships = [buying(129, -1), buying(130, 0), buying(131, 100)];
+        let site = port();
+        let bible = Yard {
+            buy_random: RuleSource::Bible,
+            ..yard(&ships, &[], &site)
+        };
+        let shipyard = bible
+            .shipyard(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+            .expect("a shipyard");
+        assert_eq!(listed(&shipyard), [131]);
+    }
+
+    #[test]
+    fn a_ship_off_today_hides_no_higher_one() {
+        let ships = [
+            ShipRecord {
+                disp_weight: 5,
+                flags3: ShipFlags3::HIDE_HIGHER,
+                ..buying(129, 50)
+            },
+            ShipRecord {
+                disp_weight: 5,
+                ..cheap(130)
+            },
+        ];
+        let off = rolled(&ships, &pilot(), &mut DayRolls::default(), &mut NeverFires);
+        assert_eq!(listed(&off), [130]);
+        let mut firing = Scripted::answering(&[true]);
+        let on = rolled(&ships, &pilot(), &mut DayRolls::default(), &mut firing);
+        assert_eq!(listed(&on), [129]);
     }
 
     #[test]

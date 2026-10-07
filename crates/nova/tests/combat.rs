@@ -240,6 +240,8 @@ fn weapon(reload: i16, damage: i16, ammo: i16, graphic: i16, sound: i16, flags: 
 fn rockets() -> Vec<u8> {
     let mut bytes = vec![0; Outfit::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x06, &[3, 138, 10]);
+    // For sale every day (`BuyRandom` 100).
+    put_i16s(&mut bytes, 0x3F0, &[100]);
     bytes
 }
 
@@ -2717,6 +2719,7 @@ fn fighter_data(alpha_dudes: &[i16]) -> Rc<GameData> {
     put_i16s(&mut carrier, 0x732, &[2]);
     let mut fighters = vec![0; Outfit::SIZE.expect("fixed")];
     put_i16s(&mut fighters, 0x06, &[3, 130, 9999]);
+    put_i16s(&mut fighters, 0x3F0, &[100]);
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &boarder)

@@ -113,7 +113,8 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
 }
 
 /// `oütf` `id` with these mods (the unused ones none): tech level 1, a
-/// ton, 1000 credits, up to 10 owned, no flags, requiring nothing, of
+/// ton, 1000 credits, up to 10 owned, no flags, requiring nothing, for
+/// sale every day (`BuyRandom` 100), of
 /// `ItemClass` 0, its lower-case names "outfit `id`" and "outfits `id`".
 pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
     let mut pairs = [(0, 0); 4];
@@ -132,6 +133,7 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
         contribute: 0,
         require: 0,
         require_govt: -1,
+        buy_random: 100,
         availability: String::new(),
         item_class: 0,
         lc_name: format!("outfit {id}"),

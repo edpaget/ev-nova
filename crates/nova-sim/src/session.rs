@@ -482,6 +482,14 @@ pub struct Session {
     /// Each ship class's roll for hire since the last landing, drawn the
     /// first time the bar's list asks it.
     hire_rolls: DayRolls<ShipId>,
+    /// Each outfit's roll for sale since the last landing, drawn the first
+    /// time the outfitter's list asks it.
+    outfit_rolls: DayRolls<OutfitId>,
+    /// Each ship class's roll for sale since the last landing, drawn the
+    /// first time the shipyard's list asks it.
+    ship_rolls: DayRolls<ShipId>,
+    /// How `BuyRandom` reads (see [`Session::with_buy_random`]).
+    buy_random: RuleSource,
     /// Whether each take-off pays the hired escorts a day's wages (see
     /// [`Session::with_take_off_pay`]).
     take_off_pay: RuleSource,
@@ -607,6 +615,9 @@ impl Session {
             control_bits: hire::Shared(Rc::new(NoControlBits)),
             hire_require: RuleSource::Engine,
             hire_rolls: DayRolls::default(),
+            outfit_rolls: DayRolls::default(),
+            ship_rolls: DayRolls::default(),
+            buy_random: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
@@ -1712,6 +1723,8 @@ impl Session {
         self.talk = None;
         self.leave_with_fighters(true);
         self.hire_rolls.clear();
+        self.outfit_rolls.clear();
+        self.ship_rolls.clear();
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
@@ -1777,10 +1790,28 @@ impl Session {
         Ok(tons)
     }
 
-    /// The outfitter of the stellar the ship is docked at, if it has
-    /// landed at one.
+    /// This session with `BuyRandom` read as `source` says
+    /// ([`RuleKey::BuyRandom`](crate::RuleKey::BuyRandom)): by the
+    /// engine's default, an outfit's below 1 is never for sale and a
+    /// ship's below 0 always (see [`outfitter`] and
+    /// [`shipyard`]).
     #[must_use]
-    pub fn outfitter(&self) -> Option<Outfitter> {
+    pub fn with_buy_random(mut self, source: RuleSource) -> Self {
+        self.buy_random = source;
+        self
+    }
+
+    /// How `BuyRandom` reads: by the engine ([`RuleSource::Engine`]) or
+    /// by the Bible.
+    #[must_use]
+    pub fn buy_random(&self) -> RuleSource {
+        self.buy_random
+    }
+
+    /// The outfitter of the stellar the ship is docked at, if it has
+    /// landed at one, drawing on `chance` each outfit's roll for the day
+    /// not drawn yet since the landing (see [`outfitter`]).
+    pub fn outfitter(&mut self, chance: &mut dyn Chance) -> Option<Outfitter> {
         let stellar = self.landed?;
         let site = self.sites.iter().find(|site| site.id == stellar)?;
         Shop {
@@ -1789,16 +1820,22 @@ impl Session {
             defaults: &self.defaults,
             site,
             fighter_room: &self.fighter_room(),
+            buy_random: self.buy_random,
         }
-        .outfitter(&self.pilot)
+        .outfitter(&self.pilot, &mut self.outfit_rolls, chance)
     }
 
-    /// Buys or sells one outfit as `order` asks: a change made in the
-    /// spaceport, so a save is due, and the stats change with it. When the
-    /// ship is not landed at an outfitter, or the order is refused,
-    /// nothing changes and the refusal says why.
-    pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
-        let outfitter = self.outfitter().ok_or(OutfitRefusal::NoOutfitter)?;
+    /// Buys or sells one outfit as `order` asks, the rolls not drawn yet
+    /// drawn on `chance`: a change made in the spaceport, so a save is
+    /// due, and the stats change with it. When the ship is not landed at
+    /// an outfitter, or the order is refused, nothing changes and the
+    /// refusal says why.
+    pub fn outfit(
+        &mut self,
+        order: OutfitOrder,
+        chance: &mut dyn Chance,
+    ) -> Result<(), OutfitRefusal> {
+        let outfitter = self.outfitter(chance).ok_or(OutfitRefusal::NoOutfitter)?;
         outfitter.check(order)?;
         let price = outfitter.row(order.outfit).map_or(0, |row| row.price);
         let record = self
@@ -1813,9 +1850,9 @@ impl Session {
     }
 
     /// The shipyard of the stellar the ship is docked at, if it has landed
-    /// at one.
-    #[must_use]
-    pub fn shipyard(&self) -> Option<Shipyard> {
+    /// at one, drawing on `chance` each class's roll for the day not drawn
+    /// yet since the landing (see [`shipyard`]).
+    pub fn shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
         let stellar = self.landed?;
         let site = self.sites.iter().find(|site| site.id == stellar)?;
         Yard {
@@ -1823,8 +1860,9 @@ impl Session {
             outfits: &self.outfits,
             fields: self.fields,
             site,
+            buy_random: self.buy_random,
         }
-        .shipyard(&self.pilot)
+        .shipyard(&self.pilot, &mut self.ship_rolls, chance)
     }
 
     /// Buys a ship of class `ship`, trading in the one flown, and gives
@@ -1832,9 +1870,15 @@ impl Session {
     /// due, and the session flies the new ship from then on, its fields,
     /// default items and stats read from its record. When the ship is not
     /// landed at a shipyard, or the purchase is refused, nothing changes
-    /// and the refusal says why.
-    pub fn buy_ship(&mut self, ship: ShipId) -> Result<ShipPurchase, ShipRefusal> {
-        let shipyard = self.shipyard().ok_or(ShipRefusal::NoShipyard)?;
+    /// and the refusal says why. The rolls not drawn yet are drawn on
+    /// `chance`, and a purchase draws the class's roll again, as the
+    /// original does (`_DoShipyardDialog` @0x5f0d5-0x5f0f8).
+    pub fn buy_ship(
+        &mut self,
+        ship: ShipId,
+        chance: &mut dyn Chance,
+    ) -> Result<ShipPurchase, ShipRefusal> {
+        let shipyard = self.shipyard(chance).ok_or(ShipRefusal::NoShipyard)?;
         shipyard.check(ship)?;
         let record = self
             .ships
@@ -1859,6 +1903,7 @@ impl Session {
         self.fields = record.fields;
         self.defaults = pilot::tally(record.defaults.iter().copied());
         self.refit(false);
+        self.ship_rolls.redraw(&ship);
         bought.ok_or(ShipRefusal::NoShipyard)
     }
 
@@ -5039,10 +5084,13 @@ mod tests {
     fn there_is_an_outfitter_only_while_landed_at_one() {
         let catalog = outfitting();
         let mut session = Session::start(&catalog).expect("starts");
-        assert_eq!(session.outfitter(), None, "in flight");
-        assert_eq!(session.outfit(buy(SPEED)), Err(OutfitRefusal::NoOutfitter));
+        assert_eq!(session.outfitter(&mut NeverFires), None, "in flight");
+        assert_eq!(
+            session.outfit(buy(SPEED), &mut NeverFires),
+            Err(OutfitRefusal::NoOutfitter)
+        );
         land_now(&mut session).expect("lands");
-        let outfitter = session.outfitter().expect("an outfitter");
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
         assert_eq!(outfitter.rows.len(), 5);
         assert_eq!((outfitter.cash, outfitter.free_mass), (25_000, 30));
         let plain = FakePilotCatalog {
@@ -5056,8 +5104,15 @@ mod tests {
             ..outfitting()
         };
         let mut session = outfitted(&plain);
-        assert_eq!(session.outfitter(), None, "no outfitter here");
-        assert_eq!(session.outfit(buy(SPEED)), Err(OutfitRefusal::NoOutfitter));
+        assert_eq!(
+            session.outfitter(&mut NeverFires),
+            None,
+            "no outfitter here"
+        );
+        assert_eq!(
+            session.outfit(buy(SPEED), &mut NeverFires),
+            Err(OutfitRefusal::NoOutfitter)
+        );
     }
 
     #[test]
@@ -5065,8 +5120,8 @@ mod tests {
         let catalog = outfitting();
         let mut session = outfitted(&catalog);
         let reads = *catalog.outfit_reads.borrow();
-        session.outfit(buy(SPEED)).expect("bought");
-        session.outfitter().expect("an outfitter");
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        session.outfitter(&mut NeverFires).expect("an outfitter");
         session.take_off();
         jump(&mut session, &catalog, 131);
         assert_eq!(*catalog.outfit_reads.borrow(), reads);
@@ -5076,12 +5131,12 @@ mod tests {
     fn a_speed_booster_raises_the_top_speed_and_selling_it_lowers_it_again() {
         let mut session = outfitted(&outfitting());
         let before = session.handling();
-        assert_eq!(session.outfit(buy(SPEED)), Ok(()));
+        assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()));
         assert_eq!(session.handling().max_speed, before.max_speed + 3.0);
         assert_eq!(session.handling().accel, before.accel);
         assert_eq!(session.pilot().owned(SPEED), 1);
         assert_eq!(session.pilot().cash(), 24_000);
-        assert_eq!(session.outfit(sell(SPEED)), Ok(()));
+        assert_eq!(session.outfit(sell(SPEED), &mut NeverFires), Ok(()));
         assert_eq!(session.handling(), before);
         assert_eq!(session.pilot().cash(), 24_500, "sold for half");
     }
@@ -5090,20 +5145,20 @@ mod tests {
     fn a_cargo_pod_adds_space_to_the_exchange_too() {
         let mut session = outfitted(&outfitting());
         assert_eq!(session.capacity(), 20);
-        session.outfit(buy(CARGO)).expect("bought");
+        session.outfit(buy(CARGO), &mut NeverFires).expect("bought");
         assert_eq!(session.capacity(), 30);
         assert_eq!(session.market().expect("an exchange").free, 30);
-        session.outfit(sell(CARGO)).expect("sold");
+        session.outfit(sell(CARGO), &mut NeverFires).expect("sold");
         assert_eq!(session.capacity(), 20);
     }
 
     #[test]
     fn selling_space_below_the_cargo_held_is_allowed_and_none_is_free() {
         let mut session = outfitted(&outfitting());
-        session.outfit(buy(CARGO)).expect("bought");
+        session.outfit(buy(CARGO), &mut NeverFires).expect("bought");
         let food = order(FOOD, Direction::Buy, Lot::Max);
         assert_eq!(session.trade(food), Ok(30));
-        assert_eq!(session.outfit(sell(CARGO)), Ok(()));
+        assert_eq!(session.outfit(sell(CARGO), &mut NeverFires), Ok(()));
         let market = session.market().expect("an exchange");
         assert_eq!((market.capacity, market.free), (20, 0));
         assert_eq!(session.pilot().held(FOOD), 30);
@@ -5114,7 +5169,7 @@ mod tests {
         let mut session = outfitted(&outfitting());
         session.pilot.reserves.fuel.now = 200.0;
         session.pilot.reserves.shield.now = 10.0;
-        session.outfit(buy(TANK)).expect("bought");
+        session.outfit(buy(TANK), &mut NeverFires).expect("bought");
         assert_eq!(
             session.reserves().fuel,
             Gauge {
@@ -5122,7 +5177,9 @@ mod tests {
                 max: 400.0
             }
         );
-        session.outfit(buy(SHIELD)).expect("bought");
+        session
+            .outfit(buy(SHIELD), &mut NeverFires)
+            .expect("bought");
         assert_eq!(
             session.reserves().shield,
             Gauge {
@@ -5131,7 +5188,7 @@ mod tests {
             }
         );
         assert_eq!(session.reserves().armor, Gauge::full(45.0), "unchanged");
-        session.outfit(sell(TANK)).expect("sold");
+        session.outfit(sell(TANK), &mut NeverFires).expect("sold");
         assert_eq!(
             session.reserves().fuel,
             Gauge {
@@ -5139,7 +5196,7 @@ mod tests {
                 max: 300.0
             }
         );
-        session.outfit(sell(SHIELD)).expect("sold");
+        session.outfit(sell(SHIELD), &mut NeverFires).expect("sold");
         assert_eq!(
             session.reserves().shield,
             Gauge {
@@ -5148,8 +5205,8 @@ mod tests {
             }
         );
         session.pilot.reserves.fuel.now = 50.0;
-        session.outfit(buy(TANK)).expect("bought");
-        session.outfit(sell(TANK)).expect("sold");
+        session.outfit(buy(TANK), &mut NeverFires).expect("bought");
+        session.outfit(sell(TANK), &mut NeverFires).expect("sold");
         assert_eq!(
             session.reserves().fuel,
             Gauge {
@@ -5163,10 +5220,10 @@ mod tests {
     fn a_fuel_scoop_adds_to_the_regeneration_and_selling_it_takes_it_away() {
         let mut session = outfitted(&outfitting());
         assert_eq!(session.fuel_regen_per_tick(), 0.0);
-        session.outfit(buy(SCOOP)).expect("bought");
+        session.outfit(buy(SCOOP), &mut NeverFires).expect("bought");
         assert_eq!(session.fuel_regen_per_tick(), 0.1);
         assert_eq!(session.stats().fuel_regen, 0.1);
-        session.outfit(sell(SCOOP)).expect("sold");
+        session.outfit(sell(SCOOP), &mut NeverFires).expect("sold");
         assert_eq!(session.fuel_regen_per_tick(), 0.0);
     }
 
@@ -5174,16 +5231,19 @@ mod tests {
     fn an_outfit_bought_or_sold_makes_a_save_due_and_a_refused_one_changes_nothing() {
         let mut session = outfitted(&outfitting());
         let before = session.clone();
-        assert_eq!(session.outfit(sell(SPEED)), Err(OutfitRefusal::NoneOwned));
         assert_eq!(
-            session.outfit(buy(OutfitId(999))),
+            session.outfit(sell(SPEED), &mut NeverFires),
+            Err(OutfitRefusal::NoneOwned)
+        );
+        assert_eq!(
+            session.outfit(buy(OutfitId(999)), &mut NeverFires),
             Err(OutfitRefusal::NotListed)
         );
         assert_eq!(session, before);
         assert!(!session.take_save_due());
-        session.outfit(buy(SPEED)).expect("bought");
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
         assert!(session.take_save_due());
-        session.outfit(sell(SPEED)).expect("sold");
+        session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
         assert!(session.take_save_due());
     }
 
@@ -5204,13 +5264,15 @@ mod tests {
         };
         let mut session = outfitted(&catalog);
         assert_eq!(
-            session.outfit(buy(OutfitId(306))),
+            session.outfit(buy(OutfitId(306)), &mut NeverFires),
             Err(OutfitRefusal::CannotAfford)
         );
-        assert_eq!(session.outfit(buy(OutfitId(305))), Ok(()));
+        assert_eq!(session.outfit(buy(OutfitId(305)), &mut NeverFires), Ok(()));
+        // The list built, the day's rolls are as the refusal leaves them.
+        session.outfitter(&mut NeverFires);
         let before = session.clone();
         assert_eq!(
-            session.outfit(buy(OutfitId(305))),
+            session.outfit(buy(OutfitId(305)), &mut NeverFires),
             Err(OutfitRefusal::NoSpace)
         );
         assert_eq!(session, before);
@@ -5226,10 +5288,12 @@ mod tests {
         };
         let mut session = outfitted(&roomy);
         for _ in 0..3 {
-            session.outfit(buy(OutfitId(305))).expect("bought");
+            session
+                .outfit(buy(OutfitId(305)), &mut NeverFires)
+                .expect("bought");
         }
         assert_eq!(
-            session.outfit(buy(OutfitId(305))),
+            session.outfit(buy(OutfitId(305)), &mut NeverFires),
             Err(OutfitRefusal::MaxOwned)
         );
         assert_eq!(session.pilot().owned(OutfitId(305)), 3);
@@ -5249,11 +5313,11 @@ mod tests {
             ..outfitting()
         };
         let mut session = outfitted(&catalog);
-        let outfitter = session.outfitter().expect("an outfitter");
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
         let row = outfitter.row(OutfitId(310)).expect("listed, sell-only");
         assert_eq!(row.buy, Err(OutfitRefusal::NotForSale));
         assert_eq!(row.sell, Ok(()));
-        assert_eq!(session.outfit(sell(OutfitId(310))), Ok(()));
+        assert_eq!(session.outfit(sell(OutfitId(310)), &mut NeverFires), Ok(()));
         assert_eq!(session.pilot().owned(OutfitId(310)), 1);
         assert_eq!(session.pilot().cash(), 25_000 + 2000);
     }
@@ -5277,7 +5341,9 @@ mod tests {
                 fuel: Gauge::full(400.0),
             }
         );
-        let outfitter = outfitted(&catalog).outfitter().expect("an outfitter");
+        let outfitter = outfitted(&catalog)
+            .outfitter(&mut NeverFires)
+            .expect("an outfitter");
         assert_eq!(outfitter.free_mass, 30, "free mass is on top of them");
     }
 
@@ -5285,8 +5351,8 @@ mod tests {
     fn flying_a_pilot_with_outfits_gives_their_stats() {
         let catalog = outfitting();
         let mut session = outfitted(&catalog);
-        session.outfit(buy(SPEED)).expect("bought");
-        session.outfit(buy(TANK)).expect("bought");
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        session.outfit(buy(TANK), &mut NeverFires).expect("bought");
         let text = crate::save::encode(session.pilot());
         let pilot = crate::save::decode(&text).expect("a pilot");
         let resumed = Session::fly(&catalog, pilot).expect("flies");
@@ -5420,10 +5486,13 @@ mod tests {
     fn there_is_a_shipyard_only_while_landed_at_one() {
         let catalog = shipbuying();
         let mut session = Session::start(&catalog).expect("starts");
-        assert_eq!(session.shipyard(), None, "in flight");
-        assert_eq!(session.buy_ship(NEW), Err(ShipRefusal::NoShipyard));
+        assert_eq!(session.shipyard(&mut NeverFires), None, "in flight");
+        assert_eq!(
+            session.buy_ship(NEW, &mut NeverFires),
+            Err(ShipRefusal::NoShipyard)
+        );
         land_now(&mut session).expect("lands");
-        let shipyard = session.shipyard().expect("a shipyard");
+        let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
         assert_eq!(shipyard.rows.len(), 2);
         assert_eq!((shipyard.cash, shipyard.trade_in), (25_000, 2500));
         assert_eq!(shipyard.current, ShipId(128));
@@ -5432,8 +5501,11 @@ mod tests {
             ..shipbuying()
         };
         let mut session = outfitted(&plain);
-        assert_eq!(session.shipyard(), None, "no shipyard here");
-        assert_eq!(session.buy_ship(NEW), Err(ShipRefusal::NoShipyard));
+        assert_eq!(session.shipyard(&mut NeverFires), None, "no shipyard here");
+        assert_eq!(
+            session.buy_ship(NEW, &mut NeverFires),
+            Err(ShipRefusal::NoShipyard)
+        );
     }
 
     #[test]
@@ -5449,8 +5521,8 @@ mod tests {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);
         assert_eq!(*catalog.ship_record_reads.borrow(), 1);
-        session.buy_ship(NEW).expect("bought");
-        session.shipyard().expect("a shipyard");
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        session.shipyard(&mut NeverFires).expect("a shipyard");
         session.take_off();
         jump(&mut session, &catalog, 131);
         assert_eq!(*catalog.ship_record_reads.borrow(), 1);
@@ -5461,17 +5533,23 @@ mod tests {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);
         let before = session.clone();
-        assert_eq!(session.buy_ship(ShipId(999)), Err(ShipRefusal::NotListed));
+        assert_eq!(
+            session.buy_ship(ShipId(999), &mut NeverFires),
+            Err(ShipRefusal::NotListed)
+        );
         let mut poor = session.clone();
         poor.pilot.cash = 14_999;
         let poorer = poor.clone();
-        assert_eq!(poor.buy_ship(NEW), Err(ShipRefusal::CannotAfford));
+        assert_eq!(
+            poor.buy_ship(NEW, &mut NeverFires),
+            Err(ShipRefusal::CannotAfford)
+        );
         assert_eq!(poor, poorer);
         assert!(!poor.take_save_due());
         assert_eq!(session, before);
         assert!(!session.take_save_due());
         assert_eq!(
-            session.buy_ship(NEW),
+            session.buy_ship(NEW, &mut NeverFires),
             Ok(ShipPurchase {
                 price: 17_500,
                 trade_in: 2500,
@@ -5490,8 +5568,8 @@ mod tests {
     fn after_a_purchase_the_stats_are_the_new_ships_with_its_outfits() {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);
-        session.outfit(buy(SPEED)).expect("bought");
-        session.buy_ship(NEW).expect("bought");
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
         let stats = ShipStats::new(
             HEAVY,
             &[crate::fuel::OutfitMod {
@@ -5514,10 +5592,10 @@ mod tests {
     fn after_a_purchase_the_outfitter_reads_the_new_ships_free_mass_and_defaults() {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);
-        session.buy_ship(NEW).expect("bought");
-        let outfitter = session.outfitter().expect("an outfitter");
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
         assert_eq!(outfitter.free_mass, 12, "its tank is fitted on top");
-        let shipyard = session.shipyard().expect("a shipyard");
+        let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
         assert_eq!(shipyard.current, NEW);
         assert_eq!(shipyard.trade_in, 17_500 / 4 + 500, "the hull and its tank");
     }
@@ -5526,7 +5604,7 @@ mod tests {
     fn after_take_off_the_ship_flies_at_the_new_top_speed() {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);
-        session.buy_ship(NEW).expect("bought");
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
         session.take_off().expect("took off");
         let mut expected = *session.player();
         for _ in 0..200 {
@@ -5556,7 +5634,7 @@ mod tests {
         let mut session = outfitted(&catalog);
         assert_eq!(session.pilot().owned(PLATE), 1);
         assert_ne!(FAST.mass, HEAVY.mass);
-        let bought = session.buy_ship(NEW).expect("bought");
+        let bought = session.buy_ship(NEW, &mut NeverFires).expect("bought");
         assert_eq!(bought.sold_back, BTreeMap::from([(PLATE, 1)]));
         assert_eq!(bought.refund, 100 * i64::from(FAST.mass) / 2);
         assert_eq!(bought.trade_in, 2500, "persistent: not in the trade-in");
@@ -5571,7 +5649,7 @@ mod tests {
         session
             .trade(order(FOOD, Direction::Buy, Lot::Max))
             .expect("bought");
-        session.buy_ship(NEW).expect("bought");
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
         let text = crate::save::encode(session.pilot());
         let pilot = crate::save::decode(&text).expect("a pilot");
         assert_eq!(pilot, *session.pilot());
@@ -5583,6 +5661,163 @@ mod tests {
         assert_eq!(resumed.reserves(), session.reserves());
         assert_eq!(resumed.stats(), session.stats());
         assert_eq!(*resumed.pilot(), *session.pilot(), "no default added twice");
+    }
+
+    // BuyRandom.
+
+    /// [`shipbuying`], with the speed booster for sale on a `BuyRandom` of
+    /// `outfit_random` and ship 129 on one of `ship_random`.
+    fn rolling(outfit_random: i16, ship_random: i16) -> FakePilotCatalog {
+        let mut catalog = shipbuying();
+        catalog.outfits[0].buy_random = outfit_random;
+        catalog.ship_records[1].buy_random = ship_random;
+        catalog
+    }
+
+    /// Takes off and lands on planet 128 again.
+    fn relanded(session: &mut Session) {
+        session.take_off().expect("takes off");
+        land_now(session).expect("lands again");
+    }
+
+    fn lists_speed(session: &mut Session, chance: &mut dyn Chance) -> bool {
+        let outfitter = session.outfitter(chance).expect("an outfitter");
+        outfitter.row(SPEED).is_some()
+    }
+
+    fn lists_new(session: &mut Session, chance: &mut dyn Chance) -> bool {
+        let shipyard = session.shipyard(chance).expect("a shipyard");
+        shipyard.row(NEW).is_some()
+    }
+
+    #[test]
+    fn the_outfitters_rolls_are_drawn_once_a_landing_and_again_at_the_next() {
+        let mut session = outfitted(&rolling(50, 100));
+        let mut missing = Scripted::answering(&[false]);
+        assert!(!lists_speed(&mut session, &mut missing));
+        assert_eq!(missing.asked, [50]);
+        let mut firing = Scripted::answering(&[true, true]);
+        assert!(!lists_speed(&mut session, &mut firing), "kept");
+        assert!(firing.asked.is_empty());
+        relanded(&mut session);
+        assert!(lists_speed(&mut session, &mut firing));
+        assert_eq!(firing.asked, [50]);
+    }
+
+    #[test]
+    fn outfit_trades_draw_no_roll_again() {
+        let mut session = outfitted(&rolling(50, 100));
+        let mut chance = Scripted::answering(&[true]);
+        assert_eq!(session.outfit(buy(SPEED), &mut chance), Ok(()));
+        assert_eq!(session.outfit(sell(SPEED), &mut chance), Ok(()));
+        assert!(lists_speed(&mut session, &mut chance));
+        assert_eq!(chance.asked, [50]);
+    }
+
+    #[test]
+    fn the_shipyards_rolls_are_drawn_once_a_landing_and_again_at_the_next() {
+        let mut session = outfitted(&rolling(100, 50));
+        let mut missing = Scripted::answering(&[false]);
+        assert!(!lists_new(&mut session, &mut missing));
+        assert_eq!(missing.asked, [50]);
+        let mut firing = Scripted::answering(&[true, true]);
+        assert!(!lists_new(&mut session, &mut firing), "kept");
+        assert!(firing.asked.is_empty());
+        relanded(&mut session);
+        assert!(lists_new(&mut session, &mut firing));
+        assert_eq!(firing.asked, [50]);
+    }
+
+    #[test]
+    fn buying_a_ship_draws_its_class_roll_again() {
+        let mut session = outfitted(&rolling(100, 50));
+        let mut firing = Scripted::answering(&[true]);
+        session.buy_ship(NEW, &mut firing).expect("bought");
+        assert_eq!(firing.asked, [50]);
+        let mut missing = Scripted::answering(&[false]);
+        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        assert_eq!(missing.asked, [50]);
+    }
+
+    #[test]
+    fn an_item_off_today_is_refused_as_not_listed() {
+        let mut session = outfitted(&rolling(50, 50));
+        let before = session.clone();
+        assert_eq!(
+            session.outfit(buy(SPEED), &mut NeverFires),
+            Err(OutfitRefusal::NotListed)
+        );
+        assert_eq!(
+            session.buy_ship(NEW, &mut NeverFires),
+            Err(ShipRefusal::NotListed)
+        );
+        assert_eq!(session.pilot(), before.pilot());
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_pilot_loaded_docked_rolls_afresh() {
+        let catalog = rolling(50, 50);
+        let mut session = outfitted(&catalog);
+        let mut firing = Scripted::answering(&[true, true]);
+        assert!(lists_speed(&mut session, &mut firing));
+        assert!(lists_new(&mut session, &mut firing));
+        let text = crate::save::encode(session.pilot());
+        assert!(!text.contains("roll"), "no roll is saved: {text}");
+        let pilot = crate::save::decode(&text).expect("a pilot");
+        let mut resumed = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(resumed.landed(), Some(StellarId(128)));
+        let mut missing = Scripted::answering(&[false, false]);
+        assert!(!lists_speed(&mut resumed, &mut missing));
+        assert!(!lists_new(&mut resumed, &mut missing));
+        assert_eq!(missing.asked, [50, 50]);
+    }
+
+    /// Fires its `k`-th question, `k` counting from 0, when `k % 100` is
+    /// below the percent: over 100 questions of one percent, it fires
+    /// exactly that many.
+    #[derive(Default)]
+    struct Cycle {
+        k: u32,
+    }
+
+    impl Chance for Cycle {
+        fn fires(&mut self, percent: u8) -> bool {
+            let fired = self.k % 100 < u32::from(percent);
+            self.k += 1;
+            fired
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            NeverFires.below(n)
+        }
+    }
+
+    #[test]
+    fn about_n_percent_of_landings_sell_an_item_of_buy_random_n() {
+        let mut session = outfitted(&rolling(37, 62));
+        let (mut outfits, mut ships) = (Cycle::default(), Cycle::default());
+        let (mut speeds, mut news) = (0, 0);
+        for _ in 0..100 {
+            speeds += u32::from(lists_speed(&mut session, &mut outfits));
+            news += u32::from(lists_new(&mut session, &mut ships));
+            relanded(&mut session);
+        }
+        assert_eq!((speeds, news), (37, 62));
+        assert_eq!((outfits.k, ships.k), (100, 100), "one roll a landing");
+    }
+
+    #[test]
+    fn the_session_reads_buy_random_as_its_rule_says() {
+        let catalog = rolling(0, -1);
+        let mut engine = outfitted(&catalog);
+        assert_eq!(engine.buy_random(), RuleSource::Engine);
+        assert!(!lists_speed(&mut engine, &mut NeverFires));
+        assert!(lists_new(&mut engine, &mut NeverFires));
+        let mut bible = outfitted(&catalog).with_buy_random(RuleSource::Bible);
+        assert_eq!(bible.buy_random(), RuleSource::Bible);
+        assert!(lists_speed(&mut bible, &mut NeverFires));
+        assert!(!lists_new(&mut bible, &mut NeverFires));
     }
 
     // Recharging.
@@ -6760,7 +6995,9 @@ mod tests {
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.take_combat_events(), [], "no weapon yet");
         land_now(&mut session).expect("lands at the outfitter");
-        session.outfit(buy(OutfitId(305))).expect("bought");
+        session
+            .outfit(buy(OutfitId(305)), &mut NeverFires)
+            .expect("bought");
         session.take_off().expect("took off");
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
@@ -6828,7 +7065,7 @@ mod tests {
     fn a_ship_bought_fights_with_its_own_weapons_size_and_explosion() {
         let catalog = armed_shipyard();
         let mut session = outfitted(&catalog);
-        session.buy_ship(NEW).expect("bought");
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
         session.take_off().expect("took off");
         session.hold_trigger(FIRE);
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -7221,7 +7458,7 @@ mod tests {
         let mut session = outfitted(&catalog);
         session.select_secondary(false);
         assert_eq!(session.secondary(), Some(MISSILE));
-        session.outfit(buy(SPEED)).expect("bought");
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
         assert_eq!(session.secondary(), Some(MISSILE));
     }
 
@@ -7229,11 +7466,11 @@ mod tests {
     fn a_ship_bought_keeps_the_secondary_it_carries_or_selects_its_first() {
         let catalog = with_secondaries(shipbuying());
         let mut session = outfitted(&catalog);
-        session.buy_ship(NEW).expect("bought");
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
         assert_eq!(session.secondary(), Some(TORCH), "its first");
         let mut session = outfitted(&catalog);
         session.select_secondary(false);
-        session.buy_ship(NEW).expect("bought");
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
         assert_eq!(session.secondary(), Some(MISSILE), "still carried");
     }
 

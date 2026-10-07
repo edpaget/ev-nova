@@ -189,7 +189,8 @@ fn booster() -> Vec<u8> {
     put_i16s(&mut bytes, 0x00, &[30, 1, 1, 23, -500, 1]);
     bytes[0x0E..0x12].copy_from_slice(&5000_i32.to_be_bytes());
     put_i16s(&mut bytes, 0x12, &[0; 6]);
-    put_i16s(&mut bytes, 0x3F2, &[-1]);
+    // For sale every day (`BuyRandom` 100), requiring nothing anywhere.
+    put_i16s(&mut bytes, 0x3F0, &[100, -1]);
     let name = b"Horizontal\\nBooster";
     bytes[0x32B..0x32B + name.len()].copy_from_slice(name);
     bytes

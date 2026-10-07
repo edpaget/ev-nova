@@ -23,8 +23,42 @@
 //! so for now every outfit gated by one is available (stock `oütf` 342,
 //! "Area Map - Vell-os", shows everywhere).
 //!
-//! `BuyRandom`, the percent chance a day that an outfit is for sale, is
-//! not applied yet: every outfit is for sale every day.
+//! # `BuyRandom`: what is for sale today
+//!
+//! `BuyRandom` is the percent chance a day that an outfit is for sale.
+//! The original (`EV Nova.app`) draws one roll per outfit, `_Rand(100) +
+//! 1`, for the whole galaxy each day, for a new pilot and on load, and
+//! never saves it (`_IncrementGameTime` @0xb7c4-0xb833, `_ResetPlayer`
+//! @0x1d84a, `_LoadPilotData` @0x76407); a day always passes at take-off
+//! (`_PlayerLandOnStellar` @0x63440), so each landing sees fresh rolls
+//! and nothing rolls again during a stay. `_SetupPortAvailableItems`
+//! (@0xbedb, @0xc05d-0xc08f) then sells, among the outfits tech allows:
+//!
+//! - one the player owns, with no roll consulted; its roll is set so it
+//!   stays for sale for the rest of the day, even after the last is
+//!   sold;
+//! - any other when its `BuyRandom` is above 0 and at least the day's
+//!   roll: a `BuyRandom` % chance, and 100 always.
+//!
+//! The loader clamps `BuyRandom` to 0-100 (`_LoadObjectData`
+//! @0x78b8d-0x78ba6), so by the engine an outfit of `BuyRandom` below 1
+//! is never for sale (the stock data's 51 such are mission, granted or
+//! variant items) and one of 100 or more always. The Bible says instead
+//! that a value below 1 or above 100 means 100; the rulebook's
+//! [`RuleKey::BuyRandom`](crate::RuleKey::BuyRandom) chooses
+//! (`buy_roll`).
+//!
+//! Here each outfit's roll is drawn on the caller's
+//! [`Chance`] the first time the list is built after a
+//! landing, by ascending ID and only for an outfit that tech allows,
+//! that the player does not own and whose reading is a chance of 1-99,
+//! and kept until the next landing; it is never saved, as the original
+//! rolls again on load. The player only ever sees one stellar's list in a
+//! day, and the original always passes a day between two landings, so a
+//! roll a landing is the original's roll a day. Buying or selling an
+//! outfit draws no roll again. An outfit off today is not listed and
+//! takes no higher one off sale; one the player owns that is flagged
+//! [`OutfitFlags::SELL_ANYWHERE`] is still listed, sell-only.
 //!
 //! # What it lists
 //!
@@ -75,12 +109,14 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{GovtId, LandingSite, OutfitId, OutfitRecord};
+use crate::chance::Chance;
 use crate::fuel::OutfitMod;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
 use crate::market::{Direction, control_bits_allow};
 use crate::pilot::Pilot;
-use crate::wares::{self, HideBits, HideHigher};
+use crate::rulebook::RuleSource;
+use crate::wares::{self, ALWAYS_RANDOM, DayRolls, HideBits, HideHigher, Roll};
 
 /// The `oütf` `Flags` bits the outfitter reads (the Bible).
 #[derive(Clone, Copy, Debug)]
@@ -215,6 +251,19 @@ pub fn tech_allows(outfit: &OutfitRecord, site: &LandingSite) -> bool {
     wares::tech_allows(outfit.tech_level, site)
 }
 
+/// How an outfit of `buy_random` rolls for sale each day, read as
+/// `source` says ([`RuleKey::BuyRandom`](crate::RuleKey::BuyRandom)): by
+/// the engine, below 1 never and 100 or more always (`_LoadObjectData`
+/// clamps it to 0-100, @0x78b8d-0x78ba6, and `_SetupPortAvailableItems`
+/// sells only above 0, @0xc07a); by the Bible, below 1 or above 100
+/// always. Any other is a `BuyRandom` % chance.
+pub(crate) fn buy_roll(buy_random: i16, source: RuleSource) -> Roll {
+    match source {
+        RuleSource::Bible if !(1..=ALWAYS_RANDOM).contains(&buy_random) => Roll::Always,
+        _ => Roll::of(buy_random),
+    }
+}
+
 /// Whether an outfit's `Require` applies at a stellar of `govt` (`None`
 /// for independent), given its `RequireGovt`.
 #[must_use]
@@ -336,11 +385,20 @@ pub(crate) struct Shop<'a> {
     /// For every ammunition outfit of a fighter bay, the fighters the
     /// ship's bays can still take (see [`bay`](crate::bay)).
     pub(crate) fighter_room: &'a BTreeMap<OutfitId, u32>,
+    /// How `BuyRandom` reads ([`buy_roll`]).
+    pub(crate) buy_random: RuleSource,
 }
 
 impl Shop<'_> {
-    /// The outfitter, for `pilot`; `None` when the stellar has none.
-    pub(crate) fn outfitter(&self, pilot: &Pilot) -> Option<Outfitter> {
+    /// The outfitter, for `pilot`, each outfit's roll for the day kept in
+    /// `rolls` and any not drawn yet drawn on `chance` (see the module
+    /// docs); `None` when the stellar has none.
+    pub(crate) fn outfitter(
+        &self,
+        pilot: &Pilot,
+        rolls: &mut DayRolls<OutfitId>,
+        chance: &mut dyn Chance,
+    ) -> Option<Outfitter> {
         if self.site.flags & StellarFlags::OUTFITTER == 0 {
             return None;
         }
@@ -355,7 +413,15 @@ impl Shop<'_> {
             let required = !requirements_apply(record.require_govt, self.site.govt)
                 || wares::requirement_met(record.require, contributed);
             let available = control_bits_allow(&record.availability);
-            let for_sale = tech_allows(record, self.site) && sweep.on_sale(record.disp_weight);
+            let today = tech_allows(record, self.site)
+                && if owned > 0 {
+                    rolls.hold(record.id);
+                    true
+                } else {
+                    let roll = buy_roll(record.buy_random, self.buy_random);
+                    rolls.today(record.id, roll, chance)
+                };
+            let for_sale = today && sweep.on_sale(record.disp_weight);
             let buyable = for_sale && required && available;
             sweep.note(
                 record.disp_weight,
@@ -456,8 +522,9 @@ pub(crate) fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direct
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chance::NeverFires;
     use crate::stats::{MORE_FUEL, MORE_SPEED};
-    use crate::testkit::{FAST, catalog, outfit, planet};
+    use crate::testkit::{FAST, Scripted, catalog, outfit, planet};
 
     /// An outfitter of tech level 4 with special tech 6 and 55, of
     /// government 128.
@@ -502,18 +569,46 @@ mod tests {
         }
     }
 
-    const NO_DEFAULTS: BTreeMap<OutfitId, u16> = BTreeMap::new();
-    const NO_FIGHTERS: BTreeMap<OutfitId, u32> = BTreeMap::new();
+    static NO_DEFAULTS: BTreeMap<OutfitId, u16> = BTreeMap::new();
+    static NO_FIGHTERS: BTreeMap<OutfitId, u32> = BTreeMap::new();
 
-    fn open_at(records: &[OutfitRecord], site: &LandingSite, pilot: &Pilot) -> Option<Outfitter> {
+    /// The outfitter of `records` at `site`, reading `BuyRandom` by the
+    /// engine.
+    fn shop<'a>(records: &'a [OutfitRecord], site: &'a LandingSite) -> Shop<'a> {
         Shop {
             records,
             fields: FAST,
             defaults: &NO_DEFAULTS,
             site,
             fighter_room: &NO_FIGHTERS,
+            buy_random: RuleSource::Engine,
         }
-        .outfitter(pilot)
+    }
+
+    /// The outfitter at `site` with no roll drawn yet, and none that
+    /// fires.
+    fn open_at(records: &[OutfitRecord], site: &LandingSite, pilot: &Pilot) -> Option<Outfitter> {
+        shop(records, site).outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
+    }
+
+    /// The outfitter at [`port`] on `rolls`, drawing on `chance`.
+    fn rolled(
+        records: &[OutfitRecord],
+        pilot: &Pilot,
+        rolls: &mut DayRolls<OutfitId>,
+        chance: &mut dyn Chance,
+    ) -> Outfitter {
+        shop(records, &port())
+            .outfitter(pilot, rolls, chance)
+            .expect("an outfitter")
+    }
+
+    /// Outfit `id` of `buy_random`.
+    fn buying(id: i16, buy_random: i16) -> OutfitRecord {
+        OutfitRecord {
+            buy_random,
+            ..outfit(id, &[])
+        }
     }
 
     fn open(records: &[OutfitRecord], pilot: &Pilot) -> Outfitter {
@@ -526,6 +621,184 @@ mod tests {
 
     fn row(outfitter: &Outfitter, id: i16) -> &OutfitRow {
         outfitter.row(OutfitId(id)).expect("listed")
+    }
+
+    // BuyRandom.
+
+    #[test]
+    fn by_the_engine_an_outfits_buy_random_below_1_is_never_and_above_99_always() {
+        let engine = |buy_random| buy_roll(buy_random, RuleSource::Engine);
+        assert_eq!(engine(i16::MIN), Roll::Never);
+        assert_eq!(engine(-1), Roll::Never);
+        assert_eq!(engine(0), Roll::Never);
+        assert_eq!(engine(1), Roll::Chance(1));
+        assert_eq!(engine(99), Roll::Chance(99));
+        assert_eq!(engine(100), Roll::Always);
+        assert_eq!(engine(250), Roll::Always);
+    }
+
+    #[test]
+    fn by_the_bible_an_outfits_buy_random_outside_1_to_100_is_always() {
+        let bible = |buy_random| buy_roll(buy_random, RuleSource::Bible);
+        assert_eq!(bible(-1), Roll::Always);
+        assert_eq!(bible(0), Roll::Always);
+        assert_eq!(bible(1), Roll::Chance(1));
+        assert_eq!(bible(50), Roll::Chance(50));
+        assert_eq!(bible(99), Roll::Chance(99));
+        assert_eq!(bible(100), Roll::Always);
+        assert_eq!(bible(101), Roll::Always);
+        assert_eq!(bible(i16::MAX), Roll::Always);
+    }
+
+    #[test]
+    fn an_outfit_whose_roll_misses_is_not_for_sale_today() {
+        let records = [buying(128, 50)];
+        let mut chance = Scripted::answering(&[false]);
+        let off = rolled(&records, &pilot(), &mut DayRolls::default(), &mut chance);
+        assert_eq!(listed(&off), Vec::<i16>::new());
+        assert_eq!(chance.asked, [50]);
+        let mut chance = Scripted::answering(&[true]);
+        let on = rolled(&records, &pilot(), &mut DayRolls::default(), &mut chance);
+        assert_eq!(listed(&on), [128]);
+        assert_eq!(buy(&on), Ok(()));
+        assert_eq!(chance.asked, [50]);
+    }
+
+    #[test]
+    fn only_outfits_tech_allows_are_rolled_by_ascending_id() {
+        let records = [
+            buying(130, 40),
+            buying(128, 60),
+            OutfitRecord {
+                tech_level: 9,
+                ..buying(129, 70)
+            },
+            buying(131, 100),
+            buying(132, 0),
+        ];
+        let mut chance = Scripted::answering(&[true, true]);
+        let outfitter = rolled(&records, &pilot(), &mut DayRolls::default(), &mut chance);
+        assert_eq!(chance.asked, [60, 40]);
+        assert_eq!(listed(&outfitter), [128, 130, 131]);
+    }
+
+    #[test]
+    fn an_outfits_roll_is_kept_across_builds_of_one_stay() {
+        let records = [buying(128, 50)];
+        let mut rolls = DayRolls::default();
+        let mut missing = Scripted::answering(&[false]);
+        assert_eq!(
+            listed(&rolled(&records, &pilot(), &mut rolls, &mut missing)),
+            Vec::<i16>::new()
+        );
+        let mut firing = Scripted::answering(&[true]);
+        assert_eq!(
+            listed(&rolled(&records, &pilot(), &mut rolls, &mut firing)),
+            Vec::<i16>::new()
+        );
+        assert!(firing.asked.is_empty(), "no second draw");
+    }
+
+    #[test]
+    fn an_owned_outfit_is_for_sale_whatever_its_roll() {
+        let mut chance = Scripted::default();
+        let outfitter = rolled(
+            &[buying(128, 50)],
+            &owning(&[(128, 1)]),
+            &mut DayRolls::default(),
+            &mut chance,
+        );
+        assert_eq!(listed(&outfitter), [128]);
+        assert_eq!(buy(&outfitter), Ok(()));
+        assert!(chance.asked.is_empty(), "no roll asked");
+    }
+
+    #[test]
+    fn an_outfit_owned_when_listed_stays_for_sale_after_the_last_is_sold() {
+        let records = [buying(128, 50)];
+        let mut rolls = DayRolls::default();
+        let mut chance = Scripted::default();
+        rolled(&records, &owning(&[(128, 1)]), &mut rolls, &mut chance);
+        let sold = rolled(&records, &pilot(), &mut rolls, &mut chance);
+        assert_eq!(listed(&sold), [128]);
+        assert_eq!(buy(&sold), Ok(()));
+        assert!(chance.asked.is_empty());
+        let next_landing = rolled(&records, &pilot(), &mut DayRolls::default(), &mut chance);
+        assert_eq!(listed(&next_landing), Vec::<i16>::new());
+    }
+
+    #[test]
+    fn an_owned_outfit_of_buy_random_0_is_for_sale_until_none_is_owned() {
+        let records = [buying(128, 0)];
+        let mut rolls = DayRolls::default();
+        let owned = rolled(&records, &owning(&[(128, 1)]), &mut rolls, &mut NeverFires);
+        assert_eq!(listed(&owned), [128]);
+        assert_eq!(buy(&owned), Ok(()));
+        let sold = rolled(&records, &pilot(), &mut rolls, &mut NeverFires);
+        assert_eq!(listed(&sold), Vec::<i16>::new());
+    }
+
+    #[test]
+    fn an_owned_sell_anywhere_outfit_off_today_lists_sell_only() {
+        let records = [OutfitRecord {
+            flags: OutfitFlags::SELL_ANYWHERE,
+            tech_level: 9,
+            ..buying(128, 50)
+        }];
+        let mut chance = Scripted::default();
+        let outfitter = rolled(
+            &records,
+            &owning(&[(128, 1)]),
+            &mut DayRolls::default(),
+            &mut chance,
+        );
+        assert_eq!(listed(&outfitter), [128]);
+        assert_eq!(buy(&outfitter), Err(OutfitRefusal::NotForSale));
+        assert_eq!(sell(&outfitter), Ok(()));
+        assert!(chance.asked.is_empty());
+    }
+
+    #[test]
+    fn an_outfit_off_today_hides_no_higher_one() {
+        let records = [
+            OutfitRecord {
+                disp_weight: 5,
+                flags: OutfitFlags::HIDE_HIGHER,
+                ..buying(129, 50)
+            },
+            OutfitRecord {
+                disp_weight: 5,
+                ..outfit(130, &[])
+            },
+        ];
+        let off = rolled(
+            &records,
+            &pilot(),
+            &mut DayRolls::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(listed(&off), [130]);
+        let mut firing = Scripted::answering(&[true]);
+        let on = rolled(&records, &pilot(), &mut DayRolls::default(), &mut firing);
+        assert_eq!(listed(&on), [129]);
+    }
+
+    #[test]
+    fn by_the_bible_an_outfit_of_buy_random_0_is_always_for_sale() {
+        let records = [buying(128, 0), buying(129, -1)];
+        let site = port();
+        let bible = Shop {
+            buy_random: RuleSource::Bible,
+            ..shop(&records, &site)
+        };
+        let mut chance = Scripted::default();
+        let outfitter = bible
+            .outfitter(&pilot(), &mut DayRolls::default(), &mut chance)
+            .expect("an outfitter");
+        assert_eq!(listed(&outfitter), [128, 129]);
+        assert!(chance.asked.is_empty());
+        let engine = open_at(&records, &site, &pilot()).expect("an outfitter");
+        assert_eq!(listed(&engine), Vec::<i16>::new());
     }
 
     // What a stellar sells.
@@ -972,8 +1245,9 @@ mod tests {
                 defaults: &NO_DEFAULTS,
                 site: &port(),
                 fighter_room,
+                buy_random: RuleSource::Engine,
             }
-            .outfitter(pilot)
+            .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
             .expect("open")
         };
         assert_eq!(buy(&open_with(&room(128, 1), &pilot())), Ok(()));
@@ -1055,8 +1329,9 @@ mod tests {
             defaults: &NO_DEFAULTS,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
+            buy_random: RuleSource::Engine,
         }
-        .outfitter(&pilot())
+        .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
         .expect("open");
         assert_eq!(buy(&negative), Err(OutfitRefusal::NoExpansion));
         let massless = Shop {
@@ -1068,8 +1343,9 @@ mod tests {
             defaults: &NO_DEFAULTS,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
+            buy_random: RuleSource::Engine,
         }
-        .outfitter(&pilot())
+        .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
         .expect("open");
         assert_eq!(buy(&massless), Ok(()));
         let empty_holds = Shop {
@@ -1078,8 +1354,9 @@ mod tests {
             defaults: &NO_DEFAULTS,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
+            buy_random: RuleSource::Engine,
         }
-        .outfitter(&pilot())
+        .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
         .expect("open");
         assert_eq!(buy(&empty_holds), Ok(()), "only negative Holds forbids it");
     }

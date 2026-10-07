@@ -157,6 +157,9 @@ pub struct OutfitRecord {
     pub require: u64,
     /// Its `RequireGovt`, raw.
     pub require_govt: i16,
+    /// Its `BuyRandom`, raw: the percent chance a day that it is for
+    /// sale, as [`outfitter`](crate::outfitter) reads it.
+    pub buy_random: i16,
     /// Its `Availability` control-bit expression.
     pub availability: String,
     /// Its `ItemClass`, raw: the class a person's `GrantClass` grants
@@ -928,6 +931,7 @@ mod tests {
                 contribute: 0,
                 require: 0,
                 require_govt: -1,
+                buy_random: 100,
                 availability: String::new(),
                 item_class: 0,
                 lc_name: "scoop".to_owned(),

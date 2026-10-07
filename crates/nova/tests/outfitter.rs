@@ -203,7 +203,8 @@ fn outfit(
     );
     bytes[0x0E..0x12].copy_from_slice(&cost.to_be_bytes());
     put_i16s(&mut bytes, 0x12, &[0; 6]);
-    put_i16s(&mut bytes, 0x3F2, &[-1]);
+    // For sale every day (`BuyRandom` 100), requiring nothing anywhere.
+    put_i16s(&mut bytes, 0x3F0, &[100, -1]);
     bytes[0x32B..0x32B + short_name.len()].copy_from_slice(short_name.as_bytes());
     bytes
 }
