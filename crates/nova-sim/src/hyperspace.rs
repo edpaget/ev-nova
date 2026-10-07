@@ -4,9 +4,11 @@
 //! - The [`StarMap`] is every system's map position and hyperlinks. A link
 //!   joins its two systems both ways, whichever of them lists it (as the
 //!   galaxy map draws it); a system's link to itself, or to a system that
-//!   does not exist, is no link. [`StarMap::route`] is the fewest jumps
-//!   from one system to another, and [`StarMap::neighbours`] every system
-//!   linked with one, by ascending ID. [`StarMap::listed_links`] is only
+//!   does not exist, is no link. The star map is the single owner of
+//!   these rules: the galaxy map draws [`StarMap::links`], each link once,
+//!   rather than normalising the links itself. [`StarMap::route`] is the
+//!   fewest jumps from one system to another, and [`StarMap::neighbours`]
+//!   every system linked with one, by ascending ID. [`StarMap::listed_links`] is only
 //!   the links a system's own `sÿst` lists, in Con order: the original's
 //!   Hyper Select offers just these (`_HandlePlayer` @0x69bb2-0x69ce7
 //!   walks the current system's own Con slots), evidence that a link
@@ -200,7 +202,8 @@ pub struct StarMap {
 impl StarMap {
     /// The map of `systems`: each link both ways, without links to itself
     /// or to a system that is not among them. Where two systems share an
-    /// ID, the last wins.
+    /// ID, the last wins. This is the one place hyperlinks are normalised:
+    /// the galaxy map draws [`StarMap::links`].
     #[must_use]
     pub fn new(systems: Vec<StarSystem>) -> Self {
         let known: BTreeSet<SystemId> = systems.iter().map(|system| system.id).collect();
@@ -246,6 +249,21 @@ impl StarMap {
     #[must_use]
     pub fn listed_links(&self, id: SystemId) -> &[SystemId] {
         self.nodes.get(&id).map_or(&[], |node| &node.listed)
+    }
+
+    /// Every hyperlink once, as (lower ID, higher ID), sorted: the links
+    /// the galaxy map draws.
+    #[must_use]
+    pub fn links(&self) -> Vec<(SystemId, SystemId)> {
+        self.nodes
+            .iter()
+            .flat_map(|(&from, node)| {
+                node.links
+                    .iter()
+                    .filter(move |&&to| to > from)
+                    .map(move |&to| (from, to))
+            })
+            .collect()
     }
 
     /// Every system linked with `id`, whichever of the two lists the link,
@@ -399,6 +417,24 @@ mod tests {
 
     fn route(map: &StarMap, from: i16, to: i16) -> Result<Vec<SystemId>, RouteError> {
         map.route(SystemId(from), SystemId(to))
+    }
+
+    // Links.
+
+    #[test]
+    fn the_links_are_each_link_once_lower_id_first_sorted() {
+        let map = StarMap::new(vec![
+            system(5, &[1]),       // one-way, listed by the higher ID
+            system(1, &[2, 2, 9]), // repeated, and to a missing system
+            system(2, &[1, 2]),    // listed by both, and to itself
+            system(3, &[4]),
+            system(4, &[3, 3]),
+            system(6, &[]),
+        ]);
+        let pair = |a, b| (SystemId(a), SystemId(b));
+        assert_eq!(map.links(), vec![pair(1, 2), pair(1, 5), pair(3, 4)]);
+        assert_eq!(StarMap::new(vec![]).links(), vec![]);
+        assert_eq!(StarMap::default().links(), vec![]);
     }
 
     // Routes.
