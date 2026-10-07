@@ -16,7 +16,8 @@
 //! so does each fighter launched from the player's bays, marked
 //! `carried`, until it docks again, and each ship hired in the bar
 //! ([`Session::hire`](crate::Session::hire)), with the daily `wage` it
-//! was hired at. In flight the session flies each as
+//! was hired at, and each person who joins the player, linked to its
+//! `person`. In flight the session flies each as
 //! an NPC beside the player. The carried fighters do not count towards
 //! the fleet's most ([`Pilot::escort_count`]).
 //!
@@ -108,6 +109,11 @@ pub struct Escort {
     /// each day follows [`Session::with_escort_wage`](crate::Session::with_escort_wage)
     /// (see [`hire`](crate::hire)).
     pub wage: Option<i64>,
+    /// The person (`përs`) this escort is, flying as itself, its name,
+    /// ship and loadout its record's (see [`person`](crate::person));
+    /// none for any other escort. One whose person no longer has a record
+    /// flies as an ordinary escort of its ship class.
+    pub person: Option<PersonId>,
 }
 
 impl Escort {
@@ -513,6 +519,7 @@ mod tests {
             order: Some(EscortOrder::Hold),
             carried: false,
             wage: None,
+            person: None,
         };
         pilot.escorts.push(escort);
         assert_eq!(pilot.escorts(), [escort]);
@@ -528,6 +535,7 @@ mod tests {
             order: None,
             carried,
             wage: None,
+            person: None,
         };
         pilot.escorts = vec![escort(true), escort(false), escort(true), escort(false)];
         assert_eq!(pilot.escort_count(), 2);
@@ -543,6 +551,7 @@ mod tests {
             order: None,
             carried: false,
             wage,
+            person: None,
         };
         assert!(!escort(None).hired(), "captured");
         assert!(escort(Some(0)).hired());

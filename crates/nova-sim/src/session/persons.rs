@@ -20,7 +20,8 @@
 //! read), on the trigger its `Flags` give: when it begins to attack the
 //! player, now and then, and so on (see [`person`](crate::person)); the
 //! flight shows each in its message line ([`Session::take_quotes`]).
-//! "No quote showing" counts only the hail quotes, the last said
+//! A person escorting the player says none. "No quote showing" counts
+//! only the hail quotes, the last said
 //! [`QUOTE_SHOWN_TICKS`] or more ago. A person's quote state is never
 //! saved, and "once" is once for its stay.
 //!
@@ -144,6 +145,9 @@ impl Session {
             let around = world.around(self.npcs());
             self.npcs()
                 .iter()
+                // A person escorting the player says no hail quote: the
+                // original's joined ship is a mission ship, not the person.
+                .filter(|npc| npc.escort.is_none())
                 .filter_map(|npc| {
                     let person = npc.person?;
                     let view = QuoteView {

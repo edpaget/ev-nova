@@ -6526,7 +6526,8 @@ mod tests {
                     "reserves": {"shield": gauge(40.0), "armor": gauge(60.0), "fuel": gauge(250.0)},
                     "order": null,
                     "carried": carried,
-                    "wage": null
+                    "wage": null,
+                    "person": null
                 })
             })
             .collect();
@@ -6932,7 +6933,8 @@ mod tests {
                     "reserves": {"shield": gauge(40.0), "armor": gauge(60.0), "fuel": gauge(250.0)},
                     "order": null,
                     "carried": carried,
-                    "wage": wage
+                    "wage": wage,
+                    "person": null
                 })
             })
             .collect();

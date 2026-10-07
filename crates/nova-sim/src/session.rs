@@ -256,6 +256,9 @@ use crate::traffic::table::SpawnTable;
 use crate::traffic::{Traffic, World};
 
 /// The player's ship, flying in one system.
+// Each flag is its own part of the flight's state, set and read on its
+// own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
     /// The pilot flying: everything a save keeps.
@@ -343,6 +346,10 @@ pub struct Session {
     /// Each escort of the fleet's NPC in the system, lined up with the
     /// pilot's escorts while in flight; none for one not placed.
     fleet: Vec<Option<NpcId>>,
+    /// Whether the person escorts are restocked full to their fitted
+    /// ships as they are placed next: after a take-off, and when a pilot
+    /// is flown.
+    restock_persons: bool,
     /// The fee and wage of a hire (see [`Session::with_hire_terms`]).
     hire_terms: hire::Shared<dyn HireTerms>,
     /// The control-bit test a ship's `Availability` for hire goes through
@@ -463,6 +470,7 @@ impl Session {
             fighter_recall: RuleSource::Engine,
             fighter_notes: Vec::new(),
             fleet: Vec::new(),
+            restock_persons: false,
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
             control_bits: hire::Shared(Rc::new(NoControlBits)),
             hire_require: RuleSource::Engine,
@@ -562,6 +570,12 @@ impl Session {
             &self.outfits,
             &self.arsenal,
             &*self.person_rules.0,
+            &self
+                .pilot
+                .escorts
+                .iter()
+                .filter_map(|escort| escort.person)
+                .collect(),
         );
         let world = World {
             persons: PersonWorld {
@@ -569,6 +583,7 @@ impl Session {
                 gone: &self.pilot.gone_persons,
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.control_bits.0,
+                fleet: &self.pilot.escorts,
             },
             ..World::new(&[])
         };
@@ -610,6 +625,7 @@ impl Session {
                         gone: &self.pilot.gone_persons,
                         grudges: &self.pilot.grudges,
                         control_bits: &*self.control_bits.0,
+                        fleet: &self.pilot.escorts,
                     },
                 };
                 let strikes = std::mem::take(&mut self.strikes);
@@ -639,6 +655,7 @@ impl Session {
                 gone: &self.pilot.gone_persons,
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.control_bits.0,
+                fleet: &self.pilot.escorts,
             },
         }
     }
@@ -1770,6 +1787,7 @@ impl Session {
             order: None,
             carried: false,
             wage: None,
+            person: None,
         };
         self.drop_quarry(id);
         for other in self.traffic.npcs_mut() {
@@ -1825,6 +1843,7 @@ impl Session {
             order: None,
             carried: false,
             wage: None,
+            person: None,
         };
         let defaults = pilot::tally(record.defaults.iter().copied());
         let records = &self.outfits;
@@ -6410,6 +6429,7 @@ mod tests {
             order: None,
             carried: false,
             wage: None,
+            person: None,
         };
         session.pilot.escorts = vec![escort(130), escort(130), escort(131)];
         // Crew 10, 3 from each interceptor escort (ship 130), none from
@@ -6429,6 +6449,7 @@ mod tests {
                 order: None,
                 carried: false,
                 wage: None,
+                person: None,
             };
             MAX_ESCORTS
         ];
@@ -6798,6 +6819,7 @@ mod tests {
                 order: None,
                 carried: false,
                 wage: None,
+                person: None,
             };
             MAX_ESCORTS
         ];
@@ -6818,6 +6840,7 @@ mod tests {
             order: None,
             carried,
             wage: None,
+            person: None,
         };
         let fleet = |escorts: usize, fighters: usize| {
             let mut fleet = vec![escort(false); escorts];
@@ -6892,6 +6915,7 @@ mod tests {
             order: None,
             carried: false,
             wage: None,
+            person: None,
         }
     }
 
@@ -7129,6 +7153,7 @@ mod tests {
                 order: None,
                 carried: false,
                 wage: None,
+                person: None,
             }],
             "the old ship, stock and full"
         );

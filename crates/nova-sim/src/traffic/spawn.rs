@@ -154,10 +154,23 @@ impl<'a> PersonDraw<'a> {
                     // missions-and-storylines brings them.
                     && self.world.control_bits.allows(&record.active_on)
                     && !(arriving && person.derelict)
-                    && !self.here.contains(&record.name)
+                    && !self.world.in_fleet(**id)
+                    && !self.named_here(table, &record.name)
             })
             .map(|(&id, _)| id)
             .collect()
+    }
+
+    /// Whether a person named `name` is in the system already, the
+    /// persons of the player's fleet, known to `table`, among them.
+    fn named_here(&self, table: &SpawnTable, name: &str) -> bool {
+        self.here.contains(name)
+            || self
+                .world
+                .fleet
+                .iter()
+                .filter_map(|escort| table.persons.get(&escort.person?))
+                .any(|person| person.record.name == name)
     }
 
     /// The person roll among those of `table` who may appear.
@@ -247,10 +260,15 @@ pub fn initial(
             continue;
         };
         let world = draw.world;
-        if world.gone.contains(&id) || !world.control_bits.allows(&person.record.active_on) {
+        if world.gone.contains(&id)
+            || world.in_fleet(id)
+            || !world.control_bits.allows(&person.record.active_on)
+        {
             continue;
         }
-        if world.rules.listed(prob, &mut &mut *chance) && !draw.here.contains(&person.record.name) {
+        if world.rules.listed(prob, &mut &mut *chance)
+            && !draw.named_here(table, &person.record.name)
+        {
             let state = in_system(chance);
             out.extend(draw.spawn(table, id, state));
         }
@@ -1401,5 +1419,80 @@ mod tests {
         let (ships, asked) = set_up(&table, world, &[0, 0, 0]);
         assert_eq!(asked, [1500, 1500, 360]);
         assert_eq!(persons_of(&ships), [Some(600)]);
+    }
+
+    /// The player's escorts that are persons `ids`.
+    fn fleet_of(ids: &[i16]) -> Vec<crate::pilot::Escort> {
+        ids.iter()
+            .map(|&id| crate::pilot::Escort {
+                ship: ShipId(201),
+                reserves: kind(3, FAST).stats.full(),
+                order: None,
+                carried: false,
+                wage: None,
+                person: Some(PersonId(id)),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_person_in_the_players_fleet_is_never_rolled_nor_slotted() {
+        let mut table = peopled();
+        table
+            .persons
+            .insert(PersonId(511), spawn_person(511, true, 2));
+        let fleet = fleet_of(&[510]);
+        let world = PersonWorld {
+            fleet: &fleet,
+            ..PersonWorld::NONE
+        };
+        assert_eq!(
+            PersonDraw::new(world).eligible(&table, false),
+            [PersonId(511)]
+        );
+        let (ships, asked) = set_up(&table, world, &[0, 382, 99]);
+        assert_eq!(asked, [7, 1022, 100], "landing on it is empty");
+        assert_eq!(ships, []);
+        let (ships, _) = set_up(&table, world, &[0, 383, 0, 0, 0, 99]);
+        assert_eq!(persons_of(&ships), [Some(511)], "another comes");
+        let slotted = fleet_of(&[600]);
+        let world = PersonWorld {
+            fleet: &slotted,
+            ..PersonWorld::NONE
+        };
+        let none = SpawnTable {
+            avg_ships: 0,
+            ..peopled()
+        };
+        assert_eq!(set_up(&none, world, &[0]), (vec![], vec![]), "no draw");
+    }
+
+    #[test]
+    fn a_person_of_the_name_of_one_in_the_players_fleet_does_not_come() {
+        let mut table = peopled();
+        let mut namesake = spawn_person(512, true, 2);
+        namesake.record.name = "Person 600".to_owned();
+        table.persons.insert(PersonId(512), namesake);
+        let fleet = fleet_of(&[600]);
+        let world = PersonWorld {
+            fleet: &fleet,
+            ..PersonWorld::NONE
+        };
+        assert_eq!(
+            PersonDraw::new(world).eligible(&table, false),
+            [PersonId(510)]
+        );
+        assert_eq!(
+            PersonDraw::new(PersonWorld::NONE).eligible(&table, false),
+            [PersonId(510), PersonId(512)],
+            "with no fleet, as before"
+        );
+        let slot = SpawnTable {
+            avg_ships: 0,
+            person_slots: vec![(PersonId(512), 100)],
+            ..table
+        };
+        let (ships, asked) = set_up(&slot, world, &[0]);
+        assert_eq!((persons_of(&ships), asked), (vec![], vec![100]));
     }
 }

@@ -31,7 +31,9 @@
 //!    `Flags` 0x0800): drifting derelicts never jump in;
 //! 6. no person of its name is in the system already, in any condition
 //!    (@0x40baa-0x40c48; the original skips mission ships, of which there
-//!    are none yet).
+//!    are none yet), the persons escorting the player counted;
+//! 7. it does not escort the player ([`PersonWorld::fleet`]): a person in
+//!    the fleet is never rolled nor slotted.
 //!
 //! A person whose ship type has no record never appears (the original
 //! flies ship 128 for a `ShipType` out of range).
@@ -85,6 +87,7 @@ use crate::combat::hull::Condition;
 use crate::combat::weapon::{Ammo, WeaponSpec};
 use crate::govt::Governments;
 use crate::hire::{ControlBits, NoControlBits};
+use crate::pilot::Escort;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::traffic::npc::{Mode, Npc, NpcPerson};
@@ -250,6 +253,27 @@ pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView) -> Eligib
         (false, _) => Eligible::No,
         (true, false) => Eligible::Yes,
         (true, true) => Eligible::Now,
+    }
+}
+
+impl NpcPerson {
+    /// What an NPC flown by `record`'s person carries of it, holding a
+    /// grudge when `grudge`, having said no hail quote yet.
+    #[must_use]
+    pub fn of(record: &PersonRecord, grudge: bool) -> Self {
+        Self {
+            id: record.id,
+            flags: record.flags,
+            coward: record.coward,
+            comm_quote: record.comm_quote,
+            hail_quote: record.hail_quote,
+            mission: record.link_mission.is_some(),
+            portrait: record.hail_pict,
+            invincible: record.shield_mod < 0,
+            grudge,
+            quoted: false,
+            quoted_at: None,
+        }
     }
 }
 
@@ -560,16 +584,28 @@ pub struct PersonWorld<'a> {
     pub grudges: &'a BTreeSet<PersonId>,
     /// The control-bit test of a person's `ActiveOn`.
     pub control_bits: &'a dyn ControlBits,
+    /// The player's fleet: the persons among it never spawn, and their
+    /// names count as in the system.
+    pub fleet: &'a [Escort],
+}
+
+impl PersonWorld<'_> {
+    /// Whether person `id` escorts the player.
+    #[must_use]
+    pub fn in_fleet(&self, id: PersonId) -> bool {
+        self.fleet.iter().any(|escort| escort.person == Some(id))
+    }
 }
 
 impl PersonWorld<'static> {
-    /// Nova's rules by the engine, no person gone, no grudge, and every
-    /// `ActiveOn` holding.
+    /// Nova's rules by the engine, no person gone, no grudge, every
+    /// `ActiveOn` holding, and no fleet.
     pub const NONE: Self = Self {
         rules: &NovaPersons::ENGINE,
         gone: &NO_PERSONS,
         grudges: &NO_PERSONS,
         control_bits: &NoControlBits,
+        fleet: &[],
     };
 }
 

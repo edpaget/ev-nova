@@ -16,6 +16,16 @@
 //! full (`_RespawnEscort` @0x3d4b8, restock 1 @0x674c2), the fuel as
 //! recorded. Landed, the escorts wait in the record.
 //!
+//! **Person escorts.** An escort that is a person
+//! ([`Escort::person`](crate::Escort)) flies as itself in every system:
+//! its person's fitted ship (its weapon slots and `ShieldMod`, see
+//! [`person`](crate::person)), named by its record, with its grudge;
+//! taking off and flying a pilot restock it full to that fitted ship as
+//! it is placed. It says no hail quote. Destroyed without an escape pod,
+//! its person is gone for good; disabled or released, it leaves the fleet
+//! as the person it is. One whose person has no record flies as an
+//! ordinary escort of its ship class.
+//!
 //! **Standing orders on entering a system.** Each escort's standing
 //! order is kept on its record ([`Escort::order`](crate::Escort)) and
 //! saved. On entering a system the session follows its
@@ -58,9 +68,10 @@ use crate::escort::{
 };
 use crate::flight::ShipState;
 use crate::hyperspace::JUMP_FUEL;
+use crate::reserves::Reserves;
 use crate::rulebook::RuleSource;
-use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
-use crate::traffic::table;
+use crate::traffic::npc::{AiType, Mode, Npc, NpcId, NpcPerson};
+use crate::traffic::table::{self, ShipKind};
 
 impl Session {
     /// This session with its escorts' standing orders reset, or kept, on
@@ -91,6 +102,7 @@ impl Session {
         self.fleet = (0..self.pilot.escorts.len())
             .map(|index| self.place_escort(index))
             .collect();
+        self.restock_persons = false;
         self.reform();
         for id in self.fleet.clone().into_iter().flatten() {
             self.snap(id);
@@ -100,12 +112,27 @@ impl Session {
     /// Escort `index` as an NPC in the system, beside the player until it
     /// is snapped to its slot; none when its ship type has no record.
     pub(super) fn place_escort(&mut self, index: usize) -> Option<NpcId> {
-        let escort = *self.pilot.escorts.get(index)?;
+        let mut escort = *self.pilot.escorts.get(index)?;
         let record = self.ship_record(escort.ship)?;
-        let kind = table::kind(record, &self.outfits, &self.arsenal);
+        let maneuver = record.fields.maneuver;
+        let fitted = escort
+            .person
+            .and_then(|id| self.traffic.person(id))
+            .map(|person| {
+                let grudge = self.pilot.grudges.contains(&person.record.id);
+                (person.kind.clone(), NpcPerson::of(&person.record, grudge))
+            });
+        let (kind, person) = match fitted {
+            Some((kind, person)) => (kind, Some(person)),
+            None => (table::kind(record, &self.outfits, &self.arsenal), None),
+        };
+        if self.restock_persons && person.is_some() {
+            restock(&mut escort.reserves, &kind);
+            self.pilot.escorts[index].reserves = escort.reserves;
+        }
         let carrier = escort.carried.then(|| Carrier {
             ship: ShipRef::Player,
-            window: dock_window(record.fields.maneuver),
+            window: dock_window(maneuver),
             reach: self.reach_of(ShipRef::Player),
         });
         let npc = Npc {
@@ -141,7 +168,7 @@ impl Session {
             spared: false,
             assisting: 0,
             carrier,
-            person: None,
+            person,
         };
         Some(self.traffic.add_npc(npc))
     }
@@ -199,21 +226,18 @@ impl Session {
 
     /// Each escort's shield, armour and fuel, full as its class holds
     /// them, the fuel as recorded no more than it holds.
+    /// A person escort, whose fitted ship only the system's traffic knows,
+    /// is restocked to it as it is placed next.
     pub(super) fn restock_fleet(&mut self) {
         for index in 0..self.pilot.escorts.len() {
             let ship = self.pilot.escorts[index].ship;
             let Some(record) = self.ship_record(ship) else {
                 continue;
             };
-            let full = table::kind(record, &self.outfits, &self.arsenal)
-                .stats
-                .full();
-            let reserves = &mut self.pilot.escorts[index].reserves;
-            reserves.shield = full.shield;
-            reserves.armor = full.armor;
-            reserves.fuel.max = full.fuel.max;
-            reserves.fuel.now = reserves.fuel.now.min(full.fuel.max);
+            let kind = table::kind(record, &self.outfits, &self.arsenal);
+            restock(&mut self.pilot.escorts[index].reserves, &kind);
         }
+        self.restock_persons = true;
     }
 
     /// Each escort's record takes its NPC's shield, armour and fuel.
@@ -391,6 +415,16 @@ impl Session {
     }
 }
 
+/// `reserves` restocked full as a ship of `kind` holds them, the fuel as
+/// recorded no more than it holds.
+fn restock(reserves: &mut Reserves, kind: &ShipKind) {
+    let full = kind.stats.full();
+    reserves.shield = full.shield;
+    reserves.armor = full.armor;
+    reserves.fuel.max = full.fuel.max;
+    reserves.fuel.now = reserves.fuel.now.min(full.fuel.max);
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -399,7 +433,7 @@ mod tests {
     use super::*;
     use crate::ai::{Behaviour, NovaAi, Peaceful, Surroundings};
     use crate::catalog::{
-        HullRecord, ShipId, ShipRecord, StockWeapon, SystemId, WeaponId, WeaponRecord,
+        HullRecord, PersonId, ShipId, ShipRecord, StockWeapon, SystemId, WeaponId, WeaponRecord,
     };
     use crate::chance::{Chance, NeverFires};
     use crate::combat::Rules;
@@ -422,6 +456,7 @@ mod tests {
                 order: Some(EscortOrder::Defend),
                 carried: false,
                 wage: None,
+                person: None,
             };
             2
         ];
@@ -587,6 +622,7 @@ mod tests {
             order,
             carried: false,
             wage: None,
+            person: None,
         }
     }
 
@@ -1320,5 +1356,195 @@ mod tests {
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.target().map(|npc| npc.id), freighter, "kept");
         assert_eq!(session.select_target(TargetPick::NextEscort), None);
+    }
+
+    // Person escorts.
+
+    /// [`fleeted`] with "Ace" (`përs` 700), who appears nowhere, flying the
+    /// warship with two more turrets, its `ShieldMod` 200, its `HailPict`
+    /// 7800 and its hail quote 1 (`STR#` 7101 "Hi!").
+    fn with_ace() -> FakePilotCatalog {
+        let mut catalog = fleeted();
+        catalog.persons = vec![crate::catalog::PersonRecord {
+            name: "Ace".to_owned(),
+            link_syst: -2,
+            shield_mod: 200,
+            hail_pict: Some(7800),
+            hail_quote: 1,
+            weapons: vec![crate::catalog::PersonWeapon {
+                weapon: TURRET,
+                count: 2,
+                ammo: 0,
+            }],
+            ..crate::testkit::person(700, WARSHIP.0)
+        }];
+        catalog.strings = vec![(7101, vec!["Hi!".to_owned()])];
+        catalog
+    }
+
+    /// A pilot whose fleet is Ace, worn.
+    fn with_ace_escort(catalog: &FakePilotCatalog) -> Pilot {
+        let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
+        pilot.escorts = vec![Escort {
+            person: Some(PersonId(700)),
+            ..escort(WARSHIP, worn(), None)
+        }];
+        pilot
+    }
+
+    /// [`with_ace_escort`]'s session, its first traffic tick done.
+    fn flying_ace(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::fly(catalog, with_ace_escort(catalog)).expect("flies");
+        tick(&mut session, catalog);
+        session
+    }
+
+    #[test]
+    fn a_person_escort_flies_as_itself_with_its_fitted_ship() {
+        let catalog = with_ace();
+        let mut pilot = with_ace_escort(&catalog);
+        pilot.grudges.insert(PersonId(700));
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        tick(&mut session, &catalog);
+        let ace = escort_npcs(&session)[0];
+        let person = ace.person.expect("flown by Ace");
+        assert_eq!(person.id, PersonId(700));
+        assert_eq!(person.portrait, Some(7800));
+        assert!(person.grudge, "its grudge kept");
+        assert_eq!(session.npc_name(ace), Some("Ace"));
+        assert_eq!(ace.stats.shield, 2.0 * f32::from(FAST.shield));
+        assert_eq!(ace.stats.armor, 2.0 * f32::from(FAST.armor));
+        assert_eq!(
+            ace.armament
+                .mounts()
+                .iter()
+                .map(|mount| (mount.spec.id, mount.count))
+                .collect::<Vec<_>>(),
+            [(TURRET, 3)],
+            "its class's turret and its two more"
+        );
+        assert!(ace.escort.is_some());
+        assert_eq!(ace.govt, None);
+        assert_eq!(ace.ai_type, AiType::Warship);
+    }
+
+    #[test]
+    fn a_person_escort_is_restocked_full_to_its_fitted_ship_on_flying_and_taking_off() {
+        let catalog = with_ace();
+        let mut session = flying_ace(&catalog);
+        let fitted = Reserves {
+            fuel: worn().fuel,
+            ..Reserves::full(60.0, 90.0, 300.0)
+        };
+        assert_eq!(
+            escort_npcs(&session)[0].reserves,
+            fitted,
+            "the fuel as recorded"
+        );
+        assert_eq!(
+            session.pilot().escorts()[0].reserves,
+            fitted,
+            "and its record"
+        );
+        let ace = session.fleet[0].expect("placed");
+        session.npc_mut(ace).expect("there").reserves.shield.now = 5.0;
+        session.sync_fleet();
+        session.land().expect("lands on 128, under the ship");
+        session.take_off().expect("takes off");
+        tick(&mut session, &catalog);
+        assert_eq!(escort_npcs(&session)[0].reserves.shield.now, 60.0);
+    }
+
+    #[test]
+    fn a_person_escort_keeps_its_reserves_through_a_jump() {
+        let catalog = with_ace();
+        let mut session = flying_ace(&catalog);
+        let ace = session.fleet[0].expect("placed");
+        session.npc_mut(ace).expect("there").reserves.shield.now = 5.0;
+        session.sync_fleet();
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        let ace = escort_npcs(&session)[0];
+        assert_eq!(
+            ace.reserves.shield,
+            Gauge {
+                now: 5.0,
+                max: 60.0
+            }
+        );
+        assert_eq!(ace.person.map(|person| person.id), Some(PersonId(700)));
+        assert_eq!(session.npc_name(ace), Some("Ace"), "known there too");
+    }
+
+    #[test]
+    fn an_escort_whose_person_has_no_record_flies_as_its_class() {
+        let catalog = fleeted();
+        let session = flying_ace(&catalog);
+        let escort = escort_npcs(&session)[0];
+        assert_eq!(escort.person, None);
+        assert_eq!(escort.stats, ShipStats::new(FAST, &[]));
+        assert_eq!(
+            session.pilot().escorts()[0].person,
+            Some(PersonId(700)),
+            "its link kept"
+        );
+    }
+
+    #[test]
+    fn a_person_escort_says_no_hail_quote() {
+        let catalog = with_ace();
+        let mut session = flying_ace(&catalog);
+        session.tick_quotes(&catalog, &mut crate::testkit::Draws::of(&[0]));
+        assert_eq!(session.take_quotes(), []);
+        let ace = session.fleet[0].expect("placed");
+        session.unfleet(ace);
+        let mut chance = crate::testkit::Draws::of(&[0]);
+        session.tick_quotes(&catalog, &mut chance);
+        assert_eq!(
+            chance.asked,
+            [crate::person::QUOTE_ODDS],
+            "out of the fleet"
+        );
+        assert_eq!(
+            session
+                .take_quotes()
+                .into_iter()
+                .map(|quote| quote.text)
+                .collect::<Vec<_>>(),
+            ["Hi!"]
+        );
+    }
+
+    #[test]
+    fn a_person_escort_destroyed_without_an_escape_pod_is_gone_for_good() {
+        let catalog = with_ace();
+        let mut session = flying_ace(&catalog);
+        let ace = session.fleet[0].expect("placed");
+        session.npc_mut(ace).expect("there").reserves.armor.now = 0.0;
+        for _ in 0..4 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(session.pilot().escorts(), []);
+        assert!(session.pilot().gone(PersonId(700)));
+    }
+
+    #[test]
+    fn a_person_escort_disabled_or_released_stays_its_person_alive() {
+        let catalog = with_ace();
+        let mut session = flying_ace(&catalog);
+        let ace = session.fleet[0].expect("placed");
+        session.npc_mut(ace).expect("there").reserves.armor.now = 10.0;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.pilot().escorts(), []);
+        let left = session.npc(ace).expect("left behind");
+        assert_eq!(left.condition, Condition::Disabled);
+        assert_eq!(left.person.map(|person| person.id), Some(PersonId(700)));
+        assert!(!session.pilot().gone(PersonId(700)));
+        let mut session = flying_ace(&catalog);
+        let ace = session.fleet[0].expect("placed");
+        session.release(ace);
+        assert_eq!(session.pilot().escorts(), []);
+        let left = session.npc(ace).expect("leaving");
+        assert_eq!(left.person.map(|person| person.id), Some(PersonId(700)));
+        assert!(!session.pilot().gone(PersonId(700)));
     }
 }

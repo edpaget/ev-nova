@@ -2301,7 +2301,8 @@ fn with_fleet(pilot: &Pilot, ships: &[i16]) -> Pilot {
                 "reserves": {"shield": gauge(30.0), "armor": gauge(45.0), "fuel": gauge(300.0)},
                 "order": null,
                 "carried": false,
-                "wage": null
+                "wage": null,
+                "person": null
             })
         })
         .collect();

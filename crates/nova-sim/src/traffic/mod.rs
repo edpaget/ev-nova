@@ -419,22 +419,8 @@ impl Traffic {
             };
             let reserves = person.map_or_else(|| kind.stats.full(), |person| person.reserves);
             let condition = person.map_or(Condition::Intact, |person| person.condition);
-            let traits = person.map(|person| {
-                let record = &person.record;
-                NpcPerson {
-                    id: record.id,
-                    flags: record.flags,
-                    coward: record.coward,
-                    comm_quote: record.comm_quote,
-                    hail_quote: record.hail_quote,
-                    mission: record.link_mission.is_some(),
-                    portrait: record.hail_pict,
-                    invincible: record.shield_mod < 0,
-                    grudge: grudges.contains(&record.id),
-                    quoted: false,
-                    quoted_at: None,
-                }
-            });
+            let traits = person
+                .map(|person| NpcPerson::of(&person.record, grudges.contains(&person.record.id)));
             let id = NpcId(self.next_id);
             self.next_id += 1;
             self.npcs.push(Npc {

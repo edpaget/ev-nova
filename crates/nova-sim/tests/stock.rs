@@ -2660,6 +2660,7 @@ fn table_of(data: &GameData, system: i16) -> SpawnTable {
         &data.outfits(),
         &nova_sim::combat::armament::Arsenal::read(data),
         &NovaPersons::default(),
+        &std::collections::BTreeSet::new(),
     )
 }
 

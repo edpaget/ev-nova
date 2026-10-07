@@ -15,9 +15,9 @@
 //! - A weighted [`pick`] draws `Rand(sum) + 1` and takes the first entry
 //!   whose cumulative weight reaches it.
 //! - The persons ([`SpawnPerson`]) kept are those whose `LinkSyst`
-//!   allows the system ([`PersonLink`]) or whom one of its Person slots
-//!   names, and whose ship type has a record, each flying its ship as
-//!   [`person::fit`] fits it.
+//!   allows the system ([`PersonLink`]), whom one of its Person slots
+//!   names, or who escorts the player, and whose ship type has a record,
+//!   each flying its ship as [`person::fit`] fits it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -247,8 +247,10 @@ impl SpawnTable {
     /// `govts`, with each ship type's stats from its record in `ships`
     /// and its default items, the `oütf`s from `outfits`, as the player's
     /// are, and its hull and armament from `arsenal`; its persons' links
-    /// and ships as `rules` says. A system that cannot be read has no
-    /// traffic.
+    /// and ships as `rules` says. The persons of `fleet`, the player's
+    /// escorts, are kept wherever they are, so each flies as itself in
+    /// every system. A system that cannot be read has no traffic, and
+    /// keeps only the fleet's persons.
     #[must_use]
     // Each is a separate input the session reads once and keeps.
     #[allow(clippy::too_many_arguments)]
@@ -261,9 +263,29 @@ impl SpawnTable {
         outfits: &[OutfitRecord],
         arsenal: &Arsenal,
         rules: &dyn PersonRules,
+        fleet: &BTreeSet<PersonId>,
     ) -> Self {
         let Some(traffic) = catalog.system_traffic(system) else {
-            return Self::default();
+            if fleet.is_empty() {
+                return Self::default();
+            }
+            let mut persons = persons(
+                catalog,
+                (system, system_govt, govts),
+                (&[], fleet),
+                (ships, outfits, arsenal),
+                rules,
+            );
+            persons.retain(|id, _| fleet.contains(id));
+            let wanted: BTreeSet<ShipId> = persons
+                .values()
+                .filter_map(|person| person.record.ship)
+                .collect();
+            return Self {
+                ships: kinds(ships, &wanted, outfits, arsenal),
+                persons,
+                ..Self::default()
+            };
         };
         let decoded = decode_dude_types(&traffic.dude_types);
         let dude_records: BTreeMap<_, _> = decoded
@@ -308,7 +330,7 @@ impl SpawnTable {
         let persons = persons(
             catalog,
             (system, system_govt, govts),
-            &person_slots,
+            (&person_slots, fleet),
             (ships, outfits, arsenal),
             rules,
         );
@@ -323,11 +345,7 @@ impl SpawnTable {
             }))
             .chain(persons.values().filter_map(|person| person.record.ship))
             .collect();
-        let ships = ships
-            .iter()
-            .filter(|record| wanted.contains(&record.id))
-            .map(|record| (record.id, kind(record, outfits, arsenal)))
-            .collect();
+        let ships = kinds(ships, &wanted, outfits, arsenal);
         Self {
             avg_ships: u32::try_from(traffic.avg_ships).unwrap_or(0),
             dudes: decoded.dudes,
@@ -348,14 +366,29 @@ impl SpawnTable {
     }
 }
 
+/// Each of `ships` whose ID is `wanted`, as the traffic flies it.
+fn kinds(
+    ships: &[ShipRecord],
+    wanted: &BTreeSet<ShipId>,
+    outfits: &[OutfitRecord],
+    arsenal: &Arsenal,
+) -> BTreeMap<ShipId, ShipKind> {
+    ships
+        .iter()
+        .filter(|record| wanted.contains(&record.id))
+        .map(|record| (record.id, kind(record, outfits, arsenal)))
+        .collect()
+}
+
 /// The persons of `catalog` linked to `system`, governed by `system_govt`
-/// with the relations in `govts`, or named in `slots`, whose ship has a
-/// record among `ships`, each flying it fitted, its default items from
-/// `outfits` and armed from `arsenal`, as `rules` say.
+/// with the relations in `govts`, named in `slots` or in the player's
+/// `fleet`, whose ship has a record among `ships`, each flying it fitted,
+/// its default items from `outfits` and armed from `arsenal`, as `rules`
+/// say.
 fn persons(
     catalog: &(impl TrafficCatalog + ?Sized),
     (system, system_govt, govts): (SystemId, Option<GovtId>, &Governments),
-    slots: &[(PersonId, i16)],
+    (slots, fleet): (&[(PersonId, i16)], &BTreeSet<PersonId>),
     (ships, outfits, arsenal): (&[ShipRecord], &[OutfitRecord], &Arsenal),
     rules: &dyn PersonRules,
 ) -> BTreeMap<PersonId, SpawnPerson> {
@@ -370,7 +403,7 @@ fn persons(
                 rules.link_slip(),
             );
             let slotted = slots.iter().any(|&(id, _)| id == record.id);
-            if !linked && !slotted {
+            if !linked && !slotted && !fleet.contains(&record.id) {
                 return None;
             }
             let ship = ships.iter().find(|ship| Some(ship.id) == record.ship)?;
@@ -762,6 +795,12 @@ mod tests {
     }
 
     fn resolved_by(rules: NovaPersons) -> SpawnTable {
+        resolved_with(rules, &BTreeSet::new())
+    }
+
+    /// The table by `rules`, the persons of `fleet` in the player's
+    /// fleet.
+    fn resolved_with(rules: NovaPersons, fleet: &BTreeSet<PersonId>) -> SpawnTable {
         SpawnTable::resolve(
             &Traffic::default(),
             SystemId(130),
@@ -774,7 +813,57 @@ mod tests {
             ],
             &arsenal(),
             &rules,
+            fleet,
         )
+    }
+
+    #[test]
+    fn a_table_keeps_the_persons_of_the_players_fleet_fitted_wherever_it_is() {
+        let fleet = BTreeSet::from([PersonId(601), PersonId(602), PersonId(700)]);
+        let table = resolved_with(NovaPersons::default(), &fleet);
+        assert_eq!(
+            table.persons.keys().copied().collect::<Vec<_>>(),
+            [PersonId(510), PersonId(600), PersonId(601), PersonId(603)],
+            "601 for the fleet; 602's ship has no record, and 700 none at all"
+        );
+        let escort = &table.persons[&PersonId(601)];
+        assert!(!escort.linked, "neither linked nor slotted here");
+        assert_eq!(escort.record, Traffic::default().persons()[2]);
+        assert_eq!(
+            escort.kind,
+            table.persons[&PersonId(600)].kind,
+            "fitted as any other"
+        );
+        assert!(table.ship_types().contains(&ShipId(200)), "its ship");
+        assert!(
+            resolved_with(NovaPersons::default(), &BTreeSet::from([PersonId(510)])).persons
+                [&PersonId(510)]
+                .linked,
+            "a fleet person linked here is linked"
+        );
+    }
+
+    #[test]
+    fn a_system_that_cannot_be_read_keeps_only_the_fleets_persons() {
+        let catalog = Traffic::default();
+        let table = SpawnTable::resolve(
+            &catalog,
+            SystemId(131),
+            None,
+            &Governments::default(),
+            &records(),
+            &[],
+            &Arsenal::default(),
+            &NovaPersons::default(),
+            &BTreeSet::from([PersonId(601)]),
+        );
+        assert_eq!(
+            table.persons.keys().copied().collect::<Vec<_>>(),
+            [PersonId(601)]
+        );
+        assert_eq!(table.ship_types(), [ShipId(200)]);
+        assert_eq!((table.avg_ships, table.dudes.len()), (0, 0));
+        assert!(table.person_slots.is_empty());
     }
 
     #[test]
@@ -970,6 +1059,7 @@ mod tests {
             &[],
             &Arsenal::default(),
             &NovaPersons::default(),
+            &BTreeSet::new(),
         );
         assert_eq!(table, SpawnTable::default());
         assert!(catalog.dudes_asked.borrow().is_empty());
@@ -1005,6 +1095,7 @@ mod tests {
             &[],
             &Arsenal::default(),
             &NovaPersons::default(),
+            &BTreeSet::new(),
         );
         assert_eq!(table, SpawnTable::default());
     }

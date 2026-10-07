@@ -260,6 +260,7 @@ impl Session {
                 order: None,
                 carried: false,
                 wage: Some(wage),
+                person: None,
             });
         });
         self.hire_rolls.remove(&ship);
@@ -605,6 +606,7 @@ mod tests {
             order: None,
             carried,
             wage: None,
+            person: None,
         }
     }
 
@@ -662,6 +664,7 @@ mod tests {
                 order: None,
                 carried: false,
                 wage: Some(100),
+                person: None,
             }]
         );
         assert!(session.take_save_due());

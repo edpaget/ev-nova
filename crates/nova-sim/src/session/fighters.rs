@@ -136,6 +136,7 @@ impl Session {
             order,
             carried: true,
             wage: None,
+            person: None,
         };
         let id = self.traffic.add_npc(npc);
         self.pilot.escorts.push(escort);
@@ -768,6 +769,7 @@ mod tests {
             order,
             carried: false,
             wage: None,
+            person: None,
         };
         let mut session = Session::fly(&catalog, pilot(&catalog, 2, vec![warship]))
             .expect("flies")
@@ -866,6 +868,7 @@ mod tests {
             order: None,
             carried: true,
             wage: None,
+            person: None,
         }
     }
 
@@ -877,6 +880,7 @@ mod tests {
             order,
             carried: false,
             wage: None,
+            person: None,
         }
     }
 
