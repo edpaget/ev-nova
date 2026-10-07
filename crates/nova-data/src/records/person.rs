@@ -4,7 +4,7 @@
 //! resource"); byte order and widths from the ResForge Nova template
 //! (`TMPB` 514), which sums to the 400 bytes of every stock record. The
 //! Bible lists eight weapon slots, but the record holds four. The 64 bytes
-//! at 0x13A are not in the Bible and stay raw.
+//! at 0x13A, not in the Bible, are the person's subtitle.
 
 use binrw::BinRead;
 use nova_rsrc::ResType;
@@ -74,9 +74,12 @@ pub struct Person {
     pub grant_count: i16,
     /// Bible `GrantProb` (offset 0x138, i16): percent chance of a grant.
     pub grant_prob: i16,
-    /// Offset 0x13A, 64 bytes: undocumented in the Bible (the template
-    /// labels it a 64-byte C string subtitle).
-    pub unknown_0x13a: RawArray<64>,
+    /// Offset 0x13A, 64-byte C string: the person's subtitle, which the
+    /// target panel shows under its name. Not in the Bible; the template
+    /// labels it a subtitle, and the engine copies it for the target panel
+    /// (`_LoadObjectData` @0x7c4f6, drawn by `_DrawStatusTarg` @0x4b860).
+    #[br(parse_with = fixed_c_string::<_, 64>)]
+    pub subtitle: MacString,
     /// Bible `Color` (offset 0x17A, u32): ship paint, `00RRGGBB`; 0 for
     /// none.
     pub color: u32,
@@ -143,10 +146,20 @@ mod tests {
             [pers.grant_class, pers.grant_count, pers.grant_prob],
             [25, 1, 50]
         );
-        assert_eq!(&pers.unknown_0x13a.0[..9], b"w00tWare\0");
+        assert_eq!(pers.subtitle.as_str(), "w00tWare");
         assert_eq!(pers.color, 0x00FF_FFFF);
         assert_eq!(pers.flags2, Flags16(0x0001));
         assert_eq!(pers.unknown_0x180, RawArray([0x21; 16]));
+    }
+
+    #[test]
+    fn the_subtitle_is_named_in_the_json_and_uses_all_64_bytes_without_a_nul() {
+        let pers: Person = buf::<Person>().bytes(0x13A, b"Top Gun\0").decode();
+        let json = serde_json::to_value(&pers).expect("serializes");
+        assert_eq!(json["subtitle"], "Top Gun");
+        let full: Person = buf::<Person>().bytes(0x13A, &[b'x'; 64]).decode();
+        assert_eq!(full.subtitle.len(), 64);
+        assert_eq!(full.color, 0, "the next field is untouched");
     }
 
     #[test]

@@ -55,9 +55,11 @@ pub struct System {
     /// appear here; -1 for none.
     #[br(map = ids::<PersonId, 8>)]
     pub person: [Option<PersonId>; 8],
-    /// Offset 0x7E, 8 x i16: undocumented in the Bible (the template labels
-    /// them as a probability per `person` entry).
-    pub unknown_0x7e: [i16; 8],
+    /// Offset 0x7E, 8 x i16: the percent chance of each `person` entry,
+    /// in the same order. Not in the Bible; the template labels them so,
+    /// and the engine rolls `Rand(100) + 1` against each
+    /// (`_SetupShipsInSystem` @0x4337b).
+    pub person_prob: [i16; 8],
     /// Bible `BkgndColor` (offset 0x8E, u32): background colour, `00RRGGBB`.
     pub bkgnd_color: u32,
     /// Bible `Murk` (offset 0x92, i16): murkiness, 0-100; negative also
@@ -139,7 +141,7 @@ mod tests {
         assert_eq!(syst.interference, 100);
         assert_eq!(syst.person[0], Some(PersonId(600)));
         assert_eq!(syst.person[1], None);
-        assert_eq!(syst.unknown_0x7e[0], 25);
+        assert_eq!(syst.person_prob[0], 25);
         assert_eq!(syst.bkgnd_color, 0x0010_2030);
         assert_eq!(syst.murk, -1);
         assert_eq!(syst.ast_types, Flags16(0x0011));
@@ -148,6 +150,14 @@ mod tests {
         assert_eq!(syst.reinf_time, 90);
         assert_eq!(syst.reinf_intrval, 7);
         assert_eq!(syst.unknown_0x19c, RawArray([0xAA; 16]));
+    }
+
+    #[test]
+    fn each_person_slots_chance_is_named_in_the_json() {
+        let syst: System = buf::<System>().i16(0x7E, 50).i16(0x8C, 7).decode();
+        let json = serde_json::to_value(&syst).expect("serializes");
+        assert_eq!(json["person_prob"][0], 50);
+        assert_eq!(json["person_prob"][7], 7);
     }
 
     #[test]
