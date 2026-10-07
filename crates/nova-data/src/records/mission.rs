@@ -4,7 +4,7 @@
 //! resource"); byte order and widths from the ResForge Nova template
 //! (`TMPB` 510), which sums to the 1970 bytes of every stock record. Words
 //! the Bible does not describe stay raw under offset names. Control-bit
-//! expressions are kept as text; nothing here parses them.
+//! expressions are kept as text; [`crate::expr`] parses them.
 
 use binrw::BinRead;
 use nova_rsrc::ResType;

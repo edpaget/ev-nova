@@ -172,12 +172,21 @@ fn group(cursor: &mut Cursor<'_>) -> Result<TestExpr, ParseError> {
             kind: ParseErrorKind::DanglingOperator,
         });
     }
-    let right = term(cursor)?;
+    let right = if cursor.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+        // A bare number, which the original skips: the left side stands.
+        cursor.number(0..=MAX_NUMBER)?;
+        None
+    } else {
+        Some(term(cursor)?)
+    };
     cursor.skip_space();
     if operator(cursor).is_some() {
         return Err(cursor.error(ParseErrorKind::ChainedOperators));
     }
     end_of_group(cursor)?;
+    let Some(right) = right else {
+        return Ok(left);
+    };
     let (left, right) = (Box::new(left), Box::new(right));
     Ok(if join == b'&' {
         TestExpr::And(left, right)
@@ -552,10 +561,31 @@ mod tests {
     #[test]
     fn unknown_letters_and_stray_characters_are_rejected() {
         assert_eq!(fails("b1 & x2"), err(5, K::UnknownOperand('x')));
-        assert_eq!(fails("b1 & 2"), err(5, K::UnknownOperand('2')));
+        assert_eq!(fails("(2 & b1)"), err(1, K::UnknownOperand('2')));
+        assert_eq!(fails("b1 & !2"), err(6, K::UnknownOperand('2')));
         assert_eq!(fails("b1 # b2"), err(3, K::Unexpected('#')));
         assert_eq!(fails("b1x"), err(2, K::UnknownOperand('x')));
         assert_eq!(fails("b1 < 2"), err(3, K::Unexpected('<')));
+    }
+
+    #[test]
+    fn a_bare_number_as_the_right_operand_is_dropped_with_its_operator() {
+        // The stock mïsn 428 has `(b50 | 467)`, a slip for `b467`. The
+        // original reads the number as a token only a comparison uses, so
+        // the group evaluates as `b50`.
+        assert_eq!(
+            parse("!(b511 | b515) & !((b50 | 467) | b6666)"),
+            and(not(or(bit(511), bit(515))), not(or(bit(50), bit(6666))))
+        );
+        assert_eq!(parse("b1 && 2 "), bit(1));
+        assert_eq!(fails("b1 | 2 | b3"), err(7, K::ChainedOperators));
+        assert_eq!(fails("b1 | 2x"), err(6, K::UnknownOperand('x')));
+        let past = K::NumberOutOfRange {
+            value: 32768,
+            min: 0,
+            max: 32767,
+        };
+        assert_eq!(fails("b1 | 32768"), err(5, past));
     }
 
     #[test]

@@ -72,6 +72,14 @@
 //! ([`ParseErrorKind::ChainedOperators`]); [`TestExpr::And`] and
 //! [`TestExpr::Or`] are binary.
 //!
+//! A bare number reads as a `#` token (0x14b5d), which only a comparison
+//! (below) uses; anywhere else `_EvalTestExp` skips it. As the right
+//! operand of `&` or `|` that leaves the left side standing: the stock
+//! `mïsn` 428 has `(b50 | 467)`, a slip for `b467`, which evaluates as
+//! `b50`. This module accepts a bare number there, and only there, and
+//! drops it and its operator from the tree. (As a left operand it would
+//! read as false, not skipped; this module rejects it.)
+//!
 //! The binary also has an undocumented count comparison. `[ ... ]` is a
 //! group that returns how many of its operands are true (0x15e5c), and
 //! `<`, `>` or `=` followed by a number compares the value before it with
@@ -154,6 +162,7 @@
 //! use a spelling no stock expression can contain, so that it never changes
 //! what an existing expression means.
 
+mod check;
 mod set;
 mod test;
 mod token;
@@ -162,6 +171,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub use check::{EXPR_FIELDS, ExprError, ExprField, ExprKind, check_expressions};
 pub use set::{BitWrite, SetExpr, SetOp, SetOpKind};
 pub use test::{Comparison, CountTerm, TestExpr, TestOperand};
 
