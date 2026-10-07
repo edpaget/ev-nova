@@ -1,15 +1,25 @@
 //! The ship browser screen: pages through every ship by keyboard, drawing
 //! the selected ship rotating through every frame of its sheet with its
 //! glow and lights layers on top, and its name (in Charcoal), stats and
-//! description in a column beside it.
+//! description in a column beside it. The lights blink by the ship's
+//! [`Blink`](super::catalog::Blink) from the selection on, as
+//! [`nova_sim::lights_level`] says, rolling on [`HashedRolls`] from seed 0
+//! for random blinking. The glow (at full level) and the lights (at
+//! [`lights_tint`] of their level) are combined by OR with what is beneath
+//! ([`Blend::Or`](crate::Blend::Or)), scaled by level/32, like the
+//! original's `_BlitPixieRLETranslucent` (0xc1568) below full and
+//! `_BlitPixieRLEAddOver` (0xc24bf) at full: see [`lights_tint`] for the
+//! full record.
 //!
 //! The screen reads ships only through the [`ShipCatalog`] port, once at
 //! start-up and once per selection; drawing never resolves anything.
 
 use std::time::Duration;
 
+use nova_sim::{HashedRolls, lights_level};
+
 use super::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId};
-use crate::draw::crossed_box;
+use crate::draw::{crossed_box, lights_tint};
 use crate::time::ticks;
 use crate::{Color, DrawList, Font, ImageKey, Input, Key, Point, Screen, ScreenAction};
 
@@ -62,6 +72,8 @@ pub struct ShipBrowser<C> {
     current: Option<ShipEntry>,
     /// Time since the selection.
     elapsed: Duration,
+    /// What random running lights roll on.
+    blink_rolls: HashedRolls,
 }
 
 impl<C: ShipCatalog> ShipBrowser<C> {
@@ -75,6 +87,7 @@ impl<C: ShipCatalog> ShipBrowser<C> {
             selected: 0,
             current,
             elapsed: Duration::ZERO,
+            blink_rolls: HashedRolls::new(0),
         }
     }
 
@@ -132,14 +145,12 @@ impl<C: ShipCatalog> ShipBrowser<C> {
                     SHIP_CENTER,
                     Color::WHITE,
                 );
-                for layer in [&ship.glow, &ship.lights] {
-                    if let Some(Ok(layer)) = layer {
+                let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+                let lights = lights_level(&ship.blink, tick, &self.blink_rolls).map(lights_tint);
+                for (layer, tint) in [(&ship.glow, Some(Color::WHITE)), (&ship.lights, lights)] {
+                    if let (Some(Ok(layer)), Some(tint)) = (layer, tint) {
                         let frame = frame % layer.frames.get();
-                        list.sprite(
-                            ImageKey::sprite(layer.image_id, frame),
-                            SHIP_CENTER,
-                            Color::WHITE,
-                        );
+                        list.or_sprite(ImageKey::sprite(layer.image_id, frame), SHIP_CENTER, tint);
                     }
                 }
             }
@@ -270,10 +281,10 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::ships::catalog::{SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
+    use crate::ships::catalog::{Blink, SheetInfo, ShipCatalog, ShipEntry, ShipId, ShipStats};
     use crate::{
-        Color, DrawCommand, DrawList, Font, ImageKey, Input, Key, MouseButton, Point, Screen,
-        ScreenAction,
+        Blend, Color, DrawCommand, DrawList, Font, ImageKey, Input, Key, MouseButton, Point,
+        Screen, ScreenAction,
     };
 
     /// Canned entries in ID order; records every `ship` call.
@@ -336,6 +347,7 @@ mod tests {
             sprite: Ok(sheet(id * 10, 5)),
             glow: None,
             lights: None,
+            blink: Blink::STEADY,
         }
     }
 
@@ -407,6 +419,7 @@ mod tests {
                     image,
                     center,
                     tint,
+                    ..
                 } => {
                     assert_eq!(*tint, Color::WHITE);
                     Some((*image, *center))
@@ -588,6 +601,167 @@ mod tests {
             matches!(list.iter().next(), Some(DrawCommand::Sprite { .. })),
             "the ship is drawn first"
         );
+    }
+
+    #[test]
+    fn the_glow_and_lights_or_onto_the_normal_base() {
+        let catalog = FakeCatalog::with(vec![layered()]);
+        let browser = ShipBrowser::new(&catalog);
+        let blends: Vec<Blend> = drawn(&browser)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { blend, .. } => Some(*blend),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(blends, [Blend::Normal, Blend::Or, Blend::Or]);
+    }
+
+    /// The Shuttle's blink: lit at ticks 1-3 and 10-12 of every 40.
+    const SHUTTLE: Blink = Blink {
+        mode: 1,
+        a: 4,
+        b: 1,
+        c: 2,
+        d: 20,
+    };
+
+    /// [`layered`] ship `id`, its lights blinking by `blink`.
+    fn blinking(id: i16, blink: Blink) -> ShipEntry {
+        ShipEntry {
+            id: ShipId(id),
+            blink,
+            ..layered()
+        }
+    }
+
+    /// The alphas the lights, `rlëD` 1200, are drawn with: one, or none
+    /// while they are off.
+    fn lights_alphas(browser: &impl Screen) -> Vec<u8> {
+        drawn(browser)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite {
+                    image,
+                    tint,
+                    blend: Blend::Or,
+                    ..
+                } if image.id == 1200 => {
+                    assert_eq!((tint.r, tint.g, tint.b), (255, 255, 255));
+                    Some(tint.a)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_lights_blink_by_the_ships_blink() {
+        let catalog = FakeCatalog::with(vec![blinking(128, SHUTTLE)]);
+        let mut browser = ShipBrowser::new(&catalog);
+        assert_eq!(lights_alphas(&browser), [0_u8; 0], "tick 0: off");
+        let ids: Vec<i16> = sprites(&drawn(&browser))
+            .iter()
+            .map(|(i, _)| i.id)
+            .collect();
+        assert_eq!(ids, [1000, 1100], "the base and glow still show");
+        browser.tick(tick());
+        assert_eq!(lights_alphas(&browser), [255], "tick 1: on");
+        browser.tick(tick() * 3);
+        assert_eq!(lights_alphas(&browser), [0_u8; 0], "tick 4: off");
+        browser.tick(tick() * 6);
+        assert_eq!(lights_alphas(&browser), [255], "tick 10: on again");
+    }
+
+    #[test]
+    fn pulsing_lights_are_ored_at_their_level() {
+        // The stock triangle: 10 to 31.
+        let triangle = Blink {
+            mode: 2,
+            a: 10,
+            b: 75,
+            c: 32,
+            d: 75,
+        };
+        let catalog = FakeCatalog::with(vec![blinking(128, triangle)]);
+        let mut browser = ShipBrowser::new(&catalog);
+        assert_eq!(lights_alphas(&browser), [0_u8; 0], "0.75: not drawn");
+        browser.tick(tick());
+        assert_eq!(lights_alphas(&browser), [8], "level 1");
+        browser.tick(tick() * 40);
+        assert_eq!(lights_alphas(&browser), [247], "level 31");
+    }
+
+    /// Every command drawing the lights, `rlëD` 1200, whatever its blend.
+    fn lights_commands(browser: &ShipBrowser<&FakeCatalog>) -> Vec<DrawCommand> {
+        drawn(browser)
+            .iter()
+            .filter(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 1200),
+            )
+            .cloned()
+            .collect()
+    }
+
+    /// The lights drawn by OR with `tint` over the ship's centre, at the base's
+    /// current frame.
+    fn lights_at(browser: &ShipBrowser<&FakeCatalog>, tint: Color) -> DrawCommand {
+        DrawCommand::Sprite {
+            image: ImageKey::sprite(1200, browser.frame().expect("a sheet")),
+            center: SHIP_CENTER,
+            tint,
+            blend: Blend::Or,
+        }
+    }
+
+    #[test]
+    fn lights_are_ored_scaled_by_level_below_full_and_whole_at_full() {
+        // The stock triangle, 10 to 31, never full: the original draws
+        // every level with its translucent blit, which ORs in the lights
+        // scaled by level/32 (see `lights_tint`).
+        let triangle = Blink {
+            mode: 2,
+            a: 10,
+            b: 75,
+            c: 32,
+            d: 75,
+        };
+        let rolls = HashedRolls::new(0);
+        let catalog = FakeCatalog::with(vec![blinking(128, triangle)]);
+        let mut browser = ShipBrowser::new(&catalog);
+        let mut levels = Vec::new();
+        for tick_number in 0..=101 {
+            let level = lights_level(&triangle, tick_number, &rolls);
+            let want: Vec<_> = level
+                .map(|n| lights_at(&browser, lights_tint(n)))
+                .into_iter()
+                .collect();
+            assert_eq!(lights_commands(&browser), want, "tick {tick_number}");
+            levels.extend(level);
+            browser.tick(tick());
+        }
+        assert!(levels.contains(&10), "the lowest level is drawn");
+        assert!(levels.contains(&31), "the highest level is drawn");
+
+        // A steady light is full: ORed whole.
+        let catalog = FakeCatalog::with(vec![blinking(128, Blink::STEADY)]);
+        let browser = ShipBrowser::new(&catalog);
+        assert_eq!(
+            lights_commands(&browser),
+            [lights_at(&browser, Color::WHITE)]
+        );
+    }
+
+    #[test]
+    fn choosing_another_ship_restarts_its_blink() {
+        let catalog = FakeCatalog::with(vec![blinking(128, SHUTTLE), blinking(129, SHUTTLE)]);
+        let mut browser = ShipBrowser::new(&catalog);
+        browser.tick(tick());
+        assert_eq!(lights_alphas(&browser), [255], "tick 1");
+        browser.input(&press(Key::Right));
+        assert_eq!(lights_alphas(&browser), [0_u8; 0], "tick 0 again");
+        browser.tick(tick());
+        assert_eq!(lights_alphas(&browser), [255]);
     }
 
     #[test]

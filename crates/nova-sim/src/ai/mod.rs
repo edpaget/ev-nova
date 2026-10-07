@@ -49,7 +49,7 @@ use crate::flight::ShipState;
 use crate::govt::Governments;
 use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
-use crate::landing::landable;
+use crate::landing::is_landable as landable;
 use crate::reserves::Reserves;
 use crate::traffic::npc::{Mode, Npc, NpcId};
 

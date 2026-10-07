@@ -1,11 +1,9 @@
-//! The galaxy map's hyperlinks and the simulation's star map are built
-//! from the same `sÿst` `Con` links by two owners, `nova_view`'s
-//! `GalaxyModel` and `nova_sim`'s `StarMap`, each normalising them on its
-//! own. Over the same synthetic game data, both keep the same undirected
-//! links: none to itself, none to a system that is missing or does not
-//! decode, each once whichever of its systems lists it, however often.
+//! The galaxy map draws the session's star-map hyperlinks and reports
+//! links to missing systems. Over synthetic game data read through the
+//! real adapters, `GalaxyModel`'s links are exactly those of the
+//! `StarMap` built from `PilotCatalog::star_map`, and each link to a
+//! system that is missing or does not decode is a problem.
 
-use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 
@@ -79,37 +77,31 @@ fn data() -> GameData {
     GameData::load(&file, &file, Path::new("/data"), None).expect("opens")
 }
 
-/// The star map's links, as (lower ID, higher ID): each pair of systems
-/// on it one jump apart.
-fn star_map_links(map: &StarMap, systems: &[SystemId]) -> BTreeSet<(SystemId, SystemId)> {
-    let mut links = BTreeSet::new();
-    for &from in systems {
-        for &to in systems {
-            if from < to && map.route(from, to) == Ok(vec![to]) {
-                links.insert((from, to));
-            }
-        }
-    }
-    links
-}
-
 #[test]
-fn the_galaxy_map_and_the_star_map_keep_the_same_hyperlinks() {
+fn the_galaxy_map_draws_the_star_maps_links_and_reports_missing_systems() {
     let data = data();
     let model = GalaxyModel::new(data.galaxy());
-    let map = StarMap::new(data.star_map());
     let systems: Vec<SystemId> = model.systems().iter().map(|s| s.entry.id).collect();
     assert_eq!(systems, (128..=134).map(SystemId).collect::<Vec<_>>());
-    let drawn: BTreeSet<_> = model.links().iter().copied().collect();
-    assert_eq!(star_map_links(&map, &systems), drawn);
+    assert_eq!(model.links(), StarMap::new(data.star_map()).links());
     let pair = |a, b| (SystemId(a), SystemId(b));
     assert_eq!(
-        drawn,
-        BTreeSet::from([
+        model.links(),
+        [
             pair(128, 129),
             pair(129, 130),
             pair(130, 131),
             pair(132, 133)
-        ])
+        ]
+    );
+    assert_eq!(
+        model.problems(),
+        [
+            "sÿst 135: field System → unknown_0x19c → self_0 at byte 0x1ab: \
+             unexpected end of data (record is 427 bytes, layout needs 428)",
+            "sÿst 128: hyperlink to missing sÿst 999",
+            "sÿst 130: hyperlink to missing sÿst 135",
+            "sÿst 133: hyperlink to missing sÿst 999",
+        ]
     );
 }

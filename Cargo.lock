@@ -1452,6 +1452,7 @@ dependencies = [
  "nova-sim",
  "nova-view",
  "pollster",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
@@ -1468,8 +1469,6 @@ dependencies = [
  "nova-data",
  "nova-rsrc",
  "nova-view",
- "serde",
- "serde_json",
  "tempfile",
 ]
 

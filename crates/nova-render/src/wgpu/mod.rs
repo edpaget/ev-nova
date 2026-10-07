@@ -9,6 +9,14 @@
 //! run. Text uses only the faces in the [`FontFaces`](crate::FontFaces) the
 //! adapter is made with.
 //!
+//! [`WgpuRenderer`] draws every frame into an offscreen scene texture of
+//! its own (always RGBA8, whatever the target's format), then copies it to
+//! the window or offscreen target with one blit. An OR batch
+//! ([`Blend::Or`](nova_view::Blend::Or)) reads a backdrop copy of the
+//! rectangle the core says it covers
+//! ([`Frame::pixels_covered`](crate::Frame::pixels_covered)), taken just
+//! before it.
+//!
 //! [`GlyphonMetrics`] is `nova_view`'s text-metrics port over the same
 //! font system the renderer draws with, so the widgets lay text out by the
 //! widths it will be drawn at. It needs no GPU.

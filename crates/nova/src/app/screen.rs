@@ -41,12 +41,12 @@
 //! developer's viewer, which enters systems; play plots courses on the map
 //! opened from flight, which has no "Enter system" button.
 //!
-//! L, in flight over a stellar that can be landed on, lands and shows its
-//! spaceport ([`SpaceportView`]), laid out by the interface file's
-//! "Spaceport" dialog when the router has dialogs; without them the
-//! spaceport says why. The spaceport takes every input: Leave, Return and
-//! Escape take off, back into flight at the stellar, and Tab, F and I do
-//! nothing.
+//! L in flight requests clearance at a stellar, and a second L, over it,
+//! lands and shows its spaceport ([`SpaceportView`]), laid out by the
+//! interface file's "Spaceport" dialog when the router has dialogs;
+//! without them the spaceport says why. The spaceport takes every input:
+//! Leave, Return and Escape take off, back into flight at the stellar,
+//! and Tab, F and I do nothing.
 //!
 //! At a trade center, the spaceport's Trade Center opens the session's
 //! exchange, laid out by the interface file's "Trade" dialog. There B buys
@@ -140,10 +140,11 @@
 //!
 //! P, on any side, opens the Preferences dialog ("new prefs dialog") over
 //! the screen shown when the router has dialogs. Like the About dialog it
-//! is modal, and flight pauses under it. It opens on the player's sound
-//! preferences ([`AppScreen::with_sound_prefs`]), and each change is
-//! reported once through [`Screen::take_sound_prefs`] for the app to play
-//! and save. OK, Return or Escape closes it.
+//! is modal, and flight pauses under it. It opens on the player's
+//! preferences ([`AppScreen::with_prefs`]), and each change is
+//! reported once through [`Screen::take_prefs`] for the app to play
+//! and save. Flight follows the Hyperspace Effects preference: it is
+//! built with it, and a change reaches a flight already built. OK, Return or Escape closes it.
 //!
 //! The router reports every live screen's sounds through
 //! [`Screen::take_sounds`], and what it shows through
@@ -186,8 +187,7 @@ use nova_view::ui::{
     HaggleDialog, PlunderDialog, PlunderShown, PrefsDialog,
 };
 use nova_view::{
-    Color, Diagnostic, DrawList, Input, Key, Navigator, Point, Screen, ScreenAction, Sound,
-    SoundPrefs,
+    Color, Diagnostic, DrawList, Input, Key, Navigator, Point, Prefs, Screen, ScreenAction, Sound,
 };
 
 /// The hint the router draws over every screen, where it goes, its size and
@@ -250,12 +250,12 @@ pub struct AppScreen {
     spaceport: Option<SpaceportView>,
     /// The sounds of screens closed since the sounds were last taken.
     sounds: Vec<Sound>,
-    /// The player's sound preferences, as last chosen.
-    sound_prefs: SoundPrefs,
+    /// The player's preferences, as last chosen.
+    prefs: Prefs,
     /// The Preferences dialog, while it is open.
     preferences: Option<PrefsDialog>,
     /// The preferences chosen since they were last taken, if they changed.
-    prefs_change: Option<SoundPrefs>,
+    prefs_change: Option<Prefs>,
     /// The main menu and where pilots are kept, once given.
     menu: Option<Menu>,
     /// The New Pilot dialog, while it is open over the main menu.
@@ -363,7 +363,7 @@ impl AppScreen {
             about: None,
             spaceport: None,
             sounds: Vec::new(),
-            sound_prefs: SoundPrefs::default(),
+            prefs: Prefs::default(),
             preferences: None,
             prefs_change: None,
             menu: None,
@@ -646,7 +646,8 @@ impl AppScreen {
             .with_hire_terms(Rc::clone(&self.hire_terms))
             .with_control_bits(Rc::clone(&self.control_bits))
             .with_person_rules(Rc::clone(&self.person_rules))
-            .with_comm_quote(self.comm_quote);
+            .with_comm_quote(self.comm_quote)
+            .with_hyperspace_effects(self.prefs.hyperspace_effects);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -729,20 +730,17 @@ impl AppScreen {
         }
     }
 
-    /// The router with the player's sound preferences, `prefs`, which the
+    /// The router with the player's preferences, `prefs`, which the
     /// Preferences dialog opens on.
     #[must_use]
-    pub fn with_sound_prefs(self, prefs: SoundPrefs) -> Self {
-        Self {
-            sound_prefs: prefs,
-            ..self
-        }
+    pub fn with_prefs(self, prefs: Prefs) -> Self {
+        Self { prefs, ..self }
     }
 
-    /// The player's sound preferences, as last chosen.
+    /// The player's preferences, as last chosen.
     #[must_use]
-    pub fn sound_prefs(&self) -> SoundPrefs {
-        self.sound_prefs
+    pub fn prefs(&self) -> Prefs {
+        self.prefs
     }
 
     /// The About dialog, while it is open.
@@ -893,7 +891,7 @@ impl AppScreen {
     }
 
     /// Opens the Preferences dialog over the side shown, on the player's
-    /// sound preferences, first cancelling the side's pointer gesture and
+    /// preferences, first cancelling the side's pointer gesture and
     /// letting go of its keys. With no dialogs, nothing opens; when the
     /// dialog cannot be built, nothing opens and the reason goes to stderr.
     fn open_preferences(&mut self) {
@@ -906,7 +904,7 @@ impl AppScreen {
             .and_then(|template| {
                 PrefsDialog::new(
                     &template,
-                    self.sound_prefs,
+                    self.prefs,
                     self.data.button_style(),
                     Rc::clone(&dialogs.metrics),
                 )
@@ -928,8 +926,11 @@ impl AppScreen {
         if let Some(dialog) = &mut self.preferences {
             dialog.input(input);
             if let Some(prefs) = dialog.take_change() {
-                self.sound_prefs = prefs;
+                self.prefs = prefs;
                 self.prefs_change = Some(prefs);
+                if let Some(flight) = &mut self.flight {
+                    flight.set_hyperspace_effects(prefs.hyperspace_effects);
+                }
             }
             if dialog.closed() {
                 self.sounds.extend(dialog.take_sounds());
@@ -980,7 +981,8 @@ impl AppScreen {
 
     /// Flight's input: an Escape press closes flight's map when it is
     /// open, and otherwise goes back; everything else goes to flight
-    /// (which ignores Tab). When it lands, the spaceport shows.
+    /// (where Tab selects the navigation target). When it lands, the
+    /// spaceport shows.
     fn flight_input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
             key: Key::Escape,
@@ -1833,9 +1835,9 @@ impl Screen for AppScreen {
         sounds
     }
 
-    /// The sound preferences chosen in the Preferences dialog, once after
-    /// each change.
-    fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+    /// The preferences chosen in the Preferences dialog, once after each
+    /// change.
+    fn take_prefs(&mut self) -> Option<Prefs> {
         self.prefs_change.take()
     }
 
@@ -2548,13 +2550,16 @@ mod tests {
     }
 
     #[test]
-    fn tab_does_nothing_in_flight() {
+    fn tab_in_flight_targets_ships_not_stellars_and_stays_in_flight() {
         let mut screen = AppScreen::new(data());
         fly(&mut screen);
+        let target = |screen: &AppScreen| flight(screen).session().expect("flying").nav_target();
+        assert_eq!(target(&screen), None);
         for input in [key(Key::Tab, true), held(Key::Tab), key(Key::Tab, false)] {
             assert_eq!(screen.input(&input), ScreenAction::None);
             assert_eq!(screen.showing(), Showing::Flight);
         }
+        assert_eq!(target(&screen), None, "Tab is the original's Target Select");
     }
 
     #[test]
@@ -2754,14 +2759,15 @@ mod tests {
 
     /// "new prefs dialog" (4003), smaller: 300 x 260 at (0, 0), with OK
     /// (1), the effects volume (4 to 7), the Music (8) and Sound (20)
-    /// check boxes, Key Settings (16) and a greyed check box (9).
+    /// check boxes, Key Settings (16), a greyed check box (9) and the
+    /// Hyperspace Effects check box (21).
     fn prefs_template() -> DialogTemplate {
         let item = |x, y, w, h, kind| ItemTemplate {
             bounds: Bounds::at(Point::new(x, y), w, h),
             enabled: true,
             kind,
         };
-        let mut items: Vec<ItemTemplate> = (0..20)
+        let mut items: Vec<ItemTemplate> = (0..21)
             .map(|_| item(0.0, 300.0, 10.0, 10.0, ItemSpec::User))
             .collect();
         items[0] = item(200.0, 230.0, 70.0, 20.0, ItemSpec::Button("OK".into()));
@@ -2808,6 +2814,13 @@ mod tests {
             100.0,
             18.0,
             ItemSpec::CheckBox("Ambient Sounds".into()),
+        );
+        items[20] = item(
+            150.0,
+            80.0,
+            100.0,
+            18.0,
+            ItemSpec::CheckBox("Hyperspace Effects".into()),
         );
         DialogTemplate {
             bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 260.0),
@@ -3086,10 +3099,18 @@ mod tests {
 
     const LAND: Key = Key::Char('l');
 
-    /// Enters flight and lands with an L press.
+    /// Presses L twice in flight: the first requests clearance, the
+    /// second lands.
+    fn land_twice(screen: &mut AppScreen) {
+        for pressed in [true, false, true] {
+            assert_eq!(screen.input(&key(LAND, pressed)), ScreenAction::None);
+        }
+    }
+
+    /// Enters flight and lands with two L presses.
     fn land(screen: &mut AppScreen) {
         fly(screen);
-        assert_eq!(screen.input(&key(LAND, true)), ScreenAction::None);
+        land_twice(screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
     }
 
@@ -3122,7 +3143,7 @@ mod tests {
         let mut screen = with_dialogs(data());
         fly(&mut screen);
         screen.input(&key(Key::Up, true));
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         // Up's release goes to the spaceport, and Leave takes off.
         screen.input(&key(Key::Up, false));
@@ -3248,7 +3269,7 @@ mod tests {
         fly(&mut screen);
         screen.input(&key(Key::Up, true));
         screen.tick(TICK * 30);
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Flight);
         assert!(screen.spaceport_view().is_none());
         assert!(flight(&screen).message().is_some());
@@ -3358,12 +3379,15 @@ mod tests {
         }
     }
 
-    fn quiet() -> SoundPrefs {
-        SoundPrefs {
-            sound: true,
-            music: false,
-            effects_level: 3,
-            music_level: 5,
+    fn quiet() -> Prefs {
+        Prefs {
+            sound: nova_view::SoundPrefs {
+                sound: true,
+                music: false,
+                effects_level: 3,
+                music_level: 5,
+            },
+            hyperspace_effects: true,
         }
     }
 
@@ -3391,7 +3415,7 @@ mod tests {
         assert_eq!(screen.showing(), Showing::FlightMap);
         screen.input(&key(Key::Escape, true));
 
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         open_prefs(&mut screen);
         screen.input(&key(Key::Escape, true));
@@ -3400,38 +3424,99 @@ mod tests {
 
     #[test]
     fn the_dialog_opens_on_the_prefs_the_router_was_given() {
-        let mut screen = with_dialogs(data()).with_sound_prefs(quiet());
-        assert_eq!(screen.sound_prefs(), quiet());
+        let mut screen = with_dialogs(data()).with_prefs(quiet());
+        assert_eq!(screen.prefs(), quiet());
         open_prefs(&mut screen);
         assert_eq!(prefs_dialog(&screen).prefs(), quiet());
-        assert_eq!(AppScreen::new(data()).sound_prefs(), SoundPrefs::default());
+        assert_eq!(AppScreen::new(data()).prefs(), Prefs::default());
     }
 
     #[test]
     fn each_change_comes_out_once_and_the_dialog_reopens_on_it() {
-        let mut screen = with_dialogs(data()).with_sound_prefs(quiet());
-        assert_eq!(screen.take_sound_prefs(), None);
+        let mut screen = with_dialogs(data()).with_prefs(quiet());
+        assert_eq!(screen.take_prefs(), None);
         open_prefs(&mut screen);
         let music = prefs_dialog(&screen).music().rect().center();
         click_at(&mut screen, music);
-        let changed = SoundPrefs {
-            music: true,
+        let changed = Prefs {
+            sound: nova_view::SoundPrefs {
+                music: true,
+                ..quiet().sound
+            },
             ..quiet()
         };
-        assert_eq!(screen.take_sound_prefs(), Some(changed));
-        assert_eq!(screen.take_sound_prefs(), None, "once");
-        assert_eq!(screen.sound_prefs(), changed);
+        assert_eq!(screen.take_prefs(), Some(changed));
+        assert_eq!(screen.take_prefs(), None, "once");
+        assert_eq!(screen.prefs(), changed);
         let up = prefs_dialog(&screen).effects_volume().rects().up.center();
         click_at(&mut screen, up);
         screen.input(&key(Key::Enter, true));
         assert!(screen.preferences().is_none(), "closed");
-        let louder = SoundPrefs {
-            effects_level: 4,
+        let louder = Prefs {
+            sound: nova_view::SoundPrefs {
+                effects_level: 4,
+                ..changed.sound
+            },
             ..changed
         };
-        assert_eq!(screen.take_sound_prefs(), Some(louder));
+        assert_eq!(screen.take_prefs(), Some(louder));
         open_prefs(&mut screen);
         assert_eq!(prefs_dialog(&screen).prefs(), louder);
+    }
+
+    fn no_effects() -> Prefs {
+        Prefs {
+            hyperspace_effects: false,
+            ..quiet()
+        }
+    }
+
+    fn flight_effects(screen: &AppScreen) -> bool {
+        screen.flight_view().expect("flying").hyperspace_effects()
+    }
+
+    #[test]
+    fn flight_is_built_with_the_routers_hyperspace_effects() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        assert!(flight_effects(&screen), "on by default");
+        let mut screen = with_dialogs(data()).with_prefs(no_effects());
+        fly(&mut screen);
+        assert!(!flight_effects(&screen));
+    }
+
+    #[test]
+    fn a_change_in_the_dialog_reaches_flight_already_built() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        open_prefs(&mut screen);
+        let point = prefs_dialog(&screen).hyperspace_effects().rect().center();
+        click_at(&mut screen, point);
+        assert!(!flight_effects(&screen));
+        assert_eq!(
+            screen.take_prefs(),
+            Some(Prefs {
+                hyperspace_effects: false,
+                ..Prefs::default()
+            })
+        );
+        assert_eq!(screen.take_prefs(), None, "once");
+        click_at(&mut screen, point);
+        assert!(flight_effects(&screen), "back on");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(flight_effects(&screen));
+    }
+
+    #[test]
+    fn a_change_before_flight_is_built_reaches_it_when_it_is() {
+        let mut screen = with_dialogs(data());
+        open_prefs(&mut screen);
+        let point = prefs_dialog(&screen).hyperspace_effects().rect().center();
+        click_at(&mut screen, point);
+        screen.input(&key(Key::Escape, true));
+        fly(&mut screen);
+        assert!(!flight_effects(&screen));
     }
 
     #[test]
@@ -3739,6 +3824,18 @@ mod tests {
     }
 
     #[test]
+    fn a_new_pilot_flies_with_the_routers_hyperspace_effects() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store).with_prefs(Prefs {
+            hyperspace_effects: false,
+            ..Prefs::default()
+        });
+        create(&mut screen, "Ada");
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(!screen.flight_view().expect("flying").hyperspace_effects());
+    }
+
+    #[test]
     fn typing_a_name_never_opens_the_dialogs_under_it() {
         let store = MemoryPilots::new();
         let mut screen = menu_with_dialogs(&store);
@@ -3821,7 +3918,7 @@ mod tests {
         let store = MemoryPilots::new();
         let mut screen = menu(&store);
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         let landed = pilot(&screen).clone();
         assert_eq!(landed.stellar(), Some(nova_sim::StellarId(128)));
         assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
@@ -3898,7 +3995,7 @@ mod tests {
         screen.input(&key(Key::Escape, true));
         create(&mut screen, "Ada");
         assert_eq!(screen.showing(), Showing::Flight);
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         screen.quit();
         assert_eq!(screen.take_warnings(), Vec::<String>::new());
     }
@@ -3909,7 +4006,7 @@ mod tests {
         let mut screen = menu(&store);
         create(&mut screen, "Ada");
         assert_eq!(store.writes(), 1, "created");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(store.writes(), 2, "landed");
         assert_eq!(
             saved(&store, "Ada").stellar(),
@@ -3942,7 +4039,7 @@ mod tests {
         let mut screen = menu(&store);
         choose(&mut screen, MenuChoice::OpenPilot);
         screen.input(&key(Key::Enter, true));
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         let writes = store.writes();
         screen.quit();
         assert_eq!(store.writes(), writes + 1, "quitting saves");
@@ -3954,7 +4051,7 @@ mod tests {
         let mut screen = menu(&store);
         create(&mut screen, "Ada");
         store.fail_writes(true);
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(
             screen.take_warnings(),
             ["nova: cannot save the pilot Ada in memory (the disk is full)"]
@@ -3973,7 +4070,7 @@ mod tests {
         screen.input(&key(Key::Tab, true));
         fly(&mut screen);
         assert_eq!(pilot(&screen).name(), "");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         screen.input(&key(Key::Escape, true));
         screen.input(&key(Key::Escape, true));
@@ -4170,7 +4267,7 @@ mod tests {
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
         assert_eq!(screen.showing(), Showing::Flight);
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         screen
     }
@@ -4261,7 +4358,7 @@ mod tests {
             .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         click_port_item(&mut screen, 7);
         let open = spaceport(&screen).open_trade().expect("trading");
         assert_eq!(open.problem(), Some("no DLOG 1001"));
@@ -4324,7 +4421,7 @@ mod tests {
             .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         screen
     }
@@ -4414,7 +4511,7 @@ mod tests {
             .with_dialogs(Rc::new(Dialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         click_port_item(&mut screen, 8);
         let open = spaceport(&screen).open_outfitter().expect("outfitting");
         assert_eq!(open.problem(), Some("no DLOG 1002"));
@@ -4436,7 +4533,7 @@ mod tests {
             .with_dialogs(Rc::new(EveryDialog), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         click_port_item(&mut screen, 8);
         screen.input(&key(Key::Char('b'), true));
         screen.input(&key(Key::Escape, true));
@@ -4508,7 +4605,7 @@ mod tests {
             .with_dialogs(Rc::new(ShipyardDialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
         screen
     }
@@ -4600,7 +4697,7 @@ mod tests {
             .with_dialogs(Rc::new(EveryDialog), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
-        screen.input(&key(LAND, true));
+        land_twice(&mut screen);
         click_port_item(&mut screen, 9);
         let open = spaceport(&screen).open_shipyard().expect("shipbuying");
         assert_eq!(open.problem(), Some("no DLOG 1004"));

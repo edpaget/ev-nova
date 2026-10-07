@@ -414,6 +414,13 @@ impl Harness {
         self.type_key(code, None);
     }
 
+    /// Presses L twice, as the player lands: the first requests clearance,
+    /// the second lands.
+    fn land(&mut self) {
+        self.press(KeyCode::KeyL);
+        self.press(KeyCode::KeyL);
+    }
+
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
@@ -538,7 +545,7 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     game.press(KeyCode::Enter);
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
-    game.press(KeyCode::KeyL);
+    game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
 
     // The Trade Center lists only what the planet trades, at its levels.

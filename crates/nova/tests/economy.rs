@@ -580,6 +580,13 @@ impl Harness {
         self.type_key(code, None);
     }
 
+    /// Presses L twice, as the player lands: the first requests clearance,
+    /// the second lands.
+    fn land(&mut self) {
+        self.press(KeyCode::KeyL);
+        self.press(KeyCode::KeyL);
+    }
+
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
@@ -806,10 +813,11 @@ impl Harness {
         assert_eq!(self.session().course(), [SystemId(129)]);
         self.fly_out();
         self.press(KeyCode::KeyJ);
-        for _ in 0..600 {
+        for _ in 0..1200 {
             self.frame();
             let flight = self.app.screen().flight_view().expect("flying");
-            if flight.jump_effect().is_none() {
+            let arrived = self.session().system() == SystemId(129);
+            if arrived && flight.jump_effect().is_none() {
                 assert_eq!(self.session().system(), SystemId(129));
                 return;
             }
@@ -837,7 +845,7 @@ fn new_pilot(store: &MemoryPilots) -> Harness {
 /// Steps 1-3: food bought low in Alpha, ten tons of it sold high in Beta.
 fn trade_at_a_profit(game: &mut Harness) {
     // 1. Alpha Prime sells food low, at 80: Alt-B fills the 20-ton hold.
-    game.press(KeyCode::KeyL);
+    game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
     game.open(7);
     assert_eq!(
@@ -854,7 +862,7 @@ fn trade_at_a_profit(game: &mut Harness) {
     game.leave();
     game.jump_to_beta();
     game.brake();
-    game.press(KeyCode::KeyL);
+    game.land();
     assert_eq!(
         game.showing(),
         Showing::Spaceport,
@@ -973,7 +981,7 @@ fn a_pilot_trades_at_a_profit_buys_an_outfit_and_a_ship_and_is_restored_by_open_
     let stats = game.session().stats();
 
     // 9. Land again, and close the window, which saves.
-    game.press(KeyCode::KeyL);
+    game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
     let flown = game.pilot();
     assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);

@@ -352,7 +352,7 @@ impl Session {
         group: EscortGroup,
         command: EscortCommand,
     ) -> Option<Commanded> {
-        if self.landed.is_some() || self.jumping.is_some() {
+        if self.landed.is_some() || self.jumping().is_some() {
             return None;
         }
         let target = self
@@ -444,7 +444,9 @@ mod tests {
     use crate::reserves::{Gauge, Reserves};
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
-    use crate::testkit::{FAST, FakePilotCatalog, catalog, hull, jump, ship, weapon};
+    use crate::testkit::{
+        FAST, FakePilotCatalog, begin_jump_now, catalog, hull, jump, land_now, ship, weapon,
+    };
 
     /// A pilot whose fleet is two escorts, both defending the player.
     fn defended(catalog: &FakePilotCatalog) -> Pilot {
@@ -503,7 +505,7 @@ mod tests {
             .with_escort_orders(source);
         tick(&mut session, &catalog);
         defend_all(&mut session);
-        session.land().expect("lands on 128, under the ship");
+        land_now(&mut session).expect("lands on 128, under the ship");
         assert!(crate::save::encode(session.pilot()).contains("\"defend\""));
         session.take_off().expect("takes off");
         tick(&mut session, &catalog);
@@ -868,7 +870,7 @@ mod tests {
         let warship = session.fleet[0].expect("placed");
         session.npc_mut(warship).expect("there").reserves.shield.now = 4.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(session.pilot().escorts()[0].reserves.shield.now, 4.0);
         tick(&mut session, &catalog);
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -1213,7 +1215,7 @@ mod tests {
         let mut session = flying(&catalog, RuleSource::Bible);
         session.plot_course(SystemId(131)).expect("a route");
         crate::testkit::fly_out(&mut session);
-        session.begin_jump().expect("jumps");
+        begin_jump_now(&mut session).expect("jumps");
         let before = session.pilot().clone();
         let npcs: Vec<Npc> = escort_npcs(&session).into_iter().cloned().collect();
         assert_eq!(
@@ -1236,7 +1238,7 @@ mod tests {
     fn no_command_is_given_while_landed() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Hold),
             None
@@ -1449,7 +1451,7 @@ mod tests {
         let ace = session.fleet[0].expect("placed");
         session.npc_mut(ace).expect("there").reserves.shield.now = 5.0;
         session.sync_fleet();
-        session.land().expect("lands on 128, under the ship");
+        land_now(&mut session).expect("lands on 128, under the ship");
         session.take_off().expect("takes off");
         tick(&mut session, &catalog);
         assert_eq!(escort_npcs(&session)[0].reserves.shield.now, 60.0);

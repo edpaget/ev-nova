@@ -1,9 +1,70 @@
 //! Draw commands and draw lists.
 
+use nova_sim::blink::FULL;
+
 use crate::color::Color;
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
+
+/// How a sprite combines with what is beneath it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Blend {
+    /// Painted over what is beneath, by its alpha.
+    #[default]
+    Normal,
+    /// Adds its colour, scaled by its alpha, to what is beneath: a true
+    /// saturating add. No screen uses it since the glow and lights moved to
+    /// [`Blend::Or`].
+    Additive,
+    /// ORs its colour, scaled by a level from the tint, into what is
+    /// beneath, bit for bit: the original's ship glow and lights blits,
+    /// `_BlitPixieRLEAddOver` (0xc24bf; the copy loop at 0xc2560) at full
+    /// level and `_BlitPixieRLETranslucent` (0xc1568) with
+    /// `_BlitPixieTranslucentCopy` (0xc1110; per pixel at 0xc11cc–0xc1275)
+    /// below it, which compute `((src_c × n) >> 5) | dst_c` per 5-bit
+    /// channel. `_HandleShipDisplay` (0x2b514) sets n for the lights at
+    /// 0x2c672–0x2c692 and for the glow at 0x2c2b6–0x2c2d6. See
+    /// [`lights_tint`] for the full trace.
+    ///
+    /// # The level
+    ///
+    /// The tint is the per-channel level in 32nds:
+    /// `n_c = round(tint_c × tint_a × 32 / 255²)`, so [`Color::WHITE`] is
+    /// 32 (the layer as it is) and [`lights_tint`]`(n)` is exactly n in
+    /// every channel, for every n from 0 to 32.
+    ///
+    /// # The bit depth
+    ///
+    /// Per channel, with the layer's texel `t` (straight RGBA, 0 to 1) and
+    /// the destination `d8` (0 to 255):
+    ///
+    /// ```text
+    /// s8  = round(t.rgb × t.a × 255)   // premultiplied: transparent adds 0
+    /// s5  = s8 >> 3                    // the 5-bit source
+    /// t5  = (s5 × n) >> 5              // the original's floor, exactly
+    /// t8  = (t5 << 3) | (t5 >> 2)      // widened by bit replication
+    /// out = d8 | t8 ;  out.a = d.a
+    /// ```
+    ///
+    /// The source is scaled in 5 bits and the OR is taken at 8 bits
+    /// against the destination as it is:
+    ///
+    /// - Stock layer texels are 5-bit values widened by replication, so
+    ///   `s8 >> 3` recovers the original's 5-bit value and `(s5 × n) >> 5`
+    ///   is its own truncation. Scaling in 8 bits would miss that floor by
+    ///   up to one 5-bit step (blue 5 at level 10 is 1 in the original, 2
+    ///   if rounded).
+    /// - Replication distributes over OR: `w(a) | w(b) = w(a | b)`. Where
+    ///   the destination is itself a widened 5-bit colour (every stock hull
+    ///   pixel), the 8-bit OR is exactly the original's 5-bit OR, widened.
+    ///   Where it is not (antialiased text, blended or tinted draws), its
+    ///   low bits survive, and a black or transparent layer pixel leaves
+    ///   any destination unchanged bit for bit. Quantising the destination
+    ///   to 5 bits as well would posterise every such pixel under the
+    ///   layer's black area, which is the whole ship frame.
+    Or,
+}
 
 /// One thing to draw, in logical coordinates.
 #[derive(Clone, Debug, PartialEq)]
@@ -17,6 +78,8 @@ pub enum DrawCommand {
         center: Point,
         /// Colour multiplier and alpha.
         tint: Color,
+        /// How it combines with what is beneath it.
+        blend: Blend,
     },
     /// A picture, unscaled and untinted, with its top-left corner at
     /// `top_left`.
@@ -112,12 +175,33 @@ impl DrawList {
         self.commands.is_empty()
     }
 
-    /// Appends a [`DrawCommand::Sprite`].
+    /// Appends a [`DrawCommand::Sprite`] drawn with [`Blend::Normal`].
     pub fn sprite(&mut self, image: ImageKey, center: Point, tint: Color) -> &mut Self {
         self.push(DrawCommand::Sprite {
             image,
             center,
             tint,
+            blend: Blend::Normal,
+        })
+    }
+
+    /// Appends a [`DrawCommand::Sprite`] drawn with [`Blend::Additive`].
+    pub fn additive_sprite(&mut self, image: ImageKey, center: Point, tint: Color) -> &mut Self {
+        self.push(DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend: Blend::Additive,
+        })
+    }
+
+    /// Appends a [`DrawCommand::Sprite`] drawn with [`Blend::Or`].
+    pub fn or_sprite(&mut self, image: ImageKey, center: Point, tint: Color) -> &mut Self {
+        self.push(DrawCommand::Sprite {
+            image,
+            center,
+            tint,
+            blend: Blend::Or,
         })
     }
 
@@ -214,6 +298,67 @@ pub fn crossed_box(list: &mut DrawList, center: Point, size: f32, color: Color) 
         .line(corners[1], corners[3], 1.0, color);
 }
 
+/// The tint the running lights (and flight's engine glow) are drawn with
+/// at `level` out of [`nova_sim::blink::FULL`] (32): white, with that many
+/// 32nds of full alpha, rounded to nearest, so level 32 draws the layer as
+/// it is. Levels past 32 are 32. Under [`Blend::Or`] the alpha encodes n
+/// exactly: `round(a × 32 / 255) = n` for every n from 0 to 32.
+///
+/// # The original's light blit
+///
+/// Traced in `EV Nova.app/Contents/MacOS/EV Nova` (i386, `otool -tV`), in
+/// the 16-bit ("thousands of colours", RGB555) depth this reproduces. Each
+/// routine is cited at its entry point; instruction sites inside one are
+/// given after "at".
+///
+/// - `_HandleShipDisplay` (0x2b514) shows the lights sprite while the
+///   intensity is above 1, at level n = `trunc(intensity)`. At
+///   0x2c672–0x2c692 it writes the sprite's destination factor (+0xa8) as
+///   32 and its red, green and blue factors (+0xaa, +0xac, +0xae) as n;
+///   an uncloaked ship's lights get no bias (+0xb0 = 0).
+/// - `_BlitPixieRLETranslucentDrawProc` (0xbb3fc), the draw proc of every
+///   ship's glow and lights sprites, picks `_BlitPixieRLEAddOver`
+///   (0xc24bf) when all four factors are 32 and there is no bias, which
+///   is level 32, and `_BlitPixieRLETranslucent` (0xc1568) otherwise,
+///   which is levels 1 to 31.
+/// - `_BlitPixieRLEAddOver` ORs the sprite's packed pixels into the
+///   screen: `dst | src`.
+/// - `_BlitPixieRLETranslucent` takes +0xa8 (32) as the destination factor
+///   and each channel's factor - +0xa8 + 32, capped at 32, as that
+///   channel's source factor (n). `_BlitPixieTranslucentCopy` (0xc1110)
+///   then combines each 5-bit channel as `((src_c * source factor) >> 5)
+///   | ((dst_c * destination factor) >> 5)`.
+///
+/// So at every level n from 1 to 32, per 5-bit channel:
+///
+/// ```text
+/// out_c = ((src_c * n) >> 5) | dst_c
+/// ```
+///
+/// A black lights pixel adds nothing, and the destination is never
+/// dimmed: the lights draw no silhouette at any level. At 32 the formula
+/// is `src | dst`, the `AddOver` blit, so one operator covers every level:
+/// the lights scaled by n/32 and combined into the screen by OR. That is
+/// why both screens draw the lights with [`Blend::Or`] at this tint at
+/// every level rather than choosing the blend by level; [`Blend::Or`]
+/// records how the renderer reproduces the formula, 5-bit floor included.
+/// The engine glow's sprite has the same draw proc and field writes
+/// (`_HandleShipDisplay` at 0x2c2b6-0x2c2d6), so flight ORs the glow in
+/// at this tint at its level too.
+///
+/// Where this deviates from the original:
+///
+/// - **Cloaking is not modelled.** A cloaked ship's bias (+0xb0 ≠ 0)
+///   mixes the lights toward a colour and keeps them off `AddOver` even at
+///   level 32. Nor is the 8-bit depth, whose alpha-table blits were not
+///   traced.
+#[must_use]
+pub fn lights_tint(level: u8) -> Color {
+    let full = u16::from(FULL);
+    let level = u16::from(level).min(full);
+    Color::rgba(255, 255, 255, ((level * 255 + full / 2) / full) as u8)
+}
+
 /// Fills `area` with `color`. There is no rectangle command: a horizontal
 /// line as thick as the area, along its middle, is one.
 pub fn fill_rect(list: &mut DrawList, area: Bounds, color: Color) {
@@ -241,6 +386,58 @@ mod tests {
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
+    }
+
+    #[test]
+    fn a_lights_level_is_white_at_that_many_32nds_of_full_alpha() {
+        let alphas = [32, 31, 16, 10, 1, 0].map(|level| lights_tint(level).a);
+        assert_eq!(alphas, [255, 247, 128, 80, 8, 0]);
+        assert_eq!(lights_tint(32), Color::WHITE);
+        assert_eq!(lights_tint(16), Color::rgba(255, 255, 255, 128));
+        assert_eq!(lights_tint(33), Color::WHITE, "past full is full");
+        assert_eq!(lights_tint(u8::MAX), Color::WHITE);
+    }
+
+    #[test]
+    fn a_sprite_draws_normally_unless_asked_to_add() {
+        let tint = Color::rgba(255, 0, 0, 128);
+        let mut list = DrawList::new();
+        list.sprite(ImageKey::sprite(200, 3), at(10.0, 20.0), tint)
+            .additive_sprite(ImageKey::sprite(201, 4), at(30.0, 40.0), tint);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [
+                DrawCommand::Sprite {
+                    image: ImageKey::sprite(200, 3),
+                    center: at(10.0, 20.0),
+                    tint,
+                    blend: Blend::Normal,
+                },
+                DrawCommand::Sprite {
+                    image: ImageKey::sprite(201, 4),
+                    center: at(30.0, 40.0),
+                    tint,
+                    blend: Blend::Additive,
+                },
+            ]
+        );
+        assert_eq!(Blend::default(), Blend::Normal);
+    }
+
+    #[test]
+    fn an_or_sprite_asks_for_the_or_composite() {
+        let tint = lights_tint(10);
+        let mut list = DrawList::new();
+        list.or_sprite(ImageKey::sprite(202, 5), at(50.0, 60.0), tint);
+        assert_eq!(
+            list.iter().cloned().collect::<Vec<_>>(),
+            [DrawCommand::Sprite {
+                image: ImageKey::sprite(202, 5),
+                center: at(50.0, 60.0),
+                tint,
+                blend: Blend::Or,
+            }]
+        );
     }
 
     #[test]
@@ -280,7 +477,8 @@ mod tests {
             DrawCommand::Sprite {
                 image: ImageKey::sprite(200, 3),
                 center: at(10.0, 20.0),
-                tint: Color::WHITE
+                tint: Color::WHITE,
+                blend: Blend::Normal,
             }
         );
         assert_eq!(

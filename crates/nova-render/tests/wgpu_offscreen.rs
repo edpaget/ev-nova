@@ -12,6 +12,7 @@ use nova_render::wgpu::{
 use nova_render::{
     Frame, Gpu, ImageError, ImageSource, LogicalSize, PixelRect, Renderer, Viewport,
 };
+use nova_view::draw::lights_tint;
 use nova_view::{Color, DrawList, Font, ImageKey, ImageKind, Point};
 
 /// Logical 32x24 in a 64x64 target: scale 2, content (0, 8, 64, 48).
@@ -46,9 +47,39 @@ fn patterned(w: u32, h: u32) -> Image {
     Image::from_rgba(w, h, pixels).expect("w x h")
 }
 
-/// A patterned 4x2 picture (`PICT` 1), a white 4x4 sprite (`rlëD` 2) and
-/// a patterned 2x4 sprite (`rlëD` 3).
+/// A patterned 4x2 picture (`PICT` 1), a white 4x4 sprite (`rlëD` 2), a
+/// patterned 2x4 sprite (`rlëD` 3), an opaque black 4x4 sprite (`rlëD` 4),
+/// an opaque dark orange 4x4 sprite (`rlëD` 5), the 4x4 [`or_sheet`]
+/// (`rlëD` 7), and solid 4x4 sprites of [`DIM`] (`rlëD` 8) and [`LIT`]
+/// (`rlëD` 9).
 struct Images;
+
+/// `rlëD` 5's colour.
+const ORANGE: [u8; 4] = [64, 32, 0, 255];
+
+/// A 5-bit colour widened to opaque 8-bit by bit replication,
+/// `(c << 3) | (c >> 2)`, as stock sprite texels are.
+fn w555(rgb5: [u8; 3]) -> [u8; 4] {
+    let [r, g, b] = rgb5.map(|c| (c << 3) | (c >> 2));
+    [r, g, b, 255]
+}
+
+/// 5-bit (16, 10, 5): the lit colour of [`or_sheet`], and `rlëD` 9.
+const LIT_555: [u8; 3] = [16, 10, 5];
+/// [`LIT_555`] widened.
+const LIT: [u8; 4] = [132, 82, 41, 255];
+/// 5-bit (8, 6, 2): `rlëD` 8.
+const DIM_555: [u8; 3] = [8, 6, 2];
+/// [`DIM_555`] widened.
+const DIM: [u8; 4] = [66, 49, 16, 255];
+
+/// `rlëD` 7, a layer sheet: a transparent white column (which a layer
+/// that ignored alpha would OR in), an opaque black column, then two
+/// [`LIT`] columns.
+fn or_sheet() -> Image {
+    let row = [[255, 255, 255, 0], BLACK, LIT, LIT].concat();
+    Image::from_rgba(4, 4, row.repeat(4)).expect("4x4")
+}
 
 impl ImageSource for Images {
     fn frames(&self, kind: ImageKind, id: i16) -> Result<Vec<Image>, ImageError> {
@@ -57,6 +88,11 @@ impl ImageSource for Images {
             (ImageKind::Pict, 1) => Ok(vec![patterned(4, 2)]),
             (ImageKind::Rled, 2) => Ok(vec![solid([255, 255, 255, 255])]),
             (ImageKind::Rled, 3) => Ok(vec![patterned(2, 4)]),
+            (ImageKind::Rled, 4) => Ok(vec![solid([0, 0, 0, 255])]),
+            (ImageKind::Rled, 5) => Ok(vec![solid(ORANGE)]),
+            (ImageKind::Rled, 7) => Ok(vec![or_sheet()]),
+            (ImageKind::Rled, 8) => Ok(vec![solid(DIM)]),
+            (ImageKind::Rled, 9) => Ok(vec![solid(LIT)]),
             _ => Err(ImageError::Missing),
         }
     }
@@ -219,6 +255,275 @@ fn batches_on_two_pages_draw_their_own_quads_in_order() {
     for at in [(21, 13), (26, 13), (19, 19), (28, 19), (22, 22), (12, 13)] {
         assert_near(&pixels, at, BLACK, 0);
     }
+}
+
+/// Asserts every pixel of the logical rectangle `left..right` x
+/// `top..bottom` (scale 2, content offset 8 rows) is `want` within
+/// `tolerance` per channel.
+fn assert_area(
+    pixels: &[u8],
+    (left, top): (u32, u32),
+    (right, bottom): (u32, u32),
+    want: [u8; 4],
+    tolerance: u8,
+) {
+    for y in 2 * top + 8..2 * bottom + 8 {
+        for x in 2 * left..2 * right {
+            assert_near(pixels, (x, y), want, tolerance);
+        }
+    }
+}
+
+#[test]
+fn an_additive_sprite_adds_its_colour_scaled_by_its_alpha() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // Three grey squares, logical (4..8, 4..8), (14..18, 4..8) and
+    // (24..28, 4..8), each with an additive sprite over it, and one
+    // additive sprite over the black clear at (14..18, 14..18).
+    let grey = Color::rgba(64, 64, 64, 255);
+    let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
+    let mut list = DrawList::new();
+    for spot in spots {
+        list.sprite(ImageKey::sprite(2, 0), spot, grey);
+    }
+    list.additive_sprite(ImageKey::sprite(4, 0), spots[0], Color::WHITE)
+        .additive_sprite(ImageKey::sprite(5, 0), spots[1], Color::WHITE)
+        .additive_sprite(
+            ImageKey::sprite(2, 0),
+            spots[2],
+            Color::rgba(255, 0, 0, 128),
+        )
+        .additive_sprite(ImageKey::sprite(5, 0), Point::new(16.0, 16.0), Color::WHITE);
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // Black adds nothing.
+    assert_area(&pixels, (4, 4), (8, 8), [64, 64, 64, 255], 2);
+    // Orange adds its colour.
+    assert_area(&pixels, (14, 4), (18, 8), [128, 96, 64, 255], 2);
+    // Red at half alpha adds half of it.
+    assert_area(&pixels, (24, 4), (28, 8), [192, 64, 64, 255], 2);
+    // Over black it is its own colour.
+    assert_area(&pixels, (14, 14), (18, 18), ORANGE, 2);
+    // Around them.
+    for at in [
+        (3, 5),
+        (8, 5),
+        (13, 5),
+        (18, 5),
+        (5, 3),
+        (5, 8),
+        (16, 13),
+        (16, 18),
+    ] {
+        assert_area(&pixels, at, (at.0 + 1, at.1 + 1), BLACK, 2);
+    }
+}
+
+#[test]
+fn an_additive_sprite_after_a_normal_one_lands_over_it_in_order() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // A normal red square A, logical (8..12, 8..12); an additive orange
+    // square B, (10..14, 10..14), over A's bottom-right quarter; a normal
+    // blue square C, (12..16, 12..16), over B's bottom-right quarter.
+    let mut list = DrawList::new();
+    list.sprite(
+        ImageKey::sprite(2, 0),
+        Point::new(10.0, 10.0),
+        Color::rgba(128, 0, 0, 255),
+    )
+    .additive_sprite(ImageKey::sprite(5, 0), Point::new(12.0, 12.0), Color::WHITE)
+    .sprite(
+        ImageKey::sprite(2, 0),
+        Point::new(14.0, 14.0),
+        Color::rgba(0, 0, 128, 255),
+    );
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // A alone.
+    assert_area(&pixels, (8, 8), (10, 12), [128, 0, 0, 255], 2);
+    // B added over A.
+    assert_area(&pixels, (10, 10), (12, 12), [192, 32, 0, 255], 2);
+    // B over the clear.
+    assert_area(&pixels, (12, 10), (14, 12), ORANGE, 2);
+    assert_area(&pixels, (10, 12), (12, 14), ORANGE, 2);
+    // C painted over B.
+    assert_area(&pixels, (12, 12), (14, 14), [0, 0, 128, 255], 2);
+    // C alone.
+    assert_area(&pixels, (14, 12), (16, 16), [0, 0, 128, 255], 2);
+}
+
+/// The original's 16-bit light blit at `level` out of 32, transcribed
+/// from `EV Nova`'s `_BlitPixieTranslucentCopy` (0xc1110) as
+/// `_BlitPixieRLETranslucent` (0xc1568) sets it up for a lights sprite
+/// (`_alpha` = 32, `_alphaC` = level, no bias): per 5-bit channel,
+/// `((src * level) >> 5) | dst`. At level 32 it is `src | dst`,
+/// `_BlitPixieRLEAddOver` (0xc24bf).
+fn original_lights_555(src: [u8; 3], dst: [u8; 3], level: u8) -> [u8; 3] {
+    let level = u16::from(level);
+    std::array::from_fn(|c| (((u16::from(src[c]) * level) >> 5) as u8) | dst[c])
+}
+
+fn tint(rgba: [u8; 4]) -> Color {
+    Color::rgba(rgba[0], rgba[1], rgba[2], rgba[3])
+}
+
+/// Five-bit (16, 12, 0): a hull colour sharing set bits with [`LIT_555`]
+/// in red and green.
+const HULL_555: [u8; 3] = [16, 12, 0];
+
+#[test]
+fn an_or_sprite_ors_its_colour_into_what_is_beneath_not_adds() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // Hull squares at logical (4..8, 4..8), a 5-bit colour, and (14..18,
+    // 4..8), a colour that is not 5-bit; the OR sheet over each and over
+    // the black clear at (24..28, 4..8). Each sheet's columns are
+    // transparent (x 4..5), black (5..6) and lit (6..8), and likewise 10
+    // and 20 further right. The three sheets overlap nothing of each
+    // other's, so they are one batch.
+    let hull = w555(HULL_555);
+    assert_eq!(hull, [132, 99, 0, 255]);
+    let odd = [100, 37, 250, 255];
+    let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
+    let mut list = DrawList::new();
+    list.sprite(ImageKey::sprite(2, 0), spots[0], tint(hull))
+        .sprite(ImageKey::sprite(2, 0), spots[1], tint(odd));
+    for spot in spots {
+        list.or_sprite(ImageKey::sprite(7, 0), spot, Color::WHITE);
+    }
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // Transparent and black layer pixels leave what is beneath exactly.
+    assert_area(&pixels, (4, 4), (6, 8), hull, 0);
+    assert_area(&pixels, (14, 4), (16, 8), odd, 0);
+    assert_area(&pixels, (24, 4), (26, 8), BLACK, 0);
+    // Lit over the 5-bit hull: 16|16, 12|10, 0|5 is (16, 14, 5), widened;
+    // not the sum.
+    let ored = w555(original_lights_555(LIT_555, HULL_555, 32));
+    assert_eq!(ored, [132, 115, 41, 255]);
+    assert_ne!(ored, [255, 181, 41, 255]);
+    assert_area(&pixels, (6, 4), (8, 8), ored, 0);
+    // Lit over the other: ORed at 8 bits against it as it is.
+    assert_area(&pixels, (16, 4), (18, 8), [228, 119, 251, 255], 0);
+    // Lit over the clear: the layer's own colour.
+    assert_area(&pixels, (26, 4), (28, 8), LIT, 0);
+}
+
+#[test]
+fn a_partial_level_light_composites_like_the_originals_translucent_blit() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // Hull squares at logical (4..8, 4..8) and (14..18, 4..8), with the OR
+    // sheet over the first at level 16 and over the second at level 10
+    // (the stock triangle blink's lowest), and over the black clear at
+    // level 16, (24..28, 4..8).
+    let hull = w555(HULL_555);
+    let spots = [6.0, 16.0, 26.0].map(|x| Point::new(x, 6.0));
+    let mut list = DrawList::new();
+    list.sprite(ImageKey::sprite(2, 0), spots[0], tint(hull))
+        .sprite(ImageKey::sprite(2, 0), spots[1], tint(hull))
+        .or_sprite(ImageKey::sprite(7, 0), spots[0], lights_tint(16))
+        .or_sprite(ImageKey::sprite(7, 0), spots[1], lights_tint(10))
+        .or_sprite(ImageKey::sprite(7, 0), spots[2], lights_tint(16));
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // Transparent and black layer pixels leave the hull and the clear.
+    assert_area(&pixels, (4, 4), (6, 8), hull, 0);
+    assert_area(&pixels, (14, 4), (16, 8), hull, 0);
+    assert_area(&pixels, (24, 4), (26, 8), BLACK, 0);
+    // A lit one is scaled by level/32, floored in 5 bits, and ORed in.
+    let at_16 = w555(original_lights_555(LIT_555, HULL_555, 16));
+    assert_eq!(at_16, [198, 107, 16, 255]);
+    assert_area(&pixels, (6, 4), (8, 8), at_16, 0);
+    // In blue, 5 x 10 / 32 floors to 1 (8), where rounding would give 2.
+    let at_10 = w555(original_lights_555(LIT_555, HULL_555, 10));
+    assert_eq!(at_10, [173, 123, 8, 255]);
+    assert_area(&pixels, (16, 4), (18, 8), at_10, 0);
+    let alone = w555(original_lights_555(LIT_555, [0, 0, 0], 16));
+    assert_eq!(alone, [66, 41, 16, 255]);
+    assert_area(&pixels, (26, 4), (28, 8), alone, 0);
+}
+
+#[test]
+fn an_or_sprite_between_normal_ones_keeps_submission_order() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // A normal red square A, logical (8..12, 8..12); an OR square B,
+    // (10..14, 10..14), over A's bottom-right quarter; a normal blue
+    // square C, (12..16, 12..16), over B's bottom-right quarter.
+    let red = w555([16, 0, 0]);
+    let blue = [0, 0, 132, 255];
+    let mut list = DrawList::new();
+    list.sprite(ImageKey::sprite(2, 0), Point::new(10.0, 10.0), tint(red))
+        .or_sprite(ImageKey::sprite(8, 0), Point::new(12.0, 12.0), Color::WHITE)
+        .sprite(ImageKey::sprite(2, 0), Point::new(14.0, 14.0), tint(blue));
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    // A alone.
+    assert_area(&pixels, (8, 8), (10, 12), red, 0);
+    // B ORed over A.
+    let over_a = w555(original_lights_555(DIM_555, [16, 0, 0], 32));
+    assert_eq!(over_a, [198, 49, 16, 255]);
+    assert_area(&pixels, (10, 10), (12, 12), over_a, 0);
+    // B over the clear.
+    assert_area(&pixels, (12, 10), (14, 12), DIM, 0);
+    assert_area(&pixels, (10, 12), (12, 14), DIM, 0);
+    // C painted over B, and C alone.
+    assert_area(&pixels, (12, 12), (14, 14), blue, 0);
+    assert_area(&pixels, (14, 12), (16, 16), blue, 0);
+}
+
+#[test]
+fn an_or_sprite_sees_the_or_sprite_before_it() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    // OR square X, logical (8..12, 8..12), then OR square Y, (10..14,
+    // 10..14), over X's bottom-right quarter: they overlap, so Y reads a
+    // backdrop that already holds X.
+    let mut list = DrawList::new();
+    list.or_sprite(ImageKey::sprite(9, 0), Point::new(10.0, 10.0), Color::WHITE)
+        .or_sprite(ImageKey::sprite(8, 0), Point::new(12.0, 12.0), Color::WHITE);
+    let mut renderer = Renderer::new(Images);
+
+    let report = renderer.render(&list, &Viewport::new(LOGICAL, (SIZE, SIZE), 2.0), &mut gpu);
+    let pixels = gpu.read_pixels().expect("read back");
+
+    assert_eq!(report.new_failures, vec![]);
+    assert_area(&pixels, (8, 8), (10, 12), LIT, 0);
+    // Y over X: 16|8, 10|6, 5|2, widened. Y on a stale backdrop would be
+    // DIM here.
+    let both = w555(original_lights_555(DIM_555, LIT_555, 32));
+    assert_eq!(both, [198, 115, 57, 255]);
+    assert_area(&pixels, (10, 10), (12, 12), both, 0);
+    assert_area(&pixels, (12, 10), (14, 14), DIM, 0);
 }
 
 /// Whether any pixel in rows `rows` is not black.

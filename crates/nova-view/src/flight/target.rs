@@ -358,6 +358,7 @@ mod tests {
             nav: none,
             weap: rect(8.0, 300.0, 184.0, 315.0),
             targ: rect(8.0, 330.0, 184.0, 442.0),
+            cargo: none,
             bright_text: BRIGHT,
             dim_text: DIM,
             bright_radar: Color::WHITE,

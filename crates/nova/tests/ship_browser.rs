@@ -22,7 +22,7 @@ use nova_render::recording::RecordingGpu;
 use nova_render::{Batch, Frame, QuadInstance};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
-use nova_view::Key;
+use nova_view::{Blend, Key};
 
 /// A 1024x768 window at scale 1.
 struct FakeWindow;
@@ -116,6 +116,26 @@ fn data() -> Rc<GameData> {
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
+/// Ship 128 alone, with base, glow and lights sheets, its lights
+/// blinking as the Shuttle's do (`BlinkMode` 1, A=4 B=1 C=2 D=20): lit at
+/// ticks 1-3 and 10-12 of every 40.
+fn blinking_data() -> Rc<GameData> {
+    let mut shan = anim(1000, 1100, 1200);
+    for (at, value) in [(0x36, 1_i16), (0x38, 4), (0x3A, 1), (0x3C, 2), (0x3E, 20)] {
+        put(&mut shan, at, &value.to_be_bytes());
+    }
+    let fork = ForkBuilder::new()
+        .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship())
+        .resource(ShipAnim::TYPE, 128, None, &shan)
+        .resource(RLED, 1000, None, &sheet(8))
+        .resource(RLED, 1100, None, &sheet(16))
+        .resource(RLED, 1200, None, &sheet(16))
+        .build()
+        .bytes;
+    let file = OneFile(fork);
+    Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
+}
+
 struct Harness {
     app: App<Rc<GameData>>,
     gpu: RecordingGpu,
@@ -124,7 +144,11 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
-        let data = data();
+        Self::over(data())
+    }
+
+    /// The app opening on the ship browser over `data`.
+    fn over(data: Rc<GameData>) -> Self {
         let app = App::new(&FakeWindow, Rc::clone(&data), start_screen(data));
         Self {
             app,
@@ -212,11 +236,25 @@ fn the_first_frame_draws_the_ship_its_layers_and_its_text() {
     let mut harness = Harness::new();
     let frame = harness.frame();
 
+    // The base is drawn normally, then the glow and lights ORed over it,
+    // each in its own batch since they overlap.
     assert!(
-        matches!(&frame.batches[0], Batch::Sprites { quads, .. } if quads.len() == 3),
+        matches!(
+            &frame.batches[0],
+            Batch::Sprites { blend: Blend::Normal, quads, .. } if quads.len() == 1
+        ),
         "{:?}",
         frame.batches[0]
     );
+    for layer in &frame.batches[1..3] {
+        assert!(
+            matches!(
+                layer,
+                Batch::Sprites { blend: Blend::Or, quads, .. } if quads.len() == 1
+            ),
+            "{layer:?}"
+        );
+    }
     let quads = sprite_quads(&frame);
     let centre = |quad: &QuadInstance| {
         (
@@ -291,4 +329,24 @@ fn later_redraws_turn_the_ship() {
     assert_eq!(first[0].dest, second[0].dest);
     assert_ne!(first[0].uv, second[0].uv, "the base shows its next frame");
     assert_ne!(first[1].uv, second[1].uv, "the glow follows it");
+}
+
+#[test]
+fn the_lights_blink_by_the_shan() {
+    let mut harness = Harness::over(blinking_data());
+    // 1/60 s, tick 0: the lights are off; the base and glow show.
+    let first = harness.frame();
+    assert_eq!(sprite_quads(&first).len(), 2, "{:?}", first.batches);
+    // 2/60 s, tick 1: the lights are ORed over the glow.
+    let second = harness.frame();
+    assert_eq!(sprite_quads(&second).len(), 3, "{:?}", second.batches);
+    for layer in &second.batches[1..3] {
+        assert!(
+            matches!(
+                layer,
+                Batch::Sprites { blend: Blend::Or, quads, .. } if quads.len() == 1
+            ),
+            "{layer:?}"
+        );
+    }
 }

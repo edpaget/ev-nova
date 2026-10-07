@@ -352,6 +352,13 @@ impl Harness {
         self.type_key(code, None);
     }
 
+    /// Presses L twice, as the player lands: the first requests clearance,
+    /// the second lands.
+    fn land(&mut self) {
+        self.press(KeyCode::KeyL);
+        self.press(KeyCode::KeyL);
+    }
+
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
@@ -458,7 +465,7 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     game.frame();
 
     // Landing saves, with the stellar; leaving saves again.
-    game.press(KeyCode::KeyL);
+    game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(store.writes(), 2);
     assert_eq!(saved(&store, "Ada P").stellar(), Some(StellarId(128)));
@@ -467,7 +474,7 @@ fn a_new_pilot_lands_quits_and_resumes_where_it_landed() {
     assert_eq!(store.writes(), 3);
 
     // Landed again, closing the window saves the pilot as it is.
-    game.press(KeyCode::KeyL);
+    game.land();
     let writes = store.writes();
     let landed = game.pilot();
     assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);

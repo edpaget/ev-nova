@@ -5,11 +5,11 @@ use std::cell::RefCell;
 
 use crate::ai::Goal;
 use crate::catalog::{
-    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterRecord, DudeId,
-    DudeRecord, FleetRecord, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, ShipId, ShipRecord, StarSystem,
-    StartDate, StartError, StellarId, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
-    WeaponRecord,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterRecord,
+    DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
+    LandingSite, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, ShipId,
+    ShipRecord, StarSystem, StartDate, StartError, StellarId, SystemId, SystemTraffic,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -18,8 +18,9 @@ use crate::flight::ShipState;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
-use crate::hyperspace::MIN_JUMP_DISTANCE;
-use crate::landing::StellarFlags;
+use crate::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
+use crate::landing::{LandOutcome, LandingRefusal, StellarFlags};
+use crate::session::LandPress;
 use crate::session::Session;
 use crate::stats::ShipStats;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
@@ -68,6 +69,14 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) govts: Vec<GovtRecord>,
     /// Each `STR#`; any other is missing.
     pub(crate) strings: Vec<(i16, Vec<String>)>,
+    /// The first `chär`'s date prefix and suffix.
+    pub(crate) date_affixes: DateAffixes,
+    /// How many times the date affixes were read.
+    pub(crate) date_affix_reads: RefCell<usize>,
+    /// Every stellar a gate may lead to: none, by default.
+    pub(crate) gates: Vec<GateSite>,
+    /// How many times the gate sites were read.
+    pub(crate) gate_reads: RefCell<usize>,
 }
 
 pub(crate) const FAST: ShipFields = ShipFields {
@@ -84,6 +93,7 @@ pub(crate) const FAST: ShipFields = ShipFields {
     contribute: 0x1,
     shield_rech: 0,
     armor_rech: 0,
+    flags2: 0,
 };
 
 /// A landable planet at (`x`, `y`), 100 x 100 (radius 50).
@@ -98,6 +108,7 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         tech_level: 0,
         special_tech: [0; 8],
         govt: None,
+        flags2: 0,
     }
 }
 
@@ -347,6 +358,13 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         hulls: Vec::new(),
         govts: Vec::new(),
         strings: Vec::new(),
+        date_affixes: DateAffixes {
+            prefix: String::new(),
+            suffix: " NC".to_owned(),
+        },
+        date_affix_reads: RefCell::default(),
+        gates: Vec::new(),
+        gate_reads: RefCell::default(),
     }
 }
 
@@ -438,6 +456,16 @@ impl PilotCatalog for FakePilotCatalog {
     fn disasters(&self) -> Vec<DisasterRecord> {
         *self.goods_reads.borrow_mut() += 1;
         self.disasters.clone()
+    }
+
+    fn date_affixes(&self) -> DateAffixes {
+        *self.date_affix_reads.borrow_mut() += 1;
+        self.date_affixes.clone()
+    }
+
+    fn gate_sites(&self) -> Vec<GateSite> {
+        *self.gate_reads.borrow_mut() += 1;
+        self.gates.clone()
     }
 }
 
@@ -532,6 +560,21 @@ pub(crate) fn fly_out(session: &mut Session) {
     panic!("never got out: {:?}", session.player());
 }
 
+/// Presses L until it lands or is refused: a first press that selects a
+/// stellar is followed by a second. Gives the stellar landed on, or the
+/// refusal.
+pub(crate) fn land_now(session: &mut Session) -> Result<StellarId, LandingRefusal> {
+    for _ in 0..2 {
+        if let LandPress::Outcome(LandOutcome::Landed(stellar)) = session.land()? {
+            return Ok(stellar);
+        }
+    }
+    panic!(
+        "L selected twice and never landed: {:?}",
+        session.nav_target()
+    );
+}
+
 /// Plots a course to `to`, flies out and jumps, and arrives, no chance
 /// firing on the way.
 pub(crate) fn jump(session: &mut Session, catalog: &FakePilotCatalog, to: i16) -> Option<SystemId> {
@@ -550,16 +593,32 @@ pub(crate) fn jump_with(
         session.plot_course(SystemId(to)).expect("a route");
     }
     fly_out(session);
-    session.begin_jump().expect("jumps");
+    begin_jump_now(session).expect("jumps");
     session.arrive(catalog, chance)
 }
 
-/// A [`Chance`] that answers from a script (no once it runs out) and
-/// records each percent it is asked.
+/// Presses J, and if the jump is accepted, ticks with no keys held through
+/// the pre-jump stage until the jump has begun. Gives what J gave.
+pub(crate) fn begin_jump_now(session: &mut Session) -> Result<SystemId, JumpRefusal> {
+    let next = session.begin_jump()?;
+    for _ in 0..1000 {
+        if session.jumping().is_some() {
+            return Ok(next);
+        }
+        session.tick(Controls::default());
+    }
+    panic!("the jump never began: {:?}", session.player());
+}
+
+/// A [`Chance`] that answers and rolls from a script (no, and 0, once it
+/// runs out) and records each percent and each number of sides it is
+/// asked.
 #[derive(Debug, Default)]
 pub(crate) struct Scripted {
     answers: Vec<bool>,
+    rolls: Vec<u16>,
     pub(crate) asked: Vec<u8>,
+    pub(crate) sides_asked: Vec<u16>,
 }
 
 impl Scripted {
@@ -567,7 +626,15 @@ impl Scripted {
     pub(crate) fn answering(answers: &[bool]) -> Self {
         Self {
             answers: answers.iter().rev().copied().collect(),
-            asked: Vec::new(),
+            ..Self::default()
+        }
+    }
+
+    /// Rolls `rolls`, in order, then 0.
+    pub(crate) fn rolling(rolls: &[u16]) -> Self {
+        Self {
+            rolls: rolls.iter().rev().copied().collect(),
+            ..Self::default()
         }
     }
 }
@@ -576,6 +643,11 @@ impl Chance for Scripted {
     fn fires(&mut self, percent: u8) -> bool {
         self.asked.push(percent);
         self.answers.pop().unwrap_or(false)
+    }
+
+    fn roll(&mut self, sides: u16) -> u16 {
+        self.sides_asked.push(sides);
+        self.rolls.pop().unwrap_or(0)
     }
 
     /// The last outcome, as [`NeverFires`] draws: no roll fires.

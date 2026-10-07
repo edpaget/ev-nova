@@ -283,7 +283,7 @@ mod tests {
     use crate::stats::HYPERSPACE_DAYS;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
-    use crate::testkit::{FAST, FakePilotCatalog, Scripted, catalog, jump, planet, ship};
+    use crate::testkit::{FAST, FakePilotCatalog, Scripted, catalog, jump, land_now, planet, ship};
     use crate::traffic::npc::AiType;
 
     /// The bar's stellar, 128, at the centre, under the ship as it
@@ -328,7 +328,7 @@ mod tests {
     fn landed(catalog: &FakePilotCatalog, cash: i64) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.pilot.cash = cash;
-        assert_eq!(session.land(), Ok(BAR_AT));
+        assert_eq!(land_now(&mut session), Ok(BAR_AT));
         session.take_save_due();
         session
     }
@@ -453,7 +453,7 @@ mod tests {
         );
         session.take_off().expect("takes off");
         assert_eq!(session.escorts_for_hire(&mut chance), None, "in flight");
-        assert_eq!(session.land(), Ok(BAR_AT));
+        assert_eq!(land_now(&mut session), Ok(BAR_AT));
         let list = session.escorts_for_hire(&mut chance).expect("a bar");
         assert_eq!(listed(&list), Vec::<i16>::new());
         assert_eq!(chance.asked, [50, 50]);
@@ -965,7 +965,7 @@ mod tests {
     /// [`payer`]'s session, landed at the bar.
     fn docked(cash: i64, rule: RuleSource) -> Session {
         let mut session = payer(cash, payroll(), 1, rule);
-        assert_eq!(session.land(), Ok(BAR_AT));
+        assert_eq!(land_now(&mut session), Ok(BAR_AT));
         session.take_save_due();
         session
     }

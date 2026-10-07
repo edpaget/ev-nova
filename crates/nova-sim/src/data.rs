@@ -1,7 +1,10 @@
 //! The pilot, traffic, combat and comm catalogs over the game data: a
 //! thin mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`, `wëap`,
 //! `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët` and `gövt` records, its
-//! string lists and its stellar sprites.
+//! string lists and its stellar sprites; and a `shän`'s blink fields as a
+//! [`Blink`].
+
+use std::collections::BTreeMap;
 
 use nova_data::GameData;
 use nova_data::records::character::Character;
@@ -20,12 +23,14 @@ use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
 
+use crate::blink::Blink;
 use crate::catalog::{
-    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterId, DisasterRecord,
-    DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord, HullRecord,
-    JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord, Penalties, PersonId,
-    PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, StockWeapon, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
+    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
+    GovtRecord, HullRecord, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord,
+    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId,
+    StarSystem, StartDate, StartError, StellarId, StockWeapon, SystemId, SystemTraffic,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -177,6 +182,7 @@ impl PilotCatalog for GameData {
                     tech_level: stellar.tech_level,
                     special_tech,
                     govt: stellar.govt,
+                    flags2: stellar.flags2.bits(),
                 })
             })
             .collect()
@@ -219,6 +225,44 @@ impl PilotCatalog for GameData {
                     bought_at: stellars(&record.bought_at),
                     buy_on: record.buy_on.as_str().to_owned(),
                     sell_on: record.sell_on.as_str().to_owned(),
+                })
+            })
+            .collect()
+    }
+
+    fn date_affixes(&self) -> DateAffixes {
+        match self.records::<Character>().next() {
+            Some((_, Ok(character))) => DateAffixes {
+                prefix: character.record.date_prefix.as_str().to_owned(),
+                suffix: character.record.date_suffix.as_str().to_owned(),
+            },
+            _ => DateAffixes::default(),
+        }
+    }
+
+    fn gate_sites(&self) -> Vec<GateSite> {
+        // Systems come by ascending ID, so the first to list a stellar is
+        // the lowest.
+        let mut listed: BTreeMap<StellarId, SystemId> = BTreeMap::new();
+        for (id, system) in self.records::<System>() {
+            let Ok(system) = system else {
+                continue;
+            };
+            for stellar in system.record.nav_def.into_iter().flatten() {
+                listed.entry(stellar).or_insert(SystemId(id));
+            }
+        }
+        listed
+            .into_iter()
+            .filter_map(|(id, system)| {
+                let stellar = self.get::<Stellar>(id.0)?.ok()?.record;
+                Some(GateSite {
+                    id,
+                    system,
+                    position: Vec2::new(f32::from(stellar.x_pos), f32::from(stellar.y_pos)),
+                    flags2: stellar.flags2.bits(),
+                    links: stellar.hyper_link,
+                    exit_angle: stellar.cust_snd_id,
                 })
             })
             .collect()
@@ -520,6 +564,29 @@ fn stock_weapons(ship: &Ship) -> Vec<StockWeapon> {
         .collect()
 }
 
+/// A `shän`'s `BlinkMode` and `BlinkValA`–`D`, raw.
+impl From<&ShipAnim> for Blink {
+    fn from(anim: &ShipAnim) -> Self {
+        Self {
+            mode: anim.blink_mode,
+            a: anim.blink_val_a,
+            b: anim.blink_val_b,
+            c: anim.blink_val_c,
+            d: anim.blink_val_d,
+        }
+    }
+}
+
+/// Ship `id`'s blink: its `shän`'s blink fields, or steady when the `shän`
+/// is missing or cannot be read.
+#[must_use]
+pub fn ship_blink(data: &GameData, id: i16) -> Blink {
+    match data.get::<ShipAnim>(id) {
+        Some(Ok(anim)) => Blink::from(anim.record),
+        _ => Blink::STEADY,
+    }
+}
+
 /// A `shïp`'s handling, reserve, cargo and mass fields.
 fn ship_fields(ship: &Ship) -> ShipFields {
     ShipFields {
@@ -536,6 +603,7 @@ fn ship_fields(ship: &Ship) -> ShipFields {
         contribute: ship.contribute.bits(),
         shield_rech: ship.shield_rech,
         armor_rech: ship.armor_rech,
+        flags2: ship.flags2.bits(),
     }
 }
 
@@ -603,8 +671,8 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        DisasterId, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem, StartDate,
-        StellarId, StockWeapon, WeaponId, WeaponRecord,
+        DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
+        StartDate, StellarId, StockWeapon, WeaponId, WeaponRecord,
     };
 
     /// One data file, `/data/Nova Data`, holding a fork.
@@ -722,6 +790,40 @@ mod tests {
         );
     }
 
+    /// A `chär` whose `DatePrefix` (0x13A) and `DateSuffix` (0x14A) are
+    /// `prefix` and `suffix`.
+    fn dated(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
+        let mut bytes = character(128, [130, -1, -1, -1]);
+        bytes[0x13A..0x13A + prefix.len()].copy_from_slice(prefix);
+        bytes[0x14A..0x14A + suffix.len()].copy_from_slice(suffix);
+        bytes
+    }
+
+    #[test]
+    fn the_date_affixes_are_the_first_chärs_prefix_and_suffix() {
+        let data = store(&[
+            (Character::TYPE, 129, dated(b"Era \0", b" AD\0")),
+            (Character::TYPE, 128, dated(b"Year \0", b" NC\0")),
+        ]);
+        assert_eq!(
+            data.date_affixes(),
+            DateAffixes {
+                prefix: "Year ".to_owned(),
+                suffix: " NC".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn no_chär_or_an_undecodable_one_has_no_date_affixes() {
+        assert_eq!(store(&[]).date_affixes(), DateAffixes::default());
+        let data = store(&[
+            (Character::TYPE, 128, short(dated(b"Year \0", b" NC\0"))),
+            (Character::TYPE, 129, dated(b"Era \0", b" AD\0")),
+        ]);
+        assert_eq!(data.date_affixes(), DateAffixes::default());
+    }
+
     #[test]
     fn the_start_carries_the_chärs_cash_and_legal_records() {
         let mut bytes = character(128, [130, -1, -1, -1]);
@@ -815,6 +917,14 @@ mod tests {
         let data = store(&[(Ship::TYPE, 128, bytes)]);
         let fields = data.ship_fields(ShipId(128)).expect("decodes");
         assert_eq!((fields.shield_rech, fields.armor_rech), (125, -20));
+    }
+
+    #[test]
+    fn a_ships_fields_include_its_flags2() {
+        let mut bytes = ship(1, 2, 3);
+        put_i16s(&mut bytes, 0x62, &[0x4021]);
+        let data = store(&[(Ship::TYPE, 128, bytes)]);
+        assert_eq!(data.ship_fields(ShipId(128)).map(|f| f.flags2), Ok(0x4021));
     }
 
     /// A `shïp` carrying `items` in its `DefaultItems` 1-4 and `more` in
@@ -1131,12 +1241,76 @@ mod tests {
             .build()
     }
 
+    /// `bytes`, a `spöb`, with this `Flags2`.
+    fn flagged2(mut bytes: Vec<u8>, flags2: u16) -> Vec<u8> {
+        bytes[0x20..0x22].copy_from_slice(&flags2.to_be_bytes());
+        bytes
+    }
+
+    /// A wormhole (`Flags2` 0x2000) at (`x`, `y`) heading out on
+    /// `angle`, with these `HyperLink`s, every other slot -1.
+    fn gate(x: i16, y: i16, angle: i16, links: &[i16]) -> Vec<u8> {
+        let mut bytes = flagged2(stellar(x, y, 0, 0x21, 0), 0x2000);
+        put_i16s(&mut bytes, 0x1A, &[angle]);
+        put_i16s(&mut bytes, 0x26, &[-1; 8]);
+        put_i16s(&mut bytes, 0x26, links);
+        bytes
+    }
+
+    #[test]
+    fn the_gate_sites_are_every_listed_stellar_by_id_in_the_lowest_system_listing_it() {
+        let data = store(&[
+            (System::TYPE, 131, system_with(&[129, 128])),
+            (System::TYPE, 130, system_with(&[129, 999])),
+            (System::TYPE, 132, short(system_with(&[133]))),
+            (Stellar::TYPE, 128, stellar(5, 6, 0, 1, 0)),
+            (Stellar::TYPE, 129, gate(-70, 250, 120, &[128, 0, 999])),
+            (Stellar::TYPE, 130, gate(0, 0, 0, &[])),
+            (Stellar::TYPE, 133, gate(0, 0, 0, &[])),
+        ]);
+        let links = |ids: &[i16]| {
+            let mut slots = [None; 8];
+            for (slot, &id) in slots.iter_mut().zip(ids) {
+                *slot = Some(StellarId(id));
+            }
+            slots
+        };
+        assert_eq!(
+            data.gate_sites(),
+            [
+                GateSite {
+                    id: StellarId(128),
+                    system: SystemId(131),
+                    position: Vec2::new(5.0, 6.0),
+                    flags2: 0,
+                    // Its zeroed links, kept raw.
+                    links: [Some(StellarId(0)); 8],
+                    exit_angle: 0,
+                },
+                GateSite {
+                    id: StellarId(129),
+                    system: SystemId(130),
+                    position: Vec2::new(-70.0, 250.0),
+                    flags2: 0x2000,
+                    links: links(&[128, 0, 999]),
+                    exit_angle: 120,
+                },
+            ],
+            "unlisted 130, missing 999, and 133 listed only by an undecodable system left out"
+        );
+        assert_eq!(store(&[]).gate_sites(), []);
+    }
+
     #[test]
     fn a_systems_landing_sites_are_its_readable_stellars_in_nav_order() {
         let data = store(&[
             (System::TYPE, 130, system_with(&[129, 999, 128, 131])),
             (Stellar::TYPE, 128, stellar(-300, 450, 7, 0x0000_0013, 25)),
-            (Stellar::TYPE, 129, stellar(10, -20, 0, 0x2001, -32767)),
+            (
+                Stellar::TYPE,
+                129,
+                flagged2(stellar(10, -20, 0, 0x2001, -32767), 0x1200),
+            ),
             (Stellar::TYPE, 131, short(stellar(0, 0, 0, 1, 0))),
             (Spin::TYPE, 1000, spin(1000)),
             (RLED, 1000, sheet(12, 30)),
@@ -1154,6 +1328,7 @@ mod tests {
                     tech_level: 0,
                     special_tech: [0; 8],
                     govt: None,
+                    flags2: 0x1200,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -1165,6 +1340,7 @@ mod tests {
                     tech_level: 0,
                     special_tech: [0; 8],
                     govt: None,
+                    flags2: 0,
                 },
             ]
         );
@@ -2057,5 +2233,46 @@ mod tests {
             ],
             "-1 and 127 name none"
         );
+    }
+
+    #[test]
+    fn a_blink_is_its_shäns_blink_fields() {
+        let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x36, &[2, -3, 75, 31, 85]);
+        let shan = nova_data::decode_bytes::<ShipAnim>(&bytes)
+            .expect("decodes")
+            .record;
+        assert_eq!(
+            Blink::from(&shan),
+            Blink {
+                mode: 2,
+                a: -3,
+                b: 75,
+                c: 31,
+                d: 85,
+            }
+        );
+    }
+
+    #[test]
+    fn a_ships_blink_is_its_shäns_and_steady_without_a_readable_one() {
+        let mut shan = vec![0; ShipAnim::SIZE.expect("fixed")];
+        put_i16s(&mut shan, 0x36, &[1, 4, 1, 2, 20]);
+        let data = store(&[
+            (ShipAnim::TYPE, 128, shan.clone()),
+            (ShipAnim::TYPE, 129, short(shan)),
+        ]);
+        assert_eq!(
+            ship_blink(&data, 128),
+            Blink {
+                mode: 1,
+                a: 4,
+                b: 1,
+                c: 2,
+                d: 20,
+            }
+        );
+        assert_eq!(ship_blink(&data, 129), Blink::STEADY, "undecodable");
+        assert_eq!(ship_blink(&data, 130), Blink::STEADY, "no shän");
     }
 }

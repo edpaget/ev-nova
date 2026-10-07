@@ -152,7 +152,7 @@ impl Session {
                     let person = npc.person?;
                     let view = QuoteView {
                         liked: likes_player(npc, &around),
-                        player_jumping: self.jumping.is_some(),
+                        player_jumping: self.jumping().is_some(),
                         player_ai,
                         // Missions: every mission is available until
                         // missions-and-storylines brings them.

@@ -29,7 +29,8 @@ impl SplitMix {
 }
 
 /// A `percent` % chance fires when a draw, taken modulo 100, is below it;
-/// a draw below `n` is a draw taken modulo `n`.
+/// a draw below `n` is a draw taken modulo `n`, and a roll is a draw
+/// modulo its sides.
 impl Chance for SplitMix {
     fn fires(&mut self, percent: u8) -> bool {
         self.next_u64() % 100 < u64::from(percent)
@@ -37,6 +38,15 @@ impl Chance for SplitMix {
 
     fn below(&mut self, n: u32) -> u32 {
         u32::try_from(self.next_u64() % u64::from(n.max(1))).unwrap_or(0)
+    }
+
+    fn roll(&mut self, sides: u16) -> u16 {
+        let draw = self.next_u64();
+        if sides == 0 {
+            return 0;
+        }
+        // Below `sides`, so it fits.
+        u16::try_from(draw % u64::from(sides)).unwrap_or(0)
     }
 }
 
@@ -124,5 +134,34 @@ mod tests {
         assert_eq!(0xE220_A839_7B1D_CDAF_u64 % 100, 35);
         assert!(SplitMix::new(0).fires(36));
         assert!(!SplitMix::new(0).fires(35));
+    }
+
+    #[test]
+    fn a_roll_is_a_draw_modulo_the_sides() {
+        // Seed 0's first draw is 0xE220A8397B1DCDAF: 7 modulo 8, 295
+        // modulo 360.
+        assert_eq!(0xE220_A839_7B1D_CDAF_u64 % 8, 7);
+        assert_eq!(0xE220_A839_7B1D_CDAF_u64 % 360, 295);
+        assert_eq!(SplitMix::new(0).roll(8), 7);
+        assert_eq!(SplitMix::new(0).roll(360), 295);
+        assert_eq!(SplitMix::new(0).roll(1), 0);
+        assert_eq!(SplitMix::new(0).roll(0), 0, "no outcomes");
+        assert_eq!(SplitMix::new(0).roll(u16::MAX), 54_055);
+    }
+
+    #[test]
+    fn rolls_stay_below_the_sides_and_cover_them() {
+        let mut mix = SplitMix::new(9);
+        let rolls: Vec<u16> = (0..2000).map(|_| mix.roll(8)).collect();
+        assert!(rolls.iter().all(|&roll| roll < 8));
+        for side in 0..8 {
+            assert!(rolls.contains(&side), "{side}");
+        }
+        let rolls = |seed| {
+            let mut mix = SplitMix::new(seed);
+            (0..5).map(|_| mix.roll(360)).collect::<Vec<_>>()
+        };
+        assert_eq!(rolls(42), rolls(42));
+        assert_ne!(rolls(42), rolls(43));
     }
 }

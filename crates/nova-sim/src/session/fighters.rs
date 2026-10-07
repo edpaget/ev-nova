@@ -465,7 +465,7 @@ mod tests {
     use crate::reserves::Reserves;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
-    use crate::testkit::{FAST, FakePilotCatalog, catalog, hull, outfit, ship, weapon};
+    use crate::testkit::{FAST, FakePilotCatalog, catalog, hull, land_now, outfit, ship, weapon};
     use crate::traffic::npc::{AiType, Npc, NpcId};
 
     /// The Viper Bay: carrying ship 144, reloading every 60 ticks,
@@ -1406,7 +1406,7 @@ mod tests {
     fn by_the_engine_landed_the_fighters_stay_out_and_take_off_restocked() {
         let catalog = two_bays();
         let mut session = both_out(&catalog, RuleSource::Engine);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(session.pilot().escorts().len(), 2, "still out");
         assert_eq!(session.pilot().owned(VIPERS), 0);
         session.take_off().expect("takes off");
@@ -1441,7 +1441,7 @@ mod tests {
         let catalog = two_bays();
         let mut session = fleet(&catalog, 0, vec![warship(None), out(), dart_out()])
             .with_fighter_recall(RuleSource::Bible);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(session.pilot().escorts(), [warship(None)]);
         assert_eq!(
             (session.pilot().owned(VIPERS), session.pilot().owned(DARTS)),
@@ -1488,7 +1488,7 @@ mod tests {
             .with_fighter_recall(RuleSource::Bible);
         launch(&mut session);
         assert_eq!(session.pilot().owned(VIPERS), 2);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         let pilot = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         assert_eq!(pilot.owned(VIPERS), 3);
         assert_eq!(pilot.escorts(), []);
@@ -1511,7 +1511,7 @@ mod tests {
         let catalog = spaceport();
         let mut session = fleet(&catalog, 1, vec![out(), warship(None), dart_out()]);
         session.pilot.cash = 1_000_000;
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.buy_ship(ShipId(129)).expect("bought");
         assert_eq!(session.pilot().escorts(), [warship(None)]);
         assert_eq!(session.pilot().owned(DARTS), 0, "no rounds");
@@ -1548,7 +1548,7 @@ mod tests {
     ) -> Result<(), crate::outfitter::OutfitRefusal> {
         let mut session = fleet(catalog, aboard, vec![out(); out_]);
         session.pilot.cash = 1_000_000;
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session
             .outfitter()
             .expect("an outfitter")
@@ -1580,7 +1580,7 @@ mod tests {
         // Each bay's fighters are counted on their own.
         let mut session = fleet(&catalog, 0, vec![out(); 4]);
         session.pilot.cash = 1_000_000;
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert_eq!(
             session
                 .outfitter()

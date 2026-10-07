@@ -74,16 +74,80 @@ pub struct ShipAnim {
     pub weap_decay: i16,
     /// Bible `FramesPer` (offset 0x34, i16): frames per rotation.
     pub frames_per: i16,
-    /// Bible `BlinkMode` (offset 0x36, i16): 0/-1 off, 1 square, 2 triangle,
-    /// 3 random.
+    /// Bible `BlinkMode` (offset 0x36, i16): how the running lights
+    /// (`LightImageID`) blink. The Bible names the modes "0 or -1 Ignored",
+    /// "1 Square-wave blinking", "2 Triangle-wave pulsing" and "3 Random
+    /// pulsing"; what `BlinkValA`–`D` mean in each is on those fields.
+    ///
+    /// The original keeps a lights intensity from 0 to 32 per ship (32 is
+    /// full brightness) and updates it once every 1/30 s tick: every timer
+    /// and ramp in `_HandleShipDisplay` (0x2b514), at 0x2c2ea–0x2c565,
+    /// scales by `_gSpeedMult`, which `_HandleTimeAdjustment` sets to the
+    /// frame's elapsed milliseconds x 0.03 (at 0x333e1), so 1.0 is one
+    /// tick. The lights are drawn only while the intensity is above 1, at
+    /// level `trunc(intensity)` out of 32 (at 0x2c59a–0x2c6a9). Level 32 is
+    /// `_BlitPixieRLEAddOver` (0xc24bf), a bitwise OR into the screen;
+    /// lower levels use `_BlitPixieRLETranslucent` (0xc1568), whose
+    /// per-pixel `_BlitPixieTranslucentCopy` (0xc1110) ORs in the lights
+    /// scaled by level/32 and leaves the screen undimmed. The full record
+    /// is on `nova_view::draw::lights_tint`. The intensity starts at 0
+    /// (`_InitObjects`, at 0x1c423).
+    ///
+    /// Any mode but 1, 2 and 3 (stock: -1) holds the intensity at 32
+    /// (0x2c565): the lights show steadily, which is what the Bible's
+    /// "Ignored" amounts to.
     pub blink_mode: i16,
     /// Bible `BlinkValA` (offset 0x38, i16).
+    ///
+    /// - Mode 1: the **off-time** between the blinks of a group, in ticks.
+    ///   The Bible calls A "the light on-time", but `_HandleShipDisplay`
+    ///   loads A into the timer as it turns the light off and counts a
+    ///   blink (0x2c380–0x2c395); see `blink_val_b`.
+    /// - Mode 2: the minimum intensity, 1 to 32 (Bible). The falling ramp
+    ///   stops at A and turns to rise (0x2c466–0x2c480).
+    /// - Mode 3: the minimum intensity, 1 to 32 (Bible): each change picks
+    ///   A + `Rand(B - A + 1)` (0x2c4dd–0x2c4fb).
     pub blink_val_a: i16,
     /// Bible `BlinkValB` (offset 0x3A, i16).
+    ///
+    /// - Mode 1: the **on-time** of each blink, in ticks. The Bible calls B
+    ///   "the delay between blinks", but `_HandleShipDisplay` loads B into
+    ///   the timer as it turns the light on, at intensity 32
+    ///   (0x2c39f–0x2c3b4). This follows the executable, not the Bible's
+    ///   labels. Each tick the timer is first clamped to at most
+    ///   max(B, D) (0x2c31a–0x2c340), then counts down one a tick, and the
+    ///   light switches on the tick after it goes below 0, so a phase
+    ///   loaded with `v` lasts max(min(v, max(B, D)), -1) + 2 ticks. The
+    ///   Shuttle (A=4 B=1 C=2 D=20) is lit for 3 ticks, dark for 6, lit
+    ///   for 3, then dark for 28: a double flash every 40 ticks.
+    /// - Mode 2: the intensity added each rising tick, in hundredths
+    ///   (Bible: "x100"; 0.01 x B x `_gSpeedMult` at 0x2c44d–0x2c4b6).
+    /// - Mode 3: the maximum intensity, 1 to 32 (Bible), clamped to at
+    ///   most 31 when the ship is loaded (`_LoadExtendedShipSprites`,
+    ///   0x233eb–0x233ff).
     pub blink_val_b: i16,
     /// Bible `BlinkValC` (offset 0x3C, i16).
+    ///
+    /// - Mode 1: the number of blinks in a group (Bible); 0 or less never
+    ///   lights (0x2c360).
+    /// - Mode 2: the maximum intensity, 1 to 32 (Bible), clamped to at
+    ///   most 31 when the ship is loaded (`_LoadExtendedShipSprites`,
+    ///   0x233c7–0x233db). The rising ramp stops at C and turns to fall
+    ///   (0x2c425–0x2c43f). Each bound is checked before the step, so the
+    ///   intensity can overshoot C, or undershoot A, by less than a step
+    ///   for one tick.
+    /// - Mode 3: the delay between intensity changes, in ticks (the Bible
+    ///   gives no unit): each value holds for max(C, 0) + 1 ticks
+    ///   (0x2c4c0–0x2c563).
     pub blink_val_c: i16,
     /// Bible `BlinkValD` (offset 0x3E, i16).
+    ///
+    /// - Mode 1: the delay between groups, in ticks (the Bible gives no
+    ///   unit): after the C-th blink's off-time the light stays dark for a
+    ///   phase loaded with D (0x2c3cd–0x2c3f4).
+    /// - Mode 2: the intensity taken away each falling tick, in hundredths
+    ///   (Bible: "x100"; -0.01 x D x `_gSpeedMult` at 0x2c48e–0x2c4b6).
+    /// - Mode 3: ignored (Bible).
     pub blink_val_d: i16,
     /// Bible `ShieldImageID` (offset 0x40, i16): shield bubble.
     pub shield_image_id: i16,

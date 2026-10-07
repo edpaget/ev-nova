@@ -1118,6 +1118,7 @@ mod tests {
                 image: ImageKey::sprite(402, 2),
                 center: camera.world_to_screen(at(10.0, 20.0)),
                 tint: translucent(),
+                blend: crate::Blend::Normal,
             }
         );
         assert_eq!(commands.len(), 17);

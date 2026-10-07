@@ -625,6 +625,8 @@ fn by_the_settings_other_reading_merchant_joins_and_flies_again_after_a_save() {
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.session().pilot().escorts().len(), 1);
     game.frame();
+    // L requests clearance, a second L lands.
+    game.tap(Key::Char('l'));
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
     let saved: serde_json::Value =

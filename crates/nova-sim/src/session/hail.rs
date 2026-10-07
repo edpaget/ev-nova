@@ -98,7 +98,7 @@ impl Session {
             self.condition,
             Condition::Dying { .. } | Condition::Destroyed
         );
-        if self.landed.is_some() || self.jumping.is_some() || !flying {
+        if self.landed.is_some() || self.jumping().is_some() || !flying {
             return Err(HailRefusal::NoTarget);
         }
         let npc = self.target().ok_or(HailRefusal::NoTarget)?;
@@ -347,7 +347,7 @@ impl Session {
     /// `rule` no longer has the player disabled. While the ship is landed
     /// or jumping, nothing happens.
     pub fn tick_assistance(&mut self, rule: &dyn DisableRule) {
-        if self.landed.is_some() || self.jumping.is_some() {
+        if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
         let player = self.player;
@@ -458,7 +458,7 @@ mod tests {
     use crate::handling::ShipFields;
     use crate::reserves::Gauge;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-    use crate::testkit::{Draws, FAST, FakePilotCatalog, govt, ship};
+    use crate::testkit::{Draws, FAST, FakePilotCatalog, govt, land_now, ship};
 
     const FED: GovtId = GovtId(128);
     const OTHER: GovtId = GovtId(129);
@@ -660,7 +660,7 @@ mod tests {
         let mut landed = targeting(&catalog);
         landed.landed = Some(StellarId(128));
         let mut jumping = targeting(&catalog);
-        jumping.jumping = Some(SystemId(131));
+        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
         let mut dying = targeting(&catalog);
         dying.condition = Condition::Dying { ticks_left: 3 };
         let mut destroyed = targeting(&catalog);
@@ -1198,7 +1198,7 @@ mod tests {
         let mut session = targeting(&catalog);
         hail(&mut session, &catalog);
         session.player.position = Vec2::new(30.0, -40.0);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         assert!(session.talk.is_none(), "landed");
     }
 
@@ -1417,7 +1417,7 @@ mod tests {
         let mut landed = helped(&catalog, Help::Refuel, 0.0);
         landed.landed = Some(StellarId(128));
         let mut jumping = helped(&catalog, Help::Refuel, 0.0);
-        jumping.jumping = Some(SystemId(131));
+        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
         let mut disabled = helped(&catalog, Help::Refuel, 0.0);
         npc(&mut disabled).condition = Condition::Disabled;
         for mut session in [landed, jumping, disabled] {

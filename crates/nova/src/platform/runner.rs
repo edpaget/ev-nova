@@ -23,7 +23,7 @@ use nova_data::GameData;
 #[cfg(feature = "dev-tools")]
 use nova_render::wgpu::WithOverlay;
 
-use nova_audio::{Audio, AudioCore, SettingsKeeper, SettingsStore};
+use nova_audio::{Audio, AudioCore};
 use nova_render::wgpu::{InitError, SurfaceGpu};
 use nova_render::{FontFaces, ImageSource};
 use winit::application::ApplicationHandler;
@@ -37,6 +37,7 @@ use crate::app::{App, AppScreen, Control, Handled, WindowEvent};
 #[cfg(feature = "dev-tools")]
 use crate::devtools::DevTools;
 use crate::exit::OpenFailure;
+use crate::settings::GameKeeper;
 
 /// The window, its GPU surface and the app, once the window is open.
 struct Running<S> {
@@ -59,7 +60,7 @@ pub struct Runner<S> {
     /// The audio core, until the app takes it.
     audio: Option<AudioCore<Box<dyn Audio>>>,
     /// The settings keeper, until the app takes it.
-    settings: Option<SettingsKeeper<Box<dyn SettingsStore>>>,
+    settings: Option<GameKeeper>,
     /// Where the diagnostics are written, until the app takes it.
     diagnostics: Option<Box<dyn Write>>,
 }
@@ -100,7 +101,7 @@ impl<S: ImageSource> Runner<S> {
     /// The runner with the player's settings kept by `keeper`: the app it
     /// opens saves each change through it.
     #[must_use]
-    pub fn with_settings(mut self, keeper: SettingsKeeper<Box<dyn SettingsStore>>) -> Self {
+    pub fn with_settings(mut self, keeper: GameKeeper) -> Self {
         self.settings = Some(keeper);
         self
     }
@@ -275,7 +276,9 @@ mod tests {
     use nova_rsrc::{Fork, ForkReader};
 
     use nova_audio::recording::{MemorySettings, RecordingAudio};
-    use nova_audio::{AudioCommand, AudioSettings, Volume};
+    use nova_audio::{AudioCommand, AudioSettings, SettingsStore, Volume};
+
+    use crate::settings::{GameSettings, SettingsKeeper};
     use nova_view::Showing;
 
     use super::*;
@@ -366,9 +369,12 @@ mod tests {
         let (keeper, _) = SettingsKeeper::open(Box::new(store.clone()) as Box<dyn SettingsStore>);
         let mut runner = runner.with_settings(keeper);
         let keeper = runner.settings.as_mut().expect("kept");
-        let quiet = AudioSettings {
-            sound: false,
-            ..AudioSettings::default()
+        let quiet = GameSettings {
+            audio: AudioSettings {
+                sound: false,
+                ..AudioSettings::default()
+            },
+            hyperspace_effects: false,
         };
         keeper.change(quiet).expect("saves");
         assert_eq!(store.writes(), 1);

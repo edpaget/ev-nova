@@ -1,5 +1,5 @@
 //! The Preferences dialog, "new prefs dialog" (`DLOG` 4003): sound effects
-//! and music on or off, and each one's volume.
+//! and music on or off, each one's volume, and Hyperspace Effects.
 //!
 //! The stock dialog has a column of check boxes for options this game
 //! does not have yet, one volume (item 4's "Sound Volume:", its value in
@@ -9,6 +9,8 @@
 //! - Check box 8 ("Intro Music") is the music toggle, labelled "Music",
 //!   and check box 20 ("Ambient Sounds") the sound effects toggle,
 //!   labelled "Sound".
+//! - Check box 21 ("Hyperspace Effects") works as it stands: on, a jump
+//!   fades to white and back; off, it does not.
 //! - The stock volume is the sound effects' volume. The music's is the
 //!   same four parts moved [`MUSIC_VOLUME_OFFSET`] down, into item 3's
 //!   empty area above the buttons, labelled "Music Volume:".
@@ -26,6 +28,7 @@ use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
+use crate::preferences::Prefs;
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, SoundPrefs};
 use crate::text::TextMetrics;
@@ -50,6 +53,9 @@ pub const MUSIC_ITEM: usize = 8;
 /// The sound effects toggle's item ("Ambient Sounds" in the stock dialog).
 pub const SOUND_ITEM: usize = 20;
 
+/// The Hyperspace Effects toggle's item.
+pub const HYPERSPACE_EFFECTS_ITEM: usize = 21;
+
 /// The sound effects volume's label item.
 pub const VOLUME_LABEL_ITEM: usize = 4;
 
@@ -70,6 +76,9 @@ pub const MUSIC_LABEL: &str = "Music";
 
 /// The sound effects toggle's label.
 pub const SOUND_LABEL: &str = "Sound";
+
+/// The Hyperspace Effects toggle's label, the stock check box's title.
+pub const HYPERSPACE_EFFECTS_LABEL: &str = "Hyperspace Effects";
 
 /// The sound effects volume's label.
 pub const EFFECTS_VOLUME_LABEL: &str = "Sound Volume:";
@@ -97,6 +106,8 @@ pub enum Focus {
     Music,
     /// The sound effects toggle.
     Sound,
+    /// The Hyperspace Effects toggle.
+    HyperspaceEffects,
     /// The sound effects volume.
     EffectsVolume,
     /// The music volume.
@@ -109,7 +120,8 @@ impl Focus {
     fn next(self) -> Self {
         match self {
             Self::Music => Self::Sound,
-            Self::Sound => Self::EffectsVolume,
+            Self::Sound => Self::HyperspaceEffects,
+            Self::HyperspaceEffects => Self::EffectsVolume,
             Self::EffectsVolume => Self::MusicVolume,
             Self::MusicVolume => Self::Ok,
             Self::Ok => Self::Music,
@@ -122,12 +134,13 @@ impl Focus {
 enum Target {
     Music,
     Sound,
+    HyperspaceEffects,
     EffectsVolume,
     MusicVolume,
     Dialog,
 }
 
-/// "new prefs dialog": the sound preferences, changed with the mouse or
+/// "new prefs dialog": the preferences, changed with the mouse or
 /// the keyboard, and closed by OK, Return or Escape.
 #[derive(Clone)]
 pub struct PrefsDialog {
@@ -136,6 +149,7 @@ pub struct PrefsDialog {
     sound: Toggle,
     effects_volume: VolumeControl,
     music_volume: VolumeControl,
+    hyperspace: Toggle,
     /// The check boxes for options that do not work yet, greyed.
     inert: Vec<Toggle>,
     style: ButtonStyle,
@@ -165,7 +179,7 @@ impl PrefsDialog {
     /// When the template lacks one of the items the dialog is built from.
     pub fn new(
         template: &DialogTemplate,
-        prefs: SoundPrefs,
+        prefs: Prefs,
         style: ButtonStyle,
         metrics: Rc<dyn TextMetrics>,
     ) -> Result<Self, String> {
@@ -196,6 +210,12 @@ impl PrefsDialog {
             down: place(VOLUME_DOWN_ITEM)?,
         };
         let music_rects = effects.offset(Point::new(0.0, MUSIC_VOLUME_OFFSET));
+        let hyperspace = Toggle::new(
+            place(HYPERSPACE_EFFECTS_ITEM)?,
+            HYPERSPACE_EFFECTS_LABEL,
+            prefs.hyperspace_effects,
+        );
+        let prefs = prefs.sound;
         let music = Toggle::new(place(MUSIC_ITEM)?, MUSIC_LABEL, prefs.music);
         let sound = Toggle::new(place(SOUND_ITEM)?, SOUND_LABEL, prefs.sound);
         let size = (template.bounds.width(), template.bounds.height());
@@ -205,7 +225,8 @@ impl PrefsDialog {
             .enumerate()
             .filter_map(|(index, item)| match &item.kind {
                 ItemSpec::CheckBox(title)
-                    if ![MUSIC_ITEM, SOUND_ITEM].contains(&(index + 1))
+                    if ![MUSIC_ITEM, SOUND_ITEM, HYPERSPACE_EFFECTS_ITEM]
+                        .contains(&(index + 1))
                         && inside(item.bounds, size) =>
                 {
                     Some(Toggle::greyed(
@@ -221,6 +242,7 @@ impl PrefsDialog {
             sound,
             effects_volume: VolumeControl::new(effects, EFFECTS_VOLUME_LABEL, prefs.effects_level),
             music_volume: VolumeControl::new(music_rects, MUSIC_VOLUME_LABEL, prefs.music_level),
+            hyperspace,
             inert,
             dialog,
             style,
@@ -234,18 +256,21 @@ impl PrefsDialog {
 
     /// The preferences as the dialog shows them.
     #[must_use]
-    pub fn prefs(&self) -> SoundPrefs {
-        SoundPrefs {
-            sound: self.sound.on(),
-            music: self.music.on(),
-            effects_level: self.effects_volume.level(),
-            music_level: self.music_volume.level(),
+    pub fn prefs(&self) -> Prefs {
+        Prefs {
+            sound: SoundPrefs {
+                sound: self.sound.on(),
+                music: self.music.on(),
+                effects_level: self.effects_volume.level(),
+                music_level: self.music_volume.level(),
+            },
+            hyperspace_effects: self.hyperspace.on(),
         }
     }
 
     /// The preferences, once after each change: `None` when nothing has
     /// changed since they were last taken.
-    pub fn take_change(&mut self) -> Option<SoundPrefs> {
+    pub fn take_change(&mut self) -> Option<Prefs> {
         std::mem::take(&mut self.changed).then(|| self.prefs())
     }
 
@@ -260,6 +285,7 @@ impl PrefsDialog {
             (Key::Space, Some(Focus::Ok)) => self.closed |= !repeat,
             (_, Some(Focus::Music)) => self.changed |= self.music.input(input),
             (_, Some(Focus::Sound)) => self.changed |= self.sound.input(input),
+            (_, Some(Focus::HyperspaceEffects)) => self.changed |= self.hyperspace.input(input),
             (_, Some(Focus::EffectsVolume)) => self.changed |= self.effects_volume.input(input),
             (_, Some(Focus::MusicVolume)) => self.changed |= self.music_volume.input(input),
             _ => {}
@@ -278,6 +304,8 @@ impl PrefsDialog {
                 Target::Music
             } else if self.sound.contains(at) {
                 Target::Sound
+            } else if self.hyperspace.contains(at) {
+                Target::HyperspaceEffects
             } else if self.effects_volume.arrow_at(at).is_some() {
                 Target::EffectsVolume
             } else if self.music_volume.arrow_at(at).is_some() {
@@ -289,6 +317,7 @@ impl PrefsDialog {
         match self.target {
             Some(Target::Music) => self.changed |= self.music.input(input),
             Some(Target::Sound) => self.changed |= self.sound.input(input),
+            Some(Target::HyperspaceEffects) => self.changed |= self.hyperspace.input(input),
             Some(Target::EffectsVolume) => self.changed |= self.effects_volume.input(input),
             Some(Target::MusicVolume) => self.changed |= self.music_volume.input(input),
             Some(Target::Dialog) => self.dialog_input(input),
@@ -332,6 +361,12 @@ impl PrefsDialog {
         &self.sound
     }
 
+    /// The Hyperspace Effects toggle.
+    #[must_use]
+    pub fn hyperspace_effects(&self) -> &Toggle {
+        &self.hyperspace
+    }
+
     /// The sound effects volume.
     #[must_use]
     pub fn effects_volume(&self) -> &VolumeControl {
@@ -355,8 +390,8 @@ impl Screen for PrefsDialog {
     /// - A click on a toggle flips it, and a click on a volume's arrow
     ///   steps it. A click on OK closes the dialog; the greyed check boxes
     ///   and Key Settings do nothing.
-    /// - Tab moves the focus (music, sound, the sound volume, the music
-    ///   volume, OK, and round). Space flips a focused toggle or activates
+    /// - Tab moves the focus (music, sound, Hyperspace Effects, the sound
+    ///   volume, the music volume, OK, and round). Space flips a focused toggle or activates
     ///   OK; the arrow keys step a focused volume, repeats included.
     /// - Return and Escape close it.
     ///
@@ -378,7 +413,7 @@ impl Screen for PrefsDialog {
     fn tick(&mut self, _dt: Duration) {}
 
     /// The backdrop and its outline, OK and Key Settings, the greyed check
-    /// boxes, the two toggles, then the two volumes. The focused part is
+    /// boxes, the three toggles, then the two volumes. The focused part is
     /// outlined.
     fn draw(&self, list: &mut DrawList) {
         let bounds = self.dialog.bounds();
@@ -391,6 +426,8 @@ impl Screen for PrefsDialog {
         let focused = |part| self.focus == Some(part);
         self.music.draw(focused(Focus::Music), &self.metrics, list);
         self.sound.draw(focused(Focus::Sound), &self.metrics, list);
+        self.hyperspace
+            .draw(focused(Focus::HyperspaceEffects), &self.metrics, list);
         self.effects_volume
             .draw(focused(Focus::EffectsVolume), list);
         self.music_volume.draw(focused(Focus::MusicVolume), list);
@@ -403,6 +440,7 @@ impl Screen for PrefsDialog {
         self.dialog.cancel_pointer();
         self.music.cancel_pointer();
         self.sound.cancel_pointer();
+        self.hyperspace.cancel_pointer();
         self.effects_volume.cancel_pointer();
         self.music_volume.cancel_pointer();
         self.target = None;
@@ -418,7 +456,7 @@ impl Screen for PrefsDialog {
     }
 
     /// The preferences once after each change.
-    fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+    fn take_prefs(&mut self) -> Option<Prefs> {
         self.take_change()
     }
 }
@@ -512,12 +550,15 @@ mod tests {
         ltrb(left, top, right, bottom).offset(ORIGIN)
     }
 
-    fn start() -> SoundPrefs {
-        SoundPrefs {
-            sound: true,
-            music: false,
-            effects_level: 4,
-            music_level: 2,
+    fn start() -> Prefs {
+        Prefs {
+            sound: SoundPrefs {
+                sound: true,
+                music: false,
+                effects_level: 4,
+                music_level: 2,
+            },
+            hyperspace_effects: true,
         }
     }
 
@@ -638,12 +679,86 @@ mod tests {
                 "Running Lights",
                 "Weapon Effects",
                 "Parallax Starfield",
-                "Hyperspace Effects",
                 "Check For Updates",
             ]
         );
         assert!(inert.iter().all(|(_, enabled, on)| !enabled && !on));
         assert_eq!(dialog.inert()[2].rect(), placed(11.0, 121.0, 172.0, 139.0));
+    }
+
+    #[test]
+    fn the_hyperspace_effects_box_is_enabled_and_shows_the_pref() {
+        let dialog = prefs();
+        let toggle = dialog.hyperspace_effects();
+        assert_eq!(toggle.rect(), placed(171.0, 143.0, 316.0, 161.0));
+        assert_eq!(toggle.label(), HYPERSPACE_EFFECTS_LABEL);
+        assert_eq!(HYPERSPACE_EFFECTS_LABEL, "Hyperspace Effects");
+        assert_eq!(HYPERSPACE_EFFECTS_ITEM, 21);
+        assert!(toggle.enabled() && toggle.on());
+        let off = PrefsDialog::new(
+            &template(),
+            Prefs {
+                hyperspace_effects: false,
+                ..start()
+            },
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        assert!(!off.hyperspace_effects().on());
+        assert!(!off.prefs().hyperspace_effects);
+        let on = PrefsDialog::new(
+            &template(),
+            Prefs::default(),
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        assert!(on.hyperspace_effects().on(), "on by default");
+    }
+
+    #[test]
+    fn a_click_on_hyperspace_effects_flips_it_and_reports_once() {
+        let mut dialog = prefs();
+        let point = dialog.hyperspace_effects().rect().center();
+        click(&mut dialog, point);
+        assert_eq!(
+            dialog.take_change(),
+            Some(Prefs {
+                hyperspace_effects: false,
+                ..start()
+            })
+        );
+        assert_eq!(dialog.take_change(), None, "once");
+        click(&mut dialog, point);
+        assert_eq!(dialog.take_change(), Some(start()), "back on");
+        assert!(!dialog.closed());
+    }
+
+    #[test]
+    fn space_flips_the_focused_hyperspace_effects_box_and_outlines_it() {
+        let mut dialog = prefs();
+        let unfocused = drawn(&dialog);
+        for _ in 0..3 {
+            dialog.input(&key(Key::Tab));
+        }
+        assert_eq!(dialog.focus(), Some(Focus::HyperspaceEffects));
+        let mut outlined = DrawList::new();
+        dialog
+            .hyperspace_effects()
+            .draw(true, &MonoMetrics, &mut outlined);
+        let outlined: Vec<DrawCommand> = outlined.iter().cloned().collect();
+        let commands = drawn(&dialog);
+        assert_eq!(commands.len(), unfocused.len() + 4);
+        assert!(commands.windows(outlined.len()).any(|w| w == outlined));
+        dialog.input(&held(Key::Space));
+        assert!(dialog.prefs().hyperspace_effects, "a repeat does nothing");
+        dialog.input(&key(Key::Space));
+        assert!(!dialog.prefs().hyperspace_effects);
+        assert_eq!(
+            dialog.take_change().map(|p| p.hyperspace_effects),
+            Some(false)
+        );
     }
 
     #[test]
@@ -658,7 +773,13 @@ mod tests {
 
     #[test]
     fn a_template_without_an_item_it_needs_is_an_error() {
-        for missing in [MUSIC_ITEM, SOUND_ITEM, VOLUME_LABEL_ITEM, VOLUME_DOWN_ITEM] {
+        for missing in [
+            MUSIC_ITEM,
+            SOUND_ITEM,
+            HYPERSPACE_EFFECTS_ITEM,
+            VOLUME_LABEL_ITEM,
+            VOLUME_DOWN_ITEM,
+        ] {
             let mut template = template();
             template.items.truncate(missing - 1);
             let error =
@@ -676,15 +797,18 @@ mod tests {
         let mut dialog = prefs();
         let point = dialog.music().rect().center();
         click(&mut dialog, point);
-        assert!(dialog.prefs().music);
+        assert!(dialog.prefs().sound.music);
         let point = dialog.sound().rect().center();
         click(&mut dialog, point);
-        assert!(!dialog.prefs().sound);
+        assert!(!dialog.prefs().sound.sound);
         assert_eq!(
             dialog.take_change(),
-            Some(SoundPrefs {
-                music: true,
-                sound: false,
+            Some(Prefs {
+                sound: SoundPrefs {
+                    music: true,
+                    sound: false,
+                    ..start().sound
+                },
                 ..start()
             })
         );
@@ -710,8 +834,8 @@ mod tests {
         click(&mut dialog, effects.up.center());
         click(&mut dialog, effects.up.center());
         click(&mut dialog, music.down.center());
-        assert_eq!(dialog.prefs().effects_level, 6);
-        assert_eq!(dialog.prefs().music_level, 1);
+        assert_eq!(dialog.prefs().sound.effects_level, 6);
+        assert_eq!(dialog.prefs().sound.music_level, 1);
     }
 
     #[test]
@@ -732,6 +856,7 @@ mod tests {
         let points = [
             dialog.music().rect().center(),
             dialog.sound().rect().center(),
+            dialog.hyperspace_effects().rect().center(),
             dialog.effects_volume().rects().up.center(),
             dialog.music_volume().rects().up.center(),
             ok(&dialog),
@@ -776,7 +901,7 @@ mod tests {
     fn tab_moves_the_focus_round_the_ring() {
         let mut dialog = prefs();
         let mut order = Vec::new();
-        for _ in 0..6 {
+        for _ in 0..7 {
             dialog.input(&key(Key::Tab));
             order.push(dialog.focus().expect("focused"));
         }
@@ -785,6 +910,7 @@ mod tests {
             [
                 Focus::Music,
                 Focus::Sound,
+                Focus::HyperspaceEffects,
                 Focus::EffectsVolume,
                 Focus::MusicVolume,
                 Focus::Ok,
@@ -802,14 +928,14 @@ mod tests {
         assert_eq!(dialog.prefs(), start(), "nothing focused");
         dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Space));
-        assert!(dialog.prefs().music);
+        assert!(dialog.prefs().sound.music);
         dialog.input(&held(Key::Space));
-        assert!(dialog.prefs().music, "a repeat does nothing");
+        assert!(dialog.prefs().sound.music, "a repeat does nothing");
         dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Space));
-        assert!(!dialog.prefs().sound);
+        assert!(!dialog.prefs().sound.sound);
         dialog.input(&key(Key::Up));
-        assert_eq!(dialog.prefs().effects_level, 4, "not a volume");
+        assert_eq!(dialog.prefs().sound.effects_level, 4, "not a volume");
     }
 
     #[test]
@@ -817,17 +943,20 @@ mod tests {
         let mut dialog = prefs();
         dialog.input(&key(Key::Up));
         assert_eq!(dialog.prefs(), start(), "nothing focused");
-        for _ in 0..3 {
+        for _ in 0..4 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&key(Key::Up));
         dialog.input(&held(Key::Right));
-        assert_eq!(dialog.prefs().effects_level, 6);
+        assert_eq!(dialog.prefs().sound.effects_level, 6);
         dialog.input(&key(Key::Space));
         assert_eq!(
             dialog.prefs(),
-            SoundPrefs {
-                effects_level: 6,
+            Prefs {
+                sound: SoundPrefs {
+                    effects_level: 6,
+                    ..start().sound
+                },
                 ..start()
             }
         );
@@ -835,10 +964,10 @@ mod tests {
         dialog.input(&key(Key::Down));
         dialog.input(&held(Key::Left));
         dialog.input(&held(Key::Left));
-        assert_eq!(dialog.prefs().music_level, 0);
+        assert_eq!(dialog.prefs().sound.music_level, 0);
         dialog.input(&key(Key::Tab));
         dialog.input(&key(Key::Down));
-        assert_eq!(dialog.prefs().music_level, 0, "OK is focused");
+        assert_eq!(dialog.prefs().sound.music_level, 0, "OK is focused");
         assert!(!dialog.closed());
     }
 
@@ -850,7 +979,7 @@ mod tests {
             assert!(dialog.closed(), "{input:?}");
         }
         let mut dialog = prefs();
-        for _ in 0..5 {
+        for _ in 0..6 {
             dialog.input(&key(Key::Tab));
         }
         dialog.input(&held(Key::Space));
@@ -871,25 +1000,28 @@ mod tests {
     #[test]
     fn a_change_is_reported_once() {
         let mut dialog = prefs();
-        assert_eq!(dialog.take_sound_prefs(), None, "no change yet");
+        assert_eq!(dialog.take_prefs(), None, "no change yet");
         let point = dialog.effects_volume().rects().down.center();
         click(&mut dialog, point);
-        let changed = SoundPrefs {
-            effects_level: 3,
+        let changed = Prefs {
+            sound: SoundPrefs {
+                effects_level: 3,
+                ..start().sound
+            },
             ..start()
         };
-        assert_eq!(dialog.take_sound_prefs(), Some(changed));
-        assert_eq!(dialog.take_sound_prefs(), None, "once");
+        assert_eq!(dialog.take_prefs(), Some(changed));
+        assert_eq!(dialog.take_prefs(), None, "once");
         // A step that changes nothing is not a change.
-        for _ in 0..3 {
+        for _ in 0..4 {
             dialog.input(&key(Key::Tab));
         }
         for _ in 0..3 {
             dialog.input(&key(Key::Down));
         }
-        dialog.take_sound_prefs();
+        dialog.take_prefs();
         dialog.input(&key(Key::Down));
-        assert_eq!(dialog.take_sound_prefs(), None, "already silent");
+        assert_eq!(dialog.take_prefs(), None, "already silent");
     }
 
     #[test]
@@ -903,25 +1035,39 @@ mod tests {
             dialog.take_change()
         };
         let music = focused(1, key(Key::Space)).expect("Space on Music");
-        assert!(music.music);
+        assert!(music.sound.music);
         let sound = focused(2, key(Key::Space)).expect("Space on Sound");
-        assert!(!sound.sound);
-        let effects = focused(3, key(Key::Up)).expect("Up on the sound volume");
-        assert_eq!(effects.effects_level, 5);
-        let volume = focused(4, key(Key::Down)).expect("Down on the music volume");
-        assert_eq!(volume.music_level, 1);
+        assert!(!sound.sound.sound);
+        let hyperspace = focused(3, key(Key::Space)).expect("Space on Hyperspace Effects");
+        assert!(!hyperspace.hyperspace_effects);
+        let effects = focused(4, key(Key::Up)).expect("Up on the sound volume");
+        assert_eq!(effects.sound.effects_level, 5);
+        let volume = focused(5, key(Key::Down)).expect("Down on the music volume");
+        assert_eq!(volume.sound.music_level, 1);
         let clicked = |part: fn(&PrefsDialog) -> Point| {
             let mut dialog = prefs();
             let point = part(&dialog);
             click(&mut dialog, point);
             dialog.take_change()
         };
-        assert!(clicked(|d| d.music().rect().center()).expect("Music").music);
-        assert!(!clicked(|d| d.sound().rect().center()).expect("Sound").sound);
+        assert!(
+            clicked(|d| d.music().rect().center())
+                .expect("Music")
+                .sound
+                .music
+        );
+        assert!(
+            !clicked(|d| d.sound().rect().center())
+                .expect("Sound")
+                .sound
+                .sound
+        );
+        let hyperspace = clicked(|d| d.hyperspace_effects().rect().center());
+        assert!(!hyperspace.expect("Hyperspace Effects").hyperspace_effects);
         let up = clicked(|d| d.effects_volume().rects().up.center());
-        assert_eq!(up.expect("the sound volume").effects_level, 5);
+        assert_eq!(up.expect("the sound volume").sound.effects_level, 5);
         let up = clicked(|d| d.music_volume().rects().up.center());
-        assert_eq!(up.expect("the music volume").music_level, 3);
+        assert_eq!(up.expect("the music volume").sound.music_level, 3);
     }
 
     #[test]
@@ -1005,6 +1151,9 @@ mod tests {
         }
         dialog.music().draw(false, &MonoMetrics, &mut expected);
         dialog.sound().draw(false, &MonoMetrics, &mut expected);
+        dialog
+            .hyperspace_effects()
+            .draw(false, &MonoMetrics, &mut expected);
         dialog.effects_volume().draw(false, &mut expected);
         dialog.music_volume().draw(false, &mut expected);
         assert_eq!(commands, expected.iter().cloned().collect::<Vec<_>>());
@@ -1042,7 +1191,7 @@ mod tests {
         assert_eq!(commands.len(), unfocused.len() + 4);
         let music: Vec<DrawCommand> = music.iter().cloned().collect();
         assert!(commands.windows(music.len()).any(|window| window == music));
-        for _ in 0..2 {
+        for _ in 0..3 {
             dialog.input(&key(Key::Tab));
         }
         let mut effects = DrawList::new();
@@ -1093,10 +1242,7 @@ mod tests {
     #[test]
     fn debug_shows_the_prefs_and_the_focus() {
         let debug = format!("{:?}", prefs());
-        assert!(
-            debug.starts_with("PrefsDialog { prefs: SoundPrefs"),
-            "{debug}"
-        );
+        assert!(debug.starts_with("PrefsDialog { prefs: Prefs"), "{debug}");
         assert!(debug.contains("focus: None"), "{debug}");
         assert!(debug.contains("closed: false"), "{debug}");
     }

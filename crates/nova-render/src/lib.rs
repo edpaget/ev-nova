@@ -24,7 +24,11 @@
 //! The adapter, [`wgpu`], is the only module that names `wgpu` or
 //! `glyphon` types: [`wgpu::OffscreenGpu`] draws into its own texture and
 //! reads it back, and [`wgpu::SurfaceGpu`] draws into a window. Both hand
-//! the work to [`wgpu::WgpuRenderer`]. [`wgpu::GlyphonMetrics`] is
+//! the work to [`wgpu::WgpuRenderer`], which draws each frame into an
+//! offscreen scene and blits it to the target; an OR batch reads a backdrop
+//! copy of the rectangle the core says it covers
+//! ([`Frame::pixels_covered`]). The core turns each OR tint into exact
+//! levels and keeps overlapping OR quads in separate batches. [`wgpu::GlyphonMetrics`] is
 //! `nova_view`'s text-metrics port over the same glyphon font system, with
 //! no GPU: the widgets lay text out by the widths it is drawn at, and the
 //! batcher spaces lines by `nova_view`'s shared line-height rule.

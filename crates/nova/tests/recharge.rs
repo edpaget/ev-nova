@@ -372,6 +372,13 @@ impl Harness {
         self.type_key(code, None);
     }
 
+    /// Presses L twice, as the player lands: the first requests clearance,
+    /// the second lands.
+    fn land(&mut self) {
+        self.press(KeyCode::KeyL);
+        self.press(KeyCode::KeyL);
+    }
+
     /// Sends the physical key `code` going down or, when not `pressed`, up.
     fn key(&mut self, code: KeyCode, pressed: bool) {
         let state = if pressed {
@@ -538,16 +545,17 @@ impl Harness {
         assert_eq!(self.session().course(), [SystemId(129)]);
         self.fly_out();
         self.press(KeyCode::KeyJ);
-        for _ in 0..600 {
+        for _ in 0..1200 {
             self.frame();
             let flight = self.app.screen().flight_view().expect("flying");
-            if flight.jump_effect().is_none() {
+            let arrived = self.session().system() == SystemId(129);
+            if arrived && flight.jump_effect().is_none() {
                 break;
             }
         }
         assert_eq!(self.session().system(), SystemId(129), "the jump ended");
         self.brake();
-        self.press(KeyCode::KeyL);
+        self.land();
         assert_eq!(
             self.showing(),
             Showing::Spaceport,

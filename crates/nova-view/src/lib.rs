@@ -53,7 +53,9 @@
 //!
 //! Screens report the sounds they make as events ([`sound`]): a button
 //! pressed or released, the flight session's own, and a fight's, heard
-//! from where they happen. The audio side decides what each plays.
+//! from where they happen. The audio side decides what each plays. The
+//! player's preferences, sound and hyperspace effects alike, are reported
+//! as a [`Prefs`] ([`preferences`]).
 //!
 //! # Developer tools
 //!
@@ -71,6 +73,7 @@ pub mod image;
 pub mod input;
 pub mod menu;
 pub mod navigator;
+pub mod preferences;
 pub mod screen;
 pub mod ships;
 pub mod sound;
@@ -81,11 +84,12 @@ mod time;
 pub mod ui;
 
 pub use color::Color;
-pub use draw::{DrawCommand, DrawList};
+pub use draw::{Blend, DrawCommand, DrawList};
 pub use font::Font;
 pub use geometry::Point;
 pub use image::{ImageKey, ImageKind};
 pub use input::{Input, Key, MouseButton};
 pub use navigator::Navigator;
+pub use preferences::Prefs;
 pub use screen::{Diagnostic, Screen, ScreenAction, Showing};
 pub use sound::{CombatSound, Sound, SoundPrefs, UiSound};

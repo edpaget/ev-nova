@@ -179,7 +179,7 @@ mod tests {
     use crate::fixture::MemoryPilots;
     use crate::reserves::Gauge;
     use crate::session::Session;
-    use crate::testkit::{catalog, edge_lander, jump};
+    use crate::testkit::{catalog, edge_lander, jump, land_now};
 
     #[test]
     fn a_pilots_key_is_its_name_trimmed() {
@@ -220,7 +220,7 @@ mod tests {
         let mut session =
             Session::fly(&catalog, Pilot::new(&catalog, name).expect("starts")).expect("flies");
         jump(&mut session, &catalog, 132);
-        session.land().expect("lands");
+        land_now(&mut session).expect("lands");
         session.transact(|pilot| {
             pilot.set_cash(7);
             pilot.set_legal_record(GovtId(129), -3);

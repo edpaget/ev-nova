@@ -489,6 +489,7 @@ mod tests {
                     image,
                     center,
                     tint,
+                    ..
                 } => {
                     assert_eq!(*tint, Color::WHITE);
                     Some((*image, *center))

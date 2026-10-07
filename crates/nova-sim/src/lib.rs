@@ -21,6 +21,9 @@
 //!   assigning a ship captured ([`Assignment`]); the [`BoardingRule`]
 //!   port with Nova's [`NovaBoarding`]: who repels boarders, the capture
 //!   odds and the capture roll, a person's credits and its grant.
+//! - [`blink`]: how bright a ship's running lights are at a tick,
+//!   [`lights_level`], from its `shän`'s [`Blink`] fields, with random
+//!   mode rolling on the [`BlinkChance`] port.
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
@@ -48,7 +51,8 @@
 //! - `fixture` (with the `fixture` feature, and in this crate's tests):
 //!   `MemoryPilots`, a pilot store in memory.
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
-//!   one day a jump.
+//!   a day for each day a jump takes, and [`date::date_text`], how it is
+//!   displayed.
 //! - [`escort`]: the player's escorts: their [`EscortClass`], the
 //!   [`EscortOrder`] each follows, the [`EscortCommand`]s the player gives
 //!   an [`EscortGroup`] and what one changed ([`Commanded`]), the escort
@@ -59,6 +63,9 @@
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
 //!   `shïp` and its outfits' fuel scoops.
+//! - [`gate`]: hypergates and wormholes: which a stellar is
+//!   ([`GateKind`]), where each leads, and how a ship comes out of one,
+//!   under the [`GateArrivalRule`] and [`WormholeRule`].
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
 //! - [`govt`]: the [`Governments`] and their relations: allies, enemies,
@@ -77,6 +84,10 @@
 //!   ([`Ask`]); the [`Help`] a ship gives the player once asked; and what
 //!   the comm dialog shows of the player's own escort ([`EscortStatus`]),
 //!   a hired one's daily pay among it.
+//! - [`glow`]: how bright a ship's engine glow is: its base level, which
+//!   thrust ramps up and coasting down ([`ramp_glow`]), and the level
+//!   drawn at a tick, flickering on the [`BlinkChance`] port
+//!   ([`glow_level`]).
 //! - [`handling`]: a ship's [`Handling`], its speed, acceleration and turn
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hire`]: hiring escorts in the bar: which ships are for hire today
@@ -87,15 +98,22 @@
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
-//! - [`landing`]: whether the ship can land, [`check_landing`], each
-//!   [`LandingRefusal`] in the order it applies, and the [`Service`]s a
-//!   stellar's flags offer.
+//! - [`landing`]: what the land key does, [`land_or_select`]: request
+//!   clearance, then land (or, over a hypergate or wormhole, enter it);
+//!   whether the ship can land, [`check_landing`],
+//!   each [`LandingRefusal`] in the order it applies; and the
+//!   [`Service`]s a stellar's flags offer.
 //! - [`legal`]: the player's legal record: the [`LegalCode`] port that
 //!   says what a [`Crime`] against a ship does to it, Nova's
 //!   [`NovaLaw`], and [`legal::convict`], which applies it.
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
+//! - [`message`]: the [`SimMessage`] events a session raises for the
+//!   message line, such as arriving from a jump or through a gate; the
+//!   view words them.
+//! - [`navigation`]: the navigation target Tab selects, [`next_stellar`]:
+//!   the system's stellars in their `NavDef` order, wrapping.
 //! - [`outfitter`]: the outfitter: which outfits a stellar lists and sells
 //!   ([`Outfitter`]), their price and mass, the ship's free mass, and
 //!   buying and selling one at a time ([`OutfitOrder`]).
@@ -107,6 +125,9 @@
 //!   ship, location, date, cash, reserves, course, explored systems,
 //!   legal records, cargo, the events under way, the outfits owned and
 //!   the fleet of [`Escort`]s, starting from the first `chär`.
+//! - [`pre_jump`]: what the ship does between the jump key and the jump:
+//!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
+//!   turns to the bearing of the next system.
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
 //!   fuel ([`sells_fuel`]), what filling the tank costs, and each
 //!   [`RechargeRefusal`].
@@ -149,6 +170,7 @@
 
 pub mod ai;
 pub mod bay;
+pub mod blink;
 pub mod board;
 pub mod catalog;
 pub mod chance;
@@ -161,7 +183,9 @@ pub mod escort;
 pub mod fixture;
 pub mod flight;
 pub mod fuel;
+pub mod gate;
 pub mod geometry;
+pub mod glow;
 pub mod govt;
 pub mod grant;
 pub mod hail;
@@ -171,9 +195,12 @@ pub mod hyperspace;
 pub mod landing;
 pub mod legal;
 pub mod market;
+pub mod message;
+pub mod navigation;
 pub mod outfitter;
 pub mod person;
 pub mod pilot;
+pub mod pre_jump;
 pub mod recharge;
 pub mod reserves;
 pub mod rulebook;
@@ -194,17 +221,18 @@ pub use ai::{
     Reaction, Surroundings, Warship, WimpyTrader,
 };
 pub use bay::{Carrier, FighterNote, capacity, dock_window};
+pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};
 pub use board::{
     Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, NovaBoarding, Plunder, PlunderView,
     Take, Taken,
 };
 pub use catalog::{
-    BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterId,
-    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord,
-    HullRecord, JunkId, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord, Penalties,
-    PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem,
-    StartDate, StartError, StellarId, StockWeapon, SystemId, SystemTraffic, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
+    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
+    GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord,
+    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId,
+    StarSystem, StartDate, StartError, StellarId, StockWeapon, SystemId, SystemTraffic,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
@@ -219,7 +247,9 @@ pub use escort::{
 };
 pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
+pub use gate::{GateArrivalRule, GateKind, GateRefusal, WormholeRule};
 pub use geometry::Vec2;
+pub use glow::{GLOW_CRUISE, glow_level, ramp_glow};
 pub use govt::Governments;
 pub use grant::{GrantStock, Granted, PersonGrant};
 pub use hail::{
@@ -231,10 +261,18 @@ pub use hire::{
     ControlBits, HireList, HireRefusal, HireRow, HireTerms, Hired, NoControlBits, NovaHire,
     PayNote, price_flux,
 };
-pub use hyperspace::{JumpRefusal, RouteError, StarMap, check_jump};
-pub use landing::{LandingRefusal, Service, check_landing, landing_radius, services};
+pub use hyperspace::{
+    HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule, MultiJumpRule,
+    RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,
+};
+pub use landing::{
+    Clearance, LandOutcome, LandingRefusal, Service, check_landing, is_landable, land_or_select,
+    landing_radius, nearest_landable, services,
+};
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
+pub use message::SimMessage;
+pub use navigation::{next_after, next_stellar};
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use person::{
     COMM_QUOTES, ESCAPE_POD, GRUDGE, HAIL_QUOTES, NovaPersons, PersonRoll, PersonRules,
@@ -246,7 +284,7 @@ pub use reserves::{Gauge, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
-pub use session::{PersonQuote, Session};
+pub use session::{LandPress, PersonQuote, Session};
 pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;

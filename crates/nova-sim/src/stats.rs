@@ -21,8 +21,8 @@
 //! - [`FUEL_SCOOP`](crate::fuel::FUEL_SCOOP) (18) regenerates fuel, as
 //!   [`fuel_regen_per_tick`] says.
 //! - [`HYPERSPACE_DAYS`] (22) adds days to each jump's
-//!   [`DAYS_PER_JUMP`], which never goes below one (the Bible: "still
-//!   can't go below 1 day/jump").
+//!   [`base_jump_days`], from the hull's `Mass`, and the total never goes
+//!   below one (the Bible: "still can't go below 1 day/jump").
 //! - [`MORE_SHIELD_RECHARGE`] (5) and [`MORE_ARMOR_RECHARGE`] (29) add to
 //!   the `shïp`'s `ShieldRech` and `ArmorRech`, on the same scale: each
 //!   [`RECHARGE_SCALE`] is a point a tick, the `shïp`'s
@@ -31,15 +31,21 @@
 //! - [`HYPERSPACE_DISTANCE`] (23) moves the edge of the no-jump zone from
 //!   its standard [`MIN_JUMP_DISTANCE`] (the Bible: "the standard radius
 //!   is 1000").
+//! - [`FAST_JUMP`] (37), carried at all, whatever its `ModVal`, or a
+//!   `shïp` whose `Flags2` has [`FAST_JUMP_HULL`] (0x0020) set, lets the
+//!   ship jump without slowing down first.
+//! - [`MULTI_JUMP`] (32) is how many systems a jump passes along the
+//!   course. It is the one total that is not `ModVal` x count: each
+//!   outfit carried adds its `ModVal` once, whatever its count, as the
+//!   engine's `_ShipJumpsPerJump` does.
 //!
 //! Each total is summed wide, and none goes below none, so no mix of
-//! outfits can overflow or turn a figure negative. Multi-jump (32), fast
-//! jumping (37), the inertial dampener (38) and every other `ModType`
-//! change nothing here yet.
+//! outfits can overflow or turn a figure negative. The inertial dampener
+//! (38) and every other `ModType` change nothing here yet.
 
 use crate::fuel::{OutfitMod, fuel_regen_per_tick};
 use crate::handling::{Handling, ShipFields};
-use crate::hyperspace::{DAYS_PER_JUMP, MIN_JUMP_DISTANCE};
+use crate::hyperspace::{MIN_JUMP_DISTANCE, base_jump_days};
 use crate::market::cargo_capacity;
 use crate::reserves::{Reserves, shield_points};
 
@@ -67,6 +73,13 @@ pub const MORE_ARMOR_RECHARGE: i16 = 29;
 /// How many units of `ShieldRech` or `ArmorRech` regenerate a point a
 /// tick: the record's "x1000 per frame".
 pub const RECHARGE_SCALE: f32 = 1000.0;
+/// The `oütf` `ModType` whose `ModVal` is how many systems a jump passes
+/// along the course.
+pub const MULTI_JUMP: i16 = 32;
+/// The `oütf` `ModType` that lets the ship jump without slowing down.
+pub const FAST_JUMP: i16 = 37;
+/// The `shïp` `Flags2` bit for a hull that jumps without slowing down.
+pub const FAST_JUMP_HULL: u16 = 0x0020;
 
 /// A [`TURN_CHANGE`] `ModVal` per unit of `Maneuver`: the Bible's "100 =
 /// 30°/sec" for the outfit and "10 is about 30°/s" for the ship.
@@ -95,6 +108,11 @@ pub struct ShipStats {
     pub jump_distance: f32,
     /// How many days each of its jumps takes; at least one.
     pub jump_days: u32,
+    /// Whether it jumps without slowing down first.
+    pub fast_jump: bool,
+    /// How many systems a jump passes along the course, as the outfits
+    /// give it (see [`hops_per_jump`](crate::hyperspace::hops_per_jump)).
+    pub multi_jump: u32,
 }
 
 impl ShipStats {
@@ -128,8 +146,23 @@ impl ShipStats {
                 / RECHARGE_SCALE,
             capacity: cargo_capacity(fields.holds, outfits),
             jump_distance: positive(MIN_JUMP_DISTANCE as i64 + total(HYPERSPACE_DISTANCE)),
-            jump_days: u32::try_from((i64::from(DAYS_PER_JUMP) + total(HYPERSPACE_DAYS)).max(1))
-                .unwrap_or(u32::MAX),
+            jump_days: u32::try_from(
+                (i64::from(base_jump_days(fields.mass)) + total(HYPERSPACE_DAYS)).max(1),
+            )
+            .unwrap_or(u32::MAX),
+            fast_jump: fields.flags2 & FAST_JUMP_HULL != 0
+                || outfits
+                    .iter()
+                    .any(|outfit| outfit.mod_type == FAST_JUMP && outfit.count > 0),
+            multi_jump: u32::try_from(
+                outfits
+                    .iter()
+                    .filter(|outfit| outfit.mod_type == MULTI_JUMP && outfit.count > 0)
+                    .map(|outfit| i64::from(outfit.mod_val))
+                    .sum::<i64>()
+                    .max(0),
+            )
+            .unwrap_or(u32::MAX),
         }
     }
 
@@ -145,7 +178,7 @@ impl ShipStats {
 mod tests {
     use super::*;
     use crate::fuel::FUEL_SCOOP;
-    use crate::hyperspace::{DAYS_PER_JUMP, MIN_JUMP_DISTANCE};
+    use crate::hyperspace::MIN_JUMP_DISTANCE;
     use crate::market::MORE_CARGO;
     use crate::reserves::Gauge;
 
@@ -166,6 +199,7 @@ mod tests {
         contribute: 1,
         shield_rech: 10,
         armor_rech: 0,
+        flags2: 0,
     };
 
     fn outfit(mod_type: i16, mod_val: i16, count: u16) -> OutfitMod {
@@ -351,7 +385,6 @@ mod tests {
 
     #[test]
     fn a_jump_takes_a_day_unless_a_hyperspace_speed_mod_changes_it() {
-        assert_eq!(ShipStats::new(AVERAGE, &[]).jump_days, DAYS_PER_JUMP);
         assert_eq!(ShipStats::new(AVERAGE, &[]).jump_days, 1);
         let slower = ShipStats::new(AVERAGE, &[outfit(HYPERSPACE_DAYS, 1, 2)]);
         assert_eq!(slower.jump_days, 3, "ModVal x count");
@@ -363,6 +396,39 @@ mod tests {
             ],
         );
         assert_eq!(mixed.jump_days, 3);
+    }
+
+    #[test]
+    fn a_light_a_medium_and_a_heavy_hull_jump_in_1_2_and_3_days() {
+        for (mass, days) in [(15, 1), (150, 2), (250, 3)] {
+            let hull = ShipFields { mass, ..AVERAGE };
+            assert_eq!(ShipStats::new(hull, &[]).jump_days, days, "mass {mass}");
+        }
+    }
+
+    #[test]
+    fn a_heavy_hull_with_the_dampener_jumps_in_fewer_days_but_at_least_one() {
+        let heavy = ShipFields {
+            mass: 250,
+            ..AVERAGE
+        };
+        // The stock Sutherland Alluvial Dampener: -1.
+        let dampener = ShipStats::new(heavy, &[outfit(HYPERSPACE_DAYS, -1, 1)]);
+        assert_eq!(dampener.jump_days, 2);
+        let two = ShipStats::new(heavy, &[outfit(HYPERSPACE_DAYS, -1, 2)]);
+        assert_eq!(two.jump_days, 1);
+        for (mod_val, count) in [(-1, 5), (i16::MIN, u16::MAX)] {
+            let least = ShipStats::new(heavy, &[outfit(HYPERSPACE_DAYS, mod_val, count)]);
+            assert_eq!(least.jump_days, 1, "{mod_val} x {count}");
+        }
+        let medium = ShipFields {
+            mass: 150,
+            ..AVERAGE
+        };
+        let medium_dampened = ShipStats::new(medium, &[outfit(HYPERSPACE_DAYS, -1, 1)]);
+        assert_eq!(medium_dampened.jump_days, 1);
+        let slower = ShipStats::new(heavy, &[outfit(HYPERSPACE_DAYS, 1, 2)]);
+        assert_eq!(slower.jump_days, 5, "ModVal x count on top of three");
     }
 
     #[test]
@@ -388,9 +454,63 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_ship_does_not_fast_jump() {
+        assert!(!ShipStats::new(AVERAGE, &[]).fast_jump);
+    }
+
+    #[test]
+    fn a_fast_jump_outfit_makes_the_ship_fast_jump() {
+        assert_eq!(FAST_JUMP, 37);
+        // ModVal is ignored.
+        assert!(ShipStats::new(AVERAGE, &[outfit(FAST_JUMP, 0, 1)]).fast_jump);
+        assert!(
+            !ShipStats::new(AVERAGE, &[outfit(FAST_JUMP, 1, 0)]).fast_jump,
+            "none carried"
+        );
+    }
+
+    #[test]
+    fn a_hull_with_flags2_0x0020_fast_jumps() {
+        assert_eq!(FAST_JUMP_HULL, 0x0020);
+        let hull = |flags2| ShipFields { flags2, ..AVERAGE };
+        assert!(ShipStats::new(hull(0x0020), &[]).fast_jump);
+        assert!(
+            !ShipStats::new(hull(0xFFDF), &[]).fast_jump,
+            "every other bit"
+        );
+    }
+
+    #[test]
+    fn a_multi_jump_outfit_gives_its_modval_once_whatever_the_count() {
+        assert_eq!(MULTI_JUMP, 32);
+        let total = |outfits: &[OutfitMod]| ShipStats::new(AVERAGE, outfits).multi_jump;
+        // The stock Multi-Jumping Organ: 10.
+        assert_eq!(total(&[outfit(MULTI_JUMP, 10, 1)]), 10);
+        assert_eq!(total(&[outfit(MULTI_JUMP, 10, 2)]), 10, "not x count");
+        assert_eq!(
+            total(&[outfit(MULTI_JUMP, 3, 1), outfit(MULTI_JUMP, 4, 5)]),
+            7,
+            "summed over the outfits"
+        );
+        assert_eq!(total(&[outfit(MULTI_JUMP, 10, 0)]), 0, "none carried");
+        assert_eq!(total(&[]), 0);
+    }
+
+    #[test]
+    fn a_negative_multi_jump_total_is_none() {
+        let stats = ShipStats::new(AVERAGE, &[outfit(MULTI_JUMP, -5, 1)]);
+        assert_eq!(stats.multi_jump, 0);
+        let mixed = ShipStats::new(
+            AVERAGE,
+            &[outfit(MULTI_JUMP, -5, 1), outfit(MULTI_JUMP, 8, 1)],
+        );
+        assert_eq!(mixed.multi_jump, 3);
+    }
+
+    #[test]
     fn every_other_mod_type_changes_nothing() {
         let plain = ShipStats::new(AVERAGE, &[]);
-        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 15, 17, 32, 37, 38, 45, 99] {
+        for mod_type in [-1, 0, 1, 3, 10, 11, 13, 15, 17, 38, 45, 99] {
             assert_eq!(
                 ShipStats::new(AVERAGE, &[outfit(mod_type, 500, 3)]),
                 plain,

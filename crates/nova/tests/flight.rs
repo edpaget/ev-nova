@@ -26,7 +26,8 @@ use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::{ShipId, ShipState, SystemId, Vec2};
 use nova_view::flight::FlightView;
-use nova_view::{Key, Point};
+use nova_view::flight::hud::NAV_NO_DESTINATION;
+use nova_view::{Blend, Key, Point};
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -127,10 +128,16 @@ fn status_picture() -> Vec<u8> {
         .build()
 }
 
-/// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations.
-fn ship_anim() -> Vec<u8> {
+/// A `shän` whose base image is `rlëD` 2000, one set of 36 rotations,
+/// with an engine glow, `rlëD` 2100, and (if `lights`) lights, `rlëD`
+/// 2200.
+fn ship_anim(lights: bool) -> Vec<u8> {
     let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[2000, 0, 1]);
+    put_i16s(&mut bytes, 0x16, &[2100]);
+    if lights {
+        put_i16s(&mut bytes, 0x1E, &[2200]);
+    }
     put_i16s(&mut bytes, 0x34, &[36]);
     bytes
 }
@@ -176,13 +183,20 @@ const STELLARS: [Point; 2] = [Point::new(0.0, -600.0), Point::new(300.0, -200.0)
 /// The first `chär` (if `with_character`) flies ship 128 from Alpha (128),
 /// which holds Alpha Prime (128) at (0, -600), an 8 x 8 sprite, and Alpha
 /// Station (129) at (300, -200), a 6 x 6 one. The ship's sheet is 36
-/// rotations of 1 x 1. Beta (129) holds nothing. The status bar is `ïntf`
-/// 128, over a 194 x 16 `PICT` 700.
+/// rotations of 1 x 1, its glow's 36 of 3 x 3. Beta (129) holds nothing. The status bar is `ïntf`
+/// 128, over a 194 x 16 `PICT` 700. The ship has no lights.
 fn data(with_character: bool) -> Rc<GameData> {
+    data_with(with_character, false)
+}
+
+/// [`data`], with the ship's lights, 36 rotations of 3 x 3 in `rlëD`
+/// 2200, if `lights`.
+fn data_with(with_character: bool, lights: bool) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Ship::TYPE, 128, Some(b"Shuttle"), &ship())
-        .resource(ShipAnim::TYPE, 128, None, &ship_anim())
+        .resource(ShipAnim::TYPE, 128, None, &ship_anim(lights))
         .resource(RLED, 2000, None, &sheet(36, 1))
+        .resource(RLED, 2100, None, &sheet(36, 3))
         .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128, 129]))
         .resource(System::TYPE, 129, Some(b"Beta"), &system(600, &[]))
         .resource(
@@ -211,6 +225,9 @@ fn data(with_character: bool) -> Rc<GameData> {
     if with_character {
         fork = fork.resource(Character::TYPE, 128, Some(b"Pilot"), &character());
     }
+    if lights {
+        fork = fork.resource(RLED, 2200, None, &sheet(36, 3));
+    }
     let file = OneFile(fork.build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -229,7 +246,11 @@ struct Harness {
 impl Harness {
     /// The app on the ship browser, before any frame.
     fn new(fps: u64, with_character: bool) -> Self {
-        let data = data(with_character);
+        Self::over(fps, data(with_character))
+    }
+
+    /// The app on the ship browser over `data`, before any frame.
+    fn over(fps: u64, data: Rc<GameData>) -> Self {
         Self {
             app: App::new(&FakeWindow, Rc::clone(&data), start_screen(data)),
             gpu: RecordingGpu::new(),
@@ -241,10 +262,19 @@ impl Harness {
 
     /// The app in flight, entered from the ship browser, before any frame.
     fn flying(fps: u64) -> Self {
-        let mut harness = Self::new(fps, true);
-        harness.press(Key::Char('f'));
-        assert_eq!(harness.showing(), Showing::Flight);
-        harness
+        Self::new(fps, true).into_flight()
+    }
+
+    /// [`Harness::flying`], with the ship's lights.
+    fn flying_with_lights(fps: u64) -> Self {
+        Self::over(fps, data_with(true, true)).into_flight()
+    }
+
+    /// Enters flight from the ship browser.
+    fn into_flight(mut self) -> Self {
+        self.press(Key::Char('f'));
+        assert_eq!(self.showing(), Showing::Flight);
+        self
     }
 
     fn handle(&mut self, event: WindowEvent) -> Control {
@@ -340,6 +370,14 @@ fn shape(frame: &Frame) -> Vec<(&'static str, usize)> {
         .collect()
 }
 
+/// Batch `at`'s blend and quad count, if it is a sprites batch.
+fn sprite_batch(frame: &Frame, at: usize) -> Option<(Blend, usize)> {
+    match frame.batches.get(at) {
+        Some(Batch::Sprites { blend, quads, .. }) => Some((*blend, quads.len())),
+        _ => None,
+    }
+}
+
 /// Every sprite drawn, in order: the stellars, the ship, then the status
 /// bar's picture.
 fn quads(frame: &Frame) -> Vec<QuadInstance> {
@@ -396,8 +434,8 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
     let first = harness.frame();
     // The stars; the two stellars, then their names; the ship; the title
     // and help lines; then the HUD: the status bar's picture, two radar
-    // dots and three bars, the system's name, and the target and secondary
-    // weapon lines.
+    // dots and three bars, then the nav area's "No Destination" (never the
+    // system's name), the date, and the target and secondary weapon lines.
     let shape = shape(&first);
     assert_eq!(shape[0].0, "solid");
     assert!(shape[0].1 > 0, "stars");
@@ -410,7 +448,7 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
             ("text", 2),
             ("sprites", 1),
             ("solid", 5),
-            ("text", 3)
+            ("text", 4)
         ]
     );
     let start = quads(&first);
@@ -511,17 +549,25 @@ fn the_hud_is_drawn_while_flying() {
         ]
     );
 
-    // The system's name in the nav area, then the target and secondary
-    // weapon lines.
+    // The nav area comes last but for the target and secondary weapon
+    // lines, with nothing selected and no course: "No Destination", not
+    // the system's name; then the date, the `chär`'s unset start (1
+    // January of year 0) without affixes.
     let Some(Batch::Text(runs)) = first.batches.last() else {
         panic!("text last: {:?}", shape(&first))
     };
     let lines: Vec<&str> = runs.iter().map(|run| run.text.as_str()).collect();
-    assert_eq!(lines, ["Alpha", "No Target", "No Secondary Weapon"]);
     assert_eq!(
-        (runs[0].text.as_str(), runs[0].origin_px),
-        ("Alpha", (838.0, 254.0))
+        lines,
+        [
+            NAV_NO_DESTINATION,
+            "January 1, 0",
+            "No Target",
+            "No Secondary Weapon"
+        ]
     );
+    assert_eq!(runs[0].origin_px, (838.0, 254.0));
+    assert!(!lines.contains(&"Alpha"), "{lines:?}");
 
     // Flying up moves the dots down the radar, with the ship as drawn.
     harness.hold(&[Key::Up]);
@@ -586,6 +632,73 @@ fn the_default_keys_fly_the_ship_and_the_camera_follows_it() {
         shortest_turn(ship.heading, behind).abs() < 1e-2,
         "{ship:?} against {behind}"
     );
+}
+
+#[test]
+fn holding_up_ors_the_engine_glow_over_the_ship_and_it_fades_out_after_release() {
+    let mut harness = Harness::flying(60);
+    let ship_and_glow = |frame: &Frame| (sprite_batch(frame, 3), sprite_batch(frame, 4));
+    let unlit = |frame: &Frame| {
+        let (ship, next) = ship_and_glow(frame);
+        ship == Some((Blend::Normal, 1)) && !matches!(next, Some((Blend::Or, _)))
+    };
+    let first = harness.frame();
+    assert!(unlit(&first), "no glow at rest: {:?}", shape(&first));
+
+    // A second of thrust: the glow's base is at cruise, 24.
+    harness.hold(&[Key::Up]);
+    let thrusting = harness.run(1.0);
+    assert_eq!(
+        ship_and_glow(&thrusting),
+        (Some((Blend::Normal, 1)), Some((Blend::Or, 1))),
+        "the ship, then its glow ORed over it"
+    );
+    let drawn = quads(&thrusting);
+    let (ship, glow) = (drawn[2].dest, drawn[3].dest);
+    assert_eq!((ship.w, glow.w), (1.0, 3.0));
+    assert_eq!(centre(glow), centre(ship), "centred on the ship");
+    // An OR quad's tint is its level in 32nds: lights_tint(level), as the
+    // batcher turns it into levels.
+    let tint = drawn[3].tint;
+    assert!(
+        (20..=25_u8).any(|level| {
+            let n = f32::from(level) / 32.0;
+            tint.iter()
+                .zip([n, n, n, 1.0])
+                .all(|(got, want)| (got - want).abs() < 1e-6)
+        }),
+        "a flickering partial level: {tint:?}"
+    );
+
+    // Three ticks after release the glow is fading, not out.
+    harness.hold(&[]);
+    let released = harness.run(0.1);
+    assert_eq!(
+        sprite_batch(&released, 4),
+        Some((Blend::Or, 1)),
+        "still glowing: {:?}",
+        shape(&released)
+    );
+
+    let coasting = harness.run(1.0);
+    assert!(unlit(&coasting), "faded out: {:?}", shape(&coasting));
+}
+
+#[test]
+fn the_ships_lights_are_ored_over_it() {
+    let mut harness = Harness::flying_with_lights(60);
+    let frame = harness.frame();
+
+    assert_eq!(
+        sprite_batch(&frame, 3),
+        Some((Blend::Normal, 1)),
+        "the ship"
+    );
+    assert_eq!(sprite_batch(&frame, 4), Some((Blend::Or, 1)), "its lights");
+    let drawn = quads(&frame);
+    let (ship, lights) = (drawn[2].dest, drawn[3].dest);
+    assert_eq!((ship.w, lights.w, lights.h), (1.0, 3.0, 3.0));
+    assert_eq!(centre(lights), centre(ship), "centred on the ship");
 }
 
 /// Flies to `target` with the default keys alone: turns towards it,

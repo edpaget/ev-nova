@@ -18,6 +18,8 @@
 //! - [`rulebook`]: which rules follow the original engine and which the
 //!   Nova Bible, as the settings file chooses.
 //! - [`saves`]: the pilot files, one JSON file per pilot in a directory.
+//! - [`settings`]: the player's settings, sound and Hyperspace Effects,
+//!   and the one keeper that reads and saves them all.
 //! - [`platform`]: the thin winit adapter: event translation, the window
 //!   port over a real window, and the event-loop runner.
 //!
@@ -36,3 +38,4 @@ pub mod fonts;
 pub mod platform;
 pub mod rulebook;
 pub mod saves;
+pub mod settings;

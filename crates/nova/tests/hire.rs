@@ -722,6 +722,8 @@ fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_r
     let store = MemoryPilots::new();
     let mut game = Game::with_pilot(&store, &ada(), Showing::Flight, |screen| screen);
     game.frame();
+    // L requests clearance, a second L lands.
+    game.tap(Key::Char('l'));
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
 
@@ -768,7 +770,8 @@ fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_r
     );
 
     // Landed again it is saved; a new app opens it still hired, and its
-    // hail shows its pay.
+    // hail shows its pay. L requests clearance, a second L lands.
+    game.tap(Key::Char('l'));
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(saved(&store).escorts()[0].wage, Some(100));
@@ -806,11 +809,18 @@ fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
     game.jump_to_beta();
     assert_eq!(
         game.app.screen().flight_view().expect("flying").message(),
-        Some(DEFECTED_ONE)
+        Some(
+            format!(
+                "Jumping into the Beta system on January 2, 0. No stellar objects present.  \
+                 {DEFECTED_ONE}"
+            )
+            .as_str()
+        ),
+        "after the arrival"
     );
     let frame = game.frame();
     assert!(
-        texts(&frame).contains(&DEFECTED_ONE.to_owned()),
+        texts(&frame).iter().any(|text| text.contains(DEFECTED_ONE)),
         "{:?}",
         texts(&frame)
     );

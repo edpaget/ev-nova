@@ -682,6 +682,8 @@ fn a_unique_person_shot_down_is_gone_for_good_after_a_save_and_another_comes_bac
     for _ in 0..60 {
         game.frame();
     }
+    // L requests clearance, a second L lands.
+    game.tap(Key::Char('l'));
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
     let saved: serde_json::Value =

@@ -18,6 +18,8 @@ nova-render.workspace = true
 nova-sim.workspace = true
 nova-view.workspace = true
 pollster.workspace = true
+# The settings file's format: JSON, through a private record.
+serde.workspace = true
 # The settings file's `rules` and `rule_overrides`, read beside the sound
 # settings.
 serde_json.workspace = true

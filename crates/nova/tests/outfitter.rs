@@ -456,6 +456,13 @@ impl Harness {
         self.type_key(code, None);
     }
 
+    /// Presses L twice, as the player lands: the first requests clearance,
+    /// the second lands.
+    fn land(&mut self) {
+        self.press(KeyCode::KeyL);
+        self.press(KeyCode::KeyL);
+    }
+
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
@@ -587,7 +594,7 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     game.frame();
     let base_speed = game.top_speed();
     assert!((base_speed - 3.0).abs() < 1e-6, "{base_speed}");
-    game.press(KeyCode::KeyL);
+    game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
 
     // The Outfitter lists what tech level 2 allows, heaviest weight first.

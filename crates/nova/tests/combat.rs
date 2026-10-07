@@ -2641,6 +2641,8 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
                 .any(|text| text == "New escort orders assigned:  All ships defending."),
             "{shown:?}"
         );
+        // L requests clearance, a second L lands.
+        game.tap(Key::Char('l'));
         game.tap(Key::Char('l'));
         assert_eq!(game.showing(), Showing::Spaceport, "landed");
         let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
@@ -3025,6 +3027,8 @@ fn a_fighter_out_is_saved_on_landing_and_flies_again_after_take_off() {
     let store = MemoryPilots::new();
     let mut game = carrying(&store, &[], |screen| screen);
     game.launch();
+    // L requests clearance, a second L lands.
+    game.tap(Key::Char('l'));
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport, "landed");
     let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
@@ -3064,6 +3068,8 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     let store = MemoryPilots::new();
     let mut game = carrying(&store, &[], |screen| screen.with_fighter_recall(source));
     game.launch();
+    // L requests clearance, a second L lands.
+    game.tap(Key::Char('l'));
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport, "landed");
     let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");

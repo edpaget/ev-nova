@@ -8,7 +8,7 @@
 //! - [`escorts`]: the escort menu, which picks the escorts a command goes
 //!   to, its look ([`EscortMenuLooks`]), and the message a command gives.
 //! - [`jump`]: the hyperspace jump's [`JumpEffect`], the stars streaking
-//!   and the screen fading out and in.
+//!   and the screen fading to white and back.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
@@ -31,8 +31,8 @@ pub mod view;
 pub mod weapons;
 
 pub use catalog::{
-    BoomLook, CombatLooks, EffectSheet, Looks, ShipSheet, ShipSprites, StatusBarLayout, StatusBars,
-    TargetCard, WeaponLook,
+    BoomLook, CombatLooks, EffectSheet, LayerSheet, Looks, ShipSheet, ShipSprites, StatusBarLayout,
+    StatusBars, TargetCard, WeaponLook,
 };
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};

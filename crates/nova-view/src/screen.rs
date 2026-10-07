@@ -7,7 +7,8 @@ use nova_sim::SimDiagnostic;
 
 use crate::draw::DrawList;
 use crate::input::Input;
-use crate::sound::{Sound, SoundPrefs};
+use crate::preferences::Prefs;
+use crate::sound::Sound;
 
 /// What a screen asks of the app after an input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,10 +105,9 @@ pub trait Screen {
     fn take_sounds(&mut self) -> Vec<Sound> {
         vec![]
     }
-    /// The sound preferences the player has chosen since they were last
-    /// taken, if they changed: each change is reported once. None by
-    /// default.
-    fn take_sound_prefs(&mut self) -> Option<SoundPrefs> {
+    /// The preferences the player has chosen since they were last taken,
+    /// if they changed: each change is reported once. None by default.
+    fn take_prefs(&mut self) -> Option<Prefs> {
         None
     }
     /// Which screen is showing, for a screen that routes between others;
@@ -206,7 +206,7 @@ mod tests {
         let mut counter = Counter::default();
         let screen: &mut dyn Screen = &mut counter;
         assert_eq!(screen.take_sounds(), []);
-        assert_eq!(screen.take_sound_prefs(), None);
+        assert_eq!(screen.take_prefs(), None);
         assert_eq!(screen.now_showing(), None);
     }
 

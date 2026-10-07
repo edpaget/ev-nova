@@ -4,6 +4,7 @@ use std::num::NonZeroU16;
 use std::rc::Rc;
 
 pub use nova_data::ShipId;
+pub use nova_sim::Blink;
 
 /// A ship's key stats, raw from its `shïp` record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,6 +46,9 @@ pub struct ShipEntry {
     pub glow: Option<Result<SheetInfo, String>>,
     /// Its running lights layer, if its `shän` defines one.
     pub lights: Option<Result<SheetInfo, String>>,
+    /// Its `shän`'s blink fields, which the lights blink by; steady when
+    /// it has no readable `shän`.
+    pub blink: Blink,
 }
 
 /// The ships the browser can show.
@@ -99,6 +103,7 @@ mod tests {
                 sprite: Err("no sprite".to_owned()),
                 glow: None,
                 lights: None,
+                blink: Blink::STEADY,
             }
         }
     }

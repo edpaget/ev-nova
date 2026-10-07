@@ -481,6 +481,13 @@ impl Harness {
         self.type_key(code, None);
     }
 
+    /// Presses L twice, as the player lands: the first requests clearance,
+    /// the second lands.
+    fn land(&mut self) {
+        self.press(KeyCode::KeyL);
+        self.press(KeyCode::KeyL);
+    }
+
     fn click(&mut self, at: Point) {
         self.send(WindowEvent::PointerMoved {
             px: (f64::from(at.x), f64::from(at.y)),
@@ -611,7 +618,7 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
     assert_eq!(game.showing(), Showing::Flight);
     game.frame();
     assert!((game.top_speed() - 3.0).abs() < 1e-6);
-    game.press(KeyCode::KeyL);
+    game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
 
     // The Shipyard lists both ships, the Shuttle marked as flown.

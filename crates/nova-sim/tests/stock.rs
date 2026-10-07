@@ -4,7 +4,8 @@
 //! tech levels allow; Viking's shipyard sells what its tech levels and the
 //! ships' `BuyRandom` allow, and trades the Shuttle in; the ships go by
 //! their names without the designers' notes. Port Kane sells
-//! fuel and uninhabited Reflex-ion sells none. NPC traffic flies the
+//! fuel and uninhabited Reflex-ion sells none. The date reads with the
+//! first `chär`'s affixes. HG-Kania leads to HG-Tichel. NPC traffic flies the
 //! ships and governments its system's `düde`s and fleets give, and
 //! Alphara's `DudeTypes` fleet comes when its roll fires. The governments
 //! stand as their `gövt`s say, and in Fomalhaut the player's attack on a
@@ -30,9 +31,10 @@ use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::{
-    Direction, DisasterId, DisasterRecord, GameDate, Gauge, Good, JunkId, LandingRefusal, OutfitId,
-    OutfitMod, OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session,
-    ShipFields, ShipId, ShipState, ShipStats, StartDate, StellarId, check_landing, services,
+    Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good, GovtId,
+    JunkId, LandOutcome, LandPress, LandingRefusal, NeverFires, OutfitId, OutfitMod, OutfitOrder,
+    OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields, ShipId,
+    ShipState, ShipStats, StartDate, StellarId, SystemId, Vec2, check_landing, services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -69,6 +71,23 @@ fn a_new_pilot_starts_as_the_first_chär_says() {
     assert_eq!(pilot.explored().collect::<Vec<_>>(), [pilot.system()]);
 }
 
+/// A stock session's date reads "June 23, 1177 NC": the first `chär`'s
+/// empty `DatePrefix` and its `DateSuffix`, " NC".
+#[test]
+fn a_stock_session_shows_its_date_with_the_chärs_affixes() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let affixes = data.date_affixes();
+    assert_eq!(
+        (affixes.prefix.as_str(), affixes.suffix.as_str()),
+        ("", " NC")
+    );
+    let session = Session::start(&data).expect("the stock first chär starts");
+    assert_eq!(session.date_text(), "June 23, 1177 NC");
+}
+
 #[test]
 fn the_first_chär_starts_a_session_in_one_of_its_systems() {
     let Some(dir) = common::nova_data() else {
@@ -96,6 +115,7 @@ fn the_first_chär_starts_a_session_in_one_of_its_systems() {
         holds: ship.holds,
         mass: ship.mass,
         free_mass: ship.free_mass,
+        flags2: ship.flags2.bits(),
         contribute: ship.contribute.bits(),
         shield_rech: ship.shield_rech,
         armor_rech: ship.armor_rech,
@@ -148,7 +168,7 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
     assert_eq!(
         check_landing(
             &parked,
-            &sites,
+            kania,
             session.star_map().govt(session.system()),
             |govt| session.pilot().legal_record(govt),
         ),
@@ -670,6 +690,7 @@ fn stock_traffic_flies_the_systems_dudes_and_fleets() {
         assert!(tries < 10_000, "never got out");
     }
     session.begin_jump().expect("jumps");
+    finish_pre_jump(&mut session);
     assert_eq!(session.arrive(&data, &mut chance), Some(next));
     let seen = traffic_seen(&data, &mut session, &mut chance, 3000);
     assert!(!seen.is_empty(), "traffic in sÿst {}", next.0);
@@ -806,7 +827,7 @@ use nova_sim::combat::weapon::{Ammo, Guidance, WeaponSpec};
 use nova_sim::combat::{Combat, Fighter, Rules};
 use nova_sim::{
     Armament, CombatCatalog, CombatEvent, Condition, HullSpec, Reserves, ShipRef, SimDiagnostic,
-    Trigger, Vec2, WeaponId,
+    Trigger, WeaponId,
 };
 
 /// Draws the middle outcome: every shot leaves straight ahead.
@@ -1586,7 +1607,7 @@ fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released()
 use nova_sim::ai::{Goal, NovaAi};
 use nova_sim::legal::{Crime, LegalCode, NovaLaw};
 use nova_sim::rulebook::RuleSource;
-use nova_sim::{Assigned, Assignment, Governments, GovtId, NovaBoarding, Take, Taken};
+use nova_sim::{Assigned, Assignment, Governments, NovaBoarding, Take, Taken};
 
 const FEDERATION: GovtId = GovtId(128);
 const PIRATES: GovtId = GovtId(137);
@@ -1993,6 +2014,7 @@ fn attacking_a_stock_trader_then_boarding_and_capturing_it() {
         assert!(tries < 10_000, "never got out");
     }
     session.begin_jump().expect("jumps");
+    finish_pre_jump(session);
     assert_eq!(session.arrive(&data, &mut fight.chance), Some(next));
     let arrived: Vec<_> = session
         .npcs()
@@ -2979,4 +3001,89 @@ fn the_bounty_hunter_gone_for_good_never_appears_again() {
             "sÿst {system}"
         );
     }
+}
+
+/// A new stock pilot in Kania, at rest over HG-Kania (`spöb` 1404, at
+/// (-70, 250)): docked there through a save that says so, then taken off,
+/// which leaves the ship at the gate's centre. Its record with the
+/// Hypergate government (183) is 32767, HG-Kania's `MinStatus`: the
+/// original never lets a record pass 32767 (task
+/// `landing-minstatus-32767-never`), which `check_landing` does not model
+/// yet.
+fn over_hg_kania(data: &GameData) -> Session {
+    let mut pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    pilot.set_legal_record(GovtId(183), 32767);
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["stellar"] = serde_json::json!(1404);
+    let parked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(data, parked).expect("flies");
+    assert_eq!(session.take_off(), Some(StellarId(1404)));
+    assert_eq!(session.player().position, Vec2::new(-70.0, 250.0));
+    session
+}
+
+/// L, L over HG-Kania enters it, offering Tichel, Dani and Koria; picking
+/// Tichel brings the Shuttle out of HG-Tichel at (-400, -500), heading
+/// 120° at half its top speed, on the same day and with a full tank.
+#[test]
+fn hg_kania_leads_to_hg_tichel() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = over_hg_kania(&data);
+    assert_eq!(session.system(), SystemId(128));
+    assert_eq!(
+        session.land(),
+        Ok(LandOutcome::Selected {
+            stellar: StellarId(1404),
+            station: true,
+            clearance: Clearance::Granted,
+        }
+        .into())
+    );
+    assert_eq!(
+        session.land(),
+        Ok(LandPress::AtGate {
+            stellar: StellarId(1404),
+            kind: GateKind::Hypergate,
+        })
+    );
+    assert_eq!(
+        session.open_hypergate(&data),
+        Ok(vec![SystemId(129), SystemId(298), SystemId(483)])
+    );
+    let full = session.reserves().fuel;
+    assert_eq!(
+        session.enter_hypergate(Some(SystemId(129)), &data, &mut NeverFires),
+        Ok(SystemId(129))
+    );
+    let player = *session.player();
+    assert_eq!(player.position, Vec2::new(-400.0, -500.0));
+    assert!(
+        (player.heading - 120.0).abs() < f32::EPSILON,
+        "{}",
+        player.heading
+    );
+    let speed = player.velocity.length();
+    assert!(
+        (speed - session.handling().max_speed / 2.0).abs() < 1e-4,
+        "{speed}"
+    );
+    assert_eq!(session.date_text(), "June 23, 1177 NC");
+    assert_eq!(session.reserves().fuel, full);
+    assert_eq!(full, Gauge::full(300.0));
+}
+
+/// Ticks `session` through the pre-jump turn and braking until the jump
+/// itself begins.
+fn finish_pre_jump(session: &mut Session) {
+    for _ in 0..10_000 {
+        if session.jumping().is_some() {
+            return;
+        }
+        session.tick(nova_sim::Controls::default());
+    }
+    panic!("never began the jump");
 }

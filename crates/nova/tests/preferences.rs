@@ -12,26 +12,26 @@ use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
+mod prefs_fixture;
+
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova::platform;
+use nova::settings::{GameSettings, SettingsKeeper, game_settings};
 use nova_audio::recording::{AudioLog, MemorySettings, RecordingAudio};
 use nova_audio::settings::level_volume;
 use nova_audio::{
-    Audio, AudioCommand, AudioCore, AudioSettings, SettingsKeeper, SettingsStore, SoundTable,
-    Volume,
+    Audio, AudioCommand, AudioCore, AudioSettings, SettingsStore, SoundTable, Volume,
 };
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
-use nova_data::records::dialog::Dlog;
-use nova_data::records::dialog_items::Ditl;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
-use nova_data::{GameData, InterfaceData, Record, SoundId};
+use nova_data::{GameData, Record, SoundId};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
 use nova_render::{Batch, FontFaces, Frame};
@@ -85,10 +85,6 @@ fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> OneFile {
         .build()
         .bytes;
     OneFile(bytes)
-}
-
-fn be(values: &[i16]) -> Vec<u8> {
-    values.iter().flat_map(|v| v.to_be_bytes()).collect()
 }
 
 fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
@@ -163,79 +159,20 @@ fn game_data() -> Rc<GameData> {
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
-/// One `DITL` item: (left, top, right, bottom), type byte and data.
-fn ditl_item((l, t, r, b): (i16, i16, i16, i16), type_byte: u8, data: &[u8]) -> Vec<u8> {
-    let mut bytes = vec![0; 4];
-    bytes.extend(be(&[t, l, b, r]));
-    bytes.push(type_byte);
-    bytes.push(data.len() as u8);
-    bytes.extend(data);
-    if data.len() % 2 == 1 {
-        bytes.push(0);
-    }
-    bytes
-}
-
-const BUTTON: u8 = 4;
-const CHECK_BOX: u8 = 5;
-const STATIC_TEXT: u8 = 8;
-const PICTURE: u8 = 64;
-const USER: u8 = 0;
-const DISABLED: u8 = 0x80;
-
-/// Stock "new prefs dialog": `DLOG` 4003, 336 x 278 and centred, and its
-/// twenty-two items.
-fn interface() -> InterfaceData {
-    let mut dlog = be(&[54, 37, 332, 373, 1]);
-    dlog.extend([1, 0, 0, 0, 0, 0, 0, 0]);
-    dlog.extend(be(&[4003]));
-    dlog.extend([0, 0, 0xA8, 0x0A]);
-    let check = |bounds, title: &str| ditl_item(bounds, CHECK_BOX, title.as_bytes());
-    let items = [
-        ditl_item((225, 245, 295, 265), BUTTON, b"OK"),
-        check((171, 55, 342, 73), "Share Processor Time"),
-        ditl_item((69, 213, 314, 230), USER | DISABLED, &[]),
-        ditl_item(
-            (171, 167, 277, 183),
-            STATIC_TEXT | DISABLED,
-            b"Sound Volume:",
-        ),
-        ditl_item((189, 186, 311, 202), STATIC_TEXT | DISABLED, b"Static Text"),
-        ditl_item((172, 194, 183, 203), PICTURE, &be(&[135])),
-        ditl_item((172, 185, 183, 194), PICTURE, &be(&[134])),
-        check((171, 33, 270, 51), "Intro Music"),
-        check((171, 99, 307, 117), "QuickTime Movies"),
-        check((11, 121, 172, 139), "Smoke Trails"),
-        check((171, 77, 302, 95), "Run in a window"),
-        check((11, 33, 172, 51), "Ship Animations"),
-        check((11, 55, 172, 73), "Engine Glows"),
-        check((11, 77, 172, 95), "Running Lights"),
-        check((11, 99, 172, 117), "Weapon Effects"),
-        ditl_item((49, 245, 184, 265), BUTTON, b"Key Settings"),
-        ditl_item((186, 416, 306, 436), USER, &[]),
-        check((11, 143, 156, 161), "Parallax Starfield"),
-        ditl_item((12, 5, 325, 28), USER | DISABLED, &[]),
-        check((171, 121, 307, 139), "Ambient Sounds"),
-        check((171, 143, 316, 161), "Hyperspace Effects"),
-        check((11, 165, 156, 183), "Check For Updates"),
-    ];
-    let mut ditl = be(&[items.len() as i16 - 1]);
-    ditl.extend(items.concat());
-    let file = fork(&[(Dlog::TYPE, 4003, dlog), (Ditl::TYPE, 4003, ditl)]);
-    InterfaceData::load(&file, Path::new("/Nova-DF.rsrc")).expect("loads")
-}
-
 /// The settings saved before the game starts: music on, the effects at
 /// level 4 and the music at level 6.
 fn seeded() -> MemorySettings {
     let store = MemorySettings::new();
     let (mut keeper, _) = SettingsKeeper::open(store.clone());
     keeper
-        .change(AudioSettings {
-            sound: true,
-            music: true,
-            effects_volume: level_volume(4),
-            music_volume: level_volume(6),
+        .change(GameSettings {
+            audio: AudioSettings {
+                sound: true,
+                music: true,
+                effects_volume: level_volume(4),
+                music_volume: level_volume(6),
+            },
+            hyperspace_effects: true,
         })
         .expect("seeds");
     store
@@ -259,20 +196,20 @@ impl Harness {
     /// The game started over `store`, its audio core playing `table`.
     fn with_table(store: &MemorySettings, table: SoundTable) -> Self {
         let data = game_data();
-        let (keeper, warning) =
-            SettingsKeeper::open(Box::new(store.clone()) as Box<dyn SettingsStore>);
+        let (keeper, settings, warning) =
+            game_settings(Some(Box::new(store.clone()) as Box<dyn SettingsStore>));
         assert_eq!(warning, None);
-        let settings = keeper.settings();
+        let keeper = keeper.expect("a keeper");
         let screen = start_screen(Rc::clone(&data))
             .with_dialogs(
-                Rc::new(interface()),
+                Rc::new(prefs_fixture::interface()),
                 Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
             )
-            .with_sound_prefs(settings.prefs());
+            .with_prefs(settings.prefs());
         let audio = RecordingAudio::new();
         let log = audio.log();
-        let core =
-            AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, table).with_settings(settings);
+        let core = AudioCore::with_table(Box::new(audio) as Box<dyn Audio>, table)
+            .with_settings(settings.audio);
         let window = FakeWindow;
         Self {
             app: App::new(&window, data, screen)
@@ -311,6 +248,13 @@ impl Harness {
         for state in [ElementState::Pressed, ElementState::Released] {
             self.send(platform::key_event(PhysicalKey::Code(code), state, false));
         }
+    }
+
+    /// Presses L twice, as the player lands: the first requests clearance,
+    /// the second lands.
+    fn land(&mut self) {
+        self.press_physical(KeyCode::KeyL);
+        self.press_physical(KeyCode::KeyL);
     }
 
     /// Moves to the logical point `at`, then presses and releases there.
@@ -420,15 +364,15 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
 
     let music = harness.dialog().music().rect().center();
     harness.click(music);
-    assert!(!harness.dialog().prefs().music);
+    assert!(!harness.dialog().prefs().sound.music);
     let up = harness.dialog().effects_volume().rects().up.center();
     harness.click(up);
-    assert_eq!(harness.dialog().prefs().effects_level, 5);
-    for _ in 0..4 {
+    assert_eq!(harness.dialog().prefs().sound.effects_level, 5);
+    for _ in 0..5 {
         harness.press(Key::Tab);
     }
     harness.press(Key::Down);
-    assert_eq!(harness.dialog().prefs().music_level, 5);
+    assert_eq!(harness.dialog().prefs().sound.music_level, 5);
     let changed = harness.frame();
     assert!(texts(&changed).iter().any(|text| text == "5"));
     harness.press(Key::Enter);
@@ -436,7 +380,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     assert_eq!(harness.played(), [AudioCommand::StopMusic]);
 
     // Later sounds play at the new effects volume.
-    harness.press_physical(KeyCode::KeyL);
+    harness.land();
     assert_eq!(harness.showing(), Showing::Spaceport);
     let five = Volume::new(5.0 / 7.0);
     assert_eq!(
@@ -458,7 +402,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     let (restarted, warning) = SettingsKeeper::open(store.clone());
     assert_eq!(warning, None);
     assert_eq!(
-        restarted.settings(),
+        restarted.settings().audio,
         AudioSettings {
             sound: true,
             music: false,
@@ -469,7 +413,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     let mut again = Harness::new(&store);
     again.press(Key::Char('p'));
     assert_eq!(
-        again.dialog().prefs(),
+        again.dialog().prefs().sound,
         nova_view::SoundPrefs {
             sound: true,
             music: false,
@@ -495,7 +439,10 @@ fn a_failed_save_is_a_warning_and_the_change_still_plays() {
         ["nova: cannot save the settings: the disk is full".to_owned()]
     );
     let (unchanged, _) = SettingsKeeper::open(store.clone());
-    assert!(unchanged.settings().music, "the old settings stay saved");
+    assert!(
+        unchanged.settings().audio.music,
+        "the old settings stay saved"
+    );
 }
 
 /// An engine sound, for a table that has one.
@@ -538,4 +485,63 @@ fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
     harness.key(Key::Up, true);
     harness.fly();
     assert_eq!(harness.played(), [engine], "a fresh thrust");
+}
+
+/// The settings saved in `store`, as JSON.
+fn saved(store: &MemorySettings) -> serde_json::Value {
+    serde_json::from_str(&store.text().expect("saved")).expect("JSON")
+}
+
+#[test]
+fn hyperspace_effects_toggle_by_click_and_key_and_survive_a_restart() {
+    let store = seeded();
+    let mut harness = Harness::new(&store);
+    harness.press(Key::Char('p'));
+    assert_eq!(harness.showing(), Showing::Preferences);
+    assert!(harness.dialog().hyperspace_effects().on(), "on at first");
+    let open = harness.frame();
+    assert!(texts(&open).iter().any(|text| text == "Hyperspace Effects"));
+
+    // A click turns it off, and it is saved with the audio settings.
+    let box_at = harness.dialog().hyperspace_effects().rect().center();
+    harness.click(box_at);
+    assert!(!harness.dialog().hyperspace_effects().on());
+    assert_eq!(saved(&store)["hyperspace_effects"], false);
+    let (kept, _) = SettingsKeeper::open(store.clone());
+    assert_eq!(
+        kept.settings().audio,
+        AudioSettings {
+            sound: true,
+            music: true,
+            effects_volume: level_volume(4),
+            music_volume: level_volume(6),
+        },
+        "the seeded audio settings intact"
+    );
+
+    // An audio change keeps it.
+    let music = harness.dialog().music().rect().center();
+    harness.click(music);
+    let json = saved(&store);
+    assert_eq!(json["music"], false);
+    assert_eq!(json["hyperspace_effects"], false);
+    harness.press(Key::Enter);
+    assert_ne!(harness.showing(), Showing::Preferences);
+    assert_eq!(harness.app.take_warnings(), Vec::<String>::new());
+
+    // After a restart it is still off, and the keyboard turns it back on.
+    let mut again = Harness::new(&store);
+    again.press(Key::Char('p'));
+    assert!(
+        !again.dialog().hyperspace_effects().on(),
+        "off after a restart"
+    );
+    for _ in 0..3 {
+        again.press(Key::Tab);
+    }
+    again.press(Key::Space);
+    assert!(again.dialog().hyperspace_effects().on());
+    let json = saved(&store);
+    assert_eq!(json["hyperspace_effects"], true);
+    assert_eq!(json["music"], false, "the audio change kept");
 }

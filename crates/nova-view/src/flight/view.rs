@@ -61,10 +61,11 @@
 //! bought ([`FlightView::shipyard`], [`FlightView::buy_ship`]), whose
 //! sprite sheet is read then.
 //!
-//! The HUD is drawn last, over everything: the status bar against the
+//! The HUD is drawn over everything but a jump's fade: the status bar against the
 //! right edge, its radar showing the stellars around the ship as drawn,
-//! and its bars the session's shield, armour and fuel. Without a status
-//! bar it says why, and flight goes on.
+//! its bars the session's shield, armour and fuel, and its nav area the
+//! navigation target or else the course. Without a status bar it says
+//! why, and flight goes on.
 //!
 //! Each [`Screen::tick`] runs the simulation's fixed-step clock: the
 //! frame's time becomes whole steps of 1/30 s, each flown with the keys
@@ -73,17 +74,53 @@
 //! the step before the last towards the last, so motion is smooth at any
 //! frame rate while the simulation itself never depends on it.
 //!
+//! The ship is drawn as its sheet's rotation frame for the heading shown,
+//! then, at the same centre and on the same frame (modulo the layer's
+//! frame count), its engine glow and its running lights. The glow is
+//! drawn at the level [`nova_sim::glow_level`] gives for the session's
+//! glow base ([`Session::engine_glow`]) at the flight's time in ticks: it
+//! fades in over 24 ticks of thrust, flickers, and fades out over 24
+//! ticks after Up is released, and landing and beginning a jump put it
+//! out. The lights are drawn at the level [`nova_sim::lights_level`]
+//! gives for the sheet's blink at the flight's time in ticks. Each is
+//! drawn at [`lights_tint`] of its level, or not at all while it is hidden
+//! or off. Both are combined by OR with what is beneath
+//! ([`Blend::Or`](crate::Blend::Or)) at every level, scaled by level/32,
+//! like the original's `_BlitPixieRLETranslucent` (0xc1568) below full and
+//! `_BlitPixieRLEAddOver` (0xc24bf) at full: see [`lights_tint`] for the
+//! full record. The flight's time
+//! stops while the course map is open, so the lights blink and the glow
+//! flickers in game time. Random blinking rolls on [`HashedRolls`] from
+//! seed 0, and the glow's flicker on [`HashedRolls`] from seed 1. A layer
+//! that cannot be shown is left out silently.
+//!
 //! Input, the original's default keys:
 //!
 //! - Up thrusts, Left and Right turn, and Down turns to face against the
 //!   ship's motion, while held: a press (or its key repeats) holds the key
 //!   and its release lets it go. Left and Right together cancel, and
 //!   either overrides Down.
-//! - L lands on the stellar the ship is over, once a press (its repeats
-//!   do nothing). The router takes the landing ([`FlightView::take_landing`])
-//!   and shows the spaceport. A refused landing says why above the help
-//!   line, in the original's words (`STR#` 2002), for
-//!   [`MESSAGE_SHOWN_FOR`].
+//! - L, once a press (its repeats do nothing), requests clearance, then
+//!   lands, as [`landing`](nova_sim::landing) says: with no navigation
+//!   target it selects the nearest landable stellar and shows the reply
+//!   ([`clearance_message`]); with one it lands there. The router takes
+//!   the landing ([`FlightView::take_landing`]) and shows the spaceport.
+//!   The reply, or why a landing was refused, shows above the help line
+//!   in the original's words (`STR#` 2002), for [`MESSAGE_SHOWN_FOR`].
+//!   Over a hypergate or wormhole, the second L enters it instead
+//!   ([`nova_sim::gate`]): a hypergate opens the course map as the
+//!   hypergate map ([`MapMode::Hypergate`]), offering its linked
+//!   systems, and closing the map (M, or the router's Escape) enters it
+//!   for the one picked, or cancels; a wormhole passes the ship through at
+//!   once. The ship comes out in the new system, which is read and laid
+//!   out, the message line says so ([`arrival_message_with`]), and the
+//!   screen fades in from white out of a hypergate
+//!   ([`JumpEffect::emerging`]) or flashes white out of a wormhole
+//!   ([`JumpEffect::flash`]). Clearance at a hypergate, and why a gate
+//!   cannot be entered, are in the gate's own words
+//!   ([`hypergate_clearance_message`], [`gate_refusal_message`]); the
+//!   hypergate's two clearance replies are picked by a roll on the
+//!   flight's chance.
 //! - M (a press, not its repeats) opens the course map, a [`GalaxyMap`]
 //!   in [`MapMode::Course`](crate::galaxy::MapMode::Course), and lets go
 //!   of the flight keys. While it is open flight is paused, as in the
@@ -93,13 +130,37 @@
 //!   destination: the session plots the course there and the map shows
 //!   it. The map shows the systems the pilot has explored, and the rest
 //!   unexplored.
-//! - J (a press) jumps to the next system on the course when the session
-//!   allows it, and otherwise says why in the original's words (`STR#`
-//!   2002), as a refused landing does. A jump plays its [`JumpEffect`]:
-//!   the keys are let go and ignored and the session waits while the stars
-//!   streak and the screen fades out; then the ship arrives, the new
-//!   system is read and laid out, and it fades in. The HUD stays on top
-//!   throughout.
+//! - The HUD's nav area shows the navigation target L selected, or else
+//!   the next system on the course (see [`hud`](super::hud)). The
+//!   original binds no key to cycling the stellars (its `Keys.nib` has
+//!   none): Tab is its Target Select, cycling the ships.
+//! - `\` (a press, not its repeats), the original's Hyper Select, plots
+//!   a one-jump course to the next system linked with this one, as
+//!   [`Session::select_next_system`] says, and clears the navigation
+//!   target, so the nav area shows that system and J jumps there.
+//! - J (a press) begins the pre-jump turn and slow-down towards the next
+//!   system on the course when the session allows a jump, and otherwise
+//!   says why in the original's words (`STR#` 2002), as a refused landing
+//!   does. Once J is accepted the keys are let go and ignored while the
+//!   session flies the ship round to the jump's bearing
+//!   ([`Session::preparing_jump`]). The stars streak when the session says
+//!   the jump has begun ([`Session::jumping`]), at once for a ship already
+//!   facing that way and slow enough. The jump plays its [`JumpEffect`]:
+//!   the session waits while the stars streak and the screen, HUD
+//!   included, fades to white, as the original's whole-display fade does;
+//!   then the ship arrives at full white, the new system is read and laid
+//!   out, and the message line says so in the original's words
+//!   ([`arrival_message`]). Flight resumes as the new system fades in
+//!   from white: the keys work again and the session flies, J included,
+//!   as under the original's asynchronous display fade. Only the streak
+//!   and the fade-out ignore the keys. A multi-jump plays one
+//!   effect, toward the first system, and the scene loaded is the last
+//!   system it passes. With the Hyperspace Effects preference off
+//!   ([`FlightView::with_hyperspace_effects`],
+//!   [`FlightView::set_hyperspace_effects`]) a jump skips the fades, as
+//!   the original's does: the stars streak, the ship arrives as the streak
+//!   ends, and the arrival frame shows solid white once, with flight
+//!   going on under it.
 //! - Space fires the primary weapons and Control the secondary selected,
 //!   while held. W (a press) selects the next secondary weapon, and with
 //!   Alt (Option) the one before. Tab (a press) targets the next ship in
@@ -183,14 +244,15 @@ use std::time::Duration;
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
-    ClassRow, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
-    EscortCommand, FighterNote, FixedStep, Good, GovtId, Haggle, HailOptions, HailRefusal,
-    HailView, Help, JumpRefusal, LandingRefusal, LegalCode, Market, NeverFires, NovaAi,
-    NovaBoarding, NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal,
-    Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reserves,
-    RuleSource, Rules, Session, ShipId, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
-    StartError, StellarId, Steps, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn,
-    Vec2, flight::normalized, flight::shortest_turn,
+    ClassRow, Clearance, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
+    EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId, Haggle,
+    HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
+    LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
+    NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
+    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleSource, Rules, Session, ShipId,
+    ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError, StellarId,
+    Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2,
+    flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules};
 
@@ -200,18 +262,19 @@ use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
     Toggled, escort_command_message, fighters_abandoned_message,
 };
-use super::hud::{self, HudState, StatusBar};
+use super::hud::{self, HudState, NavDisplay, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
 use super::sprite::rotation_frame;
 use super::target::{self, TargetShown};
 use super::weapons::{self, BeamShown, ShotShown};
-use crate::draw::crossed_box;
-use crate::galaxy::{GalaxyCatalog, GalaxyMap};
+use crate::draw::{crossed_box, lights_tint};
+use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
 use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::system::starfield;
 use crate::text::TextMetrics;
+use crate::time::ticks;
 use crate::ui::PlunderShown;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction, Sound,
@@ -225,7 +288,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   P: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
@@ -322,6 +385,11 @@ pub fn comm_message(note: &CommNote) -> String {
     };
     format!("{}:  {done}.", note.comm_name)
 }
+/// The Hyper Select key, which cycles the hyperspace destination through
+/// the systems the current one links to: the original's default, `\`
+/// (`Keys.nib`'s `hyperSel`, "Hyper Select:", default keycode 0x2a in
+/// `_loadKeys`). H is the original's separate Hyperspace Mode key.
+pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
 
 /// `STR#` 2002 #29.
 pub const NO_DESTINATION: &str =
@@ -337,6 +405,101 @@ pub const TAKE_OFF_FIRST: &str = "Can't initiate hyperspace jump - take off firs
 /// Not the original's, whose disabled ship takes no keys: worded after
 /// `STR#` 2002 #42.
 pub const JUMP_DISABLED: &str = "Can't initiate hyperspace jump - your ship is disabled.";
+
+/// `STR#` 2002 #44. The original picks #43, #44 or #45 ("Entering the",
+/// "Jumping into the", "Arriving in the") at random; this port always
+/// says #44, matching none of its random rolls.
+pub const JUMPING_INTO: &str = "Jumping into the";
+/// `STR#` 2002 #48.
+pub const SYSTEM_ON: &str = "system on";
+
+/// `STR#` 2002 #46: coming out of a hypergate.
+pub const EXITING_HYPERGATE: &str = "Exiting hypergate in the";
+/// `STR#` 2002 #47: passing through a wormhole.
+pub const PASSING_WORMHOLE: &str = "Passing through a wormhole into the";
+
+/// What the message line says on arriving from a jump in the system
+/// named `system` on `date`, as the original's `HandlePlayer` builds it,
+/// adding [`NO_STELLARS`] when the system has no stellars: the
+/// [`JUMPING_INTO`] reading of [`arrival_message_with`]. The original's
+/// fighters-abandoned suffix and message-buoy override are left out.
+#[must_use]
+pub fn arrival_message(system: &str, date: &str, stellars: bool) -> String {
+    arrival_message_with(JUMPING_INTO, system, date, stellars)
+}
+
+/// What the message line says on arriving in the system named `system` on
+/// `date`, led by `lead`: [`JUMPING_INTO`] from a jump, and
+/// [`EXITING_HYPERGATE`] or [`PASSING_WORMHOLE`] through a gate, as
+/// `_PlayerEnterHypergate` (@0x63c45-0x63dbe) and `_PlayerEnterWormhole`
+/// (@0x6444c-0x6457d) build it; [`NO_STELLARS`] follows when the system
+/// has no stellars.
+#[must_use]
+pub fn arrival_message_with(lead: &str, system: &str, date: &str, stellars: bool) -> String {
+    let mut text = format!("{lead} {system} {SYSTEM_ON} {date}.");
+    if !stellars {
+        text.push(' ');
+        text.push_str(NO_STELLARS);
+    }
+    text
+}
+
+/// The lead of the message line on the arrival `message` raises.
+fn arrival_lead(message: SimMessage) -> &'static str {
+    match message {
+        SimMessage::Arrived(_) => JUMPING_INTO,
+        SimMessage::ExitedHypergate(_) => EXITING_HYPERGATE,
+        SimMessage::PassedWormhole(_) => PASSING_WORMHOLE,
+    }
+}
+
+/// `STR#` 2002 #50: no system picked on the hypergate map, or none the
+/// gate leads to.
+pub const HYPERGATE_CANCELLED: &str = "Hypergate jump cancelled.";
+/// `STR#` 2002 #74.
+pub const HYPERGATE_ENERGIZED: &str = "Hypergate is energized";
+/// `STR#` 2002 #75.
+pub const HYPERGATE_ONLINE: &str = "Hypergate is online";
+/// `STR#` 2002 #80.
+pub const BEGIN_APPROACH: &str = "Begin initial approach.";
+/// `STR#` 2002 #81: clearance denied at a hypergate
+/// (`_HandlePlayerDockRequest` @0x67ee0-0x67eea).
+pub const HYPERGATE_DENIED: &str = "Hypergate usage denied.";
+/// `STR#` 2002 #84.
+pub const UNABLE_TO: &str = "Your ship is unable to";
+/// `STR#` 2002 #85.
+pub const HYPERGATE_OFFLINE: &str = "enter this hypergate - it is offline.";
+/// `STR#` 2002 #86.
+pub const WORMHOLE_TOO_HOT: &str = "enter this wormhole - the radiation levels are too extreme.";
+
+/// What the player is told when L requests clearance at a hypergate and is
+/// cleared: [`HYPERGATE_ENERGIZED`] when `energized`, otherwise
+/// [`HYPERGATE_ONLINE`] (the original rolls `Rand(2)`, @0x67a8b-0x67aa5),
+/// then ". " and [`BEGIN_APPROACH`] (@0x67b78-0x67c05). The original adds
+/// the pilot's name after the first half on another roll; that is left
+/// out.
+#[must_use]
+pub fn hypergate_clearance_message(energized: bool) -> String {
+    let first = if energized {
+        HYPERGATE_ENERGIZED
+    } else {
+        HYPERGATE_ONLINE
+    };
+    format!("{first}. {BEGIN_APPROACH}")
+}
+
+/// Why the ship cannot enter a gate of `kind`, as the original says it
+/// (@0x67cda-0x67d3c): [`UNABLE_TO`] then [`HYPERGATE_OFFLINE`] or
+/// [`WORMHOLE_TOO_HOT`]. A gate that cannot be landed on says it, and so
+/// does a wormhole that leads nowhere.
+#[must_use]
+pub fn gate_refusal_message(kind: GateKind) -> String {
+    let why = match kind {
+        GateKind::Hypergate => HYPERGATE_OFFLINE,
+        GateKind::Wormhole => WORMHOLE_TOO_HOT,
+    };
+    format!("{UNABLE_TO} {why}")
+}
 
 /// `STR#` 2002 #49.
 pub const NO_STELLARS: &str = "No stellar objects present.";
@@ -363,6 +526,55 @@ pub const IN_HYPERSPACE: &str = "Unable to land - your ship is in hyperspace.";
 /// Not the original's, whose disabled ship takes no keys: worded as
 /// [`IN_HYPERSPACE`] is.
 pub const LAND_DISABLED: &str = "Unable to land - your ship is disabled.";
+
+/// `STR#` 2002 #76.
+pub const DOCKMASTER_READS_YOU: &str = "dockmaster reads you";
+/// `STR#` 2002 #78.
+pub const TRAFFIC_CONTROL_READS_YOU: &str = "traffic control reads you";
+/// `STR#` 2002 #95.
+pub const CLEARED_TO_DOCK: &str = "you're cleared to dock.";
+/// `STR#` 2002 #96.
+pub const YOU_ARE_CLEARED_TO_DOCK: &str = "You are cleared to dock.";
+/// `STR#` 2002 #98.
+pub const CLEARED_TO_LAND: &str = "you're cleared to land.";
+/// `STR#` 2002 #99.
+pub const YOU_ARE_CLEARED_TO_LAND: &str = "You are cleared to land.";
+
+/// What the player is told when L requests clearance at the stellar
+/// `name`, a station or a planet, and `clearance` is the reply. Only the
+/// pieces are the original's (`STR#` 2002); how they are joined is a
+/// reconstruction:
+///
+/// - granted: "{name} traffic control reads you, you're cleared to land."
+///   (#78, #98), or at a station "{name} dockmaster reads you, you're
+///   cleared to dock." (#76, #95);
+/// - uninhabited, with no traffic control to answer: "You are cleared to
+///   land." (#99) or "You are cleared to dock." (#96);
+/// - denied: "Landing request denied." (#83) or "Docking request denied."
+///   (#82).
+#[must_use]
+pub fn clearance_message(name: &str, station: bool, clearance: Clearance) -> String {
+    let (reads_you, cleared, you_are_cleared, denied) = if station {
+        (
+            DOCKMASTER_READS_YOU,
+            CLEARED_TO_DOCK,
+            YOU_ARE_CLEARED_TO_DOCK,
+            DOCKING_DENIED,
+        )
+    } else {
+        (
+            TRAFFIC_CONTROL_READS_YOU,
+            CLEARED_TO_LAND,
+            YOU_ARE_CLEARED_TO_LAND,
+            LANDING_DENIED,
+        )
+    };
+    match clearance {
+        Clearance::Granted => format!("{name} {reads_you}, {cleared}"),
+        Clearance::NoTrafficControl => you_are_cleared.to_owned(),
+        Clearance::Denied => denied.to_owned(),
+    }
+}
 
 /// What the player is told when `refusal` stops a landing: the original's
 /// words for it, for a station or a planet.
@@ -574,7 +786,8 @@ pub fn jump_refusal_message(refusal: &JumpRefusal) -> &'static str {
 }
 
 /// A [`Chance`] shared by whoever holds a copy: the app's one source of
-/// randomness, handed to each flight. The default never fires.
+/// randomness, handed to each flight. The default never fires and always
+/// rolls the first outcome.
 #[derive(Clone)]
 pub struct SharedChance(Rc<RefCell<dyn Chance>>);
 
@@ -606,6 +819,10 @@ impl Chance for SharedChance {
     fn below(&mut self, n: u32) -> u32 {
         self.0.borrow_mut().below(n)
     }
+
+    fn roll(&mut self, sides: u16) -> u16 {
+        self.0.borrow_mut().roll(sides)
+    }
 }
 
 /// The player's ship in flight, reading the game data from `C`.
@@ -627,7 +844,8 @@ pub struct FlightView<C> {
     previous: ShipState,
     /// How far the display is from `previous` to the session's ship.
     alpha: f32,
-    /// Time since the view opened, which drives the stellars' animations.
+    /// Time since the view opened, which drives the stellars' animations
+    /// and the running lights' blinking. It stops while the map is open.
     elapsed: Duration,
     /// The flight keys held down.
     held: HashSet<Key>,
@@ -648,10 +866,22 @@ pub struct FlightView<C> {
     map: GalaxyMap,
     /// Whether the course map is shown.
     map_open: bool,
-    /// The jump's effect, while it plays.
+    /// The jump's effect, while it holds flight: the streak and the
+    /// fade-out, until the ship arrives.
     jump: Option<JumpEffect>,
+    /// The rest of an arrival's effect, once the ship has arrived: the
+    /// fade-in from white, or the white flash. Flight goes on under it.
+    fade_in: Option<JumpEffect>,
+    /// Whether jumps play their white fades, as the Hyperspace Effects
+    /// preference says.
+    hyperspace_effects: bool,
     /// What each day's events and the traffic are rolled on.
     chance: SharedChance,
+    /// What random running lights roll on.
+    blink_rolls: HashedRolls,
+    /// What the engine glow's flicker rolls on: seed 1, so it never
+    /// mirrors random-mode lights, which roll on seed 0.
+    glow_rolls: HashedRolls,
     /// How the NPCs decide.
     behaviour: Rc<dyn Behaviour>,
     /// When a ship in the fight is disabled.
@@ -753,6 +983,8 @@ impl<
             map,
             map_open: false,
             jump: None,
+            fade_in: None,
+            hyperspace_effects: true,
             session,
             scene,
             sheet,
@@ -769,6 +1001,8 @@ impl<
             hail_options: HailOptions::default(),
             boarding_rule: Rc::new(NovaBoarding::default()),
             chance: SharedChance::default(),
+            blink_rolls: HashedRolls::new(0),
+            glow_rolls: HashedRolls::new(1),
             behaviour: Rc::new(NovaAi::default()),
             disable_rule: Rc::new(NovaDisable),
             defence_rule: Rc::new(Allegiance),
@@ -921,13 +1155,6 @@ impl<
         }
     }
 
-    /// The flight with each day's events and the traffic rolled on
-    /// `chance`.
-    #[must_use]
-    pub fn with_chance(self, chance: SharedChance) -> Self {
-        Self { chance, ..self }
-    }
-
     /// The flight with its NPCs deciding as `behaviour` says.
     #[must_use]
     pub fn with_behaviour(self, behaviour: Rc<dyn Behaviour>) -> Self {
@@ -1049,10 +1276,47 @@ impl<
         }
     }
 
+    /// The flight with each day's events and the traffic rolled on
+    /// `chance`.
+    #[must_use]
+    pub fn with_chance(self, chance: SharedChance) -> Self {
+        Self { chance, ..self }
+    }
+
+    /// The flight with jumps playing their white fades or not, as the
+    /// Hyperspace Effects preference is on (the default) or off.
+    #[must_use]
+    pub fn with_hyperspace_effects(self, hyperspace_effects: bool) -> Self {
+        Self {
+            hyperspace_effects,
+            ..self
+        }
+    }
+
+    /// Sets whether the next jump plays its white fades; a jump already
+    /// playing keeps its own.
+    pub fn set_hyperspace_effects(&mut self, hyperspace_effects: bool) {
+        self.hyperspace_effects = hyperspace_effects;
+    }
+
+    /// Whether jumps play their white fades.
+    #[must_use]
+    pub fn hyperspace_effects(&self) -> bool {
+        self.hyperspace_effects
+    }
+
     /// The catalog the screen reads.
     #[must_use]
     pub fn catalog(&self) -> &C {
         &self.catalog
+    }
+
+    /// Covers the screen in the arrival's fade-in, then in the jump's
+    /// fade-out, as far as each shows.
+    fn draw_fades(&self, list: &mut DrawList) {
+        for effect in [&self.fade_in, &self.jump].into_iter().flatten() {
+            effect.draw_fade(list);
+        }
     }
 
     /// Lets go of the flight keys and shows the course map.
@@ -1075,52 +1339,231 @@ impl<
         }
     }
 
+    /// What the HUD's nav area shows: the selected stellar, by its name in
+    /// `scene`; otherwise the next system on the course, by its name on the
+    /// map if the pilot has explored it; otherwise nothing.
+    fn nav_display(&self, scene: &SystemScene) -> NavDisplay {
+        let Ok(session) = &self.session else {
+            return NavDisplay::None;
+        };
+        if let Some(target) = session.nav_target() {
+            let name = scene.stellars().iter().find(|stellar| stellar.id == target);
+            return NavDisplay::Stellar(name.map(|s| s.name.clone()).unwrap_or_default());
+        }
+        session.course().first().map_or(NavDisplay::None, |&next| {
+            let name = session
+                .pilot()
+                .has_explored(next)
+                .then(|| self.map.model().system(next))
+                .flatten()
+                .map(|system| system.entry.name.clone());
+            NavDisplay::Hyperspace {
+                name,
+                readiness: session.jump_readiness(),
+            }
+        })
+    }
+
     /// Begins a jump, or shows why not.
     fn jump(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
         };
-        let from = session.system();
         match session.begin_jump() {
-            Ok(next) => {
-                let position = |id| session.star_map().position(id).unwrap_or_default();
-                self.jump = Some(JumpEffect::toward(position(from), position(next)));
+            Ok(_) => {
                 self.held.clear();
                 self.message = None;
+                self.start_streak_if_jumping();
             }
-            Err(refusal) => self.say(jump_refusal_message(&refusal)),
+            Err(refusal) => self.show(jump_refusal_message(&refusal).to_owned()),
         }
     }
 
+    /// Starts the jump's streak, from the current system towards the next,
+    /// once the session says the jump has begun, unless it is playing
+    /// already.
+    fn start_streak_if_jumping(&mut self) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        if let (None, Some(next)) = (&self.jump, session.jumping()) {
+            let position = |id| session.star_map().position(id).unwrap_or_default();
+            self.jump = Some(
+                JumpEffect::toward(position(session.system()), position(next))
+                    .with_fades(self.hyperspace_effects),
+            );
+        }
+    }
+
+    /// Whether the ship is braking and turning before a jump.
+    fn preparing_jump(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_ok_and(|session| session.preparing_jump().is_some())
+    }
+
     /// Ends the jump: the ship arrives in the next system, which is read
-    /// and laid out, and drawn from where the ship arrives; the flight
-    /// says how many fighters were abandoned and how many hired escorts
-    /// defected unpaid, if any, in one message, the fighters first.
+    /// and laid out, and drawn from where the ship arrives.
     fn arrive(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
         };
-        let Some(system) = session.arrive(&self.catalog, &mut self.chance) else {
+        if let Some(system) = session.arrive(&self.catalog, &mut self.chance) {
+            self.load_arrival(system);
+        }
+    }
+
+    /// Lays out `system`, which the ship has just arrived in, drawn from
+    /// where it arrives, and shows the session's arrival message in the
+    /// original's words, followed by how many fighters were abandoned and
+    /// how many hired escorts defected unpaid, if any, the fighters first.
+    fn load_arrival(&mut self, system: SystemId) {
+        let Ok(session) = &mut self.session else {
             return;
         };
         let notes = session.take_fighter_notes();
         let pay = session.take_pay_notes();
-        self.scene = Some(SystemScene::load(&self.catalog, system));
+        let scene = SystemScene::load(&self.catalog, system);
         self.map.show_course(system, session.course());
         self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
         self.alpha = 0.0;
         self.message = None;
+        let date = session.date_text();
+        let mut said: Vec<String> = session
+            .take_messages()
+            .into_iter()
+            .map(arrival_lead)
+            .next_back()
+            .map(|lead| {
+                let stellars = !scene.stellars().is_empty();
+                arrival_message_with(lead, scene.name(), &date, stellars)
+            })
+            .into_iter()
+            .collect();
+        said.extend(
+            notes
+                .into_iter()
+                .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count)),
+        );
+        said.extend(pay_notes_message(&pay));
+        if !said.is_empty() {
+            self.show(said.join("  "));
+        }
+        self.scene = Some(scene);
         self.npc_previous.clear();
         self.effects.clear();
         self.read_npc_sheets();
-        let mut said: Vec<String> = notes
-            .into_iter()
-            .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count))
-            .collect();
-        said.extend(pay_notes_message(&pay));
-        if !said.is_empty() {
-            self.say(said.join("  "));
+    }
+
+    /// Plays `effect` for the ship having come out of a gate into
+    /// `system`, laid out as an arrival is.
+    fn came_through(&mut self, system: SystemId, effect: JumpEffect) {
+        self.held.clear();
+        self.load_arrival(system);
+        self.fade_in = Some(effect);
+    }
+
+    /// Presses the land key: requests clearance and shows the reply,
+    /// lands, enters a gate, or shows why not. Over a cleared hypergate
+    /// the course map opens offering its links, and over a wormhole the
+    /// ship passes through at once.
+    fn land(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        match session.land() {
+            Ok(LandPress::Outcome(LandOutcome::Selected {
+                stellar,
+                station,
+                clearance,
+            })) => {
+                let hypergate = session.gate_kind(stellar) == Some(GateKind::Hypergate);
+                let text = match clearance {
+                    Clearance::Granted if hypergate => {
+                        hypergate_clearance_message(self.chance.roll(2) == 0)
+                    }
+                    Clearance::Denied if hypergate => HYPERGATE_DENIED.to_owned(),
+                    _ => {
+                        let name = self.scene.as_ref().and_then(|scene| {
+                            let named = scene.stellars().iter().find(|named| named.id == stellar);
+                            named.map(|named| named.name.as_str())
+                        });
+                        clearance_message(name.unwrap_or_default(), station, clearance)
+                    }
+                };
+                self.show(text);
+            }
+            Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
+                self.pending_landing = Some(stellar);
+                self.message = None;
+                self.effects.clear();
+            }
+            Ok(LandPress::AtGate {
+                kind: GateKind::Hypergate,
+                ..
+            }) => match session.open_hypergate(&self.catalog) {
+                Ok(offered) => {
+                    self.map.offer_gates(offered);
+                    self.open_map();
+                }
+                Err(refusal) => self.gate_refused(Some(refusal)),
+            },
+            Ok(LandPress::AtGate {
+                kind: GateKind::Wormhole,
+                ..
+            }) => match session.enter_wormhole(&self.catalog, &mut self.chance) {
+                Ok(system) => self.came_through(system, JumpEffect::flash()),
+                Err(refusal) => self.gate_refused(Some(refusal)),
+            },
+            Err(refusal) => {
+                let gate = match refusal {
+                    LandingRefusal::NotLandable { stellar, .. } => session.gate_kind(stellar),
+                    _ => None,
+                };
+                let text = gate.map_or_else(
+                    || refusal_message(&refusal).to_owned(),
+                    gate_refusal_message,
+                );
+                self.show(text);
+            }
+        }
+    }
+
+    /// Shows what the original says when entering a gate is refused, if
+    /// anything: a cancelled hypergate jump, or a wormhole leading
+    /// nowhere. A hypergate without links says nothing.
+    fn gate_refused(&mut self, refusal: Option<GateRefusal>) {
+        match refusal {
+            Some(GateRefusal::Cancelled) => self.show(HYPERGATE_CANCELLED.to_owned()),
+            Some(GateRefusal::NoExit) => self.show(gate_refusal_message(GateKind::Wormhole)),
+            Some(GateRefusal::NoLinks | GateRefusal::NotAtGate) | None => {}
+        }
+    }
+
+    /// Closes the course map, abandoning any gesture on it, and goes back
+    /// to flight. Closing the hypergate map enters the hypergate for the
+    /// system picked on it: the ship comes out there, and the new system
+    /// fades in from white ([`JumpEffect::emerging`], or flashes white
+    /// with the Hyperspace Effects preference off); with no pick, the jump
+    /// is cancelled ([`HYPERGATE_CANCELLED`]).
+    pub fn close_map(&mut self) {
+        self.map.cancel_pointer();
+        self.map.release_keys();
+        self.map_open = false;
+        if self.map.mode() != MapMode::Hypergate {
+            return;
+        }
+        let choice = self.map.take_gate_choice();
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        match session.enter_hypergate(choice, &self.catalog, &mut self.chance) {
+            Ok(system) => {
+                let effect = JumpEffect::emerging(self.hyperspace_effects);
+                self.came_through(system, effect);
+            }
+            Err(refusal) => self.gate_refused(Some(refusal)),
         }
     }
 }
@@ -1166,18 +1609,12 @@ impl<C> FlightView<C> {
         &self.map
     }
 
-    /// Closes the course map, abandoning any gesture on it, and goes back
-    /// to flight.
-    pub fn close_map(&mut self) {
-        self.map.cancel_pointer();
-        self.map.release_keys();
-        self.map_open = false;
-    }
-
-    /// The jump's effect, while it plays.
+    /// The jump's effect, while it plays: the streak and the fade-out
+    /// that hold flight, or else the arrival's fade-in (or flash) that
+    /// flight goes on under.
     #[must_use]
     pub fn jump_effect(&self) -> Option<&JumpEffect> {
-        self.jump.as_ref()
+        self.jump.as_ref().or(self.fade_in.as_ref())
     }
 
     /// The stellar the ship has just landed on, once: the router takes it
@@ -1311,19 +1748,9 @@ impl<C> FlightView<C> {
         taken
     }
 
-    /// Lands, or shows why not.
-    fn land(&mut self) {
-        let Ok(session) = &mut self.session else {
-            return;
-        };
-        match session.land() {
-            Ok(stellar) => {
-                self.pending_landing = Some(stellar);
-                self.message = None;
-                self.effects.clear();
-            }
-            Err(refusal) => self.say(refusal_message(&refusal)),
-        }
+    /// Shows `text` from now, for [`MESSAGE_SHOWN_FOR`].
+    fn show(&mut self, text: String) {
+        self.say(text);
     }
 
     /// The flight, or why it could not start.
@@ -1501,6 +1928,15 @@ impl<C> FlightView<C> {
     pub fn frame(&self) -> Option<u16> {
         let sheet = self.sheet.as_ref().ok()?;
         Some(rotation_frame(self.shown_heading(), sheet.rotations))
+    }
+
+    /// Today's date as the HUD shows it, or none for a session that never
+    /// started.
+    fn date_text(&self) -> String {
+        self.session
+            .as_ref()
+            .map(Session::date_text)
+            .unwrap_or_default()
     }
 
     /// The ship's shield, armour and fuel, or none for a session that
@@ -1689,6 +2125,17 @@ impl<C> FlightView<C> {
             Ok(sheet) => {
                 let frame = rotation_frame(self.shown_heading(), sheet.rotations);
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+                let base = self.session.as_ref().map_or(0, Session::engine_glow);
+                let glow = sheet
+                    .glow
+                    .zip(glow_level(base, tick, &self.glow_rolls).map(lights_tint));
+                let level = lights_level(&sheet.blink, tick, &self.blink_rolls);
+                let lights = sheet.lights.zip(level.map(lights_tint));
+                for (layer, tint) in [glow, lights].into_iter().flatten() {
+                    let layer_frame = frame % layer.frames.get();
+                    list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
+                }
             }
             Err(reason) => {
                 crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
@@ -1723,7 +2170,7 @@ impl<
 {
     /// Never quits: Escape is the router's.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if self.jump.is_some() {
+        if self.jump.is_some() || self.preparing_jump() {
             return ScreenAction::None;
         }
         let press = match *input {
@@ -1762,6 +2209,12 @@ impl<
             }
             Some(JUMP_KEY) => {
                 self.jump();
+                return ScreenAction::None;
+            }
+            Some(HYPER_SELECT_KEY) => {
+                if let Ok(session) = &mut self.session {
+                    session.select_next_system();
+                }
                 return ScreenAction::None;
             }
             Some(TARGET_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
@@ -1812,22 +2265,29 @@ impl<
     }
 
     /// Runs the simulation's steps for `dt` with the keys held, and advances
-    /// the stellars' animations. While the map is open nothing moves; while
-    /// a jump plays only its effect does, and the ship arrives when the
-    /// effect says.
+    /// the stellars' animations. While the map is open nothing moves. During
+    /// the pre-jump stage the session flies on, and the streak starts on
+    /// the step the session begins the jump, which is the last step run.
+    /// While the stars streak and the old system fades out only the
+    /// jump's effect moves, and the ship arrives when the effect says.
+    /// From then on the session flies again while the rest of the effect,
+    /// the fade-in or the white flash, plays over it; that plays on with
+    /// the map open too, as the original's display fade does.
     fn tick(&mut self, dt: Duration) {
+        if let Some(effect) = &mut self.fade_in {
+            effect.advance(dt);
+            if effect.done() {
+                self.fade_in = None;
+            }
+        }
         if self.map_open {
             return;
         }
         if let Some(effect) = &mut self.jump {
             self.elapsed += dt;
-            let arrived = effect.advance(dt);
-            let done = effect.done();
-            if arrived {
+            if effect.advance(dt) {
                 self.arrive();
-            }
-            if done {
-                self.jump = None;
+                self.fade_in = self.jump.take().filter(|effect| !effect.done());
             }
             return;
         }
@@ -1869,6 +2329,9 @@ impl<
                 for event in session.take_combat_events() {
                     self.effects.apply(&event, &scene, &self.looks, chance);
                 }
+                if session.jumping().is_some() {
+                    break;
+                }
             }
         }
         for note in &notes {
@@ -1882,11 +2345,13 @@ impl<
         let rows = self.escort_rows();
         self.escort_menu.update(self.elapsed, &rows);
         self.alpha = alpha;
+        self.start_streak_if_jumping();
     }
 
     fn draw(&self, list: &mut DrawList) {
         if self.map_open {
             self.map.draw(list);
+            self.draw_fades(list);
             return;
         }
         let Some(scene) = &self.scene else {
@@ -1931,25 +2396,25 @@ impl<
         if let Some(message) = self.message() {
             list.text(message, MESSAGE_AT, OVERLAY_SIZE, None, Color::WHITE);
         }
-        if let Some(effect) = &self.jump {
-            effect.draw_fade(list);
-        }
         match &self.status_bar {
             Ok(bar) => {
                 let stellars: Vec<Point> = scene.stellars().iter().map(|s| s.position).collect();
                 let ships: Vec<Point> = self.shown_npcs().iter().map(|&(_, at, _)| at).collect();
+                let date = self.date_text();
                 let state = HudState {
                     position: self.shown_position(),
                     stellars: &stellars,
                     ships: &ships,
                     reserves: self.reserves(),
-                    system: scene.name(),
+                    nav: self.nav_display(scene),
+                    date: &date,
                 };
                 hud::draw(list, bar, &state);
                 self.draw_combat_hud(list, bar);
             }
             Err(reason) => hud::draw_unavailable(list, reason),
         }
+        self.draw_fades(list);
     }
 
     /// Abandons any gesture on the course map.
@@ -2038,30 +2503,35 @@ mod tests {
 
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
-        CharacterStart, CommodityStrings, DisasterRecord, Handling, JunkRecord, LandingSite,
-        OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord, ShipStats, SimDiagnostic,
-        SimSound, SoundId, StarSystem, StartDate, StartError, SystemId, TICK, Vec2, step,
+        CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, GateSite, Handling,
+        JunkRecord, LandingSite, OutfitId, OutfitRecord, Reserves, ShipFields, ShipId, ShipRecord,
+        ShipStats, SimDiagnostic, SimSound, SoundId, StarSystem, StartDate, StartError, SystemId,
+        TICK, Vec2, step,
     };
 
     use super::*;
-    use crate::flight::catalog::{BoomLook, GovtId, StatusBarLayout, TargetCard, WeaponLook};
-    use crate::flight::hud::{self, HudState, StatusBar};
+    use crate::draw::lights_tint;
+    use crate::flight::catalog::{
+        Blink, BoomLook, GovtId, LayerSheet, StatusBarLayout, TargetCard, WeaponLook,
+    };
+    use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::sound::Sound;
     use crate::system::camera::VIEW_CENTER;
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
     };
-    use crate::{DrawCommand, Font};
+    use crate::{Blend, DrawCommand, Font};
     use nova_sim::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
+    use nova_sim::{BlinkChance, GLOW_CRUISE, HashedRolls, glow_level};
 
     /// The first `chär` flies ship 128 (an average ship that turns 3° a
     /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system
     /// 130, Sol: Earth at (0, -600) and Moon at (300, -200), which animates
-    /// a frame a tick. On the map Sol is at (0, 0), linked to Alpha
+    /// a frame a tick. On the map Sol is at (0, 0), linked both ways to Alpha
     /// Centauri (131) at (600, 0), which holds Proxima at its centre;
-    /// Barnard (132) at (0, 600) is linked to nothing. Records the systems
-    /// read.
+    /// Barnard (132) at (0, 600) is linked to nothing, unless `onward`.
+    /// Records the systems read.
     struct FakeCatalog {
         character: Result<CharacterStart, StartError>,
         fields: ShipFields,
@@ -2103,6 +2573,16 @@ mod tests {
         strings: Vec<(i16, Vec<String>)>,
         /// The persons: none, by default.
         persons: Vec<nova_sim::PersonRecord>,
+        /// Ship 128's default items: none, by default.
+        defaults: Vec<(OutfitId, u16)>,
+        /// Whether Alpha Centauri links on to Barnard, which has no
+        /// stellars: not by default.
+        onward: bool,
+        /// Whether Sol lists Barnard too, after Alpha Centauri, so that
+        /// Hyper Select has two systems to cycle through: not by default.
+        fan: bool,
+        /// Every stellar a gate may lead to: none, by default.
+        gates: Vec<GateSite>,
     }
 
     /// No strings unless a test sets them.
@@ -2131,6 +2611,7 @@ mod tests {
         contribute: 1,
         shield_rech: 0,
         armor_rech: 0,
+        flags2: 0,
     };
 
     fn sheet() -> ShipSheet {
@@ -2139,6 +2620,9 @@ mod tests {
             rotations: NonZeroU16::new(36).expect("non-zero"),
             frame_width: 40,
             frame_height: 40,
+            glow: None,
+            lights: None,
+            blink: Blink::STEADY,
         }
     }
 
@@ -2147,7 +2631,11 @@ mod tests {
             character: Ok(CharacterStart {
                 ship: Some(ShipId(128)),
                 systems: [None, Some(SystemId(130)), None, None],
-                start: StartDate::default(),
+                start: StartDate {
+                    day: 23,
+                    month: 6,
+                    year: 1177,
+                },
                 ..CharacterStart::default()
             }),
             fields: FIELDS,
@@ -2174,6 +2662,10 @@ mod tests {
             codes: Vec::new(),
             strings: Vec::new(),
             persons: Vec::new(),
+            defaults: Vec::new(),
+            onward: false,
+            fan: false,
+            gates: Vec::new(),
         }
     }
 
@@ -2189,8 +2681,12 @@ mod tests {
             tech_level: 1,
             special_tech: [0; 8],
             govt: None,
+            flags2: 0,
         }
     }
+
+    /// The start's date, with stock's affixes.
+    const DATE: &str = "June 23, 1177 NC";
 
     /// Stock `ïntf` 128's areas, with background `PICT` 700.
     fn layout() -> StatusBarLayout {
@@ -2206,6 +2702,7 @@ mod tests {
             nav: rect(8.0, 254.0, 184.0, 286.0),
             weap: rect(8.0, 300.0, 184.0, 315.0),
             targ: rect(8.0, 330.0, 184.0, 442.0),
+            cargo: rect(8.0, 458.0, 184.0, 552.0),
             bright_text: Color::WHITE,
             dim_text: Color::DIM,
             bright_radar: Color::rgba(0, 255, 0, 255),
@@ -2233,7 +2730,7 @@ mod tests {
 
         fn default_outfits(&self, id: ShipId) -> Vec<(OutfitId, u16)> {
             assert_eq!(id, ShipId(128));
-            Vec::new()
+            self.defaults.clone()
         }
 
         fn outfits(&self) -> Vec<OutfitRecord> {
@@ -2252,6 +2749,7 @@ mod tests {
             match system.0 {
                 130 => self.sites.clone(),
                 131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
+                132 if self.onward => Vec::new(),
                 other => panic!("asked for sÿst {other}'s sites"),
             }
         }
@@ -2263,9 +2761,11 @@ mod tests {
                 links: links.iter().copied().map(SystemId).collect(),
                 govt: None,
             };
+            let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
+            let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
             vec![
-                star(130, (0.0, 0.0), &[131]),
-                star(131, (600.0, 0.0), &[]),
+                star(130, (0.0, 0.0), sol),
+                star(131, (600.0, 0.0), onward),
                 star(132, (0.0, 600.0), &[]),
             ]
         }
@@ -2280,6 +2780,18 @@ mod tests {
 
         fn disasters(&self) -> Vec<DisasterRecord> {
             self.disasters.clone()
+        }
+
+        /// Stock's: no prefix, and " NC".
+        fn date_affixes(&self) -> DateAffixes {
+            DateAffixes {
+                prefix: String::new(),
+                suffix: " NC".to_owned(),
+            }
+        }
+
+        fn gate_sites(&self) -> Vec<GateSite> {
+            self.gates.clone()
         }
     }
 
@@ -2355,6 +2867,7 @@ mod tests {
                     ],
                 ),
                 131 => ("Alpha Centauri", vec![stellar(140, "Proxima", (0, 0), 1)]),
+                132 if self.onward => ("Barnard", Vec::new()),
                 other => panic!("asked for sÿst {other}"),
             };
             SystemContents {
@@ -2377,10 +2890,12 @@ mod tests {
                 govt: None,
                 stellars: Vec::new(),
             };
+            let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
+            let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
             Galaxy {
                 systems: vec![
-                    entry(130, "Sol", (0, 0), &[131]),
-                    entry(131, "Alpha Centauri", (600, 0), &[]),
+                    entry(130, "Sol", (0, 0), sol),
+                    entry(131, "Alpha Centauri", (600, 0), onward),
                     entry(132, "Barnard", (0, 600), &[]),
                 ],
                 ..Galaxy::default()
@@ -2390,7 +2905,8 @@ mod tests {
 
     impl ShipSprites for FakeCatalog {
         /// Ship 128's sheet is [`FakeCatalog::sheet`]; ship 129's is
-        /// `rlëD` 2001's, with 72 rotations; ship 130's cannot be read.
+        /// `rlëD` 2001's, with 72 rotations, glow `rlëD` 2101 and lights
+        /// `rlëD` 2201; ship 130's cannot be read.
         fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
             self.sheets_asked.borrow_mut().push(id);
             match id.0 {
@@ -2398,6 +2914,8 @@ mod tests {
                 129 => Ok(ShipSheet {
                     image_id: 2001,
                     rotations: NonZeroU16::new(72).expect("non-zero"),
+                    glow: Some(layer(2101, 72)),
+                    lights: Some(layer(2201, 72)),
                     ..sheet()
                 }),
                 130 => Err("no shän 130".to_owned()),
@@ -2685,7 +3203,12 @@ mod tests {
         let mut view = flight();
         let others = [
             key(Key::Escape, true),
+            key(Key::Space, true),
+            key(Key::Tab, true),
+            key(Key::Space, true),
             key(Key::Enter, true),
+            key(Key::Char('w'), true),
+            key(Key::Char('w'), true),
             key(Key::Other, true),
             Input::PointerMoved(at(1.0, 2.0)),
             Input::PointerButton {
@@ -2855,7 +3378,8 @@ mod tests {
                 stellars: &[at(0.0, -600.0), at(300.0, -200.0)],
                 ships: &[],
                 reserves: ShipStats::new(FIELDS, &[]).full(),
-                system: "Sol",
+                nav: NavDisplay::None,
+                date: DATE,
             },
         );
         let bar = view.status_bar().expect("a status bar");
@@ -2874,7 +3398,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   P: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -2951,6 +3475,464 @@ mod tests {
         assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
     }
 
+    // The engine glow and running lights.
+
+    fn layer(image_id: i16, frames: u16) -> LayerSheet {
+        LayerSheet {
+            image_id,
+            frames: NonZeroU16::new(frames).expect("non-zero"),
+        }
+    }
+
+    /// [`sheet`] with a 36-frame glow, `rlëD` 2100, and 12-frame lights,
+    /// `rlëD` 2200.
+    fn layered() -> FakeCatalog {
+        FakeCatalog {
+            sheet: Ok(ShipSheet {
+                glow: Some(layer(2100, 36)),
+                lights: Some(layer(2200, 12)),
+                ..sheet()
+            }),
+            ..catalog()
+        }
+    }
+
+    /// The ship's sprites drawn: those from `rlëD`s 2000 to 2299.
+    fn ship_sprites(view: &View) -> Vec<(ImageKey, Point)> {
+        sprites(&drawn(view))
+            .into_iter()
+            .filter(|(image, _)| (2000..2300).contains(&image.id))
+            .collect()
+    }
+
+    #[test]
+    fn a_coasting_ship_draws_its_lights_over_it_and_no_glow() {
+        let mut view = FlightView::new(layered());
+        assert_eq!(
+            ship_sprites(&view),
+            [
+                (ImageKey::sprite(2000, 0), VIEW_CENTER),
+                (ImageKey::sprite(2200, 0), VIEW_CENTER),
+            ]
+        );
+        view.input(&key(Key::Up, true));
+        assert_eq!(ship_sprites(&view).len(), 2, "held, but not yet flown");
+        ticks(&mut view, 3);
+        view.input(&key(Key::Up, false));
+        // As many ticks coasting as thrusting: the glow has faded out.
+        ticks(&mut view, 3);
+        let session = view.session().expect("flying");
+        assert!(!session.thrusting());
+        assert_eq!(session.engine_glow(), 0);
+        assert_eq!(
+            ship_sprites(&view)
+                .iter()
+                .map(|(image, _)| image.id)
+                .collect::<Vec<_>>(),
+            [2000, 2200],
+            "coasting"
+        );
+    }
+
+    #[test]
+    fn a_thrusting_ship_draws_its_glow_between_it_and_its_lights() {
+        let mut view = FlightView::new(layered());
+        view.input(&key(Key::Up, true));
+        // A base of 6: drawn at every roll.
+        ticks(&mut view, 6);
+        let centre = view.camera().world_to_screen(view.shown_position());
+        assert_eq!(
+            ship_sprites(&view),
+            [
+                (ImageKey::sprite(2000, 0), centre),
+                (ImageKey::sprite(2100, 0), centre),
+                (ImageKey::sprite(2200, 0), centre),
+            ]
+        );
+    }
+
+    /// The ship's sprites' image ids and blends, as [`ship_sprites`].
+    fn ship_blends(view: &View) -> Vec<(i16, Blend)> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, blend, .. } if (2000..2300).contains(&image.id) => {
+                    Some((image.id, *blend))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_thrusting_ships_glow_and_lights_or_onto_its_normal_sprite() {
+        let mut view = FlightView::new(layered());
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 6);
+        assert_eq!(
+            ship_blends(&view),
+            [(2000, Blend::Normal), (2100, Blend::Or), (2200, Blend::Or),]
+        );
+        assert!(
+            !drawn(&view).iter().any(|command| matches!(
+                command,
+                DrawCommand::Sprite {
+                    blend: Blend::Additive,
+                    ..
+                }
+            )),
+            "nothing in a thrusting, lit frame is added"
+        );
+        view.input(&key(Key::Up, false));
+        ticks(&mut view, 6);
+        assert_eq!(view.session().expect("flying").engine_glow(), 0);
+        assert_eq!(
+            ship_blends(&view),
+            [(2000, Blend::Normal), (2200, Blend::Or)],
+            "coasting"
+        );
+    }
+
+    #[test]
+    fn the_layers_turn_with_the_ship_between_steps() {
+        let mut view = FlightView::new(layered());
+        view.input(&key(Key::Up, true));
+        view.input(&key(Key::Right, true));
+        // 50 steps and a half: the display is between two steps.
+        ticks(&mut view, 50);
+        view.tick(TICK / 2);
+        assert_ne!(view.shown_heading(), player(&view).heading, "between");
+        let frame = view.frame().expect("a sheet");
+        assert_eq!(frame, 15, "{}", view.shown_heading());
+        let centre = view.camera().world_to_screen(view.shown_position());
+        assert_eq!(
+            ship_sprites(&view),
+            [
+                (ImageKey::sprite(2000, frame), centre),
+                (ImageKey::sprite(2100, frame), centre),
+                (ImageKey::sprite(2200, frame % 12), centre),
+            ]
+        );
+    }
+
+    #[test]
+    fn landing_while_thrusting_puts_the_glow_out() {
+        let mut view = FlightView::new(FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..layered()
+        });
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 6);
+        assert_eq!(ship_sprites(&view).len(), 3, "glowing");
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        assert_eq!(view.session().expect("flying").engine_glow(), 0);
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2000, 2200], "landed");
+    }
+
+    #[test]
+    fn beginning_a_jump_while_thrusting_puts_the_glow_out() {
+        let mut view = FlightView::new(layered());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 6);
+        assert_eq!(ship_sprites(&view).len(), 3, "glowing");
+        jump_now(&mut view);
+        assert_eq!(view.session().expect("flying").engine_glow(), 0);
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2000, 2200], "jumping");
+    }
+
+    #[test]
+    fn a_ship_without_layers_draws_only_its_sprite() {
+        let mut view = flight();
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert!(view.session().expect("flying").thrusting());
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2000]);
+    }
+
+    #[test]
+    fn a_ship_without_a_sheet_draws_no_layers() {
+        let mut view = FlightView::new(FakeCatalog {
+            sheet: Err("no shän 128 for shïp 128".to_owned()),
+            ..layered()
+        });
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert_eq!(ship_sprites(&view), []);
+    }
+
+    /// Every command drawing the glow, `rlëD` 2100, whatever its blend.
+    fn glow_commands(view: &View) -> Vec<DrawCommand> {
+        drawn(view)
+            .iter()
+            .filter(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2100),
+            )
+            .cloned()
+            .collect()
+    }
+
+    /// The glow commands for a base of `base` at `tick`: the glow drawn by
+    /// OR at the level [`glow_level`] gives over the ship's centre, on its
+    /// frame, or none when it is hidden.
+    fn glow_for(view: &View, base: u8, tick: u64) -> Vec<DrawCommand> {
+        let frame = view.frame().expect("a sheet") % 36;
+        let center = view.camera().world_to_screen(view.shown_position());
+        glow_level(base, tick, &view.glow_rolls)
+            .map(|level| DrawCommand::Sprite {
+                image: ImageKey::sprite(2100, frame),
+                center,
+                tint: lights_tint(level),
+                blend: Blend::Or,
+            })
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn the_glow_ramps_in_and_flickers_at_the_glow_function_level() {
+        let mut view = FlightView::new(layered());
+        view.input(&key(Key::Up, true));
+        let mut cruising = Vec::new();
+        for n in 1..=40_u8 {
+            ticks(&mut view, 1);
+            let base = n.min(GLOW_CRUISE);
+            assert_eq!(view.session().expect("flying").engine_glow(), base);
+            let want = glow_for(&view, base, u64::from(n));
+            assert_eq!(glow_commands(&view), want, "tick {n}");
+            if n >= 6 {
+                assert_eq!(want.len(), 1, "a base of 6 or more always shows");
+            }
+            if n >= 24 {
+                cruising.extend(want);
+            }
+        }
+        cruising.dedup();
+        assert!(cruising.len() >= 2, "it flickers: {cruising:?}");
+    }
+
+    #[test]
+    fn releasing_up_fades_the_glow_out() {
+        let mut view = FlightView::new(layered());
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 30);
+        assert_eq!(view.session().expect("flying").engine_glow(), GLOW_CRUISE);
+        view.input(&key(Key::Up, false));
+        for k in 1..=40_u8 {
+            ticks(&mut view, 1);
+            let base = GLOW_CRUISE.saturating_sub(k);
+            assert_eq!(view.session().expect("flying").engine_glow(), base);
+            let want = glow_for(&view, base, 30 + u64::from(k));
+            assert_eq!(glow_commands(&view), want, "{k} ticks after");
+            if k == 3 {
+                let level = glow_level(21, 33, &view.glow_rolls).expect("still drawn");
+                let alpha = lights_tint(level).a;
+                assert!(alpha < 255 && alpha >= lights_tint(17).a, "{alpha}");
+                assert_eq!(want.len(), 1, "fading, not out");
+            }
+            if k >= 24 {
+                assert_eq!(want, [], "out {k} ticks after");
+            }
+        }
+    }
+
+    // The running lights' blinking.
+
+    /// The Shuttle's blink: a double flash every 40 ticks, lit at ticks
+    /// 1-3 and 10-12.
+    const SHUTTLE: Blink = Blink {
+        mode: 1,
+        a: 4,
+        b: 1,
+        c: 2,
+        d: 20,
+    };
+
+    /// [`layered`], with the lights blinking by `blink`.
+    fn blinking(blink: Blink) -> FakeCatalog {
+        FakeCatalog {
+            sheet: Ok(ShipSheet {
+                glow: Some(layer(2100, 36)),
+                lights: Some(layer(2200, 12)),
+                blink,
+                ..sheet()
+            }),
+            ..catalog()
+        }
+    }
+
+    /// The tints the lights, `rlëD` 2200, are drawn by OR with.
+    fn lights_tints(view: &View) -> Vec<Color> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite {
+                    image,
+                    tint,
+                    blend: Blend::Or,
+                    ..
+                } if image.id == 2200 => Some(*tint),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The lights' alphas drawn: one, or none when they are off.
+    fn lights_alphas(view: &View) -> Vec<u8> {
+        lights_tints(view).iter().map(|tint| tint.a).collect()
+    }
+
+    #[test]
+    fn the_shuttles_lights_blink_with_game_time() {
+        let mut view = FlightView::new(blinking(SHUTTLE));
+        assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 0: off");
+        assert_eq!(ship_sprites(&view)[0].0.id, 2000, "the ship is drawn");
+        ticks(&mut view, 1);
+        assert_eq!(lights_tints(&view), [Color::WHITE], "tick 1: on");
+        ticks(&mut view, 3);
+        assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 4: off");
+        ticks(&mut view, 6);
+        assert_eq!(lights_alphas(&view), [255], "tick 10: on again");
+        ticks(&mut view, 3);
+        assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 13: the gap");
+    }
+
+    #[test]
+    fn a_pulsing_light_is_ored_at_its_level() {
+        // The stock triangle: 10 to 31.
+        let triangle = Blink {
+            mode: 2,
+            a: 10,
+            b: 75,
+            c: 32,
+            d: 75,
+        };
+        let mut view = FlightView::new(blinking(triangle));
+        assert_eq!(lights_alphas(&view), [0_u8; 0], "0.75: not drawn");
+        ticks(&mut view, 1);
+        assert_eq!(lights_alphas(&view), [8], "level 1");
+        ticks(&mut view, 40);
+        assert_eq!(lights_alphas(&view), [247], "level 31");
+    }
+
+    /// Every command drawing the lights, `rlëD` 2200, whatever its blend.
+    fn lights_commands(view: &View) -> Vec<DrawCommand> {
+        drawn(view)
+            .iter()
+            .filter(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2200),
+            )
+            .cloned()
+            .collect()
+    }
+
+    /// The lights drawn by OR with `tint` over the coasting ship's centre.
+    fn lights_at(tint: Color) -> DrawCommand {
+        DrawCommand::Sprite {
+            image: ImageKey::sprite(2200, 0),
+            center: VIEW_CENTER,
+            tint,
+            blend: Blend::Or,
+        }
+    }
+
+    #[test]
+    fn lights_are_ored_scaled_by_level_below_full_and_whole_at_full() {
+        // The stock triangle, 10 to 31, never full: the original draws
+        // every level with its translucent blit, which ORs in the lights
+        // scaled by level/32 (see `lights_tint`).
+        let triangle = Blink {
+            mode: 2,
+            a: 10,
+            b: 75,
+            c: 32,
+            d: 75,
+        };
+        let rolls = HashedRolls::new(0);
+        let mut view = FlightView::new(blinking(triangle));
+        let mut levels = Vec::new();
+        for tick in 0..=101 {
+            let level = lights_level(&triangle, tick, &rolls);
+            let want: Vec<_> = level
+                .map(|n| lights_at(lights_tint(n)))
+                .into_iter()
+                .collect();
+            assert_eq!(lights_commands(&view), want, "tick {tick}");
+            levels.extend(level);
+            ticks(&mut view, 1);
+        }
+        assert!(levels.contains(&10), "the lowest level is drawn");
+        assert!(levels.contains(&31), "the highest level is drawn");
+
+        // A steady light is full: ORed whole.
+        let view = FlightView::new(blinking(Blink::STEADY));
+        assert_eq!(lights_commands(&view), [lights_at(Color::WHITE)]);
+    }
+
+    #[test]
+    fn steady_lights_are_ored_at_full_from_the_start() {
+        let view = FlightView::new(blinking(Blink::STEADY));
+        assert_eq!(lights_tints(&view), [Color::WHITE]);
+    }
+
+    #[test]
+    fn the_glow_still_shows_while_the_lights_are_off() {
+        let mut view = FlightView::new(blinking(SHUTTLE));
+        view.input(&key(Key::Up, true));
+        // Tick 13: the Shuttle's lights are dark, and a base of 13 always
+        // shows the glow.
+        ticks(&mut view, 13);
+        assert!(view.session().expect("flying").thrusting());
+        assert_eq!(
+            ship_blends(&view),
+            [(2000, Blend::Normal), (2100, Blend::Or)]
+        );
+        let glow = drawn(&view).iter().find_map(|command| match command {
+            DrawCommand::Sprite { image, tint, .. } if image.id == 2100 => Some(*tint),
+            _ => None,
+        });
+        let level = glow_level(13, 13, &view.glow_rolls).expect("drawn");
+        assert_eq!(glow, Some(lights_tint(level)));
+    }
+
+    #[test]
+    fn the_blink_pauses_while_the_map_is_open() {
+        let mut view = FlightView::new(blinking(SHUTTLE));
+        ticks(&mut view, 3);
+        assert_eq!(lights_alphas(&view), [255], "tick 3");
+        view.input(&key(MAP_KEY, true));
+        assert!(view.map_open());
+        // Tick 103 would be dark.
+        ticks(&mut view, 100);
+        view.close_map();
+        assert_eq!(lights_alphas(&view), [255], "still tick 3");
+        ticks(&mut view, 1);
+        assert_eq!(lights_alphas(&view), [0_u8; 0], "tick 4");
+    }
+
+    #[test]
+    fn random_lights_roll_on_hashed_rolls() {
+        // A=5 B=12 C=3: one of 8 levels from 5, every 4 ticks.
+        let random = Blink {
+            mode: 3,
+            a: 5,
+            b: 12,
+            c: 3,
+            d: 0,
+        };
+        let rolls = HashedRolls::new(0);
+        let expected = |change| lights_tint(5 + rolls.roll(change, 8) as u8).a;
+        let mut view = FlightView::new(blinking(random));
+        assert_eq!(lights_alphas(&view), [expected(0)]);
+        ticks(&mut view, 4);
+        assert_eq!(lights_alphas(&view), [expected(1)]);
+    }
+
     // The HUD.
 
     #[test]
@@ -3009,8 +3991,8 @@ mod tests {
                 on_radar(at(300.0, -200.0)).expect("in range"),
             ]
         );
-        let names: Vec<String> = texts(&list).into_iter().rev().take(3).collect();
-        assert_eq!(names, [NO_SECONDARY, NO_TARGET, "Sol"]);
+        // No system name in the nav area (the dev title still names it).
+        assert!(!texts(&list).contains(&"Sol".to_owned()), "{list:?}");
     }
 
     #[test]
@@ -3048,7 +4030,8 @@ mod tests {
                 stellars: &[],
                 ships: &[],
                 reserves,
-                system: "Sol",
+                nav: NavDisplay::None,
+                date: DATE,
             },
         );
         assert_eq!(lines(&drawn(&view)), lines(&expected));
@@ -3140,20 +4123,114 @@ mod tests {
             .cloned()
     }
 
+    /// L pressed twice: clearance, then landing.
+    fn land_now(view: &mut View) {
+        tap(view, LAND);
+        tap(view, LAND);
+    }
+
     #[test]
-    fn l_over_a_landable_stellar_lands_once() {
-        let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+    fn l_requests_clearance_and_a_second_l_lands() {
+        // The Moon (129), in the scene, over the ship.
+        let mut view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
         assert_eq!(view.take_landing(), None);
+        assert_eq!(view.input(&key(LAND, true)), ScreenAction::None);
+        assert_eq!(view.take_landing(), None, "cleared, not landed");
+        assert_eq!(view.session().expect("flying").landed(), None);
+        assert_eq!(nav_target(&view), Some(StellarId(129)));
+        let cleared = "Moon traffic control reads you, you're cleared to land.";
+        assert_eq!(view.message(), Some(cleared));
+        assert_eq!(
+            message(&view),
+            Some(overlay(cleared, MESSAGE_AT, OVERLAY_SIZE, Color::WHITE))
+        );
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "the HUD shows it");
+        assert_eq!(view.take_sounds(), [], "no sound for clearance");
+
+        view.input(&key(LAND, false));
         assert_eq!(view.input(&key(LAND, true)), ScreenAction::None);
         assert_eq!(
             view.session().expect("flying").landed(),
-            Some(StellarId(140))
+            Some(StellarId(129))
         );
-        assert_eq!(view.take_landing(), Some(StellarId(140)));
+        assert_eq!(view.take_landing(), Some(StellarId(129)));
         assert_eq!(view.take_landing(), None, "taken");
         assert_eq!(view.message(), None);
         assert_eq!(message(&view), None);
         assert_eq!(LAND_KEY, LAND);
+    }
+
+    #[test]
+    fn every_clearance_has_its_message() {
+        use Clearance::{Denied, Granted, NoTrafficControl};
+        let cases = [
+            (
+                false,
+                Granted,
+                "Earth traffic control reads you, you're cleared to land.",
+            ),
+            (
+                true,
+                Granted,
+                "Earth dockmaster reads you, you're cleared to dock.",
+            ),
+            (false, NoTrafficControl, "You are cleared to land."),
+            (true, NoTrafficControl, "You are cleared to dock."),
+            (false, Denied, "Landing request denied."),
+            (true, Denied, "Docking request denied."),
+        ];
+        for (station, clearance, text) in cases {
+            assert_eq!(
+                clearance_message("Earth", station, clearance),
+                text,
+                "{station} {clearance:?}"
+            );
+        }
+        assert_eq!(
+            [
+                TRAFFIC_CONTROL_READS_YOU,
+                DOCKMASTER_READS_YOU,
+                CLEARED_TO_LAND,
+                CLEARED_TO_DOCK,
+                YOU_ARE_CLEARED_TO_LAND,
+                YOU_ARE_CLEARED_TO_DOCK,
+            ],
+            [
+                "traffic control reads you",
+                "dockmaster reads you",
+                "you're cleared to land.",
+                "you're cleared to dock.",
+                "You are cleared to land.",
+                "You are cleared to dock.",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_clearance_names_the_stellar_selected_and_says_how_it_answered() {
+        let uninhabited = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
+        let mut view = flight_among(vec![site(128, (0.0, 0.0), uninhabited)]);
+        tap(&mut view, LAND);
+        assert_eq!(view.message(), Some("You are cleared to land."));
+        let strict = LandingSite {
+            min_status: 1,
+            ..site(
+                129,
+                (0.0, 0.0),
+                StellarFlags::CAN_LAND | StellarFlags::STATION,
+            )
+        };
+        let mut view = flight_among(vec![strict]);
+        tap(&mut view, LAND);
+        assert_eq!(view.message(), Some("Docking request denied."));
+        assert_eq!(nav_target(&view), Some(StellarId(129)), "selected anyway");
+        let mut view = flight();
+        tap(&mut view, LAND);
+        assert_eq!(
+            view.message(),
+            Some("Moon traffic control reads you, you're cleared to land."),
+            "the nearer of Sol's two"
+        );
     }
 
     #[test]
@@ -3163,6 +4240,7 @@ mod tests {
         view.input(&key(LAND, false));
         assert_eq!(view.take_landing(), None);
         assert_eq!(view.session().expect("flying").landed(), None);
+        assert_eq!(nav_target(&view), None, "nothing selected");
         let mut far = flight();
         far.input(&held(LAND));
         assert_eq!(far.message(), None, "no refusal either");
@@ -3170,9 +4248,11 @@ mod tests {
 
     #[test]
     fn each_refusal_says_why_in_the_originals_words() {
+        // L, then L again: the first requests clearance where it can.
         let refused = |sites: Vec<LandingSite>| {
             let mut view = flight_among(sites);
-            view.input(&key(LAND, true));
+            tap(&mut view, LAND);
+            tap(&mut view, LAND);
             assert_eq!(view.take_landing(), None);
             view.message().map(str::to_owned)
         };
@@ -3226,9 +4306,10 @@ mod tests {
             let mut view = flight_among(vec![big(flags)]);
             view.input(&key(Key::Up, true));
             ticks(&mut view, 15);
-            view.input(&key(LAND, true));
+            land_now(&mut view);
             assert_eq!(view.take_landing(), None);
             assert_eq!(view.message(), Some(expected));
+            assert_eq!(nav_target(&view), Some(StellarId(140)), "kept: try again");
         }
     }
 
@@ -3241,14 +4322,14 @@ mod tests {
             (LandingRefusal::NoStellars, NO_STELLARS),
             (
                 LandingRefusal::TooFar {
-                    nearest: stellar,
+                    stellar,
                     station: true,
                 },
                 TOO_FAR_STATION,
             ),
             (
                 LandingRefusal::TooFar {
-                    nearest: stellar,
+                    stellar,
                     station: false,
                 },
                 TOO_FAR_PLANET,
@@ -3335,7 +4416,7 @@ mod tests {
     fn the_refusal_is_drawn_above_the_help_line_until_it_has_been_shown_long_enough() {
         let mut view = flight();
         ticks(&mut view, 3);
-        view.input(&key(LAND, true));
+        land_now(&mut view);
         let shown = Some(overlay(
             TOO_FAR_PLANET,
             MESSAGE_AT,
@@ -3364,6 +4445,8 @@ mod tests {
     #[test]
     fn a_new_refusal_shows_afresh() {
         let mut view = flight();
+        land_now(&mut view);
+        assert_eq!(view.message(), Some(TOO_FAR_PLANET));
         view.input(&key(LAND, true));
         view.tick(Duration::from_secs(3));
         view.input(&key(LAND, false));
@@ -3375,7 +4458,7 @@ mod tests {
     #[test]
     fn taking_off_draws_the_ship_at_the_stellar_on_the_next_frame() {
         let mut view = flight_among(vec![site(140, (6.0, -8.0), StellarFlags::CAN_LAND)]);
-        view.input(&key(LAND, true));
+        land_now(&mut view);
         assert_eq!(view.take_landing(), Some(StellarId(140)));
         assert_eq!(view.take_off(), Some(StellarId(140)));
         assert_eq!(view.session().expect("flying").landed(), None);
@@ -3392,8 +4475,7 @@ mod tests {
     #[test]
     fn a_refusal_is_forgotten_once_the_ship_lands() {
         let mut view = flight_among(vec![site(140, (0.0, -12.0), StellarFlags::CAN_LAND)]);
-        view.input(&key(LAND, true));
-        view.input(&key(LAND, false));
+        land_now(&mut view);
         assert_eq!(view.message(), Some(TOO_FAR_PLANET));
         // Nudge the ship and drift over the planet.
         view.input(&key(Key::Up, true));
@@ -3434,7 +4516,9 @@ mod tests {
             ..site(140, (6.0, -8.0), StellarFlags::CAN_LAND)
         }]);
         assert_eq!(view.take_sounds(), []);
-        view.input(&key(LAND, true));
+        tap(&mut view, LAND);
+        assert_eq!(view.take_sounds(), [], "clearance is silent");
+        tap(&mut view, LAND);
         assert_eq!(
             view.take_sounds(),
             [Sound::Sim(SimSound::Landed {
@@ -3703,7 +4787,7 @@ mod tests {
     fn j_while_landed_is_refused_until_take_off() {
         let mut view = flight_among(vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)]);
         plot(&mut view, 131);
-        view.input(&key(LAND, true));
+        land_now(&mut view);
         assert_eq!(view.take_landing(), Some(StellarId(140)));
         view.input(&key(JUMP, true));
         assert_eq!(view.jump_effect(), None);
@@ -3743,9 +4827,9 @@ mod tests {
         let mut view = flight();
         plot(&mut view, 131);
         fly_out(&mut view);
+        jump_now(&mut view);
         let leaving = player(&view);
         let fuel_leaving = reserves(&view).fuel.now;
-        assert_eq!(view.input(&key(JUMP, true)), ScreenAction::None);
         assert_eq!(view.message(), None);
         let effect = view.jump_effect().expect("jumping");
         assert_eq!(effect.direction(), at(1.0, 0.0), "east, to Alpha Centauri");
@@ -3765,19 +4849,20 @@ mod tests {
         assert_eq!(fade(&list), None);
         assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
 
-        // The old system fades out, under the HUD.
+        // The old system fades out to white, HUD and all.
         view.tick(ms(625));
         let list = drawn(&view);
         let (at_fade, color) = fade(&list).expect("a fade");
-        assert_eq!(color, Color::rgba(0, 0, 0, 64));
-        assert!(ship_at(&list) < at_fade && at_fade < hud_at(&list));
+        assert_eq!(color, Color::rgba(255, 255, 255, 64));
+        assert!(ship_at(&list) < hud_at(&list) && hud_at(&list) < at_fade);
+        assert_eq!(at_fade, list.len() - 1, "the fade is drawn last");
         assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
         view.tick(ms(125));
         assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(128), "growing");
         assert_eq!(view.session().expect("flying").system(), SystemId(130));
 
         // Past 1.5 s it arrives, and the new system fades in.
-        view.tick(ms(300));
+        view.tick(ms(450));
         let session = view.session().expect("flying");
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.jumping(), None);
@@ -3789,24 +4874,25 @@ mod tests {
         assert_eq!(view.course_map().current(), Some(SystemId(131)));
         assert_eq!(view.course_map().route(), []);
         let arrived = player(&view);
-        assert_eq!(arrived.position, Vec2::new(-1000.0, 0.0));
+        assert_eq!(arrived.position, Vec2::new(-1001.0, 0.0));
+        assert_eq!(arrived.velocity, Vec2::ZERO, "at rest");
         assert_eq!(reserves(&view).fuel.now, fuel_leaving - 100.0);
-        assert_eq!(view.shown_position(), at(-1000.0, 0.0));
+        assert_eq!(view.shown_position(), at(-1001.0, 0.0));
         let list = drawn(&view);
         let (at_fade, color) = fade(&list).expect("a fade");
-        assert_eq!(color.a, 230);
+        assert_eq!(color.a, 221);
         assert!(texts(&list).contains(&"Alpha Centauri (sÿst 131)".to_owned()));
-        assert!(at_fade < hud_at(&list));
         let mut hud = DrawList::new();
         hud::draw(
             &mut hud,
             view.status_bar().expect("a status bar"),
             &HudState {
-                position: at(-1000.0, 0.0),
+                position: at(-1001.0, 0.0),
                 stellars: &[at(0.0, 0.0)],
                 ships: &[],
                 reserves: reserves(&view),
-                system: "Alpha Centauri",
+                nav: NavDisplay::None,
+                date: "June 24, 1177 NC",
             },
         );
         assert!(
@@ -3814,28 +4900,299 @@ mod tests {
                 .skip(hud_at(&list))
                 .take(hud.len())
                 .eq(hud.iter()),
-            "the HUD, with a jump's fuel less, is last"
+            "the HUD, with a jump's fuel less and a day on"
         );
         assert_eq!(
-            list.len(),
-            hud_at(&list) + hud.len() + 2,
-            "then the target and weapon"
+            (at_fade, hud_at(&list) + hud.len() + 2),
+            (list.len() - 1, at_fade),
+            "then the target and weapon, and the fade over everything"
         );
         view.tick(ms(100));
-        assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(179), "shrinking");
-        assert_eq!(player(&view), arrived, "still frozen");
+        assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(204), "shrinking");
+        assert_eq!(player(&view), arrived, "at rest, no keys held");
 
         // Then plain flight.
-        view.tick(ms(500));
+        view.tick(ms(1200));
         assert_eq!(view.jump_effect(), None);
         let list = drawn(&view);
         assert_eq!(fade(&list), None);
         let mut stars = DrawList::new();
         starfield::draw(&mut stars, &view.camera());
         assert!(list.iter().take(stars.len()).eq(stars.iter()));
+        view.input(&key(Key::Up, true));
         ticks(&mut view, 3);
-        assert_eq!(player(&view), stepped(arrived, Controls::default(), 3));
+        assert_eq!(player(&view), stepped(arrived, THRUST, 3));
         assert_ne!(player(&view), arrived, "it flies again");
+    }
+
+    #[test]
+    fn hyperspace_effects_default_on() {
+        let mut view = flight();
+        assert!(view.hyperspace_effects());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(1250));
+        assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(128), "fading out");
+    }
+
+    /// Whether `list` draws the fade quad translucent: part of a fade.
+    fn translucent_fade(list: &DrawList) -> bool {
+        fade(list).is_some_and(|(_, color)| color.a < u8::MAX)
+    }
+
+    #[test]
+    fn with_effects_off_a_jump_streaks_then_arrives_without_fading() {
+        let mut view = flight().with_hyperspace_effects(false);
+        assert!(!view.hyperspace_effects());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let leaving = player(&view);
+
+        // The stars streak, with no fade over them.
+        view.tick(ms(500));
+        assert_eq!(player(&view), leaving, "frozen");
+        let list = drawn(&view);
+        let mut streaks = DrawList::new();
+        starfield::draw_streaked(&mut streaks, &view.camera(), at(1.0, 0.0), 256.0);
+        assert!(list.iter().take(streaks.len()).eq(streaks.iter()));
+        assert_eq!(fade(&list), None);
+        view.tick(ms(499));
+        assert_eq!(fade(&drawn(&view)), None);
+        assert_eq!(view.session().expect("flying").system(), SystemId(130));
+
+        // As the streak ends, the ship arrives and the screen is white once.
+        view.tick(ms(1));
+        let session = view.session().expect("flying");
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.jumping(), None);
+        let list = drawn(&view);
+        assert_eq!(
+            fade(&list),
+            Some((list.len() - 1, Color::WHITE)),
+            "opaque white over everything"
+        );
+        assert!(view.jump_effect().is_some(), "flashing");
+        assert_eq!(player(&view).position, Vec2::new(-1001.0, 0.0));
+
+        // Then plain flight, with no fade in.
+        view.tick(ms(33));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(fade(&drawn(&view)), None);
+    }
+
+    #[test]
+    fn set_hyperspace_effects_changes_the_next_jump() {
+        let mut view = flight().with_hyperspace_effects(false);
+        view.set_hyperspace_effects(true);
+        assert!(view.hyperspace_effects());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(1250));
+        assert!(translucent_fade(&drawn(&view)), "fading");
+
+        let mut view = flight();
+        view.set_hyperspace_effects(false);
+        assert!(!view.hyperspace_effects());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let mut faded = false;
+        for _ in 0..200 {
+            view.tick(TICK);
+            faded |= translucent_fade(&drawn(&view));
+        }
+        assert!(!faded, "never fades");
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    }
+
+    /// Ship 128 carrying the stock Multi-Jumping Organ (`oütf` 275,
+    /// multi-jump 10), with Alpha Centauri linked on to Barnard.
+    fn multi_jumping() -> FakeCatalog {
+        FakeCatalog {
+            outfits: vec![OutfitRecord {
+                id: OutfitId(275),
+                name: "Multi-Jumping Organ".to_owned(),
+                short_name: "Multi-Jumping Organ".to_owned(),
+                disp_weight: 0,
+                mass: 0,
+                tech_level: 1,
+                max: 1,
+                flags: 0,
+                cost: 0,
+                mods: [(32, 10), (0, 0), (0, 0), (0, 0)],
+                contribute: 0,
+                require: 0,
+                require_govt: -1,
+                availability: String::new(),
+                item_class: 0,
+                lc_name: "multi-jumping organ".to_owned(),
+                lc_plural: "multi-jumping organs".to_owned(),
+            }],
+            defaults: vec![(OutfitId(275), 1)],
+            onward: true,
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
+        let mut view = FlightView::new(multi_jumping());
+        plot(&mut view, 132);
+        assert_eq!(
+            view.session().expect("flying").course(),
+            [SystemId(131), SystemId(132)]
+        );
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let fuel_leaving = reserves(&view).fuel.now;
+        let effect = view.jump_effect().expect("jumping");
+        assert_eq!(effect.direction(), at(1.0, 0.0), "east, to the first hop");
+
+        view.tick(ms(1550));
+        let session = view.session().expect("flying");
+        assert_eq!(session.system(), SystemId(132));
+        assert_eq!(session.course(), []);
+        assert_eq!(
+            *view.catalog().systems_read.borrow(),
+            [SystemId(130), SystemId(132)],
+            "Alpha Centauri is never loaded"
+        );
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(132)));
+        assert_eq!(reserves(&view).fuel.now, fuel_leaving - 100.0);
+        assert!(texts(&drawn(&view)).contains(&"Barnard (sÿst 132)".to_owned()));
+        assert_eq!(
+            view.message(),
+            Some(
+                "Jumping into the Barnard system on June 24, 1177 NC. No stellar objects present."
+            ),
+            "names the final system"
+        );
+        assert!(view.jump_effect().is_some(), "fading in");
+
+        view.tick(ms(1450));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(view.session().expect("flying").jumping(), None);
+        for _ in 0..30 {
+            view.tick(TICK);
+            assert_eq!(view.jump_effect(), None, "no second effect");
+        }
+        assert_eq!(view.session().expect("flying").system(), SystemId(132));
+    }
+
+    /// Presses J and ticks until the streak begins, as the session says
+    /// the jump has begun.
+    fn jump_now(view: &mut View) {
+        view.input(&key(JUMP, true));
+        for _ in 0..1000 {
+            if view.jump_effect().is_some() {
+                return;
+            }
+            view.tick(TICK);
+        }
+        panic!("the jump never began: {:?}", player(view));
+    }
+
+    /// Ticks until the ship has arrived in another system and the jump's
+    /// effect is over.
+    fn arrive_now(view: &mut View) {
+        let leaving = view.session().expect("flying").system();
+        for _ in 0..1000 {
+            let arrived = view.session().expect("flying").system() != leaving;
+            if arrived && view.jump_effect().is_none() {
+                return;
+            }
+            view.tick(TICK);
+        }
+        panic!("never arrived: {:?}", player(view));
+    }
+
+    #[test]
+    fn the_streak_waits_for_the_session_to_begin_the_jump() {
+        // fly_out leaves the ship racing north, facing it; Alpha Centauri
+        // is east.
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert_eq!(view.jump_effect(), None, "not on J");
+        assert_eq!(view.message(), None);
+        let session = view.session().expect("flying");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        assert_eq!(session.jumping(), None);
+        let pressed = player(&view);
+        view.tick(TICK);
+        assert_ne!(player(&view), pressed, "the session keeps ticking");
+        let mut waited = 1;
+        while view.session().expect("flying").jumping().is_none() {
+            assert_eq!(view.jump_effect(), None, "tick {waited}");
+            view.tick(TICK);
+            waited += 1;
+            assert!(waited < 1000, "the jump never began");
+        }
+        let effect = view.jump_effect().expect("the streak, on that tick");
+        assert_eq!(effect.direction(), at(1.0, 0.0), "east, to Alpha Centauri");
+        assert_eq!(player(&view).heading, 90.0, "facing it");
+        assert!(waited > 30, "braked and turned first: {waited}");
+    }
+
+    #[test]
+    fn a_ship_ready_to_jump_streaks_on_j() {
+        // Turned east at rest, then drifting out slowly that way: facing
+        // Alpha Centauri and slow enough, it needs no pre-jump stage.
+        let mut view = flight();
+        plot(&mut view, 131);
+        view.input(&key(Key::Right, true));
+        ticks(&mut view, 30);
+        view.input(&key(Key::Right, false));
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 10);
+        view.input(&key(Key::Up, false));
+        for _ in 0..2000 {
+            if player(&view).position.length() >= MIN_JUMP_DISTANCE {
+                break;
+            }
+            view.tick(TICK);
+        }
+        let ship = player(&view);
+        assert_eq!(ship.heading, 90.0, "{ship:?}");
+        assert!(ship.position.length() >= MIN_JUMP_DISTANCE, "{ship:?}");
+        view.input(&key(JUMP, true));
+        let effect = view.jump_effect().expect("streaking on J");
+        assert_eq!(effect.direction(), at(1.0, 0.0));
+        view.tick(TICK);
+        assert_eq!(player(&view), ship, "frozen at once");
+    }
+
+    #[test]
+    fn keys_are_ignored_while_the_ship_turns_to_jump() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        let pressed = player(&view);
+        let mut alongside = flight();
+        plot(&mut alongside, 131);
+        fly_out(&mut alongside);
+        alongside.input(&key(JUMP, true));
+        for k in [Key::Up, Key::Left, Key::Down, MAP, LAND, JUMP, Key::Tab] {
+            assert_eq!(view.input(&key(k, true)), ScreenAction::None);
+        }
+        assert!(!view.map_open());
+        assert_eq!(view.message(), None);
+        for _ in 0..10 {
+            view.tick(TICK);
+            alongside.tick(TICK);
+        }
+        assert_eq!(player(&view), player(&alongside), "flown alike");
+        assert_ne!(player(&view), pressed, "the session flies on");
+        assert_eq!(view.jump_effect(), None);
+        let session = view.session().expect("flying");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(view.take_landing(), None);
     }
 
     #[test]
@@ -3844,7 +5201,7 @@ mod tests {
         plot(&mut view, 131);
         fly_out(&mut view);
         view.input(&key(Key::Up, true));
-        view.input(&key(JUMP, true));
+        jump_now(&mut view);
         view.tick(ms(300));
         view.input(&key(Key::Up, false));
         view.input(&key(Key::Left, true));
@@ -3853,7 +5210,7 @@ mod tests {
         view.input(&key(JUMP, true));
         assert!(!view.map_open());
         assert_eq!(view.message(), None);
-        view.tick(ms(2000));
+        view.tick(ms(2700));
         assert_eq!(view.jump_effect(), None);
         assert_eq!(view.take_landing(), None);
         let arrived = player(&view);
@@ -3863,6 +5220,178 @@ mod tests {
             stepped(arrived, Controls::default(), 5),
             "neither thrusting nor turning"
         );
+    }
+
+    #[test]
+    fn keys_are_ignored_while_the_old_system_fades_out() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(1250));
+        assert!(matches!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeOut(_))
+        ));
+        for k in [Key::Up, Key::Left, MAP, LAND, JUMP] {
+            assert_eq!(view.input(&key(k, true)), ScreenAction::None);
+        }
+        assert!(!view.map_open());
+        assert_eq!(view.message(), None);
+        assert_eq!(view.take_landing(), None);
+        arrive_now(&mut view);
+        let arrived = player(&view);
+        ticks(&mut view, 5);
+        assert_eq!(
+            player(&view),
+            stepped(arrived, Controls::default(), 5),
+            "neither thrusting nor turning"
+        );
+        assert_eq!(view.session().expect("flying").preparing_jump(), None);
+    }
+
+    /// Jumps from Sol to Alpha Centauri, on a course on to Barnard, and
+    /// stops 50 ms into the arrival's fade-in.
+    fn fading_in_on_course_to_barnard() -> View {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        plot(&mut view, 132);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(1550));
+        assert_eq!(system_of(&view), SystemId(131));
+        assert!(matches!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeIn(_))
+        ));
+        view
+    }
+
+    /// The fade's alpha as drawn, if it is.
+    fn fade_alpha(view: &View) -> Option<u8> {
+        fade(&drawn(view)).map(|(_, color)| color.a)
+    }
+
+    #[test]
+    fn j_during_the_arrival_fade_in_begins_the_next_jump() {
+        let mut view = fading_in_on_course_to_barnard();
+        view.input(&key(JUMP, true));
+        assert_eq!(view.message(), None, "not refused");
+        let session = view.session().expect("flying");
+        assert!(
+            session.preparing_jump() == Some(SystemId(132))
+                || session.jumping() == Some(SystemId(132)),
+            "{:?} {:?}",
+            session.preparing_jump(),
+            session.jumping()
+        );
+        let pressed = fade_alpha(&view).expect("still fading in");
+        view.tick(TICK);
+        let fading = fade_alpha(&view).expect("the old fade plays on");
+        assert!(fading < pressed, "{fading} < {pressed}");
+        for _ in 0..1000 {
+            if view.session().expect("flying").jumping().is_some() {
+                break;
+            }
+            view.tick(TICK);
+        }
+        assert_eq!(
+            view.session().expect("flying").jumping(),
+            Some(SystemId(132))
+        );
+        let effect = view.jump_effect().expect("the next jump's streak");
+        assert!(matches!(effect.phase(), JumpPhase::Streak(_)));
+        let toward = JumpEffect::toward(Vec2::new(600.0, 0.0), Vec2::new(0.0, 600.0));
+        assert_eq!(
+            effect.direction(),
+            toward.direction(),
+            "south-west, to Barnard"
+        );
+        arrive_now(&mut view);
+        assert_eq!(system_of(&view), SystemId(132));
+    }
+
+    #[test]
+    fn the_ship_flies_under_the_arrival_fade_in() {
+        let mut view = fading_in_on_course_to_barnard();
+        let arrived = player(&view);
+        let before = fade_alpha(&view).expect("fading in");
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert_eq!(player(&view), stepped(arrived, THRUST, 3));
+        let after = fade_alpha(&view).expect("still fading in");
+        assert!(after < before, "{after} < {before}");
+    }
+
+    #[test]
+    fn the_arrival_fade_plays_on_and_shows_over_the_map() {
+        let mut view = fading_in_on_course_to_barnard();
+        tap(&mut view, MAP);
+        assert!(view.map_open(), "the map opens under the fade");
+        let list = drawn(&view);
+        let (at_fade, color) = fade(&list).expect("the fade, over the map");
+        assert_eq!(at_fade, list.len() - 1, "drawn last");
+        let before = color.a;
+        view.tick(ms(100));
+        let after = fade_alpha(&view).expect("fading on with the map open");
+        assert!(after < before, "{after} < {before}");
+        view.tick(crate::flight::jump::FADE_IN_FOR);
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(view.jump_effect(), None, "the fade played out");
+        assert_eq!(fade(&drawn(&view)), None);
+    }
+
+    #[test]
+    fn arrival_message_reads_as_the_original() {
+        assert_eq!(
+            arrival_message("Sol", "June 23, 1177 NC", true),
+            "Jumping into the Sol system on June 23, 1177 NC."
+        );
+    }
+
+    #[test]
+    fn arrival_message_in_a_system_without_stellars_says_so() {
+        assert_eq!(
+            arrival_message("Sol", "June 23, 1177 NC", false),
+            "Jumping into the Sol system on June 23, 1177 NC. No stellar objects present."
+        );
+    }
+
+    #[test]
+    fn the_arrival_strings_are_the_originals() {
+        assert_eq!(JUMPING_INTO, "Jumping into the");
+        assert_eq!(SYSTEM_ON, "system on");
+    }
+
+    #[test]
+    fn arriving_shows_the_jump_message_on_the_message_line() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let session = view.session().expect("flying");
+        let leaving = session.system();
+        for _ in 0..1000 {
+            if view.session().expect("flying").system() != leaving {
+                break;
+            }
+            view.tick(TICK);
+        }
+        let date = view.session().expect("flying").date_text();
+        let name = view.scene().expect("arrived").name().to_owned();
+        let text = arrival_message(&name, &date, true);
+        assert!(text.contains("Alpha Centauri"), "{text}");
+        assert_eq!(view.message(), Some(text.as_str()));
+        assert_eq!(
+            message(&view),
+            Some(overlay(&text, MESSAGE_AT, OVERLAY_SIZE, Color::WHITE))
+        );
+        view.tick(MESSAGE_SHOWN_FOR);
+        assert_eq!(view.message(), None);
+        assert_eq!(message(&view), None);
     }
 
     #[test]
@@ -3876,6 +5405,10 @@ mod tests {
         assert_eq!(view.message(), Some(NO_DESTINATION), "still on screen");
         view.input(&key(JUMP, true));
         assert_eq!(view.message(), None);
+        jump_now(&mut view);
+        arrive_now(&mut view);
+        let shown = view.message().expect("the arrival message");
+        assert!(shown.starts_with(JUMPING_INTO), "{shown}");
     }
 
     #[test]
@@ -3900,7 +5433,7 @@ mod tests {
         let mut view = flight();
         plot(&mut view, 131);
         fly_out(&mut view);
-        view.input(&key(JUMP, true));
+        jump_now(&mut view);
         let moon = |view: &View| sprites(&drawn(view))[1].0.frame;
         let before = moon(&view);
         view.tick(TICK);
@@ -3940,7 +5473,7 @@ mod tests {
         };
         let pilot = Pilot::new(&centred, name).expect("starts");
         let mut view = FlightView::with_pilot(centred, pilot);
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         assert_eq!(view.take_landing(), Some(StellarId(128)));
         view.pilot().expect("flying").clone()
     }
@@ -3995,7 +5528,7 @@ mod tests {
         let mut view = FlightView::new(centred);
         assert!(!view.take_save_due());
         assert!(!view.transact(|pilot| pilot.set_cash(5)), "in flight");
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         assert!(view.take_save_due(), "landed");
         assert!(view.transact(|pilot| pilot.set_cash(5)));
         assert_eq!(view.pilot().map(Pilot::cash), Some(5));
@@ -4029,9 +5562,7 @@ mod tests {
         plot(&mut view, 131);
         fly_out(&mut view);
         view.input(&key(JUMP, true));
-        for _ in 0..90 {
-            view.tick(TICK);
-        }
+        arrive_now(&mut view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
         assert_eq!(explored(&view), Some(vec![SystemId(130), SystemId(131)]));
     }
@@ -4073,7 +5604,7 @@ mod tests {
         let mut view = FlightView::new(trading());
         assert_eq!(view.market(), None, "in flight");
         assert_eq!(view.trade(BUY_FOOD), Err(TradeRefusal::NoMarket));
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         view.take_save_due();
         let market = view.market().expect("landed at a trade center");
         assert_eq!(
@@ -4145,7 +5676,7 @@ mod tests {
         let mut view = FlightView::new(outfitting());
         assert_eq!(view.outfitter(), None, "in flight");
         assert_eq!(view.outfit(BUY_TANK), Err(OutfitRefusal::NoOutfitter));
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         view.take_save_due();
         let outfitter = view.outfitter().expect("landed at an outfitter");
         assert_eq!(
@@ -4175,7 +5706,7 @@ mod tests {
         use nova_sim::RechargeRefusal;
         let mut view = FlightView::new(outfitting());
         assert_eq!(view.recharge(), Err(RechargeRefusal::NoFuel), "in flight");
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         view.take_save_due();
         assert_eq!(view.recharge(), Err(RechargeRefusal::Full));
         assert!(!view.take_save_due());
@@ -4204,6 +5735,11 @@ mod tests {
         fn below(&mut self, n: u32) -> u32 {
             self.drawn.push(n);
             0
+        }
+
+        /// The last of the outcomes.
+        fn roll(&mut self, sides: u16) -> u16 {
+            sides.saturating_sub(1)
         }
     }
 
@@ -4240,9 +5776,7 @@ mod tests {
         plot(view, 131);
         fly_out(view);
         view.input(&key(JUMP, true));
-        for _ in 0..90 {
-            view.tick(TICK);
-        }
+        arrive_now(view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
     }
 
@@ -4265,6 +5799,13 @@ mod tests {
         assert_eq!(view.pilot().expect("a pilot").events().count(), 0);
         let mut shared = SharedChance::default();
         assert!(!shared.fires(100));
+        assert_eq!(shared.roll(8), 0);
+    }
+
+    #[test]
+    fn a_shared_chance_rolls_on_its_source() {
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
+        assert_eq!(SharedChance::new(shared).roll(360), 359);
     }
 
     use nova_sim::ShipRefusal;
@@ -4316,7 +5857,7 @@ mod tests {
         let mut view = FlightView::new(shipbuying());
         assert_eq!(view.shipyard(), None, "in flight");
         assert_eq!(view.buy_ship(ShipId(129)), Err(ShipRefusal::NoShipyard));
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         view.take_save_due();
         let shipyard = view.shipyard().expect("landed at a shipyard");
         assert_eq!(shipyard.row(ShipId(129)).map(|row| row.price), Some(900));
@@ -4348,6 +5889,8 @@ mod tests {
             )),
             "the new sheet"
         );
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2001, 2201], "and its lights");
         assert_eq!(
             view.session().map(|session| session.handling().max_speed),
             Ok(6.0)
@@ -4649,7 +6192,7 @@ mod tests {
         ticks(&mut view, 10);
         assert_eq!(npc_states(&view), before, "the map is open");
         tap(&mut view, MAP);
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         assert!(view.take_landing().is_some());
         let before = npc_states(&view);
         ticks(&mut view, 10);
@@ -4665,7 +6208,7 @@ mod tests {
         let mut view = FlightView::new(catalog);
         view.tick(TICK);
         assert_eq!(npc_ids(&view), [NpcId(0), NpcId(1)]);
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         view.take_off().expect("took off");
         view.tick(TICK);
         assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)]);
@@ -4699,7 +6242,7 @@ mod tests {
         ticks(&mut view, 2);
         assert_eq!(rule.asked.get(), 3, "not while the map is open");
         view.input(&key(MAP_KEY, true));
-        view.input(&key(LAND_KEY, true));
+        land_now(&mut view);
         assert!(view.take_landing().is_some());
         ticks(&mut view, 2);
         assert_eq!(rule.asked.get(), 3, "not while landed");
@@ -5573,7 +7116,7 @@ mod tests {
         catalog.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
         let mut view = fighting(catalog, &[]);
         detonate(&mut view);
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         assert!(view.take_landing().is_some());
         assert_eq!(*view.effects(), Effects::default());
     }
@@ -5584,10 +7127,8 @@ mod tests {
         plot(&mut view, 131);
         fly_out(&mut view);
         detonate(&mut view);
-        view.input(&key(JUMP, true));
-        view.tick(ms(1000));
-        assert_eq!(view.effects().explosions().len(), 1, "frozen in the jump");
-        view.tick(ms(1000));
+        jump_now(&mut view);
+        arrive_now(&mut view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
         assert_eq!(*view.effects(), Effects::default());
     }
@@ -5866,7 +7407,7 @@ mod tests {
         ticks(&mut view, 2);
         assert_eq!(rule.asked.get(), 3, "not while the map is open");
         view.input(&key(MAP_KEY, true));
-        view.input(&key(LAND_KEY, true));
+        land_now(&mut view);
         assert!(view.take_landing().is_some());
         ticks(&mut view, 2);
         assert_eq!(rule.asked.get(), 3, "not while landed");
@@ -6301,8 +7842,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             drawn_player,
-            [ImageKey::sprite(2001, 0)],
-            "ship 129's sheet"
+            [ImageKey::sprite(2001, 0), ImageKey::sprite(2201, 0)],
+            "ship 129's sheet, and its lights"
         );
         assert_eq!(view.assign(Assignment::MyShip), None, "nothing awaits");
     }
@@ -6659,7 +8200,12 @@ mod tests {
     fn fighters_abandoned_in_a_jump_are_told_on_arrival() {
         let mut view = fighters_out();
         jump_to_alpha(&mut view);
-        assert_eq!(view.message(), Some("(Two fighters abandoned)"));
+        assert_eq!(
+            view.message(),
+            Some(
+                "Jumping into the Alpha Centauri system on June 24, 1177 NC.  (Two fighters abandoned)"
+            )
+        );
         assert_eq!(view.pilot().expect("flying").escorts(), []);
     }
 
@@ -6944,7 +8490,7 @@ mod tests {
         let mut view = FlightView::new(hiring()).with_chance(SharedChance::new(shared));
         assert_eq!(view.escorts_for_hire(), None, "in flight");
         assert_eq!(view.hire(ShipId(129)), Err(HireRefusal::NoBar));
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         view.take_save_due();
         let list = view.escorts_for_hire().expect("a bar");
         let row = list.row(ShipId(129)).expect("for hire");
@@ -7018,11 +8564,19 @@ mod tests {
         let mut view = paying(50, false);
         assert_eq!(view.pilot().expect("flying").escorts().len(), 1);
         jump_to_alpha(&mut view);
-        assert_eq!(view.message(), Some(DEFECTED_ONE));
+        let said = format!(
+            "{}  {DEFECTED_ONE}",
+            "Jumping into the Alpha Centauri system on June 24, 1177 NC."
+        );
+        assert_eq!(view.message(), Some(said.as_str()), "after the arrival");
         assert_eq!(view.pilot().expect("flying").escorts(), []);
         let mut paid = paying(100, false);
         jump_to_alpha(&mut paid);
-        assert_eq!(paid.message(), None);
+        assert_eq!(
+            paid.message(),
+            Some("Jumping into the Alpha Centauri system on June 24, 1177 NC."),
+            "the arrival alone"
+        );
         assert_eq!(paid.pilot().map(Pilot::cash), Some(0));
     }
 
@@ -7064,7 +8618,9 @@ mod tests {
         jump_to_alpha(&mut view);
         assert_eq!(
             view.message(),
-            Some("(Two fighters abandoned)  Due to lack of pay, one of your escorts has defected.")
+            Some(
+                "Jumping into the Alpha Centauri system on June 24, 1177 NC.  (Two fighters abandoned)  Due to lack of pay, one of your escorts has defected."
+            )
         );
         assert_eq!(view.pilot().expect("flying").escorts(), []);
     }
@@ -7119,7 +8675,7 @@ mod tests {
             .with_chance(SharedChance::new(always))
             .with_hire_terms(Rc::new(Sevens))
             .with_control_bits(Rc::new(Nothing));
-        tap(&mut view, LAND_KEY);
+        land_now(&mut view);
         let list = view.escorts_for_hire().expect("a bar");
         let row = list.row(ShipId(129)).expect("listed: no Flags3 hides it");
         assert_eq!((row.fee, row.wage), (7, 3));
@@ -7400,5 +8956,611 @@ mod tests {
     fn boarding_a_person_that_grants_nothing_says_nothing() {
         let view = boarded_ace(2, Rc::new(Sure));
         assert_eq!(view.message(), None);
+    }
+
+    // The navigation target.
+
+    fn nav_target(view: &View) -> Option<StellarId> {
+        view.session().expect("flying").nav_target()
+    }
+
+    /// The texts drawn in the HUD's nav area, the stock bar's at (830, 0).
+    fn nav(view: &View) -> Vec<String> {
+        let area = layout().nav.offset(at(830.0, 0.0));
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } if area.contains(*origin) => {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The texts drawn in the HUD's nav area, as [`nav`] gives them, each
+    /// with its colour.
+    fn nav_colored(view: &View) -> Vec<(String, Color)> {
+        let area = layout().nav.offset(at(830.0, 0.0));
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    ..
+                } if area.contains(*origin) => Some((text.clone(), *color)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The colour the nav area's value, its second line, is drawn in.
+    fn nav_value_color(view: &View) -> Color {
+        nav_colored(view)[1].1
+    }
+
+    /// The texts drawn in the cargo area, at the stock bar's (830, 0),
+    /// with where each starts.
+    fn cargo(view: &View) -> Vec<(String, Point)> {
+        let area = layout().cargo.offset(at(830.0, 0.0));
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } if area.contains(*origin) => {
+                    Some((text.clone(), *origin))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The last line of the cargo area, (8, 458)-(184, 552) at (830, 0):
+    /// one line of Geneva 12 (1.2 x 12) above its bottom.
+    fn last_cargo_line() -> Point {
+        at(838.0, 552.0 - 1.2 * 12.0)
+    }
+
+    #[test]
+    fn the_hud_shows_the_date_on_the_cargo_areas_last_line() {
+        assert_eq!(
+            layout().cargo,
+            crate::geometry::Bounds {
+                min: at(8.0, 458.0),
+                max: at(184.0, 552.0),
+            }
+        );
+        let mut view = flight();
+        assert_eq!(cargo(&view), [(DATE.to_owned(), last_cargo_line())]);
+        jump_to_alpha(&mut view);
+        assert_eq!(
+            cargo(&view),
+            [("June 24, 1177 NC".to_owned(), last_cargo_line())]
+        );
+    }
+
+    #[test]
+    fn with_nothing_selected_and_no_course_the_hud_says_no_destination() {
+        assert_eq!(nav(&flight()), [hud::NAV_NO_DESTINATION]);
+    }
+
+    #[test]
+    fn the_hud_shows_the_selected_stellar_by_name() {
+        let mut view = flight();
+        tap(&mut view, LAND);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "the nearest");
+    }
+
+    #[test]
+    fn a_plotted_jump_shows_hyperspace_and_the_next_system_if_explored() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        jump_to_alpha(&mut view);
+        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION], "arrived");
+        plot(&mut view, 130);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Sol"]);
+    }
+
+    #[test]
+    fn the_destination_is_dim_until_the_ship_is_out_far_enough_to_jump() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        let hyperspace = |value: Color| {
+            vec![
+                (hud::NAV_HYPERSPACE.to_owned(), Color::DIM),
+                (hud::NAV_UNEXPLORED.to_owned(), value),
+            ]
+        };
+        assert_eq!(nav_colored(&view), hyperspace(Color::DIM));
+        let clear_iff_out = |view: &View| {
+            let out = player(view).position.length() >= MIN_JUMP_DISTANCE;
+            let expected = if out { Color::WHITE } else { Color::DIM };
+            assert_eq!(nav_value_color(view), expected, "{:?}", player(view));
+            out
+        };
+        view.input(&key(Key::Up, true));
+        let mut dim_ticks = 0;
+        while !clear_iff_out(&view) {
+            dim_ticks += 1;
+            assert!(dim_ticks < 2000, "never got out");
+            view.tick(TICK);
+        }
+        assert!(dim_ticks > 0, "it started inside");
+        assert_eq!(nav_colored(&view), hyperspace(Color::WHITE));
+        // Back inside: Down turns against the motion, then Up thrusts.
+        view.input(&key(Key::Up, false));
+        view.input(&key(Key::Down, true));
+        for _ in 0..90 {
+            view.tick(TICK);
+            clear_iff_out(&view);
+        }
+        view.input(&key(Key::Down, false));
+        view.input(&key(Key::Up, true));
+        let mut out_ticks = 0;
+        while clear_iff_out(&view) {
+            out_ticks += 1;
+            assert!(out_ticks < 2000, "never got back in");
+            view.tick(TICK);
+        }
+        view.release_keys();
+        assert_eq!(nav_colored(&view), hyperspace(Color::DIM));
+    }
+
+    #[test]
+    fn in_a_system_with_no_stellars_the_destination_is_bright_from_the_centre() {
+        let mut view = FlightView::new(FakeCatalog {
+            sites: Vec::new(),
+            ..catalog()
+        });
+        plot(&mut view, 131);
+        assert_eq!(player(&view).position, Vec2::ZERO);
+        assert_eq!(nav_value_color(&view), Color::WHITE);
+    }
+
+    #[test]
+    fn once_j_is_accepted_the_hyperspace_label_turns_bright_too() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        tap(&mut view, JUMP);
+        assert_eq!(
+            nav_colored(&view),
+            [
+                (hud::NAV_HYPERSPACE.to_owned(), Color::WHITE),
+                (hud::NAV_UNEXPLORED.to_owned(), Color::WHITE),
+            ]
+        );
+    }
+
+    #[test]
+    fn with_a_target_and_a_course_the_hud_shows_the_target() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        tap(&mut view, LAND);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"]);
+        assert_eq!(
+            view.session().expect("flying").course(),
+            [SystemId(131)],
+            "the course is kept"
+        );
+    }
+
+    #[test]
+    fn arriving_clears_the_target_and_l_selects_in_the_new_system() {
+        let mut view = flight();
+        tap(&mut view, LAND);
+        jump_to_alpha(&mut view);
+        assert_eq!(nav_target(&view), None);
+        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION]);
+        tap(&mut view, LAND);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Proxima"]);
+    }
+
+    #[test]
+    fn tab_in_a_flight_that_never_started_does_nothing() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert_eq!(view.input(&key(Key::Tab, true)), ScreenAction::None);
+        assert!(view.session().is_err());
+    }
+
+    // Hyper Select.
+
+    const HYPER_SELECT: Key = Key::Char('\\');
+
+    /// A flight from Sol, which lists Alpha Centauri then Barnard.
+    fn fanned() -> View {
+        FlightView::new(FakeCatalog {
+            fan: true,
+            ..catalog()
+        })
+    }
+
+    fn course(view: &View) -> Vec<SystemId> {
+        view.session().expect("flying").course().to_vec()
+    }
+
+    #[test]
+    fn the_hyper_select_key_plots_the_next_listed_system() {
+        let mut view = fanned();
+        assert_eq!(HYPER_SELECT_KEY, HYPER_SELECT);
+        for expected in [131, 132, 131] {
+            assert_eq!(view.input(&key(HYPER_SELECT, true)), ScreenAction::None);
+            view.input(&key(HYPER_SELECT, false));
+            assert_eq!(course(&view), [SystemId(expected)]);
+        }
+    }
+
+    #[test]
+    fn the_hud_nav_area_shows_the_selected_system() {
+        let mut view = flight();
+        tap(&mut view, LAND);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"]);
+        tap(&mut view, HYPER_SELECT);
+        assert_eq!(nav_target(&view), None);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+    }
+
+    #[test]
+    fn a_repeat_or_release_of_the_hyper_select_key_does_not_cycle() {
+        let mut view = fanned();
+        view.input(&held(HYPER_SELECT));
+        view.input(&key(HYPER_SELECT, false));
+        assert_eq!(course(&view), []);
+        tap(&mut view, HYPER_SELECT);
+        view.input(&held(HYPER_SELECT));
+        view.input(&key(HYPER_SELECT, false));
+        assert_eq!(course(&view), [SystemId(131)]);
+    }
+
+    #[test]
+    fn hyper_select_is_ignored_while_a_jump_prepares_or_plays() {
+        let mut view = fanned();
+        tap(&mut view, HYPER_SELECT);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.preparing_jump(), "braking and turning");
+        tap(&mut view, HYPER_SELECT);
+        assert_eq!(course(&view), [SystemId(131)]);
+        jump_now(&mut view);
+        tap(&mut view, HYPER_SELECT);
+        assert_eq!(course(&view), [SystemId(131)]);
+    }
+
+    #[test]
+    fn hyper_select_with_the_map_open_changes_nothing() {
+        let mut view = fanned();
+        tap(&mut view, MAP);
+        tap(&mut view, HYPER_SELECT);
+        assert!(view.map_open());
+        assert_eq!(course(&view), []);
+    }
+
+    // Hypergates and wormholes.
+
+    use crate::flight::jump::{ARRIVAL_FLASH_FOR, FADE_IN_FOR};
+    use nova_sim::GateKind;
+
+    /// Stellar `id` in `system` at (`x`, `y`), with `flags2`, `links` and
+    /// `exit_angle`.
+    fn gate_site(
+        id: i16,
+        system: i16,
+        (x, y): (f32, f32),
+        flags2: u16,
+        links: &[i16],
+        exit_angle: i16,
+    ) -> GateSite {
+        let mut slots = [None; 8];
+        for (slot, &link) in slots.iter_mut().zip(links) {
+            *slot = Some(StellarId(link));
+        }
+        GateSite {
+            id: StellarId(id),
+            system: SystemId(system),
+            position: Vec2::new(x, y),
+            flags2,
+            links: slots,
+            exit_angle,
+        }
+    }
+
+    /// Sol holds hypergate 300 (a station) at its centre, over the ship,
+    /// linked to 310 in Alpha Centauri at (100, 200), heading ships out on
+    /// 90°.
+    fn gated() -> FakeCatalog {
+        FakeCatalog {
+            sites: vec![LandingSite {
+                flags2: 0x1200,
+                ..site(
+                    300,
+                    (0.0, 0.0),
+                    StellarFlags::CAN_LAND | StellarFlags::STATION,
+                )
+            }],
+            gates: vec![
+                gate_site(300, 130, (0.0, 0.0), 0x1200, &[310], 120),
+                gate_site(310, 131, (100.0, 200.0), 0x1000, &[300], 90),
+            ],
+            ..catalog()
+        }
+    }
+
+    /// Sol holds unlinked wormhole 400 at its centre, over the ship, and
+    /// Alpha Centauri unlinked wormhole 410 at (-300, 40).
+    fn holed() -> FakeCatalog {
+        FakeCatalog {
+            sites: vec![LandingSite {
+                flags2: 0x2200,
+                ..site(400, (0.0, 0.0), StellarFlags::CAN_LAND)
+            }],
+            gates: vec![
+                gate_site(400, 130, (0.0, 0.0), 0x2200, &[], 120),
+                gate_site(410, 131, (-300.0, 40.0), 0x2000, &[], 0),
+            ],
+            ..catalog()
+        }
+    }
+
+    fn system_of(view: &View) -> SystemId {
+        view.session().expect("flying").system()
+    }
+
+    #[test]
+    fn the_gate_messages_read_as_the_original() {
+        assert_eq!(
+            arrival_message_with(EXITING_HYPERGATE, "Alpha Centauri", DATE, true),
+            "Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC."
+        );
+        assert_eq!(
+            arrival_message_with(PASSING_WORMHOLE, "Barnard", DATE, false),
+            "Passing through a wormhole into the Barnard system on June 23, 1177 NC. \
+             No stellar objects present."
+        );
+        assert_eq!(
+            arrival_message_with(JUMPING_INTO, "Sol", DATE, true),
+            arrival_message("Sol", DATE, true)
+        );
+        assert_eq!(
+            hypergate_clearance_message(true),
+            "Hypergate is energized. Begin initial approach."
+        );
+        assert_eq!(
+            hypergate_clearance_message(false),
+            "Hypergate is online. Begin initial approach."
+        );
+        assert_eq!(
+            gate_refusal_message(GateKind::Hypergate),
+            "Your ship is unable to enter this hypergate - it is offline."
+        );
+        assert_eq!(
+            gate_refusal_message(GateKind::Wormhole),
+            "Your ship is unable to enter this wormhole - the radiation levels are too extreme."
+        );
+        assert_eq!(HYPERGATE_CANCELLED, "Hypergate jump cancelled.");
+        assert_eq!(HYPERGATE_DENIED, "Hypergate usage denied.");
+    }
+
+    #[test]
+    fn hypergate_clearance_is_energized_or_online_by_a_roll() {
+        let mut view = FlightView::new(gated());
+        tap(&mut view, LAND);
+        assert_eq!(
+            view.message(),
+            Some("Hypergate is energized. Begin initial approach."),
+            "the first outcome"
+        );
+        let last: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
+        let mut view = FlightView::new(gated()).with_chance(SharedChance::new(last));
+        tap(&mut view, LAND);
+        assert_eq!(
+            view.message(),
+            Some("Hypergate is online. Begin initial approach."),
+            "the second outcome"
+        );
+    }
+
+    #[test]
+    fn a_hypergate_the_pilot_may_not_use_denies_it_in_its_own_words() {
+        let mut catalog = gated();
+        catalog.sites[0].min_status = 100;
+        let mut view = FlightView::new(catalog);
+        tap(&mut view, LAND);
+        assert_eq!(view.message(), Some(HYPERGATE_DENIED));
+    }
+
+    #[test]
+    fn an_offline_gate_is_refused_in_its_own_words() {
+        for (flags2, kind) in [(0x1000, GateKind::Hypergate), (0x2000, GateKind::Wormhole)] {
+            let mut view = flight_among(vec![LandingSite {
+                flags2,
+                ..site(300, (0.0, 0.0), StellarFlags::STATION)
+            }]);
+            tap(&mut view, LAND);
+            let refusal = gate_refusal_message(kind);
+            assert_eq!(view.message(), Some(refusal.as_str()), "{kind:?}");
+        }
+        let mut planet = flight_among(vec![site(300, (0.0, 0.0), 0)]);
+        tap(&mut planet, LAND);
+        assert_eq!(planet.message(), Some(HOSTILE_PLANET), "not a gate");
+    }
+
+    #[test]
+    fn l_twice_at_a_hypergate_opens_the_map_offering_its_links() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        assert!(view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert_eq!(view.take_landing(), None, "not landed");
+        assert_eq!(system_of(&view), SystemId(130));
+    }
+
+    #[test]
+    fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Course);
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(player(&view).position, Vec2::new(100.0, 200.0));
+        assert_eq!(view.scene().map(SystemScene::name), Some("Alpha Centauri"));
+        assert_eq!(
+            view.message(),
+            Some("Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC.")
+        );
+        assert_eq!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeIn(0.0))
+        );
+        assert_eq!(view.shown_position(), Point::new(100.0, 200.0));
+        view.tick(FADE_IN_FOR);
+        assert_eq!(view.jump_effect(), None, "the fade is over");
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(
+            view.course_map().current(),
+            Some(SystemId(131)),
+            "the map follows"
+        );
+    }
+
+    #[test]
+    fn the_ship_flies_under_a_hypergates_fade_in() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        assert_eq!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeIn(0.0))
+        );
+        let arrived = player(&view);
+        assert_eq!(arrived.position, Vec2::new(100.0, 200.0));
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 3);
+        assert_eq!(player(&view), stepped(arrived, THRUST, 3));
+        assert_ne!(player(&view).position, arrived.position, "it flies");
+        assert!(translucent_fade(&drawn(&view)), "still fading in");
+    }
+
+    #[test]
+    fn escape_on_the_hypergate_map_enters_the_gate_too() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        view.close_map();
+        assert_eq!(system_of(&view), SystemId(131));
+    }
+
+    #[test]
+    fn closing_the_hypergate_map_without_a_pick_cancels() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Course);
+        assert_eq!(system_of(&view), SystemId(130));
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(nav_target(&view), None);
+        // The map is a course map again.
+        tap(&mut view, MAP);
+        assert_eq!(view.course_map().mode(), MapMode::Course);
+        tap(&mut view, MAP);
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED), "nothing new");
+    }
+
+    #[test]
+    fn without_hyperspace_effects_a_hypergate_flashes_white() {
+        let mut view = FlightView::new(gated()).with_hyperspace_effects(false);
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        assert_eq!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::Flash(0.0))
+        );
+        view.tick(ARRIVAL_FLASH_FOR);
+        assert_eq!(view.jump_effect(), None);
+    }
+
+    #[test]
+    fn a_hypergate_without_links_does_nothing() {
+        let mut catalog = gated();
+        catalog.gates[0].links = [None; 8];
+        let mut view = FlightView::new(catalog);
+        tap(&mut view, LAND);
+        let cleared = view.message().map(str::to_owned);
+        tap(&mut view, LAND);
+        assert!(!view.map_open());
+        assert_eq!(system_of(&view), SystemId(130));
+        assert_eq!(view.message(), cleared.as_deref(), "nothing said");
+        assert_eq!(nav_target(&view), None);
+    }
+
+    #[test]
+    fn a_hypergate_whose_links_lead_nowhere_opens_an_empty_map_that_cancels() {
+        let mut catalog = gated();
+        catalog.gates[0].links[0] = Some(StellarId(999));
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        assert!(view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert_ne!(view.message(), Some(HYPERGATE_CANCELLED), "not yet");
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(system_of(&view), SystemId(130));
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+    }
+
+    #[test]
+    fn l_twice_at_a_wormhole_passes_through_it_with_a_flash() {
+        let mut view = FlightView::new(holed());
+        land_now(&mut view);
+        assert!(!view.map_open());
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(player(&view).position, Vec2::new(-300.0, 40.0));
+        assert_eq!(
+            view.message(),
+            Some("Passing through a wormhole into the Alpha Centauri system on June 23, 1177 NC.")
+        );
+        assert_eq!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::Flash(0.0))
+        );
+        let mut plain = FlightView::new(holed()).with_hyperspace_effects(false);
+        land_now(&mut plain);
+        assert_eq!(
+            plain.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::Flash(0.0)),
+            "whatever the preference"
+        );
+    }
+
+    #[test]
+    fn a_wormhole_with_no_exit_says_why() {
+        let mut catalog = holed();
+        catalog.gates.truncate(1);
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        assert_eq!(system_of(&view), SystemId(130));
+        assert_eq!(
+            view.message(),
+            Some(
+                "Your ship is unable to enter this wormhole - the radiation levels are too extreme."
+            )
+        );
+        assert_eq!(view.jump_effect(), None);
     }
 }

@@ -4,8 +4,17 @@
 //! A new pilot's date comes from the first `chär`'s starting day, month and
 //! year ([`StartDate`]), raw. A month outside 1-12 means January, and a day
 //! that the month does not have means the 1st.
+//!
+//! [`date_text`] is how a date is displayed: `{DatePrefix}{Month} {day},
+//! {year}{DateSuffix}`, as in stock's "June 23, 1177 NC". The Bible says the
+//! `chär`'s `DatePrefix` and `DateSuffix` are "appended to the start/end of
+//! the date whenever it's displayed", so they are used verbatim, with no
+//! spaces added; the suffix is an era marker, so the year comes last. The
+//! data names no months: the original took them from the system's long-date
+//! format, so they are the twelve English names here, with no weekday, no
+//! zero-padding, and the year a plain integer that keeps its sign.
 
-use crate::catalog::StartDate;
+use crate::catalog::{DateAffixes, StartDate};
 
 /// A day of the Gregorian calendar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -80,6 +89,33 @@ impl GameDate {
     pub fn day(self) -> u8 {
         self.day
     }
+}
+
+/// The months' English names, January first.
+const MONTH_NAMES: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+/// `date` as it is displayed, wrapped in `affixes`: for example
+/// "June 23, 1177 NC".
+#[must_use]
+pub fn date_text(date: GameDate, affixes: &DateAffixes) -> String {
+    let month = MONTH_NAMES[usize::from(date.month - 1)];
+    format!(
+        "{}{month} {}, {}{}",
+        affixes.prefix, date.day, date.year, affixes.suffix
+    )
 }
 
 /// Whether `year` is a Gregorian leap year.
@@ -176,5 +212,86 @@ mod tests {
         assert_eq!(dmy(date(29, 2, 1176)), (29, 2, 1176));
         assert_eq!(dmy(date(1, 12, 1177)), (1, 12, 1177));
         assert_eq!(dmy(date(31, 12, -3)), (31, 12, -3));
+    }
+
+    // Formatting.
+
+    fn affixes(prefix: &str, suffix: &str) -> DateAffixes {
+        DateAffixes {
+            prefix: prefix.to_owned(),
+            suffix: suffix.to_owned(),
+        }
+    }
+
+    fn day(year: i32, month: u8, day: u8) -> GameDate {
+        GameDate::new(year, month, day).expect("exists")
+    }
+
+    #[test]
+    fn the_stock_start_reads_june_23_1177_nc() {
+        assert_eq!(
+            date_text(date(23, 6, 1177), &affixes("", " NC")),
+            "June 23, 1177 NC"
+        );
+    }
+
+    #[test]
+    fn each_month_reads_as_its_english_name() {
+        let names = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
+        for (month, name) in (1..=12).zip(names) {
+            assert_eq!(
+                date_text(day(1177, month, 9), &DateAffixes::default()),
+                format!("{name} 9, 1177")
+            );
+        }
+    }
+
+    #[test]
+    fn a_one_digit_day_is_not_padded() {
+        assert_eq!(
+            date_text(day(1177, 7, 1), &affixes("", " NC")),
+            "July 1, 1177 NC"
+        );
+    }
+
+    #[test]
+    fn the_prefix_and_suffix_wrap_the_date_verbatim() {
+        assert_eq!(
+            date_text(date(23, 6, 1177), &affixes("<", ">")),
+            "<June 23, 1177>"
+        );
+        assert_eq!(
+            date_text(date(23, 6, 1177), &affixes("Year ", " NC")),
+            "Year June 23, 1177 NC"
+        );
+    }
+
+    #[test]
+    fn without_affixes_the_date_is_bare() {
+        assert_eq!(
+            date_text(date(23, 6, 1177), &DateAffixes::default()),
+            "June 23, 1177"
+        );
+    }
+
+    #[test]
+    fn a_negative_year_keeps_its_sign() {
+        assert_eq!(
+            date_text(day(-735, 12, 31), &affixes("", " NC")),
+            "December 31, -735 NC"
+        );
     }
 }

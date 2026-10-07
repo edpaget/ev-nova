@@ -30,6 +30,15 @@
 //! shown ([`GalaxyMap::show_course`]): the current system marked, and the
 //! route from it through each hop.
 //!
+//! While a hypergate is entered from flight, the course map becomes the
+//! hypergate map ([`MapMode::Hypergate`], [`GalaxyMap::offer_gates`]), as
+//! the original's `_DoSystemMap` in hypergate mode: an arrow points from
+//! the current system to each system the gate offers (`_DrawMap`
+//! @0xf195-0xf467), and a click selects one of them and nothing else
+//! (@0x12f8f-0x13040). The owner takes the pick with
+//! [`GalaxyMap::take_gate_choice`], which returns the map to the course
+//! map.
+//!
 //! A map shown the systems the pilot has explored
 //! ([`GalaxyMap::show_explored`], the course map in flight) draws every
 //! other system's dot [`UNEXPLORED`] grey instead of its government's
@@ -107,6 +116,16 @@ pub const ENTER_LABEL: &str = "Enter system (Return)";
 const ENTER_LABEL_AT: Point = Point::new(540.0, 720.0);
 const ENTER_LABEL_SIZE: f32 = 14.0;
 
+/// The hypergate map's help line.
+pub const HYPERGATE_HELP: &str = "Arrows or drag: pan   +/-: zoom   Click an arrowed system: hypergate destination   M or Esc: go";
+/// The arrows to the systems a hypergate offers: their colour and width,
+/// and how long each head's strokes are.
+pub const GATE: Color = Color::rgba(64, 192, 255, 255);
+pub const GATE_WIDTH: f32 = 2.0;
+pub const ARROW_SIZE: f32 = 10.0;
+/// How far either side of the shaft an arrowhead's strokes splay, in
+/// degrees.
+const ARROW_SPLAY: f32 = 30.0;
 /// The course map's help line.
 pub const COURSE_HELP: &str =
     "Arrows or drag: pan   +/-: zoom   Click: set destination   M or Esc: back";
@@ -143,6 +162,10 @@ pub enum MapMode {
     Viewer,
     /// Choosing where the player's ship goes, from flight.
     Course,
+    /// Choosing which of a hypergate's linked systems the ship comes out
+    /// in, from flight: the course map while a hypergate is entered
+    /// ([`GalaxyMap::offer_gates`]).
+    Hypergate,
 }
 
 /// The galaxy map.
@@ -167,6 +190,8 @@ pub struct GalaxyMap {
     /// The systems explored, once shown; `None` shows every system as
     /// explored.
     explored: Option<BTreeSet<SystemId>>,
+    /// The systems a hypergate offers, on the hypergate map.
+    offered: Vec<SystemId>,
 }
 
 impl GalaxyMap {
@@ -197,6 +222,7 @@ impl GalaxyMap {
             current: None,
             route: Vec::new(),
             explored: None,
+            offered: Vec::new(),
         }
     }
 
@@ -210,6 +236,31 @@ impl GalaxyMap {
     /// if any; taking it clears it.
     pub fn take_destination(&mut self) -> Option<SystemId> {
         self.destination.take()
+    }
+
+    /// Switches to the hypergate map, offering the systems `offered`, with
+    /// nothing selected: a click selects one of them and nothing else, and
+    /// records no course destination. An arrow points from the current
+    /// system to each.
+    pub fn offer_gates(&mut self, offered: Vec<SystemId>) {
+        self.mode = MapMode::Hypergate;
+        self.offered = offered;
+        self.selected = None;
+        self.destination = None;
+    }
+
+    /// The system picked on the hypergate map, if one is selected, and the
+    /// map goes back to the course map with nothing selected; `None`, and
+    /// nothing changes, when no gates are offered.
+    pub fn take_gate_choice(&mut self) -> Option<SystemId> {
+        if self.mode != MapMode::Hypergate {
+            return None;
+        }
+        self.mode = MapMode::Course;
+        let offered = std::mem::take(&mut self.offered);
+        self.selected
+            .take()
+            .filter(|selected| offered.contains(selected))
     }
 
     /// Shows the player in `current` with `route` ahead: the systems still
@@ -318,7 +369,14 @@ impl GalaxyMap {
             return;
         };
         if press.travelled <= CLICK_SLOP && in_map(at) {
-            self.selected = self.model.click(at, &self.view, self.selected);
+            let clicked = self.model.click(at, &self.view, self.selected);
+            if self.mode == MapMode::Hypergate {
+                if clicked.is_some_and(|id| self.offered.contains(&id)) {
+                    self.selected = clicked;
+                }
+                return;
+            }
+            self.selected = clicked;
             if self.mode == MapMode::Course && self.selected.is_some() {
                 self.destination = self.selected;
             }
@@ -370,6 +428,9 @@ impl GalaxyMap {
             }
             if let Some(at) = screen(current) {
                 list.dot(at, CURRENT_SIZE, CURRENT);
+                for to in self.offered.iter().filter_map(|&id| screen(id)) {
+                    arrow(list, at, to);
+                }
             }
         }
         // Highest ID first, so where systems share a position the lowest
@@ -447,6 +508,7 @@ impl GalaxyMap {
         let help = match self.mode {
             MapMode::Viewer => HELP,
             MapMode::Course => COURSE_HELP,
+            MapMode::Hypergate => HYPERGATE_HELP,
         };
         right(list, help.to_owned(), HELP_TOP, Color::DIM);
         let percent = (self.view.scale() * 100.0).round();
@@ -535,6 +597,24 @@ fn draw_system(system: &SystemEntry, explored: bool, list: &mut DrawList) {
             Some(LEFT_WRAP),
             Color::WHITE,
         );
+    }
+}
+
+/// An arrow in [`GATE`] from `from` to `to`: the shaft, then the head's
+/// two strokes, [`ARROW_SIZE`] back from the tip and [`ARROW_SPLAY`]
+/// either side of the shaft.
+fn arrow(list: &mut DrawList, from: Point, to: Point) {
+    list.line(from, to, GATE_WIDTH, GATE);
+    let (dx, dy) = (from.x - to.x, from.y - to.y);
+    let length = dx.hypot(dy);
+    if length == 0.0 {
+        return;
+    }
+    let back = dy.atan2(dx);
+    for side in [-ARROW_SPLAY, ARROW_SPLAY] {
+        let (sin, cos) = (back + side.to_radians()).sin_cos();
+        let tail = Point::new(to.x + ARROW_SIZE * cos, to.y + ARROW_SIZE * sin);
+        list.line(tail, to, GATE_WIDTH, GATE);
     }
 }
 
@@ -1195,6 +1275,27 @@ mod tests {
                 (dot(&map, 128), dot(&map, 130), 1.0),
             ]
         );
+    }
+
+    /// As the original's `_DrawMap` (@0xe7a8) draws it: a plain line
+    /// between the pair, whichever end lists the link, though by the
+    /// engine's `HyperlinkRule` the ship jumps along it one way only.
+    #[test]
+    fn a_link_listed_by_one_system_alone_is_drawn_once() {
+        for (lister, listed) in [(128, 129), (129, 128)] {
+            let mut systems = vec![system(128, 0, 0), system(129, 600, 0)];
+            let at = usize::try_from(lister - 128).expect("128 or 129");
+            systems[at].links = vec![SystemId(listed)];
+            let map = GalaxyMap::new(&FakeCatalog::new(Galaxy {
+                systems,
+                ..Galaxy::default()
+            }));
+            assert_eq!(
+                lines(&drawn(&map), LINK),
+                [(dot(&map, 128), dot(&map, 129), 1.0)],
+                "listed by {lister}"
+            );
+        }
     }
 
     #[test]
@@ -1922,5 +2023,116 @@ mod tests {
         click_on(&mut map, 128);
         assert_eq!(map.selected(), Some(SystemId(128)));
         assert_eq!(course_line(&drawn(&map)), None, "the current system");
+    }
+
+    // The hypergate map.
+
+    /// The course map in Alpha (128), offering Beta (129) and Gamma (130)
+    /// through a hypergate.
+    fn gate_map() -> GalaxyMap {
+        let mut map = course_map();
+        map.show_course(SystemId(128), &[]);
+        map.offer_gates(ids(&[129, 130]));
+        map
+    }
+
+    #[test]
+    fn offering_gates_switches_to_the_hypergate_map_with_nothing_selected() {
+        let mut map = course_map();
+        click_on(&mut map, 129);
+        map.offer_gates(ids(&[129, 130]));
+        assert_eq!(map.mode(), MapMode::Hypergate);
+        assert_eq!(map.selected(), None);
+        assert_eq!(map.take_destination(), None, "no course destination");
+    }
+
+    #[test]
+    fn a_click_selects_an_offered_system_and_nothing_else() {
+        let mut map = gate_map();
+        click_on(&mut map, 129);
+        assert_eq!(map.selected(), Some(SystemId(129)));
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(129)), "not offered");
+        click(&mut map, at(5.0, 400.0));
+        assert_eq!(map.selected(), Some(SystemId(129)), "empty space");
+        click_on(&mut map, 130);
+        assert_eq!(map.selected(), Some(SystemId(130)));
+        assert_eq!(map.take_destination(), None, "never a course destination");
+        assert_eq!(map.route(), []);
+    }
+
+    #[test]
+    fn taking_the_gate_choice_gives_it_and_returns_to_the_course_map() {
+        let mut map = gate_map();
+        click_on(&mut map, 130);
+        assert_eq!(map.take_gate_choice(), Some(SystemId(130)));
+        assert_eq!(map.mode(), MapMode::Course);
+        assert_eq!(map.selected(), None);
+        assert_eq!(map.take_gate_choice(), None, "taken");
+        click_on(&mut map, 128);
+        assert_eq!(
+            map.take_destination(),
+            Some(SystemId(128)),
+            "a course map again"
+        );
+
+        let mut unpicked = gate_map();
+        assert_eq!(unpicked.take_gate_choice(), None);
+        assert_eq!(unpicked.mode(), MapMode::Course);
+
+        let mut course = course_map();
+        click_on(&mut course, 129);
+        assert_eq!(course.take_gate_choice(), None, "no gates offered");
+        assert_eq!(course.selected(), Some(SystemId(129)));
+    }
+
+    #[test]
+    fn an_arrow_points_from_the_current_system_to_each_offered_one() {
+        let map = gate_map();
+        let list = drawn(&map);
+        let arrows = lines(&list, GATE);
+        assert_eq!(arrows.len(), 6, "{arrows:?}");
+        let (from, to) = (dot(&map, 128), dot(&map, 129));
+        assert_eq!(arrows[0], (from, to, GATE_WIDTH));
+        // The head: two strokes back from the tip, either side of the shaft.
+        for (tail, tip, width) in &arrows[1..3] {
+            assert_eq!((*tip, *width), (to, GATE_WIDTH));
+            assert!(tail.x < to.x, "{tail:?}");
+            let back = ((to.x - tail.x).powi(2) + (to.y - tail.y).powi(2)).sqrt();
+            assert!((back - ARROW_SIZE).abs() < 1e-3, "{back}");
+        }
+        // The shaft points right, so the head's strokes splay 30° back
+        // from it: below, then above.
+        let near = |a: Point, b: Point| (a.x - b.x).abs() < 1e-3 && (a.y - b.y).abs() < 1e-3;
+        let back = ARROW_SIZE * 30_f32.to_radians().cos();
+        let aside = ARROW_SIZE * 30_f32.to_radians().sin();
+        let below = Point::new(to.x - back, to.y + aside);
+        let above = Point::new(to.x - back, to.y - aside);
+        assert!(near(arrows[1].0, below), "{arrows:?}");
+        assert!(near(arrows[2].0, above), "{arrows:?}");
+        assert_eq!(arrows[3], (from, dot(&map, 130), GATE_WIDTH));
+        assert_eq!(ARROW_SIZE, 10.0);
+        let texts = texts(&list);
+        assert!(texts.contains(&HYPERGATE_HELP.to_owned()), "{texts:?}");
+        assert!(!texts.contains(&COURSE_HELP.to_owned()));
+    }
+
+    #[test]
+    fn without_a_current_system_no_arrows_are_drawn() {
+        let mut map = course_map();
+        map.offer_gates(ids(&[129]));
+        assert_eq!(lines(&drawn(&map), GATE), []);
+        let mut map = gate_map();
+        map.take_gate_choice();
+        assert_eq!(lines(&drawn(&map), GATE), [], "none once taken");
+    }
+
+    #[test]
+    fn an_offered_system_at_the_current_ones_position_has_no_head() {
+        let mut map = course_map();
+        map.show_course(SystemId(128), &[]);
+        map.offer_gates(ids(&[131]));
+        let here = dot(&map, 128);
+        assert_eq!(lines(&drawn(&map), GATE), [(here, here, GATE_WIDTH)]);
     }
 }
