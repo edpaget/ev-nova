@@ -68,6 +68,20 @@
 //!   the landing ([`FlightView::take_landing`]) and shows the spaceport.
 //!   The reply, or why a landing was refused, shows above the help line
 //!   in the original's words (`STR#` 2002), for [`MESSAGE_SHOWN_FOR`].
+//!   Over a hypergate or wormhole, the second L enters it instead
+//!   ([`nova_sim::gate`]): a hypergate opens the course map as the
+//!   hypergate map ([`MapMode::Hypergate`]), offering its linked
+//!   systems, and closing the map (M, or the router's Escape) enters it
+//!   for the one picked, or cancels; a wormhole passes the ship through at
+//!   once. The ship comes out in the new system, which is read and laid
+//!   out, the message line says so ([`arrival_message_with`]), and the
+//!   screen fades in from white out of a hypergate
+//!   ([`JumpEffect::emerging`]) or flashes white out of a wormhole
+//!   ([`JumpEffect::flash`]). Clearance at a hypergate, and why a gate
+//!   cannot be entered, are in the gate's own words
+//!   ([`hypergate_clearance_message`], [`gate_refusal_message`]); the
+//!   hypergate's two clearance replies are picked by a roll on the
+//!   flight's chance.
 //! - M (a press, not its repeats) opens the course map, a [`GalaxyMap`]
 //!   in [`MapMode::Course`](crate::galaxy::MapMode::Course), and lets go
 //!   of the flight keys. While it is open flight is paused, as in the
@@ -114,11 +128,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Chance, Clearance, Controls, FixedStep, HashedRolls, JumpRefusal, LandOutcome, LandingRefusal,
-    Market, NeverFires, Order, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
-    RechargeRefusal, Reserves, Session, ShipId, ShipPurchase, ShipRefusal, ShipState, Shipyard,
-    SimMessage, StartError, StellarId, Steps, TradeRefusal, Turn, flight::normalized,
-    flight::shortest_turn, glow_level, lights_level,
+    Chance, Clearance, Controls, FixedStep, GateKind, GateRefusal, HashedRolls, JumpRefusal,
+    LandOutcome, LandingRefusal, Market, NeverFires, Order, OutfitOrder, OutfitRefusal, Outfitter,
+    Pilot, PilotCatalog, RechargeRefusal, Reserves, Session, ShipId, ShipPurchase, ShipRefusal,
+    ShipState, Shipyard, SimMessage, StartError, StellarId, Steps, SystemId, TradeRefusal, Turn,
+    flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -126,7 +140,7 @@ use super::hud::{self, HudState, NavDisplay, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
 use super::sprite::rotation_frame;
 use crate::draw::{crossed_box, lights_tint};
-use crate::galaxy::{GalaxyCatalog, GalaxyMap};
+use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
 use crate::system::camera::Camera;
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
@@ -189,18 +203,92 @@ pub const JUMPING_INTO: &str = "Jumping into the";
 /// `STR#` 2002 #48.
 pub const SYSTEM_ON: &str = "system on";
 
+/// `STR#` 2002 #46: coming out of a hypergate.
+pub const EXITING_HYPERGATE: &str = "Exiting hypergate in the";
+/// `STR#` 2002 #47: passing through a wormhole.
+pub const PASSING_WORMHOLE: &str = "Passing through a wormhole into the";
+
 /// What the message line says on arriving from a jump in the system
 /// named `system` on `date`, as the original's `HandlePlayer` builds it,
-/// adding [`NO_STELLARS`] when the system has no stellars. The original's
+/// adding [`NO_STELLARS`] when the system has no stellars: the
+/// [`JUMPING_INTO`] reading of [`arrival_message_with`]. The original's
 /// fighters-abandoned suffix and message-buoy override are left out.
 #[must_use]
 pub fn arrival_message(system: &str, date: &str, stellars: bool) -> String {
-    let mut text = format!("{JUMPING_INTO} {system} {SYSTEM_ON} {date}.");
+    arrival_message_with(JUMPING_INTO, system, date, stellars)
+}
+
+/// What the message line says on arriving in the system named `system` on
+/// `date`, led by `lead`: [`JUMPING_INTO`] from a jump, and
+/// [`EXITING_HYPERGATE`] or [`PASSING_WORMHOLE`] through a gate, as
+/// `_PlayerEnterHypergate` (@0x63c45-0x63dbe) and `_PlayerEnterWormhole`
+/// (@0x6444c-0x6457d) build it; [`NO_STELLARS`] follows when the system
+/// has no stellars.
+#[must_use]
+pub fn arrival_message_with(lead: &str, system: &str, date: &str, stellars: bool) -> String {
+    let mut text = format!("{lead} {system} {SYSTEM_ON} {date}.");
     if !stellars {
         text.push(' ');
         text.push_str(NO_STELLARS);
     }
     text
+}
+
+/// The lead of the message line on the arrival `message` raises.
+fn arrival_lead(message: SimMessage) -> &'static str {
+    match message {
+        SimMessage::Arrived(_) => JUMPING_INTO,
+        SimMessage::ExitedHypergate(_) => EXITING_HYPERGATE,
+        SimMessage::PassedWormhole(_) => PASSING_WORMHOLE,
+    }
+}
+
+/// `STR#` 2002 #50: no system picked on the hypergate map, or none the
+/// gate leads to.
+pub const HYPERGATE_CANCELLED: &str = "Hypergate jump cancelled.";
+/// `STR#` 2002 #74.
+pub const HYPERGATE_ENERGIZED: &str = "Hypergate is energized";
+/// `STR#` 2002 #75.
+pub const HYPERGATE_ONLINE: &str = "Hypergate is online";
+/// `STR#` 2002 #80.
+pub const BEGIN_APPROACH: &str = "Begin initial approach.";
+/// `STR#` 2002 #81: clearance denied at a hypergate
+/// (`_HandlePlayerDockRequest` @0x67ee0-0x67eea).
+pub const HYPERGATE_DENIED: &str = "Hypergate usage denied.";
+/// `STR#` 2002 #84.
+pub const UNABLE_TO: &str = "Your ship is unable to";
+/// `STR#` 2002 #85.
+pub const HYPERGATE_OFFLINE: &str = "enter this hypergate - it is offline.";
+/// `STR#` 2002 #86.
+pub const WORMHOLE_TOO_HOT: &str = "enter this wormhole - the radiation levels are too extreme.";
+
+/// What the player is told when L requests clearance at a hypergate and is
+/// cleared: [`HYPERGATE_ENERGIZED`] when `energized`, otherwise
+/// [`HYPERGATE_ONLINE`] (the original rolls `Rand(2)`, @0x67a8b-0x67aa5),
+/// then ". " and [`BEGIN_APPROACH`] (@0x67b78-0x67c05). The original adds
+/// the pilot's name after the first half on another roll; that is left
+/// out.
+#[must_use]
+pub fn hypergate_clearance_message(energized: bool) -> String {
+    let first = if energized {
+        HYPERGATE_ENERGIZED
+    } else {
+        HYPERGATE_ONLINE
+    };
+    format!("{first}. {BEGIN_APPROACH}")
+}
+
+/// Why the ship cannot enter a gate of `kind`, as the original says it
+/// (@0x67cda-0x67d3c): [`UNABLE_TO`] then [`HYPERGATE_OFFLINE`] or
+/// [`WORMHOLE_TOO_HOT`]. A gate that cannot be landed on says it, and so
+/// does a wormhole that leads nowhere.
+#[must_use]
+pub fn gate_refusal_message(kind: GateKind) -> String {
+    let why = match kind {
+        GateKind::Hypergate => HYPERGATE_OFFLINE,
+        GateKind::Wormhole => WORMHOLE_TOO_HOT,
+    };
+    format!("{UNABLE_TO} {why}")
 }
 
 /// `STR#` 2002 #49.
@@ -568,7 +656,16 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         let Ok(session) = &mut self.session else {
             return;
         };
-        let Some(system) = session.arrive(&self.catalog, &mut self.chance) else {
+        if let Some(system) = session.arrive(&self.catalog, &mut self.chance) {
+            self.load_arrival(system);
+        }
+    }
+
+    /// Lays out `system`, which the ship has just arrived in, drawn from
+    /// where it arrives, and shows the session's arrival message in the
+    /// original's words.
+    fn load_arrival(&mut self, system: SystemId) {
+        let Ok(session) = &mut self.session else {
             return;
         };
         let scene = SystemScene::load(&self.catalog, system);
@@ -578,15 +675,129 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         self.alpha = 0.0;
         self.message = None;
         let date = session.date_text();
-        let arrived = session
+        if let Some(lead) = session
             .take_messages()
             .into_iter()
-            .any(|message| matches!(message, SimMessage::Arrived(_)));
-        if arrived {
-            let text = arrival_message(scene.name(), &date, !scene.stellars().is_empty());
-            self.show(text);
+            .map(arrival_lead)
+            .next_back()
+        {
+            let stellars = !scene.stellars().is_empty();
+            self.show(arrival_message_with(lead, scene.name(), &date, stellars));
         }
         self.scene = Some(scene);
+    }
+
+    /// Plays `effect` for the ship having come out of a gate into
+    /// `system`, laid out as an arrival is.
+    fn came_through(&mut self, system: SystemId, effect: JumpEffect) {
+        self.held.clear();
+        self.load_arrival(system);
+        self.jump = Some(effect);
+    }
+
+    /// Presses the land key: requests clearance and shows the reply,
+    /// lands, enters a gate, or shows why not. Over a cleared hypergate
+    /// the course map opens offering its links, and over a wormhole the
+    /// ship passes through at once.
+    fn land(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        match session.land() {
+            Ok(LandOutcome::Selected {
+                stellar,
+                station,
+                clearance,
+            }) => {
+                let hypergate = session.gate_kind(stellar) == Some(GateKind::Hypergate);
+                let text = match clearance {
+                    Clearance::Granted if hypergate => {
+                        hypergate_clearance_message(self.chance.roll(2) == 0)
+                    }
+                    Clearance::Denied if hypergate => HYPERGATE_DENIED.to_owned(),
+                    _ => {
+                        let name = self.scene.as_ref().and_then(|scene| {
+                            let named = scene.stellars().iter().find(|named| named.id == stellar);
+                            named.map(|named| named.name.as_str())
+                        });
+                        clearance_message(name.unwrap_or_default(), station, clearance)
+                    }
+                };
+                self.show(text);
+            }
+            Ok(LandOutcome::Landed(stellar)) => {
+                self.pending_landing = Some(stellar);
+                self.message = None;
+            }
+            Ok(LandOutcome::AtGate {
+                kind: GateKind::Hypergate,
+                ..
+            }) => {
+                let offered = session.hypergate_destinations(&self.catalog);
+                if offered.is_empty() {
+                    let refused = session.enter_hypergate(None, &self.catalog, &mut self.chance);
+                    self.gate_refused(refused.err());
+                } else {
+                    self.map.offer_gates(offered);
+                    self.open_map();
+                }
+            }
+            Ok(LandOutcome::AtGate {
+                kind: GateKind::Wormhole,
+                ..
+            }) => match session.enter_wormhole(&self.catalog, &mut self.chance) {
+                Ok(system) => self.came_through(system, JumpEffect::flash()),
+                Err(refusal) => self.gate_refused(Some(refusal)),
+            },
+            Err(refusal) => {
+                let gate = match refusal {
+                    LandingRefusal::NotLandable { stellar, .. } => session.gate_kind(stellar),
+                    _ => None,
+                };
+                let text = gate.map_or_else(
+                    || refusal_message(&refusal).to_owned(),
+                    gate_refusal_message,
+                );
+                self.show(text);
+            }
+        }
+    }
+
+    /// Shows what the original says when entering a gate is refused, if
+    /// anything: a cancelled hypergate jump, or a wormhole leading
+    /// nowhere. A hypergate without links says nothing.
+    fn gate_refused(&mut self, refusal: Option<GateRefusal>) {
+        match refusal {
+            Some(GateRefusal::Cancelled) => self.show(HYPERGATE_CANCELLED.to_owned()),
+            Some(GateRefusal::NoExit) => self.show(gate_refusal_message(GateKind::Wormhole)),
+            Some(GateRefusal::NoLinks | GateRefusal::NotAtGate) | None => {}
+        }
+    }
+
+    /// Closes the course map, abandoning any gesture on it, and goes back
+    /// to flight. Closing the hypergate map enters the hypergate for the
+    /// system picked on it: the ship comes out there, and the new system
+    /// fades in from white ([`JumpEffect::emerging`], or flashes white
+    /// with the Hyperspace Effects preference off); with no pick, the jump
+    /// is cancelled ([`HYPERGATE_CANCELLED`]).
+    pub fn close_map(&mut self) {
+        self.map.cancel_pointer();
+        self.map.release_keys();
+        self.map_open = false;
+        if self.map.mode() != MapMode::Hypergate {
+            return;
+        }
+        let choice = self.map.take_gate_choice();
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        match session.enter_hypergate(choice, &self.catalog, &mut self.chance) {
+            Ok(system) => {
+                let effect = JumpEffect::emerging(self.hyperspace_effects);
+                self.came_through(system, effect);
+            }
+            Err(refusal) => self.gate_refused(Some(refusal)),
+        }
     }
 }
 
@@ -613,14 +824,6 @@ impl<C> FlightView<C> {
     #[must_use]
     pub fn course_map(&self) -> &GalaxyMap {
         &self.map
-    }
-
-    /// Closes the course map, abandoning any gesture on it, and goes back
-    /// to flight.
-    pub fn close_map(&mut self) {
-        self.map.cancel_pointer();
-        self.map.release_keys();
-        self.map_open = false;
     }
 
     /// The jump's effect, while it plays.
@@ -657,38 +860,6 @@ impl<C> FlightView<C> {
     /// Shows `text` from now.
     fn show(&mut self, text: String) {
         self.message = Some((text, self.elapsed));
-    }
-
-    /// Presses the land key: requests clearance and shows the reply,
-    /// lands, or shows why not.
-    fn land(&mut self) {
-        let Ok(session) = &mut self.session else {
-            return;
-        };
-        match session.land() {
-            Ok(LandOutcome::Selected {
-                stellar,
-                station,
-                clearance,
-            }) => {
-                let name = self.scene.as_ref().and_then(|scene| {
-                    let named = scene.stellars().iter().find(|named| named.id == stellar);
-                    named.map(|named| named.name.as_str())
-                });
-                self.show(clearance_message(
-                    name.unwrap_or_default(),
-                    station,
-                    clearance,
-                ));
-            }
-            Ok(LandOutcome::Landed(stellar)) => {
-                self.pending_landing = Some(stellar);
-                self.message = None;
-            }
-            // Entering a gate comes with the flight's wiring for it.
-            Ok(LandOutcome::AtGate { .. }) => {}
-            Err(refusal) => self.show(refusal_message(&refusal).to_owned()),
-        }
     }
 
     /// The flight, or why it could not start.
@@ -4404,5 +4575,302 @@ mod tests {
         tap(&mut view, HYPER_SELECT);
         assert!(view.map_open());
         assert_eq!(course(&view), []);
+    }
+
+    // Hypergates and wormholes.
+
+    use crate::flight::jump::{ARRIVAL_FLASH_FOR, FADE_IN_FOR};
+    use nova_sim::GateKind;
+
+    /// Stellar `id` in `system` at (`x`, `y`), with `flags2`, `links` and
+    /// `exit_angle`.
+    fn gate_site(
+        id: i16,
+        system: i16,
+        (x, y): (f32, f32),
+        flags2: u16,
+        links: &[i16],
+        exit_angle: i16,
+    ) -> GateSite {
+        let mut slots = [None; 8];
+        for (slot, &link) in slots.iter_mut().zip(links) {
+            *slot = Some(StellarId(link));
+        }
+        GateSite {
+            id: StellarId(id),
+            system: SystemId(system),
+            position: Vec2::new(x, y),
+            flags2,
+            links: slots,
+            exit_angle,
+        }
+    }
+
+    /// Sol holds hypergate 300 (a station) at its centre, over the ship,
+    /// linked to 310 in Alpha Centauri at (100, 200), heading ships out on
+    /// 90°.
+    fn gated() -> FakeCatalog {
+        FakeCatalog {
+            sites: vec![LandingSite {
+                flags2: 0x1200,
+                ..site(
+                    300,
+                    (0.0, 0.0),
+                    StellarFlags::CAN_LAND | StellarFlags::STATION,
+                )
+            }],
+            gates: vec![
+                gate_site(300, 130, (0.0, 0.0), 0x1200, &[310], 120),
+                gate_site(310, 131, (100.0, 200.0), 0x1000, &[300], 90),
+            ],
+            ..catalog()
+        }
+    }
+
+    /// Sol holds unlinked wormhole 400 at its centre, over the ship, and
+    /// Alpha Centauri unlinked wormhole 410 at (-300, 40).
+    fn holed() -> FakeCatalog {
+        FakeCatalog {
+            sites: vec![LandingSite {
+                flags2: 0x2200,
+                ..site(400, (0.0, 0.0), StellarFlags::CAN_LAND)
+            }],
+            gates: vec![
+                gate_site(400, 130, (0.0, 0.0), 0x2200, &[], 120),
+                gate_site(410, 131, (-300.0, 40.0), 0x2000, &[], 0),
+            ],
+            ..catalog()
+        }
+    }
+
+    fn system_of(view: &View) -> SystemId {
+        view.session().expect("flying").system()
+    }
+
+    #[test]
+    fn the_gate_messages_read_as_the_original() {
+        assert_eq!(
+            arrival_message_with(EXITING_HYPERGATE, "Alpha Centauri", DATE, true),
+            "Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC."
+        );
+        assert_eq!(
+            arrival_message_with(PASSING_WORMHOLE, "Barnard", DATE, false),
+            "Passing through a wormhole into the Barnard system on June 23, 1177 NC. \
+             No stellar objects present."
+        );
+        assert_eq!(
+            arrival_message_with(JUMPING_INTO, "Sol", DATE, true),
+            arrival_message("Sol", DATE, true)
+        );
+        assert_eq!(
+            hypergate_clearance_message(true),
+            "Hypergate is energized. Begin initial approach."
+        );
+        assert_eq!(
+            hypergate_clearance_message(false),
+            "Hypergate is online. Begin initial approach."
+        );
+        assert_eq!(
+            gate_refusal_message(GateKind::Hypergate),
+            "Your ship is unable to enter this hypergate - it is offline."
+        );
+        assert_eq!(
+            gate_refusal_message(GateKind::Wormhole),
+            "Your ship is unable to enter this wormhole - the radiation levels are too extreme."
+        );
+        assert_eq!(HYPERGATE_CANCELLED, "Hypergate jump cancelled.");
+        assert_eq!(HYPERGATE_DENIED, "Hypergate usage denied.");
+    }
+
+    #[test]
+    fn hypergate_clearance_is_energized_or_online_by_a_roll() {
+        let mut view = FlightView::new(gated());
+        tap(&mut view, LAND);
+        assert_eq!(
+            view.message(),
+            Some("Hypergate is energized. Begin initial approach."),
+            "the first outcome"
+        );
+        let last: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
+        let mut view = FlightView::new(gated()).with_chance(SharedChance::new(last));
+        tap(&mut view, LAND);
+        assert_eq!(
+            view.message(),
+            Some("Hypergate is online. Begin initial approach."),
+            "the second outcome"
+        );
+    }
+
+    #[test]
+    fn a_hypergate_the_pilot_may_not_use_denies_it_in_its_own_words() {
+        let mut catalog = gated();
+        catalog.sites[0].min_status = 100;
+        let mut view = FlightView::new(catalog);
+        tap(&mut view, LAND);
+        assert_eq!(view.message(), Some(HYPERGATE_DENIED));
+    }
+
+    #[test]
+    fn an_offline_gate_is_refused_in_its_own_words() {
+        for (flags2, kind) in [(0x1000, GateKind::Hypergate), (0x2000, GateKind::Wormhole)] {
+            let mut view = flight_among(vec![LandingSite {
+                flags2,
+                ..site(300, (0.0, 0.0), StellarFlags::STATION)
+            }]);
+            tap(&mut view, LAND);
+            let refusal = gate_refusal_message(kind);
+            assert_eq!(view.message(), Some(refusal.as_str()), "{kind:?}");
+        }
+        let mut planet = flight_among(vec![site(300, (0.0, 0.0), 0)]);
+        tap(&mut planet, LAND);
+        assert_eq!(planet.message(), Some(HOSTILE_PLANET), "not a gate");
+    }
+
+    #[test]
+    fn l_twice_at_a_hypergate_opens_the_map_offering_its_links() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        assert!(view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        assert_eq!(view.take_landing(), None, "not landed");
+        assert_eq!(system_of(&view), SystemId(130));
+    }
+
+    #[test]
+    fn closing_the_hypergate_map_on_a_pick_comes_out_of_its_gate() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Course);
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(player(&view).position, Vec2::new(100.0, 200.0));
+        assert_eq!(view.scene().map(SystemScene::name), Some("Alpha Centauri"));
+        assert_eq!(
+            view.message(),
+            Some("Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC.")
+        );
+        assert_eq!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::FadeIn(0.0))
+        );
+        assert_eq!(view.shown_position(), Point::new(100.0, 200.0));
+        view.tick(FADE_IN_FOR);
+        assert_eq!(view.jump_effect(), None, "the fade is over");
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(
+            view.course_map().current(),
+            Some(SystemId(131)),
+            "the map follows"
+        );
+    }
+
+    #[test]
+    fn escape_on_the_hypergate_map_enters_the_gate_too() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        view.close_map();
+        assert_eq!(system_of(&view), SystemId(131));
+    }
+
+    #[test]
+    fn closing_the_hypergate_map_without_a_pick_cancels() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(view.course_map().mode(), MapMode::Course);
+        assert_eq!(system_of(&view), SystemId(130));
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(nav_target(&view), None);
+        // The map is a course map again.
+        tap(&mut view, MAP);
+        assert_eq!(view.course_map().mode(), MapMode::Course);
+        tap(&mut view, MAP);
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED), "nothing new");
+    }
+
+    #[test]
+    fn without_hyperspace_effects_a_hypergate_flashes_white() {
+        let mut view = FlightView::new(gated()).with_hyperspace_effects(false);
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        assert_eq!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::Flash(0.0))
+        );
+        view.tick(ARRIVAL_FLASH_FOR);
+        assert_eq!(view.jump_effect(), None);
+    }
+
+    #[test]
+    fn a_hypergate_without_links_does_nothing() {
+        let mut catalog = gated();
+        catalog.gates[0].links = [None; 8];
+        let mut view = FlightView::new(catalog);
+        tap(&mut view, LAND);
+        let cleared = view.message().map(str::to_owned);
+        tap(&mut view, LAND);
+        assert!(!view.map_open());
+        assert_eq!(system_of(&view), SystemId(130));
+        assert_eq!(view.message(), cleared.as_deref(), "nothing said");
+        assert_eq!(nav_target(&view), None);
+    }
+
+    #[test]
+    fn a_hypergate_whose_links_lead_nowhere_cancels_at_once() {
+        let mut catalog = gated();
+        catalog.gates[0].links[0] = Some(StellarId(999));
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        assert!(!view.map_open());
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+    }
+
+    #[test]
+    fn l_twice_at_a_wormhole_passes_through_it_with_a_flash() {
+        let mut view = FlightView::new(holed());
+        land_now(&mut view);
+        assert!(!view.map_open());
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(player(&view).position, Vec2::new(-300.0, 40.0));
+        assert_eq!(
+            view.message(),
+            Some("Passing through a wormhole into the Alpha Centauri system on June 23, 1177 NC.")
+        );
+        assert_eq!(
+            view.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::Flash(0.0))
+        );
+        let mut plain = FlightView::new(holed()).with_hyperspace_effects(false);
+        land_now(&mut plain);
+        assert_eq!(
+            plain.jump_effect().map(JumpEffect::phase),
+            Some(JumpPhase::Flash(0.0)),
+            "whatever the preference"
+        );
+    }
+
+    #[test]
+    fn a_wormhole_with_no_exit_says_why() {
+        let mut catalog = holed();
+        catalog.gates.truncate(1);
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        assert_eq!(system_of(&view), SystemId(130));
+        assert_eq!(
+            view.message(),
+            Some(
+                "Your ship is unable to enter this wormhole - the radiation levels are too extreme."
+            )
+        );
+        assert_eq!(view.jump_effect(), None);
     }
 }
