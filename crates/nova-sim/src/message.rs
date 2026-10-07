@@ -8,4 +8,8 @@ use crate::catalog::SystemId;
 pub enum SimMessage {
     /// A jump ended in this system, the last of a multi-jump.
     Arrived(SystemId),
+    /// The ship came out of a hypergate in this system.
+    ExitedHypergate(SystemId),
+    /// The ship passed through a wormhole into this system.
+    PassedWormhole(SystemId),
 }

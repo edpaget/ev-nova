@@ -127,7 +127,7 @@ pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
 pub use date::GameDate;
 pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
-pub use gate::{GateArrivalRule, GateKind, WormholeRule};
+pub use gate::{GateArrivalRule, GateKind, GateRefusal, WormholeRule};
 pub use geometry::Vec2;
 pub use glow::{GLOW_CRUISE, glow_level, ramp_glow};
 pub use handling::{Handling, ShipFields};

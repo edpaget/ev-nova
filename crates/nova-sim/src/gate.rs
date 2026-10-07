@@ -98,6 +98,23 @@ impl GateKind {
     }
 }
 
+/// Why entering a hypergate or wormhole took the ship nowhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GateRefusal {
+    /// No entry is pending: the land key has not just been pressed over a
+    /// gate of that kind, cleared, or a tick has passed since.
+    NotAtGate,
+    /// The hypergate has no links (`_StellarNumHyperLinks` is 0): the
+    /// original says nothing.
+    NoLinks,
+    /// No system was picked on the map, or none the hypergate's links lead
+    /// to (`STR#` 2002 #50, "Hypergate jump cancelled.").
+    Cancelled,
+    /// The wormhole leads nowhere (`STR#` 2002 #84 and #86, "the radiation
+    /// levels are too extreme").
+    NoExit,
+}
+
 /// Where a ship comes out of a hypergate or wormhole.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GateArrivalRule {

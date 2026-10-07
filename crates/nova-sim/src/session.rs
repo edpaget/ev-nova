@@ -44,6 +44,16 @@
 //! days or each hop's. In flight, fuel regenerates each tick at the rate the ship
 //! and its outfits give.
 //!
+//! The land key's second press over a hypergate or wormhole, once
+//! cleared, enters it rather than docking ([`Session::land`]); the
+//! player then picks a hypergate's destination
+//! ([`Session::hypergate_destinations`], [`Session::enter_hypergate`]),
+//! while a wormhole picks its own ([`Session::enter_wormhole`]), as the
+//! [`gate`](crate::gate) rules say. Neither uses fuel nor minds the
+//! no-jump zone, and the ship comes out as the session's
+//! [`GateArrivalRule`] says; by the engine's, at the exit gate with no
+//! day passing.
+//!
 //! Everything about how the ship performs (its handling, the most shield,
 //! armour and fuel it holds, its fuel regeneration and its cargo space)
 //! comes from its [`ShipStats`]: its `shïp`'s fields, read when the session
@@ -109,13 +119,17 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{
-    DateAffixes, GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord,
-    StartError, StellarId, SystemId,
+    DateAffixes, GateSite, GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId,
+    ShipRecord, StartError, StellarId, SystemId,
 };
 use crate::chance::Chance;
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
+use crate::gate::{
+    self, GateArrivalRule, GateKind, GateRefusal, WormholeRule, emerge, has_links, hypergate_exit,
+    wormhole_exit,
+};
 use crate::geometry::Vec2;
 use crate::glow::ramp_glow;
 use crate::handling::{Handling, ShipFields};
@@ -178,6 +192,13 @@ pub struct Session {
     hyper_select: HyperSelectRule,
     /// The rule jumps along the hyperlinks follow.
     hyperlinks: HyperlinkRule,
+    /// The hypergate or wormhole the land key has just been pressed over,
+    /// cleared: its entry awaits until the next tick.
+    gate: Option<StellarId>,
+    /// The rule a ship coming out of a gate follows.
+    gate_arrival: GateArrivalRule,
+    /// The rule an unlinked wormhole follows.
+    wormholes: WormholeRule,
     /// The goods traded and the events that move their prices, read when
     /// the session starts.
     goods: Goods,
@@ -259,6 +280,9 @@ impl Session {
             multi_jump: MultiJumpRule::default(),
             hyper_select: HyperSelectRule::default(),
             hyperlinks: HyperlinkRule::default(),
+            gate: None,
+            gate_arrival: GateArrivalRule::default(),
+            wormholes: WormholeRule::default(),
             goods: Goods::read(catalog),
             thrusting: false,
             engine_glow: 0,
@@ -296,6 +320,22 @@ impl Session {
         self
     }
 
+    /// This session with ships coming out of hypergates and wormholes as
+    /// `rule` says; the engine's by default.
+    #[must_use]
+    pub fn with_gate_arrival(mut self, rule: GateArrivalRule) -> Self {
+        self.gate_arrival = rule;
+        self
+    }
+
+    /// This session with unlinked wormholes leading where `rule` says; the
+    /// engine's by default.
+    #[must_use]
+    pub fn with_wormholes(mut self, rule: WormholeRule) -> Self {
+        self.wormholes = rule;
+        self
+    }
+
     /// The ship's stats with the outfits the pilot owns.
     fn current_stats(&self) -> ShipStats {
         ShipStats::new(
@@ -325,8 +365,11 @@ impl Session {
     /// pre-jump stage the controls are ignored: the ship flies the stage
     /// ([`pre_jump::fly`]) instead, and the jump begins on the tick it is
     /// ready. A landed ship, or one in hyperspace, does not move, glows not
-    /// at all, and gains no fuel.
+    /// at all, and gains no fuel. Any tick ends a gate's pending entry: the
+    /// original's hypergate map is modal, so nothing ticks between the
+    /// land key and the pick.
     pub fn tick(&mut self, controls: Controls) {
+        self.gate = None;
         if self.landed.is_some() {
             return;
         }
@@ -527,11 +570,16 @@ impl Session {
         Some(at)
     }
 
-    /// Uses a jump's fuel and lets the days the stats give a jump go by,
-    /// each stepping the planetary events, rolled on `chance`.
+    /// Uses a jump's fuel and lets its days go by ([`Session::pass_jump_days`]).
     fn take_jump_cost(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.pilot.reserves.fuel.now -= JUMP_FUEL;
+        self.pass_jump_days(chance);
+    }
+
+    /// Lets the days the stats give a jump go by, each stepping the
+    /// planetary events, rolled on `chance`.
+    fn pass_jump_days(&mut self, chance: &mut (impl Chance + ?Sized)) {
         let pilot = &mut self.pilot;
-        pilot.reserves.fuel.now -= JUMP_FUEL;
         for _ in 0..self.stats.jump_days {
             pilot.date = pilot.date.next_day();
             market::step_day(&self.goods, &mut pilot.events, chance);
@@ -628,6 +676,12 @@ impl Session {
     /// at rest, its heading and reserves unchanged, and clears the target,
     /// so that once it takes off L requests clearance again. Otherwise the
     /// ship flies on, its target kept, and the refusal says why.
+    ///
+    /// A press that would land on a hypergate or wormhole
+    /// ([`GateKind::of`] its `Flags2`) enters it instead: it does not dock
+    /// and makes no sound, and gives [`LandOutcome::AtGate`]. The entry
+    /// then awaits [`Session::enter_hypergate`] or
+    /// [`Session::enter_wormhole`], until the next tick.
     pub fn land(&mut self) -> Result<LandOutcome, LandingRefusal> {
         if self.jump.is_some() {
             return Err(LandingRefusal::Jumping);
@@ -641,9 +695,158 @@ impl Session {
         )?;
         match outcome {
             LandOutcome::Selected { stellar, .. } => self.nav_target = Some(stellar),
-            LandOutcome::Landed(stellar) => self.dock(stellar),
+            LandOutcome::Landed(stellar) => {
+                if let Some(kind) = self.gate_kind(stellar) {
+                    self.gate = Some(stellar);
+                    return Ok(LandOutcome::AtGate { stellar, kind });
+                }
+                self.dock(stellar);
+            }
+            LandOutcome::AtGate { .. } => {}
         }
         Ok(outcome)
+    }
+
+    /// What `stellar`, one of the system's, leads through, if it is a
+    /// hypergate or wormhole.
+    #[must_use]
+    pub fn gate_kind(&self, stellar: StellarId) -> Option<GateKind> {
+        let site = self.sites.iter().find(|site| site.id == stellar)?;
+        GateKind::of(site.flags2)
+    }
+
+    /// The pending entry, if it is through a gate of `kind`; it ends here
+    /// whatever it is.
+    fn take_gate(&mut self, kind: GateKind) -> Option<StellarId> {
+        self.gate
+            .take()
+            .filter(|&stellar| self.gate_kind(stellar) == Some(kind))
+    }
+
+    /// The links of `stellar` among `sites`; none when no system lists it.
+    fn links_of(sites: &[GateSite], stellar: StellarId) -> [Option<StellarId>; 8] {
+        sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .map_or([None; 8], |site| site.links)
+    }
+
+    /// The systems the hypergate whose entry is pending offers, read from
+    /// `catalog`'s gate sites ([`gate::hypergate_destinations`]); none when
+    /// no hypergate entry is pending.
+    #[must_use]
+    pub fn hypergate_destinations(&self, catalog: &impl PilotCatalog) -> Vec<SystemId> {
+        let Some(stellar) = self.gate else {
+            return Vec::new();
+        };
+        if self.gate_kind(stellar) != Some(GateKind::Hypergate) {
+            return Vec::new();
+        }
+        let sites = catalog.gate_sites();
+        gate::hypergate_destinations(&Self::links_of(&sites, stellar), &sites)
+    }
+
+    /// Enters the hypergate whose entry is pending, for the system `to`
+    /// the player picked on the map (`None` for no pick), and gives the
+    /// system the ship comes out in: through the first of its links that
+    /// leads there ([`hypergate_exit`]), read from `catalog`. Any outcome
+    /// ends the entry; a refusal also clears the navigation target, as the
+    /// original's does, and otherwise changes nothing. See
+    /// [`Session::enter_wormhole`] for the arrival.
+    pub fn enter_hypergate(
+        &mut self,
+        to: Option<SystemId>,
+        catalog: &impl PilotCatalog,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Result<SystemId, GateRefusal> {
+        let here = self
+            .take_gate(GateKind::Hypergate)
+            .ok_or(GateRefusal::NotAtGate)?;
+        let sites = catalog.gate_sites();
+        let links = Self::links_of(&sites, here);
+        let exit = if has_links(&links) {
+            to.and_then(|to| Some((to, *hypergate_exit(&links, &sites, to, &self.star_map)?)))
+                .ok_or(GateRefusal::Cancelled)
+        } else {
+            Err(GateRefusal::NoLinks)
+        };
+        match exit {
+            Ok((system, exit)) => {
+                self.come_out(system, &exit, catalog, chance);
+                self.messages.push(SimMessage::ExitedHypergate(system));
+                Ok(system)
+            }
+            Err(refusal) => {
+                self.nav_target = None;
+                Err(refusal)
+            }
+        }
+    }
+
+    /// Enters the wormhole whose entry is pending and gives the system the
+    /// ship comes out in: through the wormhole [`wormhole_exit`] rolls on
+    /// `chance`, under the session's [`WormholeRule`] (the engine's unless
+    /// [`Session::with_wormholes`] says otherwise), read from `catalog`.
+    /// Any outcome ends the entry; a refusal changes nothing else.
+    ///
+    /// Out of a hypergate or wormhole the ship comes out as the session's
+    /// [`GateArrivalRule`] says (the engine's unless
+    /// [`Session::with_gate_arrival`] says otherwise): by the engine's at
+    /// the exit gate, as [`emerge`] says, with no day passing; like a jump,
+    /// where a jump between the two systems arrives, with a jump's days
+    /// passing, each stepping the planetary events on `chance`. Either way
+    /// no fuel is used, the minimum jump distance does not count, and the
+    /// ship is in the new system, explored, its stellars read, with the
+    /// course and the navigation target cleared, its thrust stopped and
+    /// [`SimSound::Arrived`]. It raises [`SimMessage::PassedWormhole`] or
+    /// [`SimMessage::ExitedHypergate`].
+    pub fn enter_wormhole(
+        &mut self,
+        catalog: &impl PilotCatalog,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Result<SystemId, GateRefusal> {
+        let here = self
+            .take_gate(GateKind::Wormhole)
+            .ok_or(GateRefusal::NotAtGate)?;
+        let sites = catalog.gate_sites();
+        let exit = *wormhole_exit(here, self.pilot.system, &sites, self.wormholes, chance)
+            .ok_or(GateRefusal::NoExit)?;
+        self.come_out(exit.system, &exit, catalog, chance);
+        self.messages.push(SimMessage::PassedWormhole(exit.system));
+        Ok(exit.system)
+    }
+
+    /// Brings the ship out of `exit` in `system`: see
+    /// [`Session::enter_wormhole`].
+    fn come_out(
+        &mut self,
+        system: SystemId,
+        exit: &GateSite,
+        catalog: &impl PilotCatalog,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.player = match self.gate_arrival {
+            GateArrivalRule::Engine => emerge(exit, self.stats.handling.max_speed, chance),
+            GateArrivalRule::LikeJump => {
+                let map = |id| self.star_map.position(id).unwrap_or_default();
+                let placed = arrival(
+                    map(self.pilot.system),
+                    map(system),
+                    self.stats.jump_distance,
+                );
+                self.pass_jump_days(chance);
+                placed
+            }
+        };
+        let pilot = &mut self.pilot;
+        pilot.system = system;
+        pilot.stellar = None;
+        pilot.explore(system);
+        pilot.course.clear();
+        self.sites = catalog.landing_sites(system);
+        self.nav_target = None;
+        self.stop_thrust();
+        self.sounds.push(SimSound::Arrived);
     }
 
     /// Docks the ship at `stellar`, one of the system's.
@@ -915,12 +1118,13 @@ fn refit(gauge: &mut Gauge, max: f32, gain: bool) {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::{CharacterStart, LandingSite, SoundId, StellarId};
+    use crate::catalog::{CharacterStart, GateSite, LandingSite, SoundId, StellarId};
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
     use crate::chance::NeverFires;
     use crate::clock::TICKS_PER_SECOND;
     use crate::flight::Turn;
     use crate::fuel::FUEL_SCOOP;
+    use crate::gate::{GateArrivalRule, GateKind, GateRefusal, HYPERGATE, WORMHOLE, WormholeRule};
     use crate::geometry::Vec2;
     use crate::glow::GLOW_CRUISE;
     use crate::handling::ShipFields;
@@ -4044,5 +4248,410 @@ mod tests {
             Some(SystemId(131)),
             "a multi-jump course: the first"
         );
+    }
+
+    // Hypergates and wormholes.
+
+    /// Stellar `id` at (`x`, `y`) in `system`, with `flags2`, its `links`
+    /// and its exit angle.
+    fn gate_site(
+        id: i16,
+        system: i16,
+        (x, y): (f32, f32),
+        flags2: u16,
+        links: &[i16],
+        exit_angle: i16,
+    ) -> GateSite {
+        let mut slots = [None; 8];
+        for (slot, &link) in slots.iter_mut().zip(links) {
+            *slot = Some(StellarId(link));
+        }
+        GateSite {
+            id: StellarId(id),
+            system: SystemId(system),
+            position: Vec2::new(x, y),
+            flags2,
+            links: slots,
+            exit_angle,
+        }
+    }
+
+    /// A landable stellar `id` at the centre with `flags2`.
+    fn gate_landing(id: i16, flags2: u16) -> LandingSite {
+        LandingSite {
+            flags2,
+            ..planet(id, 0.0, 0.0)
+        }
+    }
+
+    /// The ship starts over hypergate 300, at system 130's centre, linked
+    /// to 310 in 131 at (100, 200), heading ships out on 90°, then to 320
+    /// in 132 (a random heading), then to 999, which no system lists.
+    fn gated() -> FakePilotCatalog {
+        FakePilotCatalog {
+            sites: vec![
+                (SystemId(130), vec![gate_landing(300, HYPERGATE)]),
+                (SystemId(131), vec![planet(140, 0.0, 0.0)]),
+            ],
+            gates: vec![
+                gate_site(300, 130, (0.0, 0.0), 0x1200, &[310, 320, 999], 120),
+                gate_site(310, 131, (100.0, 200.0), HYPERGATE, &[300], 90),
+                gate_site(320, 132, (-50.0, 0.0), HYPERGATE, &[], -1),
+            ],
+            ..catalog()
+        }
+    }
+
+    /// [`gated`]'s session, with L pressed twice over the hypergate: the
+    /// entry awaits the player's pick.
+    fn at_gate(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        assert!(matches!(session.land(), Ok(LandOutcome::Selected { .. })));
+        assert_eq!(
+            session.land(),
+            Ok(LandOutcome::AtGate {
+                stellar: StellarId(300),
+                kind: GateKind::Hypergate,
+            })
+        );
+        session
+    }
+
+    #[test]
+    fn l_twice_over_a_cleared_hypergate_awaits_the_entry_and_does_not_dock() {
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        assert_eq!(session.landed(), None);
+        assert_eq!(session.pilot().stellar(), None);
+        assert!(!session.take_save_due());
+        assert!(
+            !session
+                .take_sounds()
+                .iter()
+                .any(|sound| matches!(sound, SimSound::Landed { .. })),
+            "no landing sound"
+        );
+        assert_eq!(
+            session.hypergate_destinations(&catalog),
+            ids(&[131, 132]),
+            "each linked gate's system, in slot order"
+        );
+        assert_eq!(session.gate_kind(StellarId(300)), Some(GateKind::Hypergate));
+        assert_eq!(session.gate_kind(StellarId(310)), None, "not here");
+    }
+
+    #[test]
+    fn no_destinations_are_offered_without_an_entry_pending() {
+        let catalog = gated();
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.hypergate_destinations(&catalog), []);
+        assert_eq!(*catalog.gate_reads.borrow(), 0, "not read at the start");
+    }
+
+    #[test]
+    fn a_tick_ends_a_pending_entry() {
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        session.tick(Controls::default());
+        assert_eq!(session.hypergate_destinations(&catalog), []);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Err(GateRefusal::NotAtGate)
+        );
+        assert_eq!(session.system(), SystemId(130));
+    }
+
+    #[test]
+    fn entering_a_hypergate_comes_out_of_the_gate_picked_at_half_speed() {
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        session.plot_course(SystemId(132)).expect("a route");
+        session.take_sounds();
+        let mut chance = Scripted::default();
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut chance),
+            Ok(SystemId(131))
+        );
+        assert_eq!(session.system(), SystemId(131));
+        let player = *session.player();
+        assert_eq!(player.position, Vec2::new(100.0, 200.0));
+        assert_eq!(player.heading, 90.0);
+        let half = session.handling().max_speed / 2.0;
+        assert!((player.velocity - Vec2::new(half, 0.0)).length() < 1e-4);
+        assert!(session.pilot().has_explored(SystemId(131)));
+        assert_eq!(session.pilot().stellar(), None);
+        assert_eq!(session.course(), [], "the course cleared");
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(session.reserves().fuel, Gauge::full(300.0), "no fuel");
+        assert_eq!(dmy(&session), (23, 6, 1177), "no day passes");
+        assert!(chance.asked.is_empty() && chance.sides_asked.is_empty());
+        assert_eq!(session.take_sounds(), [SimSound::Arrived]);
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::ExitedHypergate(SystemId(131))]
+        );
+        assert_eq!(
+            catalog.sites_asked.borrow().last(),
+            Some(&SystemId(131)),
+            "the new system's stellars read"
+        );
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(130)), &catalog, &mut chance),
+            Err(GateRefusal::NotAtGate),
+            "the entry is over"
+        );
+    }
+
+    #[test]
+    fn a_gate_with_an_angle_outside_0_to_359_heads_the_ship_out_at_random() {
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        let mut chance = Scripted::rolling(&[270]);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(132)), &catalog, &mut chance),
+            Ok(SystemId(132))
+        );
+        assert_eq!(chance.sides_asked, [360]);
+        assert_eq!(session.player().heading, 270.0);
+        assert_eq!(session.player().position, Vec2::new(-50.0, 0.0));
+    }
+
+    #[test]
+    fn no_pick_or_one_no_link_leads_to_cancels_and_clears_the_target() {
+        let catalog = gated();
+        for to in [None, Some(SystemId(133))] {
+            let mut session = at_gate(&catalog);
+            assert_eq!(session.nav_target(), Some(StellarId(300)));
+            assert_eq!(
+                session.enter_hypergate(to, &catalog, &mut NeverFires),
+                Err(GateRefusal::Cancelled),
+                "{to:?}"
+            );
+            assert_eq!(session.nav_target(), None);
+            assert_eq!(session.system(), SystemId(130));
+            assert_eq!(session.player().position, Vec2::ZERO);
+            assert_eq!(session.take_messages(), []);
+            assert_eq!(
+                session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+                Err(GateRefusal::NotAtGate),
+                "the entry is over"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hypergate_without_links_leads_nowhere() {
+        let catalog = FakePilotCatalog {
+            gates: vec![gate_site(300, 130, (0.0, 0.0), HYPERGATE, &[0, -2], 0)],
+            ..gated()
+        };
+        let mut session = at_gate(&catalog);
+        assert_eq!(session.hypergate_destinations(&catalog), []);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Err(GateRefusal::NoLinks)
+        );
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(session.system(), SystemId(130));
+    }
+
+    #[test]
+    fn a_hypergate_whose_links_lead_nowhere_cancels() {
+        let catalog = FakePilotCatalog {
+            gates: vec![gate_site(300, 130, (0.0, 0.0), HYPERGATE, &[999], 0)],
+            ..gated()
+        };
+        let mut session = at_gate(&catalog);
+        assert_eq!(session.hypergate_destinations(&catalog), []);
+        assert_eq!(
+            session.enter_hypergate(None, &catalog, &mut NeverFires),
+            Err(GateRefusal::Cancelled)
+        );
+    }
+
+    /// The ship starts over unlinked wormhole 400, at system 130's centre;
+    /// unlinked wormhole 410 is in 131 at (-300, 40), and wormhole 420,
+    /// linked to 410, in 132.
+    fn wormholes() -> FakePilotCatalog {
+        FakePilotCatalog {
+            sites: vec![
+                (SystemId(130), vec![gate_landing(400, 0x2200)]),
+                (SystemId(131), vec![planet(140, 0.0, 0.0)]),
+            ],
+            gates: vec![
+                gate_site(400, 130, (0.0, 0.0), 0x2200, &[], 120),
+                gate_site(410, 131, (-300.0, 40.0), WORMHOLE, &[], 0),
+                gate_site(420, 132, (5.0, 5.0), WORMHOLE, &[410], 0),
+            ],
+            ..catalog()
+        }
+    }
+
+    /// `catalog`'s session with L pressed twice over the wormhole.
+    fn at_wormhole(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.land().expect("clearance");
+        assert_eq!(
+            session.land(),
+            Ok(LandOutcome::AtGate {
+                stellar: StellarId(400),
+                kind: GateKind::Wormhole,
+            })
+        );
+        session
+    }
+
+    #[test]
+    fn entering_a_wormhole_comes_out_of_the_one_rolled() {
+        let catalog = wormholes();
+        let mut session = at_wormhole(&catalog);
+        assert_eq!(
+            session.hypergate_destinations(&catalog),
+            [],
+            "not a hypergate"
+        );
+        session.take_sounds();
+        let mut chance = Scripted::rolling(&[0]);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut chance),
+            Ok(SystemId(131))
+        );
+        assert_eq!(chance.sides_asked, [2]);
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.player().position, Vec2::new(-300.0, 40.0));
+        assert_eq!(session.player().heading, 0.0);
+        assert_eq!(session.reserves().fuel, Gauge::full(300.0));
+        assert_eq!(dmy(&session), (23, 6, 1177));
+        assert_eq!(session.take_sounds(), [SimSound::Arrived]);
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::PassedWormhole(SystemId(131))]
+        );
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut chance),
+            Err(GateRefusal::NotAtGate)
+        );
+    }
+
+    #[test]
+    fn a_wormhole_rolled_onto_a_linked_one_comes_out_where_it_went_in() {
+        let catalog = wormholes();
+        let mut session = at_wormhole(&catalog);
+        let mut chance = Scripted::rolling(&[1]);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut chance),
+            Ok(SystemId(130))
+        );
+        assert_eq!(session.player().position, Vec2::ZERO);
+        assert_eq!(session.player().heading, 120.0);
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::PassedWormhole(SystemId(130))]
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_wormhole_rolls_over_the_unlinked_ones_only() {
+        let catalog = wormholes();
+        let mut session = at_wormhole(&catalog).with_wormholes(WormholeRule::UnlinkedOnly);
+        let mut chance = Scripted::default();
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut chance),
+            Ok(SystemId(131))
+        );
+        assert_eq!(chance.sides_asked, [1]);
+    }
+
+    #[test]
+    fn a_wormhole_with_nowhere_to_lead_refuses() {
+        let catalog = FakePilotCatalog {
+            gates: vec![gate_site(400, 130, (0.0, 0.0), WORMHOLE, &[], 0)],
+            ..wormholes()
+        };
+        let mut session = at_wormhole(&catalog);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut NeverFires),
+            Err(GateRefusal::NoExit)
+        );
+        assert_eq!(session.system(), SystemId(130));
+        assert_eq!(session.take_messages(), []);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut NeverFires),
+            Err(GateRefusal::NotAtGate),
+            "the entry is over"
+        );
+    }
+
+    #[test]
+    fn each_gate_is_entered_only_its_own_way() {
+        let hypergates = gated();
+        let mut session = at_gate(&hypergates);
+        assert_eq!(
+            session.enter_wormhole(&hypergates, &mut NeverFires),
+            Err(GateRefusal::NotAtGate)
+        );
+        assert_eq!(session.system(), SystemId(130));
+        let holes = wormholes();
+        let mut session = at_wormhole(&holes);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &holes, &mut NeverFires),
+            Err(GateRefusal::NotAtGate)
+        );
+        assert_eq!(session.system(), SystemId(130));
+    }
+
+    #[test]
+    fn like_a_jump_a_gate_places_the_ship_as_a_jump_and_lets_its_days_pass() {
+        let catalog = FakePilotCatalog {
+            disasters: surplus().disasters,
+            ..gated()
+        };
+        let mut session = at_gate(&catalog).with_gate_arrival(GateArrivalRule::LikeJump);
+        let mut chance = Scripted::answering(&[true]);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut chance),
+            Ok(SystemId(131))
+        );
+        assert_eq!(
+            *session.player(),
+            crate::hyperspace::arrival(Vec2::ZERO, Vec2::new(600.0, 0.0), MIN_JUMP_DISTANCE)
+        );
+        assert_eq!(dmy(&session), (24, 6, 1177), "a jump's day");
+        assert_eq!(chance.asked, [35], "the day's events rolled");
+        assert_eq!(session.pilot().events().count(), 1);
+        assert_eq!(session.reserves().fuel, Gauge::full(300.0), "still no fuel");
+    }
+
+    #[test]
+    fn by_the_engine_a_gate_lets_no_day_pass_even_with_events_to_roll() {
+        let catalog = FakePilotCatalog {
+            disasters: surplus().disasters,
+            ..gated()
+        };
+        let mut session = at_gate(&catalog);
+        let mut chance = Scripted::answering(&[true]);
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut chance)
+            .expect("enters");
+        assert!(chance.asked.is_empty());
+        assert_eq!(session.pilot().events().count(), 0);
+    }
+
+    #[test]
+    fn a_gate_entered_mid_thrust_stops_the_thrust() {
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        session.thrusting = true;
+        session.engine_glow = 10;
+        session.take_sounds();
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires)
+            .expect("enters");
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::ThrustStopped, SimSound::Arrived]
+        );
+        assert_eq!(session.engine_glow(), 0);
+        assert!(!session.thrusting());
     }
 }

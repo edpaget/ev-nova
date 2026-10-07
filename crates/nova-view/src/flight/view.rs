@@ -685,6 +685,8 @@ impl<C> FlightView<C> {
                 self.pending_landing = Some(stellar);
                 self.message = None;
             }
+            // Entering a gate comes with the flight's wiring for it.
+            Ok(LandOutcome::AtGate { .. }) => {}
             Err(refusal) => self.show(refusal_message(&refusal).to_owned()),
         }
     }
