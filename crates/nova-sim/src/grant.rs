@@ -155,7 +155,9 @@ pub fn phase_count(count: u16, chance: &mut dyn Chance) -> u16 {
 pub fn fit_count(count: u16, mass: i16, free_mass: i64) -> u16 {
     let free = free_mass.max(0);
     let mut count = count;
-    while count > 0 && i64::from(mass) * i64::from(count) > free {
+    // At none the outfits weigh nothing, which the free mass (none or
+    // more) always covers, so the loop ends there.
+    while i64::from(mass) * i64::from(count) > free {
         count -= 1;
     }
     count
