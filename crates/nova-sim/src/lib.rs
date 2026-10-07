@@ -149,7 +149,7 @@ pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use reserves::{Gauge, Reserves};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
-pub use session::Session;
+pub use session::{LandPress, Session};
 pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;

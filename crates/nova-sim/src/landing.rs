@@ -45,11 +45,11 @@
 //!
 //! Hypergates and wormholes are landed on the same way, with the same
 //! checks; the [`Session`](crate::Session) enters one instead of docking
-//! ([`LandOutcome::AtGate`], see [`gate`](crate::gate)).
+//! ([`LandPress::AtGate`](crate::LandPress::AtGate), see
+//! [`gate`](crate::gate)).
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::flight::ShipState;
-use crate::gate::GateKind;
 use crate::geometry::Vec2;
 
 /// The fastest a ship can land, in pixels a tick (30 pixels a second): a
@@ -167,16 +167,6 @@ pub enum LandOutcome {
     },
     /// It landed on the stellar.
     Landed(StellarId),
-    /// The ship is cleared and over a hypergate or wormhole, and the
-    /// [`Session`](crate::Session) awaits its entry: what [`check_landing`]
-    /// would let it land on, it enters instead (see [`gate`](crate::gate)).
-    /// [`land_or_select`] never gives this.
-    AtGate {
-        /// The stellar.
-        stellar: StellarId,
-        /// What it is.
-        kind: GateKind,
-    },
 }
 
 /// What the land key does with the navigation target `target`, for the

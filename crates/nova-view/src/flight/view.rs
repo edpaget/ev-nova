@@ -129,10 +129,10 @@ use std::time::Duration;
 
 use nova_sim::{
     Chance, Clearance, Controls, FixedStep, GateKind, GateRefusal, HashedRolls, JumpRefusal,
-    LandOutcome, LandingRefusal, Market, NeverFires, Order, OutfitOrder, OutfitRefusal, Outfitter,
-    Pilot, PilotCatalog, RechargeRefusal, Reserves, Session, ShipId, ShipPurchase, ShipRefusal,
-    ShipState, Shipyard, SimMessage, StartError, StellarId, Steps, SystemId, TradeRefusal, Turn,
-    flight::normalized, flight::shortest_turn, glow_level, lights_level,
+    LandOutcome, LandPress, LandingRefusal, Market, NeverFires, Order, OutfitOrder, OutfitRefusal,
+    Outfitter, Pilot, PilotCatalog, RechargeRefusal, Reserves, Session, ShipId, ShipPurchase,
+    ShipRefusal, ShipState, Shipyard, SimMessage, StartError, StellarId, Steps, SystemId,
+    TradeRefusal, Turn, flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 
 use super::catalog::{ShipSheet, ShipSprites, StatusBars};
@@ -704,11 +704,11 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
             return;
         };
         match session.land() {
-            Ok(LandOutcome::Selected {
+            Ok(LandPress::Outcome(LandOutcome::Selected {
                 stellar,
                 station,
                 clearance,
-            }) => {
+            })) => {
                 let hypergate = session.gate_kind(stellar) == Some(GateKind::Hypergate);
                 let text = match clearance {
                     Clearance::Granted if hypergate => {
@@ -725,11 +725,11 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
                 };
                 self.show(text);
             }
-            Ok(LandOutcome::Landed(stellar)) => {
+            Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
                 self.pending_landing = Some(stellar);
                 self.message = None;
             }
-            Ok(LandOutcome::AtGate {
+            Ok(LandPress::AtGate {
                 kind: GateKind::Hypergate,
                 ..
             }) => {
@@ -742,7 +742,7 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
                     self.open_map();
                 }
             }
-            Ok(LandOutcome::AtGate {
+            Ok(LandPress::AtGate {
                 kind: GateKind::Wormhole,
                 ..
             }) => match session.enter_wormhole(&self.catalog, &mut self.chance) {

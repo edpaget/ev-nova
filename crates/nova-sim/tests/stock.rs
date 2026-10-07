@@ -16,7 +16,7 @@ use nova_data::records::stellar::Stellar;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::{
     Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good, GovtId,
-    JunkId, LandOutcome, LandingRefusal, NeverFires, OutfitId, OutfitMod, OutfitOrder,
+    JunkId, LandOutcome, LandPress, LandingRefusal, NeverFires, OutfitId, OutfitMod, OutfitOrder,
     OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields, ShipId,
     ShipState, ShipStats, StartDate, StellarId, SystemId, Vec2, check_landing, services,
 };
@@ -551,11 +551,12 @@ fn hg_kania_leads_to_hg_tichel() {
             stellar: StellarId(1404),
             station: true,
             clearance: Clearance::Granted,
-        })
+        }
+        .into())
     );
     assert_eq!(
         session.land(),
-        Ok(LandOutcome::AtGate {
+        Ok(LandPress::AtGate {
             stellar: StellarId(1404),
             kind: GateKind::Hypergate,
         })

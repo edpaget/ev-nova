@@ -6,8 +6,8 @@
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
     CharacterStart, Clearance, CommodityStrings, Controls, DateAffixes, DisasterRecord, JunkRecord,
-    LandOutcome, LandingRefusal, LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session,
-    ShipFields, ShipId, StarSystem, StartDate, StartError, StellarId, SystemId, Vec2,
+    LandOutcome, LandPress, LandingRefusal, LandingSite, OutfitId, OutfitRecord, PilotCatalog,
+    Session, ShipFields, ShipId, StarSystem, StartDate, StartError, StellarId, SystemId, Vec2,
 };
 
 /// One `chär` flying an average ship that turns 6° a tick from system
@@ -108,12 +108,13 @@ fn a_system_without_stellars_refuses() {
     assert_eq!(session(Vec::new()).land(), Err(LandingRefusal::NoStellars));
 }
 
-fn selected(station: bool, clearance: Clearance) -> LandOutcome {
+fn selected(station: bool, clearance: Clearance) -> LandPress {
     LandOutcome::Selected {
         stellar: StellarId(128),
         station,
         clearance,
     }
+    .into()
 }
 
 #[test]
@@ -122,7 +123,10 @@ fn the_first_l_requests_clearance_and_the_second_lands() {
     assert_eq!(session.land(), Ok(selected(false, Clearance::Granted)));
     assert_eq!(session.nav_target(), Some(StellarId(128)));
     assert_eq!(session.landed(), None);
-    assert_eq!(session.land(), Ok(LandOutcome::Landed(StellarId(128))));
+    assert_eq!(
+        session.land(),
+        Ok(LandOutcome::Landed(StellarId(128)).into())
+    );
     assert_eq!(session.landed(), Some(StellarId(128)));
     assert_eq!(session.nav_target(), None);
 }
@@ -204,7 +208,10 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     while session.player().velocity.length() > 1.0 {
         session.tick(thrust);
     }
-    assert_eq!(session.land(), Ok(LandOutcome::Landed(StellarId(128))));
+    assert_eq!(
+        session.land(),
+        Ok(LandOutcome::Landed(StellarId(128)).into())
+    );
     assert_eq!(session.player().velocity, Vec2::ZERO);
     assert_eq!(session.player().position, Vec2::ZERO);
     assert_eq!(session.take_off(), Some(StellarId(128)));

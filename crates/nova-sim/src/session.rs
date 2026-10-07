@@ -160,6 +160,30 @@ enum Jump {
     Hyperspace(SystemId),
 }
 
+/// What [`Session::land`] did, when it was not refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LandPress {
+    /// What the [`landing`](crate::landing) rules gave: a stellar
+    /// selected, or one landed on and docked at.
+    Outcome(LandOutcome),
+    /// The ship is cleared and over a hypergate or wormhole, and the
+    /// entry awaits [`Session::enter_hypergate`] or
+    /// [`Session::enter_wormhole`]: what the landing rules would let it
+    /// land on, it enters instead (see [`gate`]).
+    AtGate {
+        /// The stellar.
+        stellar: StellarId,
+        /// What it is.
+        kind: GateKind,
+    },
+}
+
+impl From<LandOutcome> for LandPress {
+    fn from(outcome: LandOutcome) -> Self {
+        Self::Outcome(outcome)
+    }
+}
+
 /// The player's ship, flying in one system.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
@@ -679,10 +703,10 @@ impl Session {
     ///
     /// A press that would land on a hypergate or wormhole
     /// ([`GateKind::of`] its `Flags2`) enters it instead: it does not dock
-    /// and makes no sound, and gives [`LandOutcome::AtGate`]. The entry
+    /// and makes no sound, and gives [`LandPress::AtGate`]. The entry
     /// then awaits [`Session::enter_hypergate`] or
     /// [`Session::enter_wormhole`], until the next tick.
-    pub fn land(&mut self) -> Result<LandOutcome, LandingRefusal> {
+    pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
         if self.jump.is_some() {
             return Err(LandingRefusal::Jumping);
         }
@@ -698,13 +722,12 @@ impl Session {
             LandOutcome::Landed(stellar) => {
                 if let Some(kind) = self.gate_kind(stellar) {
                     self.gate = Some(stellar);
-                    return Ok(LandOutcome::AtGate { stellar, kind });
+                    return Ok(LandPress::AtGate { stellar, kind });
                 }
                 self.dock(stellar);
             }
-            LandOutcome::AtGate { .. } => {}
         }
-        Ok(outcome)
+        Ok(outcome.into())
     }
 
     /// What `stellar`, one of the system's, leads through, if it is a
@@ -1421,7 +1444,8 @@ mod tests {
                 stellar: StellarId(128),
                 station: false,
                 clearance: Clearance::Granted,
-            })
+            }
+            .into())
         );
         assert_eq!(session.nav_target(), Some(StellarId(128)));
         assert_eq!(
@@ -1439,7 +1463,10 @@ mod tests {
     fn the_second_l_lands_on_the_target_and_clears_it() {
         let mut session = Session::start(&catalog()).expect("starts");
         session.land().expect("selects");
-        assert_eq!(session.land(), Ok(LandOutcome::Landed(StellarId(128))));
+        assert_eq!(
+            session.land(),
+            Ok(LandOutcome::Landed(StellarId(128)).into())
+        );
         assert_eq!(session.landed(), Some(StellarId(128)));
         assert_eq!(session.nav_target(), None, "cleared on landing");
         assert!(session.take_save_due());
@@ -1451,7 +1478,10 @@ mod tests {
         );
         // Once off again, L requests clearance afresh.
         session.take_off();
-        assert!(matches!(session.land(), Ok(LandOutcome::Selected { .. })));
+        assert!(matches!(
+            session.land(),
+            Ok(LandPress::Outcome(LandOutcome::Selected { .. }))
+        ));
         assert_eq!(session.landed(), None);
     }
 
@@ -1459,7 +1489,10 @@ mod tests {
     fn l_with_a_target_selected_by_tab_lands_on_it_at_once() {
         let mut session = Session::start(&catalog()).expect("starts");
         assert_eq!(session.select_next_stellar(), Some(StellarId(128)));
-        assert_eq!(session.land(), Ok(LandOutcome::Landed(StellarId(128))));
+        assert_eq!(
+            session.land(),
+            Ok(LandOutcome::Landed(StellarId(128)).into())
+        );
         // Planet 129 is far away: L refuses and keeps it.
         session.take_off();
         session.select_next_stellar();
@@ -1485,17 +1518,18 @@ mod tests {
                 stellar: StellarId(128),
                 station: false,
                 clearance: Clearance::Denied,
-            })
+            }
+            .into())
         );
         assert_eq!(session.nav_target(), Some(StellarId(128)), "still selected");
         let catalog = governed([None, None], Some(LAWFUL));
         let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
         assert!(matches!(
             session.land(),
-            Ok(LandOutcome::Selected {
+            Ok(LandPress::Outcome(LandOutcome::Selected {
                 clearance: Clearance::Granted,
                 ..
-            })
+            }))
         ));
     }
 
@@ -2434,7 +2468,10 @@ mod tests {
         assert!(!session.thrusting(), "coasting");
         session.tick(THRUST);
         session.land().expect("selects");
-        assert!(matches!(session.land(), Ok(LandOutcome::Landed(_))));
+        assert!(matches!(
+            session.land(),
+            Ok(LandPress::Outcome(LandOutcome::Landed(_)))
+        ));
         assert!(!session.thrusting(), "landed");
         session.tick(THRUST);
         assert!(!session.thrusting(), "docked, nothing thrusts");
@@ -4306,10 +4343,13 @@ mod tests {
     /// entry awaits the player's pick.
     fn at_gate(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
-        assert!(matches!(session.land(), Ok(LandOutcome::Selected { .. })));
+        assert!(matches!(
+            session.land(),
+            Ok(LandPress::Outcome(LandOutcome::Selected { .. }))
+        ));
         assert_eq!(
             session.land(),
-            Ok(LandOutcome::AtGate {
+            Ok(LandPress::AtGate {
                 stellar: StellarId(300),
                 kind: GateKind::Hypergate,
             })
@@ -4493,7 +4533,7 @@ mod tests {
         session.land().expect("clearance");
         assert_eq!(
             session.land(),
-            Ok(LandOutcome::AtGate {
+            Ok(LandPress::AtGate {
                 stellar: StellarId(400),
                 kind: GateKind::Wormhole,
             })
