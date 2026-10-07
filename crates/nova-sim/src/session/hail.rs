@@ -507,6 +507,7 @@ mod tests {
                 SystemTraffic {
                     dude_types,
                     avg_ships: 1,
+                    persons: Default::default(),
                 },
             )],
             dudes: vec![(

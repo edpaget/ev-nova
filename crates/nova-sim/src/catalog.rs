@@ -7,8 +7,8 @@
 use std::rc::Rc;
 
 pub use nova_data::{
-    BoomId, DudeId, FleetId, GovtId, JunkId, OutfitId, ShipId, SoundId, StellarId, SystemId,
-    WeaponId,
+    BoomId, DudeId, FleetId, GovtId, JunkId, OutfitId, PersonId, ShipId, SoundId, StellarId,
+    SystemId, WeaponId,
 };
 
 use crate::geometry::Vec2;
@@ -252,6 +252,9 @@ pub struct SystemTraffic {
     pub dude_types: [(i16, i16); 8],
     /// Its `AvgShips`.
     pub avg_ships: i16,
+    /// Its Person slots, each with its chance (the undocumented `sÿst`
+    /// words at 0x7E), in record order: a `përs`, or an unused slot.
+    pub persons: [(Option<PersonId>, i16); 8],
 }
 
 /// A `düde`, raw: the [`traffic`](crate::traffic) rules decide what the
@@ -303,8 +306,67 @@ pub struct FleetRecord {
     pub appear_on: String,
 }
 
+/// One of a person's weapon slots that names a weapon, raw from its
+/// `përs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PersonWeapon {
+    /// Its `WeapType`.
+    pub weapon: WeaponId,
+    /// Its `WeapCount`: how many more of the weapon than the ship carries.
+    pub count: i16,
+    /// Its `AmmoLoad`: how many more rounds of the weapon's ammunition.
+    pub ammo: i16,
+}
+
+/// A person, raw from its `përs`: the [`person`](crate::person) rules
+/// decide what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PersonRecord {
+    /// The `përs`'s ID.
+    pub id: PersonId,
+    /// Its name: the resource's name up to its last ';', trailing spaces
+    /// and ';'s dropped, at most 29 characters (`_LoadObjectData`
+    /// @0x7c57d-0x7c5f3); empty when the resource has none.
+    pub name: String,
+    /// Its `LinkSyst`, raw.
+    pub link_syst: i16,
+    /// Its `Govt`, or `None` for independent (-1).
+    pub govt: Option<GovtId>,
+    /// Its `AIType`, raw.
+    pub ai_type: i16,
+    /// Its `Aggress`, raw.
+    pub aggress: i16,
+    /// Its `Coward`: the percent of its shields below which it runs.
+    pub coward: i16,
+    /// Its `ShipType`, if it names one.
+    pub ship: Option<ShipId>,
+    /// Its weapon slots that name a weapon (`WeapType` above 127), in
+    /// slot order.
+    pub weapons: Vec<PersonWeapon>,
+    /// Its `Credits`.
+    pub credits: i32,
+    /// Its `ShieldMod`: a percent; negative is invincible.
+    pub shield_mod: i16,
+    /// Its `HailPict`, when it is 128 or more.
+    pub hail_pict: Option<i16>,
+    /// Its `CommQuote`: an entry in `STR#` 7100.
+    pub comm_quote: i16,
+    /// Its `HailQuote`: an entry in `STR#` 7101.
+    pub hail_quote: i16,
+    /// Its `LinkMission`, when it is above 127.
+    pub link_mission: Option<i16>,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `ActiveOn` control-bit expression.
+    pub active_on: String,
+    /// Its subtitle, the 64-byte string at 0x13A.
+    pub subtitle: String,
+    /// Its `Flags2`.
+    pub flags2: u16,
+}
+
 /// The game data a system's NPC traffic is spawned from: its `sÿst`'s
-/// traffic, the `düde`s it names and the `flët`s.
+/// traffic, the `düde`s it names, the `flët`s and the `përs`.
 pub trait TrafficCatalog {
     /// System `id`'s traffic, or `None` when it cannot be read.
     fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic>;
@@ -312,6 +374,8 @@ pub trait TrafficCatalog {
     fn dude(&self, id: DudeId) -> Option<DudeRecord>;
     /// Every `flët` that can be read, by ascending ID.
     fn fleets(&self) -> Vec<FleetRecord>;
+    /// Every `përs` that can be read, by ascending ID.
+    fn persons(&self) -> Vec<PersonRecord>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -327,6 +391,10 @@ impl<T: TrafficCatalog + ?Sized> TrafficCatalog for &T {
     fn fleets(&self) -> Vec<FleetRecord> {
         (**self).fleets()
     }
+
+    fn persons(&self) -> Vec<PersonRecord> {
+        (**self).persons()
+    }
 }
 
 /// A shared catalog is a catalog.
@@ -341,6 +409,10 @@ impl<T: TrafficCatalog + ?Sized> TrafficCatalog for Rc<T> {
 
     fn fleets(&self) -> Vec<FleetRecord> {
         (**self).fleets()
+    }
+
+    fn persons(&self) -> Vec<PersonRecord> {
+        (**self).persons()
     }
 }
 
@@ -910,6 +982,16 @@ mod tests {
                     (-1, 0),
                 ],
                 avg_ships: 5,
+                persons: [
+                    (Some(PersonId(510)), 50),
+                    (None, 0),
+                    (None, 0),
+                    (None, 0),
+                    (None, 0),
+                    (None, 0),
+                    (None, 0),
+                    (None, 0),
+                ],
             })
         }
 
@@ -937,10 +1019,17 @@ mod tests {
                 appear_on: String::new(),
             }]
         }
+
+        fn persons(&self) -> Vec<PersonRecord> {
+            vec![PersonRecord {
+                name: "Ace".to_owned(),
+                ..crate::testkit::person(510, 128)
+            }]
+        }
     }
 
     /// Everything `catalog` says about system 130's and 131's traffic,
-    /// düdes 128 and 129 and the fleets.
+    /// düdes 128 and 129, the fleets and the persons.
     fn traffic(catalog: impl TrafficCatalog) -> Vec<String> {
         vec![
             format!("{:?}", catalog.system_traffic(SystemId(130))),
@@ -948,6 +1037,7 @@ mod tests {
             format!("{:?}", catalog.dude(DudeId(128))),
             format!("{:?}", catalog.dude(DudeId(129))),
             format!("{:?}", catalog.fleets()),
+            format!("{:?}", catalog.persons()),
         ]
     }
 
@@ -960,6 +1050,8 @@ mod tests {
         assert!(direct[2].contains("info_types: 16389"), "{direct:?}");
         assert_eq!(direct[3], "None");
         assert!(direct[4].contains("FleetId(129)"), "{direct:?}");
+        assert!(direct[0].contains("PersonId(510)), 50"), "{direct:?}");
+        assert!(direct[5].contains("\"Ace\""), "{direct:?}");
         assert_eq!(traffic(&One), direct);
         assert_eq!(traffic(Rc::new(One)), direct);
     }

@@ -2208,7 +2208,7 @@ mod tests {
         }
     }
 
-    /// The traffic and düdes given; no fleets.
+    /// The traffic and düdes given; no fleets and no persons.
     impl TrafficCatalog for FakeCatalog {
         fn system_traffic(&self, id: SystemId) -> Option<nova_sim::SystemTraffic> {
             self.traffic
@@ -2225,6 +2225,10 @@ mod tests {
         }
 
         fn fleets(&self) -> Vec<nova_sim::FleetRecord> {
+            Vec::new()
+        }
+
+        fn persons(&self) -> Vec<nova_sim::PersonRecord> {
             Vec::new()
         }
     }
@@ -4360,6 +4364,7 @@ mod tests {
                         nova_sim::SystemTraffic {
                             dude_types,
                             avg_ships: avg,
+                            persons: Default::default(),
                         },
                     )
                 })

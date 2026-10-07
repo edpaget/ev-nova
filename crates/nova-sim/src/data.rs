@@ -11,6 +11,7 @@ use nova_data::records::fleet::Fleet;
 use nova_data::records::govt::Govt;
 use nova_data::records::junk::Junk;
 use nova_data::records::outfit::Outfit;
+use nova_data::records::person::Person;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::Stellar;
@@ -21,9 +22,9 @@ use nova_data::records::weapon::Weapon;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterId, DisasterRecord,
     DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord, HullRecord,
-    JunkRecord, LandingSite, OutfitId, OutfitRecord, Penalties, PilotCatalog, ShipId, ShipRecord,
-    SoundId, StarSystem, StartDate, StartError, StockWeapon, SystemId, SystemTraffic,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    JunkRecord, LandingSite, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
+    PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
+    StockWeapon, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -248,6 +249,10 @@ impl TrafficCatalog for GameData {
         Some(SystemTraffic {
             dude_types: std::array::from_fn(|slot| (system.dude_types[slot], system.prob[slot])),
             avg_ships: system.avg_ships,
+            persons: std::array::from_fn(|slot| {
+                let person = system.person[slot].filter(|person| person.0 > LAST_UNUSED);
+                (person, system.person_prob[slot])
+            }),
         })
     }
 
@@ -290,6 +295,74 @@ impl TrafficCatalog for GameData {
             })
             .collect()
     }
+
+    fn persons(&self) -> Vec<PersonRecord> {
+        self.records::<Person>()
+            .filter_map(|(id, person)| {
+                let person = person.ok()?;
+                let record = person.record;
+                let weapons = (0..record.weap_type.len())
+                    .filter_map(|slot| {
+                        let weapon =
+                            record.weap_type[slot].filter(|weapon| weapon.0 > LAST_UNUSED)?;
+                        Some(PersonWeapon {
+                            weapon,
+                            count: record.weap_count[slot],
+                            ammo: record.ammo_load[slot],
+                        })
+                    })
+                    .collect();
+                Some(PersonRecord {
+                    id: PersonId(id),
+                    name: person.name.map(person_name).unwrap_or_default(),
+                    link_syst: record.link_syst,
+                    govt: record.govt,
+                    ai_type: record.ai_type,
+                    aggress: record.aggress,
+                    coward: record.coward,
+                    ship: record.ship_type,
+                    weapons,
+                    credits: record.credits,
+                    shield_mod: record.shield_mod,
+                    hail_pict: record
+                        .hail_pict
+                        .map(|pict| pict.0)
+                        .filter(|&pict| pict > LAST_UNUSED),
+                    comm_quote: record.comm_quote,
+                    hail_quote: record.hail_quote,
+                    link_mission: record
+                        .link_mission
+                        .map(|mission| mission.0)
+                        .filter(|&mission| mission > LAST_UNUSED),
+                    flags: record.flags.bits(),
+                    active_on: record.active_on.as_str().to_owned(),
+                    subtitle: record.subtitle.as_str().to_owned(),
+                    flags2: record.flags2.bits(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// The highest ID a person's weapon, `HailPict` or `LinkMission`, or a
+/// system's Person slot, names none at (`_LoadObjectData` keeps only
+/// those above it).
+const LAST_UNUSED: i16 = 127;
+
+/// The most characters of a person's name the engine keeps (it copies 30
+/// bytes, a Pascal string's length byte among them).
+const PERSON_NAME_CHARS: usize = 29;
+
+/// A `përs` resource's name as the game shows it: up to its last ';',
+/// trailing spaces and ';'s dropped, and at most [`PERSON_NAME_CHARS`]
+/// characters (`_LoadObjectData` @0x7c57d-0x7c5f3).
+fn person_name(name: &str) -> String {
+    let shown = name.rfind(';').map_or(name, |at| &name[..at]);
+    shown
+        .trim_end_matches([' ', ';'])
+        .chars()
+        .take(PERSON_NAME_CHARS)
+        .collect()
 }
 
 /// Reads the records afresh on every call; a session asks once, when it
@@ -1593,6 +1666,7 @@ mod tests {
                     (5, 5)
                 ],
                 avg_ships: 7,
+                persons: Default::default(),
             }),
             "every slot, raw"
         );
@@ -1747,5 +1821,157 @@ mod tests {
             "by ID, the undecodable one skipped and the unused escort slots left out"
         );
         assert_eq!(store(&[]).fleets(), []);
+    }
+
+    /// A `përs` linked to `link_syst`, of `govt`, AI type 3, `Aggress` 2
+    /// and `Coward` 25, flying `ship`, with these weapon slots (type,
+    /// count, ammunition), 8000 credits, `ShieldMod` 250, `HailPict`
+    /// `hail_pict`, `CommQuote` 24, `HailQuote` 8, no mission, `Flags`
+    /// 0x0090, `ActiveOn` "b0 & !b8", subtitle "Top Gun" and `Flags2`
+    /// 0x0001.
+    fn person(
+        link_syst: i16,
+        govt: i16,
+        ship: i16,
+        weapons: [(i16, i16, i16); 4],
+        hail_pict: i16,
+    ) -> Vec<u8> {
+        let mut bytes = vec![0; Person::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[link_syst, govt, 3, 2, 25, ship]);
+        for (slot, (weapon, count, ammo)) in weapons.into_iter().enumerate() {
+            put_i16s(&mut bytes, 0x0C + 2 * slot, &[weapon]);
+            put_i16s(&mut bytes, 0x14 + 2 * slot, &[count]);
+            put_i16s(&mut bytes, 0x1C + 2 * slot, &[ammo]);
+        }
+        bytes[0x24..0x28].copy_from_slice(&8000_i32.to_be_bytes());
+        put_i16s(&mut bytes, 0x28, &[250, hail_pict, 24, 8, -1]);
+        bytes[0x32..0x34].copy_from_slice(&0x0090_u16.to_be_bytes());
+        bytes[0x34..0x34 + 9].copy_from_slice(b"b0 & !b8\0");
+        bytes[0x13A..0x13A + 8].copy_from_slice(b"Top Gun\0");
+        bytes[0x17E..0x180].copy_from_slice(&0x0001_u16.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn each_readable_përs_is_a_person_record_by_id() {
+        let slots = [(132, 2, 0), (-1, 5, 5), (0, 1, 1), (135, 2, 50)];
+        let data = store_named(&[
+            (
+                Person::TYPE,
+                131,
+                Some("Ace;designer note "),
+                person(132, 128, 279, slots, 127),
+            ),
+            (
+                Person::TYPE,
+                130,
+                None,
+                person(-1, -1, 140, [(-1, 0, 0); 4], 7800),
+            ),
+            (
+                Person::TYPE,
+                132,
+                Some("Broken"),
+                short(person(-1, -1, 140, [(-1, 0, 0); 4], -1)),
+            ),
+        ]);
+        let persons = data.persons();
+        assert_eq!(
+            persons.iter().map(|person| person.id).collect::<Vec<_>>(),
+            [PersonId(130), PersonId(131)],
+            "by ID, the undecodable one skipped"
+        );
+        let ace = &persons[1];
+        assert_eq!(
+            ace,
+            &PersonRecord {
+                id: PersonId(131),
+                name: "Ace".to_owned(),
+                link_syst: 132,
+                govt: Some(GovtId(128)),
+                ai_type: 3,
+                aggress: 2,
+                coward: 25,
+                ship: Some(ShipId(279)),
+                weapons: vec![
+                    PersonWeapon {
+                        weapon: WeaponId(132),
+                        count: 2,
+                        ammo: 0,
+                    },
+                    PersonWeapon {
+                        weapon: WeaponId(135),
+                        count: 2,
+                        ammo: 50,
+                    },
+                ],
+                credits: 8000,
+                shield_mod: 250,
+                hail_pict: None,
+                comm_quote: 24,
+                hail_quote: 8,
+                link_mission: None,
+                flags: 0x0090,
+                active_on: "b0 & !b8".to_owned(),
+                subtitle: "Top Gun".to_owned(),
+                flags2: 0x0001,
+            },
+            "the -1 and 0 weapon slots left out, HailPict 127 none"
+        );
+        let nameless = &persons[0];
+        assert_eq!(nameless.name, "");
+        assert_eq!(nameless.govt, None);
+        assert_eq!(nameless.hail_pict, Some(7800));
+        assert!(nameless.weapons.is_empty());
+        assert_eq!(store(&[]).persons(), []);
+    }
+
+    #[test]
+    fn a_persons_name_is_its_resources_up_to_its_last_semicolon_trimmed_to_29() {
+        for (resource, name) in [
+            ("Ace;designer note ", "Ace"),
+            ("Jack Folstam", "Jack Folstam"),
+            ("Bounty Hunter  ;", "Bounty Hunter"),
+            ("A;B;note", "A;B"),
+            ("Ace;;note", "Ace"),
+            (
+                "A very long name of thirty-one",
+                "A very long name of thirty-on",
+            ),
+        ] {
+            assert_eq!(person_name(resource), name, "{resource}");
+        }
+        assert_eq!(PERSON_NAME_CHARS, 29);
+    }
+
+    #[test]
+    fn a_persons_mission_is_its_link_mission_above_127() {
+        let mut linked = person(-1, -1, 140, [(-1, 0, 0); 4], -1);
+        put_i16s(&mut linked, 0x30, &[400]);
+        let data = store(&[(Person::TYPE, 128, linked)]);
+        assert_eq!(data.persons()[0].link_mission, Some(400));
+    }
+
+    #[test]
+    fn a_systems_person_slots_are_each_person_with_its_chance() {
+        let mut bytes = trafficked([-1; 8], [0; 8], 3);
+        put_i16s(&mut bytes, 0x6E, &[510, -1, 600, -1, -1, -1, 127, -1]);
+        put_i16s(&mut bytes, 0x7E, &[50, 0, 100, 0, 0, 0, 0, 7]);
+        let data = store(&[(System::TYPE, 128, bytes)]);
+        let traffic = data.system_traffic(SystemId(128)).expect("readable");
+        assert_eq!(
+            traffic.persons,
+            [
+                (Some(PersonId(510)), 50),
+                (None, 0),
+                (Some(PersonId(600)), 100),
+                (None, 0),
+                (None, 0),
+                (None, 0),
+                (None, 0),
+                (None, 7),
+            ],
+            "-1 and 127 name none"
+        );
     }
 }

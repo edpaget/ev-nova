@@ -20,13 +20,18 @@
 //! an NPC beside the player. The carried fighters do not count towards
 //! the fleet's most ([`Pilot::escort_count`]).
 //!
+//! The pilot also keeps the persons gone for good, destroyed without an
+//! escape pod or captured, who never appear again, and those holding a
+//! grudge against the player (see [`person`](crate::person)); a new pilot
+//! has neither.
+//!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
-    DisasterId, GovtId, OutfitId, PilotCatalog, ShipId, StartError, StellarId, SystemId,
+    DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, ShipId, StartError, StellarId, SystemId,
 };
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
@@ -73,6 +78,11 @@ pub struct Pilot {
     pub(crate) default_outfits_pending: bool,
     /// The fleet: every ship escorting the player, in the order it joined.
     pub(crate) escorts: Vec<Escort>,
+    /// The persons gone for good, who never appear again (see
+    /// [`person`](crate::person)).
+    pub(crate) gone_persons: BTreeSet<PersonId>,
+    /// The persons holding a grudge against the player.
+    pub(crate) grudges: BTreeSet<PersonId>,
 }
 
 /// A ship in the player's fleet: its class, its shield, armour and fuel,
@@ -145,6 +155,8 @@ impl Pilot {
             outfits,
             default_outfits_pending: false,
             escorts: Vec::new(),
+            gone_persons: BTreeSet::new(),
+            grudges: BTreeSet::new(),
         })
     }
 
@@ -275,6 +287,28 @@ impl Pilot {
     pub fn outfits(&self) -> impl Iterator<Item = (OutfitId, u16)> + '_ {
         self.outfits.iter().map(|(&id, &count)| (id, count))
     }
+
+    /// Whether person `id` is gone for good, never to appear again.
+    #[must_use]
+    pub fn gone(&self, id: PersonId) -> bool {
+        self.gone_persons.contains(&id)
+    }
+
+    /// Whether person `id` holds a grudge against the player.
+    #[must_use]
+    pub fn grudge(&self, id: PersonId) -> bool {
+        self.grudges.contains(&id)
+    }
+
+    /// Every person gone for good, by ascending ID.
+    pub fn gone_persons(&self) -> impl Iterator<Item = PersonId> + '_ {
+        self.gone_persons.iter().copied()
+    }
+
+    /// Every person holding a grudge against the player, by ascending ID.
+    pub fn grudges(&self) -> impl Iterator<Item = PersonId> + '_ {
+        self.grudges.iter().copied()
+    }
 }
 
 /// Ship `ship`'s default items from `catalog`, each with how many: repeated
@@ -302,7 +336,7 @@ pub(crate) fn tally(items: impl IntoIterator<Item = (OutfitId, u16)>) -> BTreeMa
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::{CharacterStart, GovtId, ShipId, StartError, SystemId};
+    use crate::catalog::{CharacterStart, GovtId, PersonId, ShipId, StartError, SystemId};
     use crate::date::GameDate;
     use crate::reserves::Gauge;
     use crate::testkit::{FAST, FakePilotCatalog, START, catalog, starting};
@@ -440,6 +474,28 @@ mod tests {
             pilot.events().collect::<Vec<_>>(),
             [(DisasterId(128), 9), (DisasterId(130), 4)]
         );
+    }
+
+    #[test]
+    fn a_new_pilot_has_lost_no_person_and_holds_no_grudge() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert!(!pilot.gone(PersonId(151)));
+        assert!(!pilot.grudge(PersonId(510)));
+        assert_eq!(pilot.gone_persons().count(), 0);
+        assert_eq!(pilot.grudges().count(), 0);
+    }
+
+    #[test]
+    fn the_persons_gone_and_the_grudges_read_as_they_are_kept() {
+        let mut pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        pilot.gone_persons.insert(PersonId(151));
+        pilot.grudges.insert(PersonId(510));
+        assert!(pilot.gone(PersonId(151)));
+        assert!(!pilot.gone(PersonId(510)));
+        assert!(pilot.grudge(PersonId(510)));
+        assert!(!pilot.grudge(PersonId(151)));
+        assert_eq!(pilot.gone_persons().collect::<Vec<_>>(), [PersonId(151)]);
+        assert_eq!(pilot.grudges().collect::<Vec<_>>(), [PersonId(510)]);
     }
 
     #[test]

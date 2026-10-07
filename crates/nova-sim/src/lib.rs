@@ -191,9 +191,10 @@ pub use board::{
 pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterId,
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord,
-    HullRecord, JunkId, JunkRecord, LandingSite, OutfitId, OutfitRecord, Penalties, PilotCatalog,
-    ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StockWeapon,
-    SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    HullRecord, JunkId, JunkRecord, LandingSite, OutfitId, OutfitRecord, Penalties, PersonId,
+    PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StockWeapon, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
+    WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};

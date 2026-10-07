@@ -27,6 +27,8 @@
 //!   bay, none in an older save.
 //! - Version 8: adds each escort's daily wage, none (not hired) in an
 //!   older save.
+//! - Version 9: adds the persons gone for good and those holding a
+//!   grudge against the player, none in an older save.
 //!
 //! IDs are saved as their raw numbers, the date as its year, month and
 //! day, each reserve as how much the ship has and can hold, each good held
@@ -38,12 +40,14 @@
 //! for an escort that was not hired). The fighters aboard a bay are its
 //! rounds, the ammunition outfits saved with the outfits; the fighters
 //! out are the carried escorts. Which carrier a fighter came from is
-//! never saved: it docks with the player's bay of its type.
+//! never saved: it docks with the player's bay of its type. The persons
+//! gone for good (`gone_persons`) and those holding a grudge (`grudges`)
+//! are each a list of `përs` IDs.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::catalog::{DisasterId, GovtId, JunkId, OutfitId, ShipId, StellarId, SystemId};
+use crate::catalog::{DisasterId, GovtId, JunkId, OutfitId, PersonId, ShipId, StellarId, SystemId};
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::Good;
@@ -51,7 +55,7 @@ use crate::pilot::{Escort, Pilot};
 use crate::reserves::{Gauge, Reserves};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 8;
+pub const CURRENT: u64 = 9;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -239,6 +243,8 @@ struct Saved {
     #[serde(deserialize_with = "Option::deserialize")]
     outfits: Option<Vec<SavedOutfit>>,
     escorts: Vec<SavedEscort>,
+    gone_persons: Vec<i16>,
+    grudges: Vec<i16>,
 }
 
 /// `pilot` as the current version's save: pretty JSON.
@@ -307,6 +313,8 @@ pub fn encode(pilot: &Pilot) -> String {
                 wage: escort.wage,
             })
             .collect(),
+        gone_persons: pilot.gone_persons.iter().map(|person| person.0).collect(),
+        grudges: pilot.grudges.iter().map(|person| person.0).collect(),
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
@@ -321,6 +329,7 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     escort_orders,
     carried_fighters,
     hired_escorts,
+    persons,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -358,6 +367,11 @@ fn carried_fighters(save: &mut Value) {
 /// Version 7 to 8: no escort was hired, so none has a wage.
 fn hired_escorts(save: &mut Value) {
     add_to_escorts(save, "wage", &Value::Null);
+}
+
+/// Version 8 to 9: every person alive, and no grudges.
+fn persons(save: &mut Value) {
+    add_empty(save, &["gone_persons", "grudges"]);
 }
 
 /// Adds `field` to every escort in `save`, as `value`.
@@ -460,6 +474,8 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
                 wage: saved.wage,
             })
             .collect(),
+        gone_persons: saved.gone_persons.into_iter().map(PersonId).collect(),
+        grudges: saved.grudges.into_iter().map(PersonId).collect(),
     })
 }
 
@@ -469,7 +485,9 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use crate::catalog::{DisasterId, GovtId, JunkId, OutfitId, ShipId, StellarId, SystemId};
+    use crate::catalog::{
+        DisasterId, GovtId, JunkId, OutfitId, PersonId, ShipId, StellarId, SystemId,
+    };
     use crate::date::GameDate;
     use crate::escort::EscortOrder;
     use crate::market::Good;
@@ -549,6 +567,8 @@ mod tests {
                     wage: Some(100),
                 },
             ],
+            gone_persons: BTreeSet::from([PersonId(151), PersonId(600)]),
+            grudges: BTreeSet::from([PersonId(510)]),
         }
     }
 
@@ -569,6 +589,8 @@ mod tests {
             events: BTreeMap::new(),
             outfits: BTreeMap::new(),
             escorts: Vec::new(),
+            gone_persons: BTreeSet::new(),
+            grudges: BTreeSet::new(),
             cash: -5,
             ..seasoned()
         };
@@ -604,7 +626,9 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 8);
+        assert_eq!(CURRENT, 9);
+        assert_eq!(value["gone_persons"], serde_json::json!([151, 600]));
+        assert_eq!(value["grudges"], serde_json::json!([510]));
         assert_eq!(value["name"], "Ada Lovelace");
         assert_eq!(value["ship"], 140);
         assert_eq!(value["stellar"], 150);
@@ -655,7 +679,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 8"), "{text}");
+        assert!(text.contains("\n  \"version\": 9"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -1021,7 +1045,7 @@ mod tests {
         assert!(pilot.escorts().iter().all(|escort| !escort.hired()));
         // Saved again, it is a current save whose escorts say so.
         let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
-        assert_eq!(value["version"], 8);
+        assert_eq!(value["version"], CURRENT);
         assert_eq!(value["escorts"][0]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][1]["wage"], serde_json::Value::Null);
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
@@ -1034,6 +1058,82 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    /// A version 8 save: before the persons gone and the grudges.
+    const VERSION_8: &str = r#"{
+        "version": 8,
+        "name": "Mercenary",
+        "ship": 129,
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [],
+        "cargo": [],
+        "events": [],
+        "outfits": [],
+        "escorts": [
+            {
+                "ship": 128,
+                "reserves": {
+                    "shield": {"now": 30.0, "max": 30.0},
+                    "armor": {"now": 45.0, "max": 45.0},
+                    "fuel": {"now": 300.0, "max": 300.0}
+                },
+                "order": null,
+                "carried": false,
+                "wage": 100
+            }
+        ]
+    }"#;
+
+    #[test]
+    fn a_version_8_save_loads_with_every_person_alive_and_no_grudge() {
+        let pilot = decode(VERSION_8).expect("loads");
+        assert_eq!(pilot.name(), "Mercenary");
+        assert_eq!(pilot.escorts()[0].wage, Some(100));
+        assert_eq!(pilot.gone_persons().count(), 0);
+        assert_eq!(pilot.grudges().count(), 0);
+        // Saved again, it is a current save that says so.
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], 9);
+        assert_eq!(value["gone_persons"], serde_json::json!([]));
+        assert_eq!(value["grudges"], serde_json::json!([]));
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [
+            VERSION_7, VERSION_6, VERSION_5, VERSION_4, VERSION_3, VERSION_2, VERSION_1,
+        ] {
+            let pilot = decode(text).expect("loads");
+            assert_eq!(
+                (pilot.gone_persons().count(), pilot.grudges().count()),
+                (0, 0),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_current_save_missing_its_persons_or_grudges_or_of_no_list_is_unusable() {
+        for field in ["gone_persons", "grudges"] {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&encode(&seasoned())).expect("JSON");
+            if let Some(object) = value.as_object_mut() {
+                object.remove(field);
+            }
+            assert!(unusable(&value.to_string()).contains(field), "{field}");
+        }
+        let text =
+            encode(&seasoned()).replace("\"grudges\": [\n    510\n  ]", "\"grudges\": \"lots\"");
+        assert!(text.contains("lots"), "{text}");
+        assert!(unusable(&text).contains("lots"), "{}", unusable(&text));
     }
 
     #[test]
@@ -1131,12 +1231,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 8", "\"version\": 9");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 9 }));
+        let newer = encode(&seasoned()).replace("\"version\": 9", "\"version\": 10");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 10 }));
         assert_eq!(
-            SaveError::Newer { version: 9 }.to_string(),
+            SaveError::Newer { version: 10 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 9, and this version of Nova reads up to 8)."
+             (it is version 10, and this version of Nova reads up to 9)."
         );
     }
 

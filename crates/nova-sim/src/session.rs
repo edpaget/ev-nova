@@ -3906,6 +3906,7 @@ mod tests {
                 SystemTraffic {
                     dude_types,
                     avg_ships: avg,
+                    persons: Default::default(),
                 },
             )],
             dudes: vec![(
@@ -4804,6 +4805,7 @@ mod tests {
                         system,
                         SystemTraffic {
                             avg_ships: 2,
+                            persons: Default::default(),
                             ..traffic
                         },
                     )
@@ -5754,6 +5756,7 @@ mod tests {
                 SystemTraffic {
                     dude_types,
                     avg_ships: dudes.len() as i16,
+                    persons: Default::default(),
                 },
             )],
             dudes: dudes

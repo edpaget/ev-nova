@@ -7,8 +7,9 @@ use crate::ai::Goal;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterRecord, DudeId,
     DudeRecord, FleetRecord, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, OutfitId,
-    OutfitRecord, Penalties, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, ShipId, ShipRecord, StarSystem,
+    StartDate, StartError, StellarId, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
+    WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -57,6 +58,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) dudes: Vec<(DudeId, DudeRecord)>,
     /// Every `flët`.
     pub(crate) fleets: Vec<FleetRecord>,
+    /// Every `përs`.
+    pub(crate) persons: Vec<PersonRecord>,
     /// Every `wëap`.
     pub(crate) weapons: Vec<WeaponRecord>,
     /// Every `shïp`'s combat fields.
@@ -222,6 +225,34 @@ pub(crate) fn govt(id: i16) -> GovtRecord {
     }
 }
 
+/// `përs` `id`, "Person `id`", flying ship `ship`: a warship of no
+/// government and `Aggress` 2 that may appear anywhere (`LinkSyst` -1),
+/// with no `Coward`, extra weapons, credits, `ShieldMod`, quotes,
+/// picture, mission, flags or `ActiveOn`.
+pub(crate) fn person(id: i16, ship: i16) -> PersonRecord {
+    PersonRecord {
+        id: PersonId(id),
+        name: format!("Person {id}"),
+        link_syst: -1,
+        govt: None,
+        ai_type: 3,
+        aggress: 2,
+        coward: 0,
+        ship: Some(ShipId(ship)),
+        weapons: Vec::new(),
+        credits: 0,
+        shield_mod: 0,
+        hail_pict: None,
+        comm_quote: -1,
+        hail_quote: -1,
+        link_mission: None,
+        flags: 0,
+        active_on: String::new(),
+        subtitle: String::new(),
+        flags2: 0,
+    }
+}
+
 /// NPC `id`, a wimpy trader of ship type 128 performing as `stats`, its
 /// reserves full, at rest at the centre facing up, flying and idle,
 /// intact and unarmed.
@@ -302,6 +333,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         traffic: Vec::new(),
         dudes: Vec::new(),
         fleets: Vec::new(),
+        persons: Vec::new(),
         weapons: Vec::new(),
         hulls: Vec::new(),
         govts: Vec::new(),
@@ -418,6 +450,10 @@ impl TrafficCatalog for FakePilotCatalog {
 
     fn fleets(&self) -> Vec<FleetRecord> {
         self.fleets.clone()
+    }
+
+    fn persons(&self) -> Vec<PersonRecord> {
+        self.persons.clone()
     }
 }
 

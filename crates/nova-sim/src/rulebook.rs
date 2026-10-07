@@ -28,12 +28,21 @@
 //! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage ([`Session`](crate::Session)) | wages are paid only for the days that pass, a jump's\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
+//! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear ([`NovaPersons`](crate::NovaPersons)) | 5 %, one of those who may appear picked evenly |
+//! | [`SystemPersons`](RuleKey::SystemPersons) | `system_persons` | a `sÿst` Person slot brings its person on `Rand(100) + 1` at most its chance ([`NovaPersons`](crate::NovaPersons)) | always |
+//! | [`LinkSystSlip`](RuleKey::LinkSystSlip) | `link_syst_slip` | a person's system `LinkSyst` also allows the system of ID `LinkSyst` + 128 ([`NovaPersons`](crate::NovaPersons)) | that system only |
+//! | [`ShieldMod`](RuleKey::ShieldMod) | `shield_mod` | a person's `ShieldMod` scales its shield and armour ([`NovaPersons`](crate::NovaPersons)) | its shield only |
+//! | [`PersonCoward`](RuleKey::PersonCoward) | `person_coward` | only a warship person of a government with `Flags` 0x0010 runs at `Coward` % ([`NovaAi`](crate::NovaAi)) | any warship or interceptor person |
+//! | [`PersonCredits`](RuleKey::PersonCredits) | `person_credits` | a person carries half its `Credits` in thousands, kept in 16 bits, and a draw of as many more ([`NovaBoarding`](crate::NovaBoarding)) | its `Credits`, ±25 % |
+//! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
-//! `hire_fee` or `escort_wage`: for them, the reading other than the
-//! engine's (`"bible"` in the settings) is the intended behaviour, not
-//! the engine's bug or quirk, and not anything the Bible says.
+//! `hire_fee`, `escort_wage` or `comm_quote` (only that the quote is
+//! "displayed in the communications dialog"): for them, the reading other
+//! than the engine's (`"bible"` in the settings) is the intended
+//! behaviour, not the engine's bug or quirk, and not anything the Bible
+//! says.
 //!
 //! # Adding a rule
 //!
@@ -207,6 +216,53 @@ rule_keys! {
     /// the intended behaviour, not anything the Bible says (see
     /// [`Session::with_escort_wage`](crate::Session::with_escort_wage)).
     EscortWage => "escort_wage",
+    /// How often a person (`përs`) takes an ordinary ship's place, and
+    /// which: by the engine, a draw of `Rand(7)` of 0, then `Rand(1022)`
+    /// landing on a person who may appear (`_SpawnPerson` @0x40c95), so
+    /// each person has a fixed 1-in-1022 share; by the Bible ("a 5% chance
+    /// that a specific AI-person will also be created"), `Rand(100)`
+    /// below 5, then one of the persons who may appear, picked evenly,
+    /// taking the ship's place (see [`person`](crate::person)).
+    PersonOdds => "person_odds",
+    /// Whether a `sÿst` Person slot brings its person: by the engine,
+    /// when `Rand(100) + 1` is at most the slot's chance
+    /// (`_SetupShipsInSystem` @0x43363-0x43386); by the Bible ("Want to
+    /// make a ‘pers’ type ship always appear? Put its ID into one of the
+    /// Person fields"), always (see [`person`](crate::person)).
+    SystemPersons => "system_persons",
+    /// Which systems a system-linked person's `LinkSyst` allows: by the
+    /// engine, that system and, by its slip comparing the raw value with
+    /// the system's index (@0x409db), the one whose ID is `LinkSyst` +
+    /// 128 too; by the Bible, that system only (see
+    /// [`person`](crate::person)).
+    LinkSystSlip => "link_syst_slip",
+    /// What a person's `ShieldMod` scales: by the engine, its shield and
+    /// its armour (`_SpawnPerson` @0x40f68-0x40f9e); by the Bible ("How
+    /// much to increase/decrease the person's shield capacity"), its
+    /// shield only (see [`person`](crate::person)).
+    ShieldMod => "shield_mod",
+    /// Which persons run below `Coward`% of their shields: by the engine,
+    /// only a warship person of a government with `Flags` 0x0010 and no
+    /// fleet lead (`_WarshipAI` @0x8be36); by the Bible ("At what percent
+    /// of total shield capacity will the person run away from a fight?"),
+    /// any warship or interceptor person with no fleet lead (see
+    /// [`ai::warship`](crate::ai::warship)).
+    PersonCoward => "person_coward",
+    /// The credits a boarded person carries: by the engine, half its
+    /// `Credits` in thousands (kept in 16 bits), with a draw of as many
+    /// more thousands above 2 (`_SetPlunderValues` @0x922f2-0x9238f); by
+    /// the Bible ("This many credits, +/- 25%"), its `Credits` times 75 to
+    /// 125 % (see [`board`](crate::board)).
+    PersonCredits => "person_credits",
+    /// When a person's comm quote (`STR#` 7100) is said: by the engine,
+    /// as a friendly person's answer to Greetings, in place of its advice
+    /// (`_LoadAdvice` @0x91ae7-0x91b55); otherwise, as the phase has it,
+    /// in place of the hail's opening line, whatever the person's
+    /// attitude. The Bible says only that it is "displayed in the
+    /// communications dialog", so the other reading is the intended
+    /// behaviour, not anything the Bible says (see
+    /// [`Session::with_comm_quote`](crate::Session::with_comm_quote)).
+    CommQuote => "comm_quote",
 }
 
 impl RuleKey {
@@ -338,9 +394,23 @@ mod tests {
                 RuleKey::HireRequire,
                 RuleKey::TakeOffPay,
                 RuleKey::HireFee,
-                RuleKey::EscortWage
+                RuleKey::EscortWage,
+                RuleKey::PersonOdds,
+                RuleKey::SystemPersons,
+                RuleKey::LinkSystSlip,
+                RuleKey::ShieldMod,
+                RuleKey::PersonCoward,
+                RuleKey::PersonCredits,
+                RuleKey::CommQuote
             ]
         );
+        assert_eq!(RuleKey::PersonOdds.key(), "person_odds");
+        assert_eq!(RuleKey::SystemPersons.key(), "system_persons");
+        assert_eq!(RuleKey::LinkSystSlip.key(), "link_syst_slip");
+        assert_eq!(RuleKey::ShieldMod.key(), "shield_mod");
+        assert_eq!(RuleKey::PersonCoward.key(), "person_coward");
+        assert_eq!(RuleKey::PersonCredits.key(), "person_credits");
+        assert_eq!(RuleKey::CommQuote.key(), "comm_quote");
         assert_eq!(RuleKey::HireRequire.key(), "hire_require");
         assert_eq!(RuleKey::TakeOffPay.key(), "take_off_pay");
         assert_eq!(RuleKey::HireFee.key(), "hire_fee");

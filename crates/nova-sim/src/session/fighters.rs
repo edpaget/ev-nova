@@ -1277,6 +1277,7 @@ mod tests {
             crate::catalog::SystemTraffic {
                 dude_types,
                 avg_ships: 1,
+                persons: Default::default(),
             },
         )];
         catalog.dudes = vec![(

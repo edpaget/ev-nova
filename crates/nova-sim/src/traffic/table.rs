@@ -316,7 +316,7 @@ mod tests {
     use super::*;
     use crate::catalog::GovtRecord;
     use crate::catalog::{
-        DudeRecord, EscortRecord, HullRecord, OutfitId, StockWeapon, SystemTraffic,
+        DudeRecord, EscortRecord, HullRecord, OutfitId, PersonRecord, StockWeapon, SystemTraffic,
     };
     use crate::escort::EscortClass;
     use crate::handling::ShipFields;
@@ -536,6 +536,7 @@ mod tests {
             (id == SystemId(130)).then_some(SystemTraffic {
                 dude_types: types(&[(128, 60), (129, 40), (-140, 20)]),
                 avg_ships: 4,
+                persons: Default::default(),
             })
         }
 
@@ -572,6 +573,10 @@ mod tests {
                 fleet(145, 202, 202, 15_001),
                 fleet(146, 202, 202, 25_001),
             ]
+        }
+
+        fn persons(&self) -> Vec<PersonRecord> {
+            Vec::new()
         }
     }
 
@@ -766,12 +771,16 @@ mod tests {
                 Some(SystemTraffic {
                     dude_types: [UNUSED; 8],
                     avg_ships: -3,
+                    persons: Default::default(),
                 })
             }
             fn dude(&self, _id: DudeId) -> Option<DudeRecord> {
                 None
             }
             fn fleets(&self) -> Vec<FleetRecord> {
+                Vec::new()
+            }
+            fn persons(&self) -> Vec<PersonRecord> {
                 Vec::new()
             }
         }
