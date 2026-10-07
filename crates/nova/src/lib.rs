@@ -15,6 +15,8 @@
 //!   window could not be opened.
 //! - [`fonts`]: the fonts text is drawn in, from the result of loading the
 //!   game's Charcoal.
+//! - [`load`]: what loading the game data found wrong: the files it
+//!   skipped and the control-bit expressions that do not parse.
 //! - [`rulebook`]: which rules follow the original engine and which the
 //!   Nova Bible, as the settings file chooses.
 //! - [`saves`]: the pilot files, one JSON file per pilot in a directory.
@@ -35,6 +37,7 @@ pub mod config;
 pub mod devtools;
 pub mod exit;
 pub mod fonts;
+pub mod load;
 pub mod platform;
 pub mod rulebook;
 pub mod saves;

@@ -87,6 +87,10 @@
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!
+//! When the game data loads, each data file that could not be loaded and
+//! each control-bit expression that does not parse is reported as a line
+//! on standard error, and the game runs without them.
+//!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
 //! cannot be opened.
@@ -102,6 +106,7 @@ use nova::audio::{game_audio, music_warning};
 use nova::chance::SplitMix;
 use nova::config::{Os, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
+use nova::load::data_warnings;
 use nova::platform::Runner;
 use nova::rulebook::game_rulebook;
 use nova::saves::FilePilots;
@@ -134,6 +139,9 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    for warning in data_warnings(&data) {
+        eprintln!("{warning}");
+    }
     let warn = |warning: Option<String>| {
         if let Some(warning) = warning {
             eprintln!("{warning}");
