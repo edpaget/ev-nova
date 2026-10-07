@@ -394,6 +394,14 @@ impl Scripted {
             ..Self::default()
         }
     }
+
+    /// Rolls `rolls`, in order, then 0.
+    pub(crate) fn rolling(rolls: &[u16]) -> Self {
+        Self {
+            rolls: rolls.iter().rev().copied().collect(),
+            ..Self::default()
+        }
+    }
 }
 
 impl Chance for Scripted {

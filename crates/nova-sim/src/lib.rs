@@ -23,6 +23,9 @@
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
 //!   `shïp` and its outfits' fuel scoops.
+//! - [`gate`]: hypergates and wormholes: which a stellar is
+//!   ([`GateKind`]), where each leads, and how a ship comes out of one,
+//!   under the [`GateArrivalRule`] and [`WormholeRule`].
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
 //! - [`glow`]: how bright a ship's engine glow is: its base level, which
@@ -89,6 +92,7 @@ pub mod date;
 pub mod fixture;
 pub mod flight;
 pub mod fuel;
+pub mod gate;
 pub mod geometry;
 pub mod glow;
 pub mod handling;
@@ -123,6 +127,7 @@ pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
 pub use date::GameDate;
 pub use flight::{Controls, ShipState, Turn, step};
 pub use fuel::{OutfitMod, fuel_regen_per_tick};
+pub use gate::{GateArrivalRule, GateKind, WormholeRule};
 pub use geometry::Vec2;
 pub use glow::{GLOW_CRUISE, glow_level, ramp_glow};
 pub use handling::{Handling, ShipFields};
