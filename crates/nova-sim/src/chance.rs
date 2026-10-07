@@ -2,7 +2,8 @@
 //! so many equal outcomes a roll gives.
 //!
 //! The rules that roll dice (each day's `öops` events, see
-//! [`market`](crate::market)) ask a [`Chance`] the caller supplies, so they
+//! [`market`](crate::market), and where a wormhole leads and which way a
+//! ship comes out of a gate, see [`gate`](crate::gate)) ask a [`Chance`] the caller supplies, so they
 //! stay deterministic under test. The real source lives at the program's
 //! edge.
 

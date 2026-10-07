@@ -37,14 +37,15 @@
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
 //! - [`landing`]: what the land key does, [`land_or_select`]: request
-//!   clearance, then land; whether the ship can land, [`check_landing`],
+//!   clearance, then land (or, over a hypergate or wormhole, enter it); whether the ship can land, [`check_landing`],
 //!   each [`LandingRefusal`] in the order it applies; and the
 //!   [`Service`]s a stellar's flags offer.
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.
 //! - [`message`]: the [`SimMessage`] events a session raises for the
-//!   message line, such as arriving from a jump; the view words them.
+//!   message line, such as arriving from a jump or through a gate; the
+//!   view words them.
 //! - [`navigation`]: the navigation target Tab selects, [`next_stellar`]:
 //!   the system's stellars in their `NavDef` order, wrapping.
 //! - [`outfitter`]: the outfitter: which outfits a stellar lists and sells

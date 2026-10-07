@@ -45,6 +45,8 @@
 //!   the ship is nearer the system's centre than its jump distance
 //!   ([`MIN_JUMP_DISTANCE`] standard, the Bible's "Jump Distance 1000
 //!   pixels", which outfits can move), or it has less than [`JUMP_FUEL`].
+//!   Hypergates and wormholes never ask it: they use no fuel and work
+//!   anywhere the ship can land on them (see [`gate`](crate::gate)).
 //! - [`jump_bearing`] is the heading the ship turns to before it jumps:
 //!   the map's bearing from the system it is in to the next.
 //! - [`arrival`] places the ship in the system it jumps to: its jump
