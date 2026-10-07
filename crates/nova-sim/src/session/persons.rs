@@ -653,6 +653,29 @@ mod tests {
     }
 
     #[test]
+    fn the_refill_clears_only_the_invincible_persons_downed_marks() {
+        let catalog = duel(0, -1);
+        let mut session = facing_ace(&catalog, ada(&catalog));
+        let downed = |ship| Strike {
+            ship,
+            by: ShipRef::Player,
+            damage: 9.0,
+            downed: Some(crate::combat::Downed::Disabled),
+        };
+        let mut strikes = [
+            downed(ShipRef::Npc(NpcId(0))),
+            downed(ShipRef::Npc(NpcId(7))),
+        ];
+        session.refill_invincible(&mut strikes);
+        assert_eq!(strikes[0].downed, None, "Ace's");
+        assert_eq!(
+            strikes[1].downed,
+            Some(crate::combat::Downed::Disabled),
+            "another ship's kept"
+        );
+    }
+
+    #[test]
     fn an_invincible_person_ends_each_fight_tick_whole_and_is_never_disabled() {
         let catalog = duel(0, -1);
         let mut session = facing_ace(&catalog, ada(&catalog));
@@ -756,6 +779,27 @@ mod tests {
                 "{none}"
             );
         }
+    }
+
+    #[test]
+    fn a_session_keeps_its_comm_quote_reading_and_its_person_rules() {
+        let catalog = peopled(0);
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.comm_quote(), RuleSource::Engine);
+        assert_eq!(
+            format!("{:?}", session.person_rules()),
+            format!("{:?}", crate::person::NovaPersons::default())
+        );
+        for source in RuleSource::ALL {
+            let session = Session::start(&catalog)
+                .expect("starts")
+                .with_comm_quote(source);
+            assert_eq!(session.comm_quote(), source);
+        }
+        let session = Session::start(&catalog)
+            .expect("starts")
+            .with_person_rules(Rc::new(FirstComes));
+        assert_eq!(format!("{:?}", session.person_rules()), "FirstComes");
     }
 
     #[test]

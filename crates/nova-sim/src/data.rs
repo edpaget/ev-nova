@@ -1854,7 +1854,7 @@ mod tests {
 
     #[test]
     fn each_readable_përs_is_a_person_record_by_id() {
-        let slots = [(132, 2, 0), (-1, 5, 5), (0, 1, 1), (135, 2, 50)];
+        let slots = [(132, 2, 0), (-1, 5, 5), (127, 1, 1), (135, 2, 50)];
         let data = store_named(&[
             (
                 Person::TYPE,
@@ -1916,7 +1916,7 @@ mod tests {
                 subtitle: "Top Gun".to_owned(),
                 flags2: 0x0001,
             },
-            "the -1 and 0 weapon slots left out, HailPict 127 none"
+            "the -1 and 127 weapon slots left out, HailPict 127 none"
         );
         let nameless = &persons[0];
         assert_eq!(nameless.name, "");
@@ -1948,8 +1948,11 @@ mod tests {
     fn a_persons_mission_is_its_link_mission_above_127() {
         let mut linked = person(-1, -1, 140, [(-1, 0, 0); 4], -1);
         put_i16s(&mut linked, 0x30, &[400]);
-        let data = store(&[(Person::TYPE, 128, linked)]);
+        let mut low = person(-1, -1, 140, [(-1, 0, 0); 4], -1);
+        put_i16s(&mut low, 0x30, &[127]);
+        let data = store(&[(Person::TYPE, 128, linked), (Person::TYPE, 129, low)]);
         assert_eq!(data.persons()[0].link_mission, Some(400));
+        assert_eq!(data.persons()[1].link_mission, None, "127 names none");
     }
 
     #[test]

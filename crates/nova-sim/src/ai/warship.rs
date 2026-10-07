@@ -516,9 +516,9 @@ mod tests {
             "no 0x0010"
         );
         assert_eq!(
-            coward(WARSHIPS_RETREAT, w, 0, (0.0, 1), false, ENGINE),
+            coward(WARSHIPS_RETREAT, w, 0, (-1.0, 1), false, ENGINE),
             FIGHT,
-            "Coward 0 never runs"
+            "Coward 0 never runs, its shields below none"
         );
         assert_eq!(
             coward(WARSHIPS_RETREAT, w, -5, (0.0, 1), false, ENGINE),
@@ -612,7 +612,7 @@ mod tests {
                 "{ai_type:?}"
             );
             assert_eq!(
-                coward(0, ai_type, 0, (0.0, 4), false, BIBLE),
+                coward(0, ai_type, 0, (-1.0, 4), false, BIBLE),
                 FIGHT,
                 "{ai_type:?}"
             );

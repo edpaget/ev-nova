@@ -3,18 +3,23 @@
 //! - [`table`]: the [`SpawnTable`] a system's traffic is drawn from, its
 //!   `DudeTypes` and `LinkSyst`s decoded and its ship types' stats
 //!   resolved when the system is entered.
-//! - [`spawn`]: the rolls: the initial population, the arrivals over time
-//!   and the fleets, and where each ship starts.
+//! - [`spawn`]: the rolls: the initial population, the arrivals over time,
+//!   the fleets and the persons (see [`person`](crate::person)), and
+//!   where each ship starts.
 //! - [`npc`]: an [`Npc`]: its ship, government, AI type, escort class
 //!   and duty as the player's escort, stats, reserves, flight state and
 //!   goal, its condition, armament and fire command, its provocation,
 //!   aggression and the ship it last inspected, and the carrier that
-//!   launched it from a fighter bay, if any.
+//!   launched it from a fighter bay, if any, and the person flying it,
+//!   if any ([`NpcPerson`](npc::NpcPerson)).
 //! - [`autopilot`]: flying an NPC's goal each tick with the player's
 //!   flight physics.
 //!
 //! [`Traffic`] holds a system's NPCs. Entering a system
-//! ([`Traffic::enter`]) replaces them with its initial population. Each
+//! ([`Traffic::enter_in`]) replaces them with its initial population, its
+//! persons drawn in the [`World`]'s persons' world: the persons gone for
+//! good never come, and one holding a grudge comes with it. A person
+//! flies its fitted ship ([`Traffic::person`]). Each
 //! tick ([`Traffic::tick_in`]) in its [`World`] (the stellars, the player,
 //! the governments and the player's legal record there), in order:
 //!
@@ -1516,7 +1521,11 @@ mod tests {
         assert!(traffic.npcs()[0].mode != Mode::Flying, "jumping in");
         let mut chance = Draws::of(&[0, 0]);
         traffic.tick_in(&Keep, World::new(&[]), &[], &mut chance);
-        assert_eq!(chance.asked[..2], [500, 7], "Ace is here: nobody may come");
+        assert_eq!(
+            chance.asked,
+            [500, 7],
+            "Ace is here: nobody may come, no draw of 1022"
+        );
         assert_eq!(traffic.npcs().len(), 1);
     }
 
