@@ -22,7 +22,7 @@
 //! bought ([`FlightView::shipyard`], [`FlightView::buy_ship`]), whose
 //! sprite sheet is read then.
 //!
-//! The HUD is drawn last, over everything: the status bar against the
+//! The HUD is drawn over everything but a jump's fade: the status bar against the
 //! right edge, its radar showing the stellars around the ship as drawn,
 //! its bars the session's shield, armour and fuel, and its nav area the
 //! navigation target or else the course. Without a status bar it says
@@ -90,10 +90,11 @@
 //!   ([`Session::preparing_jump`]). The stars streak when the session says
 //!   the jump has begun ([`Session::jumping`]), at once for a ship already
 //!   facing that way and slow enough. The jump plays its [`JumpEffect`]:
-//!   the session waits while the stars streak and the screen fades out;
-//!   then the ship arrives, the new system is read and laid out, and it
-//!   fades in, and the message line says so in the original's words
-//!   ([`arrival_message`]). The HUD stays on top throughout. A multi-jump plays one
+//!   the session waits while the stars streak and the screen, HUD
+//!   included, fades to white, as the original's whole-display fade does;
+//!   then the ship arrives at full white, the new system is read and laid
+//!   out, and it fades in from white, and the message line says so in the
+//!   original's words ([`arrival_message`]). A multi-jump plays one
 //!   effect, toward the first system, and the scene loaded is the last
 //!   system it passes.
 //! - Escape belongs to the app's router, which closes the map or leaves
@@ -971,9 +972,6 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
         if let Some(message) = self.message() {
             list.text(message, MESSAGE_AT, OVERLAY_SIZE, None, Color::WHITE);
         }
-        if let Some(effect) = &self.jump {
-            effect.draw_fade(list);
-        }
         match &self.status_bar {
             Ok(bar) => {
                 let stellars: Vec<Point> = scene.stellars().iter().map(|s| s.position).collect();
@@ -988,6 +986,9 @@ impl<C: PilotCatalog + SystemCatalog + ShipSprites + StatusBars + GalaxyCatalog>
                 hud::draw(list, bar, &state);
             }
             Err(reason) => hud::draw_unavailable(list, reason),
+        }
+        if let Some(effect) = &self.jump {
+            effect.draw_fade(list);
         }
     }
 
@@ -3203,12 +3204,13 @@ mod tests {
         assert_eq!(fade(&list), None);
         assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
 
-        // The old system fades out, under the HUD.
+        // The old system fades out to white, HUD and all.
         view.tick(ms(625));
         let list = drawn(&view);
         let (at_fade, color) = fade(&list).expect("a fade");
         assert_eq!(color, Color::rgba(255, 255, 255, 64));
-        assert!(ship_at(&list) < at_fade && at_fade < hud_at(&list));
+        assert!(ship_at(&list) < hud_at(&list) && hud_at(&list) < at_fade);
+        assert_eq!(at_fade, list.len() - 1, "the fade is drawn last");
         assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
         view.tick(ms(125));
         assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(128), "growing");
@@ -3235,7 +3237,6 @@ mod tests {
         let (at_fade, color) = fade(&list).expect("a fade");
         assert_eq!(color.a, 230);
         assert!(texts(&list).contains(&"Alpha Centauri (sÿst 131)".to_owned()));
-        assert!(at_fade < hud_at(&list));
         let mut hud = DrawList::new();
         hud::draw(
             &mut hud,
@@ -3249,8 +3250,16 @@ mod tests {
             },
         );
         assert!(
-            list.iter().skip(hud_at(&list)).eq(hud.iter()),
-            "the HUD, with a jump's fuel less and a day on, is last"
+            list.iter()
+                .skip(hud_at(&list))
+                .take(hud.len())
+                .eq(hud.iter()),
+            "the HUD, with a jump's fuel less and a day on"
+        );
+        assert_eq!(
+            (at_fade, hud_at(&list) + hud.len()),
+            (list.len() - 1, at_fade),
+            "then the fade over everything"
         );
         view.tick(ms(100));
         assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(179), "shrinking");
