@@ -3207,7 +3207,7 @@ mod tests {
         view.tick(ms(625));
         let list = drawn(&view);
         let (at_fade, color) = fade(&list).expect("a fade");
-        assert_eq!(color, Color::rgba(0, 0, 0, 64));
+        assert_eq!(color, Color::rgba(255, 255, 255, 64));
         assert!(ship_at(&list) < at_fade && at_fade < hud_at(&list));
         assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
         view.tick(ms(125));

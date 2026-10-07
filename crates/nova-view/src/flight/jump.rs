@@ -33,8 +33,9 @@ pub const FADE_IN_FOR: Duration = Duration::from_millis(500);
 /// that moves with the camera; each layer's is this times its factor, so
 /// near stars streak longer.
 pub const STREAK_LENGTH: f32 = 512.0;
-/// The colour the screen fades to, at full alpha.
-pub const FADE_COLOR: Color = Color::BLACK;
+/// The colour the screen fades to, at full alpha: white, as the original's
+/// `_FadeWhiteIn` and `_FadeWhiteOut` fade the display.
+pub const FADE_COLOR: Color = Color::WHITE;
 
 /// The whole screen, which the fade covers.
 const SCREEN: Bounds = Bounds {
@@ -259,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn the_fade_covers_the_screen_in_the_fade_colour() {
+    fn the_fade_covers_the_screen_in_white() {
         let mut list = DrawList::new();
         after(ms(1250)).draw_fade(&mut list);
         assert_eq!(
@@ -268,10 +269,10 @@ mod tests {
                 from: Point::new(0.0, 384.0),
                 to: Point::new(1024.0, 384.0),
                 width: 768.0,
-                color: Color::rgba(0, 0, 0, 128),
+                color: Color::rgba(255, 255, 255, 128),
             }]
         );
-        assert_eq!(FADE_COLOR, Color::BLACK);
+        assert_eq!(FADE_COLOR, Color::WHITE);
         for at in [500, 2000] {
             let mut none = DrawList::new();
             after(ms(at)).draw_fade(&mut none);
