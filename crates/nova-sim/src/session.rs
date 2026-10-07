@@ -134,8 +134,8 @@ use crate::geometry::Vec2;
 use crate::glow::ramp_glow;
 use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{
-    HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpRefusal, MultiJumpRule, RouteError, StarMap,
-    arrival, check_jump, hops_per_jump, jump_bearing, next_hyper_destination,
+    HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, MultiJumpRule,
+    RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing, next_hyper_destination,
 };
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
@@ -483,12 +483,7 @@ impl Session {
         if let Some(Jump::PreJump { to, .. }) = self.jump {
             return Ok(to);
         }
-        let next = check_jump(
-            &self.player,
-            self.pilot.reserves.fuel.now,
-            self.pilot.course.first().copied(),
-            self.stats.jump_distance,
-        )?;
+        let next = self.check_next_jump()?;
         let map = |id| self.star_map.position(id);
         let bearing = map(self.pilot.system)
             .zip(map(next))
@@ -496,6 +491,37 @@ impl Session {
         self.jump = Some(Jump::PreJump { to: next, bearing });
         self.start_jump_if_ready(next, bearing);
         Ok(next)
+    }
+
+    /// The next system on the course, if J would jump there now, or the
+    /// first [`JumpRefusal`] that applies: the ship has landed, or
+    /// [`check_jump`]'s refusals. J and [`Session::jump_readiness`] both
+    /// ask this, so the rule lives in one place.
+    fn check_next_jump(&self) -> Result<SystemId, JumpRefusal> {
+        if self.landed.is_some() {
+            return Err(JumpRefusal::Landed);
+        }
+        check_jump(
+            &self.player,
+            self.pilot.reserves.fuel.now,
+            self.pilot.course.first().copied(),
+            self.stats.jump_distance,
+        )
+    }
+
+    /// Whether the ship can jump to the next system on its course: under
+    /// way once J has been accepted, until the ship arrives; otherwise
+    /// clear when J would be accepted now, and blocked when it would be
+    /// refused. The nav area draws the destination by this.
+    #[must_use]
+    pub fn jump_readiness(&self) -> JumpReadiness {
+        if self.jump.is_some() {
+            JumpReadiness::Underway
+        } else if self.check_next_jump().is_ok() {
+            JumpReadiness::Clear
+        } else {
+            JumpReadiness::Blocked
+        }
     }
 
     /// Begins the jump to `to`, if the ship is ready to turn no further
@@ -1167,8 +1193,8 @@ mod tests {
     use crate::glow::GLOW_CRUISE;
     use crate::handling::ShipFields;
     use crate::hyperspace::{
-        ARRIVAL_DISTANCE, HyperSelectRule, HyperlinkRule, JumpRefusal, MIN_JUMP_DISTANCE,
-        RouteError, StarMap,
+        ARRIVAL_DISTANCE, HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal,
+        MIN_JUMP_DISTANCE, RouteError, StarMap,
     };
     use crate::landing::StellarFlags;
     use crate::landing::{Clearance, LandOutcome, LandingRefusal};
@@ -1743,6 +1769,75 @@ mod tests {
             Err(JumpRefusal::NoFuel { fuel: 99.0 })
         );
         assert_eq!(session.jumping(), None);
+    }
+
+    #[test]
+    fn a_plotted_course_is_blocked_until_the_ship_is_out_and_clear_from_then() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        assert_eq!(
+            session.jump_readiness(),
+            JumpReadiness::Blocked,
+            "no course"
+        );
+        session.plot_course(SystemId(131)).expect("a route");
+        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked, "centre");
+        session.player.position = Vec2::new(0.0, 999.9);
+        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
+        session.player.position = Vec2::new(0.0, MIN_JUMP_DISTANCE);
+        assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
+        session.player.position = Vec2::new(0.0, 500.0);
+        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked, "back in");
+    }
+
+    #[test]
+    fn without_a_jumps_fuel_the_ship_is_never_clear() {
+        let empty = FakePilotCatalog {
+            ships: vec![(ShipId(128), Ok(ShipFields { fuel: 99, ..FAST }))],
+            ..catalog()
+        };
+        let mut session = Session::start(&empty).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
+    }
+
+    #[test]
+    fn once_j_is_accepted_the_jump_is_underway_until_arrival() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        fly_out(&mut session);
+        session.begin_jump().expect("pre-jump");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        assert_eq!(session.jump_readiness(), JumpReadiness::Underway);
+        begin_jump_now(&mut session).expect("jumps");
+        session.player.position = Vec2::ZERO;
+        assert_eq!(session.jump_readiness(), JumpReadiness::Underway, "jumping");
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert_eq!(session.jump_readiness(), JumpReadiness::Clear, "arrived");
+    }
+
+    #[test]
+    fn a_raised_jump_distance_moves_where_the_ship_becomes_clear() {
+        let raised = owning(catalog(), HYPERSPACE_DISTANCE, 250, 1);
+        let mut session = Session::start(&raised).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        session.player.position = Vec2::new(0.0, 1100.0);
+        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
+        session.player.position = Vec2::new(0.0, 1250.0);
+        assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
+    }
+
+    #[test]
+    fn a_landed_ship_is_blocked() {
+        let catalog = edge_lander();
+        let mut session = landed_at_the_edge(&catalog);
+        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
+        session.take_off();
+        assert_eq!(session.jump_readiness(), JumpReadiness::Clear, "once off");
     }
 
     #[test]

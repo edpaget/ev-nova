@@ -47,6 +47,10 @@
 //!   pixels", which outfits can move), or it has less than [`JUMP_FUEL`].
 //!   Hypergates and wormholes never ask it: they use no fuel and work
 //!   anywhere the ship can land on them (see [`gate`](crate::gate)).
+//!   [`Session::jump_readiness`](crate::Session::jump_readiness) asks the
+//!   same rule, through the same helper as J, for the nav area's colours:
+//!   a [`JumpReadiness`] of blocked, clear, or under way once J is
+//!   accepted (`_DrawStatusNav` @0x49f43-0x4a451).
 //! - [`jump_bearing`] is the heading the ship turns to before it jumps:
 //!   the map's bearing from the system it is in to the next.
 //! - [`arrival`] places the ship in the system it jumps to: its jump
@@ -218,6 +222,20 @@ pub enum RouteError {
     Unknown,
     /// No chain of hyperlinks reaches the destination.
     Unreachable,
+}
+
+/// Whether the ship can jump to the next system on its course, as the
+/// nav area shows it (`_DrawStatusNav` @0x49f43-0x4a451 draws the
+/// destination dim unless the ship is clear or a jump is under way).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JumpReadiness {
+    /// J would be refused now, for any [`JumpRefusal`].
+    Blocked,
+    /// J would be accepted.
+    Clear,
+    /// J has been accepted: the ship is braking and turning before the
+    /// jump, or is in hyperspace.
+    Underway,
 }
 
 /// Why the ship cannot jump.
