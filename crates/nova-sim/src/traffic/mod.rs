@@ -51,17 +51,20 @@ pub mod spawn;
 pub mod table;
 
 use crate::ai::{Behaviour, Goal, PlayerSide, Reaction, Surroundings};
-use crate::catalog::{GovtId, LandingSite, ShipId};
+use std::collections::BTreeSet;
+
+use crate::catalog::{GovtId, LandingSite, PersonId, ShipId};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::flight::ShipState;
 use crate::govt::Governments;
+use crate::person::PersonWorld;
 use autopilot::Outcome;
-use npc::{Mode, Npc, NpcId};
-use spawn::{JUMP_IN_TICKS, NewShip};
-use table::SpawnTable;
+use npc::{Mode, Npc, NpcId, NpcPerson};
+use spawn::{JUMP_IN_TICKS, NewShip, PersonDraw};
+use table::{SpawnPerson, SpawnTable};
 
 /// How many ticks apart an NPC's decisions are: every tick, as the
 /// original at full speed.
@@ -90,10 +93,14 @@ pub struct World<'a> {
     /// The player's legal record with the system's government; none in an
     /// independent system.
     pub record: i16,
+    /// What the persons' spawning sees: the rules, the persons gone and
+    /// grudging, and the control bits.
+    pub persons: PersonWorld<'a>,
 }
 
 impl<'a> World<'a> {
-    /// `sites` alone: no player, no governments and no record.
+    /// `sites` alone: no player, no governments, no record, and no person
+    /// gone or grudging ([`PersonWorld::NONE`]).
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -103,6 +110,7 @@ impl<'a> World<'a> {
             govts: bare.govts,
             system_govt: None,
             record: 0,
+            persons: PersonWorld::NONE,
         }
     }
 
@@ -164,13 +172,27 @@ impl Traffic {
     }
 
     /// Enters a system whose traffic is drawn from `table`: its NPCs are
-    /// replaced with its initial population, rolled on `chance`.
+    /// replaced with its initial population, rolled on `chance`, with no
+    /// person gone or grudging (see [`Traffic::enter_in`]).
     pub fn enter(&mut self, table: SpawnTable, chance: &mut (impl Chance + ?Sized)) {
+        self.enter_in(table, World::new(&[]), chance);
+    }
+
+    /// Enters a system whose traffic is drawn from `table` in `world`: its
+    /// NPCs are replaced with its initial population, rolled on `chance`,
+    /// its persons as the world's persons say.
+    pub fn enter_in(
+        &mut self,
+        table: SpawnTable,
+        world: World,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         self.table = table;
         self.npcs.clear();
         self.departed.clear();
-        let ships = spawn::initial(&self.table, chance);
-        self.add(ships);
+        let mut draw = PersonDraw::new(world.persons);
+        let ships = spawn::initial(&self.table, &mut draw, chance);
+        self.add(ships, world.persons.grudges);
     }
 
     /// Advances the traffic one tick among `sites` alone, NPCs deciding
@@ -195,8 +217,12 @@ impl Traffic {
         strikes: &[Strike],
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let arrivals = spawn::arrivals(&self.table, self.npcs.len(), chance);
-        self.add(arrivals);
+        let mut draw = PersonDraw {
+            world: world.persons,
+            here: self.person_names(),
+        };
+        let arrivals = spawn::arrivals(&self.table, self.npcs.len(), &mut draw, chance);
+        self.add(arrivals, world.persons.grudges);
         self.react(behaviour, world, strikes);
         for npc in &mut self.npcs {
             if npc.condition != Condition::Intact {
@@ -359,13 +385,51 @@ impl Traffic {
         self.table.ship_types()
     }
 
-    /// Adds `ships`, numbering each and pointing each escort at its lead.
-    fn add(&mut self, ships: Vec<NewShip>) {
+    /// Person `id` as the system's traffic spawns it, if it can.
+    #[must_use]
+    pub fn person(&self, id: PersonId) -> Option<&SpawnPerson> {
+        self.table.persons.get(&id)
+    }
+
+    /// The names of the persons in the system.
+    fn person_names(&self) -> BTreeSet<String> {
+        self.npcs
+            .iter()
+            .filter_map(|npc| self.person(npc.person?.id))
+            .map(|person| person.record.name.clone())
+            .collect()
+    }
+
+    /// Adds `ships`, numbering each and pointing each escort at its lead; a
+    /// person flies its fitted ship, holding a grudge when `grudges` say.
+    fn add(&mut self, ships: Vec<NewShip>, grudges: &BTreeSet<PersonId>) {
         let first = self.next_id;
         for ship in ships {
-            let Some(kind) = self.table.ships.get(&ship.ship) else {
+            let person = ship.person.and_then(|id| self.table.persons.get(&id));
+            let Some(kind) = person
+                .map(|person| &person.kind)
+                .or_else(|| self.table.ships.get(&ship.ship))
+            else {
                 continue;
             };
+            let reserves = person.map_or_else(|| kind.stats.full(), |person| person.reserves);
+            let condition = person.map_or(Condition::Intact, |person| person.condition);
+            let traits = person.map(|person| {
+                let record = &person.record;
+                NpcPerson {
+                    id: record.id,
+                    flags: record.flags,
+                    coward: record.coward,
+                    comm_quote: record.comm_quote,
+                    hail_quote: record.hail_quote,
+                    mission: record.link_mission.is_some(),
+                    portrait: record.hail_pict,
+                    invincible: record.shield_mod < 0,
+                    grudge: grudges.contains(&record.id),
+                    quoted: false,
+                    quoted_at: None,
+                }
+            });
             let id = NpcId(self.next_id);
             self.next_id += 1;
             self.npcs.push(Npc {
@@ -377,7 +441,7 @@ impl Traffic {
                 class: kind.escort_class,
                 escort: None,
                 stats: kind.stats,
-                reserves: kind.stats.full(),
+                reserves,
                 state: ship.state,
                 mode: if ship.jumping_in {
                     Mode::JumpingIn {
@@ -387,7 +451,7 @@ impl Traffic {
                     Mode::Flying
                 },
                 goal: Goal::Idle,
-                condition: Condition::Intact,
+                condition,
                 hull: kind.hull,
                 armament: kind.armament.clone(),
                 rounds: kind.rounds.clone(),
@@ -402,6 +466,7 @@ impl Traffic {
                 spared: false,
                 assisting: 0,
                 carrier: None,
+                person: traits,
             });
         }
     }
@@ -416,6 +481,7 @@ mod tests {
     use super::*;
     use crate::catalog::WeaponId;
     use crate::catalog::{DudeId, EscortRecord, FleetId, FleetRecord, GovtId, StellarId};
+    use crate::catalog::{PersonId, PersonRecord};
     use crate::combat::ShipRef;
     use crate::combat::armament::Armament;
     use crate::combat::hull::HullSpec;
@@ -423,10 +489,11 @@ mod tests {
     use crate::escort::EscortClass;
     use crate::geometry::Vec2;
     use crate::hail::Help;
+    use crate::person::PersonWorld;
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST, planet, weapon};
-    use crate::traffic::npc::AiType;
-    use crate::traffic::table::{ShipKind, SpawnDude};
+    use crate::traffic::npc::{AiType, NpcPerson};
+    use crate::traffic::table::{ShipKind, SpawnDude, SpawnPerson};
 
     /// Decides `goal`, `trigger` and `target` for everyone, recording who
     /// decided.
@@ -1320,5 +1387,143 @@ mod tests {
             }
         }
         assert!(nearest < 500.0, "well inside 1000: {nearest}");
+    }
+
+    // Persons.
+
+    /// [`table`] of `avg_ships` with person 510 linked here, flying ship
+    /// 200 fitted with twice its shield and an extra weapon: a warship of
+    /// govt 128 and `Aggress` 4, `Coward` 15, quoting 24 and 8, with
+    /// `HailPict` 7800, a mission, `Flags` 0x0003, and invincible; it
+    /// starts disabled with no fuel.
+    fn peopled(avg_ships: u32) -> SpawnTable {
+        let mut table = table(avg_ships);
+        let base = table.ships[&ShipId(200)].clone();
+        let mut kind = base.clone();
+        kind.stats.shield *= 2.0;
+        kind.armament = Armament::new([(WeaponSpec::new(&weapon(129)), 1)]);
+        let mut reserves = kind.stats.full();
+        reserves.fuel.now = 0.0;
+        table.persons.insert(
+            PersonId(510),
+            SpawnPerson {
+                record: PersonRecord {
+                    name: "Ace".to_owned(),
+                    govt: Some(GovtId(128)),
+                    aggress: 4,
+                    coward: 15,
+                    comm_quote: 24,
+                    hail_quote: 8,
+                    hail_pict: Some(7800),
+                    link_mission: Some(400),
+                    flags: 0x0003,
+                    shield_mod: -1,
+                    ..crate::testkit::person(510, 200)
+                },
+                linked: true,
+                kind,
+                reserves,
+                condition: Condition::Disabled,
+                derelict: false,
+            },
+        );
+        table
+    }
+
+    fn entered(world: World, draws: &[u32]) -> Traffic {
+        let mut traffic = Traffic::new();
+        traffic.enter_in(peopled(1), world, &mut Draws::of(draws));
+        traffic
+    }
+
+    #[test]
+    fn a_person_entering_flies_as_its_record_and_its_fitted_ship_say() {
+        let traffic = entered(World::new(&[]), &[0, 382, 750, 750, 0]);
+        let npcs = traffic.npcs();
+        assert_eq!(npcs.len(), 1);
+        let npc = &npcs[0];
+        let fitted = &traffic.person(PersonId(510)).expect("its record").kind;
+        assert_eq!(
+            (npc.ship, npc.govt, npc.ai_type, npc.aggression),
+            (ShipId(200), Some(GovtId(128)), AiType::Warship, 4)
+        );
+        assert_eq!(npc.stats, fitted.stats, "its fitted stats");
+        assert_eq!(npc.armament, fitted.armament);
+        assert_eq!(npc.reserves.fuel.now, 0.0, "the reserves it starts with");
+        assert_eq!(npc.reserves.shield.max, 2.0 * f32::from(FAST.shield));
+        assert_eq!(npc.condition, Condition::Disabled);
+        assert_eq!((npc.booty, npc.info_types), (0, 0));
+        assert_eq!(
+            npc.person,
+            Some(NpcPerson {
+                id: PersonId(510),
+                flags: 0x0003,
+                coward: 15,
+                comm_quote: 24,
+                hail_quote: 8,
+                mission: true,
+                portrait: Some(7800),
+                invincible: true,
+                grudge: false,
+                quoted: false,
+                quoted_at: None,
+            })
+        );
+        assert_eq!(traffic.person(PersonId(600)), None);
+    }
+
+    #[test]
+    fn a_person_holding_a_grudge_enters_with_it() {
+        let grudges = std::collections::BTreeSet::from([PersonId(510)]);
+        let world = World {
+            persons: PersonWorld {
+                grudges: &grudges,
+                ..PersonWorld::NONE
+            },
+            ..World::new(&[])
+        };
+        let traffic = entered(world, &[0, 382, 750, 750, 0]);
+        assert!(traffic.npcs()[0].person.expect("a person").grudge);
+    }
+
+    #[test]
+    fn a_person_gone_for_good_never_enters() {
+        let gone = std::collections::BTreeSet::from([PersonId(510)]);
+        let world = World {
+            persons: PersonWorld {
+                gone: &gone,
+                ..PersonWorld::NONE
+            },
+            ..World::new(&[])
+        };
+        assert_eq!(entered(world, &[0, 382]).npcs(), []);
+    }
+
+    #[test]
+    fn a_person_arrives_on_its_roll_and_only_once_by_its_name() {
+        let mut traffic = Traffic::new();
+        traffic.enter_in(peopled(2), World::new(&[]), &mut Draws::of(&[0, 0, 0, 0]));
+        assert_eq!(traffic.npcs(), [], "two empty person rolls");
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[0, 0, 382, 0]));
+        assert_eq!(
+            traffic
+                .npcs()
+                .iter()
+                .map(|npc| npc.person.map(|p| p.id))
+                .collect::<Vec<_>>(),
+            [Some(PersonId(510))]
+        );
+        assert!(traffic.npcs()[0].mode != Mode::Flying, "jumping in");
+        let mut chance = Draws::of(&[0, 0]);
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut chance);
+        assert_eq!(chance.asked[..2], [500, 7], "Ace is here: nobody may come");
+        assert_eq!(traffic.npcs().len(), 1);
+    }
+
+    #[test]
+    fn entering_without_a_world_brings_no_one_gone_or_grudging() {
+        let mut traffic = Traffic::new();
+        traffic.enter(peopled(1), &mut Draws::of(&[0, 382, 750, 750, 0]));
+        assert!(!traffic.npcs()[0].person.expect("a person").grudge);
     }
 }

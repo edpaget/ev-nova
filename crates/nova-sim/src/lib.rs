@@ -95,6 +95,9 @@
 //! - [`outfitter`]: the outfitter: which outfits a stellar lists and sells
 //!   ([`Outfitter`]), their price and mass, the ship's free mass, and
 //!   buying and selling one at a time ([`OutfitOrder`]).
+//! - [`person`]: persons (`përs`): where they may appear ([`PersonLink`](person::PersonLink)),
+//!   how often ([`PersonRules`], Nova's [`NovaPersons`]), and the ship
+//!   each flies ([`person::fit`]).
 //! - [`pilot`]: the [`Pilot`], everything about the player a save keeps:
 //!   ship, location, date, cash, reserves, course, explored systems,
 //!   legal records, cargo, the events under way, the outfits owned and
@@ -163,6 +166,7 @@ pub mod landing;
 pub mod legal;
 pub mod market;
 pub mod outfitter;
+pub mod person;
 pub mod pilot;
 pub mod recharge;
 pub mod reserves;
@@ -225,6 +229,7 @@ pub use landing::{LandingRefusal, Service, check_landing, landing_radius, servic
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
+pub use person::{NovaPersons, PersonRoll, PersonRules, PersonWorld};
 pub use pilot::{Escort, Pilot};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use reserves::{Gauge, Reserves};
@@ -236,5 +241,5 @@ pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;
 pub use targeting::TargetPick;
-pub use traffic::npc::{AiType, Npc, NpcId};
+pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
 pub use traffic::{Traffic, World};

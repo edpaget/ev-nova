@@ -181,6 +181,7 @@ mod escorts;
 mod fighters;
 mod hail;
 mod hire;
+mod persons;
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -224,6 +225,7 @@ use crate::market::{self, Good, Goods, Market, Order, TradeRefusal};
 use crate::outfitter::{
     self, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
 };
+use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
 use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
@@ -342,6 +344,8 @@ pub struct Session {
     escort_wage: RuleSource,
     /// What paying the escorts did since this was last taken.
     pay_notes: Vec<PayNote>,
+    /// How persons appear (see [`Session::with_person_rules`]).
+    person_rules: hire::Shared<dyn PersonRules>,
 }
 
 impl Session {
@@ -440,6 +444,7 @@ impl Session {
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
+            person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             pilot,
         };
         session.refit(false);
@@ -527,8 +532,18 @@ impl Session {
             &self.ships,
             &self.outfits,
             &self.arsenal,
+            &*self.person_rules.0,
         );
-        self.traffic.enter(table, chance);
+        let world = World {
+            persons: PersonWorld {
+                rules: &*self.person_rules.0,
+                gone: &self.pilot.gone_persons,
+                grudges: &self.pilot.grudges,
+                control_bits: &*self.control_bits.0,
+            },
+            ..World::new(&[])
+        };
+        self.traffic.enter_in(table, world, chance);
         self.traffic_due = false;
         self.enter_escorts();
         self.strikes.clear();
@@ -561,6 +576,12 @@ impl Session {
                     govts: &self.govts,
                     system_govt,
                     record: system_govt.map_or(0, |govt| self.pilot.legal_record(govt)),
+                    persons: PersonWorld {
+                        rules: &*self.person_rules.0,
+                        gone: &self.pilot.gone_persons,
+                        grudges: &self.pilot.grudges,
+                        control_bits: &*self.control_bits.0,
+                    },
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 self.traffic.tick_in(behaviour, world, &strikes, chance);
@@ -573,7 +594,9 @@ impl Session {
 
     /// What the traffic flies among in flight: the system's stellars, the
     /// player, the governments, the system's government and the player's
-    /// legal record with it (none in an independent system).
+    /// legal record with it (none in an independent system), and the
+    /// persons' world: the session's rules and control bits, and the
+    /// pilot's persons gone and grudges.
     fn world(&self) -> World<'_> {
         let system_govt = self.star_map.govt(self.pilot.system);
         World {
@@ -582,6 +605,12 @@ impl Session {
             govts: &self.govts,
             system_govt,
             record: system_govt.map_or(0, |govt| self.pilot.legal_record(govt)),
+            persons: PersonWorld {
+                rules: &*self.person_rules.0,
+                gone: &self.pilot.gone_persons,
+                grudges: &self.pilot.grudges,
+                control_bits: &*self.control_bits.0,
+            },
         }
     }
 

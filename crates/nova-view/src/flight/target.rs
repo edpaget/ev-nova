@@ -707,6 +707,7 @@ mod tests {
             spared: false,
             assisting: 0,
             carrier: None,
+            person: None,
         }
     }
 

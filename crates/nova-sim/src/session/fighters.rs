@@ -437,6 +437,7 @@ fn fighter(
         spared: false,
         assisting: 0,
         carrier: Some(carrier),
+        person: None,
     }
 }
 

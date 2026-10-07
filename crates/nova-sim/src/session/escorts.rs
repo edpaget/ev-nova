@@ -141,6 +141,7 @@ impl Session {
             spared: false,
             assisting: 0,
             carrier,
+            person: None,
         };
         Some(self.traffic.add_npc(npc))
     }

@@ -14,20 +14,26 @@
 //!   appear in.
 //! - A weighted [`pick`] draws `Rand(sum) + 1` and takes the first entry
 //!   whose cumulative weight reaches it.
+//! - The persons ([`SpawnPerson`]) kept are those whose `LinkSyst`
+//!   allows the system ([`PersonLink`]) or whom one of its Person slots
+//!   names, and whose ship type has a record, each flying its ship as
+//!   [`person::fit`] fits it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
-    DudeId, FleetId, FleetRecord, GovtId, OutfitRecord, ShipId, ShipRecord, SystemId,
-    TrafficCatalog, WeaponId,
+    DudeId, FleetId, FleetRecord, GovtId, OutfitRecord, PersonId, PersonRecord, ShipId, ShipRecord,
+    SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
-use crate::combat::hull::HullSpec;
+use crate::combat::hull::{Condition, HullSpec};
 use crate::escort::EscortClass;
 use crate::govt::Governments;
 use crate::outfitter::outfit_mods;
+use crate::person::{self, PersonLink, PersonRules};
 use crate::pilot::tally;
+use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 
 /// The lowest `DudeTypes` value that is a `düde`.
@@ -187,6 +193,27 @@ pub struct ShipKind {
     pub rounds: BTreeMap<WeaponId, u32>,
 }
 
+/// A person as the traffic spawns it: its record, whether its `LinkSyst`
+/// allows the system, the ship it flies, fitted (see [`person::fit`]),
+/// the reserves and condition it starts in, and whether its government
+/// is derelict.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpawnPerson {
+    /// Its `përs`.
+    pub record: PersonRecord,
+    /// Whether its `LinkSyst` allows the system; a person a Person slot
+    /// names may not.
+    pub linked: bool,
+    /// Its ship, with its weapons, rounds and scaled stats.
+    pub kind: ShipKind,
+    /// The shield, armour and fuel it starts with.
+    pub reserves: Reserves,
+    /// How it starts: disabled when derelict.
+    pub condition: Condition,
+    /// Whether its government is derelict (`gövt` `Flags` 0x0800).
+    pub derelict: bool,
+}
+
 /// Everything a system's traffic is drawn from.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SpawnTable {
@@ -203,8 +230,15 @@ pub struct SpawnTable {
     pub link_fleets: BTreeSet<FleetId>,
     /// The fleets it can spawn, from either list.
     pub fleets: BTreeMap<FleetId, FleetRecord>,
-    /// Every ship type its `düde`s and fleets name that has a record.
+    /// Every ship type its `düde`s, fleets and persons name that has a
+    /// record.
     pub ships: BTreeMap<ShipId, ShipKind>,
+    /// The persons linked to it or named in its Person slots whose ship
+    /// has a record.
+    pub persons: BTreeMap<PersonId, SpawnPerson>,
+    /// Its Person slots that name a person, each with its chance, in
+    /// order.
+    pub person_slots: Vec<(PersonId, i16)>,
 }
 
 impl SpawnTable {
@@ -212,9 +246,12 @@ impl SpawnTable {
     /// `catalog`, its fleets' links matched with the relations in
     /// `govts`, with each ship type's stats from its record in `ships`
     /// and its default items, the `oütf`s from `outfits`, as the player's
-    /// are, and its hull and armament from `arsenal`. A system that cannot
-    /// be read has no traffic.
+    /// are, and its hull and armament from `arsenal`; its persons' links
+    /// and ships as `rules` says. A system that cannot be read has no
+    /// traffic.
     #[must_use]
+    // Each is a separate input the session reads once and keeps.
+    #[allow(clippy::too_many_arguments)]
     pub fn resolve(
         catalog: &(impl TrafficCatalog + ?Sized),
         system: SystemId,
@@ -223,6 +260,7 @@ impl SpawnTable {
         ships: &[ShipRecord],
         outfits: &[OutfitRecord],
         arsenal: &Arsenal,
+        rules: &dyn PersonRules,
     ) -> Self {
         let Some(traffic) = catalog.system_traffic(system) else {
             return Self::default();
@@ -262,6 +300,18 @@ impl SpawnTable {
                 fleets.insert(fleet.id, fleet);
             }
         }
+        let person_slots: Vec<(PersonId, i16)> = traffic
+            .persons
+            .iter()
+            .filter_map(|&(id, prob)| Some((id?, prob)))
+            .collect();
+        let persons = persons(
+            catalog,
+            (system, system_govt, govts),
+            &person_slots,
+            (ships, outfits, arsenal),
+            rules,
+        );
         let wanted: BTreeSet<ShipId> = dude_records
             .values()
             .flat_map(|dude| dude.ships.iter().map(|&(ship, _)| ship))
@@ -271,6 +321,7 @@ impl SpawnTable {
                     .into_iter()
                     .chain(fleet.escorts.iter().map(|escort| escort.ship))
             }))
+            .chain(persons.values().filter_map(|person| person.record.ship))
             .collect();
         let ships = ships
             .iter()
@@ -285,6 +336,8 @@ impl SpawnTable {
             link_fleets,
             fleets,
             ships,
+            persons,
+            person_slots,
         }
     }
 
@@ -293,6 +346,55 @@ impl SpawnTable {
     pub fn ship_types(&self) -> Vec<ShipId> {
         self.ships.keys().copied().collect()
     }
+}
+
+/// The persons of `catalog` linked to `system`, governed by `system_govt`
+/// with the relations in `govts`, or named in `slots`, whose ship has a
+/// record among `ships`, each flying it fitted, its default items from
+/// `outfits` and armed from `arsenal`, as `rules` say.
+fn persons(
+    catalog: &(impl TrafficCatalog + ?Sized),
+    (system, system_govt, govts): (SystemId, Option<GovtId>, &Governments),
+    slots: &[(PersonId, i16)],
+    (ships, outfits, arsenal): (&[ShipRecord], &[OutfitRecord], &Arsenal),
+    rules: &dyn PersonRules,
+) -> BTreeMap<PersonId, SpawnPerson> {
+    catalog
+        .persons()
+        .into_iter()
+        .filter_map(|record| {
+            let linked = PersonLink::decode(record.link_syst).matches(
+                system,
+                system_govt,
+                govts,
+                rules.link_slip(),
+            );
+            let slotted = slots.iter().any(|&(id, _)| id == record.id);
+            if !linked && !slotted {
+                return None;
+            }
+            let ship = ships.iter().find(|ship| Some(ship.id) == record.ship)?;
+            let derelict = govts.derelict(record.govt);
+            let (kind, reserves, condition) = person::fit(
+                &kind(ship, outfits, arsenal),
+                &record,
+                arsenal,
+                rules.shield_mod(),
+                derelict,
+            );
+            Some((
+                record.id,
+                SpawnPerson {
+                    record,
+                    linked,
+                    kind,
+                    reserves,
+                    condition,
+                    derelict,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// A ship of `record`, carrying its default items, armed from `arsenal`.
@@ -310,18 +412,22 @@ pub(crate) fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arse
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use std::cell::RefCell;
 
     use super::*;
     use crate::catalog::GovtRecord;
+    use crate::catalog::PersonId;
     use crate::catalog::{
         DudeRecord, EscortRecord, HullRecord, OutfitId, PersonRecord, StockWeapon, SystemTraffic,
     };
     use crate::escort::EscortClass;
     use crate::handling::ShipFields;
+    use crate::person::NovaPersons;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::MORE_SPEED;
-    use crate::testkit::{Draws, FAST, govt, hull, outfit, ship, weapon};
+    use crate::testkit::{Draws, FAST, govt, hull, outfit, person, ship, weapon};
 
     const UNUSED: (i16, i16) = (-1, 0);
 
@@ -419,6 +525,7 @@ mod tests {
 
     /// Governments 128 and 129 are allies (class 1 and its ally); 130 is
     /// at war with 128 (class 3, listing class 1); 131 is xenophobic;
+    /// 133 is derelict;
     /// 132 is neutral to all.
     fn relations() -> Governments {
         Governments::new([
@@ -440,6 +547,10 @@ mod tests {
                 ..govt(131)
             },
             govt(132),
+            GovtRecord {
+                flags: crate::govt::DERELICT,
+                ..govt(133)
+            },
         ])
     }
 
@@ -520,7 +631,13 @@ mod tests {
 
     /// System 130 (Federation, govt 128) names düde 128 at 60 and düde 129
     /// (unreadable) at 40, and fleet 140 at 20, with 4 ships on average.
-    /// Düde 128 flies ship 200 and ship 999 (no record). Fleet 140 is led by
+    /// Düde 128 flies ship 200 and ship 999 (no record). Person 510, of
+    /// derelict govt 133 and `ShieldMod` 200, links to Federation systems
+    /// and flies ship 203; person 600, linked to system 131, is named in
+    /// the system's second Person slot at 50 %, and 605, of no record, in
+    /// its third at 20 %; 601 links to system 131 only; 602 links anywhere
+    /// but flies ship 999; and 603's `LinkSyst` 2 slips to system 130.
+    /// Fleet 140 is led by
     /// ship 201 with ship 202 escorting; fleet 141 links to any system,
     /// fleet 142 to Federation systems, fleet 143 to system 131, fleet
     /// 144 to Federation systems but led by nothing readable, fleet 145 to
@@ -536,7 +653,16 @@ mod tests {
             (id == SystemId(130)).then_some(SystemTraffic {
                 dude_types: types(&[(128, 60), (129, 40), (-140, 20)]),
                 avg_ships: 4,
-                persons: Default::default(),
+                persons: [
+                    (None, 0),
+                    (Some(PersonId(600)), 50),
+                    (Some(PersonId(605)), 20),
+                    (None, 0),
+                    (None, 0),
+                    (None, 0),
+                    (None, 0),
+                    (None, 0),
+                ],
             })
         }
 
@@ -576,7 +702,27 @@ mod tests {
         }
 
         fn persons(&self) -> Vec<PersonRecord> {
-            Vec::new()
+            vec![
+                PersonRecord {
+                    link_syst: 10_000,
+                    shield_mod: 200,
+                    govt: Some(GovtId(133)),
+                    ..person(510, 203)
+                },
+                PersonRecord {
+                    link_syst: 131,
+                    ..person(600, 200)
+                },
+                PersonRecord {
+                    link_syst: 131,
+                    ..person(601, 200)
+                },
+                person(602, 999),
+                PersonRecord {
+                    link_syst: 2,
+                    ..person(603, 200)
+                },
+            ]
         }
     }
 
@@ -612,6 +758,10 @@ mod tests {
     }
 
     fn resolved() -> SpawnTable {
+        resolved_by(NovaPersons::default())
+    }
+
+    fn resolved_by(rules: NovaPersons) -> SpawnTable {
         SpawnTable::resolve(
             &Traffic::default(),
             SystemId(130),
@@ -623,7 +773,67 @@ mod tests {
                 outfit(301, &[(crate::combat::armament::MOD_AMMO, 138)]),
             ],
             &arsenal(),
+            &rules,
         )
+    }
+
+    #[test]
+    fn a_table_keeps_the_persons_linked_here_or_slotted_whose_ship_has_a_record() {
+        let table = resolved();
+        assert_eq!(
+            table.persons.keys().copied().collect::<Vec<_>>(),
+            [PersonId(510), PersonId(600), PersonId(603)],
+            "601 is neither linked nor slotted; 602's ship has no record"
+        );
+        assert!(table.persons[&PersonId(510)].linked);
+        assert!(!table.persons[&PersonId(600)].linked, "slotted only");
+        assert!(table.persons[&PersonId(603)].linked, "by the engine's slip");
+        assert_eq!(
+            table.persons[&PersonId(600)].record,
+            Traffic::default().persons()[1]
+        );
+        assert_eq!(
+            table.person_slots,
+            [(PersonId(600), 50), (PersonId(605), 20)],
+            "every slot naming a person, in order"
+        );
+        let bible = NovaPersons::from_rulebook(
+            &Rulebook::default().with_override(RuleKey::LinkSystSlip, RuleSource::Bible),
+        );
+        assert_eq!(
+            resolved_by(bible)
+                .persons
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            [PersonId(510), PersonId(600)],
+            "no slip by the Bible"
+        );
+    }
+
+    #[test]
+    fn a_tables_persons_fly_their_fitted_ships_and_their_ship_types_are_listed() {
+        let table = resolved();
+        let ace = &table.persons[&PersonId(510)];
+        assert_eq!(ace.kind.stats.shield, 2.0 * f32::from(FAST.shield));
+        assert_eq!(
+            ace.kind.stats.armor,
+            2.0 * f32::from(FAST.armor),
+            "by the engine"
+        );
+        assert!(ace.derelict, "govt 133 is derelict");
+        assert_eq!(ace.condition, Condition::Disabled);
+        assert_eq!(ace.reserves.shield.now, 0.0);
+        let bible = NovaPersons::from_rulebook(
+            &Rulebook::default().with_override(RuleKey::ShieldMod, RuleSource::Bible),
+        );
+        let ace = &resolved_by(bible).persons[&PersonId(510)];
+        assert_eq!(ace.kind.stats.armor, f32::from(FAST.armor));
+        let plain = &table.persons[&PersonId(600)];
+        assert!(!plain.derelict);
+        assert_eq!(plain.condition, Condition::Intact);
+        assert_eq!(plain.reserves, plain.kind.stats.full());
+        assert!(table.ship_types().contains(&ShipId(203)), "510's ship");
     }
 
     #[test]
@@ -670,8 +880,8 @@ mod tests {
         let table = resolved();
         assert_eq!(
             table.ship_types(),
-            [ShipId(200), ShipId(201), ShipId(202)],
-            "ships 998 and 999 have no record, and 203 is not named"
+            [ShipId(200), ShipId(201), ShipId(202), ShipId(203)],
+            "ships 998 and 999 have no record, and 203 is person 510's"
         );
         let boosted = ShipStats::new(
             FAST,
@@ -689,7 +899,7 @@ mod tests {
                 .values()
                 .map(|kind| kind.inherent_ai)
                 .collect::<Vec<_>>(),
-            [1, 2, 3]
+            [1, 2, 3, 4]
         );
     }
 
@@ -705,7 +915,8 @@ mod tests {
             [
                 EscortClass::Freighter,
                 EscortClass::Freighter,
-                EscortClass::Warship
+                EscortClass::Warship,
+                EscortClass::Fighter
             ],
             "worked out for the traders, and 202's own"
         );
@@ -758,6 +969,7 @@ mod tests {
             &records(),
             &[],
             &Arsenal::default(),
+            &NovaPersons::default(),
         );
         assert_eq!(table, SpawnTable::default());
         assert!(catalog.dudes_asked.borrow().is_empty());
@@ -792,6 +1004,7 @@ mod tests {
             &[],
             &[],
             &Arsenal::default(),
+            &NovaPersons::default(),
         );
         assert_eq!(table, SpawnTable::default());
     }

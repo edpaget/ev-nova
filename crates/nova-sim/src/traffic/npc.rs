@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::ai::Goal;
 use crate::bay::Carrier;
-use crate::catalog::{GovtId, ShipId, WeaponId};
+use crate::catalog::{GovtId, PersonId, ShipId, WeaponId};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
@@ -72,6 +72,38 @@ pub enum Mode {
     Flying,
 }
 
+/// What an NPC flown by a person (`përs`) carries of it (see
+/// [`person`](crate::person)).
+// Each flag is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NpcPerson {
+    /// The person.
+    pub id: PersonId,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `Coward`: the percent of its shields below which it runs.
+    pub coward: i16,
+    /// Its `CommQuote`, an entry in `STR#` 7100.
+    pub comm_quote: i16,
+    /// Its `HailQuote`, an entry in `STR#` 7101.
+    pub hail_quote: i16,
+    /// Whether it has a `LinkMission`.
+    pub mission: bool,
+    /// Its `HailPict`, which the comm dialog shows in place of its ship's
+    /// picture.
+    pub portrait: Option<i16>,
+    /// Whether it is invincible (`ShieldMod` below 0): its shield and
+    /// armour are refilled every fight tick.
+    pub invincible: bool,
+    /// Whether it holds a grudge against the player.
+    pub grudge: bool,
+    /// Whether it has said its hail quote this stay.
+    pub quoted: bool,
+    /// The quote tick it last said its hail quote, if it has.
+    pub quoted_at: Option<u64>,
+}
+
 /// An NPC ship in the player's system.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Npc {
@@ -115,7 +147,8 @@ pub struct Npc {
     /// The shield and armour damage it has taken while it fights: none
     /// once it goes back to an idle goal or is disabled.
     pub provoked: f32,
-    /// How aggressive it is: 0, 2 or 3 for traffic.
+    /// How aggressive it is: 0, 2 or 3 for traffic; 1, 2 or 4 for a
+    /// person.
     pub aggression: u8,
     /// The ship it last inspected, if any.
     pub inspected: Option<ShipRef>,
@@ -136,6 +169,8 @@ pub struct Npc {
     /// while it has one (see [`bay`](crate::bay)); none for any other
     /// ship.
     pub carrier: Option<Carrier>,
+    /// The person flying it, if any.
+    pub person: Option<NpcPerson>,
 }
 
 impl Npc {

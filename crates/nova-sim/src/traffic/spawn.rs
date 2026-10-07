@@ -6,18 +6,24 @@
 //! `_RandomShipSpawn` in the `EV Nova` executable), each written as
 //! "`below(n) < k` fires":
 //!
-//! - **Setup** ([`initial`]) makes `AvgShips` passes. Each draws a person
-//!   (`Rand(7) == 0`; persons come later, so it spawns nothing), else a
-//!   `LinkSyst` fleet (`Rand(7) == 0`, [`link_fleet`]), else one `düde`
-//!   ship, placed in the system already: x and y each `Rand(1500) - 750`,
-//!   heading `Rand(360)`, at rest.
+//! - **Setup** ([`initial`]) makes `AvgShips` passes. Each first rolls
+//!   for a person ([`PersonRules::roll`](crate::person::PersonRules::roll),
+//!   see [`person`](crate::person)): a person who may appear is placed as
+//!   a `düde` ship is, an empty roll brings nothing that pass, and no
+//!   person goes on to a `LinkSyst` fleet (`Rand(7) == 0`, [`link_fleet`]),
+//!   else one `düde` ship, placed in the system already: x and y each
+//!   `Rand(1500) - 750`, heading `Rand(360)`, at rest. Then each of the
+//!   system's Person slots naming a person alive whose `ActiveOn` holds is
+//!   rolled ([`PersonRules::listed`](crate::person::PersonRules::listed)),
+//!   and brings its person, placed so, unless one of its name is there.
 //! - **Arrivals** ([`arrivals`]), every tick while the system holds fewer
 //!   NPCs than `AvgShips`, draw `Rand(500)`. On 1, when the system's
 //!   `DudeTypes` name fleets, `Rand(100) + 1` at or below the sum of their
 //!   `% Prob` brings one in, picked by `% Prob`; otherwise it falls
-//!   through to 0's case. On 0, when the system has a `düde`, a person
-//!   (`Rand(7) == 0`, nothing), else a `LinkSyst` fleet (`Rand(7) == 0`),
-//!   else one `düde` ship jumps in.
+//!   through to 0's case. On 0, when the system has a `düde`, the person
+//!   roll (a person who may appear, its government not derelict, jumps
+//!   in; an empty roll brings nothing), else a `LinkSyst` fleet
+//!   (`Rand(7) == 0`), else one `düde` ship jumps in.
 //! - **A `LinkSyst` fleet** ([`link_fleet`]) draws `Rand(256)`, `flët`
 //!   `128 + slot`, and comes only when that fleet's `LinkSyst` matches.
 //! - **A fleet** ([`fleet`]) is its lead, with the fleet's government and
@@ -36,19 +42,24 @@
 //! - **Aggression** ([`aggression`]): every ship spawned draws
 //!   `Rand(3) ^ 2` last, after its place (@0x3c55b, @0x3cb04): 2, 3 or 0.
 //!   It decides how far a warship hunts a player wanted by its
-//!   government, and when it retreats (see [`ai`](crate::ai)).
+//!   government, and when it retreats (see [`ai`](crate::ai)). A person
+//!   draws none: its `Aggress` gives it ([`aggression_of`]).
 //!
 //! A ship type with no record spawns nothing, a `Max` below `Min` gives
 //! `Min`, a negative count none, and a draw is never asked over 0.
 
-use crate::catalog::{FleetId, GovtId, ShipId};
+use std::collections::BTreeSet;
+
+use crate::catalog::{FleetId, GovtId, PersonId, ShipId};
 use crate::chance::Chance;
 use crate::flight::{ShipState, facing, heading_of};
 use crate::geometry::Vec2;
+use crate::person::{PersonRoll, PersonWorld, aggression_of};
 use crate::traffic::npc::AiType;
 use crate::traffic::table::{ShipKind, SpawnDude, SpawnTable, pick};
 
-/// `Rand(7) == 0`: a person, rather than anything else.
+/// `Rand(7) == 0`: a person, rather than anything else, by the engine
+/// (see [`person`](crate::person)).
 pub const PERSON_ODDS: u32 = 7;
 /// `Rand(7) == 0`: a `LinkSyst` fleet, rather than a `düde` ship.
 pub const FLEET_ODDS: u32 = 7;
@@ -103,6 +114,81 @@ pub struct NewShip {
     /// Its `düde`'s `InfoTypes` flags, what it says when hailed; none for
     /// a fleet's ship.
     pub info_types: u16,
+    /// The person flying it, if any.
+    pub person: Option<PersonId>,
+}
+
+/// The persons' side of a system's spawning: their world, and the names
+/// of the persons in the system, which grow as persons spawn.
+#[derive(Clone, Debug)]
+pub struct PersonDraw<'a> {
+    /// The rules, the persons gone and the control bits.
+    pub world: PersonWorld<'a>,
+    /// The names of the persons in the system.
+    pub here: BTreeSet<String>,
+}
+
+impl<'a> PersonDraw<'a> {
+    /// The draw in `world`, with no person in the system.
+    #[must_use]
+    pub fn new(world: PersonWorld<'a>) -> Self {
+        Self {
+            world,
+            here: BTreeSet::new(),
+        }
+    }
+
+    /// The persons of `table` who may appear, `arriving` by hyperspace or
+    /// not, in ascending ID (see [`person`](crate::person)).
+    #[must_use]
+    pub fn eligible(&self, table: &SpawnTable, arriving: bool) -> Vec<PersonId> {
+        table
+            .persons
+            .iter()
+            .filter(|(id, person)| {
+                let record = &person.record;
+                person.linked
+                    && record.ai_type > 0
+                    && !self.world.gone.contains(id)
+                    // Control bits: every `ActiveOn` holds until
+                    // missions-and-storylines brings them.
+                    && self.world.control_bits.allows(&record.active_on)
+                    && !(arriving && person.derelict)
+                    && !self.here.contains(&record.name)
+            })
+            .map(|(&id, _)| id)
+            .collect()
+    }
+
+    /// The person roll among those of `table` who may appear.
+    fn roll(
+        &self,
+        table: &SpawnTable,
+        arriving: bool,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> PersonRoll {
+        let eligible = self.eligible(table, arriving);
+        self.world.rules.roll(&eligible, &mut &mut *chance)
+    }
+
+    /// Person `id` of `table`, now in the system, starting at `state`.
+    fn spawn(&mut self, table: &SpawnTable, id: PersonId, state: ShipState) -> Option<NewShip> {
+        let person = table.persons.get(&id)?;
+        let record = &person.record;
+        self.here.insert(record.name.clone());
+        Some(NewShip {
+            ship: record.ship?,
+            govt: record.govt,
+            ai_type: AiType::from_raw(record.ai_type),
+            lead: None,
+            state,
+            jumping_in: false,
+            aggression: aggression_of(record.aggress),
+            booty: 0,
+            info_types: 0,
+            person: Some(id),
+        })
+    }
 }
 
 /// How fast a ship glides on tick `k` (from 0) of its jump in.
@@ -118,12 +204,23 @@ pub fn jump_in_distance() -> f32 {
     JUMP_IN_END + (0..JUMP_IN_TICKS).map(glide_speed).sum::<f32>()
 }
 
-/// A system's initial population (see the module docs).
-pub fn initial(table: &SpawnTable, chance: &mut (impl Chance + ?Sized)) -> Vec<NewShip> {
+/// A system's initial population, its persons drawn as `draw` says (see
+/// the module docs).
+pub fn initial(
+    table: &SpawnTable,
+    draw: &mut PersonDraw,
+    chance: &mut (impl Chance + ?Sized),
+) -> Vec<NewShip> {
     let mut out = Vec::new();
     for _ in 0..table.avg_ships {
-        if chance.below(PERSON_ODDS) < 1 {
-            continue;
+        match draw.roll(table, false, chance) {
+            PersonRoll::Person(id) => {
+                let state = in_system(chance);
+                out.extend(draw.spawn(table, id, state));
+                continue;
+            }
+            PersonRoll::Empty => continue,
+            PersonRoll::None => {}
         }
         if chance.below(FLEET_ODDS) < 1 {
             link_fleet(table, chance, &mut out);
@@ -141,17 +238,32 @@ pub fn initial(table: &SpawnTable, chance: &mut (impl Chance + ?Sized)) -> Vec<N
                 aggression: aggression(chance),
                 booty: dude.booty,
                 info_types: dude.info_types,
+                person: None,
             });
+        }
+    }
+    for &(id, prob) in &table.person_slots {
+        let Some(person) = table.persons.get(&id) else {
+            continue;
+        };
+        let world = draw.world;
+        if world.gone.contains(&id) || !world.control_bits.allows(&person.record.active_on) {
+            continue;
+        }
+        if world.rules.listed(prob, &mut &mut *chance) && !draw.here.contains(&person.record.name) {
+            let state = in_system(chance);
+            out.extend(draw.spawn(table, id, state));
         }
     }
     out
 }
 
-/// The ships that arrive this tick in a system holding `present` NPCs
-/// (see the module docs).
+/// The ships that arrive this tick in a system holding `present` NPCs,
+/// its persons drawn as `draw` says (see the module docs).
 pub fn arrivals(
     table: &SpawnTable,
     present: usize,
+    draw: &mut PersonDraw,
     chance: &mut (impl Chance + ?Sized),
 ) -> Vec<NewShip> {
     let mut out = Vec::new();
@@ -160,7 +272,7 @@ pub fn arrivals(
     }
     match chance.below(ARRIVAL_ODDS) {
         1 if named_fleet(table, chance, &mut out) => {}
-        0 | 1 => hyper_ship(table, chance, &mut out),
+        0 | 1 => hyper_ship(table, draw, chance, &mut out),
         _ => {}
     }
     out
@@ -186,11 +298,35 @@ fn named_fleet(
     true
 }
 
-/// `_HyperShipSpawn`: when the system has a `düde`, a person, a
-/// `LinkSyst` fleet or a `düde` ship jumps in, added to `out`.
-fn hyper_ship(table: &SpawnTable, chance: &mut (impl Chance + ?Sized), out: &mut Vec<NewShip>) {
-    if table.dudes.is_empty() || chance.below(PERSON_ODDS) < 1 {
+/// `_HyperShipSpawn`: when the system has a `düde`, a person (drawn as
+/// `draw` says), a `LinkSyst` fleet or a `düde` ship jumps in, added to
+/// `out`.
+fn hyper_ship(
+    table: &SpawnTable,
+    draw: &mut PersonDraw,
+    chance: &mut (impl Chance + ?Sized),
+    out: &mut Vec<NewShip>,
+) {
+    if table.dudes.is_empty() {
         return;
+    }
+    match draw.roll(table, true, chance) {
+        PersonRoll::Person(id) => {
+            if table
+                .persons
+                .get(&id)
+                .is_some_and(|person| can_jump(&person.kind))
+            {
+                let state = hyperspace_entry(chance);
+                out.extend(draw.spawn(table, id, state).map(|ship| NewShip {
+                    jumping_in: true,
+                    ..ship
+                }));
+            }
+            return;
+        }
+        PersonRoll::Empty => return,
+        PersonRoll::None => {}
     }
     if chance.below(FLEET_ODDS) < 1 {
         link_fleet(table, chance, out);
@@ -210,6 +346,7 @@ fn hyper_ship(table: &SpawnTable, chance: &mut (impl Chance + ?Sized), out: &mut
             aggression: aggression(chance),
             booty: dude.booty,
             info_types: dude.info_types,
+            person: None,
         });
     }
 }
@@ -273,6 +410,7 @@ pub fn fleet(
         aggression: aggression(chance),
         booty: 0,
         info_types: 0,
+        person: None,
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -291,6 +429,7 @@ pub fn fleet(
                 aggression: aggression(chance),
                 booty: 0,
                 info_types: 0,
+                person: None,
             });
         }
     }
@@ -366,9 +505,21 @@ mod tests {
 
     use super::*;
     use crate::catalog::{DudeId, EscortRecord, FleetRecord};
+    use crate::catalog::{PersonId, PersonRecord};
+    use crate::combat::hull::Condition;
     use crate::handling::ShipFields;
+    use crate::hire::ControlBits;
+    use crate::person::{NovaPersons, PersonWorld};
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
-    use crate::testkit::{Draws, FAST};
+    use crate::testkit::{Draws, FAST, person};
+    use crate::traffic::table::SpawnPerson;
+
+    /// The person draw of a world without persons gone or grudging, by
+    /// the engine.
+    fn nobody() -> PersonDraw<'static> {
+        PersonDraw::new(PersonWorld::NONE)
+    }
 
     fn kind(inherent_ai: i16, fields: ShipFields) -> ShipKind {
         ShipKind {
@@ -428,6 +579,8 @@ mod tests {
                 (ShipId(202), kind(4, FAST)),
                 (ShipId(203), kind(1, no_fuel)),
             ]),
+            persons: BTreeMap::new(),
+            person_slots: Vec::new(),
         }
     }
 
@@ -483,7 +636,7 @@ mod tests {
     #[test]
     fn a_setup_pass_drawing_a_person_spawns_nothing() {
         let mut chance = Draws::of(&[0]);
-        assert_eq!(initial(&one_pass(), &mut chance), []);
+        assert_eq!(initial(&one_pass(), &mut nobody(), &mut chance), []);
         assert_eq!(chance.asked, [7]);
     }
 
@@ -493,7 +646,7 @@ mod tests {
         // escorts at (-150, -150) and (149, 149) from the lead, each ship's
         // aggression drawn after its place.
         let mut chance = Draws::of(&[6, 0, 13, 0, 2, 0, 0, 2, 299, 299, 2]);
-        let ships = initial(&one_pass(), &mut chance);
+        let ships = initial(&one_pass(), &mut nobody(), &mut chance);
         assert_eq!(chance.asked, [7, 7, 256, 360, 3, 300, 300, 3, 300, 300, 3]);
         let lead = ships[0];
         assert_eq!(
@@ -524,10 +677,10 @@ mod tests {
     fn only_a_draw_of_0_in_7_is_a_person_or_a_fleet() {
         // 1 is neither: a düde ship.
         let mut chance = Draws::of(&[1, 1, 0, 0, 0, 0, 0]);
-        assert_eq!(initial(&one_pass(), &mut chance).len(), 1);
+        assert_eq!(initial(&one_pass(), &mut nobody(), &mut chance).len(), 1);
         assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
         let mut chance = Draws::of(&[0, 1, 1, 0, 0, 0]);
-        assert_eq!(arrivals(&table(), 0, &mut chance).len(), 1);
+        assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut chance).len(), 1);
         assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
     }
 
@@ -536,7 +689,7 @@ mod tests {
         // Not a person, not a fleet: düde 128, ship 200, at (-750, 749)
         // facing 90.
         let mut chance = Draws::of(&[6, 6, 0, 0, 0, 1499, 90]);
-        let ships = initial(&one_pass(), &mut chance);
+        let ships = initial(&one_pass(), &mut nobody(), &mut chance);
         assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
         assert_eq!(
             ships,
@@ -554,6 +707,7 @@ mod tests {
                 aggression: 0,
                 booty: 0x0041,
                 info_types: 0x4005,
+                person: None,
             }]
         );
     }
@@ -565,15 +719,18 @@ mod tests {
             avg_ships: 3,
             ..table()
         };
-        assert_eq!(initial(&three, &mut persons), []);
+        assert_eq!(initial(&three, &mut nobody(), &mut persons), []);
         assert_eq!(persons.asked, [7, 7, 7]);
-        assert_eq!(initial(&three, &mut crate::NeverFires).len(), 3);
+        assert_eq!(
+            initial(&three, &mut nobody(), &mut crate::NeverFires).len(),
+            3
+        );
         let none = SpawnTable {
             avg_ships: 0,
             ..table()
         };
         let mut nothing = Draws::of(&[]);
-        assert_eq!(initial(&none, &mut nothing), []);
+        assert_eq!(initial(&none, &mut nobody(), &mut nothing), []);
         assert!(nothing.asked.is_empty());
     }
 
@@ -581,36 +738,46 @@ mod tests {
     fn a_dude_with_an_ai_type_gives_it_and_one_without_gives_the_ships() {
         let mut table = one_pass();
         let ship_201 = [6, 6, 0, 99, 0, 0, 0];
-        let ships = initial(&table, &mut Draws::of(&ship_201));
+        let ships = initial(&table, &mut nobody(), &mut Draws::of(&ship_201));
         assert_eq!(ships[0].ai_type, AiType::Warship, "201's InherentAI");
         table
             .dude_records
             .get_mut(&DudeId(128))
             .expect("düde")
             .ai_type = 4;
-        let ships = initial(&table, &mut Draws::of(&ship_201));
+        let ships = initial(&table, &mut nobody(), &mut Draws::of(&ship_201));
         assert_eq!(ships[0].ai_type, AiType::Interceptor, "the düde's AIType");
         table
             .dude_records
             .get_mut(&DudeId(128))
             .expect("düde")
             .ai_type = 1;
-        let ships = initial(&table, &mut Draws::of(&ship_201));
+        let ships = initial(&table, &mut nobody(), &mut Draws::of(&ship_201));
         assert_eq!(ships[0].ai_type, AiType::WimpyTrader, "1 is above 0");
     }
 
     #[test]
     fn a_dude_ship_carries_its_dudes_booty() {
         let ship_201 = [6, 6, 0, 99, 0, 0, 0];
-        let ships = initial(&one_pass(), &mut Draws::of(&ship_201));
+        let ships = initial(&one_pass(), &mut nobody(), &mut Draws::of(&ship_201));
         assert_eq!(ships[0].booty, 0x0041);
-        let arrived = arrivals(&table(), 1, &mut Draws::of(&[0, 6, 6, 0, 99, 90]));
+        let arrived = arrivals(
+            &table(),
+            1,
+            &mut nobody(),
+            &mut Draws::of(&[0, 6, 6, 0, 99, 90]),
+        );
         assert_eq!(arrived[0].booty, 0x0041, "a düde ship jumping in too");
     }
 
     #[test]
     fn a_fleet_ship_has_no_booty() {
-        let ships = arrivals(&table(), 0, &mut Draws::of(&[1, 29, 0, 0, 0, 2]));
+        let ships = arrivals(
+            &table(),
+            0,
+            &mut nobody(),
+            &mut Draws::of(&[1, 29, 0, 0, 0, 2]),
+        );
         assert_eq!(ships.len(), 4);
         assert!(ships.iter().all(|ship| ship.booty == 0), "{ships:?}");
     }
@@ -618,15 +785,25 @@ mod tests {
     #[test]
     fn a_dude_ship_carries_its_dudes_info_types() {
         let ship_201 = [6, 6, 0, 99, 0, 0, 0];
-        let ships = initial(&one_pass(), &mut Draws::of(&ship_201));
+        let ships = initial(&one_pass(), &mut nobody(), &mut Draws::of(&ship_201));
         assert_eq!(ships[0].info_types, 0x4005);
-        let arrived = arrivals(&table(), 1, &mut Draws::of(&[0, 6, 6, 0, 99, 90]));
+        let arrived = arrivals(
+            &table(),
+            1,
+            &mut nobody(),
+            &mut Draws::of(&[0, 6, 6, 0, 99, 90]),
+        );
         assert_eq!(arrived[0].info_types, 0x4005, "a düde ship jumping in too");
     }
 
     #[test]
     fn a_fleet_ship_has_no_info_types() {
-        let ships = arrivals(&table(), 0, &mut Draws::of(&[1, 29, 0, 0, 0, 2]));
+        let ships = arrivals(
+            &table(),
+            0,
+            &mut nobody(),
+            &mut Draws::of(&[1, 29, 0, 0, 0, 2]),
+        );
         assert_eq!(ships.len(), 4);
         assert!(ships.iter().all(|ship| ship.info_types == 0), "{ships:?}");
     }
@@ -636,11 +813,11 @@ mod tests {
         let mut table = one_pass();
         table.ships.remove(&ShipId(200));
         let mut chance = Draws::of(&[6, 6, 0, 0]);
-        assert_eq!(initial(&table, &mut chance), []);
+        assert_eq!(initial(&table, &mut nobody(), &mut chance), []);
         assert_eq!(chance.asked, [7, 7, 100, 100], "no placement drawn");
         table.dude_records.clear();
         let mut chance = Draws::of(&[6, 6, 0]);
-        assert_eq!(initial(&table, &mut chance), []);
+        assert_eq!(initial(&table, &mut nobody(), &mut chance), []);
         assert_eq!(chance.asked, [7, 7, 100]);
     }
 
@@ -649,25 +826,25 @@ mod tests {
     #[test]
     fn no_ship_arrives_in_a_system_holding_avg_ships() {
         let mut chance = Draws::of(&[0]);
-        assert_eq!(arrivals(&table(), 2, &mut chance), []);
-        assert_eq!(arrivals(&table(), 3, &mut chance), []);
+        assert_eq!(arrivals(&table(), 2, &mut nobody(), &mut chance), []);
+        assert_eq!(arrivals(&table(), 3, &mut nobody(), &mut chance), []);
         assert!(chance.asked.is_empty(), "nothing drawn");
     }
 
     #[test]
     fn two_in_500_ticks_bring_an_arrival() {
         let mut chance = Draws::of(&[2]);
-        assert_eq!(arrivals(&table(), 1, &mut chance), []);
+        assert_eq!(arrivals(&table(), 1, &mut nobody(), &mut chance), []);
         assert_eq!(chance.asked, [500]);
         let mut chance = Draws::of(&[499]);
-        assert_eq!(arrivals(&table(), 0, &mut chance), []);
+        assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut chance), []);
     }
 
     #[test]
     fn on_0_a_dude_ship_jumps_in() {
         // 0, not a person, not a fleet, düde 128, ship 201, at angle 90.
         let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90]);
-        let ships = arrivals(&table(), 1, &mut chance);
+        let ships = arrivals(&table(), 1, &mut nobody(), &mut chance);
         assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
         assert_eq!(ships.len(), 1);
         let ship = ships[0];
@@ -690,14 +867,14 @@ mod tests {
     #[test]
     fn on_0_a_person_or_a_linksyst_fleet_may_come_instead() {
         let mut person = Draws::of(&[0, 0]);
-        assert_eq!(arrivals(&table(), 0, &mut person), []);
+        assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut person), []);
         assert_eq!(person.asked, [500, 7]);
         let mut linked = Draws::of(&[0, 6, 0, 13]);
-        let ships = arrivals(&table(), 0, &mut linked);
+        let ships = arrivals(&table(), 0, &mut nobody(), &mut linked);
         assert_eq!(&linked.asked[..4], [500, 7, 7, 256]);
         assert_eq!(ships.len(), 3, "fleet 141: its lead and two escorts");
         let mut missed = Draws::of(&[0, 6, 0, 14]);
-        assert_eq!(arrivals(&table(), 0, &mut missed), []);
+        assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut missed), []);
         assert_eq!(missed.asked, [500, 7, 7, 256]);
     }
 
@@ -707,7 +884,7 @@ mod tests {
         // angle 0, its lead's aggression, then Rand(3) = 2, so three
         // escorts.
         let mut chance = Draws::of(&[1, 29, 0, 0, 0, 2]);
-        let ships = arrivals(&table(), 0, &mut chance);
+        let ships = arrivals(&table(), 0, &mut nobody(), &mut chance);
         assert_eq!(&chance.asked[..6], [500, 100, 30, 360, 3, 3]);
         assert_eq!(
             chance.asked.len(),
@@ -733,11 +910,11 @@ mod tests {
     fn on_1_a_percentage_roll_above_the_odds_falls_through_to_0s_case() {
         // Rand(100) + 1 = 31, above 30: falls through, and a person comes.
         let mut chance = Draws::of(&[1, 30, 0]);
-        assert_eq!(arrivals(&table(), 0, &mut chance), []);
+        assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut chance), []);
         assert_eq!(chance.asked, [500, 100, 7]);
         // Through to a düde ship.
         let mut chance = Draws::of(&[1, 30, 6, 6, 0, 0, 0]);
-        let ships = arrivals(&table(), 0, &mut chance);
+        let ships = arrivals(&table(), 0, &mut nobody(), &mut chance);
         assert_eq!(chance.asked, [500, 100, 7, 7, 100, 100, 360, 3]);
         assert_eq!(ships.len(), 1);
     }
@@ -749,7 +926,7 @@ mod tests {
             ..table()
         };
         let mut chance = Draws::of(&[1, 0]);
-        assert_eq!(arrivals(&table, 0, &mut chance), []);
+        assert_eq!(arrivals(&table, 0, &mut nobody(), &mut chance), []);
         assert_eq!(chance.asked, [500, 7]);
     }
 
@@ -761,10 +938,10 @@ mod tests {
             ..table()
         };
         let mut chance = Draws::of(&[0]);
-        assert_eq!(arrivals(&table, 0, &mut chance), []);
+        assert_eq!(arrivals(&table, 0, &mut nobody(), &mut chance), []);
         assert_eq!(chance.asked, [500]);
         let mut chance = Draws::of(&[1, 30]);
-        assert_eq!(arrivals(&table, 0, &mut chance), []);
+        assert_eq!(arrivals(&table, 0, &mut nobody(), &mut chance), []);
         assert_eq!(chance.asked, [500, 100]);
     }
 
@@ -777,7 +954,7 @@ mod tests {
             .expect("düde")
             .ships = vec![(ShipId(203), 1)];
         let mut chance = Draws::of(&[0, 6, 6, 0, 0]);
-        assert_eq!(arrivals(&table, 0, &mut chance), []);
+        assert_eq!(arrivals(&table, 0, &mut nobody(), &mut chance), []);
         assert_eq!(chance.asked, [500, 7, 7, 100, 1], "no placement drawn");
         // Nor a fleet it leads.
         table
@@ -831,7 +1008,7 @@ mod tests {
 
     #[test]
     fn a_fleets_escorts_follow_the_index_of_their_lead_among_the_ships_added() {
-        let mut out = vec![initial(&one_pass(), &mut crate::NeverFires)[0]];
+        let mut out = vec![initial(&one_pass(), &mut nobody(), &mut crate::NeverFires)[0]];
         fleet(&table(), FleetId(141), &mut crate::NeverFires, &mut out);
         assert_eq!(out.len(), 4);
         assert_eq!(
@@ -865,12 +1042,12 @@ mod tests {
         for (draw, aggression) in [(0, 2), (1, 3), (2, 0)] {
             // A düde ship placed at setup.
             let mut chance = Draws::of(&[6, 6, 0, 0, 0, 0, 0, draw]);
-            let ships = initial(&one_pass(), &mut chance);
+            let ships = initial(&one_pass(), &mut nobody(), &mut chance);
             assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
             assert_eq!(ships[0].aggression, aggression, "{draw}");
             // One jumping in.
             let mut chance = Draws::of(&[0, 6, 6, 0, 0, 0, draw]);
-            let ships = arrivals(&table(), 0, &mut chance);
+            let ships = arrivals(&table(), 0, &mut nobody(), &mut chance);
             assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
             assert_eq!(ships[0].aggression, aggression, "{draw}");
         }
@@ -942,5 +1119,287 @@ mod tests {
         );
         let state = escort_offset(&lead, &mut Draws::of(&[150, 150]));
         assert_eq!(state.position, lead.position);
+    }
+
+    // Persons.
+
+    /// Person `id` flying ship 201, linked here or not, of `aggress` and
+    /// government 128.
+    fn spawn_person(id: i16, linked: bool, aggress: i16) -> SpawnPerson {
+        let kind = kind(3, FAST);
+        SpawnPerson {
+            record: PersonRecord {
+                govt: Some(GovtId(128)),
+                aggress,
+                ..person(id, 201)
+            },
+            linked,
+            reserves: kind.stats.full(),
+            kind,
+            condition: Condition::Intact,
+            derelict: false,
+        }
+    }
+
+    /// [`one_pass`] with person 510 (`Aggress` 4) linked here, and 600,
+    /// unlinked, in the first Person slot at 50 %.
+    fn peopled() -> SpawnTable {
+        SpawnTable {
+            persons: BTreeMap::from([
+                (PersonId(510), spawn_person(510, true, 4)),
+                (PersonId(600), spawn_person(600, false, 1)),
+            ]),
+            person_slots: vec![(PersonId(600), 50)],
+            ..one_pass()
+        }
+    }
+
+    /// Lets every expression hold but `refused`.
+    #[derive(Debug)]
+    struct Refusing(&'static str);
+
+    impl ControlBits for Refusing {
+        fn allows(&self, expression: &str) -> bool {
+            expression != self.0
+        }
+    }
+
+    /// The setup of `table` in `world`, drawn from `draws`, and the
+    /// bounds asked.
+    fn set_up(table: &SpawnTable, world: PersonWorld, draws: &[u32]) -> (Vec<NewShip>, Vec<u32>) {
+        let mut chance = Draws::of(draws);
+        let ships = initial(table, &mut PersonDraw::new(world), &mut chance);
+        (ships, chance.asked)
+    }
+
+    fn persons_of(ships: &[NewShip]) -> Vec<Option<i16>> {
+        ships
+            .iter()
+            .map(|ship| ship.person.map(|id| id.0))
+            .collect()
+    }
+
+    #[test]
+    fn a_setup_pass_rolling_a_person_places_it_with_its_own_aggression() {
+        let (ships, asked) = set_up(&peopled(), PersonWorld::NONE, &[0, 382, 0, 1499, 90, 99]);
+        assert_eq!(
+            asked,
+            [7, 1022, 1500, 1500, 360, 100],
+            "no aggression drawn"
+        );
+        assert_eq!(
+            ships,
+            [NewShip {
+                ship: ShipId(201),
+                govt: Some(GovtId(128)),
+                ai_type: AiType::Warship,
+                lead: None,
+                state: ShipState {
+                    position: Vec2::new(-750.0, 749.0),
+                    velocity: Vec2::ZERO,
+                    heading: 90.0,
+                },
+                jumping_in: false,
+                aggression: 4,
+                booty: 0,
+                info_types: 0,
+                person: Some(PersonId(510)),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_person_roll_that_misses_brings_nothing_that_pass() {
+        let two = SpawnTable {
+            avg_ships: 2,
+            ..peopled()
+        };
+        let (ships, asked) = set_up(
+            &two,
+            PersonWorld::NONE,
+            &[0, 381, 6, 6, 0, 0, 0, 0, 0, 0, 99],
+        );
+        assert_eq!(&asked[..2], [7, 1022], "the first pass: nothing");
+        assert_eq!(&asked[2..4], [7, 7], "the next pass rolls as usual");
+        assert_eq!(persons_of(&ships), [None]);
+    }
+
+    #[test]
+    fn a_person_gone_refused_by_its_active_on_or_of_no_ai_type_does_not_come() {
+        let gone = BTreeSet::from([PersonId(510)]);
+        let world = PersonWorld {
+            gone: &gone,
+            ..PersonWorld::NONE
+        };
+        assert_eq!(set_up(&peopled(), world, &[0, 99]).1, [7, 100], "empty");
+        let mut table = peopled();
+        table
+            .persons
+            .get_mut(&PersonId(510))
+            .expect("there")
+            .record
+            .active_on = "b8".to_owned();
+        let refusing = Refusing("b8");
+        let world = PersonWorld {
+            control_bits: &refusing,
+            ..PersonWorld::NONE
+        };
+        assert_eq!(set_up(&table, world, &[0, 99]).1, [7, 100]);
+        let mut table = peopled();
+        table
+            .persons
+            .get_mut(&PersonId(510))
+            .expect("there")
+            .record
+            .ai_type = 0;
+        assert_eq!(set_up(&table, PersonWorld::NONE, &[0, 99]).1, [7, 100]);
+    }
+
+    #[test]
+    fn a_person_whose_name_is_in_the_system_does_not_come_again() {
+        let mut draw = PersonDraw::new(PersonWorld::NONE);
+        draw.here.insert("Person 510".to_owned());
+        assert_eq!(draw.eligible(&peopled(), false), []);
+        let two = SpawnTable {
+            avg_ships: 2,
+            ..peopled()
+        };
+        // The first pass brings 510; the second's roll lands on it again.
+        let (ships, asked) = set_up(&two, PersonWorld::NONE, &[0, 382, 0, 0, 0, 0, 99]);
+        assert_eq!(persons_of(&ships), [Some(510)]);
+        assert_eq!(&asked[5..], [7, 100], "nobody may come: no second draw");
+    }
+
+    #[test]
+    fn a_derelict_person_may_come_at_setup_but_never_jumps_in() {
+        let mut table = peopled();
+        table
+            .persons
+            .get_mut(&PersonId(510))
+            .expect("there")
+            .derelict = true;
+        let draw = PersonDraw::new(PersonWorld::NONE);
+        assert_eq!(draw.eligible(&table, false), [PersonId(510)]);
+        assert_eq!(draw.eligible(&table, true), []);
+        assert_eq!(draw.eligible(&peopled(), true), [PersonId(510)]);
+    }
+
+    #[test]
+    fn after_the_passes_each_person_slot_is_rolled_and_brings_its_person() {
+        let none = SpawnTable {
+            avg_ships: 0,
+            ..peopled()
+        };
+        let (ships, asked) = set_up(&none, PersonWorld::NONE, &[49, 0, 0, 0]);
+        assert_eq!(asked, [100, 1500, 1500, 360]);
+        assert_eq!(persons_of(&ships), [Some(600)], "linked or not");
+        assert_eq!(ships[0].aggression, 1);
+        assert!(!ships[0].jumping_in);
+        let (ships, asked) = set_up(&none, PersonWorld::NONE, &[50]);
+        assert_eq!((ships.len(), asked), (0, vec![100]));
+    }
+
+    #[test]
+    fn a_slot_naming_a_person_gone_refused_or_without_a_ship_draws_nothing() {
+        let none = SpawnTable {
+            avg_ships: 0,
+            ..peopled()
+        };
+        let gone = BTreeSet::from([PersonId(600)]);
+        let world = PersonWorld {
+            gone: &gone,
+            ..PersonWorld::NONE
+        };
+        assert_eq!(set_up(&none, world, &[]), (vec![], vec![]));
+        let mut table = none.clone();
+        table
+            .persons
+            .get_mut(&PersonId(600))
+            .expect("there")
+            .record
+            .active_on = "b9".to_owned();
+        let refusing = Refusing("b9");
+        let world = PersonWorld {
+            control_bits: &refusing,
+            ..PersonWorld::NONE
+        };
+        assert_eq!(set_up(&table, world, &[]), (vec![], vec![]));
+        let shipless = SpawnTable {
+            person_slots: vec![(PersonId(605), 100)],
+            ..none
+        };
+        assert_eq!(set_up(&shipless, PersonWorld::NONE, &[]), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_slot_person_already_present_draws_and_does_not_come() {
+        let none = SpawnTable {
+            avg_ships: 0,
+            ..peopled()
+        };
+        let mut draw = PersonDraw::new(PersonWorld::NONE);
+        draw.here.insert("Person 600".to_owned());
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(initial(&none, &mut draw, &mut chance), []);
+        assert_eq!(chance.asked, [100]);
+    }
+
+    #[test]
+    fn a_person_arriving_jumps_in_from_hyperspace() {
+        let mut draw = PersonDraw::new(PersonWorld::NONE);
+        let mut chance = Draws::of(&[0, 0, 382, 90]);
+        let ships = arrivals(&peopled(), 0, &mut draw, &mut chance);
+        assert_eq!(chance.asked, [500, 7, 1022, 360], "no aggression drawn");
+        assert_eq!(persons_of(&ships), [Some(510)]);
+        assert!(ships[0].jumping_in);
+        assert_eq!(ships[0].aggression, 4);
+        assert!(near(
+            ships[0].state.position,
+            Vec2::new(jump_in_distance(), 0.0)
+        ));
+        assert!(draw.here.contains("Person 510"), "now here");
+        let mut chance = Draws::of(&[0, 0, 381]);
+        assert_eq!(arrivals(&peopled(), 0, &mut nobody(), &mut chance), []);
+        assert_eq!(chance.asked, [500, 7, 1022], "nothing arrives");
+    }
+
+    fn by(key: RuleKey) -> NovaPersons {
+        NovaPersons::from_rulebook(&Rulebook::default().with_override(key, RuleSource::Bible))
+    }
+
+    #[test]
+    fn by_the_bibles_odds_a_pass_brings_a_person_5_times_in_100_or_goes_on() {
+        let rules = by(RuleKey::PersonOdds);
+        let world = PersonWorld {
+            rules: &rules,
+            ..PersonWorld::NONE
+        };
+        let (ships, asked) = set_up(&peopled(), world, &[4, 0, 0, 0, 99]);
+        assert_eq!(asked, [100, 1500, 1500, 360, 100]);
+        assert_eq!(persons_of(&ships), [Some(510)]);
+        let (ships, asked) = set_up(&one_pass(), world, &[4, 6, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            asked,
+            [100, 7, 100, 100, 1500, 1500, 360, 3],
+            "on to a düde ship"
+        );
+        assert_eq!(persons_of(&ships), [None]);
+    }
+
+    #[test]
+    fn by_the_bibles_slots_a_slot_brings_its_person_without_a_draw() {
+        let rules = by(RuleKey::SystemPersons);
+        let world = PersonWorld {
+            rules: &rules,
+            ..PersonWorld::NONE
+        };
+        let table = SpawnTable {
+            avg_ships: 0,
+            person_slots: vec![(PersonId(600), 1)],
+            ..peopled()
+        };
+        let (ships, asked) = set_up(&table, world, &[0, 0, 0]);
+        assert_eq!(asked, [1500, 1500, 360]);
+        assert_eq!(persons_of(&ships), [Some(600)]);
     }
 }

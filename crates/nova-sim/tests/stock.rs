@@ -687,6 +687,28 @@ impl nova_sim::Chance for Script {
     }
 }
 
+/// Draws by the bound asked, as listed, and 0 for any other bound.
+struct ByBound(&'static [(u32, u32)]);
+
+impl nova_sim::Chance for ByBound {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        self.0
+            .iter()
+            .find(|&&(bound, _)| bound == n)
+            .map_or(0, |&(_, draw)| draw)
+    }
+}
+
+/// Every person roll fires but lands on no stock person (1149, past the
+/// last), and no Person slot below 100 % lists its person.
+fn no_person() -> ByBound {
+    ByBound(&[(1022, 1021), (100, 99)])
+}
+
 /// Alphara (`sÿst` 131) names `flët` 129 in its `DudeTypes`, at 20 %:
 /// when an arrival's roll lands on 1 and the percentage roll is within
 /// 20, the fleet's lead jumps in with its escorts, for its government.
@@ -721,8 +743,8 @@ fn alpharas_named_fleet_comes_when_its_roll_fires() {
     save["system"] = serde_json::json!(131);
     let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(&data, pilot).expect("flies");
-    // Every setup pass draws a person: no traffic yet.
-    session.populate(&data, &mut Script(std::collections::VecDeque::new()));
+    // Every setup pass draws a person, who never comes: no traffic yet.
+    session.populate(&data, &mut no_person());
     assert_eq!(session.npcs(), []);
     // Rand(500) = 1, then Rand(100) + 1 = 1, within 20: the first named
     // fleet, flët 129.
