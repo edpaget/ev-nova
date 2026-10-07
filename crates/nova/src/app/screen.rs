@@ -88,10 +88,11 @@
 //!
 //! P, on any side, opens the Preferences dialog ("new prefs dialog") over
 //! the screen shown when the router has dialogs. Like the About dialog it
-//! is modal, and flight pauses under it. It opens on the player's sound
+//! is modal, and flight pauses under it. It opens on the player's
 //! preferences ([`AppScreen::with_prefs`]), and each change is
 //! reported once through [`Screen::take_prefs`] for the app to play
-//! and save. OK, Return or Escape closes it.
+//! and save. Flight follows the Hyperspace Effects preference: it is
+//! built with it, and a change reaches a flight already built. OK, Return or Escape closes it.
 //!
 //! The router reports every live screen's sounds through
 //! [`Screen::take_sounds`], and what it shows through
@@ -460,8 +461,12 @@ impl AppScreen {
     /// go back to.
     fn enter_flight(&mut self) {
         let (data, chance) = (&self.data, &self.chance);
-        self.flight
-            .get_or_insert_with(|| FlightView::new(Rc::clone(data)).with_chance(chance.clone()));
+        let effects = self.prefs.hyperspace_effects;
+        self.flight.get_or_insert_with(|| {
+            FlightView::new(Rc::clone(data))
+                .with_chance(chance.clone())
+                .with_hyperspace_effects(effects)
+        });
         self.return_to = self.side;
         self.switch_to(Side::Flight);
     }
@@ -523,6 +528,9 @@ impl AppScreen {
             if let Some(prefs) = dialog.take_change() {
                 self.prefs = prefs;
                 self.prefs_change = Some(prefs);
+                if let Some(flight) = &mut self.flight {
+                    flight.set_hyperspace_effects(prefs.hyperspace_effects);
+                }
             }
             if dialog.closed() {
                 self.sounds.extend(dialog.take_sounds());
@@ -636,8 +644,9 @@ impl AppScreen {
     /// spaceport.
     fn start_flight(&mut self, pilot: Pilot) {
         self.spaceport = None;
-        let mut flight =
-            FlightView::with_pilot(Rc::clone(&self.data), pilot).with_chance(self.chance.clone());
+        let mut flight = FlightView::with_pilot(Rc::clone(&self.data), pilot)
+            .with_chance(self.chance.clone())
+            .with_hyperspace_effects(self.prefs.hyperspace_effects);
         let landing = flight.take_landing();
         self.flight = Some(flight);
         self.return_to = Side::MainMenu;
@@ -2743,6 +2752,61 @@ mod tests {
         assert_eq!(prefs_dialog(&screen).prefs(), louder);
     }
 
+    fn no_effects() -> Prefs {
+        Prefs {
+            hyperspace_effects: false,
+            ..quiet()
+        }
+    }
+
+    fn flight_effects(screen: &AppScreen) -> bool {
+        screen.flight_view().expect("flying").hyperspace_effects()
+    }
+
+    #[test]
+    fn flight_is_built_with_the_routers_hyperspace_effects() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        assert!(flight_effects(&screen), "on by default");
+        let mut screen = with_dialogs(data()).with_prefs(no_effects());
+        fly(&mut screen);
+        assert!(!flight_effects(&screen));
+    }
+
+    #[test]
+    fn a_change_in_the_dialog_reaches_flight_already_built() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        open_prefs(&mut screen);
+        let point = prefs_dialog(&screen).hyperspace_effects().rect().center();
+        click_at(&mut screen, point);
+        assert!(!flight_effects(&screen));
+        assert_eq!(
+            screen.take_prefs(),
+            Some(Prefs {
+                hyperspace_effects: false,
+                ..Prefs::default()
+            })
+        );
+        assert_eq!(screen.take_prefs(), None, "once");
+        click_at(&mut screen, point);
+        assert!(flight_effects(&screen), "back on");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(flight_effects(&screen));
+    }
+
+    #[test]
+    fn a_change_before_flight_is_built_reaches_it_when_it_is() {
+        let mut screen = with_dialogs(data());
+        open_prefs(&mut screen);
+        let point = prefs_dialog(&screen).hyperspace_effects().rect().center();
+        click_at(&mut screen, point);
+        screen.input(&key(Key::Escape, true));
+        fly(&mut screen);
+        assert!(!flight_effects(&screen));
+    }
+
     #[test]
     fn a_p_repeat_or_release_opens_nothing_and_reaches_nothing() {
         let mut screen = with_dialogs(data());
@@ -3045,6 +3109,18 @@ mod tests {
         assert_eq!(store.keys(), ["Ada"], "saved at once");
         assert_eq!(saved(&store, "Ada"), *pilot(&screen));
         assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_new_pilot_flies_with_the_routers_hyperspace_effects() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store).with_prefs(Prefs {
+            hyperspace_effects: false,
+            ..Prefs::default()
+        });
+        create(&mut screen, "Ada");
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(!screen.flight_view().expect("flying").hyperspace_effects());
     }
 
     #[test]
