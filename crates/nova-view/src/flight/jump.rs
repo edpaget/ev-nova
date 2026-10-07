@@ -54,6 +54,16 @@
 //! other reading, no streak and arrival at once, is recorded in task
 //! `bible-vs-engine-settings`.
 //!
+//! # Gates
+//!
+//! Coming out of a hypergate or wormhole plays only the arrival's half,
+//! the ship having arrived at once. `_PlayerEnterHypergate` paints the
+//! work area white (`ForeColor(30)`, @0x63b44-0x63b5b), then fades the
+//! display back from white with `_FadeWhiteOut` unless the preference
+//! skips it (@0x63c25-0x63c40): [`JumpEffect::emerging`].
+//! `_PlayerEnterWormhole` paints the window white once (@0x643ea-0x64414)
+//! and never fades, whatever the preference: [`JumpEffect::flash`].
+//!
 //! The black fades (`_FadeScreenOut`, `_FadeScreenIn`) serve death, the
 //! intro and dialogs, never the jump. The streak and fade-out durations
 //! are ours: the original's fade-out starts from a warp speed we do not
@@ -93,6 +103,16 @@ const SCREEN: Bounds = Bounds {
     min: Point::new(0.0, 0.0),
     max: Point::new(VIEW_SIZE.0, VIEW_SIZE.1),
 };
+
+/// How far into a jump's effect the ship arrives: the end of the fade-out,
+/// or of the streak without fades.
+fn arrival_at(fades: bool) -> Duration {
+    if fades {
+        STREAK_FOR + FADE_OUT_FOR
+    } else {
+        STREAK_FOR
+    }
+}
 
 /// Where the effect is, each phase with how far through it, in `[0, 1)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -142,6 +162,30 @@ impl JumpEffect {
         }
     }
 
+    /// The effect of coming out of a hypergate: the new system fades in
+    /// from white ([`JumpPhase::FadeIn`], for [`FADE_IN_FOR`]) when `fades`,
+    /// as the Hyperspace Effects preference is on, and otherwise the screen
+    /// shows solid white once ([`JumpPhase::Flash`]). There is no streak
+    /// and no fade-out, and it never reports an arrival: the ship has
+    /// arrived already. See "Gates" in the module docs.
+    #[must_use]
+    pub fn emerging(fades: bool) -> Self {
+        Self {
+            // No streak shows it.
+            direction: Point::new(0.0, -1.0),
+            elapsed: arrival_at(fades),
+            fades,
+        }
+    }
+
+    /// The effect of passing through a wormhole: the screen shows solid
+    /// white once ([`JumpPhase::Flash`]), whatever the preference, and it
+    /// never reports an arrival.
+    #[must_use]
+    pub fn flash() -> Self {
+        Self::emerging(false)
+    }
+
     /// This effect, with its white fades (the default) or without them, as
     /// the Hyperspace Effects preference is on or off.
     #[must_use]
@@ -159,11 +203,7 @@ impl JumpEffect {
     /// instant the ship arrives, the end of the fade-out (or of the streak,
     /// without fades): true exactly once, however long `dt` is.
     pub fn advance(&mut self, dt: Duration) -> bool {
-        let arrival = if self.fades {
-            STREAK_FOR + FADE_OUT_FOR
-        } else {
-            STREAK_FOR
-        };
+        let arrival = arrival_at(self.fades);
         let before = self.elapsed;
         self.elapsed = self.elapsed.saturating_add(dt);
         before < arrival && self.elapsed >= arrival
@@ -443,5 +483,40 @@ mod tests {
             );
         }
         assert_eq!(plain(ms(1033)).fade_alpha(), 0);
+    }
+
+    /// `effect` after `at` more, and whether that reported an arrival.
+    fn played(mut effect: JumpEffect, at: Duration) -> (JumpEffect, bool) {
+        let arrived = effect.advance(at);
+        (effect, arrived)
+    }
+
+    #[test]
+    fn out_of_a_hypergate_the_new_system_fades_in_from_white() {
+        let gate = JumpEffect::emerging(true);
+        assert_eq!(gate.phase(), JumpPhase::FadeIn(0.0));
+        assert_eq!(gate.direction(), Point::new(0.0, -1.0), "up, unused");
+        assert_eq!(gate.fade_alpha(), 255);
+        assert_eq!(gate.streak_length(), 0.0);
+        assert_eq!(played(gate, ms(750)).0.phase(), JumpPhase::FadeIn(0.5));
+        assert!(!played(gate, ms(1499)).0.done());
+        assert!(played(gate, FADE_IN_FOR).0.done());
+        for at in [Duration::ZERO, ms(16), FADE_IN_FOR, Duration::MAX] {
+            assert!(!played(gate, at).1, "never an arrival: {at:?}");
+        }
+    }
+
+    #[test]
+    fn out_of_a_hypergate_without_fades_and_out_of_a_wormhole_the_screen_flashes_white() {
+        for effect in [JumpEffect::emerging(false), JumpEffect::flash()] {
+            assert_eq!(effect.phase(), JumpPhase::Flash(0.0));
+            assert_eq!(effect.fade_alpha(), 255);
+            assert_eq!(effect.streak_length(), 0.0);
+            assert!(!played(effect, ms(32)).0.done());
+            assert!(played(effect, ARRIVAL_FLASH_FOR).0.done());
+            for at in [Duration::ZERO, ms(16), ARRIVAL_FLASH_FOR, Duration::MAX] {
+                assert!(!played(effect, at).1, "never an arrival: {at:?}");
+            }
+        }
     }
 }
