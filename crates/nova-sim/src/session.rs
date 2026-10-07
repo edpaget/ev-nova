@@ -9565,6 +9565,27 @@ mod tests {
     }
 
     #[test]
+    fn a_grant_credits_back_the_mass_of_the_ships_stock_weapons() {
+        let mut catalog = granting();
+        // 15 tons each: two fit the 30 tons free only with the ton each of
+        // the stock blaster and point defence (outfits 250 and 251) the
+        // player owns credited back; without it, 28 tons fit one.
+        let booster = catalog
+            .outfits
+            .iter_mut()
+            .find(|record| record.id == OutfitId(200))
+            .expect("the booster");
+        booster.mass = 15;
+        let mut session = alongside_ace(&catalog);
+        assert_eq!(session.pilot().owned(OutfitId(250)), 1, "stock blaster");
+        assert_eq!(session.pilot().owned(OutfitId(251)), 1, "stock defence");
+        let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert!(boarded.is_ok());
+        assert_eq!(session.pilot().owned(OutfitId(200)), 2);
+        assert_eq!(session.take_grant().map(|granted| granted.count), Some(2));
+    }
+
+    #[test]
     fn an_outfits_lower_case_names_are_its_records() {
         let catalog = granting();
         let session = Session::start(&catalog).expect("starts");
