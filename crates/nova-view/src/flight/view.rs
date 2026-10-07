@@ -4668,6 +4668,17 @@ mod tests {
     }
 
     #[test]
+    fn in_a_system_with_no_stellars_the_destination_is_bright_from_the_centre() {
+        let mut view = FlightView::new(FakeCatalog {
+            sites: Vec::new(),
+            ..catalog()
+        });
+        plot(&mut view, 131);
+        assert_eq!(player(&view).position, Vec2::ZERO);
+        assert_eq!(nav_value_color(&view), Color::WHITE);
+    }
+
+    #[test]
     fn once_j_is_accepted_the_hyperspace_label_turns_bright_too() {
         let mut view = flight();
         plot(&mut view, 131);

@@ -45,6 +45,12 @@
 //!   the ship is nearer the system's centre than its jump distance
 //!   ([`MIN_JUMP_DISTANCE`] standard, the Bible's "Jump Distance 1000
 //!   pixels", which outfits can move), or it has less than [`JUMP_FUEL`].
+//!   [`jump_zone`] gives the distance it must be out, under a
+//!   [`JumpZoneRule`]: by the engine's, the zone applies only in a system
+//!   with a stellar that is neither a hypergate nor a wormhole, so in a
+//!   system of gates alone, or with no stellars, the ship jumps from
+//!   anywhere (`_HandlePlayer` @0x6b15d-0x6b1f4, `_DrawStatusNav`
+//!   @0x4a242-0x4a2cd).
 //!   Hypergates and wormholes never ask it: they use no fuel and work
 //!   anywhere the ship can land on them (see [`gate`](crate::gate)).
 //!   [`Session::jump_readiness`](crate::Session::jump_readiness) asks the
@@ -70,8 +76,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Bound::{Excluded, Unbounded};
 
-use crate::catalog::{GovtId, StarSystem, SystemId};
+use crate::catalog::{GovtId, LandingSite, StarSystem, SystemId};
 use crate::flight::{ShipState, heading_of};
+use crate::gate::GateKind;
 use crate::geometry::Vec2;
 use crate::navigation::next_after;
 
@@ -457,6 +464,39 @@ impl StarMap {
     }
 }
 
+/// Where the no-jump zone applies.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JumpZoneRule {
+    /// The original engine's reading: the zone (`_ShipHyperSafeDist`)
+    /// applies only when the current system's nav slots list an ordinary
+    /// stellar, one whose `Flags2` has neither the hypergate (0x1000) nor
+    /// the wormhole (0x2000) bit, whatever else it is; in a system of gates
+    /// alone, or with no stellars, the ship jumps from anywhere. J
+    /// (`_HandlePlayer` @0x6b15d-0x6b1f4), the nav area's dimming
+    /// (`_DrawStatusNav` @0x4a242-0x4a2cd) and the "ready to jump" cue
+    /// (`_HandlePlayer` @0x6d501-0x6d598) each skip a slot whose stellar's
+    /// word at +0x34 has 0x3000 set, and test the distance from the centre
+    /// only for the rest. That word is `Flags2`: `_HandlePlayerDockRequest`
+    /// branches on the same bits to enter a hypergate (@0x66ed1) or a
+    /// wormhole (@0x66f0d).
+    #[default]
+    Engine,
+    /// The Nova Bible's reading, which states no exception: the jump
+    /// distance applies in every system.
+    Always,
+}
+
+/// The distance from the centre a ship must be to jump, given the current
+/// system's `sites` and the ship's `jump_distance`, under `rule`:
+/// `jump_distance` where the no-jump zone applies, and none (0) where it
+/// does not.
+#[must_use]
+pub fn jump_zone(sites: &[LandingSite], jump_distance: f32, rule: JumpZoneRule) -> f32 {
+    let applies = rule == JumpZoneRule::Always
+        || sites.iter().any(|site| GateKind::of(site.flags2).is_none());
+    if applies { jump_distance } else { 0.0 }
+}
+
 /// Whether `player`, holding `fuel`, can jump to `next`, the next system
 /// on its route, when it must be `min_distance` from the centre to jump
 /// (exactly that far is far enough): `next`, or the first refusal that
@@ -516,6 +556,8 @@ pub fn arrival(from: Vec2, to: Vec2, jump_distance: f32) -> ShipState {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::gate::{HYPERGATE, WORMHOLE};
+    use crate::testkit::planet;
     use HyperlinkRule::{BothWays, Engine};
 
     #[test]
@@ -1160,6 +1202,50 @@ mod tests {
                     "{from:?} to {to:?} at {jump_distance}: {arrived:?}"
                 );
             }
+        }
+    }
+
+    /// A stellar with `Flags2` `flags2`, otherwise a plain planet.
+    fn stellar(id: i16, flags2: u16) -> LandingSite {
+        LandingSite {
+            flags2,
+            ..planet(id, 0.0, 0.0)
+        }
+    }
+
+    #[test]
+    fn by_the_engine_the_zone_applies_only_with_an_ordinary_stellar() {
+        use JumpZoneRule::{Always, Engine};
+        assert_eq!(JumpZoneRule::default(), Engine);
+        let no_zone: [&[LandingSite]; 6] = [
+            &[],
+            &[stellar(300, HYPERGATE)],
+            &[stellar(300, WORMHOLE)],
+            &[stellar(300, HYPERGATE | WORMHOLE)],
+            &[stellar(300, 0x2200)],
+            &[stellar(300, HYPERGATE), stellar(301, WORMHOLE)],
+        ];
+        let unlandable = LandingSite {
+            flags: 0,
+            ..stellar(128, 0)
+        };
+        let zone: [&[LandingSite]; 4] = [
+            &[planet(128, 30.0, -40.0)],
+            &[unlandable],
+            &[stellar(128, 0x0100)],
+            &[
+                stellar(300, HYPERGATE),
+                planet(128, 0.0, 0.0),
+                stellar(301, WORMHOLE),
+            ],
+        ];
+        for sites in no_zone {
+            assert_eq!(jump_zone(sites, 1250.0, Engine), 0.0, "{sites:?}");
+            assert_eq!(jump_zone(sites, 1250.0, Always), 1250.0, "{sites:?}");
+        }
+        for sites in zone {
+            assert_eq!(jump_zone(sites, 1250.0, Engine), 1250.0, "{sites:?}");
+            assert_eq!(jump_zone(sites, 1250.0, Always), 1250.0, "{sites:?}");
         }
     }
 }

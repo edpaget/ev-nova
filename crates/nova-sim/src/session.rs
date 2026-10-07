@@ -29,7 +29,10 @@
 //! follow. J
 //! ([`Session::begin_jump`]) is accepted when the
 //! [`hyperspace`](crate::hyperspace) rules allow a jump to the next system
-//! on it. The ship then flies the pre-jump stage on its own, the player's
+//! on it, with the no-jump zone applying where the session's
+//! [`JumpZoneRule`] says (the engine's, only in a system with a stellar
+//! that is no gate, unless [`Session::with_jump_zone`] says otherwise).
+//! The ship then flies the pre-jump stage on its own, the player's
 //! controls ignored: it brakes and turns to the map bearing of that system
 //! as [`pre_jump`] says ([`Session::preparing_jump`]), and the jump begins
 //! once it is ready ([`Session::jumping`]), at once if it already is. A
@@ -134,8 +137,9 @@ use crate::geometry::Vec2;
 use crate::glow::ramp_glow;
 use crate::handling::{Handling, ShipFields};
 use crate::hyperspace::{
-    HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, MultiJumpRule,
-    RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing, next_hyper_destination,
+    HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
+    MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing,
+    jump_zone, next_hyper_destination,
 };
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::market::{self, Goods, Market, Order, TradeRefusal};
@@ -216,6 +220,8 @@ pub struct Session {
     hyper_select: HyperSelectRule,
     /// The rule jumps along the hyperlinks follow.
     hyperlinks: HyperlinkRule,
+    /// The rule for where the no-jump zone applies.
+    jump_zone: JumpZoneRule,
     /// The hypergate or wormhole the land key has just been pressed over,
     /// cleared: its entry awaits until the next tick.
     gate: Option<StellarId>,
@@ -304,6 +310,7 @@ impl Session {
             multi_jump: MultiJumpRule::default(),
             hyper_select: HyperSelectRule::default(),
             hyperlinks: HyperlinkRule::default(),
+            jump_zone: JumpZoneRule::default(),
             gate: None,
             gate_arrival: GateArrivalRule::default(),
             wormholes: WormholeRule::default(),
@@ -341,6 +348,14 @@ impl Session {
     #[must_use]
     pub fn with_hyperlinks(mut self, rule: HyperlinkRule) -> Self {
         self.hyperlinks = rule;
+        self
+    }
+
+    /// This session with the no-jump zone applying where `rule` says; the
+    /// engine's by default, only in a system with an ordinary stellar.
+    #[must_use]
+    pub fn with_jump_zone(mut self, rule: JumpZoneRule) -> Self {
+        self.jump_zone = rule;
         self
     }
 
@@ -495,8 +510,10 @@ impl Session {
 
     /// The next system on the course, if J would jump there now, or the
     /// first [`JumpRefusal`] that applies: the ship has landed, or
-    /// [`check_jump`]'s refusals. J and [`Session::jump_readiness`] both
-    /// ask this, so the rule lives in one place.
+    /// [`check_jump`]'s refusals, with the no-jump zone the session's
+    /// [`JumpZoneRule`] gives the system's stellars ([`jump_zone`]). J and
+    /// [`Session::jump_readiness`] both ask this, so the rule lives in one
+    /// place.
     fn check_next_jump(&self) -> Result<SystemId, JumpRefusal> {
         if self.landed.is_some() {
             return Err(JumpRefusal::Landed);
@@ -505,7 +522,7 @@ impl Session {
             &self.player,
             self.pilot.reserves.fuel.now,
             self.pilot.course.first().copied(),
-            self.stats.jump_distance,
+            jump_zone(&self.sites, self.stats.jump_distance, self.jump_zone),
         )
     }
 
@@ -1193,7 +1210,7 @@ mod tests {
     use crate::glow::GLOW_CRUISE;
     use crate::handling::ShipFields;
     use crate::hyperspace::{
-        ARRIVAL_DISTANCE, HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal,
+        ARRIVAL_DISTANCE, HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule,
         MIN_JUMP_DISTANCE, RouteError, StarMap,
     };
     use crate::landing::StellarFlags;
@@ -1838,6 +1855,115 @@ mod tests {
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
         session.take_off();
         assert_eq!(session.jump_readiness(), JumpReadiness::Clear, "once off");
+    }
+
+    /// [`catalog`] with system 130 holding `sites` alone, and 131 none.
+    fn holding(sites: Vec<LandingSite>) -> FakePilotCatalog {
+        FakePilotCatalog {
+            sites: vec![(SystemId(130), sites), (SystemId(131), vec![])],
+            ..catalog()
+        }
+    }
+
+    /// `catalog`'s session under `rule`, its course plotted to 131 and the
+    /// ship at the centre.
+    fn at_the_centre(catalog: &FakePilotCatalog, rule: JumpZoneRule) -> Session {
+        let mut session = Session::start(catalog)
+            .expect("starts")
+            .with_jump_zone(rule);
+        session.plot_course(SystemId(131)).expect("a route");
+        session.player.position = Vec2::ZERO;
+        session
+    }
+
+    #[test]
+    fn by_the_engine_a_system_without_an_ordinary_stellar_has_no_zone() {
+        let gates_only = holding(vec![
+            gate_landing(300, HYPERGATE),
+            gate_landing(301, WORMHOLE),
+        ]);
+        for catalog in [gates_only, holding(vec![])] {
+            let mut session = at_the_centre(&catalog, JumpZoneRule::Engine);
+            assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
+            assert_eq!(session.begin_jump(), Ok(SystemId(131)));
+            let mut session = Session::start(&catalog).expect("starts");
+            session.plot_course(SystemId(131)).expect("a route");
+            assert_eq!(session.begin_jump(), Ok(SystemId(131)), "by default");
+        }
+    }
+
+    #[test]
+    fn under_the_bible_the_zone_applies_in_every_system() {
+        let gates_only = holding(vec![gate_landing(300, HYPERGATE)]);
+        for catalog in [gates_only, holding(vec![]), catalog()] {
+            let mut session = at_the_centre(&catalog, JumpZoneRule::Always);
+            assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
+            assert_eq!(
+                session.begin_jump(),
+                Err(JumpRefusal::TooClose { distance: 0.0 })
+            );
+            session.player.position = Vec2::new(0.0, MIN_JUMP_DISTANCE);
+            assert_eq!(session.jump_readiness(), JumpReadiness::Clear);
+        }
+    }
+
+    #[test]
+    fn without_a_zone_a_jump_still_needs_fuel() {
+        let catalog = FakePilotCatalog {
+            ships: vec![(ShipId(128), Ok(ShipFields { fuel: 99, ..FAST }))],
+            ..holding(vec![gate_landing(300, HYPERGATE)])
+        };
+        let mut session = at_the_centre(&catalog, JumpZoneRule::Engine);
+        assert_eq!(
+            session.begin_jump(),
+            Err(JumpRefusal::NoFuel { fuel: 99.0 })
+        );
+        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
+    }
+
+    #[test]
+    fn the_zone_follows_the_system_the_ship_is_in() {
+        // 130 holds a planet, 131 nothing and 132 a planet, and 132 links
+        // back to 131.
+        let catalog = FakePilotCatalog {
+            systems: vec![SystemId(130), SystemId(131), SystemId(132)],
+            sites: vec![
+                (SystemId(130), vec![planet(128, 30.0, -40.0)]),
+                (SystemId(131), vec![]),
+                (SystemId(132), vec![planet(150, 0.0, 0.0)]),
+            ],
+            star_map: vec![
+                star(130, (0.0, 0.0), &[131]),
+                star(131, (600.0, 0.0), &[132]),
+                star(132, (600.0, 600.0), &[131]),
+            ],
+            ..catalog()
+        };
+        for (rule, empty) in [
+            (JumpZoneRule::Engine, JumpReadiness::Clear),
+            (JumpZoneRule::Always, JumpReadiness::Blocked),
+        ] {
+            let mut session = at_the_centre(&catalog, rule);
+            assert_eq!(session.jump_readiness(), JumpReadiness::Blocked, "130");
+            session.plot_course(SystemId(132)).expect("a route");
+            fly_out(&mut session);
+            begin_jump_now(&mut session).expect("jumps");
+            assert_eq!(
+                session.arrive(&catalog, &mut NeverFires),
+                Some(SystemId(131))
+            );
+            session.player.position = Vec2::ZERO;
+            assert_eq!(session.jump_readiness(), empty, "131 under {rule:?}");
+            fly_out(&mut session);
+            begin_jump_now(&mut session).expect("jumps");
+            assert_eq!(
+                session.arrive(&catalog, &mut NeverFires),
+                Some(SystemId(132))
+            );
+            session.plot_course(SystemId(131)).expect("a route back");
+            session.player.position = Vec2::ZERO;
+            assert_eq!(session.jump_readiness(), JumpReadiness::Blocked, "132");
+        }
     }
 
     #[test]
