@@ -3217,7 +3217,7 @@ mod tests {
         assert_eq!(view.session().expect("flying").system(), SystemId(130));
 
         // Past 1.5 s it arrives, and the new system fades in.
-        view.tick(ms(300));
+        view.tick(ms(450));
         let session = view.session().expect("flying");
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.jumping(), None);
@@ -3235,7 +3235,7 @@ mod tests {
         assert_eq!(view.shown_position(), at(-1001.0, 0.0));
         let list = drawn(&view);
         let (at_fade, color) = fade(&list).expect("a fade");
-        assert_eq!(color.a, 230);
+        assert_eq!(color.a, 221);
         assert!(texts(&list).contains(&"Alpha Centauri (sÿst 131)".to_owned()));
         let mut hud = DrawList::new();
         hud::draw(
@@ -3262,11 +3262,11 @@ mod tests {
             "then the fade over everything"
         );
         view.tick(ms(100));
-        assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(179), "shrinking");
+        assert_eq!(fade(&drawn(&view)).map(|f| f.1.a), Some(204), "shrinking");
         assert_eq!(player(&view), arrived, "still frozen");
 
         // Then plain flight.
-        view.tick(ms(500));
+        view.tick(ms(1200));
         assert_eq!(view.jump_effect(), None);
         let list = drawn(&view);
         assert_eq!(fade(&list), None);
@@ -3340,7 +3340,7 @@ mod tests {
         );
         assert!(view.jump_effect().is_some(), "fading in");
 
-        view.tick(ms(1000));
+        view.tick(ms(1450));
         assert_eq!(view.jump_effect(), None);
         assert_eq!(view.session().expect("flying").jumping(), None);
         for _ in 0..30 {
@@ -3478,7 +3478,7 @@ mod tests {
         view.input(&key(JUMP, true));
         assert!(!view.map_open());
         assert_eq!(view.message(), None);
-        view.tick(ms(2000));
+        view.tick(ms(2700));
         assert_eq!(view.jump_effect(), None);
         assert_eq!(view.take_landing(), None);
         let arrived = player(&view);

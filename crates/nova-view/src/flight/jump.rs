@@ -27,8 +27,9 @@ use crate::{Color, DrawList, Point};
 pub const STREAK_FOR: Duration = Duration::from_secs(1);
 /// How long the screen takes to fade out.
 pub const FADE_OUT_FOR: Duration = Duration::from_millis(500);
-/// How long the new system takes to fade in.
-pub const FADE_IN_FOR: Duration = Duration::from_millis(500);
+/// How long the new system takes to fade in: the original's 1.5 s, as its
+/// `_FadeWhiteOut` fades the display back from white.
+pub const FADE_IN_FOR: Duration = Duration::from_millis(1500);
 /// How long a streak is at the end of the streak phase, for a star layer
 /// that moves with the camera; each layer's is this times its factor, so
 /// near stars streak longer.
@@ -201,14 +202,14 @@ mod tests {
         assert_eq!(after(ms(1000)).phase(), JumpPhase::FadeOut(0.0));
         assert_eq!(after(ms(1250)).phase(), JumpPhase::FadeOut(0.5));
         assert_eq!(after(ms(1500)).phase(), JumpPhase::FadeIn(0.0));
-        assert_eq!(after(ms(1750)).phase(), JumpPhase::FadeIn(0.5));
-        assert_eq!(after(ms(2000)).phase(), JumpPhase::Done);
+        assert_eq!(after(ms(2250)).phase(), JumpPhase::FadeIn(0.5));
+        assert_eq!(after(ms(3000)).phase(), JumpPhase::Done);
         assert_eq!(after(Duration::MAX).phase(), JumpPhase::Done);
-        assert!(!after(ms(1999)).done());
-        assert!(after(ms(2000)).done());
+        assert!(!after(ms(2999)).done());
+        assert!(after(ms(3000)).done());
         assert_eq!(
             (STREAK_FOR, FADE_OUT_FOR, FADE_IN_FOR),
-            (ms(1000), ms(500), ms(500))
+            (ms(1000), ms(500), ms(1500))
         );
     }
 
@@ -252,7 +253,7 @@ mod tests {
 
     #[test]
     fn the_fade_rises_from_nothing_to_opaque_and_falls_back() {
-        let alphas: Vec<u8> = [0, 999, 1000, 1250, 1499, 1500, 1750, 1999, 2000]
+        let alphas: Vec<u8> = [0, 999, 1000, 1250, 1499, 1500, 2250, 2994, 3000]
             .into_iter()
             .map(|at| after(ms(at)).fade_alpha())
             .collect();
@@ -273,7 +274,7 @@ mod tests {
             }]
         );
         assert_eq!(FADE_COLOR, Color::WHITE);
-        for at in [500, 2000] {
+        for at in [500, 3000] {
             let mut none = DrawList::new();
             after(ms(at)).draw_fade(&mut none);
             assert!(none.is_empty(), "{at}");
