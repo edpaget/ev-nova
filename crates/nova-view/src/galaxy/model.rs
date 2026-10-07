@@ -4,7 +4,8 @@
 //! - Each system's colour comes from its own government's map colour;
 //!   independent systems, and systems whose government is missing, are
 //!   [`NEUTRAL`].
-//! - Each hyperlink is kept once, however many of its two systems list it.
+//! - The hyperlinks are the [`StarMap`]'s, the same graph the session
+//!   jumps along; a link to a missing system is reported as a problem.
 //! - Each nebula is drawn over its map rectangle at the current scale,
 //!   from whichever of its pictures is closest in size without being
 //!   enlarged.
@@ -13,6 +14,8 @@
 //!   the game swaps in later); repeated clicks there cycle through them.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use nova_sim::{StarMap, StarSystem, Vec2};
 
 use super::catalog::{Galaxy, GovtId, NebulaEntry, NebulaPicture, SystemEntry, SystemId};
 use super::view::{Bounds, MAP_HEIGHT, MapView};
@@ -89,6 +92,17 @@ impl MapSystem {
     }
 }
 
+/// `entry` as the star map takes it: its links stay raw, for the star map
+/// to normalise.
+fn star_system(entry: &SystemEntry) -> StarSystem {
+    StarSystem {
+        id: entry.id,
+        position: Vec2::new(entry.x.into(), entry.y.into()),
+        links: entry.links.clone(),
+        govt: entry.govt,
+    }
+}
+
 /// The galaxy laid out for the map.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GalaxyModel {
@@ -114,22 +128,17 @@ impl GalaxyModel {
         } = galaxy;
         systems.sort_by_key(|system| system.id);
         let known: BTreeSet<SystemId> = systems.iter().map(|system| system.id).collect();
-        let mut links = BTreeSet::new();
         for system in &systems {
             for &to in &system.links {
-                if to == system.id {
-                    continue;
-                }
-                if !known.contains(&to) {
+                if to != system.id && !known.contains(&to) {
                     problems.push(format!(
                         "sÿst {}: hyperlink to missing sÿst {}",
                         system.id.0, to.0
                     ));
-                    continue;
                 }
-                links.insert((system.id.min(to), system.id.max(to)));
             }
         }
+        let links = StarMap::new(systems.iter().map(star_system).collect()).links();
         let systems = systems
             .into_iter()
             .map(|entry| {
@@ -161,7 +170,7 @@ impl GalaxyModel {
             .collect();
         Self {
             systems,
-            links: links.into_iter().collect(),
+            links,
             nebulae,
             problems,
         }
