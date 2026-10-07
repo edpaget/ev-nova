@@ -377,6 +377,19 @@ pub struct PersonRecord {
     pub grant_count: i16,
     /// Its `GrantProb`, raw: the percent chance of a grant.
     pub grant_prob: i16,
+    /// Its `LinkMission`'s special ships: none without a `LinkMission`,
+    /// or when the mission cannot be read.
+    pub mission_ship: Option<MissionShip>,
+}
+
+/// A mission's special ships, raw from its `mïsn`: as many as its
+/// `ShipCount`, with its `ShipGoal`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MissionShip {
+    /// Its `ShipCount`.
+    pub count: i16,
+    /// Its `ShipGoal`.
+    pub goal: i16,
 }
 
 /// The game data a system's NPC traffic is spawned from: its `sÿst`'s

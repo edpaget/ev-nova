@@ -71,7 +71,8 @@
 //!   price and advice) and haggling over a price ([`Haggle`]), the
 //!   [`Reply`] it says, and the [`HailOption`] port the comm dialog lists
 //!   ([`HailOptions`]), with Nova's Greetings, Request Assistance and Beg
-//!   For Mercy, and [`Release`] for the player's escort, which answer each
+//!   For Mercy, [`Release`] for the player's escort, and Use As Escort
+//!   ([`JoinFleet`]) for a person who may join, which answer each
 //!   press with an [`Answer`]: a reply, a [`Deed`] and a price asked
 //!   ([`Ask`]); the [`Help`] a ship gives the player once asked; and what
 //!   the comm dialog shows of the player's own escort ([`EscortStatus`]),
@@ -200,10 +201,10 @@ pub use board::{
 pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterId,
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord,
-    HullRecord, JunkId, JunkRecord, LandingSite, OutfitId, OutfitRecord, Penalties, PersonId,
-    PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StockWeapon, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
-    WeaponRecord,
+    HullRecord, JunkId, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord, Penalties,
+    PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem,
+    StartDate, StartError, StellarId, StockWeapon, SystemId, SystemTraffic, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
@@ -223,7 +224,7 @@ pub use govt::Governments;
 pub use grant::{GrantStock, Granted, PersonGrant};
 pub use hail::{
     Answer, Ask, Attitude, CommNote, Conversation, Deed, EscortStatus, Haggle, Hail, HailButton,
-    HailOption, HailOptions, HailRefusal, HailView, Help, Release, Reply,
+    HailOption, HailOptions, HailRefusal, HailView, Help, JoinFleet, Release, Reply,
 };
 pub use handling::{Handling, ShipFields};
 pub use hire::{

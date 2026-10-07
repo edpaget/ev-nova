@@ -7114,6 +7114,7 @@ mod tests {
             grant_class: 0,
             grant_count: 0,
             grant_prob: 0,
+            mission_ship: None,
         }];
         catalog.strings = vec![(7101, vec!["<OSN>: Prepare to die, <PN>!".to_owned()])];
         catalog

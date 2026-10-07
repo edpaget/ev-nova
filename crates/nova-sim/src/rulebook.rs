@@ -37,14 +37,16 @@
 //! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
 //! | [`GrantCount`](RuleKey::GrantCount) | `grant_count` | boarding a person grants trunc((50 + `Rand(51)`) x `GrantCount` / 100) outfits, at least 1 ([`NovaBoarding`](crate::NovaBoarding)) | 1 + `Rand(GrantCount)`\* |
 //! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a grant may take the player past the outfit's `Max` ([`NovaBoarding`](crate::NovaBoarding)) | it is held to `Max` less the owned\* |
+//! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: the original offers its `LinkMission`, which waits for missions ([`JoinFleet`](crate::hail::nova::JoinFleet)) | a person whose record allows it lists Use As Escort and joins the fleet as itself, for good\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
-//! `hire_fee`, `escort_wage`, `grant_max` or `comm_quote` (only that the
-//! quote is "displayed in the communications dialog"), and agrees with the
-//! engine on `grant_count`: for them, the reading other than the engine's
-//! (`"bible"` in the settings) is the intended behaviour, not the
-//! engine's bug or quirk, and not anything the Bible says.
+//! `hire_fee`, `escort_wage`, `grant_max`, `person_join` or `comm_quote`
+//! (only that the quote is "displayed in the communications dialog"), and
+//! agrees with the engine on `grant_count`: for them, the reading other
+//! than the engine's (`"bible"` in the settings) is the intended
+//! behaviour, not the engine's bug or quirk, and not anything the Bible
+//! says.
 //!
 //! # Adding a rule
 //!
@@ -281,6 +283,18 @@ rule_keys! {
     /// reading is the obvious fix, not anything the Bible says (see
     /// [`grant`](crate::grant)).
     GrantMax => "grant_max",
+    /// Whether a person offers to join the player when hailed: by the
+    /// engine, none does, as the original brings a person to fly with the
+    /// player only through its `LinkMission`, offered in place of the comm
+    /// dialog and swapping the person's ship for a mission ship
+    /// (`_HandlePlayerCommunication` @0x621a9-0x62509), which waits for
+    /// missions; otherwise, as the phase has it, a person whose record
+    /// allows it ([`offers_to_join`](crate::person::offers_to_join)) lists
+    /// Use As Escort and joins the fleet as itself, for good. The Bible is
+    /// silent here, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see
+    /// [`JoinFleet`](crate::hail::nova::JoinFleet)).
+    PersonJoin => "person_join",
 }
 
 impl RuleKey {
@@ -421,9 +435,11 @@ mod tests {
                 RuleKey::PersonCredits,
                 RuleKey::CommQuote,
                 RuleKey::GrantCount,
-                RuleKey::GrantMax
+                RuleKey::GrantMax,
+                RuleKey::PersonJoin
             ]
         );
+        assert_eq!(RuleKey::PersonJoin.key(), "person_join");
         assert_eq!(RuleKey::GrantCount.key(), "grant_count");
         assert_eq!(RuleKey::GrantMax.key(), "grant_max");
         assert_eq!(RuleKey::PersonOdds.key(), "person_odds");

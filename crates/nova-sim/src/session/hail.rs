@@ -25,6 +25,16 @@
 //!   jump's fuel, or else deciding as its idle block does. A save is due.
 //!   The player's escort is hailed whatever its ship type's government
 //!   says, and opens "What can I do for you?".
+//! - **Join** (Use As Escort, under
+//!   [`RuleKey::PersonJoin`](crate::RuleKey::PersonJoin)'s other reading):
+//!   the person hailed joins the fleet at once as itself
+//!   ([`Escort::person`](crate::Escort)), with no wage and its reserves as
+//!   they are, of no government, its AI type its `InherentAI`, keeping
+//!   formation; every other NPC lets it go, and so does the player's
+//!   target. A save is due, and the hail stays open as the escort's. A
+//!   hail lists it ([`Hail::joins`](crate::Hail)) for a person whose
+//!   record allows it ([`offers_to_join`]) while the fleet has room, fewer
+//!   than [`MAX_ESCORTS`] escorts not counting the carried fighters.
 //! - **Help** (`_AIMakeShipRefuelPlayer` @0x82dbb,
 //!   `_AIMakeShipRepairPlayer` @0x82df2): it assists the player
 //!   ([`Goal::Assist`]), its provocation gone. Each step
@@ -36,6 +46,7 @@
 
 use super::Session;
 use crate::ai::Goal;
+use crate::board::MAX_ESCORTS;
 use crate::catalog::CommCatalog;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -46,7 +57,7 @@ use crate::hail::{
     HailButton, HailOptions, HailRefusal, HailView, Help, Reply, Settled, assist, attitude, reply,
 };
 use crate::hyperspace::JUMP_FUEL;
-use crate::person::COMM_QUOTES;
+use crate::person::{COMM_QUOTES, offers_to_join};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 
@@ -152,8 +163,19 @@ impl Session {
         let quote = Self::quote_of(npc).filter(|_| self.comm_quote == RuleSource::Engine);
         Hail {
             quote,
+            joins: self.joins(npc),
             ..Hail::new(npc, &around, self.dispositions(npc), talk, need)
         }
+    }
+
+    /// Whether `npc` is a person who may join the player's fleet: its
+    /// record allows it ([`offers_to_join`]) and the fleet has room, fewer
+    /// than [`MAX_ESCORTS`] not counting the carried fighters.
+    fn joins(&self, npc: &Npc) -> bool {
+        npc.person
+            .and_then(|person| self.traffic.person(person.id))
+            .is_some_and(|person| offers_to_join(&person.record))
+            && self.pilot.escort_count() < MAX_ESCORTS
     }
 
     /// The comm dialog's contents while a hail is under way and its ship
@@ -285,6 +307,10 @@ impl Session {
             }
             return;
         }
+        if deed == Deed::Join {
+            self.enlist_person(id);
+            return;
+        }
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
@@ -305,7 +331,7 @@ impl Session {
                 npc.goal = Goal::Attack(ShipRef::Player);
                 npc.target = Some(ShipRef::Player);
             }
-            Deed::Release => {}
+            Deed::Release | Deed::Join => {}
             Deed::Help(help) => {
                 npc.goal = Goal::Assist(help);
                 npc.target = Some(ShipRef::Player);
@@ -1556,5 +1582,169 @@ mod tests {
         let view = hail(&mut session, &catalog);
         assert!(labels(&view).iter().all(|(label, _)| *label != "Release"));
         assert_eq!(view.options.len(), 2, "{view:?}");
+    }
+
+    // Persons joining the fleet.
+
+    /// [`hailable`] with "Merchant" (`përs` 600, anywhere, of `Flags`
+    /// 0x0040), whose mission has one escort ship: it may join.
+    fn merchants() -> FakePilotCatalog {
+        let mut catalog = hailable();
+        catalog.persons = vec![crate::catalog::PersonRecord {
+            name: "Merchant".to_owned(),
+            flags: crate::person::REPLACED_BY_MISSION_SHIP,
+            mission_ship: Some(crate::catalog::MissionShip { count: 1, goal: 3 }),
+            ..crate::testkit::person(600, 129)
+        }];
+        catalog
+    }
+
+    /// [`targeting`] Merchant, flying the Federation ship (NPC 0), worn.
+    fn targeting_merchant(catalog: &FakePilotCatalog) -> Session {
+        let mut session = targeting(catalog);
+        let record = catalog.persons[0].clone();
+        let merchant = npc(&mut session);
+        merchant.person = Some(crate::traffic::npc::NpcPerson::of(&record, false));
+        merchant.reserves.shield.now = 7.0;
+        merchant.reserves.armor.now = 20.0;
+        merchant.goal = Goal::Attack(ShipRef::Npc(NpcId(5)));
+        merchant.leader = Some(NpcId(5));
+        session
+    }
+
+    /// Nova's options with `person_join` by `source`.
+    fn joining_options(source: RuleSource) -> HailOptions {
+        HailOptions::nova(&Rulebook::default().with_override(RuleKey::PersonJoin, source))
+    }
+
+    /// The comm dialog's labels hailing NPC 0 with `options`.
+    fn hailed_labels(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        options: &HailOptions,
+    ) -> Vec<String> {
+        let view = session
+            .hail(catalog, options, &mut Draws::of(&opening(0)))
+            .expect("answered");
+        view.options
+            .into_iter()
+            .map(|button| button.label)
+            .collect()
+    }
+
+    /// An escort of ship 129, a carried fighter when `carried`.
+    fn escort_of(carried: bool) -> crate::pilot::Escort {
+        crate::pilot::Escort {
+            ship: ShipId(129),
+            reserves: crate::reserves::Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried,
+            wage: None,
+            person: None,
+        }
+    }
+
+    #[test]
+    fn a_person_who_may_join_lists_use_as_escort_while_the_fleet_has_room() {
+        let catalog = merchants();
+        let bible = joining_options(RuleSource::Bible);
+        let mut session = targeting_merchant(&catalog);
+        assert_eq!(
+            hailed_labels(&mut session, &catalog, &bible),
+            ["Greetings", "Request Assistance", "Use As Escort"]
+        );
+        assert_eq!(
+            hailed_labels(&mut session, &catalog, &joining_options(RuleSource::Engine)),
+            ["Greetings", "Request Assistance"],
+            "by the engine"
+        );
+        session.pilot.escorts = vec![escort_of(false); 5];
+        session.pilot.escorts.extend([escort_of(true); 3]);
+        assert!(
+            hailed_labels(&mut session, &catalog, &bible).contains(&"Use As Escort".to_owned()),
+            "fighters do not count"
+        );
+        session.pilot.escorts.push(escort_of(false));
+        assert_eq!(
+            hailed_labels(&mut session, &catalog, &bible),
+            ["Greetings", "Request Assistance"],
+            "six escorts fill the fleet"
+        );
+        let mut plain = targeting(&catalog);
+        assert_eq!(
+            hailed_labels(&mut plain, &catalog, &bible),
+            ["Greetings", "Request Assistance"],
+            "a ship no person flies"
+        );
+        let mut barred = merchants();
+        barred.persons[0].flags |= crate::person::MISSION_ON_BOARD;
+        let mut session = targeting_merchant(&barred);
+        assert_eq!(
+            hailed_labels(&mut session, &barred, &bible),
+            ["Greetings", "Request Assistance"],
+            "a person whose record does not allow it"
+        );
+    }
+
+    #[test]
+    fn pressing_use_as_escort_makes_the_person_an_escort_at_once() {
+        let catalog = merchants();
+        let bible = joining_options(RuleSource::Bible);
+        let mut session = targeting_merchant(&catalog);
+        let mut other = crate::testkit::npc(9, session.npcs()[0].stats);
+        other.target = Some(ShipRef::Npc(NpcId(0)));
+        other.goal = Goal::Attack(ShipRef::Npc(NpcId(0)));
+        let other = session.traffic.add_npc(other);
+        session.take_save_due();
+        session
+            .hail(&catalog, &bible, &mut Draws::of(&opening(0)))
+            .expect("answered");
+        let reserves = session.npcs()[0].reserves;
+        let mut chance = Draws::of(&[]);
+        let view = session
+            .answer(2, &catalog, &bible, &mut chance)
+            .expect("open");
+        assert!(chance.asked.is_empty(), "nothing drawn");
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        assert_eq!(
+            view.options
+                .iter()
+                .map(|button| button.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Release"],
+            "the hail stays open, with the escort's options"
+        );
+        assert_eq!(
+            session.pilot().escorts(),
+            [crate::pilot::Escort {
+                ship: ShipId(129),
+                reserves,
+                order: None,
+                carried: false,
+                wage: None,
+                person: Some(crate::catalog::PersonId(600)),
+            }],
+            "its reserves as they were, not halved"
+        );
+        let merchant = &session.npcs()[0];
+        assert_eq!(
+            merchant.person.map(|person| person.id),
+            Some(crate::catalog::PersonId(600))
+        );
+        assert_eq!(merchant.govt, None);
+        assert_eq!(merchant.ai_type, AiType::WimpyTrader, "its InherentAI");
+        assert_eq!(merchant.goal, Goal::Formation { guard: None });
+        assert_eq!(merchant.leader, None);
+        assert_eq!(merchant.condition, Condition::Intact);
+        assert!(merchant.escort.is_some());
+        assert!(session.is_escort(NpcId(0)));
+        assert_eq!(session.target, None, "the player's target cleared");
+        let other = session.npc(other).expect("there");
+        assert_eq!((other.target, other.goal), (None, Goal::Idle), "let go");
+        assert!(session.take_save_due());
+        assert!(
+            !session.pilot().gone(crate::catalog::PersonId(600)),
+            "alive"
+        );
     }
 }

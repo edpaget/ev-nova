@@ -5575,7 +5575,7 @@ mod tests {
             | RuleKey::GrantCount
             | RuleKey::GrantMax => "boarding_rule",
             RuleKey::PiracyPolice | RuleKey::EscortAi | RuleKey::PersonCoward => "behaviour",
-            RuleKey::QuietHails | RuleKey::LongAdvice => "hail_options",
+            RuleKey::QuietHails | RuleKey::LongAdvice | RuleKey::PersonJoin => "hail_options",
             RuleKey::EscortOrders => "escort_orders",
             RuleKey::FighterLaunch => "fighter_launch",
             RuleKey::FighterRecall => "fighter_recall",

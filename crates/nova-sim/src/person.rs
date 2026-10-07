@@ -120,6 +120,30 @@ pub const NOT_TO_BRAVE: u16 = 0x2000;
 pub const NOT_TO_WARSHIP: u16 = 0x4000;
 /// `Flags2`: it starts with no fuel (@0x40f1f-0x40f55).
 pub const ZERO_FUEL: u16 = 0x0001;
+/// `Flags`: accepting its one-ship mission swaps its ship for the
+/// mission's ship (@0x62421).
+pub const REPLACED_BY_MISSION_SHIP: u16 = 0x0040;
+/// `Flags`: its mission is offered when it is boarded, not hailed
+/// (@0x621c3).
+pub const MISSION_ON_BOARD: u16 = 0x0200;
+/// `mïsn` `ShipGoal`: the special ship escorts the player (@0x624f6).
+pub const ESCORT_GOAL: i16 = 3;
+
+/// Whether `record`'s person offers to join the player, under
+/// [`RuleKey::PersonJoin`]'s other reading: the engine's own gate for
+/// swapping a hailed person for its mission's escort ship
+/// (`_HandlePlayerCommunication` @0x621a9-0x62509). Its `Flags` has
+/// [`REPLACED_BY_MISSION_SHIP`] and not [`MISSION_ON_BOARD`], and its
+/// `LinkMission` has one special ship whose goal is [`ESCORT_GOAL`]. The
+/// mission's availability is taken as met until missions exist.
+#[must_use]
+pub fn offers_to_join(record: &PersonRecord) -> bool {
+    record.flags & REPLACED_BY_MISSION_SHIP != 0
+        && record.flags & MISSION_ON_BOARD == 0
+        && record
+            .mission_ship
+            .is_some_and(|ship| ship.count == 1 && ship.goal == ESCORT_GOAL)
+}
 
 /// `Rand(1022)` (0x3fe @0x40c8e): the person a roll lands on.
 pub const PERSON_DRAW: u32 = 1022;
@@ -1311,5 +1335,44 @@ mod tests {
         }
         assert_eq!([QUOTE_ODDS, HAIL_QUOTES as u32], [140, 7101]);
         assert_eq!([QUOTE_SHOWN_TICKS, QUOTE_GAP_TICKS], [420, 1350]);
+    }
+
+    /// Person 128 of `flags`, its mission's special ships `ship`.
+    fn joining(flags: u16, ship: Option<(i16, i16)>) -> PersonRecord {
+        PersonRecord {
+            flags,
+            mission_ship: ship.map(|(count, goal)| crate::catalog::MissionShip { count, goal }),
+            ..person(128, 136)
+        }
+    }
+
+    #[test]
+    fn a_person_replaced_by_its_one_escort_mission_ship_offers_to_join() {
+        assert!(offers_to_join(&joining(0x0040, Some((1, 3)))));
+        assert!(
+            offers_to_join(&joining(0x14ca, Some((1, 3)))),
+            "stock Terrapin"
+        );
+        assert_eq!(
+            (REPLACED_BY_MISSION_SHIP, MISSION_ON_BOARD, ESCORT_GOAL),
+            (0x0040, 0x0200, 3)
+        );
+    }
+
+    #[test]
+    fn any_other_person_does_not_offer_to_join() {
+        for (flags, ship) in [
+            (0x0000, Some((1, 3))),
+            (0x0240, Some((1, 3))),
+            (0x0040, Some((1, 5))),
+            (0x0040, Some((2, 3))),
+            (0x0040, Some((-1, 3))),
+            (0x0040, None),
+        ] {
+            assert!(
+                !offers_to_join(&joining(flags, ship)),
+                "{flags:#x} {ship:?}"
+            );
+        }
     }
 }

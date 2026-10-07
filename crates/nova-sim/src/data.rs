@@ -10,6 +10,7 @@ use nova_data::records::dude::Dude;
 use nova_data::records::fleet::Fleet;
 use nova_data::records::govt::Govt;
 use nova_data::records::junk::Junk;
+use nova_data::records::mission::Mission;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::person::Person;
 use nova_data::records::ship::Ship;
@@ -22,9 +23,9 @@ use nova_data::records::weapon::Weapon;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DisasterId, DisasterRecord,
     DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GovtId, GovtRecord, HullRecord,
-    JunkRecord, LandingSite, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
-    PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
-    StockWeapon, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord, Penalties, PersonId,
+    PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
+    StartError, StockWeapon, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -344,6 +345,13 @@ impl TrafficCatalog for GameData {
                     grant_class: record.grant_class,
                     grant_count: record.grant_count,
                     grant_prob: record.grant_prob,
+                    mission_ship: record
+                        .link_mission
+                        .and_then(|mission| self.get::<Mission>(mission.0)?.ok())
+                        .map(|mission| MissionShip {
+                            count: mission.record.ship_count,
+                            goal: mission.record.ship_goal,
+                        }),
                 })
             })
             .collect()
@@ -1940,6 +1948,7 @@ mod tests {
                 grant_class: 0,
                 grant_count: 0,
                 grant_prob: 0,
+                mission_ship: None,
             },
             "the -1 and 127 weapon slots left out, HailPict 127 none"
         );
@@ -1990,6 +1999,41 @@ mod tests {
         let data = store(&[(Person::TYPE, 128, linked), (Person::TYPE, 129, low)]);
         assert_eq!(data.persons()[0].link_mission, Some(400));
         assert_eq!(data.persons()[1].link_mission, None, "127 names none");
+    }
+
+    /// A `mïsn` of `ShipCount` `count` and `ShipGoal` `goal`.
+    fn mission(count: i16, goal: i16) -> Vec<u8> {
+        use nova_data::records::mission::Mission;
+        let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x20, &[count]);
+        put_i16s(&mut bytes, 0x26, &[goal]);
+        bytes
+    }
+
+    #[test]
+    fn a_persons_mission_ship_is_its_link_missions_ship_count_and_goal() {
+        use nova_data::records::mission::Mission;
+        let linking = |mission: i16| {
+            let mut bytes = person(-1, -1, 140, [(-1, 0, 0); 4], -1);
+            put_i16s(&mut bytes, 0x30, &[mission]);
+            bytes
+        };
+        let data = store(&[
+            (Person::TYPE, 128, linking(132)),
+            (Person::TYPE, 129, linking(-1)),
+            (Person::TYPE, 130, linking(140)),
+            (Person::TYPE, 131, linking(133)),
+            (Mission::TYPE, 132, mission(1, 3)),
+            (Mission::TYPE, 133, short(mission(1, 3))),
+        ]);
+        let persons = data.persons();
+        assert_eq!(
+            persons[0].mission_ship,
+            Some(MissionShip { count: 1, goal: 3 })
+        );
+        assert_eq!(persons[1].mission_ship, None, "no LinkMission");
+        assert_eq!(persons[2].mission_ship, None, "its mission missing");
+        assert_eq!(persons[3].mission_ship, None, "its mission unreadable");
     }
 
     #[test]

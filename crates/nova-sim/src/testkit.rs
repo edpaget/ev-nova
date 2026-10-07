@@ -257,6 +257,7 @@ pub(crate) fn person(id: i16, ship: i16) -> PersonRecord {
         grant_class: 0,
         grant_count: 0,
         grant_prob: 0,
+        mission_ship: None,
     }
 }
 

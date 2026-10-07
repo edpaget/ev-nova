@@ -1,7 +1,7 @@
-//! Nova's four hail options, the defaults: [`Greetings`],
-//! [`RequestAssistance`], [`BegForMercy`] and [`Release`]. The first
-//! three are for any ship but the player's escort, and Release for the
-//! escort alone.
+//! Nova's hail options, the defaults: [`Greetings`],
+//! [`RequestAssistance`], [`BegForMercy`], [`Release`] and [`JoinFleet`].
+//! The first three are for any ship but the player's escort, Release for
+//! the escort alone, and Use As Escort for a person who may join.
 //!
 //! The comm dialog's buttons stand in a column (`_DrawCommDialogButtons`
 //! @0x28c43 in the `EV Nova` executable): Greetings, then the middle
@@ -78,6 +78,16 @@
 //!    spares the player; declined, "What? How dare you! Prepare to die!"
 //!    and it attacks; short, "Yeah, come back when you actually have some
 //!    money." and nothing changes.
+//!
+//! **Use As Escort** (`STR#` 150 #46, key U), by
+//! [`RuleKey::PersonJoin`]'s reading. By the engine it is never listed:
+//! the original brings a person to fly with the player only through its
+//! `LinkMission`, offered in place of the comm dialog, which waits for
+//! missions. By the other reading it is listed for a person who may join
+//! ([`Hail::joins`]: its record allows it and the fleet has room), not
+//! hostile, and neither the player's escort nor a carried fighter: it
+//! says "Okay, I'm on my way." (group 29) and joins the fleet as itself
+//! at once ([`Deed::Join`]), at no cost.
 
 use super::reply::{
     self, BAD_MOOD, BUSY, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU, IN_YOUR_DREAMS,
@@ -366,6 +376,56 @@ impl HailOption for Release {
         Answer {
             deed: Some(Deed::Release),
             ..Answer::say(Reply::Comm(RELEASED))
+        }
+    }
+}
+
+/// Use As Escort's label, `STR#` 150 #46 (the captured-ship dialog's
+/// button).
+pub const USE_AS_ESCORT: &str = "Use As Escort";
+/// Use As Escort's hotkey.
+pub const USE_AS_ESCORT_KEY: char = 'U';
+
+/// Use As Escort (see the module docs): a person who may join, under
+/// [`RuleKey::PersonJoin`]'s other reading.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JoinFleet {
+    /// Whether any person offers to join: by the engine, none does.
+    pub rule: RuleSource,
+}
+
+impl JoinFleet {
+    /// Use As Escort as `rulebook` chooses: its [`RuleKey::PersonJoin`]
+    /// entry.
+    #[must_use]
+    pub fn from_rulebook(rulebook: &Rulebook) -> Self {
+        Self {
+            rule: rulebook.source_for(RuleKey::PersonJoin),
+        }
+    }
+}
+
+impl HailOption for JoinFleet {
+    fn label(&self) -> String {
+        USE_AS_ESCORT.to_owned()
+    }
+
+    fn key(&self) -> Option<char> {
+        Some(USE_AS_ESCORT_KEY)
+    }
+
+    fn applies(&self, hail: &Hail) -> bool {
+        self.rule == RuleSource::Bible
+            && hail.joins
+            && !hail.escort()
+            && !hail.carried()
+            && hail.attitude != Attitude::Hostile
+    }
+
+    fn press(&self, _hail: &Hail, _chance: &mut dyn Chance) -> Answer {
+        Answer {
+            deed: Some(Deed::Join),
+            ..Answer::say(Reply::Comm(ON_MY_WAY))
         }
     }
 }
@@ -951,5 +1011,88 @@ mod tests {
             quiet_hails: RuleSource::Bible,
         };
         assert!(press(&bible, &hail).ask.is_some(), "as usual");
+    }
+
+    // Joining the fleet.
+
+    /// A friendly hail of `npc`, a person who may join.
+    fn joining(npc: &Npc) -> Hail<'_> {
+        Hail {
+            joins: true,
+            ..hail(npc)
+        }
+    }
+
+    const BY_THE_PHASE: JoinFleet = JoinFleet {
+        rule: RuleSource::Bible,
+    };
+
+    #[test]
+    fn by_the_engine_no_one_offers_to_join() {
+        let npc = ship();
+        assert!(!JoinFleet::default().applies(&joining(&npc)));
+        assert_eq!(JoinFleet::default().rule, RuleSource::Engine);
+    }
+
+    #[test]
+    fn by_the_other_reading_a_person_who_may_join_offers_to() {
+        let npc = ship();
+        assert!(BY_THE_PHASE.applies(&joining(&npc)));
+        for attitude in [Attitude::Friendly, Attitude::Unfriendly] {
+            let hail = Hail {
+                attitude,
+                ..joining(&npc)
+            };
+            assert!(BY_THE_PHASE.applies(&hail), "{attitude:?}");
+        }
+        assert_eq!(BY_THE_PHASE.label(), "Use As Escort");
+        assert_eq!(BY_THE_PHASE.key(), Some('U'));
+    }
+
+    #[test]
+    fn no_escort_fighter_hostile_ship_or_ship_that_may_not_join_offers_to() {
+        let stranger = ship();
+        assert!(!BY_THE_PHASE.applies(&hail(&stranger)), "may not join");
+        let hostile = Hail {
+            attitude: Attitude::Hostile,
+            ..joining(&stranger)
+        };
+        assert!(!BY_THE_PHASE.applies(&hostile));
+        let escort = escorting(ship());
+        assert!(!BY_THE_PHASE.applies(&joining(&escort)));
+        let mut fighter = ship();
+        fighter.carrier = Some(crate::bay::Carrier {
+            ship: crate::combat::ShipRef::Player,
+            window: 100.0,
+            reach: 40.0,
+        });
+        assert!(!BY_THE_PHASE.applies(&joining(&fighter)));
+    }
+
+    #[test]
+    fn use_as_escort_says_it_is_on_its_way_and_joins() {
+        let npc = ship();
+        assert_eq!(
+            press(&BY_THE_PHASE, &joining(&npc)),
+            Answer {
+                deed: Some(Deed::Join),
+                ..says(ON_MY_WAY)
+            },
+            "drawing nothing"
+        );
+    }
+
+    #[test]
+    fn join_fleet_follows_its_rulebook_entry() {
+        assert_eq!(
+            JoinFleet::from_rulebook(&Rulebook::default()),
+            JoinFleet::default()
+        );
+        assert_eq!(
+            JoinFleet::from_rulebook(
+                &Rulebook::default().with_override(RuleKey::PersonJoin, RuleSource::Bible)
+            ),
+            BY_THE_PHASE
+        );
     }
 }

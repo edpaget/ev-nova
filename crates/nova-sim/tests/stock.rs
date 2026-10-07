@@ -2823,6 +2823,125 @@ fn the_ufs_razorback_hailed_greets_with_its_comm_quote() {
     );
 }
 
+/// Exactly the 78 "Terrapin" persons, whose `LinkMission` 132 has one
+/// escort ship, may join the player under `person_join`'s other reading;
+/// the Valkyrie's refuel mission and the Razorback's lack of one keep
+/// them out.
+#[test]
+fn only_the_terrapins_may_join_the_player() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let persons = nova_sim::TrafficCatalog::persons(&data);
+    let joining: Vec<_> = persons
+        .iter()
+        .filter(|person| nova_sim::person::offers_to_join(person))
+        .collect();
+    assert_eq!(joining.len(), 78);
+    assert!(
+        joining
+            .iter()
+            .all(|person| person.name == "Terrapin" && person.link_mission == Some(132))
+    );
+    assert!(nova_sim::person::offers_to_join(&person_record(&data, 128)));
+    assert!(!nova_sim::person::offers_to_join(&person_record(
+        &data, 225
+    )));
+    assert!(!nova_sim::person::offers_to_join(&person_record(
+        &data, 510
+    )));
+}
+
+/// Every setup pass's person roll lands on the Terrapin `përs` 128, and
+/// the Razorback's Person slot does not list it.
+fn terrapin_roll() -> ByBound {
+    ByBound(&[(7, 0), (1022, 0), (100, 99)])
+}
+
+/// The persons in `session`'s system, with whether each is an escort.
+fn persons_here(session: &Session) -> Vec<(i16, bool)> {
+    session
+        .npcs()
+        .iter()
+        .filter_map(|npc| Some((npc.person?.id.0, npc.escort.is_some())))
+        .collect()
+}
+
+/// Hailed in Kania under `person_join`'s other reading, the Terrapin
+/// (`përs` 128) lists Use As Escort and joins the fleet as itself; saved
+/// and flown again it is placed as the Terrapin, and no other Terrapin
+/// comes. By the engine it lists no Use As Escort.
+#[test]
+fn the_terrapin_hailed_in_kania_joins_the_player_under_person_join() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = flying_in(&data, 128, &[], NovaPersons::default());
+    session.populate(&data, &mut terrapin_roll());
+    assert_eq!(persons_here(&session), [(128, false)]);
+    let terrapin = session
+        .npcs()
+        .iter()
+        .find(|npc| npc.person.is_some())
+        .expect("the Terrapin")
+        .id;
+    while session.select_target(nova_sim::TargetPick::Next) != Some(terrapin) {}
+    let labels = |view: &nova_sim::HailView| {
+        view.options
+            .iter()
+            .map(|button| button.label.clone())
+            .collect::<Vec<_>>()
+    };
+    let engine = nova_sim::HailOptions::default();
+    let opened = session
+        .hail(&data, &engine, &mut ByBound(&[]))
+        .expect("answers");
+    assert!(!labels(&opened).contains(&"Use As Escort".to_owned()));
+    let bible = nova_sim::HailOptions::nova(
+        &nova_sim::Rulebook::default()
+            .with_override(nova_sim::RuleKey::PersonJoin, nova_sim::RuleSource::Bible),
+    );
+    let opened = session
+        .hail(&data, &bible, &mut ByBound(&[]))
+        .expect("answers");
+    let pick = labels(&opened)
+        .iter()
+        .position(|label| label == "Use As Escort")
+        .expect("listed");
+    let joined = session
+        .answer(pick, &data, &bible, &mut ByBound(&[]))
+        .expect("answers");
+    assert_eq!(joined.reply, "Okay, I'm on my way.");
+    assert_eq!(
+        session
+            .pilot()
+            .escorts()
+            .iter()
+            .map(|escort| escort.person.map(|person| person.0))
+            .collect::<Vec<_>>(),
+        [Some(128)]
+    );
+    session.hang_up();
+    let pilot =
+        nova_sim::save::decode(&nova_sim::save::encode(session.pilot())).expect("reads again");
+    assert_eq!(pilot.escorts()[0].person, Some(PersonId(128)));
+    let mut again = Session::fly(&data, pilot).expect("flies");
+    again.populate(&data, &mut terrapin_roll());
+    assert_eq!(
+        persons_here(&again),
+        [(128, true)],
+        "the escort, and no other Terrapin"
+    );
+    let escort = again
+        .npcs()
+        .iter()
+        .find(|npc| npc.escort.is_some())
+        .expect("placed");
+    assert_eq!(again.npc_name(escort), Some("Terrapin"));
+}
+
 #[test]
 fn the_bounty_hunters_hail_quote_names_him_and_the_pilot() {
     let Some(dir) = common::nova_data() else {

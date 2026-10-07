@@ -135,8 +135,10 @@
 //! ([`Session::command_escorts`], [`Session::escort_menu`]) and which
 //! entering a system resets, or keeps, as
 //! [`Session::with_escort_orders`] says. A ship captured joins the fleet
-//! where it is; an escort disabled or destroyed leaves it, and one hailed
-//! may be released. Each change to the fleet makes a save due.
+//! where it is, and so does a person hailed that offers to join
+//! (`person_join`'s other reading), flying as itself in every system; an
+//! escort disabled or destroyed leaves it, and one hailed may be
+//! released. Each change to the fleet makes a save due.
 //!
 //! The player's fighter bays launch fighters into the fleet, which Return
 //! to Hangar brings back to dock, a round of their bay again; an NPC
@@ -211,8 +213,8 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, GovtId, LandingSite, OutfitId, OutfitRecord, PilotCatalog, ShipId, ShipRecord,
-    StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
+    CombatCatalog, GovtId, LandingSite, OutfitId, OutfitRecord, PersonId, PilotCatalog, ShipId,
+    ShipRecord, StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -1748,24 +1750,45 @@ impl Session {
         self.aboard = None;
     }
 
-    /// NPC `id` joins the fleet where it is (`_AIMakeEscortFlyInForm`
-    /// @0x89b8e): intact, its armour at half its most, of no government,
-    /// its AI type its ship type's `InherentAI`, keeping formation with
-    /// no standing order. Every other NPC lets it go, its own escorts
-    /// leave it, and so does the player's target; a save is due.
+    /// NPC `id`, captured, joins the fleet where it is: no longer its
+    /// person, intact, its armour at half its most, and then as
+    /// [`Session::fleet_up`] says.
     fn join_fleet(&mut self, id: NpcId) {
-        let inherent_ai = self
-            .npcs()
-            .iter()
-            .find(|npc| npc.id == id)
-            .and_then(|npc| self.ship_record(npc.ship))
-            .map(|record| record.inherent_ai);
         self.lose_captured(id);
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
         npc.reserves.armor.now = npc.reserves.armor.max * ESCORT_ARMOR_SHARE;
         npc.condition = Condition::Intact;
+        self.fleet_up(id, None);
+    }
+
+    /// NPC `id`, the person hailed, joins the fleet where it is as
+    /// itself, its reserves as they are (see [`Session::fleet_up`]).
+    fn enlist_person(&mut self, id: NpcId) {
+        let person = self
+            .npc(id)
+            .and_then(|npc| npc.person)
+            .map(|person| person.id);
+        self.fleet_up(id, person);
+    }
+
+    /// NPC `id` joins the fleet where it is (`_AIMakeEscortFlyInForm`
+    /// @0x89b8e), the escort of `person` when it is one: of no
+    /// government, its AI type its ship type's `InherentAI`, keeping
+    /// formation with no standing order. Every other NPC lets it go, its
+    /// own escorts leave it, and so does the player's target; a save is
+    /// due.
+    fn fleet_up(&mut self, id: NpcId, person: Option<PersonId>) {
+        let inherent_ai = self
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .and_then(|npc| self.ship_record(npc.ship))
+            .map(|record| record.inherent_ai);
+        let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
+            return;
+        };
         npc.govt = None;
         if let Some(inherent_ai) = inherent_ai {
             npc.ai_type = AiType::from_raw(inherent_ai);
@@ -1787,7 +1810,7 @@ impl Session {
             order: None,
             carried: false,
             wage: None,
-            person: None,
+            person,
         };
         self.drop_quarry(id);
         for other in self.traffic.npcs_mut() {

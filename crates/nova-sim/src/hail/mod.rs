@@ -59,7 +59,7 @@ use crate::traffic::npc::{Npc, NpcId};
 pub use crate::ai::Help;
 pub use deal::{Conversation, Haggle, Mood, Settled};
 pub use like::{Attitude, attitude, likes_player};
-pub use nova::{BegForMercy, Greetings, Release, RequestAssistance};
+pub use nova::{BegForMercy, Greetings, JoinFleet, Release, RequestAssistance};
 pub use reply::Reply;
 
 /// `Flags`: its ships answer no hail.
@@ -131,6 +131,8 @@ impl Dispositions {
 
 /// The conversation as an option sees it: everything Nova's options
 /// decide by, read-only.
+// Each flag is its own fact about the conversation, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug)]
 pub struct Hail<'a> {
     /// The ship hailed: its AI type, government, `InfoTypes`, goal and
@@ -159,6 +161,11 @@ pub struct Hail<'a> {
     /// reading of [`RuleKey::CommQuote`](crate::RuleKey::CommQuote); none
     /// otherwise.
     pub quote: Option<u16>,
+    /// Whether the ship hailed is a person who may join the player's
+    /// fleet: its record allows it
+    /// ([`offers_to_join`](crate::person::offers_to_join)) and the fleet
+    /// has room. The session sets it; none otherwise.
+    pub joins: bool,
 }
 
 impl Hail<'_> {
@@ -209,6 +216,7 @@ impl<'a> Hail<'a> {
             player_threatened: around.npcs.iter().any(Npc::threatens_player),
             need,
             quote: None,
+            joins: false,
         }
     }
 }
@@ -226,6 +234,8 @@ pub enum Deed {
     /// The player's escort leaves the fleet, and the system, once the
     /// channel closes.
     Release,
+    /// The person hailed joins the player's fleet, as itself, at once.
+    Join,
 }
 
 /// A price a ship asks, and what it says and does as the haggling ends.
@@ -380,10 +390,13 @@ impl HailOptions {
         }
     }
 
-    /// Nova's four, Greetings, Request Assistance, Beg For Mercy and
-    /// Release, as `rulebook` chooses: the first three's
-    /// [`RuleKey::QuietHails`](crate::RuleKey::QuietHails) and Greetings'
-    /// [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice) entries.
+    /// Nova's five, Greetings, Request Assistance, Beg For Mercy, Release
+    /// and Use As Escort, as `rulebook` chooses: the first three's
+    /// [`RuleKey::QuietHails`](crate::RuleKey::QuietHails), Greetings'
+    /// [`RuleKey::LongAdvice`](crate::RuleKey::LongAdvice) and Use As
+    /// Escort's [`RuleKey::PersonJoin`](crate::RuleKey::PersonJoin)
+    /// entries. Release is for the player's escorts and Use As Escort for
+    /// the rest, so the two are never listed together.
     #[must_use]
     pub fn nova(rulebook: &Rulebook) -> Self {
         Self::empty()
@@ -391,6 +404,7 @@ impl HailOptions {
             .with(Rc::new(RequestAssistance::from_rulebook(rulebook)))
             .with(Rc::new(BegForMercy::from_rulebook(rulebook)))
             .with(Rc::new(Release))
+            .with(Rc::new(JoinFleet::from_rulebook(rulebook)))
     }
 
     /// These options with `option` after them.
@@ -440,6 +454,7 @@ pub(crate) mod fixture {
             player_threatened: false,
             need: None,
             quote: None,
+            joins: false,
         }
     }
 }
@@ -746,6 +761,39 @@ mod tests {
             "the escort's"
         );
         assert_eq!(labels(&HailOptions::default(), &hail(&escort)), ["Release"]);
+    }
+
+    #[test]
+    fn nova_lists_use_as_escort_for_a_joining_person_under_person_join_alone() {
+        let npc = ship();
+        let joining = Hail {
+            joins: true,
+            ..hail(&npc)
+        };
+        let keys = |options: &HailOptions| {
+            options
+                .listed(&joining)
+                .iter()
+                .map(|option| (option.label(), option.key()))
+                .collect::<Vec<_>>()
+        };
+        let bible = HailOptions::nova(
+            &Rulebook::default().with_override(RuleKey::PersonJoin, RuleSource::Bible),
+        );
+        assert_eq!(
+            keys(&bible),
+            [
+                ("Greetings".to_owned(), Some('G')),
+                ("Request Assistance".to_owned(), Some('R')),
+                ("Use As Escort".to_owned(), Some('U')),
+            ]
+        );
+        assert_eq!(
+            labels(&HailOptions::nova(&Rulebook::default()), &joining),
+            ["Greetings", "Request Assistance"],
+            "by the engine"
+        );
+        assert!(!hail(&npc).joins, "the fixture's hail may not join");
     }
 
     #[test]
