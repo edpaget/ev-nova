@@ -224,6 +224,20 @@ mod tests {
     }
 
     #[test]
+    fn the_joining_and_grant_rules_are_overridden_by_their_keys() {
+        let text = r#"{"rule_overrides": {"person_join": "bible", "grant_count": "bible", "grant_max": "bible"}}"#;
+        let (rulebook, warnings) = rulebook_of(text);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine()
+                .with_override(RuleKey::PersonJoin, RuleSource::Bible)
+                .with_override(RuleKey::GrantCount, RuleSource::Bible)
+                .with_override(RuleKey::GrantMax, RuleSource::Bible)
+        );
+    }
+
+    #[test]
     fn the_persons_rules_are_overridden_by_their_keys() {
         let text = r#"{"rule_overrides": {"person_odds": "bible", "system_persons": "bible", "link_syst_slip": "bible", "shield_mod": "bible", "person_coward": "bible", "person_credits": "bible", "comm_quote": "bible"}}"#;
         let (rulebook, warnings) = rulebook_of(text);

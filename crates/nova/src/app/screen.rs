@@ -5613,6 +5613,27 @@ mod tests {
         let all =
             rules_of(&AppScreen::new(data()).with_rulebook(&Rulebook::new(RuleSource::Bible)));
         assert!(all.contains(&("comm_quote", "Bible".to_owned())), "{all:?}");
+        // The joining and grant rules reach the hail options' Use As
+        // Escort and the boarding rule's two fields.
+        let joined = Rulebook::default()
+            .with_override(RuleKey::PersonJoin, RuleSource::Bible)
+            .with_override(RuleKey::GrantCount, RuleSource::Bible)
+            .with_override(RuleKey::GrantMax, RuleSource::Bible);
+        let routed = rules_of(&AppScreen::new(data()).with_rulebook(&joined));
+        let setting = |name: &str| {
+            routed
+                .iter()
+                .find(|(setting, _)| *setting == name)
+                .map(|(_, value)| value.clone())
+                .unwrap_or_default()
+        };
+        assert!(
+            setting("hail_options").contains("JoinFleet { rule: Bible }"),
+            "{routed:?}"
+        );
+        let boarding = setting("boarding_rule");
+        assert!(boarding.contains("grant_count: Bible"), "{boarding}");
+        assert!(boarding.contains("grant_max: Bible"), "{boarding}");
     }
 
     #[test]

@@ -75,9 +75,15 @@
 //! person linked to a system also appears in the one the engine's slip
 //! gives), `"shield_mod"` (whether `ShieldMod` scales the armour too),
 //! `"person_coward"` (which persons run at their `Coward`),
-//! `"person_credits"` (the credits a person carries) and `"comm_quote"`
-//! (whether a person's comm quote answers Greetings or opens the hail);
-//! every key is listed in
+//! `"person_credits"` (the credits a person carries), `"comm_quote"`
+//! (whether a person's comm quote answers Greetings or opens the hail)
+//! and `"person_join"` (whether no person offers to join, as the engine
+//! has it until missions exist, or a person whose record allows it lists
+//! Use As Escort and joins the fleet as itself), and the boarding
+//! grants: `"grant_count"` (whether a grant is half its `GrantCount` to
+//! all of it, as the engine and the Bible have it, or one to all of it)
+//! and `"grant_max"` (whether a grant may pass the outfit's `Max`, or is
+//! held to it); every key is listed in
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!
