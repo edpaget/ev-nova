@@ -21,6 +21,8 @@
 //!   [`PilotSheet`] and each [`PilotEdit`] to it, or why it was refused.
 //! - [`editor`]: the [`PilotEditor`], the sheet shown, the drafts of each
 //!   edit and the status line.
+//! - [`session`]: the port's adapter over a live `nova_sim::Session`, the
+//!   [`SessionDesk`].
 //!
 //! egui draws the overlay only in the `nova` crate's `dev-tools` build,
 //! and only renders this model's strings and images.
@@ -34,6 +36,7 @@ pub mod overlay;
 pub mod pilot;
 pub mod preview;
 pub mod search;
+pub mod session;
 
 pub use browser::{ResourceBrowser, Selection};
 pub use catalog::{
@@ -46,3 +49,4 @@ pub use overlay::{DevOverlay, Routing, TOGGLE_KEY};
 pub use pilot::{EditRefusal, PilotDesk, PilotEdit, PilotSheet, Place};
 pub use preview::{MAX_PREVIEW_SIDE, Preview, preview};
 pub use search::{Query, fold};
+pub use session::SessionDesk;
