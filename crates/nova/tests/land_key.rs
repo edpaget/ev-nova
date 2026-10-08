@@ -4,13 +4,14 @@
 //!
 //! Alpha holds two planets the ship starts over, both 64 x 64: Alpha
 //! Prime (128) at the centre and Alpha Minor (131) just below it. Its
-//! navigation defaults are Alpha Minor, then Alpha Prime, so Tab selects
-//! Alpha Minor first, though Alpha Prime is nearer.
+//! navigation defaults are Alpha Minor, then Alpha Prime, so 1 selects
+//! Alpha Minor and 2 Alpha Prime, though Alpha Prime is nearer.
 //!
 //! - With no target, L requests clearance at the nearest, Alpha Prime: its
 //!   traffic control's reply shows, the HUD's nav area shows it, and the
 //!   ship stays in flight. A second L lands there.
-//! - With Alpha Minor chosen by Tab, L lands there, not on Alpha Prime.
+//! - With Alpha Minor chosen by 1, L lands there, not on Alpha Prime;
+//!   after L selected Alpha Prime, 1 switches the target to Alpha Minor.
 //! - Moving too fast, or far from every stellar, the second L says so in
 //!   the original's words (`STR#` 2002 #72, #68) and the ship flies on.
 
@@ -347,6 +348,30 @@ fn with_no_target_l_requests_clearance_at_the_nearest_and_a_second_l_lands_there
     game.press(KeyCode::KeyL);
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(game.spaceport(), Some(StellarId(128)));
+}
+
+#[test]
+fn with_alpha_minor_chosen_by_its_slot_key_l_lands_there() {
+    let mut game = Harness::flying();
+    game.press(KeyCode::Digit1);
+    assert_eq!(game.session().nav_target(), Some(StellarId(131)));
+    game.press(KeyCode::KeyL);
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(game.spaceport(), Some(StellarId(131)));
+}
+
+#[test]
+fn after_l_selected_the_nearest_a_slot_key_switches_the_target() {
+    let mut game = Harness::flying();
+    game.press(KeyCode::KeyL);
+    assert_eq!(game.session().nav_target(), Some(StellarId(128)));
+    game.press(KeyCode::Digit1);
+    assert_eq!(game.session().nav_target(), Some(StellarId(131)));
+    game.press(KeyCode::F2);
+    assert_eq!(game.session().nav_target(), Some(StellarId(128)));
+    game.press(KeyCode::Digit1);
+    game.press(KeyCode::KeyL);
+    assert_eq!(game.spaceport(), Some(StellarId(131)));
 }
 
 #[test]

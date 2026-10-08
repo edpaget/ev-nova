@@ -796,7 +796,7 @@ mod tests {
             session.hold_fire(true, false);
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(session.shots().len(), 1, "{text}");
-            session.select_next_stellar();
+            session.select_stellar(crate::session::StellarPick::Slot(0));
             session.target = Some(NpcId(0));
             session.gate = Some(StellarId(128));
             session.strikes = session.combat.take_strikes();

@@ -6,10 +6,10 @@
 //! Alpha's navigation defaults are Alpha Minor, then Alpha Prime. With
 //! nothing selected and no course the nav area says "No Destination". A
 //! course plotted on flight's map to Beta, not yet explored, shows
-//! "Hyperspace" over "Unexplored System". Tab selects Alpha Minor, then
-//! Alpha Prime, then Alpha Minor again, and the selected stellar takes
-//! the place of the course. Arriving in Beta clears both; a course back to
-//! Alpha, explored, shows its name.
+//! "Hyperspace" over "Unexplored System". Tab, the original's Target
+//! Select for ships, selects no stellar and leaves the course shown.
+//! Arriving in Beta clears the course; a course back to Alpha, explored,
+//! shows its name.
 //!
 //! The date, at the foot of the cargo area, reads "June 23, 1177 NC" and
 //! moves on a day with each jump.

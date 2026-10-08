@@ -7,7 +7,8 @@
 //!   Return, closes it.
 //! - While it is open, keys 1-5 ([`GROUP_KEYS`]) select All Ships,
 //!   Fighters, Medium Ships, Warships or Freighters; a class the player
-//!   has no escort of is not selected. While it is shut they do nothing.
+//!   has no escort of is not selected. While it is shut, 1-4 are the
+//!   flight's stellar slot keys instead.
 //! - It closes [`MENU_TIMEOUT`] after it opened, or after the last
 //!   selection or command it took ([`EscortMenu::touch`]), and as soon as
 //!   the fleet is empty. The original then fades it out over 32 frames;

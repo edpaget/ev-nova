@@ -121,8 +121,9 @@
 //! - [`message`]: the [`SimMessage`] events a session raises for the
 //!   message line, such as arriving from a jump or through a gate; the
 //!   view words them.
-//! - [`navigation`]: the navigation target Tab selects, [`next_stellar`]:
-//!   the system's stellars in their `NavDef` order, wrapping.
+//! - [`navigation`]: how the player selects the stellar navigation
+//!   target: by its `NavDef` slot, the nearest, or a click
+//!   ([`stellar_under`]), as the original does.
 //! - [`outfit_effects`]: what granting an outfit does: a map explores, a
 //!   clean-record outfit cleans the legal record and a paint paints the
 //!   ship ([`Rgb15`]) instead of being added
@@ -301,7 +302,7 @@ pub use landing::{
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
-pub use navigation::{next_after, next_stellar};
+pub use navigation::{next_after, stellar_under};
 pub use outfit_effects::{OutfitRules, Rgb15};
 pub use outfitter::{LcNames, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use person::{
@@ -316,7 +317,7 @@ pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
     HookRules, LandPress, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, Settled,
-    ShipChangeRules, nova_set_ops,
+    ShipChangeRules, StellarPick, nova_set_ops,
 };
 pub use shipyard::{ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
