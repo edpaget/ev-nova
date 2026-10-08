@@ -51,6 +51,7 @@
 //! | [`MoveStarless`](RuleKey::MoveStarless) | `move_starless` | `M` in flight into a system with no stellar keeps the ship's position and velocity ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the ship is put at rest at the system's centre |
 //! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only the escorts and fighters out follow, the new system filling with arrivals over time ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
 //! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed ([`ScriptEffectRules`](crate::ScriptEffectRules)) | only a landed `N` keeps the landing position\* |
+//! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the player leaves all the same, with no message |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -432,6 +433,14 @@ rule_keys! {
     /// anything the Bible says (see
     /// [`ScriptEffectRules`](crate::ScriptEffectRules)).
     MoveKeepFlag => "move_keep_flag",
+    /// What a `Q` set operator whose `STR#` is missing or empty, or whose
+    /// pick is empty, does: by the engine, nothing, as the player leaves
+    /// only on a message that is not empty (`_PlayGame` @0x4654c, the port
+    /// dialogs' filters such as `_PortFilter` @0x4f041), and it cancels an
+    /// earlier `Q`, whose message it overwrites; by the Bible ("make the
+    /// player immediately leave"), the player leaves all the same, with no
+    /// message (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    BlankLeave => "blank_leave",
 }
 
 impl RuleKey {
@@ -594,12 +603,14 @@ mod tests {
                 RuleKey::ShipChangeReserves,
                 RuleKey::MoveStarless,
                 RuleKey::MoveArrival,
-                RuleKey::MoveKeepFlag
+                RuleKey::MoveKeepFlag,
+                RuleKey::BlankLeave
             ]
         );
         assert_eq!(RuleKey::MoveStarless.key(), "move_starless");
         assert_eq!(RuleKey::MoveArrival.key(), "move_arrival");
         assert_eq!(RuleKey::MoveKeepFlag.key(), "move_keep_flag");
+        assert_eq!(RuleKey::BlankLeave.key(), "blank_leave");
         assert_eq!(
             RuleKey::ShipChangePersistence.key(),
             "ship_change_persistence"

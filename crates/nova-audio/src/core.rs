@@ -103,6 +103,7 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::TookOff) => self.play(self.table.take_off),
                 Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
                 Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
+                Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
                 Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
                 Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
                 Sound::Combat(fight) => {
@@ -380,6 +381,20 @@ mod tests {
                 play(601, 1.0)
             ]
         );
+    }
+
+    #[test]
+    fn a_q_message_in_flight_beeps() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::ScriptMessage)],
+        );
+        assert_eq!(drain(&log), [play(154, 1.0)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(None, &[Sound::Sim(SimSound::ScriptMessage)]);
+        assert_eq!(drain(&log), [], "sound off");
     }
 
     #[test]

@@ -22,4 +22,6 @@ pub enum SimSound {
     JumpBegan,
     /// A jump ended in the next system.
     Arrived,
+    /// A `Q` set operator's message is shown in flight.
+    ScriptMessage,
 }

@@ -1581,42 +1581,62 @@ impl<
     /// session populates the system's traffic afresh on its next tick
     /// ([`Session::take_off`]).
     pub fn take_off(&mut self) -> Option<StellarId> {
-        let session = self.session.as_mut().ok()?;
-        let stellar = session.take_off()?;
-        let pay = session.take_pay_notes();
+        let stellar = self.session.as_mut().ok()?.take_off()?;
+        let said = self.took_off();
+        self.say_all(&said);
+        Some(stellar)
+    }
+
+    /// Catches the screen up with the session having taken off: the ship
+    /// drawn where it is, in the system laid out afresh if a move while
+    /// landed changed it, no message from before kept; gives what paying
+    /// the escorts for the take-off has to say.
+    fn took_off(&mut self) -> Vec<String> {
+        let pay = self
+            .session
+            .as_mut()
+            .map(Session::take_pay_notes)
+            .unwrap_or_default();
         self.resync();
         self.message = None;
-        let said = pay_notes_message(&pay);
+        pay_notes_message(&pay)
+    }
+
+    /// Shows `said`, joined by two spaces, when there is anything.
+    fn say_all(&mut self, said: &[String]) {
         if !said.is_empty() {
             self.say(said.join("  "));
         }
-        Some(stellar)
     }
 
     /// Settles what the set expressions run since queued, as
     /// [`Session::settle_script`] does, reading the catalog and drawing on
-    /// the flight's chance. After a move in flight the system the ship is
-    /// in is laid out afresh, even the same one, as the original kills its
-    /// explosions and smoke, and how many fighters were abandoned, if
-    /// any, is shown. A move while landed shows once the ship takes off.
-    pub fn settle_script(&mut self) {
-        let Ok(session) = &mut self.session else {
-            return;
-        };
+    /// the flight's chance, and gives the stellar a `Q` made the ship take
+    /// off from, for the router to close its spaceport. A take-off is
+    /// caught up with as [`FlightView::take_off`] is, the `Q`'s message
+    /// shown before what the take-off's pay has to say. After a move in
+    /// flight the system the ship is in is laid out afresh, even the same
+    /// one, as the original kills its explosions and smoke, and how many
+    /// fighters were abandoned, if any, is shown after a `Q`'s message. A
+    /// move while landed shows once the ship takes off.
+    pub fn settle_script(&mut self) -> Option<StellarId> {
+        let session = self.session.as_mut().ok()?;
         let settled = session.settle_script(&self.catalog, &mut self.chance);
-        if settled.moved.is_none() || session.landed().is_some() {
-            return;
+        let flying = session.landed().is_none();
+        let mut said: Vec<String> = settled.message.into_iter().collect();
+        if settled.took_off.is_some() {
+            said.extend(self.took_off());
+        } else if flying && let Some(system) = settled.moved.map(|_| session.system()) {
+            let notes = session.take_fighter_notes();
+            self.lay_out(system);
+            said.extend(
+                notes
+                    .into_iter()
+                    .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count)),
+            );
         }
-        let system = session.system();
-        let notes = session.take_fighter_notes();
-        self.lay_out(system);
-        let said: Vec<String> = notes
-            .into_iter()
-            .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count))
-            .collect();
-        if !said.is_empty() {
-            self.say(said.join("  "));
-        }
+        self.say_all(&said);
+        settled.took_off
     }
 
     /// Plays `effect` for the ship having come out of a gate into
@@ -9210,6 +9230,47 @@ mod tests {
                 .is_some_and(|explored| explored.contains(&SystemId(131))),
             "the take-off explores"
         );
+    }
+
+    /// `view` with `STR#` 25048 holding one message.
+    fn told(view: View) -> View {
+        let strings = FakeCatalog {
+            strings: vec![(25048, vec!["Off you go, <PSN>.".to_owned()])],
+            ..catalog()
+        };
+        view.with_strings(Rc::new(strings))
+    }
+
+    #[test]
+    fn a_q_in_flight_shows_its_message() {
+        let mut view = told(flight());
+        run_set(&mut view, "Q25048");
+        assert_eq!(view.settle_script(), None);
+        assert_eq!(view.message(), Some("Off you go, <PSN>."));
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::ScriptMessage)]);
+    }
+
+    #[test]
+    fn a_landed_q_takes_off_and_shows_its_message() {
+        let mut view = told(landed_view());
+        run_set(&mut view, "M131 Q25048");
+        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        let session = view.session().expect("flying");
+        assert_eq!(session.landed(), None);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
+        assert_eq!(view.message(), Some("Off you go, <PSN>."));
+        assert_eq!(view.settle_script(), None, "settled");
+    }
+
+    #[test]
+    fn a_landed_q_shows_the_take_offs_pay_after_its_message() {
+        let mut view = told(paying(50, true));
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        run_set(&mut view, "Q25048");
+        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        let said = format!("Off you go, <PSN>.  {DEFECTED_ONE}");
+        assert_eq!(view.message(), Some(said.as_str()));
     }
 
     #[test]

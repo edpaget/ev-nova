@@ -1,5 +1,5 @@
 //! The set operators that move the player: `M` and `N` move it to
-//! another system, the session's side of `_EvalSetExp`'s moves.
+//! another system, and `Q` makes it leave the stellar it is landed on.
 //!
 //! **The original.** `_EvalSetExp` (@0x150fc) dispatches on the letter
 //! through the table at 0xdd2fc (@0x15cc2):
@@ -11,6 +11,7 @@
 //! | both | @0x15807-0x1583e | every active ship whose parent is the player (+0x9a 0: its escorts and fighters out) takes the new system; the others keep the old one, and `_DoPlayGameWork` runs only the ships in the player's system, so they stay behind |
 //! | both, landed | | `_dockedPortMissions` is filled with -1, and that is all |
 //! | both, in flight | @0x158a4 | the shots, cargo boxes, explosions, smoke and asteroids are killed, the stellar sprites rebuilt, and `_MissionHandlePlayerEnteredNewSystem` runs |
+//! | `Q` | @0x15bee-0x15c6c | `_absquatulateStr` (0x1635a0) becomes one of `STR#` `xxx`'s strings, the raw ID, with no range check, drawn as `T` draws (`_GetRandomIndString`: `Rand(count) + 1`); only inside a mission's set expression (`_currentMissionIndexForSetParser` ≤ 15, set by `_EvalCurrentMissionBitSetString` @0x99a6b alone) is it run through `_MungeBriefing`, so a hook's text is shown as it is. A missing or empty list, or an empty pick, leaves it empty (strcpy over an earlier one) |
 //!
 //! Neither calls `_SetupShipsInSystem` or `_AutoSetExploration`, whose
 //! only callers are a new pilot, the main screen, the take-off and
@@ -84,6 +85,29 @@
 //! as the fighter rules say and the system is populated
 //! ([`Session::populate`]).
 //!
+//! **`Qxxx`** ([`LeaveStellarOp`]) draws its message when it runs, from
+//! the session's string lists ([`Session::with_strings`]; none by
+//! default), with a roll of as many sides as the list holds, as `T`
+//! draws, so the order of the draws is kept. Nothing moves until it is
+//! settled; whoever sees the original's string next acts on it:
+//!
+//! - Landed, every port dialog's filter (`_BarFilter` @0x47a4b,
+//!   `_PortFilter` @0x4f041 and the others) closes on its next event, so
+//!   `Q` does not wait for the spaceport to close, it forces it closed;
+//!   the take-off then shows the message (`_DisplayComm` @0x635cf) in
+//!   place of its usual greeting, with no beep. Here
+//!   [`Session::settle_script`] takes off ([`Session::take_off`]) and
+//!   gives the message, for whoever shows the spaceport to close it.
+//! - In flight, the next frame beeps `_beepSnd[4]` (`_PlayGame`
+//!   @0x4654c) and shows the message: here the message, and
+//!   [`SimSound::ScriptMessage`].
+//!
+//! The text is the string as it is: mission text tags wait for missions,
+//! as the original munges them only inside one. A blank `Q` (a missing
+//! or empty list, or an empty pick) does nothing and cancels an earlier
+//! one, unless [`ScriptEffectRules::blank_leave`] makes the player leave
+//! all the same, with no message.
+//!
 //! Not yet as the original: the mission work its moves do
 //! (`_dockedPortMissions`, `_MissionHandlePlayerEnteredNewSystem`) waits
 //! for missions, and the first stellar is the first of
@@ -99,6 +123,7 @@ use crate::gate::GateKind;
 use crate::geometry::Vec2;
 use crate::landing::is_landable;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::sound::SimSound;
 
 /// The disputed rules of the moving set operators that the session
 /// follows (see [`Session::with_script_effect_rules`]): the engine's by
@@ -113,17 +138,21 @@ pub struct ScriptEffectRules {
     /// Whether an `N` in flight keeps the next take-off's landing
     /// position ([`RuleKey::MoveKeepFlag`]).
     pub keep_flag: RuleSource,
+    /// Whether a blank `Q` makes the player leave ([`RuleKey::BlankLeave`]).
+    pub blank_leave: RuleSource,
 }
 
 impl ScriptEffectRules {
     /// The rules `rulebook` chooses: its [`RuleKey::MoveStarless`],
-    /// [`RuleKey::MoveArrival`] and [`RuleKey::MoveKeepFlag`] entries.
+    /// [`RuleKey::MoveArrival`], [`RuleKey::MoveKeepFlag`] and
+    /// [`RuleKey::BlankLeave`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
             starless: rulebook.source_for(RuleKey::MoveStarless),
             arrival: rulebook.source_for(RuleKey::MoveArrival),
             keep_flag: rulebook.source_for(RuleKey::MoveKeepFlag),
+            blank_leave: rulebook.source_for(RuleKey::BlankLeave),
         }
     }
 }
@@ -137,12 +166,25 @@ pub(super) enum ScriptMove {
     KeepPosition(SystemId),
 }
 
+/// What the set expressions queued for [`Session::settle_script`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Queued {
+    /// The moves, in order.
+    moves: Vec<ScriptMove>,
+    /// The message a `Q` leaves on: none for no `Q` pending.
+    leave: Option<String>,
+}
+
 /// What [`Session::settle_script`] did.
 #[must_use]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settled {
     /// The system the last move applied went to, if any did.
     pub moved: Option<SystemId>,
+    /// The stellar a `Q` made the ship take off from, if it was landed.
+    pub took_off: Option<StellarId>,
+    /// The message a `Q` shows, if it has one.
+    pub message: Option<String>,
 }
 
 impl Session {
@@ -161,16 +203,17 @@ impl Session {
     }
 
     /// Applies what the set expressions run since the last settling
-    /// queued, in order (see the module docs): the moves, each read from
-    /// `catalog`, populating on `chance` where the rules say. Whoever runs
-    /// set expressions calls it after each input and tick, before saving.
+    /// queued (see the module docs): the moves in order, each read from
+    /// `catalog`, populating on `chance` where the rules say, then a `Q`'s
+    /// leave. Whoever runs set expressions calls it after each input and
+    /// tick, before saving.
     pub fn settle_script(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Settled {
         let mut settled = Settled::default();
-        for step in std::mem::take(&mut self.script_moves) {
+        for step in std::mem::take(&mut self.queued.moves) {
             let (system, keep) = match step {
                 ScriptMove::To(system) => (system, false),
                 ScriptMove::KeepPosition(system) => (system, true),
@@ -180,7 +223,25 @@ impl Session {
                 settled.moved = Some(system);
             }
         }
+        if let Some(text) = self.queued.leave.take() {
+            settled.message = Some(text).filter(|text| !text.is_empty());
+            if self.landed.is_some() {
+                settled.took_off = self.take_off();
+            } else if settled.message.is_some() {
+                self.sounds.push(SimSound::ScriptMessage);
+            }
+        }
         settled
+    }
+
+    /// `Q`: draws the message to leave on from `STR#` `list` on `chance`
+    /// (see the module docs); a blank one cancels an earlier `Q`, or
+    /// leaves with no message by [`ScriptEffectRules::blank_leave`]'s
+    /// Bible reading.
+    fn leave_stellar(&mut self, list: i16, chance: &mut dyn Chance) {
+        self.queued.leave = self.pick_string(list, chance).or_else(|| {
+            (self.script_effect_rules.blank_leave == RuleSource::Bible).then(String::new)
+        });
     }
 
     /// Moves the player to `system`, keeping the position when `keep`
@@ -277,7 +338,20 @@ pub struct MoveToOp;
 impl SetOpHandler<Session> for MoveToOp {
     fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
         if let SetOp::MoveTo(system) = op {
-            session.script_moves.push(ScriptMove::To(*system));
+            session.queued.moves.push(ScriptMove::To(*system));
+        }
+    }
+}
+
+/// `Qxxx`: makes the player leave the stellar it is landed on, with a
+/// message from a string list (see the module docs).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LeaveStellarOp;
+
+impl SetOpHandler<Session> for LeaveStellarOp {
+    fn apply(&self, op: &SetOp, session: &mut Session, chance: &mut dyn Chance) {
+        if let SetOp::LeaveStellar(list) = op {
+            session.leave_stellar(list.0, chance);
         }
     }
 }
@@ -290,7 +364,7 @@ pub struct MoveKeepPositionOp;
 impl SetOpHandler<Session> for MoveKeepPositionOp {
     fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
         if let SetOp::MoveKeepPosition(system) = op {
-            session.script_moves.push(ScriptMove::KeepPosition(*system));
+            session.queued.moves.push(ScriptMove::KeepPosition(*system));
         }
     }
 }
@@ -303,6 +377,9 @@ mod tests {
         DudeId, DudeRecord, GovtId, HullRecord, ShipId, StockWeapon, SystemTraffic, WeaponId,
         WeaponRecord,
     };
+    use std::rc::Rc;
+
+    use crate::catalog::CommCatalog;
     use crate::chance::NeverFires;
     use crate::combat::Rules;
     use crate::control::{SetExpr, SetOpKind};
@@ -467,6 +544,7 @@ mod tests {
             starless: RuleSource::Engine,
             arrival: RuleSource::Engine,
             keep_flag: RuleSource::Engine,
+            blank_leave: RuleSource::Engine,
         };
         assert_eq!(ScriptEffectRules::default(), engine);
         assert_eq!(
@@ -496,6 +574,13 @@ mod tests {
             bible(RuleKey::MoveKeepFlag),
             ScriptEffectRules {
                 keep_flag: RuleSource::Bible,
+                ..engine
+            }
+        );
+        assert_eq!(
+            bible(RuleKey::BlankLeave),
+            ScriptEffectRules {
+                blank_leave: RuleSource::Bible,
                 ..engine
             }
         );
@@ -897,9 +982,142 @@ mod tests {
     }
 
     #[test]
-    fn the_moves_are_registered_by_nova() {
+    fn the_moves_and_the_leave_are_registered_by_nova() {
         let kinds: Vec<SetOpKind> = crate::session::nova_set_ops().kinds().collect();
         assert!(kinds.contains(&SetOpKind::MoveTo));
         assert!(kinds.contains(&SetOpKind::MoveKeepPosition));
+        assert!(kinds.contains(&SetOpKind::LeaveStellar));
+    }
+
+    // Q.
+
+    /// String lists by ID.
+    #[derive(Debug, Default)]
+    struct Lists(Vec<(i16, Vec<&'static str>)>);
+
+    impl CommCatalog for Lists {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            self.0
+                .iter()
+                .find(|(list, _)| *list == id)
+                .map_or_else(Vec::new, |(_, strings)| {
+                    strings.iter().map(|&string| string.to_owned()).collect()
+                })
+        }
+    }
+
+    /// 25048 holds three messages, the last naming the player; 25049 is
+    /// empty; 25050 holds an empty string and one that is not.
+    fn told(session: Session) -> Session {
+        session.with_strings(Rc::new(Lists(vec![
+            (25048, vec!["Go.", "Leave now.", "Off you go, <PSN>."]),
+            (25049, vec![]),
+            (25050, vec!["", "Shoo."]),
+        ])))
+    }
+
+    /// Runs `text`, rolling `rolls`, and gives the sides asked.
+    fn run_rolling(session: &mut Session, text: &str, rolls: &[u16]) -> Vec<u16> {
+        let mut chance = Scripted::rolling(rolls);
+        session.run_set(&SetExpr::parse(text).expect("parses"), &mut chance);
+        chance.sides_asked
+    }
+
+    #[test]
+    fn a_landed_q_takes_off_with_a_message_drawn_from_its_list() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        assert_eq!(run_rolling(&mut session, "Q25048", &[2]), [3]);
+        assert_eq!(session.landed(), Some(StellarId(128)), "nothing yet");
+        assert!(!session.take_save_due());
+        let settled = settle(&mut session, &catalog);
+        assert_eq!(settled.took_off, Some(StellarId(128)));
+        assert_eq!(settled.message.as_deref(), Some("Off you go, <PSN>."));
+        assert_eq!(settled.moved, None);
+        assert_eq!(session.landed(), None);
+        assert_eq!(session.take_sounds(), [SimSound::TookOff], "no beep");
+        assert!(session.take_save_due());
+        assert_eq!(settle(&mut session, &catalog), Settled::default(), "once");
+    }
+
+    #[test]
+    fn a_q_in_flight_shows_its_message_with_a_beep() {
+        let catalog = moving();
+        let mut session = told(flying(&catalog));
+        session.take_sounds();
+        run_rolling(&mut session, "Q25048", &[0]);
+        let settled = settle(&mut session, &catalog);
+        assert_eq!(settled.message.as_deref(), Some("Go."));
+        assert_eq!(settled.took_off, None);
+        assert_eq!(session.take_sounds(), [SimSound::ScriptMessage]);
+        assert_eq!(session.landed(), None);
+    }
+
+    #[test]
+    fn by_the_engine_a_blank_q_does_nothing_and_cancels_an_earlier_one() {
+        let catalog = moving();
+        for (text, rolls, sides) in [
+            ("Q25051", &[][..], &[][..]),
+            ("Q25049", &[], &[]),
+            ("Q25050", &[0], &[2]),
+            ("Q25048 Q25049", &[1], &[3]),
+        ] {
+            let mut session = told(landed(&catalog));
+            assert_eq!(run_rolling(&mut session, text, rolls), sides, "{text}");
+            assert_eq!(settle(&mut session, &catalog), Settled::default(), "{text}");
+            assert_eq!(session.landed(), Some(StellarId(128)), "{text}");
+            assert_eq!(session.take_sounds(), [], "{text}");
+            let mut session = told(flying(&catalog));
+            session.take_sounds();
+            run_rolling(&mut session, text, rolls);
+            assert_eq!(settle(&mut session, &catalog), Settled::default(), "{text}");
+            assert_eq!(session.take_sounds(), [], "{text}");
+        }
+    }
+
+    #[test]
+    fn by_the_bible_a_blank_q_leaves_all_the_same_with_no_message() {
+        let catalog = moving();
+        let rules = ScriptEffectRules {
+            blank_leave: RuleSource::Bible,
+            ..ScriptEffectRules::default()
+        };
+        let mut session = told(landed(&catalog)).with_script_effect_rules(rules);
+        run_rolling(&mut session, "Q25049", &[]);
+        let settled = settle(&mut session, &catalog);
+        assert_eq!(settled.took_off, Some(StellarId(128)));
+        assert_eq!(settled.message, None);
+        assert_eq!(session.landed(), None);
+        let mut session = told(flying(&catalog)).with_script_effect_rules(rules);
+        session.take_sounds();
+        run_rolling(&mut session, "Q25050", &[0]);
+        assert_eq!(settle(&mut session, &catalog), Settled::default());
+        assert_eq!(session.take_sounds(), [], "nothing to show");
+        let mut session = told(landed(&catalog)).with_script_effect_rules(rules);
+        run_rolling(&mut session, "Q25048", &[1]);
+        let settled = settle(&mut session, &catalog);
+        assert_eq!(settled.message.as_deref(), Some("Leave now."), "as usual");
+    }
+
+    #[test]
+    fn a_landed_move_and_q_take_off_in_the_system_moved_to() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        run_rolling(&mut session, "M131 Q25048", &[0]);
+        let settled = settle(&mut session, &catalog);
+        assert_eq!(settled.moved, Some(SystemId(131)));
+        assert_eq!(settled.took_off, Some(StellarId(128)));
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(ids(&session.sites), [140, 141]);
+        assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
+    }
+
+    #[test]
+    fn without_string_lists_a_q_does_nothing() {
+        let catalog = moving();
+        let mut session = landed(&catalog);
+        assert_eq!(run_rolling(&mut session, "Q25048", &[]), Vec::<u16>::new());
+        assert_eq!(settle(&mut session, &catalog), Settled::default());
+        assert_eq!(session.landed(), Some(StellarId(128)));
     }
 }

@@ -1441,12 +1441,25 @@ impl AppScreen {
     }
 
     /// Settles what the set expressions run in flight or in the spaceport
-    /// queued ([`FlightView::settle_script`]): a move while landed leaves
-    /// the spaceport open as it is.
+    /// queued ([`FlightView::settle_script`]): a `Q` that took off closes
+    /// the spaceport, as leaving it does, and a move while landed leaves it
+    /// open as it is.
     fn settle_script(&mut self) {
-        if let Some(flight) = self.flight.as_mut() {
-            flight.settle_script();
+        let took_off = self.flight.as_mut().and_then(FlightView::settle_script);
+        if took_off.is_some() {
+            self.close_spaceport();
         }
+    }
+
+    /// Closes the spaceport, if it is open, keeping its sounds, and shows
+    /// flight, letting go of the spaceport's keys.
+    fn close_spaceport(&mut self) {
+        let Some(spaceport) = self.spaceport.as_mut() else {
+            return;
+        };
+        self.sounds.extend(spaceport.take_sounds());
+        self.switch_to(Side::Flight);
+        self.spaceport = None;
     }
 
     /// Saves the pilot if flight says a save is due: it has landed, taken
@@ -1671,9 +1684,7 @@ impl AppScreen {
             refresh_spaceport(spaceport, flight);
         }
         if spaceport.left() {
-            self.sounds.extend(spaceport.take_sounds());
-            self.switch_to(Side::Flight);
-            self.spaceport = None;
+            self.close_spaceport();
             self.flight.as_mut().expect(ENTERED).take_off();
         }
         ScreenAction::None
@@ -2113,7 +2124,7 @@ pub(super) mod tests {
     }
 
     /// [`outfitting_data`], where the booster's `OnPurchase` is
-    /// `on_purchase`.
+    /// `on_purchase`, and `STR#` 25048 holds "Off you go, <PSN>."
     fn hooked_outfitting_data(on_purchase: &[u8]) -> Rc<GameData> {
         game_data_starting(true, true, false, b"", on_purchase)
     }
@@ -2162,6 +2173,10 @@ pub(super) mod tests {
             booster[0x0E..0x12].copy_from_slice(&500_i32.to_be_bytes());
             booster[0x32B..0x332].copy_from_slice(b"Booster");
             booster[0x12D..0x12D + on_purchase.len()].copy_from_slice(on_purchase);
+            if !on_purchase.is_empty() {
+                let leave = str_list(&["Off you go, <PSN>."]);
+                fork = fork.resource(StrList::TYPE, 25048, None, &leave);
+            }
             fork = fork.resource(Outfit::TYPE, 128, Some(b"Booster"), &booster);
         }
         if shipbuying {
@@ -4738,6 +4753,34 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_q_by_a_purchase_hook_closes_the_spaceport_takes_off_and_saves() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, hooked_outfitting_data(b"Q25048"));
+        click_port_item(&mut screen, 8);
+        let writes = store.writes();
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.spaceport_view().is_none());
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "bought first");
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.landed(), None);
+        assert_eq!(flight(&screen).message(), Some("Off you go, <PSN>."));
+        assert_eq!(store.writes(), writes + 1, "saved once, after the input");
+        assert_eq!(saved(&store, "Ada").owned(BOOSTER), 1);
+        let sounds = screen.take_sounds();
+        assert!(
+            sounds.contains(&Sound::Sim(nova_sim::SimSound::TookOff)),
+            "{sounds:?}"
+        );
+        assert!(
+            !sounds.contains(&Sound::Sim(nova_sim::SimSound::ScriptMessage)),
+            "no beep on the take-off"
+        );
+        screen.input(&key(Key::Char('l'), true));
+        assert_eq!(screen.showing(), Showing::Flight, "flight takes the keys");
+    }
+
+    #[test]
     fn a_new_pilot_moved_by_its_on_start_flies_there_and_is_saved_there() {
         let store = MemoryPilots::new();
         let mut screen = AppScreen::new(starting_data(b"M129"))
@@ -6008,9 +6051,10 @@ pub(super) mod tests {
             | RuleKey::ShipChangeMax
             | RuleKey::ShipChangeCargo
             | RuleKey::ShipChangeReserves => "ship_change_rules",
-            RuleKey::MoveStarless | RuleKey::MoveArrival | RuleKey::MoveKeepFlag => {
-                "script_effect_rules"
-            }
+            RuleKey::MoveStarless
+            | RuleKey::MoveArrival
+            | RuleKey::MoveKeepFlag
+            | RuleKey::BlankLeave => "script_effect_rules",
         }
     }
 

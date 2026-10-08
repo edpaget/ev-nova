@@ -295,19 +295,27 @@ impl Session {
     /// `T`: renames the ship from `STR#` `list`, drawing on `chance` (see
     /// the module docs).
     fn rename_ship(&mut self, list: i16, chance: &mut dyn Chance) {
-        let names = self.strings.0.string_list(list);
-        if names.is_empty() {
-            return;
-        }
-        let sides = u16::try_from(names.len()).unwrap_or(u16::MAX);
-        let Some(pick) = names.get(usize::from(chance.roll(sides))) else {
+        let Some(pick) = self.pick_string(list, chance) else {
             return;
         };
-        if pick.is_empty() {
-            return;
-        }
         let previous = self.pilot.ship_name.as_deref().unwrap_or_default();
         self.pilot.ship_name = Some(pick.replace('*', previous));
+    }
+
+    /// One of `STR#` `list`'s strings, from the session's string lists,
+    /// picked evenly on `chance` as `_GetRandomIndString` (@0x72ef7) picks
+    /// it: a roll of as many sides as the list holds. `None`, with no roll,
+    /// for a missing or empty list, and `None` for an empty pick.
+    pub(super) fn pick_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
+        let strings = self.strings.0.string_list(list);
+        if strings.is_empty() {
+            return None;
+        }
+        let sides = u16::try_from(strings.len()).unwrap_or(u16::MAX);
+        strings
+            .into_iter()
+            .nth(usize::from(chance.roll(sides)))
+            .filter(|pick| !pick.is_empty())
     }
 }
 

@@ -222,10 +222,12 @@
 //! changes the player's ship outside the shipyard (`C`, `E`, `H`, as
 //! [`Session::with_ship_change_rules`] says where the rules are
 //! disputed) and renames it (`T`, from the string lists
-//! [`Session::with_strings`] gives), and moves the player to another
-//! system (`M`, `N`), applied when [`Session::settle_script`] settles
-//! them, as [`Session::with_script_effect_rules`] says where the rules
-//! are disputed; one nothing handles is skipped and told once
+//! [`Session::with_strings`] gives), moves the player to another
+//! system (`M`, `N`) and makes it leave the stellar it is landed on
+//! (`Q`, with a message from those string lists), applied when
+//! [`Session::settle_script`] settles them, as
+//! [`Session::with_script_effect_rules`] says where the rules are
+//! disputed; one nothing handles is skipped and told once
 //! ([`Session::take_script_notes`]). See the `ship_change` and
 //! `script_effects` modules.
 //!
@@ -290,7 +292,9 @@ pub use ship_change::{
 
 pub use edit::RelocateRefusal;
 pub use persons::PersonQuote;
-pub use script_effects::{MoveKeepPositionOp, MoveToOp, ScriptEffectRules, Settled};
+pub use script_effects::{
+    LeaveStellarOp, MoveKeepPositionOp, MoveToOp, ScriptEffectRules, Settled,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -568,9 +572,9 @@ pub struct Session {
     /// The string lists `T` names the ship from (see
     /// [`Session::with_strings`]).
     strings: ship_change::Strings,
-    /// The moves the set expressions queued since the last settling, in
-    /// order (see [`Session::settle_script`]); never saved.
-    script_moves: Vec<script_effects::ScriptMove>,
+    /// What the set expressions queued since the last settling (see
+    /// [`Session::settle_script`]); never saved.
+    queued: script_effects::Queued,
     /// The stellars of the system a landed move went to, swapped in at
     /// the take-off.
     next_sites: Option<Vec<LandingSite>>,
@@ -705,7 +709,7 @@ impl Session {
             ship_change_rules: ShipChangeRules::default(),
             disable_rule: Self::nova_disable(),
             strings: ship_change::Strings::none(),
-            script_moves: Vec::new(),
+            queued: script_effects::Queued::default(),
             next_sites: None,
             hold_position: false,
             touchdown: player.position,

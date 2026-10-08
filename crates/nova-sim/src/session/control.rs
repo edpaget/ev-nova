@@ -20,13 +20,13 @@
 //! hands every other operator to the registry given by
 //! [`Session::with_set_ops`]: by default [`nova_set_ops`], Nova's `G`, `D`
 //! and `X` (see the `outfits` module), the ship changes `C`, `E`, `H`
-//! and `T` (see the `ship_change` module) and the moves `M` and `N`,
-//! which apply when [`Session::settle_script`] settles them (see the
-//! `script_effects` module). Any change to the pilot makes
+//! and `T` (see the `ship_change` module), and the moves `M` and `N` and
+//! the leave `Q`, which apply when [`Session::settle_script`] settles
+//! them (see the `script_effects` module). Any change to the pilot makes
 //! a save due. An operator nothing handles is skipped, and its kind told
 //! once a session as a [`ScriptNote`] ([`Session::take_script_notes`]);
 //! which kinds were told is never saved. The operators still unhandled
-//! are the sound and leave (`P`, `Q`), and those of the
+//! are the sound (`P`), and those of the
 //! missions (`A`, `F`, `S`), ranks (`K`, `L`) and stellars (`Y`, `U`),
 //! which other work registers.
 //!
@@ -40,7 +40,7 @@ use std::rc::Rc;
 use super::Session;
 use super::hire::Shared;
 use super::outfits::{ExploreOp, GrantOutfitOp, RemoveOutfitOp};
-use super::script_effects::{MoveKeepPositionOp, MoveToOp};
+use super::script_effects::{LeaveStellarOp, MoveKeepPositionOp, MoveToOp};
 use super::ship_change::{ChangeShipOp, ChangeShipWithDefaultsOp, RenameShipOp, ReplaceShipOp};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
@@ -134,7 +134,7 @@ impl BitStore for Session {
 
 /// Nova's set operators beyond the bit writes and `R(...)`: `G`, `D` and
 /// `X` (see the `outfits` module), `C`, `E`, `H` and `T` (see the
-/// `ship_change` module), and `M` and `N` (see the `script_effects`
+/// `ship_change` module), and `M`, `N` and `Q` (see the `script_effects`
 /// module). Later work registers more onto it with [`SetRegistry::with`].
 #[must_use]
 pub fn nova_set_ops() -> SetRegistry<Session> {
@@ -151,6 +151,7 @@ pub fn nova_set_ops() -> SetRegistry<Session> {
         .with(SetOpKind::RenameShip, Rc::new(RenameShipOp))
         .with(SetOpKind::MoveTo, Rc::new(MoveToOp))
         .with(SetOpKind::MoveKeepPosition, Rc::new(MoveKeepPositionOp))
+        .with(SetOpKind::LeaveStellar, Rc::new(LeaveStellarOp))
 }
 
 impl Session {
@@ -390,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn novas_set_ops_are_g_d_x_the_ship_changes_and_the_moves() {
+    fn novas_set_ops_are_g_d_x_the_ship_changes_the_moves_and_the_leave() {
         assert_eq!(
             nova_set_ops().kinds().collect::<Vec<_>>(),
             [
@@ -402,13 +403,14 @@ mod tests {
                 SetOpKind::MoveTo,
                 SetOpKind::MoveKeepPosition,
                 SetOpKind::RenameShip,
+                SetOpKind::LeaveStellar,
                 SetOpKind::Explore
             ]
         );
     }
 
     #[test]
-    fn the_operators_still_unhandled_are_the_sound_leave_and_other_work() {
+    fn the_operators_still_unhandled_are_the_sound_and_other_work() {
         let catalog = catalog();
         let mut session = session();
         session.run_set(
@@ -429,7 +431,6 @@ mod tests {
                 SetOpKind::PlaySound,
                 SetOpKind::DestroyStellar,
                 SetOpKind::RegenerateStellar,
-                SetOpKind::LeaveStellar,
             ]
             .map(ScriptNote::Unhandled)
         );

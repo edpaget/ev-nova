@@ -26,6 +26,8 @@ pub struct SoundTable {
     pub button_down: Option<SoundId>,
     /// Plays as a pressed interface button comes back up.
     pub button_up: Option<SoundId>,
+    /// Plays as a `Q` set operator's message is shown in flight.
+    pub script_message: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -47,6 +49,10 @@ impl SoundTable {
     /// - `button_down`: 600, "Menu button down" (the resource's name, and
     ///   the guide's).
     /// - `button_up`: 601, "Menu button up" (likewise).
+    /// - `script_message`: 154, the fifth of the beeps `_LoadSounds` loads
+    ///   from `snd ` 150 to 154 into `_beepSnd` (@0x1c174), which
+    ///   `_PlayGame` plays as it shows a `Q`'s message in flight
+    ///   (`_beepSnd[4]`, @0x4657a).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -55,6 +61,7 @@ impl SoundTable {
         arrival: Some(SoundId(130)),
         button_down: Some(SoundId(600)),
         button_up: Some(SoundId(601)),
+        script_message: Some(SoundId(154)),
     };
 }
 
@@ -72,5 +79,6 @@ mod tests {
         assert_eq!(table.arrival, Some(SoundId(130)), "Warp out");
         assert_eq!(table.button_down, Some(SoundId(600)), "Menu button down");
         assert_eq!(table.button_up, Some(SoundId(601)), "Menu button up");
+        assert_eq!(table.script_message, Some(SoundId(154)), "_beepSnd[4]");
     }
 }
