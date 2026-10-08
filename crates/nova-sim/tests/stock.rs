@@ -2656,7 +2656,23 @@ fn persons_in(
     rules: NovaPersons,
     chance: &mut ByBound,
 ) -> Vec<i16> {
+    persons_with_bits(data, system, gone, rules, &[], chance)
+}
+
+/// The persons `sÿst` `system` is populated with, as [`persons_in`] says,
+/// with the control bits `bits` set.
+fn persons_with_bits(
+    data: &GameData,
+    system: i16,
+    gone: &[i16],
+    rules: NovaPersons,
+    bits: &[u16],
+    chance: &mut ByBound,
+) -> Vec<i16> {
     let mut session = flying_in(data, system, gone, rules);
+    for &bit in bits {
+        session.set_control_bit(nova_sim::Bit::new(bit).expect("a bit"), true);
+    }
     session.populate(data, chance);
     session
         .npcs()
@@ -2766,20 +2782,22 @@ fn jack_folstam_appears_in_nesre_primus_and_by_the_engines_slip_in_jraphit() {
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let rolled = || ByBound(&[(7, 0), (1022, 3), (100, 99)]);
     let engine = NovaPersons::default();
-    assert_eq!(persons_in(&data, 132, &[], engine, &mut rolled()), [131]);
-    assert_eq!(
-        persons_in(&data, 260, &[], engine, &mut rolled()),
-        [131],
-        "the slip"
-    );
+    // His `ActiveOn` is `b0 & !b8`.
+    let active = |system, rules, bits: &[u16]| {
+        persons_with_bits(&data, system, &[], rules, bits, &mut rolled())
+    };
+    assert_eq!(active(132, engine, &[0]), [131]);
+    assert_eq!(active(260, engine, &[0]), [131], "the slip");
     let bible = NovaPersons::from_rulebook(
         &Rulebook::default().with_override(RuleKey::LinkSystSlip, RuleSource::Bible),
     );
     assert_eq!(
-        persons_in(&data, 260, &[], bible, &mut rolled()),
+        active(260, bible, &[0]),
         Vec::<i16>::new(),
         "no slip by the Bible"
     );
+    assert_eq!(active(132, engine, &[]), Vec::<i16>::new(), "bit 0 clear");
+    assert_eq!(active(132, engine, &[0, 8]), Vec::<i16>::new(), "bit 8 set");
     let jack = person_record(&data, 131);
     let table = table_of(&data, 132);
     let valkyrie = &table.ships[&ShipId(279)];
