@@ -59,7 +59,10 @@
 //! landed at an outfitter, so can its outfitter ([`FlightView::outfitter`],
 //! [`FlightView::outfit`]); and landed at a shipyard, a new ship can be
 //! bought ([`FlightView::shipyard`], [`FlightView::buy_ship`]), whose
-//! sprite sheet is read then.
+//! sprite sheet is read then. Whenever the session flies a class other
+//! than the one the player's sprite sheet was read for, after a purchase,
+//! a capture, or a `C`, `E` or `H` set operator (settled with
+//! [`FlightView::settle_script`]), the sheet is read afresh, once.
 //!
 //! The HUD is drawn over everything but a jump's fade: the status bar against the
 //! right edge, its radar showing the stellars around the ship as drawn,
@@ -177,7 +180,7 @@
 //!   dialog over the paused flight; each press there goes through
 //!   [`FlightView::plunder`], and a capture's assignment through
 //!   [`FlightView::assign`], each saying what it did as a message. After
-//!   "Use As My Ship" the new ship's sprite sheet is read. Boarding a
+//!   "Use As My Ship" the new ship's sprite sheet is read, once. Boarding a
 //!   person that grants outfits says what it retrieved
 //!   ([`grant_message`]) for [`GRANT_SHOWN_FOR`].
 //! - Y (a press) hails the target ([`Session::hail`]), the comm dialog
@@ -840,6 +843,8 @@ pub struct FlightView<C> {
     scene: Option<SystemScene>,
     /// The player ship's sheet, or why it cannot be shown.
     sheet: Result<ShipSheet, String>,
+    /// The class `sheet` was read for; `None` when the session failed.
+    sheet_ship: Option<ShipId>,
     /// The HUD's status bar, or why it cannot be shown.
     status_bar: Result<StatusBar, String>,
     /// Turns frame times into simulation steps.
@@ -970,13 +975,14 @@ impl<
 
     fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
         let session = session.map_err(|err| err.to_string());
-        let (scene, sheet, status_bar) = match &session {
+        let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
                 Some(SystemScene::load(&catalog, session.system())),
                 catalog.ship_sheet(session.ship()),
+                Some(session.ship()),
                 hud::choose_status_bar(&catalog, session.government()),
             ),
-            Err(reason) => (None, Err(reason.clone()), Err(reason.clone())),
+            Err(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
         };
         let previous = session
             .as_ref()
@@ -1003,6 +1009,7 @@ impl<
             session,
             scene,
             sheet,
+            sheet_ship,
             status_bar,
             clock: FixedStep::new(),
             previous,
@@ -1618,7 +1625,9 @@ impl<
     /// flight the system the ship is in is laid out afresh, even the same
     /// one, as the original kills its explosions and smoke, and how many
     /// fighters were abandoned, if any, is shown after a `Q`'s message. A
-    /// move while landed shows once the ship takes off.
+    /// move while landed shows once the ship takes off. When the session
+    /// now flies a class other than the one the player's sprite sheet was
+    /// read for, as after a `C`, `E` or `H`, the sheet is read afresh.
     pub fn settle_script(&mut self) -> Option<StellarId> {
         let session = self.session.as_mut().ok()?;
         let settled = session.settle_script(&self.catalog, &mut self.chance);
@@ -1636,6 +1645,7 @@ impl<
             );
         }
         self.say_all(&said);
+        self.follow_ship();
         settled.took_off
     }
 
@@ -1753,30 +1763,45 @@ impl<
 
 impl<C: ShipSprites> FlightView<C> {
     /// Buys a ship as [`Session::buy_ship`] does, its hooks drawing on the
-    /// flight's chance, and reads the new ship's
-    /// sprite sheet, so the new hull is drawn once it takes off; a session
-    /// that failed has no shipyard.
+    /// flight's chance, and reads the sprite sheet of the class the session
+    /// then flies (the one bought, or the one its hooks changed it to), so
+    /// the new hull is drawn once it takes off; a refused purchase reads
+    /// nothing, and a session that failed has no shipyard.
     pub fn buy_ship(&mut self, ship: ShipId) -> Result<ShipPurchase, ShipRefusal> {
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
         let bought = session.buy_ship(ship, &mut self.chance)?;
-        self.sheet = self.catalog.ship_sheet(ship);
+        self.follow_ship();
         Ok(bought)
     }
 
     /// Assigns the ship captured, as [`Session::assign`] does, and says
     /// what it did; after "Use As My Ship" the new ship's sprite sheet is
-    /// read, and it is drawn where it is, not on its way from the old
+    /// read, once, and it is drawn where it is, not on its way from the old
     /// ship. `None` when no capture awaits its assignment.
     pub fn assign(&mut self, choice: Assignment) -> Option<Assigned> {
         let session = self.session.as_mut().ok()?;
         let assigned = session.assign(choice, &mut self.chance)?;
         if assigned == Assigned::MyShip {
-            self.sheet = self.catalog.ship_sheet(session.ship());
             self.previous = *session.player();
             self.alpha = 0.0;
         }
+        self.follow_ship();
         self.say(assigned_message(assigned));
         Some(assigned)
+    }
+
+    /// Reads the player's sprite sheet afresh when the session flies a
+    /// class other than the one it was read for, so a ship bought,
+    /// captured or changed by a set expression is drawn. A sheet that
+    /// cannot be read is kept against its class too, so it is not tried
+    /// again each frame.
+    fn follow_ship(&mut self) {
+        let Ok(session) = &self.session else { return };
+        let ship = session.ship();
+        if self.sheet_ship != Some(ship) {
+            self.sheet = self.catalog.ship_sheet(ship);
+            self.sheet_ship = Some(ship);
+        }
     }
 }
 
@@ -6144,7 +6169,15 @@ mod tests {
         );
         assert_eq!(view.reserves().fuel.max, 350.0, "its tank");
         // Off again, the new hull is drawn, at the new speed.
+        view.settle_script();
         view.take_off().expect("took off");
+        view.settle_script();
+        view.tick(TICK);
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(129)],
+            "read once"
+        );
         let mut list = DrawList::new();
         view.draw(&mut list);
         assert!(
@@ -6214,6 +6247,35 @@ mod tests {
         view.buy_ship(ShipId(129)).expect("bought");
         assert!(bit_set(&view, 3));
         assert!(!bit_set(&view, 4));
+    }
+
+    #[test]
+    fn a_ships_on_purchase_h_reads_only_the_final_class_sheet_once() {
+        let mut catalog = shipbuying();
+        catalog.ships[0].on_purchase = nova_sim::Script::parse("H130");
+        let other = ShipRecord {
+            id: ShipId(130),
+            ..catalog.ships[0].clone()
+        };
+        catalog.ships.push(other);
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        view.buy_ship(ShipId(129)).expect("bought");
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(130)));
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(130)]
+        );
+        view.settle_script();
+        view.take_off().expect("took off");
+        view.settle_script();
+        view.tick(TICK);
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(130)],
+            "a failed read is not tried again"
+        );
+        assert_eq!(view.frame(), None, "no sheet for 130");
     }
 
     /// The first `chär`'s `OnStart` is `on_start`.
@@ -8183,10 +8245,18 @@ mod tests {
     #[test]
     fn use_as_my_ship_flies_and_draws_the_captured_ship() {
         let mut view = captured();
+        let mut asked = view.catalog().sheets_asked.borrow().clone();
         assert_eq!(view.assign(Assignment::MyShip), Some(Assigned::MyShip));
         assert_eq!(view.message(), Some(RETAINED_OLD_SHIP));
         assert_eq!(view.session().expect("flying").ship(), ShipId(129));
-        assert!(view.catalog().sheets_asked.borrow().contains(&ShipId(129)));
+        asked.push(ShipId(129));
+        assert_eq!(*view.catalog().sheets_asked.borrow(), asked, "read once");
+        view.settle_script();
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            asked,
+            "not again once settled"
+        );
         let drawn_player = sprites(&drawn(&view))
             .into_iter()
             .filter(|&(_, center)| center == VIEW_CENTER)
@@ -9203,6 +9273,53 @@ mod tests {
             [SystemId(131)],
             "nothing more to settle"
         );
+    }
+
+    #[test]
+    fn an_h_from_a_set_expression_redraws_the_new_hull_once_settled() {
+        let mut view = FlightView::new(shipbuying());
+        assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
+        run_set(&mut view, "H129");
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(129)));
+        view.settle_script();
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(129)]
+        );
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2001, 2201], "ship 129's sheet, and its lights");
+        assert_eq!(view.frame(), Some(0), "of 72 rotations");
+    }
+
+    #[test]
+    fn an_outfits_on_purchase_h_redraws_the_new_hull() {
+        let mut catalog = shipbuying();
+        catalog.outfits[0].on_purchase = nova_sim::Script::parse("H129");
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(129)));
+        view.settle_script();
+        view.settle_script();
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(129)],
+            "once"
+        );
+        view.take_off().expect("took off");
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2001, 2201], "the new hull");
+    }
+
+    #[test]
+    fn settling_reads_no_sheet_when_the_class_is_unchanged() {
+        let mut view = FlightView::new(shipbuying());
+        view.settle_script();
+        ticks(&mut view, 3);
+        run_set(&mut view, "b1");
+        view.settle_script();
+        view.tick(TICK);
+        assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
     }
 
     #[test]
