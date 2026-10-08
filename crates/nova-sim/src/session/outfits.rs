@@ -75,7 +75,7 @@ use crate::grant::{GrantStock, held_to_max};
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records};
 use crate::outfitter::{self, resale, unit_mass, unit_price};
 use crate::pilot::Pilot;
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource};
 
 /// The outfit IDs the grant path and `D` take: an index below 0x200
 /// (`_GrantOutfitItem` @0x44d5c, `_EvalSetExp` @0x15427 and @0x15455).
@@ -107,14 +107,27 @@ impl Session {
     /// where the Bible and the engine disagree: the engine's by default.
     #[must_use]
     pub fn with_outfit_rules(mut self, rules: OutfitRules) -> Self {
-        self.outfit_rules = rules;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self
+            .rules
+            .with_override(RuleKey::MapExplore, rules.map_explore);
+        self.rules = self
+            .rules
+            .with_override(RuleKey::InvalidMap, rules.invalid_map);
+        self.rules = self.rules.with_override(RuleKey::GrantMax, rules.grant_max);
+        self.rules = self
+            .rules
+            .with_override(RuleKey::RemoveRefund, rules.remove_refund);
+        self.rules = self
+            .rules
+            .with_override(RuleKey::RefitReserves, rules.refit_reserves);
         self
     }
 
     /// The rules granting and removing outfits follow.
     #[must_use]
     pub fn outfit_rules(&self) -> OutfitRules {
-        self.outfit_rules
+        OutfitRules::from_rulebook(&self.rules)
     }
 
     /// The record of `outfit`, if there is one.
@@ -132,7 +145,7 @@ impl Session {
                 clean: Vec::new(),
                 added: true,
             },
-            |record| GrantEffect::of(record, self.outfit_rules.invalid_map),
+            |record| GrantEffect::of(record, self.outfit_rules().invalid_map),
         )
     }
 
@@ -174,7 +187,7 @@ impl Session {
                 &self.star_map,
                 self.hyperlinks,
                 &self.govts,
-                self.outfit_rules.map_explore,
+                self.outfit_rules().map_explore,
             );
             for system in reached {
                 self.pilot.explore(system);
@@ -199,7 +212,7 @@ impl Session {
         }
         self.outfit_record(outfit).is_none_or(|record| {
             let stock = self.grant_stock(record);
-            held_to_max(self.outfit_rules.grant_max, 1, &stock, self.free_mass())
+            held_to_max(self.outfit_rules().grant_max, 1, &stock, self.free_mass())
                 .is_none_or(|count| count > 0)
         })
     }
@@ -218,7 +231,7 @@ impl Session {
         if !OUTFIT_IDS.contains(&outfit.0) || !take_one(&mut self.pilot, outfit) {
             return;
         }
-        if self.outfit_rules.remove_refund == RuleSource::Bible {
+        if self.outfit_rules().remove_refund == RuleSource::Bible {
             let price = self
                 .outfit_record(outfit)
                 .map_or(0, |record| unit_price(record, self.fields.mass));

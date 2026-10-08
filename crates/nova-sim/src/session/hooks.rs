@@ -91,14 +91,23 @@ impl Session {
     /// disputed: the engine's by default.
     #[must_use]
     pub fn with_hook_rules(mut self, rules: HookRules) -> Self {
-        self.hook_rules = rules;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self
+            .rules
+            .with_override(RuleKey::PurchasePaintOrder, rules.purchase_paint_order);
+        self.rules = self
+            .rules
+            .with_override(RuleKey::CaptureHookOrder, rules.capture_hook_order);
+        self.rules = self
+            .rules
+            .with_override(RuleKey::StartShipPurchase, rules.start_ship_purchase);
         self
     }
 
     /// The rules the hooks follow.
     #[must_use]
     pub fn hook_rules(&self) -> HookRules {
-        self.hook_rules
+        HookRules::from_rulebook(&self.rules)
     }
 
     /// Runs `script` on the session (see the module docs), drawing
@@ -140,7 +149,7 @@ impl Session {
         let Ok(start) = catalog.first_character() else {
             return;
         };
-        if self.hook_rules.start_ship_purchase == RuleSource::Bible {
+        if self.hook_rules().start_ship_purchase == RuleSource::Bible {
             self.ship_hook(self.pilot.ship, ShipHook::Purchase, chance);
         }
         self.run_script(&start.on_start, chance);

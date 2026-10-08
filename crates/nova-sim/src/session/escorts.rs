@@ -71,7 +71,7 @@ use crate::escort::{
 use crate::flight::ShipState;
 use crate::hyperspace::JUMP_FUEL;
 use crate::reserves::Reserves;
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId, NpcPerson};
 use crate::traffic::table::{self, ShipKind};
 
@@ -81,7 +81,8 @@ impl Session {
     /// engine's reset by default.
     #[must_use]
     pub fn with_escort_orders(mut self, source: RuleSource) -> Self {
-        self.escort_orders = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::EscortOrders, source);
         self
     }
 
@@ -89,14 +90,14 @@ impl Session {
     /// system ([`RuleSource::Engine`]) or kept.
     #[must_use]
     pub fn escort_orders(&self) -> RuleSource {
-        self.escort_orders
+        self.rules.source_for(RuleKey::EscortOrders)
     }
 
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, and each is placed on its
     /// slot.
     pub(super) fn enter_escorts(&mut self) {
-        if self.escort_orders == RuleSource::Engine {
+        if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
             }

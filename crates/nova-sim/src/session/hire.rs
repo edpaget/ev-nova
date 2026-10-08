@@ -49,7 +49,7 @@ use crate::control::ControlBits;
 use crate::hire::{Bar, HireList, HireRefusal, HireTerms, Hired, PayNote};
 use crate::landing::StellarFlags;
 use crate::pilot::Escort;
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::table;
 use crate::wares::{self, Roll};
 
@@ -99,7 +99,8 @@ impl Session {
     /// by the engine's default it does not.
     #[must_use]
     pub fn with_hire_require(mut self, source: RuleSource) -> Self {
-        self.hire_require = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::HireRequire, source);
         self
     }
 
@@ -107,7 +108,7 @@ impl Session {
     /// ([`RuleSource::Engine`]), and so by the other reading.
     #[must_use]
     pub fn hire_require(&self) -> RuleSource {
-        self.hire_require
+        self.rules.source_for(RuleKey::HireRequire)
     }
 
     /// This session with each take-off paying the hired escorts a day's
@@ -116,7 +117,8 @@ impl Session {
     /// engine's default it does.
     #[must_use]
     pub fn with_take_off_pay(mut self, source: RuleSource) -> Self {
-        self.take_off_pay = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::TakeOffPay, source);
         self
     }
 
@@ -125,7 +127,7 @@ impl Session {
     /// days are paid.
     #[must_use]
     pub fn take_off_pay(&self) -> RuleSource {
-        self.take_off_pay
+        self.rules.source_for(RuleKey::TakeOffPay)
     }
 
     /// This session with a hired escort paid, and showing when hailed,
@@ -134,7 +136,8 @@ impl Session {
     /// engine's default, the wage its ship type's record gives now.
     #[must_use]
     pub fn with_escort_wage(mut self, source: RuleSource) -> Self {
-        self.escort_wage = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::EscortWage, source);
         self
     }
 
@@ -143,7 +146,7 @@ impl Session {
     /// it was hired at.
     #[must_use]
     pub fn escort_wage(&self) -> RuleSource {
-        self.escort_wage
+        self.rules.source_for(RuleKey::EscortWage)
     }
 
     /// What paying the escorts did since this was last taken, in order;
@@ -159,7 +162,7 @@ impl Session {
     /// hired.
     pub(super) fn paid_wage(&self, escort: &Escort) -> i64 {
         let kept = escort.wage.unwrap_or(0);
-        match self.escort_wage {
+        match self.rules.source_for(RuleKey::EscortWage) {
             RuleSource::Engine => self
                 .ship_record(escort.ship)
                 .map_or(kept, |record| self.hire_terms.0.wage(record)),
@@ -227,7 +230,7 @@ impl Session {
             terms: &*self.hire_terms.0,
             control_bits: &*self.control_bits.0,
             pilot: &facts,
-            hire_require: self.hire_require,
+            hire_require: self.rules.source_for(RuleKey::HireRequire),
         };
         let rolls = &mut self.hire_rolls;
         Some(bar.list(|ship, percent| rolls.today(ship, Roll::Chance(percent), chance)))

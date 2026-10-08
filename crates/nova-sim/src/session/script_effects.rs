@@ -221,14 +221,27 @@ impl Session {
     /// the Bible and the engine disagree: the engine's by default.
     #[must_use]
     pub fn with_script_effect_rules(mut self, rules: ScriptEffectRules) -> Self {
-        self.script_effect_rules = rules;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self
+            .rules
+            .with_override(RuleKey::MoveStarless, rules.starless);
+        self.rules = self
+            .rules
+            .with_override(RuleKey::MoveArrival, rules.arrival);
+        self.rules = self
+            .rules
+            .with_override(RuleKey::MoveKeepFlag, rules.keep_flag);
+        self.rules = self
+            .rules
+            .with_override(RuleKey::BlankLeave, rules.blank_leave);
+        self.rules = self.rules.with_override(RuleKey::ScriptSound, rules.sound);
         self
     }
 
     /// The rules the moving set operators follow.
     #[must_use]
     pub fn script_effect_rules(&self) -> ScriptEffectRules {
-        self.script_effect_rules
+        ScriptEffectRules::from_rulebook(&self.rules)
     }
 
     /// Applies what the set expressions run since the last settling
@@ -266,7 +279,7 @@ impl Session {
     /// `P`: plays `sound`, held to the next flight tick or at once, as
     /// [`ScriptEffectRules::sound`] says (see the module docs).
     fn play_script_sound(&mut self, sound: SoundId) {
-        match self.script_effect_rules.sound {
+        match self.script_effect_rules().sound {
             RuleSource::Engine => self.queued.sound = Some(sound),
             RuleSource::Bible => self.sounds.push(SimSound::Script {
                 sound,
@@ -292,7 +305,7 @@ impl Session {
     /// Bible reading.
     fn leave_stellar(&mut self, list: i16, chance: &mut dyn Chance) {
         self.queued.leave = self.pick_string(list, chance).or_else(|| {
-            (self.script_effect_rules.blank_leave == RuleSource::Bible).then(String::new)
+            (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
         });
     }
 
@@ -310,7 +323,7 @@ impl Session {
         let first = sites
             .first()
             .map(|site| (site.position, is_dockable(site).then_some(site.id)));
-        let rules = self.script_effect_rules;
+        let rules = self.script_effect_rules();
         let landed = self.landed.is_some();
         if keep {
             self.hold_position |= landed || rules.keep_flag == RuleSource::Engine;

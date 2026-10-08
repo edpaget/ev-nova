@@ -49,7 +49,7 @@ use crate::person::{
     ESCAPE_POD, Eligible, GRUDGE, HAIL_QUOTES, PersonRules, QUOTE_GAP_TICKS, QUOTE_ODDS,
     QUOTE_SHOWN_TICKS, QuoteTags, QuoteView, expand_tags, quote_eligible,
 };
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::{Npc, NpcId};
 
 /// A person's hail quote said, for the flight's message line.
@@ -91,14 +91,15 @@ impl Session {
     /// otherwise in place of the hail's opening line.
     #[must_use]
     pub fn with_comm_quote(mut self, source: RuleSource) -> Self {
-        self.comm_quote = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::CommQuote, source);
         self
     }
 
     /// When a person's comm quote is said.
     #[must_use]
     pub fn comm_quote(&self) -> RuleSource {
-        self.comm_quote
+        self.rules.source_for(RuleKey::CommQuote)
     }
 
     /// `npc`'s comm quote, an entry in `STR#` 7100, when it is a person

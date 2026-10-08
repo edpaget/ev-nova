@@ -207,14 +207,24 @@ impl Session {
     /// where the Bible and the engine disagree: the engine's by default.
     #[must_use]
     pub fn with_ship_change_rules(mut self, rules: ShipChangeRules) -> Self {
-        self.ship_change_rules = rules;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self
+            .rules
+            .with_override(RuleKey::ShipChangePersistence, rules.persistence);
+        self.rules = self.rules.with_override(RuleKey::ShipChangeMax, rules.max);
+        self.rules = self
+            .rules
+            .with_override(RuleKey::ShipChangeCargo, rules.cargo);
+        self.rules = self
+            .rules
+            .with_override(RuleKey::ShipChangeReserves, rules.reserves);
         self
     }
 
     /// The rules the ship-change set operators follow.
     #[must_use]
     pub fn ship_change_rules(&self) -> ShipChangeRules {
-        self.ship_change_rules
+        ShipChangeRules::from_rulebook(&self.rules)
     }
 
     /// This session with `rule` saying when the player's ship is
@@ -274,12 +284,12 @@ impl Session {
         self.defaults = defaults;
         self.stock = stock;
         self.refit(false);
-        if self.ship_change_rules.reserves == RuleSource::Engine {
+        if self.ship_change_rules().reserves == RuleSource::Engine {
             let reserves = &mut self.pilot.reserves;
             reserves.shield.now = before.shield.now;
             reserves.armor.now = before.armor.now;
         }
-        if self.ship_change_rules.cargo == RuleSource::Bible {
+        if self.ship_change_rules().cargo == RuleSource::Bible {
             // To the new ship's own hold, goods in order: the purchase
             // rule's other reading, with no escorts' holds counted.
             shipyard::keep_cargo(
@@ -352,7 +362,7 @@ pub struct ChangeShipWithDefaultsOp;
 impl SetOpHandler<Session> for ChangeShipWithDefaultsOp {
     fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
         if let SetOp::ChangeShipWithDefaults(ship) = op {
-            let clamp = session.ship_change_rules.clamps();
+            let clamp = session.ship_change_rules().clamps();
             session.change_ship(*ship, OutfitCarry::KeepWithDefaults, clamp);
         }
     }
@@ -366,7 +376,7 @@ pub struct ReplaceShipOp;
 impl SetOpHandler<Session> for ReplaceShipOp {
     fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
         if let SetOp::ReplaceShip(ship) = op {
-            let rules = session.ship_change_rules;
+            let rules = session.ship_change_rules();
             let carry = OutfitCarry::Persistent {
                 mask: rules.persistent(),
             };

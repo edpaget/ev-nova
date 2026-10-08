@@ -48,7 +48,7 @@ use crate::flight::ShipState;
 use crate::hyperspace::JUMP_FUEL;
 use crate::outfitter::Launcher;
 use crate::pilot::Escort;
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 use crate::traffic::table::{self, ShipKind};
@@ -113,7 +113,7 @@ impl Session {
     /// player targets `target` (see the module docs).
     fn join_as_fighter(&mut self, mut npc: Npc, target: Option<ShipRef>) {
         let target = target
-            .filter(|_| self.fighter_launch == RuleSource::Bible)
+            .filter(|_| self.rules.source_for(RuleKey::FighterLaunch) == RuleSource::Bible)
             .filter(|&ship| match ship {
                 ShipRef::Npc(id) => !self.is_escort(id),
                 ShipRef::Player => false,
@@ -249,7 +249,7 @@ impl Session {
     /// and the rest are abandoned; by the other reading, on arrival and on
     /// landing, every one goes back aboard.
     pub(super) fn leave_with_fighters(&mut self, landing: bool) {
-        match self.fighter_recall {
+        match self.rules.source_for(RuleKey::FighterRecall) {
             RuleSource::Engine if !landing => self.abandon_fighters(),
             RuleSource::Engine => {}
             RuleSource::Bible => self.recall_fighters(),
@@ -437,7 +437,8 @@ impl Session {
     /// `source` says (see the module docs): the engine's by default.
     #[must_use]
     pub fn with_fighter_launch(mut self, source: RuleSource) -> Self {
-        self.fighter_launch = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::FighterLaunch, source);
         self
     }
 
@@ -445,7 +446,7 @@ impl Session {
     /// class's standing order; otherwise it attacks the player's target.
     #[must_use]
     pub fn fighter_launch(&self) -> RuleSource {
-        self.fighter_launch
+        self.rules.source_for(RuleKey::FighterLaunch)
     }
 
     /// This session with the player's fighters out, as it leaves the
@@ -453,7 +454,8 @@ impl Session {
     /// default.
     #[must_use]
     pub fn with_fighter_recall(mut self, source: RuleSource) -> Self {
-        self.fighter_recall = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::FighterRecall, source);
         self
     }
 
@@ -462,7 +464,7 @@ impl Session {
     /// it is landed; otherwise they go back into their bays.
     #[must_use]
     pub fn fighter_recall(&self) -> RuleSource {
-        self.fighter_recall
+        self.rules.source_for(RuleKey::FighterRecall)
     }
 }
 

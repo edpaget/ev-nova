@@ -58,7 +58,7 @@ use crate::hail::{
 };
 use crate::hyperspace::JUMP_FUEL;
 use crate::person::{COMM_QUOTES, offers_to_join};
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 
 /// A hail under way: the NPC hailed, the conversation, what it last
@@ -121,10 +121,12 @@ impl Session {
             )
         };
         let opening = match Self::quote_of(npc) {
-            Some(index) if self.comm_quote == RuleSource::Bible => Reply::Line {
-                list: COMM_QUOTES,
-                index,
-            },
+            Some(index) if self.rules.source_for(RuleKey::CommQuote) == RuleSource::Bible => {
+                Reply::Line {
+                    list: COMM_QUOTES,
+                    index,
+                }
+            }
             _ => Reply::Comm(opening),
         };
         self.talk = Some(Talk {
@@ -160,7 +162,8 @@ impl Session {
         let need = assist::need(self.condition, self.pilot.reserves.fuel);
         let around = self.world();
         let around = around.around(self.npcs());
-        let quote = Self::quote_of(npc).filter(|_| self.comm_quote == RuleSource::Engine);
+        let quote = Self::quote_of(npc)
+            .filter(|_| self.rules.source_for(RuleKey::CommQuote) == RuleSource::Engine);
         Hail {
             quote,
             joins: self.joins(npc),

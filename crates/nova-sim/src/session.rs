@@ -356,7 +356,6 @@ use crate::market::{
 };
 use crate::message::SimMessage;
 use crate::navigation::next_stellar;
-use crate::outfit_effects::OutfitRules;
 use crate::outfitter::{
     self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
 };
@@ -365,7 +364,7 @@ use crate::pilot::{self, Escort, Pilot};
 use crate::pre_jump::{self, PreJump};
 use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::shipyard::{self, Quote, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
@@ -410,20 +409,16 @@ impl From<LandOutcome> for LandPress {
     }
 }
 
-/// What lasts one opening of the outfitter, whether it limits what is
-/// sold (see [`outfitter::Bought`]), and how a sale refunds (see
-/// [`outfitter::refund`]).
+/// What lasts one opening of the outfitter: the flags that may limit what
+/// is sold (see [`outfitter::Bought`]), and the counts a sale refunds
+/// against (see [`outfitter::refund`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Opening {
     /// The once-an-opening flags.
     bought: outfitter::Bought,
-    /// Whether they limit a map or clean-record outfit.
-    limit: RuleSource,
     /// How many of each outfit the player owned when the outfitter opened,
     /// as `_DoOutfitDialog` copies them on entry (@0x5badd-0x5bafa).
     owned: BTreeMap<OutfitId, u16>,
-    /// Whether an outfit bought since then refunds in full.
-    refund: RuleSource,
 }
 
 /// The player's ship, flying in one system.
@@ -529,15 +524,6 @@ pub struct Session {
     /// What the NPCs assisting the player have done since this was last
     /// taken.
     comm: Vec<CommNote>,
-    /// Whether the escorts' standing orders are reset on entering a
-    /// system (see [`Session::with_escort_orders`]).
-    escort_orders: RuleSource,
-    /// What a fighter the player launches does first (see
-    /// [`Session::with_fighter_launch`]).
-    fighter_launch: RuleSource,
-    /// What becomes of the player's fighters out as it leaves the system
-    /// (see [`Session::with_fighter_recall`]).
-    fighter_recall: RuleSource,
     /// What the player's fighters met as it left systems since this was
     /// last taken.
     fighter_notes: Vec<FighterNote>,
@@ -553,9 +539,6 @@ pub struct Session {
     /// The control-bit test a ship's `Availability` for hire goes through
     /// (see [`Session::with_control_bits`]).
     control_bits: hire::Shared<dyn ControlBits>,
-    /// Whether an unmet `Require` refuses a hire (see
-    /// [`Session::with_hire_require`]).
-    hire_require: RuleSource,
     /// Each ship class's roll for hire since the last landing, drawn the
     /// first time the bar's list asks it.
     hire_rolls: DayRolls<ShipId>,
@@ -564,10 +547,10 @@ pub struct Session {
     outfit_rolls: DayRolls<OutfitId>,
     /// The once-an-opening flags, whether the last outfit bought since the
     /// outfitter opened was a map or a clean record (see
-    /// [`outfitter::Bought`]), and whether they limit what is sold (see
-    /// [`Session::with_outfit_limit`]); the counts owned when it opened,
-    /// and how a sale refunds against them (see
-    /// [`Session::with_outfit_refund`]). None of it is saved: the
+    /// [`outfitter::Bought`]), which limit what is sold as
+    /// [`RuleKey::OutfitLimit`] reads; and the counts owned when it
+    /// opened, which a sale refunds against as [`RuleKey::OutfitRefund`]
+    /// reads. None of it is saved: the
     /// original keeps the flags in globals `_DoOutfitDialog` clears on
     /// opening, and the counts in its locals.
     opening: Opening,
@@ -580,51 +563,12 @@ pub struct Session {
     /// shipyard opens (`_SetupPortAvailableShipTypes`, called only
     /// @0x5e68f), so a roll drawn again shows only then.
     ship_redraws: BTreeSet<ShipId>,
-    /// How `BuyRandom` reads (see [`Session::with_buy_random`]).
-    buy_random: RuleSource,
     /// The original's frame counter, which times the tribbles and
     /// perishables step (see [`market`]). The original's value when a
     /// flight starts depends on how long the program has run, so 0 here
     /// is a choice; a take-off sets it anyway. Not saved, as the
     /// original's pilot file does not keep it.
     frame: i16,
-    /// When held tribbles and perishable `jünk` grow and decay (see
-    /// [`Session::with_junk_flags`]).
-    junk_flags: RuleSource,
-    /// When a launcher cannot be sold for its ammunition (see
-    /// [`Session::with_launcher_sale`]).
-    launcher_sale: RuleSource,
-    /// How a `ModType` 27 outfit raises its target's `Max` (see
-    /// [`Session::with_raised_max`]).
-    raised_max: RuleSource,
-    /// What Option does with Buy or Sell at the outfitter (see
-    /// [`Session::with_outfit_count`]).
-    outfit_count: RuleSource,
-    /// How a sale at the outfitter is refused for the free mass (see
-    /// [`Session::with_sale_mass`]).
-    sale_mass: RuleSource,
-    /// Whether an unsellable outfit counts in the trade-in (see
-    /// [`Session::with_trade_in_outfits`]).
-    trade_in_outfits: RuleSource,
-    /// How an active `öops` event prices its commodity, how a `jünk` of
-    /// negative or zero price is traded, which ways a `jünk` row trades,
-    /// how many tons a plain trade moves, how the most a buy moves
-    /// divides the cash by the price, what Option on Buy or Sell does, and
-    /// how a buy reads cash below nothing (see
-    /// [`Session::with_event_price`], [`Session::with_junk_price`],
-    /// [`Session::with_junk_trade`], [`Session::with_trade_lot`],
-    /// [`Session::with_trade_quotient`], [`Session::with_trade_count`] and
-    /// [`Session::with_trade_debt`]).
-    exchange_rules: market::ExchangeRules,
-    /// What cargo a ship purchase keeps (see
-    /// [`Session::with_purchase_cargo`]).
-    purchase_cargo: RuleSource,
-    /// Whether each take-off pays the hired escorts a day's wages (see
-    /// [`Session::with_take_off_pay`]).
-    take_off_pay: RuleSource,
-    /// Which wage a hired escort is paid (see
-    /// [`Session::with_escort_wage`]).
-    escort_wage: RuleSource,
     /// What paying the escorts did since this was last taken.
     pay_notes: Vec<PayNote>,
     /// The handlers of the set operators beyond the bit writes (see
@@ -637,22 +581,10 @@ pub struct Session {
     script_notes: Vec<ScriptNote>,
     /// How persons appear (see [`Session::with_person_rules`]).
     person_rules: hire::Shared<dyn PersonRules>,
-    /// When a person's comm quote is said (see
-    /// [`Session::with_comm_quote`]).
-    comm_quote: RuleSource,
     /// The hail quotes' clock.
     quote_clock: persons::QuoteClock,
     /// The hail quotes said since they were last taken.
     quotes: Vec<persons::PersonQuote>,
-    /// How granting and removing outfits go where the rules are disputed
-    /// (see [`Session::with_outfit_rules`]).
-    outfit_rules: OutfitRules,
-    /// The order of the set-expression hooks where it is disputed (see
-    /// [`Session::with_hook_rules`]).
-    hook_rules: HookRules,
-    /// How the ship-change set operators go where the rules are disputed
-    /// (see [`Session::with_ship_change_rules`]).
-    ship_change_rules: ShipChangeRules,
     /// When the player's ship is disabled after a change of ship (see
     /// [`Session::with_disable_rule`]).
     disable_rule: hire::Shared<dyn DisableRule>,
@@ -671,9 +603,9 @@ pub struct Session {
     /// Where the ship was as it last landed, before it was docked at the
     /// stellar's centre.
     touchdown: Vec2,
-    /// How the moving set operators go where the rules are disputed (see
-    /// [`Session::with_script_effect_rules`]).
-    script_effect_rules: ScriptEffectRules,
+    /// How each disputed rule the session acts on reads (see
+    /// [`Session::with_rules`]); never saved.
+    rules: Rulebook,
 }
 
 impl Session {
@@ -704,7 +636,6 @@ impl Session {
     /// # Errors
     ///
     /// When the ship cannot be read, or the system no longer exists.
-    #[allow(clippy::too_many_lines)] // one line per field of the session
     pub fn fly(
         catalog: &(impl PilotCatalog + CombatCatalog),
         mut pilot: Pilot,
@@ -779,56 +710,61 @@ impl Session {
             granted: None,
             talk: None,
             comm: Vec::new(),
-            escort_orders: RuleSource::Engine,
-            fighter_launch: RuleSource::Engine,
-            fighter_recall: RuleSource::Engine,
             fighter_notes: Vec::new(),
             fleet: Vec::new(),
             restock_persons: false,
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
             control_bits: hire::Shared(Rc::new(NovaBits)),
-            hire_require: RuleSource::Engine,
             hire_rolls: DayRolls::default(),
             outfit_rolls: DayRolls::default(),
             opening: Opening::default(),
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
-            buy_random: RuleSource::Engine,
             frame: 0,
-            junk_flags: RuleSource::Engine,
-            launcher_sale: RuleSource::Engine,
-            raised_max: RuleSource::Engine,
-            outfit_count: RuleSource::Engine,
-            sale_mass: RuleSource::Engine,
-            trade_in_outfits: RuleSource::Engine,
-            exchange_rules: market::ExchangeRules::default(),
-            purchase_cargo: RuleSource::Engine,
-            take_off_pay: RuleSource::Engine,
-            escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
             set_ops: hire::Shared(Rc::new(control::nova_set_ops())),
             unhandled_ops: BTreeSet::new(),
             script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
-            comm_quote: RuleSource::Engine,
             quote_clock: persons::QuoteClock::default(),
             quotes: Vec::new(),
-            outfit_rules: OutfitRules::default(),
-            hook_rules: HookRules::default(),
-            ship_change_rules: ShipChangeRules::default(),
             disable_rule: Self::nova_disable(),
             strings: ship_change::Strings::none(),
             queued: script_effects::Queued::default(),
             next_sites: None,
             hold_position: false,
             touchdown: player.position,
-            script_effect_rules: ScriptEffectRules::default(),
+            rules: Rulebook::default(),
             pilot,
         };
         session.open_opening();
         session.refit(false);
         session.restock_fleet();
         Ok(session)
+    }
+
+    /// This session with every disputed rule reading as `rules` says
+    /// ([`Rulebook::source_for`]): by default, [`Rulebook::default`], every
+    /// rule the engine's. The whole rule set is replaced, so a session is
+    /// given one rulebook with every override it needs.
+    ///
+    /// The session acts on the rules it decides itself through this rule
+    /// set, reading each where it decides. The rules a strategy port
+    /// decides (its law, boarding, AI, hail options, hire terms and
+    /// persons; see [`RuleKey`]) are in the rule set too, but the session
+    /// never reads them there: the port it was given reads them, and at
+    /// the edge of the program that port is built from the same rulebook.
+    /// Setting such a rule here alone changes nothing.
+    #[must_use]
+    pub fn with_rules(mut self, rules: Rulebook) -> Self {
+        self.rules = rules;
+        self
+    }
+
+    /// How each disputed rule reads (see [`Session::with_rules`]).
+    #[must_use]
+    pub fn rules(&self) -> &Rulebook {
+        &self.rules
     }
 
     /// This session with multi-jumps following `rule`; the engine's by
@@ -899,7 +835,7 @@ impl Session {
     /// `gain`, one whose most rose gains as much. The hull and the weapons
     /// follow the ship and the outfits, ready to fire. The outfitter, the
     /// shipyard, capture, a change of ship and a reload refit this way;
-    /// `G`, `D` and boarding refit as [`OutfitRules::refit_reserves`]
+    /// `G`, `D` and boarding refit as [`OutfitRules::refit_reserves`](crate::OutfitRules::refit_reserves)
     /// says (see [`Session::script_refit`]).
     fn refit(&mut self, gain: bool) {
         self.refit_reserves(gain, true);
@@ -911,7 +847,10 @@ impl Session {
     /// engine's keeping a surplus (`_SystemInfoToShipStats` @0xca33
     /// clamps no reserve), and the fuel always held.
     fn script_refit(&mut self, gain: bool) {
-        self.refit_reserves(gain, self.outfit_rules.refit_reserves == RuleSource::Bible);
+        self.refit_reserves(
+            gain,
+            self.outfit_rules().refit_reserves == RuleSource::Bible,
+        );
     }
 
     /// [`Session::refit`], holding the shield and armour to their most
@@ -967,7 +906,7 @@ impl Session {
                 &self.goods,
                 &mut self.pilot.cargo,
                 capacity,
-                self.junk_flags,
+                self.rules.source_for(RuleKey::JunkFlags),
             );
         }
         let controls = match self.condition {
@@ -2023,7 +1962,7 @@ impl Session {
         }
         self.pilot.explore(self.pilot.system);
         self.traffic_due = true;
-        if self.take_off_pay == RuleSource::Engine {
+        if self.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
             self.pay_escorts(1);
         }
         self.restock_fleet();
@@ -2062,9 +2001,23 @@ impl Session {
             &self.pilot,
             self.capacity(),
             self.gate(),
-            self.exchange_rules,
+            self.exchange_rules(),
             self.markup(site),
         )
+    }
+
+    /// The exchange's rules, read from the rule set.
+    fn exchange_rules(&self) -> market::ExchangeRules {
+        let source = |key| self.rules.source_for(key);
+        market::ExchangeRules {
+            event_price: source(RuleKey::EventPrice),
+            junk_price: source(RuleKey::JunkPrice),
+            junk_trade: source(RuleKey::JunkTrade),
+            trade_lot: source(RuleKey::TradeLot),
+            trade_quotient: source(RuleKey::TradeQuotient),
+            trade_count: source(RuleKey::TradeCount),
+            trade_debt: source(RuleKey::TradeDebt),
+        }
     }
 
     /// The markup at `site`, one of the system's: by whether it has a
@@ -2113,7 +2066,8 @@ impl Session {
     /// [`shipyard`]).
     #[must_use]
     pub fn with_buy_random(mut self, source: RuleSource) -> Self {
-        self.buy_random = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::BuyRandom, source);
         self
     }
 
@@ -2121,7 +2075,7 @@ impl Session {
     /// by the Bible.
     #[must_use]
     pub fn buy_random(&self) -> RuleSource {
-        self.buy_random
+        self.rules.source_for(RuleKey::BuyRandom)
     }
 
     /// This session with held tribbles and perishable `jünk` growing and
@@ -2131,7 +2085,8 @@ impl Session {
     /// overfill the hold (see [`market`]).
     #[must_use]
     pub fn with_junk_flags(mut self, source: RuleSource) -> Self {
-        self.junk_flags = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::JunkFlags, source);
         self
     }
 
@@ -2139,7 +2094,7 @@ impl Session {
     /// engine ([`RuleSource::Engine`]) or by the Bible.
     #[must_use]
     pub fn junk_flags(&self) -> RuleSource {
-        self.junk_flags
+        self.rules.source_for(RuleKey::JunkFlags)
     }
 
     /// This session with a ship purchase keeping the cargo as `source`
@@ -2149,7 +2104,8 @@ impl Session {
     /// fleet's holds (see [`shipyard`]).
     #[must_use]
     pub fn with_purchase_cargo(mut self, source: RuleSource) -> Self {
-        self.purchase_cargo = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::PurchaseCargo, source);
         self
     }
 
@@ -2157,7 +2113,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or by the other reading.
     #[must_use]
     pub fn purchase_cargo(&self) -> RuleSource {
-        self.purchase_cargo
+        self.rules.source_for(RuleKey::PurchaseCargo)
     }
 
     /// This session with a map or clean-record outfit sold as `source`
@@ -2167,7 +2123,8 @@ impl Session {
     /// limit (see [`outfitter`]).
     #[must_use]
     pub fn with_outfit_limit(mut self, source: RuleSource) -> Self {
-        self.opening.limit = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::OutfitLimit, source);
         self
     }
 
@@ -2175,7 +2132,7 @@ impl Session {
     /// by the engine ([`RuleSource::Engine`]) or with no limit.
     #[must_use]
     pub fn outfit_limit(&self) -> RuleSource {
-        self.opening.limit
+        self.rules.source_for(RuleKey::OutfitLimit)
     }
 
     /// This session with an outfit sold as `source` says
@@ -2185,7 +2142,8 @@ impl Session {
     /// half (see [`outfitter::refund`]).
     #[must_use]
     pub fn with_outfit_refund(mut self, source: RuleSource) -> Self {
-        self.opening.refund = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::OutfitRefund, source);
         self
     }
 
@@ -2193,7 +2151,7 @@ impl Session {
     /// or always at half.
     #[must_use]
     pub fn outfit_refund(&self) -> RuleSource {
-        self.opening.refund
+        self.rules.source_for(RuleKey::OutfitRefund)
     }
 
     /// This session with a `jünk` of negative or zero price traded as
@@ -2203,7 +2161,8 @@ impl Session {
     /// listed; by the other reading, never below 0 (see [`market`]).
     #[must_use]
     pub fn with_junk_price(mut self, source: RuleSource) -> Self {
-        self.exchange_rules.junk_price = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::JunkPrice, source);
         self
     }
 
@@ -2211,7 +2170,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or by the other reading.
     #[must_use]
     pub fn junk_price(&self) -> RuleSource {
-        self.exchange_rules.junk_price
+        self.rules.source_for(RuleKey::JunkPrice)
     }
 
     /// This session with each listed `jünk` row traded as `source` says
@@ -2221,7 +2180,8 @@ impl Session {
     /// row sold only (see [`market`]).
     #[must_use]
     pub fn with_junk_trade(mut self, source: RuleSource) -> Self {
-        self.exchange_rules.junk_trade = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::JunkTrade, source);
         self
     }
 
@@ -2229,7 +2189,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or by the Bible.
     #[must_use]
     pub fn junk_trade(&self) -> RuleSource {
-        self.exchange_rules.junk_trade
+        self.rules.source_for(RuleKey::JunkTrade)
     }
 
     /// This session with a plain trade at the exchange moving as many tons
@@ -2239,7 +2199,8 @@ impl Session {
     /// by the other reading, a ton (see [`market`]).
     #[must_use]
     pub fn with_trade_lot(mut self, source: RuleSource) -> Self {
-        self.exchange_rules.trade_lot = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::TradeLot, source);
         self
     }
 
@@ -2247,7 +2208,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or by the other reading.
     #[must_use]
     pub fn trade_lot(&self) -> RuleSource {
-        self.exchange_rules.trade_lot
+        self.rules.source_for(RuleKey::TradeLot)
     }
 
     /// This session with the most a buy at the exchange moves dividing
@@ -2258,7 +2219,8 @@ impl Session {
     /// (see [`market`]).
     #[must_use]
     pub fn with_trade_quotient(mut self, source: RuleSource) -> Self {
-        self.exchange_rules.trade_quotient = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::TradeQuotient, source);
         self
     }
 
@@ -2267,7 +2229,7 @@ impl Session {
     /// reading.
     #[must_use]
     pub fn trade_quotient(&self) -> RuleSource {
-        self.exchange_rules.trade_quotient
+        self.rules.source_for(RuleKey::TradeQuotient)
     }
 
     /// This session's exchange saying what Option (Alt) on Buy or Sell
@@ -2279,7 +2241,8 @@ impl Session {
     /// shows it.
     #[must_use]
     pub fn with_trade_count(mut self, source: RuleSource) -> Self {
-        self.exchange_rules.trade_count = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::TradeCount, source);
         self
     }
 
@@ -2288,7 +2251,7 @@ impl Session {
     /// by the other reading.
     #[must_use]
     pub fn trade_count(&self) -> RuleSource {
-        self.exchange_rules.trade_count
+        self.rules.source_for(RuleKey::TradeCount)
     }
 
     /// This session reading cash below nothing at the exchange as
@@ -2298,7 +2261,8 @@ impl Session {
     /// by the other reading, as none, so that buy is refused.
     #[must_use]
     pub fn with_trade_debt(mut self, source: RuleSource) -> Self {
-        self.exchange_rules.trade_debt = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::TradeDebt, source);
         self
     }
 
@@ -2306,7 +2270,7 @@ impl Session {
     /// engine ([`RuleSource::Engine`]), or as none, by the other reading.
     #[must_use]
     pub fn trade_debt(&self) -> RuleSource {
-        self.exchange_rules.trade_debt
+        self.rules.source_for(RuleKey::TradeDebt)
     }
 
     /// This session with a launcher's sale refused for its ammunition as
@@ -2317,7 +2281,8 @@ impl Session {
     /// `MaxAmmo` is above 0 (see [`outfitter`]).
     #[must_use]
     pub fn with_launcher_sale(mut self, source: RuleSource) -> Self {
-        self.launcher_sale = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::LauncherSale, source);
         self
     }
 
@@ -2325,7 +2290,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or by the other reading.
     #[must_use]
     pub fn launcher_sale(&self) -> RuleSource {
-        self.launcher_sale
+        self.rules.source_for(RuleKey::LauncherSale)
     }
 
     /// This session with a `ModType` 27 outfit raising its target's `Max`
@@ -2336,7 +2301,8 @@ impl Session {
     /// (n - 1); in the outfitter and when boarding (see [`outfitter`]).
     #[must_use]
     pub fn with_raised_max(mut self, source: RuleSource) -> Self {
-        self.raised_max = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::RaisedMax, source);
         self
     }
 
@@ -2344,7 +2310,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or by the Bible.
     #[must_use]
     pub fn raised_max(&self) -> RuleSource {
-        self.raised_max
+        self.rules.source_for(RuleKey::RaisedMax)
     }
 
     /// This session with Option on Buy or Sell at the outfitter doing as
@@ -2356,7 +2322,8 @@ impl Session {
     /// whoever shows the dialog ([`Outfitter::count_asked`]).
     #[must_use]
     pub fn with_outfit_count(mut self, source: RuleSource) -> Self {
-        self.outfit_count = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::OutfitCount, source);
         self
     }
 
@@ -2364,7 +2331,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or nothing.
     #[must_use]
     pub fn outfit_count(&self) -> RuleSource {
-        self.outfit_count
+        self.rules.source_for(RuleKey::OutfitCount)
     }
 
     /// This session with a sale at the outfitter refused for the free
@@ -2375,7 +2342,8 @@ impl Session {
     /// sale that would leave the free mass below 0.
     #[must_use]
     pub fn with_sale_mass(mut self, source: RuleSource) -> Self {
-        self.sale_mass = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::SaleMass, source);
         self
     }
 
@@ -2383,7 +2351,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or whenever it would leave less than none.
     #[must_use]
     pub fn sale_mass(&self) -> RuleSource {
-        self.sale_mass
+        self.rules.source_for(RuleKey::SaleMass)
     }
 
     /// This session with the trade-in counting outfits as `source` says
@@ -2392,7 +2360,8 @@ impl Session {
     /// the other reading, not an unsellable one either.
     #[must_use]
     pub fn with_trade_in_outfits(mut self, source: RuleSource) -> Self {
-        self.trade_in_outfits = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::TradeInOutfits, source);
         self
     }
 
@@ -2400,7 +2369,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or leaving out unsellable ones too.
     #[must_use]
     pub fn trade_in_outfits(&self) -> RuleSource {
-        self.trade_in_outfits
+        self.rules.source_for(RuleKey::TradeInOutfits)
     }
 
     /// This session with an active `öops` event pricing its commodity as
@@ -2410,7 +2379,8 @@ impl Session {
     /// price plus every event's `PriceDelta` (see [`market`]).
     #[must_use]
     pub fn with_event_price(mut self, source: RuleSource) -> Self {
-        self.exchange_rules.event_price = source;
+        // Shim until callers use with_rules (removed in this phase).
+        self.rules = self.rules.with_override(RuleKey::EventPrice, source);
         self
     }
 
@@ -2418,7 +2388,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or by the Bible.
     #[must_use]
     pub fn event_price(&self) -> RuleSource {
-        self.exchange_rules.event_price
+        self.rules.source_for(RuleKey::EventPrice)
     }
 
     /// The player's ship class's `MaxGun` and `MaxTur`; none for a class
@@ -2456,15 +2426,18 @@ impl Session {
             site,
             fighter_room: &self.fighter_room(),
             ammo_caps: &self.ammo_caps(),
-            buy_random: self.buy_random,
+            buy_random: self.rules.source_for(RuleKey::BuyRandom),
             hardpoints: self.hardpoints(),
             free_cargo: self.free_cargo(),
             launchers: &self.launchers(),
-            launcher_sale: self.launcher_sale,
-            raised_max: self.raised_max,
-            bought: self.opening.bought.under(self.opening.limit),
-            outfit_count: self.outfit_count,
-            sale_mass: self.sale_mass,
+            launcher_sale: self.rules.source_for(RuleKey::LauncherSale),
+            raised_max: self.rules.source_for(RuleKey::RaisedMax),
+            bought: self
+                .opening
+                .bought
+                .under(self.rules.source_for(RuleKey::OutfitLimit)),
+            outfit_count: self.rules.source_for(RuleKey::OutfitCount),
+            sale_mass: self.rules.source_for(RuleKey::SaleMass),
             gate: self.gate(),
         }
         .outfitter(&self.pilot, &mut rolls, chance);
@@ -2516,7 +2489,7 @@ impl Session {
                 price,
                 self.pilot.owned(order.outfit),
                 self.opening.owned.get(&order.outfit).copied().unwrap_or(0),
-                self.opening.refund,
+                self.rules.source_for(RuleKey::OutfitRefund),
             ),
         };
         self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, amount));
@@ -2588,8 +2561,8 @@ impl Session {
             outfits: &self.outfits,
             fields: self.fields,
             site,
-            buy_random: self.buy_random,
-            trade_in_outfits: self.trade_in_outfits,
+            buy_random: self.rules.source_for(RuleKey::BuyRandom),
+            trade_in_outfits: self.rules.source_for(RuleKey::TradeInOutfits),
             gate: self.gate(),
         }
         .shipyard(&self.pilot, &mut rolls, chance);
@@ -2669,13 +2642,13 @@ impl Session {
             trade_in: shipyard.trade_in,
         };
         self.ship_hook(self.pilot.ship, ShipHook::Retire, chance);
-        let paint_last = self.hook_rules.purchase_paint_order == RuleSource::Engine;
+        let paint_last = self.hook_rules().purchase_paint_order == RuleSource::Engine;
         let old_mass = self.fields.mass;
         self.drop_fighters(|_, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
         let fleet = shipyard::Fleet {
             escorts: &escorts,
-            cargo: self.purchase_cargo,
+            cargo: self.rules.source_for(RuleKey::PurchaseCargo),
         };
         let outfits = std::mem::take(&mut self.outfits);
         let fits = self.arsenal.stock_fits(ship, &outfits);
@@ -2940,7 +2913,7 @@ impl Session {
             &grant,
             &stock,
             self.free_mass(),
-            self.outfit_rules.grant_max,
+            self.outfit_rules().grant_max,
             chance,
         )?;
         for _ in 0..granted.count {
@@ -3128,7 +3101,12 @@ impl Session {
     /// the boarding's calls of `_HasMaxOfItem` read it (`_DoPlunderDialog`
     /// @0x93119, @0x93192, @0x93d9f; see [`outfitter::raised_max`]).
     fn raised_max_of(&self, record: &OutfitRecord) -> i64 {
-        outfitter::raised_max(record, &self.pilot.outfits, &self.outfits, self.raised_max)
+        outfitter::raised_max(
+            record,
+            &self.pilot.outfits,
+            &self.outfits,
+            self.rules.source_for(RuleKey::RaisedMax),
+        )
     }
 
     /// Takes up to `rounds` of ammunition outfit `outfit`, one at a time
@@ -3324,7 +3302,7 @@ impl Session {
         let Some(record) = record.filter(|_| self.npcs().len() + 1 < MAX_SHIPS_IN_SYSTEM) else {
             return Some(Assigned::Abandoned);
         };
-        let hooks_first = self.hook_rules.capture_hook_order == RuleSource::Engine;
+        let hooks_first = self.hook_rules().capture_hook_order == RuleSource::Engine;
         if hooks_first {
             self.retire_for_capture(record.id, chance);
         }
@@ -3482,6 +3460,7 @@ mod tests {
     use crate::landing::StellarFlags;
     use crate::landing::{Clearance, LandOutcome, LandingRefusal};
     use crate::market::{Direction, Good, Lot, Order, TradeRefusal};
+    use crate::outfit_effects::OutfitRules;
     use crate::pre_jump::slow_enough;
     use crate::reserves::{Gauge, Reserves};
     use crate::stats::{
@@ -3534,6 +3513,23 @@ mod tests {
     fn a_new_pilot_belongs_to_no_government() {
         let session = Session::start(&catalog()).expect("starts");
         assert_eq!(session.government(), None);
+    }
+
+    #[test]
+    fn every_rule_reaches_the_session() {
+        let every = RuleKey::ALL
+            .into_iter()
+            .fold(Rulebook::default(), |book, key| {
+                book.with_override(key, RuleSource::Bible)
+            });
+        let session = Session::start(&catalog()).expect("starts");
+        assert_eq!(session.rules(), &Rulebook::default());
+        let session = session.with_rules(every);
+        let rules = session.rules();
+        assert_eq!(rules, &every);
+        for key in RuleKey::ALL {
+            assert_eq!(rules.source_for(key), RuleSource::Bible, "{key:?}");
+        }
     }
 
     #[test]
@@ -6129,7 +6125,9 @@ mod tests {
     /// each good, a ton a click: it is left on the other reading of
     /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot).
     fn buy_goods(session: &mut Session, tons: &[(Good, u32)]) {
-        session.exchange_rules.trade_lot = RuleSource::Bible;
+        session.rules = session
+            .rules
+            .with_override(RuleKey::TradeLot, RuleSource::Bible);
         for &(good, tons) in tons {
             for _ in 0..tons {
                 let bought = session.trade(order(session, good, Direction::Buy, Lot::Click));
