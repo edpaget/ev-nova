@@ -234,6 +234,15 @@ pub enum OutfitRefusal {
     MaxOwned,
     /// Its `Max` is none.
     NoneAllowed,
+    /// It is a fighter, and the ship's bays have no room for another
+    /// (`_CanBuyFighter` @0x5a82). The original reaches that check only
+    /// from `_CanBuyOutfitItem` (@0x4e938), not from `_HasMaxOfItem`, so
+    /// its info box gives this none of the #219/#220 words the other
+    /// `Max` refusals get. It would still show the mass words #221/#222
+    /// if the fighter also lacked the mass; here the bays are checked
+    /// first, so nothing shows (roadmap `shop-and-trade-fidelity`,
+    /// `phase-20-outfitter-full-bays-mass-words`).
+    BaysFull,
     /// The ship has not the free mass for another.
     NoSpace,
     /// The ship has not the free mass for one.
@@ -817,7 +826,7 @@ impl Shop<'_> {
             } else if let Some(refusal) = armed.refusal(record.flags) {
                 Err(refusal)
             } else if self.fighter_room.get(&record.id) == Some(&0) {
-                Err(OutfitRefusal::MaxOwned)
+                Err(OutfitRefusal::BaysFull)
             } else if mass < 0 && self.fields.holds < 0 {
                 Err(OutfitRefusal::NoExpansion)
             } else if mass > free {
@@ -1637,7 +1646,7 @@ mod tests {
         assert_eq!(buy(&open_with(&room(128, 1), &pilot())), Ok(()));
         assert_eq!(
             buy(&open_with(&room(128, 0), &pilot())),
-            Err(OutfitRefusal::MaxOwned),
+            Err(OutfitRefusal::BaysFull),
             "the bays are full"
         );
         assert_eq!(
@@ -1672,9 +1681,14 @@ mod tests {
         for max in [0, -1] {
             let none = OutfitRecord { max, ..heavy() };
             assert_eq!(
-                buy(&open(&[none], &pilot())),
+                buy(&open(std::slice::from_ref(&none), &pilot())),
                 Err(OutfitRefusal::NoneAllowed),
                 "{max}"
+            );
+            assert_eq!(
+                buy(&open(&[none], &owning(&[(128, 1)]))),
+                Err(OutfitRefusal::NoneAllowed),
+                "{max}, one owned (granted)"
             );
         }
     }
@@ -2423,7 +2437,7 @@ mod tests {
             .expect("open");
             buys(&outfitter, 200)
         };
-        assert_eq!(at(&room(0)), Err(OutfitRefusal::MaxOwned));
+        assert_eq!(at(&room(0)), Err(OutfitRefusal::BaysFull));
         assert_eq!(at(&room(1)), Ok(()));
     }
 

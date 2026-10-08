@@ -1603,7 +1603,7 @@ mod tests {
     #[test]
     fn the_outfitter_sells_fighters_only_while_the_bays_have_room_counting_those_out() {
         let catalog = spaceport();
-        let full = Err(crate::outfitter::OutfitRefusal::MaxOwned);
+        let full = Err(crate::outfitter::OutfitRefusal::BaysFull);
         assert_eq!(viper_for_sale(&catalog, 3, 1), full, "MaxAmmo 4, one bay");
         assert_eq!(viper_for_sale(&catalog, 3, 0), Ok(()));
         assert_eq!(viper_for_sale(&catalog, 0, 4), full);
@@ -1709,7 +1709,7 @@ mod tests {
             .push(outfit(170, &[(crate::outfitter::RAISES_MAX, VIPERS.0)]));
         for (aboard, sold) in [
             (1, Ok(())),
-            (2, Err(crate::outfitter::OutfitRefusal::MaxOwned)),
+            (2, Err(crate::outfitter::OutfitRefusal::BaysFull)),
         ] {
             let mut session = fleet(&catalog, aboard, vec![]);
             session.pilot.cash = 1_000_000;

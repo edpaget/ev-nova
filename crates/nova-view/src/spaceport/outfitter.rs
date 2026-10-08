@@ -29,10 +29,12 @@
 //! `dësc` 3000 plus its ID less 128, both read through the
 //! [`OutfitterCatalog`] as the selection changes. The info box shows its price, its mass, how many the player
 //! has and the free mass (#215-218), and why it cannot be bought (#219-222)
-//! or sold (#207), when the original has words for it. A gun or turret
-//! limit reads as `Max` does, #219 when the player owns one or more of the
-//! outfit and #220 otherwise, as `_OutfitDialogUpdate` words
-//! `_HasMaxOfItem` (@0x57ddf-0x57df8). A launcher that cannot be sold for
+//! or sold (#207), when the original has words for it. Every refusal
+//! `_HasMaxOfItem` makes (its `Max`, none allowed, a gun or turret limit)
+//! reads by the count owned, #219 when the player owns one or more of the
+//! outfit and #220 otherwise, as `_OutfitDialogUpdate` words it
+//! (@0x57ddf-0x57df8); a fighter refused for full bays gets no words, as
+//! `_CanBuyFighter` is not part of `_HasMaxOfItem`. A launcher that cannot be sold for
 //! its ammunition gets the #208-212 sentence ([`ammunition_first`]),
 //! which the original shows in a text dialog when Sell is clicked, Sell
 //! left enabled (`_DoOutfitDialog` @0x5ce5a); here Sell is greyed and the
@@ -184,9 +186,11 @@ pub fn raised_first(count: u32, target: &LcNames, outfit: &str) -> String {
 }
 
 /// The original's words for why one of `row` cannot be bought or sold, if
-/// it has any, `names` giving the outfits' lower-case names. A gun or
-/// turret limit is worded as `Max`: #219 when the player owns one or more
-/// of the outfit, #220 otherwise (`_OutfitDialogUpdate` @0x57ddf-0x57df8).
+/// it has any, `names` giving the outfits' lower-case names. Every refusal
+/// the original's `_HasMaxOfItem` makes (its `Max`, none allowed, a gun or
+/// turret limit) is worded by the count owned: #219 when the player owns
+/// one or more of the outfit, #220 otherwise (`_OutfitDialogUpdate`
+/// @0x57ddf-0x57df8). Full fighter bays get no words.
 #[must_use]
 pub fn refusal_text(
     refusal: OutfitRefusal,
@@ -194,11 +198,18 @@ pub fn refusal_text(
     names: &BTreeMap<OutfitId, LcNames>,
 ) -> Option<String> {
     let text = match refusal {
-        OutfitRefusal::MaxOwned => MAX_OWNED,
-        OutfitRefusal::GunLimit | OutfitRefusal::TurretLimit if row.owned > 0 => MAX_OWNED,
-        OutfitRefusal::NoneAllowed | OutfitRefusal::GunLimit | OutfitRefusal::TurretLimit => {
-            NONE_ALLOWED
+        OutfitRefusal::MaxOwned
+        | OutfitRefusal::NoneAllowed
+        | OutfitRefusal::GunLimit
+        | OutfitRefusal::TurretLimit
+            if row.owned > 0 =>
+        {
+            MAX_OWNED
         }
+        OutfitRefusal::MaxOwned
+        | OutfitRefusal::NoneAllowed
+        | OutfitRefusal::GunLimit
+        | OutfitRefusal::TurretLimit => NONE_ALLOWED,
         OutfitRefusal::NoSpace => NO_SPACE,
         OutfitRefusal::NoSpaceForAny => NO_SPACE_FOR_ANY,
         OutfitRefusal::NegativeFreeMass => NEGATIVE_FREE_MASS,
@@ -981,11 +992,11 @@ mod tests {
     fn each_refusal_the_original_words_has_its_words() {
         let said = |text: &str| Some(text.to_owned());
         assert_eq!(
-            worded(OutfitRefusal::MaxOwned, 0),
+            worded(OutfitRefusal::MaxOwned, 1),
             said("Can't have any more!")
         );
         assert_eq!(
-            worded(OutfitRefusal::NoneAllowed, 1),
+            worded(OutfitRefusal::NoneAllowed, 0),
             said("Can't have any of this item!")
         );
         assert_eq!(
@@ -1002,7 +1013,12 @@ mod tests {
                 "Can't sell that item, because your ship would have negative free mass afterwards."
             )
         );
-        for limit in [OutfitRefusal::GunLimit, OutfitRefusal::TurretLimit] {
+        for limit in [
+            OutfitRefusal::MaxOwned,
+            OutfitRefusal::NoneAllowed,
+            OutfitRefusal::GunLimit,
+            OutfitRefusal::TurretLimit,
+        ] {
             assert_eq!(worded(limit, 1), said(MAX_OWNED), "{limit:?}");
             assert_eq!(worded(limit, 3), said(MAX_OWNED), "{limit:?}");
             assert_eq!(worded(limit, 0), said(NONE_ALLOWED), "{limit:?}");
@@ -1049,8 +1065,10 @@ mod tests {
             OutfitRefusal::NoneOwned,
             OutfitRefusal::CannotSell,
             OutfitRefusal::NotBoughtHere,
+            OutfitRefusal::BaysFull,
         ] {
             assert_eq!(worded(silent, 1), None, "{silent:?}");
+            assert_eq!(worded(silent, 0), None, "{silent:?}");
         }
     }
 
@@ -1749,6 +1767,36 @@ mod tests {
                 NEGATIVE_FREE_MASS,
             ]
         );
+    }
+
+    #[test]
+    fn the_info_box_words_a_max_refusal_by_the_count_owned_and_full_bays_not_at_all() {
+        let info_lines = |buy: OutfitRefusal, owned: u16| {
+            let screen = screen_of(Outfitter {
+                rows: vec![OutfitRow {
+                    buy: Err(buy),
+                    ..row(128, "Widget", 100, 1, owned)
+                }],
+                ..outfitter()
+            });
+            let info = item(&screen, INFO_ITEM);
+            texts(&drawn(&screen))
+                .into_iter()
+                .filter(|(_, at, _)| info.contains(*at))
+                .map(|(text, _, _)| text)
+                .collect::<Vec<_>>()
+        };
+        let granted = info_lines(OutfitRefusal::NoneAllowed, 1);
+        assert!(granted.contains(&MAX_OWNED.to_owned()), "{granted:?}");
+        assert!(!granted.contains(&NONE_ALLOWED.to_owned()), "{granted:?}");
+        for owned in [0, 2] {
+            let full = info_lines(OutfitRefusal::BaysFull, owned);
+            assert!(full.iter().any(|text| text.starts_with("Available:")));
+            assert!(
+                !full.iter().any(|text| text.starts_with("Can't")),
+                "{owned}: {full:?}"
+            );
+        }
     }
 
     #[test]
