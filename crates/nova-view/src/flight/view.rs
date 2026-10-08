@@ -10474,6 +10474,19 @@ mod tests {
     }
 
     #[test]
+    fn a_click_picks_the_stellar_above_or_below_the_ship_where_it_is_drawn() {
+        let mut view = flight_among(vec![
+            site(128, (0.0, 150.0), StellarFlags::CAN_LAND),
+            site(129, (0.0, -150.0), StellarFlags::CAN_LAND),
+        ]);
+        for (id, y) in [(129, -150.0), (128, 150.0), (129, -150.0)] {
+            let drawn = on_screen(&view, (0.0, y));
+            click(&mut view, drawn);
+            assert_eq!(nav_target(&view), Some(StellarId(id)), "{y}");
+        }
+    }
+
+    #[test]
     fn a_click_on_empty_space_keeps_the_target() {
         let mut view = a_and_b();
         tap(&mut view, LAND);
