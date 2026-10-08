@@ -98,9 +98,12 @@
 //! it, or is never below 0, a row priced 0 listed and bought free),
 //! `"junk_trade"` (whether every listed `jünk` row is bought and sold at
 //! its own price, as the engine has it, or its `SoldAt` row is bought
-//! only and its `BoughtAt` row sold only, as the Bible says) and
+//! only and its `BoughtAt` row sold only, as the Bible says),
 //! `"trade_lot"` (whether a plain Buy or Sell moves up to 10 tons, as
-//! the engine has it, or a ton),
+//! the engine has it, or a ton) and `"trade_quotient"` (whether the most
+//! a buy moves divides the cash by the price in single floats, as the
+//! engine has it, which above 2^24 cash can buy a ton more than the cash
+//! covers, or exactly),
 //! the shipyard's `"purchase_cargo"` (whether a ship purchase keeps the
 //! new ship's share of each good against the trader escorts' holds, then
 //! trims to the fleet's holds, as the engine has it, or keeps what fits

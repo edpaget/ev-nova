@@ -536,9 +536,10 @@ pub struct Session {
     raised_max: RuleSource,
     /// How an active `öops` event prices its commodity, how a `jünk` of
     /// negative or zero price is traded, which ways a `jünk` row trades,
-    /// and how many tons a plain trade moves (see
-    /// [`Session::with_event_price`], [`Session::with_junk_price`],
-    /// [`Session::with_junk_trade`] and [`Session::with_trade_lot`]).
+    /// how many tons a plain trade moves, and how the most a buy moves
+    /// divides the cash by the price (see [`Session::with_event_price`],
+    /// [`Session::with_junk_price`], [`Session::with_junk_trade`],
+    /// [`Session::with_trade_lot`] and [`Session::with_trade_quotient`]).
     exchange_rules: market::ExchangeRules,
     /// What cargo a ship purchase keeps (see
     /// [`Session::with_purchase_cargo`]).
@@ -2035,6 +2036,26 @@ impl Session {
     #[must_use]
     pub fn trade_lot(&self) -> RuleSource {
         self.exchange_rules.trade_lot
+    }
+
+    /// This session with the most a buy at the exchange moves dividing
+    /// the cash by the price as `source` says
+    /// ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)): by the
+    /// engine's default, in single floats, which above 2^24 cash can buy
+    /// a ton more than the cash covers; by the other reading, exactly
+    /// (see [`market`]).
+    #[must_use]
+    pub fn with_trade_quotient(mut self, source: RuleSource) -> Self {
+        self.exchange_rules.trade_quotient = source;
+        self
+    }
+
+    /// How the most a buy at the exchange moves divides the cash by the
+    /// price: by the engine ([`RuleSource::Engine`]) or by the other
+    /// reading.
+    #[must_use]
+    pub fn trade_quotient(&self) -> RuleSource {
+        self.exchange_rules.trade_quotient
     }
 
     /// This session with a launcher's sale refused for its ammunition as
@@ -5493,6 +5514,81 @@ mod tests {
                 "{source:?}"
             );
             assert_eq!(session.pilot().cash(), 1000);
+        }
+    }
+
+    #[test]
+    fn the_session_trades_a_counted_lot_at_the_rows_price() {
+        let mut session = Session::start(&exchange()).expect("starts");
+        land_now(&mut session).expect("lands");
+        session.take_save_due();
+        assert_eq!(
+            session.trade(order(&session, FOOD, Direction::Buy, Lot::Count(7))),
+            Ok(7)
+        );
+        assert_eq!(session.pilot().cash(), 1000 - 7 * 75);
+        assert_eq!(session.pilot().held(FOOD), 7);
+        assert!(session.take_save_due());
+        assert_eq!(
+            session.trade(order(&session, FOOD, Direction::Sell, Lot::Count(3))),
+            Ok(3)
+        );
+        assert_eq!(session.pilot().cash(), 1000 - 4 * 75);
+        assert_eq!(session.pilot().held(FOOD), 4);
+        let before = session.clone();
+        assert_eq!(
+            session.trade(order(&session, FOOD, Direction::Sell, Lot::Count(5))),
+            Err(TradeRefusal::OutOfRange)
+        );
+        assert_eq!(session, before);
+    }
+
+    /// [`exchange`] with food at 32767 a ton and ship 128 holding 2000
+    /// tons.
+    fn dear_exchange() -> FakePilotCatalog {
+        let mut commodities = food_and_metal();
+        commodities.base_prices[0] = "32767".to_owned();
+        FakePilotCatalog {
+            ships: vec![(
+                ShipId(128),
+                Ok(ShipFields {
+                    holds: 2000,
+                    ..FAST
+                }),
+            )],
+            commodities,
+            ..exchange()
+        }
+    }
+
+    #[test]
+    fn the_session_buys_the_most_by_its_quotient_rule() {
+        for (source, tons, cash) in [
+            (None, 1000, -1),
+            (Some(RuleSource::Engine), 1000, -1),
+            (Some(RuleSource::Bible), 999, 32_766),
+        ] {
+            for lot in [Lot::Max, Lot::Count(tons)] {
+                let session = Session::start(&dear_exchange()).expect("starts");
+                let mut session = match source {
+                    Some(source) => session.with_trade_quotient(source),
+                    None => session,
+                };
+                let source = source.unwrap_or_default();
+                assert_eq!(session.trade_quotient(), source);
+                session.pilot.set_cash(32_766_999);
+                land_now(&mut session).expect("lands");
+                let market = session.market().expect("an exchange");
+                assert_eq!(market.trade_quotient, source);
+                assert_eq!(market.row_max(0, Direction::Buy), Some(i64::from(tons)));
+                assert_eq!(
+                    session.trade(order(&session, FOOD, Direction::Buy, lot)),
+                    Ok(tons),
+                    "{source:?} {lot:?}"
+                );
+                assert_eq!(session.pilot().cash(), cash, "{source:?} {lot:?}");
+                assert_eq!(session.pilot().held(FOOD), tons);
+            }
         }
     }
 

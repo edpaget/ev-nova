@@ -237,7 +237,9 @@
 //!   ([`FlightView::with_event_price`]), how it trades a `jünk` of
 //!   negative or zero price ([`FlightView::with_junk_price`]), which ways
 //!   it trades a `jünk` row ([`FlightView::with_junk_trade`]), how many
-//!   tons a plain trade moves ([`FlightView::with_trade_lot`]), and what
+//!   tons a plain trade moves ([`FlightView::with_trade_lot`]), how the
+//!   most a buy moves divides the cash by the price
+//!   ([`FlightView::with_trade_quotient`]), and what
 //!   cargo a ship purchase keeps ([`FlightView::with_purchase_cargo`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
@@ -1153,6 +1155,19 @@ impl<
     pub fn with_trade_lot(self, source: RuleSource) -> Self {
         Self {
             session: self.session.map(|session| session.with_trade_lot(source)),
+            ..self
+        }
+    }
+
+    /// The flight with the most a buy at the exchange moves dividing the
+    /// cash by the price as `source` says
+    /// ([`Session::with_trade_quotient`]).
+    #[must_use]
+    pub fn with_trade_quotient(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_trade_quotient(source)),
             ..self
         }
     }
@@ -6282,6 +6297,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::trade_lot),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_trade_quotient_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_trade_quotient(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.trade_quotient(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::trade_quotient),
             Ok(RuleSource::Engine)
         );
     }

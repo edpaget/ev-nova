@@ -180,10 +180,16 @@
 //! min(trunc(cash / price), 10, free) tons (`_DoTradeDialog`
 //! @0x5e268-0x5e278) and a plain sale min(held, 10) (@0x5e48d-0x5e4fa);
 //! by the other reading, the port's earlier one, a ton. The most
-//! ([`Lot::Max`]) is as much as both the free space and the cash allow
-//! for a buy, and everything held for a sale: what the original's Option
-//! quantity dialog offers by default (@0x5e23a-0x5e25a, @0x5e44f-0x5e47f).
-//! A trade that would move nothing is refused. The Buy button is enabled
+//! ([`Lot::Max`], [`Market::row_max`]) is what the original's Option
+//! quantity dialog offers by default (@0x5e23a-0x5e25a, @0x5e44f-0x5e47f):
+//! for a buy min(cash / price, free), the quotient in single floats by
+//! the engine (@0x5e21d-0x5e234) or exact by the other reading
+//! ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)), and for a
+//! sale everything held; either way at most 32000 tons. A counted lot
+//! ([`Lot::Count`]) moves exactly its count, from 1 up to that most, as
+//! the dialog trades what it is given with no check against the cash, so
+//! above 2^24 cash the engine's most can leave the cash below 0. A trade
+//! that would move nothing is refused. The Buy button is enabled
 //! as `_CanBuyGoods` has it, which a row priced below nothing can pass
 //! with nothing then bought ([`Market::row_allows`]).
 
@@ -301,10 +307,20 @@ pub enum Direction {
 pub enum Lot {
     /// A plain click or key on Buy or Sell: up to [`CLICK_TONS`] tons, or
     /// a ton by the other reading of
-    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot).
+    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot). A buy's cash /
+    /// price is exact integer division under both readings of
+    /// [`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient): the
+    /// single-float quotient differs from it only above 2^24 cash, where
+    /// it is at least 512 and a click moves at most 10 either way.
     Click,
-    /// As much as possible.
+    /// The most the exchange offers on the row ([`Market::row_max`]): the
+    /// default of the original's Option quantity dialog.
     Max,
+    /// Exactly this many tons, as the original's quantity dialog trades
+    /// what it is given: from 1 up to the most the exchange offers
+    /// ([`Market::row_max`]). None, or more than the most, is refused
+    /// ([`TradeRefusal::OutOfRange`]).
+    Count(u32),
 }
 
 /// The most tons a [`Lot::Click`] moves by the engine: a plain buy moves
@@ -342,6 +358,11 @@ pub enum TradeRefusal {
     CannotAfford,
     /// The player holds none of the good.
     NoneHeld,
+    /// A counted lot ([`Lot::Count`]) of none, which the original's
+    /// callers skip (`jle` @0x5e27d, @0x5e4d8), or of more than the most
+    /// the exchange offers ([`Market::row_max`]), which its quantity
+    /// dialog never gives.
+    OutOfRange,
 }
 
 /// A standard commodity that can be traded: its name and base price.
@@ -424,7 +445,14 @@ pub fn hold_tons(holds: i16) -> u16 {
 }
 
 /// The most cargo space a fleet has (`_TotalFleetHolds` @0xc33e-0xc349).
+/// A trade's lot has its own cap of the same 32000 tons ([`Lot::Max`],
+/// [`Market::row_max`]), which shows only on a sale: tribbles can grow
+/// past a full hold, but the free space never passes this.
 pub const MAX_FLEET_HOLDS: u32 = 32_000;
+
+/// The most tons one trade offers, a buy (@0x5e23a-0x5e24c) or a sale
+/// (@0x5e44f-0x5e457).
+const LOT_CAP: i64 = 32_000;
 
 /// What the fleet's cargo space needs of one of the player's escorts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -673,6 +701,9 @@ pub struct Market {
     /// How many tons a [`Lot::Click`] moves
     /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)).
     pub trade_lot: RuleSource,
+    /// How the most a buy moves divides the cash by the price
+    /// ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)).
+    pub trade_quotient: RuleSource,
 }
 
 impl Market {
@@ -709,36 +740,98 @@ impl Market {
         if !row.trades(direction) {
             return Err(TradeRefusal::NotTraded);
         }
-        match direction {
+        let most = match direction {
             Direction::Buy => {
                 if self.free == 0 {
                     return Err(TradeRefusal::NoSpace);
                 }
-                let wanted = match lot {
-                    Lot::Click => self.click_tons().min(self.free),
-                    Lot::Max => self.free,
-                };
-                // A good priced at nothing is limited by space alone; one
-                // priced below nothing buys none, as the engine's cash /
-                // price is negative and its `jle` @0x5e27d skips the buy.
-                let affordable = self
-                    .cash
-                    .max(0)
-                    .checked_div(row.price)
-                    .map_or(wanted, |tons| {
-                        u32::try_from(tons.max(0)).unwrap_or(u32::MAX)
-                    });
-                match wanted.min(affordable) {
-                    0 => Err(TradeRefusal::CannotAfford),
-                    tons => Ok(tons),
+                if lot == Lot::Click {
+                    let wanted = self.click_tons().min(self.free);
+                    let affordable = self
+                        .quotient(row.price, RuleSource::Bible)
+                        .map_or(wanted, |tons| {
+                            u32::try_from(tons.max(0)).unwrap_or(u32::MAX)
+                        });
+                    return match wanted.min(affordable) {
+                        0 => Err(TradeRefusal::CannotAfford),
+                        tons => Ok(tons),
+                    };
                 }
+                // A good priced below nothing buys none, as the engine's
+                // cash / price is negative and its `jle` @0x5e27d skips
+                // the buy.
+                u32::try_from(self.most(row, direction))
+                    .ok()
+                    .filter(|&most| most > 0)
+                    .ok_or(TradeRefusal::CannotAfford)?
             }
             Direction::Sell => match (row.held, lot) {
-                (0, _) => Err(TradeRefusal::NoneHeld),
-                (held, Lot::Click) => Ok(held.min(self.click_tons())),
-                (held, Lot::Max) => Ok(held),
+                (0, _) => return Err(TradeRefusal::NoneHeld),
+                (held, Lot::Click) => return Ok(held.min(self.click_tons())),
+                _ => u32::try_from(self.most(row, direction)).unwrap_or(0),
             },
+        };
+        match lot {
+            Lot::Count(n) if n == 0 || n > most => Err(TradeRefusal::OutOfRange),
+            Lot::Count(n) => Ok(n),
+            Lot::Click | Lot::Max => Ok(most),
         }
+    }
+
+    /// The most `row` offers `direction`: the maximum the original's
+    /// quantity dialog opens with (`_DoTradeDialog`), signed, as it can be
+    /// 0 or less. A buy's is min(cash / price, free), the quotient as
+    /// [`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient) says,
+    /// and anything from 32001 up made 32000 (@0x5e23a-0x5e24c); a row
+    /// priced at nothing is limited by space alone. A sale's is
+    /// min(held, 32000) (@0x5e44f-0x5e457).
+    fn most(&self, row: &MarketRow, direction: Direction) -> i64 {
+        let tons = match direction {
+            Direction::Buy => {
+                let space = i64::from(self.free);
+                self.quotient(row.price, self.trade_quotient)
+                    .map_or(space, |tons| tons.min(space))
+            }
+            Direction::Sell => i64::from(row.held),
+        };
+        tons.min(LOT_CAP)
+    }
+
+    /// The cash divided by `price`, as `source` says, or `None` at a price
+    /// of nothing, which the engine never lists (phase 23). Cash below
+    /// nothing counts as none, as this port has always read it, so a
+    /// price below nothing gives 0 or less. By the engine, the division
+    /// is trunc(f32(cash) / f32(price)) (@0x5e21d-0x5e234), the cash held
+    /// in the engine's 32 bits and the price in its 16, each held at the
+    /// most it can hold rather than wrapped past it; above 2^24 cash it
+    /// can round up to a ton more than the cash covers. By the other
+    /// reading, exact integer division.
+    fn quotient(&self, price: i64, source: RuleSource) -> Option<i64> {
+        if price == 0 {
+            return None;
+        }
+        let cash = self.cash.max(0);
+        Some(match source {
+            RuleSource::Engine => {
+                let cash = i32::try_from(cash).unwrap_or(i32::MAX);
+                let price =
+                    i16::try_from(price).unwrap_or(if price < 0 { i16::MIN } else { i16::MAX });
+                (cash as f32 / f32::from(price)) as i64
+            }
+            RuleSource::Bible => cash / price,
+        })
+    }
+
+    /// The most row `index` offers `direction` ([`Lot::Max`]), which the
+    /// original's quantity dialog opens with: 0 or less where nothing can
+    /// be traded, as on a row priced below nothing. `None` where there is
+    /// no such row or it does not trade `direction`, so no dialog opens.
+    #[must_use]
+    pub fn row_max(&self, index: usize, direction: Direction) -> Option<i64> {
+        self.rows
+            .get(index)
+            .filter(|row| row.trades(direction))
+            .map(|row| self.most(row, direction))
     }
 
     /// The most tons a [`Lot::Click`] moves, as
@@ -796,6 +889,9 @@ pub(crate) struct ExchangeRules {
     /// How many tons a plain trade moves
     /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)).
     pub(crate) trade_lot: RuleSource,
+    /// How the most a buy moves divides the cash by the price
+    /// ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)).
+    pub(crate) trade_quotient: RuleSource,
 }
 
 /// The exchange of `stellar`, with these `flags`, for `pilot` with
@@ -875,6 +971,7 @@ pub(crate) fn market(
         capacity,
         free: capacity.saturating_sub(held),
         trade_lot: rules.trade_lot,
+        trade_quotient: rules.trade_quotient,
     })
 }
 
@@ -1990,6 +2087,26 @@ mod tests {
     }
 
     #[test]
+    fn the_exchange_divides_by_its_quotient_rule() {
+        for trade_quotient in RuleSource::ALL {
+            let found = market(
+                &goods(),
+                StellarId(137),
+                PORT_KANE,
+                &pilot(500),
+                10,
+                ExchangeRules {
+                    trade_quotient,
+                    ..ExchangeRules::default()
+                },
+                Markup::Standard,
+            )
+            .expect("trades");
+            assert_eq!(found.trade_quotient, trade_quotient);
+        }
+    }
+
+    #[test]
     fn the_exchange_lists_the_commodities_traded_at_their_levels() {
         let flags = PORT_KANE;
         let found = market(
@@ -2018,6 +2135,7 @@ mod tests {
                 capacity: 10,
                 free: 10,
                 trade_lot: RuleSource::Engine,
+                trade_quotient: RuleSource::Engine,
             }
         );
         let some = TRADE | (1 << 24) | (4 << 12);
@@ -3208,6 +3326,7 @@ mod tests {
             capacity: 100,
             free,
             trade_lot: RuleSource::Engine,
+            trade_quotient: RuleSource::Engine,
         }
     }
 
@@ -3388,6 +3507,236 @@ mod tests {
         assert!(!buy(&negative(-500, 3)), "cash below the price");
         assert!(!buy(&negative(-201, 3)), "cash below the price");
         assert!(!buy(&negative(0, 0)), "no space");
+    }
+
+    // Counted lots and the engine's maximum.
+
+    /// `market` dividing its cash by a price as `trade_quotient` says.
+    fn quotient_by(trade_quotient: RuleSource, market: Market) -> Market {
+        Market {
+            trade_quotient,
+            ..market
+        }
+    }
+
+    #[test]
+    fn a_counted_buy_moves_exactly_its_count_up_to_the_most() {
+        let buy = |market: &Market, n| market.tons(order(0, FOOD, Direction::Buy, Lot::Count(n)));
+        let market = stall(5000, 0, 70);
+        assert_eq!(market.row_max(0, Direction::Buy), Some(50), "5000 at 100");
+        assert_eq!(buy(&market, 7), Ok(7));
+        assert_eq!(buy(&market, 1), Ok(1));
+        assert_eq!(buy(&market, 50), Ok(50), "the most");
+        assert_eq!(buy(&market, 51), Err(TradeRefusal::OutOfRange));
+        assert_eq!(buy(&market, 0), Err(TradeRefusal::OutOfRange));
+        let space = stall(100_000, 0, 7);
+        assert_eq!(space.row_max(0, Direction::Buy), Some(7), "the space");
+        assert_eq!(buy(&space, 7), Ok(7));
+        assert_eq!(buy(&space, 8), Err(TradeRefusal::OutOfRange));
+    }
+
+    #[test]
+    fn a_counted_buy_is_refused_as_any_buy_before_its_count_is_read() {
+        let buy = |market: &Market, n| market.tons(order(0, FOOD, Direction::Buy, Lot::Count(n)));
+        assert_eq!(buy(&stall(1000, 0, 0), 1), Err(TradeRefusal::NoSpace));
+        assert_eq!(buy(&stall(1000, 0, 0), 0), Err(TradeRefusal::NoSpace));
+        assert_eq!(buy(&stall(99, 0, 5), 1), Err(TradeRefusal::CannotAfford));
+        assert_eq!(buy(&stall(99, 0, 5), 0), Err(TradeRefusal::CannotAfford));
+        let opals = stall(10_000, 5, 5).tons(order(1, OPALS, Direction::Buy, Lot::Count(1)));
+        assert_eq!(opals, Err(TradeRefusal::NotTraded));
+    }
+
+    #[test]
+    fn a_counted_sale_moves_exactly_its_count_up_to_everything_held() {
+        let sell = |market: &Market, n| market.tons(order(0, FOOD, Direction::Sell, Lot::Count(n)));
+        let market = stall(0, 25, 0);
+        assert_eq!(market.row_max(0, Direction::Sell), Some(25));
+        assert_eq!(sell(&market, 7), Ok(7));
+        assert_eq!(sell(&market, 25), Ok(25));
+        assert_eq!(sell(&market, 26), Err(TradeRefusal::OutOfRange));
+        assert_eq!(sell(&market, 0), Err(TradeRefusal::OutOfRange));
+        assert_eq!(sell(&stall(0, 0, 9), 0), Err(TradeRefusal::NoneHeld));
+        assert_eq!(sell(&stall(0, 0, 9), 1), Err(TradeRefusal::NoneHeld));
+        let water = stall(0, 5, 5).tons(order(2, WATER, Direction::Sell, Lot::Count(1)));
+        assert_eq!(water, Err(TradeRefusal::NotTraded));
+    }
+
+    /// The most a sale offers is everything held up to 32000
+    /// (`_DoTradeDialog` @0x5e44f-0x5e457), which only tribbles grown
+    /// past a full hold can pass.
+    #[test]
+    fn a_sale_moves_at_most_32000_tons() {
+        let sell = |held, lot| stall(0, held, 0).tons(order(0, FOOD, Direction::Sell, lot));
+        let most = |held| stall(0, held, 0).row_max(0, Direction::Sell);
+        assert_eq!(most(32_001), Some(32_000));
+        assert_eq!(most(40_000), Some(32_000));
+        assert_eq!(most(32_000), Some(32_000));
+        assert_eq!(most(31_999), Some(31_999));
+        assert_eq!(sell(32_001, Lot::Max), Ok(32_000));
+        assert_eq!(sell(32_000, Lot::Max), Ok(32_000));
+        assert_eq!(sell(32_001, Lot::Count(32_000)), Ok(32_000));
+        assert_eq!(
+            sell(32_001, Lot::Count(32_001)),
+            Err(TradeRefusal::OutOfRange)
+        );
+        assert_eq!(sell(32_001, Lot::Click), Ok(10));
+    }
+
+    /// The fleet's free space stops at [`MAX_FLEET_HOLDS`], so only a
+    /// market built with more free shows the buy's own cap
+    /// (@0x5e23a-0x5e24c).
+    #[test]
+    fn a_buy_moves_at_most_32000_tons() {
+        let rich = |free| stall(100_000_000, 0, free);
+        let most = |free| rich(free).row_max(0, Direction::Buy);
+        assert_eq!(most(40_000), Some(32_000));
+        assert_eq!(most(32_001), Some(32_000));
+        assert_eq!(most(32_000), Some(32_000));
+        assert_eq!(most(31_999), Some(31_999));
+        let buy = |free, lot| rich(free).tons(order(0, FOOD, Direction::Buy, lot));
+        assert_eq!(buy(40_000, Lot::Max), Ok(32_000));
+        assert_eq!(buy(40_000, Lot::Count(32_000)), Ok(32_000));
+        assert_eq!(
+            buy(40_000, Lot::Count(32_001)),
+            Err(TradeRefusal::OutOfRange)
+        );
+        let water = |free| stall(0, 0, free).row_max(2, Direction::Buy);
+        assert_eq!(water(40_000), Some(32_000), "at no price, by space");
+        assert_eq!(water(9), Some(9));
+    }
+
+    /// A stall whose only row is food at 32767, the most a price can be,
+    /// traded both ways, for a player with `cash` and 2000 tons free.
+    fn dear(cash: i64) -> Market {
+        Market {
+            rows: vec![row(FOOD, "Food", 32_767)],
+            ..stall(cash, 0, 2000)
+        }
+    }
+
+    /// By the engine the cash is divided by the price in single floats
+    /// (@0x5e21d-0x5e234): 32,766,999 is 32,767,000 as an `f32`, so the
+    /// most is 1000, a ton more than the cash covers.
+    #[test]
+    fn by_the_engine_the_most_a_buy_moves_is_the_single_float_quotient() {
+        let market = dear(32_766_999);
+        assert_eq!(market, quotient_by(RuleSource::Engine, dear(32_766_999)));
+        let buy = |lot| market.tons(order(0, FOOD, Direction::Buy, lot));
+        assert_eq!(market.row_max(0, Direction::Buy), Some(1000));
+        assert_eq!(buy(Lot::Max), Ok(1000));
+        assert_eq!(buy(Lot::Count(1000)), Ok(1000));
+        assert_eq!(buy(Lot::Count(1001)), Err(TradeRefusal::OutOfRange));
+    }
+
+    #[test]
+    fn by_the_other_reading_the_most_a_buy_moves_is_the_integer_quotient() {
+        let market = quotient_by(RuleSource::Bible, dear(32_766_999));
+        let buy = |lot| market.tons(order(0, FOOD, Direction::Buy, lot));
+        assert_eq!(market.row_max(0, Direction::Buy), Some(999));
+        assert_eq!(buy(Lot::Max), Ok(999));
+        assert_eq!(buy(Lot::Count(999)), Ok(999));
+        assert_eq!(buy(Lot::Count(1000)), Err(TradeRefusal::OutOfRange));
+    }
+
+    /// Below 2^24 the cash converts exactly, and the quotient never rounds
+    /// up to the next ton.
+    #[test]
+    fn below_2_24_cash_both_quotients_agree() {
+        for (cash, price, most) in [
+            (16_383_499, 32_767, 499),
+            (16_383_500, 32_767, 500),
+            (999_999, 1001, 999),
+            (32_766, 32_767, 0),
+            (100, 100, 1),
+        ] {
+            let market = Market {
+                rows: vec![row(FOOD, "Food", price)],
+                ..stall(cash, 0, 2000)
+            };
+            for source in RuleSource::ALL {
+                let found = quotient_by(source, market.clone()).row_max(0, Direction::Buy);
+                assert_eq!(found, Some(most), "{cash} at {price} {source:?}");
+            }
+        }
+    }
+
+    /// The engine holds the cash in 32 bits and the price in 16 before it
+    /// divides; past those, this port holds each at the most it can hold
+    /// rather than wrapping it.
+    #[test]
+    fn by_the_engine_the_cash_and_price_divided_are_held_at_their_widths() {
+        let at = |cash, price| Market {
+            rows: vec![row(FOOD, "Food", price)],
+            ..stall(cash, 0, 40_000)
+        };
+        let most = |cash, price| at(cash, price).row_max(0, Direction::Buy);
+        assert_eq!(most((1 << 32) + 100_000, 10), Some(32_000), "not 10,000");
+        assert_eq!(most(32_767_000, 40_000), Some(1000), "at 32767, not 819");
+        let other = quotient_by(RuleSource::Bible, at(32_767_000, 40_000));
+        assert_eq!(other.row_max(0, Direction::Buy), Some(819));
+    }
+
+    #[test]
+    fn a_click_is_unchanged_by_the_quotient() {
+        for source in RuleSource::ALL {
+            let market = quotient_by(source, dear(32_766_999));
+            let click = market.tons(order(0, FOOD, Direction::Buy, Lot::Click));
+            assert_eq!(click, Ok(10), "{source:?}");
+            let poor = quotient_by(source, dear(32_767 * 3 - 1));
+            let click = poor.tons(order(0, FOOD, Direction::Buy, Lot::Click));
+            assert_eq!(click, Ok(2), "{source:?}");
+        }
+    }
+
+    /// A negative price gives a quotient of 0 or less, so the most a buy
+    /// moves is 0 or less and every buy is refused; the dialog would open
+    /// on it all the same.
+    #[test]
+    fn by_the_engine_a_negative_junk_price_offers_a_most_of_0_or_less() {
+        let at = |cash| junk_market(-100, ONLY_SOLD, RuleSource::Engine, &pilot(cash));
+        assert_eq!(at(0).row_max(0, Direction::Buy), Some(0), "traded at 0");
+        assert_eq!(
+            at(1000).row_max(0, Direction::Buy),
+            Some(-12),
+            "1000 at -80"
+        );
+        for cash in [0, 1000] {
+            for lot in [Lot::Max, Lot::Count(1), Lot::Count(0)] {
+                assert_eq!(
+                    at(cash).tons(order(0, ODD, Direction::Buy, lot)),
+                    Err(TradeRefusal::CannotAfford),
+                    "{cash} {lot:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn row_max_is_none_on_no_row_or_one_not_traded_that_way() {
+        let market = stall(10_000, 5, 50);
+        assert_eq!(market.row_max(1, Direction::Buy), None, "opals not sold");
+        assert_eq!(market.row_max(2, Direction::Sell), None, "water not bought");
+        assert_eq!(market.row_max(3, Direction::Buy), None, "no row 3");
+        assert_eq!(market.row_max(3, Direction::Sell), None, "no row 3");
+        assert_eq!(market.row_max(1, Direction::Sell), Some(5));
+        assert_eq!(market.row_max(2, Direction::Buy), Some(50));
+        assert_eq!(stall(0, 0, 9).row_max(0, Direction::Sell), Some(0));
+    }
+
+    #[test]
+    fn row_max_is_what_the_most_moves() {
+        for market in [stall(10_000, 5, 50), stall(350, 3, 70), stall(0, 40, 9)] {
+            for (index, good) in [(0, FOOD), (1, OPALS), (2, WATER)] {
+                for direction in [Direction::Buy, Direction::Sell] {
+                    let positive = market.row_max(index, direction).filter(|&most| most > 0);
+                    let Some(most) = positive else {
+                        continue;
+                    };
+                    let moved = market.tons(order(index, good, direction, Lot::Max));
+                    assert_eq!(moved, Ok(u32::try_from(most).expect("some")), "{good:?}");
+                }
+            }
+        }
     }
 
     #[test]

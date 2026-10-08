@@ -51,7 +51,8 @@
 //! At a trade center, the spaceport's Trade Center opens the session's
 //! exchange, laid out by the interface file's "Trade" dialog. There a
 //! plain B buys and S sells up to ten tons of the selected good (a ton by
-//! the `trade_lot` rule's other reading), and with Alt held the most; the
+//! the `trade_lot` rule's other reading), and with Alt held the engine's
+//! maximum (the `trade_quotient` rule says how it divides); the
 //! router makes each trade through the session, hands the exchange as
 //! it now is back to the screen, and saves the pilot after the input.
 //!
@@ -130,7 +131,9 @@
 //! price as the router says ([`AppScreen::with_junk_price`]), and trades
 //! each `jünk` row the ways it says ([`AppScreen::with_junk_trade`]), and
 //! moves as many tons a plain trade as it says
-//! ([`AppScreen::with_trade_lot`]), the engine's until others are given. Each flight's outfitter sells a map
+//! ([`AppScreen::with_trade_lot`]), and divides the cash by the price for
+//! the most a buy moves as it says ([`AppScreen::with_trade_quotient`]),
+//! the engine's until others are given. Each flight's outfitter sells a map
 //! or clean-record outfit as the router says
 //! ([`AppScreen::with_outfit_limit`]), the engine's until another is
 //! given; each time the spaceport's outfitter opens, the flight is told
@@ -343,6 +346,9 @@ pub struct AppScreen {
     junk_trade: RuleSource,
     /// How many tons a plain trade on each flight's exchange moves.
     trade_lot: RuleSource,
+    /// How the most a buy on each flight's exchange moves divides the
+    /// cash by the price.
+    trade_quotient: RuleSource,
     /// Whether each flight's outfitter sells a map or clean-record outfit
     /// only once an opening.
     outfit_limit: RuleSource,
@@ -444,6 +450,7 @@ impl AppScreen {
             junk_price: RuleSource::Engine,
             junk_trade: RuleSource::Engine,
             trade_lot: RuleSource::Engine,
+            trade_quotient: RuleSource::Engine,
             outfit_limit: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
@@ -671,6 +678,18 @@ impl AppScreen {
         }
     }
 
+    /// The router with the most a buy on each flight's exchange moves
+    /// dividing the cash by the price as `source` says
+    /// ([`FlightView::with_trade_quotient`]); the engine's (in single
+    /// floats) until another is given.
+    #[must_use]
+    pub fn with_trade_quotient(self, source: RuleSource) -> Self {
+        Self {
+            trade_quotient: source,
+            ..self
+        }
+    }
+
     /// The router with each flight's outfitter selling a map or
     /// clean-record outfit as `source` says
     /// ([`FlightView::with_outfit_limit`]); the engine's (once an opening)
@@ -773,6 +792,7 @@ impl AppScreen {
             .with_junk_price(rulebook.source_for(RuleKey::JunkPrice))
             .with_junk_trade(rulebook.source_for(RuleKey::JunkTrade))
             .with_trade_lot(rulebook.source_for(RuleKey::TradeLot))
+            .with_trade_quotient(rulebook.source_for(RuleKey::TradeQuotient))
             .with_outfit_limit(rulebook.source_for(RuleKey::OutfitLimit))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
@@ -837,6 +857,7 @@ impl AppScreen {
             .with_junk_price(self.junk_price)
             .with_junk_trade(self.junk_trade)
             .with_trade_lot(self.trade_lot)
+            .with_trade_quotient(self.trade_quotient)
             .with_outfit_limit(self.outfit_limit)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
@@ -6217,6 +6238,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_trade_quotient_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_trade_quotient(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.trade_quotient(), source);
+            assert_eq!(session.trade_lot(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.trade_quotient(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_outfit_limit_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_outfit_limit(source);
@@ -6305,6 +6341,7 @@ mod tests {
             ("junk_price", format!("{:?}", screen.junk_price)),
             ("junk_trade", format!("{:?}", screen.junk_trade)),
             ("trade_lot", format!("{:?}", screen.trade_lot)),
+            ("trade_quotient", format!("{:?}", screen.trade_quotient)),
             ("outfit_limit", format!("{:?}", screen.outfit_limit)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
@@ -6339,6 +6376,7 @@ mod tests {
             RuleKey::JunkPrice => "junk_price",
             RuleKey::JunkTrade => "junk_trade",
             RuleKey::TradeLot => "trade_lot",
+            RuleKey::TradeQuotient => "trade_quotient",
             RuleKey::OutfitLimit => "outfit_limit",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
