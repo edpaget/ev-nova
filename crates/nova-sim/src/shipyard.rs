@@ -321,11 +321,13 @@ pub fn ship_price(ship: &ShipRecord) -> i64 {
 /// The hull starts the total at [`TRADE_IN_PERCENT`] of its `Cost`,
 /// truncated toward zero and not clamped, so a negative `Cost` starts it
 /// below 0 (@0xb0b7-0xb0cc). Then, by ascending ID, each outfit owned
-/// that has a record and a count above 0, and is not persistent, adds half
-/// its whole line, count × its price on that ship, the total truncated
-/// toward zero after each (@0xb0d5-0xb0e1, @0xb109-0xb11f). The persistent
-/// flag is the record byte `_LoadObjectData` sets from `Flags` 0x0004
-/// (@0x78cad-0x78cb3). By the engine an unsellable outfit counts; by
+/// that has a record and is not persistent adds half its whole line,
+/// count × its price on that ship, the total truncated toward zero after
+/// each (@0xb0da-0xb0e1, @0xb109-0xb11f). The engine also skips a count of
+/// 0 (@0xb0d5-0xb0d8); here that outfit's line of 0 leaves the total as it
+/// was, so it needs no skip of its own. The persistent flag is the record
+/// byte `_LoadObjectData` sets from `Flags` 0x0004 (@0x78cad-0x78cb3). By
+/// the engine an unsellable outfit counts; by
 /// `source` [`RuleSource::Bible`] it adds nothing either
 /// ([`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits)). Only the
 /// final total is clamped at 0 (@0xb131-0xb138).
@@ -344,7 +346,6 @@ pub fn trade_in(
     let hull = i64::from(cost) * TRADE_IN_PERCENT / 100;
     owned
         .iter()
-        .filter(|&(_, &count)| count > 0)
         .filter_map(|(id, &count)| {
             let record = records.iter().find(|record| record.id == *id)?;
             (record.flags & skipped == 0).then_some((record, count))
