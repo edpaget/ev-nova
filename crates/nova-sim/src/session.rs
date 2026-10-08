@@ -87,7 +87,11 @@
 //! ([`Session::market`], [`Session::trade`]), with the cargo space the ship
 //! and its outfits give; the goods traded and the events that move their
 //! prices are read when the session starts. A trade makes a save due; a
-//! refused one changes nothing.
+//! refused one changes nothing. In flight, held tribbles `jünk` grow and
+//! perishable `jünk` decay a ton on each due frame, the 15th tick after a
+//! take-off and then as the [`market`](crate::market) rules time it, as
+//! the session's reading says (the engine's unless
+//! [`Session::with_junk_flags`] says otherwise); that makes no save due.
 //!
 //! Landed at an outfitter, the player buys and sells outfits one at a
 //! time ([`Session::outfitter`], [`Session::outfit`]) as the
@@ -499,6 +503,15 @@ pub struct Session {
     ship_redraws: BTreeSet<ShipId>,
     /// How `BuyRandom` reads (see [`Session::with_buy_random`]).
     buy_random: RuleSource,
+    /// The original's frame counter, which times the tribbles and
+    /// perishables step (see [`market`]). The original's value when a
+    /// flight starts depends on how long the program has run, so 0 here
+    /// is a choice; a take-off sets it anyway. Not saved, as the
+    /// original's pilot file does not keep it.
+    frame: i16,
+    /// When held tribbles and perishable `jünk` grow and decay (see
+    /// [`Session::with_junk_flags`]).
+    junk_flags: RuleSource,
     /// Whether each take-off pays the hired escorts a day's wages (see
     /// [`Session::with_take_off_pay`]).
     take_off_pay: RuleSource,
@@ -634,6 +647,8 @@ impl Session {
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             buy_random: RuleSource::Engine,
+            frame: 0,
+            junk_flags: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
@@ -746,10 +761,25 @@ impl Session {
     /// land key and the pick. A ship that is not intact ignores the
     /// controls and drifts, giving up a jump it was turning and braking
     /// for, and a destroyed one stays where it is.
+    ///
+    /// Each tick in flight, a jump's included, moves the frame counter on,
+    /// and on a due frame ([`market::junk_step_due`]) steps the held
+    /// tribbles and perishables, unless the player is destroyed. A landed
+    /// tick moves neither.
     pub fn tick(&mut self, controls: Controls) {
         self.gate = None;
         if self.landed.is_some() {
             return;
+        }
+        let frame = self.frame;
+        self.frame = market::next_frame(frame);
+        if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
+            market::step_junk(
+                &self.goods,
+                &mut self.pilot.cargo,
+                self.stats.capacity,
+                self.junk_flags,
+            );
         }
         let controls = match self.condition {
             Condition::Intact => controls,
@@ -1759,6 +1789,7 @@ impl Session {
     /// has not landed.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.landed.take()?;
+        self.frame = market::AFTER_TAKE_OFF_FRAME;
         self.traffic_due = true;
         if self.take_off_pay == RuleSource::Engine {
             self.pay_escorts(1);
@@ -1828,6 +1859,24 @@ impl Session {
     #[must_use]
     pub fn buy_random(&self) -> RuleSource {
         self.buy_random
+    }
+
+    /// This session with held tribbles and perishable `jünk` growing and
+    /// decaying as `source` says
+    /// ([`RuleKey::JunkFlags`](crate::RuleKey::JunkFlags)): by the
+    /// engine's default, on the free space measured once, so tribbles can
+    /// overfill the hold (see [`market`]).
+    #[must_use]
+    pub fn with_junk_flags(mut self, source: RuleSource) -> Self {
+        self.junk_flags = source;
+        self
+    }
+
+    /// How held tribbles and perishable `jünk` grow and decay: by the
+    /// engine ([`RuleSource::Engine`]) or by the Bible.
+    #[must_use]
+    pub fn junk_flags(&self) -> RuleSource {
+        self.junk_flags
     }
 
     /// The outfitter of the stellar the ship is docked at, if it has
@@ -4632,6 +4681,7 @@ mod tests {
             bought_at: vec![StellarId(140)],
             buy_on: String::new(),
             sell_on: String::new(),
+            flags: 0,
         };
         let catalog = edge_lander();
         let catalog = FakePilotCatalog {
@@ -4676,6 +4726,167 @@ mod tests {
             Ok(12)
         );
         assert_eq!(session.pilot().cash(), 1000 - 12 * 80 + 12 * 125);
+    }
+
+    // Tribbles and perishables.
+
+    const FURBALLS: Good = Good::Junk(JunkId(128));
+    const FRUIT: Good = Good::Junk(JunkId(129));
+    const MORE_FURBALLS: Good = Good::Junk(JunkId(130));
+
+    /// [`exchange`], its planet 128 selling `jünk` 128 and 130, tribbles,
+    /// and 129, perishable, at 8 a ton.
+    fn breeding() -> FakePilotCatalog {
+        let sold = |id, flags| JunkRecord {
+            id: JunkId(id),
+            name: format!("Junk {id}"),
+            base_price: 10,
+            sold_at: vec![StellarId(128)],
+            bought_at: Vec::new(),
+            buy_on: String::new(),
+            sell_on: String::new(),
+            flags,
+        };
+        FakePilotCatalog {
+            junk: vec![
+                sold(128, market::TRIBBLES),
+                sold(129, market::PERISHABLE),
+                sold(130, market::TRIBBLES),
+            ],
+            ..exchange()
+        }
+    }
+
+    /// `session`, landed on planet 128 of [`breeding`], buys `tons` of
+    /// each good.
+    fn buy_goods(session: &mut Session, tons: &[(Good, u32)]) {
+        for &(good, tons) in tons {
+            for _ in 0..tons {
+                let bought = session.trade(order(good, Direction::Buy, Lot::One));
+                assert_eq!(bought, Ok(1), "{good:?}");
+            }
+        }
+    }
+
+    /// `session`, landed on planet 128 of [`breeding`], buys `tons` of
+    /// each good and takes off.
+    fn take_off_with(session: &mut Session, tons: &[(Good, u32)]) {
+        buy_goods(session, tons);
+        assert_eq!(session.take_off(), Some(StellarId(128)));
+    }
+
+    /// A session of [`breeding`] that has bought `tons` of each good at
+    /// planet 128 and taken off.
+    fn taken_off_with(tons: &[(Good, u32)]) -> Session {
+        let mut session = Session::start(&breeding()).expect("starts");
+        land_now(&mut session).expect("lands");
+        take_off_with(&mut session, tons);
+        session
+    }
+
+    /// The tons of furballs and of fruit held.
+    fn furballs_and_fruit(session: &Session) -> (u32, u32) {
+        (session.pilot().held(FURBALLS), session.pilot().held(FRUIT))
+    }
+
+    /// The ticks, from 1, on which `session`'s cargo changes in `ticks`
+    /// ticks with no keys held.
+    fn steps_in(session: &mut Session, ticks: u32) -> Vec<u32> {
+        let mut steps = Vec::new();
+        for tick in 1..=ticks {
+            let before = session.pilot().cargo().collect::<Vec<_>>();
+            session.tick(Controls::default());
+            if session.pilot().cargo().collect::<Vec<_>>() != before {
+                steps.push(tick);
+            }
+        }
+        steps
+    }
+
+    #[test]
+    fn after_a_take_off_tribbles_grow_and_perishables_decay_on_the_15th_tick_and_every_due_frame() {
+        let mut session = taken_off_with(&[(FURBALLS, 2), (FRUIT, 10)]);
+        assert_eq!(steps_in(&mut session, 14), Vec::<u32>::new());
+        assert_eq!(furballs_and_fruit(&session), (2, 10));
+        assert_eq!(steps_in(&mut session, 1), [1], "the 15th tick");
+        assert_eq!(furballs_and_fruit(&session), (3, 9));
+        assert_eq!(steps_in(&mut session, 249), Vec::<u32>::new());
+        assert_eq!(steps_in(&mut session, 1), [1], "the 265th tick");
+        assert_eq!(furballs_and_fruit(&session), (4, 8));
+        assert_eq!(
+            steps_in(&mut session, 1040 - 265),
+            [515, 765, 1015, 1040].map(|tick| tick - 265),
+            "four 250 ticks apart, then the next 25 ticks later"
+        );
+        assert_eq!(furballs_and_fruit(&session), (8, 4));
+    }
+
+    #[test]
+    fn landed_ticks_move_neither_the_cargo_nor_the_frame_counter() {
+        let mut session = Session::start(&breeding()).expect("starts");
+        land_now(&mut session).expect("lands");
+        buy_goods(&mut session, &[(FURBALLS, 19)]);
+        let frame = session.frame;
+        assert_eq!(steps_in(&mut session, 300), Vec::<u32>::new());
+        assert_eq!(session.frame, frame, "the counter stands still");
+        take_off_with(&mut session, &[]);
+        assert_eq!(steps_in(&mut session, 15), [15], "still the 15th tick");
+        assert_eq!(session.pilot().held(FURBALLS), 20, "the hold filled");
+    }
+
+    #[test]
+    fn a_step_falls_due_in_hyperspace_too() {
+        let catalog = breeding();
+        let mut session = taken_off_with(&[(FURBALLS, 1), (FRUIT, 15)]);
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        let held = furballs_and_fruit(&session);
+        session.frame = market::JUNK_STEP_FRAMES - 1;
+        assert_eq!(steps_in(&mut session, 2), [2]);
+        assert_eq!(session.jumping(), Some(SystemId(131)), "still jumping");
+        assert_eq!(furballs_and_fruit(&session), (held.0 + 1, held.1 - 1));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+    }
+
+    #[test]
+    fn a_destroyed_players_ticks_do_not_step_but_the_counter_moves_on() {
+        let mut session = taken_off_with(&[(FURBALLS, 2), (FRUIT, 2)]);
+        session.condition = Condition::Destroyed;
+        session.frame = 0;
+        assert_eq!(steps_in(&mut session, 1), Vec::<u32>::new());
+        assert_eq!(furballs_and_fruit(&session), (2, 2));
+        assert_eq!(session.frame, 1);
+    }
+
+    #[test]
+    fn a_step_makes_no_save_due() {
+        let mut session = taken_off_with(&[(FURBALLS, 2)]);
+        session.take_save_due();
+        assert_eq!(steps_in(&mut session, 15), [15]);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn the_session_reads_the_junk_flags_as_its_rule_says() {
+        let tons = [(FURBALLS, 10), (MORE_FURBALLS, 9)];
+        let mut engine = taken_off_with(&tons);
+        assert_eq!(engine.junk_flags(), RuleSource::Engine);
+        steps_in(&mut engine, 15);
+        let held =
+            |session: &Session| [FURBALLS, MORE_FURBALLS].map(|good| session.pilot().held(good));
+        assert_eq!(held(&engine), [11, 10], "21 tons of 20");
+        let mut bible = Session::start(&breeding())
+            .expect("starts")
+            .with_junk_flags(RuleSource::Bible);
+        assert_eq!(bible.junk_flags(), RuleSource::Bible);
+        land_now(&mut bible).expect("lands");
+        take_off_with(&mut bible, &tons);
+        steps_in(&mut bible, 15);
+        assert_eq!(held(&bible), [11, 9], "only the lower ID, into the space");
     }
 
     /// A food surplus at planet 140 (-15, 30 days, 35 % a day), and planet
@@ -8980,6 +9191,7 @@ mod tests {
             bought_at: Vec::new(),
             buy_on: String::new(),
             sell_on: String::new(),
+            flags: 0,
         }];
         catalog.outfits.push(outfit(310, &[]));
         let session = Session::start(&catalog).expect("starts");

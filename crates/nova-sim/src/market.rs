@@ -27,8 +27,36 @@
 //! through a trade center, so a listed stellar without one offers nothing.
 //! A stellar in both lists, which stock data never has, trades it both
 //! ways at its base price. `SellOn` gates selling it and `BuyOn` buying
-//! it, through [`control_bits_allow`]. Its tribbles and perishable flags
-//! are not modelled.
+//! it, through [`control_bits_allow`]. Its `Flags` make it multiply or
+//! decay in the hold (below).
+//!
+//! # Tribbles and perishables
+//!
+//! In flight, a held `jünk` with the Tribbles flag ([`TRIBBLES`]) gains a
+//! ton, and one with the Perishable flag ([`PERISHABLE`]) loses one, on
+//! each due frame, as the [`Session`](crate::Session) ticks; a good that
+//! decays to none is gone.
+//! There is no random draw. A frame is due when the original's frame
+//! counter is a multiple of [`JUNK_STEP_FRAMES`] ([`junk_step_due`]); the
+//! counter counts up to [`LAST_FRAME`] and goes back to 0
+//! ([`next_frame`]), so four due frames fall 250 frames apart and the
+//! next 25 frames later: 5 steps every 1025 ticks, about 34 s. Each tick
+//! in flight moves it on, a jump's too, but not a landed one; a take-off
+//! sets it to [`AFTER_TAKE_OFF_FRAME`], so the first step comes on the
+//! 15th tick of flight, and a destroyed player's ticks do not step. The
+//! original's double time, which steps a due frame twice, is not
+//! modelled.
+//!
+//! The conditions follow
+//! [`RuleKey::JunkFlags`](crate::RuleKey::JunkFlags): by the engine, on
+//! the free space measured once, so tribbles goods can overfill the hold,
+//! perishable goods decay only while there is space, and a good with both
+//! flags decays only beside a perishable-only good; by the Bible,
+//! tribbles goods grow only into free space and perishable goods always
+//! decay. The free space is the cargo space the ship and its outfits give
+//! ([`cargo_capacity`]) less everything held; the original counts the
+//! fleet's escort holds too, which waits for rdm
+//! `phase/shop-and-trade-fidelity/phase-11-exchange-fleet-holds`.
 //!
 //! # Events
 //!
@@ -67,6 +95,7 @@ use crate::chance::Chance;
 use crate::fuel::OutfitMod;
 use crate::landing::StellarFlags;
 use crate::pilot::Pilot;
+use crate::rulebook::RuleSource;
 
 /// How many standard commodities there are.
 pub const COMMODITIES: u8 = 6;
@@ -597,6 +626,133 @@ fn draw(stellars: &[StellarId], chance: &mut (impl Chance + ?Sized)) -> Option<S
     stellars.get(usize::from(chance.roll(sides))).copied()
 }
 
+/// The `jünk` `Flags` bit of a good that multiplies in the hold.
+pub const TRIBBLES: u16 = 0x0001;
+
+/// The `jünk` `Flags` bit of a good that decays in the hold.
+pub const PERISHABLE: u16 = 0x0002;
+
+/// How many frames apart the tribbles and perishables steps fall: a frame
+/// is due when the counter is a multiple of this (`_HandlePlayer`
+/// @0x70835-0x70861, @0x708c3-0x708f9).
+pub const JUNK_STEP_FRAMES: i16 = 250;
+
+/// The frame counter's highest value: it counts up to this, then goes back
+/// to 0 (`_PlayGame` @0x45f36-0x45f52), a cycle of 1025 frames.
+pub const LAST_FRAME: i16 = 1024;
+
+/// The frame counter on the first tick after a take-off. The original
+/// sets -15 inside the take-off frame (`_HandlePlayerDockRequest`
+/// @0x67678), and that frame's end moves it on to this; -15 to -1 are
+/// never due, so the first step comes on the 15th tick of flight.
+pub const AFTER_TAKE_OFF_FRAME: i16 = -14;
+
+/// The frame counter after `frame`: one more, or 0 once that passes
+/// [`LAST_FRAME`].
+#[must_use]
+pub fn next_frame(frame: i16) -> i16 {
+    if frame >= LAST_FRAME { 0 } else { frame + 1 }
+}
+
+/// Whether the tribbles and perishables step falls due on `frame`: when it
+/// is a multiple of [`JUNK_STEP_FRAMES`]. The remainder truncates toward
+/// zero, as the original's does, so the frames -15 to -1 after a take-off
+/// are not due.
+#[must_use]
+pub fn junk_step_due(frame: i16) -> bool {
+    frame % JUNK_STEP_FRAMES == 0
+}
+
+/// One tribbles and perishables step on `cargo`, in a hold of `capacity`
+/// tons, read as `source` says
+/// ([`RuleKey::JunkFlags`](crate::RuleKey::JunkFlags)); whether it
+/// changed anything. Only held `jünk` whose record has a flag changes,
+/// a ton at a time, and a good decayed to none is gone.
+///
+/// The free space is the capacity less everything held, never below
+/// none, measured once.
+///
+/// - By the engine (`_ResetPlayerPrecalcedValues` @0xc52e-0xc55b,
+///   `_HandlePlayer` @0x70827-0x7093b), while that space is above none,
+///   every tribbles good held gains a ton, so with several of them the
+///   hold can go over; then, when a good that is perishable and not
+///   tribbles is held, every perishable good held loses a ton, on the
+///   same space, measured before the growth. So a good with both flags
+///   only grows unless a perishable-only good is aboard too, and then it
+///   grows and decays. With no tribbles good aboard, the original's
+///   perishable test reads a value nothing set for it, which is undefined;
+///   here it reads the free space measured the same way.
+/// - By the Bible, which says only that tribbles goods multiply and
+///   perishable goods "gradually decay away", the tribbles goods grow by
+///   ascending ID, each taking a ton of the free space, until none is
+///   left, so the hold never goes over; then every perishable good loses
+///   a ton, whatever the space.
+pub(crate) fn step_junk(
+    goods: &Goods,
+    cargo: &mut BTreeMap<Good, u32>,
+    capacity: u32,
+    source: RuleSource,
+) -> bool {
+    let flags = |good: Good| match good {
+        Good::Junk(id) => goods
+            .junk
+            .iter()
+            .find(|junk| junk.id == id)
+            .map_or(0, |junk| junk.flags),
+        Good::Commodity(_) => 0,
+    };
+    let held: Vec<(Good, u16)> = cargo
+        .iter()
+        .filter(|&(_, &tons)| tons > 0)
+        .map(|(&good, _)| (good, flags(good)))
+        .collect();
+    let with = |flag: u16| -> Vec<Good> {
+        held.iter()
+            .filter(|(_, flags)| flags & flag != 0)
+            .map(|&(good, _)| good)
+            .collect()
+    };
+    let total = cargo
+        .values()
+        .fold(0_u32, |sum, &tons| sum.saturating_add(tons));
+    let free = capacity.saturating_sub(total);
+    let (grow, decay) = match source {
+        RuleSource::Engine => {
+            let rotting = held
+                .iter()
+                .any(|(_, flags)| flags & PERISHABLE != 0 && flags & TRIBBLES == 0);
+            let room = free > 0;
+            let grow = if room { with(TRIBBLES) } else { Vec::new() };
+            let decay = if room && rotting {
+                with(PERISHABLE)
+            } else {
+                Vec::new()
+            };
+            (grow, decay)
+        }
+        RuleSource::Bible => {
+            let room = usize::try_from(free).unwrap_or(usize::MAX);
+            let grow = with(TRIBBLES).into_iter().take(room).collect();
+            (grow, with(PERISHABLE))
+        }
+    };
+    let before = cargo.clone();
+    for good in grow {
+        cargo
+            .entry(good)
+            .and_modify(|tons| *tons = tons.saturating_add(1));
+    }
+    for good in decay {
+        if let Some(tons) = cargo.get_mut(&good) {
+            *tons -= 1;
+            if *tons == 0 {
+                cargo.remove(&good);
+            }
+        }
+    }
+    *cargo != before
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,6 +955,7 @@ mod tests {
             bought_at: Vec::new(),
             buy_on: String::new(),
             sell_on: String::new(),
+            flags: 0,
         }
     }
 
@@ -1561,5 +1718,222 @@ mod tests {
         let mut events = BTreeMap::new();
         step_day(&goods, &mut events, &mut Scripted::answering(&[true]));
         assert_eq!(days(&events), [(128, 32_767)]);
+    }
+
+    // Tribbles and perishables: the frame counter.
+
+    #[test]
+    fn the_frame_counter_counts_up_to_1024_and_wraps_to_0() {
+        let moved: Vec<_> = [-15, -1, 0, 1, 1023, 1024].map(next_frame).to_vec();
+        assert_eq!(moved, [-14, 0, 1, 2, 1024, 0]);
+    }
+
+    #[test]
+    fn a_frame_is_due_when_the_counter_is_a_multiple_of_250() {
+        for frame in [0, 250, 500, 750, 1000] {
+            assert!(junk_step_due(frame), "{frame}");
+        }
+        for frame in [-15, -1, 1, 249, 251, 1024] {
+            assert!(!junk_step_due(frame), "{frame}");
+        }
+    }
+
+    #[test]
+    fn after_a_take_off_the_steps_fall_on_ticks_15_265_515_765_1015_and_1040() {
+        let mut frame = AFTER_TAKE_OFF_FRAME;
+        let mut due = Vec::new();
+        for tick in 1..=1100 {
+            if junk_step_due(frame) {
+                due.push(tick);
+            }
+            frame = next_frame(frame);
+        }
+        assert_eq!(due, [15, 265, 515, 765, 1015, 1040]);
+    }
+
+    #[test]
+    fn the_frame_constants_are_the_originals() {
+        assert_eq!(
+            (JUNK_STEP_FRAMES, LAST_FRAME, AFTER_TAKE_OFF_FRAME),
+            (250, 1024, -14)
+        );
+        assert_eq!((TRIBBLES, PERISHABLE), (0x0001, 0x0002));
+    }
+
+    // Tribbles and perishables: the step.
+
+    const BREEDING: Good = Good::Junk(JunkId(128));
+    const ROTTING: Good = Good::Junk(JunkId(129));
+    const BOTH: Good = Good::Junk(JunkId(130));
+    const PLAIN: Good = Good::Junk(JunkId(131));
+    const BREEDING_TOO: Good = Good::Junk(JunkId(132));
+
+    /// `jünk` 128 and 132 tribbles, 129 perishable, 130 both and 131
+    /// neither.
+    fn flagged() -> Goods {
+        let junk = [(128, TRIBBLES), (129, PERISHABLE)]
+            .into_iter()
+            .chain([(130, TRIBBLES | PERISHABLE), (131, 0), (132, TRIBBLES)])
+            .map(|(id, flags)| JunkRecord {
+                id: JunkId(id),
+                flags,
+                ..unlisted()
+            })
+            .collect();
+        Goods::new(&stock(), junk, Vec::new())
+    }
+
+    /// `held` after one step in a hold of 10 tons by `source`, and whether
+    /// the step changed it.
+    fn stepped(source: RuleSource, held: &[(Good, u32)]) -> (Vec<(Good, u32)>, bool) {
+        stepped_in(10, source, held)
+    }
+
+    /// `held` after one step in a hold of `capacity` tons by `source`,
+    /// and whether the step changed it.
+    fn stepped_in(
+        capacity: u32,
+        source: RuleSource,
+        held: &[(Good, u32)],
+    ) -> (Vec<(Good, u32)>, bool) {
+        let mut cargo: BTreeMap<Good, u32> = held.iter().copied().collect();
+        let changed = step_junk(&flagged(), &mut cargo, capacity, source);
+        (cargo.into_iter().collect(), changed)
+    }
+
+    const ENGINE: RuleSource = RuleSource::Engine;
+    const BIBLE: RuleSource = RuleSource::Bible;
+
+    #[test]
+    fn by_the_engine_a_tribbles_good_held_gains_a_ton_while_there_is_space() {
+        assert_eq!(
+            stepped(ENGINE, &[(FOOD, 2), (BREEDING, 3)]),
+            (vec![(FOOD, 2), (BREEDING, 4)], true),
+            "the tribbles good not held stays absent"
+        );
+        assert_eq!(
+            stepped(ENGINE, &[(FOOD, 7), (BREEDING, 3)]),
+            (vec![(FOOD, 7), (BREEDING, 3)], false),
+            "the hold full"
+        );
+        assert_eq!(
+            stepped(ENGINE, &[(FOOD, 8), (BREEDING, 3)]),
+            (vec![(FOOD, 8), (BREEDING, 3)], false),
+            "the hold over"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_every_tribbles_good_grows_on_the_space_measured_once() {
+        assert_eq!(
+            stepped(ENGINE, &[(BREEDING, 4), (BREEDING_TOO, 5)]),
+            (vec![(BREEDING, 5), (BREEDING_TOO, 6)], true),
+            "11 tons of 10"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_perishable_good_held_loses_a_ton_while_there_is_space() {
+        assert_eq!(stepped(ENGINE, &[(ROTTING, 3)]), (vec![(ROTTING, 2)], true));
+        assert_eq!(
+            stepped(ENGINE, &[(FOOD, 7), (ROTTING, 3)]),
+            (vec![(FOOD, 7), (ROTTING, 3)], false),
+            "the hold full"
+        );
+        assert_eq!(
+            stepped(ENGINE, &[(FOOD, 2), (ROTTING, 1)]),
+            (vec![(FOOD, 2)], true),
+            "a good decayed to none is gone"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_perishables_decay_on_the_space_measured_before_the_tribbles_grew() {
+        assert_eq!(
+            stepped(ENGINE, &[(BREEDING, 4), (ROTTING, 5)]),
+            (vec![(BREEDING, 5), (ROTTING, 4)], true)
+        );
+        assert_eq!(
+            stepped(ENGINE, &[(BREEDING, 5), (ROTTING, 5)]),
+            (vec![(BREEDING, 5), (ROTTING, 5)], false),
+            "the hold full"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_good_with_both_flags_decays_only_beside_a_perishable_only_good() {
+        assert_eq!(stepped(ENGINE, &[(BOTH, 3)]), (vec![(BOTH, 4)], true));
+        assert_eq!(
+            stepped(ENGINE, &[(ROTTING, 3), (BOTH, 3)]),
+            (vec![(ROTTING, 2), (BOTH, 3)], true),
+            "grown and decayed"
+        );
+        assert_eq!(
+            stepped(ENGINE, &[(BREEDING, 3), (BOTH, 3)]),
+            (vec![(BREEDING, 4), (BOTH, 4)], true),
+            "beside a tribbles good"
+        );
+    }
+
+    #[test]
+    fn commodities_unflagged_junk_and_junk_with_no_record_never_change() {
+        let unknown = Good::Junk(JunkId(999));
+        for source in [ENGINE, BIBLE] {
+            let held = vec![(FOOD, 2), (PLAIN, 3), (unknown, 1)];
+            assert_eq!(stepped(source, &held), (held.clone(), false), "{source:?}");
+            assert_eq!(stepped(source, &[]), (Vec::new(), false), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_bible_tribbles_goods_grow_by_id_only_into_free_space() {
+        assert_eq!(
+            stepped(BIBLE, &[(BREEDING, 4), (BREEDING_TOO, 5)]),
+            (vec![(BREEDING, 5), (BREEDING_TOO, 5)], true),
+            "only the lower ID"
+        );
+        assert_eq!(
+            stepped(BIBLE, &[(BREEDING, 4), (BREEDING_TOO, 4)]),
+            (vec![(BREEDING, 5), (BREEDING_TOO, 5)], true),
+            "room for both"
+        );
+        assert_eq!(
+            stepped(BIBLE, &[(FOOD, 7), (BREEDING, 3)]),
+            (vec![(FOOD, 7), (BREEDING, 3)], false),
+            "the hold full"
+        );
+        assert_eq!(
+            stepped_in(3, BIBLE, &[(FOOD, 4), (BREEDING, 1)]),
+            (vec![(FOOD, 4), (BREEDING, 1)], false),
+            "the hold over"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_perishables_always_decay() {
+        assert_eq!(
+            stepped(BIBLE, &[(FOOD, 7), (ROTTING, 3)]),
+            (vec![(FOOD, 7), (ROTTING, 2)], true),
+            "the hold full"
+        );
+        assert_eq!(
+            stepped(BIBLE, &[(ROTTING, 1)]),
+            (Vec::new(), true),
+            "a good decayed to none is gone"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_good_with_both_flags_grows_then_decays() {
+        assert_eq!(
+            stepped(BIBLE, &[(BOTH, 3)]),
+            (vec![(BOTH, 3)], false),
+            "with room"
+        );
+        assert_eq!(
+            stepped(BIBLE, &[(FOOD, 7), (BOTH, 3)]),
+            (vec![(FOOD, 7), (BOTH, 2)], true),
+            "the hold full"
+        );
     }
 }

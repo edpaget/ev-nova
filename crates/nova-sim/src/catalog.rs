@@ -260,6 +260,9 @@ pub struct JunkRecord {
     pub buy_on: String,
     /// Its `SellOn` control-bit expression.
     pub sell_on: String,
+    /// Its `Flags`, raw: [`TRIBBLES`](crate::market::TRIBBLES) and
+    /// [`PERISHABLE`](crate::market::PERISHABLE) are read.
+    pub flags: u16,
 }
 
 /// An `öops` resource's ID: a planetary event.
@@ -1026,6 +1029,7 @@ mod tests {
                 bought_at: Vec::new(),
                 buy_on: String::new(),
                 sell_on: String::new(),
+                flags: 0,
             }]
         }
 

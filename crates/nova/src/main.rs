@@ -83,9 +83,13 @@
 //! grants: `"grant_count"` (whether a grant is half its `GrantCount` to
 //! all of it, as the engine and the Bible have it, or one to all of it)
 //! and `"grant_max"` (whether a grant may pass the outfit's `Max`, or is
-//! held to it), and the shops' `"buy_random"` (whether an outfit's
+//! held to it), the shops' `"buy_random"` (whether an outfit's
 //! `BuyRandom` below 1 is never for sale and a ship's below 0 always, as
-//! the engine has it, or as the Bible says); every key is listed in
+//! the engine has it, or as the Bible says), and the cargo's
+//! `"junk_flags"` (whether held tribbles `jünk` can overfill the hold and
+//! perishable `jünk` decays only while there is space, as the engine has
+//! it, or tribbles grow only into free space and perishables always
+//! decay); every key is listed in
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!

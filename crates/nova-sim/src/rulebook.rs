@@ -39,6 +39,7 @@
 //! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a grant may take the player past the outfit's `Max` ([`NovaBoarding`](crate::NovaBoarding)) | it is held to `Max` less the owned\* |
 //! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: the original offers its `LinkMission`, which waits for missions ([`JoinFleet`](crate::hail::nova::JoinFleet)) | a person whose record allows it lists Use As Escort and joins the fleet as itself, for good\* |
 //! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
+//! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b; [`Session`](crate::Session)) | tribbles goods grow only into free space, and perishable goods always decay‡ |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -52,6 +53,11 @@
 //! † The Bible gives an outfit's `BuyRandom` below 1 or above 100 as 100,
 //! and a ship's 0 as never, but is silent on a ship's negative value:
 //! its reading here takes that as never too.
+//!
+//! ‡ The Bible says only that a tribbles good "multiplies like tribbles"
+//! and a perishable one "gradually decays away", and gives no rates: both
+//! readings take the engine's ton every due frame in flight, and only
+//! the conditions differ.
 //!
 //! # Adding a rule
 //!
@@ -309,6 +315,18 @@ rule_keys! {
     /// cover it (see [`outfitter`](crate::outfitter) and
     /// [`shipyard`](crate::shipyard)).
     BuyRandom => "buy_random",
+    /// When held `jünk` with the Tribbles (0x0001) and Perishable
+    /// (0x0002) `Flags` grow and decay, a ton each every due frame in
+    /// flight: by the engine, on the free space measured once, so
+    /// tribbles goods can fill the hold past full, perishable goods decay
+    /// only while there is space, and a good with both flags decays only
+    /// beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b);
+    /// by the Bible, which says only that tribbles goods multiply and
+    /// perishable goods "gradually decay away", tribbles goods grow only
+    /// into free space and perishable goods always decay. The Bible gives
+    /// no rates, so both readings take the engine's ton every due frame
+    /// (see [`market`](crate::market)).
+    JunkFlags => "junk_flags",
 }
 
 impl RuleKey {
@@ -451,9 +469,12 @@ mod tests {
                 RuleKey::GrantCount,
                 RuleKey::GrantMax,
                 RuleKey::PersonJoin,
-                RuleKey::BuyRandom
+                RuleKey::BuyRandom,
+                RuleKey::JunkFlags
             ]
         );
+        assert_eq!(RuleKey::JunkFlags.key(), "junk_flags");
+        assert_eq!(RuleKey::from_key("junk_flags"), Some(RuleKey::JunkFlags));
         assert_eq!(RuleKey::BuyRandom.key(), "buy_random");
         assert_eq!(RuleKey::from_key("buy_random"), Some(RuleKey::BuyRandom));
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

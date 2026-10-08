@@ -223,7 +223,9 @@
 //!   and trades through it ([`FlightView::outfit`],
 //!   [`FlightView::buy_ship`]), each item's roll for the day drawn on the
 //!   flight's chance; how `BuyRandom` reads is set on the screen
-//!   ([`FlightView::with_buy_random`]).
+//!   ([`FlightView::with_buy_random`]). How held tribbles and perishable
+//!   `jünk` grow and decay in flight is set there too
+//!   ([`FlightView::with_junk_flags`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
 //!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance;
@@ -1074,6 +1076,16 @@ impl<
     pub fn with_buy_random(self, source: RuleSource) -> Self {
         Self {
             session: self.session.map(|session| session.with_buy_random(source)),
+            ..self
+        }
+    }
+
+    /// The flight with held tribbles and perishable `jünk` growing and
+    /// decaying as `source` says ([`Session::with_junk_flags`]).
+    #[must_use]
+    pub fn with_junk_flags(self, source: RuleSource) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_junk_flags(source)),
             ..self
         }
     }
@@ -6041,6 +6053,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::buy_random),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_junk_flags_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_junk_flags(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.junk_flags(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::junk_flags),
             Ok(RuleSource::Engine)
         );
     }

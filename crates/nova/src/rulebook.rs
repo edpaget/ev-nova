@@ -342,6 +342,20 @@ mod tests {
     }
 
     #[test]
+    fn the_junk_flags_rule_is_overridden_by_its_key() {
+        let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"junk_flags": "bible"}}"#);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine().with_override(RuleKey::JunkFlags, RuleSource::Bible)
+        );
+        let (rulebook, _) =
+            rulebook_of(r#"{"rules": "bible", "rule_overrides": {"junk_flags": "engine"}}"#);
+        assert_eq!(rulebook.source_for(RuleKey::JunkFlags), RuleSource::Engine);
+        assert_eq!(rulebook.source_for(RuleKey::BuyRandom), RuleSource::Bible);
+    }
+
+    #[test]
     fn a_source_that_is_neither_is_the_engines_with_a_warning_naming_its_key() {
         for value in [r#""Bible""#, r#""both""#, "1", "null", r#"{"bible": true}"#] {
             let text =

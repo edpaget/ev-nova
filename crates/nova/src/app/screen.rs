@@ -113,6 +113,9 @@
 //! the engine's and Nova's until others are given. Each flight's
 //! outfitter and shipyard read `BuyRandom` as the router says
 //! ([`AppScreen::with_buy_random`]), the engine's until another is given.
+//! Each flight's held tribbles and perishable `jünk` grow and decay as
+//! the router says ([`AppScreen::with_junk_flags`]), the engine's until
+//! another is given.
 //! Each flight's persons
 //! appear as the router's rules say ([`AppScreen::with_person_rules`])
 //! and say their comm quotes as it says ([`AppScreen::with_comm_quote`]),
@@ -301,6 +304,9 @@ pub struct AppScreen {
     hire_require: RuleSource,
     /// How `BuyRandom` reads in each flight.
     buy_random: RuleSource,
+    /// How held tribbles and perishable `jünk` grow and decay in each
+    /// flight.
+    junk_flags: RuleSource,
     /// Whether each take-off pays each flight's hired escorts a day.
     take_off_pay: RuleSource,
     /// Which wage each flight's hired escorts are paid.
@@ -391,6 +397,7 @@ impl AppScreen {
             fighter_recall: RuleSource::Engine,
             hire_require: RuleSource::Engine,
             buy_random: RuleSource::Engine,
+            junk_flags: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
@@ -525,6 +532,18 @@ impl AppScreen {
         }
     }
 
+    /// The router with held tribbles and perishable `jünk` growing and
+    /// decaying in each flight as `source` says
+    /// ([`FlightView::with_junk_flags`]); the engine's until another is
+    /// given.
+    #[must_use]
+    pub fn with_junk_flags(self, source: RuleSource) -> Self {
+        Self {
+            junk_flags: source,
+            ..self
+        }
+    }
+
     /// The router with each take-off paying each flight's hired escorts a
     /// day's wages, or not, as `source` says
     /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
@@ -591,7 +610,7 @@ impl AppScreen {
     /// The router with Nova's rules, each disputed one as `rulebook`
     /// chooses: the NPCs' behaviour, disabling, point defence, the law,
     /// boarding, hailing, the escorts' and fighters' rules, hiring, the
-    /// shops' `BuyRandom`, and the persons' rules. This is the edge where every [`RuleKey`] meets
+    /// shops' `BuyRandom`, the tribbles and perishables, and the persons' rules. This is the edge where every [`RuleKey`] meets
     /// its setting.
     #[must_use]
     pub fn with_rulebook(self, rulebook: &Rulebook) -> Self {
@@ -606,6 +625,7 @@ impl AppScreen {
             .with_fighter_recall(rulebook.source_for(RuleKey::FighterRecall))
             .with_hire_require(rulebook.source_for(RuleKey::HireRequire))
             .with_buy_random(rulebook.source_for(RuleKey::BuyRandom))
+            .with_junk_flags(rulebook.source_for(RuleKey::JunkFlags))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
@@ -661,6 +681,7 @@ impl AppScreen {
             .with_fighter_recall(self.fighter_recall)
             .with_hire_require(self.hire_require)
             .with_buy_random(self.buy_random)
+            .with_junk_flags(self.junk_flags)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
@@ -5937,6 +5958,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_junk_flags_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_junk_flags(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.junk_flags(), source);
+            assert_eq!(session.buy_random(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.junk_flags(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_persons_rules_reach_every_flight() {
         let rules = nova_sim::NovaPersons {
             slots: RuleSource::Bible,
@@ -5972,6 +6008,7 @@ mod tests {
             ("fighter_recall", format!("{:?}", screen.fighter_recall)),
             ("hire_require", format!("{:?}", screen.hire_require)),
             ("buy_random", format!("{:?}", screen.buy_random)),
+            ("junk_flags", format!("{:?}", screen.junk_flags)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
@@ -5997,6 +6034,7 @@ mod tests {
             RuleKey::FighterRecall => "fighter_recall",
             RuleKey::HireRequire => "hire_require",
             RuleKey::BuyRandom => "buy_random",
+            RuleKey::JunkFlags => "junk_flags",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
             RuleKey::EscortWage => "escort_wage",

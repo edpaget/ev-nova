@@ -226,6 +226,7 @@ impl PilotCatalog for GameData {
                     bought_at: stellars(&record.bought_at),
                     buy_on: record.buy_on.as_str().to_owned(),
                     sell_on: record.sell_on.as_str().to_owned(),
+                    flags: record.flags.bits(),
                 })
             })
             .collect()
@@ -1539,6 +1540,7 @@ mod tests {
         let mut opals = junk(&[189, 165], &[185, -1, 199], 1200, "opals");
         opals[0xA6..0xA9].copy_from_slice(b"b43");
         opals[0x1A5..0x1A9].copy_from_slice(b"!b80");
+        put_i16s(&mut opals, 0x22, &[0x0003]);
         let data = store_named(&[
             (Junk::TYPE, 146, Some("Opals"), opals),
             (Junk::TYPE, 134, None, junk(&[160], &[], 300, "water")),
@@ -1560,6 +1562,7 @@ mod tests {
                     bought_at: Vec::new(),
                     buy_on: String::new(),
                     sell_on: String::new(),
+                    flags: 0,
                 },
                 JunkRecord {
                     id: JunkId(146),
@@ -1569,6 +1572,7 @@ mod tests {
                     bought_at: vec![StellarId(185), StellarId(199)],
                     buy_on: "b43".to_owned(),
                     sell_on: "!b80".to_owned(),
+                    flags: 0x0003,
                 },
             ],
             "a resource without a name goes by its LCName; an undecodable one is skipped"
