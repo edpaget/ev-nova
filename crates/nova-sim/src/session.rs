@@ -521,6 +521,9 @@ pub struct Session {
     /// How an active `öops` event prices its commodity (see
     /// [`Session::with_event_price`]).
     event_price: RuleSource,
+    /// What cargo a ship purchase keeps (see
+    /// [`Session::with_purchase_cargo`]).
+    purchase_cargo: RuleSource,
     /// Whether each take-off pays the hired escorts a day's wages (see
     /// [`Session::with_take_off_pay`]).
     take_off_pay: RuleSource,
@@ -661,6 +664,7 @@ impl Session {
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
             event_price: RuleSource::Engine,
+            purchase_cargo: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
@@ -1920,6 +1924,24 @@ impl Session {
         self.junk_flags
     }
 
+    /// This session with a ship purchase keeping the cargo as `source`
+    /// says ([`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo)):
+    /// by the engine's default, each good's share by the new ship's cargo
+    /// space over that plus the trader escorts' holds, then trimmed to the
+    /// fleet's holds (see [`shipyard`]).
+    #[must_use]
+    pub fn with_purchase_cargo(mut self, source: RuleSource) -> Self {
+        self.purchase_cargo = source;
+        self
+    }
+
+    /// What cargo a ship purchase keeps: by the engine
+    /// ([`RuleSource::Engine`]) or by the other reading.
+    #[must_use]
+    pub fn purchase_cargo(&self) -> RuleSource {
+        self.purchase_cargo
+    }
+
     /// This session with a launcher's sale refused for its ammunition as
     /// `source` says
     /// ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)): by the
@@ -2129,12 +2151,17 @@ impl Session {
         };
         let old_mass = self.fields.mass;
         self.drop_fighters(|_, _| false);
+        let escorts: Vec<EscortHolds> = self.escort_holds().collect();
+        let fleet = shipyard::Fleet {
+            escorts: &escorts,
+            cargo: self.purchase_cargo,
+        };
         let outfits = std::mem::take(&mut self.outfits);
         let fits = self.arsenal.stock_fits(ship, &outfits);
         let mut bought = None;
         self.transact(|pilot| {
             bought = Some(shipyard::purchase(
-                pilot, old_mass, &record, name, &fits, quote, &outfits,
+                pilot, old_mass, &record, name, &fits, quote, &outfits, fleet,
             ));
         });
         self.outfits = outfits;
@@ -6429,6 +6456,52 @@ mod tests {
         assert_eq!(session.ship(), NEW);
         assert_eq!(session.pilot().cash(), 25_000 - 17_500 + 2500);
         assert_eq!(session.pilot().outfits().collect::<Vec<_>>(), [(TANK, 1)]);
+    }
+
+    #[test]
+    fn buying_a_ship_keeps_the_cargo_as_its_rule_says_with_the_trader_escorts() {
+        let catalog = FakePilotCatalog {
+            ship_records: [shipbuying().ship_records, vec![holds_record(130, 15, 1)]].concat(),
+            ..shipbuying()
+        };
+        let opals = Good::Junk(JunkId(146));
+        assert_eq!(
+            Session::start(&catalog).expect("starts").purchase_cargo(),
+            RuleSource::Engine
+        );
+        // The new ship's 15 tons of 30 with the trader: f = 0.5.
+        for (source, kept, left_behind) in [
+            (
+                RuleSource::Engine,
+                vec![(FOOD, 5), (opals, 2)],
+                BTreeMap::from([(FOOD, 5), (opals, 2)]),
+            ),
+            (
+                RuleSource::Bible,
+                vec![(FOOD, 10), (opals, 4)],
+                BTreeMap::new(),
+            ),
+        ] {
+            let mut session = outfitted(&catalog).with_purchase_cargo(source);
+            assert_eq!(session.purchase_cargo(), source);
+            session.pilot.escorts = vec![
+                fleet_escort(130),
+                Escort {
+                    carried: true,
+                    ..fleet_escort(130)
+                },
+            ];
+            session.pilot.cargo = BTreeMap::from([(FOOD, 10), (opals, 4)]);
+            let bought = session
+                .buy_ship(NEW, "Kestrel", &mut NeverFires)
+                .expect("bought");
+            assert_eq!(
+                session.pilot().cargo().collect::<Vec<_>>(),
+                kept,
+                "{source:?}: the launched fighter takes no share"
+            );
+            assert_eq!(bought.left_behind, left_behind, "{source:?}");
+        }
     }
 
     #[test]

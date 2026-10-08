@@ -349,6 +349,20 @@ pub struct EscortHolds {
     pub carried: bool,
 }
 
+/// The summed `Holds` of the escorts [`fleet_holds`] counts: each that is
+/// not a launched fighter and whose `InherentAI` is
+/// [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI) or less, raw, with no
+/// cap and possibly below none. A ship purchase divides the cargo by it
+/// uncapped ([`shipyard`](crate::shipyard)).
+#[must_use]
+pub fn escort_tons(escorts: impl IntoIterator<Item = EscortHolds>) -> i64 {
+    escorts
+        .into_iter()
+        .filter(|escort| !escort.carried && escort.inherent_ai <= crate::escort::FREIGHTER_AI)
+        .map(|escort| i64::from(escort.holds))
+        .sum()
+}
+
 /// The fleet's cargo space, in tons (`_TotalFleetHolds` @0xc24d-0xc356):
 /// the ship's own `ship` tons plus the `Holds` of each escort that is not
 /// a launched fighter and whose `InherentAI` is
@@ -356,12 +370,7 @@ pub struct EscortHolds {
 /// [`MAX_FLEET_HOLDS`] and never below none.
 #[must_use]
 pub fn fleet_holds(ship: u32, escorts: impl IntoIterator<Item = EscortHolds>) -> u32 {
-    let escorts: i64 = escorts
-        .into_iter()
-        .filter(|escort| !escort.carried && escort.inherent_ai <= crate::escort::FREIGHTER_AI)
-        .map(|escort| i64::from(escort.holds))
-        .sum();
-    let tons = (i64::from(ship) + escorts).clamp(0, i64::from(MAX_FLEET_HOLDS));
+    let tons = (i64::from(ship) + escort_tons(escorts)).clamp(0, i64::from(MAX_FLEET_HOLDS));
     u32::try_from(tons).unwrap_or(MAX_FLEET_HOLDS)
 }
 
@@ -1235,6 +1244,25 @@ mod tests {
         assert_eq!(fleet_holds(40_000, []), 32_000, "the ship's too");
         assert_eq!(fleet_holds(u32::MAX, [escort(1, 1)]), 32_000);
         assert_eq!(fleet_holds(0, [escort(i16::MAX, 1); 6]), 32_000);
+    }
+
+    #[test]
+    fn the_escorts_tons_count_the_traders_out_of_no_bay_with_no_cap() {
+        let fighter = EscortHolds {
+            carried: true,
+            ..escort(15, 1)
+        };
+        assert_eq!(escort_tons([]), 0);
+        assert_eq!(
+            escort_tons([escort(15, 1), escort(30, 3), fighter, escort(-5, 0)]),
+            10,
+            "the trader and the negative one, not the warship or the fighter"
+        );
+        assert_eq!(
+            escort_tons([escort(i16::MAX, 2); 2]),
+            2 * i64::from(i16::MAX),
+            "past 32000"
+        );
     }
 
     // Control bits.

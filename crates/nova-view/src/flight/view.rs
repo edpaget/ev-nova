@@ -230,7 +230,8 @@
 //!   `ModType` 27 outfit raises its target's `Max`
 //!   ([`FlightView::with_raised_max`]). How an active `öops` event prices
 //!   its commodity on the exchange is set there too
-//!   ([`FlightView::with_event_price`]).
+//!   ([`FlightView::with_event_price`]), and what cargo a ship purchase
+//!   keeps ([`FlightView::with_purchase_cargo`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
 //!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance;
@@ -1103,6 +1104,18 @@ impl<
             session: self
                 .session
                 .map(|session| session.with_launcher_sale(source)),
+            ..self
+        }
+    }
+
+    /// The flight with a ship purchase keeping the cargo as `source` says
+    /// ([`Session::with_purchase_cargo`]).
+    #[must_use]
+    pub fn with_purchase_cargo(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_purchase_cargo(source)),
             ..self
         }
     }
@@ -6134,6 +6147,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::launcher_sale),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_purchase_cargo_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_purchase_cargo(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.purchase_cargo(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::purchase_cargo),
             Ok(RuleSource::Engine)
         );
     }

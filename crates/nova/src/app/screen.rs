@@ -123,6 +123,9 @@
 //! until another is given. Each flight's exchange prices an active
 //! `öops` event's commodity as the router says
 //! ([`AppScreen::with_event_price`]), the engine's until another is given.
+//! Each flight's ship purchase keeps the cargo as the router says
+//! ([`AppScreen::with_purchase_cargo`]), the engine's until another is
+//! given.
 //! Each flight's persons
 //! appear as the router's rules say ([`AppScreen::with_person_rules`])
 //! and say their comm quotes as it says ([`AppScreen::with_comm_quote`]),
@@ -322,6 +325,8 @@ pub struct AppScreen {
     /// How each flight's exchange prices an active `öops` event's
     /// commodity.
     event_price: RuleSource,
+    /// What cargo each flight's ship purchase keeps.
+    purchase_cargo: RuleSource,
     /// Whether each take-off pays each flight's hired escorts a day.
     take_off_pay: RuleSource,
     /// Which wage each flight's hired escorts are paid.
@@ -416,6 +421,7 @@ impl AppScreen {
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
             event_price: RuleSource::Engine,
+            purchase_cargo: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
@@ -597,6 +603,17 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's ship purchase keeping the cargo as
+    /// `source` says ([`FlightView::with_purchase_cargo`]); the engine's
+    /// until another is given.
+    #[must_use]
+    pub fn with_purchase_cargo(self, source: RuleSource) -> Self {
+        Self {
+            purchase_cargo: source,
+            ..self
+        }
+    }
+
     /// The router with each take-off paying each flight's hired escorts a
     /// day's wages, or not, as `source` says
     /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
@@ -663,8 +680,9 @@ impl AppScreen {
     /// The router with Nova's rules, each disputed one as `rulebook`
     /// chooses: the NPCs' behaviour, disabling, point defence, the law,
     /// boarding, hailing, the escorts' and fighters' rules, hiring, the
-    /// shops' `BuyRandom`, the tribbles and perishables, and the persons' rules. This is the edge where every [`RuleKey`] meets
-    /// its setting.
+    /// shops' `BuyRandom`, the tribbles and perishables, the cargo a ship
+    /// purchase keeps, and the persons' rules. This is the edge where
+    /// every [`RuleKey`] meets its setting.
     #[must_use]
     pub fn with_rulebook(self, rulebook: &Rulebook) -> Self {
         self.with_behaviour(Rc::new(NovaAi::from_rulebook(rulebook)))
@@ -682,6 +700,7 @@ impl AppScreen {
             .with_launcher_sale(rulebook.source_for(RuleKey::LauncherSale))
             .with_raised_max(rulebook.source_for(RuleKey::RaisedMax))
             .with_event_price(rulebook.source_for(RuleKey::EventPrice))
+            .with_purchase_cargo(rulebook.source_for(RuleKey::PurchaseCargo))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
@@ -741,6 +760,7 @@ impl AppScreen {
             .with_launcher_sale(self.launcher_sale)
             .with_raised_max(self.raised_max)
             .with_event_price(self.event_price)
+            .with_purchase_cargo(self.purchase_cargo)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
@@ -6047,6 +6067,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_purchase_cargo_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_purchase_cargo(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.purchase_cargo(), source);
+            assert_eq!(session.event_price(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.purchase_cargo(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_event_price_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_event_price(source);
@@ -6116,6 +6151,7 @@ mod tests {
             ("launcher_sale", format!("{:?}", screen.launcher_sale)),
             ("raised_max", format!("{:?}", screen.raised_max)),
             ("event_price", format!("{:?}", screen.event_price)),
+            ("purchase_cargo", format!("{:?}", screen.purchase_cargo)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
@@ -6145,6 +6181,7 @@ mod tests {
             RuleKey::LauncherSale => "launcher_sale",
             RuleKey::RaisedMax => "raised_max",
             RuleKey::EventPrice => "event_price",
+            RuleKey::PurchaseCargo => "purchase_cargo",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
             RuleKey::EscortWage => "escort_wage",

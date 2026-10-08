@@ -89,10 +89,14 @@
 //! `"junk_flags"` (whether held tribbles `jünk` can overfill the hold and
 //! perishable `jünk` decays only while there is space, as the engine has
 //! it, or tribbles grow only into free space and perishables always
-//! decay), and the exchange's `"event_price"` (whether an active `öops`
+//! decay), the exchange's `"event_price"` (whether an active `öops`
 //! event prices its commodity at its `BasePrice` plus its `PriceDelta`,
 //! the highest ID winning, as the engine has it, or adds its `PriceDelta`
-//! to the stellar's own price, several adding up); every key is listed in
+//! to the stellar's own price, several adding up), and the shipyard's
+//! `"purchase_cargo"` (whether a ship purchase keeps the new ship's share
+//! of each good against the trader escorts' holds, then trims to the
+//! fleet's holds, as the engine has it, or keeps what fits the new ship,
+//! goods in order); every key is listed in
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!

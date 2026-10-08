@@ -88,10 +88,27 @@
 //! `Max`, as the original fits them regardless, and then its stock weapons
 //! and their `AmmoLoad` are topped up (see Stock weapons).
 //!
-//! The cargo that fits in the new ship's cargo space is kept, goods in
-//! [`Good`] order (commodities by number, then `jünk` by ID) until the
-//! hold is full; the rest is left behind, unpaid, as the phase's "keeps
-//! cargo that fits" says (the Bible and the forums are silent). The new
+//! What cargo is kept follows the rulebook's
+//! [`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo) (`keep_cargo`);
+//! the rest is left behind, unpaid. By the engine, `_DoShipyardDialog`
+//! calls `_DestroyPartialFleetCargo(0)` (@0x5ef9f, @0xcd32-0xcff6) once
+//! the new class, launched fighters dropped and the outfits above are in
+//! place. A is the new ship's cargo space (its `Holds` and the `ModType` 2
+//! outfits now owned, @0xcd4c-0xcdcd) and B is A plus the `Holds` of the
+//! escorts the fleet's holds count ([`escort_tons`], @0xce08-0xcf0d), with
+//! no 32000 cap; f = min(1, A/B) in doubles (@0xcf27-0xcf37), and none
+//! when A is none (the engine's 0/0 NaN acts so). Each commodity becomes
+//! trunc(held x f) (for the player's slot the second write, @0xcf6c,
+//! wins), and each `jünk` loses trunc(held x f), so with no such escorts
+//! every `jünk` goes (@0xcf94-0xcfe4). Then `_ResetPlayerPrecalcedValues`
+//! trims (@0xc7d8-0xc82c): when the fleet's holds ([`fleet_holds`]) are
+//! below everything held, each commodity becomes trunc(held x holds /
+//! held in all), worked in single floats; `jünk` is not cut. Mission
+//! cargo, which the engine leaves alone, does not exist yet. By the other
+//! reading, the phase's first wording (the Bible and the forums are
+//! silent), the cargo that fits in the new ship's own cargo space is
+//! kept, goods in [`Good`] order (commodities by number, then `jünk` by
+//! ID) until the hold is full. The new
 //! ship comes with its shield, armour and fuel full, as a new hull: the
 //! Bible is silent here too. Everything else about the pilot (where it is,
 //! the date, the course, its legal records and the events under way)
@@ -159,7 +176,7 @@ use crate::chance::Chance;
 use crate::combat::armament::{StockFit, fit_stock, fitted};
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
-use crate::market::{Good, control_bits_allow};
+use crate::market::{EscortHolds, Good, control_bits_allow, escort_tons, fleet_holds};
 use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_mass, unit_price};
 use crate::pilot::{Pilot, merged, tally};
 use crate::rulebook::RuleSource;
@@ -479,10 +496,98 @@ pub(crate) struct Quote {
     pub(crate) trade_in: i64,
 }
 
+/// What a purchase's cargo step reads of the fleet.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Fleet<'a> {
+    /// The escorts that stay with the player, launched fighters already
+    /// gone.
+    pub(crate) escorts: &'a [EscortHolds],
+    /// What cargo the purchase keeps
+    /// ([`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo)).
+    pub(crate) cargo: RuleSource,
+}
+
+/// Cuts `cargo` down to what a purchase keeps on a new ship of `capacity`
+/// tons of its own with `escorts`, read as `source` says, and gives what
+/// it left behind, each good with its tons (see the module's Buying a
+/// ship).
+pub(crate) fn keep_cargo(
+    cargo: &mut BTreeMap<Good, u32>,
+    capacity: u32,
+    escorts: &[EscortHolds],
+    source: RuleSource,
+) -> BTreeMap<Good, u32> {
+    let before = cargo.clone();
+    match source {
+        RuleSource::Engine => {
+            let share = new_ships_share(capacity, escort_tons(escorts.iter().copied()));
+            for (good, tons) in cargo.iter_mut() {
+                let held = i64::from(*tons);
+                let part = (f64::from(*tons) * share) as i64;
+                let kept = match good {
+                    Good::Commodity(_) => part,
+                    Good::Junk(_) if part > held => 0,
+                    Good::Junk(_) => held - part,
+                };
+                *tons = u32::try_from(kept.max(0)).unwrap_or(u32::MAX);
+            }
+            trim_to(cargo, fleet_holds(capacity, escorts.iter().copied()));
+        }
+        RuleSource::Bible => {
+            let mut room = capacity;
+            for tons in cargo.values_mut() {
+                let kept = (*tons).min(room);
+                room -= kept;
+                *tons = kept;
+            }
+        }
+    }
+    cargo.retain(|_, tons| *tons > 0);
+    before
+        .into_iter()
+        .filter_map(|(good, was)| {
+            let now = cargo.get(&good).copied().unwrap_or(0);
+            (was > now).then(|| (good, was - now))
+        })
+        .collect()
+}
+
+/// The new ship's share of the fleet's cargo space when it buys a ship
+/// (`_DestroyPartialFleetCargo` @0xcf27-0xcf37): its own `capacity` over
+/// that plus the `escorts` tons, at most 1, in doubles. With no space of
+/// its own the share is none: the engine's 0/0 is NaN, which converts to
+/// a value that keeps nothing of a commodity and takes nothing of a
+/// `jünk`, as none does.
+fn new_ships_share(capacity: u32, escorts: i64) -> f64 {
+    if capacity == 0 {
+        return 0.0;
+    }
+    let own = f64::from(capacity);
+    (own / (own + escorts as f64)).min(1.0)
+}
+
+/// Cuts each commodity in `cargo` by `holds` over everything held when
+/// that is more (`_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c), in single
+/// floats; a `jünk` is not cut.
+fn trim_to(cargo: &mut BTreeMap<Good, u32>, holds: u32) {
+    let total: u64 = cargo.values().map(|&tons| u64::from(tons)).sum();
+    if u64::from(holds) >= total {
+        return;
+    }
+    let ratio = holds as f32 / total as f32;
+    for (good, tons) in cargo.iter_mut() {
+        if let Good::Commodity(_) = good {
+            *tons = (*tons as f32 * ratio) as u32;
+        }
+    }
+}
+
 /// Buys `new`, whose stock weapons and ammunition are `fits`
 /// ([`Arsenal::stock_fits`](crate::combat::armament::Arsenal::stock_fits)),
 /// for `pilot`, at `quote`, from a ship of `old_mass`, naming it `name`
-/// ([`cull_name`]), as the module says, and gives what it did.
+/// ([`cull_name`]), with `fleet`, as the module says, and gives what it
+/// did.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn purchase(
     pilot: &mut Pilot,
     old_mass: i16,
@@ -491,6 +596,7 @@ pub(crate) fn purchase(
     fits: &[StockFit],
     quote: Quote,
     records: &[OutfitRecord],
+    fleet: Fleet,
 ) -> ShipPurchase {
     let defaults = tally(new.defaults.iter().copied());
     let standard = merged(&defaults, &fitted(fits));
@@ -528,19 +634,7 @@ pub(crate) fn purchase(
         .saturating_add(quote.trade_in)
         .saturating_add(refund);
     let stats = ShipStats::new(new.fields, &outfit_mods(&pilot.outfits, records));
-    // The new ship's own space, not the fleet's: the original's trim
-    // waits for rdm `phase/shop-and-trade-fidelity/phase-17-shipyard-fleet-cargo`.
-    let mut room = stats.capacity;
-    let mut left_behind = BTreeMap::new();
-    for (good, tons) in &mut pilot.cargo {
-        let kept = (*tons).min(room);
-        room -= kept;
-        if kept < *tons {
-            left_behind.insert(*good, *tons - kept);
-        }
-        *tons = kept;
-    }
-    pilot.cargo.retain(|_, tons| *tons > 0);
+    let left_behind = keep_cargo(&mut pilot.cargo, stats.capacity, fleet.escorts, fleet.cargo);
     pilot.reserves = stats.full();
     ShipPurchase {
         price: quote.price,
@@ -1210,7 +1304,23 @@ mod tests {
         name: &str,
         records: &[OutfitRecord],
     ) -> ShipPurchase {
-        purchase(pilot, FAST.mass, new, name, &[], QUOTE, records)
+        purchase(pilot, FAST.mass, new, name, &[], QUOTE, records, ALONE)
+    }
+
+    /// No escorts, the cargo kept by the engine.
+    const ALONE: Fleet<'static> = Fleet {
+        escorts: &[],
+        cargo: RuleSource::Engine,
+    };
+
+    /// Buys `new` with `fleet`.
+    fn buy_by(
+        pilot: &mut Pilot,
+        new: &ShipRecord,
+        records: &[OutfitRecord],
+        fleet: Fleet,
+    ) -> ShipPurchase {
+        purchase(pilot, FAST.mass, new, "Kestrel", &[], QUOTE, records, fleet)
     }
 
     /// Buys `new`, whose stock weapons and ammunition are `fits`.
@@ -1220,7 +1330,9 @@ mod tests {
         fits: &[StockFit],
         records: &[OutfitRecord],
     ) -> ShipPurchase {
-        purchase(pilot, FAST.mass, new, "Kestrel", fits, QUOTE, records)
+        purchase(
+            pilot, FAST.mass, new, "Kestrel", fits, QUOTE, records, ALONE,
+        )
     }
 
     /// Two blasters (weapon 128) held by outfit 205, and 20 rockets
@@ -1347,6 +1459,7 @@ mod tests {
                 trade_in: 2500,
             },
             &[],
+            ALONE,
         );
         assert_eq!(paid.cash(), 11_500, "paid the difference");
     }
@@ -1521,6 +1634,199 @@ mod tests {
         assert_eq!(full.owned(OutfitId(140)), u16::MAX, "saturating");
     }
 
+    // The cargo a purchase keeps.
+
+    const OPALS: Good = Good::Junk(JunkId(146));
+    const FOOD: Good = Good::Commodity(0);
+    const METAL: Good = Good::Commodity(3);
+
+    /// A trader escort out of no bay, of `Holds` `holds`.
+    fn trader(holds: i16) -> EscortHolds {
+        EscortHolds {
+            holds,
+            inherent_ai: 1,
+            carried: false,
+        }
+    }
+
+    /// The cargo `held` keeps on a new ship of `capacity` tons with
+    /// `escorts`, read as `source` says, and what it leaves behind.
+    fn kept(
+        held: &[(Good, u32)],
+        capacity: u32,
+        escorts: &[EscortHolds],
+        source: RuleSource,
+    ) -> (Vec<(Good, u32)>, BTreeMap<Good, u32>) {
+        let mut cargo: BTreeMap<Good, u32> = held.iter().copied().collect();
+        let left_behind = keep_cargo(&mut cargo, capacity, escorts, source);
+        (cargo.into_iter().collect(), left_behind)
+    }
+
+    #[test]
+    fn by_the_engine_with_no_escorts_the_commodities_stay_and_every_junk_goes() {
+        assert_eq!(
+            kept(
+                &[(FOOD, 6), (METAL, 9), (OPALS, 4)],
+                20,
+                &[],
+                RuleSource::Engine
+            ),
+            (vec![(FOOD, 6), (METAL, 9)], BTreeMap::from([(OPALS, 4)]))
+        );
+    }
+
+    #[test]
+    fn by_the_engine_commodities_over_the_new_hold_are_trimmed_by_its_ratio() {
+        assert_eq!(
+            kept(
+                &[(FOOD, 30), (METAL, 10), (OPALS, 5)],
+                20,
+                &[],
+                RuleSource::Engine
+            ),
+            (
+                vec![(FOOD, 15), (METAL, 5)],
+                BTreeMap::from([(FOOD, 15), (METAL, 5), (OPALS, 5)])
+            ),
+            "the jünk goes first, then 20 of 40"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_trader_escorts_take_their_share_of_each_good() {
+        // A = 20, B = 50: f = 0.4.
+        assert_eq!(
+            kept(
+                &[(FOOD, 40), (METAL, 7), (OPALS, 5)],
+                20,
+                &[trader(30)],
+                RuleSource::Engine
+            ),
+            (
+                vec![(FOOD, 16), (METAL, 2), (OPALS, 3)],
+                BTreeMap::from([(FOOD, 24), (METAL, 5), (OPALS, 2)])
+            ),
+            "the fleet has room, so no trim"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_fleet_over_its_holds_trims_the_commodities_and_not_the_junk() {
+        // A = 10, B = 20: f = 0.5, leaving 30 food and 5 opals in a fleet
+        // of 20 tons; then 30 x 20/35.
+        assert_eq!(
+            kept(
+                &[(FOOD, 60), (OPALS, 10)],
+                10,
+                &[trader(10)],
+                RuleSource::Engine
+            ),
+            (
+                vec![(FOOD, 17), (OPALS, 5)],
+                BTreeMap::from([(FOOD, 43), (OPALS, 5)])
+            )
+        );
+    }
+
+    #[test]
+    fn by_the_engine_the_escorts_share_is_not_capped_at_32000() {
+        // B = 61,000: 640 x 1000/61000 = 10.49; capped at 32,000 it would
+        // be 20.
+        assert_eq!(
+            kept(
+                &[(FOOD, 640)],
+                1000,
+                &[trader(30_000), trader(30_000)],
+                RuleSource::Engine
+            )
+            .0,
+            [(FOOD, 10)]
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_new_ship_of_no_cargo_space_keeps_no_commodity_and_every_junk() {
+        for escorts in [&[][..], &[trader(30)]] {
+            assert_eq!(
+                kept(&[(FOOD, 10), (OPALS, 4)], 0, escorts, RuleSource::Engine),
+                (vec![(OPALS, 4)], BTreeMap::from([(FOOD, 10)])),
+                "{escorts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_a_warship_escort_or_a_launched_fighter_takes_no_share() {
+        let warship = EscortHolds {
+            inherent_ai: 3,
+            ..trader(30)
+        };
+        let fighter = EscortHolds {
+            carried: true,
+            ..trader(30)
+        };
+        assert_eq!(
+            kept(
+                &[(FOOD, 10), (OPALS, 4)],
+                20,
+                &[warship, fighter],
+                RuleSource::Engine
+            )
+            .0,
+            [(FOOD, 10)]
+        );
+    }
+
+    #[test]
+    fn by_the_engine_the_trim_is_worked_in_single_floats() {
+        // 22 x (13 / 22) is 13 in doubles, but 12.999999 in singles.
+        assert_eq!(
+            kept(&[(FOOD, 22)], 13, &[], RuleSource::Engine).0,
+            [(FOOD, 12)]
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_trader_escorts_are_ignored() {
+        assert_eq!(
+            kept(
+                &[(FOOD, 40), (METAL, 7), (OPALS, 5)],
+                20,
+                &[trader(30)],
+                RuleSource::Bible
+            ),
+            (
+                vec![(FOOD, 20)],
+                BTreeMap::from([(FOOD, 20), (METAL, 7), (OPALS, 5)])
+            )
+        );
+    }
+
+    #[test]
+    fn a_purchase_keeps_the_cargo_by_the_engine_on_the_new_ship_with_its_pods() {
+        let records = [OutfitRecord {
+            mass: 0,
+            ..outfit(150, &[(MORE_CARGO, 3)])
+        }];
+        let with_pod = ShipRecord {
+            defaults: vec![(OutfitId(150), 1)],
+            ..heavy()
+        };
+        let mut pilot = pilot();
+        pilot.cargo = BTreeMap::from([(FOOD, 30), (OPALS, 4)]);
+        let fleet = Fleet {
+            escorts: &[trader(18)],
+            cargo: RuleSource::Engine,
+        };
+        let bought = buy_by(&mut pilot, &with_pod, &records, fleet);
+        assert_eq!(
+            pilot.cargo().collect::<Vec<_>>(),
+            [(FOOD, 15), (OPALS, 2)],
+            "18 tons, 15 and a 3-ton pod, of 36"
+        );
+        assert_eq!(bought.left_behind, BTreeMap::from([(FOOD, 15), (OPALS, 2)]));
+    }
+
     #[test]
     fn cargo_beyond_the_new_hold_is_cut_down_in_good_order_and_reported() {
         let records = [OutfitRecord {
@@ -1532,6 +1838,13 @@ mod tests {
             ..heavy()
         };
         let opals = Good::Junk(JunkId(146));
+        let buy = |pilot: &mut Pilot, new: &ShipRecord, records: &[OutfitRecord]| {
+            let fleet = Fleet {
+                escorts: &[],
+                cargo: RuleSource::Bible,
+            };
+            buy_by(pilot, new, records, fleet)
+        };
         let mut pilot = pilot();
         pilot.cargo =
             BTreeMap::from([(Good::Commodity(0), 6), (Good::Commodity(3), 9), (opals, 4)]);

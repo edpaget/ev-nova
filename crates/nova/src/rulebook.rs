@@ -370,6 +370,24 @@ mod tests {
     }
 
     #[test]
+    fn the_purchase_cargo_rule_is_overridden_by_its_key() {
+        let (rulebook, warnings) =
+            rulebook_of(r#"{"rule_overrides": {"purchase_cargo": "bible"}}"#);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine().with_override(RuleKey::PurchaseCargo, RuleSource::Bible)
+        );
+        let (rulebook, _) =
+            rulebook_of(r#"{"rules": "bible", "rule_overrides": {"purchase_cargo": "engine"}}"#);
+        assert_eq!(
+            rulebook.source_for(RuleKey::PurchaseCargo),
+            RuleSource::Engine
+        );
+        assert_eq!(rulebook.source_for(RuleKey::EventPrice), RuleSource::Bible);
+    }
+
+    #[test]
     fn the_raised_max_rule_is_overridden_by_its_key() {
         let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"raised_max": "bible"}}"#);
         assert_eq!(warnings, Vec::<String>::new());
