@@ -837,8 +837,8 @@ impl Session {
     /// `gain`, one whose most rose gains as much. The hull and the weapons
     /// follow the ship and the outfits, ready to fire. The outfitter, the
     /// shipyard, capture, a change of ship and a reload refit this way;
-    /// `G`, `D` and boarding refit as [`OutfitRules::refit_reserves`](crate::OutfitRules::refit_reserves)
-    /// says (see [`Session::script_refit`]).
+    /// `G`, `D` and boarding refit as the rule set reads
+    /// [`RuleKey::RefitReserves`] (see [`Session::script_refit`]).
     fn refit(&mut self, gain: bool) {
         self.refit_reserves(gain, true);
     }
