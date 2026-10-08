@@ -8235,7 +8235,11 @@ mod tests {
     #[test]
     fn use_as_escort_says_so() {
         let mut view = captured();
+        view.tick(TICK / 2);
+        let alpha = view.alpha();
+        assert!(alpha > 0.0, "between steps");
         assert_eq!(view.assign(Assignment::Escort), Some(Assigned::Escort));
+        assert_eq!(view.alpha(), alpha, "the old ship flies on");
         assert_eq!(view.message(), Some(ASSIGNED_ESCORT));
         let pilot = view.pilot().expect("a pilot");
         assert_eq!(pilot.escorts().len(), 1);
@@ -8245,8 +8249,11 @@ mod tests {
     #[test]
     fn use_as_my_ship_flies_and_draws_the_captured_ship() {
         let mut view = captured();
+        view.tick(TICK / 2);
+        assert!(view.alpha() > 0.0, "between steps");
         let mut asked = view.catalog().sheets_asked.borrow().clone();
         assert_eq!(view.assign(Assignment::MyShip), Some(Assigned::MyShip));
+        assert_eq!(view.alpha(), 0.0, "drawn where it is");
         assert_eq!(view.message(), Some(RETAINED_OLD_SHIP));
         assert_eq!(view.session().expect("flying").ship(), ShipId(129));
         asked.push(ShipId(129));
