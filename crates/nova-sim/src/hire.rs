@@ -117,6 +117,7 @@
 use std::fmt::Debug;
 
 use crate::catalog::{LandingSite, ShipId, ShipRecord};
+use crate::control::TestExpr;
 use crate::market::control_bits_allow;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::shipyard::{HIDE_BITS, ShipFlags3, ShipSpecs};
@@ -248,11 +249,11 @@ pub fn price_flux(price: i32, ship_tech: i16, stellar_tech: i16) -> i64 {
     (price / step * step).max(1)
 }
 
-/// Whether the control-bit expression a record names holds: the port the
-/// hire list asks a ship's `Availability`.
+/// Whether the control-bit test a record names holds: the port the hire
+/// list asks a ship's `Availability`.
 pub trait ControlBits: Debug {
-    /// Whether `expression` holds.
-    fn allows(&self, expression: &str) -> bool;
+    /// Whether `test` holds.
+    fn allows(&self, test: &TestExpr) -> bool;
 }
 
 /// The control bits until they exist: every expression holds, as
@@ -261,8 +262,8 @@ pub trait ControlBits: Debug {
 pub struct NoControlBits;
 
 impl ControlBits for NoControlBits {
-    fn allows(&self, expression: &str) -> bool {
-        control_bits_allow(expression)
+    fn allows(&self, test: &TestExpr) -> bool {
+        control_bits_allow(test)
     }
 }
 
@@ -410,7 +411,9 @@ impl Bar<'_> {
                 continue;
             }
             let required = wares::requirement_met(ship.require, self.contributed);
-            let available = self.control_bits.allows(&ship.availability);
+            let available = ship
+                .availability
+                .holds(|test| self.control_bits.allows(test));
             if wares::hidden(ship.flags3, HIDE_BITS, required, available)
                 || !sweep.on_sale(ship.disp_weight)
             {
@@ -601,9 +604,10 @@ mod tests {
 
     #[test]
     fn without_control_bits_every_expression_holds() {
-        assert!(NoControlBits.allows("b33"));
-        assert!(NoControlBits.allows(""));
-        assert!(NoControlBits.allows("!b1 & b2"));
+        for text in ["b33", "", "!b1 & b2"] {
+            let tree = TestExpr::parse(text).expect("parses");
+            assert!(NoControlBits.allows(&tree), "{text}");
+        }
     }
 
     #[test]

@@ -277,7 +277,7 @@ impl Yard<'_> {
         let mut rows = Vec::new();
         for ship in sorted {
             let required = wares::requirement_met(ship.require, contributed);
-            let available = control_bits_allow(&ship.availability);
+            let available = ship.availability.holds(control_bits_allow);
             let for_sale = buy_random_allows(ship.buy_random)
                 && wares::tech_allows(ship.tech_level, self.site)
                 && sweep.on_sale(ship.disp_weight);
@@ -429,6 +429,7 @@ pub(crate) fn purchase(
 mod tests {
     use super::*;
     use crate::catalog::{DisasterId, GovtId, JunkId, StellarId, SystemId};
+    use crate::control::Test;
     use crate::market::MORE_CARGO;
     use crate::reserves::Reserves;
     use crate::stats::{MORE_FUEL, MORE_SHIELD};
@@ -674,7 +675,7 @@ mod tests {
         // Availability always holds until control bits exist.
         let gated = ShipRecord {
             flags3: ShipFlags3::HIDE_UNLESS_AVAILABLE,
-            availability: "b422".to_owned(),
+            availability: Test::parse("b422"),
             ..cheap(129)
         };
         let shipyard = open(&[gated], &pilot());

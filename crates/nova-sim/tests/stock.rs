@@ -29,6 +29,7 @@ use nova_data::GameData;
 use nova_data::records::character::Character;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
+use nova_sim::Test;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::{
     Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good, GovtId,
@@ -345,7 +346,7 @@ fn the_food_surplus_targets_port_kane() {
             price_delta: -15,
             duration: 30,
             freq: 35,
-            activate_on: String::new(),
+            activate_on: Test::default(),
         }
     );
     assert_eq!(data.junk().len(), 23);

@@ -59,6 +59,7 @@ use crate::catalog::{
     CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord, PilotCatalog, StellarId,
 };
 use crate::chance::Chance;
+use crate::control::TestExpr;
 use crate::fuel::OutfitMod;
 use crate::landing::StellarFlags;
 use crate::pilot::Pilot;
@@ -193,14 +194,16 @@ pub fn cargo_capacity(holds: i16, outfits: &[OutfitMod]) -> u32 {
     u32::try_from(tons.max(0)).unwrap_or(u32::MAX)
 }
 
-/// Whether a control-bit test `expression` holds.
+/// Whether a control-bit test holds, its tree parsed.
 ///
-/// Always true for now: there are no control bits until rdm
-/// `roadmap/missions-and-storylines` builds them, and this is the one
-/// place every `öops` `ActivateOn`, `jünk` `BuyOn`/`SellOn`, and `oütf`
-/// and `shïp` `Availability` is tested, so that roadmap replaces it here.
+/// Always true for now: this is the one place every `öops` `ActivateOn`,
+/// `jünk` `BuyOn`/`SellOn`, and `oütf` and `shïp` `Availability` is
+/// tested, and rdm `roadmap/control-bits` moves these onto the
+/// [`ControlBits`](crate::ControlBits) port. Callers ask through
+/// [`Test::holds`](crate::Test::holds), so a test that did not parse never
+/// holds.
 #[must_use]
-pub fn control_bits_allow(_expression: &str) -> bool {
+pub fn control_bits_allow(_test: &TestExpr) -> bool {
     true
 }
 
@@ -405,8 +408,8 @@ pub(crate) fn market(
         })
         .collect();
     rows.extend(goods.junk.iter().filter_map(|junk| {
-        let sold = junk.sold_at.contains(&stellar) && control_bits_allow(&junk.sell_on);
-        let bought = junk.bought_at.contains(&stellar) && control_bits_allow(&junk.buy_on);
+        let sold = junk.sold_at.contains(&stellar) && junk.sell_on.holds(control_bits_allow);
+        let bought = junk.bought_at.contains(&stellar) && junk.buy_on.holds(control_bits_allow);
         let level = match (sold, bought) {
             (true, true) => PriceLevel::Medium,
             (true, false) => PriceLevel::Low,
@@ -495,7 +498,7 @@ pub(crate) fn step_day(
             && event.freq > 0
             && event.duration > 0
             && standard(event.commodity).is_some()
-            && control_bits_allow(&event.activate_on);
+            && event.activate_on.holds(control_bits_allow);
         if !can_start {
             continue;
         }
@@ -510,6 +513,7 @@ pub(crate) fn step_day(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::Test;
     use crate::testkit::{Scripted, catalog};
 
     // Price levels and prices.
@@ -622,9 +626,10 @@ mod tests {
     // Control bits.
 
     #[test]
-    fn every_control_bit_expression_holds_until_there_are_control_bits() {
+    fn every_control_bit_test_holds_until_there_are_control_bits() {
         for expression in ["", "b43", "!b80", "b1 & (b2 | !b3)"] {
-            assert!(control_bits_allow(expression), "{expression}");
+            let tree = TestExpr::parse(expression).expect("parses");
+            assert!(control_bits_allow(&tree), "{expression}");
         }
     }
 
@@ -707,8 +712,8 @@ mod tests {
             base_price: 0,
             sold_at: Vec::new(),
             bought_at: Vec::new(),
-            buy_on: String::new(),
-            sell_on: String::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
         }
     }
 
@@ -746,7 +751,7 @@ mod tests {
                 price_delta,
                 duration,
                 freq,
-                activate_on: String::new(),
+                activate_on: Test::default(),
             };
         vec![
             event(128, "An enormous food surplus", 140, 0, -15, 30, 35),

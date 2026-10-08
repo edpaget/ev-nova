@@ -14,6 +14,7 @@ use crate::catalog::{
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
+use crate::control::Test;
 use crate::flight::ShipState;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
@@ -132,7 +133,7 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
         contribute: 0,
         require: 0,
         require_govt: -1,
-        availability: String::new(),
+        availability: Test::default(),
         item_class: 0,
         lc_name: format!("outfit {id}"),
         lc_plural: format!("outfits {id}"),
@@ -157,7 +158,7 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         buy_random: 100,
         hire_random: 0,
         require: 0,
-        availability: String::new(),
+        availability: Test::default(),
         flags3: 0,
         disp_weight: 0,
         max_gun: 2,
@@ -262,7 +263,7 @@ pub(crate) fn person(id: i16, ship: i16) -> PersonRecord {
         hail_quote: -1,
         link_mission: None,
         flags: 0,
-        active_on: String::new(),
+        active_on: Test::default(),
         subtitle: String::new(),
         flags2: 0,
         grant_class: 0,

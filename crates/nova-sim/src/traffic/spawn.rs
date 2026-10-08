@@ -152,7 +152,7 @@ impl<'a> PersonDraw<'a> {
                     && !self.world.gone.contains(id)
                     // Control bits: every `ActiveOn` holds until
                     // missions-and-storylines brings them.
-                    && self.world.control_bits.allows(&record.active_on)
+                    && record.active_on.holds(|test| self.world.control_bits.allows(test))
                     && !(arriving && person.derelict)
                     && !self.world.in_fleet(**id)
                     && !self.named_here(table, &record.name)
@@ -262,7 +262,10 @@ pub fn initial(
         let world = draw.world;
         if world.gone.contains(&id)
             || world.in_fleet(id)
-            || !world.control_bits.allows(&person.record.active_on)
+            || !person
+                .record
+                .active_on
+                .holds(|test| world.control_bits.allows(test))
         {
             continue;
         }
@@ -525,6 +528,7 @@ mod tests {
     use crate::catalog::{DudeId, EscortRecord, FleetRecord};
     use crate::catalog::{PersonId, PersonRecord};
     use crate::combat::hull::Condition;
+    use crate::control::{Test, TestExpr};
     use crate::handling::ShipFields;
     use crate::hire::ControlBits;
     use crate::person::{NovaPersons, PersonWorld};
@@ -561,7 +565,7 @@ mod tests {
                 .collect(),
             govt: Some(GovtId(131)),
             link_syst: -1,
-            appear_on: String::new(),
+            appear_on: Test::default(),
         }
     }
 
@@ -1172,13 +1176,13 @@ mod tests {
         }
     }
 
-    /// Lets every expression hold but `refused`.
+    /// Refuses every test that reads its bit.
     #[derive(Debug)]
-    struct Refusing(&'static str);
+    struct Refusing(u16);
 
     impl ControlBits for Refusing {
-        fn allows(&self, expression: &str) -> bool {
-            expression != self.0
+        fn allows(&self, test: &TestExpr) -> bool {
+            !test.reads().iter().any(|bit| bit.get() == self.0)
         }
     }
 
@@ -1256,8 +1260,8 @@ mod tests {
             .get_mut(&PersonId(510))
             .expect("there")
             .record
-            .active_on = "b8".to_owned();
-        let refusing = Refusing("b8");
+            .active_on = Test::parse("b8");
+        let refusing = Refusing(8);
         let world = PersonWorld {
             control_bits: &refusing,
             ..PersonWorld::NONE
@@ -1335,8 +1339,8 @@ mod tests {
             .get_mut(&PersonId(600))
             .expect("there")
             .record
-            .active_on = "b9".to_owned();
-        let refusing = Refusing("b9");
+            .active_on = Test::parse("b9");
+        let refusing = Refusing(9);
         let world = PersonWorld {
             control_bits: &refusing,
             ..PersonWorld::NONE

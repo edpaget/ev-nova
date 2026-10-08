@@ -99,7 +99,7 @@ impl PilotCatalog for GameData {
                     buy_random: record.buy_random,
                     hire_random: record.hire_random,
                     require: record.require.bits(),
-                    availability: record.availability.as_str().to_owned(),
+                    availability: self.test_expr(record.availability.as_str()).into(),
                     flags3: record.flags3.bits(),
                     disp_weight: record.disp_weight,
                     max_gun: record.max_gun,
@@ -141,7 +141,7 @@ impl PilotCatalog for GameData {
                     contribute: record.contribute.bits(),
                     require: record.require.bits(),
                     require_govt: record.require_govt,
-                    availability: record.availability.as_str().to_owned(),
+                    availability: self.test_expr(record.availability.as_str()).into(),
                     item_class: record.item_class,
                     lc_name: record.lc_name.as_str().to_owned(),
                     lc_plural: record.lc_plural.as_str().to_owned(),
@@ -223,8 +223,8 @@ impl PilotCatalog for GameData {
                     base_price: record.base_price,
                     sold_at: stellars(&record.sold_at),
                     bought_at: stellars(&record.bought_at),
-                    buy_on: record.buy_on.as_str().to_owned(),
-                    sell_on: record.sell_on.as_str().to_owned(),
+                    buy_on: self.test_expr(record.buy_on.as_str()).into(),
+                    sell_on: self.test_expr(record.sell_on.as_str()).into(),
                 })
             })
             .collect()
@@ -282,7 +282,7 @@ impl PilotCatalog for GameData {
                     price_delta: record.price_delta,
                     duration: record.duration,
                     freq: record.freq,
-                    activate_on: record.activate_on.as_str().to_owned(),
+                    activate_on: self.test_expr(record.activate_on.as_str()).into(),
                 })
             })
             .collect()
@@ -338,7 +338,7 @@ impl TrafficCatalog for GameData {
                         .collect(),
                     govt: fleet.govt,
                     link_syst: fleet.link_syst,
-                    appear_on: fleet.appear_on.as_str().to_owned(),
+                    appear_on: self.test_expr(fleet.appear_on.as_str()).into(),
                 })
             })
             .collect()
@@ -383,7 +383,7 @@ impl TrafficCatalog for GameData {
                         .map(|mission| mission.0)
                         .filter(|&mission| mission > LAST_UNUSED),
                     flags: record.flags.bits(),
-                    active_on: record.active_on.as_str().to_owned(),
+                    active_on: self.test_expr(record.active_on.as_str()).into(),
                     subtitle: record.subtitle.as_str().to_owned(),
                     flags2: record.flags2.bits(),
                     grant_class: record.grant_class,
@@ -674,6 +674,7 @@ mod tests {
         DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
         StartDate, StellarId, StockWeapon, WeaponId, WeaponRecord,
     };
+    use crate::control::Test;
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -691,6 +692,11 @@ mod tests {
         fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
             Ok((fork == Fork::Data).then(|| self.0.clone()))
         }
+    }
+
+    /// Whether two tests are the one parse, shared.
+    fn shared(a: &Test, b: &Test) -> bool {
+        std::sync::Arc::ptr_eq(&a.0, &b.0)
     }
 
     fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
@@ -1036,7 +1042,7 @@ mod tests {
             buy_random: 45,
             hire_random: 40,
             require: 0x0000_0002_0000_0001,
-            availability: "b422".to_owned(),
+            availability: Test::parse("b422"),
             flags3: 0x4100,
             disp_weight: 25,
             max_gun: 4,
@@ -1065,6 +1071,13 @@ mod tests {
             "the same default items"
         );
         assert_eq!(store(&[]).ships(), []);
+        for (a, b) in data.ships().iter().zip(&data.ships()) {
+            assert!(
+                shared(&a.availability, &b.availability),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
 
     #[test]
@@ -1159,7 +1172,7 @@ mod tests {
             contribute: 0x10,
             require: 0x0000_0008_0000_0001,
             require_govt: 1128,
-            availability: "b12".to_owned(),
+            availability: Test::parse("b12"),
             item_class: 0,
             lc_name: "big gun".to_owned(),
             lc_plural: String::new(),
@@ -1173,6 +1186,13 @@ mod tests {
             "a resource without a name goes by its LCName; an undecodable one is skipped"
         );
         assert_eq!(store(&[]).outfits(), []);
+        for (a, b) in data.outfits().iter().zip(&data.outfits()) {
+            assert!(
+                shared(&a.availability, &b.availability),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
 
     #[test]
@@ -1550,8 +1570,8 @@ mod tests {
                     base_price: 300,
                     sold_at: vec![StellarId(160)],
                     bought_at: Vec::new(),
-                    buy_on: String::new(),
-                    sell_on: String::new(),
+                    buy_on: Test::default(),
+                    sell_on: Test::default(),
                 },
                 JunkRecord {
                     id: JunkId(146),
@@ -1559,13 +1579,20 @@ mod tests {
                     base_price: 1200,
                     sold_at: vec![StellarId(189), StellarId(165)],
                     bought_at: vec![StellarId(185), StellarId(199)],
-                    buy_on: "b43".to_owned(),
-                    sell_on: "!b80".to_owned(),
+                    buy_on: Test::parse("b43"),
+                    sell_on: Test::parse("!b80"),
                 },
             ],
             "a resource without a name goes by its LCName; an undecodable one is skipped"
         );
         assert_eq!(store(&[]).junk(), []);
+        for (a, b) in data.junk().iter().zip(&data.junk()) {
+            assert!(
+                shared(&a.buy_on, &b.buy_on) && shared(&a.sell_on, &b.sell_on),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
 
     /// An `öops` at `stellar` moving `commodity` by `delta` for `duration`
@@ -1616,7 +1643,7 @@ mod tests {
                     price_delta: -15,
                     duration: 30,
                     freq: 35,
-                    activate_on: String::new(),
+                    activate_on: Test::default(),
                 },
                 DisasterRecord {
                     id: DisasterId(129),
@@ -1626,7 +1653,7 @@ mod tests {
                     price_delta: 40,
                     duration: 100,
                     freq: 25,
-                    activate_on: "!b80".to_owned(),
+                    activate_on: Test::parse("!b80"),
                 },
                 DisasterRecord {
                     id: DisasterId(131),
@@ -1636,11 +1663,18 @@ mod tests {
                     price_delta: 1,
                     duration: 1,
                     freq: 1,
-                    activate_on: String::new(),
+                    activate_on: Test::default(),
                 },
             ]
         );
         assert_eq!(store(&[]).disasters(), []);
+        for (a, b) in data.disasters().iter().zip(&data.disasters()) {
+            assert!(
+                shared(&a.activate_on, &b.activate_on),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
     /// A `wëap` with every field the combat catalog reads set to
     /// something of its own.
@@ -2009,7 +2043,7 @@ mod tests {
                     }],
                     govt: Some(GovtId(129)),
                     link_syst: -1,
-                    appear_on: String::new(),
+                    appear_on: Test::default(),
                 },
                 FleetRecord {
                     id: FleetId(130),
@@ -2021,12 +2055,19 @@ mod tests {
                     }],
                     govt: None,
                     link_syst: 10_000,
-                    appear_on: "b42".to_owned(),
+                    appear_on: Test::parse("b42"),
                 },
             ],
             "by ID, the undecodable one skipped and the unused escort slots left out"
         );
         assert_eq!(store(&[]).fleets(), []);
+        for (a, b) in data.fleets().iter().zip(&data.fleets()) {
+            assert!(
+                shared(&a.appear_on, &b.appear_on),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
 
     /// A `përs` linked to `link_syst`, of `govt`, AI type 3, `Aggress` 2
@@ -2118,7 +2159,7 @@ mod tests {
                 hail_quote: 8,
                 link_mission: None,
                 flags: 0x0090,
-                active_on: "b0 & !b8".to_owned(),
+                active_on: Test::parse("b0 & !b8"),
                 subtitle: "Top Gun".to_owned(),
                 flags2: 0x0001,
                 grant_class: 0,
@@ -2134,6 +2175,13 @@ mod tests {
         assert_eq!(nameless.hail_pict, Some(7800));
         assert!(nameless.weapons.is_empty());
         assert_eq!(store(&[]).persons(), []);
+        for (a, b) in data.persons().iter().zip(&data.persons()) {
+            assert!(
+                shared(&a.active_on, &b.active_on),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
 
     #[test]

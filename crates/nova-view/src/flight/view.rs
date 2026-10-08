@@ -5026,7 +5026,7 @@ mod tests {
                 contribute: 0,
                 require: 0,
                 require_govt: -1,
-                availability: String::new(),
+                availability: nova_sim::Test::default(),
                 item_class: 0,
                 lc_name: "multi-jumping organ".to_owned(),
                 lc_plural: "multi-jumping organs".to_owned(),
@@ -5657,7 +5657,7 @@ mod tests {
                 contribute: 0,
                 require: 0,
                 require_govt: -1,
-                availability: String::new(),
+                availability: nova_sim::Test::default(),
                 item_class: 0,
                 lc_name: "fuel tank".to_owned(),
                 lc_plural: "fuel tanks".to_owned(),
@@ -5765,7 +5765,7 @@ mod tests {
                 price_delta: -15,
                 duration: 30,
                 freq: 35,
-                activate_on: String::new(),
+                activate_on: nova_sim::Test::default(),
             }],
             ..catalog()
         }
@@ -5836,7 +5836,7 @@ mod tests {
                 buy_random: 100,
                 hire_random: 0,
                 require: 0,
-                availability: String::new(),
+                availability: nova_sim::Test::default(),
                 flags3: 0,
                 disp_weight: 0,
                 max_gun: 0,
@@ -5979,7 +5979,7 @@ mod tests {
             buy_random: 100,
             hire_random: 0,
             require: 0,
-            availability: String::new(),
+            availability: nova_sim::Test::default(),
             flags3: 0,
             disp_weight: 0,
             max_gun: 0,
@@ -7896,7 +7896,7 @@ mod tests {
             contribute: 0,
             require: 0,
             require_govt: -1,
-            availability: String::new(),
+            availability: nova_sim::Test::default(),
             item_class: 0,
             lc_name: "rocket".to_owned(),
             lc_plural: "rockets".to_owned(),
@@ -8648,7 +8648,7 @@ mod tests {
     struct Nothing;
 
     impl ControlBits for Nothing {
-        fn allows(&self, _expression: &str) -> bool {
+        fn allows(&self, _test: &nova_sim::TestExpr) -> bool {
             false
         }
     }
@@ -8708,7 +8708,7 @@ mod tests {
             hail_quote: 1,
             link_mission: None,
             flags: 0,
-            active_on: String::new(),
+            active_on: nova_sim::Test::default(),
             subtitle: "Top Gun".to_owned(),
             flags2: 0,
             grant_class: 0,
@@ -8907,7 +8907,7 @@ mod tests {
             contribute: 0,
             require: 0,
             require_govt: -1,
-            availability: String::new(),
+            availability: nova_sim::Test::default(),
             item_class: 7,
             lc_name: "spare part".to_owned(),
             lc_plural: "spare parts".to_owned(),

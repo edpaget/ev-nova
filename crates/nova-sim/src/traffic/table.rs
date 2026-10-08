@@ -455,6 +455,7 @@ mod tests {
     use crate::catalog::{
         DudeRecord, EscortRecord, HullRecord, OutfitId, PersonRecord, StockWeapon, SystemTraffic,
     };
+    use crate::control::Test;
     use crate::escort::EscortClass;
     use crate::handling::ShipFields;
     use crate::person::NovaPersons;
@@ -721,7 +722,7 @@ mod tests {
                 }],
                 govt: Some(GovtId(131)),
                 link_syst,
-                appear_on: String::new(),
+                appear_on: Test::default(),
             };
             vec![
                 fleet(140, 201, 202, 131),

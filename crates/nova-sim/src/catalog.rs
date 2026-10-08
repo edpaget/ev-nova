@@ -11,6 +11,7 @@ pub use nova_data::{
     SystemId, WeaponId,
 };
 
+use crate::control::Test;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
@@ -157,8 +158,8 @@ pub struct OutfitRecord {
     pub require: u64,
     /// Its `RequireGovt`, raw.
     pub require_govt: i16,
-    /// Its `Availability` control-bit expression.
-    pub availability: String,
+    /// Its `Availability` control-bit test, parsed.
+    pub availability: Test,
     /// Its `ItemClass`, raw: the class a person's `GrantClass` grants
     /// from (see [`grant`](crate::grant)).
     pub item_class: i16,
@@ -199,8 +200,8 @@ pub struct ShipRecord {
     pub hire_random: i16,
     /// Its `Require` bits.
     pub require: u64,
-    /// Its `Availability` control-bit expression.
-    pub availability: String,
+    /// Its `Availability` control-bit test, parsed.
+    pub availability: Test,
     /// Its `Flags3`.
     pub flags3: u16,
     /// Its `DispWeight`: higher shows nearer the top.
@@ -253,10 +254,10 @@ pub struct JunkRecord {
     pub sold_at: Vec<StellarId>,
     /// Its `BoughtAt` stellars, the unused (-1) slots left out.
     pub bought_at: Vec<StellarId>,
-    /// Its `BuyOn` control-bit expression.
-    pub buy_on: String,
-    /// Its `SellOn` control-bit expression.
-    pub sell_on: String,
+    /// Its `BuyOn` control-bit test, parsed.
+    pub buy_on: Test,
+    /// Its `SellOn` control-bit test, parsed.
+    pub sell_on: Test,
 }
 
 /// An `öops` resource's ID: a planetary event.
@@ -283,8 +284,8 @@ pub struct DisasterRecord {
     pub duration: i16,
     /// Its `Freq`: the percent chance each day that it starts.
     pub freq: i16,
-    /// Its `ActivateOn` control-bit expression.
-    pub activate_on: String,
+    /// Its `ActivateOn` control-bit test, parsed.
+    pub activate_on: Test,
 }
 
 /// A system's traffic, raw from its `sÿst`: the
@@ -346,8 +347,8 @@ pub struct FleetRecord {
     pub govt: Option<GovtId>,
     /// Its `LinkSyst`, raw.
     pub link_syst: i16,
-    /// Its `AppearOn` control-bit expression.
-    pub appear_on: String,
+    /// Its `AppearOn` control-bit test, parsed.
+    pub appear_on: Test,
 }
 
 /// One of a person's weapon slots that names a weapon, raw from its
@@ -401,8 +402,8 @@ pub struct PersonRecord {
     pub link_mission: Option<i16>,
     /// Its `Flags`.
     pub flags: u16,
-    /// Its `ActiveOn` control-bit expression.
-    pub active_on: String,
+    /// Its `ActiveOn` control-bit test, parsed.
+    pub active_on: Test,
     /// Its subtitle, the 64-byte string at 0x13A.
     pub subtitle: String,
     /// Its `Flags2`.
@@ -928,7 +929,7 @@ mod tests {
                 contribute: 0,
                 require: 0,
                 require_govt: -1,
-                availability: String::new(),
+                availability: Test::default(),
                 item_class: 0,
                 lc_name: "scoop".to_owned(),
                 lc_plural: "scoops".to_owned(),
@@ -1009,8 +1010,8 @@ mod tests {
                 base_price: 1200,
                 sold_at: vec![StellarId(128)],
                 bought_at: Vec::new(),
-                buy_on: String::new(),
-                sell_on: String::new(),
+                buy_on: Test::default(),
+                sell_on: Test::default(),
             }]
         }
 
@@ -1136,7 +1137,7 @@ mod tests {
                 }],
                 govt: None,
                 link_syst: -1,
-                appear_on: String::new(),
+                appear_on: Test::default(),
             }]
         }
 

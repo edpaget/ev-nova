@@ -2556,6 +2556,7 @@ mod tests {
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
     use crate::chance::NeverFires;
     use crate::clock::TICKS_PER_SECOND;
+    use crate::control::Test;
     use crate::flight::Turn;
     use crate::fuel::FUEL_SCOOP;
     use crate::gate::{GateArrivalRule, GateKind, GateRefusal, HYPERGATE, WORMHOLE, WormholeRule};
@@ -4482,8 +4483,8 @@ mod tests {
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: vec![StellarId(140)],
-            buy_on: String::new(),
-            sell_on: String::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
         };
         let catalog = edge_lander();
         let catalog = FakePilotCatalog {
@@ -4551,7 +4552,7 @@ mod tests {
                 price_delta: -15,
                 duration: 30,
                 freq: 35,
-                activate_on: String::new(),
+                activate_on: Test::default(),
             }],
             ..landers
         }
@@ -5897,7 +5898,7 @@ mod tests {
             }],
             govt: Some(GovtId(150)),
             link_syst,
-            appear_on: String::new(),
+            appear_on: Test::default(),
         }
     }
 
@@ -8210,8 +8211,8 @@ mod tests {
             base_price: 10,
             sold_at: Vec::new(),
             bought_at: Vec::new(),
-            buy_on: String::new(),
-            sell_on: String::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
         }];
         catalog.outfits.push(outfit(310, &[]));
         let session = Session::start(&catalog).expect("starts");

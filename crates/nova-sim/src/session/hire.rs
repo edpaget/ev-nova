@@ -276,6 +276,7 @@ mod tests {
     use crate::catalog::{LandingSite, ShipRecord, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
+    use crate::control::{Test, TestExpr};
     use crate::escort::{EscortCommand, EscortDuty, EscortGroup, slot_position};
     use crate::hail::{EscortStatus, HailOptions};
     use crate::hire::{HireRow, NovaHire, PayNote};
@@ -368,13 +369,13 @@ mod tests {
         }
     }
 
-    /// Control bits where the expressions named do not hold.
+    /// Control bits refusing every test that reads one of its bits.
     #[derive(Debug)]
-    struct Refusing(&'static [&'static str]);
+    struct Refusing(&'static [u16]);
 
     impl ControlBits for Refusing {
-        fn allows(&self, expression: &str) -> bool {
-            !self.0.contains(&expression)
+        fn allows(&self, test: &TestExpr) -> bool {
+            !test.reads().iter().any(|bit| self.0.contains(&bit.get()))
         }
     }
 
@@ -507,12 +508,12 @@ mod tests {
     #[test]
     fn a_ship_whose_availability_does_not_hold_is_hidden_or_refused() {
         let gated = |id, flags3| ShipRecord {
-            availability: "b99".to_owned(),
+            availability: Test::parse("b99"),
             flags3,
             ..hireable(id, 100)
         };
         let catalog = barred(vec![gated(129, 0x0100), gated(130, 0), hireable(131, 100)]);
-        let mut session = landed(&catalog, 25_000).with_control_bits(Rc::new(Refusing(&["b99"])));
+        let mut session = landed(&catalog, 25_000).with_control_bits(Rc::new(Refusing(&[99])));
         let list = list(&mut session);
         assert_eq!(listed(&list), [130, 131]);
         assert_eq!(row(&list, 130).hire, Err(HireRefusal::NotForHire));
@@ -698,7 +699,7 @@ mod tests {
     #[test]
     fn a_refused_hire_changes_nothing() {
         let gated = ShipRecord {
-            availability: "b99".to_owned(),
+            availability: Test::parse("b99"),
             ..hireable(130, 100)
         };
         let catalog = barred(vec![hireable(129, 100), gated]);
@@ -710,7 +711,7 @@ mod tests {
         };
         let mut flying = Session::start(&catalog).expect("starts");
         refused(&mut flying, 129, HireRefusal::NoBar);
-        let mut session = landed(&catalog, 25_000).with_control_bits(Rc::new(Refusing(&["b99"])));
+        let mut session = landed(&catalog, 25_000).with_control_bits(Rc::new(Refusing(&[99])));
         refused(&mut session, 999, HireRefusal::NotListed);
         refused(&mut session, 128, HireRefusal::NotListed);
         refused(&mut session, 130, HireRefusal::NotForHire);

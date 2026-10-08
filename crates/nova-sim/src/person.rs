@@ -882,7 +882,10 @@ mod tests {
     fn the_world_without_persons_follows_the_engine_and_lets_every_person_be() {
         let none = PersonWorld::NONE;
         assert!(none.gone.is_empty() && none.grudges.is_empty());
-        assert!(none.control_bits.allows("b0 & !b8"));
+        assert!(
+            none.control_bits
+                .allows(&crate::control::TestExpr::parse("b0 & !b8").expect("parses"))
+        );
         let mut chance = Draws::of(&[0]);
         assert_eq!(none.rules.roll(&[], &mut chance), PersonRoll::Empty);
         assert_eq!(none.rules.link_slip(), ENGINE);

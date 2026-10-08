@@ -290,6 +290,7 @@ mod tests {
     use super::*;
     use crate::catalog::{PersonId, PersonRecord, ShipId, SystemId, SystemTraffic};
     use crate::chance::{Chance, NeverFires};
+    use crate::control::Test;
     use crate::hire::ControlBits;
     use crate::person::{PersonRoll, PersonRules};
     use crate::pilot::Pilot;
@@ -316,7 +317,7 @@ mod tests {
                 PersonRecord {
                     name: "Ace".to_owned(),
                     subtitle: "Top Gun".to_owned(),
-                    active_on: "b3".to_owned(),
+                    active_on: Test::parse("b3"),
                     link_syst: 131,
                     ..person(600, 129)
                 },
@@ -364,7 +365,7 @@ mod tests {
     struct NoneHold;
 
     impl ControlBits for NoneHold {
-        fn allows(&self, _expression: &str) -> bool {
+        fn allows(&self, _test: &crate::control::TestExpr) -> bool {
             false
         }
     }
@@ -856,7 +857,7 @@ mod tests {
         catalog.traffic[0].1.persons[1] = (Some(PersonId(601)), 100);
         catalog.persons[0].flags = flags[0];
         catalog.persons[0].hail_quote = 1;
-        catalog.persons[0].active_on = String::new();
+        catalog.persons[0].active_on = Test::default();
         catalog.persons[1] = PersonRecord {
             name: "Bee".to_owned(),
             flags: flags[1],

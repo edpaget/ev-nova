@@ -477,6 +477,7 @@ mod tests {
     use crate::combat::armament::Armament;
     use crate::combat::hull::HullSpec;
     use crate::combat::weapon::WeaponSpec;
+    use crate::control::Test;
     use crate::escort::EscortClass;
     use crate::geometry::Vec2;
     use crate::hail::Help;
@@ -668,7 +669,7 @@ mod tests {
                 }],
                 govt: None,
                 link_syst: -1,
-                appear_on: String::new(),
+                appear_on: Test::default(),
             },
         );
         // An NPC numbered first, so the fleet's lead is NPC 1.
@@ -710,7 +711,7 @@ mod tests {
                 }],
                 govt: None,
                 link_syst: -1,
-                appear_on: String::new(),
+                appear_on: Test::default(),
             },
         );
         let mut traffic = populated(1, 1);

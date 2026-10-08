@@ -3,8 +3,16 @@
 //! The pilot holds them as a [`ControlBitSet`], every bit clear on a new
 //! pilot; [`nova_data::expr`] parses the expressions that read and write
 //! them.
+//!
+//! A catalog record holds each control-bit test it names as a [`Test`]:
+//! the tree parsed once (see [`GameData::test_expr`](nova_data::GameData::test_expr)),
+//! or why it did not parse. A test that did not parse is never satisfied
+//! ([`Test::holds`]): the safe direction, where a ship with a broken
+//! `Availability` is not sold rather than sold out of turn.
 
-pub use nova_data::{Bit, BitWrite};
+use std::sync::Arc;
+
+pub use nova_data::{Bit, BitWrite, ParsedTest, TestExpr};
 
 /// How many `u64` words hold the bits: 10,000 bits, rounded up.
 const WORDS: usize = (Bit::MAX as usize + 1).div_ceil(64);
@@ -92,9 +100,79 @@ impl FromIterator<Bit> for ControlBitSet {
     }
 }
 
+/// A record's control-bit test: its tree, parsed once and shared, or why
+/// it did not parse. The default is a blank test, which always holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Test(pub(crate) ParsedTest);
+
+impl Test {
+    /// `text` parsed.
+    #[must_use]
+    pub fn parse(text: &str) -> Self {
+        Self(Arc::new(TestExpr::parse(text)))
+    }
+
+    /// The tree, or `None` when the test did not parse.
+    #[must_use]
+    pub fn tree(&self) -> Option<&TestExpr> {
+        self.0.as_ref().as_ref().ok()
+    }
+
+    /// Whether the test holds by `check`: never when it did not parse.
+    pub fn holds(&self, check: impl FnOnce(&TestExpr) -> bool) -> bool {
+        self.tree().is_some_and(check)
+    }
+}
+
+impl Default for Test {
+    fn default() -> Self {
+        Self(Arc::new(Ok(TestExpr::Always)))
+    }
+}
+
+impl From<ParsedTest> for Test {
+    fn from(parsed: ParsedTest) -> Self {
+        Self(parsed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_default_test_is_blank_and_always_holds() {
+        assert_eq!(Test::default().tree(), Some(&TestExpr::Always));
+        assert_eq!(Test::default(), Test::parse(""));
+        assert!(Test::default().holds(|tree| *tree == TestExpr::Always));
+    }
+
+    #[test]
+    fn a_test_holds_as_its_check_says_on_its_tree() {
+        let test = Test::parse("b7");
+        assert_eq!(test.tree(), TestExpr::parse("b7").ok().as_ref());
+        assert!(test.holds(|tree| tree.reads().contains(&bit(7))));
+        assert!(!test.holds(|_| false));
+    }
+
+    #[test]
+    fn a_test_that_did_not_parse_never_holds() {
+        let test = Test::parse("b1 &");
+        assert_eq!(test.tree(), None);
+        let mut asked = false;
+        assert!(!test.holds(|_| {
+            asked = true;
+            true
+        }));
+        assert!(!asked, "the check is never asked");
+    }
+
+    #[test]
+    fn a_test_from_a_parse_shares_it() {
+        let parsed: ParsedTest = Arc::new(TestExpr::parse("b2"));
+        let test = Test::from(Arc::clone(&parsed));
+        assert!(Arc::ptr_eq(&test.0, &parsed));
+    }
 
     fn bit(n: u16) -> Bit {
         Bit::new(n).expect("in range")

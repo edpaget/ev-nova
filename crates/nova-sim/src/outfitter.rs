@@ -354,7 +354,7 @@ impl Shop<'_> {
             let owned = pilot.owned(record.id);
             let required = !requirements_apply(record.require_govt, self.site.govt)
                 || wares::requirement_met(record.require, contributed);
-            let available = control_bits_allow(&record.availability);
+            let available = record.availability.holds(control_bits_allow);
             let for_sale = tech_allows(record, self.site) && sweep.on_sale(record.disp_weight);
             let buyable = for_sale && required && available;
             sweep.note(
@@ -456,6 +456,7 @@ pub(crate) fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direct
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::Test;
     use crate::stats::{MORE_FUEL, MORE_SPEED};
     use crate::testkit::{FAST, catalog, outfit, planet};
 
@@ -721,7 +722,7 @@ mod tests {
         // Availability always holds until control bits exist.
         let gated = OutfitRecord {
             flags: OutfitFlags::HIDE_UNLESS_AVAILABLE,
-            availability: "b9999".to_owned(),
+            availability: Test::parse("b9999"),
             ..outfit(128, &[])
         };
         let outfitter = open(&[gated], &pilot());
