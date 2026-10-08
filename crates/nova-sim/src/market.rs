@@ -1873,6 +1873,19 @@ mod tests {
             (vec![(BREEDING, 4), (BOTH, 4)], true),
             "beside a tribbles good"
         );
+        assert_eq!(
+            stepped(ENGINE, &[(FOOD, 1), (BOTH, 3), (PLAIN, 1)]),
+            (vec![(FOOD, 1), (BOTH, 4), (PLAIN, 1)], true),
+            "beside goods that are not perishable"
+        );
+    }
+
+    #[test]
+    fn a_good_entered_at_none_is_not_held_and_neither_grows_nor_decays() {
+        for source in [ENGINE, BIBLE] {
+            let held = vec![(FOOD, 1), (BREEDING, 0), (ROTTING, 0), (BOTH, 0)];
+            assert_eq!(stepped(source, &held), (held.clone(), false), "{source:?}");
+        }
     }
 
     #[test]
