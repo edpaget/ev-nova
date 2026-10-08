@@ -32,6 +32,13 @@
 //! reads; a new pilot is male unless the dialog says otherwise, as the
 //! stock dialog's Gender menu starts on Male.
 //!
+//! It keeps its ship's paint, which a paint outfit (`ModType` 43) gives
+//! (see [`outfit_effects`](crate::outfit_effects)): a new pilot's ship is
+//! unpainted (the original's (32, 32, 32), `_ResetPlayer` @0x1db4e), and
+//! buying a ship unpaints it again (`_DoShipyardDialog` @0x5f022). The
+//! paint is saved, as the original's pilot file keeps it
+//! (`_WritePilotData` @0x727f2); drawing it is not done yet.
+//!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
 
@@ -44,6 +51,7 @@ use crate::control::{Bit, ControlBitSet};
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::Good;
+use crate::outfit_effects::Rgb15;
 use crate::outfitter::outfit_mods;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
@@ -95,6 +103,8 @@ pub struct Pilot {
     pub(crate) bits: ControlBitSet,
     /// The player's gender.
     pub(crate) gender: Gender,
+    /// The ship's paint; `None` when unpainted.
+    pub(crate) paint: Option<Rgb15>,
 }
 
 /// The player's gender, which the `G` test reads (true when male). The
@@ -188,6 +198,7 @@ impl Pilot {
             grudges: BTreeSet::new(),
             bits: ControlBitSet::new(),
             gender: Gender::default(),
+            paint: None,
         })
     }
 
@@ -201,6 +212,12 @@ impl Pilot {
     #[must_use]
     pub fn gender(&self) -> Gender {
         self.gender
+    }
+
+    /// The ship's paint, `None` when it is unpainted.
+    #[must_use]
+    pub fn paint(&self) -> Option<Rgb15> {
+        self.paint
     }
 
     /// Whether control bit `bit` is set.
@@ -565,6 +582,17 @@ mod tests {
         assert!(!pilot.control_bit(Bit::new(0).expect("in range")));
         assert_eq!(pilot.gender(), Gender::Male);
         assert_eq!(Gender::default(), Gender::Male);
+    }
+
+    #[test]
+    fn a_new_pilots_ship_is_unpainted() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert_eq!(pilot.paint(), None);
+        let painted = Pilot {
+            paint: Some(Rgb15 { r: 1, g: 2, b: 3 }),
+            ..pilot
+        };
+        assert_eq!(painted.paint(), Some(Rgb15 { r: 1, g: 2, b: 3 }));
     }
 
     #[test]

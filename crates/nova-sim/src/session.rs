@@ -1910,6 +1910,8 @@ impl Session {
             bought = Some(shipyard::purchase(
                 pilot, old_mass, &record, quote, &outfits,
             ));
+            // A new ship is unpainted (`_DoShipyardDialog` @0x5f022).
+            pilot.paint = None;
         });
         self.outfits = outfits;
         self.fields = record.fields;
@@ -5653,6 +5655,18 @@ mod tests {
         assert_eq!(session.ship(), NEW);
         assert_eq!(session.pilot().cash(), 25_000 - 17_500 + 2500);
         assert_eq!(session.pilot().outfits().collect::<Vec<_>>(), [(TANK, 1)]);
+    }
+
+    #[test]
+    fn buying_a_ship_unpaints_it_and_a_refused_purchase_keeps_the_paint() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        let paint = crate::outfit_effects::Rgb15 { r: 4, g: 5, b: 6 };
+        session.pilot.paint = Some(paint);
+        assert_eq!(session.buy_ship(ShipId(999)), Err(ShipRefusal::NotListed));
+        assert_eq!(session.pilot().paint(), Some(paint));
+        session.buy_ship(NEW).expect("bought");
+        assert_eq!(session.pilot().paint(), None);
     }
 
     #[test]
