@@ -2001,23 +2001,9 @@ impl Session {
             &self.pilot,
             self.capacity(),
             self.gate(),
-            self.exchange_rules(),
+            &self.rules,
             self.markup(site),
         )
-    }
-
-    /// The exchange's rules, read from the rule set.
-    fn exchange_rules(&self) -> market::ExchangeRules {
-        let source = |key| self.rules.source_for(key);
-        market::ExchangeRules {
-            event_price: source(RuleKey::EventPrice),
-            junk_price: source(RuleKey::JunkPrice),
-            junk_trade: source(RuleKey::JunkTrade),
-            trade_lot: source(RuleKey::TradeLot),
-            trade_quotient: source(RuleKey::TradeQuotient),
-            trade_count: source(RuleKey::TradeCount),
-            trade_debt: source(RuleKey::TradeDebt),
-        }
     }
 
     /// The markup at `site`, one of the system's: by whether it has a

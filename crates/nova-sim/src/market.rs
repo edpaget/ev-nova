@@ -237,7 +237,7 @@ use crate::control::Gate;
 use crate::fuel::OutfitMod;
 use crate::landing::StellarFlags;
 use crate::pilot::Pilot;
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 /// How many standard commodities there are.
 pub const COMMODITIES: u8 = 6;
@@ -921,32 +921,6 @@ impl MarketRow {
     }
 }
 
-/// The rules an exchange is priced and traded by.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ExchangeRules {
-    /// How an active `öops` event prices its commodity
-    /// ([`RuleKey::EventPrice`](crate::RuleKey::EventPrice)).
-    pub(crate) event_price: RuleSource,
-    /// How a `jünk` of negative or zero price is traded
-    /// ([`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice)).
-    pub(crate) junk_price: RuleSource,
-    /// Which ways a listed `jünk` row trades
-    /// ([`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade)).
-    pub(crate) junk_trade: RuleSource,
-    /// How many tons a plain trade moves
-    /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)).
-    pub(crate) trade_lot: RuleSource,
-    /// How the most a buy moves divides the cash by the price
-    /// ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)).
-    pub(crate) trade_quotient: RuleSource,
-    /// Whether Option on Buy or Sell asks for a count
-    /// ([`RuleKey::TradeCount`](crate::RuleKey::TradeCount)).
-    pub(crate) trade_count: RuleSource,
-    /// Whether a buy divides cash below nothing by the price signed
-    /// ([`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt)).
-    pub(crate) trade_debt: RuleSource,
-}
-
 /// The exchange of `stellar`, with these `flags`, for `pilot` with
 /// `capacity` tons of cargo space, its `jünk` tests asked of `gate`,
 /// priced by `rules`, its low and high prices by `markup`; `None` without
@@ -959,10 +933,10 @@ pub(crate) fn market(
     pilot: &Pilot,
     capacity: u32,
     gate: Gate,
-    rules: ExchangeRules,
+    rules: &Rulebook,
     markup: Markup,
 ) -> Option<Market> {
-    let source = rules.event_price;
+    let source = rules.source_for(RuleKey::EventPrice);
     if flags & StellarFlags::TRADE_CENTER == 0 {
         return None;
     }
@@ -1026,16 +1000,16 @@ pub(crate) fn market(
         cash: pilot.cash,
         capacity,
         free: capacity.saturating_sub(held),
-        trade_lot: rules.trade_lot,
-        trade_quotient: rules.trade_quotient,
-        trade_count: rules.trade_count,
-        trade_debt: rules.trade_debt,
+        trade_lot: rules.source_for(RuleKey::TradeLot),
+        trade_quotient: rules.source_for(RuleKey::TradeQuotient),
+        trade_count: rules.source_for(RuleKey::TradeCount),
+        trade_debt: rules.source_for(RuleKey::TradeDebt),
     })
 }
 
 /// The `jünk` rows `stellar` lists, its tests asked of `gate`, priced by
-/// `markup` and as `rules.junk_price` says, traded as `rules.junk_trade`
-/// says. A `jünk` the stellar both buys and sells has a row each way, the
+/// `markup` and as `rules` reads [`RuleKey::JunkPrice`], traded as it reads
+/// [`RuleKey::JunkTrade`]. A `jünk` the stellar both buys and sells has a row each way, the
 /// bought one first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f).
 /// By the engine a row priced 0 is not listed, each way on its own
 /// (`_TradeDialogUpdate` @0x4d2a2-0x4d2ac).
@@ -1043,17 +1017,18 @@ fn junk_listing<'a>(
     goods: &'a Goods,
     stellar: StellarId,
     gate: Gate<'a>,
-    rules: ExchangeRules,
+    rules: &Rulebook,
     markup: Markup,
 ) -> impl Iterator<Item = MarketRow> + 'a {
-    let (high_ways, low_ways) = junk_ways(rules.junk_trade);
+    let (high_ways, low_ways) = junk_ways(rules.source_for(RuleKey::JunkTrade));
+    let junk_price = rules.source_for(RuleKey::JunkPrice);
     goods.junk.iter().flat_map(move |junk| {
         let bought = junk.bought_at.contains(&stellar) && gate.allows(&junk.buy_on);
         let sold = junk.sold_at.contains(&stellar) && gate.allows(&junk.sell_on);
         let row = |level, ways| {
             let price = listed_junk_price(
                 band_price(i64::from(junk.base_price), level, markup),
-                rules.junk_price,
+                junk_price,
             )?;
             Some(listed(Good::Junk(junk.id), &junk.name, price, ways))
         };
@@ -2082,11 +2057,8 @@ mod tests {
 
     /// The price rules with events priced by `event_price`, and `jünk`
     /// by the engine.
-    fn rules(event_price: RuleSource) -> ExchangeRules {
-        ExchangeRules {
-            event_price,
-            ..ExchangeRules::default()
-        }
+    fn rules(event_price: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::EventPrice, event_price)
     }
 
     #[test]
@@ -2100,7 +2072,7 @@ mod tests {
                 &pilot(0),
                 10,
                 Gate::FRESH,
-                rules(RuleSource::Engine),
+                &rules(RuleSource::Engine),
                 Markup::Standard
             ),
             None
@@ -2113,7 +2085,7 @@ mod tests {
                 &pilot(0),
                 10,
                 Gate::FRESH,
-                rules(RuleSource::Engine),
+                &rules(RuleSource::Engine),
                 Markup::Standard
             ),
             None
@@ -2130,10 +2102,7 @@ mod tests {
                 &pilot(500),
                 10,
                 Gate::FRESH,
-                ExchangeRules {
-                    trade_lot,
-                    ..ExchangeRules::default()
-                },
+                &Rulebook::default().with_override(RuleKey::TradeLot, trade_lot),
                 Markup::Standard,
             )
             .expect("trades");
@@ -2151,10 +2120,7 @@ mod tests {
                 &pilot(500),
                 10,
                 Gate::FRESH,
-                ExchangeRules {
-                    trade_quotient,
-                    ..ExchangeRules::default()
-                },
+                &Rulebook::default().with_override(RuleKey::TradeQuotient, trade_quotient),
                 Markup::Standard,
             )
             .expect("trades");
@@ -2172,10 +2138,7 @@ mod tests {
                 &pilot(500),
                 10,
                 Gate::FRESH,
-                ExchangeRules {
-                    trade_count,
-                    ..ExchangeRules::default()
-                },
+                &Rulebook::default().with_override(RuleKey::TradeCount, trade_count),
                 Markup::Standard,
             )
             .expect("trades");
@@ -2193,10 +2156,7 @@ mod tests {
                 &pilot(500),
                 10,
                 Gate::FRESH,
-                ExchangeRules {
-                    trade_debt,
-                    ..ExchangeRules::default()
-                },
+                &Rulebook::default().with_override(RuleKey::TradeDebt, trade_debt),
                 Markup::Standard,
             )
             .expect("trades");
@@ -2214,7 +2174,7 @@ mod tests {
             &pilot(500),
             10,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2247,7 +2207,7 @@ mod tests {
             &pilot(0),
             0,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2265,7 +2225,7 @@ mod tests {
             &pilot(0),
             0,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2281,7 +2241,7 @@ mod tests {
             &pilot(0),
             0,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2300,7 +2260,7 @@ mod tests {
             &pilot(0),
             0,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2312,7 +2272,7 @@ mod tests {
             &pilot(0),
             0,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2321,11 +2281,8 @@ mod tests {
 
     /// The price rules with `jünk` traded by `junk_trade`, and the rest
     /// by the engine.
-    fn trading_by(junk_trade: RuleSource) -> ExchangeRules {
-        ExchangeRules {
-            junk_trade,
-            ..ExchangeRules::default()
-        }
+    fn trading_by(junk_trade: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::JunkTrade, junk_trade)
     }
 
     #[test]
@@ -2339,7 +2296,7 @@ mod tests {
                 &pilot(0),
                 0,
                 Gate::FRESH,
-                rules,
+                &rules,
                 Markup::Standard,
             )
             .expect("trades")
@@ -2377,7 +2334,7 @@ mod tests {
                 &pilot(0),
                 0,
                 Gate::FRESH,
-                trading_by(source),
+                &trading_by(source),
                 Markup::Standard,
             )
             .expect("trades");
@@ -2416,7 +2373,7 @@ mod tests {
             pilot,
             capacity,
             Gate::FRESH,
-            trading_by(junk_trade),
+            &trading_by(junk_trade),
             markup,
         )
         .expect("trades")
@@ -2549,7 +2506,7 @@ mod tests {
             &pilot(0),
             0,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             markup,
         )
         .expect("trades")
@@ -2617,7 +2574,7 @@ mod tests {
             &pilot(0),
             0,
             gate,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2696,7 +2653,7 @@ mod tests {
             &pilot(0),
             0,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2720,7 +2677,7 @@ mod tests {
             &pilot,
             12,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2745,7 +2702,7 @@ mod tests {
             &pilot,
             5,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2795,7 +2752,7 @@ mod tests {
             &pilot,
             0,
             Gate::FRESH,
-            rules(source),
+            &rules(source),
             Markup::Standard,
         )
         .expect("trades")
@@ -2883,7 +2840,7 @@ mod tests {
             &pilot,
             0,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2924,7 +2881,7 @@ mod tests {
             &pilot,
             0,
             Gate::FRESH,
-            rules(source),
+            &rules(source),
             Markup::Standard,
         )
         .expect("trades")
@@ -2953,7 +2910,7 @@ mod tests {
             &buyer,
             10,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2989,7 +2946,7 @@ mod tests {
             &buyer,
             10,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -3002,7 +2959,7 @@ mod tests {
             &buyer,
             10,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -3063,7 +3020,7 @@ mod tests {
                     &pilot(0),
                     0,
                     Gate::FRESH,
-                    rules(source),
+                    &rules(source),
                     Markup::Standard,
                 )
                 .expect("trades");
@@ -3091,11 +3048,9 @@ mod tests {
             (RuleSource::Bible, &[0, 4][..]),
         ] {
             for event_price in RuleSource::ALL {
-                let rules = ExchangeRules {
-                    event_price,
-                    junk_price,
-                    ..ExchangeRules::default()
-                };
+                let rules = Rulebook::default()
+                    .with_override(RuleKey::EventPrice, event_price)
+                    .with_override(RuleKey::JunkPrice, junk_price);
                 let found = market(
                     &goods,
                     EARTH,
@@ -3103,7 +3058,7 @@ mod tests {
                     &pilot(0),
                     0,
                     Gate::FRESH,
-                    rules,
+                    &rules,
                     Markup::Standard,
                 )
                 .expect("trades");
@@ -3182,7 +3137,7 @@ mod tests {
             &pilot,
             0,
             Gate::FRESH,
-            rules(source),
+            &rules(source),
             Markup::Standard,
         )
         .expect("trades")
@@ -3218,10 +3173,7 @@ mod tests {
     /// price that Earth buys (`bought`) and sells (`sold`), for `pilot`
     /// with 10 tons of space, traded both ways by the engine.
     fn junk_market(base: i16, ways: (bool, bool), junk_price: RuleSource, pilot: &Pilot) -> Market {
-        let rules = ExchangeRules {
-            junk_price,
-            ..ExchangeRules::default()
-        };
+        let rules = Rulebook::default().with_override(RuleKey::JunkPrice, junk_price);
         junk_market_by(base, ways, rules, pilot)
     }
 
@@ -3229,7 +3181,7 @@ mod tests {
     fn junk_market_by(
         base: i16,
         (bought, sold): (bool, bool),
-        rules: ExchangeRules,
+        rules: Rulebook,
         pilot: &Pilot,
     ) -> Market {
         let odd = JunkRecord {
@@ -3248,7 +3200,7 @@ mod tests {
             pilot,
             10,
             Gate::FRESH,
-            rules,
+            &rules,
             Markup::Standard,
         )
         .expect("trades")
@@ -3416,11 +3368,9 @@ mod tests {
         );
         let floor = junk_market(1, BOTH_WAYS, RuleSource::Bible, &holding);
         assert_eq!(junk_rows(&floor), [(1, true, true), (0, true, true)]);
-        let one_way = ExchangeRules {
-            junk_price: RuleSource::Engine,
-            junk_trade: RuleSource::Bible,
-            ..ExchangeRules::default()
-        };
+        let one_way = Rulebook::default()
+            .with_override(RuleKey::JunkPrice, RuleSource::Engine)
+            .with_override(RuleKey::JunkTrade, RuleSource::Bible);
         let one_way = junk_market_by(1, BOTH_WAYS, one_way, &holding);
         assert_eq!(junk_rows(&one_way), [(1, false, true)]);
         assert_eq!(
@@ -3458,7 +3408,7 @@ mod tests {
             &pilot,
             0,
             Gate::FRESH,
-            rules(RuleSource::Engine),
+            &rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -3500,7 +3450,7 @@ mod tests {
             &pilot,
             0,
             Gate::FRESH,
-            rules(source),
+            &rules(source),
             Markup::Standard,
         )
         .expect("trades")
