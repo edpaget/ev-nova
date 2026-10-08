@@ -161,8 +161,8 @@ use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HailView, HireTerms, HookRules, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable,
     NovaHire, NovaLaw, NovaPersons, OutfitRules, PersonRules, Pilot, PilotKeeper, PilotStore,
-    PointDefenceRule, RuleKey, RuleSource, Rulebook, Session, ShipChangeRules, Take, Taken,
-    pilot_key,
+    PointDefenceRule, RuleKey, RuleSource, Rulebook, ScriptEffectRules, Session, ShipChangeRules,
+    Take, Taken, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -316,6 +316,9 @@ pub struct AppScreen {
     /// How each flight's ship-change set operators go where the rules are
     /// disputed.
     ship_change_rules: ShipChangeRules,
+    /// How each flight's moving set operators go where the rules are
+    /// disputed.
+    script_effect_rules: ScriptEffectRules,
     /// The control-bit test a ship for hire's `Availability` goes
     /// through in each flight.
     control_bits: Rc<dyn ControlBits>,
@@ -404,6 +407,7 @@ impl AppScreen {
             outfit_rules: OutfitRules::default(),
             hook_rules: HookRules::default(),
             ship_change_rules: ShipChangeRules::default(),
+            script_effect_rules: ScriptEffectRules::default(),
             comm: None,
             haggle: None,
         }
@@ -619,12 +623,25 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's moving set operators following
+    /// `rules` where they are disputed
+    /// ([`FlightView::with_script_effect_rules`]); the engine's until
+    /// others are given.
+    #[must_use]
+    pub fn with_script_effect_rules(self, rules: ScriptEffectRules) -> Self {
+        Self {
+            script_effect_rules: rules,
+            ..self
+        }
+    }
+
     /// The router with Nova's rules, each disputed one as `rulebook`
     /// chooses: the NPCs' behaviour, disabling, point defence, the law,
     /// boarding, hailing, the escorts' and fighters' rules, hiring, the
     /// persons' rules, granting and removing outfits, the order of the
-    /// set-expression hooks, and changing the ship by set operator. This
-    /// is the edge where every [`RuleKey`] meets its setting.
+    /// set-expression hooks, changing the ship by set operator, and moving
+    /// the player by set operator. This is the edge where every
+    /// [`RuleKey`] meets its setting.
     #[must_use]
     pub fn with_rulebook(self, rulebook: &Rulebook) -> Self {
         self.with_behaviour(Rc::new(NovaAi::from_rulebook(rulebook)))
@@ -646,6 +663,7 @@ impl AppScreen {
             .with_outfit_rules(OutfitRules::from_rulebook(rulebook))
             .with_hook_rules(HookRules::from_rulebook(rulebook))
             .with_ship_change_rules(ShipChangeRules::from_rulebook(rulebook))
+            .with_script_effect_rules(ScriptEffectRules::from_rulebook(rulebook))
     }
 
     /// The comm dialog, while a hail is under way.
@@ -704,6 +722,7 @@ impl AppScreen {
             .with_outfit_rules(self.outfit_rules)
             .with_hook_rules(self.hook_rules)
             .with_ship_change_rules(self.ship_change_rules)
+            .with_script_effect_rules(self.script_effect_rules)
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects);
         match self.metrics() {
@@ -1421,6 +1440,15 @@ impl AppScreen {
         }
     }
 
+    /// Settles what the set expressions run in flight or in the spaceport
+    /// queued ([`FlightView::settle_script`]): a move while landed leaves
+    /// the spaceport open as it is.
+    fn settle_script(&mut self) {
+        if let Some(flight) = self.flight.as_mut() {
+            flight.settle_script();
+        }
+    }
+
     /// Saves the pilot if flight says a save is due: it has landed, taken
     /// off or changed in the spaceport.
     fn save_if_due(&mut self) {
@@ -1817,11 +1845,14 @@ impl Screen for AppScreen {
     /// and the galaxy map, Escape goes back to the menu instead of
     /// quitting.
     ///
-    /// After every input, a pilot with a name is saved when flight says a
-    /// save is due: on landing, on taking off, and after a change in the
-    /// spaceport ([`AppScreen::transact`]).
+    /// After every input, what the set expressions it ran queued is
+    /// settled ([`FlightView::settle_script`]), and then a pilot with a
+    /// name is saved when flight says a save is due: on landing, on taking
+    /// off, after a change in the spaceport ([`AppScreen::transact`]) and
+    /// after a move by set operator.
     fn input(&mut self, input: &Input) -> ScreenAction {
         let action = self.route(input);
+        self.settle_script();
         self.save_if_due();
         action
     }
@@ -1829,12 +1860,14 @@ impl Screen for AppScreen {
     /// Only the side shown ticks; a hidden one is paused. While an overlay
     /// (the About dialog, the Preferences dialog, the New Pilot dialog or
     /// the saved pilots' list) is open, only it ticks: flight pauses under
-    /// the preferences, as in the original. A save that is due is made.
+    /// the preferences, as in the original. What the set expressions
+    /// queued is settled, and a save that is due is made.
     fn tick(&mut self, dt: Duration) {
         match self.overlay_mut() {
             Some(overlay) => overlay.tick(dt),
             None => self.shown_mut().tick(dt),
         }
+        self.settle_script();
         self.save_if_due();
     }
 
@@ -2071,12 +2104,18 @@ pub(super) mod tests {
     }
 
     fn game_data(trading: bool, outfitting: bool, shipbuying: bool) -> Rc<GameData> {
-        game_data_starting(trading, outfitting, shipbuying, b"")
+        game_data_starting(trading, outfitting, shipbuying, b"", b"")
     }
 
     /// [`data`], where the `chär`'s `OnStart` is `on_start`.
     fn starting_data(on_start: &[u8]) -> Rc<GameData> {
-        game_data_starting(false, false, false, on_start)
+        game_data_starting(false, false, false, on_start, b"")
+    }
+
+    /// [`outfitting_data`], where the booster's `OnPurchase` is
+    /// `on_purchase`.
+    fn hooked_outfitting_data(on_purchase: &[u8]) -> Rc<GameData> {
+        game_data_starting(true, true, false, b"", on_purchase)
     }
 
     fn game_data_starting(
@@ -2084,6 +2123,7 @@ pub(super) mod tests {
         outfitting: bool,
         shipbuying: bool,
         on_start: &[u8],
+        on_purchase: &[u8],
     ) -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
@@ -2121,6 +2161,7 @@ pub(super) mod tests {
             }
             booster[0x0E..0x12].copy_from_slice(&500_i32.to_be_bytes());
             booster[0x32B..0x332].copy_from_slice(b"Booster");
+            booster[0x12D..0x12D + on_purchase.len()].copy_from_slice(on_purchase);
             fork = fork.resource(Outfit::TYPE, 128, Some(b"Booster"), &booster);
         }
         if shipbuying {
@@ -4577,7 +4618,12 @@ pub(super) mod tests {
     /// The router over [`outfitting_data`] with the outfit dialog, keeping
     /// pilots in `store`, flying a new pilot named Ada, landed.
     fn landed_outfitter(store: &MemoryPilots) -> AppScreen {
-        let mut screen = AppScreen::new(outfitting_data())
+        landed_outfitter_over(store, outfitting_data())
+    }
+
+    /// [`landed_outfitter`], over `data`.
+    fn landed_outfitter_over(store: &MemoryPilots, data: Rc<GameData>) -> AppScreen {
+        let mut screen = AppScreen::new(data)
             .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
@@ -4662,6 +4708,48 @@ pub(super) mod tests {
         screen.input(&key(Key::Escape, true));
         assert!(spaceport(&screen).open_outfitter().is_none());
         assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    #[test]
+    fn a_move_by_a_purchase_hook_keeps_the_spaceport_open_and_saves_the_pilot_moved() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, hooked_outfitting_data(b"M129"));
+        click_port_item(&mut screen, 8);
+        let writes = store.writes();
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(screen.showing(), Showing::Spaceport, "still landed");
+        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(128));
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().row(BOOSTER).map(|row| row.owned), Some(1));
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.landed(), Some(nova_sim::StellarId(128)));
+        assert!(session.market().is_some(), "the port's exchange still");
+        assert_eq!(pilot(&screen).system(), nova_sim::SystemId(129));
+        assert_eq!(pilot(&screen).stellar(), Some(nova_sim::StellarId(129)));
+        assert_eq!(store.writes(), writes + 1, "saved once, after the move");
+        assert_eq!(saved(&store, "Ada").system(), nova_sim::SystemId(129));
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        let scene = flight(&screen)
+            .scene()
+            .map(nova_view::system::SystemScene::id);
+        assert_eq!(scene, Some(nova_sim::SystemId(129)), "taken off there");
+    }
+
+    #[test]
+    fn a_new_pilot_moved_by_its_on_start_flies_there_and_is_saved_there() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(starting_data(b"M129"))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(pilot(&screen).system(), nova_sim::SystemId(129));
+        let scene = flight(&screen)
+            .scene()
+            .map(nova_view::system::SystemScene::id);
+        assert_eq!(scene, Some(nova_sim::SystemId(129)));
+        assert_eq!(saved(&store, "Ada").system(), nova_sim::SystemId(129));
     }
 
     #[test]
@@ -5832,6 +5920,19 @@ pub(super) mod tests {
                 .ship_change_rules(),
             rules
         );
+        let rules = ScriptEffectRules {
+            starless: RuleSource::Bible,
+            ..ScriptEffectRules::default()
+        };
+        let mut screen = AppScreen::new(data()).with_script_effect_rules(rules);
+        fly(&mut screen);
+        assert_eq!(
+            flight(&screen)
+                .session()
+                .expect("flying")
+                .script_effect_rules(),
+            rules
+        );
     }
 
     #[test]
@@ -5866,6 +5967,10 @@ pub(super) mod tests {
             (
                 "ship_change_rules",
                 format!("{:?}", screen.ship_change_rules),
+            ),
+            (
+                "script_effect_rules",
+                format!("{:?}", screen.script_effect_rules),
             ),
         ]
     }
@@ -5903,6 +6008,9 @@ pub(super) mod tests {
             | RuleKey::ShipChangeMax
             | RuleKey::ShipChangeCargo
             | RuleKey::ShipChangeReserves => "ship_change_rules",
+            RuleKey::MoveStarless | RuleKey::MoveArrival | RuleKey::MoveKeepFlag => {
+                "script_effect_rules"
+            }
         }
     }
 

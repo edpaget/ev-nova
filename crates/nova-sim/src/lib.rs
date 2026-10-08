@@ -308,7 +308,8 @@ pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
-    HookRules, LandPress, PersonQuote, RelocateRefusal, Session, ShipChangeRules, nova_set_ops,
+    HookRules, LandPress, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, Settled,
+    ShipChangeRules, nova_set_ops,
 };
 pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;

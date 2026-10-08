@@ -19,12 +19,14 @@
 //! the pilot's bits, drawing `R(...)` on the caller's [`Chance`], and
 //! hands every other operator to the registry given by
 //! [`Session::with_set_ops`]: by default [`nova_set_ops`], Nova's `G`, `D`
-//! and `X` (see the `outfits` module) and the ship changes `C`, `E`, `H`
-//! and `T` (see the `ship_change` module). Any change to the pilot makes
+//! and `X` (see the `outfits` module), the ship changes `C`, `E`, `H`
+//! and `T` (see the `ship_change` module) and the moves `M` and `N`,
+//! which apply when [`Session::settle_script`] settles them (see the
+//! `script_effects` module). Any change to the pilot makes
 //! a save due. An operator nothing handles is skipped, and its kind told
 //! once a session as a [`ScriptNote`] ([`Session::take_script_notes`]);
 //! which kinds were told is never saved. The operators still unhandled
-//! are the moves and sounds (`M`, `N`, `Q`, `P`), and those of the
+//! are the sound and leave (`P`, `Q`), and those of the
 //! missions (`A`, `F`, `S`), ranks (`K`, `L`) and stellars (`Y`, `U`),
 //! which other work registers.
 //!
@@ -38,6 +40,7 @@ use std::rc::Rc;
 use super::Session;
 use super::hire::Shared;
 use super::outfits::{ExploreOp, GrantOutfitOp, RemoveOutfitOp};
+use super::script_effects::{MoveKeepPositionOp, MoveToOp};
 use super::ship_change::{ChangeShipOp, ChangeShipWithDefaultsOp, RenameShipOp, ReplaceShipOp};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
@@ -130,9 +133,9 @@ impl BitStore for Session {
 }
 
 /// Nova's set operators beyond the bit writes and `R(...)`: `G`, `D` and
-/// `X` (see the `outfits` module), and `C`, `E`, `H` and `T` (see the
-/// `ship_change` module). Later work registers more onto it with
-/// [`SetRegistry::with`].
+/// `X` (see the `outfits` module), `C`, `E`, `H` and `T` (see the
+/// `ship_change` module), and `M` and `N` (see the `script_effects`
+/// module). Later work registers more onto it with [`SetRegistry::with`].
 #[must_use]
 pub fn nova_set_ops() -> SetRegistry<Session> {
     SetRegistry::new()
@@ -146,6 +149,8 @@ pub fn nova_set_ops() -> SetRegistry<Session> {
         )
         .with(SetOpKind::ReplaceShip, Rc::new(ReplaceShipOp))
         .with(SetOpKind::RenameShip, Rc::new(RenameShipOp))
+        .with(SetOpKind::MoveTo, Rc::new(MoveToOp))
+        .with(SetOpKind::MoveKeepPosition, Rc::new(MoveKeepPositionOp))
 }
 
 impl Session {
@@ -377,15 +382,15 @@ mod tests {
             [ScriptNote::Unhandled(SetOpKind::StartMission)]
         );
         assert_eq!(session.take_script_notes(), [], "taken");
-        session.run_set(&set("M150"), &mut Scripted::default());
+        session.run_set(&set("K128"), &mut Scripted::default());
         assert_eq!(
             session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::MoveTo)]
+            [ScriptNote::Unhandled(SetOpKind::ActivateRank)]
         );
     }
 
     #[test]
-    fn novas_set_ops_are_g_d_x_and_the_ship_changes() {
+    fn novas_set_ops_are_g_d_x_the_ship_changes_and_the_moves() {
         assert_eq!(
             nova_set_ops().kinds().collect::<Vec<_>>(),
             [
@@ -394,6 +399,8 @@ mod tests {
                 SetOpKind::ChangeShip,
                 SetOpKind::ChangeShipWithDefaults,
                 SetOpKind::ReplaceShip,
+                SetOpKind::MoveTo,
+                SetOpKind::MoveKeepPosition,
                 SetOpKind::RenameShip,
                 SetOpKind::Explore
             ]
@@ -401,7 +408,8 @@ mod tests {
     }
 
     #[test]
-    fn the_operators_still_unhandled_are_the_move_sound_and_other_work() {
+    fn the_operators_still_unhandled_are_the_sound_leave_and_other_work() {
+        let catalog = catalog();
         let mut session = session();
         session.run_set(
             &set(
@@ -416,8 +424,6 @@ mod tests {
                 SetOpKind::AbortMission,
                 SetOpKind::FailMission,
                 SetOpKind::StartMission,
-                SetOpKind::MoveTo,
-                SetOpKind::MoveKeepPosition,
                 SetOpKind::ActivateRank,
                 SetOpKind::DeactivateRank,
                 SetOpKind::PlaySound,
@@ -428,6 +434,8 @@ mod tests {
             .map(ScriptNote::Unhandled)
         );
         assert!(session.pilot().has_explored(SystemId(131)), "X ran");
+        let settled = session.settle_script(&catalog, &mut Scripted::default());
+        assert_eq!(settled.moved, Some(SystemId(130)), "M and N queued");
     }
 
     #[test]

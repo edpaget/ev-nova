@@ -256,7 +256,7 @@ use nova_sim::{
 };
 use nova_sim::{
     ControlBits, HireList, HireRefusal, HireTerms, Hired, HookRules, OutfitRules, PayNote,
-    PersonRules, ShipChangeRules,
+    PersonRules, ScriptEffectRules, ShipChangeRules,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -1174,6 +1174,19 @@ impl<
         }
     }
 
+    /// The flight with the moving set operators following `rules` where
+    /// the Bible and the engine disagree
+    /// ([`Session::with_script_effect_rules`]).
+    #[must_use]
+    pub fn with_script_effect_rules(self, rules: ScriptEffectRules) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_script_effect_rules(rules)),
+            ..self
+        }
+    }
+
     /// The flight with the `T` set operator naming the ship from
     /// `strings`' string lists ([`Session::with_strings`]).
     #[must_use]
@@ -1559,6 +1572,53 @@ impl<
         }
     }
 
+    /// Takes off from the stellar landed on, and gives it; `None` when the
+    /// ship has not landed. The next frame draws the ship where it is, at
+    /// the stellar, not on its way from where it was, in the system a move
+    /// made while landed went to, laid out afresh; it shows no message
+    /// from before the landing, but says how many hired escorts defected
+    /// for want of the take-off's pay ([`defection_message`]); the
+    /// session populates the system's traffic afresh on its next tick
+    /// ([`Session::take_off`]).
+    pub fn take_off(&mut self) -> Option<StellarId> {
+        let session = self.session.as_mut().ok()?;
+        let stellar = session.take_off()?;
+        let pay = session.take_pay_notes();
+        self.resync();
+        self.message = None;
+        let said = pay_notes_message(&pay);
+        if !said.is_empty() {
+            self.say(said.join("  "));
+        }
+        Some(stellar)
+    }
+
+    /// Settles what the set expressions run since queued, as
+    /// [`Session::settle_script`] does, reading the catalog and drawing on
+    /// the flight's chance. After a move in flight the system the ship is
+    /// in is laid out afresh, even the same one, as the original kills its
+    /// explosions and smoke, and how many fighters were abandoned, if
+    /// any, is shown. A move while landed shows once the ship takes off.
+    pub fn settle_script(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        let settled = session.settle_script(&self.catalog, &mut self.chance);
+        if settled.moved.is_none() || session.landed().is_some() {
+            return;
+        }
+        let system = session.system();
+        let notes = session.take_fighter_notes();
+        self.lay_out(system);
+        let said: Vec<String> = notes
+            .into_iter()
+            .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count))
+            .collect();
+        if !said.is_empty() {
+            self.say(said.join("  "));
+        }
+    }
+
     /// Plays `effect` for the ship having come out of a gate into
     /// `system`, laid out as an arrival is.
     fn came_through(&mut self, system: SystemId, effect: JumpEffect) {
@@ -1725,27 +1785,6 @@ impl<C> FlightView<C> {
     /// to show the spaceport.
     pub fn take_landing(&mut self) -> Option<StellarId> {
         self.pending_landing.take()
-    }
-
-    /// Takes off from the stellar landed on, and gives it; `None` when the
-    /// ship has not landed. The next frame draws the ship where it is, at
-    /// the stellar, not on its way from where it was, and shows no message
-    /// from before the landing, but says how many hired escorts defected
-    /// for want of the take-off's pay ([`defection_message`]); the
-    /// session populates the system's traffic afresh on its next tick
-    /// ([`Session::take_off`]).
-    pub fn take_off(&mut self) -> Option<StellarId> {
-        let session = self.session.as_mut().ok()?;
-        let stellar = session.take_off()?;
-        let pay = session.take_pay_notes();
-        self.previous = self.current();
-        self.alpha = 0.0;
-        self.message = None;
-        let said = pay_notes_message(&pay);
-        if !said.is_empty() {
-            self.say(said.join("  "));
-        }
-        Some(stellar)
     }
 
     /// The message on screen, if any.
@@ -9107,6 +9146,70 @@ mod tests {
         };
         let view = flight().with_ship_change_rules(rules);
         assert_eq!(view.session().expect("flying").ship_change_rules(), rules);
+    }
+
+    #[test]
+    fn the_script_effect_rules_reach_the_session() {
+        let rules = ScriptEffectRules {
+            arrival: RuleSource::Bible,
+            ..ScriptEffectRules::default()
+        };
+        let view = flight().with_script_effect_rules(rules);
+        assert_eq!(view.session().expect("flying").script_effect_rules(), rules);
+    }
+
+    /// Runs set expression `text` on `view`'s session.
+    fn run_set(view: &mut View, text: &str) {
+        let expr = nova_sim::SetExpr::parse(text).expect("parses");
+        let session = view.session.as_mut().expect("flying");
+        session.run_set(&expr, &mut NeverFires);
+    }
+
+    #[test]
+    fn a_move_in_flight_lays_out_the_system_moved_to_once_settled() {
+        let mut view = flight();
+        view.catalog().systems_read.borrow_mut().clear();
+        run_set(&mut view, "M131");
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+        view.settle_script();
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(*view.catalog().systems_read.borrow(), [SystemId(131)]);
+        assert_eq!(view.course_map().current(), Some(SystemId(131)));
+        assert_eq!(view.shown_position(), Point::new(0.0, 0.0), "on Proxima");
+        assert_eq!(view.message(), None);
+        view.settle_script();
+        assert_eq!(
+            *view.catalog().systems_read.borrow(),
+            [SystemId(131)],
+            "nothing more to settle"
+        );
+    }
+
+    #[test]
+    fn a_move_within_the_system_lays_it_out_afresh() {
+        let mut view = flight();
+        view.catalog().systems_read.borrow_mut().clear();
+        run_set(&mut view, "N130");
+        view.settle_script();
+        assert_eq!(*view.catalog().systems_read.borrow(), [SystemId(130)]);
+    }
+
+    #[test]
+    fn a_move_while_landed_is_laid_out_once_the_ship_takes_off() {
+        let mut view = landed_view();
+        run_set(&mut view, "M131");
+        view.settle_script();
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+        assert_eq!(*view.catalog().systems_read.borrow(), []);
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
+        assert!(
+            view.course_map()
+                .explored()
+                .is_some_and(|explored| explored.contains(&SystemId(131))),
+            "the take-off explores"
+        );
     }
 
     #[test]

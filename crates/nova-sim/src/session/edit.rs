@@ -102,6 +102,8 @@ impl Session {
         }
         self.player.position = site.position;
         self.player.velocity = Vec2::ZERO;
+        self.touchdown = site.position;
+        self.next_sites = None;
         let pilot = &mut self.pilot;
         pilot.system = system;
         pilot.stellar = Some(stellar);

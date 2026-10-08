@@ -48,13 +48,16 @@
 //! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its `Max` after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
 //! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the cargo is trimmed to the new hold, as a purchase trims it\* |
 //! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it ([`ShipChangeRules`](crate::ShipChangeRules)) | each is held to its new most\* |
+//! | [`MoveStarless`](RuleKey::MoveStarless) | `move_starless` | `M` in flight into a system with no stellar keeps the ship's position and velocity ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the ship is put at rest at the system's centre |
+//! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only the escorts and fighters out follow, the new system filling with arrivals over time ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
+//! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed ([`ScriptEffectRules`](crate::ScriptEffectRules)) | only a landed `N` keeps the landing position\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
 //! `remove_refund`, `purchase_paint_order`, `capture_hook_order`,
-//! `start_ship_purchase`, `ship_change_cargo`, `ship_change_reserves` or
-//! `comm_quote`
+//! `start_ship_purchase`, `ship_change_cargo`, `ship_change_reserves`,
+//! `move_arrival`, `move_keep_flag` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -397,6 +400,38 @@ rule_keys! {
     /// reading is the obvious alternative, not anything the Bible says
     /// (see [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeReserves => "ship_change_reserves",
+    /// Where the `M` set operator puts a ship in flight when the system
+    /// moved to has no stellar: by the engine, nowhere new, its position
+    /// and velocity kept, as `_EvalSetExp` places the ship only on a
+    /// stellar it finds (@0x1570e-0x158d4); by the Bible ("in the center
+    /// of the system if no stellars exist there"), at rest at the
+    /// system's centre (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    MoveStarless => "move_starless",
+    /// What else the `M` and `N` set operators do beyond changing where
+    /// the ship is: by the engine, nothing, as `_EvalSetExp` calls neither
+    /// `_SetupShipsInSystem` nor `_AutoSetExploration` and leaves
+    /// `_hyperRoute` alone, so the course is kept (and J refuses while its
+    /// next system is not linked from here), the system is explored only
+    /// by the next take-off, and in flight the last system's ships stay
+    /// behind but for the player's escorts and fighters out, the new
+    /// system filling only with arrivals over time; otherwise the move is
+    /// an arrival, exploring the system and clearing the course at once,
+    /// and in flight populating it at once, the fighters out kept or
+    /// abandoned as the fighter rules say. The Bible is silent here, so
+    /// the other reading is the intended behaviour, not anything the
+    /// Bible says (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    MoveArrival => "move_arrival",
+    /// What the `N` set operator's flag does when it runs in flight: by
+    /// the engine, `_dontMovePlayerAfterLanding` (@0x158d9) stays set
+    /// until the next take-off, which then keeps the ship where it landed
+    /// instead of at the stellar's centre, and clears it
+    /// (`_PlayerLandOnStellar` @0x633ad-0x63400); otherwise only a landed
+    /// `N` keeps the landing position, and a take-off after an `N` in
+    /// flight is from the stellar's centre as any other. The Bible is
+    /// silent here, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see
+    /// [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    MoveKeepFlag => "move_keep_flag",
 }
 
 impl RuleKey {
@@ -556,9 +591,15 @@ mod tests {
                 RuleKey::ShipChangePersistence,
                 RuleKey::ShipChangeMax,
                 RuleKey::ShipChangeCargo,
-                RuleKey::ShipChangeReserves
+                RuleKey::ShipChangeReserves,
+                RuleKey::MoveStarless,
+                RuleKey::MoveArrival,
+                RuleKey::MoveKeepFlag
             ]
         );
+        assert_eq!(RuleKey::MoveStarless.key(), "move_starless");
+        assert_eq!(RuleKey::MoveArrival.key(), "move_arrival");
+        assert_eq!(RuleKey::MoveKeepFlag.key(), "move_keep_flag");
         assert_eq!(
             RuleKey::ShipChangePersistence.key(),
             "ship_change_persistence"

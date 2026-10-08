@@ -222,9 +222,12 @@
 //! changes the player's ship outside the shipyard (`C`, `E`, `H`, as
 //! [`Session::with_ship_change_rules`] says where the rules are
 //! disputed) and renames it (`T`, from the string lists
-//! [`Session::with_strings`] gives); one nothing handles is skipped and
-//! told once ([`Session::take_script_notes`]). See the `ship_change`
-//! module.
+//! [`Session::with_strings`] gives), and moves the player to another
+//! system (`M`, `N`), applied when [`Session::settle_script`] settles
+//! them, as [`Session::with_script_effect_rules`] says where the rules
+//! are disputed; one nothing handles is skipped and told once
+//! ([`Session::take_script_notes`]). See the `ship_change` and
+//! `script_effects` modules.
 //!
 //! Buying an outfit, a boarding grant and `G` share one grant path, the
 //! original's: a map explores, a clean-record outfit cleans the legal
@@ -276,6 +279,7 @@ mod hire;
 mod hooks;
 mod outfits;
 mod persons;
+mod script_effects;
 mod ship_change;
 
 pub use control::nova_set_ops;
@@ -286,6 +290,7 @@ pub use ship_change::{
 
 pub use edit::RelocateRefusal;
 pub use persons::PersonQuote;
+pub use script_effects::{MoveKeepPositionOp, MoveToOp, ScriptEffectRules, Settled};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -563,6 +568,21 @@ pub struct Session {
     /// The string lists `T` names the ship from (see
     /// [`Session::with_strings`]).
     strings: ship_change::Strings,
+    /// The moves the set expressions queued since the last settling, in
+    /// order (see [`Session::settle_script`]); never saved.
+    script_moves: Vec<script_effects::ScriptMove>,
+    /// The stellars of the system a landed move went to, swapped in at
+    /// the take-off.
+    next_sites: Option<Vec<LandingSite>>,
+    /// Whether the next take-off keeps the ship where it touched down
+    /// (the original's `_dontMovePlayerAfterLanding`); never saved.
+    hold_position: bool,
+    /// Where the ship was as it last landed, before it was docked at the
+    /// stellar's centre.
+    touchdown: Vec2,
+    /// How the moving set operators go where the rules are disputed (see
+    /// [`Session::with_script_effect_rules`]).
+    script_effect_rules: ScriptEffectRules,
 }
 
 impl Session {
@@ -685,6 +705,11 @@ impl Session {
             ship_change_rules: ShipChangeRules::default(),
             disable_rule: Self::nova_disable(),
             strings: ship_change::Strings::none(),
+            script_moves: Vec::new(),
+            next_sites: None,
+            hold_position: false,
+            touchdown: player.position,
+            script_effect_rules: ScriptEffectRules::default(),
             pilot,
         };
         session.refit(false);
@@ -843,23 +868,7 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let system = self.pilot.system;
-        let table = SpawnTable::resolve(
-            catalog,
-            system,
-            self.star_map.govt(system),
-            &self.govts,
-            &self.ships,
-            &self.outfits,
-            &self.arsenal,
-            &*self.person_rules.0,
-            &self
-                .pilot
-                .escorts
-                .iter()
-                .filter_map(|escort| escort.person)
-                .collect(),
-        );
+        let table = self.spawn_table(catalog);
         let facts = control::Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.ammo_outfits,
@@ -883,6 +892,28 @@ impl Session {
         self.aboard = None;
         self.talk = None;
         self.clear_lost_target();
+    }
+
+    /// What the system's traffic is drawn from, read from `catalog`: its
+    /// ships, persons and fleets, the pilot's person escorts aside.
+    fn spawn_table(&self, catalog: &(impl TrafficCatalog + ?Sized)) -> SpawnTable {
+        let system = self.pilot.system;
+        SpawnTable::resolve(
+            catalog,
+            system,
+            self.star_map.govt(system),
+            &self.govts,
+            &self.ships,
+            &self.outfits,
+            &self.arsenal,
+            &*self.person_rules.0,
+            &self
+                .pilot
+                .escorts
+                .iter()
+                .filter_map(|escort| escort.person)
+                .collect(),
+        )
     }
 
     /// Advances the NPC traffic one tick, NPCs deciding as `behaviour`
@@ -1353,10 +1384,17 @@ impl Session {
         if self.landed.is_some() {
             return Err(JumpRefusal::Landed);
         }
+        let system = self.pilot.system;
+        let next = self
+            .pilot
+            .course
+            .first()
+            .copied()
+            .filter(|next| self.star_map.jumps(system, self.hyperlinks).contains(next));
         check_jump(
             &self.player,
             self.pilot.reserves.fuel.now,
-            self.pilot.course.first().copied(),
+            next,
             jump_zone(&self.sites, self.stats.jump_distance, self.jump_zone),
         )
     }
@@ -1788,6 +1826,7 @@ impl Session {
     /// Docks the ship at `stellar`, one of the system's.
     fn dock(&mut self, stellar: StellarId) {
         self.nav_target = None;
+        self.touchdown = self.player.position;
         let site = self.sites.iter().find(|site| site.id == stellar);
         if let Some(site) = site {
             self.player.position = site.position;
@@ -1807,12 +1846,21 @@ impl Session {
     }
 
     /// Takes off from the stellar the ship is docked at, and gives it; the
-    /// ship flies again from the stellar's centre, at rest, and the next
-    /// traffic tick populates the system afresh
-    /// ([`Session::tick_traffic`]). `None`, and nothing changes, when it
-    /// has not landed.
+    /// ship flies again from the stellar's centre, at rest, the system is
+    /// explored, and the next traffic tick populates the system afresh
+    /// ([`Session::tick_traffic`]). After a landed move the ship flies in
+    /// the system moved to, from where the move left it, and after an `N`
+    /// from where it touched down (see the `script_effects` module).
+    /// `None`, and nothing changes, when it has not landed.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.landed.take()?;
+        if let Some(sites) = self.next_sites.take() {
+            self.sites = sites;
+        }
+        if std::mem::take(&mut self.hold_position) {
+            self.player.position = self.touchdown;
+        }
+        self.pilot.explore(self.pilot.system);
         self.traffic_due = true;
         if self.take_off_pay == RuleSource::Engine {
             self.pay_escorts(1);

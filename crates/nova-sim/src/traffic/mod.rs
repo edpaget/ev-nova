@@ -200,6 +200,16 @@ impl Traffic {
         self.add(ships, world.persons.grudges);
     }
 
+    /// Goes on in another system whose traffic is drawn from `table`,
+    /// taking along only the NPCs in `keep`, as they are: the others stay
+    /// behind, and nothing of the new system's initial population comes,
+    /// only its arrivals over time. The NPCs' numbering goes on.
+    pub fn retarget(&mut self, table: SpawnTable, keep: &BTreeSet<NpcId>) {
+        self.table = table;
+        self.npcs.retain(|npc| keep.contains(&npc.id));
+        self.departed.clear();
+    }
+
     /// Advances the traffic one tick among `sites` alone, NPCs deciding
     /// as `behaviour` says, rolling on `chance` (see
     /// [`Traffic::tick_in`]).
