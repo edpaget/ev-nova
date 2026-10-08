@@ -4626,6 +4626,7 @@ mod tests {
             names: ["Food", "Industrial", "Medical", "Luxury", "Metal"]
                 .map(str::to_owned)
                 .to_vec(),
+            name_patches: Default::default(),
             base_prices: ["75", "350", "750", "900", "200"]
                 .map(str::to_owned)
                 .to_vec(),
@@ -4681,6 +4682,24 @@ mod tests {
         session.take_off();
         jump(&mut session, &catalog, 131);
         assert_eq!(*catalog.goods_reads.borrow(), 4);
+    }
+
+    #[test]
+    fn the_exchange_names_a_commodity_from_its_str_patch() {
+        let mut catalog = exchange();
+        catalog.commodities.name_patches[0] = crate::StringPatch::Text("Grain".into());
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        assert_eq!(session.good_name(FOOD), Some("Grain"));
+        assert_eq!(session.good_name(METAL), Some("Metal"));
+        let market = session.market().expect("an exchange");
+        let food: Vec<_> = market
+            .rows
+            .iter()
+            .filter(|r| r.good == FOOD)
+            .map(|r| r.price)
+            .collect();
+        assert_eq!(food, [75]);
     }
 
     #[test]

@@ -232,13 +232,17 @@ pub struct ShipRecord {
 
 /// The standard commodities, raw from their string lists: `STR#` 4000
 /// "All Cargo" names them and `STR#` 4004 "Base Prices" prices them, the
-/// nth string for commodity n (from 0). A plug-in's `'STR '` 9300 + n
-/// patches commodity n's 4004 string. The [`market`](crate::market)
-/// rules decide which string prices each commodity, and how it is read.
+/// nth string for commodity n (from 0). A plug-in's `'STR '` 9000 + n
+/// patches commodity n's 4000 string, and its `'STR '` 9300 + n patches
+/// commodity n's 4004 string. The [`market`](crate::market) rules decide
+/// which string names and which prices each commodity, and how a price
+/// is read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommodityStrings {
     /// Every string of `STR#` 4000, in order; none when it is missing.
     pub names: Vec<String>,
+    /// `'STR '` 9000-9005, the nth for commodity n.
+    pub name_patches: [StringPatch; 6],
     /// Every string of `STR#` 4004, in order; none when it is missing.
     pub base_prices: Vec<String>,
     /// `'STR '` 9300-9305, the nth for commodity n.
@@ -254,12 +258,13 @@ pub enum StringPatch {
     Absent,
     /// The `'STR '` text, whatever it holds.
     Text(String),
-    /// A `'STR '` with that ID and no bytes at all. The original then
-    /// leaves its string buffer as the slot before it left it.
+    /// A `'STR '` with that ID and no bytes at all. What the original
+    /// then reads depends on the strings it patches: see
+    /// [`market`](crate::market).
     Empty,
-    /// A `'STR '` with that ID whose length byte runs past its data. The
-    /// original then reads stale bytes; the sim prices it as the empty
-    /// string.
+    /// A `'STR '` with that ID whose length byte runs past its data. What
+    /// the original then reads depends on the strings it patches: see
+    /// [`market`](crate::market).
     Unreadable,
 }
 
@@ -1036,6 +1041,7 @@ mod tests {
         fn commodity_strings(&self) -> CommodityStrings {
             CommodityStrings {
                 names: vec!["Food".to_owned()],
+                name_patches: Default::default(),
                 base_prices: vec!["75".to_owned()],
                 price_patches: Default::default(),
             }

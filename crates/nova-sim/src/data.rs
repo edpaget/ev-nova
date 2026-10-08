@@ -207,6 +207,7 @@ impl PilotCatalog for GameData {
     fn commodity_strings(&self) -> CommodityStrings {
         CommodityStrings {
             names: strings(self, COMMODITY_NAMES),
+            name_patches: patches(self, NAME_PATCHES),
             base_prices: strings(self, BASE_PRICES),
             price_patches: patches(self, PRICE_PATCHES),
         }
@@ -633,6 +634,10 @@ fn default_items(ship: &Ship) -> Vec<(OutfitId, u16)> {
 
 /// The `STR#` naming the standard commodities, "All Cargo".
 const COMMODITY_NAMES: i16 = 4000;
+
+/// The first `'STR '` patching `STR#` 4000, the Bible's Appendix III:
+/// 9000 + n patches commodity n's name.
+const NAME_PATCHES: i16 = 9000;
 
 /// The `STR#` pricing them, "Base Prices".
 const BASE_PRICES: i16 = 4004;
@@ -1529,6 +1534,7 @@ mod tests {
             data.commodity_strings(),
             CommodityStrings {
                 names: vec!["Food".into(), "Industrial".into(), "*Cargo".into()],
+                name_patches: Default::default(),
                 base_prices: vec!["75".into(), "lots".into()],
                 price_patches: Default::default(),
             }
@@ -1546,6 +1552,7 @@ mod tests {
             data.commodity_strings(),
             CommodityStrings {
                 names: Vec::new(),
+                name_patches: Default::default(),
                 base_prices: vec!["75".into()],
                 price_patches: Default::default(),
             }
@@ -1638,6 +1645,7 @@ mod tests {
             data.commodity_strings(),
             CommodityStrings {
                 names: vec!["Food".into()],
+                name_patches: Default::default(),
                 base_prices: STOCK_PRICES.map(str::to_owned).to_vec(),
                 price_patches: [
                     StringPatch::Absent,
@@ -1673,6 +1681,71 @@ mod tests {
                 StringPatch::Absent,
             ],
             "only 9300-9305 patch prices"
+        );
+    }
+
+    const STOCK_NAMES: [&str; 6] = [
+        "Food",
+        "Industrial",
+        "Medical Supplies",
+        "Luxury Goods",
+        "Metal",
+        "Equipment",
+    ];
+
+    #[test]
+    fn a_plugins_str_name_patches_arrive_raw_beside_str_4000() {
+        let data = layered(
+            &[
+                (StrList::TYPE, 4000, str_list(&STOCK_NAMES)),
+                (StrList::TYPE, 4004, str_list(&STOCK_PRICES)),
+            ],
+            &[
+                (StrResource::TYPE, 9000, str_resource("Grain")),
+                (StrResource::TYPE, 9001, Vec::new()),
+                (StrResource::TYPE, 9002, str_resource("")),
+                (StrResource::TYPE, 9003, b"\x05ab".to_vec()),
+                (StrResource::TYPE, 9005, b"\x04Gearxyz".to_vec()),
+                (StrList::TYPE, 9004, str_list(&["X"])),
+            ],
+        );
+        assert_eq!(
+            data.commodity_strings(),
+            CommodityStrings {
+                names: STOCK_NAMES.map(str::to_owned).to_vec(),
+                name_patches: [
+                    StringPatch::Text("Grain".into()),
+                    StringPatch::Empty,
+                    StringPatch::Text(String::new()),
+                    StringPatch::Unreadable,
+                    StringPatch::Absent,
+                    StringPatch::Text("Gear".into()),
+                ],
+                base_prices: STOCK_PRICES.map(str::to_owned).to_vec(),
+                price_patches: Default::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn only_str_9000_to_9005_patch_names() {
+        let outside = layered(
+            &[
+                (StrResource::TYPE, 8999, str_resource("Before")),
+                (StrResource::TYPE, 9006, str_resource("After")),
+                (StrResource::TYPE, 9300, str_resource("10")),
+            ],
+            &[],
+        );
+        assert_eq!(
+            outside.commodity_strings().name_patches,
+            <[StringPatch; 6]>::default()
+        );
+        let first = layered(&[(StrResource::TYPE, 9000, str_resource("Grain"))], &[]);
+        assert_eq!(
+            first.commodity_strings().name_patches[0],
+            StringPatch::Text("Grain".into()),
+            "a 'STR ' 9000 in the data file counts"
         );
     }
 

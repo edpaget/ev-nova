@@ -365,11 +365,31 @@ fn the_food_surplus_targets_port_kane() {
         <[StringPatch; 6]>::default(),
         "stock data has no 'STR '"
     );
+    assert_eq!(
+        strings.name_patches,
+        <[StringPatch; 6]>::default(),
+        "stock data has no 'STR '"
+    );
     let prices: Vec<i64> = commodities(&strings)
         .into_iter()
         .map(|(_, commodity)| commodity.base_price)
         .collect();
     assert_eq!(prices, [75, 350, 750, 900, 200, 550]);
+    let names: Vec<String> = commodities(&strings)
+        .into_iter()
+        .map(|(_, commodity)| commodity.name)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Food",
+            "Industrial",
+            "Medical Supplies",
+            "Luxury Goods",
+            "Metal",
+            "Equipment"
+        ]
+    );
 }
 
 /// An `öops` at any stellar may be placed at Port Kane (`spöb` 137), but

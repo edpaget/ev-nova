@@ -5674,6 +5674,7 @@ mod tests {
             sites: vec![site(128, (0.0, 0.0), flags)],
             commodities: CommodityStrings {
                 names: vec!["Food".to_owned()],
+                name_patches: Default::default(),
                 base_prices: vec!["75".to_owned()],
                 price_patches: Default::default(),
             },
@@ -8135,6 +8136,7 @@ mod tests {
         catalog.dudes[0].1.booty = 0x0041;
         catalog.commodities = CommodityStrings {
             names: vec!["Food".to_owned()],
+            name_patches: Default::default(),
             base_prices: vec!["75".to_owned()],
             price_patches: Default::default(),
         };

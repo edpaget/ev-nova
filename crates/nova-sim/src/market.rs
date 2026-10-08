@@ -5,7 +5,10 @@
 //! # Commodities and prices
 //!
 //! The six standard commodities are named by `STR#` 4000 and priced by
-//! `STR#` 4004 ([`CommodityStrings`]). A plug-in's `'STR '` 9300 + n
+//! `STR#` 4004 ([`CommodityStrings`]). A plug-in's `'STR '` 9000 + n
+//! replaces commodity n's 4000 name whenever it exists, whatever it
+//! holds; an empty (zero-byte) or unreadable one names it empty
+//! (`_LoadStrings` @0x71afb-0x71b55). A plug-in's `'STR '` 9300 + n
 //! replaces commodity n's 4004 string whenever it exists, whatever it
 //! holds (`_InitObjects` @0x1cedd-0x1cf43). An empty (zero-byte) one
 //! from 9301 up takes the string commodity n - 1 was priced from. Every
@@ -217,7 +220,7 @@ pub enum TradeRefusal {
 /// A standard commodity that can be traded: its name and base price.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Commodity {
-    /// Its name, from `STR#` 4000.
+    /// Its name, from `STR#` 4000 or a plug-in's `'STR '` 9000 + n.
     pub name: String,
     /// Its base price, from `STR#` 4004.
     pub base_price: i64,
@@ -320,7 +323,7 @@ pub fn commodities(strings: &CommodityStrings) -> Vec<(u8, Commodity)> {
             (
                 n,
                 Commodity {
-                    name: strings.names.get(at).cloned().unwrap_or_default(),
+                    name: name_string(strings, at).to_owned(),
                     base_price: i64::from(string_to_num(base_price_string(strings, at))),
                 },
             )
@@ -354,6 +357,27 @@ pub fn string_to_num(text: &str) -> i16 {
         n.wrapping_mul(10).wrapping_add(i16::from(byte & 0xF))
     });
     if negative { n.wrapping_neg() } else { n }
+}
+
+/// The string that names commodity `n`: its `'STR '` 9000 + n patch when
+/// one exists, whatever it holds, or else its `STR#` 4000 string
+/// (`_LoadStrings` @0x71afb-0x71b55, `_LoadPluginString` @0x71a8e).
+///
+/// Unlike [`base_price_string`]'s shared buffer, each name has its own
+/// slot of `_cargoName`, which starts zero-filled (`__common`) and which
+/// nothing else writes. An empty (zero-byte) patch copies nothing into
+/// it, so it names its commodity empty, not as the slot before. A patch
+/// whose length byte runs past its data names it with the data bytes
+/// padded with NULs in the original; the sim keeps no bytes for it and
+/// names it empty. Stock data and editor-written plug-ins never have
+/// one. A slot past the end of `STR#` 4000 is the empty string, as
+/// `GetIndString` gives.
+fn name_string(strings: &CommodityStrings, n: usize) -> &str {
+    match strings.name_patches.get(n) {
+        Some(StringPatch::Text(text)) => text,
+        Some(StringPatch::Empty | StringPatch::Unreadable) => "",
+        Some(StringPatch::Absent) | None => strings.names.get(n).map_or("", String::as_str),
+    }
 }
 
 /// The string that prices commodity `n`: its `'STR '` 9300 + n patch when
@@ -1097,6 +1121,7 @@ mod tests {
     fn strings(names: &[&str], prices: &[&str]) -> CommodityStrings {
         CommodityStrings {
             names: names.iter().map(|&s| s.to_owned()).collect(),
+            name_patches: Default::default(),
             base_prices: prices.iter().map(|&s| s.to_owned()).collect(),
             price_patches: Default::default(),
         }
@@ -1109,6 +1134,23 @@ mod tests {
             strings.price_patches[*n] = patch.clone();
         }
         strings
+    }
+
+    /// [`stock`] with these `'STR '` 9000 + n patches.
+    fn renamed(patches: &[(usize, StringPatch)]) -> CommodityStrings {
+        let mut strings = stock();
+        for (n, patch) in patches {
+            strings.name_patches[*n] = patch.clone();
+        }
+        strings
+    }
+
+    /// Each commodity's name, in order.
+    fn names(strings: &CommodityStrings) -> Vec<String> {
+        commodities(strings)
+            .into_iter()
+            .map(|(_, commodity)| commodity.name)
+            .collect()
     }
 
     fn text(s: &str) -> StringPatch {
@@ -1188,6 +1230,88 @@ mod tests {
                 (3, commodity("Luxury Goods", 900)),
                 (4, commodity("Metal", 200)),
                 (5, commodity("Equipment", 550)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_patch_replaces_its_commoditys_str_4000_string() {
+        let strings = renamed(&[(0, text("Grain"))]);
+        assert_eq!(
+            names(&strings),
+            [
+                "Grain",
+                "Industrial",
+                "Medical Supplies",
+                "Luxury Goods",
+                "Metal",
+                "Equipment"
+            ]
+        );
+        assert_eq!(prices(&strings), prices(&stock()));
+    }
+
+    #[test]
+    fn a_name_patch_wins_whatever_it_holds() {
+        let found = names(&renamed(&[(1, text("")), (2, text(" 9 "))]));
+        assert_eq!(found[1], "");
+        assert_eq!(found[2], " 9 ");
+    }
+
+    #[test]
+    fn an_empty_name_patch_names_its_commodity_empty_not_the_one_before() {
+        let found = commodities(&renamed(&[(1, StringPatch::Empty)]));
+        assert_eq!(found[1], (1, commodity("", 350)));
+        assert_eq!(found[0], (0, commodity("Food", 75)));
+    }
+
+    #[test]
+    fn an_unreadable_name_patch_names_its_commodity_empty() {
+        let found = commodities(&renamed(&[(3, StringPatch::Unreadable)]));
+        assert_eq!(found[3], (3, commodity("", 900)));
+    }
+
+    #[test]
+    fn a_name_patch_names_a_commodity_str_4000_lacks() {
+        let mut five = stock();
+        five.names.truncate(5);
+        five.name_patches[5] = text("Gear");
+        assert_eq!(names(&five)[5], "Gear");
+
+        let mut none = stock();
+        none.names.clear();
+        none.name_patches[1] = text("Ore");
+        none.name_patches[4] = text("Steel");
+        assert_eq!(names(&none), ["", "Ore", "", "", "Steel", ""]);
+    }
+
+    #[test]
+    fn name_and_price_patches_are_separate() {
+        let mut both = renamed(&[(0, text("Grain"))]);
+        both.price_patches[0] = text("10");
+        assert_eq!(commodities(&both)[0], (0, commodity("Grain", 10)));
+        assert_eq!(
+            commodities(&renamed(&[(0, text("Grain"))]))[0],
+            (0, commodity("Grain", 75))
+        );
+        assert_eq!(
+            commodities(&patched(&[(0, text("10"))]))[0],
+            (0, commodity("Food", 10))
+        );
+    }
+
+    #[test]
+    fn each_name_slot_is_patched_on_its_own() {
+        let found = names(&renamed(&[(0, text("Grain")), (5, text("Gear"))]));
+        assert_eq!(
+            found,
+            [
+                "Grain",
+                "Industrial",
+                "Medical Supplies",
+                "Luxury Goods",
+                "Metal",
+                "Gear"
             ]
         );
     }

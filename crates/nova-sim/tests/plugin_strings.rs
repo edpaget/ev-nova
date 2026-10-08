@@ -1,5 +1,6 @@
-//! Wiring: a plug-in's `'STR '` 9300-9305 base-price patches reach the
-//! commodity prices through the `GameData` adapter.
+//! Wiring: a plug-in's `'STR '` 9000-9005 name patches and 9300-9305
+//! base-price patches reach the commodities through the `GameData`
+//! adapter.
 
 use std::io;
 use std::path::Path;
@@ -11,7 +12,7 @@ use nova_data::{GameData, Record};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::PilotCatalog;
-use nova_sim::market::commodities;
+use nova_sim::market::{Commodity, commodities};
 
 type Resources<'a> = &'a [(ResType, i16, Vec<u8>)];
 
@@ -105,9 +106,9 @@ fn stock() -> Vec<(ResType, i16, Vec<u8>)> {
     ]
 }
 
-/// Each commodity's base price, from stock data and, when given, a
-/// plug-in holding `plugin`.
-fn prices(plugin: Option<Resources<'_>>) -> Vec<i64> {
+/// Each commodity, from stock data and, when given, a plug-in holding
+/// `plugin`.
+fn goods(plugin: Option<Resources<'_>>) -> Vec<Commodity> {
     let files = Files {
         data: fork(&stock()),
         plugin: fork(plugin.unwrap_or_default()),
@@ -116,13 +117,108 @@ fn prices(plugin: Option<Resources<'_>>) -> Vec<i64> {
     let data = GameData::load(&files, &files, Path::new("/data"), plugins).expect("opens");
     commodities(&data.commodity_strings())
         .into_iter()
-        .map(|(_, commodity)| commodity.base_price)
+        .map(|(_, commodity)| commodity)
         .collect()
+}
+
+/// Each commodity's base price, as [`goods`] gives them.
+fn prices(plugin: Option<Resources<'_>>) -> Vec<i64> {
+    goods(plugin)
+        .into_iter()
+        .map(|commodity| commodity.base_price)
+        .collect()
+}
+
+/// Each commodity's name, as [`goods`] gives them.
+fn names(plugin: Option<Resources<'_>>) -> Vec<String> {
+    goods(plugin)
+        .into_iter()
+        .map(|commodity| commodity.name)
+        .collect()
+}
+
+const STOCK_NAMES: [&str; 6] = [
+    "Food",
+    "Industrial",
+    "Medical Supplies",
+    "Luxury Goods",
+    "Metal",
+    "Equipment",
+];
+
+const STOCK_PRICES: [i64; 6] = [75, 350, 750, 900, 200, 550];
+
+#[test]
+fn without_a_plugin_the_names_are_stock() {
+    assert_eq!(names(None), STOCK_NAMES);
+}
+
+#[test]
+fn a_plugins_str_9000_renames_food() {
+    let plugin = [(StrResource::TYPE, 9000, str_resource("Grain"))];
+    assert_eq!(
+        names(Some(&plugin)),
+        [
+            "Grain",
+            "Industrial",
+            "Medical Supplies",
+            "Luxury Goods",
+            "Metal",
+            "Equipment"
+        ]
+    );
+    assert_eq!(prices(Some(&plugin)), STOCK_PRICES);
+}
+
+#[test]
+fn a_plugins_str_9000_wins_its_slot_over_its_own_str_4000() {
+    let plugin = [
+        (
+            StrList::TYPE,
+            4000,
+            str_list(&["A", "B", "C", "D", "E", "F"]),
+        ),
+        (StrResource::TYPE, 9000, str_resource("Grain")),
+    ];
+    assert_eq!(names(Some(&plugin)), ["Grain", "B", "C", "D", "E", "F"]);
+}
+
+#[test]
+fn a_plugins_str_list_9000_names_nothing() {
+    let plugin = [(StrList::TYPE, 9000, str_list(&["Grain"]))];
+    assert_eq!(names(Some(&plugin)), STOCK_NAMES);
+}
+
+#[test]
+fn a_plugins_zero_byte_str_9001_names_industrial_empty() {
+    let plugin = [(StrResource::TYPE, 9001, Vec::new())];
+    assert_eq!(
+        names(Some(&plugin)),
+        [
+            "Food",
+            "",
+            "Medical Supplies",
+            "Luxury Goods",
+            "Metal",
+            "Equipment"
+        ]
+    );
+    assert_eq!(
+        prices(Some(&plugin)),
+        STOCK_PRICES,
+        "still listed, at stock prices"
+    );
+}
+
+#[test]
+fn a_plugins_str_9002_is_read_as_its_mac_roman_bytes() {
+    let plugin = [(StrResource::TYPE, 9002, str_bytes(b"Caf\x8e"))];
+    assert_eq!(names(Some(&plugin))[2], "Café");
 }
 
 #[test]
 fn without_a_plugin_the_prices_are_stock() {
-    assert_eq!(prices(None), [75, 350, 750, 900, 200, 550]);
+    assert_eq!(prices(None), STOCK_PRICES);
 }
 
 #[test]
