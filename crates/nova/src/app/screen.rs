@@ -108,50 +108,16 @@
 //! ([`AppScreen::with_point_defence_rule`]), by governments' allegiance
 //! until another is given; the player's crimes are judged by the
 //! router's law ([`AppScreen::with_law`]), Nova's until another is given;
-//! and the escorts' standing orders are reset, or kept, on entering a
-//! system as the router says ([`AppScreen::with_escort_orders`]), reset
-//! (the engine's) until another is given. Each flight hires escorts by
-//! the router's hiring rules ([`AppScreen::with_hire_require`],
-//! [`AppScreen::with_take_off_pay`], [`AppScreen::with_escort_wage`],
-//! [`AppScreen::with_hire_terms`], [`AppScreen::with_control_bits`]),
-//! the engine's and Nova's until others are given. Each flight's
-//! outfitter and shipyard read `BuyRandom` as the router says
-//! ([`AppScreen::with_buy_random`]), the engine's until another is given.
-//! Each flight's held tribbles and perishable `jünk` grow and decay as
-//! the router says ([`AppScreen::with_junk_flags`]), the engine's until
-//! another is given. Each flight's outfitter refuses a launcher's sale
-//! for its ammunition as the router says
-//! ([`AppScreen::with_launcher_sale`]), the engine's until another is
-//! given. Each flight's `ModType` 27 outfits raise their targets' `Max`
-//! as the router says ([`AppScreen::with_raised_max`]), the engine's
-//! until another is given. Each flight's exchange prices an active
-//! `öops` event's commodity as the router says
-//! ([`AppScreen::with_event_price`]), the engine's until another is given.
-//! Each flight's ship purchase keeps the cargo as the router says
-//! ([`AppScreen::with_purchase_cargo`]), the engine's until another is
-//! given. Each flight's exchange trades a `jünk` of negative or zero
-//! price as the router says ([`AppScreen::with_junk_price`]), and trades
-//! each `jünk` row the ways it says ([`AppScreen::with_junk_trade`]), and
-//! moves as many tons a plain trade as it says
-//! ([`AppScreen::with_trade_lot`]), and divides the cash by the price for
-//! the most a buy moves as it says ([`AppScreen::with_trade_quotient`]),
-//! and has Option on Buy or Sell ask for a count or trade the most as it
-//! says ([`AppScreen::with_trade_count`]), and reads cash below nothing
-//! on a buy as it says ([`AppScreen::with_trade_debt`]), the engine's
-//! until others are
-//! given. Each flight's outfitter sells a map
-//! or clean-record outfit as the router says
-//! ([`AppScreen::with_outfit_limit`]), refunds a sold outfit as it
-//! says ([`AppScreen::with_outfit_refund`]), and has Option on Buy or
-//! Sell ask for a count or change nothing as it says
-//! ([`AppScreen::with_outfit_count`]), the engine's until others
-//! are given; each time the spaceport's outfitter opens, the flight is told
+//! escorts are hired by the router's hire terms and control bits
+//! ([`AppScreen::with_hire_terms`], [`AppScreen::with_control_bits`]),
+//! and persons appear as the router's person rules say
+//! ([`AppScreen::with_person_rules`]), Nova's until others are given.
+//! Every other disputed rule, each flight reads from the router's rule
+//! set ([`AppScreen::with_rules`]), every rule the engine's until another
+//! is given; [`AppScreen::with_rulebook`] sets the rule set from one
+//! rulebook and builds each of the strategies above from it. Each time
+//! the spaceport's outfitter opens, the flight is told
 //! ([`FlightView::open_outfitter`]) and the outfitter shown afresh.
-//! Each flight's persons
-//! appear as the router's rules say ([`AppScreen::with_person_rules`])
-//! and say their comm quotes as it says ([`AppScreen::with_comm_quote`]),
-//! the engine's and Nova's until others are given;
-//! [`AppScreen::with_rulebook`] sets every rule from one rulebook.
 //! The flight's diagnostics about game
 //! data it could not read or the simulation does not handle yet come
 //! through [`Screen::take_diagnostics`].
@@ -326,83 +292,12 @@ pub struct AppScreen {
     assignment: Option<AssignmentDialog>,
     /// The options each flight's comm dialog lists.
     hail_options: HailOptions,
-    /// Whether each flight's escorts' standing orders are reset on
-    /// entering a system.
-    escort_orders: RuleSource,
-    /// What a fighter each flight's player launches does first.
-    fighter_launch: RuleSource,
-    /// What becomes of each flight's fighters out as the player leaves a
-    /// system.
-    fighter_recall: RuleSource,
-    /// Whether an unmet `Require` refuses a hire in each flight.
-    hire_require: RuleSource,
-    /// How `BuyRandom` reads in each flight.
-    buy_random: RuleSource,
-    /// How held tribbles and perishable `jünk` grow and decay in each
-    /// flight.
-    junk_flags: RuleSource,
-    /// When each flight's outfitter refuses a launcher's sale for its
-    /// ammunition.
-    launcher_sale: RuleSource,
-    /// How each flight's `ModType` 27 outfits raise their targets' `Max`.
-    raised_max: RuleSource,
-    /// How each flight's exchange prices an active `öops` event's
-    /// commodity.
-    event_price: RuleSource,
-    /// What cargo each flight's ship purchase keeps.
-    purchase_cargo: RuleSource,
-    /// How each flight's exchange trades a `jünk` of negative or zero
-    /// price.
-    junk_price: RuleSource,
-    /// Which ways each flight's exchange trades a `jünk` row.
-    junk_trade: RuleSource,
-    /// How many tons a plain trade on each flight's exchange moves.
-    trade_lot: RuleSource,
-    /// How the most a buy on each flight's exchange moves divides the
-    /// cash by the price.
-    trade_quotient: RuleSource,
-    /// Whether Option on Buy or Sell at each flight's exchange asks for a
-    /// count or trades the most.
-    trade_count: RuleSource,
-    /// Whether a buy at each flight's exchange reads cash below nothing
-    /// signed or as none.
-    trade_debt: RuleSource,
-    /// Whether each flight's outfitter sells a map or clean-record outfit
-    /// only once an opening.
-    outfit_limit: RuleSource,
-    /// Whether an outfit bought since each flight's outfitter opened
-    /// sells back in full.
-    outfit_refund: RuleSource,
-    /// Whether Option on Buy or Sell at each flight's outfitter asks for
-    /// a count or changes nothing.
-    outfit_count: RuleSource,
-    /// Whether a sale at each flight's outfitter of an outfit of mass 0
-    /// or more is refused while the free mass is below 0.
-    sale_mass: RuleSource,
-    /// Whether each flight's trade-in counts an unsellable outfit.
-    trade_in_outfits: RuleSource,
-    /// Whether each take-off pays each flight's hired escorts a day.
-    take_off_pay: RuleSource,
-    /// Which wage each flight's hired escorts are paid.
-    escort_wage: RuleSource,
+    /// How each disputed rule reads in each flight.
+    rules: Rulebook,
     /// The fee and wage of a hire in each flight.
     hire_terms: Rc<dyn HireTerms>,
     /// How persons appear in each flight.
     person_rules: Rc<dyn PersonRules>,
-    /// When each flight's persons say their comm quotes.
-    comm_quote: RuleSource,
-    /// How each flight grants and removes outfits where the rules are
-    /// disputed.
-    outfit_rules: OutfitRules,
-    /// The order of each flight's set-expression hooks where it is
-    /// disputed.
-    hook_rules: HookRules,
-    /// How each flight's ship-change set operators go where the rules are
-    /// disputed.
-    ship_change_rules: ShipChangeRules,
-    /// How each flight's moving set operators go where the rules are
-    /// disputed.
-    script_effect_rules: ScriptEffectRules,
     /// The control-bit test a ship for hire's `Availability` goes
     /// through in each flight.
     control_bits: Rc<dyn ControlBits>,
@@ -478,37 +373,10 @@ impl AppScreen {
             plunder: None,
             assignment: None,
             hail_options: HailOptions::default(),
-            escort_orders: RuleSource::Engine,
-            fighter_launch: RuleSource::Engine,
-            fighter_recall: RuleSource::Engine,
-            hire_require: RuleSource::Engine,
-            buy_random: RuleSource::Engine,
-            junk_flags: RuleSource::Engine,
-            launcher_sale: RuleSource::Engine,
-            raised_max: RuleSource::Engine,
-            event_price: RuleSource::Engine,
-            purchase_cargo: RuleSource::Engine,
-            junk_price: RuleSource::Engine,
-            junk_trade: RuleSource::Engine,
-            trade_lot: RuleSource::Engine,
-            trade_quotient: RuleSource::Engine,
-            trade_count: RuleSource::Engine,
-            trade_debt: RuleSource::Engine,
-            outfit_limit: RuleSource::Engine,
-            outfit_refund: RuleSource::Engine,
-            outfit_count: RuleSource::Engine,
-            sale_mass: RuleSource::Engine,
-            trade_in_outfits: RuleSource::Engine,
-            take_off_pay: RuleSource::Engine,
-            escort_wage: RuleSource::Engine,
+            rules: Rulebook::default(),
             hire_terms: Rc::new(NovaHire::default()),
             control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
-            comm_quote: RuleSource::Engine,
-            outfit_rules: OutfitRules::default(),
-            hook_rules: HookRules::default(),
-            ship_change_rules: ShipChangeRules::default(),
-            script_effect_rules: ScriptEffectRules::default(),
             comm: None,
             haggle: None,
         }
@@ -587,10 +455,9 @@ impl AppScreen {
     /// another is given.
     #[must_use]
     pub fn with_escort_orders(self, source: RuleSource) -> Self {
-        Self {
-            escort_orders: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::EscortOrders, source);
+        Self { rules, ..self }
     }
 
     /// The router with the fighters each flight's player launches doing
@@ -598,10 +465,9 @@ impl AppScreen {
     /// engine's until another is given.
     #[must_use]
     pub fn with_fighter_launch(self, source: RuleSource) -> Self {
-        Self {
-            fighter_launch: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::FighterLaunch, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's fighters out, as the player leaves a
@@ -609,10 +475,9 @@ impl AppScreen {
     /// the engine's until another is given.
     #[must_use]
     pub fn with_fighter_recall(self, source: RuleSource) -> Self {
-        Self {
-            fighter_recall: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::FighterRecall, source);
+        Self { rules, ..self }
     }
 
     /// The router with an unmet `Require` refusing a hire in each flight,
@@ -620,10 +485,9 @@ impl AppScreen {
     /// engine's (not) until another is given.
     #[must_use]
     pub fn with_hire_require(self, source: RuleSource) -> Self {
-        Self {
-            hire_require: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::HireRequire, source);
+        Self { rules, ..self }
     }
 
     /// The router with `BuyRandom` read in each flight as `source` says
@@ -631,10 +495,9 @@ impl AppScreen {
     /// given.
     #[must_use]
     pub fn with_buy_random(self, source: RuleSource) -> Self {
-        Self {
-            buy_random: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::BuyRandom, source);
+        Self { rules, ..self }
     }
 
     /// The router with held tribbles and perishable `jünk` growing and
@@ -643,10 +506,9 @@ impl AppScreen {
     /// given.
     #[must_use]
     pub fn with_junk_flags(self, source: RuleSource) -> Self {
-        Self {
-            junk_flags: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::JunkFlags, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's outfitter refusing a launcher's sale
@@ -655,10 +517,9 @@ impl AppScreen {
     /// given.
     #[must_use]
     pub fn with_launcher_sale(self, source: RuleSource) -> Self {
-        Self {
-            launcher_sale: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::LauncherSale, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's `ModType` 27 outfits raising their
@@ -666,10 +527,9 @@ impl AppScreen {
     /// the engine's until another is given.
     #[must_use]
     pub fn with_raised_max(self, source: RuleSource) -> Self {
-        Self {
-            raised_max: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::RaisedMax, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's exchange pricing an active `öops`
@@ -678,10 +538,9 @@ impl AppScreen {
     /// given.
     #[must_use]
     pub fn with_event_price(self, source: RuleSource) -> Self {
-        Self {
-            event_price: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::EventPrice, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's ship purchase keeping the cargo as
@@ -689,10 +548,9 @@ impl AppScreen {
     /// until another is given.
     #[must_use]
     pub fn with_purchase_cargo(self, source: RuleSource) -> Self {
-        Self {
-            purchase_cargo: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::PurchaseCargo, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's exchange trading a `jünk` of
@@ -701,10 +559,9 @@ impl AppScreen {
     /// given.
     #[must_use]
     pub fn with_junk_price(self, source: RuleSource) -> Self {
-        Self {
-            junk_price: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::JunkPrice, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's exchange trading each `jünk` row the
@@ -712,10 +569,9 @@ impl AppScreen {
     /// until another is given.
     #[must_use]
     pub fn with_junk_trade(self, source: RuleSource) -> Self {
-        Self {
-            junk_trade: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::JunkTrade, source);
+        Self { rules, ..self }
     }
 
     /// The router with a plain trade on each flight's exchange moving as
@@ -723,10 +579,9 @@ impl AppScreen {
     /// engine's (up to 10 a click) until another is given.
     #[must_use]
     pub fn with_trade_lot(self, source: RuleSource) -> Self {
-        Self {
-            trade_lot: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::TradeLot, source);
+        Self { rules, ..self }
     }
 
     /// The router with the most a buy on each flight's exchange moves
@@ -735,10 +590,9 @@ impl AppScreen {
     /// floats) until another is given.
     #[must_use]
     pub fn with_trade_quotient(self, source: RuleSource) -> Self {
-        Self {
-            trade_quotient: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::TradeQuotient, source);
+        Self { rules, ..self }
     }
 
     /// The router with Option on Buy or Sell at each flight's exchange
@@ -747,10 +601,9 @@ impl AppScreen {
     /// another is given.
     #[must_use]
     pub fn with_trade_count(self, source: RuleSource) -> Self {
-        Self {
-            trade_count: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::TradeCount, source);
+        Self { rules, ..self }
     }
 
     /// The router with a buy at each flight's exchange reading cash below
@@ -758,10 +611,9 @@ impl AppScreen {
     /// engine's (signed) until another is given.
     #[must_use]
     pub fn with_trade_debt(self, source: RuleSource) -> Self {
-        Self {
-            trade_debt: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::TradeDebt, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's outfitter selling a map or
@@ -770,10 +622,9 @@ impl AppScreen {
     /// until another is given.
     #[must_use]
     pub fn with_outfit_limit(self, source: RuleSource) -> Self {
-        Self {
-            outfit_limit: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::OutfitLimit, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's outfitter refunding a sold outfit as
@@ -782,10 +633,9 @@ impl AppScreen {
     /// given.
     #[must_use]
     pub fn with_outfit_refund(self, source: RuleSource) -> Self {
-        Self {
-            outfit_refund: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::OutfitRefund, source);
+        Self { rules, ..self }
     }
 
     /// The router with Option on Buy or Sell at each flight's outfitter
@@ -793,10 +643,9 @@ impl AppScreen {
     /// engine's (it asks for a count) until another is given.
     #[must_use]
     pub fn with_outfit_count(self, source: RuleSource) -> Self {
-        Self {
-            outfit_count: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::OutfitCount, source);
+        Self { rules, ..self }
     }
 
     /// The router with a sale at each flight's outfitter refused for the
@@ -805,10 +654,9 @@ impl AppScreen {
     /// clamped at 0) until another is given.
     #[must_use]
     pub fn with_sale_mass(self, source: RuleSource) -> Self {
-        Self {
-            sale_mass: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::SaleMass, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's trade-in counting outfits as
@@ -816,10 +664,9 @@ impl AppScreen {
     /// (every outfit but a persistent one) until another is given.
     #[must_use]
     pub fn with_trade_in_outfits(self, source: RuleSource) -> Self {
-        Self {
-            trade_in_outfits: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::TradeInOutfits, source);
+        Self { rules, ..self }
     }
 
     /// The router with each take-off paying each flight's hired escorts a
@@ -828,10 +675,9 @@ impl AppScreen {
     /// another is given.
     #[must_use]
     pub fn with_take_off_pay(self, source: RuleSource) -> Self {
-        Self {
-            take_off_pay: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::TakeOffPay, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's hired escorts paid the wage `source`
@@ -839,10 +685,9 @@ impl AppScreen {
     /// another is given.
     #[must_use]
     pub fn with_escort_wage(self, source: RuleSource) -> Self {
-        Self {
-            escort_wage: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::EscortWage, source);
+        Self { rules, ..self }
     }
 
     /// The router with `terms` giving the fee and wage of a hire in each
@@ -880,10 +725,9 @@ impl AppScreen {
     /// another is given.
     #[must_use]
     pub fn with_comm_quote(self, source: RuleSource) -> Self {
-        Self {
-            comm_quote: source,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self.rules.with_override(RuleKey::CommQuote, source);
+        Self { rules, ..self }
     }
 
     /// The router with each flight granting and removing outfits as
@@ -891,10 +735,15 @@ impl AppScreen {
     /// until others are given.
     #[must_use]
     pub fn with_outfit_rules(self, rules: OutfitRules) -> Self {
-        Self {
-            outfit_rules: rules,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self
+            .rules
+            .with_override(RuleKey::MapExplore, rules.map_explore)
+            .with_override(RuleKey::InvalidMap, rules.invalid_map)
+            .with_override(RuleKey::GrantMax, rules.grant_max)
+            .with_override(RuleKey::RemoveRefund, rules.remove_refund)
+            .with_override(RuleKey::RefitReserves, rules.refit_reserves);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's set-expression hooks in the order
@@ -902,10 +751,13 @@ impl AppScreen {
     /// the engine's until others are given.
     #[must_use]
     pub fn with_hook_rules(self, rules: HookRules) -> Self {
-        Self {
-            hook_rules: rules,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self
+            .rules
+            .with_override(RuleKey::PurchasePaintOrder, rules.purchase_paint_order)
+            .with_override(RuleKey::CaptureHookOrder, rules.capture_hook_order)
+            .with_override(RuleKey::StartShipPurchase, rules.start_ship_purchase);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's ship-change set operators following
@@ -914,10 +766,14 @@ impl AppScreen {
     /// are given.
     #[must_use]
     pub fn with_ship_change_rules(self, rules: ShipChangeRules) -> Self {
-        Self {
-            ship_change_rules: rules,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self
+            .rules
+            .with_override(RuleKey::ShipChangePersistence, rules.persistence)
+            .with_override(RuleKey::ShipChangeMax, rules.max)
+            .with_override(RuleKey::ShipChangeCargo, rules.cargo)
+            .with_override(RuleKey::ShipChangeReserves, rules.reserves);
+        Self { rules, ..self }
     }
 
     /// The router with each flight's moving set operators following
@@ -926,20 +782,35 @@ impl AppScreen {
     /// others are given.
     #[must_use]
     pub fn with_script_effect_rules(self, rules: ScriptEffectRules) -> Self {
-        Self {
-            script_effect_rules: rules,
-            ..self
-        }
+        // Shim until callers use with_rules (removed in this phase).
+        let rules = self
+            .rules
+            .with_override(RuleKey::MoveStarless, rules.starless)
+            .with_override(RuleKey::MoveArrival, rules.arrival)
+            .with_override(RuleKey::MoveKeepFlag, rules.keep_flag)
+            .with_override(RuleKey::BlankLeave, rules.blank_leave)
+            .with_override(RuleKey::ScriptSound, rules.sound);
+        Self { rules, ..self }
+    }
+
+    /// The router with each flight's disputed rules reading as `rules`
+    /// says ([`FlightView::with_rules`]): every rule the engine's until
+    /// others are given. Only the rule set changes: the strategies the
+    /// router hands each flight (its behaviour, law, boarding, hail
+    /// options, hire terms and persons) stay as they are, so a rule one
+    /// of them decides changes only through [`AppScreen::with_rulebook`].
+    #[must_use]
+    pub fn with_rules(self, rules: Rulebook) -> Self {
+        Self { rules, ..self }
     }
 
     /// The router with Nova's rules, each disputed one as `rulebook`
-    /// chooses: the NPCs' behaviour, disabling, point defence, the law,
-    /// boarding, hailing, the escorts' and fighters' rules, hiring, the
-    /// shops' `BuyRandom`, the tribbles and perishables, the cargo a ship
-    /// purchase keeps, the persons' rules, granting and removing outfits,
-    /// the order of the set-expression hooks, changing the ship by set
-    /// operator, and moving the player by set operator. This is the edge
-    /// where every [`RuleKey`] meets its setting.
+    /// chooses: the strategies each flight decides by (the NPCs'
+    /// behaviour, disabling, point defence, the law, boarding, hailing,
+    /// the hire terms, the control bits and the persons), built from it,
+    /// and the rule set every flight reads the rest from
+    /// ([`AppScreen::with_rules`]). This is the edge where every
+    /// [`RuleKey`] meets its setting.
     #[must_use]
     pub fn with_rulebook(self, rulebook: &Rulebook) -> Self {
         self.with_behaviour(Rc::new(NovaAi::from_rulebook(rulebook)))
@@ -948,37 +819,10 @@ impl AppScreen {
             .with_law(Rc::new(NovaLaw::from_rulebook(rulebook)))
             .with_boarding_rule(Rc::new(NovaBoarding::from_rulebook(rulebook)))
             .with_hail_options(HailOptions::nova(rulebook))
-            .with_escort_orders(rulebook.source_for(RuleKey::EscortOrders))
-            .with_fighter_launch(rulebook.source_for(RuleKey::FighterLaunch))
-            .with_fighter_recall(rulebook.source_for(RuleKey::FighterRecall))
-            .with_hire_require(rulebook.source_for(RuleKey::HireRequire))
-            .with_buy_random(rulebook.source_for(RuleKey::BuyRandom))
-            .with_junk_flags(rulebook.source_for(RuleKey::JunkFlags))
-            .with_launcher_sale(rulebook.source_for(RuleKey::LauncherSale))
-            .with_raised_max(rulebook.source_for(RuleKey::RaisedMax))
-            .with_event_price(rulebook.source_for(RuleKey::EventPrice))
-            .with_purchase_cargo(rulebook.source_for(RuleKey::PurchaseCargo))
-            .with_junk_price(rulebook.source_for(RuleKey::JunkPrice))
-            .with_junk_trade(rulebook.source_for(RuleKey::JunkTrade))
-            .with_trade_lot(rulebook.source_for(RuleKey::TradeLot))
-            .with_trade_quotient(rulebook.source_for(RuleKey::TradeQuotient))
-            .with_trade_count(rulebook.source_for(RuleKey::TradeCount))
-            .with_trade_debt(rulebook.source_for(RuleKey::TradeDebt))
-            .with_outfit_limit(rulebook.source_for(RuleKey::OutfitLimit))
-            .with_outfit_refund(rulebook.source_for(RuleKey::OutfitRefund))
-            .with_outfit_count(rulebook.source_for(RuleKey::OutfitCount))
-            .with_sale_mass(rulebook.source_for(RuleKey::SaleMass))
-            .with_trade_in_outfits(rulebook.source_for(RuleKey::TradeInOutfits))
-            .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
-            .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
             .with_control_bits(Rc::new(NovaBits))
             .with_person_rules(Rc::new(NovaPersons::from_rulebook(rulebook)))
-            .with_comm_quote(rulebook.source_for(RuleKey::CommQuote))
-            .with_outfit_rules(OutfitRules::from_rulebook(rulebook))
-            .with_hook_rules(HookRules::from_rulebook(rulebook))
-            .with_ship_change_rules(ShipChangeRules::from_rulebook(rulebook))
-            .with_script_effect_rules(ScriptEffectRules::from_rulebook(rulebook))
+            .with_rules(*rulebook)
     }
 
     /// The comm dialog, while a hail is under way.
@@ -1024,37 +868,10 @@ impl AppScreen {
             .with_law(Rc::clone(&self.law))
             .with_boarding_rule(Rc::clone(&self.boarding_rule))
             .with_hail_options(self.hail_options.clone())
-            .with_escort_orders(self.escort_orders)
-            .with_fighter_launch(self.fighter_launch)
-            .with_fighter_recall(self.fighter_recall)
-            .with_hire_require(self.hire_require)
-            .with_buy_random(self.buy_random)
-            .with_junk_flags(self.junk_flags)
-            .with_launcher_sale(self.launcher_sale)
-            .with_raised_max(self.raised_max)
-            .with_event_price(self.event_price)
-            .with_purchase_cargo(self.purchase_cargo)
-            .with_junk_price(self.junk_price)
-            .with_junk_trade(self.junk_trade)
-            .with_trade_lot(self.trade_lot)
-            .with_trade_quotient(self.trade_quotient)
-            .with_trade_count(self.trade_count)
-            .with_trade_debt(self.trade_debt)
-            .with_outfit_limit(self.outfit_limit)
-            .with_outfit_refund(self.outfit_refund)
-            .with_outfit_count(self.outfit_count)
-            .with_sale_mass(self.sale_mass)
-            .with_trade_in_outfits(self.trade_in_outfits)
-            .with_take_off_pay(self.take_off_pay)
-            .with_escort_wage(self.escort_wage)
+            .with_rules(self.rules)
             .with_hire_terms(Rc::clone(&self.hire_terms))
             .with_control_bits(Rc::clone(&self.control_bits))
             .with_person_rules(Rc::clone(&self.person_rules))
-            .with_comm_quote(self.comm_quote)
-            .with_outfit_rules(self.outfit_rules)
-            .with_hook_rules(self.hook_rules)
-            .with_ship_change_rules(self.ship_change_rules)
-            .with_script_effect_rules(self.script_effect_rules)
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects);
         match self.metrics() {
@@ -6620,6 +6437,36 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn every_rule_reaches_every_flight() {
+        let every = RuleKey::ALL
+            .into_iter()
+            .fold(Rulebook::default(), |book, key| {
+                book.with_override(key, RuleSource::Bible)
+            });
+        let reached = |screen: &AppScreen| {
+            let rules = *flight(screen).session().expect("flying").rules();
+            assert_eq!(rules, every);
+            for key in RuleKey::ALL {
+                assert_eq!(rules.source_for(key), RuleSource::Bible, "{key:?}");
+            }
+        };
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        assert_eq!(
+            flight(&screen).session().map(Session::rules),
+            Ok(&Rulebook::default()),
+            "the engine's by default"
+        );
+        let mut screen = AppScreen::new(data()).with_rulebook(&every);
+        fly(&mut screen);
+        reached(&screen);
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store).with_rulebook(&every);
+        create(&mut screen, "Ada");
+        reached(&screen);
+    }
+
+    #[test]
     fn the_routers_escort_orders_rule_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_escort_orders(source);
@@ -7005,147 +6852,84 @@ pub(super) mod tests {
         assert_eq!(strings.string_list(4000), ["Food"]);
     }
 
-    /// The rule-bearing parts of `screen`, each by name, as they print.
+    /// The rule-bearing parts of `screen`, each by name, as they print:
+    /// its rule set and the strategies it hands each flight.
     fn rules_of(screen: &AppScreen) -> Vec<(&'static str, String)> {
         vec![
+            ("rules", format!("{:?}", screen.rules)),
             ("behaviour", format!("{:?}", screen.behaviour)),
             ("disable_rule", format!("{:?}", screen.disable_rule)),
             ("defence_rule", format!("{:?}", screen.defence_rule)),
             ("law", format!("{:?}", screen.law)),
             ("boarding_rule", format!("{:?}", screen.boarding_rule)),
             ("hail_options", format!("{:?}", screen.hail_options)),
-            ("escort_orders", format!("{:?}", screen.escort_orders)),
-            ("fighter_launch", format!("{:?}", screen.fighter_launch)),
-            ("fighter_recall", format!("{:?}", screen.fighter_recall)),
-            ("hire_require", format!("{:?}", screen.hire_require)),
-            ("buy_random", format!("{:?}", screen.buy_random)),
-            ("junk_flags", format!("{:?}", screen.junk_flags)),
-            ("launcher_sale", format!("{:?}", screen.launcher_sale)),
-            ("raised_max", format!("{:?}", screen.raised_max)),
-            ("event_price", format!("{:?}", screen.event_price)),
-            ("purchase_cargo", format!("{:?}", screen.purchase_cargo)),
-            ("junk_price", format!("{:?}", screen.junk_price)),
-            ("junk_trade", format!("{:?}", screen.junk_trade)),
-            ("trade_lot", format!("{:?}", screen.trade_lot)),
-            ("trade_quotient", format!("{:?}", screen.trade_quotient)),
-            ("trade_count", format!("{:?}", screen.trade_count)),
-            ("trade_debt", format!("{:?}", screen.trade_debt)),
-            ("outfit_limit", format!("{:?}", screen.outfit_limit)),
-            ("outfit_refund", format!("{:?}", screen.outfit_refund)),
-            ("outfit_count", format!("{:?}", screen.outfit_count)),
-            ("sale_mass", format!("{:?}", screen.sale_mass)),
-            ("trade_in_outfits", format!("{:?}", screen.trade_in_outfits)),
-            ("take_off_pay", format!("{:?}", screen.take_off_pay)),
-            ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
             ("control_bits", format!("{:?}", screen.control_bits)),
             ("person_rules", format!("{:?}", screen.person_rules)),
-            ("comm_quote", format!("{:?}", screen.comm_quote)),
-            ("outfit_rules", format!("{:?}", screen.outfit_rules)),
-            ("hook_rules", format!("{:?}", screen.hook_rules)),
+        ]
+    }
+
+    /// What [`rules_of`] must find once the router is given `rulebook`:
+    /// the rule set, and each strategy built from it, by name, as they
+    /// print.
+    fn ports_of(rulebook: &Rulebook) -> Vec<(&'static str, String)> {
+        vec![
+            ("rules", format!("{rulebook:?}")),
             (
-                "ship_change_rules",
-                format!("{:?}", screen.ship_change_rules),
+                "behaviour",
+                format!("{:?}", NovaAi::from_rulebook(rulebook)),
             ),
+            ("disable_rule", format!("{NovaDisable:?}")),
+            ("defence_rule", format!("{Allegiance:?}")),
+            ("law", format!("{:?}", NovaLaw::from_rulebook(rulebook))),
             (
-                "script_effect_rules",
-                format!("{:?}", screen.script_effect_rules),
+                "boarding_rule",
+                format!("{:?}", NovaBoarding::from_rulebook(rulebook)),
+            ),
+            ("hail_options", format!("{:?}", HailOptions::nova(rulebook))),
+            (
+                "hire_terms",
+                format!("{:?}", NovaHire::from_rulebook(rulebook)),
+            ),
+            ("control_bits", format!("{NovaBits:?}")),
+            (
+                "person_rules",
+                format!("{:?}", NovaPersons::from_rulebook(rulebook)),
             ),
         ]
     }
 
-    /// The one setting each rule's key reaches.
-    fn setting_of(key: RuleKey) -> &'static str {
-        match key {
-            RuleKey::CrimeGains => "law",
-            RuleKey::EmptyBooty
-            | RuleKey::CrewlessCapture
-            | RuleKey::PersonCredits
-            | RuleKey::GrantCount => "boarding_rule",
-            RuleKey::PiracyPolice | RuleKey::EscortAi | RuleKey::PersonCoward => "behaviour",
-            RuleKey::QuietHails | RuleKey::LongAdvice | RuleKey::PersonJoin => "hail_options",
-            RuleKey::EscortOrders => "escort_orders",
-            RuleKey::FighterLaunch => "fighter_launch",
-            RuleKey::FighterRecall => "fighter_recall",
-            RuleKey::HireRequire => "hire_require",
-            RuleKey::BuyRandom => "buy_random",
-            RuleKey::JunkFlags => "junk_flags",
-            RuleKey::LauncherSale => "launcher_sale",
-            RuleKey::RaisedMax => "raised_max",
-            RuleKey::EventPrice => "event_price",
-            RuleKey::PurchaseCargo => "purchase_cargo",
-            RuleKey::JunkPrice => "junk_price",
-            RuleKey::JunkTrade => "junk_trade",
-            RuleKey::TradeLot => "trade_lot",
-            RuleKey::TradeQuotient => "trade_quotient",
-            RuleKey::TradeCount => "trade_count",
-            RuleKey::TradeDebt => "trade_debt",
-            RuleKey::OutfitLimit => "outfit_limit",
-            RuleKey::OutfitRefund => "outfit_refund",
-            RuleKey::OutfitCount => "outfit_count",
-            RuleKey::SaleMass => "sale_mass",
-            RuleKey::TradeInOutfits => "trade_in_outfits",
-            RuleKey::TakeOffPay => "take_off_pay",
-            RuleKey::HireFee => "hire_terms",
-            RuleKey::EscortWage => "escort_wage",
-            RuleKey::PersonOdds
-            | RuleKey::SystemPersons
-            | RuleKey::LinkSystSlip
-            | RuleKey::ShieldMod => "person_rules",
-            RuleKey::CommQuote => "comm_quote",
-            RuleKey::MapExplore
-            | RuleKey::InvalidMap
-            | RuleKey::GrantMax
-            | RuleKey::RemoveRefund
-            | RuleKey::RefitReserves => "outfit_rules",
-            RuleKey::PurchasePaintOrder
-            | RuleKey::CaptureHookOrder
-            | RuleKey::StartShipPurchase => "hook_rules",
-            RuleKey::ShipChangePersistence
-            | RuleKey::ShipChangeMax
-            | RuleKey::ShipChangeCargo
-            | RuleKey::ShipChangeReserves => "ship_change_rules",
-            RuleKey::MoveStarless
-            | RuleKey::MoveArrival
-            | RuleKey::MoveKeepFlag
-            | RuleKey::BlankLeave
-            | RuleKey::ScriptSound => "script_effect_rules",
-        }
-    }
-
     #[test]
     fn the_rulebook_routes_each_rule_to_its_own_setting() {
-        let engine = rules_of(&AppScreen::new(data()).with_rulebook(&Rulebook::default()));
         assert_eq!(
-            engine,
             rules_of(&AppScreen::new(data())),
+            ports_of(&Rulebook::default()),
             "the engine's are the router's defaults"
         );
-        assert!(
-            engine.contains(&("control_bits", "NovaBits".to_owned())),
-            "the real control bits: {engine:?}"
-        );
-        for key in RuleKey::ALL {
-            let rulebook = Rulebook::default().with_override(key, RuleSource::Bible);
-            let bible = rules_of(&AppScreen::new(data()).with_rulebook(&rulebook));
-            let changed: Vec<&str> = engine
-                .iter()
-                .zip(&bible)
-                .filter(|(was, now)| was.1 != now.1)
-                .map(|(was, _)| was.0)
-                .collect();
-            assert_eq!(changed, [setting_of(key)], "{key:?}");
+        let every = RuleKey::ALL
+            .into_iter()
+            .fold(Rulebook::default(), |book, key| {
+                book.with_override(key, RuleSource::Bible)
+            });
+        let books = RuleKey::ALL
+            .into_iter()
+            .map(|key| Rulebook::default().with_override(key, RuleSource::Bible))
+            .chain([every]);
+        for rulebook in books {
+            assert_eq!(
+                rules_of(&AppScreen::new(data()).with_rulebook(&rulebook)),
+                ports_of(&rulebook),
+                "{rulebook:?}"
+            );
         }
-        let all =
-            rules_of(&AppScreen::new(data()).with_rulebook(&Rulebook::new(RuleSource::Bible)));
-        assert!(all.contains(&("comm_quote", "Bible".to_owned())), "{all:?}");
         // The joining and grant rules reach the hail options' Use As
-        // Escort, the boarding rule's count and the outfit rules' `Max`.
+        // Escort, the boarding rule's count and the rule set's `Max`.
         let joined = Rulebook::default()
             .with_override(RuleKey::PersonJoin, RuleSource::Bible)
             .with_override(RuleKey::GrantCount, RuleSource::Bible)
             .with_override(RuleKey::GrantMax, RuleSource::Bible);
-        let routed = rules_of(&AppScreen::new(data()).with_rulebook(&joined));
+        let screen = AppScreen::new(data()).with_rulebook(&joined);
+        let routed = rules_of(&screen);
         let setting = |name: &str| {
             routed
                 .iter()
@@ -7160,8 +6944,10 @@ pub(super) mod tests {
         let boarding = setting("boarding_rule");
         assert!(boarding.contains("grant_count: Bible"), "{boarding}");
         assert!(!boarding.contains("grant_max"), "{boarding}");
-        let outfits = setting("outfit_rules");
-        assert!(outfits.contains("grant_max: Bible"), "{outfits}");
+        assert_eq!(
+            screen.rules.source_for(RuleKey::GrantMax),
+            RuleSource::Bible
+        );
     }
 
     #[test]
