@@ -37,7 +37,9 @@
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
 //! - [`control`]: the control bits missions and storylines script with,
-//!   held as a [`ControlBitSet`] indexed by [`Bit`].
+//!   held as a [`ControlBitSet`] indexed by [`Bit`]; a record's parsed
+//!   control-bit [`Test`], and evaluating one against the [`PilotFacts`]
+//!   it reads ([`control::holds`]).
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence
@@ -245,7 +247,7 @@ pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
-pub use control::{Bit, BitWrite, ControlBitSet, Test, TestExpr};
+pub use control::{Bit, BitWrite, ControlBitSet, PilotFacts, Test, TestExpr};
 pub use date::GameDate;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,

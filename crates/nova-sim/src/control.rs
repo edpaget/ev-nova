@@ -9,10 +9,76 @@
 //! or why it did not parse. A test that did not parse is never satisfied
 //! ([`Test::holds`]): the safe direction, where a ship with a broken
 //! `Availability` is not sold rather than sold out of turn.
+//!
+//! # Evaluating a test
+//!
+//! [`holds`] evaluates a test's tree against a read-only view of the
+//! pilot ([`PilotFacts`]), as the original's `_EvalTestExp` does (see
+//! [`nova_data::expr`]): a blank test holds; `Bxxx` reads the bit, `G`
+//! the gender (true when male), `Oxxx` whether the pilot has the outfit,
+//! `Exxx` whether it has explored the system, and `Pxxx` whether the game
+//! counts as paid for; `!`, `&` and `|` combine them as written, each
+//! binary, since the parser accepts one operator a group; and a count
+//! holds when as many of its terms hold as its comparison asks. Test
+//! evaluation draws nothing at random: the test grammar has no random
+//! operand.
 
 use std::sync::Arc;
 
-pub use nova_data::{Bit, BitWrite, ParsedTest, TestExpr};
+pub use nova_data::{Bit, BitWrite, Comparison, ParsedTest, TestExpr, TestOperand};
+
+use crate::catalog::{OutfitId, SystemId};
+use crate::pilot::Gender;
+
+/// What a control-bit test reads about the pilot.
+pub trait PilotFacts {
+    /// Whether control bit `bit` is set.
+    fn bit(&self, bit: Bit) -> bool;
+    /// The player's gender.
+    fn gender(&self) -> Gender;
+    /// Whether the game counts as paid for, unregistered for fewer than
+    /// `days` days.
+    fn paid(&self, days: u16) -> bool;
+    /// Whether the player has at least one of `outfit`.
+    fn has_outfit(&self, outfit: OutfitId) -> bool;
+    /// Whether the player has explored `system`.
+    fn explored(&self, system: SystemId) -> bool;
+}
+
+/// Whether `test` holds for `pilot` (see the module docs).
+#[must_use]
+pub fn holds(test: &TestExpr, pilot: &(impl PilotFacts + ?Sized)) -> bool {
+    match test {
+        TestExpr::Always => true,
+        TestExpr::Operand(operand) => operand_holds(*operand, pilot),
+        TestExpr::Not(inner) => !holds(inner, pilot),
+        TestExpr::And(a, b) => holds(a, pilot) && holds(b, pilot),
+        TestExpr::Or(a, b) => holds(a, pilot) || holds(b, pilot),
+        TestExpr::Count { terms, cmp, value } => {
+            let count = terms
+                .iter()
+                .filter(|term| operand_holds(term.operand, pilot) != term.negated)
+                .count();
+            let value = usize::from(*value);
+            match cmp {
+                Comparison::Less => count < value,
+                Comparison::Greater => count > value,
+                Comparison::Equal => count == value,
+            }
+        }
+    }
+}
+
+/// Whether one operand holds for `pilot`.
+fn operand_holds(operand: TestOperand, pilot: &(impl PilotFacts + ?Sized)) -> bool {
+    match operand {
+        TestOperand::Bit(bit) => pilot.bit(bit),
+        TestOperand::Paid { days } => pilot.paid(days),
+        TestOperand::Male => pilot.gender() == Gender::Male,
+        TestOperand::HasOutfit(outfit) => pilot.has_outfit(outfit),
+        TestOperand::Explored(system) => pilot.explored(system),
+    }
+}
 
 /// How many `u64` words hold the bits: 10,000 bits, rounded up.
 const WORDS: usize = (Bit::MAX as usize + 1).div_ceil(64);
@@ -256,5 +322,154 @@ mod tests {
     fn the_debug_form_lists_the_set_bits() {
         let bits: ControlBitSet = [bit(2), bit(9)].into_iter().collect();
         assert_eq!(format!("{bits:?}"), "{2, 9}");
+    }
+
+    /// A pilot view holding these bits, outfits and explored systems, this
+    /// gender, and paid as `paid` says.
+    #[derive(Default)]
+    struct FakePilot {
+        bits: Vec<u16>,
+        female: bool,
+        outfits: Vec<i16>,
+        explored: Vec<i16>,
+        unpaid: bool,
+    }
+
+    impl PilotFacts for FakePilot {
+        fn bit(&self, bit: Bit) -> bool {
+            self.bits.contains(&bit.get())
+        }
+
+        fn gender(&self) -> Gender {
+            if self.female {
+                Gender::Female
+            } else {
+                Gender::Male
+            }
+        }
+
+        fn paid(&self, _days: u16) -> bool {
+            !self.unpaid
+        }
+
+        fn has_outfit(&self, outfit: OutfitId) -> bool {
+            self.outfits.contains(&outfit.0)
+        }
+
+        fn explored(&self, system: SystemId) -> bool {
+            self.explored.contains(&system.0)
+        }
+    }
+
+    fn with_bits(bits: &[u16]) -> FakePilot {
+        FakePilot {
+            bits: bits.to_vec(),
+            ..FakePilot::default()
+        }
+    }
+
+    /// Whether `text` holds for `pilot`.
+    fn eval(text: &str, pilot: &FakePilot) -> bool {
+        holds(&TestExpr::parse(text).expect("parses"), pilot)
+    }
+
+    #[test]
+    fn a_blank_test_always_holds() {
+        assert!(holds(&TestExpr::Always, &FakePilot::default()));
+        assert!(eval("", &with_bits(&[])));
+    }
+
+    #[test]
+    fn a_bit_holds_while_it_is_set() {
+        assert!(eval("b5", &with_bits(&[5])));
+        assert!(!eval("b5", &with_bits(&[4, 6])));
+        assert!(!eval("!b5", &with_bits(&[5])));
+        assert!(eval("!b5", &with_bits(&[])));
+    }
+
+    #[test]
+    fn g_holds_for_a_male_pilot() {
+        assert!(eval("g", &FakePilot::default()));
+        let female = FakePilot {
+            female: true,
+            ..FakePilot::default()
+        };
+        assert!(!eval("G", &female));
+        assert!(eval("!g", &female));
+    }
+
+    #[test]
+    fn an_outfit_holds_while_it_is_owned() {
+        let owner = FakePilot {
+            outfits: vec![130],
+            ..FakePilot::default()
+        };
+        assert!(eval("o130", &owner));
+        assert!(!eval("o131", &owner));
+    }
+
+    #[test]
+    fn a_system_holds_once_explored() {
+        let explorer = FakePilot {
+            explored: vec![200],
+            ..FakePilot::default()
+        };
+        assert!(eval("e200", &explorer));
+        assert!(!eval("e201", &explorer));
+    }
+
+    #[test]
+    fn paid_follows_the_pilot_view() {
+        assert!(eval("p30", &FakePilot::default()));
+        let unpaid = FakePilot {
+            unpaid: true,
+            ..FakePilot::default()
+        };
+        assert!(!eval("p30", &unpaid));
+    }
+
+    #[test]
+    fn and_and_or_follow_their_truth_tables() {
+        for (bits, and, or) in [
+            (&[][..], false, false),
+            (&[1][..], false, true),
+            (&[2][..], false, true),
+            (&[1, 2][..], true, true),
+        ] {
+            let pilot = with_bits(bits);
+            assert_eq!(eval("(b1 & b2)", &pilot), and, "{bits:?}");
+            assert_eq!(eval("(b1 | b2)", &pilot), or, "{bits:?}");
+        }
+    }
+
+    #[test]
+    fn negated_groups_nest() {
+        let male = |bits: &[u16]| with_bits(bits);
+        assert!(eval("!(b1 | b2) & g", &male(&[])));
+        assert!(!eval("!(b1 | b2) & g", &male(&[2])));
+        let female = FakePilot {
+            female: true,
+            ..FakePilot::default()
+        };
+        assert!(!eval("!(b1 | b2) & g", &female));
+        assert!(eval("(b1 & (b2 | !b3)) | e128", &male(&[1, 2, 3])));
+        assert!(!eval("(b1 & (b2 | !b3)) | e128", &male(&[1, 3])));
+    }
+
+    #[test]
+    fn a_count_compares_how_many_terms_hold() {
+        // Terms b1, b2 and !b3: none hold with bit 3 set alone.
+        for (bits, count) in [(&[3][..], 0), (&[][..], 1), (&[1][..], 2), (&[1, 2][..], 3)] {
+            let pilot = with_bits(bits);
+            assert_eq!(eval("( [b1 b2 !b3] > 1)", &pilot), count > 1, "{bits:?}");
+            assert_eq!(eval("( [b1 b2 !b3] < 1)", &pilot), count < 1, "{bits:?}");
+            assert_eq!(eval("( [b1 b2 !b3] = 2)", &pilot), count == 2, "{bits:?}");
+        }
+    }
+
+    #[test]
+    fn a_bare_number_after_an_operator_leaves_the_left_side() {
+        assert!(eval("(b50 | 467)", &with_bits(&[50])));
+        assert!(!eval("(b50 | 467)", &with_bits(&[467])));
     }
 }
