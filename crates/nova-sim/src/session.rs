@@ -543,6 +543,9 @@ pub struct Session {
     /// How a `ModType` 27 outfit raises its target's `Max` (see
     /// [`Session::with_raised_max`]).
     raised_max: RuleSource,
+    /// What Option does with Buy or Sell at the outfitter (see
+    /// [`Session::with_outfit_count`]).
+    outfit_count: RuleSource,
     /// How an active `öops` event prices its commodity, how a `jünk` of
     /// negative or zero price is traded, which ways a `jünk` row trades,
     /// how many tons a plain trade moves, how the most a buy moves
@@ -697,6 +700,7 @@ impl Session {
             junk_flags: RuleSource::Engine,
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
+            outfit_count: RuleSource::Engine,
             exchange_rules: market::ExchangeRules::default(),
             purchase_cargo: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
@@ -2166,6 +2170,26 @@ impl Session {
         self.raised_max
     }
 
+    /// This session with Option on Buy or Sell at the outfitter doing as
+    /// `source` says
+    /// ([`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount)): by the
+    /// engine's default, it asks for a count in the quantity dialog; by
+    /// the other reading, each click moves one. The session only carries
+    /// it: the outfitter does too ([`Outfitter::outfit_count`]), for
+    /// whoever shows the dialog ([`Outfitter::count_asked`]).
+    #[must_use]
+    pub fn with_outfit_count(mut self, source: RuleSource) -> Self {
+        self.outfit_count = source;
+        self
+    }
+
+    /// What Option on Buy or Sell does at the outfitter: by the engine
+    /// ([`RuleSource::Engine`]) or nothing.
+    #[must_use]
+    pub fn outfit_count(&self) -> RuleSource {
+        self.outfit_count
+    }
+
     /// This session with an active `öops` event pricing its commodity as
     /// `source` says ([`RuleKey::EventPrice`](crate::RuleKey::EventPrice)):
     /// by the engine's default, at its `BasePrice` plus its `PriceDelta`,
@@ -2224,6 +2248,7 @@ impl Session {
             launcher_sale: self.launcher_sale,
             raised_max: self.raised_max,
             bought: self.opening.bought.under(self.opening.limit),
+            outfit_count: self.outfit_count,
         }
         .outfitter(&self.pilot, &mut self.outfit_rolls, chance)
     }
@@ -2293,7 +2318,7 @@ impl Session {
     /// nothing and makes no save due. The count is not checked against
     /// [`Outfitter::count_max`]: whatever it is, the loop stops where the
     /// engine's does.
-    pub fn outfit_count(
+    pub fn outfit_counted(
         &mut self,
         order: OutfitOrder,
         count: u32,
@@ -6711,7 +6736,10 @@ mod tests {
     fn a_counted_buy_stops_when_the_cash_runs_out() {
         let mut session = outfitted(&outfitting());
         session.pilot.cash = 3500;
-        assert_eq!(session.outfit_count(buy(SPEED), 5, &mut NeverFires), Ok(3));
+        assert_eq!(
+            session.outfit_counted(buy(SPEED), 5, &mut NeverFires),
+            Ok(3)
+        );
         assert_eq!(session.pilot().owned(SPEED), 3);
         assert_eq!(session.pilot().cash(), 500);
         assert!(session.take_save_due());
@@ -6721,7 +6749,7 @@ mod tests {
     fn a_counted_buy_stops_at_the_max() {
         let mut session = outfitted(&outfitting());
         assert_eq!(
-            session.outfit_count(buy(SPEED), 12, &mut NeverFires),
+            session.outfit_counted(buy(SPEED), 12, &mut NeverFires),
             Ok(10)
         );
         assert_eq!(session.pilot().owned(SPEED), 10);
@@ -6734,7 +6762,7 @@ mod tests {
         catalog.outfits[0].mass = 10;
         let mut session = outfitted(&catalog);
         assert_eq!(
-            session.outfit_count(buy(SPEED), 5, &mut NeverFires),
+            session.outfit_counted(buy(SPEED), 5, &mut NeverFires),
             Ok(3),
             "30 tons free"
         );
@@ -6743,18 +6771,21 @@ mod tests {
     #[test]
     fn a_counted_buy_of_maps_stops_after_one_as_the_rule_says() {
         let mut session = outfitted(&limiting());
-        assert_eq!(session.outfit_count(buy(MAP), 3, &mut NeverFires), Ok(1));
+        assert_eq!(session.outfit_counted(buy(MAP), 3, &mut NeverFires), Ok(1));
         let mut session = outfitted(&limiting()).with_outfit_limit(RuleSource::Bible);
-        assert_eq!(session.outfit_count(buy(MAP), 3, &mut NeverFires), Ok(3));
+        assert_eq!(session.outfit_counted(buy(MAP), 3, &mut NeverFires), Ok(3));
     }
 
     #[test]
     fn a_counted_sale_stops_when_none_are_left() {
         let mut session = outfitted(&outfitting());
         session
-            .outfit_count(buy(SPEED), 3, &mut NeverFires)
+            .outfit_counted(buy(SPEED), 3, &mut NeverFires)
             .expect("bought");
-        assert_eq!(session.outfit_count(sell(SPEED), 5, &mut NeverFires), Ok(3));
+        assert_eq!(
+            session.outfit_counted(sell(SPEED), 5, &mut NeverFires),
+            Ok(3)
+        );
         assert_eq!(session.pilot().owned(SPEED), 0);
         assert_eq!(session.pilot().cash(), 25_000, "bought this opening");
     }
@@ -6772,14 +6803,14 @@ mod tests {
         let mut session = outfitted(&catalog);
         let pod = OutfitId(310);
         session
-            .outfit_count(buy(pod), 2, &mut NeverFires)
+            .outfit_counted(buy(pod), 2, &mut NeverFires)
             .expect("bought");
         session
-            .outfit_count(buy(SPEED), 7, &mut NeverFires)
+            .outfit_counted(buy(SPEED), 7, &mut NeverFires)
             .expect("bought");
         let outfitter = session.outfitter(&mut NeverFires).expect("open");
         assert_eq!(outfitter.count_max(pod, Direction::Sell), Some(2));
-        assert_eq!(session.outfit_count(sell(pod), 2, &mut NeverFires), Ok(1));
+        assert_eq!(session.outfit_counted(sell(pod), 2, &mut NeverFires), Ok(1));
         assert_eq!(
             session.outfit(sell(pod), &mut NeverFires),
             Err(OutfitRefusal::NegativeFreeMass)
@@ -6792,10 +6823,10 @@ mod tests {
         // of 2, the second would leave none.
         let mut session = outfitted(&raising());
         session
-            .outfit_count(buy(WIDGET_RACK), 2, &mut NeverFires)
+            .outfit_counted(buy(WIDGET_RACK), 2, &mut NeverFires)
             .expect("bought");
         session
-            .outfit_count(buy(WIDGET), 2, &mut NeverFires)
+            .outfit_counted(buy(WIDGET), 2, &mut NeverFires)
             .expect("bought");
         assert_eq!(
             session
@@ -6805,7 +6836,7 @@ mod tests {
             Some(2)
         );
         assert_eq!(
-            session.outfit_count(sell(WIDGET_RACK), 2, &mut NeverFires),
+            session.outfit_counted(sell(WIDGET_RACK), 2, &mut NeverFires),
             Ok(1)
         );
         assert_eq!(session.pilot().owned(WIDGET_RACK), 1);
@@ -6835,14 +6866,17 @@ mod tests {
     fn a_counted_sale_refunds_in_full_only_above_the_opening_count() {
         let mut session = outfitted(&outfitting());
         session
-            .outfit_count(buy(SPEED), 2, &mut NeverFires)
+            .outfit_counted(buy(SPEED), 2, &mut NeverFires)
             .expect("bought");
         session.open_outfitter();
         session
-            .outfit_count(buy(SPEED), 2, &mut NeverFires)
+            .outfit_counted(buy(SPEED), 2, &mut NeverFires)
             .expect("bought");
         assert_eq!(session.pilot().cash(), 21_000);
-        assert_eq!(session.outfit_count(sell(SPEED), 3, &mut NeverFires), Ok(3));
+        assert_eq!(
+            session.outfit_counted(sell(SPEED), 3, &mut NeverFires),
+            Ok(3)
+        );
         assert_eq!(session.pilot().cash(), 21_000 + 2 * 1000 + 500);
         assert_eq!(session.pilot().owned(SPEED), 1);
     }
@@ -6898,16 +6932,32 @@ mod tests {
     }
 
     #[test]
+    fn the_outfit_count_rule_reaches_the_outfitter() {
+        for source in [None, Some(RuleSource::Engine), Some(RuleSource::Bible)] {
+            let session = outfitted(&outfitting());
+            let mut session = match source {
+                Some(source) => session.with_outfit_count(source),
+                None => session,
+            };
+            let source = source.unwrap_or_default();
+            assert_eq!(session.outfit_count(), source);
+            assert_eq!(session.outfit_refund(), RuleSource::Engine);
+            let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+            assert_eq!(outfitter.outfit_count, source, "{source:?}");
+        }
+    }
+
+    #[test]
     fn a_counted_order_refused_at_once_changes_nothing() {
         let mut session = outfitted(&outfitting());
         session.pilot.cash = 500;
         let before = session.pilot().clone();
         assert_eq!(
-            session.outfit_count(buy(SPEED), 3, &mut NeverFires),
+            session.outfit_counted(buy(SPEED), 3, &mut NeverFires),
             Err(OutfitRefusal::CannotAfford)
         );
         assert_eq!(
-            session.outfit_count(sell(SPEED), 3, &mut NeverFires),
+            session.outfit_counted(sell(SPEED), 3, &mut NeverFires),
             Err(OutfitRefusal::NoneOwned)
         );
         assert_eq!(session.pilot(), &before);
@@ -6918,7 +6968,10 @@ mod tests {
     fn a_count_of_none_buys_nothing_and_makes_no_save_due() {
         let mut session = outfitted(&outfitting());
         let before = session.pilot().clone();
-        assert_eq!(session.outfit_count(buy(SPEED), 0, &mut NeverFires), Ok(0));
+        assert_eq!(
+            session.outfit_counted(buy(SPEED), 0, &mut NeverFires),
+            Ok(0)
+        );
         assert_eq!(session.pilot(), &before);
         assert!(!session.take_save_due());
     }

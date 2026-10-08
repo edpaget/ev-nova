@@ -709,6 +709,8 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
+    use nova_sim::RuleSource;
+
     use crate::draw::DrawCommand;
     use crate::font::Font;
     use crate::input::MouseButton;
@@ -838,6 +840,7 @@ mod tests {
             cash: 5000,
             free_mass: 5,
             lc_names: BTreeMap::new(),
+            outfit_count: RuleSource::Engine,
         }
     }
 

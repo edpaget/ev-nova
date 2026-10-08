@@ -48,6 +48,7 @@
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
 //! | [`OutfitRefund`](RuleKey::OutfitRefund) | `outfit_refund` | an outfit sold while its count owned is above the count owned when the outfitter opened (one bought since) refunds its full price, any other half, item by item in a counted sale (`_DoOutfitDialog` @0x5badd-0x5bafa, @0x5ceee-0x5cf08; [`Session`](crate::Session)) | every sale refunds half§§§ |
+//! | [`OutfitCount`](RuleKey::OutfitCount) | `outfit_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog at the most the order allows, and buys or sells the count confirmed (`_DoOutfitDialog` @0x5c0c0-0x5c1aa, @0x5c5e3-0x5c628; `_DoQuantityDialog` @0x56d5b; [`Outfitter::count_asked`](crate::Outfitter::count_asked)) | Alt changes nothing: each click moves one¶¶¶ |
 //! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for a count (see [`TradeCount`](RuleKey::TradeCount)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
 //! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; [`Market::row_max`](crate::Market::row_max)) | exact integer division\*\*\* |
 //! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; [`Market::trade_count`](crate::Market::trade_count)) | Alt trades the most at once††† |
@@ -117,6 +118,10 @@
 //! §§§ The Bible says nothing of what an outfit sells back for. The other
 //! reading is the port's earlier behaviour, half the price whenever it
 //! was bought, not anything the Bible says.
+//!
+//! ¶¶¶ The Bible says nothing of what Option does at the outfitter. The
+//! other reading is the port's earlier behaviour, Alt changing nothing,
+//! not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -483,6 +488,18 @@ rule_keys! {
     /// the other reading is the port's earlier behaviour, not anything the
     /// Bible says (see [`outfitter::refund`](crate::outfitter::refund)).
     OutfitRefund => "outfit_refund",
+    /// What Option (Alt here) does with Buy or Sell at the outfitter. By
+    /// the engine, it asks for a count in the quantity dialog
+    /// (`_DoQuantityDialog` @0x56d5b, called from `_DoOutfitDialog`
+    /// @0x5c0c0-0x5c1aa and @0x5c5e3-0x5c628), which opens at the most
+    /// the order allows ([`Outfitter::count_max`](crate::Outfitter::count_max))
+    /// and buys or sells the count confirmed
+    /// ([`Session::outfit_counted`](crate::Session::outfit_counted)). By
+    /// the other reading, Alt changes nothing: each click moves one. The
+    /// Bible says nothing of Option at the outfitter, so the other reading
+    /// is the port's earlier behaviour, not anything the Bible says (see
+    /// [`Outfitter::count_asked`](crate::Outfitter::count_asked)).
+    OutfitCount => "outfit_count",
     /// How many tons a plain Buy or Sell at the exchange moves. By the
     /// engine, a plain buy moves min(trunc(cash / price), 10, free) tons
     /// (`_DoTradeDialog` @0x5e268-0x5e278) and a plain sale min(held, 10)
@@ -662,6 +679,15 @@ mod tests {
     }
 
     #[test]
+    fn the_outfit_count_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::OutfitCount.key(), "outfit_count");
+        assert_eq!(
+            RuleKey::from_key("outfit_count"),
+            Some(RuleKey::OutfitCount)
+        );
+    }
+
+    #[test]
     fn the_trade_debt_rule_is_found_by_its_key() {
         assert_eq!(RuleKey::TradeDebt.key(), "trade_debt");
         assert_eq!(RuleKey::from_key("trade_debt"), Some(RuleKey::TradeDebt));
@@ -721,6 +747,7 @@ mod tests {
                 RuleKey::JunkTrade,
                 RuleKey::OutfitLimit,
                 RuleKey::OutfitRefund,
+                RuleKey::OutfitCount,
                 RuleKey::TradeLot,
                 RuleKey::TradeQuotient,
                 RuleKey::TradeCount,

@@ -159,7 +159,9 @@
 //! dialog asks for a count, opening at the maximum
 //! [`Outfitter::count_max`] works out (none when that is 1 or less, and
 //! the click moves one), and the count is bought or sold one at a time
-//! (`Session::outfit_count`). The buy loop (@0x5c1bd-0x5c2ff) re-runs
+//! ([`Session::outfit_counted`](crate::Session::outfit_counted)), when
+//! the [`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount) rule asks
+//! ([`Outfitter::count_asked`]). The buy loop (@0x5c1bd-0x5c2ff) re-runs
 //! `_CanBuyOutfitItem` after each grant and the sell loop
 //! (@0x5c6ee-0x5d1b1) checks each sale as a single sale, so a counted
 //! order stops at the first refusal a single order would give: cash,
@@ -447,6 +449,10 @@ pub struct Outfitter {
     /// that ammunition; each raiser refused for its target, and that
     /// target.
     pub lc_names: BTreeMap<OutfitId, LcNames>,
+    /// What Option (Alt here) does with Buy or Sell
+    /// ([`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount)), read by
+    /// [`count_asked`](Self::count_asked).
+    pub outfit_count: RuleSource,
 }
 
 impl Outfitter {
@@ -514,6 +520,19 @@ impl Outfitter {
             }
         };
         u32::try_from(most).ok().filter(|&most| most > 1)
+    }
+
+    /// The count Option (Alt here) asks for when `outfit` is bought or
+    /// sold: by the engine's reading of
+    /// [`outfit_count`](Self::outfit_count), the quantity dialog opens at
+    /// [`count_max`](Self::count_max), and with `None` the click moves
+    /// one; by the other reading it never opens.
+    #[must_use]
+    pub fn count_asked(&self, outfit: OutfitId, direction: Direction) -> Option<u32> {
+        match self.outfit_count {
+            RuleSource::Engine => self.count_max(outfit, direction),
+            RuleSource::Bible => None,
+        }
     }
 }
 
@@ -1001,6 +1020,9 @@ pub(crate) struct Shop<'a> {
     /// The once-an-opening flags, as the rule reads them
     /// ([`Bought::under`]).
     pub(crate) bought: Bought,
+    /// What Option does with Buy or Sell, carried to the outfitter
+    /// ([`Outfitter::outfit_count`]).
+    pub(crate) outfit_count: RuleSource,
 }
 
 impl Shop<'_> {
@@ -1279,6 +1301,7 @@ impl Shop<'_> {
             cash: pilot.cash,
             free_mass: free,
             lc_names: names,
+            outfit_count: self.outfit_count,
         })
     }
 }
@@ -1390,6 +1413,7 @@ mod tests {
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
             bought: Bought::default(),
+            outfit_count: RuleSource::Engine,
         }
     }
 
@@ -2063,6 +2087,7 @@ mod tests {
                 launcher_sale: RuleSource::Engine,
                 raised_max: RuleSource::Engine,
                 bought: Bought::default(),
+                outfit_count: RuleSource::Engine,
             }
             .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
             .expect("open")
@@ -2184,6 +2209,7 @@ mod tests {
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
             bought: Bought::default(),
+            outfit_count: RuleSource::Engine,
         }
         .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
         .expect("open")
@@ -3812,6 +3838,56 @@ mod tests {
 
     /// The most a row has room for: `Max` and cap alike.
     const ROOM: i16 = i16::MAX;
+
+    /// What Alt asks for `direction` on `row` with `cash`, `outfit_count`
+    /// reading as `source`.
+    fn asked(row: OutfitRow, cash: i64, source: RuleSource, direction: Direction) -> Option<u32> {
+        Outfitter {
+            rows: vec![row],
+            cash,
+            outfit_count: source,
+            ..Outfitter::default()
+        }
+        .count_asked(OutfitId(128), direction)
+    }
+
+    #[test]
+    fn by_the_engine_alt_asks_at_the_maximum() {
+        let engine = RuleSource::Engine;
+        assert_eq!(Outfitter::default().outfit_count, engine);
+        let buy = counted(1000, 0, ROOM, ROOM);
+        assert_eq!(asked(buy.clone(), 3000, engine, Direction::Buy), Some(3));
+        assert_eq!(asked(buy, 1999, engine, Direction::Buy), None, "at 1");
+        let sale = counted(1000, 2, ROOM, ROOM);
+        assert_eq!(asked(sale, 0, engine, Direction::Sell), Some(2));
+        let one = counted(1000, 1, ROOM, ROOM);
+        assert_eq!(asked(one, 0, engine, Direction::Sell), None, "at 1");
+    }
+
+    #[test]
+    fn by_the_other_count_reading_alt_never_asks() {
+        let bible = RuleSource::Bible;
+        let buy = counted(1000, 0, ROOM, ROOM);
+        assert_eq!(asked(buy.clone(), 3000, bible, Direction::Buy), None);
+        assert_eq!(asked(buy, 1999, bible, Direction::Buy), None);
+        let sale = counted(1000, 2, ROOM, ROOM);
+        assert_eq!(asked(sale, 0, bible, Direction::Sell), None);
+    }
+
+    #[test]
+    fn the_shop_carries_the_count_rule_to_its_outfitter() {
+        let records = [outfit(128, &[])];
+        let site = port();
+        for source in RuleSource::ALL {
+            let outfitter = Shop {
+                outfit_count: source,
+                ..shop(&records, &site)
+            }
+            .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+            .expect("an outfitter");
+            assert_eq!(outfitter.outfit_count, source);
+        }
+    }
 
     #[test]
     fn an_outfit_not_listed_opens_no_dialog() {

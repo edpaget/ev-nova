@@ -141,8 +141,10 @@
 //! until others are
 //! given. Each flight's outfitter sells a map
 //! or clean-record outfit as the router says
-//! ([`AppScreen::with_outfit_limit`]) and refunds a sold outfit as it
-//! says ([`AppScreen::with_outfit_refund`]), the engine's until others
+//! ([`AppScreen::with_outfit_limit`]), refunds a sold outfit as it
+//! says ([`AppScreen::with_outfit_refund`]), and has Option on Buy or
+//! Sell ask for a count or change nothing as it says
+//! ([`AppScreen::with_outfit_count`]), the engine's until others
 //! are given; each time the spaceport's outfitter opens, the flight is told
 //! ([`FlightView::open_outfitter`]) and the outfitter shown afresh.
 //! Each flight's persons
@@ -369,6 +371,9 @@ pub struct AppScreen {
     /// Whether an outfit bought since each flight's outfitter opened
     /// sells back in full.
     outfit_refund: RuleSource,
+    /// Whether Option on Buy or Sell at each flight's outfitter asks for
+    /// a count or changes nothing.
+    outfit_count: RuleSource,
     /// Whether each take-off pays each flight's hired escorts a day.
     take_off_pay: RuleSource,
     /// Which wage each flight's hired escorts are paid.
@@ -472,6 +477,7 @@ impl AppScreen {
             trade_debt: RuleSource::Engine,
             outfit_limit: RuleSource::Engine,
             outfit_refund: RuleSource::Engine,
+            outfit_count: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
@@ -757,6 +763,17 @@ impl AppScreen {
         }
     }
 
+    /// The router with Option on Buy or Sell at each flight's outfitter
+    /// doing as `source` says ([`FlightView::with_outfit_count`]); the
+    /// engine's (it asks for a count) until another is given.
+    #[must_use]
+    pub fn with_outfit_count(self, source: RuleSource) -> Self {
+        Self {
+            outfit_count: source,
+            ..self
+        }
+    }
+
     /// The router with each take-off paying each flight's hired escorts a
     /// day's wages, or not, as `source` says
     /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
@@ -852,6 +869,7 @@ impl AppScreen {
             .with_trade_debt(rulebook.source_for(RuleKey::TradeDebt))
             .with_outfit_limit(rulebook.source_for(RuleKey::OutfitLimit))
             .with_outfit_refund(rulebook.source_for(RuleKey::OutfitRefund))
+            .with_outfit_count(rulebook.source_for(RuleKey::OutfitCount))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
@@ -920,6 +938,7 @@ impl AppScreen {
             .with_trade_debt(self.trade_debt)
             .with_outfit_limit(self.outfit_limit)
             .with_outfit_refund(self.outfit_refund)
+            .with_outfit_count(self.outfit_count)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
@@ -6408,6 +6427,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_outfit_count_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_outfit_count(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.outfit_count(), source);
+            assert_eq!(session.outfit_refund(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.outfit_count(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_outfit_limit_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_outfit_limit(source);
@@ -6501,6 +6535,7 @@ mod tests {
             ("trade_debt", format!("{:?}", screen.trade_debt)),
             ("outfit_limit", format!("{:?}", screen.outfit_limit)),
             ("outfit_refund", format!("{:?}", screen.outfit_refund)),
+            ("outfit_count", format!("{:?}", screen.outfit_count)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
@@ -6539,6 +6574,7 @@ mod tests {
             RuleKey::TradeDebt => "trade_debt",
             RuleKey::OutfitLimit => "outfit_limit",
             RuleKey::OutfitRefund => "outfit_refund",
+            RuleKey::OutfitCount => "outfit_count",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
             RuleKey::EscortWage => "escort_wage",

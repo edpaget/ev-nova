@@ -1924,7 +1924,7 @@ mod tests {
             outfitter.count_max(VIPER_BAY, crate::market::Direction::Sell),
             Some(3)
         );
-        assert_eq!(session.outfit_count(order, 3, &mut NeverFires), Ok(1));
+        assert_eq!(session.outfit_counted(order, 3, &mut NeverFires), Ok(1));
         assert_eq!(session.pilot().owned(VIPER_BAY), 2);
         assert_eq!(
             session.outfit(order, &mut NeverFires),
@@ -1941,7 +1941,7 @@ mod tests {
             Some(2)
         );
         assert_eq!(
-            session.outfit_count(order, 2, &mut NeverFires),
+            session.outfit_counted(order, 2, &mut NeverFires),
             Err(crate::outfitter::OutfitRefusal::AmmunitionFirst {
                 rounds: 1,
                 ammo: Some(VIPERS),

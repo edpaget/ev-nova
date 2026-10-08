@@ -221,7 +221,7 @@
 //! - Landed at an outfitter or a shipyard, the router asks the flight
 //!   for its list ([`FlightView::outfitter`], [`FlightView::shipyard`])
 //!   and trades through it ([`FlightView::outfit`],
-//!   [`FlightView::buy_ship`]), each item's roll for the day drawn on the
+//!   [`FlightView::outfit_counted`], [`FlightView::buy_ship`]), each item's roll for the day drawn on the
 //!   flight's chance; how `BuyRandom` reads is set on the screen
 //!   ([`FlightView::with_buy_random`]). How held tribbles and perishable
 //!   `jünk` grow and decay in flight is set there too
@@ -232,7 +232,8 @@
 //!   outfit is sold only once an opening
 //!   ([`FlightView::with_outfit_limit`]), and whether one bought since
 //!   the outfitter opened sells back in full
-//!   ([`FlightView::with_outfit_refund`]); the router tells the flight
+//!   ([`FlightView::with_outfit_refund`]), and what Option on Buy or
+//!   Sell does there ([`FlightView::with_outfit_count`]); the router tells the flight
 //!   each time the outfitter opens ([`FlightView::open_outfitter`]). How
 //!   an active `öops` event prices its commodity on the exchange is set
 //!   there too
@@ -1197,6 +1198,18 @@ impl<
         }
     }
 
+    /// The flight with Option on Buy or Sell at the outfitter doing as
+    /// `source` says ([`Session::with_outfit_count`]).
+    #[must_use]
+    pub fn with_outfit_count(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_outfit_count(source)),
+            ..self
+        }
+    }
+
     /// The flight with a sold outfit refunded as `source` says
     /// ([`Session::with_outfit_refund`]).
     #[must_use]
@@ -1988,6 +2001,16 @@ impl<C> FlightView<C> {
     pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
         match &mut self.session {
             Ok(session) => session.outfit(order, &mut self.chance),
+            Err(_) => Err(OutfitRefusal::NoOutfitter),
+        }
+    }
+
+    /// Buys or sells up to `count` of an outfit as
+    /// [`Session::outfit_counted`] does, on the flight's chance, giving
+    /// how many went through; a session that failed has no outfitter.
+    pub fn outfit_counted(&mut self, order: OutfitOrder, count: u32) -> Result<u32, OutfitRefusal> {
+        match &mut self.session {
+            Ok(session) => session.outfit_counted(order, count, &mut self.chance),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
         }
     }
@@ -5915,6 +5938,35 @@ mod tests {
     }
 
     #[test]
+    fn a_counted_order_goes_through_the_session() {
+        let mut catalog = outfitting();
+        catalog.character = Ok(CharacterStart {
+            cash: 3000,
+            ..catalog.character.expect("a chär")
+        });
+        let mut view = FlightView::new(catalog);
+        assert_eq!(
+            view.outfit_counted(BUY_TANK, 2),
+            Err(OutfitRefusal::NoOutfitter),
+            "in flight"
+        );
+        land_now(&mut view);
+        view.take_save_due();
+        assert_eq!(view.outfit_counted(BUY_TANK, 2), Ok(2));
+        assert_eq!(view.pilot().map(Pilot::cash), Some(1000));
+        assert!(view.take_save_due(), "a purchase");
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..outfitting()
+        };
+        let mut broken = FlightView::new(broken);
+        assert_eq!(
+            broken.outfit_counted(BUY_TANK, 2),
+            Err(OutfitRefusal::NoOutfitter)
+        );
+    }
+
+    #[test]
     fn opening_the_outfitter_lifts_the_sessions_once_an_opening_limit() {
         let mut catalog = outfitting();
         catalog.character = Ok(CharacterStart {
@@ -6376,6 +6428,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::trade_debt),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_outfit_count_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_outfit_count(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.outfit_count(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::outfit_count),
             Ok(RuleSource::Engine)
         );
     }
