@@ -17,6 +17,7 @@
 //!   repair, so the ship's condition stays as it was.
 
 use super::Session;
+use crate::date::GameDate;
 use crate::reserves::Reserve;
 
 impl Session {
@@ -24,6 +25,13 @@ impl Session {
     /// due.
     pub fn set_credits(&mut self, credits: i64) {
         self.pilot.cash = credits;
+        self.save_due = true;
+    }
+
+    /// Sets the date to `date`, landed or in flight, with no days going by
+    /// (see the module docs); a save is due.
+    pub fn set_date(&mut self, date: GameDate) {
+        self.pilot.date = date;
         self.save_due = true;
     }
 
@@ -42,11 +50,14 @@ impl Session {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::{OutfitId, SystemId};
+    use crate::catalog::{DisasterId, OutfitId, ShipId, SystemId};
     use crate::combat::hull::Condition;
+    use crate::date::GameDate;
     use crate::hyperspace::{JUMP_FUEL, JumpRefusal};
+    use crate::pilot::Escort;
     use crate::pilot::Pilot;
     use crate::reserves::Reserve;
+    use crate::reserves::Reserves;
     use crate::save;
     use crate::stats::MORE_FUEL;
     use crate::testkit::{FakePilotCatalog, catalog, fly_out, land_now, outfit};
@@ -151,5 +162,47 @@ mod tests {
         session.set_reserve(Reserve::Armor, 1000.0);
         assert_eq!(session.player_condition(), Condition::Disabled);
         assert!(session.take_save_due());
+    }
+
+    fn date(year: i32, month: u8, day: u8) -> GameDate {
+        GameDate::new(year, month, day).expect("a date")
+    }
+
+    #[test]
+    fn the_date_is_set_later_or_earlier_and_reads_as_set() {
+        let mut session = session();
+        session.set_date(date(1180, 2, 29));
+        assert_eq!(session.date(), date(1180, 2, 29));
+        assert_eq!(session.date_text(), "February 29, 1180 NC");
+        assert!(session.take_save_due());
+        session.set_date(date(1100, 1, 1));
+        assert_eq!(session.date(), date(1100, 1, 1));
+        assert!(session.take_save_due());
+        let saved = save::decode(&save::encode(session.pilot())).expect("loads");
+        assert_eq!(saved.date(), date(1100, 1, 1));
+    }
+
+    #[test]
+    fn setting_the_date_lets_no_days_go_by() {
+        let mut session = session();
+        session.pilot.events.insert(DisasterId(200), 5);
+        session.pilot.escorts.push(Escort {
+            ship: ShipId(128),
+            reserves: Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried: false,
+            wage: Some(100),
+            person: None,
+        });
+        session.set_credits(1000);
+        session.set_date(date(1178, 6, 23));
+        assert_eq!(
+            session.pilot().events().collect::<Vec<_>>(),
+            [(DisasterId(200), 5)],
+            "no event steps"
+        );
+        assert_eq!(session.pilot().cash(), 1000, "no wages paid");
+        assert_eq!(session.take_pay_notes(), []);
+        assert_eq!(session.pilot().escort_count(), 1);
     }
 }
