@@ -89,7 +89,7 @@
 //! and their `AmmoLoad` are topped up (see Stock weapons).
 //!
 //! What cargo is kept follows the rulebook's
-//! [`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo) (`keep_cargo`);
+//! [`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo) (`purchase_cargo`);
 //! the rest is left behind, unpaid. By the engine, `_DoShipyardDialog`
 //! calls `_DestroyPartialFleetCargo(0)` (@0x5ef9f, @0xcd32-0xcff6) once
 //! the new class, launched fighters dropped and the outfits above are in
