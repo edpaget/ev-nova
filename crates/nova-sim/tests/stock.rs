@@ -513,8 +513,8 @@ fn buying_the_stock_vell_os_map_explores_two_jumps_and_adds_nothing() {
         .find(|outfit| outfit.id == map)
         .expect("the Vell-os map");
     assert_eq!(record.mods[0], (16, 2), "a map of 2 jumps");
-    let bought = |rules: nova_sim::OutfitRules| {
-        let mut session = at_port_kane(&data).with_outfit_rules(rules);
+    let bought = |rules: nova_sim::Rulebook| {
+        let mut session = at_port_kane(&data).with_rules(rules);
         session.set_control_bit(nova_sim::Bit::new(9999).expect("a bit"), true);
         let cash = session.pilot().cash();
         let order = OutfitOrder {
@@ -526,7 +526,7 @@ fn buying_the_stock_vell_os_map_explores_two_jumps_and_adds_nothing() {
         assert_eq!(session.pilot().cash(), cash, "it costs nothing");
         session
     };
-    let engine = bought(nova_sim::OutfitRules::default());
+    let engine = bought(nova_sim::Rulebook::default());
     let home = engine.pilot().system();
     let stars = engine.star_map();
     let rule = nova_sim::HyperlinkRule::Engine;
@@ -542,10 +542,10 @@ fn buying_the_stock_vell_os_map_explores_two_jumps_and_adds_nothing() {
     let explored: BTreeSet<SystemId> = engine.pilot().explored().collect();
     assert!(one.is_subset(&explored), "{explored:?}");
     assert!(explored.is_subset(&two), "{explored:?}");
-    let bible = bought(nova_sim::OutfitRules {
-        map_explore: nova_sim::RuleSource::Bible,
-        ..nova_sim::OutfitRules::default()
-    });
+    let bible = bought(
+        nova_sim::Rulebook::default()
+            .with_override(nova_sim::RuleKey::MapExplore, nova_sim::RuleSource::Bible),
+    );
     assert_eq!(bible.pilot().explored().collect::<BTreeSet<_>>(), two);
 }
 

@@ -445,6 +445,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
+    use crate::rulebook::Rulebook;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
     use crate::testkit::{
@@ -495,8 +496,8 @@ mod tests {
         let catalog = catalog();
         let mut session = Session::fly(&catalog, defended(&catalog))
             .expect("flies")
-            .with_escort_orders(source);
-        assert_eq!(session.escort_orders(), source);
+            .with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source));
+        assert_eq!(session.rules().source_for(RuleKey::EscortOrders), source);
         tick(&mut session, &catalog);
         defend_all(&mut session);
         assert!(crate::save::encode(session.pilot()).contains("\"defend\""));
@@ -505,7 +506,7 @@ mod tests {
 
         let mut session = Session::fly(&catalog, defended(&catalog))
             .expect("flies")
-            .with_escort_orders(source);
+            .with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source));
         tick(&mut session, &catalog);
         defend_all(&mut session);
         land_now(&mut session).expect("lands on 128, under the ship");
@@ -519,7 +520,7 @@ mod tests {
         let pilot = crate::save::decode(&saved).expect("loads");
         let mut session = Session::fly(&catalog, pilot)
             .expect("flies")
-            .with_escort_orders(source);
+            .with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source));
         tick(&mut session, &catalog);
         let loaded = orders(&session);
         [jumped, took_off, loaded]
@@ -533,7 +534,10 @@ mod tests {
             [none.clone(), none.clone(), none]
         );
         assert_eq!(
-            Session::start(&catalog()).expect("starts").escort_orders(),
+            Session::start(&catalog())
+                .expect("starts")
+                .rules()
+                .source_for(RuleKey::EscortOrders),
             RuleSource::Engine,
             "by default"
         );
@@ -664,7 +668,7 @@ mod tests {
     fn flying(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
         let mut session = Session::fly(catalog, escorted(catalog))
             .expect("flies")
-            .with_escort_orders(source);
+            .with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source));
         tick(&mut session, catalog);
         session
     }
@@ -896,9 +900,9 @@ mod tests {
         let catalog = fleeted();
         let saved = crate::save::encode(&escorted(&catalog));
         let pilot = crate::save::decode(&saved).expect("loads");
-        let mut session = Session::fly(&catalog, pilot)
-            .expect("flies")
-            .with_escort_orders(RuleSource::Bible);
+        let mut session = Session::fly(&catalog, pilot).expect("flies").with_rules(
+            Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible),
+        );
         assert_eq!(
             session.pilot().escorts()[1].reserves.armor,
             Gauge {

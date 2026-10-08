@@ -530,6 +530,7 @@ mod tests {
     use crate::handling::ShipFields;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
+    use crate::rulebook::Rulebook;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, hull, land_now, outfit, ship, weapon};
@@ -649,7 +650,7 @@ mod tests {
     fn flying(catalog: &FakePilotCatalog, pilot: Pilot, launch: RuleSource) -> Session {
         let mut session = Session::fly(catalog, pilot)
             .expect("flies")
-            .with_fighter_launch(launch);
+            .with_rules(Rulebook::default().with_override(RuleKey::FighterLaunch, launch));
         session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
         session
     }
@@ -845,7 +846,9 @@ mod tests {
         };
         let mut session = Session::fly(&catalog, pilot(&catalog, 2, vec![warship]))
             .expect("flies")
-            .with_escort_orders(RuleSource::Bible);
+            .with_rules(
+                Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible),
+            );
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         launch(&mut session);
         assert_eq!(session.pilot().escorts().len(), 2);
@@ -871,7 +874,10 @@ mod tests {
     fn by_the_other_reading_a_fighter_attacks_the_players_target_at_once() {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Bible);
-        assert_eq!(session.fighter_launch(), RuleSource::Bible);
+        assert_eq!(
+            session.rules().source_for(RuleKey::FighterLaunch),
+            RuleSource::Bible
+        );
         let quarry = pirate(&mut session, 0.0, -300.0);
         session.select_target(TargetPick::Nearest);
         launch(&mut session);
@@ -966,12 +972,18 @@ mod tests {
             .collect()
     }
 
+    /// The rules [`fleet`] flies by: the escorts' orders kept as they
+    /// enter.
+    fn kept_orders() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible)
+    }
+
     /// `escorts` flying with `vipers` aboard, the orders kept as they
     /// enter.
     fn fleet(catalog: &FakePilotCatalog, vipers: u16, escorts: Vec<Escort>) -> Session {
         let session = Session::fly(catalog, pilot(catalog, vipers, escorts))
             .expect("flies")
-            .with_escort_orders(RuleSource::Bible);
+            .with_rules(kept_orders());
         let mut session = session;
         session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
         session
@@ -1432,7 +1444,8 @@ mod tests {
 
     /// A Viper and a Dart out, by `recall`, the Viper's shield at 10.
     fn both_out(catalog: &FakePilotCatalog, recall: RuleSource) -> Session {
-        let mut session = fleet(catalog, 0, vec![out(), dart_out()]).with_fighter_recall(recall);
+        let mut session = fleet(catalog, 0, vec![out(), dart_out()])
+            .with_rules(kept_orders().with_override(RuleKey::FighterRecall, recall));
         let viper = session.fleet[0].expect("placed");
         session.npc_mut(viper).expect("out").reserves.shield.now = 10.0;
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -1498,7 +1511,10 @@ mod tests {
     fn by_the_other_reading_every_fighter_out_is_back_aboard_on_arrival() {
         let catalog = two_bays();
         let mut session = both_out(&catalog, RuleSource::Bible);
-        assert_eq!(session.fighter_recall(), RuleSource::Bible);
+        assert_eq!(
+            session.rules().source_for(RuleKey::FighterRecall),
+            RuleSource::Bible
+        );
         crate::testkit::jump(&mut session, &catalog, 131);
         assert_eq!(session.pilot().escorts(), []);
         assert_eq!(session.npcs(), [], "none out");
@@ -1514,7 +1530,7 @@ mod tests {
     fn by_the_other_reading_landing_puts_every_fighter_out_back_aboard() {
         let catalog = two_bays();
         let mut session = fleet(&catalog, 0, vec![warship(None), out(), dart_out()])
-            .with_fighter_recall(RuleSource::Bible);
+            .with_rules(kept_orders().with_override(RuleKey::FighterRecall, RuleSource::Bible));
         land_now(&mut session).expect("lands");
         assert_eq!(session.pilot().escorts(), [warship(None)]);
         assert_eq!(
@@ -1619,7 +1635,9 @@ mod tests {
     fn by_the_other_reading_a_pilot_landed_is_saved_with_every_fighter_aboard() {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 3, Vec::new()), RuleSource::Engine)
-            .with_fighter_recall(RuleSource::Bible);
+            .with_rules(
+                Rulebook::default().with_override(RuleKey::FighterRecall, RuleSource::Bible),
+            );
         launch(&mut session);
         assert_eq!(session.pilot().owned(VIPERS), 2);
         land_now(&mut session).expect("lands");
@@ -1891,7 +1909,8 @@ mod tests {
     ) -> (Result<(), crate::outfitter::OutfitRefusal>, u16, i64) {
         let mut catalog = spaceport();
         catalog.hulls[0].weapons[0].count = bays;
-        let mut session = fleet(&catalog, aboard, vec![out(); out_]).with_launcher_sale(source);
+        let mut session = fleet(&catalog, aboard, vec![out(); out_])
+            .with_rules(kept_orders().with_override(RuleKey::LauncherSale, source));
         land_now(&mut session).expect("lands");
         let cash = session.pilot().cash();
         let sold = session.outfit(
@@ -2014,35 +2033,22 @@ mod tests {
     #[test]
     fn the_session_reads_the_launcher_sale_as_its_rule_says() {
         let session = Session::start(&catalog()).expect("starts");
-        assert_eq!(session.launcher_sale(), RuleSource::Engine);
-        let session = Session::start(&catalog())
-            .expect("starts")
-            .with_launcher_sale(RuleSource::Bible);
-        assert_eq!(session.launcher_sale(), RuleSource::Bible);
+        assert_eq!(
+            session.rules().source_for(RuleKey::LauncherSale),
+            RuleSource::Engine
+        );
+        let session = Session::start(&catalog()).expect("starts").with_rules(
+            Rulebook::default().with_override(RuleKey::LauncherSale, RuleSource::Bible),
+        );
+        assert_eq!(
+            session.rules().source_for(RuleKey::LauncherSale),
+            RuleSource::Bible
+        );
         assert_eq!(sell_a_bay(2, 4, 0, RuleSource::Engine).0, Ok(()));
         assert_eq!(
             sell_a_bay(2, 4, 0, RuleSource::Bible),
             (vipers_first(4), 2, 0)
         );
         assert_eq!(sell_a_bay(2, 0, 0, RuleSource::Bible).0, Ok(()));
-    }
-
-    #[test]
-    fn both_fighter_rules_follow_the_engine_by_default_and_either_is_chosen() {
-        let session = Session::start(&catalog()).expect("starts");
-        assert_eq!(session.fighter_launch(), RuleSource::Engine);
-        assert_eq!(session.fighter_recall(), RuleSource::Engine);
-        for source in RuleSource::ALL {
-            let session = Session::start(&catalog())
-                .expect("starts")
-                .with_fighter_launch(source);
-            assert_eq!(session.fighter_launch(), source);
-            assert_eq!(session.fighter_recall(), RuleSource::Engine);
-            let session = Session::start(&catalog())
-                .expect("starts")
-                .with_fighter_recall(source);
-            assert_eq!(session.fighter_recall(), source);
-            assert_eq!(session.fighter_launch(), RuleSource::Engine);
-        }
     }
 }

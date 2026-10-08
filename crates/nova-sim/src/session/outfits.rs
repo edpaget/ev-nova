@@ -299,19 +299,9 @@ mod tests {
     use crate::catalog::{GovtId, GovtRecord, StarSystem};
     use crate::control::{ScriptNote, SetExpr};
     use crate::outfit_effects::{CLEAN_RECORD, MAP, PAINT, Rgb15};
+    use crate::rulebook::Rulebook;
     use crate::stats::MORE_SHIELD;
     use crate::testkit::{FakePilotCatalog, Scripted, catalog, govt, outfit, star};
-
-    #[test]
-    fn the_outfit_rules_are_the_engines_until_others_are_given() {
-        let session = session(&mapped());
-        assert_eq!(session.outfit_rules(), OutfitRules::default());
-        let rules = OutfitRules {
-            map_explore: RuleSource::Bible,
-            ..OutfitRules::default()
-        };
-        assert_eq!(session.with_outfit_rules(rules).outfit_rules(), rules);
-    }
 
     /// A map of 2 jumps.
     const JUMPS_2: OutfitId = OutfitId(300);
@@ -422,11 +412,8 @@ mod tests {
 
     #[test]
     fn the_bibles_map_reaches_every_system_within_its_jumps() {
-        let rules = OutfitRules {
-            map_explore: RuleSource::Bible,
-            ..OutfitRules::default()
-        };
-        let mut session = session(&mapped()).with_outfit_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::MapExplore, RuleSource::Bible);
+        let mut session = session(&mapped()).with_rules(rules);
         session.grant_outfit(JUMPS_2);
         assert_eq!(explored(&session), ids(&[130, 131, 132, 133]));
     }
@@ -438,11 +425,8 @@ mod tests {
         assert_eq!(explored(&session), ids(&[130, 134]));
         // The rule given after the session started is the one the grant
         // reads.
-        let rules = OutfitRules {
-            map_explore: RuleSource::Bible,
-            ..OutfitRules::default()
-        };
-        let mut session = self::session(&mapped()).with_outfit_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::MapExplore, RuleSource::Bible);
+        let mut session = self::session(&mapped()).with_rules(rules);
         session.grant_outfit(INDEPENDENTS);
         assert_eq!(explored(&session), ids(&[130, 134, 136]));
     }
@@ -452,15 +436,12 @@ mod tests {
         // 133 lists 132, but 132 does not list it back.
         let mut catalog = mapped();
         catalog.star_map[2] = star(132, (1.0, 1.0), &[130, 131]);
-        let rules = OutfitRules {
-            map_explore: RuleSource::Bible,
-            ..OutfitRules::default()
-        };
-        let mut session = session(&catalog).with_outfit_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::MapExplore, RuleSource::Bible);
+        let mut session = session(&catalog).with_rules(rules);
         session.grant_outfit(JUMPS_2);
         assert_eq!(explored(&session), ids(&[130, 131, 132]));
         let mut both = self::session(&catalog)
-            .with_outfit_rules(rules)
+            .with_rules(rules)
             .with_hyperlinks(crate::HyperlinkRule::BothWays);
         both.grant_outfit(JUMPS_2);
         assert_eq!(explored(&both), ids(&[130, 131, 132, 133]));
@@ -511,11 +492,8 @@ mod tests {
         assert!(!session.grant_outfit(BLANK_MAP));
         assert_eq!(session.pilot().owned(BLANK_MAP), 0);
         assert_eq!(explored(&session), ids(&[130]));
-        let rules = OutfitRules {
-            invalid_map: RuleSource::Bible,
-            ..OutfitRules::default()
-        };
-        let mut session = self::session(&mapped()).with_outfit_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::InvalidMap, RuleSource::Bible);
+        let mut session = self::session(&mapped()).with_rules(rules);
         assert!(session.grant_outfit(BLANK_MAP));
         assert_eq!(session.pilot().owned(BLANK_MAP), 1);
     }
@@ -566,11 +544,8 @@ mod tests {
 
     #[test]
     fn g_is_held_to_the_max_and_the_free_mass_by_the_other_reading() {
-        let rules = OutfitRules {
-            grant_max: RuleSource::Bible,
-            ..OutfitRules::default()
-        };
-        let mut session = scripted(&mapped()).with_outfit_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::GrantMax, RuleSource::Bible);
+        let mut session = scripted(&mapped()).with_rules(rules);
         run(&mut session, "G305 G305");
         assert_eq!(session.pilot().owned(SHIELD), 2);
         let before = session.clone();
@@ -582,7 +557,7 @@ mod tests {
         // An outfit that just fits the free mass is granted.
         let mut catalog = mapped();
         catalog.outfits[7].mass = 30;
-        let mut session = scripted(&catalog).with_outfit_rules(rules);
+        let mut session = scripted(&catalog).with_rules(rules);
         run(&mut session, "G307 G307");
         assert_eq!(session.pilot().owned(HEAVY), 1);
         assert_eq!(session.free_mass(), 0);
@@ -619,11 +594,8 @@ mod tests {
     #[test]
     fn d_keeps_a_surplus_shield_and_armour_by_the_engine_and_holds_them_by_the_other_reading() {
         for (source, held) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
-            let rules = OutfitRules {
-                refit_reserves: source,
-                ..OutfitRules::default()
-            };
-            let mut session = scripted(&mapped()).with_outfit_rules(rules);
+            let rules = Rulebook::default().with_override(RuleKey::RefitReserves, source);
+            let mut session = scripted(&mapped()).with_rules(rules);
             run(&mut session, "G305");
             let (shield, armor, fuel) = (
                 session.stats().shield,
@@ -659,11 +631,8 @@ mod tests {
 
     #[test]
     fn d_pays_what_selling_would_by_the_other_reading() {
-        let rules = OutfitRules {
-            remove_refund: RuleSource::Bible,
-            ..OutfitRules::default()
-        };
-        let mut session = scripted(&mapped()).with_outfit_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::RemoveRefund, RuleSource::Bible);
+        let mut session = scripted(&mapped()).with_rules(rules);
         run(&mut session, "G305");
         let cash = session.pilot().cash();
         run(&mut session, "D305");

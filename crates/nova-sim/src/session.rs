@@ -3438,7 +3438,6 @@ mod tests {
     use crate::landing::StellarFlags;
     use crate::landing::{Clearance, LandOutcome, LandingRefusal};
     use crate::market::{Direction, Good, Lot, Order, TradeRefusal};
-    use crate::outfit_effects::OutfitRules;
     use crate::pre_jump::slow_enough;
     use crate::reserves::{Gauge, Reserves};
     use crate::stats::{
@@ -5535,7 +5534,7 @@ mod tests {
     fn selling_pays_the_local_price() {
         let mut session = Session::start(&exchange())
             .expect("starts")
-            .with_trade_lot(RuleSource::Bible);
+            .with_rules(Rulebook::default().with_override(RuleKey::TradeLot, RuleSource::Bible));
         land_now(&mut session).expect("lands");
         assert_eq!(
             session.trade(order(&session, METAL, Direction::Buy, Lot::Max)),
@@ -5616,7 +5615,7 @@ mod tests {
         let opals = Good::Junk(JunkId(146));
         let mut session = Session::start(&catalog)
             .expect("starts")
-            .with_junk_trade(RuleSource::Bible);
+            .with_rules(Rulebook::default().with_override(RuleKey::JunkTrade, RuleSource::Bible));
         land_now(&mut session).expect("lands");
         assert_eq!(
             session.trade(order(&session, opals, Direction::Buy, Lot::Max)),
@@ -5655,10 +5654,11 @@ mod tests {
             ..exchange()
         };
         let opals = Good::Junk(JunkId(146));
-        let mut session = Session::start(&catalog)
-            .expect("starts")
-            .with_junk_trade(RuleSource::Bible)
-            .with_trade_lot(RuleSource::Bible);
+        let mut session = Session::start(&catalog).expect("starts").with_rules(
+            Rulebook::default()
+                .with_override(RuleKey::JunkTrade, RuleSource::Bible)
+                .with_override(RuleKey::TradeLot, RuleSource::Bible),
+        );
         land_now(&mut session).expect("lands");
         let (high, low) = (2, 3);
         let on = |row, direction| Order {
@@ -5700,7 +5700,7 @@ mod tests {
         let opals = Good::Junk(JunkId(146));
         let mut session = Session::start(&catalog)
             .expect("starts")
-            .with_trade_lot(RuleSource::Bible);
+            .with_rules(Rulebook::default().with_override(RuleKey::TradeLot, RuleSource::Bible));
         land_now(&mut session).expect("lands");
         let prices: Vec<_> = session
             .market()
@@ -5751,14 +5751,16 @@ mod tests {
             (Some(RuleSource::Engine), Ok(1)),
             (Some(RuleSource::Bible), Err(TradeRefusal::NotTraded)),
         ] {
-            let session = Session::start(&catalog)
-                .expect("starts")
-                .with_trade_lot(RuleSource::Bible);
-            let mut session = match source {
-                Some(source) => session.with_junk_trade(source),
-                None => session,
+            let rules = Rulebook::default().with_override(RuleKey::TradeLot, RuleSource::Bible);
+            let rules = match source {
+                Some(source) => rules.with_override(RuleKey::JunkTrade, source),
+                None => rules,
             };
-            assert_eq!(session.junk_trade(), source.unwrap_or_default());
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            assert_eq!(
+                session.rules().source_for(RuleKey::JunkTrade),
+                source.unwrap_or_default()
+            );
             land_now(&mut session).expect("lands");
             assert!(session.transact(|pilot| {
                 pilot.cargo.insert(opals, 3);
@@ -5791,7 +5793,9 @@ mod tests {
         }
         let session = Session::start(&catalog).expect("starts");
         let mut session = match source {
-            Some(source) => session.with_junk_price(source),
+            Some(source) => {
+                session.with_rules(Rulebook::default().with_override(RuleKey::JunkPrice, source))
+            }
             None => session,
         };
         land_now(&mut session).expect("lands");
@@ -5805,7 +5809,11 @@ mod tests {
     fn the_session_trades_junk_of_negative_price_as_its_rule_says() {
         let waste = Good::Junk(JunkId(146));
         let mut engine = junk_session(-100, None);
-        assert_eq!(engine.junk_price(), RuleSource::Engine, "the default");
+        assert_eq!(
+            engine.rules().source_for(RuleKey::JunkPrice),
+            RuleSource::Engine,
+            "the default"
+        );
         assert_eq!(
             engine
                 .market()
@@ -5819,14 +5827,20 @@ mod tests {
         assert_eq!(engine.pilot().cash(), 100 - 3 * 125, "below 0");
         assert_eq!(engine.pilot().held(waste), 0);
         let mut floor = junk_session(-100, Some(RuleSource::Bible));
-        assert_eq!(floor.junk_price(), RuleSource::Bible);
+        assert_eq!(
+            floor.rules().source_for(RuleKey::JunkPrice),
+            RuleSource::Bible
+        );
         assert_eq!(
             floor.trade(order(&floor, waste, Direction::Sell, Lot::Max)),
             Ok(3)
         );
         assert_eq!(floor.pilot().cash(), 100, "sold for nothing");
         let engine = junk_session(0, Some(RuleSource::Engine));
-        assert_eq!(engine.junk_price(), RuleSource::Engine);
+        assert_eq!(
+            engine.rules().source_for(RuleKey::JunkPrice),
+            RuleSource::Engine
+        );
         assert_eq!(
             engine.market().map(|market| market.rows.len()),
             Some(2),
@@ -5869,11 +5883,13 @@ mod tests {
         ] {
             let session = Session::start(&exchange()).expect("starts");
             let mut session = match source {
-                Some(source) => session.with_trade_lot(source),
+                Some(source) => {
+                    session.with_rules(Rulebook::default().with_override(RuleKey::TradeLot, source))
+                }
                 None => session,
             };
             let source = source.unwrap_or_default();
-            assert_eq!(session.trade_lot(), source);
+            assert_eq!(session.rules().source_for(RuleKey::TradeLot), source);
             land_now(&mut session).expect("lands");
             assert_eq!(
                 session.market().map(|market| market.trade_lot),
@@ -5951,11 +5967,13 @@ mod tests {
             for lot in [Lot::Max, Lot::Count(tons)] {
                 let session = Session::start(&dear_exchange()).expect("starts");
                 let mut session = match source {
-                    Some(source) => session.with_trade_quotient(source),
+                    Some(source) => session.with_rules(
+                        Rulebook::default().with_override(RuleKey::TradeQuotient, source),
+                    ),
                     None => session,
                 };
                 let source = source.unwrap_or_default();
-                assert_eq!(session.trade_quotient(), source);
+                assert_eq!(session.rules().source_for(RuleKey::TradeQuotient), source);
                 session.pilot.set_cash(32_766_999);
                 land_now(&mut session).expect("lands");
                 let market = session.market().expect("an exchange");
@@ -5977,12 +5995,16 @@ mod tests {
         for source in [None, Some(RuleSource::Engine), Some(RuleSource::Bible)] {
             let session = Session::start(&exchange()).expect("starts");
             let mut session = match source {
-                Some(source) => session.with_trade_count(source),
+                Some(source) => session
+                    .with_rules(Rulebook::default().with_override(RuleKey::TradeCount, source)),
                 None => session,
             };
             let source = source.unwrap_or_default();
-            assert_eq!(session.trade_count(), source);
-            assert_eq!(session.trade_quotient(), RuleSource::Engine);
+            assert_eq!(session.rules().source_for(RuleKey::TradeCount), source);
+            assert_eq!(
+                session.rules().source_for(RuleKey::TradeQuotient),
+                RuleSource::Engine
+            );
             land_now(&mut session).expect("lands");
             let market = session.market().expect("an exchange");
             assert_eq!(market.trade_count, source, "{source:?}");
@@ -5994,12 +6016,16 @@ mod tests {
         for source in [None, Some(RuleSource::Engine), Some(RuleSource::Bible)] {
             let session = Session::start(&exchange()).expect("starts");
             let mut session = match source {
-                Some(source) => session.with_trade_debt(source),
+                Some(source) => session
+                    .with_rules(Rulebook::default().with_override(RuleKey::TradeDebt, source)),
                 None => session,
             };
             let source = source.unwrap_or_default();
-            assert_eq!(session.trade_debt(), source);
-            assert_eq!(session.trade_count(), RuleSource::Engine);
+            assert_eq!(session.rules().source_for(RuleKey::TradeDebt), source);
+            assert_eq!(
+                session.rules().source_for(RuleKey::TradeCount),
+                RuleSource::Engine
+            );
             land_now(&mut session).expect("lands");
             let market = session.market().expect("an exchange");
             assert_eq!(market.trade_debt, source, "{source:?}");
@@ -6025,7 +6051,9 @@ mod tests {
         };
         let session = Session::start(&catalog).expect("starts");
         let mut session = match source {
-            Some(source) => session.with_trade_debt(source),
+            Some(source) => {
+                session.with_rules(Rulebook::default().with_override(RuleKey::TradeDebt, source))
+            }
             None => session,
         };
         session.pilot.set_cash(-80);
@@ -6190,7 +6218,7 @@ mod tests {
         };
         let mut session = Session::start(&catalog)
             .expect("starts")
-            .with_junk_flags(source);
+            .with_rules(Rulebook::default().with_override(RuleKey::JunkFlags, source));
         if holds.is_some() {
             session.pilot.escorts = vec![fleet_escort(129)];
         }
@@ -6256,15 +6284,21 @@ mod tests {
     fn the_session_reads_the_junk_flags_as_its_rule_says() {
         let tons = [(FURBALLS, 10), (MORE_FURBALLS, 9)];
         let mut engine = taken_off_with(&tons);
-        assert_eq!(engine.junk_flags(), RuleSource::Engine);
+        assert_eq!(
+            engine.rules().source_for(RuleKey::JunkFlags),
+            RuleSource::Engine
+        );
         steps_in(&mut engine, 15);
         let held =
             |session: &Session| [FURBALLS, MORE_FURBALLS].map(|good| session.pilot().held(good));
         assert_eq!(held(&engine), [11, 10], "21 tons of 20");
         let mut bible = Session::start(&breeding())
             .expect("starts")
-            .with_junk_flags(RuleSource::Bible);
-        assert_eq!(bible.junk_flags(), RuleSource::Bible);
+            .with_rules(Rulebook::default().with_override(RuleKey::JunkFlags, RuleSource::Bible));
+        assert_eq!(
+            bible.rules().source_for(RuleKey::JunkFlags),
+            RuleSource::Bible
+        );
         land_now(&mut bible).expect("lands");
         take_off_with(&mut bible, &tons);
         steps_in(&mut bible, 15);
@@ -6389,15 +6423,19 @@ mod tests {
             start.cash = 1000;
         }
         assert_eq!(
-            Session::start(&catalog).expect("starts").event_price(),
+            Session::start(&catalog)
+                .expect("starts")
+                .rules()
+                .source_for(RuleKey::EventPrice),
             RuleSource::Engine
         );
         for (source, price) in [(RuleSource::Engine, 60), (RuleSource::Bible, 78)] {
-            let mut session = Session::start(&catalog)
-                .expect("starts")
-                .with_event_price(source)
-                .with_trade_lot(RuleSource::Bible);
-            assert_eq!(session.event_price(), source);
+            let mut session = Session::start(&catalog).expect("starts").with_rules(
+                Rulebook::default()
+                    .with_override(RuleKey::EventPrice, source)
+                    .with_override(RuleKey::TradeLot, RuleSource::Bible),
+            );
+            assert_eq!(session.rules().source_for(RuleKey::EventPrice), source);
             jump_with(
                 &mut session,
                 &catalog,
@@ -7077,7 +7115,8 @@ mod tests {
     fn a_counted_buy_of_maps_stops_after_one_as_the_rule_says() {
         let mut session = outfitted(&limiting());
         assert_eq!(session.outfit_counted(buy(MAP), 3, &mut NeverFires), Ok(1));
-        let mut session = outfitted(&limiting()).with_outfit_limit(RuleSource::Bible);
+        let mut session = outfitted(&limiting())
+            .with_rules(Rulebook::default().with_override(RuleKey::OutfitLimit, RuleSource::Bible));
         assert_eq!(session.outfit_counted(buy(MAP), 3, &mut NeverFires), Ok(3));
     }
 
@@ -7220,20 +7259,33 @@ mod tests {
 
     #[test]
     fn the_bible_reading_refunds_half_whenever_bought() {
-        let mut session = outfitted(&outfitting()).with_outfit_refund(RuleSource::Bible);
-        assert_eq!(session.outfit_refund(), RuleSource::Bible);
+        let mut session = outfitted(&outfitting()).with_rules(
+            Rulebook::default().with_override(RuleKey::OutfitRefund, RuleSource::Bible),
+        );
+        assert_eq!(
+            session.rules().source_for(RuleKey::OutfitRefund),
+            RuleSource::Bible
+        );
         session.open_outfitter();
         session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
         session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
         assert_eq!(session.pilot().cash(), 24_000 + 500);
-        let session = session.with_outfit_refund(RuleSource::Engine);
-        assert_eq!(session.outfit_refund(), RuleSource::Engine);
+        let session = session.with_rules(
+            Rulebook::default().with_override(RuleKey::OutfitRefund, RuleSource::Engine),
+        );
+        assert_eq!(
+            session.rules().source_for(RuleKey::OutfitRefund),
+            RuleSource::Engine
+        );
     }
 
     #[test]
     fn the_engine_reading_is_the_default() {
         let session = outfitted(&outfitting());
-        assert_eq!(session.outfit_refund(), RuleSource::Engine);
+        assert_eq!(
+            session.rules().source_for(RuleKey::OutfitRefund),
+            RuleSource::Engine
+        );
     }
 
     #[test]
@@ -7241,25 +7293,19 @@ mod tests {
         for source in [None, Some(RuleSource::Engine), Some(RuleSource::Bible)] {
             let session = outfitted(&outfitting());
             let mut session = match source {
-                Some(source) => session.with_outfit_count(source),
+                Some(source) => session
+                    .with_rules(Rulebook::default().with_override(RuleKey::OutfitCount, source)),
                 None => session,
             };
             let source = source.unwrap_or_default();
-            assert_eq!(session.outfit_count(), source);
-            assert_eq!(session.outfit_refund(), RuleSource::Engine);
+            assert_eq!(session.rules().source_for(RuleKey::OutfitCount), source);
+            assert_eq!(
+                session.rules().source_for(RuleKey::OutfitRefund),
+                RuleSource::Engine
+            );
             let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
             assert_eq!(outfitter.outfit_count, source, "{source:?}");
         }
-    }
-
-    #[test]
-    fn the_sale_mass_rule_round_trips_and_defaults_to_the_engine() {
-        let session = outfitted(&outfitting());
-        assert_eq!(session.sale_mass(), RuleSource::Engine);
-        let session = session.with_sale_mass(RuleSource::Bible);
-        assert_eq!(session.sale_mass(), RuleSource::Bible);
-        let session = session.with_sale_mass(RuleSource::Engine);
-        assert_eq!(session.sale_mass(), RuleSource::Engine);
     }
 
     /// A session landed at the outfitter over its mass limit: of its 30
@@ -7276,7 +7322,8 @@ mod tests {
             mass: 50,
             ..outfit(311, &[])
         });
-        let mut session = outfitted(&catalog).with_sale_mass(source);
+        let mut session = outfitted(&catalog)
+            .with_rules(Rulebook::default().with_override(RuleKey::SaleMass, source));
         session.pilot.outfits =
             BTreeMap::from([(OutfitId(311), 1), (SPEED, 4), (OutfitId(310), 3)]);
         let outfitter = session.outfitter(&mut NeverFires).expect("open");
@@ -7373,7 +7420,8 @@ mod tests {
         [(MAP, OTHER_MAP), (RECORD, OTHER_RECORD)]
             .into_iter()
             .map(|(first, other)| {
-                let mut session = outfitted(&limiting()).with_outfit_limit(source);
+                let mut session = outfitted(&limiting())
+                    .with_rules(Rulebook::default().with_override(RuleKey::OutfitLimit, source));
                 session.outfit(buy(first), &mut NeverFires).expect("bought");
                 (session, first, other)
             })
@@ -7454,19 +7502,27 @@ mod tests {
     #[test]
     fn by_the_other_reading_nothing_is_limited() {
         assert_eq!(
-            outfitted(&limiting()).outfit_limit(),
+            outfitted(&limiting())
+                .rules()
+                .source_for(RuleKey::OutfitLimit),
             RuleSource::Engine,
             "the engine's by default"
         );
         for (mut session, first, other) in each_limited(RuleSource::Bible) {
-            assert_eq!(session.outfit_limit(), RuleSource::Bible);
+            assert_eq!(
+                session.rules().source_for(RuleKey::OutfitLimit),
+                RuleSource::Bible
+            );
             assert_eq!(session.outfit(buy(first), &mut NeverFires), Ok(()));
             assert_eq!(session.outfit(buy(other), &mut NeverFires), Ok(()));
         }
         // The flags kept under the other reading apply once it changes.
-        let mut session = outfitted(&limiting()).with_outfit_limit(RuleSource::Bible);
+        let mut session = outfitted(&limiting())
+            .with_rules(Rulebook::default().with_override(RuleKey::OutfitLimit, RuleSource::Bible));
         session.outfit(buy(MAP), &mut NeverFires).expect("bought");
-        let mut session = session.with_outfit_limit(RuleSource::Engine);
+        let mut session = session.with_rules(
+            Rulebook::default().with_override(RuleKey::OutfitLimit, RuleSource::Engine),
+        );
         assert_eq!(
             session.outfit(buy(MAP), &mut NeverFires),
             Err(OutfitRefusal::BoughtThisOpening)
@@ -7646,10 +7702,8 @@ mod tests {
         // and boarding.
         for source in [RuleSource::Engine, RuleSource::Bible] {
             for order in [buy(OutfitId(302)), sell(OutfitId(302))] {
-                let mut session = outfitted(&outfitting()).with_outfit_rules(OutfitRules {
-                    refit_reserves: source,
-                    ..OutfitRules::default()
-                });
+                let mut session = outfitted(&outfitting())
+                    .with_rules(Rulebook::default().with_override(RuleKey::RefitReserves, source));
                 if order.direction == Direction::Sell {
                     session.pilot.outfits.insert(OutfitId(302), 1);
                     session.refit(false);
@@ -8014,7 +8068,10 @@ mod tests {
     #[test]
     fn the_session_reads_the_raised_max_as_its_rule_says() {
         let catalog = raising();
-        assert_eq!(outfitted(&catalog).raised_max(), RuleSource::Engine);
+        assert_eq!(
+            outfitted(&catalog).rules().source_for(RuleKey::RaisedMax),
+            RuleSource::Engine
+        );
         for (source, sold) in [
             (
                 RuleSource::Engine,
@@ -8025,8 +8082,9 @@ mod tests {
             ),
             (RuleSource::Bible, Ok(())),
         ] {
-            let mut session = outfitted(&catalog).with_raised_max(source);
-            assert_eq!(session.raised_max(), source);
+            let mut session = outfitted(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::RaisedMax, source));
+            assert_eq!(session.rules().source_for(RuleKey::RaisedMax), source);
             session
                 .outfit(buy(WIDGET_RACK), &mut NeverFires)
                 .expect("a rack");
@@ -8203,7 +8261,10 @@ mod tests {
         };
         let opals = Good::Junk(JunkId(146));
         assert_eq!(
-            Session::start(&catalog).expect("starts").purchase_cargo(),
+            Session::start(&catalog)
+                .expect("starts")
+                .rules()
+                .source_for(RuleKey::PurchaseCargo),
             RuleSource::Engine
         );
         // The new ship's 15 tons of 30 with the trader: f = 0.5.
@@ -8219,8 +8280,9 @@ mod tests {
                 BTreeMap::new(),
             ),
         ] {
-            let mut session = outfitted(&catalog).with_purchase_cargo(source);
-            assert_eq!(session.purchase_cargo(), source);
+            let mut session = outfitted(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::PurchaseCargo, source));
+            assert_eq!(session.rules().source_for(RuleKey::PurchaseCargo), source);
             session.pilot.escorts = vec![
                 fleet_escort(130),
                 Escort {
@@ -8536,16 +8598,6 @@ mod tests {
     }
 
     #[test]
-    fn the_trade_in_outfits_rule_round_trips_and_defaults_to_the_engine() {
-        let session = outfitted(&shipbuying());
-        assert_eq!(session.trade_in_outfits(), RuleSource::Engine);
-        let session = session.with_trade_in_outfits(RuleSource::Bible);
-        assert_eq!(session.trade_in_outfits(), RuleSource::Bible);
-        let session = session.with_trade_in_outfits(RuleSource::Engine);
-        assert_eq!(session.trade_in_outfits(), RuleSource::Engine);
-    }
-
-    #[test]
     fn by_the_engine_the_trade_in_counts_an_unsellable_outfit_but_not_a_persistent_one() {
         // An unsellable 3000-credit map and a persistent 1000-credit
         // licence on ship 128, whose hull trades in for 2500.
@@ -8561,7 +8613,8 @@ mod tests {
             ..outfit(331, &[])
         });
         let trade_in = |source| {
-            let mut session = outfitted(&catalog).with_trade_in_outfits(source);
+            let mut session = outfitted(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::TradeInOutfits, source));
             session.pilot.outfits = BTreeMap::from([(OutfitId(330), 1), (OutfitId(331), 1)]);
             session
                 .shipyard(&mut NeverFires)
@@ -8894,11 +8947,18 @@ mod tests {
     fn the_session_reads_buy_random_as_its_rule_says() {
         let catalog = rolling(0, -1);
         let mut engine = outfitted(&catalog);
-        assert_eq!(engine.buy_random(), RuleSource::Engine);
+        assert_eq!(
+            engine.rules().source_for(RuleKey::BuyRandom),
+            RuleSource::Engine
+        );
         assert!(!lists_speed(&mut engine, &mut NeverFires));
         assert!(lists_new(&mut engine, &mut NeverFires));
-        let mut bible = outfitted(&catalog).with_buy_random(RuleSource::Bible);
-        assert_eq!(bible.buy_random(), RuleSource::Bible);
+        let mut bible = outfitted(&catalog)
+            .with_rules(Rulebook::default().with_override(RuleKey::BuyRandom, RuleSource::Bible));
+        assert_eq!(
+            bible.rules().source_for(RuleKey::BuyRandom),
+            RuleSource::Bible
+        );
         assert!(lists_speed(&mut bible, &mut NeverFires));
         assert!(!lists_new(&mut bible, &mut NeverFires));
     }
@@ -11722,10 +11782,8 @@ mod tests {
     fn the_ammo_take_keeps_a_surplus_shield_and_armour_by_the_engine_and_holds_them_by_the_other_reading()
      {
         for (source, surplus) in [(RuleSource::Engine, 5.0), (RuleSource::Bible, 0.0)] {
-            let mut session = ammo_session(&ammo_aboard(1, 20)).with_outfit_rules(OutfitRules {
-                refit_reserves: source,
-                ..OutfitRules::default()
-            });
+            let mut session = ammo_session(&ammo_aboard(1, 20))
+                .with_rules(Rulebook::default().with_override(RuleKey::RefitReserves, source));
             let (shield, armor) = (session.stats().shield, session.stats().armor);
             session.pilot.reserves.shield.now = shield + 5.0;
             session.pilot.reserves.armor.now = armor + 5.0;
@@ -12617,21 +12675,18 @@ mod tests {
             session.pilot().owned(OutfitId(200))
         };
         for (rules, owned) in [
-            (OutfitRules::default(), 2),
+            (Rulebook::default(), 2),
             (
-                OutfitRules {
-                    grant_max: RuleSource::Bible,
-                    ..OutfitRules::default()
-                },
+                Rulebook::default().with_override(RuleKey::GrantMax, RuleSource::Bible),
                 1,
             ),
         ] {
-            let mut boarded = alongside_ace(&catalog).with_outfit_rules(rules);
+            let mut boarded = alongside_ace(&catalog).with_rules(rules);
             board_drawing(&mut boarded, NovaBoarding::default(), &ACE_DRAWS)
                 .0
                 .expect("boards");
             assert_eq!(boarded.pilot().owned(OutfitId(200)), owned, "boarded");
-            assert_eq!(g(alongside(&catalog).with_outfit_rules(rules)), owned, "G");
+            assert_eq!(g(alongside(&catalog).with_rules(rules)), owned, "G");
         }
     }
 
@@ -12640,10 +12695,8 @@ mod tests {
      {
         let catalog = granting();
         for (source, surplus) in [(RuleSource::Engine, 5.0), (RuleSource::Bible, 0.0)] {
-            let mut session = alongside_ace(&catalog).with_outfit_rules(OutfitRules {
-                refit_reserves: source,
-                ..OutfitRules::default()
-            });
+            let mut session = alongside_ace(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::RefitReserves, source));
             let (shield, armor) = (session.stats().shield, session.stats().armor);
             session.pilot.reserves.shield.now = shield + 5.0;
             session.pilot.reserves.armor.now = armor + 5.0;
@@ -12676,23 +12729,20 @@ mod tests {
         // Of a `Mass` scaled by Flags 0x0400 on the ship's 40 tons, with
         // 30 tons free: 20 raw is 8, 75 is 30 and 80 is 32. Held to the
         // `Max`, boarding (granting one) and `G` agree, by the scaled mass.
-        let rules = OutfitRules {
-            grant_max: RuleSource::Bible,
-            ..OutfitRules::default()
-        };
+        let rules = Rulebook::default().with_override(RuleKey::GrantMax, RuleSource::Bible);
         for (mass, fits) in [(20, true), (75, true), (80, false)] {
             let mut catalog = granting();
             catalog.persons[0].grant_count = 1;
             booster(&mut catalog).mass = mass;
             booster(&mut catalog).flags = OutfitFlags::MASS_BY_MASS;
-            let mut boarded = alongside_ace(&catalog).with_outfit_rules(rules);
+            let mut boarded = alongside_ace(&catalog).with_rules(rules);
             assert_eq!(boarded.free_mass(), 30);
             board_drawing(&mut boarded, NovaBoarding::default(), &ACE_DRAWS)
                 .0
                 .expect("boards");
             let mut scripted = alongside(&catalog)
                 .with_set_ops(std::rc::Rc::new(crate::nova_set_ops()))
-                .with_outfit_rules(rules);
+                .with_rules(rules);
             let expr = crate::control::SetExpr::parse("G200").expect("parses");
             scripted.run_set(&expr, &mut Draws::of(&[]));
             let owned = u16::from(fits);

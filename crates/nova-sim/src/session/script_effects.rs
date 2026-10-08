@@ -610,18 +610,6 @@ mod tests {
     // The rules.
 
     #[test]
-    fn the_rules_are_the_engines_until_others_are_given() {
-        let session = flying(&moving());
-        assert_eq!(session.script_effect_rules(), ScriptEffectRules::default());
-        let rules = ScriptEffectRules {
-            arrival: RuleSource::Bible,
-            ..ScriptEffectRules::default()
-        };
-        let session = session.with_script_effect_rules(rules);
-        assert_eq!(session.script_effect_rules(), rules);
-    }
-
-    #[test]
     fn each_rule_follows_its_own_rulebook_entry() {
         let engine = ScriptEffectRules {
             starless: RuleSource::Engine,
@@ -809,11 +797,8 @@ mod tests {
     #[test]
     fn m_into_a_system_with_no_stellar_stops_at_the_centre_by_the_bible() {
         let catalog = moving();
-        let rules = ScriptEffectRules {
-            starless: RuleSource::Bible,
-            ..ScriptEffectRules::default()
-        };
-        let mut session = flying(&catalog).with_script_effect_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::MoveStarless, RuleSource::Bible);
+        let mut session = flying(&catalog).with_rules(rules);
         session.player.position = Vec2::new(10.0, 10.0);
         session.player.velocity = Vec2::new(5.0, -1.0);
         moved(&mut session, &catalog, "M132");
@@ -936,13 +921,10 @@ mod tests {
     #[test]
     fn as_an_arrival_the_move_explores_clears_the_course_and_populates() {
         let catalog = moving();
-        let rules = ScriptEffectRules {
-            arrival: RuleSource::Bible,
-            ..ScriptEffectRules::default()
-        };
+        let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.escorts = vec![escort(129, false), escort(130, true)];
-        let mut session = flying_with(&catalog, pilot).with_script_effect_rules(rules);
+        let mut session = flying_with(&catalog, pilot).with_rules(rules);
         session.plot_course(SystemId(132)).expect("a route");
         moved(&mut session, &catalog, "M131");
         assert!(session.pilot().has_explored(SystemId(131)));
@@ -1065,11 +1047,8 @@ mod tests {
     #[test]
     fn as_an_arrival_a_landed_move_explores_and_clears_the_course_at_once() {
         let catalog = moving();
-        let rules = ScriptEffectRules {
-            arrival: RuleSource::Bible,
-            ..ScriptEffectRules::default()
-        };
-        let mut session = landed(&catalog).with_script_effect_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
+        let mut session = landed(&catalog).with_rules(rules);
         session.plot_course(SystemId(131)).expect("a route");
         moved(&mut session, &catalog, "N131");
         assert!(session.pilot().has_explored(SystemId(131)));
@@ -1096,11 +1075,8 @@ mod tests {
     /// flight under `keep_flag`, and takes off: where it is then.
     fn taken_off_after(text: &str, keep_flag: RuleSource) -> Vec2 {
         let catalog = moving();
-        let rules = ScriptEffectRules {
-            keep_flag,
-            ..ScriptEffectRules::default()
-        };
-        let mut session = flying(&catalog).with_script_effect_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, keep_flag);
+        let mut session = flying(&catalog).with_rules(rules);
         moved(&mut session, &catalog, text);
         session.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
@@ -1132,11 +1108,8 @@ mod tests {
     #[test]
     fn by_the_other_reading_a_landed_n_still_keeps_the_landing_position() {
         let catalog = moving();
-        let rules = ScriptEffectRules {
-            keep_flag: RuleSource::Bible,
-            ..ScriptEffectRules::default()
-        };
-        let mut session = flying(&catalog).with_script_effect_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::MoveKeepFlag, RuleSource::Bible);
+        let mut session = flying(&catalog).with_rules(rules);
         session.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         moved(&mut session, &catalog, "N130");
@@ -1217,11 +1190,8 @@ mod tests {
     #[test]
     fn by_the_other_reading_every_p_sounds_at_once_landed_or_not() {
         let catalog = moving();
-        let rules = ScriptEffectRules {
-            sound: RuleSource::Bible,
-            ..ScriptEffectRules::default()
-        };
-        let mut session = landed(&catalog).with_script_effect_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::ScriptSound, RuleSource::Bible);
+        let mut session = landed(&catalog).with_rules(rules);
         run(&mut session, "P300 P301");
         assert_eq!(
             session.take_sounds(),
@@ -1322,22 +1292,19 @@ mod tests {
     #[test]
     fn by_the_bible_a_blank_q_leaves_all_the_same_with_no_message() {
         let catalog = moving();
-        let rules = ScriptEffectRules {
-            blank_leave: RuleSource::Bible,
-            ..ScriptEffectRules::default()
-        };
-        let mut session = told(landed(&catalog)).with_script_effect_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::BlankLeave, RuleSource::Bible);
+        let mut session = told(landed(&catalog)).with_rules(rules);
         run_rolling(&mut session, "Q25049", &[]);
         let settled = settle(&mut session, &catalog);
         assert_eq!(settled.took_off, Some(StellarId(128)));
         assert_eq!(settled.message, None);
         assert_eq!(session.landed(), None);
-        let mut session = told(flying(&catalog)).with_script_effect_rules(rules);
+        let mut session = told(flying(&catalog)).with_rules(rules);
         session.take_sounds();
         run_rolling(&mut session, "Q25050", &[0]);
         assert_eq!(settle(&mut session, &catalog), Settled::default());
         assert_eq!(session.take_sounds(), [], "nothing to show");
-        let mut session = told(landed(&catalog)).with_script_effect_rules(rules);
+        let mut session = told(landed(&catalog)).with_rules(rules);
         run_rolling(&mut session, "Q25048", &[1]);
         let settled = settle(&mut session, &catalog);
         assert_eq!(settled.message.as_deref(), Some("Leave now."), "as usual");

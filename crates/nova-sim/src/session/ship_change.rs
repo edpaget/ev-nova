@@ -411,7 +411,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
     use crate::market::Good;
-    use crate::outfit_effects::{OutfitRules, Rgb15};
+    use crate::outfit_effects::Rgb15;
     use crate::outfitter::outfit_mods;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
@@ -545,20 +545,6 @@ mod tests {
     }
 
     // The rules.
-
-    #[test]
-    fn the_ship_change_rules_are_the_engines_until_others_are_given() {
-        let session = session(&changing());
-        assert_eq!(session.ship_change_rules(), ShipChangeRules::default());
-        let rules = ShipChangeRules {
-            cargo: RuleSource::Bible,
-            ..ShipChangeRules::default()
-        };
-        assert_eq!(
-            session.with_ship_change_rules(rules).ship_change_rules(),
-            rules
-        );
-    }
 
     #[test]
     fn the_ship_change_rules_follow_their_four_rulebook_keys() {
@@ -743,10 +729,9 @@ mod tests {
             },
             "by the engine the shield and armour keep their surplus; the fuel is held"
         );
-        let mut session = self::session(&catalog).with_ship_change_rules(ShipChangeRules {
-            reserves: RuleSource::Bible,
-            ..ShipChangeRules::default()
-        });
+        let mut session = self::session(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::ShipChangeReserves, RuleSource::Bible),
+        );
         run(&mut session, "C130");
         assert_eq!(
             session.reserves(),
@@ -824,11 +809,8 @@ mod tests {
         session.pilot.outfits.insert(LIMITED, 5);
         run(&mut session, "E130");
         assert_eq!(session.pilot.owned(LIMITED), 2, "an old one over its Max");
-        let bible = ShipChangeRules {
-            max: RuleSource::Bible,
-            ..ShipChangeRules::default()
-        };
-        let mut session = self::session(&catalog).with_ship_change_rules(bible);
+        let bible = Rulebook::default().with_override(RuleKey::ShipChangeMax, RuleSource::Bible);
+        let mut session = self::session(&catalog).with_rules(bible);
         run(&mut session, "E129");
         assert_eq!(session.pilot.owned(LIMITED), 3, "nothing held");
         assert_eq!(session.pilot.owned(SHIELD), 3);
@@ -850,10 +832,9 @@ mod tests {
             ]),
             "0x0004 or 0x0020 kept, the plain ones dropped, the defaults added"
         );
-        let mut session = self::session(&catalog).with_ship_change_rules(ShipChangeRules {
-            persistence: RuleSource::Bible,
-            ..ShipChangeRules::default()
-        });
+        let mut session = self::session(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::ShipChangePersistence, RuleSource::Bible),
+        );
         run(&mut session, "H130");
         assert_eq!(
             session.pilot.outfits,
@@ -874,10 +855,9 @@ mod tests {
         let mut session = session(&kept);
         run(&mut session, "H129");
         assert_eq!(session.pilot.owned(LIMITED), 2, "1 kept + 2 added, held");
-        let mut session = self::session(&kept).with_ship_change_rules(ShipChangeRules {
-            max: RuleSource::Bible,
-            ..ShipChangeRules::default()
-        });
+        let mut session = self::session(&kept).with_rules(
+            Rulebook::default().with_override(RuleKey::ShipChangeMax, RuleSource::Bible),
+        );
         run(&mut session, "H129");
         assert_eq!(session.pilot.owned(LIMITED), 3);
     }
@@ -900,24 +880,22 @@ mod tests {
     fn by_the_engine_the_cargo_is_kept_past_the_new_hold_and_otherwise_trimmed() {
         let catalog = changing();
         let loaded = |rules| {
-            let mut session = session(&catalog).with_ship_change_rules(rules);
+            let mut session = session(&catalog).with_rules(rules);
             session.pilot.cargo = [(Good::Commodity(0), 3), (Good::Commodity(2), 9)]
                 .into_iter()
                 .collect();
             run(&mut session, "C130");
             session
         };
-        let session = loaded(ShipChangeRules::default());
+        let session = loaded(Rulebook::default());
         assert_eq!(session.capacity(), 5);
         assert_eq!(
             session.pilot().cargo().collect::<Vec<_>>(),
             [(Good::Commodity(0), 3), (Good::Commodity(2), 9)],
             "every ton kept"
         );
-        let session = loaded(ShipChangeRules {
-            cargo: RuleSource::Bible,
-            ..ShipChangeRules::default()
-        });
+        let session =
+            loaded(Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible));
         assert_eq!(
             session.pilot().cargo().collect::<Vec<_>>(),
             [(Good::Commodity(0), 3), (Good::Commodity(2), 2)],
@@ -1029,10 +1007,9 @@ mod tests {
             ("C130", Reserves::full(110.0, 20.0, 100.0)),
             ("H130", Reserves::full(10.0, 20.0, 100.0)),
         ] {
-            let mut session = session(&catalog).with_outfit_rules(OutfitRules {
-                refit_reserves: RuleSource::Engine,
-                ..OutfitRules::default()
-            });
+            let mut session = session(&catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::RefitReserves, RuleSource::Engine),
+            );
             run(&mut session, op);
             let kept = session.reserves();
             assert_eq!((kept.shield.now, kept.armor.now), (130.0, 45.0), "{op}");
@@ -1094,10 +1071,9 @@ mod tests {
     fn by_the_other_reading_a_later_g_or_d_holds_a_kept_surplus_to_the_most() {
         let catalog = changing();
         let holding = |catalog| {
-            session(catalog).with_outfit_rules(OutfitRules {
-                refit_reserves: RuleSource::Bible,
-                ..OutfitRules::default()
-            })
+            session(catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::RefitReserves, RuleSource::Bible),
+            )
         };
         for op in ["C130 G400", "C130 D400"] {
             let mut session = holding(&catalog);

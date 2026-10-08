@@ -295,6 +295,7 @@ mod tests {
     use crate::hail::{EscortStatus, HailOptions};
     use crate::hire::{HireRow, NovaHire, PayNote};
     use crate::reserves::Reserves;
+    use crate::rulebook::Rulebook;
     use crate::stats::HYPERSPACE_DAYS;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
@@ -588,8 +589,9 @@ mod tests {
             requiring(130, 0x1000, 0x0200),
             requiring(131, 0x1, 0x0200),
         ]);
-        let mut session = landed(&catalog, 25_000).with_hire_require(source);
-        assert_eq!(session.hire_require(), source);
+        let mut session = landed(&catalog, 25_000)
+            .with_rules(Rulebook::default().with_override(RuleKey::HireRequire, source));
+        assert_eq!(session.rules().source_for(RuleKey::HireRequire), source);
         list(&mut session)
     }
 
@@ -599,7 +601,10 @@ mod tests {
         assert_eq!(listed(&list), [129, 131]);
         assert_eq!(row(&list, 129).hire, Ok(()));
         assert_eq!(
-            Session::start(&catalog()).expect("starts").hire_require(),
+            Session::start(&catalog())
+                .expect("starts")
+                .rules()
+                .source_for(RuleKey::HireRequire),
             RuleSource::Engine,
             "by default"
         );
@@ -877,7 +882,7 @@ mod tests {
         }
         let mut session = Session::fly(&catalog, pilot)
             .expect("flies")
-            .with_take_off_pay(rule);
+            .with_rules(Rulebook::default().with_override(RuleKey::TakeOffPay, rule));
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(session.stats().jump_days, u32::from(days));
         session.take_save_due();
@@ -1027,7 +1032,10 @@ mod tests {
         assert_eq!(session.pilot().cash(), 600);
         assert_eq!(session.take_pay_notes(), []);
         assert_eq!(
-            Session::start(&catalog()).expect("starts").take_off_pay(),
+            Session::start(&catalog())
+                .expect("starts")
+                .rules()
+                .source_for(RuleKey::TakeOffPay),
             RuleSource::Engine,
             "by default"
         );
@@ -1036,7 +1044,10 @@ mod tests {
     #[test]
     fn by_the_engine_an_escort_unpaid_at_take_off_is_gone_before_the_fleet_is_placed() {
         let mut session = docked(350, RuleSource::Engine);
-        assert_eq!(session.take_off_pay(), RuleSource::Engine);
+        assert_eq!(
+            session.rules().source_for(RuleKey::TakeOffPay),
+            RuleSource::Engine
+        );
         session.take_off().expect("takes off");
         assert_eq!(session.pilot().cash(), 250);
         assert_eq!(session.pilot().escorts().len(), 3);
@@ -1048,7 +1059,10 @@ mod tests {
     #[test]
     fn by_the_other_reading_only_the_days_of_a_jump_are_paid() {
         let mut session = docked(1000, RuleSource::Bible);
-        assert_eq!(session.take_off_pay(), RuleSource::Bible);
+        assert_eq!(
+            session.rules().source_for(RuleKey::TakeOffPay),
+            RuleSource::Bible
+        );
         session.take_off().expect("takes off");
         assert_eq!(session.pilot().cash(), 1000);
         session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
@@ -1070,8 +1084,8 @@ mod tests {
         pilot.stellar = None;
         let mut session = Session::fly(catalog, pilot)
             .expect("flies")
-            .with_escort_wage(rule);
-        assert_eq!(session.escort_wage(), rule);
+            .with_rules(Rulebook::default().with_override(RuleKey::EscortWage, rule));
+        assert_eq!(session.rules().source_for(RuleKey::EscortWage), rule);
         session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
         let id = session.fleet[0];
         (session, id)
@@ -1127,7 +1141,10 @@ mod tests {
             "with no record, the wage it was hired at"
         );
         assert_eq!(
-            Session::start(&catalog()).expect("starts").escort_wage(),
+            Session::start(&catalog())
+                .expect("starts")
+                .rules()
+                .source_for(RuleKey::EscortWage),
             RuleSource::Engine,
             "by default"
         );

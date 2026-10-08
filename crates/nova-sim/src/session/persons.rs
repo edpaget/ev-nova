@@ -297,6 +297,7 @@ mod tests {
     use crate::person::{PersonRoll, PersonRules};
     use crate::pilot::Pilot;
     use crate::rulebook::RuleSource;
+    use crate::rulebook::Rulebook;
     use crate::testkit::{FAST, FakePilotCatalog, person, ship};
 
     /// System 130 has no traffic of its own (`AvgShips` `avg_ships`) and
@@ -772,7 +773,7 @@ mod tests {
     fn greeted(catalog: &FakePilotCatalog, rule: RuleSource, hostile: bool) -> (String, String) {
         let mut session = Session::start(catalog)
             .expect("starts")
-            .with_comm_quote(rule);
+            .with_rules(Rulebook::default().with_override(RuleKey::CommQuote, rule));
         session.populate(catalog, &mut NeverFires);
         if hostile {
             session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
@@ -810,20 +811,13 @@ mod tests {
     }
 
     #[test]
-    fn a_session_keeps_its_comm_quote_reading_and_its_person_rules() {
+    fn a_session_keeps_its_person_rules() {
         let catalog = peopled(0);
         let session = Session::start(&catalog).expect("starts");
-        assert_eq!(session.comm_quote(), RuleSource::Engine);
         assert_eq!(
             format!("{:?}", session.person_rules()),
             format!("{:?}", crate::person::NovaPersons::default())
         );
-        for source in RuleSource::ALL {
-            let session = Session::start(&catalog)
-                .expect("starts")
-                .with_comm_quote(source);
-            assert_eq!(session.comm_quote(), source);
-        }
         let session = Session::start(&catalog)
             .expect("starts")
             .with_person_rules(Rc::new(FirstComes));

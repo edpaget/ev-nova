@@ -252,17 +252,6 @@ mod tests {
     }
 
     #[test]
-    fn the_hook_rules_are_the_engines_until_others_are_given() {
-        let session = Session::start(&catalog()).expect("starts");
-        assert_eq!(session.hook_rules(), HookRules::default());
-        let rules = HookRules {
-            capture_hook_order: RuleSource::Bible,
-            ..HookRules::default()
-        };
-        assert_eq!(session.with_hook_rules(rules).hook_rules(), rules);
-    }
-
-    #[test]
     fn the_hook_rules_follow_their_three_rulebook_keys() {
         assert_eq!(
             HookRules::from_rulebook(&Rulebook::default()),
@@ -517,17 +506,15 @@ mod tests {
     #[test]
     fn by_the_other_reading_a_paint_granted_by_on_purchase_stays() {
         let catalog = painting_purchase();
-        let rules = HookRules {
-            purchase_paint_order: RuleSource::Bible,
-            ..HookRules::default()
-        };
-        let mut session = outfitted(&catalog).with_hook_rules(rules);
+        let rules =
+            Rulebook::default().with_override(RuleKey::PurchasePaintOrder, RuleSource::Bible);
+        let mut session = outfitted(&catalog).with_rules(rules);
         session.pilot.paint = Rgb15::of(0x1F);
         session
             .buy_ship(NEW, "Kestrel", &mut Scripted::default())
             .expect("bought");
         assert_eq!(session.pilot.paint, Rgb15::of(0x7C00));
-        let mut plain = outfitted(&hooked_ships("", "")).with_hook_rules(rules);
+        let mut plain = outfitted(&hooked_ships("", "")).with_rules(rules);
         plain.pilot.paint = Rgb15::of(0x1F);
         plain
             .buy_ship(NEW, "Kestrel", &mut Scripted::default())
@@ -638,10 +625,10 @@ mod tests {
     fn captured_kitted(
         retire_128: &str,
         capture_129: &str,
-        rules: HookRules,
+        rules: Rulebook,
     ) -> (Session, Rc<Probe>) {
         let catalog = hooked_capture(kitted(), retire_128, capture_129);
-        let mut session = captured(&catalog).with_hook_rules(rules);
+        let mut session = captured(&catalog).with_rules(rules);
         session.pilot.outfits.insert(OutfitId(400), 1);
         session.pilot.outfits.insert(OutfitId(401), 1);
         probed(session)
@@ -649,7 +636,7 @@ mod tests {
 
     #[test]
     fn use_as_my_ship_retires_the_old_class_then_captures_the_new_before_the_swap() {
-        let (mut session, probe) = captured_kitted("S222", "S223", HookRules::default());
+        let (mut session, probe) = captured_kitted("S222", "S223", Rulebook::default());
         assert_eq!(
             session.assign(Assignment::MyShip, &mut Draws::of(&[])),
             Some(Assigned::MyShip)
@@ -669,10 +656,7 @@ mod tests {
 
     #[test]
     fn by_the_other_reading_use_as_my_ship_runs_its_hooks_after_the_swap() {
-        let rules = HookRules {
-            capture_hook_order: RuleSource::Bible,
-            ..HookRules::default()
-        };
+        let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, RuleSource::Bible);
         let (mut session, probe) = captured_kitted("S222", "S223", rules);
         session.assign(Assignment::MyShip, &mut Draws::of(&[]));
         assert_eq!(tags(&probe), [222, 223]);
@@ -690,10 +674,7 @@ mod tests {
     #[test]
     fn a_non_persistent_outfit_on_capture_grants_is_stripped_by_the_engine_and_kept_otherwise() {
         for (source, kept) in [(RuleSource::Engine, 0), (RuleSource::Bible, 1)] {
-            let rules = HookRules {
-                capture_hook_order: source,
-                ..HookRules::default()
-            };
+            let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, source);
             let (mut session, _) = captured_kitted("", "G401 G400", rules);
             session.pilot.outfits.remove(&OutfitId(401));
             session.pilot.outfits.remove(&OutfitId(400));
@@ -709,7 +690,7 @@ mod tests {
 
     #[test]
     fn an_abandoned_prize_runs_no_hook() {
-        let (mut session, probe) = captured_kitted("S222", "S223", HookRules::default());
+        let (mut session, probe) = captured_kitted("S222", "S223", Rulebook::default());
         session.ships.retain(|record| record.id != ShipId(129));
         assert_eq!(
             session.assign(Assignment::MyShip, &mut Draws::of(&[])),
@@ -720,7 +701,7 @@ mod tests {
 
     #[test]
     fn on_capture_draws_before_the_fuel() {
-        let (mut session, _) = captured_kitted("", "R(b1 b2)", HookRules::default());
+        let (mut session, _) = captured_kitted("", "R(b1 b2)", Rulebook::default());
         let mut chance = Draws::of(&[1, 7]);
         session.assign(Assignment::MyShip, &mut chance);
         assert_eq!(chance.asked, [2, 300], "the roll, then the fuel");
@@ -776,11 +757,9 @@ mod tests {
     #[test]
     fn by_the_other_reading_the_starting_ship_runs_its_on_purchase_before_on_start() {
         let catalog = starting_with("S230");
-        let rules = HookRules {
-            start_ship_purchase: RuleSource::Bible,
-            ..HookRules::default()
-        };
-        let (mut session, probe) = probed(new_pilot(&catalog).with_hook_rules(rules));
+        let rules =
+            Rulebook::default().with_override(RuleKey::StartShipPurchase, RuleSource::Bible);
+        let (mut session, probe) = probed(new_pilot(&catalog).with_rules(rules));
         session.begin(&catalog, &mut Scripted::default());
         assert_eq!(tags(&probe), [231, 230]);
     }
@@ -808,11 +787,9 @@ mod tests {
             ship_records: Vec::new(),
             ..starting_with("")
         };
-        let rules = HookRules {
-            start_ship_purchase: RuleSource::Bible,
-            ..HookRules::default()
-        };
-        let (mut session, probe) = probed(new_pilot(&catalog).with_hook_rules(rules));
+        let rules =
+            Rulebook::default().with_override(RuleKey::StartShipPurchase, RuleSource::Bible);
+        let (mut session, probe) = probed(new_pilot(&catalog).with_rules(rules));
         session.begin(&catalog, &mut Scripted::default());
         assert!(tags(&probe).is_empty());
     }
