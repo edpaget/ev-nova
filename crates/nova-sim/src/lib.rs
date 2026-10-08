@@ -40,7 +40,9 @@
 //!   held as a [`ControlBitSet`] indexed by [`Bit`]; a record's parsed
 //!   control-bit [`Test`], and evaluating one against the [`PilotFacts`]
 //!   it reads ([`control::holds`]), through the [`ControlBits`] port with
-//!   Nova's [`NovaBits`].
+//!   Nova's [`NovaBits`]; and running a set expression
+//!   ([`control::execute`]), its operators beyond the bit writes handed to
+//!   a [`SetRegistry`].
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence
@@ -249,7 +251,8 @@ pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
 pub use control::{
-    Bit, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Test, TestExpr,
+    Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, SetExpr, SetOp,
+    SetOpHandler, SetOpKind, SetRegistry, Test, TestExpr,
 };
 pub use date::GameDate;
 pub use escort::{

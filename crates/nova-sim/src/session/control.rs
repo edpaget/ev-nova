@@ -81,7 +81,7 @@ impl PilotFacts for Facts<'_> {
     }
 }
 
-/// The session's pilot, as its [`Facts`] read it.
+/// The session's pilot, as its `Facts` read it.
 impl PilotFacts for Session {
     fn bit(&self, bit: Bit) -> bool {
         self.facts().bit(bit)

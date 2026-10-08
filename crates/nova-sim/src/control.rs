@@ -26,12 +26,25 @@
 //! The rules that test a record's control bits (bar hire, a person's
 //! `ActiveOn`) ask the [`ControlBits`] port, which the caller wires at the
 //! edge; [`NovaBits`] is the original's evaluation, [`holds`].
+//!
+//! # Running a set expression
+//!
+//! [`execute`] runs a set expression on a target holding control bits
+//! ([`BitStore`]): it writes the bits itself, draws `R(...)` on the
+//! caller's [`Chance`](crate::Chance), and hands every other operator to
+//! the [`SetOpHandler`] registered for its kind in a [`SetRegistry`],
+//! skipping and reporting one with none (see the `set` submodule).
+
+mod set;
 
 use std::fmt::Debug;
 use std::sync::Arc;
 
-pub use nova_data::{Bit, BitWrite, Comparison, ParsedTest, TestExpr, TestOperand};
+pub use nova_data::{
+    Bit, BitWrite, Comparison, ParsedTest, SetExpr, SetOp, SetOpKind, TestExpr, TestOperand,
+};
 
+pub use self::set::{BitStore, SetOpHandler, SetRegistry, execute};
 use crate::catalog::{OutfitId, SystemId};
 use crate::pilot::Gender;
 
