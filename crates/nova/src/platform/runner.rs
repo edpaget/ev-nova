@@ -9,8 +9,9 @@
 //!
 //! With the `dev-tools` feature and [`Runner::with_dev_tools`], it also
 //! drives the developer tools: while their overlay shows, each redraw runs
-//! the egui panel first and submits the frame with the panel painted over
-//! it, and the raw window events the app says the overlay wants go to egui.
+//! the egui panel first, over the pilot flying (`App::pilot_desk_frame`),
+//! and submits the frame with the panel painted over it, and the raw
+//! window events the app says the overlay wants go to egui.
 
 use std::io::Write;
 #[cfg(feature = "dev-tools")]
@@ -22,6 +23,8 @@ use std::time::Instant;
 use nova_data::GameData;
 #[cfg(feature = "dev-tools")]
 use nova_render::wgpu::WithOverlay;
+#[cfg(feature = "dev-tools")]
+use nova_view::devtools::DevOverlay;
 
 use nova_audio::{Audio, AudioCore};
 use nova_render::wgpu::{InitError, SurfaceGpu};
@@ -209,14 +212,17 @@ impl<S: ImageSource> ApplicationHandler for Runner<S> {
             other => translate(other, &running.window),
         };
         // A redraw while the developer overlay shows first runs the egui
-        // panel, then submits through a GPU that paints it over the frame.
+        // panel over the pilot flying, catching the game up after an edit,
+        // then submits through a GPU that paints it over the frame.
         let handled = event.map(|event| {
             #[cfg(feature = "dev-tools")]
-            if let (WindowEvent::Redraw { .. }, Some(dev_tools), Some(overlay)) =
-                (event, &mut running.dev_tools, running.app.dev_overlay())
-                && overlay.visible()
+            if let (WindowEvent::Redraw { .. }, Some(dev_tools)) = (event, &mut running.dev_tools)
+                && running.app.dev_overlay().is_some_and(DevOverlay::visible)
             {
-                dev_tools.run_frame(&running.window.0, overlay);
+                let window = &running.window.0;
+                running
+                    .app
+                    .pilot_desk_frame(|overlay, desk| dev_tools.run_frame(window, overlay, desk));
                 let mut gpu = WithOverlay {
                     gpu: &mut running.gpu,
                     painter: dev_tools.layer_mut(),

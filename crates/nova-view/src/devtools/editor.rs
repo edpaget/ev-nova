@@ -17,6 +17,12 @@ use super::search::fold;
 /// What the panel shows when no pilot is flying.
 pub const NO_PILOT: &str = "No pilot flying";
 
+/// How the panel names control bit `bit`, e.g. "Bit 42".
+#[must_use]
+pub fn bit_label(bit: Bit) -> String {
+    format!("Bit {}", bit.get())
+}
+
 /// One of the editor's drafts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Draft {
@@ -341,7 +347,7 @@ impl PilotEditor {
     /// whether the pilot changed.
     pub fn toggle_bit(&mut self, desk: &mut dyn PilotDesk, bit: Bit) -> bool {
         let on = !self.is_set(bit);
-        let done = format!("Bit {} {}", bit.get(), if on { "set" } else { "cleared" });
+        let done = format!("{} {}", bit_label(bit), if on { "set" } else { "cleared" });
         self.send(desk, PilotEdit::Bit(bit, on), done)
     }
 }
@@ -749,6 +755,12 @@ mod tests {
         let mut editor = PilotEditor::new();
         typed(&mut editor, Draft::BitQuery, "42");
         assert_eq!(editor.bit_lookup(), Ok((bit(42), false)), "no pilot");
+    }
+
+    #[test]
+    fn a_bit_is_labelled_by_its_number() {
+        assert_eq!(bit_label(bit(0)), "Bit 0");
+        assert_eq!(bit_label(bit(9999)), "Bit 9999");
     }
 
     #[test]

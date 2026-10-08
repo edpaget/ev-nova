@@ -6,15 +6,17 @@
 //! wires egui to the window and the GPU:
 //!
 //! - [`textures`]: the preview frame as an egui texture.
-//! - [`panel`]: the [`DevPanel`] window, the frame-time readout and the
-//!   resource browser.
+//! - [`panel`]: the [`DevPanel`] windows: the frame-time readout and the
+//!   resource browser, and the pilot editor.
 //! - [`layer`]: the [`EguiLayer`], which paints egui's output over each
 //!   frame with egui-wgpu.
 //! - [`DevTools`]: the window glue, egui-winit's input state between the
 //!   window and the panel.
 //!
 //! The runner shows the overlay only while it is visible: on each redraw
-//! it runs [`DevTools::run_frame`] first, then hands the app the window's
+//! it runs [`DevTools::run_frame`] first, through `App::pilot_desk_frame`,
+//! which hands it the pilot flying to edit and catches the game up after
+//! an edit, then hands the app the window's
 //! GPU wrapped in `WithOverlay` with the layer as its painter. It forwards a
 //! raw window event to [`DevTools::on_window_event`] only when
 //! `App::overlay_wants` it.
@@ -28,7 +30,7 @@ use std::rc::Rc;
 use egui::ViewportId;
 use nova_data::GameData;
 use nova_render::wgpu::MAX_TEXTURE_SIDE;
-use nova_view::devtools::DevOverlay;
+use nova_view::devtools::{DevOverlay, PilotDesk};
 use winit::event::WindowEvent as WinitEvent;
 use winit::window::Window;
 
@@ -70,11 +72,18 @@ impl DevTools {
         let _ = self.state.on_window_event(window, event);
     }
 
-    /// Runs one egui frame of the panel, showing `overlay`'s frame times,
-    /// and prepares the layer to paint it over the next frame.
-    pub fn run_frame(&mut self, window: &Window, overlay: &DevOverlay) {
+    /// Runs one egui frame of the panel, showing `overlay`'s frame times
+    /// and editing the pilot flying through `desk`, if any, and prepares
+    /// the layer to paint it over the next frame. Returns whether the pilot
+    /// changed.
+    pub fn run_frame(
+        &mut self,
+        window: &Window,
+        overlay: &DevOverlay,
+        desk: Option<&mut dyn PilotDesk>,
+    ) -> bool {
         let input = self.state.take_egui_input(window);
-        let output = self.panel.run(input, overlay);
+        let (output, edited) = self.panel.run(input, overlay, desk);
         self.state
             .handle_platform_output(window, output.platform_output);
         self.layer.prepare(
@@ -83,6 +92,7 @@ impl DevTools {
             output.textures_delta,
             output.pixels_per_point,
         );
+        edited
     }
 
     /// The layer, to paint over the next frame.

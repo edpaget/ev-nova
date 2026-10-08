@@ -43,7 +43,7 @@ pub use catalog::{
     Origin, RecordView, ResType, ResourceCatalog, ResourceDetail, ResourceSummary, SourceInfo,
     type_code,
 };
-pub use editor::{Draft, NO_PILOT, PilotEditor};
+pub use editor::{Draft, NO_PILOT, PilotEditor, bit_label};
 pub use frame_time::{FRAME_WINDOW, FrameTimes};
 pub use overlay::{DevOverlay, Routing, TOGGLE_KEY};
 pub use pilot::{EditRefusal, PilotDesk, PilotEdit, PilotSheet, Place};

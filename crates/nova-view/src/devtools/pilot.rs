@@ -57,6 +57,22 @@ pub struct Place<Id> {
     pub name: String,
 }
 
+impl Place<SystemId> {
+    /// How a list shows it: its name, then its ID, e.g. "Sol (130)".
+    #[must_use]
+    pub fn label(&self) -> String {
+        format!("{} ({})", self.name, self.id.0)
+    }
+}
+
+impl Place<StellarId> {
+    /// How a list shows it: its name, then its ID, e.g. "Earth (128)".
+    #[must_use]
+    pub fn label(&self) -> String {
+        format!("{} ({})", self.name, self.id.0)
+    }
+}
+
 /// One change to the pilot flying.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PilotEdit {
@@ -139,6 +155,20 @@ mod tests {
             EditRefusal::NotLandable.to_string(),
             "that stellar cannot be landed on"
         );
+    }
+
+    #[test]
+    fn a_place_is_labelled_by_name_and_id() {
+        let system = Place {
+            id: SystemId(130),
+            name: "Sol".to_owned(),
+        };
+        assert_eq!(system.label(), "Sol (130)");
+        let stellar = Place {
+            id: StellarId(128),
+            name: "Earth".to_owned(),
+        };
+        assert_eq!(stellar.label(), "Earth (128)");
     }
 
     #[test]
