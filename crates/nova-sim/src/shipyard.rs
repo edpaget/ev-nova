@@ -363,6 +363,24 @@ fn merged(a: &BTreeMap<OutfitId, u16>, b: &BTreeMap<OutfitId, u16>) -> BTreeMap<
     both
 }
 
+/// Keeps as much of `pilot`'s cargo as `capacity` tons hold, goods in
+/// [`Good`] order until the hold is full, and gives the rest, left
+/// behind, each good with its tons (see the module docs).
+pub(crate) fn keep_cargo(pilot: &mut Pilot, capacity: u32) -> BTreeMap<Good, u32> {
+    let mut room = capacity;
+    let mut left_behind = BTreeMap::new();
+    for (good, tons) in &mut pilot.cargo {
+        let kept = (*tons).min(room);
+        room -= kept;
+        if kept < *tons {
+            left_behind.insert(*good, *tons - kept);
+        }
+        *tons = kept;
+    }
+    pilot.cargo.retain(|_, tons| *tons > 0);
+    left_behind
+}
+
 /// Buys `new` for `pilot`, at `quote`, from a ship of `old_mass`, as the
 /// module says, and gives what it did.
 pub(crate) fn purchase(
@@ -405,17 +423,7 @@ pub(crate) fn purchase(
         .saturating_add(quote.trade_in)
         .saturating_add(refund);
     let stats = ShipStats::new(new.fields, &outfit_mods(&pilot.outfits, records));
-    let mut room = stats.capacity;
-    let mut left_behind = BTreeMap::new();
-    for (good, tons) in &mut pilot.cargo {
-        let kept = (*tons).min(room);
-        room -= kept;
-        if kept < *tons {
-            left_behind.insert(*good, *tons - kept);
-        }
-        *tons = kept;
-    }
-    pilot.cargo.retain(|_, tons| *tons > 0);
+    let left_behind = keep_cargo(pilot, stats.capacity);
     pilot.reserves = stats.full();
     ShipPurchase {
         price: quote.price,
