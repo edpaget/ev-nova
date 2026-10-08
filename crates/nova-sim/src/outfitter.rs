@@ -872,7 +872,8 @@ fn raise_multiplier(
 /// `value` held in the engine's 16 bits, at the least or most they hold
 /// rather than wrapped past it.
 fn saturate_i16(value: i64) -> i16 {
-    i16::try_from(value).unwrap_or(if value < 0 { i16::MIN } else { i16::MAX })
+    let held = value.clamp(i64::from(i16::MIN), i64::from(i16::MAX));
+    i16::try_from(held).unwrap_or_default()
 }
 
 /// How many of the outfits `owned` are flagged `flag`.
