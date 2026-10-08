@@ -290,7 +290,7 @@ pub use person::{
 };
 pub use pilot::{Escort, Gender, Pilot};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
-pub use reserves::{Gauge, Reserves};
+pub use reserves::{Gauge, Reserve, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};

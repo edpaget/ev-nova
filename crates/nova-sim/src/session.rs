@@ -248,6 +248,7 @@
 //! [`Session::take_diagnostics`].
 
 mod control;
+mod edit;
 mod escorts;
 mod fighters;
 mod hail;
