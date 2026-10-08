@@ -2700,7 +2700,13 @@ fn boarding_dr_ralph_grants_his_map_half_the_time() {
         } else {
             &[(100, 50)]
         };
-        rule.grant(&grant, &stock, i64::from(free), &mut ByBound(draws))
+        rule.grant(
+            &grant,
+            &stock,
+            i64::from(free),
+            RuleSource::Engine,
+            &mut ByBound(draws),
+        )
     };
     assert_eq!(
         granted(49),

@@ -86,8 +86,11 @@
 //! (the Bible) or opens the dialog anyway (the engine), and
 //! [`RuleKey::CrewlessCapture`], whether a player of no crew has no odds
 //! (the Bible) or odds held at 1 or more (the engine); and for a grant,
-//! [`RuleKey::GrantCount`] and [`RuleKey::GrantMax`] (see
-//! [`grant`](crate::grant)).
+//! [`RuleKey::GrantCount`] (see [`grant`](crate::grant)). Whether a grant
+//! is held to the outfit's `Max`, [`RuleKey::GrantMax`], is the
+//! session's [`OutfitRules::grant_max`](crate::OutfitRules::grant_max),
+//! which holds `G` too: the session passes it to
+//! [`BoardingRule::grant`].
 
 use std::fmt::Debug;
 
@@ -551,13 +554,17 @@ pub trait BoardingRule: Debug {
     /// `chance`.
     fn person_credits(&self, credits: i32, chance: &mut dyn Chance) -> i64;
     /// What boarding a person of `grant` gives the player from `stock`,
-    /// every outfit as the grant sees it, with `free_mass` free, drawn on
-    /// `chance`; none when nothing is granted (see [`grant`](crate::grant)).
+    /// every outfit as the grant sees it, with `free_mass` free and held
+    /// to the outfit's `Max` as `grant_max` (the session's
+    /// [`OutfitRules::grant_max`](crate::OutfitRules::grant_max)) says,
+    /// drawn on `chance`; none when nothing is granted (see
+    /// [`grant`](crate::grant)).
     fn grant(
         &self,
         grant: &PersonGrant,
         stock: &[GrantStock],
         free_mass: i64,
+        grant_max: RuleSource,
         chance: &mut dyn Chance,
     ) -> Option<Granted>;
 }
@@ -580,17 +587,12 @@ pub struct NovaBoarding {
     /// `GrantCount` to all of it; otherwise 1 to all of it evenly
     /// ([`RuleKey::GrantCount`]).
     pub grant_count: RuleSource,
-    /// Whether a grant may pass the outfit's `Max`: by the engine, it
-    /// may; otherwise it is held to it, and to the free mass as the
-    /// outfitter weighs it ([`RuleKey::GrantMax`],
-    /// [`held_to_max`](crate::grant::held_to_max)).
-    pub grant_max: RuleSource,
 }
 
 impl NovaBoarding {
     /// The rules `rulebook` chooses: its [`RuleKey::EmptyBooty`],
-    /// [`RuleKey::CrewlessCapture`], [`RuleKey::PersonCredits`],
-    /// [`RuleKey::GrantCount`] and [`RuleKey::GrantMax`] entries.
+    /// [`RuleKey::CrewlessCapture`], [`RuleKey::PersonCredits`] and
+    /// [`RuleKey::GrantCount`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
@@ -598,7 +600,6 @@ impl NovaBoarding {
             crewless_capture: rulebook.source_for(RuleKey::CrewlessCapture),
             person_credits: rulebook.source_for(RuleKey::PersonCredits),
             grant_count: rulebook.source_for(RuleKey::GrantCount),
-            grant_max: rulebook.source_for(RuleKey::GrantMax),
         }
     }
 }
@@ -676,13 +677,14 @@ impl BoardingRule for NovaBoarding {
         grant: &PersonGrant,
         stock: &[GrantStock],
         free_mass: i64,
+        grant_max: RuleSource,
         chance: &mut dyn Chance,
     ) -> Option<Granted> {
         crate::grant::roll(
             grant,
             stock,
             free_mass,
-            (self.grant_count, self.grant_max),
+            (self.grant_count, grant_max),
             chance,
         )
     }
@@ -1404,29 +1406,19 @@ mod tests {
             (rule.empty_booty, rule.crewless_capture),
             (RuleSource::Engine, RuleSource::Bible)
         );
+        assert_eq!(bible.grant_count, RuleSource::Bible);
+        let one = Rulebook::default().with_override(RuleKey::GrantCount, RuleSource::Bible);
         assert_eq!(
-            (bible.grant_count, bible.grant_max),
-            (RuleSource::Bible, RuleSource::Bible)
+            NovaBoarding::from_rulebook(&one),
+            NovaBoarding {
+                grant_count: RuleSource::Bible,
+                ..NovaBoarding::default()
+            }
         );
-        for (key, expected) in [
-            (
-                RuleKey::GrantCount,
-                NovaBoarding {
-                    grant_count: RuleSource::Bible,
-                    ..NovaBoarding::default()
-                },
-            ),
-            (
-                RuleKey::GrantMax,
-                NovaBoarding {
-                    grant_max: RuleSource::Bible,
-                    ..NovaBoarding::default()
-                },
-            ),
-        ] {
-            let one = Rulebook::default().with_override(key, RuleSource::Bible);
-            assert_eq!(NovaBoarding::from_rulebook(&one), expected, "{key:?}");
-        }
+        // `GrantMax` is the session's outfit rules', not the boarding
+        // rule's: it leaves the boarding rule as it was.
+        let max = Rulebook::default().with_override(RuleKey::GrantMax, RuleSource::Bible);
+        assert_eq!(NovaBoarding::from_rulebook(&max), NovaBoarding::default());
     }
 
     /// A grant of `count` outfits of class 7 at odds `prob`.
@@ -1460,8 +1452,20 @@ mod tests {
         free: i64,
         draws: &[u32],
     ) -> (Option<u16>, Vec<u32>) {
+        granted_held(rule, RuleSource::Engine, grant, stock, free, draws)
+    }
+
+    /// [`granted`], held to the `Max` as `grant_max` says.
+    fn granted_held(
+        rule: NovaBoarding,
+        grant_max: RuleSource,
+        grant: PersonGrant,
+        stock: GrantStock,
+        free: i64,
+        draws: &[u32],
+    ) -> (Option<u16>, Vec<u32>) {
         let mut chance = Draws::of(draws);
-        let granted = rule.grant(&grant, &[stock], free, &mut chance);
+        let granted = rule.grant(&grant, &[stock], free, grant_max, &mut chance);
         assert!(granted.is_none_or(|granted| granted.outfit == OutfitId(200)));
         (granted.map(|granted| granted.count), chance.asked)
     }
@@ -1539,19 +1543,19 @@ mod tests {
             .0,
             Some(3)
         );
-        let held = NovaBoarding {
-            grant_max: RuleSource::Bible,
-            ..NovaBoarding::default()
+        let held = |stock| {
+            granted_held(
+                NovaBoarding::default(),
+                RuleSource::Bible,
+                grant_of(100, 3),
+                stock,
+                100,
+                &[0, 50],
+            )
+            .0
         };
-        assert_eq!(
-            granted(held, grant_of(100, 3), near, 100, &[0, 50]).0,
-            Some(1)
-        );
-        assert_eq!(
-            granted(held, grant_of(100, 3), spare(0, 7, 10), 100, &[0, 50]).0,
-            Some(3),
-            "room for all three"
-        );
+        assert_eq!(held(near), Some(1));
+        assert_eq!(held(spare(0, 7, 10)), Some(3), "room for all three");
     }
 
     #[test]

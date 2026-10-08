@@ -4851,6 +4851,7 @@ pub(super) mod tests {
             _grant: &nova_sim::grant::PersonGrant,
             _stock: &[nova_sim::grant::GrantStock],
             _free_mass: i64,
+            _grant_max: nova_sim::RuleSource,
             _chance: &mut dyn Chance,
         ) -> Option<nova_sim::grant::Granted> {
             None
@@ -5757,30 +5758,32 @@ pub(super) mod tests {
         ]
     }
 
-    /// The settings each rule's key reaches.
-    fn settings_of(key: RuleKey) -> &'static [&'static str] {
+    /// The one setting each rule's key reaches.
+    fn setting_of(key: RuleKey) -> &'static str {
         match key {
-            RuleKey::CrimeGains => &["law"],
+            RuleKey::CrimeGains => "law",
             RuleKey::EmptyBooty
             | RuleKey::CrewlessCapture
             | RuleKey::PersonCredits
-            | RuleKey::GrantCount => &["boarding_rule"],
-            RuleKey::GrantMax => &["boarding_rule", "outfit_rules"],
-            RuleKey::PiracyPolice | RuleKey::EscortAi | RuleKey::PersonCoward => &["behaviour"],
-            RuleKey::QuietHails | RuleKey::LongAdvice | RuleKey::PersonJoin => &["hail_options"],
-            RuleKey::EscortOrders => &["escort_orders"],
-            RuleKey::FighterLaunch => &["fighter_launch"],
-            RuleKey::FighterRecall => &["fighter_recall"],
-            RuleKey::HireRequire => &["hire_require"],
-            RuleKey::TakeOffPay => &["take_off_pay"],
-            RuleKey::HireFee => &["hire_terms"],
-            RuleKey::EscortWage => &["escort_wage"],
+            | RuleKey::GrantCount => "boarding_rule",
+            RuleKey::PiracyPolice | RuleKey::EscortAi | RuleKey::PersonCoward => "behaviour",
+            RuleKey::QuietHails | RuleKey::LongAdvice | RuleKey::PersonJoin => "hail_options",
+            RuleKey::EscortOrders => "escort_orders",
+            RuleKey::FighterLaunch => "fighter_launch",
+            RuleKey::FighterRecall => "fighter_recall",
+            RuleKey::HireRequire => "hire_require",
+            RuleKey::TakeOffPay => "take_off_pay",
+            RuleKey::HireFee => "hire_terms",
+            RuleKey::EscortWage => "escort_wage",
             RuleKey::PersonOdds
             | RuleKey::SystemPersons
             | RuleKey::LinkSystSlip
-            | RuleKey::ShieldMod => &["person_rules"],
-            RuleKey::CommQuote => &["comm_quote"],
-            RuleKey::MapExplore | RuleKey::InvalidMap | RuleKey::RemoveRefund => &["outfit_rules"],
+            | RuleKey::ShieldMod => "person_rules",
+            RuleKey::CommQuote => "comm_quote",
+            RuleKey::MapExplore
+            | RuleKey::InvalidMap
+            | RuleKey::GrantMax
+            | RuleKey::RemoveRefund => "outfit_rules",
         }
     }
 
@@ -5805,13 +5808,13 @@ pub(super) mod tests {
                 .filter(|(was, now)| was.1 != now.1)
                 .map(|(was, _)| was.0)
                 .collect();
-            assert_eq!(changed, settings_of(key), "{key:?}");
+            assert_eq!(changed, [setting_of(key)], "{key:?}");
         }
         let all =
             rules_of(&AppScreen::new(data()).with_rulebook(&Rulebook::new(RuleSource::Bible)));
         assert!(all.contains(&("comm_quote", "Bible".to_owned())), "{all:?}");
         // The joining and grant rules reach the hail options' Use As
-        // Escort and the boarding rule's two fields.
+        // Escort, the boarding rule's count and the outfit rules' `Max`.
         let joined = Rulebook::default()
             .with_override(RuleKey::PersonJoin, RuleSource::Bible)
             .with_override(RuleKey::GrantCount, RuleSource::Bible)
@@ -5830,7 +5833,9 @@ pub(super) mod tests {
         );
         let boarding = setting("boarding_rule");
         assert!(boarding.contains("grant_count: Bible"), "{boarding}");
-        assert!(boarding.contains("grant_max: Bible"), "{boarding}");
+        assert!(!boarding.contains("grant_max"), "{boarding}");
+        let outfits = setting("outfit_rules");
+        assert!(outfits.contains("grant_max: Bible"), "{outfits}");
     }
 
     #[test]

@@ -7732,6 +7732,7 @@ mod tests {
             _grant: &nova_sim::grant::PersonGrant,
             _stock: &[nova_sim::grant::GrantStock],
             _free_mass: i64,
+            _grant_max: nova_sim::RuleSource,
             _chance: &mut dyn Chance,
         ) -> Option<nova_sim::grant::Granted> {
             None
@@ -9012,6 +9013,7 @@ mod tests {
             grant: &nova_sim::grant::PersonGrant,
             stock: &[nova_sim::grant::GrantStock],
             _free_mass: i64,
+            _grant_max: nova_sim::RuleSource,
             _chance: &mut dyn Chance,
         ) -> Option<nova_sim::grant::Granted> {
             let first = nova_sim::grant::candidates(grant.class, stock)

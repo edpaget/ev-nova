@@ -65,8 +65,11 @@ pub struct OutfitRules {
     /// Whether a map that explores nothing is used up
     /// ([`RuleKey::InvalidMap`]; see [`GrantEffect::of`]).
     pub invalid_map: RuleSource,
-    /// Whether `G` may pass the outfit's `Max` and the free mass
-    /// ([`RuleKey::GrantMax`], which the boarding grant reads too).
+    /// Whether a grant, by boarding or by `G`, may pass the outfit's
+    /// `Max` and the free mass ([`RuleKey::GrantMax`]): its one owner,
+    /// which the session passes to
+    /// [`BoardingRule::grant`](crate::BoardingRule::grant) and holds `G`
+    /// to ([`held_to_max`](crate::grant::held_to_max)).
     pub grant_max: RuleSource,
     /// Whether `D` pays for the outfit it removes
     /// ([`RuleKey::RemoveRefund`]).

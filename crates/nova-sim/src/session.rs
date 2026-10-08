@@ -2152,7 +2152,13 @@ impl Session {
             .iter()
             .map(|record| self.grant_stock(record))
             .collect();
-        let granted = rule.grant(&grant, &stock, self.free_mass(), chance)?;
+        let granted = rule.grant(
+            &grant,
+            &stock,
+            self.free_mass(),
+            self.outfit_rules.grant_max,
+            chance,
+        )?;
         for _ in 0..granted.count {
             self.grant_outfit(granted.outfit);
         }
@@ -9315,6 +9321,38 @@ mod tests {
     }
 
     #[test]
+    fn one_grant_max_holds_boarding_and_g_to_the_max_alike() {
+        // Ace grants two of an outfit of `Max` 1. `GrantMax`, set once on
+        // the session's outfit rules, holds the boarding grant (whatever
+        // the boarding rule) and `G` to it; by the engine neither is held.
+        let mut catalog = granting();
+        catalog.outfits[0].max = 1;
+        let g = |session: Session| {
+            let mut session = session.with_set_ops(std::rc::Rc::new(crate::nova_set_ops()));
+            let expr = crate::control::SetExpr::parse("G200 G200").expect("parses");
+            session.run_set(&expr, &mut Draws::of(&[]));
+            session.pilot().owned(OutfitId(200))
+        };
+        for (rules, owned) in [
+            (OutfitRules::default(), 2),
+            (
+                OutfitRules {
+                    grant_max: RuleSource::Bible,
+                    ..OutfitRules::default()
+                },
+                1,
+            ),
+        ] {
+            let mut boarded = alongside_ace(&catalog).with_outfit_rules(rules);
+            board_drawing(&mut boarded, NovaBoarding::default(), &ACE_DRAWS)
+                .0
+                .expect("boards");
+            assert_eq!(boarded.pilot().owned(OutfitId(200)), owned, "boarded");
+            assert_eq!(g(alongside(&catalog).with_outfit_rules(rules)), owned, "G");
+        }
+    }
+
+    #[test]
     fn held_to_the_max_boarding_and_g_weigh_an_outfit_as_the_outfitter_does() {
         // Of a `Mass` scaled by Flags 0x0400 on the ship's 40 tons, with
         // 30 tons free: 20 raw is 8, 75 is 30 and 80 is 32. Held to the
@@ -9323,18 +9361,14 @@ mod tests {
             grant_max: RuleSource::Bible,
             ..OutfitRules::default()
         };
-        let held = NovaBoarding {
-            grant_max: RuleSource::Bible,
-            ..NovaBoarding::default()
-        };
         for (mass, fits) in [(20, true), (75, true), (80, false)] {
             let mut catalog = granting();
             catalog.persons[0].grant_count = 1;
             catalog.outfits[0].mass = mass;
             catalog.outfits[0].flags = OutfitFlags::MASS_BY_MASS;
-            let mut boarded = alongside_ace(&catalog);
+            let mut boarded = alongside_ace(&catalog).with_outfit_rules(rules);
             assert_eq!(boarded.free_mass(), 30);
-            board_drawing(&mut boarded, held, &ACE_DRAWS)
+            board_drawing(&mut boarded, NovaBoarding::default(), &ACE_DRAWS)
                 .0
                 .expect("boards");
             let mut scripted = alongside(&catalog)
