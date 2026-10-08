@@ -131,6 +131,41 @@ impl<C: Context, R> Check<C, R> {
 
 /// An ordered list of checks over a context `C`, refusing with reasons
 /// `R`.
+///
+/// It holds checks only: "can I?" is a checks list, and "what does it
+/// show?" is a [`Value`], which no list takes. A list builds from checks:
+///
+/// ```
+/// use nova_sim::rulebook::Rulebook;
+/// use nova_sim::rules::{Check, Checks, Context};
+///
+/// struct Facts(Rulebook);
+/// impl Context for Facts {
+///     fn rulebook(&self) -> &Rulebook {
+///         &self.0
+///     }
+/// }
+///
+/// let can: Check<Facts, ()> = Check::plain("can", "toy", |_| Ok(()));
+/// let _: Checks<Facts, ()> = [can].into();
+/// ```
+///
+/// and not from a value:
+///
+/// ```compile_fail
+/// use nova_sim::rulebook::Rulebook;
+/// use nova_sim::rules::{Checks, Context, Value};
+///
+/// struct Facts(Rulebook);
+/// impl Context for Facts {
+///     fn rulebook(&self) -> &Rulebook {
+///         &self.0
+///     }
+/// }
+///
+/// let words: Value<Facts, String> = Value::plain("words", "toy", |_| String::new());
+/// let _: Checks<Facts, ()> = [words].into();
+/// ```
 pub struct Checks<C, R>(Vec<Check<C, R>>);
 
 impl<C, R, const N: usize> From<[Check<C, R>; N]> for Checks<C, R> {
@@ -176,6 +211,80 @@ impl<C: Context, R> Checks<C, R> {
                 Err(reason) => Some((check.about(), Verdict::Refuses(reason))),
             })
             .collect()
+    }
+}
+
+/// One "what does it show?" rule over a context `C`: it gives data `T`,
+/// such as a price, a count, a maximum or a pay. It is no check, and no
+/// [`Checks`] list takes it.
+pub struct Value<C, T> {
+    about: Descriptor,
+    how: ValueHow<C, T>,
+}
+
+/// How a value is worked out.
+enum ValueHow<C, T> {
+    /// One reading, whatever the rule set.
+    Plain(fn(&C) -> T),
+    /// The engine's reading and the other, chosen by the rule set's
+    /// source for `key`.
+    Disputed {
+        key: RuleKey,
+        engine: fn(&C) -> T,
+        other: fn(&C) -> T,
+    },
+}
+
+impl<C, T> Value<C, T> {
+    /// A value with one reading, `f`.
+    #[must_use]
+    pub const fn plain(name: &'static str, reproduces: &'static str, f: fn(&C) -> T) -> Self {
+        Self {
+            about: Descriptor {
+                name,
+                reproduces,
+                reads: None,
+            },
+            how: ValueHow::Plain(f),
+        }
+    }
+
+    /// A value with the engine's reading, `engine`, and the other,
+    /// `other`, following the rule set's source for `key`.
+    #[must_use]
+    pub const fn disputed(
+        name: &'static str,
+        reproduces: &'static str,
+        key: RuleKey,
+        engine: fn(&C) -> T,
+        other: fn(&C) -> T,
+    ) -> Self {
+        Self {
+            about: Descriptor {
+                name,
+                reproduces,
+                reads: Some(key),
+            },
+            how: ValueHow::Disputed { key, engine, other },
+        }
+    }
+
+    /// What the value is.
+    #[must_use]
+    pub fn about(&self) -> &Descriptor {
+        &self.about
+    }
+}
+
+impl<C: Context, T> Value<C, T> {
+    /// The value for `facts`, in the reading the rule set chooses.
+    pub fn of(&self, facts: &C) -> T {
+        match self.how {
+            ValueHow::Plain(f) => f(facts),
+            ValueHow::Disputed { key, engine, other } => {
+                reading(facts.rulebook(), key, engine, other)(facts)
+            }
+        }
     }
 }
 
@@ -343,6 +452,7 @@ mod tests {
     /// What the toy offer reads about the pilot.
     struct PilotRecord {
         combat: u16,
+        cash: i64,
     }
 
     /// The stellar the toy offer would be made at.
@@ -370,7 +480,10 @@ mod tests {
     fn offer() -> Offer {
         Offer {
             mission: MissionOffer { min_combat: 10 },
-            pilot: PilotRecord { combat: 10 },
+            pilot: PilotRecord {
+                combat: 10,
+                cash: 1000,
+            },
             stellar: Stellar { has_bar: true },
             rules: Rulebook::default(),
         }
@@ -415,7 +528,7 @@ mod tests {
     fn a_mission_offer_refuses_without_a_bar() {
         let facts = Offer {
             stellar: Stellar { has_bar: false },
-            pilot: PilotRecord { combat: 0 },
+            pilot: PilotRecord { combat: 0, cash: 0 },
             ..offer()
         };
         assert_eq!(
@@ -485,6 +598,60 @@ mod tests {
             reads,
             [("bar", None), ("rating", Some(RuleKey::CrimeGains))]
         );
+    }
+
+    /// The toy offer's pay: a tenth of the pilot's cash by the engine, a
+    /// twentieth by the other reading.
+    fn pay() -> Value<Offer, i64> {
+        Value::disputed(
+            "pay",
+            "toy: the offer's pay",
+            RuleKey::CrimeGains,
+            |facts: &Offer| facts.pilot.cash / 10,
+            |facts: &Offer| facts.pilot.cash / 20,
+        )
+    }
+
+    /// What the toy offer says it pays.
+    fn reward_words() -> Value<Offer, String> {
+        Value::plain("reward words", "toy: the offer's text", |facts: &Offer| {
+            format!("Pays {} credits", pay().of(facts))
+        })
+    }
+
+    #[test]
+    fn a_value_gives_data() {
+        let facts = offer();
+        assert_eq!(reward_words().of(&facts), "Pays 100 credits");
+        assert_eq!(pay().of(&facts), 100);
+        assert_eq!(reward_words().about().name(), "reward words");
+        assert_eq!(reward_words().about().reproduces(), "toy: the offer's text");
+        assert_eq!(reward_words().about().reads(), None);
+    }
+
+    #[test]
+    fn a_disputed_value_follows_the_rule_set() {
+        for (source, expected) in [(RuleSource::Engine, 100), (RuleSource::Bible, 50)] {
+            let facts = Offer {
+                rules: Rulebook::default().with_override(RuleKey::CrimeGains, source),
+                ..offer()
+            };
+            assert_eq!(pay().of(&facts), expected, "{source:?}");
+        }
+        let other_key = Offer {
+            rules: Rulebook::new(RuleSource::Bible)
+                .with_override(RuleKey::CrimeGains, RuleSource::Engine),
+            ..offer()
+        };
+        assert_eq!(pay().of(&other_key), 100);
+    }
+
+    #[test]
+    fn a_disputed_values_descriptor_names_its_key() {
+        let pay = pay();
+        assert_eq!(pay.about().name(), "pay");
+        assert_eq!(pay.about().reproduces(), "toy: the offer's pay");
+        assert_eq!(pay.about().reads(), Some(RuleKey::CrimeGains));
     }
 
     /// A context no facts can be built for, whose every rule panics if
