@@ -717,6 +717,44 @@ mod tests {
         );
     }
 
+    /// `pilot` saved and loaded, then flown.
+    fn reloaded(catalog: &FakePilotCatalog, pilot: &Pilot) -> Session {
+        let saved = save::decode(&save::encode(pilot)).expect("loads");
+        Session::fly(catalog, saved).expect("flies")
+    }
+
+    #[test]
+    fn a_move_in_flight_to_another_system_forgets_the_stellar_last_landed_on() {
+        let catalog = moving();
+        let mut session = landed(&catalog);
+        assert_eq!(session.take_off(), Some(StellarId(128)));
+        assert_eq!(session.pilot().stellar(), Some(StellarId(128)), "kept");
+        moved(&mut session, &catalog, "M131");
+        assert_eq!(session.pilot().stellar(), None);
+        let flown = reloaded(&catalog, session.pilot());
+        assert_eq!(flown.system(), SystemId(131));
+        assert_eq!(flown.landed(), None, "in flight");
+        assert_eq!(flown.player().position, Vec2::ZERO, "at the centre");
+        moved(&mut session, &catalog, "N130");
+        assert_eq!(session.pilot().stellar(), None, "not 128 again");
+        let flown = reloaded(&catalog, session.pilot());
+        assert_eq!(flown.system(), SystemId(130));
+        assert_eq!(flown.landed(), None, "not docked at 128");
+        assert_eq!(flown.player().position, Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_move_in_flight_within_the_system_keeps_the_stellar_last_landed_on() {
+        let catalog = moving();
+        let mut session = landed(&catalog);
+        session.take_off();
+        moved(&mut session, &catalog, "N130");
+        assert_eq!(session.system(), SystemId(130));
+        assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
+        let flown = reloaded(&catalog, session.pilot());
+        assert_eq!(flown.landed(), Some(StellarId(128)), "docked again");
+    }
+
     #[test]
     fn n_in_flight_keeps_the_position_and_velocity() {
         let catalog = moving();
