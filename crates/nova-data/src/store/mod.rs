@@ -141,6 +141,7 @@
 //! time its text is asked for and keeps the tree (or the error), so each
 //! distinct text is parsed once for the store's life however often its
 //! records are read, and records sharing a text share one tree.
+//! [`GameData::set_expr`] does the same for a set expression.
 //!
 //! # Ship sprites
 //!
@@ -184,7 +185,7 @@ use nova_rsrc::{ForkReader, LoadError, ResType, Resource, ResourceFile, StdForkR
 use self::fs::{DirLister, StdDirLister};
 use self::order::IgnoreReason;
 use crate::error::{DecodeError, DecodeWarning};
-use crate::expr::{ParseError, TestExpr};
+use crate::expr::{ParseError, SetExpr, TestExpr};
 use crate::registry::{AnyDecoded, AnyRecord, Registered, decode_any};
 
 #[cfg(test)]
@@ -339,11 +340,17 @@ pub struct GameData {
     index: BTreeMap<ResType, TypeIndex>,
     /// Each test expression parsed so far, by its text.
     tests: Mutex<HashMap<Box<str>, ParsedTest>>,
+    /// Each set expression parsed so far, by its text.
+    sets: Mutex<HashMap<Box<str>, ParsedSet>>,
 }
 
 /// A test expression parsed once and shared: its tree, or why it did not
 /// parse.
 pub type ParsedTest = Arc<Result<TestExpr, ParseError>>;
+
+/// A set expression parsed once and shared: its operators, or why it did
+/// not parse.
+pub type ParsedSet = Arc<Result<SetExpr, ParseError>>;
 
 impl GameData {
     /// Opens `data_dir` (`Nova Files`) and, if given, the `plugins` tree
@@ -384,6 +391,7 @@ impl GameData {
             ignored: walk.ignored,
             index,
             tests: Mutex::default(),
+            sets: Mutex::default(),
         })
     }
 
@@ -399,6 +407,20 @@ impl GameData {
         }
         let parsed = Arc::new(TestExpr::parse(text));
         tests.insert(text.into(), Arc::clone(&parsed));
+        parsed
+    }
+
+    /// The set expression `text` parsed, or why it did not parse: parsed
+    /// the first time `text` is asked for and shared after.
+    #[must_use]
+    pub fn set_expr(&self, text: &str) -> ParsedSet {
+        // A poisoned lock still holds only whole entries, as in `test_expr`.
+        let mut sets = self.sets.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(parsed) = sets.get(text) {
+            return Arc::clone(parsed);
+        }
+        let parsed = Arc::new(SetExpr::parse(text));
+        sets.insert(text.into(), Arc::clone(&parsed));
         parsed
     }
 
