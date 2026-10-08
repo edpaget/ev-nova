@@ -20,7 +20,7 @@
 //!    Any map slot, whatever its `ModVal`, keeps the outfit from being
 //!    added, so by the engine a map that explores nothing is used up all
 //!    the same. Whether such a map is instead left to be added as a plain
-//!    item is the [`RuleKey::InvalidMap`](crate::RuleKey::InvalidMap)
+//!    item is the [`RuleKey::InvalidMap`]
 //!    rule: the obvious fix, as the Bible says nothing of those values.
 //! 2. **Paint ([`PAINT`], 43)**, @0x44ec1 and @0x44f9a-0x44fd5. Only the
 //!    first slot is read: the ship is painted red (`ModVal` >> 10) & 31,

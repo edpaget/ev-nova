@@ -15,6 +15,9 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # Cleaning a legal record raises one below none to none: with `<=` a
+    # record of none is set to none too, which changes nothing.
+    "replace < with <= in clean_records",
     # The shipyard's trade-in leaves out outfits flagged persistent (0x0004)
     # or unsellable (0x0008): two distinct bits, so `|` and `^` combine them
     # the same.
