@@ -1480,8 +1480,9 @@ impl<
     /// Catches the screen up with an edit made through the pilot desk:
     /// when the session is in another system than the one laid out, it is
     /// laid out as an arrival is, with no message; otherwise the course
-    /// map shows the session's course again. Nothing is read when nothing
-    /// moved.
+    /// map shows the session's course again and the ship is drawn where
+    /// the session has it, as after a move to another stellar. Nothing is
+    /// read when nothing moved.
     pub fn resync(&mut self) {
         let Ok(session) = &self.session else {
             return;
@@ -1489,6 +1490,8 @@ impl<
         let system = session.system();
         if self.scene.as_ref().map(SystemScene::id) == Some(system) {
             self.map.show_course(system, session.course());
+            self.previous = *session.player();
+            self.alpha = 0.0;
         } else {
             self.lay_out(system);
         }
@@ -5582,6 +5585,22 @@ mod tests {
             [SystemId(131)],
             "nothing moved, nothing read"
         );
+    }
+
+    #[test]
+    fn after_a_move_within_the_system_resync_drops_the_course_and_reads_nothing() {
+        let mut view = landed_view();
+        plot(&mut view, 131);
+        assert_eq!(view.course_map().route(), [SystemId(131)]);
+        view.tick(TICK / 2);
+        assert!(view.alpha() > 0.0, "between steps");
+        move_to(&mut view, 130, 129);
+        view.resync();
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+        assert_eq!(view.course_map().route(), []);
+        assert_eq!(*view.catalog().systems_read.borrow(), []);
+        assert_eq!(view.alpha(), 0.0);
+        assert_eq!(view.shown_position(), Point::new(300.0, -200.0));
     }
 
     #[test]
