@@ -962,12 +962,27 @@ mod tests {
             };
             assert_eq!(pay().of(&facts), expected, "{source:?}");
         }
-        let other_key = Offer {
+        let override_beats_default = Offer {
             rules: Rulebook::new(RuleSource::Bible)
                 .with_override(RuleKey::CrimeGains, RuleSource::Engine),
             ..offer()
         };
-        assert_eq!(pay().of(&other_key), 100);
+        assert_eq!(pay().of(&override_beats_default), 100);
+    }
+
+    #[test]
+    fn a_disputed_value_ignores_other_keys_overrides() {
+        let engine = Offer {
+            rules: Rulebook::default().with_override(RuleKey::TradeDebt, RuleSource::Bible),
+            ..offer()
+        };
+        assert_eq!(pay().of(&engine), 100);
+        let bible = Offer {
+            rules: Rulebook::new(RuleSource::Bible)
+                .with_override(RuleKey::TradeDebt, RuleSource::Engine),
+            ..offer()
+        };
+        assert_eq!(pay().of(&bible), 50);
     }
 
     #[test]
