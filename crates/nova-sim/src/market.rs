@@ -724,23 +724,21 @@ pub struct Market {
     pub capacity: u32,
     /// The cargo space free, in tons.
     pub free: u32,
-    /// The rule set the exchange was built by, which its questions read.
+    /// The rule set the exchange was built by, which its questions read:
+    /// how many tons a [`Lot::Click`] moves
+    /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)), how the most a
+    /// buy moves divides the cash by the price
+    /// ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)),
+    /// whether that cash is signed
+    /// ([`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt)), and whether
+    /// Option asks for a count ([`Market::option_asks_count`]).
     pub rules: Rulebook,
-    /// How many tons a [`Lot::Click`] moves
-    /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)).
-    pub trade_lot: RuleSource,
-    /// How the most a buy moves divides the cash by the price
-    /// ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)).
-    pub trade_quotient: RuleSource,
-    /// Whether Option (Alt) on Buy or Sell asks for a count, by the
-    /// engine, or trades the most at once
-    /// ([`RuleKey::TradeCount`](crate::RuleKey::TradeCount)). The trade
-    /// itself is the same either way; whoever shows the exchange reads it.
-    pub trade_count: RuleSource,
-    /// Whether a buy divides cash below nothing by the price signed, by
-    /// the engine, or counts it as none
-    /// ([`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt)).
-    pub trade_debt: RuleSource,
+}
+
+impl Context for Market {
+    fn rulebook(&self) -> &Rulebook {
+        &self.rules
+    }
 }
 
 impl Market {
@@ -798,6 +796,15 @@ impl Market {
             .get(index)
             .filter(|row| row.trades(direction))
             .map(|row| most(direction).of(&RowTrade { market: self, row }))
+    }
+
+    /// Whether Option (Alt) on Buy or Sell asks for a count in the
+    /// quantity dialog, by the engine, or trades the most at once, as
+    /// [`RuleKey::TradeCount`](crate::RuleKey::TradeCount) says. The trade
+    /// itself is the same either way; whoever shows the exchange reads it.
+    #[must_use]
+    pub fn option_asks_count(&self) -> bool {
+        option_asks_count().of(self)
     }
 
     /// Whether the Buy or Sell button of row `index` is enabled now. A buy
@@ -1052,6 +1059,30 @@ fn most<'a>(direction: Direction) -> Value<RowTrade<'a>, i64> {
     }
 }
 
+/// Whether Option (Alt) on Buy or Sell asks for a count, as
+/// [`RuleKey::TradeCount`](crate::RuleKey::TradeCount) says: by the
+/// engine it opens the quantity dialog at the most the row offers; by the
+/// other reading it trades the most at once.
+fn option_asks_count() -> Value<Market, bool> {
+    Value::disputed(
+        "option asks count",
+        "`_DoTradeDialog` @0x5e211, @0x5e45c; `_DoQuantityDialog` @0x56d5b",
+        RuleKey::TradeCount,
+        asks_a_count,
+        trades_the_most,
+    )
+}
+
+/// The engine's Option: a count.
+fn asks_a_count(_: &Market) -> bool {
+    true
+}
+
+/// The other reading's Option: the most.
+fn trades_the_most(_: &Market) -> bool {
+    false
+}
+
 /// One order on a row: the row, the way and the lot, as the order's
 /// checks and its tons read them.
 #[derive(Clone, Copy)]
@@ -1256,10 +1287,6 @@ pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
         capacity,
         free: capacity.saturating_sub(held),
         rules: *rules,
-        trade_lot: rules.source_for(RuleKey::TradeLot),
-        trade_quotient: rules.source_for(RuleKey::TradeQuotient),
-        trade_count: rules.source_for(RuleKey::TradeCount),
-        trade_debt: rules.source_for(RuleKey::TradeDebt),
     })
 }
 
@@ -2573,7 +2600,7 @@ mod tests {
                 ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
             })
             .expect("trades");
-            assert_eq!(found.trade_lot, trade_lot);
+            assert_eq!(found.rules.source_for(RuleKey::TradeLot), trade_lot);
         }
     }
 
@@ -2586,7 +2613,10 @@ mod tests {
                 ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
             })
             .expect("trades");
-            assert_eq!(found.trade_quotient, trade_quotient);
+            assert_eq!(
+                found.rules.source_for(RuleKey::TradeQuotient),
+                trade_quotient
+            );
         }
     }
 
@@ -2599,7 +2629,7 @@ mod tests {
                 ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
             })
             .expect("trades");
-            assert_eq!(found.trade_count, trade_count);
+            assert_eq!(found.rules.source_for(RuleKey::TradeCount), trade_count);
         }
     }
 
@@ -2612,7 +2642,7 @@ mod tests {
                 ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
             })
             .expect("trades");
-            assert_eq!(found.trade_debt, trade_debt);
+            assert_eq!(found.rules.source_for(RuleKey::TradeDebt), trade_debt);
         }
     }
 
@@ -2641,10 +2671,6 @@ mod tests {
                 capacity: 10,
                 free: 10,
                 rules: rules(RuleSource::Engine),
-                trade_lot: RuleSource::Engine,
-                trade_quotient: RuleSource::Engine,
-                trade_count: RuleSource::Engine,
-                trade_debt: RuleSource::Engine,
             }
         );
         let some = TRADE | (1 << 24) | (4 << 12);
@@ -4002,6 +4028,7 @@ mod tests {
             (click_lot().about().reads(), RuleKey::TradeLot),
             (cash_divided().about().reads(), RuleKey::TradeDebt),
             (quotient().about().reads(), RuleKey::TradeQuotient),
+            (option_asks_count().about().reads(), RuleKey::TradeCount),
         ];
         for (reads, key) in disputed {
             assert_eq!(reads, Some(key));
@@ -4063,10 +4090,6 @@ mod tests {
             capacity: 100,
             free,
             rules: Rulebook::default(),
-            trade_lot: RuleSource::Engine,
-            trade_quotient: RuleSource::Engine,
-            trade_count: RuleSource::Engine,
-            trade_debt: RuleSource::Engine,
         }
     }
 
@@ -4390,7 +4413,11 @@ mod tests {
     fn by_the_engine_negative_cash_buys_a_negative_price_junk_at_its_price() {
         let buy = |market: &Market, lot| market.tons(order(0, OPALS, Direction::Buy, lot));
         let at_price = negative(-200, 3);
-        assert_eq!(at_price.trade_debt, RuleSource::Engine, "by default");
+        assert_eq!(
+            at_price.rules.source_for(RuleKey::TradeDebt),
+            RuleSource::Engine,
+            "by default"
+        );
         assert_eq!(buy(&at_price, Lot::Click), Ok(1));
         assert_eq!(buy(&at_price, Lot::Max), Ok(1));
         assert_eq!(buy(&at_price, Lot::Count(1)), Ok(1));
@@ -4945,6 +4972,8 @@ mod tests {
         assert_eq!(buy(&bible, Lot::Max), Ok(999));
         assert_eq!(engine.row_max(0, Direction::Buy), Some(1000));
         assert_eq!(bible.row_max(0, Direction::Buy), Some(999));
+        assert!(engine.option_asks_count());
+        assert!(!bible.option_asks_count());
         let in_debt = negative(-200, 3);
         let none = Market {
             rules: Rulebook::new(RuleSource::Bible),
@@ -4953,6 +4982,25 @@ mod tests {
         let opals = order(0, OPALS, Direction::Buy, Lot::Click);
         assert_eq!(in_debt.tons(opals), Ok(1));
         assert_eq!(none.tons(opals), Err(TradeRefusal::CannotAfford));
+    }
+
+    #[test]
+    fn option_asks_count_by_the_engine_and_not_by_the_other_reading() {
+        let market = stall(1000, 5, 5);
+        assert!(option_asks_count().of(&market));
+        assert!(market.option_asks_count());
+        let at_once = Market {
+            rules: market
+                .rules
+                .with_override(RuleKey::TradeCount, RuleSource::Bible),
+            ..market.clone()
+        };
+        assert!(!option_asks_count().of(&at_once));
+        assert!(!at_once.option_asks_count());
+        assert_eq!(
+            option_asks_count().about().reproduces(),
+            "`_DoTradeDialog` @0x5e211, @0x5e45c; `_DoQuantityDialog` @0x56d5b"
+        );
     }
 
     #[test]

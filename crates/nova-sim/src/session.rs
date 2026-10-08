@@ -5607,7 +5607,9 @@ mod tests {
             assert_eq!(session.rules().source_for(RuleKey::TradeLot), source);
             land_now(&mut session).expect("lands");
             assert_eq!(
-                session.market().map(|market| market.trade_lot),
+                session
+                    .market()
+                    .map(|market| market.rules.source_for(RuleKey::TradeLot)),
                 Some(source)
             );
             session.take_save_due();
@@ -5692,7 +5694,7 @@ mod tests {
                 session.pilot.set_cash(32_766_999);
                 land_now(&mut session).expect("lands");
                 let market = session.market().expect("an exchange");
-                assert_eq!(market.trade_quotient, source);
+                assert_eq!(market.rules.source_for(RuleKey::TradeQuotient), source);
                 assert_eq!(market.row_max(0, Direction::Buy), Some(i64::from(tons)));
                 assert_eq!(
                     session.trade(order(&session, FOOD, Direction::Buy, lot)),
@@ -5722,7 +5724,11 @@ mod tests {
             );
             land_now(&mut session).expect("lands");
             let market = session.market().expect("an exchange");
-            assert_eq!(market.trade_count, source, "{source:?}");
+            assert_eq!(
+                market.rules.source_for(RuleKey::TradeCount),
+                source,
+                "{source:?}"
+            );
         }
     }
 
@@ -5743,7 +5749,11 @@ mod tests {
             );
             land_now(&mut session).expect("lands");
             let market = session.market().expect("an exchange");
-            assert_eq!(market.trade_debt, source, "{source:?}");
+            assert_eq!(
+                market.rules.source_for(RuleKey::TradeDebt),
+                source,
+                "{source:?}"
+            );
         }
     }
 

@@ -18,7 +18,7 @@
 //! Command and Control change nothing, as the original tests Option alone
 //! (`_DoTradeDialog` @0x5e211, @0x5e45c). With Alt held, by the engine's
 //! reading of [`RuleKey::TradeCount`](nova_sim::RuleKey::TradeCount)
-//! ([`Market::trade_count`]), they open the quantity dialog over the
+//! ([`Market::option_asks_count`]), they open the quantity dialog over the
 //! exchange ([`QuantityDialog`], `DLOG` 1003, or its fallback) at the most
 //! the row offers ([`Market::row_max`]), even when that is 0 or less; a
 //! count above 0 confirmed there is traded ([`Lot::Count`]), and 0 or
@@ -38,7 +38,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Direction, Lot, Market, Order, RuleSource};
+use nova_sim::{Direction, Lot, Market, Order};
 
 use super::layout::DONE_LABEL;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -309,10 +309,10 @@ impl TradeScreen {
         let Some(index) = self.selected().filter(|_| self.allows(direction)) else {
             return;
         };
-        let lot = match (self.max_lot, self.market.trade_count) {
+        let lot = match (self.max_lot, self.market.option_asks_count()) {
             (false, _) => Lot::Click,
-            (true, RuleSource::Bible) => Lot::Max,
-            (true, RuleSource::Engine) => {
+            (true, false) => Lot::Max,
+            (true, true) => {
                 if let Some(max) = self.market.row_max(index, direction) {
                     self.open_quantity(index, direction, max, by_key);
                 }
@@ -574,7 +574,7 @@ impl Screen for TradeScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::{Good, JunkId, MarketRow};
+    use nova_sim::{Good, JunkId, MarketRow, RuleKey, RuleSource, Rulebook};
 
     use super::*;
     use crate::draw::DrawCommand;
@@ -1082,7 +1082,7 @@ mod tests {
     #[test]
     fn by_the_other_count_reading_with_alt_held_buy_and_sell_ask_for_the_most() {
         let mut screen = screen_of(Market {
-            trade_count: RuleSource::Bible,
+            rules: Rulebook::default().with_override(RuleKey::TradeCount, RuleSource::Bible),
             ..market()
         });
         press(&mut screen, MAX_LOT_KEY);
