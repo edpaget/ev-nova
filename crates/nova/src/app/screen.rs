@@ -1416,7 +1416,8 @@ impl AppScreen {
 
     /// Flight's input: an Escape press closes flight's map when it is
     /// open, and otherwise goes back; everything else goes to flight
-    /// (where Tab selects the navigation target). When it lands, the
+    /// (where L, the stellar slot keys and a click select the navigation
+    /// target). When it lands, the
     /// spaceport shows.
     fn flight_input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {

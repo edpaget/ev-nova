@@ -128,9 +128,22 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Either Control: flight's secondary fire key.
         PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
         // The developer tools' toggle, by position: the key under Escape on
-        // a US-layout keyboard. Without the developer tools, no screen uses
-        // it.
+        // a US-layout keyboard. Without the developer tools, it reaches
+        // flight as Nav Off, the original's default.
         PhysicalKey::Code(KeyCode::Backquote) => Key::Char('`'),
+        // Flight's stellar slot keys, by position: 1-4 on the top row (the
+        // keypad's are not the original's).
+        PhysicalKey::Code(KeyCode::Digit1) => Key::Char('1'),
+        PhysicalKey::Code(KeyCode::Digit2) => Key::Char('2'),
+        PhysicalKey::Code(KeyCode::Digit3) => Key::Char('3'),
+        PhysicalKey::Code(KeyCode::Digit4) => Key::Char('4'),
+        // F1-F4, flight's other stellar slot keys, and F5, its nearest
+        // stellar key.
+        PhysicalKey::Code(KeyCode::F1) => Key::Function(1),
+        PhysicalKey::Code(KeyCode::F2) => Key::Function(2),
+        PhysicalKey::Code(KeyCode::F3) => Key::Function(3),
+        PhysicalKey::Code(KeyCode::F4) => Key::Function(4),
+        PhysicalKey::Code(KeyCode::F5) => Key::Function(5),
         _ => Key::Other,
     }
 }
@@ -202,8 +215,18 @@ mod tests {
             (KeyCode::KeyR, Key::Char('r')),
             (KeyCode::Backquote, Key::Char('`')),
             (KeyCode::Backslash, Key::Char('\\')),
+            (KeyCode::Digit1, Key::Char('1')),
+            (KeyCode::Digit2, Key::Char('2')),
+            (KeyCode::Digit3, Key::Char('3')),
+            (KeyCode::Digit4, Key::Char('4')),
+            (KeyCode::F1, Key::Function(1)),
+            (KeyCode::F2, Key::Function(2)),
+            (KeyCode::F3, Key::Function(3)),
+            (KeyCode::F4, Key::Function(4)),
+            (KeyCode::F5, Key::Function(5)),
             (KeyCode::KeyQ, Key::Other),
-            (KeyCode::F1, Key::Other),
+            (KeyCode::Digit5, Key::Other),
+            (KeyCode::F6, Key::Other),
         ];
         for (code, key) in cases {
             assert_eq!(map_key(PhysicalKey::Code(code)), key, "{code:?}");
@@ -216,7 +239,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 23] = [
+    const GAME_CHARACTER_KEYS: [Key; 28] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -226,6 +249,11 @@ mod tests {
         nova_view::flight::view::SELECT_KEY,
         nova_view::flight::view::NEAREST_KEY,
         nova_view::flight::view::HYPER_SELECT_KEY,
+        nova_view::flight::view::NAV_OFF_KEY,
+        nova_view::flight::view::STELLAR_SLOT_KEYS[0][0],
+        nova_view::flight::view::STELLAR_SLOT_KEYS[1][0],
+        nova_view::flight::view::STELLAR_SLOT_KEYS[2][0],
+        nova_view::flight::view::STELLAR_SLOT_KEYS[3][0],
         Key::Char('w'),
         Key::Char('a'),
         Key::Char('s'),
@@ -257,6 +285,10 @@ mod tests {
             'r' => KeyCode::KeyR,
             's' => KeyCode::KeyS,
             'w' => KeyCode::KeyW,
+            '1' => KeyCode::Digit1,
+            '2' => KeyCode::Digit2,
+            '3' => KeyCode::Digit3,
+            '4' => KeyCode::Digit4,
             '=' => KeyCode::Equal,
             '+' => KeyCode::NumpadAdd,
             '-' => KeyCode::Minus,
@@ -279,7 +311,7 @@ mod tests {
     /// Every key other than a character's that a screen reacts to, where
     /// the screen names it with a constant, and the physical key that
     /// sends it.
-    const GAME_NAMED_KEYS: [(Key, KeyCode); 7] = [
+    const GAME_NAMED_KEYS: [(Key, KeyCode); 12] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltRight),
@@ -288,6 +320,24 @@ mod tests {
         (Key::Right, KeyCode::ArrowRight),
         (Key::Up, KeyCode::ArrowUp),
         (Key::Down, KeyCode::ArrowDown),
+        // Flight's stellar slot and nearest stellar keys.
+        (
+            nova_view::flight::view::STELLAR_SLOT_KEYS[0][1],
+            KeyCode::F1,
+        ),
+        (
+            nova_view::flight::view::STELLAR_SLOT_KEYS[1][1],
+            KeyCode::F2,
+        ),
+        (
+            nova_view::flight::view::STELLAR_SLOT_KEYS[2][1],
+            KeyCode::F3,
+        ),
+        (
+            nova_view::flight::view::STELLAR_SLOT_KEYS[3][1],
+            KeyCode::F4,
+        ),
+        (nova_view::flight::view::NEAREST_STELLAR_KEY, KeyCode::F5),
     ];
 
     #[test]
