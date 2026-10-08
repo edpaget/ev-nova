@@ -238,6 +238,7 @@ use crate::fuel::OutfitMod;
 use crate::landing::StellarFlags;
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::rules::{Context, Value};
 
 /// How many standard commodities there are.
 pub const COMMODITIES: u8 = 6;
@@ -949,6 +950,11 @@ pub(crate) struct Exchange<'a> {
 }
 
 /// The exchange `exchange` describes; `None` without a trade center.
+///
+/// Each standard commodity is listed at its [`commodity_price`], when it
+/// has one, traded both ways; each `jünk` row a stellar lists, as
+/// [`junk_listing`] lists it. Then the rows are ordered by good, and
+/// each shows the tons held.
 pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
     let &Exchange {
         goods,
@@ -956,11 +962,9 @@ pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
         flags,
         pilot,
         capacity,
-        gate,
         ref rules,
-        markup,
+        ..
     } = exchange;
-    let source = rules.source_for(RuleKey::EventPrice);
     if flags & StellarFlags::TRADE_CENTER == 0 {
         return None;
     }
@@ -977,39 +981,28 @@ pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
         .commodities
         .iter()
         .filter_map(|(n, commodity)| {
-            let level = price_level(flags, *n)?;
-            let delta: i64 = match source {
-                RuleSource::Engine => 0,
-                RuleSource::Bible => here
-                    .iter()
-                    .filter(|event| standard(event.commodity) == Some(*n))
-                    .map(|event| i64::from(event.price_delta))
-                    .sum(),
+            // By ascending ID, as `pilot.events` is ordered.
+            let deltas: Vec<i64> = here
+                .iter()
+                .filter(|event| standard(event.commodity) == Some(*n))
+                .map(|event| i64::from(event.price_delta))
+                .collect();
+            let quote = CommodityQuote {
+                exchange,
+                base: commodity.base_price,
+                level: price_level(flags, *n),
+                deltas: &deltas,
             };
-            let price = word(band_price(commodity.base_price, level, markup) + delta);
-            Some(commodity_row(*n, commodity, price))
+            let price = commodity_price().of(&quote)?;
+            Some(listed(
+                Good::Commodity(*n),
+                &commodity.name,
+                price,
+                (true, true),
+            ))
         })
         .collect();
-    if source == RuleSource::Engine {
-        // By ascending ID (`pilot.events` is ordered), so the last wins.
-        for event in &here {
-            let Some((n, commodity)) = standard(event.commodity)
-                .and_then(|n| goods.commodities.iter().find(|(number, _)| *number == n))
-            else {
-                continue;
-            };
-            let row = commodity_row(
-                *n,
-                commodity,
-                word(commodity.base_price + i64::from(event.price_delta)),
-            );
-            match rows.iter_mut().find(|listed| listed.good == row.good) {
-                Some(listed) => *listed = row,
-                None => rows.push(row),
-            }
-        }
-    }
-    rows.extend(junk_listing(goods, stellar, gate, rules, markup));
+    rows.extend(junk_listing(exchange));
     rows.sort_by_key(|row| row.good);
     for row in &mut rows {
         row.held = pilot.held(row.good);
@@ -1032,81 +1025,229 @@ pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
     })
 }
 
-/// The `jünk` rows `stellar` lists, its tests asked of `gate`, priced by
-/// `markup` and as `rules` reads [`RuleKey::JunkPrice`], traded as it reads
-/// [`RuleKey::JunkTrade`]. A `jünk` the stellar both buys and sells has a row each way, the
-/// bought one first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f).
-/// By the engine a row priced 0 is not listed, each way on its own
-/// (`_TradeDialogUpdate` @0x4d2a2-0x4d2ac).
-fn junk_listing<'a>(
-    goods: &'a Goods,
-    stellar: StellarId,
-    gate: Gate<'a>,
-    rules: &Rulebook,
-    markup: Markup,
-) -> impl Iterator<Item = MarketRow> + 'a {
-    let (high_ways, low_ways) = junk_ways(rules.source_for(RuleKey::JunkTrade));
-    let junk_price = rules.source_for(RuleKey::JunkPrice);
-    goods.junk.iter().flat_map(move |junk| {
-        let bought = junk.bought_at.contains(&stellar) && gate.allows(&junk.buy_on);
-        let sold = junk.sold_at.contains(&stellar) && gate.allows(&junk.sell_on);
-        let row = |level, ways| {
-            let price = listed_junk_price(
-                band_price(i64::from(junk.base_price), level, markup),
-                junk_price,
-            )?;
-            Some(listed(Good::Junk(junk.id), &junk.name, price, ways))
-        };
-        [
-            bought.then(|| row(PriceLevel::High, high_ways)),
-            sold.then(|| row(PriceLevel::Low, low_ways)),
-        ]
-        .into_iter()
-        .flatten()
-        .flatten()
-    })
+/// The `jünk` rows `exchange` lists. A `jünk` whose `BoughtAt` lists the
+/// stellar, while the gate allows its `BuyOn`, has a row at
+/// [`JunkSide::BoughtAt`]; one whose `SoldAt` lists it, while the gate
+/// allows its `SellOn`, a row at [`JunkSide::SoldAt`]: the bought one
+/// first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f). Each is
+/// priced by [`junk_price`], and not listed without a price, and traded
+/// the [`junk_ways`].
+fn junk_listing(exchange: &Exchange) -> Vec<MarketRow> {
+    let mut rows = Vec::new();
+    for junk in &exchange.goods.junk {
+        let bought =
+            junk.bought_at.contains(&exchange.stellar) && exchange.gate.allows(&junk.buy_on);
+        let sold = junk.sold_at.contains(&exchange.stellar) && exchange.gate.allows(&junk.sell_on);
+        let sides = [
+            bought.then_some(JunkSide::BoughtAt),
+            sold.then_some(JunkSide::SoldAt),
+        ];
+        for side in sides.into_iter().flatten() {
+            let quote = JunkQuote {
+                exchange,
+                base: i64::from(junk.base_price),
+                side,
+            };
+            if let Some(price) = junk_price().of(&quote) {
+                let ways = junk_ways().of(&quote);
+                rows.push(listed(Good::Junk(junk.id), &junk.name, price, ways));
+            }
+        }
+    }
+    rows
 }
 
-/// The ways (sold here, bought here) a `jünk`'s `BoughtAt` row and its
-/// `SoldAt` row trade, as `source` says
-/// ([`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade)): by the engine
-/// both ways each, as `_CanBuyGoods` (@0xccec) and `_CanSellGoods`
-/// (@0x4a94) never ask which list a row came from; by the Bible, the
-/// `BoughtAt` row is sold only and the `SoldAt` row bought only.
-const fn junk_ways(source: RuleSource) -> ((bool, bool), (bool, bool)) {
-    match source {
-        RuleSource::Engine => ((true, true), (true, true)),
-        RuleSource::Bible => ((false, true), (true, false)),
+/// One standard commodity being priced at an exchange: the facts its
+/// price rules read.
+struct CommodityQuote<'a> {
+    /// The exchange: its rule set and markup.
+    exchange: &'a Exchange<'a>,
+    /// The commodity's `BasePrice`.
+    base: i64,
+    /// The stellar's price level for it ([`price_level`]); `None` where
+    /// it is not traded at a level.
+    level: Option<PriceLevel>,
+    /// The `PriceDelta` of each event active here on it, by ascending
+    /// `öops` ID.
+    deltas: &'a [i64],
+}
+
+impl Context for CommodityQuote<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        &self.exchange.rules
     }
 }
 
-/// A `jünk` row's `price`, as listed by `source`
-/// ([`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice)), or `None` when the
-/// row is not listed. By the engine the price is signed, with no floor,
-/// and a row priced 0 is not listed (`_TradeDialogUpdate`
-/// @0x4d2a2-0x4d2ac); by the other reading it is never below 0, and a row
-/// priced 0 is listed.
-fn listed_junk_price(price: i64, source: RuleSource) -> Option<i64> {
-    match source {
-        RuleSource::Engine => (price != 0).then_some(price),
-        RuleSource::Bible => Some(price.max(0)),
+/// The price of a commodity at its level: its [`band_price`], held in 16
+/// bits; none where it is not traded at a level.
+fn level_price<'a>() -> Value<CommodityQuote<'a>, Option<i64>> {
+    Value::plain(
+        "level price",
+        "`_DoTradeDialog` @0x5dc0c-0x5dc48, @0x5dc87-0x5dcc5, held in 16 bits @0x5dcc5",
+        level_band,
+    )
+}
+
+/// `quote`'s band price at its level, if it has one.
+fn level_band(quote: &CommodityQuote) -> Option<i64> {
+    quote
+        .level
+        .map(|level| band_price(quote.base, level, quote.exchange.markup))
+}
+
+/// The price of a commodity with the events active here, as
+/// [`RuleKey::EventPrice`](crate::RuleKey::EventPrice) says: by the
+/// engine its `BasePrice` plus the highest ID's `PriceDelta`, whatever
+/// its level, so an event lists a commodity not traded here; by the
+/// other reading its [`level_price`] plus every `PriceDelta`. Either way
+/// held in 16 bits; with no event, the level price.
+fn event_price<'a>() -> Value<CommodityQuote<'a>, Option<i64>> {
+    Value::disputed(
+        "event price",
+        "`_DoTradeDialog` @0x5dcf8-0x5dd58, held in 16 bits by `addw` @0x5dd19-0x5dd40",
+        RuleKey::EventPrice,
+        last_event_price,
+        summed_event_price,
+    )
+}
+
+/// The engine's event price: the base plus the last (highest ID) delta,
+/// held in 16 bits, or else the level price.
+fn last_event_price(quote: &CommodityQuote) -> Option<i64> {
+    quote.deltas.last().map_or_else(
+        || level_price().of(quote),
+        |delta| Some(word(quote.base + delta)),
+    )
+}
+
+/// The other reading's event price: the level price plus every delta,
+/// held in 16 bits. Wrapping the sum once is wrapping each addition, so
+/// the deltas' order does not matter.
+fn summed_event_price(quote: &CommodityQuote) -> Option<i64> {
+    let delta: i64 = quote.deltas.iter().sum();
+    level_price().of(quote).map(|price| word(price + delta))
+}
+
+/// A commodity's price on the exchange: its [`event_price`], but never
+/// below [`MIN_COMMODITY_PRICE`]; none where it is not listed.
+fn commodity_price<'a>() -> Value<CommodityQuote<'a>, Option<i64>> {
+    Value::plain(
+        "commodity price",
+        "floor of 5: `_DoTradeDialog` @0x5dcc8-0x5dcce, @0x5dd39-0x5dd40",
+        floored_commodity_price,
+    )
+}
+
+/// `quote`'s event price, raised to [`MIN_COMMODITY_PRICE`].
+fn floored_commodity_price(quote: &CommodityQuote) -> Option<i64> {
+    event_price()
+        .of(quote)
+        .map(|price| price.max(MIN_COMMODITY_PRICE))
+}
+
+/// Which of a stellar's lists a `jünk` row comes from.
+#[derive(Clone, Copy, Debug)]
+enum JunkSide {
+    /// Its `BoughtAt`: the stellar buys it, at the high price.
+    BoughtAt,
+    /// Its `SoldAt`: the stellar sells it, at the low price.
+    SoldAt,
+}
+
+impl JunkSide {
+    /// The level the row is priced at.
+    const fn level(self) -> PriceLevel {
+        match self {
+            Self::BoughtAt => PriceLevel::High,
+            Self::SoldAt => PriceLevel::Low,
+        }
+    }
+}
+
+/// One `jünk` row being priced and listed at an exchange: the facts its
+/// rules read.
+struct JunkQuote<'a> {
+    /// The exchange: its rule set and markup.
+    exchange: &'a Exchange<'a>,
+    /// The `jünk`'s `BasePrice`.
+    base: i64,
+    /// The list the row comes from.
+    side: JunkSide,
+}
+
+impl Context for JunkQuote<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        &self.exchange.rules
+    }
+}
+
+/// A `jünk` row's price, as
+/// [`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice) says, or `None` when
+/// the row is not listed. Its band price at its side's level, held in 16
+/// bits: by the engine signed, with no floor, and a row priced 0 not
+/// listed; by the other reading never below 0, and a row priced 0 listed.
+fn junk_price<'a>() -> Value<JunkQuote<'a>, Option<i64>> {
+    Value::disputed(
+        "jünk price",
+        "rows 6/7 `_DoTradeDialog` @0x5dd83-0x5de2f, held in 16 bits @0x5dddb/@0x5de2f; \
+         unlisted at 0 `_TradeDialogUpdate` @0x4d2a2-0x4d2ac, `_TradeFilter` @0x4e262; \
+         signed `_TradeDialogUpdate` @0x4d545-0x4d54b",
+        RuleKey::JunkPrice,
+        signed_junk_price,
+        floored_junk_price,
+    )
+}
+
+/// `quote`'s band price at its side's level.
+fn junk_band(quote: &JunkQuote) -> i64 {
+    band_price(quote.base, quote.side.level(), quote.exchange.markup)
+}
+
+/// The engine's `jünk` price: signed, and unlisted at 0.
+fn signed_junk_price(quote: &JunkQuote) -> Option<i64> {
+    let band = junk_band(quote);
+    (band != 0).then_some(band)
+}
+
+/// The other reading's `jünk` price: never below 0, and listed at 0.
+#[allow(clippy::unnecessary_wraps)] // The engine's reading's type: a row it does not list.
+fn floored_junk_price(quote: &JunkQuote) -> Option<i64> {
+    Some(junk_band(quote).max(0))
+}
+
+/// The ways (sold here, bought here) a `jünk` row trades, as
+/// [`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade) says: by the engine
+/// both ways, as `_CanBuyGoods` and `_CanSellGoods` never ask which list a
+/// row came from; by the Bible, the `BoughtAt` row is sold only and the
+/// `SoldAt` row bought only.
+fn junk_ways<'a>() -> Value<JunkQuote<'a>, (bool, bool)> {
+    Value::disputed(
+        "jünk ways",
+        "`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` \
+         @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e",
+        RuleKey::JunkTrade,
+        traded_both_ways,
+        traded_by_side,
+    )
+}
+
+/// The engine's ways: both.
+fn traded_both_ways(_: &JunkQuote) -> (bool, bool) {
+    (true, true)
+}
+
+/// The Bible's ways: a `BoughtAt` row sold here only, a `SoldAt` row
+/// bought here only.
+fn traded_by_side(quote: &JunkQuote) -> (bool, bool) {
+    match quote.side {
+        JunkSide::BoughtAt => (false, true),
+        JunkSide::SoldAt => (true, false),
     }
 }
 
 /// `commodity` as a standard commodity's number, if it is one.
 fn standard(commodity: i16) -> Option<u8> {
     u8::try_from(commodity).ok().filter(|&n| n < COMMODITIES)
-}
-
-/// Standard commodity `n`'s row, priced at `price` but never below
-/// [`MIN_COMMODITY_PRICE`], traded both ways.
-fn commodity_row(n: u8, commodity: &Commodity, price: i64) -> MarketRow {
-    listed(
-        Good::Commodity(n),
-        &commodity.name,
-        price.max(MIN_COMMODITY_PRICE),
-        (true, true),
-    )
 }
 
 /// A row for `good`, priced at `price`, traded these ways (sold here,
@@ -3419,6 +3560,237 @@ mod tests {
                 quiet
             );
         }
+    }
+
+    // The price rules.
+
+    /// What `ask` makes of a commodity of `base` price, at `level` by the
+    /// standard markup, moved by events of these `deltas` (by ascending
+    /// ID), under `rules`.
+    fn quoted<T>(
+        rules: Rulebook,
+        base: i64,
+        level: Option<PriceLevel>,
+        deltas: &[i64],
+        ask: impl FnOnce(&CommodityQuote) -> T,
+    ) -> T {
+        let goods = Goods::default();
+        let pilot = pilot(0);
+        let exchange = Exchange {
+            rules,
+            ..exchange(&goods, EARTH, TRADE, &pilot)
+        };
+        ask(&CommodityQuote {
+            exchange: &exchange,
+            base,
+            level,
+            deltas,
+        })
+    }
+
+    #[test]
+    fn level_price_is_the_band_price_held_in_16_bits() {
+        for source in RuleSource::ALL {
+            let at = |base, level| quoted(rules(source), base, level, &[], |q| level_price().of(q));
+            assert_eq!(at(75, Some(PriceLevel::High)), Some(93), "{source:?}");
+            assert_eq!(at(26_215, Some(PriceLevel::Medium)), Some(26_215));
+            assert_eq!(
+                at(26_215, Some(PriceLevel::High)),
+                Some(-32_768),
+                "32768 wraps"
+            );
+            assert_eq!(at(75, None), None, "not traded at a level");
+            let moved = quoted(rules(source), 75, Some(PriceLevel::Low), &[-15], |q| {
+                level_price().of(q)
+            });
+            assert_eq!(moved, Some(60), "no event moves it");
+        }
+    }
+
+    #[test]
+    fn event_price_by_the_engine_is_the_base_plus_the_highest_ids_delta_whatever_the_level() {
+        let at = |level, deltas: &[i64]| {
+            quoted(rules(RuleSource::Engine), 75, level, deltas, |q| {
+                event_price().of(q)
+            })
+        };
+        assert_eq!(at(Some(PriceLevel::High), &[]), Some(93), "no event");
+        assert_eq!(at(Some(PriceLevel::High), &[-15]), Some(60));
+        assert_eq!(at(Some(PriceLevel::Low), &[-15, 15]), Some(90), "the last");
+        assert_eq!(at(Some(PriceLevel::High), &[15, -15]), Some(60));
+        let wrapped = quoted(rules(RuleSource::Engine), 32_000, None, &[1000], |q| {
+            event_price().of(q)
+        });
+        assert_eq!(wrapped, Some(-32_536), "33000 held in 16 bits");
+    }
+
+    #[test]
+    fn event_price_by_the_other_reading_adds_every_delta_to_the_level_price() {
+        let at = |level, deltas: &[i64]| {
+            quoted(rules(RuleSource::Bible), 75, level, deltas, |q| {
+                event_price().of(q)
+            })
+        };
+        assert_eq!(at(Some(PriceLevel::High), &[]), Some(93), "no event");
+        assert_eq!(at(Some(PriceLevel::High), &[-15]), Some(78));
+        assert_eq!(at(Some(PriceLevel::High), &[-15, 15]), Some(93));
+        assert_eq!(at(Some(PriceLevel::Low), &[-15, -5]), Some(40));
+        let wrapped = quoted(
+            rules(RuleSource::Bible),
+            32_000,
+            Some(PriceLevel::Medium),
+            &[20_000, 15_000],
+            |q| event_price().of(q),
+        );
+        assert_eq!(wrapped, Some(1464), "67000 held in 16 bits");
+    }
+
+    #[test]
+    fn event_price_lists_an_untraded_commodity_only_by_the_engine() {
+        let at = |source| quoted(rules(source), 75, None, &[-15], |q| event_price().of(q));
+        assert_eq!(at(RuleSource::Engine), Some(60));
+        assert_eq!(at(RuleSource::Bible), None);
+    }
+
+    #[test]
+    fn commodity_price_is_never_below_5_by_either_reading() {
+        for source in RuleSource::ALL {
+            let at = |base, level, deltas: &[i64]| {
+                quoted(rules(source), base, level, deltas, |q| {
+                    commodity_price().of(q)
+                })
+            };
+            let medium = Some(PriceLevel::Medium);
+            assert_eq!(at(10, medium, &[-8]), Some(5), "{source:?}");
+            assert_eq!(at(4, medium, &[]), Some(5), "{source:?}");
+            assert_eq!(at(5, medium, &[]), Some(5), "{source:?}");
+            assert_eq!(at(6, medium, &[]), Some(6), "{source:?}");
+            assert_eq!(at(-50, medium, &[]), Some(5), "{source:?}");
+            assert_eq!(at(26_215, Some(PriceLevel::High), &[]), Some(5), "wrapped");
+            assert_eq!(at(75, None, &[]), None, "{source:?}");
+        }
+        let untraded = |source| quoted(rules(source), 6, None, &[-4], |q| commodity_price().of(q));
+        assert_eq!(untraded(RuleSource::Engine), Some(5));
+        assert_eq!(untraded(RuleSource::Bible), None);
+    }
+
+    /// What `ask` makes of a `jünk` of `base` price on its `side`'s row,
+    /// by the standard markup, under `rules`.
+    fn junk_quoted<T>(
+        rules: Rulebook,
+        base: i64,
+        side: JunkSide,
+        ask: impl FnOnce(&JunkQuote) -> T,
+    ) -> T {
+        let goods = Goods::default();
+        let pilot = pilot(0);
+        let exchange = Exchange {
+            rules,
+            ..exchange(&goods, EARTH, TRADE, &pilot)
+        };
+        ask(&JunkQuote {
+            exchange: &exchange,
+            base,
+            side,
+        })
+    }
+
+    /// The rule set with `jünk` priced by `junk_price`.
+    fn junk_priced_by(junk_price: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::JunkPrice, junk_price)
+    }
+
+    #[test]
+    fn junk_price_by_the_engine_is_signed_and_unlisted_at_0() {
+        let at = |base, side| {
+            junk_quoted(junk_priced_by(RuleSource::Engine), base, side, |q| {
+                junk_price().of(q)
+            })
+        };
+        assert_eq!(at(400, JunkSide::BoughtAt), Some(500), "high");
+        assert_eq!(at(400, JunkSide::SoldAt), Some(320), "low");
+        assert_eq!(at(-100, JunkSide::BoughtAt), Some(-125));
+        assert_eq!(at(-100, JunkSide::SoldAt), Some(-80));
+        assert_eq!(at(30_000, JunkSide::BoughtAt), Some(-28_036), "wrapped");
+        assert_eq!(at(0, JunkSide::BoughtAt), None);
+        assert_eq!(at(1, JunkSide::SoldAt), None, "1 / 1.25 is 0");
+        assert_eq!(at(1, JunkSide::BoughtAt), Some(1));
+    }
+
+    #[test]
+    fn junk_price_by_the_other_reading_is_never_below_0_and_listed_at_0() {
+        let at = |base, side| {
+            junk_quoted(junk_priced_by(RuleSource::Bible), base, side, |q| {
+                junk_price().of(q)
+            })
+        };
+        assert_eq!(at(400, JunkSide::BoughtAt), Some(500), "high");
+        assert_eq!(at(400, JunkSide::SoldAt), Some(320), "low");
+        assert_eq!(at(-100, JunkSide::BoughtAt), Some(0));
+        assert_eq!(at(-30_000, JunkSide::BoughtAt), Some(28_036), "wrapped");
+        assert_eq!(at(30_000, JunkSide::BoughtAt), Some(0), "wrapped");
+        assert_eq!(at(0, JunkSide::BoughtAt), Some(0));
+        assert_eq!(at(1, JunkSide::SoldAt), Some(0));
+    }
+
+    #[test]
+    fn junk_ways_by_the_engine_trade_both_ways() {
+        for side in [JunkSide::BoughtAt, JunkSide::SoldAt] {
+            let ways = junk_quoted(trading_by(RuleSource::Engine), 400, side, |q| {
+                junk_ways().of(q)
+            });
+            assert_eq!(ways, (true, true));
+        }
+    }
+
+    #[test]
+    fn junk_ways_by_the_other_reading_trade_one_way_by_side() {
+        let at = |side| {
+            junk_quoted(trading_by(RuleSource::Bible), 400, side, |q| {
+                junk_ways().of(q)
+            })
+        };
+        assert_eq!(at(JunkSide::BoughtAt), (false, true), "sold here only");
+        assert_eq!(at(JunkSide::SoldAt), (true, false), "bought here only");
+    }
+
+    #[test]
+    fn each_disputed_exchange_rule_names_its_key() {
+        let disputed = [
+            (event_price().about().reads(), RuleKey::EventPrice),
+            (junk_price().about().reads(), RuleKey::JunkPrice),
+            (junk_ways().about().reads(), RuleKey::JunkTrade),
+        ];
+        for (reads, key) in disputed {
+            assert_eq!(reads, Some(key));
+        }
+        for plain in [level_price().about(), commodity_price().about()] {
+            assert_eq!(plain.reads(), None, "{}", plain.name());
+        }
+    }
+
+    #[test]
+    fn the_price_rules_cite_the_originals_addresses() {
+        let cited = [
+            level_price().about().reproduces(),
+            event_price().about().reproduces(),
+            commodity_price().about().reproduces(),
+            junk_price().about().reproduces(),
+            junk_ways().about().reproduces(),
+        ];
+        assert_eq!(
+            cited,
+            [
+                "`_DoTradeDialog` @0x5dc0c-0x5dc48, @0x5dc87-0x5dcc5, held in 16 bits @0x5dcc5",
+                "`_DoTradeDialog` @0x5dcf8-0x5dd58, held in 16 bits by `addw` @0x5dd19-0x5dd40",
+                "floor of 5: `_DoTradeDialog` @0x5dcc8-0x5dcce, @0x5dd39-0x5dd40",
+                "rows 6/7 `_DoTradeDialog` @0x5dd83-0x5de2f, held in 16 bits @0x5dddb/@0x5de2f; \
+                 unlisted at 0 `_TradeDialogUpdate` @0x4d2a2-0x4d2ac, `_TradeFilter` @0x4e262; \
+                 signed `_TradeDialogUpdate` @0x4d545-0x4d54b",
+                "`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` \
+                 @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e",
+            ]
+        );
     }
 
     // Buying and selling.
