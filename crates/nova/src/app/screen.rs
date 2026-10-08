@@ -734,17 +734,7 @@ impl AppScreen {
         if let Some(spaceport) = &mut self.spaceport {
             match landed {
                 Some(stellar) if stellar != spaceport.stellar() => self.show_spaceport(stellar),
-                _ => {
-                    if let Some(market) = flight.market() {
-                        spaceport.set_market(market);
-                    }
-                    if let Some(outfitter) = flight.outfitter() {
-                        spaceport.set_outfitter(outfitter);
-                    }
-                    if let Some(shipyard) = flight.shipyard() {
-                        spaceport.set_shipyard(shipyard);
-                    }
-                }
+                _ => refresh_spaceport(spaceport, flight),
             }
         }
         self.save_if_due();
@@ -1593,15 +1583,7 @@ impl AppScreen {
             // Each changes the cash; an outfit the cargo space and the
             // trade-in; and a ship the cargo space, the free mass and the
             // outfits: so all three go back.
-            if let Some(market) = flight.market() {
-                spaceport.set_market(market);
-            }
-            if let Some(outfitter) = flight.outfitter() {
-                spaceport.set_outfitter(outfitter);
-            }
-            if let Some(shipyard) = flight.shipyard() {
-                spaceport.set_shipyard(shipyard);
-            }
+            refresh_spaceport(spaceport, flight);
         }
         if spaceport.left() {
             self.sounds.extend(spaceport.take_sounds());
@@ -1697,6 +1679,20 @@ impl AppScreen {
 
 /// "Desc Dialog" showing the About text, from the dialogs and the game
 /// data.
+/// Shows `spaceport` the exchange, outfitter and shipyard as `flight`
+/// now has them.
+fn refresh_spaceport(spaceport: &mut SpaceportView, flight: &FlightView<Rc<GameData>>) {
+    if let Some(market) = flight.market() {
+        spaceport.set_market(market);
+    }
+    if let Some(outfitter) = flight.outfitter() {
+        spaceport.set_outfitter(outfitter);
+    }
+    if let Some(shipyard) = flight.shipyard() {
+        spaceport.set_shipyard(shipyard);
+    }
+}
+
 fn about_dialog(dialogs: &Dialogs, data: &GameData) -> Result<DescDialog, String> {
     let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
     let text = data.description(ABOUT_TEXT)?;
