@@ -549,6 +549,21 @@ mod tests {
         assert_eq!(listed(&list_of(&mut session)), [130, 131], "clear again");
     }
 
+    #[test]
+    fn a_ship_whose_availability_is_malformed_is_never_for_hire() {
+        let malformed = |id, flags3| ShipRecord {
+            availability: Test::parse("b1 &"),
+            flags3,
+            ..hireable(id, 100)
+        };
+        let catalog = barred(vec![malformed(129, 0x0100), malformed(130, 0)]);
+        let mut session =
+            landed(&catalog, 25_000).with_control_bits(Rc::new(crate::testkit::AllowAll));
+        let list = list(&mut session);
+        assert_eq!(listed(&list), [130], "hidden when flagged");
+        assert_eq!(row(&list, 130).hire, Err(HireRefusal::NotForHire));
+    }
+
     fn list_of(session: &mut Session) -> HireList {
         list(session)
     }

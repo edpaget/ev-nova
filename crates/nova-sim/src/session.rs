@@ -1445,12 +1445,17 @@ impl Session {
     /// Lets the days the stats give a jump go by, each stepping the
     /// planetary events, rolled on `chance`, and pays the hired escorts
     /// their wages for them.
+    ///
+    /// The events step out of the pilot, so that their `ActivateOn` can
+    /// read the pilot through the session's control bits: no test reads
+    /// the events.
     fn pass_jump_days(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        let pilot = &mut self.pilot;
+        let mut events = std::mem::take(&mut self.pilot.events);
         for _ in 0..self.stats.jump_days {
-            pilot.date = pilot.date.next_day();
-            market::step_day(&self.goods, &mut pilot.events, chance);
+            self.pilot.date = self.pilot.date.next_day();
+            market::step_day(&self.goods, &mut events, self.gate(), chance);
         }
+        self.pilot.events = events;
         self.pay_escorts(self.stats.jump_days);
     }
 
@@ -1804,6 +1809,7 @@ impl Session {
             site.flags,
             &self.pilot,
             self.stats.capacity,
+            self.gate(),
         )
     }
 
@@ -4571,6 +4577,49 @@ mod tests {
         assert_eq!(session.pilot().cash(), 1000 - 12 * 80 + 12 * 125);
     }
 
+    #[test]
+    fn the_exchange_tests_junk_through_the_sessions_control_bits() {
+        let opals = JunkRecord {
+            id: JunkId(146),
+            name: "Opals".to_owned(),
+            base_price: 100,
+            sold_at: vec![StellarId(128)],
+            bought_at: Vec::new(),
+            buy_on: Test::default(),
+            sell_on: Test::parse("b7"),
+        };
+        let catalog = FakePilotCatalog {
+            character: exchange().character,
+            sites: vec![(
+                SystemId(130),
+                vec![LandingSite {
+                    flags: TRADES,
+                    ..planet(128, 0.0, 0.0)
+                }],
+            )],
+            junk: vec![opals],
+            ..catalog()
+        };
+        let opals = Good::Junk(JunkId(146));
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        let mut refusing = session
+            .clone()
+            .with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));
+        assert_eq!(
+            refusing
+                .market()
+                .and_then(|market| market.row(opals).cloned()),
+            None
+        );
+        assert_eq!(
+            refusing.trade(order(opals, Direction::Buy, Lot::One)),
+            Err(TradeRefusal::NotTraded)
+        );
+        assert_eq!(session.trade(order(opals, Direction::Buy, Lot::One)), Ok(1));
+    }
+
     /// A food surplus at planet 140 (-15, 30 days, 35 % a day), and planet
     /// 140 a trade center trading food at 75.
     fn surplus() -> FakePilotCatalog {
@@ -4613,6 +4662,27 @@ mod tests {
         let market = session.market().expect("an exchange");
         assert_eq!(market.row(FOOD).map(|row| row.price), Some(60));
         assert_eq!(market.events, ["An enormous food surplus"]);
+    }
+
+    #[test]
+    fn a_jump_tests_activate_on_through_the_sessions_control_bits() {
+        let mut catalog = surplus();
+        catalog.disasters[0].freq = 100;
+        catalog.disasters[0].activate_on = Test::parse("b7");
+        let mut session = Session::start(&catalog).expect("starts");
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        let mut refusing = session
+            .clone()
+            .with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));
+        let mut chance = Scripted::answering(&[true]);
+        jump_with(&mut refusing, &catalog, 131, &mut chance);
+        assert_eq!(refusing.pilot().events().count(), 0);
+        assert_eq!(chance.asked, Vec::<u8>::new(), "never rolled");
+        jump_with(&mut session, &catalog, 131, &mut chance);
+        assert_eq!(
+            session.pilot().events().collect::<Vec<_>>(),
+            [(DisasterId(128), 30)]
+        );
     }
 
     #[test]
