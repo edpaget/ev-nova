@@ -157,21 +157,27 @@
 //!
 //! # Adding a rule
 //!
-//! 1. Add a variant, its doc comment and its settings key to the
-//!    `rule_keys!` table below (and a row to the table above). That is the
-//!    only list: [`RuleKey::ALL`], [`RuleKey::key`] and
-//!    [`RuleKey::from_key`] come from it, and the settings file reads the
-//!    key with no further change.
-//! 2. Give the rule's implementation its [`RuleSource`], taken from the
-//!    rulebook with [`Rulebook::source_for`] where the rule is built (as
-//!    [`NovaLaw::from_rulebook`](crate::NovaLaw::from_rulebook) does), and
-//!    make the decision there.
+//! 1. Add the variant, its doc comment and its settings key to the
+//!    `rule_keys!` table below, a row to the table above, and the variant
+//!    to this module's key-list test. That is the only list:
+//!    [`RuleKey::ALL`], [`RuleKey::key`] and [`RuleKey::from_key`] come
+//!    from it, and the settings file reads the key with no further change.
+//! 2. Where the rule decides, read `rules.source_for(RuleKey::X)`
+//!    ([`Rulebook::source_for`]) from the rule set the code already holds:
+//!    the one the session or a shop builder holds, or the rulebook a
+//!    strategy port is built `from_rulebook` with (as
+//!    [`NovaLaw::from_rulebook`](crate::NovaLaw::from_rulebook) does).
+//!    Every layer already carries the whole rule set, so nothing is
+//!    threaded.
 //! 3. Test both readings, [`RuleSource::Engine`] and [`RuleSource::Bible`],
-//!    and that the rule follows its rulebook entry; extend this module's
-//!    key test to the new key.
+//!    building the rule set with
+//!    `Rulebook::default().with_override(RuleKey::X, RuleSource::Bible)`.
 //!
-//! At the edge of the program, every rule is built from the one rulebook
-//! the settings give (see `nova::rulebook`).
+//! The per-layer reaches tests and the settings test loop over
+//! [`RuleKey::ALL`], so they cover the new key unchanged. At the edge of
+//! the program, the one rulebook the settings give (see
+//! `nova::rulebook`) is the rule set every layer reads, and every
+//! strategy port is built from it.
 
 /// Which of the two a disputed rule follows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -53,96 +53,10 @@
 //! The same file chooses, for each rule where the Nova Bible and the
 //! original engine disagree, which one the game follows: `"rules"`,
 //! `"engine"` (the default) or `"bible"`, for all of them, and
-//! `"rule_overrides"`, an object, for any one by its key:
-//! `"crime_gains"` (whether a crime against a government's ship improves
-//! the record with every government not allied with it, as the engine
-//! does, or only with its enemies, as the Bible says), `"empty_booty"`
-//! (whether a ship of `Booty` 0 opens the plunder dialog anyway, or
-//! repels the boarders), `"crewless_capture"` (whether a ship of no crew
-//! can still capture), `"piracy_police"` (whether warships as well as
-//! interceptors answer the player's attack or boarding, or interceptors
-//! only), `"quiet_hails"` (whether a quiet government's ships answer
-//! Greetings and ignore the middle button, as the engine does, or answer
-//! "No response." to Greetings, as the Bible says) and `"long_advice"`
-//! (whether an advice line exactly 42 characters long reads "Nice to meet
-//! you.", as the engine's slip has it, or is shown as written), and
-//! the hiring rules: `"hire_require"` (whether an unmet `Require` refuses
-//! a hire), `"take_off_pay"` (whether each take-off pays the hired
-//! escorts a day's wages), `"hire_fee"` (whether a hire takes the
-//! engine's extra credit or exactly the fee shown) and `"escort_wage"`
-//! (whether a hired escort is paid the wage its ship type gives now or
-//! the wage it was hired at), and the persons' rules: `"person_odds"`
-//! (how often a person appears), `"system_persons"` (whether a system's
-//! Person slot always brings its person), `"link_syst_slip"` (whether a
-//! person linked to a system also appears in the one the engine's slip
-//! gives), `"shield_mod"` (whether `ShieldMod` scales the armour too),
-//! `"person_coward"` (which persons run at their `Coward`),
-//! `"person_credits"` (the credits a person carries), `"comm_quote"`
-//! (whether a person's comm quote answers Greetings or opens the hail)
-//! and `"person_join"` (whether no person offers to join, as the engine
-//! has it until missions exist, or a person whose record allows it lists
-//! Use As Escort and joins the fleet as itself), and the boarding
-//! grants: `"grant_count"` (whether a grant is half its `GrantCount` to
-//! all of it, as the engine and the Bible have it, or one to all of it)
-//! and `"grant_max"` (whether a grant, by boarding or by `G`, may pass
-//! the outfit's `Max`, or is held to it and to the free mass), and the
-//! outfit effects: `"map_explore"` (whether a map explores the engine's
-//! depth-first way, or every system within its jumps), `"invalid_map"`
-//! (whether a map that explores nothing is used up, or kept as an
-//! outfit), `"remove_refund"` (whether `D` pays nothing for the
-//! outfit it removes, or what selling it would) and `"refit_reserves"`
-//! (whether a refit by `G`, `D` or boarding keeps a shield or armour
-//! above its most, or holds each to it), and the set-expression
-//! hooks: `"purchase_paint_order"` (whether buying a ship clears its
-//! paint after the new ship's `OnPurchase`, losing a paint it grants, or
-//! before it), `"capture_hook_order"` (whether Use As My Ship runs
-//! `OnRetire` and `OnCapture` before the outfit swap, which strips a
-//! non-persistent outfit they grant, or after it) and
-//! `"start_ship_purchase"` (whether a new pilot's starting ship runs no
-//! `OnPurchase`, or runs it once before `OnStart`), the shops' `"buy_random"` (whether an outfit's
-//! `BuyRandom` below 1 is never for sale and a ship's below 0 always, as
-//! the engine has it, or as the Bible says), and the cargo's
-//! `"junk_flags"` (whether held tribbles `jünk` can overfill the hold and
-//! perishable `jünk` decays only while there is space, as the engine has
-//! it, or tribbles grow only into free space and perishables always
-//! decay), the exchange's `"event_price"` (whether an active `öops`
-//! event prices its commodity at its `BasePrice` plus its `PriceDelta`,
-//! the highest ID winning, as the engine has it, or adds its `PriceDelta`
-//! to the stellar's own price, several adding up), `"junk_price"`
-//! (whether a `jünk` price is signed, a negative one bought at no tons
-//! and sold at a loss and a row priced 0 not listed, as the engine has
-//! it, or is never below 0, a row priced 0 listed and bought free),
-//! `"junk_trade"` (whether every listed `jünk` row is bought and sold at
-//! its own price, as the engine has it, or its `SoldAt` row is bought
-//! only and its `BoughtAt` row sold only, as the Bible says),
-//! `"trade_lot"` (whether a plain Buy or Sell moves up to 10 tons, as
-//! the engine has it, or a ton), `"trade_quotient"` (whether the most
-//! a buy moves divides the cash by the price in single floats, as the
-//! engine has it, which above 2^24 cash can buy a ton more than the cash
-//! covers, or exactly), `"trade_count"` (whether Option on Buy or
-//! Sell asks for a count in the quantity dialog, as the engine has it,
-//! or trades the most at once) and `"trade_debt"` (whether a buy divides
-//! cash below 0 by the price signed, as the engine has it, so a
-//! negative-price `jünk` at exactly the cash is bought, or counts it as
-//! none),
-//! the shipyard's `"purchase_cargo"` (whether a ship purchase keeps the
-//! new ship's share of each good against the trader escorts' holds, then
-//! trims to the fleet's holds, as the engine has it, or keeps what fits
-//! the new ship, goods in order), and the outfitter's `"outfit_limit"`
-//! (whether a map or clean-record outfit is refused while the last outfit
-//! bought since the outfitter opened was of its kind, as the engine has
-//! it, or has no limit), `"outfit_refund"` (whether an outfit bought
-//! since the outfitter opened sells back at its full price, as the engine
-//! has it, or every outfit at half), `"outfit_count"` (whether Option
-//! on Buy or Sell asks for a count in the quantity dialog, as the engine
-//! has it, or moves one) and `"sale_mass"` (whether an outfit of mass 0
-//! or more sells while the free mass is below 0, the free mass read
-//! clamped at 0 as the engine has it, or a sale is refused whenever it
-//! would leave the free mass below 0), and the shipyard's
-//! `"trade_in_outfits"` (whether a ship's trade-in counts an unsellable
-//! outfit, as the engine has it, or leaves it out); every key is listed in
-//! `nova_sim::rulebook`. They are set by editing the file; a sound change
-//! in the Preferences dialog keeps them.
+//! `"rule_overrides"`, an object, for any one by its key, such as
+//! `{"crime_gains": "bible"}`. Every key, and what each reading does, is
+//! listed in `nova_sim::rulebook`'s table. They are set by editing the
+//! file; a sound change in the Preferences dialog keeps them.
 //!
 //! When the game data loads, each data file that could not be loaded and
 //! each control-bit expression that does not parse is reported as a line
