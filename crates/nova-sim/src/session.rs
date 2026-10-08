@@ -10353,6 +10353,55 @@ mod tests {
         );
     }
 
+    /// Holds `P300` in `session`, by the engine's `script_sound` reading.
+    fn hold_p300(session: &mut Session) {
+        session.run_set(
+            &crate::control::SetExpr::parse("P300").expect("parses"),
+            &mut Scripted::default(),
+        );
+    }
+
+    /// The first flight tick after a gate exit sounds the held `P300`, as
+    /// the original's gate exits (`_PlayerEnterHypergate` @0x637bf,
+    /// `_PlayerEnterWormhole` @0x64005) leave `_missionSoundID` alone.
+    fn assert_held_sound_plays_next_tick(session: &mut Session) {
+        assert_eq!(session.take_sounds(), [SimSound::Arrived], "not yet");
+        session.tick(Controls::default());
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::Script {
+                sound: SoundId(300),
+                exclusive: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_held_sound_outlives_a_wormhole_exit() {
+        let catalog = wormholes();
+        let mut session = at_wormhole(&catalog);
+        session.take_sounds();
+        hold_p300(&mut session);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[0])),
+            Ok(SystemId(131))
+        );
+        assert_held_sound_plays_next_tick(&mut session);
+    }
+
+    #[test]
+    fn by_the_engine_a_held_sound_outlives_a_hypergate_exit() {
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        session.take_sounds();
+        hold_p300(&mut session);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default()),
+            Ok(SystemId(131))
+        );
+        assert_held_sound_plays_next_tick(&mut session);
+    }
+
     #[test]
     fn a_wormhole_rolled_onto_a_linked_one_comes_out_where_it_went_in() {
         let catalog = wormholes();

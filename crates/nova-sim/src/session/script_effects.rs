@@ -115,17 +115,20 @@
 //! is held (`_missionSnd`), it loads and plays it at the effects volume;
 //! it lets the held one go once it has stopped (@0x46358-0x46375); and
 //! every frame resets the ID (@0x463a9), as do `_ResetPlayer` (@0x1d909)
-//! and the hyperspace arrival (`_HandlePlayer` @0x6c4ff). So only the
-//! last `P` before a flight frame counts, one while a mission sound still
-//! plays is dropped, and the spaceport never reads it, so a landed `P`
-//! plays on the first flight frame after the take-off.
+//! and the hyperspace arrival (`_HandlePlayer` @0x6c4ff), but not a
+//! hypergate or wormhole exit (`_PlayerEnterHypergate` @0x637bf,
+//! `_PlayerEnterWormhole` @0x64005, which bypass that arrival). So only
+//! the last `P` before a flight frame counts, one while a mission sound
+//! still plays is dropped, and the spaceport never reads it, so a landed
+//! `P` plays on the first flight frame after the take-off.
 //!
 //! Here, by [`ScriptEffectRules::sound`]'s engine reading, `P` holds its
 //! sound, a later one replacing it, and the session's next flight tick
 //! ([`Session::tick`]) sounds it as [`SimSound::Script`], exclusive: the
 //! audio side plays it on its one mission channel, unless the last sound
-//! played there is still playing. A jump's arrival drops a held sound,
-//! and none is saved. By the other reading every `P` sounds at once,
+//! played there is still playing. A jump's arrival drops a held sound;
+//! a hypergate or wormhole exit does not, so it sounds on the first tick
+//! after. None is saved. By the other reading every `P` sounds at once,
 //! landed or not, over whatever plays. The session never calls audio: the
 //! sound leaves it as an event, drained with [`Session::take_sounds`].
 //!
