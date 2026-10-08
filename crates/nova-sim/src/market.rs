@@ -22,10 +22,20 @@
 //! flags give it a price level, in the nibble at bit 28 - 4n (food at 28
 //! down to equipment at 8): 1 low, 2 medium, 4 high, 0 not traded. A
 //! nibble with more than one bit set, which stock data never has, takes
-//! the highest level it names. Low is [`LOW_PERCENT`] of the base price
-//! and high [`HIGH_PERCENT`], truncated; medium is the base price. The
-//! community's table of stock prices (Food 60/75/93, Medical 600/750/937,
-//! and so on) matches these exactly. A standard commodity's price of 4 or
+//! the lowest level it names (`_CalcPortDemand` @0x56b1-0x5794).
+//!
+//! Low is the base price divided by the stellar's [`Markup`] and high
+//! the base price multiplied by it, in doubles, truncated toward zero;
+//! medium is the base price (`_DoTradeDialog` @0x5dc0c-0x5dc48,
+//! @0x5dc87-0x5dcc5). The markup is 1.25 ([`Markup::Standard`]) unless
+//! the stellar has a government and the player's legal record in its
+//! system is below 0, when it is 1.1 ([`Markup::Outlaw`]: 110 is 99 low,
+//! 121 high), or the stellar is dominated, when it is 1.5
+//! ([`Markup::Dominated`]) whatever the record. Until the port models
+//! domination, a dominated stellar is one with the `Flags2` bit
+//! [`DOMINATED`]. By 1.25 low is 80 % and high 125 %, and the community's
+//! table of stock prices (Food 60/75/93, Medical 600/750/937, and so on)
+//! matches these exactly. A standard commodity's price of 4 or
 //! less, a base price of 0 or below included, is [`MIN_COMMODITY_PRICE`],
 //! 5, as in the engine (`_DoTradeDialog` @0x5dcc8-0x5dcce); a `jünk`
 //! price is never below 0.
@@ -36,8 +46,10 @@
 //! # Special goods
 //!
 //! A `jünk` is sold at its `SoldAt` stellars, at the low price of its
-//! `BasePrice`, and bought at its `BoughtAt` stellars, at the high price
-//! (the community's Opals: 960 and 1500 from 1200). It is traded only
+//! `BasePrice`, and bought at its `BoughtAt` stellars, at the high price,
+//! by the stellar's [`Markup`] as a commodity is (`_DoTradeDialog`
+//! @0x5dd83-0x5de2f; the community's Opals: 960 and 1500 from 1200 by
+//! 1.25). It is traded only
 //! through a trade center, so a listed stellar without one offers nothing.
 //! A stellar in both lists, which stock data never has, trades it both
 //! ways at its base price. `SellOn` gates selling it and `BuyOn` buying
@@ -136,11 +148,59 @@ use crate::rulebook::RuleSource;
 /// How many standard commodities there are.
 pub const COMMODITIES: u8 = 6;
 
-/// A low price, as a percentage of the base price.
-pub const LOW_PERCENT: i64 = 80;
+/// The `spöb` `Flags2` bit of a stellar that is always dominated by the
+/// player: `_ResetPlayerRecord` sets each stellar's dominated byte (+0x46)
+/// from it (@0x1dbdb-0x1dbdf), and the exchange prices such a stellar at
+/// [`Markup::Dominated`].
+pub const DOMINATED: u16 = 0x0020;
 
-/// A high price, as a percentage of the base price.
-pub const HIGH_PERCENT: i64 = 125;
+/// What a stellar's low and high prices are marked down and up by
+/// (`_DoTradeDialog` @0x5dc0c-0x5dc48): low is the base price divided by
+/// its [`factor`](Markup::factor), high the base price multiplied by it,
+/// in doubles, truncated toward zero; medium is the base price.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Markup {
+    /// 1.25 (the double at 0xdd5c8): low is 80 % of the base price and
+    /// high 125 %.
+    #[default]
+    Standard,
+    /// 1.1 (0xdd1b0): at a stellar with a government, while the player's
+    /// legal record in its system is below 0.
+    Outlaw,
+    /// 1.5 (0xdd640): at a stellar the player dominates, whatever the
+    /// record.
+    Dominated,
+}
+
+impl Markup {
+    /// The markup at a stellar that has a government (`governed`) or not,
+    /// where the player's legal record in its system is `record`, and
+    /// that is `dominated` or not (`_DoTradeDialog` @0x5dc0c-0x5dc48).
+    ///
+    /// The original reads the record from `_playerRecord`, one per
+    /// system; the port's is the record with the system's government, 0
+    /// in an independent system, as [`legal`](crate::legal) maps it.
+    #[must_use]
+    pub const fn of(governed: bool, record: i16, dominated: bool) -> Self {
+        if dominated {
+            Self::Dominated
+        } else if governed && record < 0 {
+            Self::Outlaw
+        } else {
+            Self::Standard
+        }
+    }
+
+    /// The factor prices are divided and multiplied by.
+    #[must_use]
+    pub const fn factor(self) -> f64 {
+        match self {
+            Self::Standard => 1.25,
+            Self::Outlaw => 1.1,
+            Self::Dominated => 1.5,
+        }
+    }
+}
 
 /// The lowest price of a standard commodity: a price of 4 or less, a
 /// level's or an event's, is raised to this (`_DoTradeDialog`
@@ -164,11 +224,11 @@ pub enum Good {
 /// A stellar's price level for a good.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PriceLevel {
-    /// [`LOW_PERCENT`] of the base price.
+    /// The base price divided by the stellar's [`Markup`].
     Low,
     /// The base price.
     Medium,
-    /// [`HIGH_PERCENT`] of the base price.
+    /// The base price multiplied by the stellar's [`Markup`].
     High,
 }
 
@@ -228,30 +288,35 @@ pub struct Commodity {
 
 /// The price level that `spöb` `flags` set for `commodity`, or `None`
 /// when the stellar does not trade it (or there is no such commodity).
+/// A nibble with several bits takes the lowest level it names, as
+/// `_CalcPortDemand` tests low, then medium, then high (@0x56b1-0x5794).
 #[must_use]
 pub fn price_level(flags: u32, commodity: u8) -> Option<PriceLevel> {
     if commodity >= COMMODITIES {
         return None;
     }
     let nibble = (flags >> (28 - 4 * u32::from(commodity))) & 0xF;
-    if nibble & 4 != 0 {
-        Some(PriceLevel::High)
+    if nibble & 1 != 0 {
+        Some(PriceLevel::Low)
     } else if nibble & 2 != 0 {
         Some(PriceLevel::Medium)
-    } else if nibble & 1 != 0 {
-        Some(PriceLevel::Low)
+    } else if nibble & 4 != 0 {
+        Some(PriceLevel::High)
     } else {
         None
     }
 }
 
-/// A good's price at `level`, from its `base` price.
+/// A good's price at `level`, from its `base` price, by `markup`: low is
+/// `base / factor` and high `base × factor`, in doubles, truncated toward
+/// zero as `cvttsd2si` truncates (`_DoTradeDialog` @0x5dc87-0x5dcc5).
 #[must_use]
-pub fn band_price(base: i64, level: PriceLevel) -> i64 {
+pub fn band_price(base: i64, level: PriceLevel, markup: Markup) -> i64 {
+    let base_f = base as f64;
     match level {
-        PriceLevel::Low => base * LOW_PERCENT / 100,
+        PriceLevel::Low => (base_f / markup.factor()) as i64,
         PriceLevel::Medium => base,
-        PriceLevel::High => base * HIGH_PERCENT / 100,
+        PriceLevel::High => (base_f * markup.factor()) as i64,
     }
 }
 
@@ -562,7 +627,8 @@ impl Market {
 }
 
 /// The exchange of `stellar`, with these `flags`, for `pilot` with
-/// `capacity` tons of cargo space; `None` without a trade center.
+/// `capacity` tons of cargo space, its low and high prices by `markup`;
+/// `None` without a trade center.
 pub(crate) fn market(
     goods: &Goods,
     stellar: StellarId,
@@ -570,6 +636,7 @@ pub(crate) fn market(
     pilot: &Pilot,
     capacity: u32,
     source: RuleSource,
+    markup: Markup,
 ) -> Option<Market> {
     if flags & StellarFlags::TRADE_CENTER == 0 {
         return None;
@@ -596,7 +663,7 @@ pub(crate) fn market(
                     .map(|event| i64::from(event.price_delta))
                     .sum(),
             };
-            let price = band_price(commodity.base_price, level) + delta;
+            let price = band_price(commodity.base_price, level, markup) + delta;
             Some(commodity_row(*n, commodity, price))
         })
         .collect();
@@ -628,7 +695,7 @@ pub(crate) fn market(
             (false, true) => PriceLevel::High,
             (false, false) => return None,
         };
-        let price = band_price(i64::from(junk.base_price), level);
+        let price = band_price(i64::from(junk.base_price), level, markup);
         Some(listed(
             Good::Junk(junk.id),
             &junk.name,
@@ -973,11 +1040,13 @@ mod tests {
     }
 
     #[test]
-    fn a_nibble_with_several_bits_takes_its_highest_level_and_8_alone_none() {
-        use PriceLevel::{High, Medium};
-        assert_eq!(price_level(0x7 << 28, 0), Some(High));
-        assert_eq!(price_level(0x3 << 28, 0), Some(Medium));
-        assert_eq!(price_level(0x5 << 28, 0), Some(High));
+    fn a_nibble_with_several_bits_takes_its_lowest_level_and_8_alone_none() {
+        use PriceLevel::{Low, Medium};
+        assert_eq!(price_level(0x3 << 28, 0), Some(Low));
+        assert_eq!(price_level(0x5 << 28, 0), Some(Low));
+        assert_eq!(price_level(0x6 << 28, 0), Some(Medium));
+        assert_eq!(price_level(0x7 << 28, 0), Some(Low));
+        assert_eq!(price_level(0xE << 28, 0), Some(Medium));
         assert_eq!(price_level(0x8 << 28, 0), None);
     }
 
@@ -991,7 +1060,7 @@ mod tests {
     }
 
     #[test]
-    fn low_is_80_percent_and_high_125_percent_truncated() {
+    fn by_the_standard_markup_low_is_80_percent_and_high_125_percent_truncated() {
         use PriceLevel::{High, Low, Medium};
         let table = [
             (75, [60, 75, 93]),
@@ -1005,12 +1074,73 @@ mod tests {
         ];
         for (base, prices) in table {
             assert_eq!(
-                [Low, Medium, High].map(|level| band_price(base, level)),
+                [Low, Medium, High].map(|level| band_price(base, level, Markup::Standard)),
                 prices,
                 "{base}"
             );
         }
-        assert_eq!((LOW_PERCENT, HIGH_PERCENT), (80, 125));
+        assert_eq!(Markup::default(), Markup::Standard);
+        assert_eq!(Markup::Standard.factor().to_bits(), 1.25_f64.to_bits());
+    }
+
+    /// `base`'s low, medium and high prices by `markup`.
+    fn bands(base: i64, markup: Markup) -> [i64; 3] {
+        use PriceLevel::{High, Low, Medium};
+        [Low, Medium, High].map(|level| band_price(base, level, markup))
+    }
+
+    #[test]
+    fn the_outlaw_markup_divides_and_multiplies_by_1_1_in_doubles() {
+        assert_eq!(Markup::Outlaw.factor().to_bits(), 1.1_f64.to_bits());
+        assert_eq!(
+            bands(110, Markup::Outlaw),
+            [99, 110, 121],
+            "110 / 1.1 < 100"
+        );
+        assert_eq!(bands(100, Markup::Outlaw), [90, 100, 110]);
+        assert_eq!(bands(33, Markup::Outlaw), [29, 33, 36]);
+        assert_eq!(bands(75, Markup::Outlaw), [68, 75, 82]);
+    }
+
+    #[test]
+    fn the_dominated_markup_divides_and_multiplies_by_1_5() {
+        assert_eq!(Markup::Dominated.factor().to_bits(), 1.5_f64.to_bits());
+        assert_eq!(bands(100, Markup::Dominated), [66, 100, 150]);
+        assert_eq!(bands(75, Markup::Dominated), [50, 75, 112]);
+    }
+
+    #[test]
+    fn a_negative_base_truncates_toward_zero() {
+        assert_eq!(bands(-75, Markup::Standard), [-60, -75, -93]);
+        assert_eq!(bands(-110, Markup::Outlaw), [-99, -110, -121]);
+    }
+
+    #[test]
+    fn the_markup_is_standard_unless_the_record_with_a_government_is_negative() {
+        for record in [i16::MIN, -1, 0, 1, i16::MAX] {
+            assert_eq!(
+                Markup::of(false, record, false),
+                Markup::Standard,
+                "{record}"
+            );
+        }
+        assert_eq!(Markup::of(true, 0, false), Markup::Standard);
+        assert_eq!(Markup::of(true, 1, false), Markup::Standard);
+        assert_eq!(Markup::of(true, -1, false), Markup::Outlaw);
+        assert_eq!(Markup::of(true, i16::MIN, false), Markup::Outlaw);
+    }
+
+    #[test]
+    fn a_dominated_stellar_takes_the_dominated_markup_whatever_the_record() {
+        for govt in [false, true] {
+            for record in [i16::MIN, -1, 0, 1] {
+                assert_eq!(
+                    Markup::of(govt, record, true),
+                    Markup::Dominated,
+                    "{govt} {record}"
+                );
+            }
+        }
     }
 
     // Cargo space.
@@ -1568,11 +1698,27 @@ mod tests {
     fn without_a_trade_center_there_is_no_exchange() {
         let flags = PORT_KANE & !StellarFlags::TRADE_CENTER;
         assert_eq!(
-            market(&goods(), EARTH, flags, &pilot(0), 10, RuleSource::Engine),
+            market(
+                &goods(),
+                EARTH,
+                flags,
+                &pilot(0),
+                10,
+                RuleSource::Engine,
+                Markup::Standard
+            ),
             None
         );
         assert_eq!(
-            market(&goods(), MARS, 0, &pilot(0), 10, RuleSource::Engine),
+            market(
+                &goods(),
+                MARS,
+                0,
+                &pilot(0),
+                10,
+                RuleSource::Engine,
+                Markup::Standard
+            ),
             None
         );
     }
@@ -1587,6 +1733,7 @@ mod tests {
             &pilot(500),
             10,
             RuleSource::Engine,
+            Markup::Standard,
         )
         .expect("trades");
         assert_eq!(
@@ -1614,6 +1761,7 @@ mod tests {
             &pilot(0),
             0,
             RuleSource::Engine,
+            Markup::Standard,
         )
         .expect("trades");
         assert_eq!(
@@ -1630,6 +1778,7 @@ mod tests {
             &pilot(0),
             0,
             RuleSource::Engine,
+            Markup::Standard,
         )
         .expect("trades");
         assert_eq!(none.rows, [], "a trade center that trades nothing");
@@ -1637,8 +1786,16 @@ mod tests {
 
     #[test]
     fn junk_is_sold_low_where_it_is_sold_and_bought_high_where_it_is_bought() {
-        let at_earth =
-            market(&goods(), EARTH, TRADE, &pilot(0), 0, RuleSource::Engine).expect("trades");
+        let at_earth = market(
+            &goods(),
+            EARTH,
+            TRADE,
+            &pilot(0),
+            0,
+            RuleSource::Engine,
+            Markup::Standard,
+        )
+        .expect("trades");
         assert_eq!(
             at_earth.rows,
             [
@@ -1653,8 +1810,16 @@ mod tests {
             ],
             "by ID"
         );
-        let at_mars =
-            market(&goods(), MARS, TRADE, &pilot(0), 0, RuleSource::Engine).expect("trades");
+        let at_mars = market(
+            &goods(),
+            MARS,
+            TRADE,
+            &pilot(0),
+            0,
+            RuleSource::Engine,
+            Markup::Standard,
+        )
+        .expect("trades");
         assert_eq!(
             at_mars.rows,
             [MarketRow {
@@ -1669,6 +1834,7 @@ mod tests {
             &pilot(0),
             0,
             RuleSource::Engine,
+            Markup::Standard,
         )
         .expect("trades");
         assert_eq!(elsewhere.rows, []);
@@ -1685,15 +1851,81 @@ mod tests {
             ..unlisted()
         };
         let goods = Goods::new(&CommodityStrings::default(), vec![both], Vec::new());
-        let found = market(&goods, EARTH, TRADE, &pilot(0), 0, RuleSource::Engine).expect("trades");
+        let found = market(
+            &goods,
+            EARTH,
+            TRADE,
+            &pilot(0),
+            0,
+            RuleSource::Engine,
+            Markup::Standard,
+        )
+        .expect("trades");
         assert_eq!(found.rows, [row(Good::Junk(JunkId(200)), "Both", 400)]);
+    }
+
+    /// The (good, price) rows at `stellar`, with `flags`, by `markup`.
+    fn priced(stellar: StellarId, flags: u32, markup: Markup) -> Vec<(Good, i64)> {
+        market(
+            &goods(),
+            stellar,
+            flags,
+            &pilot(0),
+            0,
+            RuleSource::Engine,
+            markup,
+        )
+        .expect("trades")
+        .rows
+        .iter()
+        .map(|row| (row.good, row.price))
+        .collect()
+    }
+
+    #[test]
+    fn the_markup_prices_the_low_and_high_commodities_and_medium_is_the_base() {
+        // Food low, industrial high, medical medium.
+        let flags = TRADE | (1 << 28) | (4 << 24) | (2 << 20);
+        let commodities = |markup| {
+            priced(StellarId(150), flags, markup)
+                .into_iter()
+                .map(|(_, price)| price)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(commodities(Markup::Standard), [60, 437, 750]);
+        assert_eq!(commodities(Markup::Outlaw), [68, 385, 750]);
+        assert_eq!(commodities(Markup::Dominated), [50, 525, 750]);
+    }
+
+    #[test]
+    fn the_markup_prices_junk_where_it_is_sold_and_where_it_is_bought() {
+        let water = Good::Junk(JunkId(134));
+        let opals = Good::Junk(JunkId(146));
+        assert_eq!(
+            priced(EARTH, TRADE, Markup::Outlaw),
+            [(water, 272), (opals, 1090)]
+        );
+        assert_eq!(priced(MARS, TRADE, Markup::Outlaw), [(opals, 1320)]);
+        assert_eq!(
+            priced(EARTH, TRADE, Markup::Dominated),
+            [(water, 200), (opals, 800)]
+        );
+        assert_eq!(priced(MARS, TRADE, Markup::Dominated), [(opals, 1800)]);
     }
 
     #[test]
     fn junk_follows_the_commodities() {
         let flags = TRADE | (2 << 28);
-        let found =
-            market(&goods(), MARS, flags, &pilot(0), 0, RuleSource::Engine).expect("trades");
+        let found = market(
+            &goods(),
+            MARS,
+            flags,
+            &pilot(0),
+            0,
+            RuleSource::Engine,
+            Markup::Standard,
+        )
+        .expect("trades");
         let listed: Vec<_> = found.rows.iter().map(|row| row.good).collect();
         assert_eq!(listed, [Good::Commodity(0), Good::Junk(JunkId(146))]);
     }
@@ -1714,6 +1946,7 @@ mod tests {
             &pilot,
             12,
             RuleSource::Engine,
+            Markup::Standard,
         )
         .expect("trades");
         let held: Vec<_> = found.rows.iter().map(|row| (row.good, row.held)).collect();
@@ -1730,7 +1963,16 @@ mod tests {
             (12, 2),
             "everything held counts"
         );
-        let over = market(&goods(), EARTH, TRADE, &pilot, 5, RuleSource::Engine).expect("trades");
+        let over = market(
+            &goods(),
+            EARTH,
+            TRADE,
+            &pilot,
+            5,
+            RuleSource::Engine,
+            Markup::Standard,
+        )
+        .expect("trades");
         assert_eq!(over.free, 0, "more held than there is space");
     }
 
@@ -1770,7 +2012,16 @@ mod tests {
                     )
             })
             .collect();
-        market(&goods(), stellar, flags, &pilot, 0, source).expect("trades")
+        market(
+            &goods(),
+            stellar,
+            flags,
+            &pilot,
+            0,
+            source,
+            Markup::Standard,
+        )
+        .expect("trades")
     }
 
     fn price(market: &Market, good: Good) -> i64 {
@@ -1848,8 +2099,16 @@ mod tests {
         let goods = Goods::new(&stock(), Vec::new(), records);
         let mut pilot = pilot(0);
         pilot.events = BTreeMap::from([at(&disasters()[2], 7), at(&disasters()[0], 1)]);
-        let found =
-            market(&goods, EARTH, PORT_KANE, &pilot, 0, RuleSource::Engine).expect("trades");
+        let found = market(
+            &goods,
+            EARTH,
+            PORT_KANE,
+            &pilot,
+            0,
+            RuleSource::Engine,
+            Markup::Standard,
+        )
+        .expect("trades");
         assert_eq!(
             price(&found, Good::Commodity(0)),
             90,
@@ -1880,7 +2139,7 @@ mod tests {
                 stellar: Some(EARTH),
             },
         )]);
-        market(&goods, EARTH, flags, &pilot, 0, source).expect("trades")
+        market(&goods, EARTH, flags, &pilot, 0, source, Markup::Standard).expect("trades")
     }
 
     #[test]
@@ -1906,6 +2165,7 @@ mod tests {
             &buyer,
             10,
             RuleSource::Engine,
+            Markup::Standard,
         )
         .expect("trades");
         assert_eq!(
@@ -1939,6 +2199,7 @@ mod tests {
             &buyer,
             10,
             RuleSource::Engine,
+            Markup::Standard,
         )
         .expect("trades");
         assert_eq!(price(&found, FOOD), 5, "a commodity priced at 0, 0 - 15");
@@ -1950,6 +2211,7 @@ mod tests {
             &buyer,
             10,
             RuleSource::Engine,
+            Markup::Standard,
         )
         .expect("trades");
         assert_eq!(found.row(FOOD), None, "an event at another stellar");
@@ -2002,7 +2264,8 @@ mod tests {
                 ("", food_high, 5),
             ] {
                 let goods = Goods::new(&strings(&["Food"], &[base]), Vec::new(), Vec::new());
-                let found = market(&goods, EARTH, flags, &pilot(0), 0, source).expect("trades");
+                let found = market(&goods, EARTH, flags, &pilot(0), 0, source, Markup::Standard)
+                    .expect("trades");
                 assert_eq!(price(&found, FOOD), expected, "{base} {source:?}");
             }
         }
@@ -2023,7 +2286,8 @@ mod tests {
             Vec::new(),
         );
         for source in RuleSource::ALL {
-            let found = market(&goods, EARTH, TRADE, &pilot(0), 0, source).expect("trades");
+            let found = market(&goods, EARTH, TRADE, &pilot(0), 0, source, Markup::Standard)
+                .expect("trades");
             let prices: Vec<_> = found.rows.iter().map(|row| row.price).collect();
             assert_eq!(prices, [0, 4], "{source:?}");
         }
@@ -2051,8 +2315,16 @@ mod tests {
                 stellar: Some(EARTH),
             },
         )]);
-        let found =
-            market(&goods, EARTH, PORT_KANE, &pilot, 0, RuleSource::Engine).expect("trades");
+        let found = market(
+            &goods,
+            EARTH,
+            PORT_KANE,
+            &pilot,
+            0,
+            RuleSource::Engine,
+            Markup::Standard,
+        )
+        .expect("trades");
         assert_eq!(found.events, Vec::<String>::new());
         assert_eq!(price(&found, Good::Commodity(5)), 440);
     }
@@ -2084,7 +2356,7 @@ mod tests {
                 stellar: stored,
             },
         )]);
-        market(&goods, here, PORT_KANE, &pilot, 0, source).expect("trades")
+        market(&goods, here, PORT_KANE, &pilot, 0, source, Markup::Standard).expect("trades")
     }
 
     /// Food's price and the events shown at `market`.

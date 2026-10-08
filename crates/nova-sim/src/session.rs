@@ -300,7 +300,7 @@ use crate::hyperspace::{
 };
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::legal::{self, Crime, LegalCode};
-use crate::market::{self, EscortHolds, Good, Goods, Market, Order, TradeRefusal};
+use crate::market::{self, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal};
 use crate::message::SimMessage;
 use crate::navigation::next_stellar;
 use crate::outfitter::{
@@ -906,7 +906,7 @@ impl Session {
                     player: Some(self.player_side()),
                     govts: &self.govts,
                     system_govt,
-                    record: system_govt.map_or(0, |govt| self.pilot.legal_record(govt)),
+                    record: self.system_record(),
                     persons: PersonWorld {
                         rules: &*self.person_rules.0,
                         gone: &self.pilot.gone_persons,
@@ -936,7 +936,7 @@ impl Session {
             player: Some(self.player_side()),
             govts: &self.govts,
             system_govt,
-            record: system_govt.map_or(0, |govt| self.pilot.legal_record(govt)),
+            record: self.system_record(),
             persons: PersonWorld {
                 rules: &*self.person_rules.0,
                 gone: &self.pilot.gone_persons,
@@ -1830,7 +1830,7 @@ impl Session {
     }
 
     /// The exchange of the stellar the ship is docked at, if it has landed
-    /// at a trade center.
+    /// at a trade center, priced by the stellar's [`Markup`].
     #[must_use]
     pub fn market(&self) -> Option<Market> {
         let stellar = self.landed?;
@@ -1842,7 +1842,34 @@ impl Session {
             &self.pilot,
             self.capacity(),
             self.event_price,
+            self.markup(site),
         )
+    }
+
+    /// The markup at `site`, one of the system's: by whether it has a
+    /// government, the player's legal record in the system (with the
+    /// system's government, 0 in an independent system), and whether it
+    /// is dominated ([`Markup::of`]).
+    ///
+    /// The port has no domination state yet (task `planet-domination`):
+    /// the only dominated stellars are those whose `Flags2` has
+    /// [`DOMINATED`](market::DOMINATED), so a stellar the player dominates
+    /// by hailing is not yet priced at 1.5. That task feeds its dominated
+    /// state in here.
+    fn markup(&self, site: &LandingSite) -> Markup {
+        Markup::of(
+            site.govt.is_some(),
+            self.system_record(),
+            site.flags2 & market::DOMINATED != 0,
+        )
+    }
+
+    /// The player's legal record in the current system: the record with
+    /// its government, 0 in an independent system.
+    fn system_record(&self) -> i16 {
+        self.star_map
+            .govt(self.pilot.system)
+            .map_or(0, |govt| self.pilot.legal_record(govt))
     }
 
     /// Trades on the exchange as `order` asks, and gives the tons moved: a
@@ -4732,6 +4759,81 @@ mod tests {
         let mut plain = Session::start(&self::catalog()).expect("starts");
         land_now(&mut plain).expect("lands");
         assert_eq!(plain.market(), None, "no trade center");
+    }
+
+    /// The exchange's catalog with food at high and metal at low, at a
+    /// trade center of government `site_govt` with `flags2`, in a system
+    /// of government `system_govt`.
+    fn marked_up(
+        site_govt: Option<i16>,
+        system_govt: Option<i16>,
+        flags2: u16,
+    ) -> FakePilotCatalog {
+        let mut catalog = exchange();
+        catalog.sites[0].1[0] = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::TRADE_CENTER | 4 << 28 | 1 << 12,
+            govt: site_govt.map(GovtId),
+            flags2,
+            ..planet(128, 0.0, 0.0)
+        };
+        catalog.star_map[0].govt = system_govt.map(GovtId);
+        catalog
+    }
+
+    /// The food and metal prices at `catalog`'s trade center with these
+    /// legal records, set once landed.
+    fn marked_up_prices(catalog: &FakePilotCatalog, records: &[(i16, i16)]) -> [i64; 2] {
+        let mut session = Session::start(catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        for &(govt, record) in records {
+            session.pilot.set_legal_record(GovtId(govt), record);
+        }
+        let market = session.market().expect("an exchange");
+        [FOOD, METAL].map(|good| market.row(good).expect("traded").price)
+    }
+
+    #[test]
+    fn a_negative_record_in_a_governed_stellars_system_marks_its_prices_up_by_1_1() {
+        let catalog = marked_up(Some(150), Some(150), 0);
+        assert_eq!(marked_up_prices(&catalog, &[]), [93, 160], "1.25");
+        assert_eq!(marked_up_prices(&catalog, &[(150, 0)]), [93, 160], "1.25");
+        assert_eq!(marked_up_prices(&catalog, &[(150, -1)]), [82, 181], "1.1");
+        let elsewhere = marked_up(Some(150), Some(151), 0);
+        assert_eq!(
+            marked_up_prices(&elsewhere, &[(150, -1)]),
+            [93, 160],
+            "the record with the system's government counts"
+        );
+        assert_eq!(
+            marked_up_prices(&elsewhere, &[(150, 5), (151, -1)]),
+            [82, 181]
+        );
+    }
+
+    #[test]
+    fn a_stellar_without_a_government_or_in_an_independent_system_keeps_1_25() {
+        let ungoverned = marked_up(None, Some(150), 0);
+        assert_eq!(marked_up_prices(&ungoverned, &[(150, -1)]), [93, 160]);
+        let independent = marked_up(Some(150), None, 0);
+        assert_eq!(marked_up_prices(&independent, &[(150, -1)]), [93, 160]);
+    }
+
+    #[test]
+    fn a_dominated_stellar_marks_its_prices_up_by_1_5_whatever_the_record() {
+        use crate::market::DOMINATED;
+        assert_eq!(DOMINATED, 0x0020);
+        for (govt, records) in [(Some(150), &[(150, -1)][..]), (Some(150), &[]), (None, &[])] {
+            let catalog = marked_up(govt, Some(150), DOMINATED);
+            assert_eq!(marked_up_prices(&catalog, records), [112, 133], "{govt:?}");
+        }
+        // Every other bit but the gates', which are not landed at.
+        let others = !(DOMINATED | crate::gate::HYPERGATE | crate::gate::WORMHOLE);
+        let undominated = marked_up(Some(150), Some(150), others);
+        assert_eq!(
+            marked_up_prices(&undominated, &[(150, -1)]),
+            [82, 181],
+            "only the dominated bit"
+        );
     }
 
     /// An escort of ship class `ship`, out of no bay.

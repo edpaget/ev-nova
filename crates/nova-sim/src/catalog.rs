@@ -98,7 +98,9 @@ pub struct LandingSite {
     /// Its `Govt`, or `None` when it is independent.
     pub govt: Option<GovtId>,
     /// Its `Flags2`, raw: the [`gate`](crate::gate) rules read its
-    /// hypergate (0x1000) and wormhole (0x2000) bits.
+    /// hypergate (0x1000) and wormhole (0x2000) bits, and the
+    /// [`market`](crate::market) its always-dominated bit
+    /// ([`DOMINATED`](crate::market::DOMINATED), 0x0020).
     pub flags2: u16,
 }
 
