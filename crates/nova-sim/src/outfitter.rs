@@ -747,11 +747,13 @@ fn lacks_mass(mass: i64, free: i64) -> bool {
 /// `_AdjustedItemMass`, which leaves a mass of 0 or less as it is); one of
 /// negative mass is refused when the free mass, clamped at 0 by
 /// `_ShipFreeMass` (@0xb506-0xb50a), plus its mass is below 0
-/// (@0x5c740-0x5c747). By the other reading, any sale is refused that
-/// would leave the unclamped free mass below 0.
+/// (@0x5c740-0x5c747). The clamped free mass is never below 0, so that
+/// sum is below 0 only for a negative mass, and the engine's sign test
+/// needs no test of its own here. By the other reading, any sale is
+/// refused that would leave the unclamped free mass below 0.
 fn sale_lacks_mass(mass: i64, free: i64, source: RuleSource) -> bool {
     match source {
-        RuleSource::Engine => mass < 0 && free.max(0) + mass < 0,
+        RuleSource::Engine => free.max(0) + mass < 0,
         RuleSource::Bible => free + mass < 0,
     }
 }
