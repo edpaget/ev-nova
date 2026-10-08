@@ -29,7 +29,7 @@ use super::Session;
 use super::hire::Shared;
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
-use crate::combat::armament::Armament;
+use crate::combat::armament::{Armament, lowest_ammo_outfit};
 use crate::control::{
     Bit, BitStore, ControlBitSet, PilotFacts, ScriptNote, SetExpr, SetRegistry, execute,
 };
@@ -50,20 +50,10 @@ pub(crate) struct Facts<'a> {
 impl Facts<'_> {
     /// The outfit a carried fighter of ship type `ship` docks back into:
     /// the first bay launching it, that bay's ammunition outfit of lowest
-    /// ID.
+    /// ID, the routing [`Armament::stow`] takes.
     fn docks_into(&self, ship: ShipId) -> Option<OutfitId> {
-        let bay = self
-            .armament
-            .mounts()
-            .iter()
-            .find(|mount| mount.spec.carried == Some(ship))?
-            .spec
-            .id;
-        self.ammo_outfits
-            .iter()
-            .filter(|&&(of, _)| of == bay)
-            .map(|&(_, outfit)| outfit)
-            .min()
+        let bay = self.armament.bay_of(ship)?;
+        lowest_ammo_outfit(self.ammo_outfits, bay)
     }
 }
 
