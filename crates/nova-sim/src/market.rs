@@ -41,8 +41,9 @@
 //! less, after the wrap, a base price of 0 or below included, is
 //! [`MIN_COMMODITY_PRICE`], 5, as in the engine (`_DoTradeDialog`
 //! @0x5dcc8-0x5dcce). A `jünk` price wraps the same way
-//! (@0x5dddb, @0x5de2f) and is never below 0. That floor of 0 is the
-//! port's own: the engine has no floor for a `jünk`.
+//! (@0x5dddb, @0x5de2f) and has no floor, as
+//! [`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice) says by the engine
+//! (below); by the other reading it is never below 0.
 //!
 //! A stellar sells and buys each good at one price: profit comes from
 //! carrying goods from where they are cheap to where they are dear.
@@ -64,6 +65,19 @@
 //! low and sells it high. `SellOn` gates selling it and `BuyOn` buying
 //! it, through [`control_bits_allow`]. Its `Flags` make it multiply or
 //! decay in the hold (below).
+//!
+//! A `jünk` price of 0 or below follows
+//! [`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice). By the engine (the
+//! default), the price is signed: a negative one is listed at that price
+//! (`_TradeDialogUpdate` @0x4d545-0x4d54b); buying it gets no tons, as
+//! cash / price is negative and the `jle` @0x5e27d skips the buy; and
+//! selling it takes tons x price from the cash, which can go below 0
+//! (@0x5e543-0x5e546). A row priced 0 is not listed (`_TradeDialogUpdate`
+//! @0x4d2a2-0x4d2ac, `_TradeFilter` @0x4e262), each way on its own, so a
+//! `jünk` listed both ways at base 1 (high 1, low 0) is only bought, and
+//! one at base 0 is not listed at all. By the other reading, the port's
+//! own, the price is never below 0, and a row priced 0 is listed and
+//! bought free, limited by space alone.
 //!
 //! # Tribbles and perishables
 //!
@@ -662,12 +676,16 @@ impl Market {
                     Lot::One => 1,
                     Lot::Max => self.free,
                 };
-                // A good priced at nothing is limited by space alone.
+                // A good priced at nothing is limited by space alone; one
+                // priced below nothing buys none, as the engine's cash /
+                // price is negative and its `jle` @0x5e27d skips the buy.
                 let affordable = self
                     .cash
                     .max(0)
                     .checked_div(row.price)
-                    .map_or(wanted, |tons| u32::try_from(tons).unwrap_or(u32::MAX));
+                    .map_or(wanted, |tons| {
+                        u32::try_from(tons.max(0)).unwrap_or(u32::MAX)
+                    });
                 match wanted.min(affordable) {
                     0 => Err(TradeRefusal::CannotAfford),
                     tons => Ok(tons),
@@ -714,18 +732,30 @@ impl MarketRow {
     }
 }
 
+/// The rules an exchange is priced by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PriceRules {
+    /// How an active `öops` event prices its commodity
+    /// ([`RuleKey::EventPrice`](crate::RuleKey::EventPrice)).
+    pub(crate) event_price: RuleSource,
+    /// How a `jünk` of negative or zero price is traded
+    /// ([`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice)).
+    pub(crate) junk_price: RuleSource,
+}
+
 /// The exchange of `stellar`, with these `flags`, for `pilot` with
-/// `capacity` tons of cargo space, its low and high prices by `markup`;
-/// `None` without a trade center.
+/// `capacity` tons of cargo space, priced by `rules`, its low and high
+/// prices by `markup`; `None` without a trade center.
 pub(crate) fn market(
     goods: &Goods,
     stellar: StellarId,
     flags: u32,
     pilot: &Pilot,
     capacity: u32,
-    source: RuleSource,
+    rules: PriceRules,
     markup: Markup,
 ) -> Option<Market> {
+    let source = rules.event_price;
     if flags & StellarFlags::TRADE_CENTER == 0 {
         return None;
     }
@@ -774,22 +804,7 @@ pub(crate) fn market(
             }
         }
     }
-    // A `jünk` the stellar both buys and sells has a row each way, the
-    // bought one first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f).
-    rows.extend(goods.junk.iter().flat_map(|junk| {
-        let bought = junk.bought_at.contains(&stellar) && control_bits_allow(&junk.buy_on);
-        let sold = junk.sold_at.contains(&stellar) && control_bits_allow(&junk.sell_on);
-        let row = |level, ways| {
-            let price = band_price(i64::from(junk.base_price), level, markup);
-            listed(Good::Junk(junk.id), &junk.name, price.max(0), ways)
-        };
-        [
-            bought.then(|| row(PriceLevel::High, (false, true))),
-            sold.then(|| row(PriceLevel::Low, (true, false))),
-        ]
-        .into_iter()
-        .flatten()
-    }));
+    rows.extend(junk_listing(goods, stellar, rules.junk_price, markup));
     rows.sort_by_key(|row| row.good);
     for row in &mut rows {
         row.held = pilot.held(row.good);
@@ -805,6 +820,50 @@ pub(crate) fn market(
         capacity,
         free: capacity.saturating_sub(held),
     })
+}
+
+/// The `jünk` rows `stellar` lists, priced by `markup` and as
+/// `junk_price` says. A `jünk` the stellar both buys and sells has a row
+/// each way, the bought one first, as the original's rows 6 and 7
+/// (@0x5dd83-0x5de2f). By the engine a row priced 0 is not listed, each
+/// way on its own (`_TradeDialogUpdate` @0x4d2a2-0x4d2ac).
+fn junk_listing(
+    goods: &Goods,
+    stellar: StellarId,
+    junk_price: RuleSource,
+    markup: Markup,
+) -> impl Iterator<Item = MarketRow> + '_ {
+    goods.junk.iter().flat_map(move |junk| {
+        let bought = junk.bought_at.contains(&stellar) && control_bits_allow(&junk.buy_on);
+        let sold = junk.sold_at.contains(&stellar) && control_bits_allow(&junk.sell_on);
+        let row = |level, ways| {
+            let price = listed_junk_price(
+                band_price(i64::from(junk.base_price), level, markup),
+                junk_price,
+            )?;
+            Some(listed(Good::Junk(junk.id), &junk.name, price, ways))
+        };
+        [
+            bought.then(|| row(PriceLevel::High, (false, true))),
+            sold.then(|| row(PriceLevel::Low, (true, false))),
+        ]
+        .into_iter()
+        .flatten()
+        .flatten()
+    })
+}
+
+/// A `jünk` row's `price`, as listed by `source`
+/// ([`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice)), or `None` when the
+/// row is not listed. By the engine the price is signed, with no floor,
+/// and a row priced 0 is not listed (`_TradeDialogUpdate`
+/// @0x4d2a2-0x4d2ac); by the other reading it is never below 0, and a row
+/// priced 0 is listed.
+fn listed_junk_price(price: i64, source: RuleSource) -> Option<i64> {
+    match source {
+        RuleSource::Engine => (price != 0).then_some(price),
+        RuleSource::Bible => Some(price.max(0)),
+    }
 }
 
 /// `commodity` as a standard commodity's number, if it is one.
@@ -1801,6 +1860,15 @@ mod tests {
 
     const TRADE: u32 = StellarFlags::CAN_LAND | StellarFlags::TRADE_CENTER;
 
+    /// The price rules with events priced by `event_price`, and `jünk`
+    /// by the engine.
+    fn rules(event_price: RuleSource) -> PriceRules {
+        PriceRules {
+            event_price,
+            ..PriceRules::default()
+        }
+    }
+
     #[test]
     fn without_a_trade_center_there_is_no_exchange() {
         let flags = PORT_KANE & !StellarFlags::TRADE_CENTER;
@@ -1811,7 +1879,7 @@ mod tests {
                 flags,
                 &pilot(0),
                 10,
-                RuleSource::Engine,
+                rules(RuleSource::Engine),
                 Markup::Standard
             ),
             None
@@ -1823,7 +1891,7 @@ mod tests {
                 0,
                 &pilot(0),
                 10,
-                RuleSource::Engine,
+                rules(RuleSource::Engine),
                 Markup::Standard
             ),
             None
@@ -1839,7 +1907,7 @@ mod tests {
             flags,
             &pilot(500),
             10,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -1867,7 +1935,7 @@ mod tests {
             some,
             &pilot(0),
             0,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -1884,7 +1952,7 @@ mod tests {
             TRADE,
             &pilot(0),
             0,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -1899,7 +1967,7 @@ mod tests {
             TRADE,
             &pilot(0),
             0,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -1923,7 +1991,7 @@ mod tests {
             TRADE,
             &pilot(0),
             0,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -1940,7 +2008,7 @@ mod tests {
             TRADE,
             &pilot(0),
             0,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -1968,7 +2036,7 @@ mod tests {
             TRADE,
             pilot,
             capacity,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             markup,
         )
         .expect("trades")
@@ -2045,7 +2113,7 @@ mod tests {
             flags,
             &pilot(0),
             0,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             markup,
         )
         .expect("trades")
@@ -2095,7 +2163,7 @@ mod tests {
             flags,
             &pilot(0),
             0,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2118,7 +2186,7 @@ mod tests {
             TRADE | (2 << 28),
             &pilot,
             12,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2142,7 +2210,7 @@ mod tests {
             TRADE,
             &pilot,
             5,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2191,7 +2259,7 @@ mod tests {
             flags,
             &pilot,
             0,
-            source,
+            rules(source),
             Markup::Standard,
         )
         .expect("trades")
@@ -2278,7 +2346,7 @@ mod tests {
             PORT_KANE,
             &pilot,
             0,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2312,7 +2380,16 @@ mod tests {
                 stellar: Some(EARTH),
             },
         )]);
-        market(&goods, EARTH, flags, &pilot, 0, source, Markup::Standard).expect("trades")
+        market(
+            &goods,
+            EARTH,
+            flags,
+            &pilot,
+            0,
+            rules(source),
+            Markup::Standard,
+        )
+        .expect("trades")
     }
 
     #[test]
@@ -2337,7 +2414,7 @@ mod tests {
             industrial_only,
             &buyer,
             10,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2371,7 +2448,7 @@ mod tests {
             industrial_only,
             &buyer,
             10,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2383,7 +2460,7 @@ mod tests {
             industrial_only,
             &buyer,
             10,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2437,8 +2514,16 @@ mod tests {
                 ("", food_high, 5),
             ] {
                 let goods = Goods::new(&strings(&["Food"], &[base]), Vec::new(), Vec::new());
-                let found = market(&goods, EARTH, flags, &pilot(0), 0, source, Markup::Standard)
-                    .expect("trades");
+                let found = market(
+                    &goods,
+                    EARTH,
+                    flags,
+                    &pilot(0),
+                    0,
+                    rules(source),
+                    Markup::Standard,
+                )
+                .expect("trades");
                 assert_eq!(price(&found, FOOD), expected, "{base} {source:?}");
             }
         }
@@ -2458,11 +2543,20 @@ mod tests {
             vec![cheap(200, 0), cheap(201, 5)],
             Vec::new(),
         );
-        for source in RuleSource::ALL {
-            let found = market(&goods, EARTH, TRADE, &pilot(0), 0, source, Markup::Standard)
-                .expect("trades");
-            let prices: Vec<_> = found.rows.iter().map(|row| row.price).collect();
-            assert_eq!(prices, [0, 4], "{source:?}");
+        for (junk_price, expected) in [
+            (RuleSource::Engine, &[4][..]),
+            (RuleSource::Bible, &[0, 4][..]),
+        ] {
+            for event_price in RuleSource::ALL {
+                let rules = PriceRules {
+                    event_price,
+                    junk_price,
+                };
+                let found = market(&goods, EARTH, TRADE, &pilot(0), 0, rules, Markup::Standard)
+                    .expect("trades");
+                let prices: Vec<_> = found.rows.iter().map(|row| row.price).collect();
+                assert_eq!(prices, expected, "{rules:?}");
+            }
         }
     }
 
@@ -2528,7 +2622,16 @@ mod tests {
                 )
             })
             .collect();
-        market(&goods, EARTH, flags, &pilot, 0, source, Markup::Standard).expect("trades")
+        market(
+            &goods,
+            EARTH,
+            flags,
+            &pilot,
+            0,
+            rules(source),
+            Markup::Standard,
+        )
+        .expect("trades")
     }
 
     #[test]
@@ -2555,28 +2658,136 @@ mod tests {
         assert_eq!(price(&backward, FOOD), 1464, "in either ID order");
     }
 
-    #[test]
-    fn a_junk_price_wraps_before_its_floor_of_0() {
-        let bought = |base_price| JunkRecord {
+    const ODD: Good = Good::Junk(JunkId(200));
+
+    /// The exchange at Earth, by `junk_price`, of a `jünk` 200 of `base`
+    /// price that Earth buys (`bought`) and sells (`sold`), for `pilot`
+    /// with 10 tons of space.
+    fn junk_market(
+        base: i16,
+        (bought, sold): (bool, bool),
+        junk_price: RuleSource,
+        pilot: &Pilot,
+    ) -> Market {
+        let odd = JunkRecord {
             id: JunkId(200),
-            name: "Dear".to_owned(),
-            base_price,
-            bought_at: vec![EARTH],
+            name: "Odd".to_owned(),
+            base_price: base,
+            bought_at: if bought { vec![EARTH] } else { Vec::new() },
+            sold_at: if sold { vec![EARTH] } else { Vec::new() },
             ..unlisted()
         };
-        for source in RuleSource::ALL {
-            for (base, expected) in [(30000, 0), (-30000, 28036)] {
-                let goods =
-                    Goods::new(&CommodityStrings::default(), vec![bought(base)], Vec::new());
-                let found = market(&goods, EARTH, TRADE, &pilot(0), 0, source, Markup::Standard)
-                    .expect("trades");
+        let goods = Goods::new(&CommodityStrings::default(), vec![odd], Vec::new());
+        let rules = PriceRules {
+            junk_price,
+            ..PriceRules::default()
+        };
+        market(&goods, EARTH, TRADE, pilot, 10, rules, Markup::Standard).expect("trades")
+    }
+
+    /// The (price, sold here, bought here) of each row of `market`.
+    fn junk_rows(market: &Market) -> Vec<(i64, bool, bool)> {
+        market
+            .rows
+            .iter()
+            .map(|row| (row.price, row.sold_here, row.bought_here))
+            .collect()
+    }
+
+    const ONLY_BOUGHT: (bool, bool) = (true, false);
+    const ONLY_SOLD: (bool, bool) = (false, true);
+    const BOTH_WAYS: (bool, bool) = (true, true);
+
+    #[test]
+    fn a_junk_price_wraps_and_by_the_engine_is_listed_signed() {
+        for (base, ways, engine, bible) in [
+            (30000, ONLY_BOUGHT, -28036, 0),
+            (-30000, ONLY_BOUGHT, 28036, 28036),
+            (-100, ONLY_BOUGHT, -125, 0),
+            (-100, ONLY_SOLD, -80, 0),
+            (-1, ONLY_BOUGHT, -1, 0),
+        ] {
+            for (source, expected) in [(RuleSource::Engine, engine), (RuleSource::Bible, bible)] {
+                let found = junk_market(base, ways, source, &pilot(0));
+                assert_eq!(price(&found, ODD), expected, "{base} {ways:?} {source:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_engine_a_negative_junk_price_buys_nothing() {
+        for cash in [0, 1000, -1000] {
+            let found = junk_market(-100, ONLY_SOLD, RuleSource::Engine, &pilot(cash));
+            for lot in [Lot::One, Lot::Max] {
                 assert_eq!(
-                    price(&found, Good::Junk(JunkId(200))),
-                    expected,
-                    "{base} {source:?}"
+                    found.tons(order(ODD, Direction::Buy, lot)),
+                    Err(TradeRefusal::CannotAfford),
+                    "{cash} {lot:?}"
+                );
+            }
+            assert!(!found.row_allows(0, Direction::Buy), "{cash}");
+            assert!(!found.allows(ODD, Direction::Buy), "{cash}");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_negative_junk_price_is_bought_free() {
+        let found = junk_market(-100, ONLY_SOLD, RuleSource::Bible, &pilot(0));
+        assert_eq!(found.tons(order(ODD, Direction::Buy, Lot::Max)), Ok(10));
+    }
+
+    #[test]
+    fn by_the_engine_a_negative_junk_price_is_sold_at_a_loss() {
+        let mut holding = pilot(0);
+        holding.cargo = BTreeMap::from([(ODD, 3)]);
+        let found = junk_market(-100, ONLY_BOUGHT, RuleSource::Engine, &holding);
+        assert_eq!(found.tons(order(ODD, Direction::Sell, Lot::Max)), Ok(3));
+        assert!(found.row_allows(0, Direction::Sell));
+    }
+
+    #[test]
+    fn by_the_engine_a_junk_row_priced_0_is_not_listed() {
+        for ways in [ONLY_BOUGHT, ONLY_SOLD, BOTH_WAYS] {
+            let mut holding = pilot(1000);
+            holding.cargo = BTreeMap::from([(ODD, 3)]);
+            let found = junk_market(0, ways, RuleSource::Engine, &holding);
+            assert_eq!(junk_rows(&found), [], "{ways:?}");
+            for direction in [Direction::Buy, Direction::Sell] {
+                assert_eq!(
+                    found.tons(order(ODD, direction, Lot::One)),
+                    Err(TradeRefusal::NotTraded),
+                    "{ways:?} {direction:?}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_junk_row_priced_0_is_listed_and_bought_free() {
+        let found = junk_market(0, ONLY_SOLD, RuleSource::Bible, &pilot(0));
+        assert_eq!(junk_rows(&found), [(0, true, false)]);
+        assert_eq!(found.tons(order(ODD, Direction::Buy, Lot::Max)), Ok(10));
+        let both = junk_market(0, BOTH_WAYS, RuleSource::Bible, &pilot(0));
+        assert_eq!(junk_rows(&both), [(0, false, true), (0, true, false)]);
+    }
+
+    #[test]
+    fn by_the_engine_junk_listed_both_ways_loses_only_its_row_priced_0() {
+        let mut holding = pilot(1000);
+        holding.cargo = BTreeMap::from([(ODD, 3)]);
+        let found = junk_market(1, BOTH_WAYS, RuleSource::Engine, &holding);
+        assert_eq!(
+            junk_rows(&found),
+            [(1, false, true)],
+            "1 × 1.25, not 1 / 1.25"
+        );
+        assert_eq!(found.tons(order(ODD, Direction::Sell, Lot::Max)), Ok(3));
+        assert_eq!(
+            found.tons(order(ODD, Direction::Buy, Lot::One)),
+            Err(TradeRefusal::NotTraded)
+        );
+        let bible = junk_market(1, BOTH_WAYS, RuleSource::Bible, &holding);
+        assert_eq!(junk_rows(&bible), [(1, false, true), (0, true, false)]);
     }
 
     #[test]
@@ -2607,7 +2818,7 @@ mod tests {
             PORT_KANE,
             &pilot,
             0,
-            RuleSource::Engine,
+            rules(RuleSource::Engine),
             Markup::Standard,
         )
         .expect("trades");
@@ -2642,7 +2853,16 @@ mod tests {
                 stellar: stored,
             },
         )]);
-        market(&goods, here, PORT_KANE, &pilot, 0, source, Markup::Standard).expect("trades")
+        market(
+            &goods,
+            here,
+            PORT_KANE,
+            &pilot,
+            0,
+            rules(source),
+            Markup::Standard,
+        )
+        .expect("trades")
     }
 
     /// Food's price and the events shown at `market`.

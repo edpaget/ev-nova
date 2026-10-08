@@ -518,9 +518,10 @@ pub struct Session {
     /// How a `ModType` 27 outfit raises its target's `Max` (see
     /// [`Session::with_raised_max`]).
     raised_max: RuleSource,
-    /// How an active `öops` event prices its commodity (see
-    /// [`Session::with_event_price`]).
-    event_price: RuleSource,
+    /// How an active `öops` event prices its commodity, and how a `jünk`
+    /// of negative or zero price is traded (see
+    /// [`Session::with_event_price`] and [`Session::with_junk_price`]).
+    price_rules: market::PriceRules,
     /// What cargo a ship purchase keeps (see
     /// [`Session::with_purchase_cargo`]).
     purchase_cargo: RuleSource,
@@ -663,7 +664,7 @@ impl Session {
             junk_flags: RuleSource::Engine,
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
-            event_price: RuleSource::Engine,
+            price_rules: market::PriceRules::default(),
             purchase_cargo: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
@@ -1845,7 +1846,7 @@ impl Session {
             site.flags,
             &self.pilot,
             self.capacity(),
-            self.event_price,
+            self.price_rules,
             self.markup(site),
         )
     }
@@ -1944,6 +1945,24 @@ impl Session {
         self.purchase_cargo
     }
 
+    /// This session with a `jünk` of negative or zero price traded as
+    /// `source` says ([`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice)):
+    /// by the engine's default, at its signed price, a negative one
+    /// bought at 0 tons and sold at a loss, and a row priced 0 not
+    /// listed; by the other reading, never below 0 (see [`market`]).
+    #[must_use]
+    pub fn with_junk_price(mut self, source: RuleSource) -> Self {
+        self.price_rules.junk_price = source;
+        self
+    }
+
+    /// How a `jünk` of negative or zero price is traded: by the engine
+    /// ([`RuleSource::Engine`]) or by the other reading.
+    #[must_use]
+    pub fn junk_price(&self) -> RuleSource {
+        self.price_rules.junk_price
+    }
+
     /// This session with a launcher's sale refused for its ammunition as
     /// `source` says
     /// ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)): by the
@@ -1989,7 +2008,7 @@ impl Session {
     /// price plus every event's `PriceDelta` (see [`market`]).
     #[must_use]
     pub fn with_event_price(mut self, source: RuleSource) -> Self {
-        self.event_price = source;
+        self.price_rules.event_price = source;
         self
     }
 
@@ -1997,7 +2016,7 @@ impl Session {
     /// ([`RuleSource::Engine`]) or by the Bible.
     #[must_use]
     pub fn event_price(&self) -> RuleSource {
-        self.event_price
+        self.price_rules.event_price
     }
 
     /// The player's ship class's `MaxGun` and `MaxTur`; none for a class
@@ -5132,6 +5151,64 @@ mod tests {
             Ok(1)
         );
         assert_eq!(session.pilot().cash(), 1000 - 80 + 125, "100 × 1.25");
+    }
+
+    /// [`exchange`] with 100 credits, its planet 128 buying `jünk` 146
+    /// at `base`, the player holding 3 tons of it.
+    fn junk_session(base: i16, source: Option<RuleSource>) -> Session {
+        let mut catalog = FakePilotCatalog {
+            junk: vec![JunkRecord {
+                id: JunkId(146),
+                name: "Waste".to_owned(),
+                base_price: base,
+                sold_at: Vec::new(),
+                bought_at: vec![StellarId(128)],
+                buy_on: String::new(),
+                sell_on: String::new(),
+                flags: 0,
+            }],
+            ..exchange()
+        };
+        if let Ok(start) = &mut catalog.character {
+            start.cash = 100;
+        }
+        let session = Session::start(&catalog).expect("starts");
+        let mut session = match source {
+            Some(source) => session.with_junk_price(source),
+            None => session,
+        };
+        land_now(&mut session).expect("lands");
+        assert!(session.transact(|pilot| {
+            pilot.cargo.insert(Good::Junk(JunkId(146)), 3);
+        }));
+        session
+    }
+
+    #[test]
+    fn the_session_trades_junk_of_negative_price_as_its_rule_says() {
+        let waste = Good::Junk(JunkId(146));
+        let mut engine = junk_session(-100, None);
+        assert_eq!(engine.junk_price(), RuleSource::Engine, "the default");
+        assert_eq!(
+            engine
+                .market()
+                .and_then(|market| market.row(waste).map(|row| row.price)),
+            Some(-125)
+        );
+        assert_eq!(engine.trade(order(waste, Direction::Sell, Lot::Max)), Ok(3));
+        assert_eq!(engine.pilot().cash(), 100 - 3 * 125, "below 0");
+        assert_eq!(engine.pilot().held(waste), 0);
+        let mut floor = junk_session(-100, Some(RuleSource::Bible));
+        assert_eq!(floor.junk_price(), RuleSource::Bible);
+        assert_eq!(floor.trade(order(waste, Direction::Sell, Lot::Max)), Ok(3));
+        assert_eq!(floor.pilot().cash(), 100, "sold for nothing");
+        let engine = junk_session(0, Some(RuleSource::Engine));
+        assert_eq!(engine.junk_price(), RuleSource::Engine);
+        assert_eq!(
+            engine.market().map(|market| market.rows.len()),
+            Some(2),
+            "food and metal, and no row priced 0"
+        );
     }
 
     // Tribbles and perishables.

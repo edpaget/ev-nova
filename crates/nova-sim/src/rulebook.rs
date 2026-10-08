@@ -44,6 +44,7 @@
 //! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)) | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
 //! | [`EventPrice`](RuleKey::EventPrice) | `event_price` | an active event prices its commodity at `BasePrice` + `PriceDelta`, whatever the level, the highest ID winning, and lists a commodity not traded there (`_DoTradeDialog` @0x5dcf8-0x5dd58; [`Session`](crate::Session)) | the level price plus every event's `PriceDelta`\*\* |
 //! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims the commodities to the fleet's holds (`_DestroyPartialFleetCargo` @0xcd32-0xcff6, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c; [`Session`](crate::Session)) | it keeps what fits the new ship's own cargo space, goods in order†† |
+//! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -81,6 +82,10 @@
 //! †† The Bible says nothing of cargo on a ship purchase. The other
 //! reading is the phase's first wording of the rule (keep the cargo that
 //! fits the new ship), not anything the Bible says.
+//!
+//! ‡‡ The Bible says nothing of a `jünk` of negative or zero price. The
+//! other reading is the port's own floor of 0, which it had before the
+//! engine's reading was found, not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -399,6 +404,20 @@ rule_keys! {
     /// reading is the phase's first wording of the rule, not anything the
     /// Bible says (see [`shipyard`](crate::shipyard)).
     PurchaseCargo => "purchase_cargo",
+    /// How a `jünk` of negative or zero price is traded. By the engine,
+    /// `_DoTradeDialog` stores a `jünk`'s high price (@0x5dddb) and low
+    /// price (@0x5de2f) in 16 bits with no floor, and every reader takes
+    /// it signed: a negative price is listed at that price
+    /// (`_TradeDialogUpdate` @0x4d545-0x4d54b), a buy of it gets 0 tons
+    /// (the `jle` @0x5e27d), a sale of it takes tons x price from the
+    /// cash, which can go below 0 (@0x5e543-0x5e546), and a row priced 0
+    /// is not listed (`_TradeDialogUpdate` @0x4d2a2-0x4d2ac, `_TradeFilter`
+    /// @0x4e262), the row each way on its own. By the other reading, the
+    /// price is never below 0, and a row priced 0 is listed and bought
+    /// free, limited by space. The Bible says nothing of it, so the other
+    /// reading is the port's own floor, not anything the Bible says (see
+    /// [`market`](crate::market)).
+    JunkPrice => "junk_price",
 }
 
 impl RuleKey {
@@ -546,9 +565,12 @@ mod tests {
                 RuleKey::LauncherSale,
                 RuleKey::RaisedMax,
                 RuleKey::EventPrice,
-                RuleKey::PurchaseCargo
+                RuleKey::PurchaseCargo,
+                RuleKey::JunkPrice
             ]
         );
+        assert_eq!(RuleKey::JunkPrice.key(), "junk_price");
+        assert_eq!(RuleKey::from_key("junk_price"), Some(RuleKey::JunkPrice));
         assert_eq!(RuleKey::PurchaseCargo.key(), "purchase_cargo");
         assert_eq!(
             RuleKey::from_key("purchase_cargo"),
