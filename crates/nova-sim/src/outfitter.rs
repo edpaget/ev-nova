@@ -90,14 +90,15 @@
 //! ammunition cap (below) or its `Max` already, it is a gun or a turret
 //! past the ship's limit (below), it is a fighter whose bays have no room
 //! left (their [`capacity`](crate::bay::capacity), the fighters out
-//! counted against it, `_CanBuyFighter` @0x5a82; refused as `Max`
-//! owned), the ship's
+//! counted against it, `_CanBuyFighter` @0x5a82; refused as
+//! [`OutfitRefusal::BaysFull`]), the ship's
 //! `Holds` is negative and the outfit is a mass expansion (the last of
 //! its mods of [`MORE_CARGO`] has a negative `ModVal`, whatever its
 //! `Mass`: `_LoadObjectData` flags a class of negative `Holds`,
 //! @0x7a6a5-0x7a6d3, and only `_CanBuyOutfitItem` reads the flag,
 //! @0x4e8bc-0x4e8d2, @0x4e94f-0x4e97e), there is not the free mass for
-//! it, or the player cannot pay. A
+//! it (an outfit of mass 0 or less always fits, even when the free mass
+//! is negative, @0x4e88a-0x4e892), or the player cannot pay. A
 //! buy pays the price and adds one, or with
 //! [`OutfitFlags::REMOVE_AFTER_PURCHASE`] only pays. A sale is refused
 //! when the player owns none, the outfit is flagged
@@ -108,6 +109,15 @@
 //! ammunition must be sold first (below). A sale pays [`RESALE_PERCENT`] of the price and removes one.
 //! Selling cargo space below the cargo held is allowed: the exchange then
 //! shows no space free until enough is sold.
+//!
+//! **The info box's words** (`_OutfitDialogUpdate` @0x57dba-0x57e6f,
+//! `STR#` 2002 #219-#222) are worked out for each row on their own
+//! ([`OutfitRow::words`]); the original never asks `_CanBuyOutfitItem`
+//! for them, so whatever refuses the buy first plays no part. When
+//! `_HasMaxOfItem(item, 0, 0)` holds (@0x57dd6: the ammunition cap, the
+//! raised `Max`, the gun and turret limits), its refusal; otherwise, when
+//! the outfit's mass is above 0 and above the unclamped free mass
+//! (@0x57e33-0x57e45), the mass words by the count owned; otherwise none.
 //!
 //! **Ammunition cap** (`_HasMaxOfItem` @0x457e-0x45e4, before `Max`). An
 //! outfit whose **first** mod is `ModType` 3 naming a weapon of `MaxAmmo`
@@ -258,10 +268,8 @@ pub enum OutfitRefusal {
     /// (`_CanBuyFighter` @0x5a82). The original reaches that check only
     /// from `_CanBuyOutfitItem` (@0x4e938), not from `_HasMaxOfItem`, so
     /// its info box gives this none of the #219/#220 words the other
-    /// `Max` refusals get. It would still show the mass words #221/#222
-    /// if the fighter also lacked the mass; here the bays are checked
-    /// first, so nothing shows (roadmap `shop-and-trade-fidelity`,
-    /// `phase-20-outfitter-full-bays-mass-words`).
+    /// `Max` refusals get; it still shows the mass words #221/#222 when
+    /// the fighter also lacks the mass ([`OutfitRow::words`]).
     BaysFull,
     /// The ship has not the free mass for another.
     NoSpace,
@@ -333,6 +341,14 @@ pub struct OutfitRow {
     pub buy: Result<(), OutfitRefusal>,
     /// Whether one can be sold now, or why not.
     pub sell: Result<(), OutfitRefusal>,
+    /// Which of the info box's words (`STR#` 2002 #219-#222) it gets,
+    /// whatever [`buy`](Self::buy) says: the refusal `_HasMaxOfItem`
+    /// makes, if any (a `Max`, none allowed, the ammunition cap, a gun or
+    /// turret limit); otherwise [`OutfitRefusal::NoSpaceForAny`] with none
+    /// owned or [`OutfitRefusal::NoSpace`] with some, when it lacks the
+    /// mass; otherwise none (`_OutfitDialogUpdate` @0x57dba-0x57e6f, which
+    /// never consults `_CanBuyOutfitItem`; see the module docs).
+    pub words: Option<OutfitRefusal>,
 }
 
 /// A stellar's outfitter, as the player sees it.
@@ -444,6 +460,14 @@ fn mass_expansion(outfit: &OutfitRecord) -> bool {
         .rev()
         .find(|&&(mod_type, _)| mod_type == MORE_CARGO)
         .is_some_and(|&(_, mod_val)| mod_val < 0)
+}
+
+/// Whether an outfit of `mass` does not fit in `free` tons; only one of
+/// positive mass can lack it, whatever the free mass
+/// (`_CanBuyOutfitItem` @0x4e88a-0x4e892, `_OutfitDialogUpdate`
+/// @0x57e3c-0x57e45, both reading the unclamped free mass).
+fn lacks_mass(mass: i64, free: i64) -> bool {
+    mass > 0 && mass > free
 }
 
 /// Whether an outfit with `flags` is hidden from a player who owns none,
@@ -813,6 +837,30 @@ impl Shop<'_> {
             .is_some_and(|&cap| i32::from(owned) >= i32::from(cap))
     }
 
+    /// Why `_HasMaxOfItem(item, 0, 0)` says the player, owning `owned` of
+    /// `record` and `all` the outfits, has the most of it, if it does: its
+    /// ammunition cap, then its raised `Max`, then the gun and turret
+    /// limits `armed` gives (`_HasMaxOfItem` @0x4512; see the module docs).
+    fn has_max(
+        &self,
+        record: &OutfitRecord,
+        owned: u16,
+        all: &BTreeMap<OutfitId, u16>,
+        armed: &Armed,
+    ) -> Option<OutfitRefusal> {
+        if self.at_ammo_cap(record.id, owned) {
+            Some(OutfitRefusal::MaxOwned)
+        } else if i64::from(owned) >= raised_max(record, all, self.records, self.raised_max) {
+            Some(if record.max <= 0 {
+                OutfitRefusal::NoneAllowed
+            } else {
+                OutfitRefusal::MaxOwned
+            })
+        } else {
+            armed.refusal(record.flags)
+        }
+    }
+
     /// The outfitter, for `pilot`, each outfit's roll for the day kept in
     /// `rolls` and any not drawn yet drawn on `chance` (see the module
     /// docs); `None` when the stellar has none.
@@ -861,30 +909,22 @@ impl Shop<'_> {
             }
             let price = unit_price(record, self.fields.mass);
             let mass = unit_mass(record, self.fields.mass);
+            let has_max = self.has_max(record, owned, &pilot.outfits, &armed);
+            let no_space = lacks_mass(mass, free).then_some(if owned == 0 {
+                OutfitRefusal::NoSpaceForAny
+            } else {
+                OutfitRefusal::NoSpace
+            });
             let buying = if !buyable {
                 Err(OutfitRefusal::NotForSale)
-            } else if self.at_ammo_cap(record.id, owned) {
-                Err(OutfitRefusal::MaxOwned)
-            } else if i64::from(owned)
-                >= raised_max(record, &pilot.outfits, self.records, self.raised_max)
-            {
-                Err(if record.max <= 0 {
-                    OutfitRefusal::NoneAllowed
-                } else {
-                    OutfitRefusal::MaxOwned
-                })
-            } else if let Some(refusal) = armed.refusal(record.flags) {
+            } else if let Some(refusal) = has_max {
                 Err(refusal)
             } else if self.fighter_room.get(&record.id) == Some(&0) {
                 Err(OutfitRefusal::BaysFull)
             } else if mass_expansion(record) && self.fields.holds < 0 {
                 Err(OutfitRefusal::NoExpansion)
-            } else if mass > free {
-                Err(if owned == 0 {
-                    OutfitRefusal::NoSpaceForAny
-                } else {
-                    OutfitRefusal::NoSpace
-                })
+            } else if let Some(refusal) = no_space {
+                Err(refusal)
             } else if price > pilot.cash {
                 Err(OutfitRefusal::CannotAfford)
             } else {
@@ -909,6 +949,7 @@ impl Shop<'_> {
                     max: record.max,
                     buy: buying,
                     sell: selling,
+                    words: has_max.or(no_space),
                 },
             ));
         }
@@ -1592,6 +1633,7 @@ mod tests {
                 max: 7,
                 buy: Ok(()),
                 sell: Ok(()),
+                words: None,
             }]
         );
     }
@@ -1777,11 +1819,17 @@ mod tests {
     /// The outfitter of a ship of `holds` selling outfit 128 with `mods`
     /// and `mass`, and whether it would sell one.
     fn holds_shop(holds: i16, mods: &[(i16, i16)], mass: i16) -> Result<(), OutfitRefusal> {
+        buy(&holds_outfitter(holds, mods, mass))
+    }
+
+    /// The outfitter of a ship of `holds` selling outfit 128 with `mods`
+    /// and `mass`.
+    fn holds_outfitter(holds: i16, mods: &[(i16, i16)], mass: i16) -> Outfitter {
         let records = [OutfitRecord {
             mass,
             ..outfit(128, mods)
         }];
-        let outfitter = Shop {
+        Shop {
             records: &records,
             fields: ShipFields { holds, ..FAST },
             standard: &NO_STANDARD,
@@ -1795,8 +1843,7 @@ mod tests {
             raised_max: RuleSource::Engine,
         }
         .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
-        .expect("open");
-        buy(&outfitter)
+        .expect("open")
     }
 
     #[test]
@@ -1838,6 +1885,162 @@ mod tests {
             Ok(()),
             "only negative Holds forbids it"
         );
+    }
+
+    // The info box's words (#219-#222).
+
+    /// The words outfit 128's row carries in `outfitter`.
+    fn words(outfitter: &Outfitter) -> Option<OutfitRefusal> {
+        row(outfitter, 128).words
+    }
+
+    /// Outfit 128 of `mass` tons, up to 9999 owned: on the FAST ship's 30
+    /// tons free, one of 31 tons lacks the mass.
+    fn weighing(mass: i16) -> OutfitRecord {
+        OutfitRecord {
+            mass,
+            max: 9999,
+            ..outfit(128, &[])
+        }
+    }
+
+    /// The outfitter at [`port`] with outfit 128's fighter bays full.
+    fn bays_full(records: &[OutfitRecord], pilot: &Pilot) -> Outfitter {
+        let site = port();
+        let full = BTreeMap::from([(OutfitId(128), 0)]);
+        Shop {
+            fighter_room: &full,
+            ..shop(records, &site)
+        }
+        .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
+        .expect("open")
+    }
+
+    #[test]
+    fn a_fighter_refused_for_full_bays_carries_the_mass_words_when_it_lacks_the_mass() {
+        // `_OutfitDialogUpdate` @0x57e33-0x57e4f: the words never consult
+        // `_CanBuyOutfitItem`, so `_CanBuyFighter` plays no part in them.
+        let none = bays_full(&[weighing(31)], &pilot());
+        assert_eq!(buy(&none), Err(OutfitRefusal::BaysFull));
+        assert_eq!(words(&none), Some(OutfitRefusal::NoSpaceForAny));
+        let one = bays_full(&[weighing(31)], &owning(&[(128, 1)]));
+        assert_eq!(buy(&one), Err(OutfitRefusal::BaysFull));
+        assert_eq!(words(&one), Some(OutfitRefusal::NoSpace));
+        let fits = bays_full(&[weighing(30)], &pilot());
+        assert_eq!(buy(&fits), Err(OutfitRefusal::BaysFull));
+        assert_eq!(words(&fits), None, "the mass fits");
+    }
+
+    #[test]
+    fn a_row_not_for_sale_carries_the_words_it_meets() {
+        let unmet = |mass, max| OutfitRecord {
+            mass,
+            max,
+            ..requiring(128, 0x2, -1)
+        };
+        let heavy = open(&[unmet(31, 5)], &pilot());
+        assert_eq!(buy(&heavy), Err(OutfitRefusal::NotForSale));
+        assert_eq!(words(&heavy), Some(OutfitRefusal::NoSpaceForAny));
+        let at_max = open(&[unmet(1, 1)], &owning(&[(128, 1)]));
+        assert_eq!(buy(&at_max), Err(OutfitRefusal::NotForSale));
+        assert_eq!(words(&at_max), Some(OutfitRefusal::MaxOwned));
+        let none_allowed = open(&[unmet(1, 0)], &pilot());
+        assert_eq!(words(&none_allowed), Some(OutfitRefusal::NoneAllowed));
+        let light = open(&[unmet(1, 5)], &pilot());
+        assert_eq!(buy(&light), Err(OutfitRefusal::NotForSale));
+        assert_eq!(words(&light), None);
+    }
+
+    #[test]
+    fn a_mass_expansion_refused_on_negative_holds_carries_the_mass_words() {
+        let heavy = holds_outfitter(-1, &[(MORE_CARGO, -5)], 31);
+        assert_eq!(buy(&heavy), Err(OutfitRefusal::NoExpansion));
+        assert_eq!(words(&heavy), Some(OutfitRefusal::NoSpaceForAny));
+        let light = holds_outfitter(-1, &[(MORE_CARGO, -5)], 30);
+        assert_eq!(buy(&light), Err(OutfitRefusal::NoExpansion));
+        assert_eq!(words(&light), None);
+    }
+
+    #[test]
+    fn the_max_words_win_over_the_mass_words() {
+        // `_OutfitDialogUpdate` @0x57dd6: `_HasMaxOfItem` first.
+        let at_max = open(
+            &[OutfitRecord {
+                max: 1,
+                ..weighing(31)
+            }],
+            &owning(&[(128, 1)]),
+        );
+        assert_eq!(buy(&at_max), Err(OutfitRefusal::MaxOwned));
+        assert_eq!(words(&at_max), Some(OutfitRefusal::MaxOwned));
+        let none = open(
+            &[OutfitRecord {
+                max: 0,
+                ..weighing(31)
+            }],
+            &pilot(),
+        );
+        assert_eq!(words(&none), Some(OutfitRefusal::NoneAllowed));
+        let heavy_gun = OutfitRecord {
+            mass: 31,
+            ..gun(128)
+        };
+        let limited = armed(&[heavy_gun], &pilot(), hardpoints(0, 0));
+        assert_eq!(words(&limited), Some(OutfitRefusal::GunLimit));
+        let site = port();
+        let records = [weighing(31)];
+        let caps = BTreeMap::from([(OutfitId(128), 0)]);
+        let capped = Shop {
+            ammo_caps: &caps,
+            ..shop(&records, &site)
+        }
+        .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+        .expect("open");
+        assert_eq!(
+            words(&capped),
+            Some(OutfitRefusal::MaxOwned),
+            "the ammo cap"
+        );
+    }
+
+    #[test]
+    fn a_row_whose_mass_fits_carries_no_words() {
+        let buyable = open(&[weighing(30)], &pilot());
+        assert_eq!(buy(&buyable), Ok(()));
+        assert_eq!(words(&buyable), None);
+        let mut broke = pilot();
+        broke.cash = 0;
+        let unpaid = open(&[weighing(30)], &broke);
+        assert_eq!(buy(&unpaid), Err(OutfitRefusal::CannotAfford));
+        assert_eq!(words(&unpaid), None);
+    }
+
+    #[test]
+    fn an_outfit_of_mass_none_or_less_fits_on_a_ship_with_negative_free_mass() {
+        // `_CanBuyOutfitItem` @0x4e88a-0x4e892 and `_OutfitDialogUpdate`
+        // @0x57e3c: a mass of 0 or less always fits.
+        for mass in [0, -5] {
+            let records = [
+                weighing(mass),
+                OutfitRecord {
+                    mass: 31,
+                    ..outfit(129, &[])
+                },
+            ];
+            let outfitter = open(&records, &owning(&[(129, 1)]));
+            assert_eq!(outfitter.free_mass, -1);
+            assert_eq!(buy(&outfitter), Ok(()), "{mass}");
+            assert_eq!(words(&outfitter), None, "{mass}");
+        }
+    }
+
+    #[test]
+    fn the_mass_words_need_more_than_the_free_mass() {
+        let exact = open(&[weighing(30)], &pilot());
+        assert_eq!(exact.free_mass, 30);
+        assert_eq!(words(&exact), None, "exactly the space");
+        let over = open(&[weighing(31)], &pilot());
+        assert_eq!(words(&over), Some(OutfitRefusal::NoSpaceForAny));
     }
 
     // Selling.

@@ -1771,6 +1771,7 @@ mod tests {
                 max: 10,
                 buy: Ok(()),
                 sell: Ok(()),
+                words: None,
             }],
             cash: 5000,
             free_mass: 8,

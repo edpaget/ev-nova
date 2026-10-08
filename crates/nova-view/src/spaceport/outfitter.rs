@@ -29,12 +29,15 @@
 //! `dësc` 3000 plus its ID less 128, both read through the
 //! [`OutfitterCatalog`] as the selection changes. The info box shows its price, its mass, how many the player
 //! has and the free mass (#215-218), and why it cannot be bought (#219-222)
-//! or sold (#207), when the original has words for it. Every refusal
-//! `_HasMaxOfItem` makes (its `Max`, none allowed, a gun or turret limit)
-//! reads by the count owned, #219 when the player owns one or more of the
-//! outfit and #220 otherwise, as `_OutfitDialogUpdate` words it
-//! (@0x57ddf-0x57df8); a fighter refused for full bays gets no words, as
-//! `_CanBuyFighter` is not part of `_HasMaxOfItem`. A launcher that cannot be sold for
+//! or sold (#207), when the original has words for it. The buy words are
+//! the row's own ([`OutfitRow::words`]), not its buy refusal: the
+//! original works them out without asking whether the outfit can be
+//! bought, so an outfit not for sale, or a fighter refused for full bays,
+//! still gets them. Every refusal `_HasMaxOfItem` makes (its `Max`, none
+//! allowed, a gun or turret limit) reads by the count owned, #219 when the
+//! player owns one or more of the outfit and #220 otherwise, as
+//! `_OutfitDialogUpdate` words it (@0x57ddf-0x57df8); otherwise an outfit
+//! that lacks the mass gets #221 or #222 (@0x57e33-0x57e4f). A launcher that cannot be sold for
 //! its ammunition gets the #208-212 sentence ([`ammunition_first`]),
 //! which the original shows in a text dialog when Sell is clicked, Sell
 //! left enabled (`_DoOutfitDialog` @0x5ce5a); here Sell is greyed and the
@@ -190,7 +193,7 @@ pub fn raised_first(count: u32, target: &LcNames, outfit: &str) -> String {
 /// the original's `_HasMaxOfItem` makes (its `Max`, none allowed, a gun or
 /// turret limit) is worded by the count owned: #219 when the player owns
 /// one or more of the outfit, #220 otherwise (`_OutfitDialogUpdate`
-/// @0x57ddf-0x57df8). Full fighter bays get no words.
+/// @0x57ddf-0x57df8). Full fighter bays get no words of their own.
 #[must_use]
 pub fn refusal_text(
     refusal: OutfitRefusal,
@@ -592,7 +595,7 @@ impl OutfitterScreen {
             format!("{OWNED_LABEL} {}", row.owned),
             format!("{AVAILABLE_LABEL} {} tons", self.outfitter.free_mass),
         ];
-        let refusals = [row.buy.err(), row.sell.err()];
+        let refusals = [row.words, row.sell.err()];
         lines.extend(
             refusals
                 .into_iter()
@@ -809,6 +812,7 @@ mod tests {
             } else {
                 Err(OutfitRefusal::NoneOwned)
             },
+            words: None,
         }
     }
 
@@ -822,6 +826,7 @@ mod tests {
                 row(129, "*Ammo\\nPack", 50, 0, 0),
                 OutfitRow {
                     buy: Err(OutfitRefusal::NoSpaceForAny),
+                    words: Some(OutfitRefusal::NoSpaceForAny),
                     ..row(130, "Big Gun", 9000, 10, 0)
                 },
                 OutfitRow {
@@ -1745,6 +1750,7 @@ mod tests {
             rows: vec![OutfitRow {
                 buy: Err(OutfitRefusal::MaxOwned),
                 sell: Err(OutfitRefusal::NegativeFreeMass),
+                words: Some(OutfitRefusal::MaxOwned),
                 ..row(128, "Expansion", 100, -5, 1)
             }],
             ..outfitter()
@@ -1769,34 +1775,74 @@ mod tests {
         );
     }
 
+    /// The info box's lines for a row of outfit 128, `owned` owned,
+    /// refused `buy` and carrying `words`.
+    fn info_lines(buy: OutfitRefusal, words: Option<OutfitRefusal>, owned: u16) -> Vec<String> {
+        let screen = screen_of(Outfitter {
+            rows: vec![OutfitRow {
+                buy: Err(buy),
+                words,
+                ..row(128, "Widget", 100, 1, owned)
+            }],
+            ..outfitter()
+        });
+        let info = item(&screen, INFO_ITEM);
+        texts(&drawn(&screen))
+            .into_iter()
+            .filter(|(_, at, _)| info.contains(*at))
+            .map(|(text, _, _)| text)
+            .collect()
+    }
+
+    /// The last of the info box's lines, when it says why buy is greyed.
+    fn said_why(lines: &[String]) -> Option<&str> {
+        lines
+            .last()
+            .map(String::as_str)
+            .filter(|line| !line.starts_with("Available:"))
+    }
+
     #[test]
-    fn the_info_box_words_a_max_refusal_by_the_count_owned_and_full_bays_not_at_all() {
-        let info_lines = |buy: OutfitRefusal, owned: u16| {
-            let screen = screen_of(Outfitter {
-                rows: vec![OutfitRow {
-                    buy: Err(buy),
-                    ..row(128, "Widget", 100, 1, owned)
-                }],
-                ..outfitter()
-            });
-            let info = item(&screen, INFO_ITEM);
-            texts(&drawn(&screen))
-                .into_iter()
-                .filter(|(_, at, _)| info.contains(*at))
-                .map(|(text, _, _)| text)
-                .collect::<Vec<_>>()
-        };
-        let granted = info_lines(OutfitRefusal::NoneAllowed, 1);
-        assert!(granted.contains(&MAX_OWNED.to_owned()), "{granted:?}");
-        assert!(!granted.contains(&NONE_ALLOWED.to_owned()), "{granted:?}");
+    fn the_info_box_words_a_max_refusal_by_the_count_owned() {
+        let granted = info_lines(
+            OutfitRefusal::NoneAllowed,
+            Some(OutfitRefusal::NoneAllowed),
+            1,
+        );
+        assert_eq!(said_why(&granted), Some(MAX_OWNED), "{granted:?}");
+    }
+
+    #[test]
+    fn a_fighter_refused_for_full_bays_shows_the_mass_words_when_it_lacks_the_mass() {
+        let none = info_lines(
+            OutfitRefusal::BaysFull,
+            Some(OutfitRefusal::NoSpaceForAny),
+            0,
+        );
+        assert_eq!(said_why(&none), Some(NO_SPACE_FOR_ANY), "{none:?}");
+        let one = info_lines(OutfitRefusal::BaysFull, Some(OutfitRefusal::NoSpace), 1);
+        assert_eq!(said_why(&one), Some(NO_SPACE), "{one:?}");
         for owned in [0, 2] {
-            let full = info_lines(OutfitRefusal::BaysFull, owned);
-            assert!(full.iter().any(|text| text.starts_with("Available:")));
-            assert!(
-                !full.iter().any(|text| text.starts_with("Can't")),
-                "{owned}: {full:?}"
-            );
+            let fits = info_lines(OutfitRefusal::BaysFull, None, owned);
+            assert!(fits.iter().any(|text| text.starts_with("Available:")));
+            assert_eq!(said_why(&fits), None, "{owned}: {fits:?}");
         }
+    }
+
+    #[test]
+    fn the_info_box_words_the_rows_words_not_its_buy_refusal() {
+        let heavy = info_lines(
+            OutfitRefusal::NotForSale,
+            Some(OutfitRefusal::NoSpaceForAny),
+            0,
+        );
+        assert_eq!(said_why(&heavy), Some(NO_SPACE_FOR_ANY), "{heavy:?}");
+        let at_max = info_lines(OutfitRefusal::NotForSale, Some(OutfitRefusal::MaxOwned), 1);
+        assert_eq!(said_why(&at_max), Some(MAX_OWNED), "{at_max:?}");
+        let expansion = info_lines(OutfitRefusal::NoExpansion, Some(OutfitRefusal::NoSpace), 1);
+        assert_eq!(said_why(&expansion), Some(NO_SPACE), "{expansion:?}");
+        let fits = info_lines(OutfitRefusal::NoSpaceForAny, None, 0);
+        assert_eq!(said_why(&fits), None, "buy alone gets no words: {fits:?}");
     }
 
     #[test]
