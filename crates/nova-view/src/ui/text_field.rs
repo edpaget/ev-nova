@@ -1,7 +1,8 @@
 //! A one-line text field: typed characters append to its text and
 //! Backspace deletes the last, with a caret after the text. The only
 //! selection is the whole text, which a field may start with
-//! ([`TextField::with_text`]), or its first characters
+//! ([`TextField::with_text`]) or be given ([`TextField::set_text`]),
+//! or its first characters
 //! ([`TextField::select_first`]): typing replaces it, and Backspace
 //! clears it, the caret then where it was. There is no moving the caret
 //! otherwise.
@@ -67,6 +68,14 @@ impl TextField {
         };
         field.select_first(usize::MAX);
         field
+    }
+
+    /// Replaces the text with `text` (even beyond the most it holds),
+    /// selected whole, as `SetDialogItemText` and `SelectDialogItemText`
+    /// set an edit text item.
+    pub fn set_text(&mut self, text: &str) {
+        text.clone_into(&mut self.text);
+        self.select_first(usize::MAX);
     }
 
     /// Selects the first `chars` characters, or the whole text when it is
@@ -370,6 +379,24 @@ mod tests {
         assert_eq!(field.text(), "cdef");
         typed(&mut field, "ab");
         assert_eq!(field.text(), "abcdef");
+    }
+
+    #[test]
+    fn set_text_replaces_the_text_and_selects_it_whole() {
+        let mut field = field(31);
+        typed(&mut field, "1a2");
+        field.set_text("12");
+        assert_eq!(field.text(), "12");
+        assert_eq!(field.selection(), 2);
+        typed(&mut field, "7");
+        assert_eq!(field.text(), "7", "typing replaces it");
+        field.set_text("");
+        assert_eq!((field.text(), field.selection()), ("", 0));
+        typed(&mut field, "5");
+        field.input(&key(Key::Backspace, true, false));
+        field.input(&key(Key::Backspace, true, false));
+        typed(&mut field, "6");
+        assert_eq!(field.text(), "6", "the caret is in the text");
     }
 
     #[test]

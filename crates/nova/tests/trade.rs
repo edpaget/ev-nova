@@ -13,8 +13,9 @@
 //! B, a plain buy moving up to ten tons; each trade saves the pilot. In a
 //! new app, where a plain trade moves a ton (the `trade_lot` rule's other
 //! reading), the pilot resumes docked with its cargo: S sells a ton at
-//! the local price and Alt-S the rest, then holding B buys a ton a repeat
-//! and Alt-B fills the hold again.
+//! the local price and Alt-S, confirming the quantity dialog's default,
+//! the rest, then holding B buys a ton a repeat and Alt-B, confirmed
+//! likewise, fills the hold again.
 
 use std::io;
 use std::path::Path;
@@ -609,14 +610,22 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     );
     assert!(texts(&game.frame()).contains(&status(0, full)));
 
-    // Selling pays the local price: S sells a ton, and Alt-S everything
-    // left.
+    // Selling pays the local price: S sells a ton, and Alt-S asks how
+    // many, the quantity dialog opening at everything left, which Return
+    // sells.
     game.press(KeyCode::KeyS);
     assert_eq!(game.pilot().held(FOOD), 9);
     assert_eq!(game.pilot().cash(), full + 75);
     game.key(KeyCode::AltRight, true, false);
     game.press(KeyCode::KeyS);
     game.key(KeyCode::AltRight, false, false);
+    assert_eq!(
+        game.trade().quantity().map(|asking| asking.field().text()),
+        Some("9"),
+        "the S typed nothing"
+    );
+    assert_eq!(game.pilot().held(FOOD), 9, "nothing sold yet");
+    game.press(KeyCode::Enter);
     assert_eq!(game.pilot().held(FOOD), 0, "everything left is sold");
     assert_eq!(game.pilot().cash(), cash);
     assert!(texts(&game.frame()).contains(&status(10, cash)));
@@ -631,10 +640,12 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     assert_eq!(game.pilot().held(FOOD), 4, "the press and three repeats");
     assert_eq!(game.pilot().cash(), cash - 4 * 75);
 
-    // Alt-B buys the most: here the six tons of space left.
+    // Alt-B asks how many, opening at the most: here the six tons of
+    // space left, which Return buys.
     game.key(KeyCode::AltLeft, true, false);
     game.press(KeyCode::KeyB);
     game.key(KeyCode::AltLeft, false, false);
+    game.press(KeyCode::Enter);
     assert_eq!(game.pilot().held(FOOD), 10, "the hold is full");
     assert_eq!(game.pilot().cash(), full);
     assert!(texts(&game.frame()).contains(&status(0, full)));

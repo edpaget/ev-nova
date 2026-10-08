@@ -314,7 +314,9 @@ pub enum Lot {
     /// it is at least 512 and a click moves at most 10 either way.
     Click,
     /// The most the exchange offers on the row ([`Market::row_max`]): the
-    /// default of the original's Option quantity dialog.
+    /// default the original's Option quantity dialog opens with, and what
+    /// Alt trades under the other reading of
+    /// [`RuleKey::TradeCount`](crate::RuleKey::TradeCount).
     Max,
     /// Exactly this many tons, as the original's quantity dialog trades
     /// what it is given: from 1 up to the most the exchange offers
@@ -704,6 +706,11 @@ pub struct Market {
     /// How the most a buy moves divides the cash by the price
     /// ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)).
     pub trade_quotient: RuleSource,
+    /// Whether Option (Alt) on Buy or Sell asks for a count, by the
+    /// engine, or trades the most at once
+    /// ([`RuleKey::TradeCount`](crate::RuleKey::TradeCount)). The trade
+    /// itself is the same either way; whoever shows the exchange reads it.
+    pub trade_count: RuleSource,
 }
 
 impl Market {
@@ -892,6 +899,9 @@ pub(crate) struct ExchangeRules {
     /// How the most a buy moves divides the cash by the price
     /// ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)).
     pub(crate) trade_quotient: RuleSource,
+    /// Whether Option on Buy or Sell asks for a count
+    /// ([`RuleKey::TradeCount`](crate::RuleKey::TradeCount)).
+    pub(crate) trade_count: RuleSource,
 }
 
 /// The exchange of `stellar`, with these `flags`, for `pilot` with
@@ -972,6 +982,7 @@ pub(crate) fn market(
         free: capacity.saturating_sub(held),
         trade_lot: rules.trade_lot,
         trade_quotient: rules.trade_quotient,
+        trade_count: rules.trade_count,
     })
 }
 
@@ -2107,6 +2118,26 @@ mod tests {
     }
 
     #[test]
+    fn the_exchange_carries_its_count_rule() {
+        for trade_count in RuleSource::ALL {
+            let found = market(
+                &goods(),
+                StellarId(137),
+                PORT_KANE,
+                &pilot(500),
+                10,
+                ExchangeRules {
+                    trade_count,
+                    ..ExchangeRules::default()
+                },
+                Markup::Standard,
+            )
+            .expect("trades");
+            assert_eq!(found.trade_count, trade_count);
+        }
+    }
+
+    #[test]
     fn the_exchange_lists_the_commodities_traded_at_their_levels() {
         let flags = PORT_KANE;
         let found = market(
@@ -2136,6 +2167,7 @@ mod tests {
                 free: 10,
                 trade_lot: RuleSource::Engine,
                 trade_quotient: RuleSource::Engine,
+                trade_count: RuleSource::Engine,
             }
         );
         let some = TRADE | (1 << 24) | (4 << 12);
@@ -3327,6 +3359,7 @@ mod tests {
             free,
             trade_lot: RuleSource::Engine,
             trade_quotient: RuleSource::Engine,
+            trade_count: RuleSource::Engine,
         }
     }
 

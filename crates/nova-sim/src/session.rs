@@ -536,10 +536,11 @@ pub struct Session {
     raised_max: RuleSource,
     /// How an active `öops` event prices its commodity, how a `jünk` of
     /// negative or zero price is traded, which ways a `jünk` row trades,
-    /// how many tons a plain trade moves, and how the most a buy moves
-    /// divides the cash by the price (see [`Session::with_event_price`],
-    /// [`Session::with_junk_price`], [`Session::with_junk_trade`],
-    /// [`Session::with_trade_lot`] and [`Session::with_trade_quotient`]).
+    /// how many tons a plain trade moves, how the most a buy moves
+    /// divides the cash by the price, and what Option on Buy or Sell does
+    /// (see [`Session::with_event_price`], [`Session::with_junk_price`],
+    /// [`Session::with_junk_trade`], [`Session::with_trade_lot`],
+    /// [`Session::with_trade_quotient`] and [`Session::with_trade_count`]).
     exchange_rules: market::ExchangeRules,
     /// What cargo a ship purchase keeps (see
     /// [`Session::with_purchase_cargo`]).
@@ -2056,6 +2057,27 @@ impl Session {
     #[must_use]
     pub fn trade_quotient(&self) -> RuleSource {
         self.exchange_rules.trade_quotient
+    }
+
+    /// This session's exchange saying what Option (Alt) on Buy or Sell
+    /// does as `source` says
+    /// ([`RuleKey::TradeCount`](crate::RuleKey::TradeCount)): by the
+    /// engine's default, it asks for a count; by the other reading, it
+    /// trades the most at once. The session trades the same either way;
+    /// the exchange carries it ([`Market::trade_count`]) for whoever
+    /// shows it.
+    #[must_use]
+    pub fn with_trade_count(mut self, source: RuleSource) -> Self {
+        self.exchange_rules.trade_count = source;
+        self
+    }
+
+    /// What Option on Buy or Sell at the exchange does: asks for a count,
+    /// by the engine ([`RuleSource::Engine`]), or trades the most at once,
+    /// by the other reading.
+    #[must_use]
+    pub fn trade_count(&self) -> RuleSource {
+        self.exchange_rules.trade_count
     }
 
     /// This session with a launcher's sale refused for its ammunition as
@@ -5589,6 +5611,23 @@ mod tests {
                 assert_eq!(session.pilot().cash(), cash, "{source:?} {lot:?}");
                 assert_eq!(session.pilot().held(FOOD), tons);
             }
+        }
+    }
+
+    #[test]
+    fn the_sessions_exchange_carries_its_count_rule() {
+        for source in [None, Some(RuleSource::Engine), Some(RuleSource::Bible)] {
+            let session = Session::start(&exchange()).expect("starts");
+            let mut session = match source {
+                Some(source) => session.with_trade_count(source),
+                None => session,
+            };
+            let source = source.unwrap_or_default();
+            assert_eq!(session.trade_count(), source);
+            assert_eq!(session.trade_quotient(), RuleSource::Engine);
+            land_now(&mut session).expect("lands");
+            let market = session.market().expect("an exchange");
+            assert_eq!(market.trade_count, source, "{source:?}");
         }
     }
 

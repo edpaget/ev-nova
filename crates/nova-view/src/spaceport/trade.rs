@@ -16,9 +16,15 @@
 //! holding a key keeps trading), ask for a plain trade of the selected
 //! good ([`Lot::Click`]), which moves up to 10 tons by the engine; Shift,
 //! Command and Control change nothing, as the original tests Option alone
-//! (`_DoTradeDialog` @0x5e211, @0x5e45c). With Alt held they ask for the
-//! most possible ([`Lot::Max`]), what accepting the default of the
-//! original's Option quantity dialog trades. Each is greyed as the
+//! (`_DoTradeDialog` @0x5e211, @0x5e45c). With Alt held, by the engine's
+//! reading of [`RuleKey::TradeCount`](nova_sim::RuleKey::TradeCount)
+//! ([`Market::trade_count`]), they open the quantity dialog over the
+//! exchange ([`QuantityDialog`], `DLOG` 1003, or its fallback) at the most
+//! the row offers ([`Market::row_max`]), even when that is 0 or less; a
+//! count above 0 confirmed there is traded ([`Lot::Count`]), and 0 or
+//! Cancel trades nothing. While it is open it takes every input: B, S,
+//! Return and Escape go to it. By the other reading, Alt asks for the
+//! most at once ([`Lot::Max`]). Each is greyed as the
 //! original's `_CanBuyGoods` and `_CanSellGoods` say
 //! ([`Market::row_allows`]): so Buy is enabled on a row priced below
 //! nothing while the cash is at least its price, though the buy then
@@ -32,7 +38,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Direction, Lot, Market, Order};
+use nova_sim::{Direction, Lot, Market, Order, RuleSource};
 
 use super::layout::DONE_LABEL;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -47,6 +53,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::quantity::QuantityDialog;
 
 /// The "Trade" dialog's `DLOG` (and `DITL`) ID.
 pub const TRADE_DIALOG: i16 = 1001;
@@ -80,8 +87,10 @@ pub const SELL_LABEL: &str = "Sell";
 pub const BUY_KEY: Key = Key::Char('b');
 /// Sells, as Sell does: the original's default.
 pub const SELL_KEY: Key = Key::Char('s');
-/// Held, makes a Buy or Sell the most possible, as accepting the
-/// default of the quantity dialog the original's Option opens does.
+/// Held, makes a Buy or Sell ask for a count in the quantity dialog, as
+/// the original's Option does, or by the other reading of
+/// [`RuleKey::TradeCount`](nova_sim::RuleKey::TradeCount) trade the most
+/// at once.
 pub const MAX_LOT_KEY: Key = Key::Alt;
 
 /// The list's font, size and colour.
@@ -118,6 +127,16 @@ pub fn status_line(market: &Market) -> String {
 struct Laid {
     dialog: Dialog,
     metrics: MetricsHandle,
+    /// The quantity dialog's template, if the interface file has one.
+    quantity: Option<DialogTemplate>,
+}
+
+/// The quantity dialog open over the exchange, and the trade it counts.
+#[derive(Clone, Debug)]
+struct Asking {
+    row: usize,
+    direction: Direction,
+    dialog: QuantityDialog,
 }
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
@@ -142,20 +161,25 @@ pub struct TradeScreen {
     top: usize,
     /// Whether Alt is held.
     max_lot: bool,
+    /// The quantity dialog, while it is open.
+    asking: Option<Asking>,
     /// The order asked for, until it is taken.
     order: Option<Order>,
     closed: bool,
+    style: ButtonStyle,
     sounds: Vec<Sound>,
 }
 
 impl TradeScreen {
     /// The exchange `market`, laid out by `layout`: the "Trade" dialog's
     /// template and the metrics its text is measured by, or why there are
-    /// none. Its buttons are labelled in `style`. The first row is
-    /// selected.
+    /// none. The quantity dialog is laid out by `quantity`, its template
+    /// (or, without one, its fallback). Its buttons are labelled in
+    /// `style`. The first row is selected.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
+        quantity: Result<DialogTemplate, String>,
         market: Market,
         style: ButtonStyle,
     ) -> Self {
@@ -172,6 +196,7 @@ impl TradeScreen {
             Laid {
                 dialog,
                 metrics: MetricsHandle(metrics),
+                quantity: quantity.ok(),
             }
         });
         let mut screen = Self {
@@ -180,8 +205,10 @@ impl TradeScreen {
             selected: 0,
             top: 0,
             max_lot: false,
+            asking: None,
             order: None,
             closed: false,
+            style,
             sounds: Vec::new(),
         };
         screen.regrey();
@@ -267,19 +294,90 @@ impl TradeScreen {
             .is_some_and(|index| self.market.row_allows(index, direction))
     }
 
-    /// Asks to trade on the selected row `direction`, a plain trade or with
-    /// Alt held the most, if that button is enabled: the order names the
-    /// row, as a `jünk` can be listed on two at two prices.
-    fn ask(&mut self, direction: Direction) {
+    /// The quantity dialog, while it is open.
+    #[must_use]
+    pub fn quantity(&self) -> Option<&QuantityDialog> {
+        self.asking.as_ref().map(|asking| &asking.dialog)
+    }
+
+    /// Asks to trade on the selected row `direction`, if that button is
+    /// enabled: a plain trade, or with Alt held the quantity dialog (or by
+    /// the other reading the most). `by_key` says B or S asked, whose
+    /// character the dialog then drops. The order names the row, as a
+    /// `jünk` can be listed on two at two prices.
+    fn ask(&mut self, direction: Direction, by_key: bool) {
         let Some(index) = self.selected().filter(|_| self.allows(direction)) else {
             return;
+        };
+        let lot = match (self.max_lot, self.market.trade_count) {
+            (false, _) => Lot::Click,
+            (true, RuleSource::Bible) => Lot::Max,
+            (true, RuleSource::Engine) => {
+                if let Some(max) = self.market.row_max(index, direction) {
+                    self.open_quantity(index, direction, max, by_key);
+                }
+                return;
+            }
         };
         self.order = Some(Order {
             row: index,
             good: self.market.rows[index].good,
             direction,
-            lot: if self.max_lot { Lot::Max } else { Lot::Click },
+            lot,
         });
+    }
+
+    /// Opens the quantity dialog over the exchange for row `row`'s trade
+    /// `direction`, at `max`, laid out by its template or its fallback.
+    fn open_quantity(&mut self, row: usize, direction: Direction, max: i64, by_key: bool) {
+        let Ok(laid) = &self.laid else {
+            return;
+        };
+        let metrics = Rc::clone(&laid.metrics.0);
+        let built = laid.quantity.as_ref().and_then(|template| {
+            QuantityDialog::new(template, max, direction, self.style, Rc::clone(&metrics)).ok()
+        });
+        let mut dialog =
+            built.unwrap_or_else(|| QuantityDialog::fallback(max, direction, self.style, metrics));
+        if by_key {
+            dialog.flush_typed_key();
+        }
+        self.asking = Some(Asking {
+            row,
+            direction,
+            dialog,
+        });
+    }
+
+    /// Gives `input` to the quantity dialog open, after following Alt, and
+    /// records a count above 0 confirmed there as the order; 0 or Cancel
+    /// closes it with none.
+    fn quantity_input(&mut self, input: &Input) {
+        let Some(asking) = &mut self.asking else {
+            return;
+        };
+        if let Input::Key {
+            key: MAX_LOT_KEY,
+            pressed,
+            ..
+        } = *input
+        {
+            self.max_lot = pressed;
+        }
+        asking.dialog.input(input);
+        self.sounds.extend(asking.dialog.take_sounds());
+        let Some(count) = asking.dialog.take_outcome() else {
+            return;
+        };
+        if count > 0 {
+            self.order = Some(Order {
+                row: asking.row,
+                good: self.market.rows[asking.row].good,
+                direction: asking.direction,
+                lot: Lot::Count(count),
+            });
+        }
+        self.asking = None;
     }
 
     /// Activates dialog item `item`: Done closes, Buy and Sell ask, and a
@@ -287,8 +385,8 @@ impl TradeScreen {
     fn activate(&mut self, item: usize) {
         match item {
             DONE_ITEM => self.closed = true,
-            BUY_ITEM => self.ask(Direction::Buy),
-            SELL_ITEM => self.ask(Direction::Sell),
+            BUY_ITEM => self.ask(Direction::Buy, false),
+            SELL_ITEM => self.ask(Direction::Sell, false),
             row if (FIRST_ROW_ITEM..FIRST_ROW_ITEM + ROWS).contains(&row) => {
                 let index = self.top + (row - FIRST_ROW_ITEM);
                 if index < self.market.rows.len() {
@@ -326,8 +424,13 @@ impl TradeScreen {
 }
 
 impl Screen for TradeScreen {
-    /// Every input goes to the exchange; it never quits.
+    /// Every input goes to the exchange, or to the quantity dialog while
+    /// it is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.asking.is_some() {
+            self.quantity_input(input);
+            return ScreenAction::None;
+        }
         let Ok(laid) = &mut self.laid else {
             if let Input::Key {
                 key: Key::Enter | Key::Escape,
@@ -359,12 +462,12 @@ impl Screen for TradeScreen {
                 key: BUY_KEY,
                 pressed: true,
                 ..
-            } => self.ask(Direction::Buy),
+            } => self.ask(Direction::Buy, true),
             Input::Key {
                 key: SELL_KEY,
                 pressed: true,
                 ..
-            } => self.ask(Direction::Sell),
+            } => self.ask(Direction::Sell, true),
             _ => {
                 let event = laid.dialog.input(input);
                 self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
@@ -429,20 +532,28 @@ impl Screen for TradeScreen {
             &status_line(&self.market),
         );
         dialog.draw(list);
+        if let Some(asking) = &self.asking {
+            asking.dialog.draw(list);
+        }
     }
 
     fn cancel_pointer(&mut self) {
-        if let Ok(laid) = &mut self.laid {
+        if let Some(asking) = &mut self.asking {
+            asking.dialog.cancel_pointer();
+        } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
     }
 
-    /// Lets go of Alt.
+    /// Lets go of Alt, and of the keys held in the quantity dialog.
     fn release_keys(&mut self) {
         self.max_lot = false;
+        if let Some(asking) = &mut self.asking {
+            asking.dialog.release_keys();
+        }
     }
 
-    /// The buttons' sounds, in order.
+    /// The buttons' sounds and the quantity dialog's, in order.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -546,7 +657,27 @@ mod tests {
     }
 
     fn screen_of(market: Market) -> TradeScreen {
-        TradeScreen::new(Ok(layout()), market, ButtonStyle::STOCK)
+        TradeScreen::new(Ok(layout()), Ok(quantity()), market, ButtonStyle::STOCK)
+    }
+
+    /// Stock `DITL` 1003, fixed at (10, 20): OK (1), the prompt (2), the
+    /// field (3) and Cancel (4).
+    fn quantity() -> DialogTemplate {
+        let item = |x, y, w, h, kind| ItemTemplate {
+            bounds: rect(x, y, w, h),
+            enabled: true,
+            kind,
+        };
+        DialogTemplate {
+            bounds: rect(10.0, 20.0, 172.0, 72.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(92.0, 42.0, 70.0, 20.0, ItemSpec::Button("OK".into())),
+                item(6.0, 8.0, 102.0, 16.0, ItemSpec::StaticText("^0".into())),
+                item(112.0, 8.0, 51.0, 16.0, ItemSpec::EditText("12345".into())),
+                item(10.0, 42.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
+            ],
+        }
     }
 
     fn screen() -> TradeScreen {
@@ -879,6 +1010,7 @@ mod tests {
         }
         let mut screen = TradeScreen::new(
             Ok((template, Rc::new(MonoMetrics))),
+            Ok(quantity()),
             long(20),
             ButtonStyle::STOCK,
         );
@@ -936,8 +1068,11 @@ mod tests {
     }
 
     #[test]
-    fn with_alt_held_buy_and_sell_ask_for_the_most() {
-        let mut screen = screen();
+    fn by_the_other_count_reading_with_alt_held_buy_and_sell_ask_for_the_most() {
+        let mut screen = screen_of(Market {
+            trade_count: RuleSource::Bible,
+            ..market()
+        });
         press(&mut screen, MAX_LOT_KEY);
         click_item(&mut screen, BUY_ITEM);
         assert_eq!(
@@ -968,6 +1103,279 @@ mod tests {
             screen.take_order(),
             Some(order(0, FOOD, Direction::Sell, Lot::Click))
         );
+    }
+
+    // The quantity dialog, by the engine's count reading.
+
+    fn quantity_item(screen: &TradeScreen, number: usize) -> Point {
+        screen
+            .quantity()
+            .expect("asking")
+            .dialog()
+            .item_bounds(number)
+            .expect("an item")
+            .center()
+    }
+
+    fn quantity_texts(screen: &TradeScreen) -> Vec<String> {
+        let mut list = DrawList::new();
+        screen.quantity().expect("asking").draw(&mut list);
+        let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+        texts(&commands).into_iter().map(|(text, _)| text).collect()
+    }
+
+    fn typed(screen: &mut TradeScreen, text: &str) {
+        for c in text.chars() {
+            screen.input(&key(Key::Char(c), true, false));
+            screen.input(&Input::Text(c));
+        }
+    }
+
+    /// Opens the quantity dialog on the selected row with Alt and a click
+    /// on `button`, Alt then let go.
+    fn alt_click(screen: &mut TradeScreen, button: usize) {
+        press(screen, MAX_LOT_KEY);
+        click_item(screen, button);
+        screen.input(&key(MAX_LOT_KEY, false, false));
+    }
+
+    #[test]
+    fn with_alt_held_buy_opens_the_quantity_dialog_at_the_most_and_ok_trades_the_count() {
+        let mut screen = screen();
+        alt_click(&mut screen, BUY_ITEM);
+        assert_eq!(screen.take_order(), None, "nothing yet");
+        let asking = screen.quantity().expect("asking");
+        assert_eq!(asking.field().text(), "7", "min(1000 / 93, 7 free)");
+        assert_eq!(asking.field().selection(), 1);
+        assert_eq!(
+            asking.dialog().bounds().min,
+            Point::new(10.0, 20.0),
+            "laid out by its template"
+        );
+        assert_eq!(
+            quantity_texts(&screen),
+            ["Buy", "Enter quantity:", "Cancel", "7"]
+        );
+        typed(&mut screen, "5");
+        let ok = quantity_item(&screen, 1);
+        click(&mut screen, ok);
+        assert_eq!(
+            screen.take_order(),
+            Some(order(0, FOOD, Direction::Buy, Lot::Count(5)))
+        );
+        assert!(screen.quantity().is_none(), "closed");
+    }
+
+    #[test]
+    fn alt_s_opens_a_sale_dialog_its_s_typing_nothing_and_return_trades_the_most() {
+        let mut screen = screen();
+        press(&mut screen, MAX_LOT_KEY);
+        // As a Mac sends Option-S: the key, then the character it types.
+        press(&mut screen, SELL_KEY);
+        screen.input(&Input::Text('ß'));
+        assert_eq!(
+            quantity_texts(&screen),
+            ["Sell", "Enter quantity:", "Cancel", "2"]
+        );
+        screen.input(&Input::Text('ß'));
+        assert_eq!(
+            screen.quantity().map(|asking| asking.field().text()),
+            Some("ß"),
+            "only the first typed character is dropped"
+        );
+        let mut screen = self::screen();
+        press(&mut screen, MAX_LOT_KEY);
+        typed(&mut screen, "s");
+        press(&mut screen, Key::Enter);
+        assert_eq!(
+            screen.take_order(),
+            Some(order(0, FOOD, Direction::Sell, Lot::Count(2)))
+        );
+        assert!(!screen.closed(), "Return went to the dialog");
+    }
+
+    #[test]
+    fn a_click_on_buy_keeps_the_first_typed_character() {
+        let mut screen = screen();
+        alt_click(&mut screen, BUY_ITEM);
+        screen.input(&Input::Text('3'));
+        assert_eq!(
+            screen.quantity().map(|asking| asking.field().text()),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn cancel_or_a_count_of_0_trades_nothing_and_closes_the_dialog() {
+        let mut screen = screen();
+        alt_click(&mut screen, BUY_ITEM);
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), None);
+        alt_click(&mut screen, SELL_ITEM);
+        typed(&mut screen, "0");
+        press(&mut screen, Key::Enter);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), None);
+        assert!(!screen.closed());
+    }
+
+    #[test]
+    fn while_the_dialog_is_open_b_and_escape_do_not_reach_the_exchange() {
+        let mut screen = screen();
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::Down);
+        click_item(&mut screen, SELL_ITEM);
+        press(&mut screen, Key::Escape);
+        assert_eq!(screen.take_order(), None);
+        assert!(!screen.closed());
+        assert_eq!(screen.selected(), Some(0));
+        assert!(screen.quantity().is_some(), "still open");
+    }
+
+    #[test]
+    fn alt_let_go_in_the_dialog_is_let_go_after_it() {
+        let mut screen = screen();
+        press(&mut screen, MAX_LOT_KEY);
+        click_item(&mut screen, BUY_ITEM);
+        screen.input(&key(MAX_LOT_KEY, false, false));
+        press(&mut screen, Key::Enter);
+        assert_eq!(
+            screen.take_order(),
+            Some(order(0, FOOD, Direction::Buy, Lot::Count(7)))
+        );
+        press(&mut screen, BUY_KEY);
+        assert_eq!(
+            screen.take_order(),
+            Some(order(0, FOOD, Direction::Buy, Lot::Click))
+        );
+        // And Alt pressed in the dialog stays held after it.
+        click_item(&mut screen, BUY_ITEM);
+        screen.take_order();
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, Key::Enter);
+        screen.take_order();
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_order(), None);
+        assert!(screen.quantity().is_some(), "Alt still held");
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_in_the_dialog_lets_go_of_alt() {
+        let mut screen = screen();
+        press(&mut screen, MAX_LOT_KEY);
+        click_item(&mut screen, BUY_ITEM);
+        screen.release_keys();
+        press(&mut screen, Key::Enter);
+        screen.take_order();
+        press(&mut screen, BUY_KEY);
+        assert_eq!(
+            screen.take_order(),
+            Some(order(0, FOOD, Direction::Buy, Lot::Click))
+        );
+    }
+
+    #[test]
+    fn the_dialogs_beep_and_button_sounds_come_out_of_the_exchange() {
+        let mut screen = screen();
+        alt_click(&mut screen, BUY_ITEM);
+        screen.take_sounds();
+        typed(&mut screen, "9");
+        press(&mut screen, Key::Enter);
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::Alert)]);
+        assert_eq!(
+            screen.quantity().map(|asking| asking.field().text()),
+            Some("7"),
+            "reset to the most"
+        );
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert_eq!(
+            screen.take_sounds(),
+            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
+        );
+    }
+
+    /// Waste at -200 a ton, none held, with `cash` and a ton free.
+    fn waste(cash: i64) -> TradeScreen {
+        screen_of(Market {
+            rows: vec![row(OPALS, "Waste", -200, 0)],
+            cash,
+            free: 1,
+            ..market()
+        })
+    }
+
+    #[test]
+    fn below_a_most_under_nothing_the_dialog_opens_and_only_cancel_leaves() {
+        let mut screen = waste(1000);
+        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, BUY_KEY);
+        assert_eq!(
+            screen.quantity().map(|asking| asking.field().text()),
+            Some("-5")
+        );
+        for _ in 0..3 {
+            press(&mut screen, Key::Enter);
+        }
+        assert!(screen.quantity().is_some());
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), None);
+        let mut screen = waste(0);
+        press(&mut screen, MAX_LOT_KEY);
+        press(&mut screen, BUY_KEY);
+        press(&mut screen, Key::Enter);
+        assert!(screen.quantity().is_none(), "0 of 0 confirmed");
+        assert_eq!(screen.take_order(), None);
+    }
+
+    #[test]
+    fn the_dialog_is_drawn_over_the_exchange() {
+        let mut screen = screen();
+        let exchange = drawn(&screen);
+        alt_click(&mut screen, BUY_ITEM);
+        let mut expected = exchange;
+        let mut list = DrawList::new();
+        screen.quantity().expect("asking").draw(&mut list);
+        expected.extend(list.iter().cloned());
+        assert_eq!(drawn(&screen), expected);
+    }
+
+    #[test]
+    fn without_its_template_the_dialog_opens_with_the_fallback() {
+        for quantity in [Err("no DLOG 1003".to_owned()), Ok(template())] {
+            let mut screen = TradeScreen::new(Ok(layout()), quantity, market(), ButtonStyle::STOCK);
+            alt_click(&mut screen, BUY_ITEM);
+            let asking = screen.quantity().expect("asking");
+            assert_eq!(
+                asking.dialog().bounds(),
+                rect(426.0, 348.0, 172.0, 72.0),
+                "centred"
+            );
+            assert_eq!(asking.field().text(), "7");
+        }
+    }
+
+    #[test]
+    fn cancelling_the_pointer_abandons_a_click_in_the_dialog() {
+        let mut screen = screen();
+        alt_click(&mut screen, BUY_ITEM);
+        let ok = quantity_item(&screen, 1);
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: ok,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert!(screen.quantity().is_some());
+        assert_eq!(screen.take_order(), None);
     }
 
     /// The original tests Option alone (`_DoTradeDialog` @0x5e211,
@@ -1222,8 +1630,12 @@ mod tests {
     #[test]
     fn without_the_dialog_it_says_why_and_return_or_escape_closes_it() {
         for k in [Key::Enter, Key::Escape] {
-            let mut screen =
-                TradeScreen::new(Err("no DLOG 1001".to_owned()), market(), ButtonStyle::STOCK);
+            let mut screen = TradeScreen::new(
+                Err("no DLOG 1001".to_owned()),
+                Ok(quantity()),
+                market(),
+                ButtonStyle::STOCK,
+            );
             assert_eq!(screen.problem(), Some("no DLOG 1001"));
             assert!(screen.dialog().is_none());
             assert_eq!(drawn(&screen), [problem("no DLOG 1001")]);

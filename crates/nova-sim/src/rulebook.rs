@@ -47,8 +47,9 @@
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
-//! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Alt trades the engine's maximum (see [`TradeQuotient`](RuleKey::TradeQuotient)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
+//! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for a count (see [`TradeCount`](RuleKey::TradeCount)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
 //! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; [`Market::row_max`](crate::Market::row_max)) | exact integer division\*\*\* |
+//! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; [`Market::trade_count`](crate::Market::trade_count)) | Alt trades the most at once††† |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -102,6 +103,10 @@
 //! \*\*\* The Bible says nothing of how the exchange divides the cash by
 //! the price. The other reading is the port's earlier behaviour, exact
 //! integer division, not anything the Bible says.
+//!
+//! ††† The Bible says nothing of what Option does at the exchange. The
+//! other reading is the port's earlier behaviour, Alt trading the most at
+//! once with no dialog, not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -477,6 +482,17 @@ rule_keys! {
     /// it, so the other reading is the port's earlier behaviour, not
     /// anything the Bible says (see [`market`](crate::market)).
     TradeQuotient => "trade_quotient",
+    /// What Option (Alt here) does with Buy or Sell at the exchange. By
+    /// the engine, it asks for a count in the quantity dialog
+    /// (`_DoQuantityDialog` @0x56d5b, called from `_DoTradeDialog`
+    /// @0x5e211 and @0x5e45c), which opens at the most the row offers
+    /// ([`Market::row_max`](crate::Market::row_max)) and trades the count
+    /// confirmed ([`Lot::Count`](crate::Lot::Count)). By the other
+    /// reading, Alt trades the most at once ([`Lot::Max`](crate::Lot::Max)).
+    /// The Bible says nothing of it, so the other reading is the port's
+    /// earlier behaviour, not anything the Bible says (see
+    /// [`market`](crate::market)).
+    TradeCount => "trade_count",
 }
 
 impl RuleKey {
@@ -605,7 +621,13 @@ mod tests {
             RuleKey::from_key("trade_quotient"),
             Some(RuleKey::TradeQuotient)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::TradeQuotient));
+    }
+
+    #[test]
+    fn the_trade_count_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::TradeCount.key(), "trade_count");
+        assert_eq!(RuleKey::from_key("trade_count"), Some(RuleKey::TradeCount));
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::TradeCount));
     }
 
     #[test]
@@ -647,7 +669,8 @@ mod tests {
                 RuleKey::JunkTrade,
                 RuleKey::OutfitLimit,
                 RuleKey::TradeLot,
-                RuleKey::TradeQuotient
+                RuleKey::TradeQuotient,
+                RuleKey::TradeCount
             ]
         );
         assert_eq!(RuleKey::TradeLot.key(), "trade_lot");

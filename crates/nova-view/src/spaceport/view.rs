@@ -231,9 +231,14 @@ pub struct SpaceportView {
     port: Result<Port, String>,
     /// The screen open over it, if any.
     open: Option<Open>,
-    /// The exchange's dialog template (or why there is none) and the
-    /// exchange as it is, once given.
-    trade: Option<(Result<DialogTemplate, String>, Market)>,
+    /// The exchange's dialog template and its quantity dialog's (or why
+    /// there are none) and the exchange as it is, once given.
+    #[allow(clippy::type_complexity)] // Two templates and the exchange.
+    trade: Option<(
+        Result<DialogTemplate, String>,
+        Result<DialogTemplate, String>,
+        Market,
+    )>,
     /// The outfitter, once given.
     outfitting: Option<Outfitting>,
     /// The shipyard, once given.
@@ -356,12 +361,18 @@ impl SpaceportView {
 
     /// The spaceport with the stellar's exchange, `market`, which the
     /// Trade Center opens laid out by `template`, the "Trade" dialog (or
-    /// saying why there is none). Without it, the Trade Center opens its
-    /// placeholder.
+    /// saying why there is none), its quantity dialog by `quantity` (or,
+    /// without it, the dialog's fallback). Without it, the Trade Center
+    /// opens its placeholder.
     #[must_use]
-    pub fn with_trade(self, template: Result<DialogTemplate, String>, market: Market) -> Self {
+    pub fn with_trade(
+        self,
+        template: Result<DialogTemplate, String>,
+        quantity: Result<DialogTemplate, String>,
+        market: Market,
+    ) -> Self {
         Self {
-            trade: Some((template, market)),
+            trade: Some((template, quantity, market)),
             ..self
         }
     }
@@ -390,7 +401,7 @@ impl SpaceportView {
         if let Some(Open::Trade(screen)) = &mut self.open {
             screen.set_market(market.clone());
         }
-        if let Some((_, kept)) = &mut self.trade {
+        if let Some((_, _, kept)) = &mut self.trade {
             *kept = market;
         }
     }
@@ -703,10 +714,11 @@ impl SpaceportView {
         }
         self.open = Some(
             match (&self.trade, &self.outfitting, &self.shipbuying, service) {
-                (Some((template, market)), _, _, Service::TradeCenter) => {
+                (Some((template, quantity, market)), _, _, Service::TradeCenter) => {
                     let layout = template.clone().map(|template| (template, metrics));
                     Open::Trade(Box::new(TradeScreen::new(
                         layout,
+                        quantity.clone(),
                         market.clone(),
                         port.style,
                     )))
@@ -1609,8 +1621,28 @@ mod tests {
         }
     }
 
+    /// The quantity dialog, fixed at (5, 6): OK (1), the prompt (2), the
+    /// field (3) and Cancel (4).
+    fn quantity_template() -> Template {
+        let item = |x, kind| ItemTemplate {
+            bounds: rect(x, 8.0, 40.0, 16.0),
+            enabled: true,
+            kind,
+        };
+        Template {
+            bounds: rect(5.0, 6.0, 172.0, 72.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(0.0, ItemSpec::Button("OK".into())),
+                item(40.0, ItemSpec::StaticText(String::new())),
+                item(80.0, ItemSpec::EditText(String::new())),
+                item(120.0, ItemSpec::Button("Cancel".into())),
+            ],
+        }
+    }
+
     fn trading(template: Result<Template, String>) -> SpaceportView {
-        earth().with_trade(template, exchange(0))
+        earth().with_trade(template, Ok(quantity_template()), exchange(0))
     }
 
     fn trade_item(view: &SpaceportView, number: usize) -> Point {
@@ -1732,7 +1764,26 @@ mod tests {
         assert_eq!(view.take_trade().map(|order| order.lot), Some(Lot::Click));
         view.input(&key(Key::Alt));
         view.input(&key(Key::Char('b')));
-        assert_eq!(view.take_trade().map(|order| order.lot), Some(Lot::Max));
+        assert_eq!(view.take_trade(), None, "the quantity dialog asks");
+    }
+
+    #[test]
+    fn the_exchanges_quantity_dialog_is_laid_out_by_its_template() {
+        let mut view = trading(Ok(trade_template()));
+        click_item(&mut view, 7);
+        view.input(&key(Key::Alt));
+        view.input(&key(Key::Char('b')));
+        let asking = view
+            .open_trade()
+            .and_then(TradeScreen::quantity)
+            .expect("asking");
+        assert_eq!(asking.dialog().bounds().min, Point::new(5.0, 6.0));
+        assert_eq!(asking.field().text(), "10", "min(1000 / 75, 10 free)");
+        view.input(&key(Key::Enter));
+        assert_eq!(
+            view.take_trade().map(|order| order.lot),
+            Some(Lot::Count(10))
+        );
     }
 
     // The Outfitter.

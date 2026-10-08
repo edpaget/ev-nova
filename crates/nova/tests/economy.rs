@@ -845,7 +845,8 @@ fn new_pilot(store: &MemoryPilots) -> Harness {
 
 /// Steps 1-3: food bought low in Alpha, ten tons of it sold high in Beta.
 fn trade_at_a_profit(game: &mut Harness) {
-    // 1. Alpha Prime sells food low, at 80: Alt-B fills the 20-ton hold.
+    // 1. Alpha Prime sells food low, at 80: Alt-B asks how many, and
+    //    Return takes the most offered, filling the 20-ton hold.
     game.land();
     assert_eq!(game.showing(), Showing::Spaceport);
     game.open(7);
@@ -856,6 +857,12 @@ fn trade_at_a_profit(game: &mut Harness) {
     game.key(KeyCode::AltLeft, true, false);
     game.press(KeyCode::KeyB);
     game.key(KeyCode::AltLeft, false, false);
+    assert_eq!(
+        game.trade().quantity().map(|asking| asking.field().text()),
+        Some("20")
+    );
+    game.press(KeyCode::Enter);
+    assert!(game.trade().quantity().is_none());
     assert_eq!(game.pilot().held(FOOD), 20);
     assert_eq!(game.pilot().cash(), 8400);
 

@@ -51,9 +51,11 @@
 //! At a trade center, the spaceport's Trade Center opens the session's
 //! exchange, laid out by the interface file's "Trade" dialog. There a
 //! plain B buys and S sells up to ten tons of the selected good (a ton by
-//! the `trade_lot` rule's other reading), and with Alt held the engine's
-//! maximum (the `trade_quotient` rule says how it divides); the
-//! router makes each trade through the session, hands the exchange as
+//! the `trade_lot` rule's other reading), and with Alt held the quantity
+//! dialog (`DLOG` 1003, or its fallback) asks how many, up to
+//! the engine's maximum (the `trade_quotient` rule says how it divides);
+//! by the `trade_count` rule's other reading, Alt trades that maximum at
+//! once. The router makes each trade through the session, hands the exchange as
 //! it now is back to the screen, and saves the pilot after the input.
 //!
 //! At an outfitter, the spaceport's Outfitter opens the session's
@@ -133,7 +135,9 @@
 //! moves as many tons a plain trade as it says
 //! ([`AppScreen::with_trade_lot`]), and divides the cash by the price for
 //! the most a buy moves as it says ([`AppScreen::with_trade_quotient`]),
-//! the engine's until others are given. Each flight's outfitter sells a map
+//! and has Option on Buy or Sell ask for a count or trade the most as it
+//! says ([`AppScreen::with_trade_count`]), the engine's until others are
+//! given. Each flight's outfitter sells a map
 //! or clean-record outfit as the router says
 //! ([`AppScreen::with_outfit_limit`]), the engine's until another is
 //! given; each time the spaceport's outfitter opens, the flight is told
@@ -210,6 +214,7 @@ use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
+use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::ui::text_input::TEXT_INPUT_DIALOG;
 use nova_view::ui::{
     AssignmentDialog, CommDialog, CommPress, DescDialog, DescriptionSource, DialogResources,
@@ -349,6 +354,9 @@ pub struct AppScreen {
     /// How the most a buy on each flight's exchange moves divides the
     /// cash by the price.
     trade_quotient: RuleSource,
+    /// Whether Option on Buy or Sell at each flight's exchange asks for a
+    /// count or trades the most.
+    trade_count: RuleSource,
     /// Whether each flight's outfitter sells a map or clean-record outfit
     /// only once an opening.
     outfit_limit: RuleSource,
@@ -451,6 +459,7 @@ impl AppScreen {
             junk_trade: RuleSource::Engine,
             trade_lot: RuleSource::Engine,
             trade_quotient: RuleSource::Engine,
+            trade_count: RuleSource::Engine,
             outfit_limit: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
@@ -690,6 +699,18 @@ impl AppScreen {
         }
     }
 
+    /// The router with Option on Buy or Sell at each flight's exchange
+    /// asking for a count or trading the most as `source` says
+    /// ([`FlightView::with_trade_count`]); the engine's (it asks) until
+    /// another is given.
+    #[must_use]
+    pub fn with_trade_count(self, source: RuleSource) -> Self {
+        Self {
+            trade_count: source,
+            ..self
+        }
+    }
+
     /// The router with each flight's outfitter selling a map or
     /// clean-record outfit as `source` says
     /// ([`FlightView::with_outfit_limit`]); the engine's (once an opening)
@@ -793,6 +814,7 @@ impl AppScreen {
             .with_junk_trade(rulebook.source_for(RuleKey::JunkTrade))
             .with_trade_lot(rulebook.source_for(RuleKey::TradeLot))
             .with_trade_quotient(rulebook.source_for(RuleKey::TradeQuotient))
+            .with_trade_count(rulebook.source_for(RuleKey::TradeCount))
             .with_outfit_limit(rulebook.source_for(RuleKey::OutfitLimit))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
@@ -858,6 +880,7 @@ impl AppScreen {
             .with_junk_trade(self.junk_trade)
             .with_trade_lot(self.trade_lot)
             .with_trade_quotient(self.trade_quotient)
+            .with_trade_count(self.trade_count)
             .with_outfit_limit(self.outfit_limit)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
@@ -1486,7 +1509,8 @@ impl AppScreen {
             SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG));
         if let Some(market) = self.flight.as_ref().and_then(FlightView::market) {
             let trade = template(TRADE_DIALOG).map(|(template, _)| template);
-            spaceport = spaceport.with_trade(trade, market);
+            let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
+            spaceport = spaceport.with_trade(trade, quantity, market);
         }
         if let Some(outfitter) = self.flight.as_mut().and_then(FlightView::outfitter) {
             let template = template(OUTFIT_DIALOG).map(|(template, _)| template);
@@ -4494,6 +4518,7 @@ mod tests {
     // The Trade Center.
 
     use nova_sim::Good;
+    use nova_view::spaceport::TradeScreen;
     use nova_view::spaceport::trade::{BUY_ITEM, TRADE_DIALOG};
 
     /// "Trade", smaller: 400 x 300 at (0, 0), with Done (1), eight rows (4
@@ -4533,7 +4558,14 @@ mod tests {
     /// The router over [`trading_data`] with the trade dialog, keeping
     /// pilots in `store`, flying a new pilot named Ada, landed.
     fn landed_trader(store: &MemoryPilots) -> AppScreen {
+        landed_trader_by(store, RuleSource::Engine)
+    }
+
+    /// [`landed_trader`], Option on Buy or Sell doing as `trade_count`
+    /// says.
+    fn landed_trader_by(store: &MemoryPilots, trade_count: RuleSource) -> AppScreen {
         let mut screen = AppScreen::new(trading_data())
+            .with_trade_count(trade_count)
             .with_dialogs(Rc::new(TradeDialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
@@ -4594,12 +4626,16 @@ mod tests {
         assert_eq!(open.market().cash, 250);
         assert_eq!(store.writes(), writes + 1, "saved after the input");
         assert_eq!(saved(&store, "Ada").held(FOOD), 10);
-        // A max sale and a max buy, then a click on Buy with no space.
+        // A max sale and a max buy, the quantity dialog's default each
+        // confirmed, then a click on Buy with no space.
         screen.input(&key(Key::Alt, true));
         screen.input(&key(Key::Char('s'), true));
+        assert_eq!(pilot(&screen).held(FOOD), 10, "the dialog asks first");
+        screen.input(&key(Key::Enter, true));
         assert_eq!(pilot(&screen).held(FOOD), 0, "everything held");
         assert_eq!(pilot(&screen).cash(), 1000);
         screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Enter, true));
         screen.input(&key(Key::Alt, false));
         assert_eq!(pilot(&screen).held(FOOD), 10, "the hold is full");
         assert_eq!(pilot(&screen).cash(), 250);
@@ -4623,6 +4659,42 @@ mod tests {
         screen.input(&key(Key::Escape, true));
         assert!(spaceport(&screen).open_trade().is_none());
         assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    #[test]
+    fn alt_b_asks_for_a_count_and_the_count_typed_is_bought_and_saved() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        click_port_item(&mut screen, 7);
+        let writes = store.writes();
+        screen.input(&key(Key::Alt, true));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&Input::Text('b'));
+        screen.input(&key(Key::Alt, false));
+        let asking = spaceport(&screen)
+            .open_trade()
+            .and_then(TradeScreen::quantity)
+            .expect("asking");
+        assert_eq!(asking.field().text(), "10", "min(1000 / 75, 10 free)");
+        assert_eq!(store.writes(), writes, "nothing traded yet");
+        screen.input(&key(Key::Char('3'), true));
+        screen.input(&Input::Text('3'));
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(pilot(&screen).held(FOOD), 3);
+        assert_eq!(pilot(&screen).cash(), 1000 - 3 * 75);
+        assert_eq!(store.writes(), writes + 1, "saved after the input");
+        assert_eq!(saved(&store, "Ada").held(FOOD), 3);
+        assert!(spaceport(&screen).open_trade().is_some(), "still trading");
+    }
+
+    #[test]
+    fn by_the_other_count_reading_alt_b_buys_the_most_at_once() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader_by(&store, RuleSource::Bible);
+        click_port_item(&mut screen, 7);
+        screen.input(&key(Key::Alt, true));
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).held(FOOD), 10);
     }
 
     #[test]
@@ -6238,6 +6310,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_trade_count_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_trade_count(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.trade_count(), source);
+            assert_eq!(session.trade_quotient(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.trade_count(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_trade_quotient_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_trade_quotient(source);
@@ -6342,6 +6429,7 @@ mod tests {
             ("junk_trade", format!("{:?}", screen.junk_trade)),
             ("trade_lot", format!("{:?}", screen.trade_lot)),
             ("trade_quotient", format!("{:?}", screen.trade_quotient)),
+            ("trade_count", format!("{:?}", screen.trade_count)),
             ("outfit_limit", format!("{:?}", screen.outfit_limit)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
@@ -6377,6 +6465,7 @@ mod tests {
             RuleKey::JunkTrade => "junk_trade",
             RuleKey::TradeLot => "trade_lot",
             RuleKey::TradeQuotient => "trade_quotient",
+            RuleKey::TradeCount => "trade_count",
             RuleKey::OutfitLimit => "outfit_limit",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",

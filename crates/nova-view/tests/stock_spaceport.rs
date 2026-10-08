@@ -22,6 +22,7 @@ use nova_view::spaceport::{SpaceportView, StellarId, TradeScreen};
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::DescriptionSource;
 use nova_view::ui::DialogResources;
+use nova_view::ui::quantity::QUANTITY_DIALOG;
 use nova_view::{DrawCommand, DrawList, Screen};
 
 /// The two stock builds: each `Nova Files` directory with the interface
@@ -113,6 +114,7 @@ fn port_kanes_trade_center_lists_its_goods_in_the_trade_dialog() {
         let market = at_port_kane(&data).market().expect("a trade center");
         let screen = TradeScreen::new(
             Ok((template, Rc::new(MonoMetrics))),
+            ui.dialog_template(QUANTITY_DIALOG),
             market,
             data.button_style(),
         );
@@ -297,6 +299,66 @@ impl Chance for Highest {
 
     fn below(&mut self, n: u32) -> u32 {
         n - 1
+    }
+}
+
+/// Option-Buy at Port Kane's Trade Center asks how many in the stock
+/// quantity dialog (`DLOG` 1003): 172 x 72, centred, OK titled "Buy",
+/// the prompt and the field holding the most, and Cancel.
+#[test]
+fn option_buy_at_port_kane_asks_how_many_in_the_stock_quantity_dialog() {
+    use nova_view::ui::quantity::{CANCEL_ITEM, FIELD_ITEM, OK_ITEM, PROMPT_ITEM};
+    let press = |key| nova_view::Input::Key {
+        key,
+        pressed: true,
+        repeat: false,
+    };
+    for (dir, ui) in builds() {
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let ui = InterfaceData::open(&ui).expect("the interface file opens");
+        let template = ui.dialog_template(TRADE_DIALOG).expect("Trade");
+        let quantity = ui
+            .dialog_template(QUANTITY_DIALOG)
+            .expect("the quantity dialog");
+        let market = at_port_kane(&data).market().expect("a trade center");
+        let max = market
+            .row_max(0, nova_sim::Direction::Buy)
+            .expect("the first row is bought");
+        let mut screen = TradeScreen::new(
+            Ok((template, Rc::new(MonoMetrics))),
+            Ok(quantity),
+            market,
+            data.button_style(),
+        );
+        screen.input(&press(nova_view::Key::Alt));
+        screen.input(&press(nova_view::Key::Char('b')));
+        let dialog = screen.quantity().expect("asking");
+        let bounds = dialog.dialog().bounds();
+        assert_eq!(bounds, Bounds::at(Point::new(426.0, 348.0), 172.0, 72.0));
+        let at = |x: f32, y: f32, w, h| Bounds::at(Point::new(426.0 + x, 348.0 + y), w, h);
+        for (item, bounds) in [
+            (OK_ITEM, at(92.0, 42.0, 70.0, 20.0)),
+            (PROMPT_ITEM, at(6.0, 8.0, 102.0, 16.0)),
+            (FIELD_ITEM, at(112.0, 8.0, 51.0, 16.0)),
+            (CANCEL_ITEM, at(10.0, 42.0, 70.0, 20.0)),
+        ] {
+            assert_eq!(dialog.dialog().item_bounds(item), Some(bounds), "{item}");
+            assert!(dialog.dialog().item_shown(item), "{item}");
+        }
+        assert_eq!(dialog.field().text(), max.to_string());
+        assert!(dialog.field().selected());
+        let mut list = DrawList::new();
+        dialog.draw(&mut list);
+        let texts: Vec<String> = list
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        for shown in ["Buy", "Enter quantity:", "Cancel"] {
+            assert!(texts.contains(&shown.to_owned()), "{shown}: {texts:?}");
+        }
     }
 }
 

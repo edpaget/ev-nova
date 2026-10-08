@@ -20,6 +20,8 @@
 //!   and Backspace empties.
 //! - [`text_input`]: the "Text Input" dialog ([`TextInputDialog`]): a
 //!   prompt and a line of text to type, such as the new ship's name.
+//! - [`quantity`]: the quantity dialog ([`QuantityDialog`]): how many
+//!   to buy or sell, up to a maximum.
 //! - [`new_pilot`]: the New Pilot dialog ([`NewPilotDialog`], "Create a
 //!   new pilot:"): the new pilot's name.
 //! - [`toggle`]: an on/off check box with a label.
@@ -45,6 +47,7 @@ pub mod dialog;
 pub mod new_pilot;
 pub mod plunder;
 pub mod prefs;
+pub mod quantity;
 pub mod scroll_text;
 pub mod slice;
 pub mod text_field;
@@ -62,6 +65,7 @@ pub use dialog::{
 pub use new_pilot::{NewPilotDialog, NewPilotOutcome};
 pub use plunder::{AssignmentDialog, PlunderDialog, PlunderShown};
 pub use prefs::PrefsDialog;
+pub use quantity::QuantityDialog;
 pub use scroll_text::ScrollText;
 pub use slice::{Axis, Piece, three_slice};
 pub use text_field::TextField;
