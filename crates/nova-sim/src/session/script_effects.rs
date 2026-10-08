@@ -986,6 +986,25 @@ mod tests {
     }
 
     #[test]
+    fn a_relocation_after_a_landed_n_takes_off_from_the_stellar_moved_to() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        session.player.position = Vec2::new(10.0, -10.0);
+        land_now(&mut session).expect("lands");
+        moved(&mut session, &catalog, "N131");
+        session
+            .relocate(&catalog, SystemId(131), StellarId(141))
+            .expect("moves");
+        session.take_off();
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(
+            session.player().position,
+            Vec2::new(-50.0, 0.0),
+            "141's, not where the ship touched down"
+        );
+    }
+
+    #[test]
     fn as_an_arrival_a_landed_move_explores_and_clears_the_course_at_once() {
         let catalog = moving();
         let rules = ScriptEffectRules {
