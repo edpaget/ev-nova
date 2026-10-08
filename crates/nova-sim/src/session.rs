@@ -759,7 +759,7 @@ impl Session {
             pilot,
         };
         session.open_opening();
-        session.refit(false);
+        session.refit(false, ReservePolicy::Hold);
         session.restock_fleet();
         Ok(session)
     }
@@ -851,32 +851,23 @@ impl Session {
         )
     }
 
+    /// The policy `G`, `D` and boarding refit by: the rule set's reading
+    /// of [`RuleKey::RefitReserves`].
+    fn script_reserves(&self) -> ReservePolicy {
+        ReservePolicy::reading(self.outfit_rules().refit_reserves)
+    }
+
     /// Recomputes the stats from the outfits the pilot owns: each gauge
-    /// holds up to the stats' most, keeping no more than that, and when
-    /// `gain`, one whose most rose gains as much. The hull and the weapons
-    /// follow the ship and the outfits, ready to fire. The outfitter, the
-    /// shipyard, capture, a change of ship and a reload refit this way;
-    /// `G`, `D` and boarding refit as the rule set reads
-    /// [`RuleKey::RefitReserves`] (see [`Session::script_refit`]).
-    fn refit(&mut self, gain: bool) {
-        self.refit_reserves(gain, true);
-    }
-
-    /// Refits as `G`, `D` and boarding do: the shield and armour held to
-    /// their most only by the other reading of
-    /// [`RuleKey::RefitReserves`](crate::RuleKey::RefitReserves), the
-    /// engine's keeping a surplus (`_SystemInfoToShipStats` @0xca33
-    /// clamps no reserve), and the fuel always held.
-    fn script_refit(&mut self, gain: bool) {
-        self.refit_reserves(
-            gain,
-            self.outfit_rules().refit_reserves == RuleSource::Bible,
-        );
-    }
-
-    /// [`Session::refit`], holding the shield and armour to their most
-    /// only when `hold`; the fuel is always held.
-    fn refit_reserves(&mut self, gain: bool, hold: bool) {
+    /// holds up to the stats' most and, when `gain`, one whose most rose
+    /// gains as much. The fuel keeps no more than its most; the shield and
+    /// armour keep no more only under [`ReservePolicy::Hold`]. The hull
+    /// and the weapons follow the ship and the outfits, ready to fire.
+    /// The outfitter, the shipyard, capture and a reload hold; `G`, `D`
+    /// and boarding read [`RuleKey::RefitReserves`] and a change of ship
+    /// reads [`RuleKey::ShipChangeReserves`] (see
+    /// [`ReservePolicy::reading`]).
+    fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
+        let hold = reserves == ReservePolicy::Hold;
         self.hull = self.arsenal.hull(self.pilot.ship);
         self.armament = self.arsenal.player(&self.pilot.outfits, &self.outfits);
         let carried = self.secondary.filter(|&id| {
@@ -2193,7 +2184,7 @@ impl Session {
             }
             Direction::Sell => self.run_script(&record.on_sell, chance),
         }
-        self.refit(true);
+        self.refit(true, ReservePolicy::Hold);
         Ok(())
     }
 
@@ -2353,7 +2344,7 @@ impl Session {
         self.fields = record.fields;
         self.defaults = pilot::tally(record.defaults.iter().copied());
         self.stock = armament::fitted(&fits);
-        self.refit(false);
+        self.refit(false, ReservePolicy::Hold);
         self.ship_redraws.insert(ship);
         self.ship_hook(record.id, ShipHook::Purchase, chance);
         if paint_last {
@@ -2607,7 +2598,7 @@ impl Session {
         for _ in 0..granted.count {
             self.grant_outfit(granted.outfit);
         }
-        self.script_refit(true);
+        self.refit(true, self.script_reserves());
         Some(granted)
     }
 
@@ -2824,7 +2815,7 @@ impl Session {
             *self.pilot.outfits.entry(outfit).or_default() += 1;
             count += 1;
         }
-        self.script_refit(true);
+        self.refit(true, self.script_reserves());
         count
     }
 
@@ -3037,7 +3028,7 @@ impl Session {
             .ok()
             .filter(|&fuel| fuel > 0)
             .map_or(0.0, |fuel| chance.below(fuel) as f32);
-        self.refit(false);
+        self.refit(false, ReservePolicy::Hold);
         for other in self.traffic.npcs_mut() {
             if other.leader == Some(npc.id) {
                 other.leader = None;
@@ -3088,6 +3079,28 @@ impl Aboard {
 /// raised `Max` (see [`GrantStock::max`]).
 fn clamp_i16(value: i64) -> i16 {
     i16::try_from(value.clamp(i64::from(i16::MIN), i64::from(i16::MAX))).unwrap_or_default()
+}
+
+/// How a refit treats a shield or armour above its new most: the fuel is
+/// always held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReservePolicy {
+    /// Each is held to its new most.
+    Hold,
+    /// Each keeps its surplus, as the original's `_SystemInfoToShipStats`
+    /// (@0xca33) clamps no reserve.
+    KeepSurplus,
+}
+
+impl ReservePolicy {
+    /// The policy a reserves rule's `source` reads as: the Bible's holds
+    /// each to its most, the engine's keeps the surplus.
+    fn reading(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Bible => Self::Hold,
+            RuleSource::Engine => Self::KeepSurplus,
+        }
+    }
 }
 
 /// Sets `gauge` to hold up to `max`, and when `hold`, keeping no more
@@ -7421,7 +7434,7 @@ mod tests {
                     .with_rules(Rulebook::default().with_override(RuleKey::RefitReserves, source));
                 if order.direction == Direction::Sell {
                     session.pilot.outfits.insert(OutfitId(302), 1);
-                    session.refit(false);
+                    session.refit(false, ReservePolicy::Hold);
                 }
                 let (shield, armor) = (session.stats().shield, session.stats().armor);
                 session.pilot.reserves.shield.now = shield + 5.0;

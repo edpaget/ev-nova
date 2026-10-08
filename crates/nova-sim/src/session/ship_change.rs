@@ -106,8 +106,8 @@
 use std::fmt;
 use std::rc::Rc;
 
-use super::Session;
 use super::hire::Shared;
+use super::{ReservePolicy, Session};
 use crate::catalog::{CommCatalog, ShipId};
 use crate::chance::Chance;
 use crate::combat::armament;
@@ -253,7 +253,6 @@ impl Session {
         let Some(record) = self.ship_record(ship).cloned() else {
             return;
         };
-        let before = self.pilot.reserves;
         let defaults = pilot::tally(record.defaults.iter().copied());
         let stock = armament::fitted(&self.arsenal.stock_fits(record.id, &self.outfits));
         // `E` and `H` add the stock weapons and their `AmmoLoad` with the
@@ -265,12 +264,10 @@ impl Session {
         self.fields = record.fields;
         self.defaults = defaults;
         self.stock = stock;
-        self.refit(false);
-        if self.ship_change_rules().reserves == RuleSource::Engine {
-            let reserves = &mut self.pilot.reserves;
-            reserves.shield.now = before.shield.now;
-            reserves.armor.now = before.armor.now;
-        }
+        self.refit(
+            false,
+            ReservePolicy::reading(self.ship_change_rules().reserves),
+        );
         if self.ship_change_rules().cargo == RuleSource::Bible {
             // To the new ship's own hold, goods in order: the purchase
             // rule's other reading, with no escorts' holds counted.
@@ -1035,7 +1032,7 @@ mod tests {
             assert_eq!((kept.shield.now, kept.armor.now), (130.0, 45.0), "{op}");
             let pilot = save::decode(&save::encode(session.pilot())).expect("loads");
             assert_eq!(pilot.reserves(), kept, "{op}: the save keeps the surplus");
-            // `Session::fly` refits with the clamping `refit` before any
+            // `Session::fly` refits under `ReservePolicy::Hold` before any
             // rules apply, so a reload holds the surplus whatever the
             // `refit_reserves` reading.
             let reloaded = Session::fly(&catalog, pilot).expect("flies");
