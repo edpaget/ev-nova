@@ -451,6 +451,20 @@ mod tests {
     }
 
     #[test]
+    fn the_trade_debt_rule_is_overridden_by_its_key() {
+        let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"trade_debt": "bible"}}"#);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine().with_override(RuleKey::TradeDebt, RuleSource::Bible)
+        );
+        let (rulebook, _) =
+            rulebook_of(r#"{"rules": "bible", "rule_overrides": {"trade_debt": "engine"}}"#);
+        assert_eq!(rulebook.source_for(RuleKey::TradeDebt), RuleSource::Engine);
+        assert_eq!(rulebook.source_for(RuleKey::TradeCount), RuleSource::Bible);
+    }
+
+    #[test]
     fn the_outfit_limit_rule_is_overridden_by_its_key() {
         let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"outfit_limit": "bible"}}"#);
         assert_eq!(warnings, Vec::<String>::new());

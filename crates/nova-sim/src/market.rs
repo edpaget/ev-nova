@@ -85,8 +85,9 @@
 //! A `jünk` price of 0 or below follows
 //! [`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice). By the engine (the
 //! default), the price is signed: a negative one is listed at that price
-//! (`_TradeDialogUpdate` @0x4d545-0x4d54b); buying it gets no tons, as
-//! cash / price is negative and the `jle` @0x5e27d skips the buy; and
+//! (`_TradeDialogUpdate` @0x4d545-0x4d54b); buying it with cash of 0 or
+//! more gets no tons, as cash / price is 0 or less and the `jle`
+//! @0x5e27d skips the buy (with cash below 0, see below); and
 //! selling it takes tons x price from the cash, which can go below 0
 //! (@0x5e543-0x5e546). A row priced 0 is not listed (`_TradeDialogUpdate`
 //! @0x4d2a2-0x4d2ac, `_TradeFilter` @0x4e262), each way on its own, so a
@@ -191,7 +192,19 @@
 //! above 2^24 cash the engine's most can leave the cash below 0. A trade
 //! that would move nothing is refused. The Buy button is enabled
 //! as `_CanBuyGoods` has it, which a row priced below nothing can pass
-//! with nothing then bought ([`Market::row_allows`]).
+//! with nothing then bought ([`Market::row_allows`]), and a buy it
+//! greys, with the cash below the price (@0xcd07-0xcd0d), is refused.
+//!
+//! The cash a buy divides follows
+//! [`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt). By the engine (the
+//! default), it is signed, with no clamp before the quotient or after it
+//! (@0x5e21d-0x5e234). With cash below 0 Buy is enabled only on a row
+//! priced at or below the cash, so only a `jünk` priced below 0 can be
+//! bought, and cash / price is then in (0, 1]: exactly at the price it
+//! is 1, and a click or a count of 1 buys a ton, which takes price x 1
+//! from the cash (@0x5e2df-0x5e2e2) and leaves it at 0. By the other
+//! reading, the port's earlier one, cash below 0 counts as none, and
+//! such a buy is refused.
 
 use std::collections::BTreeMap;
 
@@ -711,6 +724,10 @@ pub struct Market {
     /// ([`RuleKey::TradeCount`](crate::RuleKey::TradeCount)). The trade
     /// itself is the same either way; whoever shows the exchange reads it.
     pub trade_count: RuleSource,
+    /// Whether a buy divides cash below nothing by the price signed, by
+    /// the engine, or counts it as none
+    /// ([`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt)).
+    pub trade_debt: RuleSource,
 }
 
 impl Market {
@@ -751,6 +768,12 @@ impl Market {
             Direction::Buy => {
                 if self.free == 0 {
                     return Err(TradeRefusal::NoSpace);
+                }
+                // `_CanBuyGoods` greys Buy while cash < price, compared
+                // signed (@0xcd07-0xcd0d), so no buy reaches the quotient
+                // there ([`Market::row_allows`]).
+                if self.cash < row.price {
+                    return Err(TradeRefusal::CannotAfford);
                 }
                 if lot == Lot::Click {
                     let wanted = self.click_tons().min(self.free);
@@ -805,22 +828,29 @@ impl Market {
     }
 
     /// The cash divided by `price`, as `source` says, or `None` at a price
-    /// of nothing, which the engine never lists (phase 23). Cash below
-    /// nothing counts as none, as this port has always read it, so a
-    /// price below nothing gives 0 or less. By the engine, the division
-    /// is trunc(f32(cash) / f32(price)) (@0x5e21d-0x5e234), the cash held
-    /// in the engine's 32 bits and the price in its 16, each held at the
-    /// most it can hold rather than wrapped past it; above 2^24 cash it
-    /// can round up to a ton more than the cash covers. By the other
-    /// reading, exact integer division.
+    /// of nothing, which the engine never lists (phase 23). The cash is
+    /// read as [`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt) says: by
+    /// the engine signed, so cash below nothing at a price below nothing
+    /// gives a positive quotient; by the other reading cash below nothing
+    /// counts as none, so a price below nothing gives 0 or less. By the
+    /// engine's division, trunc(f32(cash) / f32(price))
+    /// (@0x5e21d-0x5e234), the cash is held in the engine's 32 bits and
+    /// the price in its 16, each held at the least or most it can hold
+    /// rather than wrapped past it; above 2^24 cash it can round up to a
+    /// ton more than the cash covers. By the other division, exact
+    /// integer division.
     fn quotient(&self, price: i64, source: RuleSource) -> Option<i64> {
         if price == 0 {
             return None;
         }
-        let cash = self.cash.max(0);
+        let cash = match self.trade_debt {
+            RuleSource::Engine => self.cash,
+            RuleSource::Bible => self.cash.max(0),
+        };
         Some(match source {
             RuleSource::Engine => {
-                let cash = i32::try_from(cash).unwrap_or(i32::MAX);
+                let cash =
+                    i32::try_from(cash).unwrap_or(if cash < 0 { i32::MIN } else { i32::MAX });
                 let price =
                     i16::try_from(price).unwrap_or(if price < 0 { i16::MIN } else { i16::MAX });
                 (cash as f32 / f32::from(price)) as i64
@@ -902,6 +932,9 @@ pub(crate) struct ExchangeRules {
     /// Whether Option on Buy or Sell asks for a count
     /// ([`RuleKey::TradeCount`](crate::RuleKey::TradeCount)).
     pub(crate) trade_count: RuleSource,
+    /// Whether a buy divides cash below nothing by the price signed
+    /// ([`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt)).
+    pub(crate) trade_debt: RuleSource,
 }
 
 /// The exchange of `stellar`, with these `flags`, for `pilot` with
@@ -983,6 +1016,7 @@ pub(crate) fn market(
         trade_lot: rules.trade_lot,
         trade_quotient: rules.trade_quotient,
         trade_count: rules.trade_count,
+        trade_debt: rules.trade_debt,
     })
 }
 
@@ -2138,6 +2172,26 @@ mod tests {
     }
 
     #[test]
+    fn the_exchange_carries_its_debt_rule() {
+        for trade_debt in RuleSource::ALL {
+            let found = market(
+                &goods(),
+                StellarId(137),
+                PORT_KANE,
+                &pilot(500),
+                10,
+                ExchangeRules {
+                    trade_debt,
+                    ..ExchangeRules::default()
+                },
+                Markup::Standard,
+            )
+            .expect("trades");
+            assert_eq!(found.trade_debt, trade_debt);
+        }
+    }
+
+    #[test]
     fn the_exchange_lists_the_commodities_traded_at_their_levels() {
         let flags = PORT_KANE;
         let found = market(
@@ -2168,6 +2222,7 @@ mod tests {
                 trade_lot: RuleSource::Engine,
                 trade_quotient: RuleSource::Engine,
                 trade_count: RuleSource::Engine,
+                trade_debt: RuleSource::Engine,
             }
         );
         let some = TRADE | (1 << 24) | (4 << 12);
@@ -3360,6 +3415,7 @@ mod tests {
             trade_lot: RuleSource::Engine,
             trade_quotient: RuleSource::Engine,
             trade_count: RuleSource::Engine,
+            trade_debt: RuleSource::Engine,
         }
     }
 
@@ -3443,8 +3499,8 @@ mod tests {
     fn a_good_priced_at_nothing_is_limited_only_by_space() {
         let buy = |market: &Market, lot| market.tons(order(2, WATER, Direction::Buy, lot));
         assert_eq!(buy(&stall(0, 0, 9), Lot::Max), Ok(9));
-        assert_eq!(buy(&stall(-5, 0, 9), Lot::Click), Ok(9));
-        assert_eq!(buy(&stall(-5, 0, 50), Lot::Click), Ok(10));
+        assert_eq!(buy(&stall(0, 0, 9), Lot::Click), Ok(9));
+        assert_eq!(buy(&stall(0, 0, 50), Lot::Click), Ok(10));
         assert_eq!(buy(&stall(0, 0, 50), Lot::Max), Ok(50));
         assert_eq!(buy(&stall(0, 0, 0), Lot::Max), Err(TradeRefusal::NoSpace));
     }
@@ -3523,10 +3579,115 @@ mod tests {
         }
     }
 
+    /// `market` reading its cash below nothing as `trade_debt` says.
+    fn debt_by(trade_debt: RuleSource, market: Market) -> Market {
+        Market {
+            trade_debt,
+            ..market
+        }
+    }
+
+    /// The engine's cash / price on the signed cash (@0x5e21d-0x5e234):
+    /// -200 at -200 is 1, so a click and a counted lot buy 1 ton; -199 at
+    /// -200 truncates to 0, which the `jle` @0x5e27d skips.
+    #[test]
+    fn by_the_engine_negative_cash_buys_a_negative_price_junk_at_its_price() {
+        let buy = |market: &Market, lot| market.tons(order(0, OPALS, Direction::Buy, lot));
+        let at_price = negative(-200, 3);
+        assert_eq!(at_price.trade_debt, RuleSource::Engine, "by default");
+        assert_eq!(buy(&at_price, Lot::Click), Ok(1));
+        assert_eq!(buy(&at_price, Lot::Max), Ok(1));
+        assert_eq!(buy(&at_price, Lot::Count(1)), Ok(1));
+        assert_eq!(buy(&at_price, Lot::Count(2)), Err(TradeRefusal::OutOfRange));
+        assert_eq!(at_price.row_max(0, Direction::Buy), Some(1));
+        assert!(at_price.row_allows(0, Direction::Buy));
+        let short = negative(-199, 3);
+        for lot in [Lot::Click, Lot::Max, Lot::Count(1)] {
+            assert_eq!(buy(&short, lot), Err(TradeRefusal::CannotAfford), "{lot:?}");
+        }
+        assert_eq!(short.row_max(0, Direction::Buy), Some(0));
+        for trade_quotient in RuleSource::ALL {
+            let market = quotient_by(trade_quotient, negative(-200, 3));
+            assert_eq!(buy(&market, Lot::Max), Ok(1), "{trade_quotient:?}");
+        }
+        let one_ton = lots_by(RuleSource::Bible, negative(-200, 3));
+        assert_eq!(buy(&one_ton, Lot::Click), Ok(1));
+    }
+
+    /// `_CanBuyGoods` (@0xcd07-0xcd0d) greys Buy while cash < price, so
+    /// the engine never reaches the quotient there, though -1000 at -200
+    /// would give 5.
+    #[test]
+    fn a_buy_with_cash_below_the_price_is_refused_as_buy_is_greyed() {
+        for trade_debt in RuleSource::ALL {
+            for trade_quotient in RuleSource::ALL {
+                let market = quotient_by(trade_quotient, debt_by(trade_debt, negative(-1000, 3)));
+                assert!(!market.row_allows(0, Direction::Buy));
+                for lot in [Lot::Click, Lot::Max, Lot::Count(1)] {
+                    assert_eq!(
+                        market.tons(order(0, OPALS, Direction::Buy, lot)),
+                        Err(TradeRefusal::CannotAfford),
+                        "{trade_debt:?} {trade_quotient:?} {lot:?}"
+                    );
+                }
+            }
+        }
+        let food = |cash| stall(cash, 0, 50).tons(order(0, FOOD, Direction::Buy, Lot::Count(1)));
+        assert_eq!(food(99), Err(TradeRefusal::CannotAfford));
+        assert_eq!(food(100), Ok(1));
+    }
+
+    #[test]
+    fn by_the_other_reading_negative_cash_counts_as_none() {
+        let market = debt_by(RuleSource::Bible, negative(-200, 3));
+        for lot in [Lot::Click, Lot::Max, Lot::Count(1)] {
+            assert_eq!(
+                market.tons(order(0, OPALS, Direction::Buy, lot)),
+                Err(TradeRefusal::CannotAfford),
+                "{lot:?}"
+            );
+        }
+        assert_eq!(market.row_max(0, Direction::Buy), Some(0));
+        let exact = quotient_by(RuleSource::Bible, market);
+        assert_eq!(exact.row_max(0, Direction::Buy), Some(0));
+    }
+
+    /// By the engine, cash below what its 32 bits hold is held at the
+    /// least they hold, not the most: still below 0, so a negative price
+    /// divides it to a positive quotient.
+    #[test]
+    fn by_the_engine_cash_below_32_bits_is_held_at_their_least() {
+        let market = Market {
+            rows: vec![row(OPALS, "Opals", i64::from(i16::MIN))],
+            ..stall(i64::from(i32::MIN) - 1, 0, 50)
+        };
+        assert_eq!(market.row_max(0, Direction::Buy), Some(50));
+        let bible = debt_by(RuleSource::Bible, market);
+        assert_eq!(bible.row_max(0, Direction::Buy), Some(0));
+    }
+
+    /// A row priced at nothing (the other reading of
+    /// [`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice)) is greyed with
+    /// cash below 0, as `_CanBuyGoods` compares, and now refused so too.
+    #[test]
+    fn a_good_priced_at_nothing_is_refused_with_cash_below_nothing() {
+        for lot in [Lot::Click, Lot::Max, Lot::Count(1)] {
+            for trade_debt in RuleSource::ALL {
+                let market = debt_by(trade_debt, stall(-5, 0, 9));
+                assert!(!market.row_allows(2, Direction::Buy));
+                assert_eq!(
+                    market.tons(order(2, WATER, Direction::Buy, lot)),
+                    Err(TradeRefusal::CannotAfford),
+                    "{trade_debt:?} {lot:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn row_allows_a_buy_at_a_negative_price_that_then_moves_nothing() {
         let buy = |market: &Market| market.row_allows(0, Direction::Buy);
-        for cash in [0, -100, -200, 5000] {
+        for cash in [0, -100, 5000] {
             let market = negative(cash, 3);
             assert!(buy(&market), "cash {cash}");
             for lot in [Lot::Click, Lot::Max] {

@@ -240,7 +240,8 @@
 //!   tons a plain trade moves ([`FlightView::with_trade_lot`]), how the
 //!   most a buy moves divides the cash by the price
 //!   ([`FlightView::with_trade_quotient`]), what Option on Buy or Sell
-//!   does ([`FlightView::with_trade_count`]), and what
+//!   does ([`FlightView::with_trade_count`]), how a buy reads cash below
+//!   nothing ([`FlightView::with_trade_debt`]), and what
 //!   cargo a ship purchase keeps ([`FlightView::with_purchase_cargo`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
@@ -1180,6 +1181,16 @@ impl<
     pub fn with_trade_count(self, source: RuleSource) -> Self {
         Self {
             session: self.session.map(|session| session.with_trade_count(source)),
+            ..self
+        }
+    }
+
+    /// The flight with a buy at the exchange reading cash below nothing
+    /// as `source` says ([`Session::with_trade_debt`]).
+    #[must_use]
+    pub fn with_trade_debt(self, source: RuleSource) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_trade_debt(source)),
             ..self
         }
     }
@@ -6337,6 +6348,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::trade_count),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_trade_debt_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_trade_debt(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.trade_debt(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::trade_debt),
             Ok(RuleSource::Engine)
         );
     }

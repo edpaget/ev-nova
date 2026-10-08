@@ -136,7 +136,9 @@
 //! ([`AppScreen::with_trade_lot`]), and divides the cash by the price for
 //! the most a buy moves as it says ([`AppScreen::with_trade_quotient`]),
 //! and has Option on Buy or Sell ask for a count or trade the most as it
-//! says ([`AppScreen::with_trade_count`]), the engine's until others are
+//! says ([`AppScreen::with_trade_count`]), and reads cash below nothing
+//! on a buy as it says ([`AppScreen::with_trade_debt`]), the engine's
+//! until others are
 //! given. Each flight's outfitter sells a map
 //! or clean-record outfit as the router says
 //! ([`AppScreen::with_outfit_limit`]), the engine's until another is
@@ -357,6 +359,9 @@ pub struct AppScreen {
     /// Whether Option on Buy or Sell at each flight's exchange asks for a
     /// count or trades the most.
     trade_count: RuleSource,
+    /// Whether a buy at each flight's exchange reads cash below nothing
+    /// signed or as none.
+    trade_debt: RuleSource,
     /// Whether each flight's outfitter sells a map or clean-record outfit
     /// only once an opening.
     outfit_limit: RuleSource,
@@ -460,6 +465,7 @@ impl AppScreen {
             trade_lot: RuleSource::Engine,
             trade_quotient: RuleSource::Engine,
             trade_count: RuleSource::Engine,
+            trade_debt: RuleSource::Engine,
             outfit_limit: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
@@ -711,6 +717,17 @@ impl AppScreen {
         }
     }
 
+    /// The router with a buy at each flight's exchange reading cash below
+    /// nothing as `source` says ([`FlightView::with_trade_debt`]); the
+    /// engine's (signed) until another is given.
+    #[must_use]
+    pub fn with_trade_debt(self, source: RuleSource) -> Self {
+        Self {
+            trade_debt: source,
+            ..self
+        }
+    }
+
     /// The router with each flight's outfitter selling a map or
     /// clean-record outfit as `source` says
     /// ([`FlightView::with_outfit_limit`]); the engine's (once an opening)
@@ -815,6 +832,7 @@ impl AppScreen {
             .with_trade_lot(rulebook.source_for(RuleKey::TradeLot))
             .with_trade_quotient(rulebook.source_for(RuleKey::TradeQuotient))
             .with_trade_count(rulebook.source_for(RuleKey::TradeCount))
+            .with_trade_debt(rulebook.source_for(RuleKey::TradeDebt))
             .with_outfit_limit(rulebook.source_for(RuleKey::OutfitLimit))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
@@ -881,6 +899,7 @@ impl AppScreen {
             .with_trade_lot(self.trade_lot)
             .with_trade_quotient(self.trade_quotient)
             .with_trade_count(self.trade_count)
+            .with_trade_debt(self.trade_debt)
             .with_outfit_limit(self.outfit_limit)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
@@ -6325,6 +6344,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_trade_debt_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_trade_debt(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.trade_debt(), source);
+            assert_eq!(session.trade_count(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.trade_debt(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_trade_quotient_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_trade_quotient(source);
@@ -6430,6 +6464,7 @@ mod tests {
             ("trade_lot", format!("{:?}", screen.trade_lot)),
             ("trade_quotient", format!("{:?}", screen.trade_quotient)),
             ("trade_count", format!("{:?}", screen.trade_count)),
+            ("trade_debt", format!("{:?}", screen.trade_debt)),
             ("outfit_limit", format!("{:?}", screen.outfit_limit)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
@@ -6466,6 +6501,7 @@ mod tests {
             RuleKey::TradeLot => "trade_lot",
             RuleKey::TradeQuotient => "trade_quotient",
             RuleKey::TradeCount => "trade_count",
+            RuleKey::TradeDebt => "trade_debt",
             RuleKey::OutfitLimit => "outfit_limit",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",

@@ -50,6 +50,7 @@
 //! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for a count (see [`TradeCount`](RuleKey::TradeCount)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
 //! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; [`Market::row_max`](crate::Market::row_max)) | exact integer division\*\*\* |
 //! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; [`Market::trade_count`](crate::Market::trade_count)) | Alt trades the most at once††† |
+//! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; [`Market::trade_debt`](crate::Market::trade_debt)) | cash below 0 counts as none‡‡‡ |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -107,6 +108,10 @@
 //! ††† The Bible says nothing of what Option does at the exchange. The
 //! other reading is the port's earlier behaviour, Alt trading the most at
 //! once with no dialog, not anything the Bible says.
+//!
+//! ‡‡‡ The Bible says nothing of buying with cash below 0. The other
+//! reading is the port's earlier behaviour, cash below 0 counting as
+//! none, not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -493,6 +498,18 @@ rule_keys! {
     /// earlier behaviour, not anything the Bible says (see
     /// [`market`](crate::market)).
     TradeCount => "trade_count",
+    /// What cash a buy at the exchange divides by the row's price. By the
+    /// engine, the cash as it stands, signed: the quotient
+    /// trunc(f32(cash) / f32(price)) (`_DoTradeDialog` @0x5e21d-0x5e234)
+    /// has no clamp before it or after it, and Buy is enabled only while
+    /// cash >= price (`_CanBuyGoods` @0xccec-0xcd31). So with cash below 0
+    /// a `jünk` priced exactly at the cash is bought, 1 ton, and the cash
+    /// left at 0. By the other reading, cash below 0 counts as none, and
+    /// such a buy is refused. Under both, a buy with cash below the price
+    /// is refused, as the engine greys Buy. The Bible says nothing of it,
+    /// so the other reading is the port's earlier behaviour, not anything
+    /// the Bible says (see [`market`](crate::market)).
+    TradeDebt => "trade_debt",
 }
 
 impl RuleKey {
@@ -627,7 +644,13 @@ mod tests {
     fn the_trade_count_rule_is_found_by_its_key() {
         assert_eq!(RuleKey::TradeCount.key(), "trade_count");
         assert_eq!(RuleKey::from_key("trade_count"), Some(RuleKey::TradeCount));
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::TradeCount));
+    }
+
+    #[test]
+    fn the_trade_debt_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::TradeDebt.key(), "trade_debt");
+        assert_eq!(RuleKey::from_key("trade_debt"), Some(RuleKey::TradeDebt));
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::TradeDebt));
     }
 
     #[test]
@@ -670,7 +693,8 @@ mod tests {
                 RuleKey::OutfitLimit,
                 RuleKey::TradeLot,
                 RuleKey::TradeQuotient,
-                RuleKey::TradeCount
+                RuleKey::TradeCount,
+                RuleKey::TradeDebt
             ]
         );
         assert_eq!(RuleKey::TradeLot.key(), "trade_lot");

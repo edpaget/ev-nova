@@ -537,10 +537,12 @@ pub struct Session {
     /// How an active `öops` event prices its commodity, how a `jünk` of
     /// negative or zero price is traded, which ways a `jünk` row trades,
     /// how many tons a plain trade moves, how the most a buy moves
-    /// divides the cash by the price, and what Option on Buy or Sell does
-    /// (see [`Session::with_event_price`], [`Session::with_junk_price`],
+    /// divides the cash by the price, what Option on Buy or Sell does, and
+    /// how a buy reads cash below nothing (see
+    /// [`Session::with_event_price`], [`Session::with_junk_price`],
     /// [`Session::with_junk_trade`], [`Session::with_trade_lot`],
-    /// [`Session::with_trade_quotient`] and [`Session::with_trade_count`]).
+    /// [`Session::with_trade_quotient`], [`Session::with_trade_count`] and
+    /// [`Session::with_trade_debt`]).
     exchange_rules: market::ExchangeRules,
     /// What cargo a ship purchase keeps (see
     /// [`Session::with_purchase_cargo`]).
@@ -2078,6 +2080,24 @@ impl Session {
     #[must_use]
     pub fn trade_count(&self) -> RuleSource {
         self.exchange_rules.trade_count
+    }
+
+    /// This session reading cash below nothing at the exchange as
+    /// `source` says ([`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt)):
+    /// by the engine's default, signed, so with cash below 0 a `jünk`
+    /// priced exactly at the cash is bought, a ton, leaving the cash at 0;
+    /// by the other reading, as none, so that buy is refused.
+    #[must_use]
+    pub fn with_trade_debt(mut self, source: RuleSource) -> Self {
+        self.exchange_rules.trade_debt = source;
+        self
+    }
+
+    /// How a buy at the exchange reads cash below nothing: signed, by the
+    /// engine ([`RuleSource::Engine`]), or as none, by the other reading.
+    #[must_use]
+    pub fn trade_debt(&self) -> RuleSource {
+        self.exchange_rules.trade_debt
     }
 
     /// This session with a launcher's sale refused for its ammunition as
@@ -5629,6 +5649,87 @@ mod tests {
             let market = session.market().expect("an exchange");
             assert_eq!(market.trade_count, source, "{source:?}");
         }
+    }
+
+    #[test]
+    fn the_sessions_exchange_carries_its_debt_rule() {
+        for source in [None, Some(RuleSource::Engine), Some(RuleSource::Bible)] {
+            let session = Session::start(&exchange()).expect("starts");
+            let mut session = match source {
+                Some(source) => session.with_trade_debt(source),
+                None => session,
+            };
+            let source = source.unwrap_or_default();
+            assert_eq!(session.trade_debt(), source);
+            assert_eq!(session.trade_count(), RuleSource::Engine);
+            land_now(&mut session).expect("lands");
+            let market = session.market().expect("an exchange");
+            assert_eq!(market.trade_debt, source, "{source:?}");
+        }
+    }
+
+    /// [`exchange`] landed at its planet 128, which sells `jünk` 146 at
+    /// base -100 (its low price, -80), the player holding none of it and
+    /// with cash of -80, exactly that price, read as `source` says.
+    fn debt_session(source: Option<RuleSource>) -> Session {
+        let catalog = FakePilotCatalog {
+            junk: vec![JunkRecord {
+                id: JunkId(146),
+                name: "Waste".to_owned(),
+                base_price: -100,
+                sold_at: vec![StellarId(128)],
+                bought_at: Vec::new(),
+                buy_on: String::new(),
+                sell_on: String::new(),
+                flags: 0,
+            }],
+            ..exchange()
+        };
+        let session = Session::start(&catalog).expect("starts");
+        let mut session = match source {
+            Some(source) => session.with_trade_debt(source),
+            None => session,
+        };
+        session.pilot.set_cash(-80);
+        land_now(&mut session).expect("lands");
+        session.take_save_due();
+        session
+    }
+
+    #[test]
+    fn by_the_engine_negative_cash_buys_a_junk_priced_at_it_and_leaves_none() {
+        let waste = Good::Junk(JunkId(146));
+        for lot in [Lot::Click, Lot::Count(1)] {
+            let mut session = debt_session(None);
+            let market = session.market().expect("an exchange");
+            assert_eq!(market.row(waste).map(|row| row.price), Some(-80));
+            assert_eq!(session.pilot().held(waste), 0);
+            assert_eq!(
+                session.trade(order(&session, waste, Direction::Buy, lot)),
+                Ok(1),
+                "{lot:?}"
+            );
+            assert_eq!(session.pilot().cash(), 0, "{lot:?}");
+            assert_eq!(session.pilot().held(waste), 1, "{lot:?}");
+            assert!(session.take_save_due(), "{lot:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_other_debt_reading_negative_cash_buys_nothing() {
+        let waste = Good::Junk(JunkId(146));
+        let mut session = debt_session(Some(RuleSource::Bible));
+        let before = session.clone();
+        for lot in [Lot::Click, Lot::Count(1)] {
+            assert_eq!(
+                session.trade(order(&session, waste, Direction::Buy, lot)),
+                Err(TradeRefusal::CannotAfford),
+                "{lot:?}"
+            );
+        }
+        assert_eq!(session, before);
+        assert_eq!(session.pilot().cash(), -80);
+        assert!(!session.take_save_due());
     }
 
     // Tribbles and perishables.

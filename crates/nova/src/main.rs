@@ -103,9 +103,12 @@
 //! the engine has it, or a ton), `"trade_quotient"` (whether the most
 //! a buy moves divides the cash by the price in single floats, as the
 //! engine has it, which above 2^24 cash can buy a ton more than the cash
-//! covers, or exactly) and `"trade_count"` (whether Option on Buy or
+//! covers, or exactly), `"trade_count"` (whether Option on Buy or
 //! Sell asks for a count in the quantity dialog, as the engine has it,
-//! or trades the most at once),
+//! or trades the most at once) and `"trade_debt"` (whether a buy divides
+//! cash below 0 by the price signed, as the engine has it, so a
+//! negative-price `jünk` at exactly the cash is bought, or counts it as
+//! none),
 //! the shipyard's `"purchase_cargo"` (whether a ship purchase keeps the
 //! new ship's share of each good against the trader escorts' holds, then
 //! trims to the fleet's holds, as the engine has it, or keeps what fits
