@@ -12,9 +12,13 @@
 //! itself.
 //!
 //! The grid shows each outfit listed ([`Outfitter`]) in a cell,
-//! [`COLUMNS`] across and [`GRID_ROWS`] down: its `ShortName`, split into
-//! lines on a literal `\n`, each line white when it starts with a letter
-//! or digit and grey otherwise (the Bible), and how many the player has.
+//! [`COLUMNS`] across and [`GRID_ROWS`] down: its picture (the same `PICT`
+//! as the detail pane's, shrunk to 32 x 32, or a black square without
+//! one) near the cell's top; its `ShortName` centred at the bottom, split
+//! into lines on a literal `\n`, each line white when it starts with a
+//! letter or digit and grey otherwise (the Bible); and how many the player
+//! has, when any, in the top-right corner ([`outfit_picture`],
+//! [`grid`](super::grid)).
 //! One cell is selected, by a click on it or with the arrow keys, and
 //! highlighted; the grid scrolls a row at a time with the arrows below it,
 //! or with the selection. With nothing listed, the grid says so (`STR#`
@@ -139,6 +143,15 @@ pub fn refusal_text(refusal: OutfitRefusal) -> Option<&'static str> {
     }
 }
 
+/// Outfit `outfit`'s `PICT`, 6000 plus its ID less 128, if `exists` says
+/// it is there: the picture both its grid cell and the detail pane show
+/// (`_OutfitDialogUpdate` @0x57441-0x57462 and @0x57949-0x579a5).
+#[must_use]
+pub fn outfit_picture(outfit: OutfitId, exists: impl Fn(i16) -> bool) -> Option<i16> {
+    let picture = FIRST_PICTURE.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT));
+    exists(picture).then_some(picture)
+}
+
 /// What the outfitter reads about an outfit: its description, through
 /// [`DescriptionSource`], and whether its picture exists, through
 /// [`SpaceportCatalog::picture_exists`]. Anything that is both is one.
@@ -182,6 +195,9 @@ pub struct OutfitterScreen {
     laid: Result<Laid, String>,
     outfitter: Outfitter,
     catalog: CatalogHandle,
+    /// Each listed outfit's picture, by row, read once a list (none
+    /// without the dialog).
+    pictures: Vec<Option<i16>>,
     /// The selected cell and the grid's scrolling.
     grid: CellGrid,
     /// The order asked for, until it is taken.
@@ -238,12 +254,14 @@ impl OutfitterScreen {
             laid,
             outfitter,
             catalog: CatalogHandle(catalog),
+            pictures: Vec::new(),
             grid: CellGrid::default(),
             order: None,
             held: None,
             closed: false,
             sounds: Vec::new(),
         };
+        screen.read_pictures();
         screen.select(0);
         screen
     }
@@ -305,7 +323,23 @@ impl OutfitterScreen {
             .map(|index| self.outfitter.rows[index].id)
             .and_then(|id| outfitter.rows.iter().position(|row| row.id == id));
         self.outfitter = outfitter;
+        self.read_pictures();
         self.select(kept.unwrap_or(self.grid.selected_raw()));
+    }
+
+    /// Reads each listed outfit's picture, when there is a dialog to show
+    /// them in.
+    fn read_pictures(&mut self) {
+        if self.laid.is_err() {
+            return;
+        }
+        let catalog = &self.catalog.0;
+        self.pictures = self
+            .outfitter
+            .rows
+            .iter()
+            .map(|row| outfit_picture(row.id, |id| catalog.picture_exists(id)))
+            .collect();
     }
 
     /// Selects cell `index`, or the last when there is no such cell,
@@ -325,12 +359,15 @@ impl OutfitterScreen {
     /// Reads the selected outfit's picture and description, unless they
     /// are shown already; with nothing selected, shows none.
     fn show(&mut self) {
-        let outfit = self.selected().map(|index| self.outfitter.rows[index].id);
+        let selected = self.selected().map(|index| {
+            let picture = self.pictures.get(index).copied().flatten();
+            (self.outfitter.rows[index].id, picture)
+        });
         let catalog = Rc::clone(&self.catalog.0);
         let Ok(laid) = &mut self.laid else {
             return;
         };
-        let Some(outfit) = outfit else {
+        let Some((outfit, picture)) = selected else {
             laid.shown = None;
             return;
         };
@@ -341,15 +378,12 @@ impl OutfitterScreen {
         {
             return;
         }
-        let offset = outfit.0.saturating_sub(FIRST_OUTFIT);
-        let picture = FIRST_PICTURE.saturating_add(offset);
-        let description = FIRST_DESCRIPTION.saturating_add(offset);
+        let description = FIRST_DESCRIPTION.saturating_add(outfit.0.saturating_sub(FIRST_OUTFIT));
         let area = laid
             .dialog
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
         let description = catalog.description(description).unwrap_or_default();
-        let picture = catalog.picture_exists(picture).then_some(picture);
         laid.shown = Some((
             outfit,
             Shown::read_text(&description, picture, area, &laid.metrics.0),
@@ -431,7 +465,7 @@ impl OutfitterScreen {
     }
 
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
-        let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
+        let metrics = &*laid.metrics.0;
         let Some(grid) = laid.dialog.item_bounds(GRID_ITEM) else {
             return;
         };
@@ -446,15 +480,11 @@ impl OutfitterScreen {
                 fill_rect(list, cell, SELECTED_COLOR);
             }
             outline(list, cell, GREY);
-            let mut y = cell.min.y + INSET;
-            for (line, color) in name_lines(&row.short_name) {
-                text(list, line, Point::new(cell.min.x + INSET, y), color);
-                y += line_height;
-            }
+            grid::draw_cell_picture(list, cell, self.pictures[index]);
             if row.owned > 0 {
-                let origin = Point::new(cell.min.x + INSET, cell.max.y - INSET - line_height);
-                text(list, &row.owned.to_string(), origin, TEXT_COLOR);
+                grid::draw_corner_text(list, metrics, cell, &row.owned.to_string(), true);
             }
+            grid::draw_cell_name(list, metrics, cell, &row.short_name);
         }
     }
 
@@ -985,26 +1015,31 @@ mod tests {
                 top_left: ORIGIN,
             }
         );
-        let cell = |index: usize, dy: f32| {
+        // A name line centred across the cell, `rise` (its baseline) above
+        // the bottom; MonoMetrics sets Geneva 10 at 5 a character.
+        let name = |index: usize, words: &str, rise: f32| {
             let bounds = screen.cell_bounds(index).expect("a cell");
-            Point::new(bounds.min.x + INSET, bounds.min.y + dy)
+            let width = 5.0 * words.chars().count() as f32;
+            Point::new(bounds.center().x - width / 2.0, bounds.max.y - rise - 10.0)
         };
-        let bottom = |index: usize| {
+        // The count, ending 3 inside the right, its baseline 12 below the top.
+        let count = |index: usize, words: &str| {
             let bounds = screen.cell_bounds(index).expect("a cell");
-            Point::new(bounds.min.x + INSET, bounds.max.y - INSET - 12.0)
+            let width = 5.0 * words.chars().count() as f32;
+            Point::new(bounds.max.x - 3.0 - width, bounds.min.y + 12.0 - 10.0)
         };
         let info = item(&screen, INFO_ITEM);
         let line = |n: f32| Point::new(info.min.x + INSET, info.min.y + 12.0 * n);
         let description = item(&screen, DESCRIPTION_ITEM).min;
         let mut expected = vec![
-            ("Light".to_owned(), cell(0, INSET), TEXT_COLOR),
-            ("Blaster".to_owned(), cell(0, INSET + 12.0), TEXT_COLOR),
-            ("2".to_owned(), bottom(0), TEXT_COLOR),
-            ("*Ammo".to_owned(), cell(1, INSET), GREY),
-            ("Pack".to_owned(), cell(1, INSET + 12.0), TEXT_COLOR),
-            ("Big Gun".to_owned(), cell(2, INSET), TEXT_COLOR),
-            ("Map".to_owned(), cell(3, INSET), TEXT_COLOR),
-            ("1".to_owned(), bottom(3), TEXT_COLOR),
+            ("2".to_owned(), count(0, "2"), TEXT_COLOR),
+            ("Light".to_owned(), name(0, "Light", 14.0), TEXT_COLOR),
+            ("Blaster".to_owned(), name(0, "Blaster", 3.0), TEXT_COLOR),
+            ("*Ammo".to_owned(), name(1, "*Ammo", 14.0), GREY),
+            ("Pack".to_owned(), name(1, "Pack", 3.0), TEXT_COLOR),
+            ("Big Gun".to_owned(), name(2, "Big Gun", 6.0), TEXT_COLOR),
+            ("1".to_owned(), count(3, "1"), TEXT_COLOR),
+            ("Map".to_owned(), name(3, "Map", 6.0), TEXT_COLOR),
             ("dësc 3000.".to_owned(), description, Color::WHITE),
             ("Item Price: 1000".to_owned(), line(0.0), TEXT_COLOR),
             ("Item Mass: 1 tons".to_owned(), line(1.0), TEXT_COLOR),
@@ -1282,7 +1317,17 @@ mod tests {
     fn the_picture_and_description_are_read_as_the_selection_changes() {
         let art = art();
         let mut screen = screen_with(outfitter(), &art);
-        assert_eq!(*art.asked.borrow(), ["dësc 3000", "PICT 6000"]);
+        assert_eq!(
+            *art.asked.borrow(),
+            [
+                "PICT 6000",
+                "PICT 6001",
+                "PICT 6002",
+                "PICT 6003",
+                "dësc 3000"
+            ],
+            "every cell's picture, then the selected one's description"
+        );
         press(&mut screen, Key::Right);
         let shown = words(&screen);
         assert!(shown.contains(&NO_PICTURE.to_owned()), "{shown:?}");
@@ -1299,16 +1344,20 @@ mod tests {
         assert_eq!(
             *art.asked.borrow(),
             [
-                "dësc 3000",
                 "PICT 6000",
-                "dësc 3001",
                 "PICT 6001",
-                "dësc 3002",
                 "PICT 6002",
+                "PICT 6003",
+                "dësc 3000",
+                "dësc 3001",
+                "dësc 3002",
                 "dësc 3003",
+                "PICT 6000",
+                "PICT 6001",
+                "PICT 6002",
                 "PICT 6003",
             ],
-            "once each, and not again while it stays selected"
+            "the pictures once a list, each description once while it stays selected"
         );
         let picture = item(&screen, PICTURE_ITEM);
         let no_picture = texts(&drawn(&screen))
@@ -1325,6 +1374,108 @@ mod tests {
     }
 
     #[test]
+    fn an_outfits_picture_is_pict_6000_plus_its_index_when_it_exists() {
+        assert_eq!(outfit_picture(OutfitId(128), |id| id == 6000), Some(6000));
+        assert_eq!(outfit_picture(OutfitId(131), |id| id == 6003), Some(6003));
+        assert_eq!(outfit_picture(OutfitId(131), |id| id == 6000), None);
+        assert_eq!(
+            outfit_picture(OutfitId(i16::MIN), |_| true),
+            Some(6000 + (i16::MIN))
+        );
+        assert_eq!(outfit_picture(OutfitId(i16::MAX), |_| true), Some(i16::MAX));
+    }
+
+    /// The commands drawn inside `cell`'s bounds, by the point they start
+    /// at.
+    fn inside(commands: &[DrawCommand], cell: Bounds) -> Vec<DrawCommand> {
+        commands
+            .iter()
+            .filter(|command| match command {
+                DrawCommand::StretchedPicture { top_left, .. }
+                | DrawCommand::Text {
+                    origin: top_left, ..
+                } => cell.contains(*top_left),
+                DrawCommand::Line { from, to, .. } => cell.contains(*from) && cell.contains(*to),
+                _ => false,
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The black square in `cell`'s icon.
+    fn black_square(cell: Bounds) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        fill_rect(&mut list, grid::icon_bounds(cell), Color::BLACK);
+        list.iter().cloned().collect()
+    }
+
+    #[test]
+    fn each_cell_shows_its_picture_and_a_missing_one_is_a_black_square() {
+        let screen = screen();
+        let commands = drawn(&screen);
+        let first = screen.cell_bounds(0).expect("a cell");
+        let picture = DrawCommand::StretchedPicture {
+            image: ImageKey::picture(6000),
+            top_left: grid::icon_bounds(first).min,
+            width: 32.0,
+            height: 32.0,
+        };
+        let in_first = inside(&commands, first);
+        let at = |wanted: &DrawCommand| in_first.iter().position(|c| c == wanted);
+        let picture_at = at(&picture).expect("outfit 128's PICT 6000 in its cell");
+        let first_text = in_first
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Text { .. }))
+            .expect("its count and name");
+        assert!(picture_at < first_text, "the picture under the text");
+        for index in 1..4 {
+            let cell = screen.cell_bounds(index).expect("a cell");
+            let in_cell = inside(&commands, cell);
+            assert!(
+                !in_cell
+                    .iter()
+                    .any(|c| matches!(c, DrawCommand::StretchedPicture { .. })),
+                "no PICT for cell {index}"
+            );
+            let square = black_square(cell);
+            let start = in_cell
+                .windows(square.len())
+                .position(|window| window == square.as_slice())
+                .unwrap_or_else(|| panic!("a black square in cell {index}"));
+            let last_text = in_cell
+                .iter()
+                .rposition(|c| matches!(c, DrawCommand::Text { .. }))
+                .expect("its name");
+            assert!(start < last_text, "the name over the square");
+        }
+        let map = screen.cell_bounds(3).expect("a cell");
+        let map_texts: Vec<String> = texts(&inside(&commands, map))
+            .into_iter()
+            .map(|(t, _, _)| t)
+            .collect();
+        assert_eq!(map_texts, ["1", "Map"], "its count, then its name");
+    }
+
+    #[test]
+    fn a_new_list_reads_its_pictures_again() {
+        let art = Rc::new(FakeArt {
+            pictures: vec![6000, 6005],
+            asked: RefCell::default(),
+        });
+        let mut screen = screen_with(outfitter(), &art);
+        let mut changed = outfitter();
+        changed.rows.push(row(133, "New", 10, 0, 0));
+        screen.set_outfitter(changed);
+        let fifth = screen.cell_bounds(4).expect("a cell");
+        assert!(drawn(&screen).contains(&DrawCommand::StretchedPicture {
+            image: ImageKey::picture(6005),
+            top_left: grid::icon_bounds(fifth).min,
+            width: 32.0,
+            height: 32.0,
+        }));
+    }
+
+    #[test]
     fn an_outfit_with_an_impossible_id_does_not_overflow() {
         let art = art();
         let odd = Outfitter {
@@ -1335,7 +1486,7 @@ mod tests {
         press(&mut screen, Key::Right);
         assert_eq!(
             *art.asked.borrow(),
-            ["dësc -29768", "PICT -26768", "dësc 32767", "PICT 32767"]
+            ["PICT -26768", "PICT 32767", "dësc -29768", "dësc 32767"]
         );
     }
 

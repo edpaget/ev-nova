@@ -12,9 +12,14 @@
 //! itself.
 //!
 //! The grid shows each ship listed ([`Shipyard`]) in a cell, as the
-//! Outfitter's does ([`grid`](super::grid)): its `ShortName`'s lines, and
-//! "(current)" in the cell of the class the player flies. With nothing
-//! listed, the grid says so (`STR#` 2002 #223).
+//! Outfitter's does ([`grid`](super::grid)): its picture (the same one as
+//! the detail pane's, [`ship_picture`], shrunk to 32 x 32, or a black
+//! square without one) near the cell's top, and its `ShortName`'s lines
+//! centred at the bottom. "(current)" marks the cell of the class the
+//! player flies, in its top-left corner: the port's own addition, as the
+//! original's shipyard cell has no such mark (`_ShipyardDialogUpdate`
+//! @0x58b30-0x58f91). With nothing listed, the grid says so (`STR#` 2002
+//! #223).
 //!
 //! The selected ship's picture is [`ship_picture`]'s: `PICT` 5000 plus its
 //! ID less 128, or else that of the lowest-numbered ship sharing its
@@ -60,8 +65,7 @@ use nova_sim::{ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
 
 use super::catalog::SpaceportCatalog;
 use super::grid::{
-    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE,
-    name_lines, text,
+    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, text,
 };
 use super::layout::DONE_LABEL;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -356,6 +360,9 @@ pub struct ShipyardScreen {
     catalog: CatalogHandle,
     /// Each ship's base image, read once.
     bases: Vec<(ShipId, i16)>,
+    /// Each listed ship's picture, by row, read once a list (none without
+    /// the dialog).
+    pictures: Vec<Option<i16>>,
     style: ButtonStyle,
     grid: CellGrid,
     /// The info panel, while it is open.
@@ -432,6 +439,7 @@ impl ShipyardScreen {
             shipyard,
             catalog: CatalogHandle(catalog),
             bases,
+            pictures: Vec::new(),
             style,
             grid: CellGrid::default(),
             panel: None,
@@ -443,6 +451,7 @@ impl ShipyardScreen {
             closed: false,
             sounds: Vec::new(),
         };
+        screen.read_pictures();
         screen.select(0);
         screen
     }
@@ -571,7 +580,23 @@ impl ShipyardScreen {
             .map(|row| row.id)
             .and_then(|id| shipyard.rows.iter().position(|row| row.id == id));
         self.shipyard = shipyard;
+        self.read_pictures();
         self.select(kept.unwrap_or(self.grid.selected_raw()));
+    }
+
+    /// Reads each listed ship's picture, when there is a dialog to show
+    /// them in.
+    fn read_pictures(&mut self) {
+        if self.laid.is_err() {
+            return;
+        }
+        let catalog = &self.catalog.0;
+        self.pictures = self
+            .shipyard
+            .rows
+            .iter()
+            .map(|row| ship_picture(row.id, &self.bases, |id| catalog.picture_exists(id)))
+            .collect();
     }
 
     /// Selects cell `index`, or the last when there is no such cell, and
@@ -585,13 +610,16 @@ impl ShipyardScreen {
     /// its picture and description if they are not shown already.
     fn selected_changed(&mut self) {
         let buys = self.selected_row().is_some_and(|row| row.buy.is_ok());
-        let ship = self.selected_row().map(|row| row.id);
+        let selected = self.selected().map(|index| {
+            let picture = self.pictures.get(index).copied().flatten();
+            (self.shipyard.rows[index].id, picture)
+        });
         let catalog = Rc::clone(&self.catalog.0);
         let Ok(laid) = &mut self.laid else {
             return;
         };
         laid.dialog.set_greyed(BUY_ITEM, !buys);
-        let Some(ship) = ship else {
+        let Some((ship, picture)) = selected else {
             laid.shown = None;
             return;
         };
@@ -602,7 +630,6 @@ impl ShipyardScreen {
             .dialog
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
-        let picture = ship_picture(ship, &self.bases, |id| catalog.picture_exists(id));
         let description = nova_data::ship_desc_id(ship);
         let shown = Shown::read(&*catalog, picture, description, area, &laid.metrics.0);
         laid.shown = Some((ship, shown));
@@ -694,7 +721,7 @@ impl ShipyardScreen {
     }
 
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
-        let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
+        let metrics = &*laid.metrics.0;
         let Some(area) = laid.dialog.item_bounds(GRID_ITEM) else {
             return;
         };
@@ -709,15 +736,11 @@ impl ShipyardScreen {
                 fill_rect(list, cell, SELECTED_COLOR);
             }
             outline(list, cell, GREY);
-            let mut y = cell.min.y + INSET;
-            for (line, color) in name_lines(&row.short_name) {
-                text(list, line, Point::new(cell.min.x + INSET, y), color);
-                y += line_height;
-            }
+            grid::draw_cell_picture(list, cell, self.pictures[index]);
             if row.id == self.shipyard.current {
-                let origin = Point::new(cell.min.x + INSET, cell.max.y - INSET - line_height);
-                text(list, CURRENT_MARK, origin, TEXT_COLOR);
+                grid::draw_corner_text(list, metrics, cell, CURRENT_MARK, false);
             }
+            grid::draw_cell_name(list, metrics, cell, &row.short_name);
         }
     }
 
@@ -1276,23 +1299,26 @@ mod tests {
                 top_left: ORIGIN,
             }
         );
-        let cell = |index: usize, dy: f32| {
+        // A name line centred across the cell, `rise` (its baseline) above
+        // the bottom; MonoMetrics sets Geneva 10 at 5 a character.
+        let name = |index: usize, words: &str, rise: f32| {
             let bounds = screen.cell_bounds(index).expect("a cell");
-            Point::new(bounds.min.x + INSET, bounds.min.y + dy)
+            let width = 5.0 * words.chars().count() as f32;
+            Point::new(bounds.center().x - width / 2.0, bounds.max.y - rise - 10.0)
         };
-        let bottom = screen.cell_bounds(0).expect("a cell");
+        let flown = screen.cell_bounds(0).expect("a cell");
         let shown = texts(&commands);
         for expected in [
-            ("Shuttle".to_owned(), cell(0, INSET), TEXT_COLOR),
+            ("Shuttle".to_owned(), name(0, "Shuttle", 6.0), TEXT_COLOR),
             (
                 CURRENT_MARK.to_owned(),
-                Point::new(bottom.min.x + INSET, bottom.max.y - INSET - 12.0),
+                Point::new(flown.min.x + 3.0, flown.min.y + 12.0 - 10.0),
                 TEXT_COLOR,
             ),
-            ("Heavy".to_owned(), cell(1, INSET), TEXT_COLOR),
-            ("Shuttle".to_owned(), cell(1, INSET + 12.0), TEXT_COLOR),
-            ("*Courier".to_owned(), cell(2, INSET), GREY),
-            ("Viper".to_owned(), cell(3, INSET), TEXT_COLOR),
+            ("Heavy".to_owned(), name(1, "Heavy", 14.0), TEXT_COLOR),
+            ("Shuttle".to_owned(), name(1, "Shuttle", 3.0), TEXT_COLOR),
+            ("*Courier".to_owned(), name(2, "*Courier", 6.0), GREY),
+            ("Viper".to_owned(), name(3, "Viper", 6.0), TEXT_COLOR),
         ] {
             assert!(shown.contains(&expected), "{expected:?}: {shown:?}");
         }
@@ -1432,17 +1458,125 @@ mod tests {
             [
                 "bases",
                 "PICT 5000",
-                "dësc 13000",
                 "PICT 5001",
-                "dësc 13001",
                 "PICT 5002",
-                "dësc 13002",
                 "PICT 5003",
                 "PICT 5000",
+                "dësc 13000",
+                "dësc 13001",
+                "dësc 13002",
                 "dësc 13003",
+                "PICT 5000",
+                "PICT 5001",
+                "PICT 5002",
+                "PICT 5003",
+                "PICT 5000",
             ],
-            "the bases once, and each ship once while it stays selected"
+            "the bases once, the pictures once a list, and each description once \
+             while it stays selected"
         );
+    }
+
+    /// The commands drawn inside `cell`'s bounds, by the point they start
+    /// at.
+    fn inside(commands: &[DrawCommand], cell: Bounds) -> Vec<DrawCommand> {
+        commands
+            .iter()
+            .filter(|command| match command {
+                DrawCommand::StretchedPicture { top_left, .. }
+                | DrawCommand::Text {
+                    origin: top_left, ..
+                } => cell.contains(*top_left),
+                DrawCommand::Line { from, to, .. } => cell.contains(*from) && cell.contains(*to),
+                _ => false,
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// `PICT` `id` in `cell`'s icon.
+    fn icon(cell: Bounds, id: i16) -> DrawCommand {
+        DrawCommand::StretchedPicture {
+            image: ImageKey::picture(id),
+            top_left: grid::icon_bounds(cell).min,
+            width: 32.0,
+            height: 32.0,
+        }
+    }
+
+    #[test]
+    fn each_cell_shows_its_ships_picture_and_a_missing_one_is_a_black_square() {
+        let screen = screen();
+        let commands = drawn(&screen);
+        let cell = |index: usize| screen.cell_bounds(index).expect("a cell");
+        for (index, id, why) in [
+            (0, 5000, "the Shuttle's own"),
+            (2, 5002, "the Courier's own"),
+            (3, 5000, "the Shuttle's, sharing the Viper's base image"),
+        ] {
+            let in_cell = inside(&commands, cell(index));
+            let at = in_cell
+                .iter()
+                .position(|c| *c == icon(cell(index), id))
+                .unwrap_or_else(|| panic!("{why}"));
+            let text = in_cell
+                .iter()
+                .position(|c| matches!(c, DrawCommand::Text { .. }))
+                .expect("its name");
+            assert!(at < text, "the picture under the text: {why}");
+        }
+        let heavy = inside(&commands, cell(1));
+        assert!(
+            !heavy
+                .iter()
+                .any(|c| matches!(c, DrawCommand::StretchedPicture { .. })),
+            "no PICT of its own or shared"
+        );
+        let mut square = DrawList::new();
+        fill_rect(&mut square, grid::icon_bounds(cell(1)), Color::BLACK);
+        let square: Vec<DrawCommand> = square.iter().cloned().collect();
+        let start = heavy
+            .windows(square.len())
+            .position(|window| window == square.as_slice())
+            .expect("a black square");
+        let names: Vec<(usize, String)> = heavy
+            .iter()
+            .enumerate()
+            .filter_map(|(n, c)| match c {
+                DrawCommand::Text { text, .. } => Some((n, text.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            names.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(),
+            ["Heavy", "Shuttle"]
+        );
+        assert!(start < names[0].0, "the name over the square");
+        let flown = inside(&commands, cell(0));
+        let mark = flown
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Text { text, .. } if text == CURRENT_MARK))
+            .expect("the mark");
+        let name = flown
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Text { text, .. } if text == "Shuttle"))
+            .expect("the name");
+        assert!(mark < name, "the mark, then the name");
+    }
+
+    #[test]
+    fn a_new_list_reads_its_pictures_again() {
+        let art = Rc::new(FakeArt {
+            pictures: vec![5000, 5002, 5004],
+            bases: vec![(ShipId(128), 1000), (ShipId(132), 1004)],
+            asked: RefCell::default(),
+        });
+        let mut screen = screen_with(shipyard(), &art);
+        let mut changed = shipyard();
+        changed.rows.push(row(132, "New", 10));
+        screen.set_shipyard(changed);
+        let fifth = screen.cell_bounds(4).expect("a cell");
+        assert!(drawn(&screen).contains(&icon(fifth, 5004)));
     }
 
     #[test]
