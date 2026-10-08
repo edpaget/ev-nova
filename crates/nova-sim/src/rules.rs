@@ -344,7 +344,10 @@ impl<C: Context, T> Value<C, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
     use crate::chance::NeverFires;
+    use crate::control::{ControlBits, FreshPilot, Gate, PilotFacts, Test, TestExpr};
     use crate::testkit::Scripted;
 
     /// The outfitter's Sell flag's local copy of `OutfitFlags::CANNOT_SELL`,
@@ -496,6 +499,7 @@ mod tests {
     enum OfferRefusal {
         NoBar,
         TooGreen,
+        Unavailable,
         LostTheRoll,
         LostTheSecondRoll,
     }
@@ -503,6 +507,7 @@ mod tests {
     /// A toy mission offer: what it asks of the pilot.
     struct MissionOffer {
         min_combat: u16,
+        availability: Test,
         odds: u8,
         second_odds: u8,
     }
@@ -518,16 +523,18 @@ mod tests {
         has_bar: bool,
     }
 
-    /// A non-shop context: a mission offer, the pilot, the stellar and
-    /// the rule set.
-    struct Offer {
+    /// A non-shop context: a mission offer, the pilot, the stellar, the
+    /// gate the offer's control-bit test is asked through, and the rule
+    /// set.
+    struct Offer<'a> {
         mission: MissionOffer,
         pilot: PilotRecord,
         stellar: Stellar,
+        gate: Gate<'a>,
         rules: Rulebook,
     }
 
-    impl Context for Offer {
+    impl Context for Offer<'_> {
         fn rulebook(&self) -> &Rulebook {
             &self.rules
         }
@@ -539,11 +546,13 @@ mod tests {
     }
 
     /// An offer asking a combat rating of 10 of a pilot rated 10, at a
-    /// stellar with a bar, under the default rule set.
-    fn offer() -> Offer {
+    /// stellar with a bar, available to a fresh pilot, under the default
+    /// rule set.
+    fn offer() -> Offer<'static> {
         Offer {
             mission: MissionOffer {
                 min_combat: 10,
+                availability: Test::default(),
                 odds: 40,
                 second_odds: 60,
             },
@@ -552,15 +561,17 @@ mod tests {
                 cash: 1000,
             },
             stellar: Stellar { has_bar: true },
+            gate: Gate::FRESH,
             rules: Rulebook::default(),
         }
     }
 
     /// The toy offer's checks: a bar, then the combat rating (disputed:
     /// the engine refuses below the offer's minimum, the other reading at
-    /// or below it; `CrimeGains` is only a convenient key), then two
-    /// rolls on the chance, at the offer's odds and then its second odds.
-    fn offer_checks() -> Checks<Offer, OfferRefusal> {
+    /// or below it; `CrimeGains` is only a convenient key), then the
+    /// offer's control-bit test through the gate, then two rolls on the
+    /// chance, at the offer's odds and then its second odds.
+    fn offer_checks<'a>() -> Checks<Offer<'a>, OfferRefusal> {
         [
             Check::plain("bar", "toy: the stellar's bar", |facts: &Offer| {
                 if facts.stellar.has_bar {
@@ -588,6 +599,17 @@ mod tests {
                     }
                 },
             ),
+            Check::plain(
+                "available",
+                "toy: the offer's availability",
+                |facts: &Offer| {
+                    if facts.gate.allows(&facts.mission.availability) {
+                        Ok(())
+                    } else {
+                        Err(OfferRefusal::Unavailable)
+                    }
+                },
+            ),
             Check::drawing(
                 "roll",
                 "toy: the offer's Rand draw",
@@ -612,6 +634,79 @@ mod tests {
             ),
         ]
         .into()
+    }
+
+    /// A hand-written control-bit port with a canned answer, recording
+    /// each test it is asked.
+    #[derive(Debug)]
+    struct MockBits {
+        answer: bool,
+        asked: RefCell<Vec<TestExpr>>,
+    }
+
+    impl MockBits {
+        fn answering(answer: bool) -> Self {
+            Self {
+                answer,
+                asked: RefCell::default(),
+            }
+        }
+    }
+
+    impl ControlBits for MockBits {
+        fn allows(&self, test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
+            self.asked.borrow_mut().push(test.clone());
+            self.answer
+        }
+    }
+
+    /// The toy offer, available as `b5` says, asked through `bits`.
+    fn gated(bits: &MockBits) -> Offer<'_> {
+        Offer {
+            mission: MissionOffer {
+                availability: Test::parse("b5"),
+                ..offer().mission
+            },
+            gate: Gate {
+                control_bits: bits,
+                pilot: &FreshPilot,
+            },
+            ..offer()
+        }
+    }
+
+    #[test]
+    fn a_check_reads_control_bits_through_the_gate() {
+        let bits = MockBits::answering(false);
+        let mut chance = lucky();
+        assert_eq!(
+            offer_checks().first_refusal(&gated(&bits), &mut chance),
+            Err(OfferRefusal::Unavailable)
+        );
+        assert_eq!(
+            *bits.asked.borrow(),
+            [TestExpr::parse("b5").expect("parses")]
+        );
+        assert!(chance.asked.is_empty(), "no roll after the refusal");
+    }
+
+    #[test]
+    fn a_check_passes_when_the_gate_allows() {
+        let bits = MockBits::answering(true);
+        assert_eq!(
+            offer_checks().first_refusal(&gated(&bits), &mut lucky()),
+            Ok(())
+        );
+        assert_eq!(bits.asked.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_mission_offer_passes_when_every_check_passes() {
+        let mut chance = lucky();
+        let facts = offer();
+        assert_eq!(offer_checks().first_refusal(&facts, &mut chance), Ok(()));
+        assert_eq!(chance.asked, [40, 60]);
+        assert_eq!(reward_words().of(&facts), "Pays 100 credits");
     }
 
     #[test]
@@ -690,6 +785,7 @@ mod tests {
             [
                 ("bar", None),
                 ("rating", Some(RuleKey::CrimeGains)),
+                ("available", None),
                 ("roll", None),
                 ("second roll", None),
             ]
@@ -766,7 +862,7 @@ mod tests {
 
     /// The toy offer's pay: a tenth of the pilot's cash by the engine, a
     /// twentieth by the other reading.
-    fn pay() -> Value<Offer, i64> {
+    fn pay<'a>() -> Value<Offer<'a>, i64> {
         Value::disputed(
             "pay",
             "toy: the offer's pay",
@@ -777,7 +873,7 @@ mod tests {
     }
 
     /// What the toy offer says it pays.
-    fn reward_words() -> Value<Offer, String> {
+    fn reward_words<'a>() -> Value<Offer<'a>, String> {
         Value::plain("reward words", "toy: the offer's text", |facts: &Offer| {
             format!("Pays {} credits", pay().of(facts))
         })
