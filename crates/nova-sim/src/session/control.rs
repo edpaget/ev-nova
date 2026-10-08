@@ -252,6 +252,29 @@ mod tests {
     }
 
     #[test]
+    fn the_session_answers_a_test_as_its_pilot_view_does() {
+        let catalog = catalog();
+        let mut pilot = Pilot::new(&catalog, "Eve")
+            .expect("starts")
+            .with_gender(Gender::Female);
+        pilot.outfits.insert(OutfitId(300), 1);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.set_control_bit(bit(12), true);
+        let start = session.pilot().system();
+        let view: &dyn PilotFacts = &session;
+        assert!(view.bit(bit(12)));
+        assert!(!view.bit(bit(13)));
+        assert_eq!(view.gender(), Gender::Female);
+        assert!(view.paid(30));
+        assert!(view.has_outfit(OutfitId(300)));
+        assert!(!view.has_outfit(OutfitId(301)));
+        assert!(view.explored(start));
+        assert!(!view.explored(SystemId(start.0 + 1)));
+        let male = self::session();
+        assert_eq!(PilotFacts::gender(&male), Gender::Male);
+    }
+
+    #[test]
     fn the_pilot_view_always_counts_the_game_as_paid() {
         let session = session();
         for days in [0, 30, u16::MAX] {

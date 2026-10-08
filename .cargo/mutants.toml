@@ -113,4 +113,16 @@ exclude_re = [
     # step up, so rounding a price exactly at it either way gives it back.
     "replace < with <= in price_flux",
     "replace > with >= in price_flux",
+    # `ControlBitSet`'s word count, `(9999 + 1).div_ceil(64)`, is 157;
+    # `9999 - 1` and `9999 * 1` round up to the same 157 words, so the
+    # set's size and every bit's word are unchanged. (A mutant outside a
+    # function is named by its line alone, hence no `in`.)
+    "nova-sim/src/control\\.rs:\\d+:\\d+: replace \\+ with (-|\\*)$",
+    # A fresh pilot is male, which is `Gender`'s default, so its body and
+    # `Default::default()` are the same.
+    "replace <impl PilotFacts for FreshPilot>::gender -> crate::pilot::Gender with Default::default\\(\\)",
+    # The session's pilot view counts the game as paid for always (the
+    # engine takes it as registered), so `Session`'s `paid`, which asks
+    # that view, and `true` are the same.
+    "replace <impl PilotFacts for Session>::paid -> bool with true",
 ]

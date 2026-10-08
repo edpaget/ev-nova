@@ -19,7 +19,8 @@
 //! but that government's and independent ones. Alliances are not modelled
 //! until governments' relations are, so "this government or its allies"
 //! is this government alone. `Availability` goes through
-//! [`control_bits_allow`], which always holds until control bits exist,
+//! [`control_bits_allow`], which holds for every test that parsed until
+//! the outfitter moves onto the [`ControlBits`](crate::ControlBits) port,
 //! so for now every outfit gated by one is available (stock `oütf` 342,
 //! "Area Map - Vell-os", shows everywhere).
 //!

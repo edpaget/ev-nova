@@ -17,7 +17,8 @@
 //! `Contribute` of the ship flown and of the outfits the player owns (a
 //! `shïp` has no `RequireGovt`, so `Require` applies everywhere), and its
 //! `Availability` holds. `Availability` goes through
-//! [`control_bits_allow`], which always holds until control bits exist, so
+//! [`control_bits_allow`], which holds for every test that parsed until the
+//! shipyard moves onto the [`ControlBits`](crate::ControlBits) port, so
 //! for now every ship gated by one is available: the Vell-os ships (stock
 //! 381-383, tech level 1, `Cost` 0) show, free, at every shipyard, as stock
 //! `oütf` 342 does at every outfitter.
