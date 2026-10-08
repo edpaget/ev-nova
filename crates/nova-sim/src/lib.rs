@@ -138,7 +138,8 @@
 //!   ship, location, date, cash, reserves, course, explored systems,
 //!   legal records, cargo, the events under way, the outfits owned and
 //!   the fleet of [`Escort`]s, the control bits and the player's
-//!   [`Gender`] and its ship's paint, starting from the first `chär`.
+//!   [`Gender`] and its ship's paint and name, starting from the first
+//!   `chär`.
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.

@@ -39,13 +39,23 @@
 //! paint is saved, as the original's pilot file keeps it
 //! (`_WritePilotData` @0x727f2); drawing it is not done yet.
 //!
+//! It keeps its ship's name, the original's `_shipName`: a new pilot's
+//! ship is named after its class (the `shïp`'s name; the original's
+//! new-pilot dialog asks for one, `_CullNameString` @0x19195, which is
+//! not shown yet), and a pilot from a save made before ships had names
+//! is named after its class when flown. The `T` set operator renames it
+//! (see the session's `ship_change` module); buying or capturing a ship
+//! leaves the name as it is for now (the shipyard's name dialog is not
+//! shown yet), and nothing displays it yet.
+//!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
-    DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, ShipId, StartError, StellarId, SystemId,
+    DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, ShipId, ShipRecord, StartError,
+    StellarId, SystemId,
 };
 use crate::control::{Bit, ControlBitSet};
 use crate::date::GameDate;
@@ -63,6 +73,9 @@ pub struct Pilot {
     pub(crate) name: String,
     /// The ship class flown.
     pub(crate) ship: ShipId,
+    /// The ship's name. `None` for a ship never named: a save from
+    /// before ships had names. Flying the pilot names it after its class.
+    pub(crate) ship_name: Option<String>,
     /// The system the ship is in.
     pub(crate) system: SystemId,
     /// The stellar last landed on in that system, if any.
@@ -181,6 +194,7 @@ impl Pilot {
         Ok(Self {
             name: name.to_owned(),
             ship,
+            ship_name: Some(class_name(&catalog.ships(), ship)),
             system,
             stellar: None,
             date: GameDate::from_start(character.start),
@@ -261,6 +275,13 @@ impl Pilot {
     #[must_use]
     pub fn ship(&self) -> ShipId {
         self.ship
+    }
+
+    /// The ship's name; `None` for a ship never named (see
+    /// [`Session::fly`](crate::Session::fly)).
+    #[must_use]
+    pub fn ship_name(&self) -> Option<&str> {
+        self.ship_name.as_deref()
     }
 
     /// The system the ship is in.
@@ -388,6 +409,16 @@ impl Pilot {
     }
 }
 
+/// The name of ship class `ship` among `records`, as a ship of it is
+/// named until something renames it: empty when it has no record.
+pub(crate) fn class_name(records: &[ShipRecord], ship: ShipId) -> String {
+    records
+        .iter()
+        .find(|record| record.id == ship)
+        .map(|record| record.name.clone())
+        .unwrap_or_default()
+}
+
 /// Ship `ship`'s default items from `catalog`, each with how many: repeated
 /// slots add up, and none of an item is not listed.
 pub(crate) fn default_outfits(
@@ -428,6 +459,18 @@ mod tests {
         assert_eq!(pilot.stellar(), None);
         assert_eq!(pilot.date(), GameDate::from_start(START));
         assert_eq!(pilot.course(), []);
+    }
+
+    #[test]
+    fn a_new_pilots_ship_is_named_after_its_class() {
+        let named = FakePilotCatalog {
+            ship_records: vec![crate::testkit::ship(128, FAST)],
+            ..catalog()
+        };
+        let pilot = Pilot::new(&named, "Ada").expect("starts");
+        assert_eq!(pilot.ship_name(), Some("Ship 128"));
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert_eq!(pilot.ship_name(), Some(""), "no record of its class");
     }
 
     #[test]

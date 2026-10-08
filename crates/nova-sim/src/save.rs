@@ -33,8 +33,13 @@
 //! - Version 11: adds the control bits, every one clear in an older save,
 //!   and the player's gender, male in an older save.
 //! - Version 12: adds the ship's paint, unpainted in an older save.
+//! - Version 13: adds the ship's name. An older save's ship was never
+//!   named, so the upgrade saves `null`, and flying the pilot names it
+//!   after its class ([`Session::fly`](crate::Session::fly)). The next
+//!   save keeps that name.
 //!
-//! IDs are saved as their raw numbers, the date as its year, month and
+//! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
+//! its text, or `null` for a ship not yet named, the date as its year, month and
 //! day, each reserve as how much the ship has and can hold, each good held
 //! as its kind (`commodity` with its number, or `junk` with its ID) and
 //! tons, each event as its `öops` ID and days left, each outfit as its
@@ -66,7 +71,7 @@ use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 12;
+pub const CURRENT: u64 = 13;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -295,6 +300,9 @@ struct Saved {
     version: u64,
     name: String,
     ship: i16,
+    /// `None` for a ship not yet named.
+    #[serde(deserialize_with = "Option::deserialize")]
+    ship_name: Option<String>,
     system: i16,
     // Without this, serde would read a missing optional field as `None`.
     #[serde(deserialize_with = "Option::deserialize")]
@@ -327,6 +335,7 @@ pub fn encode(pilot: &Pilot) -> String {
         version: CURRENT,
         name: pilot.name.clone(),
         ship: pilot.ship.0,
+        ship_name: pilot.ship_name.clone(),
         system: pilot.system.0,
         stellar: pilot.stellar.map(|stellar| stellar.0),
         date: SavedDate {
@@ -410,6 +419,7 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     person_escorts,
     bits_and_gender,
     paint,
+    ship_names,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -474,6 +484,13 @@ fn paint(save: &mut Value) {
     }
 }
 
+/// Version 12 to 13: the ship not yet named.
+fn ship_names(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("ship_name".to_owned(), Value::Null);
+    }
+}
+
 /// Adds `field` to every escort in `save`, as `value`.
 fn add_to_escorts(save: &mut Value, field: &str, value: &Value) {
     let Some(escorts) = save.get_mut("escorts").and_then(Value::as_array_mut) else {
@@ -528,6 +545,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
     Ok(Pilot {
         name: saved.name,
         ship: ShipId(saved.ship),
+        ship_name: saved.ship_name,
         system: SystemId(saved.system),
         stellar: saved.stellar.map(StellarId),
         date,
@@ -604,6 +622,7 @@ mod tests {
         Pilot {
             name: "Ada Lovelace".to_owned(),
             ship: ShipId(140),
+            ship_name: Some("Kestrel".to_owned()),
             system: SystemId(131),
             stellar: Some(StellarId(150)),
             date: GameDate::new(1180, 2, 29).expect("a leap day"),
@@ -746,7 +765,8 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 12);
+        assert_eq!(CURRENT, 13);
+        assert_eq!(value["ship_name"], "Kestrel");
         assert_eq!(value["paint"], serde_json::json!({"r": 31, "g": 0, "b": 4}));
         assert_eq!(value["bits"], serde_json::json!([0, 512, 9999]));
         assert_eq!(value["gender"], "female");
@@ -804,7 +824,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 12"), "{text}");
+        assert!(text.contains("\n  \"version\": 13"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -1355,7 +1375,7 @@ mod tests {
         assert_eq!(pilot.gender(), Gender::Male);
         // Saved again, it is a current save that says so.
         let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
-        assert_eq!(value["version"], 12);
+        assert_eq!(value["version"], CURRENT);
         assert_eq!(value["bits"], serde_json::json!([]));
         assert_eq!(value["gender"], "male");
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
@@ -1403,12 +1423,75 @@ mod tests {
         assert_eq!(pilot.gender(), Gender::Female);
         assert_eq!(pilot.paint(), None);
         let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
-        assert_eq!(value["version"], 12);
+        assert_eq!(value["version"], CURRENT);
         assert_eq!(value["paint"], serde_json::Value::Null);
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
         for text in [VERSION_10, VERSION_5, VERSION_1] {
             assert_eq!(decode(text).expect("loads").paint(), None, "{text}");
         }
+    }
+
+    /// A version 12 save: before the ship had a name.
+    const VERSION_12: &str = r#"{
+        "version": 12,
+        "name": "Veteran",
+        "ship": 129,
+        "system": 131,
+        "stellar": null,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [],
+        "cargo": [],
+        "events": [],
+        "outfits": [{"outfit": 200, "count": 1}],
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [7],
+        "gender": "female",
+        "paint": {"r": 1, "g": 2, "b": 3}
+    }"#;
+
+    #[test]
+    fn a_version_12_save_loads_with_its_ship_not_yet_named() {
+        let pilot = decode(VERSION_12).expect("loads");
+        assert_eq!(pilot.name(), "Veteran");
+        assert_eq!(pilot.ship_name(), None);
+        assert_eq!(pilot.paint(), Some(Rgb15 { r: 1, g: 2, b: 3 }));
+        assert_eq!(pilot.owned(OutfitId(200)), 1);
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], 13);
+        assert_eq!(value["ship_name"], serde_json::Value::Null);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [VERSION_11, VERSION_10, VERSION_5, VERSION_1] {
+            assert_eq!(decode(text).expect("loads").ship_name(), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn any_ship_name_or_none_survives_a_round_trip_and_a_current_save_must_say() {
+        for ship_name in [None, Some(String::new()), Some("* the Bold".to_owned())] {
+            let pilot = Pilot {
+                ship_name: ship_name.clone(),
+                ..seasoned()
+            };
+            assert_eq!(decode(&encode(&pilot)), Ok(pilot), "{ship_name:?}");
+        }
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("ship_name");
+        let text = value.to_string();
+        assert!(unusable(&text).contains("ship_name"), "{}", unusable(&text));
     }
 
     #[test]
@@ -1586,12 +1669,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 12", "\"version\": 13");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 13 }));
+        let newer = encode(&seasoned()).replace("\"version\": 13", "\"version\": 14");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 14 }));
         assert_eq!(
-            SaveError::Newer { version: 13 }.to_string(),
+            SaveError::Newer { version: 14 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 13, and this version of Nova reads up to 12)."
+             (it is version 14, and this version of Nova reads up to 13)."
         );
     }
 

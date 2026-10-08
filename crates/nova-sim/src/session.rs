@@ -560,6 +560,7 @@ impl Session {
     /// weapons and ship types' combat fields read from `catalog`, with the
     /// system marked explored. A pilot whose ship
     /// still carries its default items, from an old save, owns them now,
+    /// a ship never named, from an old save, is named after its class,
     /// and the reserves hold no more than the stats allow.
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
@@ -594,17 +595,15 @@ impl Session {
         let landed = docked.map(|site| site.id);
         pilot.stellar = landed;
         let defaults = pilot::default_outfits(catalog, ship);
-        if pilot.default_outfits_pending {
-            pilot.outfits.clone_from(&defaults);
-            pilot.default_outfits_pending = false;
-        }
+        let ships = catalog.ships();
+        fill_in(&mut pilot, &defaults, &ships);
         let outfits = catalog.outfits();
         let mut session = Self {
             fields,
             defaults,
             ammo_outfits: Arsenal::ammo_outfits(&outfits),
             outfits,
-            ships: catalog.ships(),
+            ships,
             // Refitted below, from the outfits the pilot owns.
             stats: ShipStats::default(),
             player,
@@ -2648,6 +2647,19 @@ impl Aboard {
             fuel: plunder.fuel,
             odds: plunder.odds,
         }
+    }
+}
+
+/// Fills in what a pilot from an old save lacks: the ship's default
+/// items, `defaults`, when they are not yet read, and a name after its
+/// class among `ships` for a ship never named.
+fn fill_in(pilot: &mut Pilot, defaults: &BTreeMap<OutfitId, u16>, ships: &[ShipRecord]) {
+    if pilot.default_outfits_pending {
+        pilot.outfits.clone_from(defaults);
+        pilot.default_outfits_pending = false;
+    }
+    if pilot.ship_name.is_none() {
+        pilot.ship_name = Some(pilot::class_name(ships, pilot.ship));
     }
 }
 
@@ -5775,15 +5787,49 @@ mod tests {
     }
 
     #[test]
-    fn a_session_reads_the_ship_records_once_when_it_starts() {
+    fn a_session_reads_the_ship_records_once_when_it_flies() {
         let catalog = shipbuying();
-        let mut session = outfitted(&catalog);
-        assert_eq!(*catalog.ship_record_reads.borrow(), 1);
+        let pilot = Pilot::new(&catalog, "").expect("starts");
+        assert_eq!(*catalog.ship_record_reads.borrow(), 1, "to name its ship");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        land_now(&mut session).expect("lands");
+        assert_eq!(*catalog.ship_record_reads.borrow(), 2);
         session.buy_ship(NEW, &mut NeverFires).expect("bought");
         session.shipyard().expect("a shipyard");
         session.take_off();
         jump(&mut session, &catalog, 131);
-        assert_eq!(*catalog.ship_record_reads.borrow(), 1);
+        assert_eq!(*catalog.ship_record_reads.borrow(), 2);
+    }
+
+    #[test]
+    fn flying_an_unnamed_ship_names_it_after_its_class() {
+        let catalog = shipbuying();
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.ship_name = None;
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.pilot().ship_name(), Some("Ship 128"));
+        assert!(!session.take_save_due());
+        let mut named = Pilot::new(&catalog, "Ada").expect("starts");
+        named.ship_name = Some("Kestrel".to_owned());
+        let session = Session::fly(&catalog, named).expect("flies");
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"), "kept");
+        let mut classless = Pilot::new(&catalog, "Ada").expect("starts");
+        classless.ship_name = None;
+        let bare = FakePilotCatalog {
+            ship_records: Vec::new(),
+            ..shipbuying()
+        };
+        let session = Session::fly(&bare, classless).expect("flies");
+        assert_eq!(session.pilot().ship_name(), Some(""), "no record");
+    }
+
+    #[test]
+    fn buying_a_ship_or_using_a_capture_as_my_ship_keeps_the_ships_name() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session.pilot.ship_name = Some("Kestrel".to_owned());
+        session.buy_ship(NEW, &mut NeverFires).expect("bought");
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"));
     }
 
     #[test]
