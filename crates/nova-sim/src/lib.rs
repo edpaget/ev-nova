@@ -251,8 +251,8 @@ pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
 pub use control::{
-    Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, SetExpr, SetOp,
-    SetOpHandler, SetOpKind, SetRegistry, Test, TestExpr,
+    Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, ScriptNote, SetExpr,
+    SetOp, SetOpHandler, SetOpKind, SetRegistry, Test, TestExpr,
 };
 pub use date::GameDate;
 pub use escort::{

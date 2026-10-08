@@ -104,6 +104,14 @@ impl ControlBits for NovaBits {
     }
 }
 
+/// What running a set expression has to tell the player's side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptNote {
+    /// An operator of this kind was skipped: nothing handles it yet. Each
+    /// kind is told once a session.
+    Unhandled(SetOpKind),
+}
+
 /// Whether one operand holds for `pilot`.
 fn operand_holds(operand: TestOperand, pilot: &(impl PilotFacts + ?Sized)) -> bool {
     match operand {

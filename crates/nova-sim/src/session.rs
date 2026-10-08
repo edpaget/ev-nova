@@ -215,7 +215,10 @@
 //!
 //! The pilot's control bits are read with [`Session::control_bit`] and
 //! set or cleared with [`Session::set_control_bit`], which makes a save
-//! due.
+//! due. A set expression runs on the session ([`Session::run_set`]),
+//! writing bits, with its other operators handled as
+//! [`Session::with_set_ops`] says; one nothing handles is skipped and
+//! told once ([`Session::take_script_notes`]).
 //!
 //! Persons (see [`person`](crate::person)) appear in the systems their
 //! records allow, by the session's [`PersonRules`]
@@ -253,7 +256,7 @@ mod persons;
 
 pub use persons::PersonQuote;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::ai::{Behaviour, Goal, PlayerSide};
@@ -279,7 +282,7 @@ use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
 use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
-use crate::control::{ControlBits, NovaBits};
+use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind, SetRegistry};
 use crate::date::{self, GameDate};
 use crate::escort::EscortDuty;
 use crate::flight::{Controls, ShipState, step};
@@ -495,6 +498,14 @@ pub struct Session {
     escort_wage: RuleSource,
     /// What paying the escorts did since this was last taken.
     pay_notes: Vec<PayNote>,
+    /// The handlers of the set operators beyond the bit writes (see
+    /// [`Session::with_set_ops`]).
+    set_ops: hire::Shared<SetRegistry<Session>>,
+    /// The set operator kinds skipped for want of a handler and told
+    /// already; never saved.
+    unhandled_ops: BTreeSet<SetOpKind>,
+    /// What running set expressions had to tell since this was last taken.
+    script_notes: Vec<ScriptNote>,
     /// How persons appear (see [`Session::with_person_rules`]).
     person_rules: hire::Shared<dyn PersonRules>,
     /// When a person's comm quote is said (see
@@ -615,6 +626,9 @@ impl Session {
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
+            set_ops: hire::Shared(Rc::new(SetRegistry::new())),
+            unhandled_ops: BTreeSet::new(),
+            script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             comm_quote: RuleSource::Engine,
             quote_clock: persons::QuoteClock::default(),

@@ -13,11 +13,26 @@
 //! original counts deployed fighters (`_GetToken` @0x14a83): the bay
 //! launching its ship type, that bay's ammunition outfit of lowest ID, the
 //! same routing a fighter docking takes.
+//!
+//! **Set expressions.** [`Session::run_set`] runs a set expression on the
+//! session (see [`control::execute`](crate::control::execute)): it writes
+//! the pilot's bits, drawing `R(...)` on the caller's [`Chance`], and
+//! hands every other operator to the registry given by
+//! [`Session::with_set_ops`], empty by default. A bit changed makes a save
+//! due. An operator nothing handles is skipped, and its kind told once a
+//! session as a [`ScriptNote`] ([`Session::take_script_notes`]); which
+//! kinds were told is never saved.
+
+use std::rc::Rc;
 
 use super::Session;
+use super::hire::Shared;
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
+use crate::chance::Chance;
 use crate::combat::armament::Armament;
-use crate::control::{Bit, PilotFacts};
+use crate::control::{
+    Bit, BitStore, ControlBitSet, PilotFacts, ScriptNote, SetExpr, SetRegistry, execute,
+};
 use crate::pilot::{Gender, Pilot};
 
 /// What a control-bit test reads about the session's pilot (see the module
@@ -104,7 +119,43 @@ impl PilotFacts for Session {
     }
 }
 
+/// A set expression writes the pilot's bits.
+impl BitStore for Session {
+    fn bits_mut(&mut self) -> &mut ControlBitSet {
+        self.pilot.bits_mut()
+    }
+}
+
 impl Session {
+    /// This session with `registry` handling the set operators beyond the
+    /// bit writes and `R(...)` (see the module docs): none by default.
+    #[must_use]
+    pub fn with_set_ops(mut self, registry: Rc<SetRegistry<Session>>) -> Self {
+        self.set_ops = Shared(registry);
+        self
+    }
+
+    /// Runs `expr` on the session (see the module docs), drawing `R(...)`
+    /// on `chance`.
+    pub fn run_set(&mut self, expr: &SetExpr, chance: &mut (impl Chance + ?Sized)) {
+        let registry = Rc::clone(&self.set_ops.0);
+        let before = self.pilot.control_bits().clone();
+        let mut told = std::mem::take(&mut self.unhandled_ops);
+        let unhandled = execute(expr, self, &registry, &mut &mut *chance, &mut told);
+        self.unhandled_ops = told;
+        if *self.pilot.control_bits() != before {
+            self.save_due = true;
+        }
+        self.script_notes
+            .extend(unhandled.into_iter().map(ScriptNote::Unhandled));
+    }
+
+    /// What running set expressions had to tell since this was last taken,
+    /// in order; taking it empties the list.
+    pub fn take_script_notes(&mut self) -> Vec<ScriptNote> {
+        std::mem::take(&mut self.script_notes)
+    }
+
     /// What a control-bit test reads about the pilot.
     pub(crate) fn facts(&self) -> Facts<'_> {
         Facts {
@@ -135,8 +186,14 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
+    use crate::chance::Chance;
+    use crate::control::{SetExpr, SetOp, SetOpHandler, SetOpKind, SetRegistry};
     use crate::save;
+    use crate::testkit::Scripted;
     use crate::testkit::catalog;
 
     fn session() -> Session {
@@ -210,6 +267,66 @@ mod tests {
         let session = Session::fly(&catalog, pilot).expect("flies");
         assert!(session.facts().has_outfit(OutfitId(300)));
         assert!(!session.facts().has_outfit(OutfitId(301)));
+    }
+
+    fn set(text: &str) -> SetExpr {
+        SetExpr::parse(text).expect("parses")
+    }
+
+    #[test]
+    fn running_a_set_expression_writes_the_bits_and_makes_a_save_due() {
+        let mut session = session();
+        session.run_set(&set("b7"), &mut Scripted::default());
+        assert!(session.control_bit(bit(7)));
+        assert!(session.take_save_due());
+        session.run_set(&set("b7"), &mut Scripted::default());
+        assert!(!session.take_save_due(), "no bit changed");
+        session.run_set(&set("R(b8 !b7)"), &mut Scripted::rolling(&[0]));
+        assert!(!session.control_bit(bit(7)));
+        assert!(!session.control_bit(bit(8)));
+        assert!(session.take_save_due());
+    }
+
+    /// Records the pilot's name and bit 1 each time it applies.
+    #[derive(Debug, Default)]
+    struct Recording(RefCell<Vec<(String, bool)>>);
+
+    impl SetOpHandler<Session> for Recording {
+        fn apply(&self, _op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
+            self.0.borrow_mut().push((
+                session.pilot().name().to_owned(),
+                session.control_bit(bit(1)),
+            ));
+        }
+    }
+
+    #[test]
+    fn a_registered_handler_sees_the_session() {
+        let recording = Rc::new(Recording::default());
+        let registry = SetRegistry::new().with(SetOpKind::StartMission, recording.clone());
+        let mut session = session().with_set_ops(Rc::new(registry));
+        session.run_set(&set("b1 S200"), &mut Scripted::default());
+        assert_eq!(*recording.0.borrow(), [("Ada".to_owned(), true)]);
+        assert_eq!(session.take_script_notes(), []);
+    }
+
+    #[test]
+    fn an_unhandled_operator_is_noted_once_and_the_next_still_applies() {
+        let mut session = session();
+        session.run_set(&set("S300 b4"), &mut Scripted::default());
+        assert!(session.control_bit(bit(4)));
+        session.run_set(&set("S301 b5"), &mut Scripted::default());
+        assert!(session.control_bit(bit(5)));
+        assert_eq!(
+            session.take_script_notes(),
+            [ScriptNote::Unhandled(SetOpKind::StartMission)]
+        );
+        assert_eq!(session.take_script_notes(), [], "taken");
+        session.run_set(&set("G150"), &mut Scripted::default());
+        assert_eq!(
+            session.take_script_notes(),
+            [ScriptNote::Unhandled(SetOpKind::GrantOutfit)]
+        );
     }
 
     #[test]
