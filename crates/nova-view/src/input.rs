@@ -30,6 +30,8 @@ pub enum Key {
     Control,
     /// A key that types a character.
     Char(char),
+    /// Function key F`n`: F1 is `Function(1)`.
+    Function(u8),
     /// Any other key.
     Other,
 }

@@ -133,10 +133,17 @@
 //!   destination: the session plots the course there and the map shows
 //!   it. The map shows the systems the pilot has explored, and the rest
 //!   unexplored.
-//! - The HUD's nav area shows the navigation target L selected, or else
-//!   the next system on the course (see [`hud`](super::hud)). The
-//!   original binds no key to cycling the stellars (its `Keys.nib` has
-//!   none): Tab is its Target Select, cycling the ships.
+//! - The HUD's nav area shows the navigation target, or else the next
+//!   system on the course (see [`hud`](super::hud)). As in the original
+//!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim::navigation)),
+//!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`], presses) select the stellar in
+//!   that slot of the system's nav defaults, 1-4 only while the escort
+//!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) the nearest landable one,
+//!   as L does with none; a left click in space the stellar under it
+//!   (not in the status panel, the right [`STATUS_BAR_WIDTH`] of the
+//!   screen, where the radar takes no clicks); and backquote, Nav Off
+//!   ([`NAV_OFF_KEY`]), clears it. The original has no stellar cycle key:
+//!   Tab is its Target Select, cycling the ships.
 //! - `\` (a press, not its repeats), the original's Hyper Select, plots
 //!   a one-jump course to the next system linked with this one, as
 //!   [`Session::select_next_system`] says, and clears the navigation
@@ -207,7 +214,7 @@
 //!   ([`escort_command_message`]); one that changed nothing says nothing.
 //!   E opens and closes the escort menu ([`EscortMenu`]), or says "You
 //!   don't have any escorts." with none; while it is open, 1-5 select
-//!   its group and Return closes it. The menu is drawn over the flight,
+//!   its group (rather than a stellar) and Return closes it. The menu is drawn over the flight,
 //!   under the HUD, in the colours the [`EscortMenuLooks`] port gives,
 //!   read when the screen is built. Option-Tab targets the next escort
 //!   ([`TargetPick::NextEscort`]), as for a hail. The escorts' standing
@@ -282,8 +289,8 @@ use nova_sim::{
     NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
     PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleSource, Rules, Session, ShipId,
     ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
-    StellarId, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2,
-    flight::normalized, flight::shortest_turn, glow_level, lights_level,
+    StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog,
+    Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
     ControlBits, HireList, HireRefusal, HireTerms, Hired, HookRules, OutfitRules, PayNote,
@@ -296,7 +303,7 @@ use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
     Toggled, escort_command_message, fighters_abandoned_message,
 };
-use super::hud::{self, HudState, NavDisplay, StatusBar};
+use super::hud::{self, HudState, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
 use super::sprite::rotation_frame;
 use super::target::{self, TargetShown};
@@ -304,7 +311,7 @@ use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
-use crate::system::camera::Camera;
+use crate::system::camera::{Camera, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
 use crate::system::starfield;
@@ -312,7 +319,8 @@ use crate::text::TextMetrics;
 use crate::time::ticks;
 use crate::ui::PlunderShown;
 use crate::{
-    Color, Diagnostic, DrawList, ImageKey, Input, Key, Point, Screen, ScreenAction, Sound,
+    Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
+    Sound,
 };
 
 /// The overlay: the system's title and the help line.
@@ -420,6 +428,30 @@ pub fn comm_message(note: &CommNote) -> String {
     };
     format!("{}:  {done}.", note.comm_name)
 }
+/// The stellar slot keys: each pair selects the stellar in that slot of
+/// the system's navigation defaults, from the first. The original reads
+/// keys 1-4 (Mac keycodes 0x12-0x15) and F1-F4 (`_loadKeys` @0xce6c8
+/// hard-codes 0x7a, 0x78, 0x63, 0x76 at +0x34..+0x3a) in `_HandlePlayer`
+/// @0x69cf6-0x69f17. While the escort menu is open, 1-4 pick its groups
+/// instead ([`GROUP_KEYS`]); F1-F4 always pick a stellar.
+pub const STELLAR_SLOT_KEYS: [[Key; 2]; 4] = [
+    [Key::Char('1'), Key::Function(1)],
+    [Key::Char('2'), Key::Function(2)],
+    [Key::Char('3'), Key::Function(3)],
+    [Key::Char('4'), Key::Function(4)],
+];
+/// The nearest stellar key: F5 (Mac keycode 0x60), which the original
+/// reads beside the slot keys (@0x69cf6-0x69f17) and which selects the
+/// stellar its land key would with nothing selected. Its Cmd-5 twin has
+/// no key here.
+pub const NEAREST_STELLAR_KEY: Key = Key::Function(5);
+/// The Nav Off key, which clears the navigation target: the original's
+/// default, backquote (`_loadKeys` @0xcd5f8 `navOff` 0x32, handled in
+/// `_HandlePlayer` @0x69a17-0x69b63), the only key that clears it. While
+/// the dev overlay is built in, backquote toggles the overlay instead and
+/// never reaches flight.
+pub const NAV_OFF_KEY: Key = Key::Char('`');
+
 /// The Hyper Select key, which cycles the hyperspace destination through
 /// the systems the current one links to: the original's default, `\`
 /// (`Keys.nib`'s `hyperSel`, "Hyper Select:", default keycode 0x2a in
@@ -2409,6 +2441,53 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// A press of `key`, if it picks an escort group or works the stellar
+    /// navigation target. While the escort menu is open, 1-5 pick its
+    /// groups ([`GROUP_KEYS`]); otherwise 1-4, like F1-F4 always, select
+    /// the stellar in their slot ([`STELLAR_SLOT_KEYS`]). F5 selects the
+    /// nearest ([`NEAREST_STELLAR_KEY`]) and Nav Off clears it
+    /// ([`NAV_OFF_KEY`]).
+    fn nav_key(&mut self, key: Key) {
+        let group = GROUP_KEYS.iter().position(|&group| group == key);
+        let slot = STELLAR_SLOT_KEYS
+            .iter()
+            .position(|keys| keys.contains(&key));
+        match (group, slot) {
+            (Some(n), _) if self.escort_menu.is_open() => {
+                let rows = self.escort_rows();
+                self.escort_menu.select(n, self.elapsed, &rows);
+            }
+            (_, Some(slot)) => self.select_stellar(StellarPick::Slot(slot)),
+            _ if key == NEAREST_STELLAR_KEY => self.select_stellar(StellarPick::Nearest),
+            _ if key == NAV_OFF_KEY => {
+                if let Ok(session) = &mut self.session {
+                    session.clear_nav_target();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Makes the stellar `pick` finds the navigation target, if any.
+    fn select_stellar(&mut self, pick: StellarPick) {
+        if let Ok(session) = &mut self.session {
+            session.select_stellar(pick);
+        }
+    }
+
+    /// A click at screen point `at`, as the original's in space
+    /// (`_HandlePlayer` @0x6a000-0x6a717): one in the status panel, the
+    /// right [`STATUS_BAR_WIDTH`] (0xc2) of the screen, radar included, is
+    /// no click in space and does nothing; any other selects the stellar
+    /// under it ([`StellarPick::At`]).
+    fn click_in_space(&mut self, at: Point) {
+        if at.x >= VIEW_SIZE.0 - STATUS_BAR_WIDTH {
+            return;
+        }
+        let world = self.camera().screen_to_world(at);
+        self.select_stellar(StellarPick::At(Vec2::new(world.x, world.y)));
+    }
+
     /// The escort menu's class rows ([`Session::escort_menu`]); none for
     /// a session that failed.
     fn escort_rows(&self) -> [ClassRow; 4] {
@@ -2627,6 +2706,14 @@ impl<
             }
             return ScreenAction::None;
         }
+        if let Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at,
+        } = *input
+        {
+            self.click_in_space(at);
+        }
         match press {
             Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
@@ -2670,13 +2757,6 @@ impl<
             } else {
                 EscortCommand::Recall
             }),
-            Some(key) if GROUP_KEYS.contains(&key) => {
-                let n = GROUP_KEYS.iter().position(|&group| group == key);
-                let rows = self.escort_rows();
-                if let Some(n) = n {
-                    self.escort_menu.select(n, self.elapsed, &rows);
-                }
-            }
             Some(NEAREST_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
                 TargetPick::Nearest
             } else {
@@ -2688,7 +2768,8 @@ impl<
                     session.select_secondary(backwards);
                 }
             }
-            _ => {}
+            Some(key) => self.nav_key(key),
+            None => {}
         }
         if let Input::Key { key, pressed, .. } = *input
             && FLIGHT_KEYS.contains(&key)
@@ -9426,10 +9507,26 @@ mod tests {
     }
 
     #[test]
+    fn with_the_escort_menu_open_1_to_4_pick_groups_not_stellars() {
+        let mut view = escorted();
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        tap(&mut view, Key::Char('2'));
+        assert_eq!(nav_target(&view), None, "the menu took it");
+        tap(&mut view, Key::Function(2));
+        assert_eq!(nav_target(&view), Some(StellarId(129)), "F2 never does");
+        tap(&mut view, MENU_CLOSE_KEY);
+        assert!(!view.escort_menu().is_open());
+        tap(&mut view, Key::Char('1'));
+        assert_eq!(nav_target(&view), Some(StellarId(128)), "shut: a stellar");
+        assert_eq!(view.escort_menu().group(), EscortGroup::All);
+    }
+
+    #[test]
     fn e_opens_the_menu_and_its_keys_pick_the_group_commanded() {
         let mut view = escorted();
         tap(&mut view, GROUP_KEYS[3]);
-        assert!(!view.escort_menu().is_open(), "1-5 do nothing while shut");
+        assert!(!view.escort_menu().is_open(), "1-5 leave a shut menu alone");
         assert_eq!(view.escort_menu().group(), EscortGroup::All);
         tap(&mut view, MENU_KEY);
         assert!(view.escort_menu().is_open());
@@ -10296,6 +10393,166 @@ mod tests {
     }
 
     // The navigation target.
+
+    /// Two stellars the ship starts over, at rest: A (128), small and
+    /// nearest, then B (129), wide and a little further off, in that nav
+    /// order; and C (130), drawn where the status panel covers it.
+    fn a_and_b() -> View {
+        let wide = LandingSite {
+            frame_size: Some((200, 200)),
+            ..site(129, (40.0, 0.0), StellarFlags::CAN_LAND)
+        };
+        flight_among(vec![
+            site(128, (10.0, 0.0), StellarFlags::CAN_LAND),
+            wide,
+            site(130, (330.0, 0.0), StellarFlags::CAN_LAND),
+        ])
+    }
+
+    /// Where `view` draws the system point `(x, y)`.
+    fn on_screen(view: &View, (x, y): (f32, f32)) -> Point {
+        view.camera().world_to_screen(at(x, y))
+    }
+
+    #[test]
+    fn a_slot_key_retargets_and_l_lands_on_the_new_target() {
+        for slot_key in STELLAR_SLOT_KEYS[1] {
+            let mut view = a_and_b();
+            tap(&mut view, LAND);
+            assert_eq!(nav_target(&view), Some(StellarId(128)), "{slot_key:?}");
+            tap(&mut view, slot_key);
+            assert_eq!(nav_target(&view), Some(StellarId(129)), "{slot_key:?}");
+            tap(&mut view, LAND);
+            assert_eq!(view.take_landing(), Some(StellarId(129)), "{slot_key:?}");
+        }
+    }
+
+    #[test]
+    fn the_slot_keys_are_1_to_4_and_f1_to_f4_in_nav_order() {
+        assert_eq!(
+            STELLAR_SLOT_KEYS,
+            [
+                [Key::Char('1'), Key::Function(1)],
+                [Key::Char('2'), Key::Function(2)],
+                [Key::Char('3'), Key::Function(3)],
+                [Key::Char('4'), Key::Function(4)],
+            ]
+        );
+        for (slot, keys) in STELLAR_SLOT_KEYS.iter().enumerate().take(3) {
+            for &slot_key in keys {
+                let mut view = a_and_b();
+                tap(&mut view, slot_key);
+                let expected = [128, 129, 130][slot];
+                assert_eq!(nav_target(&view), Some(StellarId(expected)), "{slot_key:?}");
+            }
+        }
+        let mut view = a_and_b();
+        tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+        for &empty in &STELLAR_SLOT_KEYS[3] {
+            tap(&mut view, empty);
+            assert_eq!(nav_target(&view), Some(StellarId(129)), "empty slot keeps");
+        }
+    }
+
+    #[test]
+    fn a_slot_key_repeat_or_release_does_nothing() {
+        let mut view = a_and_b();
+        view.input(&held(Key::Char('2')));
+        view.input(&key(Key::Char('2'), false));
+        assert_eq!(nav_target(&view), None);
+    }
+
+    #[test]
+    fn a_click_on_a_stellar_retargets_and_l_lands_there() {
+        let mut view = a_and_b();
+        tap(&mut view, LAND);
+        let b = on_screen(&view, (40.0, 0.0));
+        click(&mut view, b);
+        assert_eq!(nav_target(&view), Some(StellarId(129)));
+        tap(&mut view, LAND);
+        assert_eq!(view.take_landing(), Some(StellarId(129)));
+    }
+
+    #[test]
+    fn a_click_on_empty_space_keeps_the_target() {
+        let mut view = a_and_b();
+        tap(&mut view, LAND);
+        let empty = on_screen(&view, (-300.0, -300.0));
+        click(&mut view, empty);
+        assert_eq!(nav_target(&view), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn a_right_click_or_a_release_selects_nothing() {
+        let mut view = a_and_b();
+        let b = on_screen(&view, (40.0, 0.0));
+        for (button, pressed) in [
+            (crate::MouseButton::Right, true),
+            (crate::MouseButton::Left, false),
+        ] {
+            view.input(&Input::PointerButton {
+                button,
+                pressed,
+                at: b,
+            });
+            assert_eq!(nav_target(&view), None, "{button:?} {pressed}");
+        }
+    }
+
+    #[test]
+    fn a_click_on_the_status_panel_keeps_the_target_even_over_a_stellar() {
+        let mut view = a_and_b();
+        tap(&mut view, LAND);
+        let c = on_screen(&view, (330.0, 0.0));
+        let edge = VIEW_SIZE.0 - STATUS_BAR_WIDTH;
+        assert!(c.x > edge, "{c:?} is under the panel");
+        click(&mut view, c);
+        assert_eq!(nav_target(&view), Some(StellarId(128)), "over C");
+        // C's box reaches 26 pixels either side of it, across the panel's
+        // edge, which decides.
+        let left_of_c = on_screen(&view, (330.0 - 26.0, 0.0)).x;
+        assert!(left_of_c < edge && edge < c.x);
+        click(&mut view, at(edge, c.y));
+        assert_eq!(nav_target(&view), Some(StellarId(128)), "the edge is panel");
+        click(&mut view, at(edge - 0.5, c.y));
+        assert_eq!(
+            nav_target(&view),
+            Some(StellarId(130)),
+            "left of it is space"
+        );
+    }
+
+    #[test]
+    fn f5_selects_the_nearest_stellar() {
+        let mut view = a_and_b();
+        tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+        tap(&mut view, NEAREST_STELLAR_KEY);
+        assert_eq!(nav_target(&view), Some(StellarId(128)));
+        assert_eq!(NEAREST_STELLAR_KEY, Key::Function(5));
+    }
+
+    #[test]
+    fn nav_off_clears_the_target_and_the_next_l_selects_the_nearest() {
+        let mut view = a_and_b();
+        tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+        tap(&mut view, NAV_OFF_KEY);
+        assert_eq!(nav_target(&view), None);
+        tap(&mut view, LAND);
+        assert_eq!(view.take_landing(), None, "selects, not lands");
+        assert_eq!(nav_target(&view), Some(StellarId(128)));
+        assert_eq!(NAV_OFF_KEY, Key::Char('`'));
+    }
+
+    #[test]
+    fn with_the_map_open_a_click_goes_to_the_map_not_the_stellars() {
+        let mut view = a_and_b();
+        let b = on_screen(&view, (40.0, 0.0));
+        tap(&mut view, MAP);
+        click(&mut view, b);
+        tap(&mut view, MAP);
+        assert!(!view.map_open());
+        assert_eq!(nav_target(&view), None);
+    }
 
     fn nav_target(view: &View) -> Option<StellarId> {
         view.session().expect("flying").nav_target()
