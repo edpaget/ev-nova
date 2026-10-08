@@ -137,12 +137,11 @@
 use std::collections::BTreeSet;
 
 use super::Session;
-use crate::catalog::{LandingSite, PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
+use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::{SetOp, SetOpHandler};
-use crate::gate::GateKind;
 use crate::geometry::Vec2;
-use crate::landing::is_landable;
+use crate::landing::is_dockable;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
 
@@ -305,7 +304,9 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         let sites = catalog.landing_sites(system);
-        let first = sites.first().map(|site| (site.position, dockable(site)));
+        let first = sites
+            .first()
+            .map(|site| (site.position, is_dockable(site).then_some(site.id)));
         let rules = self.script_effect_rules;
         let landed = self.landed.is_some();
         if keep {
@@ -375,12 +376,6 @@ impl Session {
     }
 }
 
-/// `site`'s stellar, if a pilot may be docked there: one that can be
-/// landed on and is no hypergate or wormhole.
-fn dockable(site: &LandingSite) -> Option<StellarId> {
-    (GateKind::of(site.flags2).is_none() && is_landable(site)).then_some(site.id)
-}
-
 /// `Mxxx`: moves the player to the system, at its first stellar (see the
 /// module docs).
 #[derive(Clone, Copy, Debug, Default)]
@@ -437,8 +432,8 @@ impl SetOpHandler<Session> for MoveKeepPositionOp {
 mod tests {
     use super::*;
     use crate::catalog::{
-        DudeId, DudeRecord, GovtId, HullRecord, ShipId, SoundId, StockWeapon, SystemTraffic,
-        WeaponId, WeaponRecord,
+        DudeId, DudeRecord, GovtId, HullRecord, LandingSite, ShipId, SoundId, StockWeapon,
+        SystemTraffic, WeaponId, WeaponRecord,
     };
     use std::rc::Rc;
 

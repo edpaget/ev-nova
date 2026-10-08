@@ -31,9 +31,8 @@
 use super::Session;
 use crate::catalog::{PilotCatalog, StellarId, SystemId};
 use crate::date::GameDate;
-use crate::gate::GateKind;
 use crate::geometry::Vec2;
-use crate::landing::is_landable;
+use crate::landing::is_dockable;
 use crate::reserves::Reserve;
 use crate::traffic::Traffic;
 
@@ -97,7 +96,7 @@ impl Session {
             .iter()
             .find(|site| site.id == stellar)
             .ok_or(RelocateRefusal::NoStellar)?;
-        if GateKind::of(site.flags2).is_some() || !is_landable(site) {
+        if !is_dockable(site) {
             return Err(RelocateRefusal::NotLandable);
         }
         self.player.position = site.position;
@@ -111,16 +110,10 @@ impl Session {
         pilot.course.clear();
         self.sites = sites;
         self.landed = Some(stellar);
-        self.nav_target = None;
-        self.gate = None;
+        self.leave_scene();
         self.traffic = Traffic::new();
         self.traffic_due = true;
         self.fleet.clear();
-        self.combat.clear();
-        self.strikes.clear();
-        self.target = None;
-        self.aboard = None;
-        self.talk = None;
         self.hire_rolls.clear();
         self.save_due = true;
         Ok(())
@@ -149,7 +142,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::hull::Condition;
     use crate::date::GameDate;
-    use crate::gate::{HYPERGATE, WORMHOLE};
+    use crate::gate::{GateKind, HYPERGATE, WORMHOLE};
     use crate::geometry::Vec2;
     use crate::hyperspace::{JUMP_FUEL, JumpRefusal};
     use crate::pilot::Escort;
