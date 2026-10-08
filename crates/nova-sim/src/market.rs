@@ -8,11 +8,14 @@
 //! `STR#` 4004 ([`CommodityStrings`]). A plug-in's `'STR '` 9300 + n
 //! replaces commodity n's 4004 string whenever it exists, whatever it
 //! holds (`_InitObjects` @0x1cedd-0x1cf43). An empty (zero-byte) one
-//! from 9301 up takes the string commodity n - 1 was priced from; an
-//! empty 9300, or one that cannot be read, leaves the commodity
-//! untraded. A commodity whose base price is missing or
-//! is not a whole number, or that has no name, is never traded. A
-//! stellar with the trade-center flag trades commodity n when its `spöb`
+//! from 9301 up takes the string commodity n - 1 was priced from. Every
+//! price string is read as the Toolbox's `StringToNum` reads it, kept to
+//! 16 bits ([`string_to_num`]), so a string that is no number still
+//! prices its commodity. A missing 4004 string, a patch that cannot be
+//! read, and an empty 9300 price it at 0; a missing name is empty
+//! (`_LoadStrings` @0x71afb-0x71b55). So all six standard commodities are
+//! always traded wherever a stellar sets them a level. A stellar with
+//! the trade-center flag trades commodity n when its `spöb`
 //! flags give it a price level, in the nibble at bit 28 - 4n (food at 28
 //! down to equipment at 8): 1 low, 2 medium, 4 high, 0 not traded. A
 //! nibble with more than one bit set, which stock data never has, takes
@@ -20,8 +23,9 @@
 //! and high [`HIGH_PERCENT`], truncated; medium is the base price. The
 //! community's table of stock prices (Food 60/75/93, Medical 600/750/937,
 //! and so on) matches these exactly. A standard commodity's price of 4 or
-//! less is [`MIN_COMMODITY_PRICE`], 5, as in the engine
-//! (`_DoTradeDialog` @0x5dcc8-0x5dcce); a `jünk` price is never below 0.
+//! less, a base price of 0 or below included, is [`MIN_COMMODITY_PRICE`],
+//! 5, as in the engine (`_DoTradeDialog` @0x5dcc8-0x5dcce); a `jünk`
+//! price is never below 0.
 //!
 //! A stellar sells and buys each good at one price: profit comes from
 //! carrying goods from where they are cheap to where they are dear.
@@ -80,8 +84,7 @@
 //! the commodity's `BasePrice` plus the event's `PriceDelta`, whatever
 //! the stellar's level; of several events on one commodity the highest
 //! ID wins; and an event lists its commodity, to buy and to sell, at a
-//! stellar that does not otherwise trade it (a commodity not traded at
-//! all stays unlisted). By the Bible, the event's `PriceDelta` is added
+//! stellar that does not otherwise trade it. By the Bible, the event's `PriceDelta` is added
 //! to the stellar's own (level) price, several add up, and an event on a
 //! commodity not traded there moves nothing. Either way a price of 4 or
 //! less is 5. The exchange shows the names of the events active at its
@@ -305,24 +308,52 @@ pub fn control_bits_allow(_expression: &str) -> bool {
     true
 }
 
-/// The standard commodities that can be traded, by number, from
-/// `strings`.
+/// The standard commodities, every one of them, by number, from
+/// `strings`: a missing name is empty, and each base price is its string
+/// read by [`string_to_num`] (`_InitObjects` @0x1cedd-0x1cf43,
+/// `_LoadStrings` @0x71afb-0x71b55).
 #[must_use]
 pub fn commodities(strings: &CommodityStrings) -> Vec<(u8, Commodity)> {
     (0..COMMODITIES)
-        .filter_map(|n| {
+        .map(|n| {
             let at = usize::from(n);
-            let name = strings.names.get(at)?;
-            let base_price = base_price_string(strings, at)?.trim().parse::<i32>().ok()?;
-            Some((
+            (
                 n,
                 Commodity {
-                    name: name.clone(),
-                    base_price: i64::from(base_price),
+                    name: strings.names.get(at).cloned().unwrap_or_default(),
+                    base_price: i64::from(string_to_num(base_price_string(strings, at))),
                 },
-            ))
+            )
         })
         .collect()
+}
+
+/// `text` read as a number as the Toolbox's `StringToNum` reads it, kept
+/// to 16 bits as `_InitObjects` stores it (@0x1cf2f, `movw` @0x1cf37).
+///
+/// The rule was probed on the current macOS `CarbonCore`, as no i386-era
+/// one is at hand. An optional first `-` or `+` is the sign; every other
+/// byte, a second sign, a space or a NUL included, adds its low four bits
+/// as a decimal digit, n = n × 10 + (byte & 0xF), unchecked. It reads
+/// Mac Roman bytes, so each character is read as the byte it decoded
+/// from. Wrapping in 16 bits gives the low 16 bits of the original's
+/// wider sum, as multiplying and adding commute with taking it mod 2^16.
+#[must_use]
+pub fn string_to_num(text: &str) -> i16 {
+    // A character with no Mac Roman byte never comes from decoded data;
+    // its code point's low byte stands in, as only the low bits count.
+    let mut bytes = text
+        .chars()
+        .map(|c| nova_data::wire::string::mac_roman_byte(c).unwrap_or(c as u8))
+        .peekable();
+    let negative = bytes.next_if_eq(&b'-').is_some();
+    if !negative {
+        bytes.next_if_eq(&b'+');
+    }
+    let n = bytes.fold(0_i16, |n, byte| {
+        n.wrapping_mul(10).wrapping_add(i16::from(byte & 0xF))
+    });
+    if negative { n.wrapping_neg() } else { n }
 }
 
 /// The string that prices commodity `n`: its `'STR '` 9300 + n patch when
@@ -332,16 +363,20 @@ pub fn commodities(strings: &CommodityStrings) -> Vec<(u8, Commodity)> {
 /// The original copies a patch into a buffer it reuses from slot to slot.
 /// An empty (zero-byte) patch copies nothing, so slot n takes the string
 /// slot n - 1 took. For slot 0 the buffer is uninitialised, and a patch
-/// whose length byte runs past its data reads stale bytes, so for both
-/// there is no string and the commodity is not traded, as for any price
-/// the sim cannot read. Stock data and editor-written plug-ins never have
-/// such a patch.
-fn base_price_string(strings: &CommodityStrings, n: usize) -> Option<&str> {
+/// whose length byte runs past its data reads stale bytes, so the
+/// original prices both at a number that depends on stale memory. The
+/// sim cannot know it, and reads both as the empty string, priced 0, so
+/// the commodity stays traded as in the original. A slot past the end of
+/// `STR#` 4004 is the empty string too, as `GetIndString` gives. Stock
+/// data and editor-written plug-ins never have such a patch.
+fn base_price_string(strings: &CommodityStrings, n: usize) -> &str {
     match strings.price_patches.get(n) {
-        Some(StringPatch::Text(text)) => Some(text),
-        Some(StringPatch::Empty) => base_price_string(strings, n.checked_sub(1)?),
-        Some(StringPatch::Unreadable) => None,
-        Some(StringPatch::Absent) | None => strings.base_prices.get(n).map(String::as_str),
+        Some(StringPatch::Text(text)) => text,
+        Some(StringPatch::Empty) => n
+            .checked_sub(1)
+            .map_or("", |before| base_price_string(strings, before)),
+        Some(StringPatch::Unreadable) => "",
+        Some(StringPatch::Absent) | None => strings.base_prices.get(n).map_or("", String::as_str),
     }
 }
 
@@ -391,8 +426,9 @@ impl Goods {
         self
     }
 
-    /// `good`'s name, as the exchange names it; none for a good that is
-    /// not traded.
+    /// `good`'s name, as the exchange names it, empty for a standard
+    /// commodity with no name; none for a `jünk` with no record or a
+    /// commodity numbered 6 or up, which is not traded.
     #[must_use]
     pub fn name(&self, good: Good) -> Option<&str> {
         match good {
@@ -1111,6 +1147,37 @@ mod tests {
     }
 
     #[test]
+    fn string_to_num_reads_as_the_toolbox_does() {
+        let table = [
+            ("", 0),
+            ("75", 75),
+            ("-40", -40),
+            ("+40", 40),
+            (" 75 ", 750),
+            ("lots", 13543),
+            ("12a", 121),
+            ("1.5", 245),
+            ("--3", -133),
+            ("-+3", -113),
+            ("+-3", 133),
+            ("3-", 43),
+            ("-", 0),
+            ("+", 0),
+            ("70000", 4464),
+            ("-70000", -4464),
+            ("32768", -32768),
+            ("65536", 0),
+            ("99999999999", -6145),
+            ("1\u{0}2", 102),
+            ("\u{E9}5", 145),
+        ];
+        for (text, number) in table {
+            assert_eq!(string_to_num(text), number, "{text:?}");
+        }
+        assert_eq!(string_to_num(&"9".repeat(255)), -1);
+    }
+
+    #[test]
     fn the_six_commodities_are_the_first_names_with_their_prices() {
         assert_eq!(
             commodities(&stock()),
@@ -1126,7 +1193,7 @@ mod tests {
     }
 
     #[test]
-    fn a_commodity_without_a_whole_price_or_a_name_is_not_traded() {
+    fn every_commodity_is_traded_priced_as_string_to_num_reads_it() {
         let found = commodities(&strings(
             &["Food", "Industrial", "Medical", "Luxury", "Metal"],
             &["75", "lots", "", "-40", "200", "550", "99"],
@@ -1135,13 +1202,39 @@ mod tests {
             found,
             [
                 (0, commodity("Food", 75)),
+                (1, commodity("Industrial", 13543)),
+                (2, commodity("Medical", 0)),
                 (3, commodity("Luxury", -40)),
                 (4, commodity("Metal", 200)),
+                (5, commodity("", 550)),
             ]
         );
-        assert_eq!(commodities(&CommodityStrings::default()), []);
-        let padded = commodities(&strings(&["Food"], &[" 75 "]));
-        assert_eq!(padded, [(0, commodity("Food", 75))], "spaces are trimmed");
+    }
+
+    #[test]
+    fn odd_price_strings_are_priced_as_string_to_num_reads_them() {
+        let found = prices(&strings(&[], &["", " 75 ", "lots", "70000", "200", "550"]));
+        assert_eq!(
+            found,
+            [(0, 0), (1, 750), (2, 13543), (3, 4464), (4, 200), (5, 550)]
+        );
+    }
+
+    #[test]
+    fn with_no_strings_there_are_six_nameless_commodities_priced_at_0() {
+        let found = commodities(&CommodityStrings::default());
+        let none: Vec<_> = (0..6).map(|n| (n, commodity("", 0))).collect();
+        assert_eq!(found, none);
+    }
+
+    #[test]
+    fn a_commodity_str_4004_lacks_is_priced_at_0() {
+        let mut short = stock();
+        short.base_prices.truncate(3);
+        assert_eq!(
+            prices(&short),
+            [(0, 75), (1, 350), (2, 750), (3, 0), (4, 0), (5, 0)]
+        );
     }
 
     // Plug-in price patches.
@@ -1171,16 +1264,22 @@ mod tests {
             (2, text("")),
             (3, text(" 120 ")),
         ]));
-        assert_eq!(found, [(0, 75), (3, 120), (4, 200), (5, 550)]);
+        assert_eq!(
+            found,
+            [(0, 75), (1, 13543), (2, 0), (3, 1200), (4, 200), (5, 550)]
+        );
     }
 
     #[test]
-    fn an_unreadable_price_patch_leaves_its_commodity_untraded() {
+    fn an_unreadable_price_patch_prices_its_commodity_at_0() {
         let found = prices(&patched(&[
             (0, StringPatch::Unreadable),
             (4, StringPatch::Unreadable),
         ]));
-        assert_eq!(found, [(1, 350), (2, 750), (3, 900), (5, 550)]);
+        assert_eq!(
+            found,
+            [(0, 0), (1, 350), (2, 750), (3, 900), (4, 0), (5, 550)]
+        );
     }
 
     #[test]
@@ -1191,7 +1290,10 @@ mod tests {
 
         let mut none = patched(&[(0, text("10")), (4, text("40"))]);
         none.base_prices.clear();
-        assert_eq!(prices(&none), [(0, 10), (4, 40)]);
+        assert_eq!(
+            prices(&none),
+            [(0, 10), (1, 0), (2, 0), (3, 0), (4, 40), (5, 0)]
+        );
     }
 
     #[test]
@@ -1230,21 +1332,27 @@ mod tests {
         short.base_prices.truncate(4);
         assert_eq!(
             prices(&short),
-            [(0, 75), (1, 350), (2, 750), (3, 900)],
+            [(0, 75), (1, 350), (2, 750), (3, 900), (4, 0), (5, 0)],
             "the slot before has no string"
         );
     }
 
     #[test]
-    fn an_empty_price_patch_after_an_unreadable_one_or_first_is_untraded() {
+    fn an_empty_price_patch_after_an_unreadable_one_or_first_is_priced_at_0() {
         let after_unreadable = prices(&patched(&[
             (1, StringPatch::Unreadable),
             (2, StringPatch::Empty),
         ]));
-        assert_eq!(after_unreadable, [(0, 75), (3, 900), (4, 200), (5, 550)]);
+        assert_eq!(
+            after_unreadable,
+            [(0, 75), (1, 0), (2, 0), (3, 900), (4, 200), (5, 550)]
+        );
 
         let first = prices(&patched(&[(0, StringPatch::Empty)]));
-        assert_eq!(first, [(1, 350), (2, 750), (3, 900), (4, 200), (5, 550)]);
+        assert_eq!(
+            first,
+            [(0, 0), (1, 350), (2, 750), (3, 900), (4, 200), (5, 550)]
+        );
     }
 
     // The exchange.
@@ -1698,8 +1806,8 @@ mod tests {
         assert_eq!(found.tons(order(FOOD, Direction::Buy, Lot::One)), Ok(1));
         assert_eq!(found.tons(order(FOOD, Direction::Sell, Lot::One)), Ok(1));
 
-        let untraded = patched(&[(0, StringPatch::Unreadable)]);
-        let unreadable = Goods::new(&untraded, Vec::new(), disasters());
+        let priced_at_0 = patched(&[(0, StringPatch::Unreadable)]);
+        let unreadable = Goods::new(&priced_at_0, Vec::new(), disasters());
         let found = market(
             &unreadable,
             EARTH,
@@ -1709,7 +1817,7 @@ mod tests {
             RuleSource::Engine,
         )
         .expect("trades");
-        assert_eq!(found.row(FOOD), None, "a commodity not traded at all");
+        assert_eq!(price(&found, FOOD), 5, "a commodity priced at 0, 0 - 15");
 
         let found = market(
             &goods(),
@@ -1765,6 +1873,9 @@ mod tests {
                 ("7", food_low, 5),
                 ("8", food_low, 6),
                 ("-40", food_high, 5),
+                ("", food_low, 5),
+                ("", TRADE | (2 << 28), 5),
+                ("", food_high, 5),
             ] {
                 let goods = Goods::new(&strings(&["Food"], &[base]), Vec::new(), Vec::new());
                 let found = market(&goods, EARTH, flags, &pilot(0), 0, source).expect("trades");

@@ -234,7 +234,7 @@ pub struct ShipRecord {
 /// "All Cargo" names them and `STR#` 4004 "Base Prices" prices them, the
 /// nth string for commodity n (from 0). A plug-in's `'STR '` 9300 + n
 /// patches commodity n's 4004 string. The [`market`](crate::market)
-/// rules decide which string prices each commodity, and which are traded.
+/// rules decide which string prices each commodity, and how it is read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommodityStrings {
     /// Every string of `STR#` 4000, in order; none when it is missing.
@@ -257,7 +257,9 @@ pub enum StringPatch {
     /// A `'STR '` with that ID and no bytes at all. The original then
     /// leaves its string buffer as the slot before it left it.
     Empty,
-    /// A `'STR '` with that ID whose length byte runs past its data.
+    /// A `'STR '` with that ID whose length byte runs past its data. The
+    /// original then reads stale bytes; the sim prices it as the empty
+    /// string.
     Unreadable,
 }
 

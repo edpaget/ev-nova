@@ -72,8 +72,13 @@ fn str_list(strings: &[&str]) -> Vec<u8> {
 
 /// A `'STR '` of `text`.
 fn str_resource(text: &str) -> Vec<u8> {
+    str_bytes(text.as_bytes())
+}
+
+/// A `'STR '` of these raw (Mac Roman) bytes.
+fn str_bytes(text: &[u8]) -> Vec<u8> {
     let mut bytes = vec![u8::try_from(text.len()).expect("short")];
-    bytes.extend(text.as_bytes());
+    bytes.extend(text);
     bytes
 }
 
@@ -137,4 +142,22 @@ fn a_plugins_str_patch_wins_its_slot_over_its_own_str_4004() {
         (StrResource::TYPE, 9301, str_resource("999")),
     ];
     assert_eq!(prices(Some(&plugin)), [1, 999, 3, 4, 5, 6]);
+}
+
+#[test]
+fn a_plugins_str_9301_that_is_no_number_is_read_as_string_to_num_reads_it() {
+    let plugin = [(StrResource::TYPE, 9301, str_resource("lots"))];
+    assert_eq!(prices(Some(&plugin)), [75, 13543, 750, 900, 200, 550]);
+}
+
+#[test]
+fn a_plugins_str_9302_is_read_as_its_mac_roman_bytes() {
+    let plugin = [(StrResource::TYPE, 9302, str_bytes(&[0x8E, b'5']))];
+    assert_eq!(prices(Some(&plugin)), [75, 350, 145, 900, 200, 550]);
+}
+
+#[test]
+fn a_plugins_short_str_4004_prices_the_slots_it_lacks_at_0() {
+    let plugin = [(StrList::TYPE, 4004, str_list(&["1", "2", "3"]))];
+    assert_eq!(prices(Some(&plugin)), [1, 2, 3, 0, 0, 0]);
 }

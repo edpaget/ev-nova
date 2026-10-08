@@ -2237,7 +2237,8 @@ impl Session {
         None
     }
 
-    /// `good`'s name, as the exchange names it, if it is traded.
+    /// `good`'s name, as the exchange names it, if it is traded
+    /// ([`Goods::name`](crate::market::Goods::name)).
     #[must_use]
     pub fn good_name(&self, good: Good) -> Option<&str> {
         self.goods.name(good)
@@ -9576,7 +9577,8 @@ mod tests {
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.good_name(Good::Commodity(0)), Some("Food"));
         assert_eq!(session.good_name(Good::Commodity(4)), Some("Metal"));
-        assert_eq!(session.good_name(Good::Commodity(5)), None, "not traded");
+        assert_eq!(session.good_name(Good::Commodity(5)), Some(""), "no name");
+        assert_eq!(session.good_name(Good::Commodity(6)), None, "not standard");
         assert_eq!(session.good_name(Good::Junk(JunkId(146))), Some("Ice"));
         assert_eq!(session.good_name(Good::Junk(JunkId(147))), None);
         assert_eq!(session.outfit_name(OutfitId(310)), Some("Outfit 310"));

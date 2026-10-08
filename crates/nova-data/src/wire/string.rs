@@ -59,6 +59,25 @@ impl From<&str> for MacString {
     }
 }
 
+/// The Mac Roman byte `c` decodes from under [`MacString::from_mac_roman`],
+/// or none for a character Mac Roman cannot hold.
+///
+/// ASCII is itself; the high bytes come from the same table the decoder
+/// uses.
+#[must_use]
+pub fn mac_roman_byte(c: char) -> Option<u8> {
+    if c.is_ascii() {
+        return u8::try_from(c).ok();
+    }
+    (0x80..=u8::MAX).find(|&byte| {
+        MACINTOSH
+            .decode_without_bom_handling(&[byte])
+            .0
+            .chars()
+            .eq([c])
+    })
+}
+
 /// Reads a Pascal string: a length byte followed by that many bytes.
 ///
 /// For `#[br(parse_with = pascal)]`.
@@ -131,6 +150,24 @@ mod tests {
     #[test]
     fn mac_roman_specials_decode_to_exact_unicode() {
         assert_eq!(MacString::from_mac_roman(SPECIALS).as_str(), SPECIALS_TEXT);
+    }
+
+    #[test]
+    fn every_mac_roman_byte_maps_back_from_its_character() {
+        for byte in 0..=u8::MAX {
+            let text = MacString::from_mac_roman(&[byte]);
+            let mut chars = text.chars();
+            let c = chars.next().expect("one character");
+            assert_eq!(chars.next(), None, "byte {byte:#x} is one character");
+            assert_eq!(mac_roman_byte(c), Some(byte), "byte {byte:#x}");
+        }
+        assert_eq!(mac_roman_byte('\u{E9}'), Some(0x8E));
+    }
+
+    #[test]
+    fn a_character_mac_roman_lacks_has_no_byte() {
+        assert_eq!(mac_roman_byte('\u{6F22}'), None);
+        assert_eq!(mac_roman_byte('\u{1F600}'), None);
     }
 
     #[test]
