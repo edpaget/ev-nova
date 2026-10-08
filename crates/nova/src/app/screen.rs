@@ -4781,6 +4781,33 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_sound_by_a_purchase_hook_plays_after_the_take_off() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, hooked_outfitting_data(b"P300"));
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('b'), true));
+        screen.tick(Duration::from_millis(100));
+        let mission = Sound::Sim(SimSound::Script {
+            sound: nova_sim::SoundId(300),
+            exclusive: true,
+        });
+        assert!(!screen.take_sounds().contains(&mission), "landed");
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        screen.take_sounds();
+        screen.tick(Duration::from_millis(100));
+        assert_eq!(
+            screen
+                .take_sounds()
+                .into_iter()
+                .filter(|&sound| sound == mission)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn a_new_pilot_moved_by_its_on_start_flies_there_and_is_saved_there() {
         let store = MemoryPilots::new();
         let mut screen = AppScreen::new(starting_data(b"M129"))
@@ -6054,7 +6081,8 @@ pub(super) mod tests {
             RuleKey::MoveStarless
             | RuleKey::MoveArrival
             | RuleKey::MoveKeepFlag
-            | RuleKey::BlankLeave => "script_effect_rules",
+            | RuleKey::BlankLeave
+            | RuleKey::ScriptSound => "script_effect_rules",
         }
     }
 

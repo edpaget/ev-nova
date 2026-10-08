@@ -52,13 +52,14 @@
 //! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only the escorts and fighters out follow, the new system filling with arrivals over time ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
 //! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed ([`ScriptEffectRules`](crate::ScriptEffectRules)) | only a landed `N` keeps the landing position\* |
 //! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the player leaves all the same, with no message |
+//! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing ([`ScriptEffectRules`](crate::ScriptEffectRules)) | every `P` sounds at once, landed or not\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
 //! `remove_refund`, `purchase_paint_order`, `capture_hook_order`,
 //! `start_ship_purchase`, `ship_change_cargo`, `ship_change_reserves`,
-//! `move_arrival`, `move_keep_flag` or `comm_quote`
+//! `move_arrival`, `move_keep_flag`, `script_sound` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -441,6 +442,17 @@ rule_keys! {
     /// player immediately leave"), the player leaves all the same, with no
     /// message (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
     BlankLeave => "blank_leave",
+    /// When the `P` set operator's sound plays: by the engine, one
+    /// mission sound at a time, as `_missionSoundID` (@0x20fa14) is read
+    /// only once a flight frame (`_PlayGame` @0x462fa): `P` is held to the
+    /// next flight tick, so a landed `P` sounds after the take-off, a
+    /// later `P` replaces it, a jump's arrival drops it, and it is dropped
+    /// while the last mission sound is still playing; otherwise every `P`
+    /// sounds at once, landed or not, over whatever is playing. The Bible
+    /// is silent here, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see
+    /// [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    ScriptSound => "script_sound",
 }
 
 impl RuleKey {
@@ -604,13 +616,15 @@ mod tests {
                 RuleKey::MoveStarless,
                 RuleKey::MoveArrival,
                 RuleKey::MoveKeepFlag,
-                RuleKey::BlankLeave
+                RuleKey::BlankLeave,
+                RuleKey::ScriptSound
             ]
         );
         assert_eq!(RuleKey::MoveStarless.key(), "move_starless");
         assert_eq!(RuleKey::MoveArrival.key(), "move_arrival");
         assert_eq!(RuleKey::MoveKeepFlag.key(), "move_keep_flag");
         assert_eq!(RuleKey::BlankLeave.key(), "blank_leave");
+        assert_eq!(RuleKey::ScriptSound.key(), "script_sound");
         assert_eq!(
             RuleKey::ShipChangePersistence.key(),
             "ship_change_persistence"

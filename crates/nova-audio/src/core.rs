@@ -24,7 +24,9 @@ use crate::table::SoundTable;
 ///   not restart the track.
 /// - Each event with a `snd ` in the table plays it once, at the effects
 ///   volume, while the sound setting is on. A landing plays the table's
-///   landing sound, then the stellar's own.
+///   landing sound, then the stellar's own. A `P` set operator's sound
+///   plays its own `snd ` the same way, on the one mission channel when
+///   it is exclusive ([`AudioCommand::PlayExclusive`]).
 /// - Each of a fight's sounds plays its own `snd ` once, at the effects
 ///   volume times its [`distance_gain`], while the sound setting is on.
 /// - The engine loops while the sound setting is on, the ship thrusts in
@@ -104,6 +106,21 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
                 Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
                 Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
+                Sound::Sim(SimSound::Script {
+                    sound,
+                    exclusive: false,
+                }) => self.play(Some(sound)),
+                Sound::Sim(SimSound::Script {
+                    sound,
+                    exclusive: true,
+                }) => {
+                    if self.settings.sound {
+                        self.audio.run(AudioCommand::PlayExclusive {
+                            sound,
+                            volume: self.settings.effects_volume,
+                        });
+                    }
+                }
                 Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
                 Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
                 Sound::Combat(fight) => {
@@ -394,6 +411,37 @@ mod tests {
         core.set_sound(false);
         drain(&log);
         core.update(None, &[Sound::Sim(SimSound::ScriptMessage)]);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    fn mission(id: i16, exclusive: bool) -> Sound {
+        Sound::Sim(SimSound::Script {
+            sound: SoundId(id),
+            exclusive,
+        })
+    }
+
+    #[test]
+    fn a_mission_sound_plays_on_its_channel_or_over_the_rest() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[mission(300, true), mission(301, false)],
+        );
+        assert_eq!(
+            drain(&log),
+            [
+                AudioCommand::PlayExclusive {
+                    sound: SoundId(300),
+                    volume: Volume::new(0.5),
+                },
+                play(301, 0.5)
+            ]
+        );
+        core.set_sound(false);
+        drain(&log);
+        core.update(None, &[mission(300, true), mission(301, false)]);
         assert_eq!(drain(&log), [], "sound off");
     }
 

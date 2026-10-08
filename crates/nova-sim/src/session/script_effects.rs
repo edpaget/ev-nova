@@ -1,5 +1,6 @@
-//! The set operators that move the player: `M` and `N` move it to
-//! another system, and `Q` makes it leave the stellar it is landed on.
+//! The set operators that move the player and play a sound: `M` and `N`
+//! move it to another system, `Q` makes it leave the stellar it is landed
+//! on, and `P` plays a sound.
 //!
 //! **The original.** `_EvalSetExp` (@0x150fc) dispatches on the letter
 //! through the table at 0xdd2fc (@0x15cc2):
@@ -108,6 +109,26 @@
 //! one, unless [`ScriptEffectRules::blank_leave`] makes the player leave
 //! all the same, with no message.
 //!
+//! **`Pxxx`** ([`PlaySoundOp`], @0x15a24) sets `_missionSoundID` to the
+//! raw `snd ` ID, with no range check, and only `_PlayGame` reads it,
+//! once a flight frame (@0x462fa): when it is not -1 and no mission sound
+//! is held (`_missionSnd`), it loads and plays it at the effects volume;
+//! it lets the held one go once it has stopped (@0x46358-0x46375); and
+//! every frame resets the ID (@0x463a9), as do `_ResetPlayer` (@0x1d909)
+//! and the hyperspace arrival (`_HandlePlayer` @0x6c4ff). So only the
+//! last `P` before a flight frame counts, one while a mission sound still
+//! plays is dropped, and the spaceport never reads it, so a landed `P`
+//! plays on the first flight frame after the take-off.
+//!
+//! Here, by [`ScriptEffectRules::sound`]'s engine reading, `P` holds its
+//! sound, a later one replacing it, and the session's next flight tick
+//! ([`Session::tick`]) sounds it as [`SimSound::Script`], exclusive: the
+//! audio side plays it on its one mission channel, unless the last sound
+//! played there is still playing. A jump's arrival drops a held sound,
+//! and none is saved. By the other reading every `P` sounds at once,
+//! landed or not, over whatever plays. The session never calls audio: the
+//! sound leaves it as an event, drained with [`Session::take_sounds`].
+//!
 //! Not yet as the original: the mission work its moves do
 //! (`_dockedPortMissions`, `_MissionHandlePlayerEnteredNewSystem`) waits
 //! for missions, and the first stellar is the first of
@@ -116,7 +137,7 @@
 use std::collections::BTreeSet;
 
 use super::Session;
-use crate::catalog::{LandingSite, PilotCatalog, StellarId, SystemId, TrafficCatalog};
+use crate::catalog::{LandingSite, PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::{SetOp, SetOpHandler};
 use crate::gate::GateKind;
@@ -140,12 +161,14 @@ pub struct ScriptEffectRules {
     pub keep_flag: RuleSource,
     /// Whether a blank `Q` makes the player leave ([`RuleKey::BlankLeave`]).
     pub blank_leave: RuleSource,
+    /// When `P`'s sound plays ([`RuleKey::ScriptSound`]).
+    pub sound: RuleSource,
 }
 
 impl ScriptEffectRules {
     /// The rules `rulebook` chooses: its [`RuleKey::MoveStarless`],
-    /// [`RuleKey::MoveArrival`], [`RuleKey::MoveKeepFlag`] and
-    /// [`RuleKey::BlankLeave`] entries.
+    /// [`RuleKey::MoveArrival`], [`RuleKey::MoveKeepFlag`],
+    /// [`RuleKey::BlankLeave`] and [`RuleKey::ScriptSound`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
@@ -153,6 +176,7 @@ impl ScriptEffectRules {
             arrival: rulebook.source_for(RuleKey::MoveArrival),
             keep_flag: rulebook.source_for(RuleKey::MoveKeepFlag),
             blank_leave: rulebook.source_for(RuleKey::BlankLeave),
+            sound: rulebook.source_for(RuleKey::ScriptSound),
         }
     }
 }
@@ -166,13 +190,16 @@ pub(super) enum ScriptMove {
     KeepPosition(SystemId),
 }
 
-/// What the set expressions queued for [`Session::settle_script`].
+/// What the set expressions left for later: the moves and the leave for
+/// [`Session::settle_script`], and the sound for the next flight tick.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Queued {
     /// The moves, in order.
     moves: Vec<ScriptMove>,
     /// The message a `Q` leaves on: none for no `Q` pending.
     leave: Option<String>,
+    /// The mission sound a `P` holds to the next flight tick.
+    pub(super) sound: Option<SoundId>,
 }
 
 /// What [`Session::settle_script`] did.
@@ -232,6 +259,29 @@ impl Session {
             }
         }
         settled
+    }
+
+    /// `P`: plays `sound`, held to the next flight tick or at once, as
+    /// [`ScriptEffectRules::sound`] says (see the module docs).
+    fn play_script_sound(&mut self, sound: SoundId) {
+        match self.script_effect_rules.sound {
+            RuleSource::Engine => self.queued.sound = Some(sound),
+            RuleSource::Bible => self.sounds.push(SimSound::Script {
+                sound,
+                exclusive: false,
+            }),
+        }
+    }
+
+    /// Sounds the mission sound a `P` holds, if any, as the flight's
+    /// tick does.
+    pub(super) fn sound_script(&mut self) {
+        if let Some(sound) = self.queued.sound.take() {
+            self.sounds.push(SimSound::Script {
+                sound,
+                exclusive: true,
+            });
+        }
     }
 
     /// `Q`: draws the message to leave on from `STR#` `list` on `chance`
@@ -356,6 +406,18 @@ impl SetOpHandler<Session> for LeaveStellarOp {
     }
 }
 
+/// `Pxxx`: plays the sound (see the module docs).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PlaySoundOp;
+
+impl SetOpHandler<Session> for PlaySoundOp {
+    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
+        if let SetOp::PlaySound(sound) = op {
+            session.play_script_sound(*sound);
+        }
+    }
+}
+
 /// `Nxxx`: moves the player to the system, keeping its position (see the
 /// module docs).
 #[derive(Clone, Copy, Debug, Default)]
@@ -374,8 +436,8 @@ impl SetOpHandler<Session> for MoveKeepPositionOp {
 mod tests {
     use super::*;
     use crate::catalog::{
-        DudeId, DudeRecord, GovtId, HullRecord, ShipId, StockWeapon, SystemTraffic, WeaponId,
-        WeaponRecord,
+        DudeId, DudeRecord, GovtId, HullRecord, ShipId, SoundId, StockWeapon, SystemTraffic,
+        WeaponId, WeaponRecord,
     };
     use std::rc::Rc;
 
@@ -545,6 +607,7 @@ mod tests {
             arrival: RuleSource::Engine,
             keep_flag: RuleSource::Engine,
             blank_leave: RuleSource::Engine,
+            sound: RuleSource::Engine,
         };
         assert_eq!(ScriptEffectRules::default(), engine);
         assert_eq!(
@@ -581,6 +644,13 @@ mod tests {
             bible(RuleKey::BlankLeave),
             ScriptEffectRules {
                 blank_leave: RuleSource::Bible,
+                ..engine
+            }
+        );
+        assert_eq!(
+            bible(RuleKey::ScriptSound),
+            ScriptEffectRules {
+                sound: RuleSource::Bible,
                 ..engine
             }
         );
@@ -982,11 +1052,92 @@ mod tests {
     }
 
     #[test]
-    fn the_moves_and_the_leave_are_registered_by_nova() {
+    fn the_moves_the_leave_and_the_sound_are_registered_by_nova() {
         let kinds: Vec<SetOpKind> = crate::session::nova_set_ops().kinds().collect();
         assert!(kinds.contains(&SetOpKind::MoveTo));
         assert!(kinds.contains(&SetOpKind::MoveKeepPosition));
         assert!(kinds.contains(&SetOpKind::LeaveStellar));
+        assert!(kinds.contains(&SetOpKind::PlaySound));
+    }
+
+    // P.
+
+    fn mission_sound(id: i16, exclusive: bool) -> SimSound {
+        SimSound::Script {
+            sound: SoundId(id),
+            exclusive,
+        }
+    }
+
+    #[test]
+    fn by_the_engine_p_sounds_on_the_next_flight_tick() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        session.take_sounds();
+        run(&mut session, "P300");
+        assert_eq!(session.take_sounds(), [], "held");
+        assert!(!session.take_save_due());
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), [mission_sound(300, true)]);
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), [], "once");
+    }
+
+    #[test]
+    fn by_the_engine_only_the_last_p_before_the_tick_sounds() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        session.take_sounds();
+        run(&mut session, "P300 P301");
+        run(&mut session, "P302");
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), [mission_sound(302, true)]);
+    }
+
+    #[test]
+    fn by_the_engine_a_landed_p_sounds_on_the_first_tick_after_the_take_off() {
+        let catalog = moving();
+        let mut session = landed(&catalog);
+        run(&mut session, "P300");
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), [], "landed");
+        session.take_off();
+        assert_eq!(session.take_sounds(), [SimSound::TookOff]);
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), [mission_sound(300, true)]);
+    }
+
+    #[test]
+    fn by_the_engine_a_jumps_arrival_drops_a_held_sound() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        run(&mut session, "P300");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        session.take_sounds();
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
+    fn by_the_other_reading_every_p_sounds_at_once_landed_or_not() {
+        let catalog = moving();
+        let rules = ScriptEffectRules {
+            sound: RuleSource::Bible,
+            ..ScriptEffectRules::default()
+        };
+        let mut session = landed(&catalog).with_script_effect_rules(rules);
+        run(&mut session, "P300 P301");
+        assert_eq!(
+            session.take_sounds(),
+            [mission_sound(300, false), mission_sound(301, false)]
+        );
+        session.take_off();
+        session.take_sounds();
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), [], "nothing held");
     }
 
     // Q.

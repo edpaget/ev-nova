@@ -111,8 +111,9 @@
 //! refused one changes nothing.
 //!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
-//! stopping, landing, taking off, a jump beginning and ending), which the
-//! audio side drains with [`Session::take_sounds`]. A refused landing or
+//! stopping, landing, taking off, a jump beginning and ending, and a set
+//! operator's message and sound), which the audio side drains with
+//! [`Session::take_sounds`]. A refused landing or
 //! jump emits nothing.
 //!
 //! In flight the engine glow's base level ([`Session::engine_glow`])
@@ -225,7 +226,7 @@
 //! [`Session::with_strings`] gives), moves the player to another
 //! system (`M`, `N`) and makes it leave the stellar it is landed on
 //! (`Q`, with a message from those string lists), applied when
-//! [`Session::settle_script`] settles them, as
+//! [`Session::settle_script`] settles them, and plays a sound (`P`), as
 //! [`Session::with_script_effect_rules`] says where the rules are
 //! disputed; one nothing handles is skipped and told once
 //! ([`Session::take_script_notes`]). See the `ship_change` and
@@ -293,7 +294,7 @@ pub use ship_change::{
 pub use edit::RelocateRefusal;
 pub use persons::PersonQuote;
 pub use script_effects::{
-    LeaveStellarOp, MoveKeepPositionOp, MoveToOp, ScriptEffectRules, Settled,
+    LeaveStellarOp, MoveKeepPositionOp, MoveToOp, PlaySoundOp, ScriptEffectRules, Settled,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -572,8 +573,8 @@ pub struct Session {
     /// The string lists `T` names the ship from (see
     /// [`Session::with_strings`]).
     strings: ship_change::Strings,
-    /// What the set expressions queued since the last settling (see
-    /// [`Session::settle_script`]); never saved.
+    /// What the set expressions left for later: for
+    /// [`Session::settle_script`], and the next flight tick; never saved.
     queued: script_effects::Queued,
     /// The stellars of the system a landed move went to, swapped in at
     /// the take-off.
@@ -809,7 +810,8 @@ impl Session {
     /// pre-jump stage the controls are ignored: the ship flies the stage
     /// ([`pre_jump::fly`]) instead, and the jump begins on the tick it is
     /// ready. A landed ship, or one in hyperspace, does not move, glows not
-    /// at all, and gains no fuel. Any tick ends a gate's pending entry: the
+    /// at all, and gains no fuel. In flight, a mission sound a `P` holds
+    /// sounds (see the `script_effects` module). Any tick ends a gate's pending entry: the
     /// original's hypergate map is modal, so nothing ticks between the
     /// land key and the pick. A ship that is not intact ignores the
     /// controls and drifts, giving up a jump it was turning and braking
@@ -819,6 +821,7 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
+        self.sound_script();
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
@@ -1486,6 +1489,7 @@ impl Session {
             return None;
         };
         self.jump = None;
+        self.queued.sound = None;
         self.take_jump_cost(chance);
         let (mut from, mut at) = (self.pilot.system, first);
         if self.pilot.course.first() == Some(&first) {

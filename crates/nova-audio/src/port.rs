@@ -45,6 +45,14 @@ pub enum AudioCommand {
         /// How loud.
         volume: Volume,
     },
+    /// Plays `sound` once, at `volume`, on the one mission channel: unless
+    /// the last sound played there is still playing, when nothing happens.
+    PlayExclusive {
+        /// The `snd `.
+        sound: SoundId,
+        /// How loud.
+        volume: Volume,
+    },
     /// Starts the one looping effect, the engine: `sound`, over and over,
     /// at `volume`.
     StartLoop {
