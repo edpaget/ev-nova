@@ -723,6 +723,44 @@ mod tests {
     }
 
     #[test]
+    fn e_and_h_to_a_smaller_class_keep_the_surplus_by_the_engine_and_hold_it_by_the_other() {
+        let catalog = changing();
+        for op in ["E130", "H130"] {
+            let mut engine = session(&catalog);
+            run(&mut engine, op);
+            let kept = engine.reserves();
+            assert!(kept.shield.max < 130.0 && kept.armor.max < 45.0, "{op}");
+            assert_eq!(kept.shield.now, 130.0, "{op}: the shield's surplus kept");
+            assert_eq!(kept.armor.now, 45.0, "{op}: the armour's surplus kept");
+            assert_eq!(kept.fuel, Gauge::full(kept.fuel.max), "{op}: fuel held");
+            let mut bible = session(&catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::ShipChangeReserves, RuleSource::Bible),
+            );
+            run(&mut bible, op);
+            assert_eq!(
+                bible.reserves(),
+                Reserves::full(kept.shield.max, kept.armor.max, kept.fuel.max),
+                "{op}: each held to its new most"
+            );
+        }
+    }
+
+    #[test]
+    fn a_larger_class_is_alike_by_either_reading_of_the_reserves() {
+        let catalog = changing();
+        for op in ["C129", "E129", "H129"] {
+            let mut engine = session(&catalog);
+            run(&mut engine, op);
+            let mut bible = session(&catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::ShipChangeReserves, RuleSource::Bible),
+            );
+            run(&mut bible, op);
+            assert_eq!(bible.reserves(), engine.reserves(), "{op}");
+            assert_eq!(engine.reserves().shield.now, 130.0, "{op}: not refilled");
+        }
+    }
+
+    #[test]
     fn a_change_is_the_same_landed_and_in_flight() {
         let catalog = changing();
         for op in ["C130", "E129", "H129"] {
