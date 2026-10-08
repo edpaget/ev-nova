@@ -35,10 +35,14 @@
 //! domination, a dominated stellar is one with the `Flags2` bit
 //! [`DOMINATED`]. By 1.25 low is 80 % and high 125 %, and the community's
 //! table of stock prices (Food 60/75/93, Medical 600/750/937, and so on)
-//! matches these exactly. A standard commodity's price of 4 or
-//! less, a base price of 0 or below included, is [`MIN_COMMODITY_PRICE`],
-//! 5, as in the engine (`_DoTradeDialog` @0x5dcc8-0x5dcce); a `jünk`
-//! price is never below 0.
+//! matches these exactly. The price is then held in 16 bits, as the
+//! engine stores it (@0x5dcc5), so a high price above 32767 wraps
+//! negative ([`band_price`]). A standard commodity's price of 4 or
+//! less, after the wrap, a base price of 0 or below included, is
+//! [`MIN_COMMODITY_PRICE`], 5, as in the engine (`_DoTradeDialog`
+//! @0x5dcc8-0x5dcce). A `jünk` price wraps the same way
+//! (@0x5dddb, @0x5de2f) and is never below 0. That floor of 0 is the
+//! port's own: the engine has no floor for a `jünk`.
 //!
 //! A stellar sells and buys each good at one price: profit comes from
 //! carrying goods from where they are cheap to where they are dear.
@@ -101,8 +105,11 @@
 //! ID wins; and an event lists its commodity, to buy and to sell, at a
 //! stellar that does not otherwise trade it. By the Bible, the event's `PriceDelta` is added
 //! to the stellar's own (level) price, several add up, and an event on a
-//! commodity not traded there moves nothing. Either way a price of 4 or
-//! less is 5. The exchange shows the names of the events active at its
+//! commodity not traded there moves nothing. Either way the price is
+//! held in 16 bits (@0x5dd19-0x5dd40 adds the delta with `addw`; the Bible
+//! is silent on a price's width), and then a price of 4 or less is 5.
+//! Wrapping the sum once is wrapping each addition, so the order of
+//! several events does not matter. The exchange shows the names of the events active at its
 //! stellar.
 //!
 //! An event starts at its stellar: the `spöb` its `Stellar` names, from
@@ -207,8 +214,9 @@ impl Markup {
 }
 
 /// The lowest price of a standard commodity: a price of 4 or less, a
-/// level's or an event's, is raised to this (`_DoTradeDialog`
-/// @0x5dcc8-0x5dcce, @0x5dd39-0x5dd40). A `jünk` price has no such floor.
+/// level's or an event's, once held in 16 bits, is raised to this
+/// (`_DoTradeDialog` @0x5dcc8-0x5dcce, @0x5dd39-0x5dd40). A `jünk` price
+/// has no such floor.
 pub const MIN_COMMODITY_PRICE: i64 = 5;
 
 /// The `oütf` `ModType` that adds cargo space: the Bible's "more cargo
@@ -313,15 +321,28 @@ pub fn price_level(flags: u32, commodity: u8) -> Option<PriceLevel> {
 
 /// A good's price at `level`, from its `base` price, by `markup`: low is
 /// `base / factor` and high `base × factor`, in doubles, truncated toward
-/// zero as `cvttsd2si` truncates (`_DoTradeDialog` @0x5dc87-0x5dcc5).
+/// zero as `cvttsd2si` truncates (`_DoTradeDialog` @0x5dc87-0x5dcc5),
+/// then held in 16 bits ([`word`]) as the engine stores it, a commodity's
+/// @0x5dcc5 and a `jünk`'s @0x5dddb (high) and @0x5de2f (low). Only a high
+/// price can leave 16 bits: from a base of 26215 by 1.25, 29790 by 1.1
+/// and 21846 by 1.5 it wraps negative, and from a base of -26216 by 1.25
+/// positive.
 #[must_use]
 pub fn band_price(base: i64, level: PriceLevel, markup: Markup) -> i64 {
     let base_f = base as f64;
-    match level {
+    word(match level {
         PriceLevel::Low => (base_f / markup.factor()) as i64,
         PriceLevel::Medium => base,
         PriceLevel::High => (base_f * markup.factor()) as i64,
-    }
+    })
+}
+
+/// `price` held in 16 bits, as the engine's `_commodityPrice` (0x3b5078)
+/// holds it: its low 16 bits, signed. `cvttsd2si` gives 32 bits and a
+/// `movw` store keeps the low half; every price here is well within 32
+/// bits, so keeping the low 16 of the `i64` is the same.
+const fn word(price: i64) -> i64 {
+    price as i16 as i64
 }
 
 /// The cargo space, in tons, of a ship with `holds` and these `outfits`;
@@ -686,7 +707,7 @@ pub(crate) fn market(
                     .map(|event| i64::from(event.price_delta))
                     .sum(),
             };
-            let price = band_price(commodity.base_price, level, markup) + delta;
+            let price = word(band_price(commodity.base_price, level, markup) + delta);
             Some(commodity_row(*n, commodity, price))
         })
         .collect();
@@ -701,7 +722,7 @@ pub(crate) fn market(
             let row = commodity_row(
                 *n,
                 commodity,
-                commodity.base_price + i64::from(event.price_delta),
+                word(commodity.base_price + i64::from(event.price_delta)),
             );
             match rows.iter_mut().find(|listed| listed.good == row.good) {
                 Some(listed) => *listed = row,
@@ -2333,6 +2354,119 @@ mod tests {
                 .expect("trades");
             let prices: Vec<_> = found.rows.iter().map(|row| row.price).collect();
             assert_eq!(prices, [0, 4], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_high_price_is_held_in_16_bits() {
+        use PriceLevel::High;
+        assert_eq!(band_price(30000, High, Markup::Standard), -28036, "37500");
+        assert_eq!(band_price(-30000, High, Markup::Standard), 28036, "-37500");
+        for (markup, last, first, wrapped) in [
+            (Markup::Standard, 26214, 26215, -32768),
+            (Markup::Outlaw, 29789, 29790, -32767),
+            (Markup::Dominated, 21845, 21846, -32767),
+        ] {
+            assert_eq!(band_price(last, High, markup), 32767, "{markup:?}");
+            assert_eq!(band_price(first, High, markup), wrapped, "{markup:?}");
+        }
+    }
+
+    #[test]
+    fn low_and_medium_prices_never_wrap() {
+        use PriceLevel::{Low, Medium};
+        for markup in [Markup::Standard, Markup::Outlaw, Markup::Dominated] {
+            for base in [32767, -32768] {
+                assert_eq!(band_price(base, Medium, markup), base, "{markup:?}");
+            }
+        }
+        assert_eq!(band_price(32767, Low, Markup::Standard), 26213);
+        assert_eq!(band_price(-32768, Low, Markup::Standard), -26214);
+        assert_eq!(band_price(32767, Low, Markup::Outlaw), 29788);
+        assert_eq!(band_price(-32768, Low, Markup::Dominated), -21845);
+    }
+
+    /// The exchange at Earth (`flags`) with food priced from `base` and
+    /// these food events (ID, delta) active at Earth.
+    fn food_with_events(
+        base: &str,
+        flags: u32,
+        events: &[(i16, i16)],
+        source: RuleSource,
+    ) -> Market {
+        let records = events
+            .iter()
+            .map(|&(id, delta)| DisasterRecord {
+                id: DisasterId(id),
+                name: format!("Event {id}"),
+                stellar: 140,
+                commodity: 0,
+                price_delta: delta,
+                ..DisasterRecord::default()
+            })
+            .collect();
+        let goods = Goods::new(&strings(&["Food"], &[base]), Vec::new(), records);
+        let mut pilot = pilot(0);
+        pilot.events = events
+            .iter()
+            .map(|&(id, _)| {
+                (
+                    DisasterId(id),
+                    ActiveEvent {
+                        days: 3,
+                        stellar: Some(EARTH),
+                    },
+                )
+            })
+            .collect();
+        market(&goods, EARTH, flags, &pilot, 0, source, Markup::Standard).expect("trades")
+    }
+
+    #[test]
+    fn by_the_engine_a_price_past_32767_wraps_before_the_floor() {
+        let food_high = TRADE | (4 << 28);
+        let engine = RuleSource::Engine;
+        let high = food_with_events("30000", food_high, &[], engine);
+        assert_eq!(price(&high, FOOD), 5, "37500 is -28036");
+        let event = food_with_events("32000", food_high, &[(140, 1000)], engine);
+        assert_eq!(price(&event, FOOD), 5, "33000 is -32536");
+        let positive = food_with_events("-30000", food_high, &[(140, -10000)], engine);
+        assert_eq!(price(&positive, FOOD), 25536, "-40000 is 25536");
+    }
+
+    #[test]
+    fn by_the_bible_the_level_price_plus_the_deltas_wraps_before_the_floor() {
+        let food_medium = TRADE | (2 << 28);
+        let bible = RuleSource::Bible;
+        let one = food_with_events("32000", food_medium, &[(140, 1000)], bible);
+        assert_eq!(price(&one, FOOD), 5, "33000 is -32536");
+        let forward = food_with_events("32000", food_medium, &[(140, 20000), (141, 15000)], bible);
+        let backward = food_with_events("32000", food_medium, &[(140, 15000), (141, 20000)], bible);
+        assert_eq!(price(&forward, FOOD), 1464, "67000 is 1464");
+        assert_eq!(price(&backward, FOOD), 1464, "in either ID order");
+    }
+
+    #[test]
+    fn a_junk_price_wraps_before_its_floor_of_0() {
+        let bought = |base_price| JunkRecord {
+            id: JunkId(200),
+            name: "Dear".to_owned(),
+            base_price,
+            bought_at: vec![EARTH],
+            ..unlisted()
+        };
+        for source in RuleSource::ALL {
+            for (base, expected) in [(30000, 0), (-30000, 28036)] {
+                let goods =
+                    Goods::new(&CommodityStrings::default(), vec![bought(base)], Vec::new());
+                let found = market(&goods, EARTH, TRADE, &pilot(0), 0, source, Markup::Standard)
+                    .expect("trades");
+                assert_eq!(
+                    price(&found, Good::Junk(JunkId(200))),
+                    expected,
+                    "{base} {source:?}"
+                );
+            }
         }
     }
 
