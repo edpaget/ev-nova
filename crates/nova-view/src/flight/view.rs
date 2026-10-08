@@ -231,7 +231,8 @@
 //!   ([`FlightView::with_raised_max`]). How an active `öops` event prices
 //!   its commodity on the exchange is set there too
 //!   ([`FlightView::with_event_price`]), how it trades a `jünk` of
-//!   negative or zero price ([`FlightView::with_junk_price`]), and what
+//!   negative or zero price ([`FlightView::with_junk_price`]), which ways
+//!   it trades a `jünk` row ([`FlightView::with_junk_trade`]), and what
 //!   cargo a ship purchase keeps ([`FlightView::with_purchase_cargo`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
@@ -1127,6 +1128,16 @@ impl<
     pub fn with_junk_price(self, source: RuleSource) -> Self {
         Self {
             session: self.session.map(|session| session.with_junk_price(source)),
+            ..self
+        }
+    }
+
+    /// The flight with each listed `jünk` row traded as `source` says
+    /// ([`Session::with_junk_trade`]).
+    #[must_use]
+    pub fn with_junk_trade(self, source: RuleSource) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_junk_trade(source)),
             ..self
         }
     }
@@ -5707,6 +5718,7 @@ mod tests {
     }
 
     const BUY_FOOD: Order = Order {
+        row: 0,
         good: Good::Commodity(0),
         direction: Direction::Buy,
         lot: Lot::One,
@@ -6186,6 +6198,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::junk_price),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_junk_trade_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_junk_trade(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.junk_trade(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::junk_trade),
             Ok(RuleSource::Engine)
         );
     }

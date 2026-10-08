@@ -260,13 +260,15 @@ impl TradeScreen {
             .is_some_and(|index| self.market.row_allows(index, direction))
     }
 
-    /// Asks to trade the selected good `direction`, a ton or with Alt held
-    /// the most, if a ton could be traded that way.
+    /// Asks to trade on the selected row `direction`, a ton or with Alt
+    /// held the most, if a ton could be traded that way: the order names
+    /// the row, as a `jünk` can be listed on two at two prices.
     fn ask(&mut self, direction: Direction) {
         let Some(index) = self.selected().filter(|_| self.allows(direction)) else {
             return;
         };
         self.order = Some(Order {
+            row: index,
             good: self.market.rows[index].good,
             direction,
             lot: if self.max_lot { Lot::Max } else { Lot::One },
@@ -594,8 +596,9 @@ mod tests {
         click(screen, at);
     }
 
-    fn order(good: Good, direction: Direction, lot: Lot) -> Order {
+    fn order(row: usize, good: Good, direction: Direction, lot: Lot) -> Order {
         Order {
+            row,
             good,
             direction,
             lot,
@@ -885,25 +888,25 @@ mod tests {
         click_item(&mut screen, BUY_ITEM);
         assert_eq!(
             screen.take_order(),
-            Some(order(FOOD, Direction::Buy, Lot::One))
+            Some(order(0, FOOD, Direction::Buy, Lot::One))
         );
         assert_eq!(screen.take_order(), None, "once");
         click_item(&mut screen, SELL_ITEM);
         assert_eq!(
             screen.take_order(),
-            Some(order(FOOD, Direction::Sell, Lot::One))
+            Some(order(0, FOOD, Direction::Sell, Lot::One))
         );
         press(&mut screen, Key::Down);
         press(&mut screen, BUY_KEY);
         assert_eq!(
             screen.take_order(),
-            Some(order(METAL, Direction::Buy, Lot::One))
+            Some(order(1, METAL, Direction::Buy, Lot::One))
         );
         press(&mut screen, Key::Down);
         press(&mut screen, SELL_KEY);
         assert_eq!(
             screen.take_order(),
-            Some(order(OPALS, Direction::Sell, Lot::One))
+            Some(order(2, OPALS, Direction::Sell, Lot::One))
         );
     }
 
@@ -913,12 +916,12 @@ mod tests {
         screen.input(&key(BUY_KEY, true, true));
         assert_eq!(
             screen.take_order(),
-            Some(order(FOOD, Direction::Buy, Lot::One))
+            Some(order(0, FOOD, Direction::Buy, Lot::One))
         );
         screen.input(&key(SELL_KEY, true, true));
         assert_eq!(
             screen.take_order(),
-            Some(order(FOOD, Direction::Sell, Lot::One))
+            Some(order(0, FOOD, Direction::Sell, Lot::One))
         );
         screen.input(&key(BUY_KEY, false, false));
         assert_eq!(screen.take_order(), None, "not on release");
@@ -931,31 +934,31 @@ mod tests {
         click_item(&mut screen, BUY_ITEM);
         assert_eq!(
             screen.take_order(),
-            Some(order(FOOD, Direction::Buy, Lot::Max))
+            Some(order(0, FOOD, Direction::Buy, Lot::Max))
         );
         press(&mut screen, SELL_KEY);
         assert_eq!(
             screen.take_order(),
-            Some(order(FOOD, Direction::Sell, Lot::Max))
+            Some(order(0, FOOD, Direction::Sell, Lot::Max))
         );
         screen.input(&key(MAX_LOT_KEY, true, true));
         press(&mut screen, BUY_KEY);
         assert_eq!(
             screen.take_order(),
-            Some(order(FOOD, Direction::Buy, Lot::Max))
+            Some(order(0, FOOD, Direction::Buy, Lot::Max))
         );
         screen.input(&key(MAX_LOT_KEY, false, false));
         press(&mut screen, BUY_KEY);
         assert_eq!(
             screen.take_order(),
-            Some(order(FOOD, Direction::Buy, Lot::One))
+            Some(order(0, FOOD, Direction::Buy, Lot::One))
         );
         press(&mut screen, MAX_LOT_KEY);
         screen.release_keys();
         click_item(&mut screen, SELL_ITEM);
         assert_eq!(
             screen.take_order(),
-            Some(order(FOOD, Direction::Sell, Lot::One))
+            Some(order(0, FOOD, Direction::Sell, Lot::One))
         );
     }
 
@@ -1003,7 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn a_junk_listed_both_ways_is_sold_on_its_high_row_and_bought_on_its_low_row() {
+    fn a_junk_listed_one_way_on_each_row_is_sold_on_its_high_row_and_bought_on_its_low_row() {
         let mut screen = screen_of(Market {
             rows: vec![
                 MarketRow {
@@ -1023,7 +1026,7 @@ mod tests {
         press(&mut screen, SELL_KEY);
         assert_eq!(
             screen.take_order(),
-            Some(order(OPALS, Direction::Sell, Lot::One))
+            Some(order(0, OPALS, Direction::Sell, Lot::One))
         );
         press(&mut screen, Key::Down);
         assert_eq!(enabled(&screen), (true, false), "the low row");
@@ -1032,8 +1035,30 @@ mod tests {
         press(&mut screen, BUY_KEY);
         assert_eq!(
             screen.take_order(),
-            Some(order(OPALS, Direction::Buy, Lot::One))
+            Some(order(1, OPALS, Direction::Buy, Lot::One))
         );
+    }
+
+    #[test]
+    fn each_row_of_a_junk_traded_both_ways_names_itself_in_the_order() {
+        let mut screen = screen_of(Market {
+            rows: vec![row(OPALS, "Opals", 990, 1), row(OPALS, "Opals", 633, 1)],
+            ..market()
+        });
+        for row in [0, 1] {
+            assert_eq!(enabled(&screen), (true, true), "{row}");
+            press(&mut screen, BUY_KEY);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(row, OPALS, Direction::Buy, Lot::One))
+            );
+            press(&mut screen, SELL_KEY);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(row, OPALS, Direction::Sell, Lot::One))
+            );
+            press(&mut screen, Key::Down);
+        }
     }
 
     #[test]

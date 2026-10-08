@@ -50,21 +50,37 @@
 //!
 //! # Special goods
 //!
-//! A `jünk` is sold at its `SoldAt` stellars, at the low price of its
-//! `BasePrice`, and bought at its `BoughtAt` stellars, at the high price,
-//! by the stellar's [`Markup`] as a commodity is (`_DoTradeDialog`
+//! A `jünk` is listed at its `SoldAt` stellars at the low price of its
+//! `BasePrice`, and at its `BoughtAt` stellars at the high price, by the
+//! stellar's [`Markup`] as a commodity is (`_DoTradeDialog`
 //! @0x5dd83-0x5de2f; the community's Opals: 960 and 1500 from 1200 by
 //! 1.25). It is traded only
 //! through a trade center, so a listed stellar without one offers nothing.
 //! A stellar in both lists, which stock data never has, lists it twice,
-//! as the original's rows 6 and 7 are filled independently: first a row
-//! it buys at the high price, then one it sells at the low price, both
-//! under its name and with the tons held (@0x5dd83-0x5de2f,
-//! @0x4d301-0x4d36c). Each row trades its own way only
-//! ([`Market::trading`], [`Market::row_allows`]), so the player buys it
-//! low and sells it high. `SellOn` gates selling it and `BuyOn` buying
-//! it, through [`control_bits_allow`]. Its `Flags` make it multiply or
-//! decay in the hold (below).
+//! as the original's rows 6 and 7 are filled independently: first the
+//! `BoughtAt` row at the high price, then the `SoldAt` row at the low
+//! price, both under its name and with the tons held (@0x5dd83-0x5de2f,
+//! @0x4d301-0x4d36c). `SellOn` gates the `SoldAt` row and `BuyOn` the
+//! `BoughtAt` row, through [`control_bits_allow`]. Its `Flags` make it
+//! multiply or decay in the hold (below).
+//!
+//! Which ways a `jünk` row trades follows
+//! [`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade). By the engine (the
+//! default), every listed row trades both ways at its own price, as a
+//! commodity's does: the trade buttons ask only `_CanBuyGoods` (@0xccec:
+//! cash for a ton at the row's price, and free space) and `_CanSellGoods`
+//! (@0x4a94: tons held), never which list the row came from
+//! (`_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons`
+//! @0x2960d/0x2963e). A trade is on the selected row (`_selTradeItem`)
+//! at its price, a buy charging it (@0x5e2c4-0x5e2e2) and a sale paying it
+//! (@0x5e528-0x5e546), and both rows of a `jünk` move its one held count
+//! (@0x5e29e-0x5e2c0, @0x5e504-0x5e524). So an [`Order`] names its
+//! [`row`](Order::row), and a `jünk` in both lists is bought and sold
+//! high on one row and low on the other. By the Bible, whose `SoldAt` is
+//! where "the commodity is sold" and `BoughtAt` where it "is purchased",
+//! the `SoldAt` row is bought only and the `BoughtAt` row sold only
+//! ([`Market::row_allows`]), so the player buys it low and sells it
+//! high.
 //!
 //! A `jünk` price of 0 or below follows
 //! [`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice). By the engine (the
@@ -74,8 +90,8 @@
 //! selling it takes tons x price from the cash, which can go below 0
 //! (@0x5e543-0x5e546). A row priced 0 is not listed (`_TradeDialogUpdate`
 //! @0x4d2a2-0x4d2ac, `_TradeFilter` @0x4e262), each way on its own, so a
-//! `jünk` listed both ways at base 1 (high 1, low 0) is only bought, and
-//! one at base 0 is not listed at all. By the other reading, the port's
+//! `jünk` listed both ways at base 1 (high 1, low 0) keeps only its high
+//! row, and one at base 0 is not listed at all. By the other reading, the port's
 //! own, the price is never below 0, and a row priced 0 is listed and
 //! bought free, limited by space alone.
 //!
@@ -281,10 +297,15 @@ pub enum Lot {
     Max,
 }
 
-/// One trade the player asks for.
+/// One trade the player asks for, on the row of the exchange the player
+/// selected, as the original trades on `_selTradeItem` (0x3b54dc).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Order {
-    /// The good.
+    /// The row it trades on: its index in [`Market::rows`]. A `jünk`
+    /// listed both ways has two rows at two prices, and the order is
+    /// priced and limited by this one.
+    pub row: usize,
+    /// The good, which must be the row's.
     pub good: Good,
     /// Buying or selling.
     pub direction: Direction,
@@ -609,9 +630,14 @@ pub struct MarketRow {
     pub price: i64,
     /// How many tons the player holds.
     pub held: u32,
-    /// Whether the stellar sells it: the player can buy it.
+    /// Whether the stellar sells it on this row: the player can buy it.
+    /// Every commodity row, and by the engine every `jünk` row, is; by the
+    /// Bible only a `jünk`'s `SoldAt` row
+    /// ([`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade)).
     pub sold_here: bool,
-    /// Whether the stellar buys it: the player can sell it.
+    /// Whether the stellar buys it on this row: the player can sell it.
+    /// Every commodity row, and by the engine every `jünk` row, is; by the
+    /// Bible only a `jünk`'s `BoughtAt` row.
     pub bought_here: bool,
 }
 
@@ -638,21 +664,19 @@ impl Market {
         self.rows.iter().find(|row| row.good == good)
     }
 
-    /// The row of `good` that trades `direction`: for a buy, the row of
-    /// it the stellar sells, and for a sale, the row it buys. A `jünk`
-    /// listed both ways has one row each way (see [`market`](crate::market)).
+    /// The row `order` trades on: its [`row`](Order::row), when there is
+    /// one and it is of the order's good.
     #[must_use]
-    pub fn trading(&self, good: Good, direction: Direction) -> Option<&MarketRow> {
+    pub fn ordered(&self, order: Order) -> Option<&MarketRow> {
         self.rows
-            .iter()
-            .find(|row| row.good == good && row.trades(direction))
+            .get(order.row)
+            .filter(|row| row.good == order.good)
     }
 
-    /// How many tons `order` would move, or why it moves none.
+    /// How many tons `order` would move on its row, or why it moves none:
+    /// an order on no row, or on another good's, is not traded.
     pub fn tons(&self, order: Order) -> Result<u32, TradeRefusal> {
-        let row = self
-            .trading(order.good, order.direction)
-            .ok_or(TradeRefusal::NotTraded)?;
+        let row = self.ordered(order).ok_or(TradeRefusal::NotTraded)?;
         self.row_tons(row, order.direction, order.lot)
     }
 
@@ -699,17 +723,6 @@ impl Market {
         }
     }
 
-    /// Whether a ton of `good` can be traded `direction` now.
-    #[must_use]
-    pub fn allows(&self, good: Good, direction: Direction) -> bool {
-        self.tons(Order {
-            good,
-            direction,
-            lot: Lot::One,
-        })
-        .is_ok()
-    }
-
     /// Whether a ton can be traded `direction` on row `index` now: the
     /// row trades that way, and there is the space, cash or cargo for it.
     #[must_use]
@@ -732,15 +745,18 @@ impl MarketRow {
     }
 }
 
-/// The rules an exchange is priced by.
+/// The rules an exchange is priced and traded by.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PriceRules {
+pub(crate) struct ExchangeRules {
     /// How an active `öops` event prices its commodity
     /// ([`RuleKey::EventPrice`](crate::RuleKey::EventPrice)).
     pub(crate) event_price: RuleSource,
     /// How a `jünk` of negative or zero price is traded
     /// ([`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice)).
     pub(crate) junk_price: RuleSource,
+    /// Which ways a listed `jünk` row trades
+    /// ([`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade)).
+    pub(crate) junk_trade: RuleSource,
 }
 
 /// The exchange of `stellar`, with these `flags`, for `pilot` with
@@ -752,7 +768,7 @@ pub(crate) fn market(
     flags: u32,
     pilot: &Pilot,
     capacity: u32,
-    rules: PriceRules,
+    rules: ExchangeRules,
     markup: Markup,
 ) -> Option<Market> {
     let source = rules.event_price;
@@ -804,7 +820,7 @@ pub(crate) fn market(
             }
         }
     }
-    rows.extend(junk_listing(goods, stellar, rules.junk_price, markup));
+    rows.extend(junk_listing(goods, stellar, rules, markup));
     rows.sort_by_key(|row| row.good);
     for row in &mut rows {
         row.held = pilot.held(row.good);
@@ -823,34 +839,49 @@ pub(crate) fn market(
 }
 
 /// The `jünk` rows `stellar` lists, priced by `markup` and as
-/// `junk_price` says. A `jünk` the stellar both buys and sells has a row
-/// each way, the bought one first, as the original's rows 6 and 7
-/// (@0x5dd83-0x5de2f). By the engine a row priced 0 is not listed, each
-/// way on its own (`_TradeDialogUpdate` @0x4d2a2-0x4d2ac).
+/// `rules.junk_price` says, traded as `rules.junk_trade` says. A `jünk`
+/// the stellar both buys and sells has a row each way, the bought one
+/// first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f). By the engine
+/// a row priced 0 is not listed, each way on its own (`_TradeDialogUpdate`
+/// @0x4d2a2-0x4d2ac).
 fn junk_listing(
     goods: &Goods,
     stellar: StellarId,
-    junk_price: RuleSource,
+    rules: ExchangeRules,
     markup: Markup,
 ) -> impl Iterator<Item = MarketRow> + '_ {
+    let (high_ways, low_ways) = junk_ways(rules.junk_trade);
     goods.junk.iter().flat_map(move |junk| {
         let bought = junk.bought_at.contains(&stellar) && control_bits_allow(&junk.buy_on);
         let sold = junk.sold_at.contains(&stellar) && control_bits_allow(&junk.sell_on);
         let row = |level, ways| {
             let price = listed_junk_price(
                 band_price(i64::from(junk.base_price), level, markup),
-                junk_price,
+                rules.junk_price,
             )?;
             Some(listed(Good::Junk(junk.id), &junk.name, price, ways))
         };
         [
-            bought.then(|| row(PriceLevel::High, (false, true))),
-            sold.then(|| row(PriceLevel::Low, (true, false))),
+            bought.then(|| row(PriceLevel::High, high_ways)),
+            sold.then(|| row(PriceLevel::Low, low_ways)),
         ]
         .into_iter()
         .flatten()
         .flatten()
     })
+}
+
+/// The ways (sold here, bought here) a `jünk`'s `BoughtAt` row and its
+/// `SoldAt` row trade, as `source` says
+/// ([`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade)): by the engine
+/// both ways each, as `_CanBuyGoods` (@0xccec) and `_CanSellGoods`
+/// (@0x4a94) never ask which list a row came from; by the Bible, the
+/// `BoughtAt` row is sold only and the `SoldAt` row bought only.
+const fn junk_ways(source: RuleSource) -> ((bool, bool), (bool, bool)) {
+    match source {
+        RuleSource::Engine => ((true, true), (true, true)),
+        RuleSource::Bible => ((false, true), (true, false)),
+    }
 }
 
 /// A `jünk` row's `price`, as listed by `source`
@@ -1862,10 +1893,10 @@ mod tests {
 
     /// The price rules with events priced by `event_price`, and `jünk`
     /// by the engine.
-    fn rules(event_price: RuleSource) -> PriceRules {
-        PriceRules {
+    fn rules(event_price: RuleSource) -> ExchangeRules {
+        ExchangeRules {
             event_price,
-            ..PriceRules::default()
+            ..ExchangeRules::default()
         }
     }
 
@@ -1974,16 +2005,10 @@ mod tests {
         assert_eq!(
             at_earth.rows,
             [
-                MarketRow {
-                    bought_here: false,
-                    ..row(Good::Junk(JunkId(134)), "Water", 240)
-                },
-                MarketRow {
-                    bought_here: false,
-                    ..row(Good::Junk(JunkId(146)), "Opals", 960)
-                },
+                row(Good::Junk(JunkId(134)), "Water", 240),
+                row(Good::Junk(JunkId(146)), "Opals", 960),
             ],
-            "by ID"
+            "by ID, each traded both ways by the engine"
         );
         let at_mars = market(
             &goods(),
@@ -1995,13 +2020,7 @@ mod tests {
             Markup::Standard,
         )
         .expect("trades");
-        assert_eq!(
-            at_mars.rows,
-            [MarketRow {
-                sold_here: false,
-                ..row(Good::Junk(JunkId(146)), "Opals", 1500)
-            }]
-        );
+        assert_eq!(at_mars.rows, [row(Good::Junk(JunkId(146)), "Opals", 1500)]);
         let elsewhere = market(
             &goods(),
             StellarId(150),
@@ -2015,12 +2034,85 @@ mod tests {
         assert_eq!(elsewhere.rows, []);
     }
 
+    /// The price rules with `jünk` traded by `junk_trade`, and the rest
+    /// by the engine.
+    fn trading_by(junk_trade: RuleSource) -> ExchangeRules {
+        ExchangeRules {
+            junk_trade,
+            ..ExchangeRules::default()
+        }
+    }
+
+    #[test]
+    fn by_the_bible_junk_is_only_bought_where_it_is_sold_and_sold_where_it_is_bought() {
+        let at = |stellar| {
+            let rules = trading_by(RuleSource::Bible);
+            market(
+                &goods(),
+                stellar,
+                TRADE,
+                &pilot(0),
+                0,
+                rules,
+                Markup::Standard,
+            )
+            .expect("trades")
+            .rows
+        };
+        assert_eq!(
+            at(EARTH),
+            [
+                MarketRow {
+                    bought_here: false,
+                    ..row(Good::Junk(JunkId(134)), "Water", 240)
+                },
+                MarketRow {
+                    bought_here: false,
+                    ..row(Good::Junk(JunkId(146)), "Opals", 960)
+                },
+            ]
+        );
+        assert_eq!(
+            at(MARS),
+            [MarketRow {
+                sold_here: false,
+                ..row(Good::Junk(JunkId(146)), "Opals", 1500)
+            }]
+        );
+    }
+
+    #[test]
+    fn commodities_trade_both_ways_by_either_reading() {
+        for source in RuleSource::ALL {
+            let found = market(
+                &goods(),
+                StellarId(137),
+                PORT_KANE,
+                &pilot(0),
+                0,
+                trading_by(source),
+                Markup::Standard,
+            )
+            .expect("trades");
+            assert_eq!(found.rows.len(), 6, "{source:?}");
+            for row in &found.rows {
+                assert!(row.sold_here && row.bought_here, "{source:?} {row:?}");
+            }
+        }
+    }
+
     const TWO_WAY: Good = Good::Junk(JunkId(200));
 
     /// The exchange at Earth, by `markup`, of a `jünk` 200 of `base`
     /// price that Earth both sells and buys, for `pilot` with `capacity`
-    /// tons of space.
-    fn both_ways(base: i16, markup: Markup, pilot: &Pilot, capacity: u32) -> Market {
+    /// tons of space, traded as `junk_trade` says.
+    fn both_ways_by(
+        junk_trade: RuleSource,
+        base: i16,
+        markup: Markup,
+        pilot: &Pilot,
+        capacity: u32,
+    ) -> Market {
         let both = JunkRecord {
             id: JunkId(200),
             name: "Both".to_owned(),
@@ -2036,10 +2128,15 @@ mod tests {
             TRADE,
             pilot,
             capacity,
-            rules(RuleSource::Engine),
+            trading_by(junk_trade),
             markup,
         )
         .expect("trades")
+    }
+
+    /// [`both_ways_by`] the engine.
+    fn both_ways(base: i16, markup: Markup, pilot: &Pilot, capacity: u32) -> Market {
+        both_ways_by(RuleSource::Engine, base, markup, pilot, capacity)
     }
 
     #[test]
@@ -2047,6 +2144,12 @@ mod tests {
         let found = both_ways(400, Markup::Standard, &pilot(0), 0);
         assert_eq!(
             found.rows,
+            [row(TWO_WAY, "Both", 500), row(TWO_WAY, "Both", 320)],
+            "400 × 1.25, then 400 / 1.25, each traded both ways"
+        );
+        let bible = both_ways_by(RuleSource::Bible, 400, Markup::Standard, &pilot(0), 0);
+        assert_eq!(
+            bible.rows,
             [
                 MarketRow {
                     sold_here: false,
@@ -2057,7 +2160,7 @@ mod tests {
                     ..row(TWO_WAY, "Both", 320)
                 },
             ],
-            "400 × 1.25, then 400 / 1.25"
+            "by the Bible, one way each"
         );
         let outlaw = both_ways(110, Markup::Outlaw, &pilot(0), 0);
         let prices: Vec<_> = outlaw.rows.iter().map(|row| row.price).collect();
@@ -2065,44 +2168,84 @@ mod tests {
     }
 
     #[test]
-    fn junk_listed_both_ways_is_bought_on_its_low_row_and_sold_on_its_high_row() {
-        let buy = |market: &Market, lot| market.tons(order(TWO_WAY, Direction::Buy, lot));
-        let sell = |market: &Market, lot| market.tons(order(TWO_WAY, Direction::Sell, lot));
-        let empty = both_ways(400, Markup::Standard, &pilot(640), 10);
-        assert_eq!(buy(&empty, Lot::Max), Ok(2), "640 at 320 a ton");
-        assert_eq!(buy(&empty, Lot::One), Ok(1));
-        assert!(empty.allows(TWO_WAY, Direction::Buy));
-        assert_eq!(sell(&empty, Lot::One), Err(TradeRefusal::NoneHeld));
-        assert!(!empty.allows(TWO_WAY, Direction::Sell));
-        let mut holding = pilot(319);
+    fn by_the_engine_junk_listed_both_ways_is_bought_and_sold_on_each_row() {
+        let on = |row| {
+            move |market: &Market, direction: Direction, lot: Lot| {
+                market.tons(order(row, TWO_WAY, direction, lot))
+            }
+        };
+        let (high, low) = (on(0), on(1));
+        let empty = both_ways(400, Markup::Standard, &pilot(1000), 10);
+        assert_eq!(low(&empty, Direction::Buy, Lot::Max), Ok(3), "1000 at 320");
+        assert_eq!(high(&empty, Direction::Buy, Lot::Max), Ok(2), "1000 at 500");
+        assert_eq!(high(&empty, Direction::Buy, Lot::One), Ok(1));
+        for row in [0, 1] {
+            assert!(empty.row_allows(row, Direction::Buy), "{row}");
+            assert!(!empty.row_allows(row, Direction::Sell), "{row} none held");
+            assert_eq!(
+                on(row)(&empty, Direction::Sell, Lot::One),
+                Err(TradeRefusal::NoneHeld)
+            );
+        }
+        let mut holding = pilot(499);
         holding.cargo = BTreeMap::from([(TWO_WAY, 3)]);
         let holding = both_ways(400, Markup::Standard, &holding, 10);
         let held: Vec<_> = holding.rows.iter().map(|row| row.held).collect();
         assert_eq!(held, [3, 3], "both rows");
-        assert_eq!(sell(&holding, Lot::Max), Ok(3));
-        assert_eq!(buy(&holding, Lot::One), Err(TradeRefusal::CannotAfford));
-        let price = |direction| holding.trading(TWO_WAY, direction).map(|row| row.price);
-        assert_eq!(price(Direction::Buy), Some(320));
-        assert_eq!(price(Direction::Sell), Some(500));
-        assert_eq!(holding.trading(OPALS, Direction::Sell), None);
+        assert_eq!(high(&holding, Direction::Sell, Lot::Max), Ok(3));
+        assert_eq!(low(&holding, Direction::Sell, Lot::Max), Ok(3));
+        assert_eq!(low(&holding, Direction::Buy, Lot::Max), Ok(1), "499 at 320");
+        assert_eq!(
+            high(&holding, Direction::Buy, Lot::One),
+            Err(TradeRefusal::CannotAfford),
+            "499 at 500"
+        );
+        for row in [0, 1] {
+            assert!(holding.row_allows(row, Direction::Sell), "{row}");
+        }
+        assert!(!holding.row_allows(0, Direction::Buy), "the high row: cash");
+        assert!(holding.row_allows(1, Direction::Buy), "the low row");
+        let full = both_ways(400, Markup::Standard, &pilot(1000), 0);
+        for row in [0, 1] {
+            assert_eq!(
+                on(row)(&full, Direction::Buy, Lot::One),
+                Err(TradeRefusal::NoSpace)
+            );
+        }
     }
 
     #[test]
-    fn a_row_allows_only_its_own_direction() {
+    fn by_the_bible_junk_listed_both_ways_is_bought_on_its_low_row_and_sold_on_its_high_row() {
         let mut holding = pilot(640);
         holding.cargo = BTreeMap::from([(TWO_WAY, 3)]);
-        let market = both_ways(400, Markup::Standard, &holding, 10);
+        let market = both_ways_by(RuleSource::Bible, 400, Markup::Standard, &holding, 10);
+        let tons = |row, direction| market.tons(order(row, TWO_WAY, direction, Lot::Max));
+        assert_eq!(tons(1, Direction::Buy), Ok(2), "640 at 320");
+        assert_eq!(tons(0, Direction::Sell), Ok(3));
+        assert_eq!(tons(0, Direction::Buy), Err(TradeRefusal::NotTraded));
+        assert_eq!(tons(1, Direction::Sell), Err(TradeRefusal::NotTraded));
         assert!(!market.row_allows(0, Direction::Buy), "the high row");
         assert!(market.row_allows(0, Direction::Sell));
         assert!(market.row_allows(1, Direction::Buy), "the low row");
         assert!(!market.row_allows(1, Direction::Sell));
         assert!(!market.row_allows(2, Direction::Buy), "no row");
         assert!(!market.row_allows(2, Direction::Sell));
-        let poor = both_ways(400, Markup::Standard, &pilot(319), 10);
-        assert!(!poor.row_allows(1, Direction::Buy), "cash");
-        assert!(!poor.row_allows(0, Direction::Sell), "none held");
-        let full = both_ways(400, Markup::Standard, &pilot(640), 0);
-        assert!(!full.row_allows(1, Direction::Buy), "space");
+    }
+
+    #[test]
+    fn an_order_on_no_row_or_another_goods_row_is_not_traded() {
+        let mut holding = pilot(1000);
+        holding.cargo = BTreeMap::from([(TWO_WAY, 3), (FOOD, 3)]);
+        let market = both_ways(400, Markup::Standard, &holding, 10);
+        for direction in [Direction::Buy, Direction::Sell] {
+            for (row, good) in [(2, TWO_WAY), (usize::MAX, TWO_WAY), (0, FOOD), (1, OPALS)] {
+                assert_eq!(
+                    market.tons(order(row, good, direction, Lot::One)),
+                    Err(TradeRefusal::NotTraded),
+                    "{row} {good:?} {direction:?}"
+                );
+            }
+        }
     }
 
     /// The (good, price) rows at `stellar`, with `flags`, by `markup`.
@@ -2426,19 +2569,13 @@ mod tests {
                     ..row(FOOD, "Food", 60)
                 },
                 row(Good::Commodity(1), "Industrial", 280),
-                MarketRow {
-                    bought_here: false,
-                    ..row(Good::Junk(JunkId(134)), "Water", 240)
-                },
-                MarketRow {
-                    bought_here: false,
-                    ..row(Good::Junk(JunkId(146)), "Opals", 960)
-                },
+                row(Good::Junk(JunkId(134)), "Water", 240),
+                row(Good::Junk(JunkId(146)), "Opals", 960),
             ]
         );
         assert_eq!(found.events, ["An enormous food surplus"]);
-        assert_eq!(found.tons(order(FOOD, Direction::Buy, Lot::One)), Ok(1));
-        assert_eq!(found.tons(order(FOOD, Direction::Sell, Lot::One)), Ok(1));
+        assert_eq!(found.tons(order(0, FOOD, Direction::Buy, Lot::One)), Ok(1));
+        assert_eq!(found.tons(order(0, FOOD, Direction::Sell, Lot::One)), Ok(1));
 
         let priced_at_0 = patched(&[(0, StringPatch::Unreadable)]);
         let unreadable = Goods::new(&priced_at_0, Vec::new(), disasters());
@@ -2548,9 +2685,10 @@ mod tests {
             (RuleSource::Bible, &[0, 4][..]),
         ] {
             for event_price in RuleSource::ALL {
-                let rules = PriceRules {
+                let rules = ExchangeRules {
                     event_price,
                     junk_price,
+                    ..ExchangeRules::default()
                 };
                 let found = market(&goods, EARTH, TRADE, &pilot(0), 0, rules, Markup::Standard)
                     .expect("trades");
@@ -2662,11 +2800,20 @@ mod tests {
 
     /// The exchange at Earth, by `junk_price`, of a `jünk` 200 of `base`
     /// price that Earth buys (`bought`) and sells (`sold`), for `pilot`
-    /// with 10 tons of space.
-    fn junk_market(
+    /// with 10 tons of space, traded both ways by the engine.
+    fn junk_market(base: i16, ways: (bool, bool), junk_price: RuleSource, pilot: &Pilot) -> Market {
+        let rules = ExchangeRules {
+            junk_price,
+            ..ExchangeRules::default()
+        };
+        junk_market_by(base, ways, rules, pilot)
+    }
+
+    /// [`junk_market`] priced and traded by `rules`.
+    fn junk_market_by(
         base: i16,
         (bought, sold): (bool, bool),
-        junk_price: RuleSource,
+        rules: ExchangeRules,
         pilot: &Pilot,
     ) -> Market {
         let odd = JunkRecord {
@@ -2678,10 +2825,6 @@ mod tests {
             ..unlisted()
         };
         let goods = Goods::new(&CommodityStrings::default(), vec![odd], Vec::new());
-        let rules = PriceRules {
-            junk_price,
-            ..PriceRules::default()
-        };
         market(&goods, EARTH, TRADE, pilot, 10, rules, Markup::Standard).expect("trades")
     }
 
@@ -2697,6 +2840,55 @@ mod tests {
     const ONLY_BOUGHT: (bool, bool) = (true, false);
     const ONLY_SOLD: (bool, bool) = (false, true);
     const BOTH_WAYS: (bool, bool) = (true, true);
+
+    #[test]
+    fn by_the_engine_a_junk_only_sold_here_is_also_bought_at_its_low_price() {
+        let mut holding = pilot(0);
+        holding.cargo = BTreeMap::from([(ODD, 3)]);
+        let found = junk_market(400, ONLY_SOLD, RuleSource::Engine, &holding);
+        assert_eq!(junk_rows(&found), [(320, true, true)]);
+        assert_eq!(found.tons(order(0, ODD, Direction::Sell, Lot::Max)), Ok(3));
+        assert!(found.row_allows(0, Direction::Sell));
+        let buyer = junk_market(400, ONLY_SOLD, RuleSource::Engine, &pilot(1000));
+        assert_eq!(buyer.tons(order(0, ODD, Direction::Buy, Lot::Max)), Ok(3));
+        assert!(buyer.row_allows(0, Direction::Buy));
+    }
+
+    #[test]
+    fn by_the_engine_a_junk_only_bought_here_is_also_sold_at_its_high_price() {
+        let bought = |cash| junk_market(400, ONLY_BOUGHT, RuleSource::Engine, &pilot(cash));
+        assert_eq!(junk_rows(&bought(0)), [(500, true, true)]);
+        let buy = |cash, lot| bought(cash).tons(order(0, ODD, Direction::Buy, lot));
+        assert_eq!(buy(1999, Lot::Max), Ok(3), "1999 at 500");
+        assert_eq!(buy(100_000, Lot::Max), Ok(10), "the free space");
+        assert_eq!(buy(499, Lot::One), Err(TradeRefusal::CannotAfford));
+        assert!(bought(500).row_allows(0, Direction::Buy));
+        assert!(!bought(499).row_allows(0, Direction::Buy));
+        let mut holding = pilot(0);
+        holding.cargo = BTreeMap::from([(ODD, 3)]);
+        let holding = junk_market(400, ONLY_BOUGHT, RuleSource::Engine, &holding);
+        assert!(holding.row_allows(0, Direction::Sell));
+    }
+
+    #[test]
+    fn by_the_bible_a_junk_listed_one_way_is_not_traded_the_other() {
+        let rules = trading_by(RuleSource::Bible);
+        let mut holding = pilot(100_000);
+        holding.cargo = BTreeMap::from([(ODD, 3)]);
+        for (ways, row, refused) in [
+            (ONLY_SOLD, (320, true, false), Direction::Sell),
+            (ONLY_BOUGHT, (500, false, true), Direction::Buy),
+        ] {
+            let found = junk_market_by(400, ways, rules, &holding);
+            assert_eq!(junk_rows(&found), [row], "{ways:?}");
+            assert_eq!(
+                found.tons(order(0, ODD, refused, Lot::One)),
+                Err(TradeRefusal::NotTraded),
+                "{ways:?}"
+            );
+            assert!(!found.row_allows(0, refused), "{ways:?}");
+        }
+    }
 
     #[test]
     fn a_junk_price_wraps_and_by_the_engine_is_listed_signed() {
@@ -2720,20 +2912,19 @@ mod tests {
             let found = junk_market(-100, ONLY_SOLD, RuleSource::Engine, &pilot(cash));
             for lot in [Lot::One, Lot::Max] {
                 assert_eq!(
-                    found.tons(order(ODD, Direction::Buy, lot)),
+                    found.tons(order(0, ODD, Direction::Buy, lot)),
                     Err(TradeRefusal::CannotAfford),
                     "{cash} {lot:?}"
                 );
             }
             assert!(!found.row_allows(0, Direction::Buy), "{cash}");
-            assert!(!found.allows(ODD, Direction::Buy), "{cash}");
         }
     }
 
     #[test]
     fn by_the_other_reading_a_negative_junk_price_is_bought_free() {
         let found = junk_market(-100, ONLY_SOLD, RuleSource::Bible, &pilot(0));
-        assert_eq!(found.tons(order(ODD, Direction::Buy, Lot::Max)), Ok(10));
+        assert_eq!(found.tons(order(0, ODD, Direction::Buy, Lot::Max)), Ok(10));
     }
 
     #[test]
@@ -2741,7 +2932,7 @@ mod tests {
         let mut holding = pilot(0);
         holding.cargo = BTreeMap::from([(ODD, 3)]);
         let found = junk_market(-100, ONLY_BOUGHT, RuleSource::Engine, &holding);
-        assert_eq!(found.tons(order(ODD, Direction::Sell, Lot::Max)), Ok(3));
+        assert_eq!(found.tons(order(0, ODD, Direction::Sell, Lot::Max)), Ok(3));
         assert!(found.row_allows(0, Direction::Sell));
     }
 
@@ -2754,7 +2945,7 @@ mod tests {
             assert_eq!(junk_rows(&found), [], "{ways:?}");
             for direction in [Direction::Buy, Direction::Sell] {
                 assert_eq!(
-                    found.tons(order(ODD, direction, Lot::One)),
+                    found.tons(order(0, ODD, direction, Lot::One)),
                     Err(TradeRefusal::NotTraded),
                     "{ways:?} {direction:?}"
                 );
@@ -2765,10 +2956,11 @@ mod tests {
     #[test]
     fn by_the_other_reading_a_junk_row_priced_0_is_listed_and_bought_free() {
         let found = junk_market(0, ONLY_SOLD, RuleSource::Bible, &pilot(0));
-        assert_eq!(junk_rows(&found), [(0, true, false)]);
-        assert_eq!(found.tons(order(ODD, Direction::Buy, Lot::Max)), Ok(10));
+        assert_eq!(junk_rows(&found), [(0, true, true)]);
+        assert_eq!(found.tons(order(0, ODD, Direction::Buy, Lot::Max)), Ok(10));
         let both = junk_market(0, BOTH_WAYS, RuleSource::Bible, &pilot(0));
-        assert_eq!(junk_rows(&both), [(0, false, true), (0, true, false)]);
+        assert_eq!(junk_rows(&both), [(0, true, true), (0, true, true)]);
+        assert_eq!(both.tons(order(0, ODD, Direction::Buy, Lot::Max)), Ok(10));
     }
 
     #[test]
@@ -2778,16 +2970,33 @@ mod tests {
         let found = junk_market(1, BOTH_WAYS, RuleSource::Engine, &holding);
         assert_eq!(
             junk_rows(&found),
-            [(1, false, true)],
+            [(1, true, true)],
             "1 × 1.25, not 1 / 1.25"
         );
-        assert_eq!(found.tons(order(ODD, Direction::Sell, Lot::Max)), Ok(3));
+        assert_eq!(found.tons(order(0, ODD, Direction::Sell, Lot::Max)), Ok(3));
         assert_eq!(
-            found.tons(order(ODD, Direction::Buy, Lot::One)),
+            found.tons(order(0, ODD, Direction::Buy, Lot::Max)),
+            Ok(7),
+            "the free space, at 1 a ton"
+        );
+        assert_eq!(
+            found.tons(order(1, ODD, Direction::Buy, Lot::One)),
+            Err(TradeRefusal::NotTraded),
+            "no row 1"
+        );
+        let floor = junk_market(1, BOTH_WAYS, RuleSource::Bible, &holding);
+        assert_eq!(junk_rows(&floor), [(1, true, true), (0, true, true)]);
+        let one_way = ExchangeRules {
+            junk_price: RuleSource::Engine,
+            junk_trade: RuleSource::Bible,
+            ..ExchangeRules::default()
+        };
+        let one_way = junk_market_by(1, BOTH_WAYS, one_way, &holding);
+        assert_eq!(junk_rows(&one_way), [(1, false, true)]);
+        assert_eq!(
+            one_way.tons(order(0, ODD, Direction::Buy, Lot::One)),
             Err(TradeRefusal::NotTraded)
         );
-        let bible = junk_market(1, BOTH_WAYS, RuleSource::Bible, &holding);
-        assert_eq!(junk_rows(&bible), [(1, false, true), (0, true, false)]);
     }
 
     #[test]
@@ -2925,8 +3134,10 @@ mod tests {
         }
     }
 
-    fn order(good: Good, direction: Direction, lot: Lot) -> Order {
+    /// An order for `lot` of `good`, `direction`, on row `row`.
+    fn order(row: usize, good: Good, direction: Direction, lot: Lot) -> Order {
         Order {
+            row,
             good,
             direction,
             lot,
@@ -2939,7 +3150,7 @@ mod tests {
 
     #[test]
     fn buying_one_is_a_ton_and_the_most_is_what_space_and_cash_allow() {
-        let buy = |market: &Market, lot| market.tons(order(FOOD, Direction::Buy, lot));
+        let buy = |market: &Market, lot| market.tons(order(0, FOOD, Direction::Buy, lot));
         assert_eq!(buy(&stall(1000, 0, 50), Lot::One), Ok(1));
         assert_eq!(buy(&stall(1000, 0, 50), Lot::Max), Ok(10), "cash");
         assert_eq!(buy(&stall(1099, 0, 50), Lot::Max), Ok(10));
@@ -2950,7 +3161,7 @@ mod tests {
 
     #[test]
     fn a_buy_with_no_space_or_not_enough_cash_for_a_ton_is_refused() {
-        let buy = |market: &Market, lot| market.tons(order(FOOD, Direction::Buy, lot));
+        let buy = |market: &Market, lot| market.tons(order(0, FOOD, Direction::Buy, lot));
         for lot in [Lot::One, Lot::Max] {
             assert_eq!(buy(&stall(1000, 0, 0), lot), Err(TradeRefusal::NoSpace));
             assert_eq!(buy(&stall(99, 0, 5), lot), Err(TradeRefusal::CannotAfford));
@@ -2964,7 +3175,7 @@ mod tests {
 
     #[test]
     fn a_good_priced_at_nothing_is_limited_only_by_space() {
-        let buy = |market: &Market, lot| market.tons(order(WATER, Direction::Buy, lot));
+        let buy = |market: &Market, lot| market.tons(order(2, WATER, Direction::Buy, lot));
         assert_eq!(buy(&stall(0, 0, 9), Lot::Max), Ok(9));
         assert_eq!(buy(&stall(-5, 0, 9), Lot::One), Ok(1));
         assert_eq!(buy(&stall(0, 0, 0), Lot::Max), Err(TradeRefusal::NoSpace));
@@ -2972,7 +3183,7 @@ mod tests {
 
     #[test]
     fn selling_one_is_a_ton_and_the_most_everything_held() {
-        let sell = |market: &Market, lot| market.tons(order(FOOD, Direction::Sell, lot));
+        let sell = |market: &Market, lot| market.tons(order(0, FOOD, Direction::Sell, lot));
         assert_eq!(sell(&stall(0, 6, 0), Lot::One), Ok(1));
         assert_eq!(sell(&stall(0, 6, 0), Lot::Max), Ok(6));
         assert_eq!(sell(&stall(0, 1, 0), Lot::Max), Ok(1));
@@ -2981,31 +3192,39 @@ mod tests {
         }
     }
 
+    /// The stall's opals and water rows trade one way, as the Bible's
+    /// `jünk` rows do ([`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade)).
     #[test]
     fn a_good_not_traded_that_way_or_at_all_is_refused() {
         let market = stall(10_000, 5, 5);
         for lot in [Lot::One, Lot::Max] {
             let refused = Err(TradeRefusal::NotTraded);
-            assert_eq!(market.tons(order(OPALS, Direction::Buy, lot)), refused);
-            assert_eq!(market.tons(order(WATER, Direction::Sell, lot)), refused);
+            assert_eq!(market.tons(order(1, OPALS, Direction::Buy, lot)), refused);
+            assert_eq!(market.tons(order(2, WATER, Direction::Sell, lot)), refused);
             for direction in [Direction::Buy, Direction::Sell] {
-                let metal = order(Good::Commodity(4), direction, lot);
+                let metal = order(0, Good::Commodity(4), direction, lot);
                 assert_eq!(market.tons(metal), refused);
             }
         }
-        assert_eq!(market.tons(order(OPALS, Direction::Sell, Lot::Max)), Ok(5));
-        assert_eq!(market.tons(order(WATER, Direction::Buy, Lot::Max)), Ok(5));
+        assert_eq!(
+            market.tons(order(1, OPALS, Direction::Sell, Lot::Max)),
+            Ok(5)
+        );
+        assert_eq!(
+            market.tons(order(2, WATER, Direction::Buy, Lot::Max)),
+            Ok(5)
+        );
     }
 
     #[test]
-    fn allows_is_whether_a_ton_would_go_through() {
+    fn row_allows_is_whether_a_ton_would_go_through() {
         let market = stall(150, 1, 3);
-        assert!(market.allows(FOOD, Direction::Buy));
-        assert!(market.allows(FOOD, Direction::Sell));
-        assert!(!market.allows(OPALS, Direction::Buy));
-        assert!(market.allows(OPALS, Direction::Sell));
-        assert!(!stall(99, 0, 3).allows(FOOD, Direction::Buy));
-        assert!(!stall(99, 0, 3).allows(FOOD, Direction::Sell));
+        assert!(market.row_allows(0, Direction::Buy));
+        assert!(market.row_allows(0, Direction::Sell));
+        assert!(!market.row_allows(1, Direction::Buy));
+        assert!(market.row_allows(1, Direction::Sell));
+        assert!(!stall(99, 0, 3).row_allows(0, Direction::Buy));
+        assert!(!stall(99, 0, 3).row_allows(0, Direction::Sell));
         assert_eq!(market.row(OPALS).map(|row| row.price), Some(500));
         assert_eq!(market.row(Good::Commodity(3)), None);
     }
@@ -3013,15 +3232,25 @@ mod tests {
     #[test]
     fn settling_a_buy_pays_and_loads_and_a_sale_unloads_and_is_paid() {
         let mut pilot = pilot(1000);
-        settle(&mut pilot, order(FOOD, Direction::Buy, Lot::Max), 4, 93);
+        settle(&mut pilot, order(0, FOOD, Direction::Buy, Lot::Max), 4, 93);
         assert_eq!(pilot.cash, 1000 - 372);
         assert_eq!(pilot.held(FOOD), 4);
-        settle(&mut pilot, order(OPALS, Direction::Buy, Lot::One), 1, 0);
+        settle(&mut pilot, order(1, OPALS, Direction::Buy, Lot::One), 1, 0);
         assert_eq!(pilot.held(OPALS), 1);
-        settle(&mut pilot, order(FOOD, Direction::Sell, Lot::One), 1, 150);
+        settle(
+            &mut pilot,
+            order(0, FOOD, Direction::Sell, Lot::One),
+            1,
+            150,
+        );
         assert_eq!(pilot.cash, 1000 - 372 + 150);
         assert_eq!(pilot.held(FOOD), 3);
-        settle(&mut pilot, order(FOOD, Direction::Sell, Lot::Max), 3, 100);
+        settle(
+            &mut pilot,
+            order(0, FOOD, Direction::Sell, Lot::Max),
+            3,
+            100,
+        );
         assert_eq!(pilot.cash, 1000 - 372 + 150 + 300);
         assert_eq!(pilot.held(FOOD), 0);
         assert_eq!(
@@ -3034,18 +3263,18 @@ mod tests {
     #[test]
     fn settling_never_overflows() {
         let mut pilot = pilot(i64::MAX - 5);
-        settle(&mut pilot, order(FOOD, Direction::Sell, Lot::Max), 0, 10);
+        settle(&mut pilot, order(0, FOOD, Direction::Sell, Lot::Max), 0, 10);
         assert_eq!(pilot.cash, i64::MAX - 5);
         pilot.cargo.insert(FOOD, u32::MAX);
         settle(
             &mut pilot,
-            order(FOOD, Direction::Sell, Lot::Max),
+            order(0, FOOD, Direction::Sell, Lot::Max),
             u32::MAX,
             i64::MAX,
         );
         assert_eq!(pilot.cash, i64::MAX);
         pilot.cargo.insert(OPALS, u32::MAX);
-        settle(&mut pilot, order(OPALS, Direction::Buy, Lot::One), 5, 0);
+        settle(&mut pilot, order(1, OPALS, Direction::Buy, Lot::One), 5, 0);
         assert_eq!(pilot.held(OPALS), u32::MAX);
     }
 

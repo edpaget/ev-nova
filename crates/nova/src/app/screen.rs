@@ -126,8 +126,9 @@
 //! Each flight's ship purchase keeps the cargo as the router says
 //! ([`AppScreen::with_purchase_cargo`]), the engine's until another is
 //! given. Each flight's exchange trades a `jünk` of negative or zero
-//! price as the router says ([`AppScreen::with_junk_price`]), the
-//! engine's until another is given.
+//! price as the router says ([`AppScreen::with_junk_price`]), and trades
+//! each `jünk` row the ways it says ([`AppScreen::with_junk_trade`]), the
+//! engine's until others are given.
 //! Each flight's persons
 //! appear as the router's rules say ([`AppScreen::with_person_rules`])
 //! and say their comm quotes as it says ([`AppScreen::with_comm_quote`]),
@@ -332,6 +333,8 @@ pub struct AppScreen {
     /// How each flight's exchange trades a `jünk` of negative or zero
     /// price.
     junk_price: RuleSource,
+    /// Which ways each flight's exchange trades a `jünk` row.
+    junk_trade: RuleSource,
     /// Whether each take-off pays each flight's hired escorts a day.
     take_off_pay: RuleSource,
     /// Which wage each flight's hired escorts are paid.
@@ -428,6 +431,7 @@ impl AppScreen {
             event_price: RuleSource::Engine,
             purchase_cargo: RuleSource::Engine,
             junk_price: RuleSource::Engine,
+            junk_trade: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
@@ -632,6 +636,17 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's exchange trading each `jünk` row the
+    /// ways `source` says ([`FlightView::with_junk_trade`]); the engine's
+    /// until another is given.
+    #[must_use]
+    pub fn with_junk_trade(self, source: RuleSource) -> Self {
+        Self {
+            junk_trade: source,
+            ..self
+        }
+    }
+
     /// The router with each take-off paying each flight's hired escorts a
     /// day's wages, or not, as `source` says
     /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
@@ -720,6 +735,7 @@ impl AppScreen {
             .with_event_price(rulebook.source_for(RuleKey::EventPrice))
             .with_purchase_cargo(rulebook.source_for(RuleKey::PurchaseCargo))
             .with_junk_price(rulebook.source_for(RuleKey::JunkPrice))
+            .with_junk_trade(rulebook.source_for(RuleKey::JunkTrade))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
@@ -781,6 +797,7 @@ impl AppScreen {
             .with_event_price(self.event_price)
             .with_purchase_cargo(self.purchase_cargo)
             .with_junk_price(self.junk_price)
+            .with_junk_trade(self.junk_trade)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
@@ -6117,6 +6134,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_junk_trade_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_junk_trade(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.junk_trade(), source);
+            assert_eq!(session.junk_price(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.junk_trade(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_event_price_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_event_price(source);
@@ -6188,6 +6220,7 @@ mod tests {
             ("event_price", format!("{:?}", screen.event_price)),
             ("purchase_cargo", format!("{:?}", screen.purchase_cargo)),
             ("junk_price", format!("{:?}", screen.junk_price)),
+            ("junk_trade", format!("{:?}", screen.junk_trade)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
@@ -6219,6 +6252,7 @@ mod tests {
             RuleKey::EventPrice => "event_price",
             RuleKey::PurchaseCargo => "purchase_cargo",
             RuleKey::JunkPrice => "junk_price",
+            RuleKey::JunkTrade => "junk_trade",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
             RuleKey::EscortWage => "escort_wage",

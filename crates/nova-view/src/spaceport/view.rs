@@ -1666,6 +1666,7 @@ mod tests {
         assert_eq!(
             view.take_trade(),
             Some(Order {
+                row: 0,
                 good: Good::Commodity(0),
                 direction: Direction::Buy,
                 lot: Lot::One,

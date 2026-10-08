@@ -92,10 +92,13 @@
 //! decay), the exchange's `"event_price"` (whether an active `öops`
 //! event prices its commodity at its `BasePrice` plus its `PriceDelta`,
 //! the highest ID winning, as the engine has it, or adds its `PriceDelta`
-//! to the stellar's own price, several adding up) and `"junk_price"`
+//! to the stellar's own price, several adding up), `"junk_price"`
 //! (whether a `jünk` price is signed, a negative one bought at no tons
 //! and sold at a loss and a row priced 0 not listed, as the engine has
-//! it, or is never below 0, a row priced 0 listed and bought free), and
+//! it, or is never below 0, a row priced 0 listed and bought free) and
+//! `"junk_trade"` (whether every listed `jünk` row is bought and sold at
+//! its own price, as the engine has it, or its `SoldAt` row is bought
+//! only and its `BoughtAt` row sold only, as the Bible says), and
 //! the shipyard's `"purchase_cargo"` (whether a ship purchase keeps the
 //! new ship's share of each good against the trader escorts' holds, then
 //! trims to the fleet's holds, as the engine has it, or keeps what fits

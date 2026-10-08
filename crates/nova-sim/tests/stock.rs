@@ -304,11 +304,12 @@ fn port_kanes_exchange_trades_at_its_levels() {
             ("Equipment", 440),
         ]
     );
-    // It buys the Ancient Vell-os Sculpture (`jünk` 138, base 500) high.
+    // It buys the Ancient Vell-os Sculpture (`jünk` 138, base 500) high,
+    // and by the engine sells it there too.
     let sculpture = market.row(Good::Junk(JunkId(138))).expect("listed");
     assert_eq!(
         (sculpture.price, sculpture.sold_here, sculpture.bought_here),
-        (625, false, true)
+        (625, true, true)
     );
     assert_eq!(market.events, Vec::<String>::new(), "no event yet");
 }

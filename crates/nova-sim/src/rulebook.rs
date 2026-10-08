@@ -45,6 +45,7 @@
 //! | [`EventPrice`](RuleKey::EventPrice) | `event_price` | an active event prices its commodity at `BasePrice` + `PriceDelta`, whatever the level, the highest ID winning, and lists a commodity not traded there (`_DoTradeDialog` @0x5dcf8-0x5dd58; [`Session`](crate::Session)) | the level price plus every event's `PriceDelta`\*\* |
 //! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims the commodities to the fleet's holds (`_DestroyPartialFleetCargo` @0xcd32-0xcff6, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c; [`Session`](crate::Session)) | it keeps what fits the new ship's own cargo space, goods in order†† |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
+//! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -418,6 +419,17 @@ rule_keys! {
     /// reading is the port's own floor, not anything the Bible says (see
     /// [`market`](crate::market)).
     JunkPrice => "junk_price",
+    /// Which ways a listed `jünk` row trades. By the engine, every row
+    /// trades both ways at its own price: the trade buttons ask only
+    /// `_CanBuyGoods` (@0xccec, cash for a ton and free space) and
+    /// `_CanSellGoods` (@0x4a94, tons held), never which list the row came
+    /// from (`_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons`
+    /// @0x2960d/0x2963e), and a buy or sale on the selected row is priced
+    /// at that row's price (@0x5e2c4-0x5e2e2, @0x5e528-0x5e546). By the
+    /// Bible, whose `SoldAt` is where "the commodity is sold" and
+    /// `BoughtAt` where it "is purchased", the `SoldAt` row is bought only
+    /// and the `BoughtAt` row sold only (see [`market`](crate::market)).
+    JunkTrade => "junk_trade",
 }
 
 impl RuleKey {
@@ -566,9 +578,12 @@ mod tests {
                 RuleKey::RaisedMax,
                 RuleKey::EventPrice,
                 RuleKey::PurchaseCargo,
-                RuleKey::JunkPrice
+                RuleKey::JunkPrice,
+                RuleKey::JunkTrade
             ]
         );
+        assert_eq!(RuleKey::JunkTrade.key(), "junk_trade");
+        assert_eq!(RuleKey::from_key("junk_trade"), Some(RuleKey::JunkTrade));
         assert_eq!(RuleKey::JunkPrice.key(), "junk_price");
         assert_eq!(RuleKey::from_key("junk_price"), Some(RuleKey::JunkPrice));
         assert_eq!(RuleKey::PurchaseCargo.key(), "purchase_cargo");
