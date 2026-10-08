@@ -1883,7 +1883,9 @@ impl Session {
     pub fn trade(&mut self, order: Order) -> Result<u32, TradeRefusal> {
         let market = self.market().ok_or(TradeRefusal::NoMarket)?;
         let tons = market.tons(order)?;
-        let price = market.row(order.good).map_or(0, |row| row.price);
+        let price = market
+            .trading(order.good, order.direction)
+            .map_or(0, |row| row.price);
         self.transact(|pilot| market::settle(pilot, order, tons, price));
         Ok(tons)
     }
@@ -5091,6 +5093,34 @@ mod tests {
             Ok(12)
         );
         assert_eq!(session.pilot().cash(), 1000 - 12 * 80 + 12 * 125);
+    }
+
+    #[test]
+    fn junk_listed_both_ways_is_bought_low_and_sold_high() {
+        let both = JunkRecord {
+            id: JunkId(146),
+            name: "Opals".to_owned(),
+            base_price: 100,
+            sold_at: vec![StellarId(128)],
+            bought_at: vec![StellarId(128)],
+            buy_on: String::new(),
+            sell_on: String::new(),
+            flags: 0,
+        };
+        let catalog = FakePilotCatalog {
+            junk: vec![both],
+            ..exchange()
+        };
+        let opals = Good::Junk(JunkId(146));
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        assert_eq!(session.trade(order(opals, Direction::Buy, Lot::One)), Ok(1));
+        assert_eq!(session.pilot().cash(), 1000 - 80, "100 / 1.25");
+        assert_eq!(
+            session.trade(order(opals, Direction::Sell, Lot::One)),
+            Ok(1)
+        );
+        assert_eq!(session.pilot().cash(), 1000 - 80 + 125, "100 × 1.25");
     }
 
     // Tribbles and perishables.

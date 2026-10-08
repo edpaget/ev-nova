@@ -243,8 +243,8 @@ impl TradeScreen {
         self.regrey();
     }
 
-    /// Greys Buy and Sell when a ton of the selected good could not be
-    /// traded that way.
+    /// Greys Buy and Sell when a ton could not be traded that way on the
+    /// selected row.
     fn regrey(&mut self) {
         let buys = self.allows(Direction::Buy);
         let sells = self.allows(Direction::Sell);
@@ -254,10 +254,10 @@ impl TradeScreen {
         }
     }
 
-    /// Whether a ton of the selected good can be traded `direction`.
+    /// Whether a ton can be traded `direction` on the selected row.
     fn allows(&self, direction: Direction) -> bool {
         self.selected()
-            .is_some_and(|index| self.market.allows(self.market.rows[index].good, direction))
+            .is_some_and(|index| self.market.row_allows(index, direction))
     }
 
     /// Asks to trade the selected good `direction`, a ton or with Alt held
@@ -1000,6 +1000,40 @@ mod tests {
         });
         assert_eq!(empty.selected(), None);
         assert_eq!(enabled(&empty), (false, false));
+    }
+
+    #[test]
+    fn a_junk_listed_both_ways_is_sold_on_its_high_row_and_bought_on_its_low_row() {
+        let mut screen = screen_of(Market {
+            rows: vec![
+                MarketRow {
+                    sold_here: false,
+                    ..row(OPALS, "Opals", 1500, 1)
+                },
+                MarketRow {
+                    bought_here: false,
+                    ..row(OPALS, "Opals", 960, 1)
+                },
+            ],
+            ..market()
+        });
+        assert_eq!(enabled(&screen), (false, true), "the high row");
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_order(), None, "greyed asks for nothing");
+        press(&mut screen, SELL_KEY);
+        assert_eq!(
+            screen.take_order(),
+            Some(order(OPALS, Direction::Sell, Lot::One))
+        );
+        press(&mut screen, Key::Down);
+        assert_eq!(enabled(&screen), (true, false), "the low row");
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), None);
+        press(&mut screen, BUY_KEY);
+        assert_eq!(
+            screen.take_order(),
+            Some(order(OPALS, Direction::Buy, Lot::One))
+        );
     }
 
     #[test]

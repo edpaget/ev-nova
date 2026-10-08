@@ -55,8 +55,13 @@
 //! @0x5dd83-0x5de2f; the community's Opals: 960 and 1500 from 1200 by
 //! 1.25). It is traded only
 //! through a trade center, so a listed stellar without one offers nothing.
-//! A stellar in both lists, which stock data never has, trades it both
-//! ways at its base price. `SellOn` gates selling it and `BuyOn` buying
+//! A stellar in both lists, which stock data never has, lists it twice,
+//! as the original's rows 6 and 7 are filled independently: first a row
+//! it buys at the high price, then one it sells at the low price, both
+//! under its name and with the tons held (@0x5dd83-0x5de2f,
+//! @0x4d301-0x4d36c). Each row trades its own way only
+//! ([`Market::trading`], [`Market::row_allows`]), so the player buys it
+//! low and sells it high. `SellOn` gates selling it and `BuyOn` buying
 //! it, through [`control_bits_allow`]. Its `Flags` make it multiply or
 //! decay in the hold (below).
 //!
@@ -619,18 +624,41 @@ impl Market {
         self.rows.iter().find(|row| row.good == good)
     }
 
+    /// The row of `good` that trades `direction`: for a buy, the row of
+    /// it the stellar sells, and for a sale, the row it buys. A `jünk`
+    /// listed both ways has one row each way (see [`market`]).
+    #[must_use]
+    pub fn trading(&self, good: Good, direction: Direction) -> Option<&MarketRow> {
+        self.rows
+            .iter()
+            .find(|row| row.good == good && row.trades(direction))
+    }
+
     /// How many tons `order` would move, or why it moves none.
     pub fn tons(&self, order: Order) -> Result<u32, TradeRefusal> {
-        let row = self.row(order.good).ok_or(TradeRefusal::NotTraded)?;
-        match order.direction {
+        let row = self
+            .trading(order.good, order.direction)
+            .ok_or(TradeRefusal::NotTraded)?;
+        self.row_tons(row, order.direction, order.lot)
+    }
+
+    /// How many tons `lot` of `row` would move `direction`, or why it
+    /// moves none.
+    fn row_tons(
+        &self,
+        row: &MarketRow,
+        direction: Direction,
+        lot: Lot,
+    ) -> Result<u32, TradeRefusal> {
+        if !row.trades(direction) {
+            return Err(TradeRefusal::NotTraded);
+        }
+        match direction {
             Direction::Buy => {
-                if !row.sold_here {
-                    return Err(TradeRefusal::NotTraded);
-                }
                 if self.free == 0 {
                     return Err(TradeRefusal::NoSpace);
                 }
-                let wanted = match order.lot {
+                let wanted = match lot {
                     Lot::One => 1,
                     Lot::Max => self.free,
                 };
@@ -645,16 +673,11 @@ impl Market {
                     tons => Ok(tons),
                 }
             }
-            Direction::Sell => {
-                if !row.bought_here {
-                    return Err(TradeRefusal::NotTraded);
-                }
-                match (row.held, order.lot) {
-                    (0, _) => Err(TradeRefusal::NoneHeld),
-                    (_, Lot::One) => Ok(1),
-                    (held, Lot::Max) => Ok(held),
-                }
-            }
+            Direction::Sell => match (row.held, lot) {
+                (0, _) => Err(TradeRefusal::NoneHeld),
+                (_, Lot::One) => Ok(1),
+                (held, Lot::Max) => Ok(held),
+            },
         }
     }
 
@@ -667,6 +690,27 @@ impl Market {
             lot: Lot::One,
         })
         .is_ok()
+    }
+
+    /// Whether a ton can be traded `direction` on row `index` now: the
+    /// row trades that way, and there is the space, cash or cargo for it.
+    #[must_use]
+    pub fn row_allows(&self, index: usize, direction: Direction) -> bool {
+        self.rows
+            .get(index)
+            .is_some_and(|row| self.row_tons(row, direction, Lot::One).is_ok())
+    }
+}
+
+impl MarketRow {
+    /// Whether this row trades `direction`: a buy where the stellar sells
+    /// it, a sale where it buys it.
+    #[must_use]
+    pub fn trades(&self, direction: Direction) -> bool {
+        match direction {
+            Direction::Buy => self.sold_here,
+            Direction::Sell => self.bought_here,
+        }
     }
 }
 
@@ -730,22 +774,21 @@ pub(crate) fn market(
             }
         }
     }
-    rows.extend(goods.junk.iter().filter_map(|junk| {
-        let sold = junk.sold_at.contains(&stellar) && control_bits_allow(&junk.sell_on);
+    // A `jünk` the stellar both buys and sells has a row each way, the
+    // bought one first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f).
+    rows.extend(goods.junk.iter().flat_map(|junk| {
         let bought = junk.bought_at.contains(&stellar) && control_bits_allow(&junk.buy_on);
-        let level = match (sold, bought) {
-            (true, true) => PriceLevel::Medium,
-            (true, false) => PriceLevel::Low,
-            (false, true) => PriceLevel::High,
-            (false, false) => return None,
+        let sold = junk.sold_at.contains(&stellar) && control_bits_allow(&junk.sell_on);
+        let row = |level, ways| {
+            let price = band_price(i64::from(junk.base_price), level, markup);
+            listed(Good::Junk(junk.id), &junk.name, price.max(0), ways)
         };
-        let price = band_price(i64::from(junk.base_price), level, markup);
-        Some(listed(
-            Good::Junk(junk.id),
-            &junk.name,
-            price.max(0),
-            (sold, bought),
-        ))
+        [
+            bought.then(|| row(PriceLevel::High, (false, true))),
+            sold.then(|| row(PriceLevel::Low, (true, false))),
+        ]
+        .into_iter()
+        .flatten()
     }));
     rows.sort_by_key(|row| row.good);
     for row in &mut rows {
@@ -1904,28 +1947,94 @@ mod tests {
         assert_eq!(elsewhere.rows, []);
     }
 
-    #[test]
-    fn junk_listed_both_ways_trades_at_its_base_price() {
+    const TWO_WAY: Good = Good::Junk(JunkId(200));
+
+    /// The exchange at Earth, by `markup`, of a `jünk` 200 of `base`
+    /// price that Earth both sells and buys, for `pilot` with `capacity`
+    /// tons of space.
+    fn both_ways(base: i16, markup: Markup, pilot: &Pilot, capacity: u32) -> Market {
         let both = JunkRecord {
             id: JunkId(200),
             name: "Both".to_owned(),
-            base_price: 400,
+            base_price: base,
             sold_at: vec![EARTH],
             bought_at: vec![EARTH],
             ..unlisted()
         };
         let goods = Goods::new(&CommodityStrings::default(), vec![both], Vec::new());
-        let found = market(
+        market(
             &goods,
             EARTH,
             TRADE,
-            &pilot(0),
-            0,
+            pilot,
+            capacity,
             RuleSource::Engine,
-            Markup::Standard,
+            markup,
         )
-        .expect("trades");
-        assert_eq!(found.rows, [row(Good::Junk(JunkId(200)), "Both", 400)]);
+        .expect("trades")
+    }
+
+    #[test]
+    fn junk_listed_both_ways_is_listed_twice_bought_high_then_sold_low() {
+        let found = both_ways(400, Markup::Standard, &pilot(0), 0);
+        assert_eq!(
+            found.rows,
+            [
+                MarketRow {
+                    sold_here: false,
+                    ..row(TWO_WAY, "Both", 500)
+                },
+                MarketRow {
+                    bought_here: false,
+                    ..row(TWO_WAY, "Both", 320)
+                },
+            ],
+            "400 × 1.25, then 400 / 1.25"
+        );
+        let outlaw = both_ways(110, Markup::Outlaw, &pilot(0), 0);
+        let prices: Vec<_> = outlaw.rows.iter().map(|row| row.price).collect();
+        assert_eq!(prices, [121, 99], "110 × 1.1, then 110 / 1.1, truncated");
+    }
+
+    #[test]
+    fn junk_listed_both_ways_is_bought_on_its_low_row_and_sold_on_its_high_row() {
+        let buy = |market: &Market, lot| market.tons(order(TWO_WAY, Direction::Buy, lot));
+        let sell = |market: &Market, lot| market.tons(order(TWO_WAY, Direction::Sell, lot));
+        let empty = both_ways(400, Markup::Standard, &pilot(640), 10);
+        assert_eq!(buy(&empty, Lot::Max), Ok(2), "640 at 320 a ton");
+        assert_eq!(buy(&empty, Lot::One), Ok(1));
+        assert!(empty.allows(TWO_WAY, Direction::Buy));
+        assert_eq!(sell(&empty, Lot::One), Err(TradeRefusal::NoneHeld));
+        assert!(!empty.allows(TWO_WAY, Direction::Sell));
+        let mut holding = pilot(319);
+        holding.cargo = BTreeMap::from([(TWO_WAY, 3)]);
+        let holding = both_ways(400, Markup::Standard, &holding, 10);
+        let held: Vec<_> = holding.rows.iter().map(|row| row.held).collect();
+        assert_eq!(held, [3, 3], "both rows");
+        assert_eq!(sell(&holding, Lot::Max), Ok(3));
+        assert_eq!(buy(&holding, Lot::One), Err(TradeRefusal::CannotAfford));
+        let price = |direction| holding.trading(TWO_WAY, direction).map(|row| row.price);
+        assert_eq!(price(Direction::Buy), Some(320));
+        assert_eq!(price(Direction::Sell), Some(500));
+        assert_eq!(holding.trading(OPALS, Direction::Sell), None);
+    }
+
+    #[test]
+    fn a_row_allows_only_its_own_direction() {
+        let mut holding = pilot(640);
+        holding.cargo = BTreeMap::from([(TWO_WAY, 3)]);
+        let market = both_ways(400, Markup::Standard, &holding, 10);
+        assert!(!market.row_allows(0, Direction::Buy), "the high row");
+        assert!(market.row_allows(0, Direction::Sell));
+        assert!(market.row_allows(1, Direction::Buy), "the low row");
+        assert!(!market.row_allows(1, Direction::Sell));
+        assert!(!market.row_allows(2, Direction::Buy), "no row");
+        assert!(!market.row_allows(2, Direction::Sell));
+        let poor = both_ways(400, Markup::Standard, &pilot(319), 10);
+        assert!(!poor.row_allows(1, Direction::Buy), "cash");
+        assert!(!poor.row_allows(0, Direction::Sell), "none held");
+        let full = both_ways(400, Markup::Standard, &pilot(640), 0);
+        assert!(!full.row_allows(1, Direction::Buy), "space");
     }
 
     /// The (good, price) rows at `stellar`, with `flags`, by `markup`.
