@@ -19,7 +19,9 @@
 //! the highest level it names. Low is [`LOW_PERCENT`] of the base price
 //! and high [`HIGH_PERCENT`], truncated; medium is the base price. The
 //! community's table of stock prices (Food 60/75/93, Medical 600/750/937,
-//! and so on) matches these exactly.
+//! and so on) matches these exactly. A standard commodity's price of 4 or
+//! less is [`MIN_COMMODITY_PRICE`], 5, as in the engine
+//! (`_DoTradeDialog` @0x5dcc8-0x5dcce); a `jünk` price is never below 0.
 //!
 //! A stellar sells and buys each good at one price: profit comes from
 //! carrying goods from where they are cheap to where they are dear.
@@ -66,13 +68,26 @@
 //! # Events
 //!
 //! Each day ([`step_day`]), every active event's days left go down by
-//! one, and those that reach none end; then every `öops` that is not
-//! active, has a stellar to start at, a `Freq` above 0, a `Duration`
-//! above 0, a standard commodity and an `ActivateOn` that holds, starts
-//! with `Duration` days left if a `Freq` % [`Chance`] fires. While an
-//! event is active its `PriceDelta` is added to that commodity's price at
-//! its stellar; several add up, and a price never goes below 0. The
-//! exchange shows the names of the events active at its stellar.
+//! one, and those that reach none end; then every `öops` that had no
+//! days left that morning (an event that ends today is rolled first
+//! tomorrow, as `_DisasterHandler` @0x41add-0x41ae7 has it), has a
+//! stellar to start at, a `Freq` above 0, a `Duration` above 0, a
+//! standard commodity and an `ActivateOn` that holds, starts with
+//! `Duration` days left if a `Freq` % [`Chance`] fires. So an event is
+//! active for `Duration` days.
+//!
+//! An active event moves its commodity's price at its stellar as
+//! [`RuleKey::EventPrice`](crate::RuleKey::EventPrice) says. By the
+//! engine (the default; `_DoTradeDialog` @0x5dcf8-0x5dd58), the price is
+//! the commodity's `BasePrice` plus the event's `PriceDelta`, whatever
+//! the stellar's level; of several events on one commodity the highest
+//! ID wins; and an event lists its commodity, to buy and to sell, at a
+//! stellar that does not otherwise trade it (a commodity not traded at
+//! all stays unlisted). By the Bible, the event's `PriceDelta` is added
+//! to the stellar's own (level) price, several add up, and an event on a
+//! commodity not traded there moves nothing. Either way a price of 4 or
+//! less is 5. The exchange shows the names of the events active at its
+//! stellar.
 //!
 //! An event starts at its stellar: the `spöb` its `Stellar` names, from
 //! 128 up, or, for a `Stellar` of -1 ("any stellar"), an even pick by
@@ -111,6 +126,11 @@ pub const LOW_PERCENT: i64 = 80;
 
 /// A high price, as a percentage of the base price.
 pub const HIGH_PERCENT: i64 = 125;
+
+/// The lowest price of a standard commodity: a price of 4 or less, a
+/// level's or an event's, is raised to this (`_DoTradeDialog`
+/// @0x5dcc8-0x5dcce, @0x5dd39-0x5dd40). A `jünk` price has no such floor.
+pub const MIN_COMMODITY_PRICE: i64 = 5;
 
 /// The `oütf` `ModType` that adds cargo space: the Bible's "more cargo
 /// space", `ModVal` tons each.
@@ -448,6 +468,7 @@ pub(crate) fn market(
     flags: u32,
     pilot: &Pilot,
     capacity: u32,
+    source: RuleSource,
 ) -> Option<Market> {
     if flags & StellarFlags::TRADE_CENTER == 0 {
         return None;
@@ -466,20 +487,37 @@ pub(crate) fn market(
         .iter()
         .filter_map(|(n, commodity)| {
             let level = price_level(flags, *n)?;
-            let delta: i64 = here
-                .iter()
-                .filter(|event| standard(event.commodity) == Some(*n))
-                .map(|event| i64::from(event.price_delta))
-                .sum();
+            let delta: i64 = match source {
+                RuleSource::Engine => 0,
+                RuleSource::Bible => here
+                    .iter()
+                    .filter(|event| standard(event.commodity) == Some(*n))
+                    .map(|event| i64::from(event.price_delta))
+                    .sum(),
+            };
             let price = band_price(commodity.base_price, level) + delta;
-            Some(listed(
-                Good::Commodity(*n),
-                &commodity.name,
-                price,
-                (true, true),
-            ))
+            Some(commodity_row(*n, commodity, price))
         })
         .collect();
+    if source == RuleSource::Engine {
+        // By ascending ID (`pilot.events` is ordered), so the last wins.
+        for event in &here {
+            let Some((n, commodity)) = standard(event.commodity)
+                .and_then(|n| goods.commodities.iter().find(|(number, _)| *number == n))
+            else {
+                continue;
+            };
+            let row = commodity_row(
+                *n,
+                commodity,
+                commodity.base_price + i64::from(event.price_delta),
+            );
+            match rows.iter_mut().find(|listed| listed.good == row.good) {
+                Some(listed) => *listed = row,
+                None => rows.push(row),
+            }
+        }
+    }
     rows.extend(goods.junk.iter().filter_map(|junk| {
         let sold = junk.sold_at.contains(&stellar) && control_bits_allow(&junk.sell_on);
         let bought = junk.bought_at.contains(&stellar) && control_bits_allow(&junk.buy_on);
@@ -493,7 +531,7 @@ pub(crate) fn market(
         Some(listed(
             Good::Junk(junk.id),
             &junk.name,
-            price,
+            price.max(0),
             (sold, bought),
         ))
     }));
@@ -519,13 +557,24 @@ fn standard(commodity: i16) -> Option<u8> {
     u8::try_from(commodity).ok().filter(|&n| n < COMMODITIES)
 }
 
-/// A row for `good`, priced at `price` (never below none), traded these
-/// ways (sold here, bought here), with none held.
+/// Standard commodity `n`'s row, priced at `price` but never below
+/// [`MIN_COMMODITY_PRICE`], traded both ways.
+fn commodity_row(n: u8, commodity: &Commodity, price: i64) -> MarketRow {
+    listed(
+        Good::Commodity(n),
+        &commodity.name,
+        price.max(MIN_COMMODITY_PRICE),
+        (true, true),
+    )
+}
+
+/// A row for `good`, priced at `price`, traded these ways (sold here,
+/// bought here), with none held.
 fn listed(good: Good, name: &str, price: i64, (sold_here, bought_here): (bool, bool)) -> MarketRow {
     MarketRow {
         good,
         name: name.to_owned(),
-        price: price.max(0),
+        price,
         held: 0,
         sold_here,
         bought_here,
@@ -605,12 +654,19 @@ fn place(active: ActiveEvent, event: &DisasterRecord) -> Option<StellarId> {
 }
 
 /// One day's events: the active ones age, and each that can start is
-/// rolled once on `chance`.
+/// rolled once on `chance`. An event that had days left this morning is
+/// not rolled today, even if it ends today (`_DisasterHandler`
+/// @0x41add-0x41ae7).
 pub(crate) fn step_day(
     goods: &Goods,
     events: &mut BTreeMap<DisasterId, ActiveEvent>,
     chance: &mut (impl Chance + ?Sized),
 ) {
+    let aging: Vec<DisasterId> = events
+        .iter()
+        .filter(|(_, active)| active.days > 0)
+        .map(|(&id, _)| id)
+        .collect();
     events.retain(|id, active| {
         active.days = active.days.saturating_sub(1);
         active.days > 0 && goods.disasters.iter().any(|event| event.id == *id)
@@ -622,6 +678,7 @@ pub(crate) fn step_day(
             continue;
         }
         let can_start = !events.contains_key(&event.id)
+            && !aging.contains(&event.id)
             && event.freq > 0
             && event.duration > 0
             && standard(event.commodity).is_some()
@@ -1179,14 +1236,28 @@ mod tests {
     #[test]
     fn without_a_trade_center_there_is_no_exchange() {
         let flags = PORT_KANE & !StellarFlags::TRADE_CENTER;
-        assert_eq!(market(&goods(), EARTH, flags, &pilot(0), 10), None);
-        assert_eq!(market(&goods(), MARS, 0, &pilot(0), 10), None);
+        assert_eq!(
+            market(&goods(), EARTH, flags, &pilot(0), 10, RuleSource::Engine),
+            None
+        );
+        assert_eq!(
+            market(&goods(), MARS, 0, &pilot(0), 10, RuleSource::Engine),
+            None
+        );
     }
 
     #[test]
     fn the_exchange_lists_the_commodities_traded_at_their_levels() {
         let flags = PORT_KANE;
-        let found = market(&goods(), StellarId(137), flags, &pilot(500), 10).expect("trades");
+        let found = market(
+            &goods(),
+            StellarId(137),
+            flags,
+            &pilot(500),
+            10,
+            RuleSource::Engine,
+        )
+        .expect("trades");
         assert_eq!(
             found,
             Market {
@@ -1205,7 +1276,15 @@ mod tests {
             }
         );
         let some = TRADE | (1 << 24) | (4 << 12);
-        let found = market(&goods(), StellarId(137), some, &pilot(0), 0).expect("trades");
+        let found = market(
+            &goods(),
+            StellarId(137),
+            some,
+            &pilot(0),
+            0,
+            RuleSource::Engine,
+        )
+        .expect("trades");
         assert_eq!(
             found.rows,
             [
@@ -1213,13 +1292,22 @@ mod tests {
                 row(Good::Commodity(4), "Metal", 250),
             ]
         );
-        let none = market(&goods(), StellarId(137), TRADE, &pilot(0), 0).expect("trades");
+        let none = market(
+            &goods(),
+            StellarId(137),
+            TRADE,
+            &pilot(0),
+            0,
+            RuleSource::Engine,
+        )
+        .expect("trades");
         assert_eq!(none.rows, [], "a trade center that trades nothing");
     }
 
     #[test]
     fn junk_is_sold_low_where_it_is_sold_and_bought_high_where_it_is_bought() {
-        let at_earth = market(&goods(), EARTH, TRADE, &pilot(0), 0).expect("trades");
+        let at_earth =
+            market(&goods(), EARTH, TRADE, &pilot(0), 0, RuleSource::Engine).expect("trades");
         assert_eq!(
             at_earth.rows,
             [
@@ -1234,7 +1322,8 @@ mod tests {
             ],
             "by ID"
         );
-        let at_mars = market(&goods(), MARS, TRADE, &pilot(0), 0).expect("trades");
+        let at_mars =
+            market(&goods(), MARS, TRADE, &pilot(0), 0, RuleSource::Engine).expect("trades");
         assert_eq!(
             at_mars.rows,
             [MarketRow {
@@ -1242,7 +1331,15 @@ mod tests {
                 ..row(Good::Junk(JunkId(146)), "Opals", 1500)
             }]
         );
-        let elsewhere = market(&goods(), StellarId(150), TRADE, &pilot(0), 0).expect("trades");
+        let elsewhere = market(
+            &goods(),
+            StellarId(150),
+            TRADE,
+            &pilot(0),
+            0,
+            RuleSource::Engine,
+        )
+        .expect("trades");
         assert_eq!(elsewhere.rows, []);
     }
 
@@ -1257,14 +1354,15 @@ mod tests {
             ..unlisted()
         };
         let goods = Goods::new(&CommodityStrings::default(), vec![both], Vec::new());
-        let found = market(&goods, EARTH, TRADE, &pilot(0), 0).expect("trades");
+        let found = market(&goods, EARTH, TRADE, &pilot(0), 0, RuleSource::Engine).expect("trades");
         assert_eq!(found.rows, [row(Good::Junk(JunkId(200)), "Both", 400)]);
     }
 
     #[test]
     fn junk_follows_the_commodities() {
         let flags = TRADE | (2 << 28);
-        let found = market(&goods(), MARS, flags, &pilot(0), 0).expect("trades");
+        let found =
+            market(&goods(), MARS, flags, &pilot(0), 0, RuleSource::Engine).expect("trades");
         let listed: Vec<_> = found.rows.iter().map(|row| row.good).collect();
         assert_eq!(listed, [Good::Commodity(0), Good::Junk(JunkId(146))]);
     }
@@ -1278,7 +1376,15 @@ mod tests {
             (Good::Commodity(5), 4),
             (Good::Junk(JunkId(999)), 1),
         ]);
-        let found = market(&goods(), EARTH, TRADE | (2 << 28), &pilot, 12).expect("trades");
+        let found = market(
+            &goods(),
+            EARTH,
+            TRADE | (2 << 28),
+            &pilot,
+            12,
+            RuleSource::Engine,
+        )
+        .expect("trades");
         let held: Vec<_> = found.rows.iter().map(|row| (row.good, row.held)).collect();
         assert_eq!(
             held,
@@ -1293,7 +1399,7 @@ mod tests {
             (12, 2),
             "everything held counts"
         );
-        let over = market(&goods(), EARTH, TRADE, &pilot, 5).expect("trades");
+        let over = market(&goods(), EARTH, TRADE, &pilot, 5, RuleSource::Engine).expect("trades");
         assert_eq!(over.free, 0, "more held than there is space");
     }
 
@@ -1305,7 +1411,12 @@ mod tests {
 
     /// The exchange at `stellar` with these events active, each at its
     /// record's stellar.
-    fn with_events(stellar: StellarId, flags: u32, active: &[(i16, u16)]) -> Market {
+    fn with_events(
+        stellar: StellarId,
+        flags: u32,
+        active: &[(i16, u16)],
+        source: RuleSource,
+    ) -> Market {
         let mut pilot = pilot(0);
         let records = disasters();
         pilot.events = active
@@ -1328,7 +1439,7 @@ mod tests {
                     )
             })
             .collect();
-        market(&goods(), stellar, flags, &pilot, 0).expect("trades")
+        market(&goods(), stellar, flags, &pilot, 0, source).expect("trades")
     }
 
     fn price(market: &Market, good: Good) -> i64 {
@@ -1339,25 +1450,25 @@ mod tests {
     fn an_active_event_moves_its_commoditys_price_at_its_stellar_and_names_itself() {
         let flags = PORT_KANE;
         let food = Good::Commodity(0);
-        let quiet = with_events(EARTH, flags, &[]);
+        let quiet = with_events(EARTH, flags, &[], RuleSource::Engine);
         assert_eq!(price(&quiet, food), 93);
         assert_eq!(quiet.events, Vec::<String>::new());
-        let surplus = with_events(EARTH, flags, &[(128, 30)]);
-        assert_eq!(price(&surplus, food), 78);
+        let surplus = with_events(EARTH, flags, &[(128, 30)], RuleSource::Engine);
+        assert_eq!(price(&surplus, food), 60, "75 - 15");
         assert_eq!(surplus.events, ["An enormous food surplus"]);
         assert_eq!(
             price(&surplus, Good::Commodity(1)),
             350,
             "other goods keep theirs"
         );
-        let both = with_events(EARTH, flags, &[(128, 1), (130, 7)]);
-        assert_eq!(price(&both, food), 93, "-15 and +15");
+        let both = with_events(EARTH, flags, &[(128, 1), (130, 7)], RuleSource::Engine);
+        assert_eq!(price(&both, food), 90, "75 + 15, the higher ID");
         assert_eq!(both.events, ["An enormous food surplus", "A minor drought"]);
-        let elsewhere = with_events(MARS, flags, &[(128, 30)]);
+        let elsewhere = with_events(MARS, flags, &[(128, 30)], RuleSource::Engine);
         assert_eq!(price(&elsewhere, food), 93);
         assert_eq!(elsewhere.events, Vec::<String>::new());
-        let glut = with_events(MARS, flags, &[(129, 3), (999, 3)]);
-        assert_eq!(price(&glut, Good::Commodity(1)), 280);
+        let glut = with_events(MARS, flags, &[(129, 3), (999, 3)], RuleSource::Engine);
+        assert_eq!(price(&glut, Good::Commodity(1)), 280, "350 - 70");
         assert_eq!(
             glut.events,
             ["A glut on the market"],
@@ -1366,7 +1477,58 @@ mod tests {
     }
 
     #[test]
-    fn a_price_never_goes_below_none() {
+    fn by_the_engine_an_active_event_prices_its_commodity_from_its_base_price_whatever_the_level() {
+        let food = Good::Commodity(0);
+        for (flags, level) in [
+            (PORT_KANE, 93),
+            (TRADE | (1 << 28), 60),
+            (TRADE | (2 << 28), 75),
+        ] {
+            let quiet = with_events(EARTH, flags, &[], RuleSource::Engine);
+            assert_eq!(price(&quiet, food), level, "{flags:#x}");
+            let surplus = with_events(EARTH, flags, &[(128, 30)], RuleSource::Engine);
+            assert_eq!(price(&surplus, food), 60, "{flags:#x}");
+        }
+        let industrial = Good::Commodity(1);
+        for (flags, level) in [
+            (TRADE | (1 << 24), 280),
+            (TRADE | (2 << 24), 350),
+            (TRADE | (4 << 24), 437),
+        ] {
+            let quiet = with_events(MARS, flags, &[], RuleSource::Engine);
+            assert_eq!(price(&quiet, industrial), level, "{flags:#x}");
+            let glut = with_events(MARS, flags, &[(129, 3)], RuleSource::Engine);
+            assert_eq!(price(&glut, industrial), 280, "{flags:#x}");
+        }
+        let surplus = with_events(EARTH, PORT_KANE, &[(128, 30)], RuleSource::Engine);
+        let others: Vec<_> = (1..6)
+            .map(|n| price(&surplus, Good::Commodity(n)))
+            .collect();
+        assert_eq!(others, [350, 937, 900, 200, 440], "other goods keep theirs");
+    }
+
+    #[test]
+    fn by_the_engine_the_higher_id_of_two_events_on_one_commodity_wins() {
+        let both = with_events(EARTH, PORT_KANE, &[(130, 7), (128, 1)], RuleSource::Engine);
+        assert_eq!(price(&both, Good::Commodity(0)), 90, "not 93");
+        assert_eq!(both.events, ["An enormous food surplus", "A minor drought"]);
+        let mut records = disasters();
+        records.reverse();
+        let goods = Goods::new(&stock(), Vec::new(), records);
+        let mut pilot = pilot(0);
+        pilot.events = BTreeMap::from([at(&disasters()[2], 7), at(&disasters()[0], 1)]);
+        let found =
+            market(&goods, EARTH, PORT_KANE, &pilot, 0, RuleSource::Engine).expect("trades");
+        assert_eq!(
+            price(&found, Good::Commodity(0)),
+            90,
+            "by ID, not record order"
+        );
+    }
+
+    /// The exchange at Earth (`flags`) with one food event at Earth
+    /// moving the price by `delta`, priced as `source` says.
+    fn food_event(delta: i16, flags: u32, source: RuleSource) -> Market {
         let goods = Goods::new(
             &stock(),
             Vec::new(),
@@ -1375,7 +1537,7 @@ mod tests {
                 name: "Crash".to_owned(),
                 stellar: 140,
                 commodity: 0,
-                price_delta: -100,
+                price_delta: delta,
                 ..DisasterRecord::default()
             }],
         );
@@ -1387,11 +1549,150 @@ mod tests {
                 stellar: Some(EARTH),
             },
         )]);
-        let found = market(&goods, EARTH, PORT_KANE, &pilot, 0).expect("trades");
-        assert_eq!(price(&found, Good::Commodity(0)), 0);
-        let negative = Goods::new(&strings(&["Food"], &["-40"]), Vec::new(), Vec::new());
-        let found = market(&negative, EARTH, PORT_KANE, &pilot, 0).expect("trades");
-        assert_eq!(price(&found, Good::Commodity(0)), 0);
+        market(&goods, EARTH, flags, &pilot, 0, source).expect("trades")
+    }
+
+    #[test]
+    fn by_the_engine_an_event_price_of_4_or_less_is_5() {
+        let food = |delta| price(&food_event(delta, PORT_KANE, RuleSource::Engine), FOOD);
+        assert_eq!(food(-100), 5, "75 - 100");
+        assert_eq!(food(-71), 5, "4");
+        assert_eq!(food(-70), 5, "5");
+        assert_eq!(food(-69), 6, "6");
+        assert_eq!(MIN_COMMODITY_PRICE, 5);
+    }
+
+    #[test]
+    fn by_the_engine_an_event_lists_a_commodity_the_stellar_does_not_trade() {
+        let industrial_only = TRADE | (1 << 24);
+        let mut buyer = pilot(1000);
+        buyer.events = BTreeMap::from([at(&disasters()[0], 30)]);
+        buyer.cargo = BTreeMap::from([(FOOD, 2)]);
+        let found = market(
+            &goods(),
+            EARTH,
+            industrial_only,
+            &buyer,
+            10,
+            RuleSource::Engine,
+        )
+        .expect("trades");
+        assert_eq!(
+            found.rows,
+            [
+                MarketRow {
+                    held: 2,
+                    ..row(FOOD, "Food", 60)
+                },
+                row(Good::Commodity(1), "Industrial", 280),
+                MarketRow {
+                    bought_here: false,
+                    ..row(Good::Junk(JunkId(134)), "Water", 240)
+                },
+                MarketRow {
+                    bought_here: false,
+                    ..row(Good::Junk(JunkId(146)), "Opals", 960)
+                },
+            ]
+        );
+        assert_eq!(found.events, ["An enormous food surplus"]);
+        assert_eq!(found.tons(order(FOOD, Direction::Buy, Lot::One)), Ok(1));
+        assert_eq!(found.tons(order(FOOD, Direction::Sell, Lot::One)), Ok(1));
+
+        let untraded = patched(&[(0, StringPatch::Unreadable)]);
+        let unreadable = Goods::new(&untraded, Vec::new(), disasters());
+        let found = market(
+            &unreadable,
+            EARTH,
+            industrial_only,
+            &buyer,
+            10,
+            RuleSource::Engine,
+        )
+        .expect("trades");
+        assert_eq!(found.row(FOOD), None, "a commodity not traded at all");
+
+        let found = market(
+            &goods(),
+            MARS,
+            industrial_only,
+            &buyer,
+            10,
+            RuleSource::Engine,
+        )
+        .expect("trades");
+        assert_eq!(found.row(FOOD), None, "an event at another stellar");
+    }
+
+    #[test]
+    fn by_the_bible_events_add_to_the_level_price_and_several_add_up() {
+        let food = Good::Commodity(0);
+        let bible = RuleSource::Bible;
+        let surplus = with_events(EARTH, PORT_KANE, &[(128, 30)], bible);
+        assert_eq!(price(&surplus, food), 78, "93 - 15");
+        assert_eq!(surplus.events, ["An enormous food surplus"]);
+        let both = with_events(EARTH, PORT_KANE, &[(128, 1), (130, 7)], bible);
+        assert_eq!(price(&both, food), 93, "-15 and +15");
+        assert_eq!(price(&food_event(-100, PORT_KANE, bible), food), 5);
+        let glut = with_events(MARS, PORT_KANE, &[(129, 3)], bible);
+        assert_eq!(price(&glut, Good::Commodity(1)), 280, "350 - 70");
+        let low = with_events(MARS, TRADE | (1 << 24), &[(129, 3)], bible);
+        assert_eq!(price(&low, Good::Commodity(1)), 210, "280 - 70");
+        let industrial_only = TRADE | (1 << 24);
+        let untraded = with_events(EARTH, industrial_only, &[(128, 30)], bible);
+        let listed: Vec<_> = untraded
+            .rows
+            .iter()
+            .map(|row| (row.good, row.price))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (Good::Commodity(1), 280),
+                (Good::Junk(JunkId(134)), 240),
+                (Good::Junk(JunkId(146)), 960),
+            ],
+            "an event on a commodity not traded here lists nothing"
+        );
+    }
+
+    #[test]
+    fn a_commodity_price_never_goes_below_5() {
+        let food_low = TRADE | (1 << 28);
+        let food_high = TRADE | (4 << 28);
+        for source in RuleSource::ALL {
+            for (base, flags, expected) in [
+                ("6", food_low, 5),
+                ("7", food_low, 5),
+                ("8", food_low, 6),
+                ("-40", food_high, 5),
+            ] {
+                let goods = Goods::new(&strings(&["Food"], &[base]), Vec::new(), Vec::new());
+                let found = market(&goods, EARTH, flags, &pilot(0), 0, source).expect("trades");
+                assert_eq!(price(&found, FOOD), expected, "{base} {source:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn junk_prices_are_not_raised_to_5() {
+        let cheap = |id, base_price| JunkRecord {
+            id: JunkId(id),
+            name: "Cheap".to_owned(),
+            base_price,
+            sold_at: vec![EARTH],
+            ..unlisted()
+        };
+        let goods = Goods::new(
+            &CommodityStrings::default(),
+            vec![cheap(200, 0), cheap(201, 5)],
+            Vec::new(),
+        );
+        for source in RuleSource::ALL {
+            let found = market(&goods, EARTH, TRADE, &pilot(0), 0, source).expect("trades");
+            let prices: Vec<_> = found.rows.iter().map(|row| row.price).collect();
+            assert_eq!(prices, [0, 4], "{source:?}");
+        }
     }
 
     #[test]
@@ -1416,14 +1717,20 @@ mod tests {
                 stellar: Some(EARTH),
             },
         )]);
-        let found = market(&goods, EARTH, PORT_KANE, &pilot, 0).expect("trades");
+        let found =
+            market(&goods, EARTH, PORT_KANE, &pilot, 0, RuleSource::Engine).expect("trades");
         assert_eq!(found.events, Vec::<String>::new());
         assert_eq!(price(&found, Good::Commodity(5)), 440);
     }
 
     /// The exchange at `here` (Port Kane's levels) with one food event
     /// (-15) active, its record's `Stellar` `record`, stored at `stored`.
-    fn one_event(record: i16, stored: Option<StellarId>, here: StellarId) -> Market {
+    fn one_event(
+        record: i16,
+        stored: Option<StellarId>,
+        here: StellarId,
+        source: RuleSource,
+    ) -> Market {
         let goods = Goods::new(
             &stock(),
             Vec::new(),
@@ -1443,7 +1750,7 @@ mod tests {
                 stellar: stored,
             },
         )]);
-        market(&goods, here, PORT_KANE, &pilot, 0).expect("trades")
+        market(&goods, here, PORT_KANE, &pilot, 0, source).expect("trades")
     }
 
     /// Food's price and the events shown at `market`.
@@ -1453,24 +1760,33 @@ mod tests {
 
     #[test]
     fn an_event_moves_the_price_and_shows_at_its_stored_stellar_only() {
-        let surplus = (78, vec!["Surplus".to_owned()]);
+        let surplus = (60, vec!["Surplus".to_owned()]);
         let quiet = (93, Vec::new());
         for record in [-1, 140] {
-            let mars = one_event(record, Some(MARS), MARS);
+            let mars = one_event(record, Some(MARS), MARS, RuleSource::Engine);
             assert_eq!(food_and_events(&mars), surplus, "{record}");
-            let earth = one_event(record, Some(MARS), EARTH);
+            let earth = one_event(record, Some(MARS), EARTH, RuleSource::Engine);
             assert_eq!(food_and_events(&earth), quiet, "{record}");
         }
     }
 
     #[test]
     fn an_event_from_an_older_save_is_at_its_records_stellar() {
-        let surplus = (78, vec!["Surplus".to_owned()]);
+        let surplus = (60, vec!["Surplus".to_owned()]);
         let quiet = (93, Vec::new());
-        assert_eq!(food_and_events(&one_event(140, None, EARTH)), surplus);
-        assert_eq!(food_and_events(&one_event(140, None, MARS)), quiet);
+        assert_eq!(
+            food_and_events(&one_event(140, None, EARTH, RuleSource::Engine)),
+            surplus
+        );
+        assert_eq!(
+            food_and_events(&one_event(140, None, MARS, RuleSource::Engine)),
+            quiet
+        );
         for here in [EARTH, MARS, StellarId(-1)] {
-            assert_eq!(food_and_events(&one_event(-1, None, here)), quiet);
+            assert_eq!(
+                food_and_events(&one_event(-1, None, here, RuleSource::Engine)),
+                quiet
+            );
         }
     }
 
@@ -1699,9 +2015,24 @@ mod tests {
         step_day(&goods(), &mut events, &mut chance);
         assert_eq!(days(&events), [], "over");
         assert_eq!(
-            chance.asked.len(),
-            2 + 2 + 3,
-            "rolled again the day it ends"
+            chance.asked,
+            [40, 50, 40, 50, 40, 50],
+            "not rolled the day it ends"
+        );
+    }
+
+    #[test]
+    fn an_event_that_ends_on_a_day_is_rolled_the_next() {
+        let mut events = BTreeMap::from([on_earth(128, 1)]);
+        let mut chance = Scripted::answering(&[true; 3]);
+        step_day(&goods(), &mut events, &mut chance);
+        assert_eq!(chance.asked, [40, 50]);
+        assert!(!events.contains_key(&DisasterId(128)), "over");
+        step_day(&goods(), &mut events, &mut chance);
+        assert_eq!(chance.asked, [40, 50, 35], "rolled first the next day");
+        assert_eq!(
+            events.get(&DisasterId(128)).map(|active| active.days),
+            Some(30)
         );
     }
 

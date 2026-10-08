@@ -518,6 +518,9 @@ pub struct Session {
     /// How a `ModType` 27 outfit raises its target's `Max` (see
     /// [`Session::with_raised_max`]).
     raised_max: RuleSource,
+    /// How an active `öops` event prices its commodity (see
+    /// [`Session::with_event_price`]).
+    event_price: RuleSource,
     /// Whether each take-off pays the hired escorts a day's wages (see
     /// [`Session::with_take_off_pay`]).
     take_off_pay: RuleSource,
@@ -657,6 +660,7 @@ impl Session {
             junk_flags: RuleSource::Engine,
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
+            event_price: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
@@ -1836,6 +1840,7 @@ impl Session {
             site.flags,
             &self.pilot,
             self.stats.capacity,
+            self.event_price,
         )
     }
 
@@ -1923,6 +1928,24 @@ impl Session {
     #[must_use]
     pub fn raised_max(&self) -> RuleSource {
         self.raised_max
+    }
+
+    /// This session with an active `öops` event pricing its commodity as
+    /// `source` says ([`RuleKey::EventPrice`](crate::RuleKey::EventPrice)):
+    /// by the engine's default, at its `BasePrice` plus its `PriceDelta`,
+    /// whatever the level, the highest ID winning; by the Bible, the level
+    /// price plus every event's `PriceDelta` (see [`market`]).
+    #[must_use]
+    pub fn with_event_price(mut self, source: RuleSource) -> Self {
+        self.event_price = source;
+        self
+    }
+
+    /// How an active `öops` event prices its commodity: by the engine
+    /// ([`RuleSource::Engine`]) or by the Bible.
+    #[must_use]
+    pub fn event_price(&self) -> RuleSource {
+        self.event_price
     }
 
     /// The player's ship class's `MaxGun` and `MaxTur`; none for a class
@@ -5006,6 +5029,41 @@ mod tests {
         let market = session.market().expect("an exchange");
         assert_eq!(market.row(FOOD).map(|row| row.price), Some(60));
         assert_eq!(market.events, ["An enormous food surplus"]);
+    }
+
+    #[test]
+    fn the_session_prices_events_as_its_rule_says() {
+        let mut catalog = surplus();
+        catalog.sites[0].1[0].flags = TRADES & !(0xF << 28) | 4 << 28;
+        if let Ok(start) = &mut catalog.character {
+            start.cash = 1000;
+        }
+        assert_eq!(
+            Session::start(&catalog).expect("starts").event_price(),
+            RuleSource::Engine
+        );
+        for (source, price) in [(RuleSource::Engine, 60), (RuleSource::Bible, 78)] {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_event_price(source);
+            assert_eq!(session.event_price(), source);
+            jump_with(
+                &mut session,
+                &catalog,
+                131,
+                &mut Scripted::answering(&[true]),
+            );
+            land_now(&mut session).expect("lands");
+            let market = session.market().expect("an exchange");
+            assert_eq!(
+                market.row(FOOD).map(|row| row.price),
+                Some(price),
+                "{source:?}"
+            );
+            let cash = session.pilot().cash();
+            assert_eq!(session.trade(order(FOOD, Direction::Buy, Lot::One)), Ok(1));
+            assert_eq!(cash - session.pilot().cash(), price, "{source:?}");
+        }
     }
 
     #[test]

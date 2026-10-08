@@ -120,7 +120,9 @@
 //! ([`AppScreen::with_launcher_sale`]), the engine's until another is
 //! given. Each flight's `ModType` 27 outfits raise their targets' `Max`
 //! as the router says ([`AppScreen::with_raised_max`]), the engine's
-//! until another is given.
+//! until another is given. Each flight's exchange prices an active
+//! `öops` event's commodity as the router says
+//! ([`AppScreen::with_event_price`]), the engine's until another is given.
 //! Each flight's persons
 //! appear as the router's rules say ([`AppScreen::with_person_rules`])
 //! and say their comm quotes as it says ([`AppScreen::with_comm_quote`]),
@@ -317,6 +319,9 @@ pub struct AppScreen {
     launcher_sale: RuleSource,
     /// How each flight's `ModType` 27 outfits raise their targets' `Max`.
     raised_max: RuleSource,
+    /// How each flight's exchange prices an active `öops` event's
+    /// commodity.
+    event_price: RuleSource,
     /// Whether each take-off pays each flight's hired escorts a day.
     take_off_pay: RuleSource,
     /// Which wage each flight's hired escorts are paid.
@@ -410,6 +415,7 @@ impl AppScreen {
             junk_flags: RuleSource::Engine,
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
+            event_price: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
@@ -579,6 +585,18 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's exchange pricing an active `öops`
+    /// event's commodity as `source` says
+    /// ([`FlightView::with_event_price`]); the engine's until another is
+    /// given.
+    #[must_use]
+    pub fn with_event_price(self, source: RuleSource) -> Self {
+        Self {
+            event_price: source,
+            ..self
+        }
+    }
+
     /// The router with each take-off paying each flight's hired escorts a
     /// day's wages, or not, as `source` says
     /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
@@ -663,6 +681,7 @@ impl AppScreen {
             .with_junk_flags(rulebook.source_for(RuleKey::JunkFlags))
             .with_launcher_sale(rulebook.source_for(RuleKey::LauncherSale))
             .with_raised_max(rulebook.source_for(RuleKey::RaisedMax))
+            .with_event_price(rulebook.source_for(RuleKey::EventPrice))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
@@ -721,6 +740,7 @@ impl AppScreen {
             .with_junk_flags(self.junk_flags)
             .with_launcher_sale(self.launcher_sale)
             .with_raised_max(self.raised_max)
+            .with_event_price(self.event_price)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
@@ -6027,6 +6047,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_event_price_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_event_price(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.event_price(), source);
+            assert_eq!(session.raised_max(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.event_price(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_raised_max_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_raised_max(source);
@@ -6080,6 +6115,7 @@ mod tests {
             ("junk_flags", format!("{:?}", screen.junk_flags)),
             ("launcher_sale", format!("{:?}", screen.launcher_sale)),
             ("raised_max", format!("{:?}", screen.raised_max)),
+            ("event_price", format!("{:?}", screen.event_price)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
@@ -6108,6 +6144,7 @@ mod tests {
             RuleKey::JunkFlags => "junk_flags",
             RuleKey::LauncherSale => "launcher_sale",
             RuleKey::RaisedMax => "raised_max",
+            RuleKey::EventPrice => "event_price",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
             RuleKey::EscortWage => "escort_wage",

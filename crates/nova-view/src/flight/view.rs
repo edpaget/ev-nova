@@ -228,7 +228,9 @@
 //!   ([`FlightView::with_junk_flags`]), when a launcher cannot be sold
 //!   for its ammunition ([`FlightView::with_launcher_sale`]), and how a
 //!   `ModType` 27 outfit raises its target's `Max`
-//!   ([`FlightView::with_raised_max`]).
+//!   ([`FlightView::with_raised_max`]). How an active `öops` event prices
+//!   its commodity on the exchange is set there too
+//!   ([`FlightView::with_event_price`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
 //!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance;
@@ -1111,6 +1113,16 @@ impl<
     pub fn with_raised_max(self, source: RuleSource) -> Self {
         Self {
             session: self.session.map(|session| session.with_raised_max(source)),
+            ..self
+        }
+    }
+
+    /// The flight with an active `öops` event pricing its commodity as
+    /// `source` says ([`Session::with_event_price`]).
+    #[must_use]
+    pub fn with_event_price(self, source: RuleSource) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_event_price(source)),
             ..self
         }
     }
@@ -6079,6 +6091,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::buy_random),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_event_price_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_event_price(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.event_price(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::event_price),
             Ok(RuleSource::Engine)
         );
     }

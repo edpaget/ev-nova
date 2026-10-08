@@ -42,6 +42,7 @@
 //! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b; [`Session`](crate::Session)) | tribbles goods grow only into free space, and perishable goods always decay‡ |
 //! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)) | a launcher cannot be sold while any of its ammunition is held§ |
 //! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)) | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
+//! | [`EventPrice`](RuleKey::EventPrice) | `event_price` | an active event prices its commodity at `BasePrice` + `PriceDelta`, whatever the level, the highest ID winning, and lists a commodity not traded there (`_DoTradeDialog` @0x5dcf8-0x5dd58; [`Session`](crate::Session)) | the level price plus every event's `PriceDelta`\*\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -68,6 +69,13 @@
 //! ¶ The Bible gives the multiplier as the number of items, and says the
 //! `Max` is unchanged with none. It says nothing of selling. Its reading
 //! here refuses a sale only past the maximum it gives after the sale.
+//!
+//! \*\* The Bible gives `PriceDelta` only as "how much to raise or lower
+//! the price", read here as raising the stellar's own price. Under both
+//! readings a commodity price of 4 or less is 5, as in the engine
+//! (@0x5dcc8-0x5dcce), and the Bible's reading leaves an event on a
+//! commodity not traded there unlisted: the Bible is silent on both, so
+//! these are the engine's floor and this port's choice.
 //!
 //! # Adding a rule
 //!
@@ -361,6 +369,17 @@ rule_keys! {
     /// exceeds that maximum after the sale (see
     /// [`outfitter`](crate::outfitter)).
     RaisedMax => "raised_max",
+    /// How an active `öops` event prices its commodity at its stellar. By
+    /// the engine, the price is the commodity's `BasePrice` plus the
+    /// event's `PriceDelta`, whatever the stellar's level; of several
+    /// events on one commodity the highest ID wins, and an event lists a
+    /// commodity the stellar does not otherwise trade (`_DoTradeDialog`
+    /// @0x5dcf8-0x5dd58). By the Bible, every active event's `PriceDelta`
+    /// is added to the stellar's own (level) price, several add up, and an
+    /// event on a commodity not traded there moves nothing. Under both, a
+    /// standard commodity's price of 4 or less is 5 (see
+    /// [`market`](crate::market)).
+    EventPrice => "event_price",
 }
 
 impl RuleKey {
@@ -506,9 +525,12 @@ mod tests {
                 RuleKey::BuyRandom,
                 RuleKey::JunkFlags,
                 RuleKey::LauncherSale,
-                RuleKey::RaisedMax
+                RuleKey::RaisedMax,
+                RuleKey::EventPrice
             ]
         );
+        assert_eq!(RuleKey::EventPrice.key(), "event_price");
+        assert_eq!(RuleKey::from_key("event_price"), Some(RuleKey::EventPrice));
         assert_eq!(RuleKey::RaisedMax.key(), "raised_max");
         assert_eq!(RuleKey::from_key("raised_max"), Some(RuleKey::RaisedMax));
         assert_eq!(RuleKey::LauncherSale.key(), "launcher_sale");

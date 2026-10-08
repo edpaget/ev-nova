@@ -356,6 +356,20 @@ mod tests {
     }
 
     #[test]
+    fn the_event_price_rule_is_overridden_by_its_key() {
+        let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"event_price": "bible"}}"#);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine().with_override(RuleKey::EventPrice, RuleSource::Bible)
+        );
+        let (rulebook, _) =
+            rulebook_of(r#"{"rules": "bible", "rule_overrides": {"event_price": "engine"}}"#);
+        assert_eq!(rulebook.source_for(RuleKey::EventPrice), RuleSource::Engine);
+        assert_eq!(rulebook.source_for(RuleKey::RaisedMax), RuleSource::Bible);
+    }
+
+    #[test]
     fn the_raised_max_rule_is_overridden_by_its_key() {
         let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"raised_max": "bible"}}"#);
         assert_eq!(warnings, Vec::<String>::new());
