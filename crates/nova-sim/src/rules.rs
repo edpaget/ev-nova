@@ -13,12 +13,14 @@ pub trait Context {
 }
 
 /// What a rule is, told without running it: its name, the original's
-/// address or routine it reproduces, and the disputed rule it reads.
+/// address or routine it reproduces, the disputed rule it reads, and
+/// whether it draws on the chance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Descriptor {
     name: &'static str,
     reproduces: &'static str,
     reads: Option<RuleKey>,
+    draws: bool,
 }
 
 impl Descriptor {
@@ -40,6 +42,13 @@ impl Descriptor {
     #[must_use]
     pub fn reads(&self) -> Option<RuleKey> {
         self.reads
+    }
+
+    /// Whether the rule draws on the chance: set by the constructor that
+    /// built a drawing rule, and by no other.
+    #[must_use]
+    pub fn draws(&self) -> bool {
+        self.draws
     }
 }
 
@@ -70,6 +79,8 @@ enum CheckHow<C, R> {
         engine: fn(&C) -> Result<(), R>,
         other: fn(&C) -> Result<(), R>,
     },
+    /// One reading, drawing on the chance it is handed.
+    Draws(fn(&C, &mut dyn Chance) -> Result<(), R>),
 }
 
 impl<C, R> Check<C, R> {
@@ -85,6 +96,7 @@ impl<C, R> Check<C, R> {
                 name,
                 reproduces,
                 reads: None,
+                draws: false,
             },
             how: CheckHow::Plain(f),
         }
@@ -105,8 +117,28 @@ impl<C, R> Check<C, R> {
                 name,
                 reproduces,
                 reads: Some(key),
+                draws: false,
             },
             how: CheckHow::Disputed { key, engine, other },
+        }
+    }
+
+    /// A check with one reading, `f`, that draws on the chance it is
+    /// handed. [`Checks::all_refusals`] reports it without running it.
+    #[must_use]
+    pub const fn drawing(
+        name: &'static str,
+        reproduces: &'static str,
+        f: fn(&C, &mut dyn Chance) -> Result<(), R>,
+    ) -> Self {
+        Self {
+            about: Descriptor {
+                name,
+                reproduces,
+                reads: None,
+                draws: true,
+            },
+            how: CheckHow::Draws(f),
         }
     }
 
@@ -118,14 +150,30 @@ impl<C, R> Check<C, R> {
 }
 
 impl<C: Context, R> Check<C, R> {
-    /// Runs the check on `facts`, in the reading the rule set chooses.
-    fn decide(&self, facts: &C) -> Result<(), R> {
+    /// Runs the check on `facts`, in the reading the rule set chooses,
+    /// drawing on `chance` if it is a drawing check.
+    fn run(&self, facts: &C, chance: &mut dyn Chance) -> Result<(), R> {
         match self.how {
             CheckHow::Plain(f) => f(facts),
             CheckHow::Disputed { key, engine, other } => {
                 reading(facts.rulebook(), key, engine, other)(facts)
             }
+            CheckHow::Draws(f) => f(facts, chance),
         }
+    }
+
+    /// What the check makes of `facts` without drawing: a drawing check
+    /// is reported as such and not run, and a check that passes gives
+    /// `None`.
+    fn verdict(&self, facts: &C) -> Option<Verdict<R>> {
+        let decided = match self.how {
+            CheckHow::Plain(f) => f(facts),
+            CheckHow::Disputed { key, engine, other } => {
+                reading(facts.rulebook(), key, engine, other)(facts)
+            }
+            CheckHow::Draws(_) => return Some(Verdict::Draws),
+        };
+        decided.err().map(Verdict::Refuses)
     }
 }
 
@@ -185,6 +233,8 @@ impl<C, R> FromIterator<Check<C, R>> for Checks<C, R> {
 pub enum Verdict<R> {
     /// It refused, with this reason.
     Refuses(R),
+    /// It draws on the chance, so it was not run.
+    Draws,
 }
 
 impl<C, R> Checks<C, R> {
@@ -196,20 +246,21 @@ impl<C, R> Checks<C, R> {
 
 impl<C: Context, R> Checks<C, R> {
     /// The first refusal, in the list's order, or `Ok` when every check
-    /// passes. The checks after a refusal are not run.
-    pub fn first_refusal(&self, facts: &C, _chance: &mut dyn Chance) -> Result<(), R> {
-        self.0.iter().try_for_each(|check| check.decide(facts))
+    /// passes. The checks after a refusal are not run, so the drawing
+    /// checks draw on `chance` in the list's order, and stop drawing at
+    /// the first refusal.
+    pub fn first_refusal(&self, facts: &C, chance: &mut dyn Chance) -> Result<(), R> {
+        self.0.iter().try_for_each(|check| check.run(facts, chance))
     }
 
     /// Every check that refuses, in the list's order, each with its
-    /// descriptor. The checks that pass are left out.
+    /// descriptor. The checks that pass are left out. It is handed no
+    /// chance, so it draws on none: each drawing check is reported as
+    /// [`Verdict::Draws`] and not run.
     pub fn all_refusals(&self, facts: &C) -> Vec<(&Descriptor, Verdict<R>)> {
         self.0
             .iter()
-            .filter_map(|check| match check.decide(facts) {
-                Ok(()) => None,
-                Err(reason) => Some((check.about(), Verdict::Refuses(reason))),
-            })
+            .filter_map(|check| Some((check.about(), check.verdict(facts)?)))
             .collect()
     }
 }
@@ -244,6 +295,7 @@ impl<C, T> Value<C, T> {
                 name,
                 reproduces,
                 reads: None,
+                draws: false,
             },
             how: ValueHow::Plain(f),
         }
@@ -264,6 +316,7 @@ impl<C, T> Value<C, T> {
                 name,
                 reproduces,
                 reads: Some(key),
+                draws: false,
             },
             how: ValueHow::Disputed { key, engine, other },
         }
@@ -292,6 +345,7 @@ impl<C: Context, T> Value<C, T> {
 mod tests {
     use super::*;
     use crate::chance::NeverFires;
+    use crate::testkit::Scripted;
 
     /// The outfitter's Sell flag's local copy of `OutfitFlags::CANNOT_SELL`,
     /// so this module depends on no shop.
@@ -442,11 +496,15 @@ mod tests {
     enum OfferRefusal {
         NoBar,
         TooGreen,
+        LostTheRoll,
+        LostTheSecondRoll,
     }
 
     /// A toy mission offer: what it asks of the pilot.
     struct MissionOffer {
         min_combat: u16,
+        odds: u8,
+        second_odds: u8,
     }
 
     /// What the toy offer reads about the pilot.
@@ -475,11 +533,20 @@ mod tests {
         }
     }
 
+    /// A chance that fires on its first two questions.
+    fn lucky() -> Scripted {
+        Scripted::answering(&[true, true])
+    }
+
     /// An offer asking a combat rating of 10 of a pilot rated 10, at a
     /// stellar with a bar, under the default rule set.
     fn offer() -> Offer {
         Offer {
-            mission: MissionOffer { min_combat: 10 },
+            mission: MissionOffer {
+                min_combat: 10,
+                odds: 40,
+                second_odds: 60,
+            },
             pilot: PilotRecord {
                 combat: 10,
                 cash: 1000,
@@ -491,7 +558,8 @@ mod tests {
 
     /// The toy offer's checks: a bar, then the combat rating (disputed:
     /// the engine refuses below the offer's minimum, the other reading at
-    /// or below it; `CrimeGains` is only a convenient key).
+    /// or below it; `CrimeGains` is only a convenient key), then two
+    /// rolls on the chance, at the offer's odds and then its second odds.
     fn offer_checks() -> Checks<Offer, OfferRefusal> {
         [
             Check::plain("bar", "toy: the stellar's bar", |facts: &Offer| {
@@ -517,6 +585,28 @@ mod tests {
                         Err(OfferRefusal::TooGreen)
                     } else {
                         Ok(())
+                    }
+                },
+            ),
+            Check::drawing(
+                "roll",
+                "toy: the offer's Rand draw",
+                |facts: &Offer, chance: &mut dyn Chance| {
+                    if chance.fires(facts.mission.odds) {
+                        Ok(())
+                    } else {
+                        Err(OfferRefusal::LostTheRoll)
+                    }
+                },
+            ),
+            Check::drawing(
+                "second roll",
+                "toy: a second Rand draw",
+                |facts: &Offer, chance: &mut dyn Chance| {
+                    if chance.fires(facts.mission.second_odds) {
+                        Ok(())
+                    } else {
+                        Err(OfferRefusal::LostTheSecondRoll)
                     }
                 },
             ),
@@ -550,7 +640,7 @@ mod tests {
                 RuleSource::Bible => Err(OfferRefusal::TooGreen),
             };
             assert_eq!(
-                checks.first_refusal(&facts, &mut NeverFires),
+                checks.first_refusal(&facts, &mut lucky()),
                 expected,
                 "{source:?}"
             );
@@ -563,6 +653,7 @@ mod tests {
                 .err()
                 .map(|reason| ("rating", Verdict::Refuses(reason)))
                 .into_iter()
+                .chain([("roll", Verdict::Draws), ("second roll", Verdict::Draws)])
                 .collect();
             assert_eq!(all, expected, "{source:?}");
         }
@@ -575,14 +666,14 @@ mod tests {
             rules: Rulebook::default().with_override(RuleKey::TradeDebt, RuleSource::Bible),
             ..offer()
         };
-        assert_eq!(checks.first_refusal(&engine, &mut NeverFires), Ok(()));
+        assert_eq!(checks.first_refusal(&engine, &mut lucky()), Ok(()));
         let bible = Offer {
             rules: Rulebook::new(RuleSource::Bible)
                 .with_override(RuleKey::TradeDebt, RuleSource::Engine),
             ..offer()
         };
         assert_eq!(
-            checks.first_refusal(&bible, &mut NeverFires),
+            checks.first_refusal(&bible, &mut lucky()),
             Err(OfferRefusal::TooGreen)
         );
     }
@@ -596,8 +687,81 @@ mod tests {
             .collect();
         assert_eq!(
             reads,
-            [("bar", None), ("rating", Some(RuleKey::CrimeGains))]
+            [
+                ("bar", None),
+                ("rating", Some(RuleKey::CrimeGains)),
+                ("roll", None),
+                ("second roll", None),
+            ]
         );
+    }
+
+    #[test]
+    fn draws_happen_in_rule_order() {
+        let mut chance = Scripted::answering(&[true, false]);
+        assert_eq!(
+            offer_checks().first_refusal(&offer(), &mut chance),
+            Err(OfferRefusal::LostTheSecondRoll)
+        );
+        assert_eq!(chance.asked, [40, 60]);
+    }
+
+    #[test]
+    fn draws_stop_at_the_first_refusal() {
+        let checks = offer_checks();
+        let no_bar = Offer {
+            stellar: Stellar { has_bar: false },
+            ..offer()
+        };
+        let mut chance = lucky();
+        assert_eq!(
+            checks.first_refusal(&no_bar, &mut chance),
+            Err(OfferRefusal::NoBar)
+        );
+        assert!(chance.asked.is_empty());
+        let mut chance = Scripted::answering(&[false, true]);
+        assert_eq!(
+            checks.first_refusal(&offer(), &mut chance),
+            Err(OfferRefusal::LostTheRoll)
+        );
+        assert_eq!(chance.asked, [40]);
+    }
+
+    #[test]
+    fn all_refusals_reports_a_drawing_check_without_drawing() {
+        let checks = offer_checks();
+        let mut chance = Scripted::answering(&[false]);
+        let all: Vec<_> = checks
+            .all_refusals(&offer())
+            .into_iter()
+            .map(|(about, verdict)| (about.name(), about.draws(), verdict))
+            .collect();
+        assert_eq!(
+            all,
+            [
+                ("roll", true, Verdict::Draws),
+                ("second roll", true, Verdict::Draws),
+            ]
+        );
+        assert!(chance.asked.is_empty());
+        assert_eq!(
+            checks.first_refusal(&offer(), &mut chance),
+            Err(OfferRefusal::LostTheRoll),
+            "the first scripted answer is still the first given"
+        );
+    }
+
+    #[test]
+    fn a_drawing_list_is_repeatable_on_chances_scripted_alike() {
+        let checks = offer_checks();
+        let facts = offer();
+        let mut first = Scripted::answering(&[true, false]);
+        let mut second = Scripted::answering(&[true, false]);
+        assert_eq!(
+            checks.first_refusal(&facts, &mut first),
+            checks.first_refusal(&facts, &mut second)
+        );
+        assert_eq!(first.asked, second.asked);
     }
 
     /// The toy offer's pay: a tenth of the pilot's cash by the engine, a
@@ -669,6 +833,9 @@ mod tests {
                 |_: &Panics| panic!("third's engine reading ran"),
                 |_: &Panics| panic!("third's other reading ran"),
             ),
+            Check::drawing("fourth", "@0x3000", |_: &Panics, _: &mut dyn Chance| {
+                panic!("fourth ran")
+            }),
         ]
         .into()
     }
@@ -678,14 +845,22 @@ mod tests {
         let checks = panicking();
         let listed: Vec<_> = checks
             .descriptors()
-            .map(|about| (about.name(), about.reproduces(), about.reads()))
+            .map(|about| {
+                (
+                    about.name(),
+                    about.reproduces(),
+                    about.reads(),
+                    about.draws(),
+                )
+            })
             .collect();
         assert_eq!(
             listed,
             [
-                ("first", "@0x1000", None),
-                ("second", "a routine", None),
-                ("third", "@0x2000", Some(RuleKey::TradeDebt)),
+                ("first", "@0x1000", None, false),
+                ("second", "a routine", None, false),
+                ("third", "@0x2000", Some(RuleKey::TradeDebt), false),
+                ("fourth", "@0x3000", None, true),
             ]
         );
     }
