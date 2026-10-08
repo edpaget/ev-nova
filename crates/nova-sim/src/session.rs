@@ -255,6 +255,7 @@ mod hail;
 mod hire;
 mod persons;
 
+pub use edit::RelocateRefusal;
 pub use persons::PersonQuote;
 
 use std::collections::{BTreeMap, BTreeSet};
