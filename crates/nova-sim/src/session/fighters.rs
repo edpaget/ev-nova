@@ -39,8 +39,8 @@ use super::Session;
 use crate::ai::Goal;
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
 use crate::board::MAX_SHIPS_IN_SYSTEM;
-use crate::catalog::{OutfitId, ShipId};
-use crate::combat::armament::{OutfitRounds, Rounds, Trigger, outfit_rounds};
+use crate::catalog::{OutfitId, ShipId, WeaponId};
+use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, NO_SPRITE};
@@ -340,6 +340,40 @@ impl Session {
             );
         }
         room
+    }
+
+    /// For every outfit whose first mod is [`MOD_AMMO`] naming a weapon of
+    /// `MaxAmmo` above 0, the most of it the player may own: that
+    /// `MaxAmmo` times the player's launchers of the weapon, stock weapons
+    /// included, as the 16-bit product the original compares
+    /// (`_HasMaxOfItem` @0x457e-0x45e4, `imulw` @0x45aa). An outfit with a
+    /// [`MOD_AMMO`] mod in a later slot is not capped, so
+    /// [`Arsenal::ammo_outfits`](crate::combat::armament::Arsenal::ammo_outfits)
+    /// is not read here.
+    pub(super) fn ammo_caps(&self) -> BTreeMap<OutfitId, i16> {
+        let mut caps = BTreeMap::new();
+        for record in &self.outfits {
+            let (kind, val) = record.mods[0];
+            if kind != MOD_AMMO {
+                continue;
+            }
+            let weapon = WeaponId(val);
+            let Some(spec) = self.arsenal.weapon(weapon).filter(|spec| spec.max_ammo > 0) else {
+                continue;
+            };
+            let launchers: u32 = self
+                .armament
+                .mounts()
+                .iter()
+                .filter(|mount| mount.spec.id == weapon)
+                .map(|mount| mount.count)
+                .sum();
+            caps.insert(
+                record.id,
+                (spec.max_ammo as i16).wrapping_mul(launchers as i16),
+            );
+        }
+        caps
     }
 
     /// The player's fighters out of type `carried`: none for `None`.
@@ -1610,7 +1644,12 @@ mod tests {
         let mut two = spaceport();
         two.hulls[0].weapons[0].count = 2;
         assert_eq!(viper_for_sale(&two, 7, 0), Ok(()), "two bays hold 8");
-        assert_eq!(viper_for_sale(&two, 8, 0), full);
+        // The fighters aboard (the outfit owned) reach `MaxAmmo` x bays:
+        // `_HasMaxOfItem` (@0x4e87d) refuses before `_CanBuyFighter`
+        // (@0x4e938) is asked.
+        let max_owned = Err(crate::outfitter::OutfitRefusal::MaxOwned);
+        assert_eq!(viper_for_sale(&two, 8, 0), max_owned);
+        assert_eq!(viper_for_sale(&two, 7, 1), full, "one out");
         let mut by_outfit = spaceport();
         by_outfit.weapons[0].max_ammo = 0;
         by_outfit
@@ -1623,7 +1662,11 @@ mod tests {
         assert_eq!(viper_for_sale(&by_outfit, 4, 1), full);
         let mut no_bay = spaceport();
         no_bay.hulls[0].weapons.retain(|stock| stock.weapon != BAY);
-        assert_eq!(viper_for_sale(&no_bay, 0, 0), full, "no bay for it");
+        assert_eq!(
+            viper_for_sale(&no_bay, 0, 0),
+            max_owned,
+            "no bay for it: MaxAmmo x 0"
+        );
         // Each bay's fighters are counted on their own.
         let mut session = fleet(&catalog, 0, vec![out(); 4]);
         session.pilot.cash = 1_000_000;
@@ -1639,6 +1682,140 @@ mod tests {
             Ok(()),
             "the Dart bay has room, the Viper bay none"
         );
+    }
+
+    /// A missile launcher, 170, of `MaxAmmo` 10, held by outfit 171.
+    const LAUNCHER: WeaponId = WeaponId(170);
+    /// The launcher's ammunition outfit.
+    const MISSILES: OutfitId = OutfitId(172);
+    /// An outfit naming the launcher's ammunition in its second mod.
+    const SECOND_SLOT: OutfitId = OutfitId(173);
+    /// Ammunition, 176, for a launcher, 174, of `MaxAmmo` 0, held by
+    /// outfit 175.
+    const UNCAPPED: OutfitId = OutfitId(176);
+
+    /// [`spaceport`] with the launchers above and their ammunition, all
+    /// massless and of `Max` 9999.
+    fn missile_port() -> FakePilotCatalog {
+        let mut catalog = spaceport();
+        catalog.weapons.push(WeaponRecord {
+            max_ammo: 10,
+            ..weapon(170)
+        });
+        catalog.weapons.push(weapon(174));
+        let massless = |record: OutfitRecord| OutfitRecord {
+            mass: 0,
+            max: 9999,
+            ..record
+        };
+        catalog.outfits.extend([
+            massless(outfit(171, &[(MOD_WEAPON, 170)])),
+            massless(outfit(172, &[(MOD_AMMO, 170)])),
+            massless(outfit(
+                173,
+                &[(crate::stats::MORE_SPEED, 1), (MOD_AMMO, 170)],
+            )),
+            massless(outfit(175, &[(MOD_WEAPON, 174)])),
+            massless(outfit(176, &[(MOD_AMMO, 174)])),
+        ]);
+        catalog
+    }
+
+    /// Whether the outfitter sells one more of `outfit` to a new pilot
+    /// owning `owned` on top of the outfits its ship comes with (its stock
+    /// weapons among them).
+    fn ammo_for_sale(
+        catalog: &FakePilotCatalog,
+        owned: &[(i16, u16)],
+        outfit: OutfitId,
+    ) -> Result<(), crate::outfitter::OutfitRefusal> {
+        let mut pilot = pilot(catalog, 0, Vec::new());
+        pilot.cash = 1_000_000;
+        for &(id, n) in owned {
+            *pilot.outfits.entry(OutfitId(id)).or_insert(0) += n;
+        }
+        let mut session = Session::fly(catalog, pilot).expect("flies");
+        land_now(&mut session).expect("lands");
+        session
+            .outfitter(&mut NeverFires)
+            .expect("an outfitter")
+            .check(crate::outfitter::OutfitOrder {
+                outfit,
+                direction: crate::market::Direction::Buy,
+            })
+    }
+
+    #[test]
+    fn ammunition_is_capped_at_its_max_ammo_times_the_launchers() {
+        let catalog = missile_port();
+        let max_owned = Err(crate::outfitter::OutfitRefusal::MaxOwned);
+        assert_eq!(
+            ammo_for_sale(&catalog, &[(171, 1), (172, 9)], MISSILES),
+            Ok(())
+        );
+        assert_eq!(
+            ammo_for_sale(&catalog, &[(171, 1), (172, 10)], MISSILES),
+            max_owned,
+            "MaxAmmo 10, one launcher"
+        );
+        assert_eq!(
+            ammo_for_sale(&catalog, &[(171, 2), (172, 10)], MISSILES),
+            Ok(()),
+            "two launchers"
+        );
+        assert_eq!(
+            ammo_for_sale(&catalog, &[(171, 2), (172, 20)], MISSILES),
+            max_owned
+        );
+        assert_eq!(
+            ammo_for_sale(&catalog, &[], MISSILES),
+            max_owned,
+            "no launcher"
+        );
+        let mut stock = missile_port();
+        stock.hulls[0].weapons.push(StockWeapon {
+            weapon: LAUNCHER,
+            count: 1,
+            ammo: 0,
+        });
+        assert_eq!(
+            ammo_for_sale(&stock, &[(171, 1), (172, 10)], MISSILES),
+            Ok(()),
+            "a stock launcher counts"
+        );
+        assert_eq!(ammo_for_sale(&stock, &[(172, 10)], MISSILES), max_owned);
+    }
+
+    #[test]
+    fn only_a_first_mod_of_ammunition_is_capped() {
+        let catalog = missile_port();
+        assert_eq!(
+            ammo_for_sale(&catalog, &[(171, 1), (173, 10)], SECOND_SLOT),
+            Ok(())
+        );
+        assert_eq!(ammo_for_sale(&catalog, &[(173, 10)], SECOND_SLOT), Ok(()));
+    }
+
+    #[test]
+    fn ammunition_of_a_launcher_of_max_ammo_0_is_not_capped() {
+        let catalog = missile_port();
+        assert_eq!(
+            ammo_for_sale(&catalog, &[(175, 1), (176, 10)], UNCAPPED),
+            Ok(())
+        );
+        assert_eq!(ammo_for_sale(&catalog, &[(176, 10)], UNCAPPED), Ok(()));
+    }
+
+    #[test]
+    fn the_ammunition_cap_is_a_16_bit_product() {
+        let mut catalog = missile_port();
+        catalog.weapons.last_mut().expect("weapon 174").max_ammo = 16_384;
+        // 16,384 x 2 wraps to -32,768: none can be bought.
+        assert_eq!(
+            ammo_for_sale(&catalog, &[(175, 2)], UNCAPPED),
+            Err(crate::outfitter::OutfitRefusal::MaxOwned)
+        );
+        assert_eq!(ammo_for_sale(&catalog, &[(175, 1)], UNCAPPED), Ok(()));
     }
 
     /// Sells a Viper Bay from a pilot with `bays` bays, `aboard` Vipers

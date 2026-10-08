@@ -1971,6 +1971,7 @@ impl Session {
             standard: &self.standard(),
             site,
             fighter_room: &self.fighter_room(),
+            ammo_caps: &self.ammo_caps(),
             buy_random: self.buy_random,
             hardpoints: self.hardpoints(),
             launchers: &self.launchers(),

@@ -87,10 +87,11 @@
 //!
 //! Each order buys or sells one, and a refused one changes nothing. A buy
 //! is refused when the outfit cannot be bought here, the player owns its
-//! `Max` already, it is a gun or a turret past the ship's limit (below),
-//! it is a fighter whose bays have no room left (their
-//! [`capacity`](crate::bay::capacity), the fighters out counted against
-//! it, `_CanBuyFighter` @0x5a82; refused as `Max` owned), the ship's
+//! ammunition cap (below) or its `Max` already, it is a gun or a turret
+//! past the ship's limit (below), it is a fighter whose bays have no room
+//! left (their [`capacity`](crate::bay::capacity), the fighters out
+//! counted against it, `_CanBuyFighter` @0x5a82; refused as `Max`
+//! owned), the ship's
 //! `Holds` is negative and the outfit adds mass
 //! space, there is not the free mass for it, or the player cannot pay. A
 //! buy pays the price and adds one, or with
@@ -103,6 +104,20 @@
 //! ammunition must be sold first (below). A sale pays [`RESALE_PERCENT`] of the price and removes one.
 //! Selling cargo space below the cargo held is allowed: the exchange then
 //! shows no space free until enough is sold.
+//!
+//! **Ammunition cap** (`_HasMaxOfItem` @0x457e-0x45e4, before `Max`). An
+//! outfit whose **first** mod is `ModType` 3 naming a weapon of `MaxAmmo`
+//! above 0 is capped at that `MaxAmmo` times the player's count of the
+//! weapon, stock weapons included; a `ModType` 3 in a later slot is not
+//! capped. The product is 16-bit (`imulw` @0x45aa), compared signed, and
+//! the buy is refused, as `Max` owned, when the count owned is at least
+//! the cap: with no launcher the cap is 0 and none can be bought.
+//! `ModType` 27 never raises it. `_CanBuyOutfitItem` asks it (@0x4e87d)
+//! before `_CanBuyFighter` (@0x4e938), so a fighter whose bay weapon has a
+//! `MaxAmmo` is refused as `Max` owned once the fighters aboard reach
+//! `MaxAmmo` x bays, and for want of room only while some are out. In
+//! stock data only fighter bays have a `MaxAmmo`. The session works out
+//! the caps from the player's armament.
 //!
 //! **Guns and turrets** (`_HasMaxOfItem` @0x46c8-0x4866, after `Max`).
 //! The guns owned are the count of every outfit owned flagged
@@ -148,7 +163,8 @@
 //! (`STR#` 2002 #208-212); [`Outfitter::lc_names`] carries the names its
 //! words need.
 //!
-//! Not modelled yet: `MaxAmmo` for ammunition other than fighters. Which
+//! Not modelled yet: the lowered `Max` that `_HasMaxOfItem` reports out
+//! when the ammunition cap is the smaller (@0x45b2). Which
 //! outfits a ship bought in the [`shipyard`](crate::shipyard) keeps is
 //! the shipyard's (flag 0x0004); flag 0x0020 only concerns a mission's
 //! change of ship.
@@ -645,6 +661,12 @@ pub(crate) struct Shop<'a> {
     /// For every ammunition outfit of a fighter bay, the fighters the
     /// ship's bays can still take (see [`bay`](crate::bay)).
     pub(crate) fighter_room: &'a BTreeMap<OutfitId, u32>,
+    /// For every ammunition outfit whose first mod is `ModType` 3 naming
+    /// a weapon of `MaxAmmo` above 0, the most of it the player may own:
+    /// that `MaxAmmo` times the player's launchers of the weapon, as a
+    /// 16-bit product (`_HasMaxOfItem` @0x457e-0x45e4; see the module
+    /// docs).
+    pub(crate) ammo_caps: &'a BTreeMap<OutfitId, i16>,
     /// How `BuyRandom` reads ([`buy_roll`]).
     pub(crate) buy_random: RuleSource,
     /// The ship class's `MaxGun` and `MaxTur`.
@@ -765,6 +787,14 @@ impl Shop<'_> {
         }
     }
 
+    /// Whether `owned` of `outfit` reach its ammunition cap, if it has
+    /// one (`_HasMaxOfItem` @0x45cd-0x45d1; see the module docs).
+    fn at_ammo_cap(&self, outfit: OutfitId, owned: u16) -> bool {
+        self.ammo_caps
+            .get(&outfit)
+            .is_some_and(|&cap| i32::from(owned) >= i32::from(cap))
+    }
+
     /// The outfitter, for `pilot`, each outfit's roll for the day kept in
     /// `rolls` and any not drawn yet drawn on `chance` (see the module
     /// docs); `None` when the stellar has none.
@@ -815,6 +845,8 @@ impl Shop<'_> {
             let mass = unit_mass(record, self.fields.mass);
             let buying = if !buyable {
                 Err(OutfitRefusal::NotForSale)
+            } else if self.at_ammo_cap(record.id, owned) {
+                Err(OutfitRefusal::MaxOwned)
             } else if i64::from(owned)
                 >= raised_max(record, &pilot.outfits, self.records, self.raised_max)
             {
@@ -949,6 +981,7 @@ mod tests {
 
     static NO_STANDARD: BTreeMap<OutfitId, u16> = BTreeMap::new();
     static NO_FIGHTERS: BTreeMap<OutfitId, u32> = BTreeMap::new();
+    static NO_CAPS: BTreeMap<OutfitId, i16> = BTreeMap::new();
     static NO_LAUNCHERS: BTreeMap<OutfitId, Launcher> = BTreeMap::new();
 
     /// Room for more guns and turrets than any test buys.
@@ -966,6 +999,7 @@ mod tests {
             standard: &NO_STANDARD,
             site,
             fighter_room: &NO_FIGHTERS,
+            ammo_caps: &NO_CAPS,
             buy_random: RuleSource::Engine,
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
@@ -1634,6 +1668,7 @@ mod tests {
                 standard: &NO_STANDARD,
                 site: &port(),
                 fighter_room,
+                ammo_caps: &NO_CAPS,
                 buy_random: RuleSource::Engine,
                 hardpoints: ROOMY,
                 launchers: &NO_LAUNCHERS,
@@ -1727,6 +1762,7 @@ mod tests {
             standard: &NO_STANDARD,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
+            ammo_caps: &NO_CAPS,
             buy_random: RuleSource::Engine,
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
@@ -1745,6 +1781,7 @@ mod tests {
             standard: &NO_STANDARD,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
+            ammo_caps: &NO_CAPS,
             buy_random: RuleSource::Engine,
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
@@ -1760,6 +1797,7 @@ mod tests {
             standard: &NO_STANDARD,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
+            ammo_caps: &NO_CAPS,
             buy_random: RuleSource::Engine,
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
@@ -2439,6 +2477,115 @@ mod tests {
         };
         assert_eq!(at(&room(0)), Err(OutfitRefusal::BaysFull));
         assert_eq!(at(&room(1)), Ok(()));
+    }
+
+    /// Whether one more of outfit 200 of [`raisers`] can be bought owning
+    /// `owned`, its ammunition cap `cap` if any and its fighter room
+    /// `room` if any.
+    fn capped(
+        owned: &[(i16, u16)],
+        cap: Option<i16>,
+        room: Option<u32>,
+    ) -> Result<(), OutfitRefusal> {
+        let records = raisers();
+        let site = port();
+        let ammo_caps: BTreeMap<OutfitId, i16> =
+            cap.map(|cap| (OutfitId(200), cap)).into_iter().collect();
+        let fighter_room: BTreeMap<OutfitId, u32> =
+            room.map(|room| (OutfitId(200), room)).into_iter().collect();
+        let outfitter = Shop {
+            ammo_caps: &ammo_caps,
+            fighter_room: &fighter_room,
+            ..shop(&records, &site)
+        }
+        .outfitter(&owning(owned), &mut DayRolls::default(), &mut NeverFires)
+        .expect("open");
+        buys(&outfitter, 200)
+    }
+
+    #[test]
+    fn an_ammunition_outfit_is_refused_once_its_cap_is_owned() {
+        assert_eq!(
+            capped(&[(200, 3)], Some(3), None),
+            Err(OutfitRefusal::MaxOwned)
+        );
+        assert_eq!(capped(&[(200, 2)], Some(3), None), Ok(()));
+        assert_eq!(
+            capped(&[(200, 3)], Some(2), None),
+            Err(OutfitRefusal::MaxOwned)
+        );
+        assert_eq!(capped(&[(200, 3)], Some(6), None), Ok(()), "two launchers");
+        assert_eq!(
+            capped(&[(200, 3)], None, None),
+            Ok(()),
+            "uncapped: its Max of 4"
+        );
+        assert_eq!(
+            capped(&[(200, 4)], None, None),
+            Err(OutfitRefusal::MaxOwned)
+        );
+    }
+
+    #[test]
+    fn with_no_launcher_the_cap_is_none_and_none_can_be_bought() {
+        assert_eq!(capped(&[], Some(0), None), Err(OutfitRefusal::MaxOwned));
+        assert_eq!(
+            capped(&[], Some(-2), None),
+            Err(OutfitRefusal::MaxOwned),
+            "wrapped"
+        );
+    }
+
+    #[test]
+    fn a_raiser_does_not_lift_the_ammunition_cap() {
+        assert_eq!(
+            capped(&[(200, 3), (201, 2)], None, None),
+            Ok(()),
+            "raised to 8"
+        );
+        assert_eq!(
+            capped(&[(200, 3), (201, 2)], Some(3), None),
+            Err(OutfitRefusal::MaxOwned)
+        );
+    }
+
+    #[test]
+    fn the_ammunition_cap_comes_before_the_fighter_room() {
+        assert_eq!(
+            capped(&[(200, 3)], Some(3), Some(0)),
+            Err(OutfitRefusal::MaxOwned)
+        );
+        assert_eq!(
+            capped(&[(200, 2)], Some(3), Some(0)),
+            Err(OutfitRefusal::BaysFull)
+        );
+    }
+
+    #[test]
+    fn the_ammunition_cap_refuses_as_max_owned_whatever_the_outfits_max() {
+        let mut records = raisers();
+        let site = port();
+        let ammo_caps = BTreeMap::from([(OutfitId(200), 0)]);
+        for max in [0, -1] {
+            records[0].max = max;
+            let outfitter = Shop {
+                ammo_caps: &ammo_caps,
+                ..shop(&records, &site)
+            }
+            .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+            .expect("open");
+            assert_eq!(
+                buys(&outfitter, 200),
+                Err(OutfitRefusal::MaxOwned),
+                "Max {max}"
+            );
+        }
+        let outfitter = open(&records, &pilot());
+        assert_eq!(
+            buys(&outfitter, 200),
+            Err(OutfitRefusal::NoneAllowed),
+            "uncapped"
+        );
     }
 
     /// The outfitter at [`port`] owning `owned` of `records`, the raised
