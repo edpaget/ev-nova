@@ -146,9 +146,20 @@
 //! flags, so its words are unchanged. The other reading has no limit
 //! ([`RuleKey::OutfitLimit`](crate::RuleKey::OutfitLimit)). Not modelled:
 //! an outfit's `OnPurchase` granting another outfit inside the dialog,
-//! which would move the flags in the original; and the option-held
-//! quantity buy (@0x5c0c0-0x5c2ff), as each order here buys one and is
-//! checked afresh, which stops after one as the original's loop does.
+//! which would move the flags in the original.
+//!
+//! **Counted orders** (`_DoOutfitDialog` @0x5bacf). A plain click buys
+//! or sells one (@0x5c1b8, @0x5c69f). With Option held, the quantity
+//! dialog asks for a count, opening at the maximum
+//! [`Outfitter::count_max`] works out (none when that is 1 or less, and
+//! the click moves one), and the count is bought or sold one at a time
+//! (`Session::outfit_count`). The buy loop (@0x5c1bd-0x5c2ff) re-runs
+//! `_CanBuyOutfitItem` after each grant and the sell loop
+//! (@0x5c6ee-0x5d1b1) checks each sale as a single sale, so a counted
+//! order stops at the first refusal a single order would give: cash,
+//! `Max`, free mass, a gun limit or once an opening for a buy, and the
+//! free mass, a raised `Max`, a launcher's ammunition or none left for a
+//! sale.
 //!
 //! **Ammunition cap** (`_HasMaxOfItem` @0x457e-0x45e4, before `Max`). An
 //! outfit whose **first** mod is `ModType` 3 naming a weapon of `MaxAmmo`
@@ -208,9 +219,12 @@
 //! (`STR#` 2002 #208-212); [`Outfitter::lc_names`] carries the names its
 //! words need.
 //!
-//! Not modelled yet: the lowered `Max` that `_HasMaxOfItem` reports out
-//! when the ammunition cap is the smaller (@0x45b2). Which
-//! outfits a ship bought in the [`shipyard`](crate::shipyard) keeps is
+//! **The reported cap** ([`OutfitRow::cap`]). `_HasMaxOfItem` also
+//! reports out a cap, which only the quantity dialog reads: the `Max`,
+//! lowered to a smaller ammunition cap, replaced by the raised `Max`, and
+//! lowered to the ship's whole gun or turret limit.
+//!
+//! Which outfits a ship bought in the [`shipyard`](crate::shipyard) keeps is
 //! the shipyard's (flag 0x0004); flag 0x0020 only concerns a mission's
 //! change of ship.
 
@@ -391,6 +405,11 @@ pub struct OutfitRow {
     pub owned: u16,
     /// Its `Max`.
     pub max: i16,
+    /// The `Max` that `_HasMaxOfItem(item, 0, &cap)` reports out
+    /// (@0x4512), which the quantity dialog's buy maximum reads: its
+    /// `Max`, as the ammunition cap, a raised `Max` and the gun and
+    /// turret limits change it (see [`Outfitter::count_max`]).
+    pub cap: i16,
     /// Whether one can be bought now, or why not.
     pub buy: Result<(), OutfitRefusal>,
     /// Whether one can be sold now, or why not.
@@ -437,6 +456,73 @@ impl Outfitter {
             Direction::Sell => row.sell,
         }
     }
+
+    /// The count the quantity dialog opens at when `outfit` is bought or
+    /// sold with Option held, as `_DoOutfitDialog` works it out; `None`
+    /// when it opens none and the click moves one, as it does at a count
+    /// of 1 or less (see the module docs' "Counted orders").
+    ///
+    /// A buy opens only while the Buy flag is set
+    /// ([`buy`](OutfitRow::buy) holds). Its count is the cash over the
+    /// price, truncated, at most [`COUNT_CAP`] (that cap when the price
+    /// is nothing or less, @0x5c0ca-0x5c11f); at most `Max` less those
+    /// owned when `Max` is above those owned (@0x5c124-0x5c156); and at
+    /// most the [reported cap](OutfitRow::cap) and that cap less those
+    /// owned (@0x5c170-0x5c19d). Those owned read as 16 bits, signed.
+    /// The engine also skips the dialog when the count is 1 or less
+    /// before the cap is read (@0x5c159), which the cap could only lower.
+    ///
+    /// A sale opens while the Sell flag is set: some owned and not
+    /// [`OutfitFlags::CANNOT_SELL`] (@0x5c563-0x5c595, and each time the
+    /// list is redrawn, `_OutfitFilter` @0x5808c-0x580b1). Free mass, a
+    /// raised `Max` and a launcher's ammunition refuse a sale only inside
+    /// the sell loop, so a sale they refuse still opens the dialog. Its
+    /// count is those owned, read as 16 bits, signed, at most
+    /// [`COUNT_CAP`] (@0x5c5ed-0x5c617).
+    #[must_use]
+    pub fn count_max(&self, outfit: OutfitId, direction: Direction) -> Option<u32> {
+        let row = self.row(outfit)?;
+        let owned = i64::from(row.owned.cast_signed());
+        let most = match direction {
+            Direction::Buy => {
+                row.buy.ok()?;
+                let mut most = if row.price > 0 {
+                    (self.cash / row.price).min(COUNT_CAP)
+                } else {
+                    COUNT_CAP
+                };
+                let max = i64::from(row.max);
+                if max > owned {
+                    most = most.min(max - owned);
+                }
+                let cap = i64::from(row.cap);
+                most.min(cap).min(cap - owned)
+            }
+            Direction::Sell => {
+                if !opens_sale(row.sell) {
+                    return None;
+                }
+                owned.min(COUNT_CAP)
+            }
+        };
+        u32::try_from(most).ok().filter(|&most| most > 1)
+    }
+}
+
+/// The most the quantity dialog offers, bought or sold (`0x7d00`,
+/// `_DoOutfitDialog` @0x5c116, @0x5c606).
+pub const COUNT_CAP: i64 = 32_000;
+
+/// Whether a sale of `sell` sets the Sell flag: it holds, or only the
+/// sell loop's own checks refuse it (see [`Outfitter::count_max`]).
+fn opens_sale(sell: Result<(), OutfitRefusal>) -> bool {
+    matches!(
+        sell,
+        Ok(())
+            | Err(OutfitRefusal::NegativeFreeMass
+                | OutfitRefusal::RaisedFirst { .. }
+                | OutfitRefusal::AmmunitionFirst { .. })
+    )
 }
 
 /// Whether `outfit` is for sale, by tech level alone, at `site`.
@@ -753,7 +839,17 @@ pub(crate) fn raised_max(
     records: &[OutfitRecord],
     source: RuleSource,
 ) -> i64 {
-    let raisers: i64 = records
+    i64::from(record.max).saturating_mul(raise_multiplier(record, owned, records, source))
+}
+
+/// What [`raised_max`] multiplies `record`'s `Max` by: at least 1.
+fn raise_multiplier(
+    record: &OutfitRecord,
+    owned: &BTreeMap<OutfitId, u16>,
+    records: &[OutfitRecord],
+    source: RuleSource,
+) -> i64 {
+    records
         .iter()
         .filter_map(|raiser| Some((raiser, *owned.get(&raiser.id)?)))
         .map(|(raiser, count)| {
@@ -769,8 +865,14 @@ pub(crate) fn raised_max(
             };
             i64::from(count) * mods
         })
-        .fold(0, i64::saturating_add);
-    i64::from(record.max).saturating_mul(raisers.max(1))
+        .fold(0, i64::saturating_add)
+        .max(1)
+}
+
+/// `value` held in the engine's 16 bits, at the least or most they hold
+/// rather than wrapped past it.
+fn saturate_i16(value: i64) -> i16 {
+    i16::try_from(value).unwrap_or(if value < 0 { i16::MIN } else { i16::MAX })
 }
 
 /// How many of the outfits `owned` are flagged `flag`.
@@ -1011,6 +1113,38 @@ impl Shop<'_> {
         }
     }
 
+    /// The cap `_HasMaxOfItem(item, 0, &cap)` reports out for `record`,
+    /// `all` the outfits owned and `armed` the ship's guns (@0x4512),
+    /// when it lets the outfit be bought: its `Max`, lowered to a smaller
+    /// ammunition cap (@0x45b2-0x45c1); replaced by the raised `Max`
+    /// when more than one raiser counts (@0x4681-0x46a0: the engine also
+    /// replaces it when the raised `Max` is the smaller, which with a
+    /// multiplier of 1 it never is); then, for a gun, lowered to the
+    /// ship's whole gun limit (@0x4798-0x47a7) and, for a turret, to its
+    /// whole turret limit (@0x482b-0x483a). Each is held in 16 bits
+    /// ([`saturate_i16`]), where the engine's `imulw` and `addw` wrap.
+    fn reported_max(
+        &self,
+        record: &OutfitRecord,
+        all: &BTreeMap<OutfitId, u16>,
+        armed: &Armed,
+    ) -> i16 {
+        let mut cap = record.max;
+        if let Some(&ammo) = self.ammo_caps.get(&record.id) {
+            cap = cap.min(ammo);
+        }
+        if raise_multiplier(record, all, self.records, self.raised_max) > 1 {
+            cap = saturate_i16(raised_max(record, all, self.records, self.raised_max));
+        }
+        if record.flags & OutfitFlags::GUN != 0 {
+            cap = cap.min(saturate_i16(i64::from(armed.gun_limit)));
+        }
+        if record.flags & OutfitFlags::TURRET != 0 {
+            cap = cap.min(saturate_i16(i64::from(armed.turret_limit)));
+        }
+        cap
+    }
+
     /// The outfitter, for `pilot`, each outfit's roll for the day kept in
     /// `rolls` and any not drawn yet drawn on `chance` (see the module
     /// docs); `None` when the stellar has none.
@@ -1102,6 +1236,7 @@ impl Shop<'_> {
                     mass,
                     owned,
                     max: record.max,
+                    cap: self.reported_max(record, &pilot.outfits, &armed),
                     buy: buying,
                     sell: selling,
                     words: has_max.or(no_space),
@@ -1791,6 +1926,7 @@ mod tests {
                 mass: 1,
                 owned: 2,
                 max: 7,
+                cap: 7,
                 buy: Ok(()),
                 sell: Ok(()),
                 words: None,
@@ -3465,5 +3601,309 @@ mod tests {
         }];
         let outfitter = limited(&heavy, MAP_BOUGHT, &pilot());
         assert_eq!(buy(&outfitter), Err(OutfitRefusal::NoSpaceForAny));
+    }
+
+    // The cap `_HasMaxOfItem` reports.
+
+    /// The cap reported for outfit 200 of `records` owning `owned`, its
+    /// ammunition cap `ammo` if any, on `hardpoints`, the raised `Max`
+    /// read as `source` says.
+    fn reported(
+        records: &[OutfitRecord],
+        owned: &[(i16, u16)],
+        ammo: Option<i16>,
+        hardpoints: Hardpoints,
+        source: RuleSource,
+    ) -> i16 {
+        let site = port();
+        let ammo_caps: BTreeMap<OutfitId, i16> =
+            ammo.map(|cap| (OutfitId(200), cap)).into_iter().collect();
+        let outfitter = Shop {
+            ammo_caps: &ammo_caps,
+            hardpoints,
+            raised_max: source,
+            ..shop(records, &site)
+        }
+        .outfitter(&owning(owned), &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter");
+        row(&outfitter, 200).cap
+    }
+
+    /// The cap reported for outfit 200 of [`raisers`] (`Max` 4), by the
+    /// engine, with room for any gun.
+    fn raised_cap(owned: &[(i16, u16)], ammo: Option<i16>) -> i16 {
+        reported(&raisers(), owned, ammo, ROOMY, RuleSource::Engine)
+    }
+
+    #[test]
+    fn the_reported_cap_is_the_max() {
+        assert_eq!(raised_cap(&[], None), 4);
+        assert_eq!(raised_cap(&[(200, 2)], None), 4, "whatever is owned");
+    }
+
+    #[test]
+    fn the_reported_cap_is_lowered_to_a_smaller_ammunition_cap() {
+        assert_eq!(raised_cap(&[], Some(3)), 3);
+        assert_eq!(raised_cap(&[], Some(4)), 4);
+        assert_eq!(raised_cap(&[], Some(6)), 4, "a larger one leaves the Max");
+    }
+
+    #[test]
+    fn a_raised_max_replaces_the_reported_cap_even_over_a_lower_ammunition_cap() {
+        assert_eq!(raised_cap(&[(201, 2)], None), 8);
+        assert_eq!(raised_cap(&[(201, 2)], Some(3)), 8, "@0x4681-0x46a0");
+        assert_eq!(raised_cap(&[(201, 1)], Some(3)), 3, "one raiser: x1");
+    }
+
+    #[test]
+    fn the_reported_cap_reads_the_raised_max_as_its_rule_says() {
+        // Outfit 203 names outfit 200 twice.
+        let at = |source| reported(&raisers(), &[(203, 1)], None, ROOMY, source);
+        assert_eq!(at(RuleSource::Engine), 8);
+        assert_eq!(at(RuleSource::Bible), 4);
+    }
+
+    #[test]
+    fn the_reported_cap_saturates_at_16_bits() {
+        let mut records = raisers();
+        for (max, cap) in [(30_000, i16::MAX), (-30_000, i16::MIN)] {
+            records[0].max = max;
+            assert_eq!(
+                reported(&records, &[(201, 2)], None, ROOMY, RuleSource::Engine),
+                cap,
+                "Max {max}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_guns_reported_cap_is_lowered_to_the_ships_gun_limit() {
+        let mut records = raisers();
+        records[0].max = 10;
+        records[0].flags = OutfitFlags::GUN;
+        let at = |owned: &[(i16, u16)], guns| {
+            reported(
+                &records,
+                owned,
+                None,
+                hardpoints(guns, 1),
+                RuleSource::Engine,
+            )
+        };
+        assert_eq!(at(&[], 3), 3);
+        assert_eq!(at(&[(200, 1)], 3), 3, "the whole limit, not what is left");
+        assert_eq!(at(&[], 10), 10);
+        assert_eq!(at(&[], 12), 10, "a larger limit leaves the Max");
+    }
+
+    #[test]
+    fn a_turrets_reported_cap_is_lowered_to_the_ships_turret_limit() {
+        let mut records = raisers();
+        records[0].max = 10;
+        let at = |records: &[OutfitRecord], guns, turrets| {
+            reported(
+                records,
+                &[],
+                None,
+                hardpoints(guns, turrets),
+                RuleSource::Engine,
+            )
+        };
+        records[0].flags = OutfitFlags::TURRET;
+        assert_eq!(at(&records, 1, 3), 3);
+        assert_eq!(at(&records, 1, 10), 10);
+        assert_eq!(at(&records, 1, 12), 10);
+        records[0].flags = OutfitFlags::GUN | OutfitFlags::TURRET;
+        assert_eq!(at(&records, 3, 2), 2, "flagged both: the smaller");
+        assert_eq!(at(&records, 2, 3), 2);
+    }
+
+    // The quantity dialog's maximum.
+
+    /// Outfit 128 at `price`, `owned` owned, of `max` and reported `cap`,
+    /// which can be bought and sold.
+    fn counted(price: i64, owned: u16, max: i16, cap: i16) -> OutfitRow {
+        OutfitRow {
+            id: OutfitId(128),
+            name: String::new(),
+            short_name: String::new(),
+            price,
+            mass: 1,
+            owned,
+            max,
+            cap,
+            buy: Ok(()),
+            sell: Ok(()),
+            words: None,
+        }
+    }
+
+    /// The count the dialog opens at to buy `row` with `cash`.
+    fn most_bought(row: OutfitRow, cash: i64) -> Option<u32> {
+        Outfitter {
+            rows: vec![row],
+            cash,
+            ..Outfitter::default()
+        }
+        .count_max(OutfitId(128), Direction::Buy)
+    }
+
+    /// The count the dialog opens at to sell `row`.
+    fn most_sold(row: OutfitRow) -> Option<u32> {
+        Outfitter {
+            rows: vec![row],
+            ..Outfitter::default()
+        }
+        .count_max(OutfitId(128), Direction::Sell)
+    }
+
+    /// The most a row has room for: `Max` and cap alike.
+    const ROOM: i16 = i16::MAX;
+
+    #[test]
+    fn an_outfit_not_listed_opens_no_dialog() {
+        let outfitter = Outfitter::default();
+        assert_eq!(outfitter.count_max(OutfitId(128), Direction::Buy), None);
+        assert_eq!(outfitter.count_max(OutfitId(128), Direction::Sell), None);
+    }
+
+    #[test]
+    fn the_buy_maximum_is_the_cash_over_the_price_truncated() {
+        assert_eq!(most_bought(counted(1000, 0, ROOM, ROOM), 5999), Some(5));
+        assert_eq!(most_bought(counted(1000, 0, ROOM, ROOM), 6000), Some(6));
+    }
+
+    #[test]
+    fn the_buy_maximum_is_at_most_32000() {
+        let at = |cash| most_bought(counted(1, 0, ROOM, ROOM), cash);
+        assert_eq!(at(31_999), Some(31_999));
+        assert_eq!(at(32_000), Some(32_000));
+        assert_eq!(at(32_001), Some(32_000));
+        assert_eq!(at(1_000_000), Some(32_000));
+    }
+
+    #[test]
+    fn an_outfit_priced_at_nothing_or_less_is_bought_up_to_its_max() {
+        for price in [0, -5] {
+            assert_eq!(most_bought(counted(price, 0, 7, 7), 0), Some(7), "{price}");
+            assert_eq!(
+                most_bought(counted(price, 0, ROOM, ROOM), 0),
+                Some(32_000),
+                "{price}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_buy_maximum_is_at_most_the_max_less_those_owned() {
+        assert_eq!(most_bought(counted(1, 4, 10, 20), 1000), Some(6));
+        assert_eq!(most_bought(counted(1, 4, 10, 20), 5), Some(5), "the cash");
+    }
+
+    #[test]
+    fn a_max_owned_already_leaves_the_raised_cap_less_those_owned() {
+        // A raised `Max` lets more be bought than the raw one.
+        assert_eq!(most_bought(counted(1, 4, 4, 8), 1000), Some(4));
+        assert_eq!(most_bought(counted(1, 5, 4, 8), 1000), Some(3));
+        assert_eq!(most_bought(counted(1, 5, 4, 8), 2), Some(2), "the cash");
+    }
+
+    #[test]
+    fn the_buy_maximum_is_at_most_the_reported_cap() {
+        assert_eq!(most_bought(counted(1, 0, 10, 3), 1000), Some(3));
+    }
+
+    #[test]
+    fn the_dialog_offers_a_gun_more_than_the_gun_limit_leaves() {
+        // Guns 128 and 129 owned on a ship of 3: one more can be bought,
+        // and the dialog offers its cap of 3 less the 1 of 128 owned.
+        let records = [gun(128), gun(129)];
+        let outfitter = armed(&records, &owning(&[(128, 1), (129, 1)]), hardpoints(3, 0));
+        assert_eq!(buys(&outfitter, 128), Ok(()));
+        assert_eq!(row(&outfitter, 128).cap, 3);
+        assert_eq!(outfitter.count_max(OutfitId(128), Direction::Buy), Some(2));
+    }
+
+    #[test]
+    fn a_buy_maximum_of_1_or_less_opens_no_dialog() {
+        let at = |cash, cap| most_bought(counted(10, 3, ROOM, cap), cash);
+        assert_eq!(at(19, ROOM), None, "cash for one");
+        assert_eq!(at(20, ROOM), Some(2));
+        assert_eq!(at(0, ROOM), None);
+        assert_eq!(at(-100, ROOM), None, "cash below nothing");
+        assert_eq!(at(1000, 4), None, "a cap one past those owned");
+        assert_eq!(at(1000, 5), Some(2));
+        assert_eq!(at(1000, 2), None, "a cap below those owned");
+        assert_eq!(most_bought(counted(10, 3, 4, 99), 1000), None, "Max");
+        assert_eq!(most_bought(counted(10, 3, 5, 99), 1000), Some(2));
+    }
+
+    #[test]
+    fn a_refused_buy_opens_no_dialog() {
+        let refused = OutfitRow {
+            buy: Err(OutfitRefusal::BoughtThisOpening),
+            ..counted(1, 0, ROOM, ROOM)
+        };
+        assert_eq!(most_bought(refused, 1000), None);
+    }
+
+    #[test]
+    fn the_sale_maximum_is_the_count_owned() {
+        assert_eq!(most_sold(counted(1, 2, ROOM, ROOM)), Some(2));
+        assert_eq!(most_sold(counted(1, 7, 3, 3)), Some(7), "whatever the Max");
+        assert_eq!(most_sold(counted(1, 1, ROOM, ROOM)), None);
+        assert_eq!(most_sold(counted(1, 0, ROOM, ROOM)), None);
+    }
+
+    #[test]
+    fn the_sale_maximum_is_at_most_32000_of_a_count_read_as_16_bits() {
+        let at = |owned| most_sold(counted(1, owned, ROOM, ROOM));
+        assert_eq!(at(32_000), Some(32_000));
+        assert_eq!(at(32_001), Some(32_000));
+        assert_eq!(at(32_767), Some(32_000));
+        assert_eq!(at(32_768), None, "read as -32768");
+        assert_eq!(at(u16::MAX), None, "read as -1");
+    }
+
+    #[test]
+    fn a_sale_the_sell_button_refuses_opens_no_dialog() {
+        // The Sell flag is set only for some owned and not `CANNOT_SELL`
+        // (@0x5c563-0x5c595); the port also refuses an outfit that can't
+        // be sold here, which it never lists.
+        for refusal in [
+            OutfitRefusal::NoneOwned,
+            OutfitRefusal::CannotSell,
+            OutfitRefusal::NotBoughtHere,
+        ] {
+            let refused = OutfitRow {
+                sell: Err(refusal),
+                ..counted(1, 3, ROOM, ROOM)
+            };
+            assert_eq!(most_sold(refused), None, "{refusal:?}");
+        }
+    }
+
+    #[test]
+    fn a_sale_refused_inside_the_engines_loop_still_opens_the_dialog() {
+        // Free mass, a raised `Max` and a launcher's ammunition are
+        // checked each pass of the sell loop (@0x5c735-0x5cbe0), not
+        // before the dialog opens.
+        for refusal in [
+            OutfitRefusal::NegativeFreeMass,
+            OutfitRefusal::RaisedFirst {
+                count: 1,
+                target: OutfitId(200),
+            },
+            OutfitRefusal::AmmunitionFirst {
+                rounds: 2,
+                ammo: Some(OutfitId(158)),
+            },
+        ] {
+            let refused = OutfitRow {
+                sell: Err(refusal),
+                ..counted(1, 3, ROOM, ROOM)
+            };
+            assert_eq!(most_sold(refused), Some(3), "{refusal:?}");
+        }
     }
 }

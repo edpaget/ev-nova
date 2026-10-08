@@ -2234,6 +2234,34 @@ impl Session {
         Ok(())
     }
 
+    /// Buys or sells up to `count` of an outfit as `order` asks, one
+    /// [`outfit`](Self::outfit) order at a time, and stops at the first
+    /// refusal, as `_DoOutfitDialog`'s loops do: the buy loop
+    /// (@0x5c1bd-0x5c2ff) re-runs `_CanBuyOutfitItem` after each grant,
+    /// and the sell loop (@0x5c6ee-0x5d1b1) checks each sale afresh, so
+    /// each pass here is checked as a single order is. It gives how many
+    /// went through, or the refusal of the first, with nothing changed.
+    /// A `count` of none, which the dialog's Cancel gives, changes
+    /// nothing and makes no save due. The count is not checked against
+    /// [`Outfitter::count_max`]: whatever it is, the loop stops where the
+    /// engine's does.
+    pub fn outfit_count(
+        &mut self,
+        order: OutfitOrder,
+        count: u32,
+        chance: &mut dyn Chance,
+    ) -> Result<u32, OutfitRefusal> {
+        let mut done = 0;
+        while done < count {
+            match self.outfit(order, chance) {
+                Ok(()) => done += 1,
+                Err(refusal) if done == 0 => return Err(refusal),
+                Err(_) => break,
+            }
+        }
+        Ok(done)
+    }
+
     /// The shipyard of the stellar the ship is docked at, if it has landed
     /// at one, drawing on `chance` each class's roll for the day not drawn
     /// yet since the landing (see [`shipyard`]). This builds its list
@@ -6623,6 +6651,138 @@ mod tests {
         assert_eq!(session.market().expect("an exchange").free, 30);
         session.outfit(sell(CARGO), &mut NeverFires).expect("sold");
         assert_eq!(session.capacity(), 20);
+    }
+
+    // Counted outfit orders.
+
+    #[test]
+    fn a_counted_buy_stops_when_the_cash_runs_out() {
+        let mut session = outfitted(&outfitting());
+        session.pilot.cash = 3500;
+        assert_eq!(session.outfit_count(buy(SPEED), 5, &mut NeverFires), Ok(3));
+        assert_eq!(session.pilot().owned(SPEED), 3);
+        assert_eq!(session.pilot().cash(), 500);
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn a_counted_buy_stops_at_the_max() {
+        let mut session = outfitted(&outfitting());
+        assert_eq!(
+            session.outfit_count(buy(SPEED), 12, &mut NeverFires),
+            Ok(10)
+        );
+        assert_eq!(session.pilot().owned(SPEED), 10);
+        assert_eq!(session.pilot().cash(), 15_000);
+    }
+
+    #[test]
+    fn a_counted_buy_stops_when_the_free_mass_runs_out() {
+        let mut catalog = outfitting();
+        catalog.outfits[0].mass = 10;
+        let mut session = outfitted(&catalog);
+        assert_eq!(
+            session.outfit_count(buy(SPEED), 5, &mut NeverFires),
+            Ok(3),
+            "30 tons free"
+        );
+    }
+
+    #[test]
+    fn a_counted_buy_of_maps_stops_after_one_as_the_rule_says() {
+        let mut session = outfitted(&limiting());
+        assert_eq!(session.outfit_count(buy(MAP), 3, &mut NeverFires), Ok(1));
+        let mut session = outfitted(&limiting()).with_outfit_limit(RuleSource::Bible);
+        assert_eq!(session.outfit_count(buy(MAP), 3, &mut NeverFires), Ok(3));
+    }
+
+    #[test]
+    fn a_counted_sale_stops_when_none_are_left() {
+        let mut session = outfitted(&outfitting());
+        session
+            .outfit_count(buy(SPEED), 3, &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.outfit_count(sell(SPEED), 5, &mut NeverFires), Ok(3));
+        assert_eq!(session.pilot().owned(SPEED), 0);
+        assert_eq!(session.pilot().cash(), 25_000 - 3000 + 1500);
+    }
+
+    #[test]
+    fn a_counted_sale_stops_before_the_free_mass_goes_below_nothing() {
+        // Two pods adding 10 tons each, and seven 5-ton boosters: 15
+        // tons free, so one pod can be sold and the second cannot.
+        let mut catalog = outfitting();
+        catalog.outfits[0].mass = 5;
+        catalog.outfits.push(OutfitRecord {
+            mass: -10,
+            ..outfit(310, &[])
+        });
+        let mut session = outfitted(&catalog);
+        let pod = OutfitId(310);
+        session
+            .outfit_count(buy(pod), 2, &mut NeverFires)
+            .expect("bought");
+        session
+            .outfit_count(buy(SPEED), 7, &mut NeverFires)
+            .expect("bought");
+        let outfitter = session.outfitter(&mut NeverFires).expect("open");
+        assert_eq!(outfitter.count_max(pod, Direction::Sell), Some(2));
+        assert_eq!(session.outfit_count(sell(pod), 2, &mut NeverFires), Ok(1));
+        assert_eq!(
+            session.outfit(sell(pod), &mut NeverFires),
+            Err(OutfitRefusal::NegativeFreeMass)
+        );
+    }
+
+    #[test]
+    fn a_counted_sale_stops_at_a_raised_max() {
+        // Two racks and two widgets: the first rack sold leaves a `Max`
+        // of 2, the second would leave none.
+        let mut session = outfitted(&raising());
+        session
+            .outfit_count(buy(WIDGET_RACK), 2, &mut NeverFires)
+            .expect("bought");
+        session
+            .outfit_count(buy(WIDGET), 2, &mut NeverFires)
+            .expect("bought");
+        assert_eq!(
+            session
+                .outfitter(&mut NeverFires)
+                .expect("open")
+                .count_max(WIDGET_RACK, Direction::Sell),
+            Some(2)
+        );
+        assert_eq!(
+            session.outfit_count(sell(WIDGET_RACK), 2, &mut NeverFires),
+            Ok(1)
+        );
+        assert_eq!(session.pilot().owned(WIDGET_RACK), 1);
+    }
+
+    #[test]
+    fn a_counted_order_refused_at_once_changes_nothing() {
+        let mut session = outfitted(&outfitting());
+        session.pilot.cash = 500;
+        let before = session.pilot().clone();
+        assert_eq!(
+            session.outfit_count(buy(SPEED), 3, &mut NeverFires),
+            Err(OutfitRefusal::CannotAfford)
+        );
+        assert_eq!(
+            session.outfit_count(sell(SPEED), 3, &mut NeverFires),
+            Err(OutfitRefusal::NoneOwned)
+        );
+        assert_eq!(session.pilot(), &before);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_count_of_none_buys_nothing_and_makes_no_save_due() {
+        let mut session = outfitted(&outfitting());
+        let before = session.pilot().clone();
+        assert_eq!(session.outfit_count(buy(SPEED), 0, &mut NeverFires), Ok(0));
+        assert_eq!(session.pilot(), &before);
+        assert!(!session.take_save_due());
     }
 
     const MAP: OutfitId = OutfitId(306);

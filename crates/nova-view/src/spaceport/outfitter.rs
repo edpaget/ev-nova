@@ -806,6 +806,7 @@ mod tests {
             mass,
             owned,
             max: 10,
+            cap: 10,
             buy: Ok(()),
             sell: if owned > 0 {
                 Ok(())

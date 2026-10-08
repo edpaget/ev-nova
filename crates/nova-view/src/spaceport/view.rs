@@ -1834,6 +1834,7 @@ mod tests {
                 mass: 1,
                 owned,
                 max: 10,
+                cap: 10,
                 buy: Ok(()),
                 sell: Ok(()),
                 words: None,

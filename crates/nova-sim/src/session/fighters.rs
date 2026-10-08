@@ -1908,6 +1908,48 @@ mod tests {
     }
 
     #[test]
+    fn a_counted_sale_of_bays_stops_where_the_vipers_overfill_those_left() {
+        // Three bays of 4 and five Vipers aboard: one bay can go, as two
+        // hold 8, and the second cannot, as one holds 4.
+        let mut catalog = spaceport();
+        catalog.hulls[0].weapons[0].count = 3;
+        let mut session = fleet(&catalog, 5, vec![]);
+        land_now(&mut session).expect("lands");
+        let order = crate::outfitter::OutfitOrder {
+            outfit: VIPER_BAY,
+            direction: crate::market::Direction::Sell,
+        };
+        let outfitter = session.outfitter(&mut NeverFires).expect("open");
+        assert_eq!(
+            outfitter.count_max(VIPER_BAY, crate::market::Direction::Sell),
+            Some(3)
+        );
+        assert_eq!(session.outfit_count(order, 3, &mut NeverFires), Ok(1));
+        assert_eq!(session.pilot().owned(VIPER_BAY), 2);
+        assert_eq!(
+            session.outfit(order, &mut NeverFires),
+            Err(crate::outfitter::OutfitRefusal::AmmunitionFirst {
+                rounds: 1,
+                ammo: Some(VIPERS),
+            })
+        );
+        // Refused for its Vipers, a bay still opens the dialog, and the
+        // counted sale sells none.
+        let outfitter = session.outfitter(&mut NeverFires).expect("open");
+        assert_eq!(
+            outfitter.count_max(VIPER_BAY, crate::market::Direction::Sell),
+            Some(2)
+        );
+        assert_eq!(
+            session.outfit_count(order, 2, &mut NeverFires),
+            Err(crate::outfitter::OutfitRefusal::AmmunitionFirst {
+                rounds: 1,
+                ammo: Some(VIPERS),
+            })
+        );
+    }
+
+    #[test]
     fn the_session_reads_the_launcher_sale_as_its_rule_says() {
         let session = Session::start(&catalog()).expect("starts");
         assert_eq!(session.launcher_sale(), RuleSource::Engine);
