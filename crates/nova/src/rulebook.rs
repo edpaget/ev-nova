@@ -356,6 +356,23 @@ mod tests {
     }
 
     #[test]
+    fn the_launcher_sale_rule_is_overridden_by_its_key() {
+        let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"launcher_sale": "bible"}}"#);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine().with_override(RuleKey::LauncherSale, RuleSource::Bible)
+        );
+        let (rulebook, _) =
+            rulebook_of(r#"{"rules": "bible", "rule_overrides": {"launcher_sale": "engine"}}"#);
+        assert_eq!(
+            rulebook.source_for(RuleKey::LauncherSale),
+            RuleSource::Engine
+        );
+        assert_eq!(rulebook.source_for(RuleKey::JunkFlags), RuleSource::Bible);
+    }
+
+    #[test]
     fn a_source_that_is_neither_is_the_engines_with_a_warning_naming_its_key() {
         for value in [r#""Bible""#, r#""both""#, "1", "null", r#"{"bible": true}"#] {
             let text =

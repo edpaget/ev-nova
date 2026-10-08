@@ -29,7 +29,14 @@
 //! `dësc` 3000 plus its ID less 128, both read through the
 //! [`OutfitterCatalog`] as the selection changes. The info box shows its price, its mass, how many the player
 //! has and the free mass (#215-218), and why it cannot be bought (#219-222)
-//! or sold (#207), when the original has words for it.
+//! or sold (#207), when the original has words for it. A gun or turret
+//! limit reads as `Max` does, #219 when the player owns one or more of the
+//! outfit and #220 otherwise, as `_OutfitDialogUpdate` words
+//! `_HasMaxOfItem` (@0x57ddf-0x57df8). A launcher that cannot be sold for
+//! its ammunition gets the #208-212 sentence ([`ammunition_first`]),
+//! which the original shows in a text dialog when Sell is clicked, Sell
+//! left enabled (`_DoOutfitDialog` @0x5ce5a); here Sell is greyed and the
+//! sentence is an info-box line, as #207 is.
 //!
 //! Buy and Sell, clicked or with B and S (key repeats too, so holding a
 //! key keeps going, but only on the outfit the key went down on: when an
@@ -43,10 +50,11 @@
 //! Done, Return and Escape close it. Without the dialog, the screen says
 //! why, and Return or Escape still closes it.
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Direction, OutfitId, OutfitOrder, OutfitRefusal, Outfitter};
+use nova_sim::{Direction, LcNames, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 
 use super::catalog::SpaceportCatalog;
 use super::grid::{self, CellGrid, Shown, text};
@@ -55,6 +63,7 @@ use super::trade::{BUY_LABEL, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
+use crate::flight::escorts::NUMBER_WORDS;
 use crate::geometry::{Bounds, Point};
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
@@ -63,6 +72,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
+use crate::ui::comm::grouped;
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
 
 /// The "Outfit" dialog's `DLOG` (and `DITL`) ID.
@@ -129,18 +139,65 @@ pub const NO_SPACE: &str = "Can't hold any more!";
 /// `STR#` 2002 #222.
 pub const NO_SPACE_FOR_ANY: &str = "Can't hold any of this item!";
 
-/// The original's words for why one cannot be bought or sold, if it has
-/// any.
+/// `STR#` 2002 #208.
+pub const SELL_FIRST: &str = "You need to sell";
+/// `STR#` 2002 #209.
+pub const UNIT: &str = "unit";
+/// `STR#` 2002 #210.
+pub const UNITS: &str = "units";
+/// `STR#` 2002 #211.
+pub const OF_AMMUNITION: &str = "of ammunition";
+/// `STR#` 2002 #212.
+pub const BEFORE_SELLING: &str = "before you can sell your";
+
+/// The original's words for selling `launcher` (its `LCName`) before
+/// `rounds` of its ammunition, named by `ammo`'s `LCName` or `LCPlural`
+/// (`_DoOutfitDialog` @0x5cbf3-0x5ce2c): #208, the rounds in words for 1-3
+/// (`STR#` 137) and in comma-grouped digits above, the ammunition, or
+/// #209/#210 and #211 without an outfit naming it, #212, the launcher and
+/// a full stop.
 #[must_use]
-pub fn refusal_text(refusal: OutfitRefusal) -> Option<&'static str> {
-    match refusal {
-        OutfitRefusal::MaxOwned => Some(MAX_OWNED),
-        OutfitRefusal::NoneAllowed => Some(NONE_ALLOWED),
-        OutfitRefusal::NoSpace => Some(NO_SPACE),
-        OutfitRefusal::NoSpaceForAny => Some(NO_SPACE_FOR_ANY),
-        OutfitRefusal::NegativeFreeMass => Some(NEGATIVE_FREE_MASS),
-        _ => None,
-    }
+pub fn ammunition_first(rounds: u32, ammo: Option<&LcNames>, launcher: &str) -> String {
+    let number = match rounds {
+        1..=3 => NUMBER_WORDS[rounds as usize - 1].to_owned(),
+        _ => grouped(i64::from(rounds)),
+    };
+    let plural = rounds > 1;
+    let ammunition = match ammo {
+        Some(names) if plural => names.plural.clone(),
+        Some(names) => names.singular.clone(),
+        None => format!("{} {OF_AMMUNITION}", if plural { UNITS } else { UNIT }),
+    };
+    format!("{SELL_FIRST} {number} {ammunition} {BEFORE_SELLING} {launcher}.")
+}
+
+/// The original's words for why one of `row` cannot be bought or sold, if
+/// it has any, `names` giving the outfits' lower-case names. A gun or
+/// turret limit is worded as `Max`: #219 when the player owns one or more
+/// of the outfit, #220 otherwise (`_OutfitDialogUpdate` @0x57ddf-0x57df8).
+#[must_use]
+pub fn refusal_text(
+    refusal: OutfitRefusal,
+    row: &OutfitRow,
+    names: &BTreeMap<OutfitId, LcNames>,
+) -> Option<String> {
+    let text = match refusal {
+        OutfitRefusal::MaxOwned => MAX_OWNED,
+        OutfitRefusal::GunLimit | OutfitRefusal::TurretLimit if row.owned > 0 => MAX_OWNED,
+        OutfitRefusal::NoneAllowed | OutfitRefusal::GunLimit | OutfitRefusal::TurretLimit => {
+            NONE_ALLOWED
+        }
+        OutfitRefusal::NoSpace => NO_SPACE,
+        OutfitRefusal::NoSpaceForAny => NO_SPACE_FOR_ANY,
+        OutfitRefusal::NegativeFreeMass => NEGATIVE_FREE_MASS,
+        OutfitRefusal::AmmunitionFirst { rounds, ammo } => {
+            let launcher = names.get(&row.id).map_or("", |names| &names.singular);
+            let ammo = ammo.and_then(|ammo| names.get(&ammo));
+            return Some(ammunition_first(rounds, ammo, launcher));
+        }
+        _ => return None,
+    };
+    Some(text.to_owned())
 }
 
 /// Outfit `outfit`'s `PICT`, 6000 plus its ID less 128, if `exists` says
@@ -512,8 +569,7 @@ impl OutfitterScreen {
             refusals
                 .into_iter()
                 .flatten()
-                .filter_map(refusal_text)
-                .map(str::to_owned),
+                .filter_map(|refusal| refusal_text(refusal, row, &self.outfitter.lc_names)),
         );
         for (n, line) in lines.iter().enumerate() {
             let origin = Point::new(info.min.x + INSET, info.min.y + line_height * n as f32);
@@ -620,8 +676,6 @@ impl Screen for OutfitterScreen {
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::cell::RefCell;
-
-    use nova_sim::OutfitRow;
 
     use super::*;
     use crate::draw::DrawCommand;
@@ -749,6 +803,7 @@ mod tests {
             ],
             cash: 5000,
             free_mass: 5,
+            lc_names: BTreeMap::new(),
         }
     }
 
@@ -899,29 +954,51 @@ mod tests {
         );
     }
 
+    /// The words for `refusal` of a row with `owned` owned, no names
+    /// known.
+    fn worded(refusal: OutfitRefusal, owned: u16) -> Option<String> {
+        refusal_text(refusal, &row(128, "Gun", 1, 1, owned), &BTreeMap::new())
+    }
+
     #[test]
     fn each_refusal_the_original_words_has_its_words() {
+        let said = |text: &str| Some(text.to_owned());
         assert_eq!(
-            refusal_text(OutfitRefusal::MaxOwned),
-            Some("Can't have any more!")
+            worded(OutfitRefusal::MaxOwned, 0),
+            said("Can't have any more!")
         );
         assert_eq!(
-            refusal_text(OutfitRefusal::NoneAllowed),
-            Some("Can't have any of this item!")
+            worded(OutfitRefusal::NoneAllowed, 1),
+            said("Can't have any of this item!")
         );
         assert_eq!(
-            refusal_text(OutfitRefusal::NoSpace),
-            Some("Can't hold any more!")
+            worded(OutfitRefusal::NoSpace, 0),
+            said("Can't hold any more!")
         );
         assert_eq!(
-            refusal_text(OutfitRefusal::NoSpaceForAny),
-            Some("Can't hold any of this item!")
+            worded(OutfitRefusal::NoSpaceForAny, 0),
+            said("Can't hold any of this item!")
         );
         assert_eq!(
-            refusal_text(OutfitRefusal::NegativeFreeMass),
-            Some(
+            worded(OutfitRefusal::NegativeFreeMass, 1),
+            said(
                 "Can't sell that item, because your ship would have negative free mass afterwards."
             )
+        );
+        for limit in [OutfitRefusal::GunLimit, OutfitRefusal::TurretLimit] {
+            assert_eq!(worded(limit, 1), said(MAX_OWNED), "{limit:?}");
+            assert_eq!(worded(limit, 3), said(MAX_OWNED), "{limit:?}");
+            assert_eq!(worded(limit, 0), said(NONE_ALLOWED), "{limit:?}");
+        }
+        assert_eq!(
+            worded(
+                OutfitRefusal::AmmunitionFirst {
+                    rounds: 2,
+                    ammo: None
+                },
+                1
+            ),
+            said("You need to sell two units of ammunition before you can sell your .")
         );
         for silent in [
             OutfitRefusal::NoOutfitter,
@@ -933,8 +1010,84 @@ mod tests {
             OutfitRefusal::CannotSell,
             OutfitRefusal::NotBoughtHere,
         ] {
-            assert_eq!(refusal_text(silent), None, "{silent:?}");
+            assert_eq!(worded(silent, 1), None, "{silent:?}");
         }
+    }
+
+    fn vipers() -> LcNames {
+        LcNames {
+            singular: "Viper".to_owned(),
+            plural: "Vipers".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_words_for_selling_a_launcher_before_its_ammunition() {
+        let vipers = vipers();
+        let words = |rounds| ammunition_first(rounds, Some(&vipers), "Viper bay");
+        assert_eq!(
+            words(2),
+            "You need to sell two Vipers before you can sell your Viper bay."
+        );
+        assert_eq!(
+            words(1),
+            "You need to sell one Viper before you can sell your Viper bay."
+        );
+        assert_eq!(
+            words(3),
+            "You need to sell three Vipers before you can sell your Viper bay."
+        );
+        assert_eq!(
+            words(4),
+            "You need to sell 4 Vipers before you can sell your Viper bay."
+        );
+        assert_eq!(
+            words(1234),
+            "You need to sell 1,234 Vipers before you can sell your Viper bay."
+        );
+        assert_eq!(
+            ammunition_first(2, None, "missile rack"),
+            "You need to sell two units of ammunition before you can sell your missile rack."
+        );
+        assert_eq!(
+            ammunition_first(1, None, "missile rack"),
+            "You need to sell one unit of ammunition before you can sell your missile rack."
+        );
+        assert_eq!(
+            ammunition_first(u32::MAX, None, "rack"),
+            "You need to sell 4,294,967,295 units of ammunition before you can sell your rack."
+        );
+    }
+
+    #[test]
+    fn the_info_box_says_why_a_launcher_cannot_be_sold() {
+        let bay = OutfitRow {
+            sell: Err(OutfitRefusal::AmmunitionFirst {
+                rounds: 2,
+                ammo: Some(OutfitId(158)),
+            }),
+            ..row(157, "Viper\\nBay", 100, 5, 1)
+        };
+        let launcher = LcNames {
+            singular: "Viper bay".to_owned(),
+            plural: "Viper bays".to_owned(),
+        };
+        let screen = screen_of(Outfitter {
+            rows: vec![bay],
+            lc_names: BTreeMap::from([(OutfitId(157), launcher), (OutfitId(158), vipers())]),
+            ..outfitter()
+        });
+        let info = item(&screen, INFO_ITEM);
+        let lines: Vec<_> = texts(&drawn(&screen))
+            .into_iter()
+            .filter(|(_, at, _)| info.contains(*at))
+            .map(|(text, _, _)| text)
+            .collect();
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some("You need to sell two Vipers before you can sell your Viper bay.")
+        );
+        assert_eq!(enabled(&screen), (true, false), "Sell is greyed");
     }
 
     #[test]

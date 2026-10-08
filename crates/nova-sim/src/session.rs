@@ -304,7 +304,7 @@ use crate::market::{self, Good, Goods, Market, Order, TradeRefusal};
 use crate::message::SimMessage;
 use crate::navigation::next_stellar;
 use crate::outfitter::{
-    self, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
+    self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
@@ -512,6 +512,9 @@ pub struct Session {
     /// When held tribbles and perishable `jünk` grow and decay (see
     /// [`Session::with_junk_flags`]).
     junk_flags: RuleSource,
+    /// When a launcher cannot be sold for its ammunition (see
+    /// [`Session::with_launcher_sale`]).
+    launcher_sale: RuleSource,
     /// Whether each take-off pays the hired escorts a day's wages (see
     /// [`Session::with_take_off_pay`]).
     take_off_pay: RuleSource,
@@ -649,6 +652,7 @@ impl Session {
             buy_random: RuleSource::Engine,
             frame: 0,
             junk_flags: RuleSource::Engine,
+            launcher_sale: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
@@ -1879,6 +1883,35 @@ impl Session {
         self.junk_flags
     }
 
+    /// This session with a launcher's sale refused for its ammunition as
+    /// `source` says
+    /// ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)): by the
+    /// engine's default, only while the rounds held overfill the
+    /// remaining launchers' `MaxAmmo`, and only for a weapon whose
+    /// `MaxAmmo` is above 0 (see [`outfitter`]).
+    #[must_use]
+    pub fn with_launcher_sale(mut self, source: RuleSource) -> Self {
+        self.launcher_sale = source;
+        self
+    }
+
+    /// When a launcher cannot be sold for its ammunition: by the engine
+    /// ([`RuleSource::Engine`]) or by the other reading.
+    #[must_use]
+    pub fn launcher_sale(&self) -> RuleSource {
+        self.launcher_sale
+    }
+
+    /// The player's ship class's `MaxGun` and `MaxTur`; none for a class
+    /// with no record, like any class field that cannot be read.
+    fn hardpoints(&self) -> Hardpoints {
+        self.ship_record(self.pilot.ship)
+            .map_or_else(Hardpoints::default, |record| Hardpoints {
+                guns: record.max_gun,
+                turrets: record.max_tur,
+            })
+    }
+
     /// The outfitter of the stellar the ship is docked at, if it has
     /// landed at one, drawing on `chance` each outfit's roll for the day
     /// not drawn yet since the landing (see [`outfitter`]).
@@ -1892,6 +1925,9 @@ impl Session {
             site,
             fighter_room: &self.fighter_room(),
             buy_random: self.buy_random,
+            hardpoints: self.hardpoints(),
+            launchers: &self.launchers(),
+            launcher_sale: self.launcher_sale,
         }
         .outfitter(&self.pilot, &mut self.outfit_rolls, chance)
     }
@@ -6132,6 +6168,35 @@ mod tests {
             outfitter.free_mass,
             i64::from(FAST.free_mass),
             "FreeMass leaves out the 10 tons of guns"
+        );
+    }
+
+    #[test]
+    fn the_classes_max_gun_and_a_stock_gun_limit_the_outfitter() {
+        let gun_buy = |max_gun: Option<i16>| {
+            let mut catalog = stock_weapons(outfitting());
+            for record in &mut catalog.outfits {
+                if record.id == GUN {
+                    record.flags = OutfitFlags::GUN;
+                }
+            }
+            if let Some(max_gun) = max_gun {
+                catalog.ship_records = vec![ShipRecord {
+                    max_gun,
+                    ..ship(128, FAST)
+                }];
+            }
+            let mut session = outfitted(&catalog);
+            assert_eq!(session.pilot().owned(GUN), 2, "the stock guns");
+            let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+            (outfitter.check(buy(GUN)), outfitter.check(buy(SPEED)))
+        };
+        assert_eq!(gun_buy(Some(3)), (Ok(()), Ok(())));
+        assert_eq!(gun_buy(Some(2)), (Err(OutfitRefusal::GunLimit), Ok(())));
+        assert_eq!(
+            gun_buy(None),
+            (Err(OutfitRefusal::GunLimit), Ok(())),
+            "a class with no record has room for none"
         );
     }
 

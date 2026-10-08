@@ -60,6 +60,14 @@
 //! (`_DoNewPilot` @0x18f48, @0x18f4d); a ship bought or captured tops
 //! them up after its default items (`fit_stock`).
 //!
+//! A launcher's [`Magazine`] ([`Arsenal::magazines`]) links a weapon
+//! outfit to its ammunition, as the outfitter's Sell reads it
+//! (`_DoOutfitDialog` @0x5ca75-0x5ccb9): the weapon its first
+//! [`MOD_WEAPON`] mod names (none for `ModVal` -1), the rounds it fires
+//! (its `AmmoType`'s weapon, or its own for a fighter bay or any other
+//! `AmmoType`), its `MaxAmmo`, and the outfit naming its ammunition, the
+//! lowest-ID one whose [`MOD_AMMO`] mod names the launcher's weapon.
+//!
 //! An NPC's ([`Arsenal::npc`]) is its class's stock weapons and default
 //! items ([`Arsenal::of_class`]), its rounds held on the NPC: each stock
 //! weapon's `AmmoLoad`, and the ammunition among its default items.
@@ -638,6 +646,34 @@ impl Arsenal {
         holders(outfits, MOD_AMMO)
     }
 
+    /// Each launcher among `outfits`, with its link to its ammunition
+    /// (see the module docs): every outfit whose first [`MOD_WEAPON`] mod
+    /// names a weapon that can be read.
+    #[must_use]
+    pub fn magazines(&self, outfits: &[OutfitRecord]) -> BTreeMap<OutfitId, Magazine> {
+        let ammo_holders = holders(outfits, MOD_AMMO);
+        outfits
+            .iter()
+            .filter_map(|record| {
+                let &(_, weapon) = record.mods.iter().find(|&&(kind, _)| kind == MOD_WEAPON)?;
+                let weapon = WeaponId(weapon);
+                let spec = self.weapon(weapon)?;
+                let ammo = match spec.ammo {
+                    Ammo::Rounds(ammo) if !spec.is_bay() => ammo,
+                    _ => weapon,
+                };
+                let magazine = Magazine {
+                    weapon,
+                    ammo,
+                    max_ammo: spec.max_ammo,
+                    carried: spec.carried,
+                    ammo_outfit: holder(&ammo_holders, weapon),
+                };
+                Some((record.id, magazine))
+            })
+            .collect()
+    }
+
     /// Ship class `ship`'s stock weapons and their ammunition, each as
     /// the outfit among `outfits` that holds it (see the module docs);
     /// none for a class that cannot be read. The weapons come first, by
@@ -719,6 +755,25 @@ pub struct StockFit {
     pub weapon: WeaponId,
     /// Its `WeapCount`, or its `AmmoLoad`.
     pub count: u16,
+}
+
+/// One launcher outfit's link to its ammunition, as the outfitter's Sell
+/// reads it (`_DoOutfitDialog` @0x5ca75-0x5cbcf).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Magazine {
+    /// The weapon its first [`MOD_WEAPON`] mod names.
+    pub weapon: WeaponId,
+    /// The weapon whose rounds it fires: its `AmmoType`'s, or its own for
+    /// a fighter bay or any other `AmmoType`.
+    pub ammo: WeaponId,
+    /// The weapon's `MaxAmmo`; none for no limit of its own.
+    pub max_ammo: u32,
+    /// The ship a fighter bay launches; none for any other weapon.
+    pub carried: Option<ShipId>,
+    /// The outfit that names its ammunition: the lowest-ID one whose
+    /// [`MOD_AMMO`] mod names the launcher's weapon (not its `AmmoType`'s),
+    /// as @0x5cc7e-0x5ccb9 picks.
+    pub ammo_outfit: Option<OutfitId>,
 }
 
 /// Tops `owned` of `outfits` up to each of `fits`, as `_DoShipyardDialog`
@@ -2003,6 +2058,112 @@ mod tests {
                 (WeaponId(140), OutfitId(203)),
                 (WeaponId(141), OutfitId(203))
             ]
+        );
+    }
+
+    // Magazines: a launcher's link to its ammunition.
+
+    /// A launcher, weapon `id`, of `AmmoType` `ammo_type` and `MaxAmmo`
+    /// `max_ammo`.
+    fn launcher(id: i16, ammo_type: i16, max_ammo: i16) -> WeaponRecord {
+        WeaponRecord {
+            ammo_type,
+            max_ammo,
+            ..blaster(id, 10)
+        }
+    }
+
+    fn magazine(
+        weapon: i16,
+        ammo: i16,
+        max_ammo: u32,
+        carried: Option<i16>,
+        ammo_outfit: Option<i16>,
+    ) -> Magazine {
+        Magazine {
+            weapon: WeaponId(weapon),
+            ammo: WeaponId(ammo),
+            max_ammo,
+            carried: carried.map(ShipId),
+            ammo_outfit: ammo_outfit.map(OutfitId),
+        }
+    }
+
+    #[test]
+    fn a_launchers_magazine_is_its_first_weapon_mods_ammunition_and_max_ammo() {
+        let arsenal = Arsenal::new(&[launcher(145, 10, 30)], Vec::new());
+        let records = [
+            outfit(226, &[(MOD_AMMO, 145)]),
+            outfit(220, &[(4, 10), (MOD_WEAPON, 145)]),
+            outfit(221, &[(MOD_AMMO, 138)]),
+            outfit(225, &[(MOD_AMMO, 145)]),
+        ];
+        assert_eq!(
+            arsenal.magazines(&records),
+            BTreeMap::from([(OutfitId(220), magazine(145, 138, 30, None, Some(225)))]),
+            "the lowest outfit naming the launcher's weapon, not its AmmoType's"
+        );
+    }
+
+    #[test]
+    fn a_bays_magazine_is_the_bay_itself_and_carries_its_fighter() {
+        let arsenal = Arsenal::new(
+            &[WeaponRecord {
+                max_ammo: 4,
+                ..bay(149, 144, 60)
+            }],
+            Vec::new(),
+        );
+        let records = [
+            outfit(157, &[(MOD_WEAPON, 149)]),
+            outfit(158, &[(MOD_AMMO, 149)]),
+        ];
+        assert_eq!(
+            arsenal.magazines(&records),
+            BTreeMap::from([(OutfitId(157), magazine(149, 149, 4, Some(144), Some(158)))])
+        );
+    }
+
+    #[test]
+    fn unlimited_or_fuel_ammo_counts_the_weapons_own_rounds() {
+        let arsenal = Arsenal::new(&[launcher(170, -1, 5), launcher(172, -1005, 6)], Vec::new());
+        let records = [
+            outfit(230, &[(MOD_WEAPON, 170)]),
+            outfit(231, &[(MOD_WEAPON, 172)]),
+        ];
+        assert_eq!(
+            arsenal.magazines(&records),
+            BTreeMap::from([
+                (OutfitId(230), magazine(170, 170, 5, None, None)),
+                (OutfitId(231), magazine(172, 172, 6, None, None)),
+            ])
+        );
+    }
+
+    #[test]
+    fn no_magazine_without_a_readable_weapon_or_a_weapon_mod() {
+        let arsenal = Arsenal::new(&[launcher(145, 10, 30), launcher(146, 11, 2)], Vec::new());
+        let records = [
+            outfit(240, &[(MOD_WEAPON, -1)]),
+            outfit(241, &[(MOD_WEAPON, 999)]),
+            outfit(242, &[(MOD_AMMO, 145)]),
+            outfit(243, &[(MOD_WEAPON, -1), (MOD_WEAPON, 145)]),
+            outfit(244, &[(4, 145), (MOD_WEAPON, 146), (MOD_WEAPON, 145)]),
+        ];
+        assert_eq!(
+            arsenal.magazines(&records),
+            BTreeMap::from([(OutfitId(244), magazine(146, 139, 2, None, None))]),
+            "only the first weapon mod is read"
+        );
+    }
+
+    #[test]
+    fn a_launcher_of_max_ammo_0_still_has_its_magazine() {
+        let arsenal = Arsenal::new(&[launcher(145, 10, 0)], Vec::new());
+        let records = [outfit(220, &[(MOD_WEAPON, 145)])];
+        assert_eq!(
+            arsenal.magazines(&records),
+            BTreeMap::from([(OutfitId(220), magazine(145, 138, 0, None, None))])
         );
     }
 

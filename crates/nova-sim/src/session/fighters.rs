@@ -39,13 +39,14 @@ use super::Session;
 use crate::ai::Goal;
 use crate::bay::{Carrier, FighterNote, capacity, dock_window, launch_velocity};
 use crate::board::MAX_SHIPS_IN_SYSTEM;
-use crate::catalog::OutfitId;
+use crate::catalog::{OutfitId, ShipId};
 use crate::combat::armament::{OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Sortie};
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, NO_SPRITE};
 use crate::flight::ShipState;
 use crate::hyperspace::JUMP_FUEL;
+use crate::outfitter::Launcher;
 use crate::pilot::Escort;
 use crate::rulebook::RuleSource;
 use crate::traffic::autopilot::Outcome;
@@ -331,20 +332,50 @@ impl Session {
                 .iter()
                 .find(|record| record.id == outfit)
                 .map_or(0, |record| record.max);
-            let out = self
-                .pilot
-                .escorts
-                .iter()
-                .filter(|escort| escort.carried && Some(escort.ship) == bay.carried)
-                .count();
             let held = outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, ammo)
-                .saturating_add(u32::try_from(out).unwrap_or(u32::MAX));
+                .saturating_add(self.fighters_out(bay.carried));
             room.insert(
                 outfit,
                 capacity(bay.max_ammo, bays, max).saturating_sub(held),
             );
         }
         room
+    }
+
+    /// The player's fighters out of type `carried`: none for `None`.
+    fn fighters_out(&self, carried: Option<ShipId>) -> u32 {
+        let out = self
+            .pilot
+            .escorts
+            .iter()
+            .filter(|escort| escort.carried && Some(escort.ship) == carried)
+            .count();
+        u32::try_from(out).unwrap_or(u32::MAX)
+    }
+
+    /// Each launcher outfit ([`Arsenal::magazines`](crate::combat::armament::Arsenal::magazines)),
+    /// with the rounds of its ammunition the player holds, a bay's
+    /// fighters out counted, as the outfitter's Sell counts them
+    /// (`_DoOutfitDialog` @0x5cadb-0x5cb8e).
+    pub(super) fn launchers(&self) -> BTreeMap<OutfitId, Launcher> {
+        self.arsenal
+            .magazines(&self.outfits)
+            .into_iter()
+            .map(|(outfit, magazine)| {
+                let aboard = outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, magazine.ammo);
+                let out = if magazine.carried.is_some() {
+                    self.fighters_out(magazine.carried)
+                } else {
+                    0
+                };
+                let launcher = Launcher {
+                    max_ammo: magazine.max_ammo,
+                    rounds: aboard.saturating_add(out),
+                    ammo: magazine.ammo_outfit,
+                };
+                (outfit, launcher)
+            })
+            .collect()
     }
 
     /// What the player's fighters met as it left systems since this was
@@ -475,6 +506,8 @@ mod tests {
     const VIPER: ShipId = ShipId(144);
     /// The fighter outfit, the bay's rounds.
     const VIPERS: OutfitId = OutfitId(158);
+    /// The outfit holding the Viper Bay.
+    const VIPER_BAY: OutfitId = OutfitId(157);
     /// The fighter's gun: 10 pixels a tick for 30 ticks, every 5, 5
     /// energy and 2 mass damage.
     const GUN: WeaponId = WeaponId(141);
@@ -1606,6 +1639,72 @@ mod tests {
             Ok(()),
             "the Dart bay has room, the Viper bay none"
         );
+    }
+
+    /// Sells a Viper Bay from a pilot with `bays` bays, `aboard` Vipers
+    /// aboard and `out_` out, the sale read as `source` says; with the
+    /// bays and credits owned after.
+    fn sell_a_bay(
+        bays: i16,
+        aboard: u16,
+        out_: usize,
+        source: RuleSource,
+    ) -> (Result<(), crate::outfitter::OutfitRefusal>, u16, i64) {
+        let mut catalog = spaceport();
+        catalog.hulls[0].weapons[0].count = bays;
+        let mut session = fleet(&catalog, aboard, vec![out(); out_]).with_launcher_sale(source);
+        land_now(&mut session).expect("lands");
+        let cash = session.pilot().cash();
+        let sold = session.outfit(
+            crate::outfitter::OutfitOrder {
+                outfit: VIPER_BAY,
+                direction: crate::market::Direction::Sell,
+            },
+            &mut NeverFires,
+        );
+        (
+            sold,
+            session.pilot().owned(VIPER_BAY),
+            session.pilot().cash() - cash,
+        )
+    }
+
+    fn vipers_first(rounds: u32) -> Result<(), crate::outfitter::OutfitRefusal> {
+        Err(crate::outfitter::OutfitRefusal::AmmunitionFirst {
+            rounds,
+            ammo: Some(VIPERS),
+        })
+    }
+
+    #[test]
+    fn a_bay_cannot_be_sold_while_its_fighters_aboard_and_out_overfill_the_bays_left() {
+        let engine = RuleSource::Engine;
+        assert_eq!(sell_a_bay(1, 1, 1, engine), (vipers_first(2), 1, 0));
+        assert_eq!(
+            sell_a_bay(1, 0, 1, engine),
+            (vipers_first(1), 1, 0),
+            "one out"
+        );
+        assert_eq!(sell_a_bay(1, 0, 0, engine).0, Ok(()));
+        assert_eq!(sell_a_bay(2, 3, 1, engine).0, Ok(()), "one bay holds 4");
+        assert_eq!(sell_a_bay(2, 4, 1, engine), (vipers_first(1), 2, 0));
+        assert_eq!(sell_a_bay(1, 2, 0, engine).1, 1);
+    }
+
+    #[test]
+    fn the_session_reads_the_launcher_sale_as_its_rule_says() {
+        let session = Session::start(&catalog()).expect("starts");
+        assert_eq!(session.launcher_sale(), RuleSource::Engine);
+        let session = Session::start(&catalog())
+            .expect("starts")
+            .with_launcher_sale(RuleSource::Bible);
+        assert_eq!(session.launcher_sale(), RuleSource::Bible);
+        assert_eq!(sell_a_bay(2, 4, 0, RuleSource::Engine).0, Ok(()));
+        assert_eq!(
+            sell_a_bay(2, 4, 0, RuleSource::Bible),
+            (vipers_first(4), 2, 0)
+        );
+        assert_eq!(sell_a_bay(2, 0, 0, RuleSource::Bible).0, Ok(()));
     }
 
     #[test]

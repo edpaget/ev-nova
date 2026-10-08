@@ -40,6 +40,7 @@
 //! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: the original offers its `LinkMission`, which waits for missions ([`JoinFleet`](crate::hail::nova::JoinFleet)) | a person whose record allows it lists Use As Escort and joins the fleet as itself, for good\* |
 //! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
 //! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b; [`Session`](crate::Session)) | tribbles goods grow only into free space, and perishable goods always decay‡ |
+//! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)) | a launcher cannot be sold while any of its ammunition is held§ |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -58,6 +59,10 @@
 //! and a perishable one "gradually decays away", and gives no rates: both
 //! readings take the engine's ton every due frame in flight, and only
 //! the conditions differ.
+//!
+//! § The Bible says nothing of selling a launcher before its ammunition.
+//! The other reading is the phase's first wording of the rule (refuse
+//! while any of its ammunition is owned), not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -327,6 +332,17 @@ rule_keys! {
     /// no rates, so both readings take the engine's ton every due frame
     /// (see [`market`](crate::market)).
     JunkFlags => "junk_flags",
+    /// When a launcher outfit (one whose first `ModType` 1 names a
+    /// `wëap`) cannot be sold for the ammunition held: by the engine,
+    /// only when its weapon's `MaxAmmo` is above 0 and selling it would
+    /// leave more rounds than the remaining launchers' `MaxAmmo` holds
+    /// (`_DoOutfitDialog` @0x5ca75-0x5cbe0), so in stock data only fighter
+    /// bays are ever blocked; by the other reading, whenever any of its
+    /// ammunition is held, whatever its `MaxAmmo`. The Bible says nothing
+    /// of it, so the other reading is the phase's first wording of the
+    /// rule, not anything the Bible says (see
+    /// [`outfitter`](crate::outfitter)).
+    LauncherSale => "launcher_sale",
 }
 
 impl RuleKey {
@@ -470,8 +486,14 @@ mod tests {
                 RuleKey::GrantMax,
                 RuleKey::PersonJoin,
                 RuleKey::BuyRandom,
-                RuleKey::JunkFlags
+                RuleKey::JunkFlags,
+                RuleKey::LauncherSale
             ]
+        );
+        assert_eq!(RuleKey::LauncherSale.key(), "launcher_sale");
+        assert_eq!(
+            RuleKey::from_key("launcher_sale"),
+            Some(RuleKey::LauncherSale)
         );
         assert_eq!(RuleKey::JunkFlags.key(), "junk_flags");
         assert_eq!(RuleKey::from_key("junk_flags"), Some(RuleKey::JunkFlags));

@@ -87,7 +87,8 @@
 //!
 //! Each order buys or sells one, and a refused one changes nothing. A buy
 //! is refused when the outfit cannot be bought here, the player owns its
-//! `Max` already, it is a fighter whose bays have no room left (their
+//! `Max` already, it is a gun or a turret past the ship's limit (below),
+//! it is a fighter whose bays have no room left (their
 //! [`capacity`](crate::bay::capacity), the fighters out counted against
 //! it, `_CanBuyFighter` @0x5a82; refused as `Max` owned), the ship's
 //! `Holds` is negative and the outfit adds mass
@@ -96,15 +97,39 @@
 //! [`OutfitFlags::REMOVE_AFTER_PURCHASE`] only pays. A sale is refused
 //! when the player owns none, the outfit is flagged
 //! [`OutfitFlags::CANNOT_SELL`], it is neither for sale here nor flagged
-//! [`OutfitFlags::SELL_ANYWHERE`], or the ship would be left with negative
-//! free mass. A sale pays [`RESALE_PERCENT`] of the price and removes one.
+//! [`OutfitFlags::SELL_ANYWHERE`], the ship would be left with negative
+//! free mass, or it is a launcher whose ammunition must be sold first
+//! (below). A sale pays [`RESALE_PERCENT`] of the price and removes one.
 //! Selling cargo space below the cargo held is allowed: the exchange then
 //! shows no space free until enough is sold.
 //!
-//! Not modelled yet: the gun and turret limits (`MaxGun`, `MaxTur`, flags
-//! 0x0001 and 0x0002), `MaxAmmo` for ammunition other than fighters,
-//! selling a launcher before its ammunition,
-//! and `ModType` 27's raised maximums. Which outfits a ship bought in the
+//! **Guns and turrets** (`_HasMaxOfItem` @0x46c8-0x4866, after `Max`).
+//! The guns owned are the count of every outfit owned flagged
+//! [`OutfitFlags::GUN`], stock weapons included, and the turrets those
+//! flagged [`OutfitFlags::TURRET`]: the flag alone decides. A gun's limit
+//! is the class's `MaxGun` plus, for each outfit owned, the `ModVal` of
+//! its first [`MORE_GUNS`] mod, once per outfit whatever the count; a
+//! gun is refused when the guns owned are at the limit or above, so a
+//! limit of 0 or less buys none. A turret is the same with `MaxTur` and
+//! [`MORE_TURRETS`], checked after the gun limit for an outfit flagged
+//! both. Selling never checks them.
+//!
+//! **A launcher before its ammunition** (`_DoOutfitDialog`
+//! @0x5ca75-0x5cbe0, after the free mass). A launcher is an outfit whose
+//! first `ModType` 1 names a weapon
+//! ([`Magazine`](crate::combat::armament::Magazine)). Its rounds are those
+//! of its ammunition held, a bay's fighters out counted. By the engine,
+//! selling one of n is refused while its weapon's `MaxAmmo` is above 0 and
+//! the rounds are more than `MaxAmmo` x (n - 1), the excess to be sold
+//! first; in stock data only fighter bays have a `MaxAmmo`. The other
+//! reading refuses it while any round is held
+//! ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)). The
+//! original shows the refusal as a text dialog with Sell left enabled
+//! (`STR#` 2002 #208-212); [`Outfitter::lc_names`] carries the names its
+//! words need.
+//!
+//! Not modelled yet: `MaxAmmo` for ammunition other than fighters, and
+//! `ModType` 27's raised maximums. Which outfits a ship bought in the
 //! [`shipyard`](crate::shipyard) keeps is the shipyard's (flag 0x0004);
 //! flag 0x0020 only concerns a mission's change of ship.
 
@@ -125,6 +150,10 @@ use crate::wares::{self, ALWAYS_RANDOM, DayRolls, HideBits, HideHigher, Roll};
 pub struct OutfitFlags;
 
 impl OutfitFlags {
+    /// A fixed gun: counts against the ship's `MaxGun`.
+    pub const GUN: u16 = 0x0001;
+    /// A turret: counts against the ship's `MaxTur`.
+    pub const TURRET: u16 = 0x0002;
     /// Stays with the player when they trade ships (persistent): see
     /// [`shipyard`](crate::shipyard).
     pub const PERSISTENT: u16 = 0x0004;
@@ -146,6 +175,11 @@ impl OutfitFlags {
     /// Not shown unless its `Availability` holds, or the player owns one.
     pub const HIDE_UNLESS_AVAILABLE: u16 = 0x4000;
 }
+
+/// The `oütf` `ModType` that changes the ship's `MaxGun` by its `ModVal`.
+pub const MORE_GUNS: i16 = 45;
+/// The `oütf` `ModType` that changes the ship's `MaxTur` by its `ModVal`.
+pub const MORE_TURRETS: i16 = 46;
 
 /// What an outfit sells back for, as a percentage of its price. The
 /// Bible does not say; the community guide (evnova.miraheze.org,
@@ -193,6 +227,27 @@ pub enum OutfitRefusal {
     NotBoughtHere,
     /// Selling it would leave the ship with negative free mass.
     NegativeFreeMass,
+    /// The ship's guns are at its `MaxGun`, as `ModType` 45 changes it.
+    GunLimit,
+    /// The ship's turrets are at its `MaxTur`, as `ModType` 46 changes it.
+    TurretLimit,
+    /// It is a launcher, and `rounds` of its ammunition must be sold
+    /// first.
+    AmmunitionFirst {
+        /// The rounds to sell first.
+        rounds: u32,
+        /// The outfit that names the ammunition, if any.
+        ammo: Option<OutfitId>,
+    },
+}
+
+/// An outfit's lower-case names, as the outfitter's words use them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LcNames {
+    /// Its `LCName`.
+    pub singular: String,
+    /// Its `LCPlural`.
+    pub plural: String,
 }
 
 /// One outfit in a stellar's outfitter.
@@ -228,6 +283,10 @@ pub struct Outfitter {
     /// The ship's free mass, in tons; negative when it carries more than
     /// it has space for.
     pub free_mass: i64,
+    /// The `LCName` and `LCPlural` of every outfit a refusal's words name:
+    /// each launcher refused for its ammunition, and the outfit naming
+    /// that ammunition.
+    pub lc_names: BTreeMap<OutfitId, LcNames>,
 }
 
 impl Outfitter {
@@ -375,6 +434,128 @@ pub(crate) fn free_mass(
         - mass_of(owned, records, fields.mass)
 }
 
+/// A ship class's room for guns and turrets: its `MaxGun` and `MaxTur`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Hardpoints {
+    /// Its `MaxGun`.
+    pub(crate) guns: i16,
+    /// Its `MaxTur`.
+    pub(crate) turrets: i16,
+}
+
+/// A launcher outfit the player owns, and the ammunition it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Launcher {
+    /// Its weapon's `MaxAmmo`; none for no limit of its own.
+    pub(crate) max_ammo: u32,
+    /// The rounds of its ammunition held, the fighters out counted.
+    pub(crate) rounds: u32,
+    /// The outfit that names its ammunition, if any.
+    pub(crate) ammo: Option<OutfitId>,
+}
+
+impl Launcher {
+    /// The rounds that must be sold before one of `owned` launchers can
+    /// be, as `source` reads the rule
+    /// ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)); `None`
+    /// when it can be sold. By the engine, the rounds the remaining
+    /// launchers' `MaxAmmo` cannot hold, only when `MaxAmmo` is above 0
+    /// (`_DoOutfitDialog` @0x5cad0, @0x5cb9c-0x5cbe0); by the other
+    /// reading, every round held.
+    pub(crate) fn excess(&self, owned: u16, source: RuleSource) -> Option<u32> {
+        if self.rounds == 0 {
+            return None;
+        }
+        match source {
+            RuleSource::Engine => {
+                let kept = self
+                    .max_ammo
+                    .saturating_mul(u32::from(owned.saturating_sub(1)));
+                (self.max_ammo > 0).then_some(self.rounds.saturating_sub(kept))
+            }
+            RuleSource::Bible => Some(self.rounds),
+        }
+        .filter(|&excess| excess > 0)
+    }
+}
+
+/// `base` changed by the `ModVal` of the first mod of `mod_type` of each
+/// outfit owned, once per outfit whatever the count
+/// (`_HasMaxOfItem` @0x472b-0x4796).
+fn raised(
+    base: i16,
+    mod_type: i16,
+    owned: &BTreeMap<OutfitId, u16>,
+    records: &[OutfitRecord],
+) -> i32 {
+    let mods: i32 = records
+        .iter()
+        .filter(|record| owned.get(&record.id).is_some_and(|&count| count > 0))
+        .filter_map(|record| record.mods.iter().find(|&&(kind, _)| kind == mod_type))
+        .map(|&(_, mod_val)| i32::from(mod_val))
+        .sum();
+    i32::from(base) + mods
+}
+
+/// How many of the outfits `owned` are flagged `flag`.
+fn flagged(flag: u16, owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord]) -> i32 {
+    records
+        .iter()
+        .filter(|record| record.flags & flag != 0)
+        .filter_map(|record| owned.get(&record.id))
+        .map(|&count| i32::from(count))
+        .sum()
+}
+
+/// The guns and turrets a ship carries, and its limits for each
+/// (`_HasMaxOfItem` @0x46c8-0x4866; see the module docs).
+struct Armed {
+    /// The outfits owned flagged [`OutfitFlags::GUN`].
+    guns: i32,
+    /// The outfits owned flagged [`OutfitFlags::TURRET`].
+    turrets: i32,
+    /// `MaxGun`, as [`MORE_GUNS`] changes it.
+    gun_limit: i32,
+    /// `MaxTur`, as [`MORE_TURRETS`] changes it.
+    turret_limit: i32,
+}
+
+impl Armed {
+    /// The guns and turrets of a ship of `hardpoints` owning `owned`.
+    fn of(
+        hardpoints: Hardpoints,
+        owned: &BTreeMap<OutfitId, u16>,
+        records: &[OutfitRecord],
+    ) -> Self {
+        Self {
+            guns: flagged(OutfitFlags::GUN, owned, records),
+            turrets: flagged(OutfitFlags::TURRET, owned, records),
+            gun_limit: raised(hardpoints.guns, MORE_GUNS, owned, records),
+            turret_limit: raised(hardpoints.turrets, MORE_TURRETS, owned, records),
+        }
+    }
+
+    /// Why one more outfit of `flags` cannot be bought, the gun limit
+    /// checked first, if either refuses it.
+    fn refusal(&self, flags: u16) -> Option<OutfitRefusal> {
+        if flags & OutfitFlags::GUN != 0 && self.guns >= self.gun_limit {
+            Some(OutfitRefusal::GunLimit)
+        } else if flags & OutfitFlags::TURRET != 0 && self.turrets >= self.turret_limit {
+            Some(OutfitRefusal::TurretLimit)
+        } else {
+            None
+        }
+    }
+}
+
+/// `record`'s lower-case names.
+fn lc_names(record: &OutfitRecord) -> LcNames {
+    LcNames {
+        singular: record.lc_name.clone(),
+        plural: record.lc_plural.clone(),
+    }
+}
+
 /// Everything the outfitter rules read about the ship and where it is.
 pub(crate) struct Shop<'a> {
     /// Every `oütf`.
@@ -391,9 +572,34 @@ pub(crate) struct Shop<'a> {
     pub(crate) fighter_room: &'a BTreeMap<OutfitId, u32>,
     /// How `BuyRandom` reads ([`buy_roll`]).
     pub(crate) buy_random: RuleSource,
+    /// The ship class's `MaxGun` and `MaxTur`.
+    pub(crate) hardpoints: Hardpoints,
+    /// Each launcher outfit, with the ammunition it holds.
+    pub(crate) launchers: &'a BTreeMap<OutfitId, Launcher>,
+    /// How a launcher's sale reads ([`Launcher::excess`]).
+    pub(crate) launcher_sale: RuleSource,
 }
 
 impl Shop<'_> {
+    /// Why one of `owned` of launcher `record` cannot be sold for its
+    /// ammunition, if it cannot, with the names its words need put in
+    /// `names`: its own, and those of the outfit naming its ammunition.
+    fn ammunition_first(
+        &self,
+        record: &OutfitRecord,
+        owned: u16,
+        names: &mut BTreeMap<OutfitId, LcNames>,
+    ) -> Option<OutfitRefusal> {
+        let launcher = self.launchers.get(&record.id)?;
+        let rounds = launcher.excess(owned, self.launcher_sale)?;
+        names.insert(record.id, lc_names(record));
+        let ammo = launcher.ammo;
+        if let Some(named) = self.records.iter().find(|named| Some(named.id) == ammo) {
+            names.insert(named.id, lc_names(named));
+        }
+        Some(OutfitRefusal::AmmunitionFirst { rounds, ammo })
+    }
+
     /// The outfitter, for `pilot`, each outfit's roll for the day kept in
     /// `rolls` and any not drawn yet drawn on `chance` (see the module
     /// docs); `None` when the stellar has none.
@@ -410,8 +616,10 @@ impl Shop<'_> {
         let free = free_mass(self.fields, self.standard, &pilot.outfits, self.records);
         let mut sorted: Vec<&OutfitRecord> = self.records.iter().collect();
         sorted.sort_by_key(|record| record.id);
+        let armed = Armed::of(self.hardpoints, &pilot.outfits, self.records);
         let mut sweep = HideHigher::default();
         let mut rows = Vec::new();
+        let mut names = BTreeMap::new();
         for record in sorted {
             let owned = pilot.owned(record.id);
             let required = !requirements_apply(record.require_govt, self.site.govt)
@@ -448,6 +656,8 @@ impl Shop<'_> {
                 } else {
                     OutfitRefusal::MaxOwned
                 })
+            } else if let Some(refusal) = armed.refusal(record.flags) {
+                Err(refusal)
             } else if self.fighter_room.get(&record.id) == Some(&0) {
                 Err(OutfitRefusal::MaxOwned)
             } else if mass < 0 && self.fields.holds < 0 {
@@ -471,6 +681,8 @@ impl Shop<'_> {
                 Err(OutfitRefusal::NotBoughtHere)
             } else if free + mass < 0 {
                 Err(OutfitRefusal::NegativeFreeMass)
+            } else if let Some(refusal) = self.ammunition_first(record, owned, &mut names) {
+                Err(refusal)
             } else {
                 Ok(())
             };
@@ -494,6 +706,7 @@ impl Shop<'_> {
             rows: rows.into_iter().map(|(_, row)| row).collect(),
             cash: pilot.cash,
             free_mass: free,
+            lc_names: names,
         })
     }
 }
@@ -575,6 +788,13 @@ mod tests {
 
     static NO_STANDARD: BTreeMap<OutfitId, u16> = BTreeMap::new();
     static NO_FIGHTERS: BTreeMap<OutfitId, u32> = BTreeMap::new();
+    static NO_LAUNCHERS: BTreeMap<OutfitId, Launcher> = BTreeMap::new();
+
+    /// Room for more guns and turrets than any test buys.
+    const ROOMY: Hardpoints = Hardpoints {
+        guns: 99,
+        turrets: 99,
+    };
 
     /// The outfitter of `records` at `site`, reading `BuyRandom` by the
     /// engine.
@@ -586,6 +806,9 @@ mod tests {
             site,
             fighter_room: &NO_FIGHTERS,
             buy_random: RuleSource::Engine,
+            hardpoints: ROOMY,
+            launchers: &NO_LAUNCHERS,
+            launcher_sale: RuleSource::Engine,
         }
     }
 
@@ -1250,6 +1473,9 @@ mod tests {
                 site: &port(),
                 fighter_room,
                 buy_random: RuleSource::Engine,
+                hardpoints: ROOMY,
+                launchers: &NO_LAUNCHERS,
+                launcher_sale: RuleSource::Engine,
             }
             .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
             .expect("open")
@@ -1334,6 +1560,9 @@ mod tests {
             site: &port(),
             fighter_room: &NO_FIGHTERS,
             buy_random: RuleSource::Engine,
+            hardpoints: ROOMY,
+            launchers: &NO_LAUNCHERS,
+            launcher_sale: RuleSource::Engine,
         }
         .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
         .expect("open");
@@ -1348,6 +1577,9 @@ mod tests {
             site: &port(),
             fighter_room: &NO_FIGHTERS,
             buy_random: RuleSource::Engine,
+            hardpoints: ROOMY,
+            launchers: &NO_LAUNCHERS,
+            launcher_sale: RuleSource::Engine,
         }
         .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
         .expect("open");
@@ -1359,6 +1591,9 @@ mod tests {
             site: &port(),
             fighter_room: &NO_FIGHTERS,
             buy_random: RuleSource::Engine,
+            hardpoints: ROOMY,
+            launchers: &NO_LAUNCHERS,
+            launcher_sale: RuleSource::Engine,
         }
         .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
         .expect("open");
@@ -1449,6 +1684,412 @@ mod tests {
         let zero = open(&to_none, &owning(&[(128, 1), (129, 1)]));
         assert_eq!(zero.free_mass, 20);
         assert_eq!(sell(&zero), Ok(()), "leaves none free");
+    }
+
+    // Guns and turrets.
+
+    /// A massless gun outfit `id`, `Max` 10.
+    fn gun(id: i16) -> OutfitRecord {
+        OutfitRecord {
+            flags: OutfitFlags::GUN,
+            mass: 0,
+            ..outfit(id, &[])
+        }
+    }
+
+    /// A massless turret outfit `id`, `Max` 10.
+    fn turret(id: i16) -> OutfitRecord {
+        OutfitRecord {
+            flags: OutfitFlags::TURRET,
+            ..gun(id)
+        }
+    }
+
+    fn hardpoints(guns: i16, turrets: i16) -> Hardpoints {
+        Hardpoints { guns, turrets }
+    }
+
+    /// The outfitter at [`port`] on a ship of `hardpoints`.
+    fn armed(records: &[OutfitRecord], pilot: &Pilot, hardpoints: Hardpoints) -> Outfitter {
+        let site = port();
+        Shop {
+            hardpoints,
+            ..shop(records, &site)
+        }
+        .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter")
+    }
+
+    fn buys(outfitter: &Outfitter, id: i16) -> Result<(), OutfitRefusal> {
+        row(outfitter, id).buy
+    }
+
+    #[test]
+    fn a_gun_is_refused_once_the_guns_owned_reach_max_gun() {
+        let records = [gun(128), gun(129), outfit(130, &[])];
+        let one = armed(&records, &owning(&[(128, 1)]), hardpoints(2, 0));
+        assert_eq!((buys(&one, 128), buys(&one, 129)), (Ok(()), Ok(())));
+        let limit = Err(OutfitRefusal::GunLimit);
+        for owned in [&[(128, 1), (129, 1)][..], &[(128, 2)], &[(129, 3)]] {
+            let full = armed(&records, &owning(owned), hardpoints(2, 0));
+            assert_eq!((buys(&full, 128), buys(&full, 129)), (limit, limit));
+            assert_eq!(buys(&full, 130), Ok(()), "not a gun");
+            let sold = owned[0].0;
+            assert_eq!(row(&full, sold).sell, Ok(()), "selling is free");
+        }
+        let turrets = armed(&[turret(128)], &owning(&[(128, 1)]), hardpoints(1, 9));
+        assert_eq!(buys(&turrets, 128), Ok(()), "turrets are not guns");
+    }
+
+    #[test]
+    fn a_class_whose_max_gun_is_none_or_less_buys_no_gun() {
+        for max_gun in [0, -1] {
+            let outfitter = armed(&[gun(128)], &pilot(), hardpoints(max_gun, 5));
+            assert_eq!(buys(&outfitter, 128), Err(OutfitRefusal::GunLimit));
+        }
+        let outfitter = armed(&[gun(128)], &pilot(), hardpoints(1, 0));
+        assert_eq!(buys(&outfitter, 128), Ok(()));
+    }
+
+    #[test]
+    fn a_turret_is_refused_once_the_turrets_owned_reach_max_tur() {
+        let records = [turret(128), turret(129), gun(130)];
+        let one = armed(&records, &owning(&[(128, 1)]), hardpoints(0, 2));
+        assert_eq!((buys(&one, 128), buys(&one, 129)), (Ok(()), Ok(())));
+        let full = armed(&records, &owning(&[(128, 1), (129, 1)]), hardpoints(5, 2));
+        let limit = Err(OutfitRefusal::TurretLimit);
+        assert_eq!((buys(&full, 128), buys(&full, 129)), (limit, limit));
+        assert_eq!(buys(&full, 130), Ok(()), "guns are not turrets");
+        for max_tur in [0, -1] {
+            let none = armed(&records, &pilot(), hardpoints(5, max_tur));
+            assert_eq!(buys(&none, 128), limit);
+        }
+    }
+
+    #[test]
+    fn mod_type_45_changes_max_gun_once_per_outfit_by_its_first_mod() {
+        let records = [
+            gun(128),
+            outfit(140, &[(MORE_GUNS, 1), (MORE_GUNS, 5)]),
+            outfit(141, &[(MORE_GUNS, -1)]),
+            outfit(142, &[(MORE_SPEED, 1), (MORE_GUNS, 2)]),
+            outfit(143, &[(MORE_TURRETS, 7)]),
+        ];
+        let limit = Err(OutfitRefusal::GunLimit);
+        let at = |owned: &[(i16, u16)], max_gun| {
+            buys(
+                &armed(&records, &owning(owned), hardpoints(max_gun, 0)),
+                128,
+            )
+        };
+        assert_eq!(at(&[(128, 1), (140, 3)], 1), Ok(()), "1 + 1");
+        assert_eq!(at(&[(128, 2), (140, 3)], 1), limit, "not 1 + 3, nor + 5");
+        assert_eq!(at(&[(128, 1), (141, 1)], 2), limit, "2 - 1");
+        assert_eq!(at(&[], 0), limit, "an unowned outfit adds nothing");
+        assert_eq!(at(&[(142, 1)], 0), Ok(()), "its first mod of 45");
+        assert_eq!(at(&[(128, 1), (142, 1)], 0), Ok(()), "0 + 2, 1 owned");
+        assert_eq!(at(&[(128, 2), (142, 1)], 0), limit, "0 + 2, 2 owned");
+        assert_eq!(at(&[(128, 2), (142, 1)], 1), Ok(()), "1 + 2");
+        assert_eq!(at(&[(128, 3), (142, 1)], 1), limit);
+        assert_eq!(at(&[(143, 1)], 0), limit, "46 is turrets");
+    }
+
+    #[test]
+    fn mod_type_46_changes_max_tur() {
+        let records = [
+            turret(128),
+            outfit(140, &[(MORE_TURRETS, 1), (MORE_TURRETS, 5)]),
+            outfit(141, &[(MORE_TURRETS, -1)]),
+            outfit(143, &[(MORE_GUNS, 7)]),
+        ];
+        let limit = Err(OutfitRefusal::TurretLimit);
+        let at = |owned: &[(i16, u16)], max_tur| {
+            buys(
+                &armed(&records, &owning(owned), hardpoints(0, max_tur)),
+                128,
+            )
+        };
+        assert_eq!(at(&[(128, 1), (140, 3)], 1), Ok(()), "1 + 1");
+        assert_eq!(at(&[(128, 2), (140, 3)], 1), limit, "once per outfit");
+        assert_eq!(at(&[(128, 1), (141, 1)], 2), limit, "2 - 1");
+        assert_eq!(at(&[(143, 1)], 0), limit, "45 is guns");
+    }
+
+    #[test]
+    fn an_outfit_flagged_gun_and_turret_must_fit_both_gun_first() {
+        let both = OutfitRecord {
+            flags: OutfitFlags::GUN | OutfitFlags::TURRET,
+            ..gun(128)
+        };
+        let records = [both, gun(129), turret(130)];
+        let at =
+            |owned: &[(i16, u16)]| buys(&armed(&records, &owning(owned), hardpoints(1, 1)), 128);
+        assert_eq!(at(&[]), Ok(()));
+        assert_eq!(at(&[(129, 1)]), Err(OutfitRefusal::GunLimit));
+        assert_eq!(at(&[(130, 1)]), Err(OutfitRefusal::TurretLimit));
+        assert_eq!(at(&[(129, 1), (130, 1)]), Err(OutfitRefusal::GunLimit));
+        assert_eq!(at(&[(128, 1)]), Err(OutfitRefusal::GunLimit), "itself both");
+    }
+
+    #[test]
+    fn max_comes_before_the_gun_limit_and_the_gun_limit_before_space_and_cash() {
+        let one = OutfitRecord { max: 1, ..gun(128) };
+        let outfitter = armed(&[one], &owning(&[(128, 1)]), hardpoints(1, 0));
+        assert_eq!(buys(&outfitter, 128), Err(OutfitRefusal::MaxOwned));
+        let none = OutfitRecord { max: 0, ..gun(128) };
+        let outfitter = armed(&[none], &pilot(), hardpoints(0, 0));
+        assert_eq!(buys(&outfitter, 128), Err(OutfitRefusal::NoneAllowed));
+        let dear = OutfitRecord {
+            mass: 100,
+            cost: 1_000_000,
+            ..gun(128)
+        };
+        let outfitter = armed(std::slice::from_ref(&dear), &pilot(), hardpoints(0, 0));
+        assert_eq!(buys(&outfitter, 128), Err(OutfitRefusal::GunLimit));
+        let outfitter = armed(&[dear], &pilot(), hardpoints(1, 0));
+        assert_eq!(buys(&outfitter, 128), Err(OutfitRefusal::NoSpaceForAny));
+        let turret = OutfitRecord {
+            mass: 100,
+            ..turret(128)
+        };
+        let outfitter = armed(&[turret], &pilot(), hardpoints(0, 0));
+        assert_eq!(buys(&outfitter, 128), Err(OutfitRefusal::TurretLimit));
+    }
+
+    // A launcher and its ammunition.
+
+    /// Launcher outfit 128 (massless, "missile rack"/"missile racks") and
+    /// its ammunition, outfit 129 ("missile"/"missiles").
+    fn racks() -> [OutfitRecord; 2] {
+        [
+            OutfitRecord {
+                lc_name: "missile rack".to_owned(),
+                lc_plural: "missile racks".to_owned(),
+                ..gun(128)
+            },
+            OutfitRecord {
+                lc_name: "missile".to_owned(),
+                lc_plural: "missiles".to_owned(),
+                max: 999,
+                ..outfit(129, &[])
+            },
+        ]
+    }
+
+    fn rack(max_ammo: u32, rounds: u32) -> BTreeMap<OutfitId, Launcher> {
+        BTreeMap::from([(
+            OutfitId(128),
+            Launcher {
+                max_ammo,
+                rounds,
+                ammo: Some(OutfitId(129)),
+            },
+        )])
+    }
+
+    /// The outfitter at [`port`] with `launchers`, read as `source` says.
+    fn launching(
+        records: &[OutfitRecord],
+        pilot: &Pilot,
+        launchers: &BTreeMap<OutfitId, Launcher>,
+        source: RuleSource,
+    ) -> Outfitter {
+        let site = port();
+        Shop {
+            launchers,
+            launcher_sale: source,
+            ..shop(records, &site)
+        }
+        .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter")
+    }
+
+    fn first(rounds: u32) -> Result<(), OutfitRefusal> {
+        Err(OutfitRefusal::AmmunitionFirst {
+            rounds,
+            ammo: Some(OutfitId(129)),
+        })
+    }
+
+    #[test]
+    fn by_the_engine_selling_the_last_launcher_is_refused_while_its_rounds_are_held() {
+        let engine = |owned, max_ammo, rounds| {
+            sell(&launching(
+                &racks(),
+                &owning(&[(128, owned)]),
+                &rack(max_ammo, rounds),
+                RuleSource::Engine,
+            ))
+        };
+        assert_eq!(engine(1, 4, 2), first(2));
+        assert_eq!(engine(1, 4, 0), Ok(()));
+        let outfitter = launching(
+            &racks(),
+            &owning(&[(128, 1)]),
+            &rack(4, 2),
+            RuleSource::Engine,
+        );
+        assert_eq!(buy(&outfitter), Ok(()), "buying is free");
+    }
+
+    #[test]
+    fn by_the_engine_a_launcher_sells_while_the_others_hold_every_round() {
+        let engine = |owned, rounds| {
+            sell(&launching(
+                &racks(),
+                &owning(&[(128, owned)]),
+                &rack(4, rounds),
+                RuleSource::Engine,
+            ))
+        };
+        assert_eq!(engine(2, 4), Ok(()));
+        assert_eq!(engine(2, 5), first(1));
+        assert_eq!(engine(3, 8), Ok(()));
+        assert_eq!(engine(3, 11), first(3));
+    }
+
+    #[test]
+    fn by_the_engine_a_launcher_of_max_ammo_0_always_sells() {
+        let outfitter = launching(
+            &racks(),
+            &owning(&[(128, 1)]),
+            &rack(0, 7),
+            RuleSource::Engine,
+        );
+        assert_eq!(sell(&outfitter), Ok(()));
+    }
+
+    #[test]
+    fn by_the_other_reading_any_round_held_refuses_the_sale() {
+        let bible = |owned, max_ammo, rounds| {
+            sell(&launching(
+                &racks(),
+                &owning(&[(128, owned)]),
+                &rack(max_ammo, rounds),
+                RuleSource::Bible,
+            ))
+        };
+        assert_eq!(bible(2, 4, 4), first(4));
+        assert_eq!(bible(1, 0, 1), first(1));
+        assert_eq!(bible(1, 4, 2), first(2));
+        assert_eq!(bible(1, 4, 0), Ok(()));
+    }
+
+    #[test]
+    fn a_launchers_excess_is_read_as_its_rule_says() {
+        let excess = |max_ammo, rounds, owned, source| {
+            Launcher {
+                max_ammo,
+                rounds,
+                ammo: None,
+            }
+            .excess(owned, source)
+        };
+        for (max_ammo, rounds, owned, engine, bible) in [
+            (4, 2, 1, Some(2), Some(2)),
+            (4, 0, 1, None, None),
+            (4, 4, 2, None, Some(4)),
+            (4, 5, 2, Some(1), Some(5)),
+            (0, 1, 1, None, Some(1)),
+            (0, 0, 1, None, None),
+            (4, 9, 3, Some(1), Some(9)),
+            (4, 8, 3, None, Some(8)),
+            (4, 3, 0, Some(3), Some(3)),
+            (u32::MAX, u32::MAX, u16::MAX, None, Some(u32::MAX)),
+            (4, u32::MAX, 1, Some(u32::MAX), Some(u32::MAX)),
+            (u32::MAX, 1, 2, None, Some(1)),
+        ] {
+            let case = format!("{max_ammo} {rounds} {owned}");
+            assert_eq!(
+                excess(max_ammo, rounds, owned, RuleSource::Engine),
+                engine,
+                "{case}"
+            );
+            assert_eq!(
+                excess(max_ammo, rounds, owned, RuleSource::Bible),
+                bible,
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn negative_free_mass_and_cannot_sell_come_before_the_ammunition() {
+        let [launcher, ammo] = racks();
+        let unsellable = OutfitRecord {
+            flags: OutfitFlags::CANNOT_SELL,
+            ..launcher.clone()
+        };
+        let outfitter = launching(
+            &[unsellable, ammo.clone()],
+            &owning(&[(128, 1)]),
+            &rack(4, 2),
+            RuleSource::Engine,
+        );
+        assert_eq!(sell(&outfitter), Err(OutfitRefusal::CannotSell));
+        let expansion = OutfitRecord {
+            mass: -20,
+            ..launcher
+        };
+        let cargo = OutfitRecord {
+            mass: 40,
+            ..outfit(130, &[])
+        };
+        let outfitter = launching(
+            &[expansion, ammo, cargo],
+            &owning(&[(128, 1), (130, 1)]),
+            &rack(4, 2),
+            RuleSource::Engine,
+        );
+        assert_eq!(sell(&outfitter), Err(OutfitRefusal::NegativeFreeMass));
+    }
+
+    #[test]
+    fn the_outfitter_carries_the_names_a_launcher_refusal_needs() {
+        let refused = launching(
+            &racks(),
+            &owning(&[(128, 1)]),
+            &rack(4, 2),
+            RuleSource::Engine,
+        );
+        let names = |singular: &str, plural: &str| LcNames {
+            singular: singular.to_owned(),
+            plural: plural.to_owned(),
+        };
+        assert_eq!(
+            refused.lc_names,
+            BTreeMap::from([
+                (OutfitId(128), names("missile rack", "missile racks")),
+                (OutfitId(129), names("missile", "missiles")),
+            ])
+        );
+        let sold = launching(
+            &racks(),
+            &owning(&[(128, 1)]),
+            &rack(4, 0),
+            RuleSource::Engine,
+        );
+        assert_eq!(sold.lc_names, BTreeMap::new(), "none refused");
+        let unnamed = BTreeMap::from([(
+            OutfitId(128),
+            Launcher {
+                max_ammo: 4,
+                rounds: 2,
+                ammo: None,
+            },
+        )]);
+        let outfitter = launching(&racks(), &owning(&[(128, 1)]), &unnamed, RuleSource::Engine);
+        assert_eq!(
+            sell(&outfitter),
+            Err(OutfitRefusal::AmmunitionFirst {
+                rounds: 2,
+                ammo: None
+            })
+        );
+        assert_eq!(
+            outfitter.lc_names,
+            BTreeMap::from([(OutfitId(128), names("missile rack", "missile racks"))])
+        );
     }
 
     // Settling.

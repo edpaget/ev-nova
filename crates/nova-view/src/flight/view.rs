@@ -225,7 +225,8 @@
 //!   flight's chance; how `BuyRandom` reads is set on the screen
 //!   ([`FlightView::with_buy_random`]). How held tribbles and perishable
 //!   `jünk` grow and decay in flight is set there too
-//!   ([`FlightView::with_junk_flags`]).
+//!   ([`FlightView::with_junk_flags`]), and when a launcher cannot be
+//!   sold for its ammunition ([`FlightView::with_launcher_sale`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
 //!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance;
@@ -1086,6 +1087,18 @@ impl<
     pub fn with_junk_flags(self, source: RuleSource) -> Self {
         Self {
             session: self.session.map(|session| session.with_junk_flags(source)),
+            ..self
+        }
+    }
+
+    /// The flight with a launcher's sale refused for its ammunition as
+    /// `source` says ([`Session::with_launcher_sale`]).
+    #[must_use]
+    pub fn with_launcher_sale(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_launcher_sale(source)),
             ..self
         }
     }
@@ -6054,6 +6067,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::buy_random),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_launcher_sale_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_launcher_sale(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.launcher_sale(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::launcher_sale),
             Ok(RuleSource::Engine)
         );
     }

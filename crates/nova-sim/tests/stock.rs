@@ -443,6 +443,48 @@ fn a_battery_pack_adds_a_jump_of_fuel_to_the_shuttle() {
     );
 }
 
+/// The Shuttle (`shïp` 128, `MaxGun` 2) carries one stock Light Blaster
+/// (`oütf` 128, flagged a gun). At Port Kane it buys one more and then
+/// no gun at all (`_HasMaxOfItem` @0x46c8-0x47b7).
+#[test]
+fn the_shuttle_at_port_kane_buys_one_more_gun_and_then_none() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = at_port_kane(&data);
+    let blaster = OutfitOrder {
+        outfit: OutfitId(128),
+        direction: Direction::Buy,
+    };
+    assert_eq!(session.outfit(blaster, &mut Fires), Ok(()));
+    assert_eq!(session.pilot().owned(OutfitId(128)), 2);
+    let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
+    assert_eq!(outfitter.check(blaster), Err(OutfitRefusal::GunLimit));
+    if let Some(laser) = outfitter.row(OutfitId(270)) {
+        assert_eq!(laser.buy, Err(OutfitRefusal::GunLimit), "the mining laser");
+    }
+    let battery = outfitter.row(OutfitId(256)).expect("the Battery Pack");
+    assert_eq!(battery.buy, Ok(()), "not a gun");
+}
+
+/// The Viper Bay (`oütf` 157) launches the Viper (`wëap` 149, `MaxAmmo`
+/// 4), its own rounds, held by the Viper outfit (158).
+#[test]
+fn the_viper_bays_magazine_is_its_vipers() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let magazines = nova_sim::combat::armament::Arsenal::read(&data).magazines(&data.outfits());
+    let bay = magazines.get(&OutfitId(157)).expect("a launcher");
+    assert_eq!(
+        (bay.weapon, bay.ammo, bay.max_ammo, bay.ammo_outfit),
+        (WeaponId(149), WeaponId(149), 4, Some(OutfitId(158)))
+    );
+    assert!(bay.carried.is_some(), "it launches a ship");
+}
+
 /// A new stock pilot, docked at Viking (`spöb` 157 in Tichel, `sÿst`
 /// 129, a jump from Kania), through a save that says so.
 fn at_viking(data: &GameData) -> Session {

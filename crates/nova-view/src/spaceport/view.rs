@@ -1774,6 +1774,7 @@ mod tests {
             }],
             cash: 5000,
             free_mass: 8,
+            ..Outfitter::default()
         }
     }
 
