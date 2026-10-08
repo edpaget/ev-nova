@@ -137,7 +137,7 @@
 //! set, unless its first mod is `ModType` 3 or it has any [`MORE_CARGO`]
 //! mod (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, after the expansion tests
 //! and before the cash). Every buy sets the flags afresh
-//! ([`Bought::after_buying`], `_GrantOutfitItem` @0x44d67-0x44f8b): a map
+//! (`Bought::after_buying`, `_GrantOutfitItem` @0x44d67-0x44f8b): a map
 //! sets the map flag, a clean record without a [`PAINT`] mod the record
 //! flag, and any other outfit clears both, which lifts the limit. Both
 //! are cleared each time the outfitter opens (`_DoOutfitDialog`
@@ -273,7 +273,7 @@ pub const EXPLORES_MAP: i16 = 16;
 /// outfitter sells one only once an opening ([`Bought`]).
 pub const CLEAN_RECORD: i16 = 21;
 /// The `oütf` `ModType` that paints the ship: an outfit with one never
-/// sets the clean-record flag ([`Bought::after_buying`]).
+/// sets the clean-record flag (`Bought::after_buying`).
 pub const PAINT: i16 = 43;
 
 /// What an outfit sells back for, as a percentage of its price. The
@@ -555,7 +555,7 @@ pub(crate) fn opening_limit(outfit: &OutfitRecord) -> Option<OpeningLimit> {
 /// outfitter opened explored a map (`_boughtMap`) or cleared the legal
 /// record (`_boughtID`). The original clears both each time the
 /// outfitter dialog opens (`_DoOutfitDialog` @0x5bb37-0x5bb44) and sets
-/// them on every grant ([`Bought::after_buying`]); see the module docs.
+/// them on every grant (`Bought::after_buying`); see the module docs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Bought {
     /// `_boughtMap`.
