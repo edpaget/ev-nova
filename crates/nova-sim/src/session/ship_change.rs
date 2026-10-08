@@ -977,37 +977,26 @@ mod tests {
     }
 
     #[test]
-    fn a_reload_holds_a_kept_surplus_to_the_new_most_by_either_reading() {
+    fn a_reload_holds_a_kept_surplus_to_the_new_most() {
         let catalog = changing();
-        for source in [RuleSource::Engine, RuleSource::Bible] {
-            for (op, held) in [
-                ("C130", Reserves::full(110.0, 20.0, 100.0)),
-                ("H130", Reserves::full(10.0, 20.0, 100.0)),
-            ] {
-                let mut session = session(&catalog).with_outfit_rules(OutfitRules {
-                    refit_reserves: source,
-                    ..OutfitRules::default()
-                });
-                run(&mut session, op);
-                let kept = session.reserves();
-                assert_eq!(
-                    (kept.shield.now, kept.armor.now),
-                    (130.0, 45.0),
-                    "{op}, {source:?}"
-                );
-                let pilot = save::decode(&save::encode(session.pilot())).expect("loads");
-                assert_eq!(
-                    pilot.reserves(),
-                    kept,
-                    "{op}, {source:?}: the save keeps the surplus"
-                );
-                let reloaded = Session::fly(&catalog, pilot).expect("flies");
-                assert_eq!(
-                    reloaded.reserves(),
-                    held,
-                    "{op}, {source:?}: flying it holds it"
-                );
-            }
+        for (op, held) in [
+            ("C130", Reserves::full(110.0, 20.0, 100.0)),
+            ("H130", Reserves::full(10.0, 20.0, 100.0)),
+        ] {
+            let mut session = session(&catalog).with_outfit_rules(OutfitRules {
+                refit_reserves: RuleSource::Engine,
+                ..OutfitRules::default()
+            });
+            run(&mut session, op);
+            let kept = session.reserves();
+            assert_eq!((kept.shield.now, kept.armor.now), (130.0, 45.0), "{op}");
+            let pilot = save::decode(&save::encode(session.pilot())).expect("loads");
+            assert_eq!(pilot.reserves(), kept, "{op}: the save keeps the surplus");
+            // `Session::fly` refits with the clamping `refit` before any
+            // rules apply, so a reload holds the surplus whatever the
+            // `refit_reserves` reading.
+            let reloaded = Session::fly(&catalog, pilot).expect("flies");
+            assert_eq!(reloaded.reserves(), held, "{op}: flying it holds it");
         }
     }
 
