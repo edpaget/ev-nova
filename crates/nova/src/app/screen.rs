@@ -161,9 +161,10 @@ use nova_sim::{
     Allegiance, Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HailView,
     HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
     NovaPersons, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule, RuleKey,
-    RuleSource, Rulebook, Take, Taken, pilot_key,
+    RuleSource, Rulebook, Session, Take, Taken, pilot_key,
 };
 pub use nova_view::Showing;
+use nova_view::devtools::SessionDesk;
 use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
@@ -711,6 +712,42 @@ impl AppScreen {
         self.flight
             .as_mut()
             .is_some_and(|flight| flight.transact(change))
+    }
+
+    /// The pilot flying, as the developer tools' desk; `None` before
+    /// flight is entered and when the flight could not start.
+    pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, Rc<GameData>>> {
+        self.flight.as_mut()?.pilot_desk()
+    }
+
+    /// Catches up with an edit made through the pilot desk: flight lays out
+    /// the system the pilot is now in, the open spaceport is rebuilt for
+    /// the stellar the pilot is now landed on when it moved, and otherwise
+    /// shows the exchange, outfitter and shipyard as they now are; then
+    /// the pilot is saved if a save is due, as after any change.
+    pub fn after_pilot_edit(&mut self) {
+        let Some(flight) = self.flight.as_mut() else {
+            return;
+        };
+        flight.resync();
+        let landed = flight.session().ok().and_then(Session::landed);
+        if let Some(spaceport) = &mut self.spaceport {
+            match landed {
+                Some(stellar) if stellar != spaceport.stellar() => self.show_spaceport(stellar),
+                _ => {
+                    if let Some(market) = flight.market() {
+                        spaceport.set_market(market);
+                    }
+                    if let Some(outfitter) = flight.outfitter() {
+                        spaceport.set_outfitter(outfitter);
+                    }
+                    if let Some(shipyard) = flight.shipyard() {
+                        spaceport.set_shipyard(shipyard);
+                    }
+                }
+            }
+        }
+        self.save_if_due();
     }
 
     /// The router with dialogs: I opens the About text in a dialog built
@@ -1871,7 +1908,7 @@ impl Screen for AppScreen {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::io;
     use std::path::Path;
     use std::rc::Rc;
@@ -1939,7 +1976,8 @@ mod tests {
     /// Ships 129 and 128, each with a `shän` naming a 4-frame `rlëD` (one
     /// set of 4 rotations), and systems 128 and 129, 300 apart. System 128
     /// holds stellar 128 at (0, 0), a planet with a bar, whose `spïn` 1000
-    /// names the same `rlëD`. The only `chär` starts in ship 128, an
+    /// names the same `rlëD`; system 129 holds stellar 129, Beta Prime,
+    /// another such planet. The only `chär` starts in ship 128, an
     /// average ship, in system 128, over the planet.
     fn data() -> Rc<GameData> {
         game_data(false, false, false)
@@ -2058,8 +2096,9 @@ mod tests {
             .resource(ShipAnim::TYPE, 129, None, &anim)
             .resource(RLED, 1000, None, &sheet)
             .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128]))
-            .resource(System::TYPE, 129, Some(b"Beta"), &system(300, &[]))
+            .resource(System::TYPE, 129, Some(b"Beta"), &system(300, &[129]))
             .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar)
+            .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &landable())
             .resource(Spin::TYPE, 1000, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
             .build()
@@ -3702,7 +3741,7 @@ mod tests {
     }
 
     /// The router with the main menu over `store`, and no dialogs.
-    fn menu(store: &MemoryPilots) -> AppScreen {
+    pub(crate) fn menu(store: &MemoryPilots) -> AppScreen {
         AppScreen::new(data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
     }
 
@@ -3737,7 +3776,7 @@ mod tests {
 
     /// Creates a pilot named `name` from the main menu: New Pilot, the
     /// name, Return.
-    fn create(screen: &mut AppScreen, name: &str) {
+    pub(crate) fn create(screen: &mut AppScreen, name: &str) {
         assert_eq!(choose(screen, MenuChoice::NewPilot), ScreenAction::None);
         assert_eq!(screen.showing(), Showing::NewPilot);
         type_text(screen, name);
@@ -3748,7 +3787,7 @@ mod tests {
         flight(screen).pilot().expect("flying")
     }
 
-    fn saved(store: &MemoryPilots, key: &str) -> nova_sim::Pilot {
+    pub(crate) fn saved(store: &MemoryPilots, key: &str) -> nova_sim::Pilot {
         nova_sim::save::decode(&store.text(key).expect("saved")).expect("a pilot")
     }
 
@@ -5778,5 +5817,111 @@ mod tests {
         fly(&mut screen);
         hail(&mut screen);
         assert_eq!(flight(&screen).hailing().expect("hailing").options, []);
+    }
+
+    // Pilot edits.
+
+    use nova_view::devtools::{PilotDesk, PilotEdit};
+
+    /// Makes `edit` through the router's pilot desk, as the developer
+    /// tools do, then lets the router catch up.
+    fn edit(screen: &mut AppScreen, edit: PilotEdit) {
+        screen
+            .pilot_desk()
+            .expect("flying")
+            .edit(edit)
+            .expect("made");
+        screen.after_pilot_edit();
+    }
+
+    #[test]
+    fn the_pilot_desk_is_there_only_in_flight() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        assert!(screen.pilot_desk().is_none());
+        create(&mut screen, "Ada");
+        let desk = screen.pilot_desk().expect("flying");
+        assert_eq!(desk.sheet().expect("a pilot").name, "Ada");
+    }
+
+    #[test]
+    fn a_credits_edit_is_saved_and_the_open_exchange_shows_it() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        click_port_item(&mut screen, 7);
+        let writes = store.writes();
+        edit(&mut screen, PilotEdit::Credits(5000));
+        assert_eq!(store.writes(), writes + 1);
+        assert_eq!(saved(&store, "Ada").cash(), 5000);
+        let open = spaceport(&screen).open_trade().expect("still trading");
+        assert_eq!(open.market().cash, 5000);
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_edit_in_flight_is_saved_too() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        edit(&mut screen, PilotEdit::Credits(42));
+        assert_eq!(saved(&store, "Ada").cash(), 42);
+        assert_eq!(screen.showing(), Showing::Flight);
+    }
+
+    #[test]
+    fn a_move_rebuilds_the_spaceport_for_the_new_stellar() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        edit(
+            &mut screen,
+            PilotEdit::MoveTo {
+                system: SystemId(129),
+                stellar: nova_sim::StellarId(129),
+            },
+        );
+        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(129));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert_eq!(
+            flight(&screen)
+                .scene()
+                .map(nova_view::system::scene::SystemScene::id),
+            Some(SystemId(129))
+        );
+        let saved = saved(&store, "Ada");
+        assert_eq!(saved.system(), SystemId(129));
+        assert_eq!(saved.stellar(), Some(nova_sim::StellarId(129)));
+        assert!(
+            !spaceport(&screen)
+                .offered()
+                .contains(&nova_sim::Service::TradeCenter),
+            "Beta Prime has no exchange"
+        );
+    }
+
+    #[test]
+    fn a_move_to_the_stellar_landed_on_keeps_the_spaceport_open() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        click_port_item(&mut screen, 7);
+        edit(
+            &mut screen,
+            PilotEdit::MoveTo {
+                system: SystemId(128),
+                stellar: nova_sim::StellarId(128),
+            },
+        );
+        assert!(spaceport(&screen).open_trade().is_some(), "not rebuilt");
+    }
+
+    #[test]
+    fn an_unnamed_pilots_edit_is_not_saved() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        screen.input(&key(Key::Tab, true));
+        fly(&mut screen);
+        edit(&mut screen, PilotEdit::Credits(42));
+        assert_eq!(pilot(&screen).cash(), 42);
+        assert_eq!(store.writes(), 0);
+        assert_eq!(store.keys(), Vec::<String>::new());
     }
 }

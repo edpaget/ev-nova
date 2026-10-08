@@ -18,7 +18,9 @@
 //! [`App::handle_routed`] says where each event went, and
 //! [`App::overlay_wants`] whether the overlay's drawing (egui, in the
 //! `dev-tools` build) should see the raw event too. Without an overlay,
-//! every event goes to the game as before.
+//! every event goes to the game as before. Each frame of the overlay's
+//! drawing runs through [`App::pilot_desk_frame`], which hands it the
+//! pilot flying to edit, and catches the game up after an edit.
 //!
 //! # Sound
 //!
@@ -60,7 +62,7 @@ use std::time::Duration;
 
 use nova_audio::{Audio, AudioCore};
 use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
-use nova_view::devtools::{DevOverlay, Routing};
+use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
 use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
 
 pub mod screen;
@@ -468,6 +470,32 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// Keeps the warnings the screen reports, for the caller to take.
     fn take_screen_warnings(&mut self) {
         self.warnings.extend(self.screen.take_warnings());
+    }
+}
+
+impl<S: ImageSource> App<S, AppScreen> {
+    /// Runs one frame of the developer tools: `frame` sees the overlay and
+    /// the pilot flying as a desk (none before flight), and says whether it
+    /// edited the pilot. After an edit the screens catch up with it and the
+    /// pilot is saved as after any change ([`AppScreen::after_pilot_edit`]),
+    /// a failure kept as a warning. Without an overlay, `frame` does not
+    /// run.
+    pub fn pilot_desk_frame(
+        &mut self,
+        frame: impl FnOnce(&DevOverlay, Option<&mut dyn PilotDesk>) -> bool,
+    ) {
+        let Some(overlay) = &self.overlay else {
+            return;
+        };
+        let mut desk = self.screen.pilot_desk();
+        let edited = frame(
+            overlay,
+            desk.as_mut().map(|desk| desk as &mut dyn PilotDesk),
+        );
+        if edited {
+            self.screen.after_pilot_edit();
+            self.take_screen_warnings();
+        }
     }
 }
 
@@ -1666,5 +1694,84 @@ mod tests {
             &mut RecordingGpu::new(),
         );
         assert_eq!(store.writes(), 1);
+    }
+
+    // The pilot desk.
+
+    use nova_sim::fixture::MemoryPilots;
+    use nova_view::devtools::PilotEdit;
+
+    use super::screen::tests::{create, menu, saved};
+
+    /// An app over the main menu keeping pilots in `store`, with a
+    /// developer overlay.
+    fn desk_app(window: &FakeWindow, store: &MemoryPilots) -> App<NoImages> {
+        App::new(window, NoImages, menu(store)).with_dev_overlay()
+    }
+
+    #[test]
+    fn the_pilot_desk_frame_has_a_desk_only_in_flight() {
+        let window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemoryPilots::new();
+        let mut app = desk_app(&window, &store);
+        let mut seen = Vec::new();
+        app.pilot_desk_frame(|overlay, desk| {
+            seen.push((overlay.visible(), desk.is_some()));
+            false
+        });
+        create(&mut app.screen, "Ada");
+        app.pilot_desk_frame(|_, desk| {
+            let sheet = desk.expect("flying").sheet().expect("a pilot");
+            seen.push((false, sheet.name == "Ada"));
+            false
+        });
+        assert_eq!(seen, [(false, false), (false, true)]);
+    }
+
+    #[test]
+    fn an_edit_in_the_pilot_desk_frame_is_saved() {
+        let window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemoryPilots::new();
+        let mut app = desk_app(&window, &store);
+        create(&mut app.screen, "Ada");
+        let writes = store.writes();
+        app.pilot_desk_frame(|_, desk| {
+            desk.expect("flying")
+                .edit(PilotEdit::Credits(321))
+                .expect("made");
+            true
+        });
+        assert_eq!(store.writes(), writes + 1);
+        assert_eq!(saved(&store, "Ada").cash(), 321);
+    }
+
+    #[test]
+    fn a_pilot_desk_frame_with_no_edit_saves_nothing() {
+        let window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemoryPilots::new();
+        let mut app = desk_app(&window, &store);
+        create(&mut app.screen, "Ada");
+        let writes = store.writes();
+        app.pilot_desk_frame(|_, desk| {
+            // An edit the frame does not report waits for the next save.
+            desk.expect("flying")
+                .edit(PilotEdit::Credits(5))
+                .expect("made");
+            false
+        });
+        assert_eq!(store.writes(), writes);
+    }
+
+    #[test]
+    fn without_an_overlay_the_pilot_desk_frame_does_not_run() {
+        let window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemoryPilots::new();
+        let mut app = App::new(&window, NoImages, menu(&store));
+        let mut ran = false;
+        app.pilot_desk_frame(|_, _| {
+            ran = true;
+            true
+        });
+        assert!(!ran);
     }
 }
