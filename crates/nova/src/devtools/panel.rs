@@ -818,7 +818,9 @@ mod tests {
         let sets = harness.idle().rects(SET);
         assert_eq!(sets.len(), 5, "credits, three reserves and the date");
         for set in sets {
+            harness.edited = false;
             harness.click(set);
+            assert!(harness.edited, "each frame that edits says so");
         }
         assert_eq!(
             harness.edits(),
@@ -883,6 +885,34 @@ mod tests {
         );
     }
 
+    /// The labels among `labels` drawn on a row's own background: the
+    /// selected ones, with nothing hovered.
+    fn highlighted<'a>(drawn: &Drawn, labels: &[&'a str]) -> Vec<&'a str> {
+        labels
+            .iter()
+            .copied()
+            .filter(|label| {
+                let at = drawn.rect(label).center();
+                drawn.fills.iter().any(|(rect, fill)| {
+                    rect.contains(at) && rect.height() < 30.0 && *fill != Color32::TRANSPARENT
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn only_the_system_and_stellar_picked_are_highlighted() {
+        let mut harness = Harness::with_desk(Some(MockDesk::new()));
+        let labels = ["Sol (130)", "Alpha (131)"];
+        assert_eq!(highlighted(&harness.idle(), &labels), [] as [&str; 0]);
+        harness.click_text("Alpha (131)");
+        harness.click_text("Proxima (140)");
+        harness.frame(vec![Event::PointerGone]);
+        let drawn = harness.idle();
+        assert_eq!(highlighted(&drawn, &labels), ["Alpha (131)"]);
+        assert_eq!(highlighted(&drawn, &["Proxima (140)"]), ["Proxima (140)"]);
+    }
+
     #[test]
     fn the_system_filter_narrows_the_list() {
         let mut harness = Harness::with_desk(Some(MockDesk::new()));
@@ -894,6 +924,7 @@ mod tests {
     #[test]
     fn a_pilot_gone_is_forgotten() {
         let mut harness = Harness::with_desk(Some(MockDesk::new()));
+        assert!(harness.panel.editor().sheet().is_some());
         harness.desk = None;
         let drawn = harness.idle();
         assert!(drawn.has(NO_PILOT), "{:?}", drawn.all());
