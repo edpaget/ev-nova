@@ -49,9 +49,23 @@
 //! key keeps going, but only on the outfit the key went down on: when an
 //! order removes its cell, a held key stops until it is pressed again),
 //! ask for one of the selected outfit, and each is
-//! greyed when one could not be bought or sold. The screen only records
-//! the order ([`OutfitterScreen::take_order`]): whoever holds the session
-//! makes it and gives back the outfitter as it now is
+//! greyed when one could not be bought or sold. With Option held (Alt
+//! here, [`COUNT_KEY`]), Buy or Sell asks for a count instead, as
+//! `_DoOutfitDialog` does (@0x5c0c0-0x5c1aa for a buy, @0x5c5e3-0x5c628
+//! for a sale): when the outfitter says it asks
+//! ([`Outfitter::count_asked`], by the engine's reading of
+//! [`RuleKey::OutfitCount`](nova_sim::RuleKey::OutfitCount) the maximum
+//! `count_max` works out, none at 1 or less), the quantity dialog
+//! ([`QuantityDialog`], `DLOG` 1003, or its fallback; `_DoQuantityDialog`
+//! @0x56d5b) opens over the outfitter at that count, OK titled "Buy" or
+//! "Sell" and asking "Enter quantity:". It takes every input while it is
+//! open; a count above 0 confirmed there is the order, and 0 or Cancel
+//! orders nothing. B or S opening it types nothing into it. Otherwise, by
+//! the other reading too, a click moves one. Shift, Command and Control
+//! change nothing: the original tests Option alone (`testb $0x8` on the
+//! event's modifiers). The screen only records the order and its count
+//! ([`OutfitterScreen::take_order`]): whoever holds the session makes it
+//! and gives back the outfitter as it now is
 //! ([`OutfitterScreen::set_outfitter`]).
 //!
 //! Done, Return and Escape close it. Without the dialog, the screen says
@@ -66,7 +80,7 @@ use nova_sim::{Direction, LcNames, OutfitId, OutfitOrder, OutfitRefusal, OutfitR
 use super::catalog::SpaceportCatalog;
 use super::grid::{self, CellGrid, Shown, text};
 use super::layout::DONE_LABEL;
-use super::trade::{BUY_LABEL, SELL_LABEL};
+use super::trade::{BUY_LABEL, MAX_LOT_KEY, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -81,6 +95,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::comm::grouped;
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::quantity::{PROMPT, QuantityDialog};
 
 /// The "Outfit" dialog's `DLOG` (and `DITL`) ID.
 pub const OUTFIT_DIALOG: i16 = 1002;
@@ -116,6 +131,12 @@ pub use super::grid::{
 pub const BUY_KEY: Key = Key::Char('b');
 /// Sells one, as Sell does: the original's default.
 pub const SELL_KEY: Key = Key::Char('s');
+/// Held, makes a Buy or Sell ask for a count in the quantity dialog, as
+/// the original's Option does (`_DoOutfitDialog` tests `optionKey` alone,
+/// `testb $0x8`), unless the other reading of
+/// [`RuleKey::OutfitCount`](nova_sim::RuleKey::OutfitCount) has it change
+/// nothing. The exchange's key ([`MAX_LOT_KEY`]).
+pub const COUNT_KEY: Key = MAX_LOT_KEY;
 
 /// The first outfit's `PICT`; outfit n's is n - 128 after it.
 pub const FIRST_PICTURE: i16 = 6000;
@@ -274,6 +295,15 @@ struct Laid {
     metrics: MetricsHandle,
     /// The outfit whose picture and description are shown, and them.
     shown: Option<(OutfitId, Shown)>,
+    /// The quantity dialog's template, if the interface file has one.
+    quantity: Option<DialogTemplate>,
+}
+
+/// The quantity dialog open over the outfitter, and the order it counts.
+#[derive(Clone, Debug)]
+struct Asking {
+    order: OutfitOrder,
+    dialog: QuantityDialog,
 }
 
 /// The Outfitter of the stellar landed on.
@@ -288,25 +318,32 @@ pub struct OutfitterScreen {
     pictures: Vec<Option<i16>>,
     /// The selected cell and the grid's scrolling.
     grid: CellGrid,
-    /// The order asked for, until it is taken.
-    order: Option<OutfitOrder>,
+    /// The order asked for, and how many it moves, until it is taken.
+    order: Option<(OutfitOrder, u32)>,
     /// The key B or S last went down on (a press, not a repeat), and the
     /// outfit selected then, if any: its repeats act on that outfit
     /// alone.
     held: Option<(Key, Option<OutfitId>)>,
+    /// Whether Alt is held.
+    counting: bool,
+    /// The quantity dialog, while it is open.
+    asking: Option<Asking>,
     closed: bool,
+    style: ButtonStyle,
     sounds: Vec<Sound>,
 }
 
 impl OutfitterScreen {
     /// The outfitter `outfitter`, laid out by `layout`: the "Outfit"
     /// dialog's template and the metrics its text is measured by, or why
-    /// there are none. Its buttons are labelled in `style`, and each
-    /// outfit's picture and description are read from `catalog`. The
-    /// first cell is selected.
+    /// there are none. The quantity dialog is laid out by `quantity`, its
+    /// template (or, without one, its fallback). Its buttons are labelled
+    /// in `style`, and each outfit's picture and description are read
+    /// from `catalog`. The first cell is selected.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
+        quantity: Result<DialogTemplate, String>,
         outfitter: Outfitter,
         catalog: Rc<dyn OutfitterCatalog>,
         style: ButtonStyle,
@@ -336,6 +373,7 @@ impl OutfitterScreen {
                 dialog,
                 metrics: MetricsHandle(metrics),
                 shown: None,
+                quantity: quantity.ok(),
             }
         });
         let mut screen = Self {
@@ -346,7 +384,10 @@ impl OutfitterScreen {
             grid: CellGrid::default(),
             order: None,
             held: None,
+            counting: false,
+            asking: None,
             closed: false,
+            style,
             sounds: Vec::new(),
         };
         screen.read_pictures();
@@ -390,9 +431,16 @@ impl OutfitterScreen {
         self.closed
     }
 
-    /// The order asked for since it was last taken, once.
-    pub fn take_order(&mut self) -> Option<OutfitOrder> {
+    /// The order asked for since it was last taken, and how many it
+    /// moves (1 for a plain click), once.
+    pub fn take_order(&mut self) -> Option<(OutfitOrder, u32)> {
         self.order.take()
+    }
+
+    /// The quantity dialog, while it is open.
+    #[must_use]
+    pub fn quantity(&self) -> Option<&QuantityDialog> {
+        self.asking.as_ref().map(|asking| &asking.dialog)
     }
 
     /// Where cell `index` (counted from the grid's first row shown) is,
@@ -500,16 +548,83 @@ impl OutfitterScreen {
         })
     }
 
-    /// Asks to buy or sell one of the selected outfit, if it can go that
-    /// way.
-    fn ask(&mut self, direction: Direction) {
+    /// Asks to buy or sell the selected outfit, if it can go that way:
+    /// one, or with Alt held, when the outfitter asks for a count
+    /// ([`Outfitter::count_asked`]), the quantity dialog at that count.
+    /// `by_key` says B or S asked, whose character the dialog then drops.
+    fn ask(&mut self, direction: Direction, by_key: bool) {
         let Some(index) = self.selected().filter(|_| self.allows(direction)) else {
             return;
         };
-        self.order = Some(OutfitOrder {
+        let order = OutfitOrder {
             outfit: self.outfitter.rows[index].id,
             direction,
+        };
+        let asked = self
+            .outfitter
+            .count_asked(order.outfit, direction)
+            .filter(|_| self.counting);
+        match asked {
+            Some(max) => self.open_quantity(order, max, by_key),
+            None => self.order = Some((order, 1)),
+        }
+    }
+
+    /// Opens the quantity dialog over the outfitter for `order`, at
+    /// `max`, laid out by its template or its fallback.
+    fn open_quantity(&mut self, order: OutfitOrder, max: u32, by_key: bool) {
+        let Ok(laid) = &self.laid else {
+            return;
+        };
+        let metrics = Rc::clone(&laid.metrics.0);
+        let title = match order.direction {
+            Direction::Buy => BUY_LABEL,
+            Direction::Sell => SELL_LABEL,
+        };
+        let max = i64::from(max);
+        let built = laid.quantity.as_ref().and_then(|template| {
+            QuantityDialog::new(
+                template,
+                max,
+                title,
+                PROMPT,
+                self.style,
+                Rc::clone(&metrics),
+            )
+            .ok()
         });
+        let mut dialog = built
+            .unwrap_or_else(|| QuantityDialog::fallback(max, title, PROMPT, self.style, metrics));
+        if by_key {
+            dialog.flush_typed_key();
+        }
+        self.asking = Some(Asking { order, dialog });
+    }
+
+    /// Gives `input` to the quantity dialog open, after following Alt, and
+    /// records a count above 0 confirmed there as the order; 0 or Cancel
+    /// closes it with none.
+    fn quantity_input(&mut self, input: &Input) {
+        let Some(asking) = &mut self.asking else {
+            return;
+        };
+        if let Input::Key {
+            key: COUNT_KEY,
+            pressed,
+            ..
+        } = *input
+        {
+            self.counting = pressed;
+        }
+        asking.dialog.input(input);
+        self.sounds.extend(asking.dialog.take_sounds());
+        let Some(count) = asking.dialog.take_outcome() else {
+            return;
+        };
+        if count > 0 {
+            self.order = Some((asking.order, count));
+        }
+        self.asking = None;
     }
 
     /// Asks to go `direction` for `key` going down: a press asks for the
@@ -525,7 +640,7 @@ impl OutfitterScreen {
         } else if self.held != Some((key, selected)) {
             return;
         }
-        self.ask(direction);
+        self.ask(direction, true);
     }
 
     /// Scrolls the grid a row down, or up, never past either end.
@@ -538,8 +653,8 @@ impl OutfitterScreen {
     fn activate(&mut self, item: usize) {
         match item {
             DONE_ITEM => self.closed = true,
-            BUY_ITEM => self.ask(Direction::Buy),
-            SELL_ITEM => self.ask(Direction::Sell),
+            BUY_ITEM => self.ask(Direction::Buy, false),
+            SELL_ITEM => self.ask(Direction::Sell, false),
             SCROLL_UP_ITEM => self.scroll(false),
             SCROLL_DOWN_ITEM => self.scroll(true),
             _ => {}
@@ -621,8 +736,21 @@ impl OutfitterScreen {
 }
 
 impl Screen for OutfitterScreen {
-    /// Every input goes to the outfitter; it never quits.
+    /// Every input goes to the outfitter, or to the quantity dialog while
+    /// it is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.asking.is_some() {
+            self.quantity_input(input);
+            return ScreenAction::None;
+        }
+        if let Input::Key {
+            key: COUNT_KEY,
+            pressed,
+            ..
+        } = *input
+        {
+            self.counting = pressed;
+        }
         if self.laid.is_err() {
             if let Input::Key {
                 key: Key::Enter | Key::Escape,
@@ -689,15 +817,28 @@ impl Screen for OutfitterScreen {
         self.draw_selected(laid, list);
         self.draw_arrows(laid, list);
         laid.dialog.draw(list);
+        if let Some(asking) = &self.asking {
+            asking.dialog.draw(list);
+        }
     }
 
     fn cancel_pointer(&mut self) {
-        if let Ok(laid) = &mut self.laid {
+        if let Some(asking) = &mut self.asking {
+            asking.dialog.cancel_pointer();
+        } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
         }
     }
 
-    /// The buttons' sounds, in order.
+    /// Lets go of Alt, and of the keys held in the quantity dialog.
+    fn release_keys(&mut self) {
+        self.counting = false;
+        if let Some(asking) = &mut self.asking {
+            asking.dialog.release_keys();
+        }
+    }
+
+    /// The buttons' sounds and the quantity dialog's, in order.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -850,7 +991,33 @@ mod tests {
 
     fn screen_with(outfitter: Outfitter, art: &Rc<FakeArt>) -> OutfitterScreen {
         let catalog: Rc<dyn OutfitterCatalog> = Rc::clone(art) as Rc<dyn OutfitterCatalog>;
-        OutfitterScreen::new(Ok(layout()), outfitter, catalog, ButtonStyle::STOCK)
+        OutfitterScreen::new(
+            Ok(layout()),
+            Ok(quantity()),
+            outfitter,
+            catalog,
+            ButtonStyle::STOCK,
+        )
+    }
+
+    /// Stock `DITL` 1003, fixed at (10, 20): OK (1), the prompt (2), the
+    /// field (3) and Cancel (4).
+    fn quantity() -> DialogTemplate {
+        let item = |x, y, w, h, kind| ItemTemplate {
+            bounds: rect(x, y, w, h),
+            enabled: true,
+            kind,
+        };
+        DialogTemplate {
+            bounds: rect(10.0, 20.0, 172.0, 72.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(92.0, 42.0, 70.0, 20.0, ItemSpec::Button("OK".into())),
+                item(6.0, 8.0, 102.0, 16.0, ItemSpec::StaticText("^0".into())),
+                item(112.0, 8.0, 51.0, 16.0, ItemSpec::EditText("12345".into())),
+                item(10.0, 42.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
+            ],
+        }
     }
 
     fn screen_of(outfitter: Outfitter) -> OutfitterScreen {
@@ -929,11 +1096,20 @@ mod tests {
         click(screen, at);
     }
 
-    fn order(id: i16, direction: Direction) -> OutfitOrder {
-        OutfitOrder {
-            outfit: OutfitId(id),
-            direction,
-        }
+    /// A plain click's order: one of outfit `id`, `direction`.
+    fn order(id: i16, direction: Direction) -> (OutfitOrder, u32) {
+        counted(id, direction, 1)
+    }
+
+    /// An order for `count` of outfit `id`, `direction`.
+    fn counted(id: i16, direction: Direction, count: u32) -> (OutfitOrder, u32) {
+        (
+            OutfitOrder {
+                outfit: OutfitId(id),
+                direction,
+            },
+            count,
+        )
     }
 
     /// Whether Buy and Sell draw enabled.
@@ -1222,6 +1398,7 @@ mod tests {
         }
         let mut screen = OutfitterScreen::new(
             Ok((template, Rc::new(MonoMetrics))),
+            Ok(quantity()),
             outfitter(),
             art(),
             ButtonStyle::STOCK,
@@ -1238,6 +1415,7 @@ mod tests {
         };
         let screen = OutfitterScreen::new(
             Ok((short, Rc::new(MonoMetrics))),
+            Ok(quantity()),
             outfitter(),
             art(),
             ButtonStyle::STOCK,
@@ -2105,6 +2283,7 @@ mod tests {
             let art = art();
             let mut screen = OutfitterScreen::new(
                 Err("no DLOG 1002".to_owned()),
+                Ok(quantity()),
                 outfitter(),
                 Rc::clone(&art) as Rc<dyn OutfitterCatalog>,
                 ButtonStyle::STOCK,
@@ -2129,5 +2308,318 @@ mod tests {
             screen.input(&key(k, true, false));
             assert!(screen.closed(), "{k:?}");
         }
+    }
+
+    // The quantity dialog, by the engine's count reading.
+
+    /// The outfitter with 3000 credits: the light blaster's buy opens at
+    /// 3, and its sale at the 2 owned.
+    fn counting() -> Outfitter {
+        Outfitter {
+            cash: 3000,
+            ..outfitter()
+        }
+    }
+
+    fn counting_screen() -> OutfitterScreen {
+        screen_of(counting())
+    }
+
+    fn quantity_item(screen: &OutfitterScreen, number: usize) -> Point {
+        screen
+            .quantity()
+            .expect("asking")
+            .dialog()
+            .item_bounds(number)
+            .expect("an item")
+            .center()
+    }
+
+    fn quantity_texts(screen: &OutfitterScreen) -> Vec<String> {
+        let mut list = DrawList::new();
+        screen.quantity().expect("asking").draw(&mut list);
+        let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+        texts(&commands)
+            .into_iter()
+            .map(|(text, _, _)| text)
+            .collect()
+    }
+
+    fn field_text(screen: &OutfitterScreen) -> Option<&str> {
+        screen.quantity().map(|asking| asking.field().text())
+    }
+
+    fn typed(screen: &mut OutfitterScreen, text: &str) {
+        for c in text.chars() {
+            screen.input(&key(Key::Char(c), true, false));
+            screen.input(&Input::Text(c));
+        }
+    }
+
+    /// Clicks `button` with Alt held, then lets Alt go.
+    fn alt_click(screen: &mut OutfitterScreen, button: usize) {
+        press(screen, COUNT_KEY);
+        click_item(screen, button);
+        screen.input(&key(COUNT_KEY, false, false));
+    }
+
+    #[test]
+    fn with_alt_held_buy_opens_the_quantity_dialog_at_the_engines_maximum_titled_buy() {
+        assert_eq!(COUNT_KEY, Key::Alt);
+        let mut screen = counting_screen();
+        assert!(screen.quantity().is_none());
+        alt_click(&mut screen, BUY_ITEM);
+        assert_eq!(screen.take_order(), None, "nothing yet");
+        let asking = screen.quantity().expect("asking");
+        assert_eq!(asking.field().text(), "3", "trunc(3000 / 1000)");
+        assert_eq!(asking.field().selection(), 1);
+        assert_eq!(
+            asking.dialog().bounds().min,
+            Point::new(10.0, 20.0),
+            "laid out by its template"
+        );
+        assert_eq!(
+            quantity_texts(&screen),
+            ["Buy", "Enter quantity:", "Cancel", "3"]
+        );
+    }
+
+    #[test]
+    fn alt_s_opens_a_sell_dialog_at_the_count_owned_and_its_s_types_nothing() {
+        let mut screen = counting_screen();
+        press(&mut screen, COUNT_KEY);
+        // As a Mac sends Option-S: the key, then the character it types.
+        press(&mut screen, SELL_KEY);
+        screen.input(&Input::Text('ß'));
+        assert_eq!(
+            quantity_texts(&screen),
+            ["Sell", "Enter quantity:", "Cancel", "2"]
+        );
+        screen.input(&Input::Text('1'));
+        assert_eq!(
+            field_text(&screen),
+            Some("1"),
+            "only the first typed character is dropped"
+        );
+        // A click flushes nothing.
+        let mut screen = counting_screen();
+        alt_click(&mut screen, SELL_ITEM);
+        screen.input(&Input::Text('1'));
+        assert_eq!(field_text(&screen), Some("1"));
+    }
+
+    #[test]
+    fn ok_records_the_count_confirmed() {
+        let mut screen = counting_screen();
+        alt_click(&mut screen, BUY_ITEM);
+        typed(&mut screen, "2");
+        let ok = quantity_item(&screen, 1);
+        click(&mut screen, ok);
+        assert_eq!(screen.take_order(), Some(counted(128, Direction::Buy, 2)));
+        assert!(screen.quantity().is_none(), "closed");
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, Key::Enter);
+        assert_eq!(
+            screen.take_order(),
+            Some(counted(128, Direction::Buy, 3)),
+            "the maximum untouched"
+        );
+        assert!(screen.quantity().is_none());
+        click_item(&mut screen, BUY_ITEM);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+    }
+
+    #[test]
+    fn cancel_or_0_records_nothing_and_closes_the_dialog() {
+        let mut screen = counting_screen();
+        alt_click(&mut screen, SELL_ITEM);
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert_eq!(screen.take_order(), None);
+        assert!(screen.quantity().is_none(), "closed");
+        alt_click(&mut screen, SELL_ITEM);
+        typed(&mut screen, "0");
+        press(&mut screen, Key::Enter);
+        assert_eq!(screen.take_order(), None);
+        assert!(screen.quantity().is_none(), "closed");
+        assert!(!screen.closed());
+    }
+
+    #[test]
+    fn alt_on_a_row_whose_maximum_is_none_records_one_and_opens_nothing() {
+        // The map: one owned.
+        let mut screen = counting_screen();
+        click_cell(&mut screen, 3);
+        alt_click(&mut screen, SELL_ITEM);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), Some(order(131, Direction::Sell)));
+        // The big gun, which cannot be bought: nothing at all.
+        click_cell(&mut screen, 2);
+        alt_click(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), None);
+        // Cash for one light blaster.
+        let mut screen = screen_of(Outfitter {
+            cash: 1999,
+            ..outfitter()
+        });
+        alt_click(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+    }
+
+    #[test]
+    fn with_shift_control_or_command_held_buy_records_one() {
+        // Shift and Command reach the screen as `Key::Other`.
+        for modifier in [Key::Control, Key::Other] {
+            let mut screen = counting_screen();
+            press(&mut screen, modifier);
+            click_item(&mut screen, BUY_ITEM);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(128, Direction::Buy)),
+                "{modifier:?}"
+            );
+            press(&mut screen, SELL_KEY);
+            assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+            assert!(screen.quantity().is_none());
+        }
+    }
+
+    #[test]
+    fn by_the_other_count_reading_alt_records_one_and_never_opens_the_dialog() {
+        let mut screen = screen_of(Outfitter {
+            outfit_count: RuleSource::Bible,
+            ..counting()
+        });
+        alt_click(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+        press(&mut screen, COUNT_KEY);
+        press(&mut screen, SELL_KEY);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+    }
+
+    #[test]
+    fn while_the_dialog_is_open_b_escape_and_clicks_do_not_reach_the_outfitter() {
+        let mut screen = counting_screen();
+        alt_click(&mut screen, BUY_ITEM);
+        for k in [BUY_KEY, SELL_KEY, Key::Escape, Key::Right, Key::Down] {
+            press(&mut screen, k);
+        }
+        click_item(&mut screen, DONE_ITEM);
+        click_item(&mut screen, SELL_ITEM);
+        let cell = screen.cell_bounds(1).expect("a cell").center();
+        click(&mut screen, cell);
+        assert_eq!(screen.take_order(), None);
+        assert!(!screen.closed());
+        assert_eq!(screen.selected(), Some(0));
+        assert_eq!(field_text(&screen), Some("3"), "still open, untouched");
+    }
+
+    #[test]
+    fn without_its_template_the_dialog_opens_with_the_fallback() {
+        let unusable = DialogTemplate {
+            items: Vec::new(),
+            ..quantity()
+        };
+        for template in [Err("no DLOG 1003".to_owned()), Ok(unusable)] {
+            let mut screen = OutfitterScreen::new(
+                Ok(layout()),
+                template,
+                counting(),
+                art(),
+                ButtonStyle::STOCK,
+            );
+            alt_click(&mut screen, BUY_ITEM);
+            let asking = screen.quantity().expect("asking");
+            assert_eq!(
+                asking.dialog().bounds().min,
+                Point::new((1024.0 - 172.0) / 2.0, (768.0 - 72.0) / 2.0),
+                "centred"
+            );
+            assert_eq!(
+                quantity_texts(&screen),
+                ["Buy", "Enter quantity:", "Cancel", "3"]
+            );
+        }
+    }
+
+    #[test]
+    fn the_dialog_is_drawn_over_the_outfitter_and_its_sounds_come_out() {
+        let mut screen = counting_screen();
+        let under = drawn(&screen);
+        alt_click(&mut screen, BUY_ITEM);
+        screen.take_sounds();
+        let mut list = DrawList::new();
+        screen.quantity().expect("asking").draw(&mut list);
+        let mut expected = under;
+        expected.extend(list.iter().cloned());
+        assert_eq!(drawn(&screen), expected);
+        typed(&mut screen, "9");
+        press(&mut screen, Key::Enter);
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::Alert)]);
+        assert_eq!(field_text(&screen), Some("3"), "reset to the maximum");
+        let ok = quantity_item(&screen, 1);
+        click(&mut screen, ok);
+        assert_eq!(
+            screen.take_sounds(),
+            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
+        );
+        assert_eq!(screen.take_order(), Some(counted(128, Direction::Buy, 3)));
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_lets_go_of_alt() {
+        let mut screen = counting_screen();
+        press(&mut screen, COUNT_KEY);
+        screen.release_keys();
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+        // Let go while the dialog is open.
+        press(&mut screen, COUNT_KEY);
+        click_item(&mut screen, BUY_ITEM);
+        screen.release_keys();
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+    }
+
+    #[test]
+    fn alt_is_followed_while_the_dialog_is_open() {
+        let mut screen = counting_screen();
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, COUNT_KEY);
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_some(), "Alt went down in the dialog");
+        screen.input(&key(COUNT_KEY, false, false));
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        click_item(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_none(), "and up");
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+    }
+
+    #[test]
+    fn cancelling_the_pointer_abandons_a_click_in_the_dialog() {
+        let mut screen = counting_screen();
+        alt_click(&mut screen, BUY_ITEM);
+        let at = quantity_item(&screen, 1);
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert_eq!(screen.take_order(), None, "the click was abandoned");
+        assert!(screen.quantity().is_some());
     }
 }

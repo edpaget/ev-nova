@@ -174,11 +174,13 @@ impl Open {
     }
 }
 
-/// The outfitter given: its dialog template (or why there is none), the
-/// outfitter as it is, and where its pictures and descriptions come from.
+/// The outfitter given: its dialog template and the quantity dialog's
+/// (or why there are none), the outfitter as it is, and where its
+/// pictures and descriptions come from.
 #[derive(Clone)]
 struct Outfitting {
     template: Result<DialogTemplate, String>,
+    quantity: Result<DialogTemplate, String>,
     outfitter: Outfitter,
     catalog: Rc<dyn OutfitterCatalog>,
 }
@@ -187,6 +189,7 @@ impl std::fmt::Debug for Outfitting {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Outfitting")
             .field("template", &self.template)
+            .field("quantity", &self.quantity)
             .field("outfitter", &self.outfitter)
             .finish_non_exhaustive()
     }
@@ -408,19 +411,22 @@ impl SpaceportView {
 
     /// The spaceport with the stellar's outfitter, `outfitter`, which the
     /// Outfitter opens laid out by `template`, the "Outfit" dialog (or
-    /// saying why there is none), each outfit's picture and description
+    /// saying why there is none), its quantity dialog laid out by
+    /// `quantity` (or its fallback), each outfit's picture and description
     /// read from `catalog`. Without it, the Outfitter opens its
     /// placeholder.
     #[must_use]
     pub fn with_outfitter(
         self,
         template: Result<DialogTemplate, String>,
+        quantity: Result<DialogTemplate, String>,
         outfitter: Outfitter,
         catalog: Rc<dyn OutfitterCatalog>,
     ) -> Self {
         Self {
             outfitting: Some(Outfitting {
                 template,
+                quantity,
                 outfitter,
                 catalog,
             }),
@@ -438,8 +444,8 @@ impl SpaceportView {
     }
 
     /// The order the outfitter open asked for since it was last taken,
-    /// once.
-    pub fn take_outfit(&mut self) -> Option<OutfitOrder> {
+    /// and how many it moves, once.
+    pub fn take_outfit(&mut self) -> Option<(OutfitOrder, u32)> {
         match &mut self.open {
             Some(Open::Outfitter(screen)) => screen.take_order(),
             _ => None,
@@ -745,6 +751,7 @@ impl SpaceportView {
                         .map(|template| (template, metrics));
                     Open::Outfitter(Box::new(OutfitterScreen::new(
                         layout,
+                        outfitting.quantity.clone(),
                         outfitting.outfitter.clone(),
                         Rc::clone(&outfitting.catalog),
                         port.style,
@@ -1858,7 +1865,7 @@ mod tests {
 
     fn outfitting(template: Result<Template, String>) -> SpaceportView {
         let art: Rc<dyn OutfitterCatalog> = Rc::new(outfitting_port());
-        view_of(&outfitting_port()).with_outfitter(template, tanks(0), art)
+        view_of(&outfitting_port()).with_outfitter(template, Ok(quantity_template()), tanks(0), art)
     }
 
     fn outfit_item(view: &SpaceportView, number: usize) -> Point {
@@ -1959,10 +1966,13 @@ mod tests {
         view.input(&key(Key::Char('b')));
         assert_eq!(
             view.take_outfit(),
-            Some(OutfitOrder {
-                outfit: OutfitId(200),
-                direction: Direction::Buy,
-            })
+            Some((
+                OutfitOrder {
+                    outfit: OutfitId(200),
+                    direction: Direction::Buy,
+                },
+                1
+            ))
         );
         assert_eq!(view.take_outfit(), None, "once");
         assert_eq!(view.take_trade(), None, "not a trade");
@@ -1979,6 +1989,34 @@ mod tests {
                 .map(|open| open.outfitter().rows[0].owned),
             Some(5),
             "and reopens on it"
+        );
+    }
+
+    #[test]
+    fn the_outfitters_quantity_dialog_is_laid_out_by_its_template() {
+        let mut view = outfitting(Ok(outfit_template()));
+        click_item(&mut view, 8);
+        view.input(&key(Key::Alt));
+        let buy = outfit_item(&view, 7);
+        click(&mut view, buy);
+        let open = view.open_outfitter().expect("outfitting");
+        let asking = open.quantity().expect("asking");
+        assert_eq!(asking.field().text(), "5", "5000 / 1000");
+        assert_eq!(
+            asking.dialog().bounds(),
+            quantity_template().bounds,
+            "laid out by its template"
+        );
+        view.input(&key(Key::Enter));
+        assert_eq!(
+            view.take_outfit(),
+            Some((
+                OutfitOrder {
+                    outfit: OutfitId(200),
+                    direction: Direction::Buy,
+                },
+                5
+            ))
         );
     }
 

@@ -1570,9 +1570,10 @@ impl AppScreen {
             spaceport = spaceport.with_trade(trade, quantity, market);
         }
         if let Some(outfitter) = self.flight.as_mut().and_then(FlightView::outfitter) {
-            let template = template(OUTFIT_DIALOG).map(|(template, _)| template);
+            let outfit = template(OUTFIT_DIALOG).map(|(template, _)| template);
+            let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
             let art: Rc<dyn OutfitterCatalog> = Rc::clone(&self.data) as Rc<dyn OutfitterCatalog>;
-            spaceport = spaceport.with_outfitter(template, outfitter, art);
+            spaceport = spaceport.with_outfitter(outfit, quantity, outfitter, art);
         }
         let template_of = |id| template(id).map(|(template, _)| template);
         if let Some(shipyard) = self.flight.as_mut().and_then(FlightView::shipyard) {
@@ -1853,8 +1854,9 @@ impl AppScreen {
             if let Some(order) = trade {
                 let _ = flight.trade(order);
             }
-            if let Some(order) = outfit {
-                let _ = flight.outfit(order);
+            // A plain click's count of 1 is exactly one order.
+            if let Some((order, count)) = outfit {
+                let _ = flight.outfit_counted(order, count);
             }
             if let Some(order) = ship {
                 let _ = flight.buy_ship(order.ship, &order.name);
@@ -4905,6 +4907,42 @@ mod tests {
         screen.input(&key(Key::Escape, true));
         assert!(spaceport(&screen).open_outfitter().is_none());
         assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    #[test]
+    fn alt_on_buy_asks_for_a_count_and_buys_the_count_typed() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter(&store);
+        click_port_item(&mut screen, 8);
+        let writes = store.writes();
+        screen.input(&key(Key::Alt, true));
+        let buy = spaceport(&screen)
+            .open_outfitter()
+            .and_then(|open| open.dialog())
+            .and_then(|dialog| dialog.item_bounds(OUTFIT_BUY_ITEM))
+            .expect("Buy")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: buy,
+            });
+        }
+        screen.input(&key(Key::Alt, false));
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        let asking = open.quantity().expect("asking");
+        assert_eq!(asking.field().text(), "2", "1000 / 500");
+        assert_eq!(pilot(&screen).owned(BOOSTER), 0, "the dialog asks first");
+        screen.input(&key(Key::Char('2'), true));
+        screen.input(&Input::Text('2'));
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 2);
+        assert_eq!(pilot(&screen).cash(), 0, "two prices");
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert!(open.quantity().is_none(), "closed");
+        assert_eq!(open.outfitter().row(BOOSTER).map(|row| row.owned), Some(2));
+        assert_eq!(store.writes(), writes + 1, "saved after the input");
     }
 
     #[test]
