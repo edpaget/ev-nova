@@ -50,6 +50,7 @@
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::flight::ShipState;
+use crate::gate::GateKind;
 use crate::geometry::Vec2;
 
 /// The fastest a ship can land, in pixels a tick (30 pixels a second): a
@@ -217,6 +218,13 @@ pub fn land_or_select(
 #[must_use]
 pub fn is_landable(site: &LandingSite) -> bool {
     has(site, StellarFlags::CAN_LAND) && !has(site, StellarFlags::ONLY_WHEN_DESTROYED)
+}
+
+/// Whether a pilot may be docked at `site`: it is [landable](is_landable)
+/// and is no hypergate or wormhole, which are entered instead.
+#[must_use]
+pub fn is_dockable(site: &LandingSite) -> bool {
+    GateKind::of(site.flags2).is_none() && is_landable(site)
 }
 
 /// The landable stellar among `sites` whose centre is nearest `position`,
@@ -468,6 +476,25 @@ mod tests {
             ..with_flags(F::CAN_LAND)
         };
         assert!(is_landable(&strict));
+    }
+
+    #[test]
+    fn dockable_means_landable_and_no_gate() {
+        use crate::gate::{HYPERGATE, WORMHOLE};
+        let gate = |flags2| LandingSite {
+            flags2,
+            ..with_flags(StellarFlags::CAN_LAND)
+        };
+        assert!(is_dockable(&with_flags(StellarFlags::CAN_LAND)));
+        assert!(!is_dockable(&with_flags(0)), "not landable");
+        assert!(
+            !is_dockable(&with_flags(
+                StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED
+            )),
+            "not landable"
+        );
+        assert!(!is_dockable(&gate(HYPERGATE)), "a hypergate");
+        assert!(!is_dockable(&gate(WORMHOLE)), "a wormhole");
     }
 
     #[test]

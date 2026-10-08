@@ -43,6 +43,17 @@ pub struct Reserves {
     pub fuel: Gauge,
 }
 
+/// One of a ship's [`Reserves`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reserve {
+    /// Shield points.
+    Shield,
+    /// Armour points.
+    Armor,
+    /// Fuel.
+    Fuel,
+}
+
 /// How many shield points a negative `Shield` is per unit of its absolute
 /// value (the Bible).
 pub const NEGATIVE_SHIELD_FACTOR: i64 = 5;
@@ -68,6 +79,25 @@ impl Reserves {
             shield: Gauge::full(shield),
             armor: Gauge::full(armor),
             fuel: Gauge::full(fuel),
+        }
+    }
+
+    /// The gauge of `reserve`.
+    #[must_use]
+    pub fn get(&self, reserve: Reserve) -> Gauge {
+        match reserve {
+            Reserve::Shield => self.shield,
+            Reserve::Armor => self.armor,
+            Reserve::Fuel => self.fuel,
+        }
+    }
+
+    /// The gauge of `reserve`, to change.
+    pub(crate) fn get_mut(&mut self, reserve: Reserve) -> &mut Gauge {
+        match reserve {
+            Reserve::Shield => &mut self.shield,
+            Reserve::Armor => &mut self.armor,
+            Reserve::Fuel => &mut self.fuel,
         }
     }
 }
@@ -119,5 +149,20 @@ mod tests {
         assert_eq!(at(5.0, 0.0), 0.0, "holds nothing");
         assert_eq!(at(5.0, -1.0), 0.0, "holds less than nothing");
         assert_eq!(Gauge::full(7.0), Gauge { now: 7.0, max: 7.0 });
+    }
+
+    #[test]
+    fn each_reserve_names_its_own_gauge() {
+        let mut reserves = Reserves::full(1.0, 2.0, 3.0);
+        assert_eq!(reserves.get(Reserve::Shield), Gauge::full(1.0));
+        assert_eq!(reserves.get(Reserve::Armor), Gauge::full(2.0));
+        assert_eq!(reserves.get(Reserve::Fuel), Gauge::full(3.0));
+        reserves.get_mut(Reserve::Shield).now = 0.5;
+        reserves.get_mut(Reserve::Armor).now = 1.5;
+        reserves.get_mut(Reserve::Fuel).now = 2.5;
+        assert_eq!(
+            [reserves.shield.now, reserves.armor.now, reserves.fuel.now],
+            [0.5, 1.5, 2.5]
+        );
     }
 }

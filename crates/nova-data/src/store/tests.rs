@@ -495,6 +495,60 @@ fn records_iterate_every_id_ascending_and_keep_going_past_errors() {
     assert_eq!(data.records::<crate::records::spin::Spin>().count(), 0);
 }
 
+#[test]
+fn each_test_expression_is_parsed_once_and_shared() {
+    let data = mixed_ships();
+    let first = data.test_expr("b1 & b2");
+    let again = data.test_expr("b1 & b2");
+    assert!(std::sync::Arc::ptr_eq(&first, &again), "parsed once");
+    assert_eq!(*first, crate::expr::TestExpr::parse("b1 & b2"));
+    let other = data.test_expr("b1 | b2");
+    assert!(!std::sync::Arc::ptr_eq(&first, &other), "another text");
+    assert_eq!(*other, crate::expr::TestExpr::parse("b1 | b2"));
+}
+
+#[test]
+fn a_malformed_test_expression_keeps_its_error_and_a_blank_one_always_holds() {
+    let data = mixed_ships();
+    let bad = data.test_expr("b1 &");
+    assert_eq!(*bad, crate::expr::TestExpr::parse("b1 &"));
+    assert!(bad.is_err());
+    assert!(std::sync::Arc::ptr_eq(&bad, &data.test_expr("b1 &")));
+    assert_eq!(*data.test_expr(""), Ok(crate::expr::TestExpr::Always));
+}
+
+#[test]
+fn each_set_expression_is_parsed_once_and_shared() {
+    let data = mixed_ships();
+    let first = data.set_expr("b1 !b2");
+    let again = data.set_expr("b1 !b2");
+    assert!(std::sync::Arc::ptr_eq(&first, &again), "parsed once");
+    assert_eq!(*first, crate::expr::SetExpr::parse("b1 !b2"));
+    let other = data.set_expr("^b3");
+    assert!(!std::sync::Arc::ptr_eq(&first, &other), "another text");
+    assert_eq!(*other, crate::expr::SetExpr::parse("^b3"));
+}
+
+#[test]
+fn a_malformed_set_expression_keeps_its_error_and_a_blank_one_has_no_ops() {
+    let data = mixed_ships();
+    let bad = data.set_expr("b1&");
+    assert_eq!(*bad, crate::expr::SetExpr::parse("b1&"));
+    assert!(bad.is_err());
+    assert!(std::sync::Arc::ptr_eq(&bad, &data.set_expr("b1&")));
+    assert_eq!(
+        data.set_expr("").as_ref().as_ref().map(|set| set.ops.len()),
+        Ok(0)
+    );
+}
+
+#[test]
+fn a_test_and_a_set_with_one_text_are_kept_apart() {
+    let data = mixed_ships();
+    assert!(data.test_expr("b1").is_ok());
+    assert_eq!(*data.set_expr("b1"), crate::expr::SetExpr::parse("b1"));
+}
+
 /// The store can be shared across threads.
 const _: fn() = || {
     fn is<T: Send + Sync>() {}

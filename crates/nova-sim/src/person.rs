@@ -14,8 +14,8 @@
 //!
 //! 1. it is alive: not gone for good ([`Pilot::gone`](crate::Pilot::gone));
 //! 2. its `AIType` is above 0;
-//! 3. its `ActiveOn` holds, through the [`ControlBits`] port, which lets
-//!    every expression hold until control bits exist;
+//! 3. its `ActiveOn` holds for the player, through the [`ControlBits`]
+//!    port ([`PersonWorld::allows`]); one that did not parse never holds;
 //! 4. its `LinkSyst` allows S ([`PersonLink`]): -1 any system; 128-9998
 //!    that system; 9999-14999 a system governed by government
 //!    `LinkSyst` - 10000 + 128, so 9999 means the independent systems
@@ -85,8 +85,8 @@ use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::Condition;
 use crate::combat::weapon::{Ammo, WeaponSpec};
+use crate::control::{ControlBits, FreshPilot, Gate, NovaBits, PilotFacts, Test};
 use crate::govt::Governments;
-use crate::hire::{ControlBits, NoControlBits};
 use crate::pilot::Escort;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -609,6 +609,8 @@ pub struct PersonWorld<'a> {
     pub grudges: &'a BTreeSet<PersonId>,
     /// The control-bit test of a person's `ActiveOn`.
     pub control_bits: &'a dyn ControlBits,
+    /// What the control-bit test reads about the player.
+    pub pilot: &'a dyn PilotFacts,
     /// The player's fleet: the persons among it never spawn, and their
     /// names count as in the system.
     pub fleet: &'a [Escort],
@@ -620,16 +622,35 @@ impl PersonWorld<'_> {
     pub fn in_fleet(&self, id: PersonId) -> bool {
         self.fleet.iter().any(|escort| escort.person == Some(id))
     }
+
+    /// Whether `test` (a person's `ActiveOn`) holds for the player: never
+    /// when it did not parse.
+    #[must_use]
+    pub fn allows(&self, test: &Test) -> bool {
+        self.gate().allows(test)
+    }
+}
+
+impl<'a> PersonWorld<'a> {
+    /// The control bits and the pilot view, as a [`Gate`].
+    #[must_use]
+    pub fn gate(&self) -> Gate<'a> {
+        Gate {
+            control_bits: self.control_bits,
+            pilot: self.pilot,
+        }
+    }
 }
 
 impl PersonWorld<'static> {
-    /// Nova's rules by the engine, no person gone, no grudge, every
-    /// `ActiveOn` holding, and no fleet.
+    /// Nova's rules by the engine, no person gone, no grudge, a fresh
+    /// pilot's control bits tested by Nova's, and no fleet.
     pub const NONE: Self = Self {
         rules: &NovaPersons::ENGINE,
         gone: &NO_PERSONS,
         grudges: &NO_PERSONS,
-        control_bits: &NoControlBits,
+        control_bits: &NovaBits,
+        pilot: &FreshPilot,
         fleet: &[],
     };
 }
@@ -883,10 +904,48 @@ mod tests {
     fn the_world_without_persons_follows_the_engine_and_lets_every_person_be() {
         let none = PersonWorld::NONE;
         assert!(none.gone.is_empty() && none.grudges.is_empty());
-        assert!(none.control_bits.allows("b0 & !b8"));
         let mut chance = Draws::of(&[0]);
         assert_eq!(none.rules.roll(&[], &mut chance), PersonRoll::Empty);
         assert_eq!(none.rules.link_slip(), ENGINE);
+    }
+
+    #[test]
+    fn the_world_without_persons_tests_a_fresh_pilots_control_bits() {
+        let none = PersonWorld::NONE;
+        assert!(none.allows(&Test::default()), "a blank ActiveOn");
+        assert!(!none.allows(&Test::parse("b3")), "no bit is set");
+        assert!(none.allows(&Test::parse("!b3 & g")), "male");
+        assert!(none.allows(&Test::parse("p30")), "paid");
+        assert!(!none.allows(&Test::parse("o130")), "owning nothing");
+        assert!(
+            !none.allows(&Test::parse("e128")),
+            "having explored nowhere"
+        );
+        assert!(!none.allows(&Test::parse("b1 &")), "malformed");
+    }
+
+    #[test]
+    fn a_persons_active_on_goes_through_the_worlds_control_bits() {
+        /// Holds every test, recording that it was asked.
+        #[derive(Debug, Default)]
+        struct Every(std::cell::Cell<u32>);
+
+        impl ControlBits for Every {
+            fn allows(&self, _test: &crate::control::TestExpr, _pilot: &dyn PilotFacts) -> bool {
+                self.0.set(self.0.get() + 1);
+                true
+            }
+        }
+
+        let every = Every::default();
+        let world = PersonWorld {
+            control_bits: &every,
+            ..PersonWorld::NONE
+        };
+        assert!(world.allows(&Test::parse("b3")));
+        assert_eq!(every.0.get(), 1);
+        assert!(!world.allows(&Test::parse("b1 &")), "never asked");
+        assert_eq!(every.0.get(), 1);
     }
 
     // The ship.

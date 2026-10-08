@@ -22,4 +22,15 @@ pub enum SimSound {
     JumpBegan,
     /// A jump ended in the next system.
     Arrived,
+    /// A `Q` set operator's message is shown in flight.
+    ScriptMessage,
+    /// A `P` set operator's sound plays: `exclusive`ly, as the one mission
+    /// sound, dropped while the last is still playing; or over whatever
+    /// plays.
+    Script {
+        /// The `snd `.
+        sound: SoundId,
+        /// Whether it plays only when the last mission sound is over.
+        exclusive: bool,
+    },
 }

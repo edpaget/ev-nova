@@ -195,12 +195,14 @@ use std::time::Duration;
 use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HailView,
-    HireTerms, LegalCode, NoControlBits, NovaAi, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
-    NovaPersons, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule, RuleKey,
-    RuleSource, Rulebook, Take, Taken, pilot_key,
+    Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
+    HailView, HireTerms, HookRules, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable,
+    NovaHire, NovaLaw, NovaPersons, OutfitRules, PersonRules, Pilot, PilotKeeper, PilotStore,
+    PointDefenceRule, RuleKey, RuleSource, Rulebook, ScriptEffectRules, Session, ShipChangeRules,
+    Take, Taken, pilot_key,
 };
 pub use nova_view::Showing;
+use nova_view::devtools::SessionDesk;
 use nova_view::flight::{FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
@@ -389,6 +391,18 @@ pub struct AppScreen {
     person_rules: Rc<dyn PersonRules>,
     /// When each flight's persons say their comm quotes.
     comm_quote: RuleSource,
+    /// How each flight grants and removes outfits where the rules are
+    /// disputed.
+    outfit_rules: OutfitRules,
+    /// The order of each flight's set-expression hooks where it is
+    /// disputed.
+    hook_rules: HookRules,
+    /// How each flight's ship-change set operators go where the rules are
+    /// disputed.
+    ship_change_rules: ShipChangeRules,
+    /// How each flight's moving set operators go where the rules are
+    /// disputed.
+    script_effect_rules: ScriptEffectRules,
     /// The control-bit test a ship for hire's `Availability` goes
     /// through in each flight.
     control_bits: Rc<dyn ControlBits>,
@@ -488,9 +502,13 @@ impl AppScreen {
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
-            control_bits: Rc::new(NoControlBits),
+            control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
             comm_quote: RuleSource::Engine,
+            outfit_rules: OutfitRules::default(),
+            hook_rules: HookRules::default(),
+            ship_change_rules: ShipChangeRules::default(),
+            script_effect_rules: ScriptEffectRules::default(),
             comm: None,
             haggle: None,
         }
@@ -835,9 +853,10 @@ impl AppScreen {
         Self { hire_terms, ..self }
     }
 
-    /// The router with `bits` testing a ship for hire's `Availability` in
-    /// each flight ([`FlightView::with_control_bits`]); none hold false
-    /// until others are given.
+    /// The router with `bits` testing a ship for hire's `Availability` and
+    /// a person's `ActiveOn` against the pilot in each flight
+    /// ([`FlightView::with_control_bits`]); Nova's
+    /// ([`NovaBits`](nova_sim::NovaBits)) until others are given.
     #[must_use]
     pub fn with_control_bits(self, control_bits: Rc<dyn ControlBits>) -> Self {
         Self {
@@ -867,12 +886,60 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight granting and removing outfits as
+    /// `rules` say ([`FlightView::with_outfit_rules`]); the engine's
+    /// until others are given.
+    #[must_use]
+    pub fn with_outfit_rules(self, rules: OutfitRules) -> Self {
+        Self {
+            outfit_rules: rules,
+            ..self
+        }
+    }
+
+    /// The router with each flight's set-expression hooks in the order
+    /// `rules` say where it is disputed ([`FlightView::with_hook_rules`]);
+    /// the engine's until others are given.
+    #[must_use]
+    pub fn with_hook_rules(self, rules: HookRules) -> Self {
+        Self {
+            hook_rules: rules,
+            ..self
+        }
+    }
+
+    /// The router with each flight's ship-change set operators following
+    /// `rules` where they are disputed
+    /// ([`FlightView::with_ship_change_rules`]); the engine's until others
+    /// are given.
+    #[must_use]
+    pub fn with_ship_change_rules(self, rules: ShipChangeRules) -> Self {
+        Self {
+            ship_change_rules: rules,
+            ..self
+        }
+    }
+
+    /// The router with each flight's moving set operators following
+    /// `rules` where they are disputed
+    /// ([`FlightView::with_script_effect_rules`]); the engine's until
+    /// others are given.
+    #[must_use]
+    pub fn with_script_effect_rules(self, rules: ScriptEffectRules) -> Self {
+        Self {
+            script_effect_rules: rules,
+            ..self
+        }
+    }
+
     /// The router with Nova's rules, each disputed one as `rulebook`
     /// chooses: the NPCs' behaviour, disabling, point defence, the law,
     /// boarding, hailing, the escorts' and fighters' rules, hiring, the
     /// shops' `BuyRandom`, the tribbles and perishables, the cargo a ship
-    /// purchase keeps, and the persons' rules. This is the edge where
-    /// every [`RuleKey`] meets its setting.
+    /// purchase keeps, the persons' rules, granting and removing outfits,
+    /// the order of the set-expression hooks, changing the ship by set
+    /// operator, and moving the player by set operator. This is the edge
+    /// where every [`RuleKey`] meets its setting.
     #[must_use]
     pub fn with_rulebook(self, rulebook: &Rulebook) -> Self {
         self.with_behaviour(Rc::new(NovaAi::from_rulebook(rulebook)))
@@ -905,9 +972,13 @@ impl AppScreen {
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
-            .with_control_bits(Rc::new(NoControlBits))
+            .with_control_bits(Rc::new(NovaBits))
             .with_person_rules(Rc::new(NovaPersons::from_rulebook(rulebook)))
             .with_comm_quote(rulebook.source_for(RuleKey::CommQuote))
+            .with_outfit_rules(OutfitRules::from_rulebook(rulebook))
+            .with_hook_rules(HookRules::from_rulebook(rulebook))
+            .with_ship_change_rules(ShipChangeRules::from_rulebook(rulebook))
+            .with_script_effect_rules(ScriptEffectRules::from_rulebook(rulebook))
     }
 
     /// The comm dialog, while a hail is under way.
@@ -937,8 +1008,9 @@ impl AppScreen {
     /// A flight over the game data, `new` from it, rolling on the router's
     /// chance, its effects on the router's effects chance, deciding as its
     /// behaviour says, disabling ships, engaging missiles and judging
-    /// crimes as its rules say, and laying out its HUD's text with the
-    /// router's metrics, if it has any.
+    /// crimes as its rules say, naming its ship from the game data's
+    /// string lists, and laying out its HUD's text with the router's
+    /// metrics, if it has any.
     fn flight(
         &self,
         new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
@@ -979,6 +1051,11 @@ impl AppScreen {
             .with_control_bits(Rc::clone(&self.control_bits))
             .with_person_rules(Rc::clone(&self.person_rules))
             .with_comm_quote(self.comm_quote)
+            .with_outfit_rules(self.outfit_rules)
+            .with_hook_rules(self.hook_rules)
+            .with_ship_change_rules(self.ship_change_rules)
+            .with_script_effect_rules(self.script_effect_rules)
+            .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
@@ -1042,6 +1119,32 @@ impl AppScreen {
         self.flight
             .as_mut()
             .is_some_and(|flight| flight.transact(change))
+    }
+
+    /// The pilot flying, as the developer tools' desk; `None` before
+    /// flight is entered and when the flight could not start.
+    pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, Rc<GameData>>> {
+        self.flight.as_mut()?.pilot_desk()
+    }
+
+    /// Catches up with an edit made through the pilot desk: flight lays out
+    /// the system the pilot is now in, the open spaceport is rebuilt for
+    /// the stellar the pilot is now landed on when it moved, and otherwise
+    /// shows the exchange, outfitter and shipyard as they now are; then
+    /// the pilot is saved if a save is due, as after any change.
+    pub fn after_pilot_edit(&mut self) {
+        let Some(flight) = self.flight.as_mut() else {
+            return;
+        };
+        flight.resync();
+        let landed = flight.session().ok().and_then(Session::landed);
+        if let Some(spaceport) = &mut self.spaceport {
+            match landed {
+                Some(stellar) if stellar != spaceport.stellar() => self.show_spaceport(stellar),
+                _ => refresh_spaceport(spaceport, flight),
+            }
+        }
+        self.save_if_due();
     }
 
     /// The router with dialogs: I opens the About text in a dialog built
@@ -1672,6 +1775,28 @@ impl AppScreen {
         }
     }
 
+    /// Settles what the set expressions run in flight or in the spaceport
+    /// queued ([`FlightView::settle_script`]): a `Q` that took off closes
+    /// the spaceport, as leaving it does, and a move while landed leaves it
+    /// open as it is.
+    fn settle_script(&mut self) {
+        let took_off = self.flight.as_mut().and_then(FlightView::settle_script);
+        if took_off.is_some() {
+            self.close_spaceport();
+        }
+    }
+
+    /// Closes the spaceport, if it is open, keeping its sounds, and shows
+    /// flight, letting go of the spaceport's keys.
+    fn close_spaceport(&mut self) {
+        let Some(spaceport) = self.spaceport.as_mut() else {
+            return;
+        };
+        self.sounds.extend(spaceport.take_sounds());
+        self.switch_to(Side::Flight);
+        self.spaceport = None;
+    }
+
     /// Saves the pilot if flight says a save is due: it has landed, taken
     /// off or changed in the spaceport.
     fn save_if_due(&mut self) {
@@ -1752,15 +1877,18 @@ impl AppScreen {
     }
 
     /// The New Pilot dialog's input. A name already saved, or one no file
-    /// can be saved under, is refused; any other creates the pilot, saves
-    /// it at once (so Open Pilot lists it before it lands) and flies it.
+    /// can be saved under, is refused; any other creates the pilot with the
+    /// gender chosen and flies it, begins its game (the `chär`'s `OnStart`,
+    /// [`FlightView::begin`]) and saves it at once, with what that did (so
+    /// Open Pilot lists it before it lands), as `_DoNewPilot` runs
+    /// `OnStart` before the first save.
     fn new_pilot_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.new_pilot.as_mut().expect("open");
         dialog.input(input);
         let outcome = dialog.take_outcome();
         match outcome {
             Some(NewPilotOutcome::Cancel) => self.close_new_pilot(),
-            Some(NewPilotOutcome::Create(name)) => {
+            Some(NewPilotOutcome::Create { name, gender }) => {
                 let keeper = self.keeper();
                 let refusal = if pilot_key(&name).is_none() {
                     Some(UNUSABLE_NAME.to_owned())
@@ -1775,13 +1903,13 @@ impl AppScreen {
                 }
                 match Pilot::new(self.data.as_ref(), &name) {
                     Ok(pilot) => {
-                        if let Some(keeper) = keeper
-                            && let Err(warning) = keeper.save(&pilot)
-                        {
-                            self.warnings.push(warning);
-                        }
                         self.close_new_pilot();
-                        self.start_flight(pilot);
+                        self.start_flight(pilot.with_gender(gender));
+                        if let Some(flight) = &mut self.flight {
+                            flight.begin();
+                            flight.take_save_due();
+                        }
+                        self.save_pilot();
                     }
                     Err(error) => {
                         let why = error.to_string();
@@ -1913,20 +2041,10 @@ impl AppScreen {
             // Each changes the cash; an outfit the cargo space and the
             // trade-in; and a ship the cargo space, the free mass and the
             // outfits: so all three go back.
-            if let Some(market) = flight.market() {
-                spaceport.set_market(market);
-            }
-            if let Some(outfitter) = flight.outfitter() {
-                spaceport.set_outfitter(outfitter);
-            }
-            if let Some(shipyard) = flight.shipyard() {
-                spaceport.set_shipyard(shipyard);
-            }
+            refresh_spaceport(spaceport, flight);
         }
         if spaceport.left() {
-            self.sounds.extend(spaceport.take_sounds());
-            self.switch_to(Side::Flight);
-            self.spaceport = None;
+            self.close_spaceport();
             self.flight.as_mut().expect(ENTERED).take_off();
         }
         ScreenAction::None
@@ -2026,6 +2144,20 @@ impl AppScreen {
 
 /// "Desc Dialog" showing the About text, from the dialogs and the game
 /// data.
+/// Shows `spaceport` the exchange, outfitter and shipyard as `flight`
+/// now has them.
+fn refresh_spaceport(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if let Some(market) = flight.market() {
+        spaceport.set_market(market);
+    }
+    if let Some(outfitter) = flight.outfitter() {
+        spaceport.set_outfitter(outfitter);
+    }
+    if let Some(shipyard) = flight.shipyard() {
+        spaceport.set_shipyard(shipyard);
+    }
+}
+
 fn about_dialog(dialogs: &Dialogs, data: &GameData) -> Result<DescDialog, String> {
     let template = dialogs.resources.dialog_template(DESC_DIALOG)?;
     let text = data.description(ABOUT_TEXT)?;
@@ -2093,11 +2225,14 @@ impl Screen for AppScreen {
     /// and the galaxy map, Escape goes back to the menu instead of
     /// quitting.
     ///
-    /// After every input, a pilot with a name is saved when flight says a
-    /// save is due: on landing, on taking off, and after a change in the
-    /// spaceport ([`AppScreen::transact`]).
+    /// After every input, what the set expressions it ran queued is
+    /// settled ([`FlightView::settle_script`]), and then a pilot with a
+    /// name is saved when flight says a save is due: on landing, on taking
+    /// off, after a change in the spaceport ([`AppScreen::transact`]) and
+    /// after a move by set operator.
     fn input(&mut self, input: &Input) -> ScreenAction {
         let action = self.route(input);
+        self.settle_script();
         self.save_if_due();
         action
     }
@@ -2105,12 +2240,14 @@ impl Screen for AppScreen {
     /// Only the side shown ticks; a hidden one is paused. While an overlay
     /// (the About dialog, the Preferences dialog, the New Pilot dialog or
     /// the saved pilots' list) is open, only it ticks: flight pauses under
-    /// the preferences, as in the original. A save that is due is made.
+    /// the preferences, as in the original. What the set expressions
+    /// queued is settled, and a save that is due is made.
     fn tick(&mut self, dt: Duration) {
         match self.overlay_mut() {
             Some(overlay) => overlay.tick(dt),
             None => self.shown_mut().tick(dt),
         }
+        self.settle_script();
         self.save_if_due();
     }
 
@@ -2237,7 +2374,7 @@ impl Screen for AppScreen {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::io;
     use std::path::Path;
     use std::rc::Rc;
@@ -2305,7 +2442,8 @@ mod tests {
     /// Ships 129 and 128, each with a `shän` naming a 4-frame `rlëD` (one
     /// set of 4 rotations), and systems 128 and 129, 300 apart. System 128
     /// holds stellar 128 at (0, 0), a planet with a bar, whose `spïn` 1000
-    /// names the same `rlëD`. The only `chär` starts in ship 128, an
+    /// names the same `rlëD`; system 129 holds stellar 129, Beta Prime,
+    /// another such planet. The only `chär` starts in ship 128, an
     /// average ship, in system 128, over the planet.
     fn data() -> Rc<GameData> {
         game_data(false, false, false)
@@ -2356,6 +2494,43 @@ mod tests {
         shipbuying: bool,
         buy_random: i16,
     ) -> Rc<GameData> {
+        game_data_with(trading, outfitting, shipbuying, buy_random, b"", b"")
+    }
+
+    /// [`data`], where the `chär`'s `OnStart` is `on_start`.
+    fn starting_data(on_start: &[u8]) -> Rc<GameData> {
+        game_data_starting(false, false, false, on_start, b"")
+    }
+
+    /// [`outfitting_data`], where the booster's `OnPurchase` is
+    /// `on_purchase`, and `STR#` 25048 holds "Off you go, <PSN>."
+    fn hooked_outfitting_data(on_purchase: &[u8]) -> Rc<GameData> {
+        game_data_starting(true, true, false, b"", on_purchase)
+    }
+
+    /// [`game_data`], where the `chär`'s `OnStart` is `on_start` and the
+    /// booster's `OnPurchase` is `on_purchase`.
+    fn game_data_starting(
+        trading: bool,
+        outfitting: bool,
+        shipbuying: bool,
+        on_start: &[u8],
+        on_purchase: &[u8],
+    ) -> Rc<GameData> {
+        game_data_with(trading, outfitting, shipbuying, 100, on_start, on_purchase)
+    }
+
+    /// [`game_data`], ship 129 for sale on a `BuyRandom` of `buy_random`,
+    /// the `chär`'s `OnStart` `on_start` and the booster's `OnPurchase`
+    /// `on_purchase`.
+    fn game_data_with(
+        trading: bool,
+        outfitting: bool,
+        shipbuying: bool,
+        buy_random: i16,
+        on_start: &[u8],
+        on_purchase: &[u8],
+    ) -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
         anim[0x04..0x06].copy_from_slice(&1_i16.to_be_bytes());
@@ -2371,6 +2546,7 @@ mod tests {
             average[at..at + 2].copy_from_slice(&value.to_be_bytes());
         }
         let mut character = vec![0; Character::SIZE.expect("fixed")];
+        character[0x32..0x32 + on_start.len()].copy_from_slice(on_start);
         let mut stellar = landable();
         let mut fork = ForkBuilder::new();
         if trading {
@@ -2385,20 +2561,11 @@ mod tests {
             stellar[0x09] |= 0x04;
             stellar[0x0C..0x0E].copy_from_slice(&1_i16.to_be_bytes());
             average[0x0C..0x0E].copy_from_slice(&10_i16.to_be_bytes());
-            let mut booster = vec![0; Outfit::SIZE.expect("fixed")];
-            // For sale every day: `BuyRandom` 100.
-            for (at, value) in [
-                (0x02, 2_i16),
-                (0x04, 1),
-                (0x06, 8),
-                (0x08, 300),
-                (0x0A, 3),
-                (0x3F0, 100),
-            ] {
-                booster[at..at + 2].copy_from_slice(&value.to_be_bytes());
+            let booster = booster_record(on_purchase);
+            if !on_purchase.is_empty() {
+                let leave = str_list(&["Off you go, <PSN>."]);
+                fork = fork.resource(StrList::TYPE, 25048, None, &leave);
             }
-            booster[0x0E..0x12].copy_from_slice(&500_i32.to_be_bytes());
-            booster[0x32B..0x332].copy_from_slice(b"Booster");
             fork = fork.resource(Outfit::TYPE, 128, Some(b"Booster"), &booster);
         }
         if shipbuying {
@@ -2443,8 +2610,9 @@ mod tests {
             .resource(ShipAnim::TYPE, 129, None, &anim)
             .resource(RLED, 1000, None, &sheet)
             .resource(System::TYPE, 128, Some(b"Alpha"), &system(0, &[128]))
-            .resource(System::TYPE, 129, Some(b"Beta"), &system(300, &[]))
+            .resource(System::TYPE, 129, Some(b"Beta"), &system(300, &[129]))
             .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar)
+            .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &landable())
             .resource(Spin::TYPE, 1000, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
             .build()
@@ -2452,6 +2620,26 @@ mod tests {
         let file = OneFile(fork);
         let data = GameData::load(&file, &file, Path::new("/data"), None).expect("opens");
         Rc::new(data)
+    }
+
+    /// The booster `oütf` of [`game_data_with`]: for sale every day
+    /// (`BuyRandom` 100), 500 credits, its `OnPurchase` `on_purchase`.
+    fn booster_record(on_purchase: &[u8]) -> Vec<u8> {
+        let mut booster = vec![0; Outfit::SIZE.expect("fixed")];
+        for (at, value) in [
+            (0x02, 2_i16),
+            (0x04, 1),
+            (0x06, 8),
+            (0x08, 300),
+            (0x0A, 3),
+            (0x3F0, 100),
+        ] {
+            booster[at..at + 2].copy_from_slice(&value.to_be_bytes());
+        }
+        booster[0x0E..0x12].copy_from_slice(&500_i32.to_be_bytes());
+        booster[0x32B..0x332].copy_from_slice(b"Booster");
+        booster[0x12D..0x12D + on_purchase.len()].copy_from_slice(on_purchase);
+        booster
     }
 
     /// A `spöb` at (0, 0) that can be landed on: a planet with a bar.
@@ -4087,7 +4275,7 @@ mod tests {
     }
 
     /// The router with the main menu over `store`, and no dialogs.
-    fn menu(store: &MemoryPilots) -> AppScreen {
+    pub(crate) fn menu(store: &MemoryPilots) -> AppScreen {
         AppScreen::new(data()).with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
     }
 
@@ -4122,7 +4310,7 @@ mod tests {
 
     /// Creates a pilot named `name` from the main menu: New Pilot, the
     /// name, Return.
-    fn create(screen: &mut AppScreen, name: &str) {
+    pub(crate) fn create(screen: &mut AppScreen, name: &str) {
         assert_eq!(choose(screen, MenuChoice::NewPilot), ScreenAction::None);
         assert_eq!(screen.showing(), Showing::NewPilot);
         type_text(screen, name);
@@ -4133,7 +4321,7 @@ mod tests {
         flight(screen).pilot().expect("flying")
     }
 
-    fn saved(store: &MemoryPilots, key: &str) -> nova_sim::Pilot {
+    pub(crate) fn saved(store: &MemoryPilots, key: &str) -> nova_sim::Pilot {
         nova_sim::save::decode(&store.text(key).expect("saved")).expect("a pilot")
     }
 
@@ -4209,6 +4397,56 @@ mod tests {
         assert_eq!(store.keys(), ["Ada"], "saved at once");
         assert_eq!(saved(&store, "Ada"), *pilot(&screen));
         assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_new_pilot_runs_the_chärs_on_start_once_and_is_saved_with_what_it_did() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(starting_data(b"^b5 X129"))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        let bit_5 = nova_sim::Bit::new(5).expect("a bit");
+        assert!(pilot(&screen).control_bit(bit_5), "toggled once");
+        assert!(pilot(&screen).has_explored(nova_sim::SystemId(129)));
+        assert_eq!(saved(&store, "Ada"), *pilot(&screen), "saved with them");
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+        // Opening the pilot runs no OnStart: a second toggle would clear it.
+        assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
+        let mut screen = AppScreen::new(starting_data(b"^b5 X129"))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        choose(&mut screen, MenuChoice::OpenPilot);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(pilot(&screen).control_bit(bit_5));
+    }
+
+    #[test]
+    fn a_new_pilot_flies_and_is_saved_with_the_gender_chosen() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        choose(&mut screen, MenuChoice::NewPilot);
+        let at = screen
+            .new_pilot()
+            .expect("open")
+            .dialog()
+            .item_bounds(nova_view::ui::new_pilot::GENDER_ITEM)
+            .expect("the gender control")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+        type_text(&mut screen, "Ada");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(pilot(&screen).gender(), nova_sim::Gender::Female);
+        assert_eq!(saved(&store, "Ada").gender(), nova_sim::Gender::Female);
+        let mut screen = menu(&store);
+        create(&mut screen, "Bob");
+        assert_eq!(pilot(&screen).gender(), nova_sim::Gender::Male);
     }
 
     #[test]
@@ -4856,7 +5094,12 @@ mod tests {
     /// The router over [`outfitting_data`] with the outfit dialog, keeping
     /// pilots in `store`, flying a new pilot named Ada, landed.
     fn landed_outfitter(store: &MemoryPilots) -> AppScreen {
-        let mut screen = AppScreen::new(outfitting_data())
+        landed_outfitter_over(store, outfitting_data())
+    }
+
+    /// [`landed_outfitter`], over `data`.
+    fn landed_outfitter_over(store: &MemoryPilots, data: Rc<GameData>) -> AppScreen {
+        let mut screen = AppScreen::new(data)
             .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
@@ -4977,6 +5220,103 @@ mod tests {
         assert!(open.quantity().is_none(), "closed");
         assert_eq!(open.outfitter().row(BOOSTER).map(|row| row.owned), Some(2));
         assert_eq!(store.writes(), writes + 1, "saved after the input");
+    }
+
+    #[test]
+    fn a_move_by_a_purchase_hook_keeps_the_spaceport_open_and_saves_the_pilot_moved() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, hooked_outfitting_data(b"M129"));
+        click_port_item(&mut screen, 8);
+        let writes = store.writes();
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(screen.showing(), Showing::Spaceport, "still landed");
+        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(128));
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().row(BOOSTER).map(|row| row.owned), Some(1));
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.landed(), Some(nova_sim::StellarId(128)));
+        assert!(session.market().is_some(), "the port's exchange still");
+        assert_eq!(pilot(&screen).system(), nova_sim::SystemId(129));
+        assert_eq!(pilot(&screen).stellar(), Some(nova_sim::StellarId(129)));
+        assert_eq!(store.writes(), writes + 1, "saved once, after the move");
+        assert_eq!(saved(&store, "Ada").system(), nova_sim::SystemId(129));
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        let scene = flight(&screen)
+            .scene()
+            .map(nova_view::system::SystemScene::id);
+        assert_eq!(scene, Some(nova_sim::SystemId(129)), "taken off there");
+    }
+
+    #[test]
+    fn a_q_by_a_purchase_hook_closes_the_spaceport_takes_off_and_saves() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, hooked_outfitting_data(b"Q25048"));
+        click_port_item(&mut screen, 8);
+        let writes = store.writes();
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(screen.spaceport_view().is_none());
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "bought first");
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.landed(), None);
+        assert_eq!(flight(&screen).message(), Some("Off you go, <PSN>."));
+        assert_eq!(store.writes(), writes + 1, "saved once, after the input");
+        assert_eq!(saved(&store, "Ada").owned(BOOSTER), 1);
+        let sounds = screen.take_sounds();
+        assert!(
+            sounds.contains(&Sound::Sim(nova_sim::SimSound::TookOff)),
+            "{sounds:?}"
+        );
+        assert!(
+            !sounds.contains(&Sound::Sim(nova_sim::SimSound::ScriptMessage)),
+            "no beep on the take-off"
+        );
+        screen.input(&key(Key::Char('l'), true));
+        assert_eq!(screen.showing(), Showing::Flight, "flight takes the keys");
+    }
+
+    #[test]
+    fn a_sound_by_a_purchase_hook_plays_after_the_take_off() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, hooked_outfitting_data(b"P300"));
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('b'), true));
+        screen.tick(Duration::from_millis(100));
+        let mission = Sound::Sim(SimSound::Script {
+            sound: nova_sim::SoundId(300),
+            exclusive: true,
+        });
+        assert!(!screen.take_sounds().contains(&mission), "landed");
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        screen.take_sounds();
+        screen.tick(Duration::from_millis(100));
+        assert_eq!(
+            screen
+                .take_sounds()
+                .into_iter()
+                .filter(|&sound| sound == mission)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_new_pilot_moved_by_its_on_start_flies_there_and_is_saved_there() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(starting_data(b"M129"))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(pilot(&screen).system(), nova_sim::SystemId(129));
+        let scene = flight(&screen)
+            .scene()
+            .map(nova_view::system::SystemScene::id);
+        assert_eq!(scene, Some(nova_sim::SystemId(129)));
+        assert_eq!(saved(&store, "Ada").system(), nova_sim::SystemId(129));
     }
 
     #[test]
@@ -5482,6 +5822,7 @@ mod tests {
             _grant: &nova_sim::grant::PersonGrant,
             _stock: &[nova_sim::grant::GrantStock],
             _free_mass: i64,
+            _grant_max: nova_sim::RuleSource,
             _chance: &mut dyn Chance,
         ) -> Option<nova_sim::grant::Granted> {
             None
@@ -6608,6 +6949,60 @@ mod tests {
             let session = flight(&screen).session().expect("flying");
             assert_eq!(session.comm_quote(), source);
         }
+        let rules = OutfitRules {
+            invalid_map: RuleSource::Bible,
+            ..OutfitRules::default()
+        };
+        let mut screen = AppScreen::new(data()).with_outfit_rules(rules);
+        fly(&mut screen);
+        assert_eq!(
+            flight(&screen).session().expect("flying").outfit_rules(),
+            rules
+        );
+        let rules = HookRules {
+            capture_hook_order: RuleSource::Bible,
+            ..HookRules::default()
+        };
+        let mut screen = AppScreen::new(data()).with_hook_rules(rules);
+        fly(&mut screen);
+        assert_eq!(
+            flight(&screen).session().expect("flying").hook_rules(),
+            rules
+        );
+        let rules = ShipChangeRules {
+            persistence: RuleSource::Bible,
+            ..ShipChangeRules::default()
+        };
+        let mut screen = AppScreen::new(data()).with_ship_change_rules(rules);
+        fly(&mut screen);
+        assert_eq!(
+            flight(&screen)
+                .session()
+                .expect("flying")
+                .ship_change_rules(),
+            rules
+        );
+        let rules = ScriptEffectRules {
+            starless: RuleSource::Bible,
+            ..ScriptEffectRules::default()
+        };
+        let mut screen = AppScreen::new(data()).with_script_effect_rules(rules);
+        fly(&mut screen);
+        assert_eq!(
+            flight(&screen)
+                .session()
+                .expect("flying")
+                .script_effect_rules(),
+            rules
+        );
+    }
+
+    #[test]
+    fn each_flight_names_its_ship_from_the_game_datas_string_lists() {
+        let mut screen = AppScreen::new(trading_data());
+        fly(&mut screen);
+        let strings = flight(&screen).session().expect("flying").strings();
+        assert_eq!(strings.string_list(4000), ["Food"]);
     }
 
     /// The rule-bearing parts of `screen`, each by name, as they print.
@@ -6646,18 +7041,27 @@ mod tests {
             ("control_bits", format!("{:?}", screen.control_bits)),
             ("person_rules", format!("{:?}", screen.person_rules)),
             ("comm_quote", format!("{:?}", screen.comm_quote)),
+            ("outfit_rules", format!("{:?}", screen.outfit_rules)),
+            ("hook_rules", format!("{:?}", screen.hook_rules)),
+            (
+                "ship_change_rules",
+                format!("{:?}", screen.ship_change_rules),
+            ),
+            (
+                "script_effect_rules",
+                format!("{:?}", screen.script_effect_rules),
+            ),
         ]
     }
 
-    /// The setting each rule's key reaches.
+    /// The one setting each rule's key reaches.
     fn setting_of(key: RuleKey) -> &'static str {
         match key {
             RuleKey::CrimeGains => "law",
             RuleKey::EmptyBooty
             | RuleKey::CrewlessCapture
             | RuleKey::PersonCredits
-            | RuleKey::GrantCount
-            | RuleKey::GrantMax => "boarding_rule",
+            | RuleKey::GrantCount => "boarding_rule",
             RuleKey::PiracyPolice | RuleKey::EscortAi | RuleKey::PersonCoward => "behaviour",
             RuleKey::QuietHails | RuleKey::LongAdvice | RuleKey::PersonJoin => "hail_options",
             RuleKey::EscortOrders => "escort_orders",
@@ -6689,6 +7093,23 @@ mod tests {
             | RuleKey::LinkSystSlip
             | RuleKey::ShieldMod => "person_rules",
             RuleKey::CommQuote => "comm_quote",
+            RuleKey::MapExplore
+            | RuleKey::InvalidMap
+            | RuleKey::GrantMax
+            | RuleKey::RemoveRefund
+            | RuleKey::RefitReserves => "outfit_rules",
+            RuleKey::PurchasePaintOrder
+            | RuleKey::CaptureHookOrder
+            | RuleKey::StartShipPurchase => "hook_rules",
+            RuleKey::ShipChangePersistence
+            | RuleKey::ShipChangeMax
+            | RuleKey::ShipChangeCargo
+            | RuleKey::ShipChangeReserves => "ship_change_rules",
+            RuleKey::MoveStarless
+            | RuleKey::MoveArrival
+            | RuleKey::MoveKeepFlag
+            | RuleKey::BlankLeave
+            | RuleKey::ScriptSound => "script_effect_rules",
         }
     }
 
@@ -6699,6 +7120,10 @@ mod tests {
             engine,
             rules_of(&AppScreen::new(data())),
             "the engine's are the router's defaults"
+        );
+        assert!(
+            engine.contains(&("control_bits", "NovaBits".to_owned())),
+            "the real control bits: {engine:?}"
         );
         for key in RuleKey::ALL {
             let rulebook = Rulebook::default().with_override(key, RuleSource::Bible);
@@ -6715,7 +7140,7 @@ mod tests {
             rules_of(&AppScreen::new(data()).with_rulebook(&Rulebook::new(RuleSource::Bible)));
         assert!(all.contains(&("comm_quote", "Bible".to_owned())), "{all:?}");
         // The joining and grant rules reach the hail options' Use As
-        // Escort and the boarding rule's two fields.
+        // Escort, the boarding rule's count and the outfit rules' `Max`.
         let joined = Rulebook::default()
             .with_override(RuleKey::PersonJoin, RuleSource::Bible)
             .with_override(RuleKey::GrantCount, RuleSource::Bible)
@@ -6734,7 +7159,9 @@ mod tests {
         );
         let boarding = setting("boarding_rule");
         assert!(boarding.contains("grant_count: Bible"), "{boarding}");
-        assert!(boarding.contains("grant_max: Bible"), "{boarding}");
+        assert!(!boarding.contains("grant_max"), "{boarding}");
+        let outfits = setting("outfit_rules");
+        assert!(outfits.contains("grant_max: Bible"), "{outfits}");
     }
 
     #[test]
@@ -6746,5 +7173,111 @@ mod tests {
         fly(&mut screen);
         hail(&mut screen);
         assert_eq!(flight(&screen).hailing().expect("hailing").options, []);
+    }
+
+    // Pilot edits.
+
+    use nova_view::devtools::{PilotDesk, PilotEdit};
+
+    /// Makes `edit` through the router's pilot desk, as the developer
+    /// tools do, then lets the router catch up.
+    fn edit(screen: &mut AppScreen, edit: PilotEdit) {
+        screen
+            .pilot_desk()
+            .expect("flying")
+            .edit(edit)
+            .expect("made");
+        screen.after_pilot_edit();
+    }
+
+    #[test]
+    fn the_pilot_desk_is_there_only_in_flight() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        assert!(screen.pilot_desk().is_none());
+        create(&mut screen, "Ada");
+        let desk = screen.pilot_desk().expect("flying");
+        assert_eq!(desk.sheet().expect("a pilot").name, "Ada");
+    }
+
+    #[test]
+    fn a_credits_edit_is_saved_and_the_open_exchange_shows_it() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        click_port_item(&mut screen, 7);
+        let writes = store.writes();
+        edit(&mut screen, PilotEdit::Credits(5000));
+        assert_eq!(store.writes(), writes + 1);
+        assert_eq!(saved(&store, "Ada").cash(), 5000);
+        let open = spaceport(&screen).open_trade().expect("still trading");
+        assert_eq!(open.market().cash, 5000);
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_edit_in_flight_is_saved_too() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        edit(&mut screen, PilotEdit::Credits(42));
+        assert_eq!(saved(&store, "Ada").cash(), 42);
+        assert_eq!(screen.showing(), Showing::Flight);
+    }
+
+    #[test]
+    fn a_move_rebuilds_the_spaceport_for_the_new_stellar() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        edit(
+            &mut screen,
+            PilotEdit::MoveTo {
+                system: SystemId(129),
+                stellar: nova_sim::StellarId(129),
+            },
+        );
+        assert_eq!(spaceport(&screen).stellar(), nova_sim::StellarId(129));
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert_eq!(
+            flight(&screen)
+                .scene()
+                .map(nova_view::system::scene::SystemScene::id),
+            Some(SystemId(129))
+        );
+        let saved = saved(&store, "Ada");
+        assert_eq!(saved.system(), SystemId(129));
+        assert_eq!(saved.stellar(), Some(nova_sim::StellarId(129)));
+        assert!(
+            !spaceport(&screen)
+                .offered()
+                .contains(&nova_sim::Service::TradeCenter),
+            "Beta Prime has no exchange"
+        );
+    }
+
+    #[test]
+    fn a_move_to_the_stellar_landed_on_keeps_the_spaceport_open() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        click_port_item(&mut screen, 7);
+        edit(
+            &mut screen,
+            PilotEdit::MoveTo {
+                system: SystemId(128),
+                stellar: nova_sim::StellarId(128),
+            },
+        );
+        assert!(spaceport(&screen).open_trade().is_some(), "not rebuilt");
+    }
+
+    #[test]
+    fn an_unnamed_pilots_edit_is_not_saved() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        screen.input(&key(Key::Tab, true));
+        fly(&mut screen);
+        edit(&mut screen, PilotEdit::Credits(42));
+        assert_eq!(pilot(&screen).cash(), 42);
+        assert_eq!(store.writes(), 0);
+        assert_eq!(store.keys(), Vec::<String>::new());
     }
 }

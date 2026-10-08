@@ -28,6 +28,7 @@ use crate::catalog::{
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::{Condition, HullSpec};
+use crate::control::Test;
 use crate::escort::EscortClass;
 use crate::govt::Governments;
 use crate::outfitter::outfit_mods;
@@ -191,6 +192,9 @@ pub struct ShipKind {
     pub armament: Armament,
     /// The rounds of each ammunition it carries.
     pub rounds: BTreeMap<WeaponId, u32>,
+    /// Its `AppearOn`: while it does not hold, a `düde` or a fleet's
+    /// escorts bring none of it (see [`spawn`](crate::traffic::spawn)).
+    pub appear_on: Test,
 }
 
 /// A person as the traffic spawns it: its record, whether its `LinkSyst`
@@ -225,8 +229,9 @@ pub struct SpawnTable {
     pub dude_records: BTreeMap<DudeId, SpawnDude>,
     /// The fleets its `DudeTypes` name, each with its `% Prob`.
     pub dude_fleets: Vec<(FleetId, u32)>,
-    /// The fleets whose `LinkSyst` matches it (their `AppearOn` treated as
-    /// met).
+    /// The fleets whose `LinkSyst` matches it. Their `AppearOn` is tested
+    /// when one spawns (see [`spawn`](crate::traffic::spawn)), so a bit
+    /// set in the system counts without resolving the table again.
     pub link_fleets: BTreeSet<FleetId>,
     /// The fleets it can spawn, from either list.
     pub fleets: BTreeMap<FleetId, FleetRecord>,
@@ -441,6 +446,7 @@ pub(crate) fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arse
         hull: arsenal.hull(record.id),
         armament,
         rounds,
+        appear_on: record.appear_on.clone(),
     }
 }
 
@@ -721,7 +727,7 @@ mod tests {
                 }],
                 govt: Some(GovtId(131)),
                 link_syst,
-                appear_on: String::new(),
+                appear_on: Test::default(),
             };
             vec![
                 fleet(140, 201, 202, 131),
@@ -1019,6 +1025,16 @@ mod tests {
             EscortClass::Medium,
             "by its mass"
         );
+    }
+
+    #[test]
+    fn a_ship_type_carries_its_appear_on() {
+        let gated = ShipRecord {
+            appear_on: Test::parse("b7"),
+            ..ship(204, FAST)
+        };
+        assert_eq!(kind(&gated, &[], &arsenal()).appear_on, Test::parse("b7"));
+        assert_eq!(ShipKind::default().appear_on, Test::default(), "blank");
     }
 
     #[test]

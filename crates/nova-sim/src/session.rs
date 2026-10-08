@@ -115,8 +115,9 @@
 //! refused one changes nothing.
 //!
 //! As it goes the session emits [`SimSound`] events (thrust starting and
-//! stopping, landing, taking off, a jump beginning and ending), which the
-//! audio side drains with [`Session::take_sounds`]. A refused landing or
+//! stopping, landing, taking off, a jump beginning and ending, and a set
+//! operator's message and sound), which the audio side drains with
+//! [`Session::take_sounds`]. A refused landing or
 //! jump emits nothing.
 //!
 //! In flight the engine glow's base level ([`Session::engine_glow`])
@@ -217,6 +218,38 @@
 //! ([`Session::take_pay_notes`]). Which wage it is paid follows
 //! [`Session::with_escort_wage`], and hailing it shows it.
 //!
+//! The pilot's control bits are read with [`Session::control_bit`] and
+//! set or cleared with [`Session::set_control_bit`], which makes a save
+//! due. A set expression runs on the session ([`Session::run_set`]),
+//! writing bits, with its other operators handled as
+//! [`Session::with_set_ops`] says: by default [`nova_set_ops`], which
+//! grants (`G`) and removes (`D`) outfits, explores systems (`X`),
+//! changes the player's ship outside the shipyard (`C`, `E`, `H`, as
+//! [`Session::with_ship_change_rules`] says where the rules are
+//! disputed) and renames it (`T`, from the string lists
+//! [`Session::with_strings`] gives), moves the player to another
+//! system (`M`, `N`) and makes it leave the stellar it is landed on
+//! (`Q`, with a message from those string lists), applied when
+//! [`Session::settle_script`] settles them, and plays a sound (`P`), as
+//! [`Session::with_script_effect_rules`] says where the rules are
+//! disputed; one nothing handles is skipped and told once
+//! ([`Session::take_script_notes`]). See the `ship_change` and
+//! `script_effects` modules.
+//!
+//! Buying an outfit, a boarding grant and `G` share one grant path, the
+//! original's: a map explores, a clean-record outfit cleans the legal
+//! record and a paint paints the ship instead of being added, as
+//! [`Session::with_outfit_rules`] says where the rules are disputed (see
+//! the `outfits` module and [`outfit_effects`](crate::outfit_effects)).
+//!
+//! For tests and the developer tools, plain edits put the pilot into a
+//! given state without flying it there: its credits
+//! ([`Session::set_credits`]), shield, armour and fuel within the ship's
+//! maxima ([`Session::set_reserve`]), the date ([`Session::set_date`]),
+//! and, while landed, a move to a stellar of another system
+//! ([`Session::relocate`]). Each keeps the session consistent and makes a
+//! save due; see the `edit` module.
+//!
 //! Persons (see [`person`](crate::person)) appear in the systems their
 //! records allow, by the session's [`PersonRules`]
 //! ([`Session::with_person_rules`]), named by their records
@@ -244,17 +277,34 @@
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
 
+mod control;
+mod edit;
 mod escorts;
 mod fighters;
 mod hail;
 mod hire;
+mod hooks;
+mod outfits;
 mod persons;
+mod script_effects;
+mod ship_change;
 
+pub use control::nova_set_ops;
+pub use hooks::HookRules;
+pub use ship_change::{
+    ChangeShipOp, ChangeShipWithDefaultsOp, RenameShipOp, ReplaceShipOp, ShipChangeRules,
+};
+
+pub use edit::RelocateRefusal;
 pub use persons::PersonQuote;
+pub use script_effects::{
+    LeaveStellarOp, MoveKeepPositionOp, MoveToOp, PlaySoundOp, ScriptEffectRules, Settled,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use self::hooks::ShipHook;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::bay::FighterNote;
 use crate::board::{
@@ -273,11 +323,12 @@ use crate::combat::armament::{
     self, Armament, Arsenal, OutfitRounds, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
 use crate::combat::beam::Beam;
-use crate::combat::hull::{Condition, HullSpec};
+use crate::combat::hull::{Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
 use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
+use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind, SetRegistry};
 use crate::date::{self, GameDate};
 use crate::escort::EscortDuty;
 use crate::flight::{Controls, ShipState, step};
@@ -292,7 +343,7 @@ use crate::govt::Governments;
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
-use crate::hire::{ControlBits, HireTerms, NoControlBits, NovaHire, PayNote};
+use crate::hire::{HireTerms, NovaHire, PayNote};
 use crate::hyperspace::{
     HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing,
@@ -300,9 +351,12 @@ use crate::hyperspace::{
 };
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::legal::{self, Crime, LegalCode};
-use crate::market::{self, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal};
+use crate::market::{
+    self, Direction, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal,
+};
 use crate::message::SimMessage;
 use crate::navigation::next_stellar;
+use crate::outfit_effects::OutfitRules;
 use crate::outfitter::{
     self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
 };
@@ -573,6 +627,14 @@ pub struct Session {
     escort_wage: RuleSource,
     /// What paying the escorts did since this was last taken.
     pay_notes: Vec<PayNote>,
+    /// The handlers of the set operators beyond the bit writes (see
+    /// [`Session::with_set_ops`]).
+    set_ops: hire::Shared<SetRegistry<Session>>,
+    /// The set operator kinds skipped for want of a handler and told
+    /// already; never saved.
+    unhandled_ops: BTreeSet<SetOpKind>,
+    /// What running set expressions had to tell since this was last taken.
+    script_notes: Vec<ScriptNote>,
     /// How persons appear (see [`Session::with_person_rules`]).
     person_rules: hire::Shared<dyn PersonRules>,
     /// When a person's comm quote is said (see
@@ -582,6 +644,36 @@ pub struct Session {
     quote_clock: persons::QuoteClock,
     /// The hail quotes said since they were last taken.
     quotes: Vec<persons::PersonQuote>,
+    /// How granting and removing outfits go where the rules are disputed
+    /// (see [`Session::with_outfit_rules`]).
+    outfit_rules: OutfitRules,
+    /// The order of the set-expression hooks where it is disputed (see
+    /// [`Session::with_hook_rules`]).
+    hook_rules: HookRules,
+    /// How the ship-change set operators go where the rules are disputed
+    /// (see [`Session::with_ship_change_rules`]).
+    ship_change_rules: ShipChangeRules,
+    /// When the player's ship is disabled after a change of ship (see
+    /// [`Session::with_disable_rule`]).
+    disable_rule: hire::Shared<dyn DisableRule>,
+    /// The string lists `T` names the ship from (see
+    /// [`Session::with_strings`]).
+    strings: ship_change::Strings,
+    /// What the set expressions left for later: for
+    /// [`Session::settle_script`], and the next flight tick; never saved.
+    queued: script_effects::Queued,
+    /// The stellars of the system a landed move went to, swapped in at
+    /// the take-off.
+    next_sites: Option<Vec<LandingSite>>,
+    /// Whether the next take-off keeps the ship where it touched down
+    /// (the original's `_dontMovePlayerAfterLanding`); never saved.
+    hold_position: bool,
+    /// Where the ship was as it last landed, before it was docked at the
+    /// stellar's centre.
+    touchdown: Vec2,
+    /// How the moving set operators go where the rules are disputed (see
+    /// [`Session::with_script_effect_rules`]).
+    script_effect_rules: ScriptEffectRules,
 }
 
 impl Session {
@@ -694,7 +786,7 @@ impl Session {
             fleet: Vec::new(),
             restock_persons: false,
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
-            control_bits: hire::Shared(Rc::new(NoControlBits)),
+            control_bits: hire::Shared(Rc::new(NovaBits)),
             hire_require: RuleSource::Engine,
             hire_rolls: DayRolls::default(),
             outfit_rolls: DayRolls::default(),
@@ -714,10 +806,23 @@ impl Session {
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
+            set_ops: hire::Shared(Rc::new(control::nova_set_ops())),
+            unhandled_ops: BTreeSet::new(),
+            script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             comm_quote: RuleSource::Engine,
             quote_clock: persons::QuoteClock::default(),
             quotes: Vec::new(),
+            outfit_rules: OutfitRules::default(),
+            hook_rules: HookRules::default(),
+            ship_change_rules: ShipChangeRules::default(),
+            disable_rule: Self::nova_disable(),
+            strings: ship_change::Strings::none(),
+            queued: script_effects::Queued::default(),
+            next_sites: None,
+            hold_position: false,
+            touchdown: player.position,
+            script_effect_rules: ScriptEffectRules::default(),
             pilot,
         };
         session.open_opening();
@@ -792,8 +897,26 @@ impl Session {
     /// Recomputes the stats from the outfits the pilot owns: each gauge
     /// holds up to the stats' most, keeping no more than that, and when
     /// `gain`, one whose most rose gains as much. The hull and the weapons
-    /// follow the ship and the outfits, ready to fire.
+    /// follow the ship and the outfits, ready to fire. The outfitter, the
+    /// shipyard, capture, a change of ship and a reload refit this way;
+    /// `G`, `D` and boarding refit as [`OutfitRules::refit_reserves`]
+    /// says (see [`Session::script_refit`]).
     fn refit(&mut self, gain: bool) {
+        self.refit_reserves(gain, true);
+    }
+
+    /// Refits as `G`, `D` and boarding do: the shield and armour held to
+    /// their most only by the other reading of
+    /// [`RuleKey::RefitReserves`](crate::RuleKey::RefitReserves), the
+    /// engine's keeping a surplus (`_SystemInfoToShipStats` @0xca33
+    /// clamps no reserve), and the fuel always held.
+    fn script_refit(&mut self, gain: bool) {
+        self.refit_reserves(gain, self.outfit_rules.refit_reserves == RuleSource::Bible);
+    }
+
+    /// [`Session::refit`], holding the shield and armour to their most
+    /// only when `hold`; the fuel is always held.
+    fn refit_reserves(&mut self, gain: bool, hold: bool) {
         self.hull = self.arsenal.hull(self.pilot.ship);
         self.armament = self.arsenal.player(&self.pilot.outfits, &self.outfits);
         let carried = self.secondary.filter(|&id| {
@@ -804,12 +927,12 @@ impl Session {
         self.secondary = carried.or_else(|| self.next_secondary(None, false));
         let stats = self.current_stats();
         let reserves = &mut self.pilot.reserves;
-        for (gauge, max) in [
-            (&mut reserves.shield, stats.shield),
-            (&mut reserves.armor, stats.armor),
-            (&mut reserves.fuel, stats.fuel),
+        for (gauge, max, hold) in [
+            (&mut reserves.shield, stats.shield, hold),
+            (&mut reserves.armor, stats.armor, hold),
+            (&mut reserves.fuel, stats.fuel, true),
         ] {
-            refit(gauge, max, gain);
+            refit(gauge, max, gain, hold);
         }
         self.stats = stats;
     }
@@ -819,7 +942,8 @@ impl Session {
     /// pre-jump stage the controls are ignored: the ship flies the stage
     /// ([`pre_jump::fly`]) instead, and the jump begins on the tick it is
     /// ready. A landed ship, or one in hyperspace, does not move, glows not
-    /// at all, and gains no fuel. Any tick ends a gate's pending entry: the
+    /// at all, and gains no fuel. In flight, a mission sound a `P` holds
+    /// sounds (see the `script_effects` module). Any tick ends a gate's pending entry: the
     /// original's hypergate map is modal, so nothing ticks between the
     /// land key and the pick. A ship that is not intact ignores the
     /// controls and drifts, giving up a jump it was turning and braking
@@ -834,6 +958,7 @@ impl Session {
         if self.landed.is_some() {
             return;
         }
+        self.sound_script();
         let frame = self.frame;
         self.frame = market::next_frame(frame);
         if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
@@ -898,8 +1023,37 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
+        let table = self.spawn_table(catalog);
+        let facts = control::Facts {
+            pilot: &self.pilot,
+            ammo_outfits: &self.ammo_outfits,
+            armament: &self.armament,
+        };
+        let world = World {
+            persons: PersonWorld {
+                rules: &*self.person_rules.0,
+                gone: &self.pilot.gone_persons,
+                grudges: &self.pilot.grudges,
+                control_bits: &*self.control_bits.0,
+                pilot: &facts,
+                fleet: &self.pilot.escorts,
+            },
+            ..World::new(&[])
+        };
+        self.traffic.enter_in(table, world, chance);
+        self.traffic_due = false;
+        self.enter_escorts();
+        self.strikes.clear();
+        self.aboard = None;
+        self.talk = None;
+        self.clear_lost_target();
+    }
+
+    /// What the system's traffic is drawn from, read from `catalog`: its
+    /// ships, persons and fleets, the pilot's person escorts aside.
+    fn spawn_table(&self, catalog: &(impl TrafficCatalog + ?Sized)) -> SpawnTable {
         let system = self.pilot.system;
-        let table = SpawnTable::resolve(
+        SpawnTable::resolve(
             catalog,
             system,
             self.star_map.govt(system),
@@ -914,24 +1068,7 @@ impl Session {
                 .iter()
                 .filter_map(|escort| escort.person)
                 .collect(),
-        );
-        let world = World {
-            persons: PersonWorld {
-                rules: &*self.person_rules.0,
-                gone: &self.pilot.gone_persons,
-                grudges: &self.pilot.grudges,
-                control_bits: &*self.control_bits.0,
-                fleet: &self.pilot.escorts,
-            },
-            ..World::new(&[])
-        };
-        self.traffic.enter_in(table, world, chance);
-        self.traffic_due = false;
-        self.enter_escorts();
-        self.strikes.clear();
-        self.aboard = None;
-        self.talk = None;
-        self.clear_lost_target();
+        )
     }
 
     /// Advances the NPC traffic one tick, NPCs deciding as `behaviour`
@@ -952,6 +1089,11 @@ impl Session {
                 self.populate(catalog, chance);
             } else {
                 let system_govt = self.star_map.govt(self.pilot.system);
+                let facts = control::Facts {
+                    pilot: &self.pilot,
+                    ammo_outfits: &self.ammo_outfits,
+                    armament: &self.armament,
+                };
                 let world = World {
                     sites: &self.sites,
                     player: Some(self.player_side()),
@@ -963,6 +1105,7 @@ impl Session {
                         gone: &self.pilot.gone_persons,
                         grudges: &self.pilot.grudges,
                         control_bits: &*self.control_bits.0,
+                        pilot: &facts,
                         fleet: &self.pilot.escorts,
                     },
                 };
@@ -993,6 +1136,7 @@ impl Session {
                 gone: &self.pilot.gone_persons,
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.control_bits.0,
+                pilot: self,
                 fleet: &self.pilot.escorts,
             },
         }
@@ -1395,10 +1539,17 @@ impl Session {
         if self.landed.is_some() {
             return Err(JumpRefusal::Landed);
         }
+        let system = self.pilot.system;
+        let next = self
+            .pilot
+            .course
+            .first()
+            .copied()
+            .filter(|next| self.star_map.jumps(system, self.hyperlinks).contains(next));
         check_jump(
             &self.player,
             self.pilot.reserves.fuel.now,
-            self.pilot.course.first().copied(),
+            next,
             jump_zone(&self.sites, self.stats.jump_distance, self.jump_zone),
         )
     }
@@ -1486,6 +1637,7 @@ impl Session {
             return None;
         };
         self.jump = None;
+        self.queued.sound = None;
         self.take_jump_cost(chance);
         let (mut from, mut at) = (self.pilot.system, first);
         if self.pilot.course.first() == Some(&first) {
@@ -1529,12 +1681,17 @@ impl Session {
     /// Lets the days the stats give a jump go by, each stepping the
     /// planetary events, rolled on `chance`, and pays the hired escorts
     /// their wages for them.
+    ///
+    /// The events step out of the pilot, so that their `ActivateOn` can
+    /// read the pilot through the session's control bits: no test reads
+    /// the events.
     fn pass_jump_days(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        let pilot = &mut self.pilot;
+        let mut events = std::mem::take(&mut self.pilot.events);
         for _ in 0..self.stats.jump_days {
-            pilot.date = pilot.date.next_day();
-            market::step_day(&self.goods, &mut pilot.events, chance);
+            self.pilot.date = self.pilot.date.next_day();
+            market::step_day(&self.goods, &mut events, self.gate(), chance);
         }
+        self.pilot.events = events;
         self.pay_escorts(self.stats.jump_days);
     }
 
@@ -1825,6 +1982,7 @@ impl Session {
     /// Docks the ship at `stellar`, one of the system's.
     fn dock(&mut self, stellar: StellarId) {
         self.nav_target = None;
+        self.touchdown = self.player.position;
         let site = self.sites.iter().find(|site| site.id == stellar);
         if let Some(site) = site {
             self.player.position = site.position;
@@ -1848,13 +2006,22 @@ impl Session {
     }
 
     /// Takes off from the stellar the ship is docked at, and gives it; the
-    /// ship flies again from the stellar's centre, at rest, and the next
-    /// traffic tick populates the system afresh
-    /// ([`Session::tick_traffic`]). `None`, and nothing changes, when it
-    /// has not landed.
+    /// ship flies again from the stellar's centre, at rest, the system is
+    /// explored, and the next traffic tick populates the system afresh
+    /// ([`Session::tick_traffic`]). After a landed move the ship flies in
+    /// the system moved to, from where the move left it, and after an `N`
+    /// from where it touched down (see the `script_effects` module).
+    /// `None`, and nothing changes, when it has not landed.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         self.frame = market::AFTER_TAKE_OFF_FRAME;
+        if let Some(sites) = self.next_sites.take() {
+            self.sites = sites;
+        }
+        if std::mem::take(&mut self.hold_position) {
+            self.player.position = self.touchdown;
+        }
+        self.pilot.explore(self.pilot.system);
         self.traffic_due = true;
         if self.take_off_pay == RuleSource::Engine {
             self.pay_escorts(1);
@@ -1869,9 +2036,10 @@ impl Session {
     /// Changes the pilot with `change`, while the ship is landed (in the
     /// spaceport), and says whether it did: in flight nothing changes and
     /// `change` is not called. A save is due after a change. `change` must
-    /// not change the ship class, which only [`Session::buy_ship`]
-    /// changes, nor the outfits, which only [`Session::outfit`] and
-    /// [`Session::buy_ship`] change, so the fields and the stats follow.
+    /// not change the ship class, which only [`Session::buy_ship`],
+    /// [`Session::assign`] and the ship-change set operators change, nor
+    /// the outfits, which only they, [`Session::outfit`] and the other
+    /// set operators change, so the fields and the stats follow.
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
         if self.landed.is_none() {
             return false;
@@ -1893,6 +2061,7 @@ impl Session {
             site.flags,
             &self.pilot,
             self.capacity(),
+            self.gate(),
             self.exchange_rules,
             self.markup(site),
         )
@@ -2278,7 +2447,9 @@ impl Session {
     pub fn outfitter(&mut self, chance: &mut dyn Chance) -> Option<Outfitter> {
         let stellar = self.landed?;
         let site = self.sites.iter().find(|site| site.id == stellar)?;
-        Shop {
+        // Out of the session while the gate reads it.
+        let mut rolls = std::mem::take(&mut self.outfit_rolls);
+        let outfitter = Shop {
             records: &self.outfits,
             fields: self.fields,
             standard: &self.standard(),
@@ -2294,8 +2465,11 @@ impl Session {
             bought: self.opening.bought.under(self.opening.limit),
             outfit_count: self.outfit_count,
             sale_mass: self.sale_mass,
+            gate: self.gate(),
         }
-        .outfitter(&self.pilot, &mut self.outfit_rolls, chance)
+        .outfitter(&self.pilot, &mut rolls, chance);
+        self.outfit_rolls = rolls;
+        outfitter
     }
 
     /// The outfitter dialog opens: the once-an-opening flags are cleared,
@@ -2318,9 +2492,10 @@ impl Session {
 
     /// Buys or sells one outfit as `order` asks, the rolls not drawn yet
     /// drawn on `chance`: a change made in the spaceport, so a save is
-    /// due, and the stats change with it. When the ship is not landed at
-    /// an outfitter, or the order is refused, nothing changes and the
-    /// refusal says why.
+    /// due, and the stats change with it. The outfit's `OnPurchase` or
+    /// `OnSell` runs once, drawing on `chance` too (see the `hooks`
+    /// module). When the ship is not landed at an outfitter, or the order
+    /// is refused, nothing changes and the refusal says why.
     pub fn outfit(
         &mut self,
         order: OutfitOrder,
@@ -2336,8 +2511,8 @@ impl Session {
             .cloned()
             .ok_or(OutfitRefusal::NotListed)?;
         let amount = match order.direction {
-            market::Direction::Buy => price,
-            market::Direction::Sell => outfitter::refund(
+            Direction::Buy => price,
+            Direction::Sell => outfitter::refund(
                 price,
                 self.pilot.owned(order.outfit),
                 self.opening.owned.get(&order.outfit).copied().unwrap_or(0),
@@ -2345,8 +2520,16 @@ impl Session {
             ),
         };
         self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, amount));
-        if order.direction == market::Direction::Buy {
-            self.opening.bought = outfitter::Bought::after_buying(&record);
+        match order.direction {
+            Direction::Buy => {
+                self.opening.bought = outfitter::Bought::after_buying(&record);
+                let added = self.grant_outfit(record.id);
+                self.run_script(&record.on_purchase, chance);
+                if added && record.flags & OutfitFlags::REMOVE_AFTER_PURCHASE != 0 {
+                    self.remove_after_purchase(record.id);
+                }
+            }
+            Direction::Sell => self.run_script(&record.on_sell, chance),
         }
         self.refit(true);
         Ok(())
@@ -2398,15 +2581,20 @@ impl Session {
     fn listed_shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
         let stellar = self.landed?;
         let site = self.sites.iter().find(|site| site.id == stellar)?;
-        Yard {
+        // Out of the session while the gate reads it.
+        let mut rolls = std::mem::take(&mut self.ship_rolls);
+        let shipyard = Yard {
             ships: &self.ships,
             outfits: &self.outfits,
             fields: self.fields,
             site,
             buy_random: self.buy_random,
             trade_in_outfits: self.trade_in_outfits,
+            gate: self.gate(),
         }
-        .shipyard(&self.pilot, &mut self.ship_rolls, chance)
+        .shipyard(&self.pilot, &mut rolls, chance);
+        self.ship_rolls = rolls;
+        shipyard
     }
 
     /// The shipyard and the record of class `ship`, when it can be bought
@@ -2459,9 +2647,13 @@ impl Session {
     /// drops a leading "the "), trading in the one flown, and gives
     /// what the purchase did: a change made in the spaceport, so a save is
     /// due, and the session flies the new ship from then on, its fields,
-    /// default items, stock weapons and stats read from its record. When the ship is not
-    /// landed at a shipyard, or the purchase is refused, nothing changes
-    /// and the refusal says why. The rolls not drawn yet are drawn on
+    /// default items, stock weapons and stats read from its record. The
+    /// old class's `OnRetire` runs first and the new class's `OnPurchase`
+    /// last, each drawing on `chance`, the paint cleared as
+    /// [`HookRules::purchase_paint_order`] says (see the `hooks` module).
+    /// When the ship is not landed at a shipyard, or the purchase is
+    /// refused, nothing changes and the refusal says why. The rolls not
+    /// drawn yet are drawn on
     /// `chance`, and a purchase draws the class's roll again, as the
     /// original does (`_DoShipyardDialog` @0x5f0d5-0x5f0f8), the next time
     /// the shipyard's list is built ([`shipyard`](Self::shipyard)).
@@ -2476,6 +2668,8 @@ impl Session {
             price: shipyard.row(ship).map_or(0, |row| row.price),
             trade_in: shipyard.trade_in,
         };
+        self.ship_hook(self.pilot.ship, ShipHook::Retire, chance);
+        let paint_last = self.hook_rules.purchase_paint_order == RuleSource::Engine;
         let old_mass = self.fields.mass;
         self.drop_fighters(|_, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
@@ -2490,6 +2684,9 @@ impl Session {
             bought = Some(shipyard::purchase(
                 pilot, old_mass, &record, name, &fits, quote, &outfits, fleet,
             ));
+            if !paint_last {
+                pilot.paint = None;
+            }
         });
         self.outfits = outfits;
         self.fields = record.fields;
@@ -2497,6 +2694,12 @@ impl Session {
         self.stock = armament::fitted(&fits);
         self.refit(false);
         self.ship_redraws.insert(ship);
+        self.ship_hook(record.id, ShipHook::Purchase, chance);
+        if paint_last {
+            // A new ship is unpainted (`_DoShipyardDialog` @0x5f022), once
+            // its `OnPurchase` has run (@0x5f00d); the save is due already.
+            self.pilot.paint = None;
+        }
         bought.ok_or(ShipRefusal::NoShipyard)
     }
 
@@ -2731,24 +2934,19 @@ impl Session {
         let stock: Vec<GrantStock> = self
             .outfits
             .iter()
-            .map(|record| GrantStock {
-                outfit: record.id,
-                item_class: record.item_class,
-                mass: record.mass,
-                owned: self.pilot.owned(record.id),
-                max: clamp_i16(self.raised_max_of(record)),
-            })
+            .map(|record| self.grant_stock(record))
             .collect();
-        let free_mass = outfitter::free_mass(
-            self.fields,
-            &self.standard(),
-            &self.pilot.outfits,
-            &self.outfits,
-        );
-        let granted = rule.grant(&grant, &stock, free_mass, chance)?;
-        let owned = self.pilot.outfits.entry(granted.outfit).or_default();
-        *owned = owned.saturating_add(granted.count);
-        self.refit(true);
+        let granted = rule.grant(
+            &grant,
+            &stock,
+            self.free_mass(),
+            self.outfit_rules.grant_max,
+            chance,
+        )?;
+        for _ in 0..granted.count {
+            self.grant_outfit(granted.outfit);
+        }
+        self.script_refit(true);
         Some(granted)
     }
 
@@ -2960,12 +3158,14 @@ impl Session {
             *self.pilot.outfits.entry(outfit).or_default() += 1;
             count += 1;
         }
-        self.refit(true);
+        self.script_refit(true);
         count
     }
 
     /// Rolls the capture of the ship `aboard` boards, at its odds as
-    /// `rule` says on `chance`, and gives what came of it.
+    /// `rule` says on `chance`, and gives what came of it. A capture
+    /// taken straight into the fleet runs its class's `OnCapture` on
+    /// `chance` first.
     fn capture(
         &mut self,
         mut aboard: Aboard,
@@ -2990,6 +3190,7 @@ impl Session {
             return Taken::Captured;
         }
         self.aboard = None;
+        self.ship_hook(aboard.ship, ShipHook::Capture, chance);
         self.join_fleet(aboard.npc);
         Taken::Escorted
     }
@@ -3101,7 +3302,11 @@ impl Session {
     /// else changes. The player keeps its persistent outfits and gets the
     /// captured class's default items, then its stock weapons and their
     /// `AmmoLoad`, topped up as after a purchase. Either change makes a
-    /// save due.
+    /// save due. The captured class's `OnCapture` runs on `chance` before
+    /// it joins the fleet; on "Use As My Ship" the old class's `OnRetire`
+    /// runs first, both before the fuel draw and, as
+    /// [`HookRules::capture_hook_order`] says, before or after the outfit
+    /// swap (see the `hooks` module).
     pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
         let aboard = self.aboard.filter(|aboard| aboard.captured)?;
         self.aboard = None;
@@ -3111,6 +3316,7 @@ impl Session {
             .find(|npc| npc.id == aboard.npc)
             .cloned()?;
         if choice == Assignment::Escort {
+            self.ship_hook(npc.ship, ShipHook::Capture, chance);
             self.join_fleet(npc.id);
             return Some(Assigned::Escort);
         }
@@ -3118,6 +3324,10 @@ impl Session {
         let Some(record) = record.filter(|_| self.npcs().len() + 1 < MAX_SHIPS_IN_SYSTEM) else {
             return Some(Assigned::Abandoned);
         };
+        let hooks_first = self.hook_rules.capture_hook_order == RuleSource::Engine;
+        if hooks_first {
+            self.retire_for_capture(record.id, chance);
+        }
         let stock = ShipStats::new(self.fields, &outfit_mods(&self.defaults, &self.outfits));
         let old = Escort {
             ship: self.pilot.ship,
@@ -3140,6 +3350,9 @@ impl Session {
         }
         let fits = self.arsenal.stock_fits(record.id, records);
         fit_stock(&mut self.pilot.outfits, &fits, records);
+        if !hooks_first {
+            self.retire_for_capture(record.id, chance);
+        }
         self.pilot.ship = record.id;
         self.fields = record.fields;
         self.defaults = defaults;
@@ -3211,14 +3424,17 @@ fn clamp_i16(value: i64) -> i16 {
     i16::try_from(value.clamp(i64::from(i16::MIN), i64::from(i16::MAX))).unwrap_or_default()
 }
 
-/// Sets `gauge` to hold up to `max`, keeping no more than that; when
-/// `gain` and that is more than it held, it gains the difference.
-fn refit(gauge: &mut Gauge, max: f32, gain: bool) {
+/// Sets `gauge` to hold up to `max`, and when `hold`, keeping no more
+/// than that; when `gain` and that is more than it held, it gains the
+/// difference.
+fn refit(gauge: &mut Gauge, max: f32, gain: bool, hold: bool) {
     if gain {
         gauge.now += (max - gauge.max).max(0.0);
     }
     gauge.max = max;
-    gauge.now = gauge.now.min(max);
+    if hold {
+        gauge.now = gauge.now.min(max);
+    }
 }
 
 /// Fills in what an old save of `pilot` left to the game data: the ship's
@@ -3252,6 +3468,7 @@ mod tests {
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
     use crate::chance::NeverFires;
     use crate::clock::TICKS_PER_SECOND;
+    use crate::control::Test;
     use crate::flight::Turn;
     use crate::fuel::FUEL_SCOOP;
     use crate::gate::{GateArrivalRule, GateKind, GateRefusal, HYPERGATE, WORMHOLE, WormholeRule};
@@ -5396,8 +5613,8 @@ mod tests {
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: vec![StellarId(140)],
-            buy_on: String::new(),
-            sell_on: String::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
             flags: 0,
         };
         let catalog = edge_lander();
@@ -5455,8 +5672,8 @@ mod tests {
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: vec![StellarId(128)],
-            buy_on: String::new(),
-            sell_on: String::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
             flags: 0,
         };
         let catalog = FakePilotCatalog {
@@ -5498,8 +5715,8 @@ mod tests {
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: vec![StellarId(128)],
-            buy_on: String::new(),
-            sell_on: String::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
             flags: 0,
         };
         let catalog = FakePilotCatalog {
@@ -5546,8 +5763,8 @@ mod tests {
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: Vec::new(),
-            buy_on: String::new(),
-            sell_on: String::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
             flags: 0,
         };
         let catalog = FakePilotCatalog {
@@ -5589,8 +5806,8 @@ mod tests {
                 base_price: base,
                 sold_at: Vec::new(),
                 bought_at: vec![StellarId(128)],
-                buy_on: String::new(),
-                sell_on: String::new(),
+                buy_on: Test::default(),
+                sell_on: Test::default(),
                 flags: 0,
             }],
             ..exchange()
@@ -5826,8 +6043,8 @@ mod tests {
                 base_price: -100,
                 sold_at: vec![StellarId(128)],
                 bought_at: Vec::new(),
-                buy_on: String::new(),
-                sell_on: String::new(),
+                buy_on: Test::default(),
+                sell_on: Test::default(),
                 flags: 0,
             }],
             ..exchange()
@@ -5894,8 +6111,8 @@ mod tests {
             base_price: 10,
             sold_at: vec![StellarId(128)],
             bought_at: Vec::new(),
-            buy_on: String::new(),
-            sell_on: String::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
             flags,
         };
         FakePilotCatalog {
@@ -6078,6 +6295,51 @@ mod tests {
         assert_eq!(held(&bible), [11, 9], "only the lower ID, into the space");
     }
 
+    #[test]
+    fn the_exchange_tests_junk_through_the_sessions_control_bits() {
+        let opals = JunkRecord {
+            id: JunkId(146),
+            name: "Opals".to_owned(),
+            base_price: 100,
+            sold_at: vec![StellarId(128)],
+            bought_at: Vec::new(),
+            buy_on: Test::default(),
+            sell_on: Test::parse("b7"),
+            flags: 0,
+        };
+        let catalog = FakePilotCatalog {
+            character: exchange().character,
+            sites: vec![(
+                SystemId(130),
+                vec![LandingSite {
+                    flags: TRADES,
+                    ..planet(128, 0.0, 0.0)
+                }],
+            )],
+            junk: vec![opals],
+            ..catalog()
+        };
+        let opals = Good::Junk(JunkId(146));
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        let mut refusing = session
+            .clone()
+            .with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));
+        assert_eq!(
+            refusing
+                .market()
+                .and_then(|market| market.row(opals).cloned()),
+            None
+        );
+        assert_eq!(
+            refusing.trade(order(&refusing, opals, Direction::Buy, Lot::Count(1))),
+            Err(TradeRefusal::NotTraded)
+        );
+        let buy = order(&session, opals, Direction::Buy, Lot::Count(1));
+        assert_eq!(session.trade(buy), Ok(1));
+    }
+
     /// A food surplus at planet 140 (-15, 30 days, 35 % a day), and planet
     /// 140 a trade center trading food at 75.
     fn surplus() -> FakePilotCatalog {
@@ -6099,7 +6361,7 @@ mod tests {
                 price_delta: -15,
                 duration: 30,
                 freq: 35,
-                activate_on: String::new(),
+                activate_on: Test::default(),
             }],
             ..landers
         }
@@ -6120,6 +6382,27 @@ mod tests {
         let market = session.market().expect("an exchange");
         assert_eq!(market.row(FOOD).map(|row| row.price), Some(60));
         assert_eq!(market.events, ["An enormous food surplus"]);
+    }
+
+    #[test]
+    fn a_jump_tests_activate_on_through_the_sessions_control_bits() {
+        let mut catalog = surplus();
+        catalog.disasters[0].freq = 100;
+        catalog.disasters[0].activate_on = Test::parse("b7");
+        let mut session = Session::start(&catalog).expect("starts");
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        let mut refusing = session
+            .clone()
+            .with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));
+        let mut chance = Scripted::answering(&[true]);
+        jump_with(&mut refusing, &catalog, 131, &mut chance);
+        assert_eq!(refusing.pilot().events().count(), 0);
+        assert_eq!(chance.asked, Vec::<u8>::new(), "never rolled");
+        jump_with(&mut session, &catalog, 131, &mut chance);
+        assert_eq!(
+            session.pilot().events().collect::<Vec<_>>(),
+            [(DisasterId(128), 30)]
+        );
     }
 
     #[test]
@@ -6660,7 +6943,7 @@ mod tests {
     /// (+300), a cargo pod (+10 tons), a shield (+50), a fuel tank (+100)
     /// and a fuel scoop (a unit every 10 ticks), each a ton and 1000
     /// credits; the first `chär` holds 25,000 credits.
-    fn outfitting() -> FakePilotCatalog {
+    pub(super) fn outfitting() -> FakePilotCatalog {
         FakePilotCatalog {
             character: Ok(CharacterStart {
                 cash: 25_000,
@@ -6679,21 +6962,21 @@ mod tests {
         }
     }
 
-    fn buy(outfit: OutfitId) -> OutfitOrder {
+    pub(super) fn buy(outfit: OutfitId) -> OutfitOrder {
         OutfitOrder {
             outfit,
             direction: Direction::Buy,
         }
     }
 
-    fn sell(outfit: OutfitId) -> OutfitOrder {
+    pub(super) fn sell(outfit: OutfitId) -> OutfitOrder {
         OutfitOrder {
             outfit,
             direction: Direction::Sell,
         }
     }
 
-    fn outfitted(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn outfitted(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         land_now(&mut session).expect("lands");
         session.take_save_due();
@@ -7214,6 +7497,44 @@ mod tests {
         );
     }
 
+    /// The outfitting catalog with outfit 305 sold only on control bit 7,
+    /// and hidden while it is refused.
+    fn outfitting_on_bit_7() -> FakePilotCatalog {
+        let mut catalog = outfitting();
+        catalog.outfits.push(OutfitRecord {
+            flags: crate::outfitter::OutfitFlags::HIDE_UNLESS_AVAILABLE,
+            availability: crate::control::Test::parse("b7"),
+            ..outfit(305, &[])
+        });
+        catalog
+    }
+
+    #[test]
+    fn an_outfit_is_listed_once_the_bit_its_availability_tests_is_set() {
+        let gated = OutfitId(305);
+        let mut session = outfitted(&outfitting_on_bit_7());
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+        assert_eq!(outfitter.row(gated), None);
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+        assert_eq!(outfitter.row(gated).map(|row| row.buy), Some(Ok(())));
+        assert_eq!(session.outfit(buy(gated), &mut NeverFires), Ok(()));
+    }
+
+    #[test]
+    fn the_outfitter_tests_availability_through_the_sessions_control_bits() {
+        let gated = OutfitId(305);
+        let mut session = outfitted(&outfitting_on_bit_7())
+            .with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+        assert_eq!(outfitter.row(gated), None);
+        assert_eq!(
+            session.outfit(buy(gated), &mut NeverFires),
+            Err(OutfitRefusal::NotListed)
+        );
+    }
+
     const EXPANSION: OutfitId = OutfitId(305);
 
     /// [`outfitting`] also selling a mass expansion of 12 tons (outfit
@@ -7267,6 +7588,110 @@ mod tests {
             "room once a ton is sold"
         );
         assert_eq!(session.pilot().owned(EXPANSION), 1);
+    }
+
+    /// The outfitting catalog with a map of 1 jump (306), an outfit
+    /// cleaning the record with government 140 (307), a paint (308), a
+    /// plain outfit removed after purchase (309) and a map removed after
+    /// purchase (310) for sale too.
+    pub(super) fn outfitting_effects() -> FakePilotCatalog {
+        use crate::outfit_effects::{CLEAN_RECORD, MAP, PAINT};
+        let mut catalog = outfitting();
+        catalog.outfits.extend([
+            outfit(306, &[(MAP, 1)]),
+            outfit(307, &[(CLEAN_RECORD, 140)]),
+            outfit(308, &[(PAINT, 0x7C00)]),
+            OutfitRecord {
+                flags: OutfitFlags::REMOVE_AFTER_PURCHASE,
+                ..outfit(309, &[(MORE_SHIELD, 50)])
+            },
+            OutfitRecord {
+                flags: OutfitFlags::REMOVE_AFTER_PURCHASE,
+                ..outfit(310, &[(MAP, 1)])
+            },
+        ]);
+        catalog
+    }
+
+    #[test]
+    fn buying_a_map_pays_and_explores_and_adds_nothing() {
+        let mut session = outfitted(&outfitting_effects());
+        assert_eq!(session.outfit(buy(OutfitId(306)), &mut NeverFires), Ok(()));
+        assert_eq!(session.pilot().cash(), 24_000);
+        assert_eq!(
+            session.pilot().explored().collect::<Vec<_>>(),
+            [SystemId(130), SystemId(131)]
+        );
+        assert_eq!(session.pilot().owned(OutfitId(306)), 0);
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn buying_a_clean_record_outfit_clears_the_record_and_a_paint_paints() {
+        let mut session = outfitted(&outfitting_effects());
+        session.pilot.legal.insert(GovtId(140), -300);
+        session
+            .outfit(buy(OutfitId(307)), &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.pilot().legal_record(GovtId(140)), 0);
+        assert_eq!(session.pilot().owned(OutfitId(307)), 0);
+        session
+            .outfit(buy(OutfitId(308)), &mut NeverFires)
+            .expect("bought");
+        assert_eq!(
+            session.pilot().paint(),
+            Some(crate::outfit_effects::Rgb15 { r: 31, g: 0, b: 0 })
+        );
+        assert_eq!(session.pilot().owned(OutfitId(308)), 0);
+        assert_eq!(session.pilot().cash(), 23_000);
+    }
+
+    #[test]
+    fn an_outfit_removed_after_purchase_still_acts_but_is_not_kept() {
+        let mut session = outfitted(&outfitting_effects());
+        let shield = session.stats().shield;
+        session
+            .outfit(buy(OutfitId(309)), &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.pilot().owned(OutfitId(309)), 0);
+        assert_eq!(session.stats().shield, shield, "not kept");
+        assert_eq!(session.pilot().cash(), 24_000, "paid for");
+        session
+            .outfit(buy(OutfitId(310)), &mut NeverFires)
+            .expect("bought");
+        assert!(session.pilot().has_explored(SystemId(131)), "it explores");
+        assert_eq!(session.pilot().owned(OutfitId(310)), 0);
+    }
+
+    #[test]
+    fn the_outfitter_holds_a_surplus_shield_and_armour_by_either_reading() {
+        // `_DoOutfitDialog` clamps the reserves when it closes
+        // (@0x5da4b-0x5dad4), whatever `refit_reserves` says of `G`, `D`
+        // and boarding.
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            for order in [buy(OutfitId(302)), sell(OutfitId(302))] {
+                let mut session = outfitted(&outfitting()).with_outfit_rules(OutfitRules {
+                    refit_reserves: source,
+                    ..OutfitRules::default()
+                });
+                if order.direction == Direction::Sell {
+                    session.pilot.outfits.insert(OutfitId(302), 1);
+                    session.refit(false);
+                }
+                let (shield, armor) = (session.stats().shield, session.stats().armor);
+                session.pilot.reserves.shield.now = shield + 5.0;
+                session.pilot.reserves.armor.now = armor + 5.0;
+                session.outfit(order, &mut NeverFires).expect("traded");
+                let (shield, armor) = (session.stats().shield, session.stats().armor);
+                let reserves = session.reserves();
+                assert_eq!(
+                    reserves.shield,
+                    Gauge::full(shield),
+                    "{source:?}, {order:?}"
+                );
+                assert_eq!(reserves.armor, Gauge::full(armor), "{source:?}, {order:?}");
+            }
+        }
     }
 
     #[test]
@@ -7670,7 +8095,7 @@ mod tests {
     /// [`outfitting`], where planet 128 is a shipyard too, selling ship
     /// 128 (FAST, 10,000 credits) and ship 129 ([`HEAVY`], 17,500
     /// credits, carrying a fuel tank).
-    fn shipbuying() -> FakePilotCatalog {
+    pub(super) fn shipbuying() -> FakePilotCatalog {
         FakePilotCatalog {
             sites: vec![(SystemId(130), vec![shipyard_site()])],
             ships: vec![(ShipId(128), Ok(FAST)), (ShipId(129), Ok(HEAVY))],
@@ -7687,7 +8112,7 @@ mod tests {
         }
     }
 
-    const NEW: ShipId = ShipId(129);
+    pub(super) const NEW: ShipId = ShipId(129);
 
     #[test]
     fn there_is_a_shipyard_only_while_landed_at_one() {
@@ -7713,6 +8138,24 @@ mod tests {
             session.buy_ship(NEW, "Kestrel", &mut NeverFires),
             Err(ShipRefusal::NoShipyard)
         );
+    }
+
+    #[test]
+    fn the_shipyard_tests_availability_through_the_sessions_control_bits() {
+        let mut catalog = shipbuying();
+        catalog.ship_records[1].availability = crate::control::Test::parse("b7");
+        let mut session = outfitted(&catalog);
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        let mut refusing = session
+            .clone()
+            .with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));
+        assert_eq!(
+            refusing.buy_ship(NEW, "Kestrel", &mut NeverFires),
+            Err(ShipRefusal::NotForSale)
+        );
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought while bit 7 is set");
     }
 
     #[test]
@@ -8046,6 +8489,17 @@ mod tests {
     }
 
     #[test]
+    fn buying_a_ship_takes_the_name_given_not_its_classs() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session.pilot.ship_name = Some("Old Name".to_owned());
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"));
+    }
+
+    #[test]
     fn a_bought_ships_armament_mounts_each_stock_weapon_once() {
         let catalog = stock_weapons(shipbuying());
         let mut session = outfitted(&catalog);
@@ -8069,6 +8523,23 @@ mod tests {
             i64::from(HEAVY.free_mass),
             "its tank, gun and launcher are fitted on top"
         );
+    }
+
+    #[test]
+    fn buying_a_ship_unpaints_it_and_a_refused_purchase_keeps_the_paint() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        let paint = crate::outfit_effects::Rgb15 { r: 4, g: 5, b: 6 };
+        session.pilot.paint = Some(paint);
+        assert_eq!(
+            session.buy_ship(ShipId(999), "Kestrel", &mut NeverFires),
+            Err(ShipRefusal::NotListed)
+        );
+        assert_eq!(session.pilot().paint(), Some(paint));
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.pilot().paint(), None);
     }
 
     #[test]
@@ -8764,7 +9235,7 @@ mod tests {
             }],
             govt: Some(GovtId(150)),
             link_syst,
-            appear_on: String::new(),
+            appear_on: Test::default(),
         }
     }
 
@@ -8821,6 +9292,21 @@ mod tests {
         assert_eq!(fleet_of(&session), a_fleet_led_by(0));
         session.populate(&catalog, &mut linked_fleet_draws(3));
         assert_eq!(fleet_of(&session), [], "linked to another government");
+    }
+
+    #[test]
+    fn populating_tests_a_fleets_appear_on_through_the_sessions_control_bits() {
+        let mut catalog = fleeted();
+        catalog.fleets[0].appear_on = Test::parse("b7");
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut linked_fleet_draws(2));
+        assert_eq!(fleet_of(&session), [], "bit 7 is clear");
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        session.populate(&catalog, &mut linked_fleet_draws(2));
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        let mut refusing = session.with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));
+        refusing.populate(&catalog, &mut linked_fleet_draws(2));
+        assert_eq!(fleet_of(&refusing), []);
     }
 
     #[test]
@@ -10683,7 +11169,7 @@ mod tests {
     /// carries food and money (`Booty` 0x0041), and the police allied with
     /// them (141) flying interceptor 130; the player's ship 128 (strength
     /// 100, 20 holds, 300 fuel, 30 free mass) has a crew of 10.
-    fn boardable() -> FakePilotCatalog {
+    pub(super) fn boardable() -> FakePilotCatalog {
         let mut catalog = skirmish(&[(1, 140, 129), (4, 141, 130)], Some(140));
         catalog.dudes[0].1.booty = 0x0041;
         catalog.govts[0].penalties.board = 5;
@@ -10736,7 +11222,7 @@ mod tests {
     }
 
     /// [`alongside`], boarded by Nova's law.
-    fn aboard(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn aboard(catalog: &FakePilotCatalog) -> Session {
         let mut session = alongside(catalog);
         assert_eq!(
             board_by(&mut session, &NovaLaw::default()),
@@ -10745,7 +11231,7 @@ mod tests {
         session
     }
 
-    fn take(session: &mut Session, take: Take, draws: &[u32]) -> (Taken, Vec<u32>) {
+    pub(super) fn take(session: &mut Session, take: Take, draws: &[u32]) -> (Taken, Vec<u32>) {
         let mut chance = Draws::of(draws);
         let taken = session.plunder(take, &NovaBoarding::default(), &mut chance);
         (taken, chance.asked)
@@ -11119,8 +11605,8 @@ mod tests {
             base_price: 10,
             sold_at: Vec::new(),
             bought_at: Vec::new(),
-            buy_on: String::new(),
-            sell_on: String::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
             flags: 0,
         }];
         catalog.outfits.push(outfit(310, &[]));
@@ -11252,6 +11738,38 @@ mod tests {
                     count
                 },
                 "{raisers}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ammo_take_keeps_a_surplus_shield_and_armour_by_the_engine_and_holds_them_by_the_other_reading()
+     {
+        for (source, surplus) in [(RuleSource::Engine, 5.0), (RuleSource::Bible, 0.0)] {
+            let mut session = ammo_session(&ammo_aboard(1, 20)).with_outfit_rules(OutfitRules {
+                refit_reserves: source,
+                ..OutfitRules::default()
+            });
+            let (shield, armor) = (session.stats().shield, session.stats().armor);
+            session.pilot.reserves.shield.now = shield + 5.0;
+            session.pilot.reserves.armor.now = armor + 5.0;
+            take(&mut session, Take::Ammo, &[]);
+            let reserves = session.reserves();
+            assert_eq!(
+                reserves.shield,
+                Gauge {
+                    now: shield + surplus,
+                    max: shield
+                },
+                "{source:?}"
+            );
+            assert_eq!(
+                reserves.armor,
+                Gauge {
+                    now: armor + surplus,
+                    max: armor
+                },
+                "{source:?}"
             );
         }
     }
@@ -11552,7 +12070,7 @@ mod tests {
     }
 
     /// [`aboard`], captured and awaiting its assignment.
-    fn captured(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn captured(catalog: &FakePilotCatalog) -> Session {
         let mut session = aboard(catalog);
         assert_eq!(
             take(&mut session, Take::Capture, &[43, 1]).0,
@@ -11595,7 +12113,7 @@ mod tests {
 
     /// [`boardable`] with outfits: 400 persistent, 401 not, and 402 the
     /// trader's default item.
-    fn kitted() -> FakePilotCatalog {
+    pub(super) fn kitted() -> FakePilotCatalog {
         let mut catalog = boardable();
         catalog.outfits.extend([
             OutfitRecord {
@@ -11654,6 +12172,7 @@ mod tests {
         session.pilot.outfits = BTreeMap::from([(OutfitId(400), 1), (OutfitId(401), 2)]);
         session.pilot.cargo.insert(Good::Commodity(2), 4);
         session.pilot.cash = 777;
+        session.pilot.ship_name = Some("Kestrel".to_owned());
         let trader = &mut session.traffic.npcs_mut()[0];
         trader.state.position = Vec2::new(5.0, -3.0);
         trader.state.velocity = Vec2::new(0.25, 0.0);
@@ -11674,6 +12193,7 @@ mod tests {
         );
         assert_eq!(chance.asked, [300], "the fuel drawn below its Fuel");
         assert_eq!(session.ship(), ShipId(129));
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"), "unrenamed");
         assert_eq!(
             *session.player(),
             ShipState {
@@ -11907,6 +12427,15 @@ mod tests {
         catalog
     }
 
+    /// The shield booster (outfit 200) of [`granting`]'s `catalog`.
+    fn booster(catalog: &mut FakePilotCatalog) -> &mut OutfitRecord {
+        catalog
+            .outfits
+            .iter_mut()
+            .find(|record| record.id == OutfitId(200))
+            .expect("the booster")
+    }
+
     /// Person `id` as the NPC flying it carries it, with nothing of its
     /// own.
     fn flown_by(id: i16) -> NpcPerson {
@@ -12096,6 +12625,127 @@ mod tests {
         assert!(boarded.is_ok());
         assert_eq!(session.pilot().owned(OutfitId(200)), 2);
         assert_eq!(session.take_grant().map(|granted| granted.count), Some(2));
+    }
+
+    #[test]
+    fn one_grant_max_holds_boarding_and_g_to_the_max_alike() {
+        // Ace grants two of an outfit of `Max` 1. `GrantMax`, set once on
+        // the session's outfit rules, holds the boarding grant (whatever
+        // the boarding rule) and `G` to it; by the engine neither is held.
+        let mut catalog = granting();
+        booster(&mut catalog).max = 1;
+        let g = |session: Session| {
+            let mut session = session.with_set_ops(std::rc::Rc::new(crate::nova_set_ops()));
+            let expr = crate::control::SetExpr::parse("G200 G200").expect("parses");
+            session.run_set(&expr, &mut Draws::of(&[]));
+            session.pilot().owned(OutfitId(200))
+        };
+        for (rules, owned) in [
+            (OutfitRules::default(), 2),
+            (
+                OutfitRules {
+                    grant_max: RuleSource::Bible,
+                    ..OutfitRules::default()
+                },
+                1,
+            ),
+        ] {
+            let mut boarded = alongside_ace(&catalog).with_outfit_rules(rules);
+            board_drawing(&mut boarded, NovaBoarding::default(), &ACE_DRAWS)
+                .0
+                .expect("boards");
+            assert_eq!(boarded.pilot().owned(OutfitId(200)), owned, "boarded");
+            assert_eq!(g(alongside(&catalog).with_outfit_rules(rules)), owned, "G");
+        }
+    }
+
+    #[test]
+    fn a_boarding_grant_keeps_a_surplus_shield_and_armour_by_the_engine_and_holds_them_by_the_other_reading()
+     {
+        let catalog = granting();
+        for (source, surplus) in [(RuleSource::Engine, 5.0), (RuleSource::Bible, 0.0)] {
+            let mut session = alongside_ace(&catalog).with_outfit_rules(OutfitRules {
+                refit_reserves: source,
+                ..OutfitRules::default()
+            });
+            let (shield, armor) = (session.stats().shield, session.stats().armor);
+            session.pilot.reserves.shield.now = shield + 5.0;
+            session.pilot.reserves.armor.now = armor + 5.0;
+            board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS)
+                .0
+                .expect("boards");
+            assert_eq!(session.pilot().owned(OutfitId(200)), 2);
+            let reserves = session.reserves();
+            assert_eq!(
+                reserves.shield,
+                Gauge {
+                    now: shield + 20.0 + surplus,
+                    max: shield + 20.0
+                },
+                "{source:?}: the grant's shield gained"
+            );
+            assert_eq!(
+                reserves.armor,
+                Gauge {
+                    now: armor + surplus,
+                    max: armor
+                },
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn held_to_the_max_boarding_and_g_weigh_an_outfit_as_the_outfitter_does() {
+        // Of a `Mass` scaled by Flags 0x0400 on the ship's 40 tons, with
+        // 30 tons free: 20 raw is 8, 75 is 30 and 80 is 32. Held to the
+        // `Max`, boarding (granting one) and `G` agree, by the scaled mass.
+        let rules = OutfitRules {
+            grant_max: RuleSource::Bible,
+            ..OutfitRules::default()
+        };
+        for (mass, fits) in [(20, true), (75, true), (80, false)] {
+            let mut catalog = granting();
+            catalog.persons[0].grant_count = 1;
+            booster(&mut catalog).mass = mass;
+            booster(&mut catalog).flags = OutfitFlags::MASS_BY_MASS;
+            let mut boarded = alongside_ace(&catalog).with_outfit_rules(rules);
+            assert_eq!(boarded.free_mass(), 30);
+            board_drawing(&mut boarded, NovaBoarding::default(), &ACE_DRAWS)
+                .0
+                .expect("boards");
+            let mut scripted = alongside(&catalog)
+                .with_set_ops(std::rc::Rc::new(crate::nova_set_ops()))
+                .with_outfit_rules(rules);
+            let expr = crate::control::SetExpr::parse("G200").expect("parses");
+            scripted.run_set(&expr, &mut Draws::of(&[]));
+            let owned = u16::from(fits);
+            assert_eq!(
+                boarded.pilot().owned(OutfitId(200)),
+                owned,
+                "boarded {mass}"
+            );
+            assert_eq!(scripted.pilot().owned(OutfitId(200)), owned, "G {mass}");
+        }
+    }
+
+    #[test]
+    fn boarding_a_person_granting_a_map_explores_and_adds_nothing() {
+        let mut catalog = granting();
+        booster(&mut catalog).mods = [(crate::outfit_effects::MAP, 1), (0, 0), (0, 0), (0, 0)];
+        let mut session = alongside_ace(&catalog);
+        let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert!(boarded.is_ok());
+        assert_eq!(session.pilot().owned(OutfitId(200)), 0);
+        assert!(session.pilot().has_explored(SystemId(131)), "a jump away");
+        assert_eq!(
+            session.take_grant(),
+            Some(Granted {
+                outfit: OutfitId(200),
+                count: 2,
+            }),
+            "it is still told"
+        );
     }
 
     #[test]
@@ -12705,6 +13355,55 @@ mod tests {
             session.enter_wormhole(&catalog, &mut chance),
             Err(GateRefusal::NotAtGate)
         );
+    }
+
+    /// Holds `P300` in `session`, by the engine's `script_sound` reading.
+    fn hold_p300(session: &mut Session) {
+        session.run_set(
+            &crate::control::SetExpr::parse("P300").expect("parses"),
+            &mut Scripted::default(),
+        );
+    }
+
+    /// The first flight tick after a gate exit sounds the held `P300`, as
+    /// the original's gate exits (`_PlayerEnterHypergate` @0x637bf,
+    /// `_PlayerEnterWormhole` @0x64005) leave `_missionSoundID` alone.
+    fn assert_held_sound_plays_next_tick(session: &mut Session) {
+        assert_eq!(session.take_sounds(), [SimSound::Arrived], "not yet");
+        session.tick(Controls::default());
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::Script {
+                sound: SoundId(300),
+                exclusive: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_held_sound_outlives_a_wormhole_exit() {
+        let catalog = wormholes();
+        let mut session = at_wormhole(&catalog);
+        session.take_sounds();
+        hold_p300(&mut session);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[0])),
+            Ok(SystemId(131))
+        );
+        assert_held_sound_plays_next_tick(&mut session);
+    }
+
+    #[test]
+    fn by_the_engine_a_held_sound_outlives_a_hypergate_exit() {
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        session.take_sounds();
+        hold_p300(&mut session);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default()),
+            Ok(SystemId(131))
+        );
+        assert_held_sound_plays_next_tick(&mut session);
     }
 
     #[test]

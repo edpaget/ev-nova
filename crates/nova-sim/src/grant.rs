@@ -32,21 +32,22 @@
 //! 5. *`Max`*, as [`RuleKey::GrantMax`](crate::RuleKey::GrantMax) says:
 //!    by the engine the count is not held to the outfit's `Max`, so a
 //!    grant may pass it; otherwise it is held to `Max` less the owned.
-//! 6. *Room* ([`fit_count`]): while the count times the outfit's raw
-//!    `Mass` (not scaled by its `Flags` 0x0400) is above the free mass,
-//!    taken as none when below none, the count drops by one. At none,
-//!    nothing is granted and nothing said.
+//! 6. *Room* ([`fit_count`]): while the count times the outfit's mass is
+//!    above the free mass, taken as none when below none, the count drops
+//!    by one. At none, nothing is granted and nothing said. By the engine
+//!    the mass is the raw `Mass`, not scaled by its `Flags` 0x0400, as
+//!    the original weighs it; otherwise it is the outfitter's scaled mass,
+//!    as `G` weighs it too ([`held_to_max`] holds both to steps 5 and 6).
 //!
-//! The outfits granted are added as bought ones are, and the ship is
-//! refitted with them; a grant ignores `Flags` 0x0010 ("remove after
-//! purchase") and makes no save due. The flight says what was granted.
-//!
-//! **Deferred**: the original's `_GrantOutfitItem` (@0x44d4f), which the
-//! outfitter's purchases also go through, explores the map for an outfit
-//! of `ModType` 16, clears the legal record for 21 and paints the ship for
-//! 43, instead of adding it. Here, as in the outfitter, they are added as
-//! plain items (rdm task `outfit-mod-type-effects`); stock Dr Ralph's map
-//! is one. The sound the original plays with the message is deferred too.
+//! Each outfit granted goes through the grant path the outfitter's
+//! purchases take, once a unit (`_GrantOutfitItem` @0x44d4f, called from
+//! @0x93216): a map (`ModType` 16) explores, an outfit of `ModType` 21
+//! cleans the legal record and one of 43 paints the ship instead of being
+//! added (see [`outfit_effects`](crate::outfit_effects)); anything else is
+//! added. The ship is then refitted once. A grant ignores `Flags` 0x0010
+//! ("remove after purchase") and makes no save due. The flight says what
+//! was granted, a map's grant too. The sound the original plays with the
+//! message is deferred.
 //!
 //! The values are defaults, not a contract.
 
@@ -106,6 +107,10 @@ pub struct GrantStock {
     pub item_class: i16,
     /// Its `Mass`, raw: not scaled by its `Flags` 0x0400.
     pub mass: i16,
+    /// Its mass for one as the outfitter weighs it on the player's ship
+    /// ([`unit_mass`](crate::outfitter::unit_mass)): scaled by its
+    /// `Flags` 0x0400.
+    pub unit_mass: i64,
     /// How many the player owns.
     pub owned: u16,
     /// Its `Max`, as `ModType` 27 raises it (see
@@ -154,15 +159,45 @@ pub fn phase_count(count: u16, chance: &mut dyn Chance) -> u16 {
 /// weigh more than `free_mass`, taken as none when below none
 /// (@0x931f2-0x9320e, `_ShipFreeMass` @0xb506).
 #[must_use]
-pub fn fit_count(count: u16, mass: i16, free_mass: i64) -> u16 {
+pub fn fit_count(count: u16, mass: i64, free_mass: i64) -> u16 {
     let free = free_mass.max(0);
     let mut count = count;
     // At none the outfits weigh nothing, which the free mass (none or
     // more) always covers, so the loop ends there.
-    while i64::from(mass) * i64::from(count) > free {
+    while mass * i64::from(count) > free {
         count -= 1;
     }
     count
+}
+
+/// How many of `count` of `outfit` a grant may add with `free_mass` free,
+/// as [`RuleKey::GrantMax`](crate::RuleKey::GrantMax) (`rule`) says: the
+/// one check a boarding grant ([`roll`]) and `G`
+/// ([`OutfitRules`](crate::OutfitRules)) both hold a grant to.
+///
+/// By the engine, none: `GrantMax` holds no grant, and each path keeps
+/// the original's own rule (boarding fits its count to the raw `Mass`,
+/// [`fit_count`]; `G` checks nothing). Otherwise the count is held to
+/// the outfit's `Max` less the owned (none when it owns `Max` or more),
+/// then [fitted](fit_count) to the free mass by the outfit's
+/// [`unit_mass`](GrantStock::unit_mass), the mass the outfitter charges
+/// against the free mass for one, scaled by `Flags` 0x0400. The raw
+/// `Mass` the original's boarding weighs (@0x931fc) is not used here, so
+/// an outfit held to its `Max` fits the free mass by the same measure
+/// whichever path grants it, and the measure its purchase is held to.
+#[must_use]
+pub fn held_to_max(
+    rule: RuleSource,
+    count: u16,
+    outfit: &GrantStock,
+    free_mass: i64,
+) -> Option<u16> {
+    if rule == RuleSource::Engine {
+        return None;
+    }
+    let room = i32::from(outfit.max) - i32::from(outfit.owned);
+    let count = count.min(u16::try_from(room).unwrap_or(0));
+    Some(fit_count(count, outfit.unit_mass, free_mass))
 }
 
 /// What `grant` gives from `stock`, with `free_mass` free, its count
@@ -185,15 +220,12 @@ pub fn roll(
         many => many[chance.below(many.len() as u32) as usize],
     };
     let (count_rule, max_rule) = rules;
-    let mut count = match count_rule {
+    let count = match count_rule {
         RuleSource::Engine => engine_count(grant.count, chance),
         RuleSource::Bible => phase_count(grant.count, chance),
     };
-    if max_rule == RuleSource::Bible {
-        let room = i32::from(picked.max) - i32::from(picked.owned);
-        count = count.min(room as u16);
-    }
-    let count = fit_count(count, picked.mass, free_mass);
+    let count = held_to_max(max_rule, count, &picked, free_mass)
+        .unwrap_or_else(|| fit_count(count, i64::from(picked.mass), free_mass));
     (count > 0).then_some(Granted {
         outfit: picked.outfit,
         count,
@@ -262,6 +294,7 @@ mod tests {
             outfit: OutfitId(id),
             item_class,
             mass: 1,
+            unit_mass: 1,
             owned,
             max: 10,
         };
@@ -364,5 +397,45 @@ mod tests {
             ..ONE_OF_SEVEN
         };
         assert_eq!(rolled(none, &stock, 100, &[0]), (None, vec![100]));
+    }
+
+    /// Outfit 128 of `Mass` 20 raw and `unit_mass` as the outfitter
+    /// weighs it, `owned` of a `Max` of 10.
+    fn weighing(unit_mass: i64, owned: u16) -> GrantStock {
+        GrantStock {
+            outfit: OutfitId(128),
+            item_class: 7,
+            mass: 20,
+            unit_mass,
+            owned,
+            max: 10,
+        }
+    }
+
+    #[test]
+    fn by_the_engine_grant_max_holds_no_grant() {
+        assert_eq!(
+            held_to_max(RuleSource::Engine, 5, &weighing(99, 10), 0),
+            None
+        );
+    }
+
+    #[test]
+    fn otherwise_a_grant_is_held_to_the_max_less_the_owned() {
+        let held = |count, owned| held_to_max(RuleSource::Bible, count, &weighing(0, owned), 0);
+        assert_eq!(held(3, 9), Some(1));
+        assert_eq!(held(3, 7), Some(3), "room for all three");
+        assert_eq!(held(3, 10), Some(0), "at its Max");
+        assert_eq!(held(3, 12), Some(0), "past its Max");
+    }
+
+    #[test]
+    fn otherwise_a_grant_is_held_to_the_free_mass_as_the_outfitter_weighs_it() {
+        let held =
+            |unit_mass, free| held_to_max(RuleSource::Bible, 4, &weighing(unit_mass, 0), free);
+        assert_eq!(held(8, 30), Some(3), "8 tons each, not the raw 20");
+        assert_eq!(held(8, 32), Some(4));
+        assert_eq!(held(31, 30), Some(0));
+        assert_eq!(held(0, -5), Some(4), "a negative free mass is none");
     }
 }

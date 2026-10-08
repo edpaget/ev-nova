@@ -47,11 +47,42 @@
 //!
 //! A ship type with no record spawns nothing, a `Max` below `Min` gives
 //! `Min`, a negative count none, and a draw is never asked over 0.
+//!
+//! # `AppearOn`
+//!
+//! The `flët` and `shïp` `AppearOn` tests are asked through the
+//! [`ControlBits`](crate::ControlBits) port for the player's pilot, the
+//! [`Gate`] of the draw's [`PersonWorld`], when a ship spawns, so a bit
+//! set in flight counts from the next spawn. One that did not parse never
+//! holds. They are checked where the executable checks them, against the
+//! results `_PropagateMissionBitEffects` keeps (`shïp` @0x997e0, `flët`
+//! @0x9985a):
+//!
+//! - **A `düde`'s ship types** whose `AppearOn` does not hold are left out
+//!   of its `Probability` before the draw, as `_SelectShipFieldFromDude`
+//!   does (@0x662b, @0x6662, @0x66c7): the draw is over the rest's
+//!   weights, and a `düde` none of whose ship types may appear brings
+//!   nothing, with no ship drawn. This is the Bible's "will not show up in
+//!   dude resources". A ship type with no record stays in the weights.
+//! - **A fleet's escorts** of a ship type whose `AppearOn` does not hold
+//!   do not come; their count is drawn first (`_HyperSpawnFleet`
+//!   @0x42143, @0x4217f). Its lead comes whatever its ship type's
+//!   `AppearOn`, and a person's ship never reads it.
+//! - **A fleet** whose own `AppearOn` does not hold never comes, and draws
+//!   nothing ([`fleet`]). The `DudeTypes` fleets are picked among those
+//!   with a record whose `AppearOn` holds, against the odds of them all, as
+//!   `_SelectFleetFromSystem` does (@0x6884): when none may appear, the
+//!   arrival falls through to 0's case, as on a roll above the odds. A
+//!   `LinkSyst` slot whose fleet's `AppearOn` does not hold brings nothing
+//!   (`_SpawnFleet` @0x4275b, @0x428a5). The executable leaves such a
+//!   fleet out of the slots, and draws no slot when none is left; here the
+//!   slot is always drawn, whether or not any fleet links to the system.
 
 use std::collections::BTreeSet;
 
 use crate::catalog::{FleetId, GovtId, PersonId, ShipId};
 use crate::chance::Chance;
+use crate::control::Gate;
 use crate::flight::{ShipState, facing, heading_of};
 use crate::geometry::Vec2;
 use crate::person::{PersonRoll, PersonWorld, aggression_of};
@@ -150,9 +181,7 @@ impl<'a> PersonDraw<'a> {
                 person.linked
                     && record.ai_type > 0
                     && !self.world.gone.contains(id)
-                    // Control bits: every `ActiveOn` holds until
-                    // missions-and-storylines brings them.
-                    && self.world.control_bits.allows(&record.active_on)
+                    && self.world.allows(&record.active_on)
                     && !(arriving && person.derelict)
                     && !self.world.in_fleet(**id)
                     && !self.named_here(table, &record.name)
@@ -224,6 +253,7 @@ pub fn initial(
     draw: &mut PersonDraw,
     chance: &mut (impl Chance + ?Sized),
 ) -> Vec<NewShip> {
+    let gate = draw.world.gate();
     let mut out = Vec::new();
     for _ in 0..table.avg_ships {
         match draw.roll(table, false, chance) {
@@ -236,10 +266,10 @@ pub fn initial(
             PersonRoll::None => {}
         }
         if chance.below(FLEET_ODDS) < 1 {
-            link_fleet(table, chance, &mut out);
+            link_fleet(table, gate, chance, &mut out);
             continue;
         }
-        if let Some((ship, dude, ai_type, _)) = dude_ship(table, chance) {
+        if let Some((ship, dude, ai_type, _)) = dude_ship(table, gate, chance) {
             let state = in_system(chance);
             out.push(NewShip {
                 ship,
@@ -260,9 +290,7 @@ pub fn initial(
             continue;
         };
         let world = draw.world;
-        if world.gone.contains(&id)
-            || world.in_fleet(id)
-            || !world.control_bits.allows(&person.record.active_on)
+        if world.gone.contains(&id) || world.in_fleet(id) || !world.allows(&person.record.active_on)
         {
             continue;
         }
@@ -289,17 +317,19 @@ pub fn arrivals(
         return out;
     }
     match chance.below(ARRIVAL_ODDS) {
-        1 if named_fleet(table, chance, &mut out) => {}
+        1 if named_fleet(table, draw.world.gate(), chance, &mut out) => {}
         0 | 1 => hyper_ship(table, draw, chance, &mut out),
         _ => {}
     }
     out
 }
 
-/// Rolls for one of the fleets the system's `DudeTypes` name, and brings
-/// it in, added to `out`; whether the roll fired.
+/// Rolls for one of the fleets the system's `DudeTypes` name, picked
+/// among those with a record whose `AppearOn` holds by `gate`, and brings
+/// it in, added to `out`; whether a fleet was picked.
 fn named_fleet(
     table: &SpawnTable,
+    gate: Gate,
     chance: &mut (impl Chance + ?Sized),
     out: &mut Vec<NewShip>,
 ) -> bool {
@@ -310,9 +340,21 @@ fn named_fleet(
     if chance.below(PERCENT) + 1 > odds {
         return false;
     }
-    if let Some(id) = pick(&table.dude_fleets, chance) {
-        fleet(table, id, chance, out);
-    }
+    let appearing: Vec<(FleetId, u32)> = table
+        .dude_fleets
+        .iter()
+        .copied()
+        .filter(|(id, _)| {
+            table
+                .fleets
+                .get(id)
+                .is_some_and(|record| gate.allows(&record.appear_on))
+        })
+        .collect();
+    let Some(id) = pick(&appearing, chance) else {
+        return false;
+    };
+    fleet(table, id, gate, chance, out);
     true
 }
 
@@ -346,11 +388,12 @@ fn hyper_ship(
         PersonRoll::Empty => return,
         PersonRoll::None => {}
     }
+    let gate = draw.world.gate();
     if chance.below(FLEET_ODDS) < 1 {
-        link_fleet(table, chance, out);
+        link_fleet(table, gate, chance, out);
         return;
     }
-    if let Some((ship, dude, ai_type, kind)) = dude_ship(table, chance)
+    if let Some((ship, dude, ai_type, kind)) = dude_ship(table, gate, chance)
         && can_jump(kind)
     {
         let state = hyperspace_entry(chance);
@@ -369,15 +412,23 @@ fn hyper_ship(
     }
 }
 
-/// A `düde` ship: a `düde` by weight, a ship of it by `Probability`, and
-/// the `düde`, its AI and the ship's kind; `None` when either has no
-/// record.
+/// A `düde` ship: a `düde` by weight, a ship of it by `Probability`
+/// among those whose `AppearOn` holds by `gate`, and the `düde`, its AI
+/// and the ship's kind; `None` when either has no record, or no ship of
+/// the `düde` may appear.
 fn dude_ship<'a>(
     table: &'a SpawnTable,
+    gate: Gate,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<(ShipId, &'a SpawnDude, AiType, &'a ShipKind)> {
     let dude = table.dude_records.get(&pick(&table.dudes, chance)?)?;
-    let ship = pick(&dude.ships, chance)?;
+    let appearing: Vec<(ShipId, u32)> = dude
+        .ships
+        .iter()
+        .copied()
+        .filter(|(ship, _)| appears(table, *ship, gate))
+        .collect();
+    let ship = pick(&appearing, chance)?;
     let kind = table.ships.get(&ship)?;
     let ai_type = if dude.ai_type > 0 {
         dude.ai_type
@@ -388,23 +439,36 @@ fn dude_ship<'a>(
 }
 
 /// The `LinkSyst` fleet roll: one of 256 slots, and the fleet there, if
-/// its `LinkSyst` matches, added to `out`.
-pub fn link_fleet(table: &SpawnTable, chance: &mut (impl Chance + ?Sized), out: &mut Vec<NewShip>) {
-    let slot = chance.below(FLEET_SLOTS) as i16;
-    let id = FleetId(FIRST_FLEET_ID + slot);
-    if table.link_fleets.contains(&id) {
-        fleet(table, id, chance, out);
-    }
-}
-
-/// Fleet `id` jumping in, added to `out`: its lead, then its escorts.
-pub fn fleet(
+/// its `LinkSyst` matches and its `AppearOn` holds by `gate`, added to
+/// `out`.
+pub fn link_fleet(
     table: &SpawnTable,
-    id: FleetId,
+    gate: Gate,
     chance: &mut (impl Chance + ?Sized),
     out: &mut Vec<NewShip>,
 ) {
-    let Some(record) = table.fleets.get(&id) else {
+    let slot = chance.below(FLEET_SLOTS) as i16;
+    let id = FleetId(FIRST_FLEET_ID + slot);
+    if table.link_fleets.contains(&id) {
+        fleet(table, id, gate, chance, out);
+    }
+}
+
+/// Fleet `id` jumping in, added to `out`: its lead, then its escorts whose
+/// ship type's `AppearOn` holds by `gate`; nothing, and no draw, when the
+/// fleet's own `AppearOn` does not.
+pub fn fleet(
+    table: &SpawnTable,
+    id: FleetId,
+    gate: Gate,
+    chance: &mut (impl Chance + ?Sized),
+    out: &mut Vec<NewShip>,
+) {
+    let Some(record) = table
+        .fleets
+        .get(&id)
+        .filter(|record| gate.allows(&record.appear_on))
+    else {
         return;
     };
     let Some((lead_ship, kind)) = record
@@ -432,7 +496,11 @@ pub fn fleet(
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
-        let Some(kind) = table.ships.get(&escort.ship).filter(|kind| can_jump(kind)) else {
+        let Some(kind) = table
+            .ships
+            .get(&escort.ship)
+            .filter(|kind| can_jump(kind) && gate.allows(&kind.appear_on))
+        else {
             continue;
         };
         for _ in 0..count {
@@ -511,6 +579,15 @@ fn spread(spread: u32, chance: &mut (impl Chance + ?Sized)) -> f32 {
     chance.below(spread) as f32 - (spread / 2) as f32
 }
 
+/// Whether ship type `ship` may appear by `gate`: its `AppearOn` holds,
+/// or it has no record (and so spawns nothing).
+fn appears(table: &SpawnTable, ship: ShipId, gate: Gate) -> bool {
+    table
+        .ships
+        .get(&ship)
+        .is_none_or(|kind| gate.allows(&kind.appear_on))
+}
+
 /// Whether a ship of `kind` can come by hyperspace: it has fuel capacity.
 fn can_jump(kind: &ShipKind) -> bool {
     kind.stats.fuel > 0.0
@@ -525,12 +602,13 @@ mod tests {
     use crate::catalog::{DudeId, EscortRecord, FleetRecord};
     use crate::catalog::{PersonId, PersonRecord};
     use crate::combat::hull::Condition;
+    use crate::control::{ControlBits, PilotFacts};
+    use crate::control::{Test, TestExpr};
     use crate::handling::ShipFields;
-    use crate::hire::ControlBits;
     use crate::person::{NovaPersons, PersonWorld};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
-    use crate::testkit::{Draws, FAST, person};
+    use crate::testkit::{AllowAll, Draws, FAST, RefuseBits, person};
     use crate::traffic::table::SpawnPerson;
 
     /// The person draw of a world without persons gone or grudging, by
@@ -561,7 +639,7 @@ mod tests {
                 .collect(),
             govt: Some(GovtId(131)),
             link_syst: -1,
-            appear_on: String::new(),
+            appear_on: Test::default(),
         }
     }
 
@@ -980,7 +1058,7 @@ mod tests {
             .insert(FleetId(141), fleet_record(141, 203, &[(202, 2, 2)]));
         let mut out = Vec::new();
         let mut chance = Draws::of(&[]);
-        fleet(&table, FleetId(141), &mut chance, &mut out);
+        fleet(&table, FleetId(141), Gate::FRESH, &mut chance, &mut out);
         assert_eq!(out, []);
         assert!(chance.asked.is_empty());
         // Nor such an escort, though its lead comes.
@@ -989,7 +1067,7 @@ mod tests {
             fleet_record(141, 200, &[(203, 2, 2), (999, 1, 1)]),
         );
         let mut chance = Draws::of(&[]);
-        fleet(&table, FleetId(141), &mut chance, &mut out);
+        fleet(&table, FleetId(141), Gate::FRESH, &mut chance, &mut out);
         assert_eq!(out.len(), 1);
         assert_eq!(chance.asked, [360, 3]);
     }
@@ -998,11 +1076,23 @@ mod tests {
     fn a_fleet_without_a_lead_or_a_record_does_not_come() {
         let mut table = table();
         let mut out = Vec::new();
-        fleet(&table, FleetId(150), &mut Draws::of(&[]), &mut out);
+        fleet(
+            &table,
+            FleetId(150),
+            Gate::FRESH,
+            &mut Draws::of(&[]),
+            &mut out,
+        );
         let mut leaderless = fleet_record(141, 200, &[(202, 2, 2)]);
         leaderless.lead = None;
         table.fleets.insert(FleetId(141), leaderless);
-        fleet(&table, FleetId(141), &mut Draws::of(&[]), &mut out);
+        fleet(
+            &table,
+            FleetId(141),
+            Gate::FRESH,
+            &mut Draws::of(&[]),
+            &mut out,
+        );
         assert_eq!(out, []);
     }
 
@@ -1012,13 +1102,13 @@ mod tests {
     fn the_linksyst_roll_hits_one_slot_in_256() {
         let mut out = Vec::new();
         let mut hit = Draws::of(&[13]);
-        link_fleet(&table(), &mut hit, &mut out);
+        link_fleet(&table(), Gate::FRESH, &mut hit, &mut out);
         assert_eq!(out.len(), 3, "fleet 141");
         assert_eq!(hit.asked[0], 256);
         let mut out = Vec::new();
         for slot in [12, 0, 255] {
             let mut miss = Draws::of(&[slot]);
-            link_fleet(&table(), &mut miss, &mut out);
+            link_fleet(&table(), Gate::FRESH, &mut miss, &mut out);
             assert_eq!(miss.asked, [256], "{slot}");
         }
         assert_eq!(out, [], "fleet 140 is named, not linked");
@@ -1027,7 +1117,13 @@ mod tests {
     #[test]
     fn a_fleets_escorts_follow_the_index_of_their_lead_among_the_ships_added() {
         let mut out = vec![initial(&one_pass(), &mut nobody(), &mut crate::NeverFires)[0]];
-        fleet(&table(), FleetId(141), &mut crate::NeverFires, &mut out);
+        fleet(
+            &table(),
+            FleetId(141),
+            Gate::FRESH,
+            &mut crate::NeverFires,
+            &mut out,
+        );
         assert_eq!(out.len(), 4);
         assert_eq!(
             out.iter().map(|ship| ship.lead).collect::<Vec<_>>(),
@@ -1051,6 +1147,211 @@ mod tests {
         let mut chance = Draws::of(&[1]);
         assert_eq!(escort_count(-2, 1, &mut chance), 1, "none below none");
         assert_eq!(chance.asked, [2]);
+    }
+
+    // AppearOn.
+
+    /// The person draw of a world whose control bits refuse bit 7.
+    fn refusing_7() -> PersonDraw<'static> {
+        PersonDraw::new(PersonWorld {
+            control_bits: &RefuseBits(&[7]),
+            ..PersonWorld::NONE
+        })
+    }
+
+    /// The person draw of a world whose control bits hold every test.
+    fn allowing() -> PersonDraw<'static> {
+        PersonDraw::new(PersonWorld {
+            control_bits: &AllowAll,
+            ..PersonWorld::NONE
+        })
+    }
+
+    /// [`one_pass`] with ship `id`'s `AppearOn` `appear_on`.
+    fn appearing(mut table: SpawnTable, id: i16, appear_on: &str) -> SpawnTable {
+        table.ships.get_mut(&ShipId(id)).expect("a kind").appear_on = Test::parse(appear_on);
+        table
+    }
+
+    #[test]
+    fn a_dude_ship_type_whose_appear_on_is_refused_is_dropped_before_the_draw() {
+        // `_SelectShipFieldFromDude` sums only the ship types whose
+        // AppearOn holds: Rand(50), and ship 200 (@0x662b, @0x66c7).
+        let gated = appearing(one_pass(), 201, "b7");
+        let mut chance = Draws::of(&[6, 6, 0, 49, 0, 0, 0]);
+        let ships = initial(&gated, &mut refusing_7(), &mut chance);
+        assert_eq!(chance.asked, [7, 7, 100, 50, 1500, 1500, 360, 3]);
+        assert_eq!(
+            ships.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
+            [ShipId(200)]
+        );
+        // On arrival too.
+        let gated = appearing(table(), 201, "b7");
+        let mut chance = Draws::of(&[0, 6, 6, 0, 49, 0, 0]);
+        let ships = arrivals(&gated, 0, &mut refusing_7(), &mut chance);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 50, 360, 3]);
+        assert_eq!(
+            ships.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
+            [ShipId(200)]
+        );
+        // Under a new pilot's bits, bit 7 is clear too.
+        let gated = appearing(one_pass(), 201, "b7");
+        let mut chance = Draws::of(&[6, 6, 0, 49, 0, 0, 0]);
+        initial(&gated, &mut nobody(), &mut chance);
+        assert_eq!(chance.asked[3], 50);
+    }
+
+    #[test]
+    fn a_dude_whose_every_ship_type_is_refused_brings_nothing() {
+        let gated = appearing(appearing(one_pass(), 200, "b7"), 201, "!b7");
+        let mut chance = Draws::of(&[6, 6, 0]);
+        assert_eq!(initial(&gated, &mut refusing_7(), &mut chance), []);
+        assert_eq!(chance.asked, [7, 7, 100], "no ship drawn");
+        let gated = appearing(appearing(table(), 200, "b7"), 201, "b7");
+        let mut chance = Draws::of(&[0, 6, 6, 0]);
+        assert_eq!(arrivals(&gated, 0, &mut refusing_7(), &mut chance), []);
+        assert_eq!(chance.asked, [500, 7, 7, 100]);
+    }
+
+    #[test]
+    fn a_dude_ship_type_with_a_malformed_appear_on_never_comes() {
+        let gated = appearing(one_pass(), 200, "b1 &");
+        let mut chance = Draws::of(&[6, 6, 0, 0, 0, 0, 0]);
+        let ships = initial(&gated, &mut allowing(), &mut chance);
+        assert_eq!(chance.asked[3], 50);
+        assert_eq!(ships[0].ship, ShipId(201));
+    }
+
+    #[test]
+    fn a_fleets_lead_comes_whatever_its_ship_types_appear_on() {
+        // `_HyperSpawnFleet` tests no AppearOn of the lead's ship type.
+        let gated = appearing(table(), 200, "b7");
+        let mut out = Vec::new();
+        let gate = refusing_7().world.gate();
+        fleet(&gated, FleetId(141), gate, &mut crate::NeverFires, &mut out);
+        assert_eq!(out.len(), 3, "the lead and its two escorts");
+    }
+
+    #[test]
+    fn a_fleet_escort_type_whose_appear_on_is_refused_does_not_come() {
+        // Its count is drawn, then its ship type's AppearOn tested
+        // (`_HyperSpawnFleet` @0x42143, @0x4217f).
+        let gated = appearing(table(), 202, "b7");
+        let gate = refusing_7().world.gate();
+        let mut out = Vec::new();
+        let mut chance = Draws::of(&[0, 0, 2]);
+        fleet(&gated, FleetId(140), gate, &mut chance, &mut out);
+        assert_eq!(chance.asked, [360, 3, 3], "the lead, then the count");
+        assert_eq!(
+            out.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
+            [ShipId(201)]
+        );
+        let malformed = appearing(gated, 202, "b1 &");
+        let mut out = Vec::new();
+        fleet(
+            &malformed,
+            FleetId(140),
+            allowing().world.gate(),
+            &mut crate::NeverFires,
+            &mut out,
+        );
+        assert_eq!(out.len(), 1);
+    }
+
+    /// [`table`] with fleet `id`'s `AppearOn` `appear_on`.
+    fn fleet_appearing(mut table: SpawnTable, id: i16, appear_on: &str) -> SpawnTable {
+        table
+            .fleets
+            .get_mut(&FleetId(id))
+            .expect("a fleet")
+            .appear_on = Test::parse(appear_on);
+        table
+    }
+
+    #[test]
+    fn a_fleet_whose_appear_on_is_refused_brings_nothing_and_draws_nothing() {
+        let gated = fleet_appearing(table(), 141, "b7");
+        let mut out = Vec::new();
+        let mut chance = Draws::of(&[]);
+        fleet(
+            &gated,
+            FleetId(141),
+            refusing_7().world.gate(),
+            &mut chance,
+            &mut out,
+        );
+        assert_eq!(out, []);
+        assert!(chance.asked.is_empty());
+        fleet(&gated, FleetId(141), Gate::FRESH, &mut chance, &mut out);
+        assert_eq!(out, [], "bit 7 is clear");
+        let malformed = fleet_appearing(gated, 141, "b1 &");
+        fleet(
+            &malformed,
+            FleetId(141),
+            allowing().world.gate(),
+            &mut chance,
+            &mut out,
+        );
+        assert_eq!(out, []);
+        assert!(chance.asked.is_empty());
+    }
+
+    #[test]
+    fn a_linksyst_slot_whose_fleets_appear_on_is_refused_brings_nothing() {
+        let gated = fleet_appearing(table(), 141, "b7");
+        let mut out = Vec::new();
+        let mut hit = Draws::of(&[13]);
+        link_fleet(&gated, refusing_7().world.gate(), &mut hit, &mut out);
+        assert_eq!(hit.asked, [256]);
+        assert_eq!(out, []);
+        // At setup, the pass brings nothing more.
+        let mut chance = Draws::of(&[6, 0, 13]);
+        assert_eq!(
+            initial(
+                &SpawnTable {
+                    avg_ships: 1,
+                    ..gated
+                },
+                &mut refusing_7(),
+                &mut chance
+            ),
+            []
+        );
+        assert_eq!(chance.asked, [7, 7, 256]);
+    }
+
+    #[test]
+    fn named_fleets_whose_appear_on_is_refused_are_dropped_before_the_pick() {
+        // `_SelectFleetFromSystem` sums only the fleets whose AppearOn holds
+        // (@0x6884), against the odds of them all: 30 + 20 = 50, Rand(20).
+        let mut gated = fleet_appearing(table(), 140, "b7");
+        gated.dude_fleets.push((FleetId(141), 20));
+        let mut chance = Draws::of(&[1, 49, 19, 0, 0]);
+        let ships = arrivals(&gated, 0, &mut refusing_7(), &mut chance);
+        assert_eq!(&chance.asked[..4], [500, 100, 20, 360]);
+        assert_eq!(ships[0].ship, ShipId(200), "fleet 141's lead");
+    }
+
+    #[test]
+    fn when_every_named_fleet_is_refused_the_arrival_falls_through_to_0s_case() {
+        // `_EnterMoreShips` goes on to a düde when no fleet is picked.
+        let gated = fleet_appearing(table(), 140, "b7");
+        let mut chance = Draws::of(&[1, 0, 6, 6, 0, 0, 0]);
+        let ships = arrivals(&gated, 0, &mut refusing_7(), &mut chance);
+        assert_eq!(chance.asked, [500, 100, 7, 7, 100, 100, 360, 3]);
+        assert_eq!(ships.len(), 1, "a düde ship");
+        let malformed = fleet_appearing(gated, 140, "b1 &");
+        let mut chance = Draws::of(&[1, 0, 0]);
+        assert_eq!(arrivals(&malformed, 0, &mut allowing(), &mut chance), []);
+        assert_eq!(chance.asked, [500, 100, 7]);
+        // A named fleet with no record is not picked either.
+        let unread = SpawnTable {
+            dude_fleets: vec![(FleetId(150), 30)],
+            ..table()
+        };
+        let mut chance = Draws::of(&[1, 0, 0]);
+        assert_eq!(arrivals(&unread, 0, &mut nobody(), &mut chance), []);
+        assert_eq!(chance.asked, [500, 100, 7]);
     }
 
     // Aggression.
@@ -1078,7 +1379,7 @@ mod tests {
         // escorts, each placed and then its aggression drawn (0, then 2).
         let mut out = Vec::new();
         let mut chance = Draws::of(&[0, 1, 150, 150, 2, 150, 150, 0]);
-        fleet(&table(), FleetId(141), &mut chance, &mut out);
+        fleet(&table(), FleetId(141), Gate::FRESH, &mut chance, &mut out);
         assert_eq!(chance.asked, [360, 3, 300, 300, 3, 300, 300, 3]);
         assert_eq!(
             out.iter().map(|ship| ship.aggression).collect::<Vec<_>>(),
@@ -1172,13 +1473,13 @@ mod tests {
         }
     }
 
-    /// Lets every expression hold but `refused`.
+    /// Refuses every test that reads its bit.
     #[derive(Debug)]
-    struct Refusing(&'static str);
+    struct Refusing(u16);
 
     impl ControlBits for Refusing {
-        fn allows(&self, expression: &str) -> bool {
-            expression != self.0
+        fn allows(&self, test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
+            !test.reads().iter().any(|bit| bit.get() == self.0)
         }
     }
 
@@ -1256,8 +1557,8 @@ mod tests {
             .get_mut(&PersonId(510))
             .expect("there")
             .record
-            .active_on = "b8".to_owned();
-        let refusing = Refusing("b8");
+            .active_on = Test::parse("b8");
+        let refusing = Refusing(8);
         let world = PersonWorld {
             control_bits: &refusing,
             ..PersonWorld::NONE
@@ -1335,8 +1636,8 @@ mod tests {
             .get_mut(&PersonId(600))
             .expect("there")
             .record
-            .active_on = "b9".to_owned();
-        let refusing = Refusing("b9");
+            .active_on = Test::parse("b9");
+        let refusing = Refusing(9);
         let world = PersonWorld {
             control_bits: &refusing,
             ..PersonWorld::NONE

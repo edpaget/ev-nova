@@ -47,7 +47,8 @@
 //! "128-2175 system ID, 10000+ government") stay raw integers with the
 //! encoding documented; decoding them is left to later work. A field becomes
 //! an ID newtype only when it is a plain reference to another resource.
-//! Control-bit expressions are kept as text.
+//! Control-bit expressions are kept as the text the records store;
+//! [`expr`] parses them.
 //!
 //! # Record types
 //!
@@ -89,6 +90,12 @@
 //! - `csüm`: neither the Bible nor the templates describe it; the stock data
 //!   holds one 4-byte resource that looks like a checksum.
 //! - `vers`: Mac OS version information, absent from the stock data.
+//!
+//! # Control-bit expressions
+//!
+//! [`expr`] parses the test and set expressions that script missions and
+//! availability into trees, and [`check_expressions`] reports every one in
+//! a [`GameData`] that does not parse.
 //!
 //! # Pictures and sprites
 //!
@@ -139,6 +146,7 @@
 
 pub mod decode;
 pub mod error;
+pub mod expr;
 pub mod file;
 pub mod fonts;
 pub mod graphics;
@@ -156,13 +164,18 @@ mod testutil;
 
 pub use decode::{Decoded, Entry, Record, TypedReport, decode, decode_all, decode_bytes};
 pub use error::{Cause, DecodeError, DecodeWarning, FieldError, FieldPath};
+pub use expr::{
+    Bit, BitWrite, Comparison, CountTerm, EXPR_FIELDS, ExprError, ExprField, ExprKind, ParseError,
+    ParseErrorKind, SetExpr, SetOp, SetOpKind, TestExpr, TestOperand, check_expressions,
+};
 pub use file::{FileReport, OUT_OF_SCOPE, decode_file};
 pub use registry::{AnyDecoded, AnyRecord, Registered, TYPES, decode_any};
 pub use store::{
     FailedFile, GameData, IgnoredEntry, InterfaceData, LayerError, LayerSprite, NoInterfaceFile,
-    OpenError, Origin, Provenance, ShipLayer, ShipLayers, ShipSprite, SourceFile, SpinSheet,
-    SpinSpriteError, SpriteError, StellarSprite, StellarSpriteError, StoreEntry, StoreResource,
-    interface_path_candidates, load_interface, open_interface, ship_desc_id, stellar_spin_id,
+    OpenError, Origin, ParsedSet, ParsedTest, Provenance, ShipLayer, ShipLayers, ShipSprite,
+    SourceFile, SpinSheet, SpinSpriteError, SpriteError, StellarSprite, StellarSpriteError,
+    StoreEntry, StoreResource, interface_path_candidates, load_interface, open_interface,
+    ship_desc_id, stellar_spin_id,
 };
 pub use wire::flags::{Flags16, Flags32, Flags64};
 pub use wire::geometry::{Point, Rect};

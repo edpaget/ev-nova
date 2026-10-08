@@ -655,15 +655,16 @@ mod tests {
     #[test]
     fn with_no_target_or_while_landed_jumping_or_dying_nothing_is_hailed() {
         let catalog = hailable();
-        let mut untargeted = targeting(&catalog);
+        // Boxed: five sessions are too large for the stack together.
+        let mut untargeted = Box::new(targeting(&catalog));
         untargeted.target = None;
-        let mut landed = targeting(&catalog);
+        let mut landed = Box::new(targeting(&catalog));
         landed.landed = Some(StellarId(128));
-        let mut jumping = targeting(&catalog);
+        let mut jumping = Box::new(targeting(&catalog));
         jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
-        let mut dying = targeting(&catalog);
+        let mut dying = Box::new(targeting(&catalog));
         dying.condition = Condition::Dying { ticks_left: 3 };
-        let mut destroyed = targeting(&catalog);
+        let mut destroyed = Box::new(targeting(&catalog));
         destroyed.condition = Condition::Destroyed;
         for mut session in [untargeted, landed, jumping, dying, destroyed] {
             let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));

@@ -60,9 +60,22 @@
 //! as the original's rows 6 and 7 are filled independently: first the
 //! `BoughtAt` row at the high price, then the `SoldAt` row at the low
 //! price, both under its name and with the tons held (@0x5dd83-0x5de2f,
-//! @0x4d301-0x4d36c). `SellOn` gates the `SoldAt` row and `BuyOn` the
-//! `BoughtAt` row, through [`control_bits_allow`]. Its `Flags` make it
-//! multiply or decay in the hold (below).
+//! @0x4d301-0x4d36c). Its `Flags` make it multiply or decay in the hold
+//! (below).
+//!
+//! Its two control-bit tests, asked through the
+//! [`ControlBits`](crate::ControlBits) port for the player's pilot (a
+//! [`Gate`]), go by the stellar's side, as the field names `SoldAt` and
+//! `BoughtAt` do: `SellOn` gates the stellar selling it, its `SoldAt`
+//! row, and `BuyOn` the stellar buying it, its `BoughtAt` row. That is the
+//! executable's pairing: `_DoTradeDialog` tests `BuyOn` for a `BoughtAt`
+//! stellar (@0x5dda8, at the high price) and `SellOn` for a `SoldAt` one
+//! (@0x5de58, at the low price), the tests `_LoadObjectData` copies from
+//! the record's `BuyOn` and `SellOn` (@0x7d5e5, @0x7d603). The Bible's
+//! "available to be bought" and "able to be sold" read the same way from
+//! the stellar's side. A row whose test does not hold is not listed, so a
+//! `jünk` listed both ways keeps only its other row; a test that did not
+//! parse never holds.
 //!
 //! Which ways a `jünk` row trades follows
 //! [`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade). By the engine (the
@@ -131,7 +144,14 @@
 //! stellar to start at, a `Freq` above 0, a `Duration` above 0, a
 //! standard commodity and an `ActivateOn` that holds, starts with
 //! `Duration` days left if a `Freq` % [`Chance`] fires. So an event is
-//! active for `Duration` days.
+//! active for `Duration` days. `ActivateOn` is asked through the
+//! [`ControlBits`](crate::ControlBits) port for the player's pilot (a
+//! [`Gate`]); one that did not parse never holds. The original rolls
+//! `Freq` before it tests `ActivateOn` (`_DisasterHandler` @0x41b0f,
+//! @0x41b2c); either order starts an event with the same chance, and
+//! here an event that cannot start asks no draw, whatever stops it. An
+//! event already active runs out its days when its `ActivateOn` stops
+//! holding.
 //!
 //! An active event moves its commodity's price at its stellar as
 //! [`RuleKey::EventPrice`](crate::RuleKey::EventPrice) says. By the
@@ -213,6 +233,7 @@ use crate::catalog::{
     StringPatch,
 };
 use crate::chance::Chance;
+use crate::control::Gate;
 use crate::fuel::OutfitMod;
 use crate::landing::StellarFlags;
 use crate::pilot::Pilot;
@@ -505,17 +526,6 @@ pub fn escort_tons(escorts: impl IntoIterator<Item = EscortHolds>) -> i64 {
 pub fn fleet_holds(ship: u32, escorts: impl IntoIterator<Item = EscortHolds>) -> u32 {
     let tons = (i64::from(ship) + escort_tons(escorts)).min(i64::from(MAX_FLEET_HOLDS));
     u32::try_from(tons).unwrap_or(MAX_FLEET_HOLDS)
-}
-
-/// Whether a control-bit test `expression` holds.
-///
-/// Always true for now: there are no control bits until rdm
-/// `roadmap/missions-and-storylines` builds them, and this is the one
-/// place every `öops` `ActivateOn`, `jünk` `BuyOn`/`SellOn`, and `oütf`
-/// and `shïp` `Availability` is tested, so that roadmap replaces it here.
-#[must_use]
-pub fn control_bits_allow(_expression: &str) -> bool {
-    true
 }
 
 /// The standard commodities, every one of them, by number, from
@@ -938,14 +948,17 @@ pub(crate) struct ExchangeRules {
 }
 
 /// The exchange of `stellar`, with these `flags`, for `pilot` with
-/// `capacity` tons of cargo space, priced by `rules`, its low and high
-/// prices by `markup`; `None` without a trade center.
+/// `capacity` tons of cargo space, its `jünk` tests asked of `gate`,
+/// priced by `rules`, its low and high prices by `markup`; `None` without
+/// a trade center.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn market(
     goods: &Goods,
     stellar: StellarId,
     flags: u32,
     pilot: &Pilot,
     capacity: u32,
+    gate: Gate,
     rules: ExchangeRules,
     markup: Markup,
 ) -> Option<Market> {
@@ -998,7 +1011,7 @@ pub(crate) fn market(
             }
         }
     }
-    rows.extend(junk_listing(goods, stellar, rules, markup));
+    rows.extend(junk_listing(goods, stellar, gate, rules, markup));
     rows.sort_by_key(|row| row.good);
     for row in &mut rows {
         row.held = pilot.held(row.good);
@@ -1020,22 +1033,23 @@ pub(crate) fn market(
     })
 }
 
-/// The `jünk` rows `stellar` lists, priced by `markup` and as
-/// `rules.junk_price` says, traded as `rules.junk_trade` says. A `jünk`
-/// the stellar both buys and sells has a row each way, the bought one
-/// first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f). By the engine
-/// a row priced 0 is not listed, each way on its own (`_TradeDialogUpdate`
-/// @0x4d2a2-0x4d2ac).
-fn junk_listing(
-    goods: &Goods,
+/// The `jünk` rows `stellar` lists, its tests asked of `gate`, priced by
+/// `markup` and as `rules.junk_price` says, traded as `rules.junk_trade`
+/// says. A `jünk` the stellar both buys and sells has a row each way, the
+/// bought one first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f).
+/// By the engine a row priced 0 is not listed, each way on its own
+/// (`_TradeDialogUpdate` @0x4d2a2-0x4d2ac).
+fn junk_listing<'a>(
+    goods: &'a Goods,
     stellar: StellarId,
+    gate: Gate<'a>,
     rules: ExchangeRules,
     markup: Markup,
-) -> impl Iterator<Item = MarketRow> + '_ {
+) -> impl Iterator<Item = MarketRow> + 'a {
     let (high_ways, low_ways) = junk_ways(rules.junk_trade);
     goods.junk.iter().flat_map(move |junk| {
-        let bought = junk.bought_at.contains(&stellar) && control_bits_allow(&junk.buy_on);
-        let sold = junk.sold_at.contains(&stellar) && control_bits_allow(&junk.sell_on);
+        let bought = junk.bought_at.contains(&stellar) && gate.allows(&junk.buy_on);
+        let sold = junk.sold_at.contains(&stellar) && gate.allows(&junk.sell_on);
         let row = |level, ways| {
             let price = listed_junk_price(
                 band_price(i64::from(junk.base_price), level, markup),
@@ -1170,7 +1184,7 @@ pub(crate) struct ActiveEvent {
     /// The days it has left.
     pub(crate) days: u16,
     /// The stellar it is at; `None` for its record's own `Stellar`, which
-    /// only a save from before version 13 holds.
+    /// only a save from before version 15 holds.
     pub(crate) stellar: Option<StellarId>,
 }
 
@@ -1180,13 +1194,14 @@ fn place(active: ActiveEvent, event: &DisasterRecord) -> Option<StellarId> {
     active.stellar.or_else(|| fixed_stellar(event.stellar))
 }
 
-/// One day's events: the active ones age, and each that can start is
-/// rolled once on `chance`. An event that had days left this morning is
-/// not rolled today, even if it ends today (`_DisasterHandler`
-/// @0x41add-0x41ae7).
+/// One day's events: the active ones age, and each that can start, its
+/// `ActivateOn` asked of `gate`, is rolled once on `chance`. An event
+/// that had days left this morning is not rolled today, even if it ends
+/// today (`_DisasterHandler` @0x41add-0x41ae7).
 pub(crate) fn step_day(
     goods: &Goods,
     events: &mut BTreeMap<DisasterId, ActiveEvent>,
+    gate: Gate,
     chance: &mut (impl Chance + ?Sized),
 ) {
     let aging: Vec<DisasterId> = events
@@ -1209,7 +1224,7 @@ pub(crate) fn step_day(
             && event.freq > 0
             && event.duration > 0
             && standard(event.commodity).is_some()
-            && control_bits_allow(&event.activate_on);
+            && gate.allows(&event.activate_on);
         if !can_start {
             continue;
         }
@@ -1366,7 +1381,8 @@ pub(crate) fn step_junk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{Scripted, catalog};
+    use crate::control::{Gate, Test};
+    use crate::testkit::{AllowAll, RefuseBits, Scripted, catalog};
 
     // Price levels and prices.
 
@@ -1614,15 +1630,6 @@ mod tests {
             2 * i64::from(i16::MAX),
             "past 32000"
         );
-    }
-
-    // Control bits.
-
-    #[test]
-    fn every_control_bit_expression_holds_until_there_are_control_bits() {
-        for expression in ["", "b43", "!b80", "b1 & (b2 | !b3)"] {
-            assert!(control_bits_allow(expression), "{expression}");
-        }
     }
 
     // Commodities.
@@ -2001,8 +2008,8 @@ mod tests {
             base_price: 0,
             sold_at: Vec::new(),
             bought_at: Vec::new(),
-            buy_on: String::new(),
-            sell_on: String::new(),
+            buy_on: Test::default(),
+            sell_on: Test::default(),
             flags: 0,
         }
     }
@@ -2041,7 +2048,7 @@ mod tests {
                 price_delta,
                 duration,
                 freq,
-                activate_on: String::new(),
+                activate_on: Test::default(),
             };
         vec![
             event(128, "An enormous food surplus", 140, 0, -15, 30, 35),
@@ -2092,6 +2099,7 @@ mod tests {
                 flags,
                 &pilot(0),
                 10,
+                Gate::FRESH,
                 rules(RuleSource::Engine),
                 Markup::Standard
             ),
@@ -2104,6 +2112,7 @@ mod tests {
                 0,
                 &pilot(0),
                 10,
+                Gate::FRESH,
                 rules(RuleSource::Engine),
                 Markup::Standard
             ),
@@ -2120,6 +2129,7 @@ mod tests {
                 PORT_KANE,
                 &pilot(500),
                 10,
+                Gate::FRESH,
                 ExchangeRules {
                     trade_lot,
                     ..ExchangeRules::default()
@@ -2140,6 +2150,7 @@ mod tests {
                 PORT_KANE,
                 &pilot(500),
                 10,
+                Gate::FRESH,
                 ExchangeRules {
                     trade_quotient,
                     ..ExchangeRules::default()
@@ -2160,6 +2171,7 @@ mod tests {
                 PORT_KANE,
                 &pilot(500),
                 10,
+                Gate::FRESH,
                 ExchangeRules {
                     trade_count,
                     ..ExchangeRules::default()
@@ -2180,6 +2192,7 @@ mod tests {
                 PORT_KANE,
                 &pilot(500),
                 10,
+                Gate::FRESH,
                 ExchangeRules {
                     trade_debt,
                     ..ExchangeRules::default()
@@ -2200,6 +2213,7 @@ mod tests {
             flags,
             &pilot(500),
             10,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2232,6 +2246,7 @@ mod tests {
             some,
             &pilot(0),
             0,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2249,6 +2264,7 @@ mod tests {
             TRADE,
             &pilot(0),
             0,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2264,6 +2280,7 @@ mod tests {
             TRADE,
             &pilot(0),
             0,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2282,6 +2299,7 @@ mod tests {
             TRADE,
             &pilot(0),
             0,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2293,6 +2311,7 @@ mod tests {
             TRADE,
             &pilot(0),
             0,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2319,6 +2338,7 @@ mod tests {
                 TRADE,
                 &pilot(0),
                 0,
+                Gate::FRESH,
                 rules,
                 Markup::Standard,
             )
@@ -2356,6 +2376,7 @@ mod tests {
                 PORT_KANE,
                 &pilot(0),
                 0,
+                Gate::FRESH,
                 trading_by(source),
                 Markup::Standard,
             )
@@ -2394,6 +2415,7 @@ mod tests {
             TRADE,
             pilot,
             capacity,
+            Gate::FRESH,
             trading_by(junk_trade),
             markup,
         )
@@ -2526,6 +2548,7 @@ mod tests {
             flags,
             &pilot(0),
             0,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             markup,
         )
@@ -2567,6 +2590,102 @@ mod tests {
         assert_eq!(priced(MARS, TRADE, Markup::Dominated), [(opals, 1800)]);
     }
 
+    /// Gold, sold at Earth on `sell_on` and bought there on `buy_on`, both
+    /// as listed in `sold_at` and `bought_at`.
+    fn gold(sold_here: bool, bought_here: bool, sell_on: &str, buy_on: &str) -> Goods {
+        let gold = JunkRecord {
+            id: JunkId(200),
+            name: "Gold".to_owned(),
+            base_price: 400,
+            sold_at: if sold_here { vec![EARTH] } else { Vec::new() },
+            bought_at: if bought_here { vec![EARTH] } else { Vec::new() },
+            sell_on: Test::parse(sell_on),
+            buy_on: Test::parse(buy_on),
+            flags: 0,
+        };
+        Goods::new(&CommodityStrings::default(), vec![gold], Vec::new())
+    }
+
+    /// The prices of the gold rows Earth lists through `gate`: its
+    /// `BoughtAt` row at the high price first, then its `SoldAt` row at the
+    /// low price.
+    fn gold_at_earth(goods: &Goods, gate: Gate) -> Vec<i64> {
+        let found = market(
+            goods,
+            EARTH,
+            TRADE,
+            &pilot(0),
+            0,
+            gate,
+            rules(RuleSource::Engine),
+            Markup::Standard,
+        )
+        .expect("trades");
+        found
+            .rows
+            .iter()
+            .filter(|row| row.good == Good::Junk(JunkId(200)))
+            .map(|row| row.price)
+            .collect()
+    }
+
+    const REFUSING_7: Gate<'static> = Gate {
+        control_bits: &RefuseBits(&[7]),
+        ..Gate::FRESH
+    };
+
+    #[test]
+    fn sell_on_gates_the_junk_a_stellar_sells_and_buy_on_what_it_buys() {
+        // Its SoldAt side, where the player buys, as `_DoTradeDialog` tests
+        // SellOn (@0x5de58).
+        let sold = gold(true, false, "b7", "");
+        assert_eq!(gold_at_earth(&sold, REFUSING_7), Vec::<i64>::new());
+        let sold = gold(true, false, "", "b7");
+        assert_eq!(gold_at_earth(&sold, REFUSING_7), [320]);
+        // Its BoughtAt side, where the player sells, on BuyOn (@0x5dda8).
+        let bought = gold(false, true, "", "b7");
+        assert_eq!(gold_at_earth(&bought, REFUSING_7), Vec::<i64>::new());
+        let bought = gold(false, true, "b7", "");
+        assert_eq!(gold_at_earth(&bought, REFUSING_7), [500]);
+    }
+
+    #[test]
+    fn junk_listed_both_ways_trades_only_the_way_its_test_allows() {
+        let no_selling = gold(true, true, "b7", "");
+        assert_eq!(
+            gold_at_earth(&no_selling, REFUSING_7),
+            [500],
+            "only its BoughtAt row, at the high price"
+        );
+        let no_buying = gold(true, true, "", "b7");
+        assert_eq!(
+            gold_at_earth(&no_buying, REFUSING_7),
+            [320],
+            "only its SoldAt row, at the low price"
+        );
+        let both = gold(true, true, "b7", "b7");
+        assert_eq!(gold_at_earth(&both, REFUSING_7), Vec::<i64>::new());
+        assert_eq!(
+            gold_at_earth(&both, Gate::FRESH),
+            Vec::<i64>::new(),
+            "bit 7 is clear"
+        );
+        let neither = gold(true, true, "!b7", "!b7");
+        assert_eq!(gold_at_earth(&neither, Gate::FRESH), [500, 320]);
+    }
+
+    #[test]
+    fn a_malformed_junk_test_is_never_met() {
+        let allowing = Gate {
+            control_bits: &AllowAll,
+            ..Gate::FRESH
+        };
+        let sold = gold(true, true, "b1 &", "");
+        assert_eq!(gold_at_earth(&sold, allowing), [500]);
+        let bought = gold(true, true, "", "b1 &");
+        assert_eq!(gold_at_earth(&bought, allowing), [320]);
+    }
+
     #[test]
     fn junk_follows_the_commodities() {
         let flags = TRADE | (2 << 28);
@@ -2576,6 +2695,7 @@ mod tests {
             flags,
             &pilot(0),
             0,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2599,6 +2719,7 @@ mod tests {
             TRADE | (2 << 28),
             &pilot,
             12,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2623,6 +2744,7 @@ mod tests {
             TRADE,
             &pilot,
             5,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2672,6 +2794,7 @@ mod tests {
             flags,
             &pilot,
             0,
+            Gate::FRESH,
             rules(source),
             Markup::Standard,
         )
@@ -2759,6 +2882,7 @@ mod tests {
             PORT_KANE,
             &pilot,
             0,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2799,6 +2923,7 @@ mod tests {
             flags,
             &pilot,
             0,
+            Gate::FRESH,
             rules(source),
             Markup::Standard,
         )
@@ -2827,6 +2952,7 @@ mod tests {
             industrial_only,
             &buyer,
             10,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2862,6 +2988,7 @@ mod tests {
             industrial_only,
             &buyer,
             10,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2874,6 +3001,7 @@ mod tests {
             industrial_only,
             &buyer,
             10,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -2934,6 +3062,7 @@ mod tests {
                     flags,
                     &pilot(0),
                     0,
+                    Gate::FRESH,
                     rules(source),
                     Markup::Standard,
                 )
@@ -2967,8 +3096,17 @@ mod tests {
                     junk_price,
                     ..ExchangeRules::default()
                 };
-                let found = market(&goods, EARTH, TRADE, &pilot(0), 0, rules, Markup::Standard)
-                    .expect("trades");
+                let found = market(
+                    &goods,
+                    EARTH,
+                    TRADE,
+                    &pilot(0),
+                    0,
+                    Gate::FRESH,
+                    rules,
+                    Markup::Standard,
+                )
+                .expect("trades");
                 let prices: Vec<_> = found.rows.iter().map(|row| row.price).collect();
                 assert_eq!(prices, expected, "{rules:?}");
             }
@@ -3043,6 +3181,7 @@ mod tests {
             flags,
             &pilot,
             0,
+            Gate::FRESH,
             rules(source),
             Markup::Standard,
         )
@@ -3102,7 +3241,17 @@ mod tests {
             ..unlisted()
         };
         let goods = Goods::new(&CommodityStrings::default(), vec![odd], Vec::new());
-        market(&goods, EARTH, TRADE, pilot, 10, rules, Markup::Standard).expect("trades")
+        market(
+            &goods,
+            EARTH,
+            TRADE,
+            pilot,
+            10,
+            Gate::FRESH,
+            rules,
+            Markup::Standard,
+        )
+        .expect("trades")
     }
 
     /// The (price, sold here, bought here) of each row of `market`.
@@ -3308,6 +3457,7 @@ mod tests {
             PORT_KANE,
             &pilot,
             0,
+            Gate::FRESH,
             rules(RuleSource::Engine),
             Markup::Standard,
         )
@@ -3349,6 +3499,7 @@ mod tests {
             PORT_KANE,
             &pilot,
             0,
+            Gate::FRESH,
             rules(source),
             Markup::Standard,
         )
@@ -4030,7 +4181,7 @@ mod tests {
     fn an_event_starts_when_its_chance_fires_for_its_duration() {
         let mut events = BTreeMap::new();
         let mut chance = Scripted::answering(&[true, false, true]);
-        step_day(&goods(), &mut events, &mut chance);
+        step_day(&goods(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(chance.asked, [35, 40, 50], "each öops by ID, at its Freq");
         assert_eq!(days(&events), [(128, 30), (130, 25)]);
         assert_eq!(
@@ -4053,7 +4204,7 @@ mod tests {
         let mut events = BTreeMap::new();
         let mut chance = Scripted::default();
         for _ in 0..10 {
-            step_day(&goods(), &mut events, &mut chance);
+            step_day(&goods(), &mut events, Gate::FRESH, &mut chance);
         }
         assert_eq!(days(&events), []);
         assert_eq!(chance.asked.len(), 30);
@@ -4063,12 +4214,12 @@ mod tests {
     fn an_active_event_ages_a_day_at_a_time_and_is_not_rolled_again() {
         let mut events = BTreeMap::from([on_earth(128, 3)]);
         let mut chance = Scripted::default();
-        step_day(&goods(), &mut events, &mut chance);
+        step_day(&goods(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(days(&events), [(128, 2)]);
         assert_eq!(chance.asked, [40, 50], "not the active one");
-        step_day(&goods(), &mut events, &mut chance);
+        step_day(&goods(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(days(&events), [(128, 1)]);
-        step_day(&goods(), &mut events, &mut chance);
+        step_day(&goods(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(days(&events), [], "over");
         assert_eq!(
             chance.asked,
@@ -4081,7 +4232,7 @@ mod tests {
     fn an_event_with_no_days_left_is_rolled_that_day() {
         let mut events = BTreeMap::from([on_earth(128, 0)]);
         let mut chance = Scripted::answering(&[true]);
-        step_day(&goods(), &mut events, &mut chance);
+        step_day(&goods(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(chance.asked, [35, 40, 50], "as the original's slot at 0");
         assert_eq!(days(&events), [(128, 30)]);
     }
@@ -4090,10 +4241,10 @@ mod tests {
     fn an_event_that_ends_on_a_day_is_rolled_the_next() {
         let mut events = BTreeMap::from([on_earth(128, 1)]);
         let mut chance = Scripted::answering(&[true; 3]);
-        step_day(&goods(), &mut events, &mut chance);
+        step_day(&goods(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(chance.asked, [40, 50]);
         assert!(!events.contains_key(&DisasterId(128)), "over");
-        step_day(&goods(), &mut events, &mut chance);
+        step_day(&goods(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(chance.asked, [40, 50, 35], "rolled first the next day");
         assert_eq!(
             events.get(&DisasterId(128)).map(|active| active.days),
@@ -4118,7 +4269,7 @@ mod tests {
         let mut once = Scripted::answering(&[true]);
         let mut active = Vec::new();
         for _ in 0..4 {
-            step_day(&goods, &mut events, &mut once);
+            step_day(&goods, &mut events, Gate::FRESH, &mut once);
             active.push(events.contains_key(&DisasterId(128)));
         }
         assert_eq!(active, [true, true, false, false]);
@@ -4127,8 +4278,69 @@ mod tests {
     #[test]
     fn an_event_whose_öops_is_gone_ends() {
         let mut events = BTreeMap::from([on_earth(999, 20), on_earth(128, 20)]);
-        step_day(&goods(), &mut events, &mut Scripted::default());
+        step_day(&goods(), &mut events, Gate::FRESH, &mut Scripted::default());
         assert_eq!(days(&events), [(128, 19)]);
+    }
+
+    /// An event at Earth on food, 10 days, `freq` %, starting on
+    /// `activate_on`.
+    fn activating(freq: i16, activate_on: &str) -> Goods {
+        let event = DisasterRecord {
+            id: DisasterId(128),
+            stellar: 140,
+            commodity: 0,
+            duration: 10,
+            freq,
+            price_delta: 10,
+            activate_on: Test::parse(activate_on),
+            ..DisasterRecord::default()
+        };
+        Goods::new(&stock(), Vec::new(), vec![event])
+    }
+
+    #[test]
+    fn an_event_whose_activate_on_is_refused_is_never_rolled() {
+        let mut events = BTreeMap::new();
+        let mut chance = Scripted::answering(&[true]);
+        step_day(&activating(100, "b7"), &mut events, REFUSING_7, &mut chance);
+        assert!(events.is_empty());
+        assert_eq!(chance.asked, Vec::<u8>::new(), "no draw is asked");
+        step_day(
+            &activating(100, "b7"),
+            &mut events,
+            Gate::FRESH,
+            &mut chance,
+        );
+        assert!(events.is_empty(), "bit 7 is clear");
+        step_day(
+            &activating(100, "!b7"),
+            &mut events,
+            Gate::FRESH,
+            &mut chance,
+        );
+        assert_eq!(days(&events), [(128, 10)]);
+        assert_eq!(chance.asked, [100]);
+    }
+
+    #[test]
+    fn a_malformed_activate_on_never_starts_its_event() {
+        let allowing = Gate {
+            control_bits: &AllowAll,
+            ..Gate::FRESH
+        };
+        let mut events = BTreeMap::new();
+        let mut chance = Scripted::answering(&[true]);
+        step_day(&activating(100, "b1 &"), &mut events, allowing, &mut chance);
+        assert!(events.is_empty());
+        assert_eq!(chance.asked, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn an_active_event_runs_out_its_days_once_its_activate_on_stops_holding() {
+        let mut events = BTreeMap::from([on_earth(128, 3)]);
+        let mut chance = Scripted::answering(&[]);
+        step_day(&activating(100, "b7"), &mut events, REFUSING_7, &mut chance);
+        assert_eq!(days(&events), [(128, 2)]);
     }
 
     #[test]
@@ -4161,7 +4373,7 @@ mod tests {
         .with_stellars(&[(StellarId(140), TRADE)]);
         let mut events = BTreeMap::new();
         let mut chance = Scripted::answering(&[true]);
-        step_day(&goods, &mut events, &mut chance);
+        step_day(&goods, &mut events, Gate::FRESH, &mut chance);
         assert_eq!(chance.asked, [100], "only 136, its Freq clamped");
         assert_eq!(days(&events), [(136, 10)]);
     }
@@ -4198,13 +4410,13 @@ mod tests {
     fn an_any_stellar_event_starts_at_the_stellar_its_roll_picks() {
         let mut events = BTreeMap::new();
         let mut chance = Scripted::answering(&[true]).and_rolling(&[1]);
-        step_day(&anywhere(), &mut events, &mut chance);
+        step_day(&anywhere(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(chance.asked, [50]);
         assert_eq!(chance.sides_asked, [2], "140 and 150, not the uninhabited");
         assert_eq!(events, placed(150, 10));
         let mut events = BTreeMap::new();
         let mut chance = Scripted::answering(&[true]).and_rolling(&[0]);
-        step_day(&anywhere(), &mut events, &mut chance);
+        step_day(&anywhere(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(events, placed(140, 10));
     }
 
@@ -4212,7 +4424,7 @@ mod tests {
     fn an_any_stellar_event_whose_roll_is_out_of_range_does_not_start() {
         let mut events = BTreeMap::new();
         let mut chance = Scripted::answering(&[true]).and_rolling(&[2]);
-        step_day(&anywhere(), &mut events, &mut chance);
+        step_day(&anywhere(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(chance.sides_asked, [2]);
         assert_eq!(events, BTreeMap::new());
     }
@@ -4221,7 +4433,7 @@ mod tests {
     fn an_any_stellar_event_whose_chance_does_not_fire_draws_no_stellar() {
         let mut events = BTreeMap::new();
         let mut chance = Scripted::default();
-        step_day(&anywhere(), &mut events, &mut chance);
+        step_day(&anywhere(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(chance.asked, [50]);
         assert_eq!(chance.sides_asked, Vec::<u16>::new());
         assert_eq!(events, BTreeMap::new());
@@ -4232,7 +4444,7 @@ mod tests {
         let goods = Goods::new(&stock(), Vec::new(), anywhere().disasters);
         let mut events = BTreeMap::new();
         let mut chance = Scripted::answering(&[true]);
-        step_day(&goods, &mut events, &mut chance);
+        step_day(&goods, &mut events, Gate::FRESH, &mut chance);
         assert_eq!(chance.asked, Vec::<u8>::new());
         assert_eq!(chance.sides_asked, Vec::<u16>::new());
         assert_eq!(events, BTreeMap::new());
@@ -4242,9 +4454,9 @@ mod tests {
     fn an_any_stellar_event_keeps_its_stellar_as_it_ages() {
         let mut events = placed(150, 3);
         let mut chance = Scripted::answering(&[true, true]).and_rolling(&[0, 0]);
-        step_day(&anywhere(), &mut events, &mut chance);
+        step_day(&anywhere(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(events, placed(150, 2));
-        step_day(&anywhere(), &mut events, &mut chance);
+        step_day(&anywhere(), &mut events, Gate::FRESH, &mut chance);
         assert_eq!(events, placed(150, 1));
         assert_eq!(chance.sides_asked, Vec::<u16>::new(), "never drawn again");
     }
@@ -4263,7 +4475,12 @@ mod tests {
             }],
         );
         let mut events = BTreeMap::new();
-        step_day(&goods, &mut events, &mut Scripted::answering(&[true]));
+        step_day(
+            &goods,
+            &mut events,
+            Gate::FRESH,
+            &mut Scripted::answering(&[true]),
+        );
         assert_eq!(days(&events), [(128, 32_767)]);
     }
 

@@ -14,6 +14,7 @@ use crate::catalog::{
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
+use crate::control::{ControlBits, PilotFacts, Test, TestExpr};
 use crate::flight::ShipState;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
@@ -137,10 +138,12 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
         require: 0,
         require_govt: -1,
         buy_random: 100,
-        availability: String::new(),
+        availability: Test::default(),
         item_class: 0,
         lc_name: format!("outfit {id}"),
         lc_plural: format!("outfits {id}"),
+        on_purchase: crate::control::Script::default(),
+        on_sell: crate::control::Script::default(),
     }
 }
 
@@ -162,7 +165,8 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         buy_random: 100,
         hire_random: 0,
         require: 0,
-        availability: String::new(),
+        availability: Test::default(),
+        appear_on: Test::default(),
         flags3: 0,
         disp_weight: 0,
         max_gun: 2,
@@ -173,6 +177,9 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         comm_name: format!("ship {id}"),
         inherent_govt: None,
         escort_type: -1,
+        on_capture: crate::control::Script::default(),
+        on_purchase: crate::control::Script::default(),
+        on_retire: crate::control::Script::default(),
     }
 }
 
@@ -267,7 +274,7 @@ pub(crate) fn person(id: i16, ship: i16) -> PersonRecord {
         hail_quote: -1,
         link_mission: None,
         flags: 0,
-        active_on: String::new(),
+        active_on: Test::default(),
         subtitle: String::new(),
         flags2: 0,
         grant_class: 0,
@@ -386,6 +393,7 @@ pub(crate) fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
         position: Vec2::new(x, y),
         links: links.iter().copied().map(SystemId).collect(),
         govt: None,
+        stellars: Vec::new(),
     }
 }
 
@@ -726,5 +734,26 @@ pub(crate) fn edge_lander() -> FakePilotCatalog {
         )],
         sites: vec![(SystemId(131), vec![planet(140, -1000.0, 0.0)])],
         ..catalog()
+    }
+}
+
+/// Control bits that refuse every test reading one of these bits, and
+/// hold every other.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RefuseBits(pub(crate) &'static [u16]);
+
+impl ControlBits for RefuseBits {
+    fn allows(&self, test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
+        !test.reads().iter().any(|bit| self.0.contains(&bit.get()))
+    }
+}
+
+/// Control bits that hold every test asked.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AllowAll;
+
+impl ControlBits for AllowAll {
+    fn allows(&self, _test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
+        true
     }
 }

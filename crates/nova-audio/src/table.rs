@@ -28,6 +28,8 @@ pub struct SoundTable {
     pub button_up: Option<SoundId>,
     /// Plays as the interface refuses what was asked of it.
     pub alert: Option<SoundId>,
+    /// Plays as a `Q` set operator's message is shown in flight.
+    pub script_message: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -53,6 +55,10 @@ impl SoundTable {
     ///   (as the Text Input dialog refuses a name too long,
     ///   `_EVTextInputDialog` @0x554a9-0x554e7), which no stock `snd `
     ///   holds.
+    /// - `script_message`: 154, the fifth of the beeps `_LoadSounds` loads
+    ///   from `snd ` 150 to 154 into `_beepSnd` (@0x1c174), which
+    ///   `_PlayGame` plays as it shows a `Q`'s message in flight
+    ///   (`_beepSnd[4]`, @0x4657a).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -62,6 +68,7 @@ impl SoundTable {
         button_down: Some(SoundId(600)),
         button_up: Some(SoundId(601)),
         alert: None,
+        script_message: Some(SoundId(154)),
     };
 }
 
@@ -80,5 +87,6 @@ mod tests {
         assert_eq!(table.button_down, Some(SoundId(600)), "Menu button down");
         assert_eq!(table.button_up, Some(SoundId(601)), "Menu button up");
         assert_eq!(table.alert, None, "the system's alert");
+        assert_eq!(table.script_message, Some(SoundId(154)), "_beepSnd[4]");
     }
 }

@@ -36,6 +36,13 @@
 //! - [`chance`]: the [`Chance`] port, whether a percentage chance fires,
 //!   which the day's planetary events roll on, and uniform draws, which
 //!   the NPC traffic rolls on.
+//! - [`control`]: the control bits missions and storylines script with,
+//!   held as a [`ControlBitSet`] indexed by [`Bit`]; a record's parsed
+//!   control-bit [`Test`], and evaluating one against the [`PilotFacts`]
+//!   it reads ([`control::holds`]), through the [`ControlBits`] port with
+//!   Nova's [`NovaBits`]; and running a set expression
+//!   ([`control::execute`]), its operators beyond the bit writes handed to
+//!   a [`SetRegistry`].
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence
@@ -59,6 +66,8 @@
 //!   menu's [`ClassRow`]s, an escort NPC's [`EscortDuty`], the formation
 //!   it keeps beside the player, and how it scores the threats to the
 //!   player.
+//! - [`exploration`]: which systems a map outfit explores
+//!   ([`exploration::map_reveals`]) and which are inhabited.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
@@ -93,8 +102,8 @@
 //! - [`hire`]: hiring escorts in the bar: which ships are for hire today
 //!   ([`HireList`], [`HireRow`], [`HireRefusal`]), the [`HireTerms`] port
 //!   with Nova's [`NovaHire`] fee and daily wage ([`price_flux`]), the
-//!   [`ControlBits`] port a ship's `Availability` goes through
-//!   ([`NoControlBits`] until control bits exist), what a hire did
+//!   [`ControlBits`] port a ship's `Availability` goes through, what a
+//!   hire did
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
@@ -114,6 +123,10 @@
 //!   view words them.
 //! - [`navigation`]: the navigation target Tab selects, [`next_stellar`]:
 //!   the system's stellars in their `NavDef` order, wrapping.
+//! - [`outfit_effects`]: what granting an outfit does: a map explores, a
+//!   clean-record outfit cleans the legal record and a paint paints the
+//!   ship ([`Rgb15`]) instead of being added
+//!   ([`outfit_effects::GrantEffect`]), and the disputed [`OutfitRules`].
 //! - [`outfitter`]: the outfitter: which outfits a stellar lists and sells
 //!   ([`Outfitter`]), their price and mass, the ship's free mass, and
 //!   buying and selling one at a time ([`OutfitOrder`]).
@@ -124,7 +137,9 @@
 //! - [`pilot`]: the [`Pilot`], everything about the player a save keeps:
 //!   ship, location, date, cash, reserves, course, explored systems,
 //!   legal records, cargo, the events under way, the outfits owned and
-//!   the fleet of [`Escort`]s, starting from the first `chär`.
+//!   the fleet of [`Escort`]s, the control bits and the player's
+//!   [`Gender`] and its ship's paint and name, starting from the first
+//!   `chär`.
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
@@ -148,6 +163,8 @@
 //!   commanding its escorts, launching and docking the fighters of its
 //!   bays and the NPC carriers' ([`Sortie`]), and hiring escorts in the
 //!   bar and paying their wages.
+//! - [`ship_change`]: changing the player's ship outside the shipyard,
+//!   as the `C`, `E` and `H` set operators do: which outfits carry over.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -176,9 +193,11 @@ pub mod catalog;
 pub mod chance;
 pub mod clock;
 pub mod combat;
+pub mod control;
 pub mod data;
 pub mod date;
 pub mod escort;
+pub mod exploration;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod flight;
@@ -197,6 +216,7 @@ pub mod legal;
 pub mod market;
 pub mod message;
 pub mod navigation;
+pub mod outfit_effects;
 pub mod outfitter;
 pub mod person;
 pub mod pilot;
@@ -207,6 +227,7 @@ pub mod rulebook;
 pub mod save;
 pub mod saves;
 pub mod session;
+pub mod ship_change;
 pub mod shipyard;
 pub mod sound;
 pub mod stats;
@@ -241,6 +262,10 @@ pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
+pub use control::{
+    Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
+    SetExpr, SetOp, SetOpHandler, SetOpKind, SetRegistry, Test, TestExpr,
+};
 pub use date::GameDate;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
@@ -257,10 +282,7 @@ pub use hail::{
     HailOption, HailOptions, HailRefusal, HailView, Help, JoinFleet, Release, Reply,
 };
 pub use handling::{Handling, ShipFields};
-pub use hire::{
-    ControlBits, HireList, HireRefusal, HireRow, HireTerms, Hired, NoControlBits, NovaHire,
-    PayNote, price_flux,
-};
+pub use hire::{HireList, HireRefusal, HireRow, HireTerms, Hired, NovaHire, PayNote, price_flux};
 pub use hyperspace::{
     HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule, MultiJumpRule,
     RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,
@@ -273,18 +295,22 @@ pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
 pub use navigation::{next_after, next_stellar};
+pub use outfit_effects::{OutfitRules, Rgb15};
 pub use outfitter::{LcNames, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use person::{
     COMM_QUOTES, ESCAPE_POD, GRUDGE, HAIL_QUOTES, NovaPersons, PersonRoll, PersonRules,
     PersonWorld, QuoteTags, expand_tags,
 };
-pub use pilot::{Escort, Pilot};
+pub use pilot::{Escort, Gender, Pilot};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
-pub use reserves::{Gauge, Reserves};
+pub use reserves::{Gauge, Reserve, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
-pub use session::{LandPress, PersonQuote, Session};
+pub use session::{
+    HookRules, LandPress, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, Settled,
+    ShipChangeRules, nova_set_ops,
+};
 pub use shipyard::{ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;

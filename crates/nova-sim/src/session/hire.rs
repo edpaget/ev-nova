@@ -41,10 +41,12 @@
 use std::rc::Rc;
 
 use super::Session;
+use super::control::Facts;
 use crate::board::MAX_ESCORTS;
 use crate::catalog::{LandingSite, ShipId};
 use crate::chance::Chance;
-use crate::hire::{Bar, ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote};
+use crate::control::ControlBits;
+use crate::hire::{Bar, HireList, HireRefusal, HireTerms, Hired, PayNote};
 use crate::landing::StellarFlags;
 use crate::pilot::Escort;
 use crate::rulebook::RuleSource;
@@ -83,9 +85,9 @@ impl Session {
         self
     }
 
-    /// This session with `bits` testing a ship's `Availability` for hire:
-    /// [`NoControlBits`](crate::NoControlBits), which lets every one
-    /// hold, by default.
+    /// This session with `bits` testing a ship's `Availability` for hire
+    /// and a person's `ActiveOn` against the pilot: Nova's
+    /// ([`NovaBits`](crate::NovaBits)) by default.
     #[must_use]
     pub fn with_control_bits(mut self, bits: Rc<dyn ControlBits>) -> Self {
         self.control_bits = Shared(bits);
@@ -207,6 +209,11 @@ impl Session {
     /// with a bar.
     pub fn escorts_for_hire(&mut self, chance: &mut dyn Chance) -> Option<HireList> {
         let site = self.bar_site()?;
+        let facts = Facts {
+            pilot: &self.pilot,
+            ammo_outfits: &self.ammo_outfits,
+            armament: &self.armament,
+        };
         let bar = Bar {
             ships: &self.ships,
             site: &site,
@@ -219,6 +226,7 @@ impl Session {
             room: self.pilot.escort_count() < MAX_ESCORTS,
             terms: &*self.hire_terms.0,
             control_bits: &*self.control_bits.0,
+            pilot: &facts,
             hire_require: self.hire_require,
         };
         let rolls = &mut self.hire_rolls;
@@ -279,6 +287,7 @@ mod tests {
     use crate::catalog::{LandingSite, ShipRecord, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
+    use crate::control::{PilotFacts, Test, TestExpr};
     use crate::escort::{EscortCommand, EscortDuty, EscortGroup, slot_position};
     use crate::hail::{EscortStatus, HailOptions};
     use crate::hire::{HireRow, NovaHire, PayNote};
@@ -371,13 +380,13 @@ mod tests {
         }
     }
 
-    /// Control bits where the expressions named do not hold.
+    /// Control bits refusing every test that reads one of its bits.
     #[derive(Debug)]
-    struct Refusing(&'static [&'static str]);
+    struct Refusing(&'static [u16]);
 
     impl ControlBits for Refusing {
-        fn allows(&self, expression: &str) -> bool {
-            !self.0.contains(&expression)
+        fn allows(&self, test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
+            !test.reads().iter().any(|bit| self.0.contains(&bit.get()))
         }
     }
 
@@ -510,18 +519,52 @@ mod tests {
     #[test]
     fn a_ship_whose_availability_does_not_hold_is_hidden_or_refused() {
         let gated = |id, flags3| ShipRecord {
-            availability: "b99".to_owned(),
+            availability: Test::parse("b99"),
             flags3,
             ..hireable(id, 100)
         };
         let catalog = barred(vec![gated(129, 0x0100), gated(130, 0), hireable(131, 100)]);
-        let mut session = landed(&catalog, 25_000).with_control_bits(Rc::new(Refusing(&["b99"])));
+        let mut session = landed(&catalog, 25_000).with_control_bits(Rc::new(Refusing(&[99])));
         let list = list(&mut session);
         assert_eq!(listed(&list), [130, 131]);
         assert_eq!(row(&list, 130).hire, Err(HireRefusal::NotForHire));
         assert_eq!(row(&list, 131).hire, Ok(()));
-        let mut open = landed(&catalog, 25_000);
-        assert_eq!(listed(&list_of(&mut open)), [129, 130, 131], "by default");
+    }
+
+    #[test]
+    fn through_the_real_control_bits_a_ships_availability_follows_its_bit() {
+        let gated = |id, flags3| ShipRecord {
+            availability: Test::parse("b99"),
+            flags3,
+            ..hireable(id, 100)
+        };
+        let catalog = barred(vec![gated(129, 0x0100), gated(130, 0), hireable(131, 100)]);
+        let mut session = landed(&catalog, 25_000);
+        let bit = crate::control::Bit::new(99).expect("in range");
+        let clear = list(&mut session);
+        assert_eq!(listed(&clear), [130, 131], "bit 99 clear");
+        assert_eq!(row(&clear, 130).hire, Err(HireRefusal::NotForHire));
+        session.set_control_bit(bit, true);
+        let set = list_of(&mut session);
+        assert_eq!(listed(&set), [129, 130, 131], "bit 99 set");
+        assert_eq!(row(&set, 130).hire, Ok(()));
+        session.set_control_bit(bit, false);
+        assert_eq!(listed(&list_of(&mut session)), [130, 131], "clear again");
+    }
+
+    #[test]
+    fn a_ship_whose_availability_is_malformed_is_never_for_hire() {
+        let malformed = |id, flags3| ShipRecord {
+            availability: Test::parse("b1 &"),
+            flags3,
+            ..hireable(id, 100)
+        };
+        let catalog = barred(vec![malformed(129, 0x0100), malformed(130, 0)]);
+        let mut session =
+            landed(&catalog, 25_000).with_control_bits(Rc::new(crate::testkit::AllowAll));
+        let list = list(&mut session);
+        assert_eq!(listed(&list), [130], "hidden when flagged");
+        assert_eq!(row(&list, 130).hire, Err(HireRefusal::NotForHire));
     }
 
     fn list_of(session: &mut Session) -> HireList {
@@ -701,7 +744,7 @@ mod tests {
     #[test]
     fn a_refused_hire_changes_nothing() {
         let gated = ShipRecord {
-            availability: "b99".to_owned(),
+            availability: Test::parse("b99"),
             ..hireable(130, 100)
         };
         let catalog = barred(vec![hireable(129, 100), gated]);
@@ -713,7 +756,7 @@ mod tests {
         };
         let mut flying = Session::start(&catalog).expect("starts");
         refused(&mut flying, 129, HireRefusal::NoBar);
-        let mut session = landed(&catalog, 25_000).with_control_bits(Rc::new(Refusing(&["b99"])));
+        let mut session = landed(&catalog, 25_000).with_control_bits(Rc::new(Refusing(&[99])));
         refused(&mut session, 999, HireRefusal::NotListed);
         refused(&mut session, 128, HireRefusal::NotListed);
         refused(&mut session, 130, HireRefusal::NotForHire);

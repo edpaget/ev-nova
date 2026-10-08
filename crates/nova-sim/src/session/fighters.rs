@@ -1527,6 +1527,66 @@ mod tests {
     }
 
     #[test]
+    fn a_control_bit_test_counts_a_fighter_out_as_its_outfit() {
+        use crate::control::PilotFacts;
+        let catalog = carrying();
+        let mut session = flying(&catalog, pilot(&catalog, 1, Vec::new()), RuleSource::Engine);
+        assert!(session.facts().has_outfit(VIPERS), "aboard");
+        launch(&mut session);
+        assert_eq!(session.pilot().owned(VIPERS), 0);
+        assert!(session.facts().has_outfit(VIPERS), "out of its bay");
+        assert!(!session.facts().has_outfit(OutfitId(159)));
+        // A carried escort of a type no bay launches docks into nothing.
+        let stray = Escort {
+            ship: WARSHIP,
+            reserves: Reserves::full(10.0, 10.0, 10.0),
+            order: None,
+            carried: true,
+            wage: None,
+            person: None,
+        };
+        let session = Session::fly(&catalog, pilot(&catalog, 0, vec![stray])).expect("flies");
+        assert!(!session.facts().has_outfit(VIPERS));
+        // Nor does an escort of the fighter's type that is not carried.
+        let own = Escort {
+            ship: VIPER,
+            carried: false,
+            ..stray
+        };
+        let session = Session::fly(&catalog, pilot(&catalog, 0, vec![own])).expect("flies");
+        assert!(!session.facts().has_outfit(VIPERS));
+    }
+
+    #[test]
+    fn a_fighter_out_counts_as_its_bays_outfit_of_lowest_id() {
+        use crate::control::PilotFacts;
+        let mut catalog = carrying();
+        catalog.outfits.push(OutfitRecord {
+            mass: 0,
+            max: 9999,
+            ..outfit(160, &[(MOD_AMMO, 149)])
+        });
+        catalog.outfits.push(OutfitRecord {
+            mass: 0,
+            max: 9999,
+            ..outfit(157, &[(MOD_AMMO, 149)])
+        });
+        let fighter = Escort {
+            ship: VIPER,
+            reserves: Reserves::full(10.0, 10.0, 10.0),
+            order: None,
+            carried: true,
+            wage: None,
+            person: None,
+        };
+        let session = Session::fly(&catalog, pilot(&catalog, 0, vec![fighter])).expect("flies");
+        let facts = session.facts();
+        assert!(facts.has_outfit(OutfitId(157)));
+        assert!(!facts.has_outfit(VIPERS));
+        assert!(!facts.has_outfit(OutfitId(160)));
+    }
+
+    #[test]
     fn a_fighter_out_survives_a_save_and_reload_and_docks_again() {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 3, Vec::new()), RuleSource::Engine);

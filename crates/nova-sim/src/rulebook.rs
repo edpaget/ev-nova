@@ -36,8 +36,24 @@
 //! | [`PersonCredits`](RuleKey::PersonCredits) | `person_credits` | a person carries half its `Credits` in thousands, kept in 16 bits, and a draw of as many more ([`NovaBoarding`](crate::NovaBoarding)) | its `Credits`, ±25 % |
 //! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
 //! | [`GrantCount`](RuleKey::GrantCount) | `grant_count` | boarding a person grants trunc((50 + `Rand(51)`) x `GrantCount` / 100) outfits, at least 1 ([`NovaBoarding`](crate::NovaBoarding)) | 1 + `Rand(GrantCount)`\* |
-//! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a grant may take the player past the outfit's `Max` ([`NovaBoarding`](crate::NovaBoarding)) | it is held to `Max` less the owned\* |
+//! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a boarding grant may take the player past the outfit's `Max`, and `G` past its `Max` and the free mass ([`OutfitRules`](crate::OutfitRules), which the boarding grant reads too) | both are held to `Max` less the owned and to the free mass, weighed as the outfitter weighs it ([`held_to_max`](crate::grant::held_to_max))\* |
 //! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: the original offers its `LinkMission`, which waits for missions ([`JoinFleet`](crate::hail::nova::JoinFleet)) | a person whose record allows it lists Use As Escort and joins the fleet as itself, for good\* |
+//! | [`MapExplore`](RuleKey::MapExplore) | `map_explore` | a map of `ModVal` N explores depth first, so it may miss systems within N jumps, and "inhabited" reads a system's first four stellars ([`OutfitRules`](crate::OutfitRules)) | every system within N jumps, and any stellar |
+//! | [`InvalidMap`](RuleKey::InvalidMap) | `invalid_map` | a map whose `ModVal` explores nothing (0, -2 to -999) is used up ([`OutfitRules`](crate::OutfitRules)) | it is added to the outfits as a plain item\* |
+//! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing ([`OutfitRules`](crate::OutfitRules)) | it pays what selling the outfit would\* |
+//! | [`RefitReserves`](RuleKey::RefitReserves) | `refit_reserves` | a refit by `G`, `D` or boarding keeps a shield or armour above the new most until damage, the outfitter or a reload takes it ([`OutfitRules`](crate::OutfitRules)) | each is held to its most\* |
+//! | [`PurchasePaintOrder`](RuleKey::PurchasePaintOrder) | `purchase_paint_order` | buying a ship clears the paint after the new ship's `OnPurchase`, so a paint it grants is lost ([`HookRules`](crate::HookRules)) | the paint is cleared before the hook, so a paint it grants stays\* |
+//! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, which strips a non-persistent outfit either grants ([`HookRules`](crate::HookRules)) | they run after the swap, so it stays\* |
+//! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` ([`HookRules`](crate::HookRules)) | it runs once, right before the `chär`'s `OnStart`\* |
+//! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 ([`ShipChangeRules`](crate::ShipChangeRules)) | only one flagged 0x0020 |
+//! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its `Max` after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
+//! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the cargo is trimmed to the new hold, as a purchase trims it\* |
+//! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it ([`ShipChangeRules`](crate::ShipChangeRules)) | each is held to its new most\* |
+//! | [`MoveStarless`](RuleKey::MoveStarless) | `move_starless` | `M` in flight into a system with no stellar keeps the ship's position and velocity ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the ship is put at rest at the system's centre |
+//! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only the escorts and fighters out follow, the new system filling with arrivals over time ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
+//! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed ([`ScriptEffectRules`](crate::ScriptEffectRules)) | only a landed `N` keeps the landing position\* |
+//! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the player leaves all the same, with no message |
+//! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing ([`ScriptEffectRules`](crate::ScriptEffectRules)) | every `P` sounds at once, landed or not\* |
 //! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
 //! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b; [`Session`](crate::Session)) | tribbles goods grow only into free space, and perishable goods always decay‡ |
 //! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)) | a launcher cannot be sold while any of its ammunition is held§ |
@@ -58,7 +74,11 @@
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
-//! `hire_fee`, `escort_wage`, `grant_max`, `person_join` or `comm_quote`
+//! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
+//! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
+//! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
+//! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
+//! `script_sound` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -364,11 +384,14 @@ rule_keys! {
     /// [`grant`](crate::grant)).
     GrantCount => "grant_count",
     /// Whether a grant may take the player past the outfit's `Max`: by the
-    /// engine, it may, as only an outfit's owned count is tested before
-    /// the pick (`_DoPlunderDialog` @0x93119); otherwise the count is held
-    /// to `Max` less the owned. The Bible is silent here, so the other
-    /// reading is the obvious fix, not anything the Bible says (see
-    /// [`grant`](crate::grant)).
+    /// engine, a boarding grant may, as only an outfit's owned count is
+    /// tested before the pick (`_DoPlunderDialog` @0x93119), though its
+    /// count is held to the free mass; and `G` may pass both the `Max`
+    /// and the free mass, as `_GrantOutfitItem` checks neither (@0x44d4f).
+    /// Otherwise both are held to `Max` less the owned and to the free
+    /// mass. The Bible is silent here, so the other reading is the
+    /// obvious fix, not anything the Bible says (see
+    /// [`grant`](crate::grant) and [`OutfitRules`](crate::OutfitRules)).
     GrantMax => "grant_max",
     /// Whether a person offers to join the player when hailed: by the
     /// engine, none does, as the original brings a person to fly with the
@@ -382,6 +405,157 @@ rule_keys! {
     /// anything the Bible says (see
     /// [`JoinFleet`](crate::hail::nova::JoinFleet)).
     PersonJoin => "person_join",
+    /// Which systems a map outfit (`ModType` 16) of `ModVal` N above 0
+    /// explores, and which systems count as inhabited for a `ModVal` of
+    /// -1: by the engine, a depth-first walk from the player's system
+    /// that follows each system's Con links in order and never enters a
+    /// system twice (`_RecursiveAutoExplore` @0xd942), so a system first
+    /// reached by a long way round, too deep to go on, is never entered
+    /// again by a shorter one and the systems beyond it within N jumps
+    /// are missed; and a system is inhabited when one of its *first four*
+    /// stellars is neither uninhabited (`Flags` 0x0020) nor a hypergate
+    /// or wormhole (`Flags2` 0x1000, 0x2000) (`_SystemIsInhabited`
+    /// @0x4c4a). By the Bible ("how many jumps away from the current
+    /// system to explore"), every system within N jumps, and any stellar
+    /// of the system counts (see
+    /// [`exploration`](crate::exploration)).
+    MapExplore => "map_explore",
+    /// What becomes of a map outfit whose `ModVal` explores nothing (0,
+    /// or -2 to -999): by the engine, it is used up all the same, as any
+    /// map slot keeps the outfit from being added (`_GrantOutfitItem`
+    /// @0x44ea9); otherwise it is no map, and is added to the outfits as
+    /// a plain item. The Bible is silent on those values, so the other
+    /// reading is the obvious fix, not anything the Bible says (see
+    /// [`outfit_effects`](crate::outfit_effects)).
+    InvalidMap => "invalid_map",
+    /// What the `D` set operator pays for the outfit it removes: by the
+    /// engine, nothing (`_EvalSetExp` @0x1544b only lowers the count);
+    /// otherwise what selling the outfit at the outfitter would. The
+    /// Bible is silent here, so the other reading is the obvious
+    /// alternative, not anything the Bible says (see
+    /// [`OutfitRules`](crate::OutfitRules)).
+    RemoveRefund => "remove_refund",
+    /// What becomes of a shield or armour above its most when `G`, `D`
+    /// or a boarding grant or ammunition take refits the ship: by the
+    /// engine, it is kept, as each works the stats out through
+    /// `_SystemInfoToShipStats` (`_EvalSetExp` @0x15489,
+    /// `_DoPlunderDialog` @0x93226), which with
+    /// `_ResetPlayerPrecalcedValues` (@0xc357-0xca32) clamps no reserve,
+    /// so the surplus lasts until damage, the outfitter closing
+    /// (`_DoOutfitDialog` @0x5da4b-0x5dad4) or a reload
+    /// (`_LoadPilotData` @0x754dc) takes it; otherwise each is held to
+    /// its most. The fuel is held to its most either way, as flight
+    /// clamps it every frame (`_HandlePlayer` @0x6d9e1). The Bible is
+    /// silent here, so the other reading is the obvious alternative, not
+    /// anything the Bible says (see [`OutfitRules`](crate::OutfitRules)).
+    RefitReserves => "refit_reserves",
+    /// When buying a ship clears its paint: by the engine, after the new
+    /// ship's `OnPurchase` runs (`_DoShipyardDialog` @0x5f00d, then
+    /// @0x5f022), so a paint that hook grants is lost; otherwise before
+    /// it, so the paint stays. The Bible is silent here, so the other
+    /// reading is the obvious alternative, not anything the Bible says
+    /// (see [`HookRules`](crate::HookRules)).
+    PurchasePaintOrder => "purchase_paint_order",
+    /// When "Use As My Ship" runs the old ship's `OnRetire` and the
+    /// captured ship's `OnCapture`: by the engine, before the outfit swap
+    /// (`_DoShipCapture` @0x41662 and @0x416c9, then @0x419dd), so a
+    /// non-persistent outfit either grants is stripped; otherwise after
+    /// it, so the outfit stays. The Bible is silent here, so the other
+    /// reading is the obvious alternative, not anything the Bible says
+    /// (see [`HookRules`](crate::HookRules)).
+    CaptureHookOrder => "capture_hook_order",
+    /// Whether a new pilot's starting ship runs its `OnPurchase`: by the
+    /// engine, it does not (`_DoNewPilot` runs only the `chär`'s
+    /// `OnStart`, @0x19345); otherwise it runs once, right before
+    /// `OnStart`, as though the ship were bought. The Bible is silent
+    /// here, so the other reading is the obvious alternative, not
+    /// anything the Bible says (see [`HookRules`](crate::HookRules)).
+    StartShipPurchase => "start_ship_purchase",
+    /// Which outfits survive the `H` set operator's change of ship: by
+    /// the engine, any flagged persistent (0x0004) or persistent through a
+    /// mission's change of ship (0x0020), as it tests both bits
+    /// (`_EvalSetExp` @0x154d5, `testb $0x24`); by the Bible's `oütf`
+    /// flag 0x0020 ("persistent in the case where the player's ship is
+    /// changed by a mission set operator", 0x0004 governing buying and
+    /// capture), only those flagged 0x0020 (see
+    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangePersistence => "ship_change_persistence",
+    /// Whether the `E` and `H` set operators hold the outfits owned to
+    /// their `Max`: by the engine, every outfit, old and new, is clamped
+    /// to its limit once the new class's default items are added
+    /// (`_HasMaxOfItem` @0x4512, called @0x15648); by the Bible's "the
+    /// player will keep all of his previous outfit items", nothing is
+    /// clamped (see [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeMax => "ship_change_max",
+    /// What becomes of the cargo on a `C`, `E` or `H` change of ship: by
+    /// the engine, it is all kept, even past the new hold, as the change
+    /// never calls `_DestroyPartialFleetCargo` (`_EvalSetExp`
+    /// @0x15493-0x156da); otherwise it is trimmed to the new hold as a
+    /// purchase trims it. The Bible is silent here, so the other reading
+    /// is the obvious alternative, not anything the Bible says (see
+    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeCargo => "ship_change_cargo",
+    /// What becomes of a shield or armour above the new class's most on a
+    /// `C`, `E` or `H` change of ship: by the engine, it is kept, as the
+    /// change clamps nothing (`_EvalSetExp` @0x15493-0x156da) and flight
+    /// regenerates the shield and armour only below their most, clamping
+    /// the fuel alone (`_HandlePlayer` @0x6cf99, @0x6d01d, @0x6d9e1), so
+    /// the surplus lasts until damage or landing takes it; otherwise each
+    /// is held to its new most. The Bible is silent here, so the other
+    /// reading is the obvious alternative, not anything the Bible says
+    /// (see [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeReserves => "ship_change_reserves",
+    /// Where the `M` set operator puts a ship in flight when the system
+    /// moved to has no stellar: by the engine, nowhere new, its position
+    /// and velocity kept, as `_EvalSetExp` places the ship only on a
+    /// stellar it finds (@0x1570e-0x158d4); by the Bible ("in the center
+    /// of the system if no stellars exist there"), at rest at the
+    /// system's centre (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    MoveStarless => "move_starless",
+    /// What else the `M` and `N` set operators do beyond changing where
+    /// the ship is: by the engine, nothing, as `_EvalSetExp` calls neither
+    /// `_SetupShipsInSystem` nor `_AutoSetExploration` and leaves
+    /// `_hyperRoute` alone, so the course is kept (and J refuses while its
+    /// next system is not linked from here), the system is explored only
+    /// by the next take-off, and in flight the last system's ships stay
+    /// behind but for the player's escorts and fighters out, the new
+    /// system filling only with arrivals over time; otherwise the move is
+    /// an arrival, exploring the system and clearing the course at once,
+    /// and in flight populating it at once, the fighters out kept or
+    /// abandoned as the fighter rules say. The Bible is silent here, so
+    /// the other reading is the intended behaviour, not anything the
+    /// Bible says (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    MoveArrival => "move_arrival",
+    /// What the `N` set operator's flag does when it runs in flight: by
+    /// the engine, `_dontMovePlayerAfterLanding` (@0x158d9) stays set
+    /// until the next take-off, which then keeps the ship where it landed
+    /// instead of at the stellar's centre, and clears it
+    /// (`_PlayerLandOnStellar` @0x633ad-0x63400); otherwise only a landed
+    /// `N` keeps the landing position, and a take-off after an `N` in
+    /// flight is from the stellar's centre as any other. The Bible is
+    /// silent here, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see
+    /// [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    MoveKeepFlag => "move_keep_flag",
+    /// What a `Q` set operator whose `STR#` is missing or empty, or whose
+    /// pick is empty, does: by the engine, nothing, as the player leaves
+    /// only on a message that is not empty (`_PlayGame` @0x4654c, the port
+    /// dialogs' filters such as `_PortFilter` @0x4f041), and it cancels an
+    /// earlier `Q`, whose message it overwrites; by the Bible ("make the
+    /// player immediately leave"), the player leaves all the same, with no
+    /// message (see [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    BlankLeave => "blank_leave",
+    /// When the `P` set operator's sound plays: by the engine, one
+    /// mission sound at a time, as `_missionSoundID` (@0x20fa14) is read
+    /// only once a flight frame (`_PlayGame` @0x462fa): `P` is held to the
+    /// next flight tick, so a landed `P` sounds after the take-off, a
+    /// later `P` replaces it, a jump's arrival drops it, and it is dropped
+    /// while the last mission sound is still playing; otherwise every `P`
+    /// sounds at once, landed or not, over whatever is playing. The Bible
+    /// is silent here, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see
+    /// [`ScriptEffectRules`](crate::ScriptEffectRules)).
+    ScriptSound => "script_sound",
     /// How a `BuyRandom` outside 1-100 reads: by the engine, an outfit's
     /// below 1 is never for sale and a ship's below 0 always, as the
     /// original's loader clamps them (`_LoadObjectData` @0x78b8d,
@@ -600,8 +774,8 @@ pub struct Rulebook {
     overrides: [Option<RuleSource>; RuleKey::ALL.len()],
 }
 
-/// Every rule following the engine, with no override. Written out, as
-/// the standard library derives `Default` for arrays of at most 32.
+/// Every rule following the engine, overriding none. (Written out, as
+/// `Default` derives only for arrays of up to 32 rules.)
 impl Default for Rulebook {
     fn default() -> Self {
         Self::new(RuleSource::default())
@@ -749,6 +923,57 @@ mod tests {
     }
 
     #[test]
+    fn the_scripting_rules_have_settings_keys() {
+        assert_eq!(RuleKey::MoveStarless.key(), "move_starless");
+        assert_eq!(RuleKey::MoveArrival.key(), "move_arrival");
+        assert_eq!(RuleKey::MoveKeepFlag.key(), "move_keep_flag");
+        assert_eq!(RuleKey::BlankLeave.key(), "blank_leave");
+        assert_eq!(RuleKey::ScriptSound.key(), "script_sound");
+        assert_eq!(
+            RuleKey::ShipChangePersistence.key(),
+            "ship_change_persistence"
+        );
+        assert_eq!(RuleKey::ShipChangeMax.key(), "ship_change_max");
+        assert_eq!(RuleKey::ShipChangeCargo.key(), "ship_change_cargo");
+        assert_eq!(RuleKey::ShipChangeReserves.key(), "ship_change_reserves");
+        assert_eq!(RuleKey::PurchasePaintOrder.key(), "purchase_paint_order");
+        assert_eq!(RuleKey::CaptureHookOrder.key(), "capture_hook_order");
+        assert_eq!(RuleKey::StartShipPurchase.key(), "start_ship_purchase");
+        assert_eq!(RuleKey::MapExplore.key(), "map_explore");
+        assert_eq!(RuleKey::InvalidMap.key(), "invalid_map");
+        assert_eq!(RuleKey::RemoveRefund.key(), "remove_refund");
+        assert_eq!(RuleKey::RefitReserves.key(), "refit_reserves");
+    }
+
+    #[test]
+    fn the_shop_and_trade_rules_are_found_by_their_keys() {
+        assert_eq!(RuleKey::TradeLot.key(), "trade_lot");
+        assert_eq!(RuleKey::from_key("trade_lot"), Some(RuleKey::TradeLot));
+        assert_eq!(RuleKey::JunkTrade.key(), "junk_trade");
+        assert_eq!(RuleKey::from_key("junk_trade"), Some(RuleKey::JunkTrade));
+        assert_eq!(RuleKey::JunkPrice.key(), "junk_price");
+        assert_eq!(RuleKey::from_key("junk_price"), Some(RuleKey::JunkPrice));
+        assert_eq!(RuleKey::PurchaseCargo.key(), "purchase_cargo");
+        assert_eq!(
+            RuleKey::from_key("purchase_cargo"),
+            Some(RuleKey::PurchaseCargo)
+        );
+        assert_eq!(RuleKey::EventPrice.key(), "event_price");
+        assert_eq!(RuleKey::from_key("event_price"), Some(RuleKey::EventPrice));
+        assert_eq!(RuleKey::RaisedMax.key(), "raised_max");
+        assert_eq!(RuleKey::from_key("raised_max"), Some(RuleKey::RaisedMax));
+        assert_eq!(RuleKey::LauncherSale.key(), "launcher_sale");
+        assert_eq!(
+            RuleKey::from_key("launcher_sale"),
+            Some(RuleKey::LauncherSale)
+        );
+        assert_eq!(RuleKey::JunkFlags.key(), "junk_flags");
+        assert_eq!(RuleKey::from_key("junk_flags"), Some(RuleKey::JunkFlags));
+        assert_eq!(RuleKey::BuyRandom.key(), "buy_random");
+        assert_eq!(RuleKey::from_key("buy_random"), Some(RuleKey::BuyRandom));
+    }
+
+    #[test]
     fn each_rule_has_a_settings_key_found_by_name() {
         assert_eq!(
             RuleKey::ALL,
@@ -777,6 +1002,22 @@ mod tests {
                 RuleKey::GrantCount,
                 RuleKey::GrantMax,
                 RuleKey::PersonJoin,
+                RuleKey::MapExplore,
+                RuleKey::InvalidMap,
+                RuleKey::RemoveRefund,
+                RuleKey::RefitReserves,
+                RuleKey::PurchasePaintOrder,
+                RuleKey::CaptureHookOrder,
+                RuleKey::StartShipPurchase,
+                RuleKey::ShipChangePersistence,
+                RuleKey::ShipChangeMax,
+                RuleKey::ShipChangeCargo,
+                RuleKey::ShipChangeReserves,
+                RuleKey::MoveStarless,
+                RuleKey::MoveArrival,
+                RuleKey::MoveKeepFlag,
+                RuleKey::BlankLeave,
+                RuleKey::ScriptSound,
                 RuleKey::BuyRandom,
                 RuleKey::JunkFlags,
                 RuleKey::LauncherSale,
@@ -796,30 +1037,6 @@ mod tests {
                 RuleKey::TradeDebt
             ]
         );
-        assert_eq!(RuleKey::TradeLot.key(), "trade_lot");
-        assert_eq!(RuleKey::from_key("trade_lot"), Some(RuleKey::TradeLot));
-        assert_eq!(RuleKey::JunkTrade.key(), "junk_trade");
-        assert_eq!(RuleKey::from_key("junk_trade"), Some(RuleKey::JunkTrade));
-        assert_eq!(RuleKey::JunkPrice.key(), "junk_price");
-        assert_eq!(RuleKey::from_key("junk_price"), Some(RuleKey::JunkPrice));
-        assert_eq!(RuleKey::PurchaseCargo.key(), "purchase_cargo");
-        assert_eq!(
-            RuleKey::from_key("purchase_cargo"),
-            Some(RuleKey::PurchaseCargo)
-        );
-        assert_eq!(RuleKey::EventPrice.key(), "event_price");
-        assert_eq!(RuleKey::from_key("event_price"), Some(RuleKey::EventPrice));
-        assert_eq!(RuleKey::RaisedMax.key(), "raised_max");
-        assert_eq!(RuleKey::from_key("raised_max"), Some(RuleKey::RaisedMax));
-        assert_eq!(RuleKey::LauncherSale.key(), "launcher_sale");
-        assert_eq!(
-            RuleKey::from_key("launcher_sale"),
-            Some(RuleKey::LauncherSale)
-        );
-        assert_eq!(RuleKey::JunkFlags.key(), "junk_flags");
-        assert_eq!(RuleKey::from_key("junk_flags"), Some(RuleKey::JunkFlags));
-        assert_eq!(RuleKey::BuyRandom.key(), "buy_random");
-        assert_eq!(RuleKey::from_key("buy_random"), Some(RuleKey::BuyRandom));
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
         assert_eq!(RuleKey::GrantCount.key(), "grant_count");
         assert_eq!(RuleKey::GrantMax.key(), "grant_max");

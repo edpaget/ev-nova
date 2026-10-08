@@ -199,17 +199,22 @@ impl Rounds for OutfitRounds<'_> {
     /// Adds one of its outfit of lowest ID; none when no outfit is its
     /// rounds.
     fn stow(&mut self, ammo: WeaponId) {
-        let lowest = self
-            .sources
-            .iter()
-            .filter(|&&(of, _)| of == ammo)
-            .map(|&(_, outfit)| outfit)
-            .min();
-        if let Some(outfit) = lowest {
+        if let Some(outfit) = lowest_ammo_outfit(self.sources, ammo) {
             let count = self.owned.entry(outfit).or_default();
             *count = count.saturating_add(1);
         }
     }
+}
+
+/// The outfit a round of `ammo` is stowed as: the ammunition outfit of
+/// lowest ID among `sources` that is its rounds; none when no outfit is.
+#[must_use]
+pub fn lowest_ammo_outfit(sources: &[(WeaponId, OutfitId)], ammo: WeaponId) -> Option<OutfitId> {
+    sources
+        .iter()
+        .filter(|&&(of, _)| of == ammo)
+        .map(|&(_, outfit)| outfit)
+        .min()
 }
 
 /// The rounds of `ammo` among `owned` outfits: each ammunition outfit
@@ -456,14 +461,25 @@ impl Armament {
             .min()
     }
 
+    /// The bay a fighter of ship type `ship` docks into: the first that
+    /// launches it, in mount order; none when no bay does.
+    #[must_use]
+    pub fn bay_of(&self, ship: ShipId) -> Option<WeaponId> {
+        self.mounts
+            .iter()
+            .find(|mount| mount.spec.carried == Some(ship))
+            .map(|mount| mount.spec.id)
+    }
+
     /// Takes a fighter of ship type `ship` aboard, a round of the first
     /// bay that launches it, into `rounds` (see the module docs), and says
     /// whether one did; with none, nothing changes.
     pub fn stow(&mut self, ship: ShipId, rounds: &mut dyn Rounds) -> bool {
+        let bay = self.bay_of(ship);
         let Some(mount) = self
             .mounts
             .iter_mut()
-            .find(|mount| mount.spec.carried == Some(ship))
+            .find(|mount| Some(mount.spec.id) == bay)
         else {
             return false;
         };
@@ -2444,6 +2460,38 @@ mod tests {
         assert!(!armament.stow(ShipId(146), &mut none), "no bay launches it");
         assert_eq!(armament, before);
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn the_bay_of_a_ship_is_the_first_bay_launching_it() {
+        let armament = Armament::new([
+            (WeaponSpec::new(&blaster(128, 0)), 1),
+            (WeaponSpec::new(&bay(150, 145, 70)), 1),
+            (WeaponSpec::new(&bay(151, 144, 80)), 1),
+            (WeaponSpec::new(&bay(149, 144, 60)), 1),
+        ]);
+        assert_eq!(armament.bay_of(ShipId(144)), Some(WeaponId(151)));
+        assert_eq!(armament.bay_of(ShipId(145)), Some(WeaponId(150)));
+        assert_eq!(armament.bay_of(ShipId(146)), None, "no bay launches it");
+    }
+
+    #[test]
+    fn the_lowest_ammo_outfit_is_the_lowest_outfit_that_is_its_rounds() {
+        let sources = [
+            (WeaponId(149), OutfitId(205)),
+            (WeaponId(140), OutfitId(203)),
+            (WeaponId(149), OutfitId(204)),
+            (WeaponId(149), OutfitId(206)),
+        ];
+        assert_eq!(
+            lowest_ammo_outfit(&sources, WeaponId(149)),
+            Some(OutfitId(204))
+        );
+        assert_eq!(
+            lowest_ammo_outfit(&sources, WeaponId(140)),
+            Some(OutfitId(203))
+        );
+        assert_eq!(lowest_ammo_outfit(&sources, WeaponId(141)), None);
     }
 
     #[test]

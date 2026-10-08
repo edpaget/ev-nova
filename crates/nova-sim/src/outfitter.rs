@@ -18,10 +18,11 @@
 //! ones; 2128-2383 everywhere but that government's; 3128-3383 everywhere
 //! but that government's and independent ones. Alliances are not modelled
 //! until governments' relations are, so "this government or its allies"
-//! is this government alone. `Availability` goes through
-//! [`control_bits_allow`], which always holds until control bits exist,
-//! so for now every outfit gated by one is available (stock `oütf` 342,
-//! "Area Map - Vell-os", shows everywhere).
+//! is this government alone. `Availability` is tested through the
+//! [`ControlBits`](crate::ControlBits) port for the player's pilot (a
+//! [`Gate`]), as `_CanBuyOutfitItem` does (@0x4eb51); one that did not
+//! parse never holds. An outfit whose `Availability` does not hold is
+//! listed but cannot be bought, and can still be sold.
 //!
 //! # `BuyRandom`: what is for sale today
 //!
@@ -111,8 +112,14 @@
 //! [`OutfitRefusal::NotForSale`], which no player can tell apart: the
 //! original returns only whether the outfit can be bought, which enables
 //! its Buy button, and never shows or tells apart a refusal. A
-//! buy pays the price and adds one, or with
-//! [`OutfitFlags::REMOVE_AFTER_PURCHASE`] only pays. A sale is refused
+//! buy pays the price, then grants one through the session's grant path,
+//! as the original's `_DoOutfitDialog` calls `_GrantOutfitItem`
+//! (@0x5c21d): a map explores, a clean-record outfit cleans the legal
+//! record and a paint paints the ship instead of being added (see
+//! [`outfit_effects`](crate::outfit_effects)), and anything else is added,
+//! but taken away again with [`OutfitFlags::REMOVE_AFTER_PURCHASE`] (the
+//! original takes it away as the outfitter closes, @0x5daeb-0x5dafa). A
+//! sale is refused
 //! when the player owns none, the outfit is flagged
 //! [`OutfitFlags::CANNOT_SELL`], it is neither for sale here nor flagged
 //! [`OutfitFlags::SELL_ANYWHERE`], it lacks the free mass (by the engine,
@@ -241,17 +248,19 @@
 //!
 //! Which outfits a ship bought in the [`shipyard`](crate::shipyard) keeps is
 //! the shipyard's (flag 0x0004); flag 0x0020 only concerns a mission's
-//! change of ship.
+//! change of ship, the `H` set operator (see
+//! [`ship_change`](crate::ship_change)).
 
 use std::collections::BTreeMap;
 
 use crate::catalog::{GovtId, LandingSite, OutfitId, OutfitRecord};
 use crate::chance::Chance;
 use crate::combat::armament::MOD_AMMO;
+use crate::control::Gate;
 use crate::fuel::OutfitMod;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
-use crate::market::{Direction, MORE_CARGO, control_bits_allow};
+use crate::market::{Direction, MORE_CARGO};
 use crate::pilot::Pilot;
 use crate::rulebook::RuleSource;
 use crate::wares::{self, ALWAYS_RANDOM, DayRolls, HideBits, HideHigher, Roll};
@@ -272,6 +281,9 @@ impl OutfitFlags {
     pub const CANNOT_SELL: u16 = 0x0008;
     /// Removed after purchase: buying it only pays.
     pub const REMOVE_AFTER_PURCHASE: u16 = 0x0010;
+    /// Stays with the player when a mission's set operator changes its
+    /// ship (`H`): see [`ship_change`](crate::ship_change).
+    pub const MISSION_PERSISTENT: u16 = 0x0020;
     /// Not shown unless the player meets its `Require`, or owns one.
     pub const HIDE_UNLESS_REQUIRED: u16 = 0x0100;
     /// Its price is its `Cost` times the ship's `Mass`.
@@ -1057,6 +1069,8 @@ pub(crate) struct Shop<'a> {
     pub(crate) outfit_count: RuleSource,
     /// How a sale is refused for the free mass ([`sale_lacks_mass`]).
     pub(crate) sale_mass: RuleSource,
+    /// The control-bit test of an outfit's `Availability`.
+    pub(crate) gate: Gate<'a>,
 }
 
 impl Shop<'_> {
@@ -1256,7 +1270,7 @@ impl Shop<'_> {
             let owned = pilot.owned(record.id);
             let required = !requirements_apply(record.require_govt, self.site.govt)
                 || wares::requirement_met(record.require, contributed);
-            let available = control_bits_allow(&record.availability);
+            let available = self.gate.allows(&record.availability);
             let today = tech_allows(record, self.site)
                 && if owned > 0 {
                     rolls.hold(record.id);
@@ -1342,29 +1356,22 @@ impl Shop<'_> {
     }
 }
 
-/// Buys or sells one of `record` as `direction` says, paying `amount`,
-/// the price, for a buy, or being paid `amount`, the [`refund`], for a
-/// sale.
+/// Settles one of `record` as `direction` says: a buy pays `amount`, the
+/// price, the outfit then going through the session's grant path (see
+/// the module docs); a sale is paid `amount`, the [`refund`], and removes
+/// one.
 pub(crate) fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direction, amount: i64) {
-    let owned = pilot.owned(record.id);
-    let owned = match direction {
-        Direction::Buy => {
-            pilot.cash = pilot.cash.saturating_sub(amount);
-            if record.flags & OutfitFlags::REMOVE_AFTER_PURCHASE == 0 {
-                owned.saturating_add(1)
-            } else {
-                owned
-            }
-        }
+    match direction {
+        Direction::Buy => pilot.cash = pilot.cash.saturating_sub(amount),
         Direction::Sell => {
             pilot.cash = pilot.cash.saturating_add(amount);
-            owned.saturating_sub(1)
+            let owned = pilot.owned(record.id).saturating_sub(1);
+            if owned == 0 {
+                pilot.outfits.remove(&record.id);
+            } else {
+                pilot.outfits.insert(record.id, owned);
+            }
         }
-    };
-    if owned == 0 {
-        pilot.outfits.remove(&record.id);
-    } else {
-        pilot.outfits.insert(record.id, owned);
     }
 }
 
@@ -1372,8 +1379,9 @@ pub(crate) fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direct
 mod tests {
     use super::*;
     use crate::chance::NeverFires;
+    use crate::control::Test;
     use crate::stats::{MORE_FUEL, MORE_SPEED};
-    use crate::testkit::{FAST, Scripted, catalog, outfit, planet};
+    use crate::testkit::{AllowAll, FAST, RefuseBits, Scripted, catalog, outfit, planet};
 
     /// An outfitter of tech level 4 with special tech 6 and 55, of
     /// government 128.
@@ -1451,6 +1459,7 @@ mod tests {
             bought: Bought::default(),
             outfit_count: RuleSource::Engine,
             sale_mass: RuleSource::Engine,
+            gate: Gate::FRESH,
         }
     }
 
@@ -1478,6 +1487,16 @@ mod tests {
             buy_random,
             ..outfit(id, &[])
         }
+    }
+
+    fn open_gated(records: &[OutfitRecord], gate: Gate, pilot: &Pilot) -> Outfitter {
+        let site = port();
+        Shop {
+            gate,
+            ..shop(records, &site)
+        }
+        .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter")
     }
 
     fn open(records: &[OutfitRecord], pilot: &Pilot) -> Outfitter {
@@ -1858,17 +1877,90 @@ mod tests {
         assert_eq!(row(&outfitter, 128).buy, Ok(()));
     }
 
+    fn gated(id: i16, flags: u16, availability: &str) -> OutfitRecord {
+        OutfitRecord {
+            flags,
+            availability: Test::parse(availability),
+            ..outfit(id, &[])
+        }
+    }
+
     #[test]
-    fn hide_unless_available_shows_an_available_outfit() {
-        // Availability always holds until control bits exist.
-        let gated = OutfitRecord {
-            flags: OutfitFlags::HIDE_UNLESS_AVAILABLE,
-            availability: "b9999".to_owned(),
-            ..outfit(128, &[])
+    fn an_outfit_whose_availability_is_refused_is_listed_but_not_for_sale() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
         };
-        let outfitter = open(&[gated], &pilot());
+        let records = [gated(128, 0, "b7"), gated(129, 0, "b8")];
+        let outfitter = open_gated(&records, refusing, &pilot());
+        assert_eq!(listed(&outfitter), [128, 129]);
+        assert_eq!(row(&outfitter, 128).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(row(&outfitter, 129).buy, Ok(()), "another bit holds");
+    }
+
+    #[test]
+    fn hide_unless_available_hides_a_refused_outfit_unless_one_is_owned() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let records = [gated(128, OutfitFlags::HIDE_UNLESS_AVAILABLE, "b7")];
+        assert!(listed(&open_gated(&records, refusing, &pilot())).is_empty());
+        let owner = owning(&[(128, 1)]);
+        let outfitter = open_gated(&records, refusing, &owner);
         assert_eq!(listed(&outfitter), [128]);
-        assert_eq!(row(&outfitter, 128).buy, Ok(()));
+        assert_eq!(row(&outfitter, 128).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(row(&outfitter, 128).sell, Ok(()), "still sold back");
+    }
+
+    #[test]
+    fn a_new_pilots_clear_bit_refuses_an_outfit_by_novas_bits() {
+        let records = [
+            gated(128, OutfitFlags::HIDE_UNLESS_AVAILABLE, "b7"),
+            gated(129, 0, "b7"),
+            gated(130, OutfitFlags::HIDE_UNLESS_AVAILABLE, "!b7"),
+        ];
+        let outfitter = open(&records, &pilot());
+        assert_eq!(listed(&outfitter), [129, 130]);
+        assert_eq!(row(&outfitter, 129).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(row(&outfitter, 130).buy, Ok(()));
+    }
+
+    #[test]
+    fn a_malformed_availability_is_never_met() {
+        let records = [
+            gated(128, 0, "b1 &"),
+            gated(129, OutfitFlags::HIDE_UNLESS_AVAILABLE, "b1 &"),
+        ];
+        let allowing = Gate {
+            control_bits: &AllowAll,
+            ..Gate::FRESH
+        };
+        let outfitter = open_gated(&records, allowing, &pilot());
+        assert_eq!(listed(&outfitter), [128]);
+        assert_eq!(row(&outfitter, 128).buy, Err(OutfitRefusal::NotForSale));
+    }
+
+    #[test]
+    fn a_refused_outfit_hides_nothing_higher() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let records = [
+            OutfitRecord {
+                disp_weight: 5,
+                ..gated(129, OutfitFlags::HIDE_HIGHER, "b7")
+            },
+            OutfitRecord {
+                disp_weight: 5,
+                ..outfit(130, &[])
+            },
+        ];
+        assert_eq!(
+            listed(&open_gated(&records, refusing, &pilot())),
+            [129, 130]
+        );
     }
 
     #[test]
@@ -2126,6 +2218,7 @@ mod tests {
                 bought: Bought::default(),
                 outfit_count: RuleSource::Engine,
                 sale_mass: RuleSource::Engine,
+                gate: Gate::FRESH,
             }
             .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
             .expect("open")
@@ -2249,6 +2342,7 @@ mod tests {
             bought: Bought::default(),
             outfit_count: RuleSource::Engine,
             sale_mass: RuleSource::Engine,
+            gate: Gate::FRESH,
         }
         .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
         .expect("open")
@@ -3541,23 +3635,12 @@ mod tests {
     // Settling.
 
     #[test]
-    fn a_buy_pays_and_adds_one() {
+    fn a_buy_only_pays_leaving_the_outfit_to_the_grant_path() {
         let mut pilot = pilot();
         settle(&mut pilot, &heavy(), Direction::Buy, 4000);
-        assert_eq!((pilot.cash, pilot.owned(OutfitId(128))), (6000, 1));
+        assert_eq!((pilot.cash, pilot.owned(OutfitId(128))), (6000, 0));
         settle(&mut pilot, &heavy(), Direction::Buy, 4000);
-        assert_eq!((pilot.cash, pilot.owned(OutfitId(128))), (2000, 2));
-    }
-
-    #[test]
-    fn a_buy_removed_after_purchase_only_pays() {
-        let permit = OutfitRecord {
-            flags: OutfitFlags::REMOVE_AFTER_PURCHASE,
-            ..heavy()
-        };
-        let mut pilot = pilot();
-        settle(&mut pilot, &permit, Direction::Buy, 4000);
-        assert_eq!(pilot.cash, 6000);
+        assert_eq!(pilot.cash, 2000);
         assert_eq!(pilot.outfits().count(), 0);
     }
 

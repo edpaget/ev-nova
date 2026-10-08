@@ -18,7 +18,7 @@ use nova_view::geometry::{Bounds, Point};
 use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
 use nova_view::ui::new_pilot::{
-    CANCEL_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome,
+    CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome,
     OK_ITEM as NEW_PILOT_OK_ITEM,
 };
 use nova_view::ui::prefs::{
@@ -414,6 +414,11 @@ fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
             template.items[CANCEL_ITEM - 1].kind,
             ItemSpec::Button("Cancel".to_owned())
         );
+        assert_eq!(
+            template.items[GENDER_ITEM - 1].kind,
+            ItemSpec::Control(500),
+            "{name}"
+        );
         let mut dialog = NewPilotDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
             .expect("builds");
         let bounds = dialog.dialog().bounds();
@@ -429,8 +434,27 @@ fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
                 _ => None,
             })
             .collect();
-        for shown in ["Create a new pilot:", "Full Name:", "OK", "Cancel"] {
+        for shown in [
+            "Create a new pilot:",
+            "Full Name:",
+            "OK",
+            "Cancel",
+            "Gender:",
+            "Male",
+        ] {
             assert!(texts.contains(&shown.to_owned()), "{name}: {texts:?}");
+        }
+        let gender = dialog
+            .dialog()
+            .item_bounds(GENDER_ITEM)
+            .expect("an item")
+            .center();
+        for pressed in [true, false] {
+            dialog.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: gender,
+            });
         }
         for c in "Ada".chars() {
             dialog.input(&Input::Text(c));
@@ -438,7 +462,10 @@ fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
         dialog.input(&key(Key::Enter));
         assert_eq!(
             dialog.take_outcome(),
-            Some(NewPilotOutcome::Create("Ada".to_owned())),
+            Some(NewPilotOutcome::Create {
+                name: "Ada".to_owned(),
+                gender: nova_sim::Gender::Female,
+            }),
             "{name}"
         );
     }

@@ -62,6 +62,7 @@ impl PilotCatalog for GameData {
             legal: std::array::from_fn(|slot| {
                 character.record.govt[slot].map(|govt| (govt, character.record.status[slot]))
             }),
+            on_start: self.set_expr(character.record.on_start.as_str()).into(),
         })
     }
 
@@ -100,7 +101,11 @@ impl PilotCatalog for GameData {
                     buy_random: record.buy_random,
                     hire_random: record.hire_random,
                     require: record.require.bits(),
-                    availability: record.availability.as_str().to_owned(),
+                    availability: self.test_expr(record.availability.as_str()).into(),
+                    appear_on: self.test_expr(record.appear_on.as_str()).into(),
+                    on_purchase: self.set_expr(record.on_purchase.as_str()).into(),
+                    on_capture: self.set_expr(record.on_capture.as_str()).into(),
+                    on_retire: self.set_expr(record.on_retire.as_str()).into(),
                     flags3: record.flags3.bits(),
                     disp_weight: record.disp_weight,
                     max_gun: record.max_gun,
@@ -143,7 +148,9 @@ impl PilotCatalog for GameData {
                     require: record.require.bits(),
                     require_govt: record.require_govt,
                     buy_random: record.buy_random,
-                    availability: record.availability.as_str().to_owned(),
+                    availability: self.test_expr(record.availability.as_str()).into(),
+                    on_purchase: self.set_expr(record.on_purchase.as_str()).into(),
+                    on_sell: self.set_expr(record.on_sell.as_str()).into(),
                     item_class: record.item_class,
                     lc_name: record.lc_name.as_str().to_owned(),
                     lc_plural: record.lc_plural.as_str().to_owned(),
@@ -199,6 +206,14 @@ impl PilotCatalog for GameData {
                     position: Vec2::new(f32::from(system.x_pos), f32::from(system.y_pos)),
                     links: system.con.into_iter().flatten().collect(),
                     govt: system.govt,
+                    stellars: system
+                        .nav_def
+                        .iter()
+                        .map(|slot| {
+                            let stellar = self.get::<Stellar>(slot.as_ref()?.0)?.ok()?.record;
+                            Some((stellar.flags.bits(), stellar.flags2.bits()))
+                        })
+                        .collect(),
                 })
             })
             .collect()
@@ -227,8 +242,8 @@ impl PilotCatalog for GameData {
                     base_price: record.base_price,
                     sold_at: stellars(&record.sold_at),
                     bought_at: stellars(&record.bought_at),
-                    buy_on: record.buy_on.as_str().to_owned(),
-                    sell_on: record.sell_on.as_str().to_owned(),
+                    buy_on: self.test_expr(record.buy_on.as_str()).into(),
+                    sell_on: self.test_expr(record.sell_on.as_str()).into(),
                     flags: record.flags.bits(),
                 })
             })
@@ -287,7 +302,7 @@ impl PilotCatalog for GameData {
                     price_delta: record.price_delta,
                     duration: record.duration,
                     freq: record.freq,
-                    activate_on: record.activate_on.as_str().to_owned(),
+                    activate_on: self.test_expr(record.activate_on.as_str()).into(),
                 })
             })
             .collect()
@@ -349,7 +364,7 @@ impl TrafficCatalog for GameData {
                         .collect(),
                     govt: fleet.govt,
                     link_syst: fleet.link_syst,
-                    appear_on: fleet.appear_on.as_str().to_owned(),
+                    appear_on: self.test_expr(fleet.appear_on.as_str()).into(),
                 })
             })
             .collect()
@@ -394,7 +409,7 @@ impl TrafficCatalog for GameData {
                         .map(|mission| mission.0)
                         .filter(|&mission| mission > LAST_UNUSED),
                     flags: record.flags.bits(),
-                    active_on: record.active_on.as_str().to_owned(),
+                    active_on: self.test_expr(record.active_on.as_str()).into(),
                     subtitle: record.subtitle.as_str().to_owned(),
                     flags2: record.flags2.bits(),
                     grant_class: record.grant_class,
@@ -714,6 +729,7 @@ mod tests {
         DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
         StartDate, StellarId, StockWeapon, WeaponId, WeaponRecord,
     };
+    use crate::control::{Script, Test};
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -731,6 +747,16 @@ mod tests {
         fn read_fork(&self, _path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
             Ok((fork == Fork::Data).then(|| self.0.clone()))
         }
+    }
+
+    /// Whether two tests are the one parse, shared.
+    fn shared(a: &Test, b: &Test) -> bool {
+        std::sync::Arc::ptr_eq(&a.0, &b.0)
+    }
+
+    /// Whether two scripts are the one parse, shared.
+    fn shared_script(a: &Script, b: &Script) -> bool {
+        std::sync::Arc::ptr_eq(&a.0, &b.0)
     }
 
     fn store(resources: &[(ResType, i16, Vec<u8>)]) -> GameData {
@@ -809,10 +835,25 @@ mod tests {
                 start: StartDate::default(),
                 cash: 0,
                 legal: [None; 4],
+                on_start: Script::default(),
             })
         );
         let shipless = store(&[(Character::TYPE, 128, character(-1, [130, -1, -1, -1]))]);
         assert_eq!(shipless.first_character().map(|c| c.ship), Ok(None));
+    }
+
+    #[test]
+    fn the_start_carries_the_chärs_on_start_parsed() {
+        let mut bytes = character(128, [130, -1, -1, -1]);
+        bytes[0x32..0x38].copy_from_slice(b"b5 !b6");
+        let data = store(&[(Character::TYPE, 128, bytes)]);
+        assert_eq!(
+            data.first_character().map(|c| c.on_start),
+            Ok(Script::parse("b5 !b6"))
+        );
+        let first = data.first_character().expect("reads").on_start;
+        let again = data.first_character().expect("reads").on_start;
+        assert!(shared_script(&first, &again), "parsed once");
     }
 
     #[test]
@@ -1037,6 +1078,7 @@ mod tests {
         put_i16s(&mut bytes, 0x3C, &[25, 30, 41, 2, 3]);
         bytes[0x64..0x6C].copy_from_slice(&0x10_u64.to_be_bytes());
         bytes[0x6C..0x70].copy_from_slice(b"b422");
+        bytes[0x16B..0x16F].copy_from_slice(b"!b17");
         bytes[0x380..0x388].copy_from_slice(&0x0000_0002_0000_0001_u64.to_be_bytes());
         put_i16s(&mut bytes, 0x388, &[45, 40]);
         bytes[0x5CE..0x5DD].copy_from_slice(b"Heavy\\nShuttle!");
@@ -1045,6 +1087,9 @@ mod tests {
         put_i16s(&mut bytes, 0x48, &[1129]);
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
         put_i16s(&mut bytes, 0x732, &[2]);
+        bytes[0x26A..0x26E].copy_from_slice(b"b300");
+        bytes[0x3D0..0x3D5].copy_from_slice(b"^b301");
+        bytes[0x4CF..0x4D3].copy_from_slice(b"!b30");
         bytes
     }
 
@@ -1076,7 +1121,8 @@ mod tests {
             buy_random: 45,
             hire_random: 40,
             require: 0x0000_0002_0000_0001,
-            availability: "b422".to_owned(),
+            availability: Test::parse("b422"),
+            appear_on: Test::parse("!b17"),
             flags3: 0x4100,
             disp_weight: 25,
             max_gun: 4,
@@ -1087,6 +1133,9 @@ mod tests {
             comm_name: "heavy shuttle".to_owned(),
             inherent_govt: Some(GovtId(129)),
             escort_type: 2,
+            on_capture: Script::parse("^b301"),
+            on_purchase: Script::parse("b300"),
+            on_retire: Script::parse("!b30"),
         };
         assert_eq!(
             data.ships(),
@@ -1105,6 +1154,25 @@ mod tests {
             "the same default items"
         );
         assert_eq!(store(&[]).ships(), []);
+        for (a, b) in data.ships().iter().zip(&data.ships()) {
+            assert!(
+                shared(&a.availability, &b.availability),
+                "parsed once: {:?}",
+                a.id
+            );
+            assert!(
+                shared(&a.appear_on, &b.appear_on),
+                "AppearOn parsed once: {:?}",
+                a.id
+            );
+            for (a, b) in [
+                (&a.on_purchase, &b.on_purchase),
+                (&a.on_capture, &b.on_capture),
+                (&a.on_retire, &b.on_retire),
+            ] {
+                assert!(shared_script(a, b), "each hook parsed once: {a:?}");
+            }
+        }
     }
 
     #[test]
@@ -1165,6 +1233,8 @@ mod tests {
         bytes[0x32B..0x334].copy_from_slice(b"Big\\nGun!");
         bytes[0x36B..0x372].copy_from_slice(b"big gun");
         put_i16s(&mut bytes, 0x3F0, &[75, 1128]);
+        bytes[0x12D..0x131].copy_from_slice(b"b400");
+        bytes[0x22C..0x231].copy_from_slice(b"!b400");
         bytes
     }
 
@@ -1200,10 +1270,12 @@ mod tests {
             require: 0x0000_0008_0000_0001,
             require_govt: 1128,
             buy_random: 75,
-            availability: "b12".to_owned(),
+            availability: Test::parse("b12"),
             item_class: 0,
             lc_name: "big gun".to_owned(),
             lc_plural: String::new(),
+            on_purchase: Script::parse("b400"),
+            on_sell: Script::parse("!b400"),
         };
         assert_eq!(
             data.outfits(),
@@ -1214,6 +1286,15 @@ mod tests {
             "a resource without a name goes by its LCName; an undecodable one is skipped"
         );
         assert_eq!(store(&[]).outfits(), []);
+        for (a, b) in data.outfits().iter().zip(&data.outfits()) {
+            assert!(
+                shared(&a.availability, &b.availability),
+                "parsed once: {:?}",
+                a.id
+            );
+            assert!(shared_script(&a.on_purchase, &b.on_purchase), "{:?}", a.id);
+            assert!(shared_script(&a.on_sell, &b.on_sell), "{:?}", a.id);
+        }
     }
 
     #[test]
@@ -1445,12 +1526,14 @@ mod tests {
                     position: Vec2::new(-20.0, 40.0),
                     links: Vec::new(),
                     govt: None,
+                    stellars: vec![None; 16],
                 },
                 StarSystem {
                     id: SystemId(131),
                     position: Vec2::new(600.0, -75.0),
                     links: vec![SystemId(130), SystemId(999), SystemId(131)],
                     govt: Some(GovtId(140)),
+                    stellars: vec![None; 16],
                 },
             ]
         );
@@ -1494,6 +1577,27 @@ mod tests {
                 Some(SoundId(10_000)),
             ]
         );
+    }
+
+    #[test]
+    fn a_systems_stellars_on_the_star_map_are_each_nav_slots_flags_raw() {
+        let mut bytes = system_with(&[129, 999, 128, 131]);
+        put_i16s(&mut bytes, 0x04, &[-1; 16]);
+        let data = store(&[
+            (System::TYPE, 130, bytes),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 0x0000_0021, 0)),
+            (
+                Stellar::TYPE,
+                129,
+                flagged2(stellar(0, 0, 0, 0x8001, 0), 0x3000),
+            ),
+            (Stellar::TYPE, 131, short(stellar(0, 0, 0, 1, 0))),
+        ]);
+        let map = data.star_map();
+        let mut expected = vec![Some((0x8001, 0x3000)), None, Some((0x21, 0)), None];
+        expected.resize(16, None);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map[0].stellars, expected, "missing and unreadable are None");
     }
 
     #[test]
@@ -1786,8 +1890,8 @@ mod tests {
                     base_price: 300,
                     sold_at: vec![StellarId(160)],
                     bought_at: Vec::new(),
-                    buy_on: String::new(),
-                    sell_on: String::new(),
+                    buy_on: Test::default(),
+                    sell_on: Test::default(),
                     flags: 0,
                 },
                 JunkRecord {
@@ -1796,14 +1900,21 @@ mod tests {
                     base_price: 1200,
                     sold_at: vec![StellarId(189), StellarId(165)],
                     bought_at: vec![StellarId(185), StellarId(199)],
-                    buy_on: "b43".to_owned(),
-                    sell_on: "!b80".to_owned(),
+                    buy_on: Test::parse("b43"),
+                    sell_on: Test::parse("!b80"),
                     flags: 0x0003,
                 },
             ],
             "a resource without a name goes by its LCName; an undecodable one is skipped"
         );
         assert_eq!(store(&[]).junk(), []);
+        for (a, b) in data.junk().iter().zip(&data.junk()) {
+            assert!(
+                shared(&a.buy_on, &b.buy_on) && shared(&a.sell_on, &b.sell_on),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
 
     /// An `öops` at `stellar` moving `commodity` by `delta` for `duration`
@@ -1854,7 +1965,7 @@ mod tests {
                     price_delta: -15,
                     duration: 30,
                     freq: 35,
-                    activate_on: String::new(),
+                    activate_on: Test::default(),
                 },
                 DisasterRecord {
                     id: DisasterId(129),
@@ -1864,7 +1975,7 @@ mod tests {
                     price_delta: 40,
                     duration: 100,
                     freq: 25,
-                    activate_on: "!b80".to_owned(),
+                    activate_on: Test::parse("!b80"),
                 },
                 DisasterRecord {
                     id: DisasterId(131),
@@ -1874,11 +1985,18 @@ mod tests {
                     price_delta: 1,
                     duration: 1,
                     freq: 1,
-                    activate_on: String::new(),
+                    activate_on: Test::default(),
                 },
             ]
         );
         assert_eq!(store(&[]).disasters(), []);
+        for (a, b) in data.disasters().iter().zip(&data.disasters()) {
+            assert!(
+                shared(&a.activate_on, &b.activate_on),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
 
     #[test]
@@ -2263,7 +2381,7 @@ mod tests {
                     }],
                     govt: Some(GovtId(129)),
                     link_syst: -1,
-                    appear_on: String::new(),
+                    appear_on: Test::default(),
                 },
                 FleetRecord {
                     id: FleetId(130),
@@ -2275,12 +2393,19 @@ mod tests {
                     }],
                     govt: None,
                     link_syst: 10_000,
-                    appear_on: "b42".to_owned(),
+                    appear_on: Test::parse("b42"),
                 },
             ],
             "by ID, the undecodable one skipped and the unused escort slots left out"
         );
         assert_eq!(store(&[]).fleets(), []);
+        for (a, b) in data.fleets().iter().zip(&data.fleets()) {
+            assert!(
+                shared(&a.appear_on, &b.appear_on),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
 
     /// A `përs` linked to `link_syst`, of `govt`, AI type 3, `Aggress` 2
@@ -2372,7 +2497,7 @@ mod tests {
                 hail_quote: 8,
                 link_mission: None,
                 flags: 0x0090,
-                active_on: "b0 & !b8".to_owned(),
+                active_on: Test::parse("b0 & !b8"),
                 subtitle: "Top Gun".to_owned(),
                 flags2: 0x0001,
                 grant_class: 0,
@@ -2388,6 +2513,13 @@ mod tests {
         assert_eq!(nameless.hail_pict, Some(7800));
         assert!(nameless.weapons.is_empty());
         assert_eq!(store(&[]).persons(), []);
+        for (a, b) in data.persons().iter().zip(&data.persons()) {
+            assert!(
+                shared(&a.active_on, &b.active_on),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
 
     #[test]

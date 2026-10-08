@@ -756,14 +756,14 @@ fn a_map_bought_greys_buy_until_the_outfitter_opens_again() {
     game.click(cell);
     let enabled = buy_color(&game.frame());
     game.press(KeyCode::KeyB);
-    assert_eq!(game.pilot().owned(MAP), 1);
+    // A map explores as it is bought, and is not kept.
+    assert_eq!(game.pilot().owned(MAP), 0);
     assert_eq!(game.pilot().cash(), 24_000);
 
     // Bought once this opening: Buy greys, and B buys nothing more.
     assert_ne!(buy_color(&game.frame()), enabled, "Buy greyed");
     game.press(KeyCode::KeyB);
-    assert_eq!(game.pilot().owned(MAP), 1);
-    assert_eq!(game.pilot().cash(), 24_000);
+    assert_eq!(game.pilot().cash(), 24_000, "nothing more bought");
 
     // Done, then the Outfitter again: Buy is enabled and buys.
     game.press(KeyCode::Escape);
@@ -772,6 +772,6 @@ fn a_map_bought_greys_buy_until_the_outfitter_opens_again() {
     game.click(cell);
     assert_eq!(buy_color(&game.frame()), enabled, "Buy enabled again");
     game.press(KeyCode::KeyB);
-    assert_eq!(game.pilot().owned(MAP), 2);
+    assert_eq!(game.pilot().owned(MAP), 0);
     assert_eq!(game.pilot().cash(), 23_000);
 }

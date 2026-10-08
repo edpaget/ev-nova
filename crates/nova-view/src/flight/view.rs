@@ -59,7 +59,10 @@
 //! landed at an outfitter, so can its outfitter ([`FlightView::outfitter`],
 //! [`FlightView::outfit`]); and landed at a shipyard, a new ship can be
 //! bought ([`FlightView::shipyard`], [`FlightView::buy_ship`]), whose
-//! sprite sheet is read then.
+//! sprite sheet is read then. Whenever the session flies a class other
+//! than the one the player's sprite sheet was read for, after a purchase,
+//! a capture, or a `C`, `E` or `H` set operator (settled with
+//! [`FlightView::settle_script`]), the sheet is read afresh, once.
 //!
 //! The HUD is drawn over everything but a jump's fade: the status bar against the
 //! right edge, its radar showing the stellars around the ship as drawn,
@@ -177,7 +180,7 @@
 //!   dialog over the paused flight; each press there goes through
 //!   [`FlightView::plunder`], and a capture's assignment through
 //!   [`FlightView::assign`], each saying what it did as a message. After
-//!   "Use As My Ship" the new ship's sprite sheet is read. Boarding a
+//!   "Use As My Ship" the new ship's sprite sheet is read, once. Boarding a
 //!   person that grants outfits says what it retrieved
 //!   ([`grant_message`]) for [`GRANT_SHOWN_FOR`].
 //! - Y (a press) hails the target ([`Session::hail`]), the comm dialog
@@ -282,7 +285,10 @@ use nova_sim::{
     StellarId, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2,
     flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
-use nova_sim::{ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules};
+use nova_sim::{
+    ControlBits, HireList, HireRefusal, HireTerms, Hired, HookRules, OutfitRules, PayNote,
+    PersonRules, ScriptEffectRules, ShipChangeRules,
+};
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
@@ -295,6 +301,7 @@ use super::jump::{JumpEffect, JumpPhase};
 use super::sprite::rotation_frame;
 use super::target::{self, TargetShown};
 use super::weapons::{self, BeamShown, ShotShown};
+use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
 use crate::system::camera::Camera;
@@ -864,6 +871,8 @@ pub struct FlightView<C> {
     scene: Option<SystemScene>,
     /// The player ship's sheet, or why it cannot be shown.
     sheet: Result<ShipSheet, String>,
+    /// The class `sheet` was read for; `None` when the session failed.
+    sheet_ship: Option<ShipId>,
     /// The HUD's status bar, or why it cannot be shown.
     status_bar: Result<StatusBar, String>,
     /// Turns frame times into simulation steps.
@@ -981,15 +990,27 @@ impl<
         Self::flying(catalog, session)
     }
 
+    /// Begins a new pilot's game as [`Session::begin`] does, on the
+    /// flight's chance, and shows on the course map any system it
+    /// explored: for a pilot just created, before its first save. A
+    /// session that failed begins nothing.
+    pub fn begin(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.begin(&self.catalog, &mut self.chance);
+            self.map.show_explored(session.pilot().explored());
+        }
+    }
+
     fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
         let session = session.map_err(|err| err.to_string());
-        let (scene, sheet, status_bar) = match &session {
+        let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
                 Some(SystemScene::load(&catalog, session.system())),
                 catalog.ship_sheet(session.ship()),
+                Some(session.ship()),
                 hud::choose_status_bar(&catalog, session.government()),
             ),
-            Err(reason) => (None, Err(reason.clone()), Err(reason.clone())),
+            Err(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
         };
         let previous = session
             .as_ref()
@@ -1016,6 +1037,7 @@ impl<
             session,
             scene,
             sheet,
+            sheet_ship,
             status_bar,
             clock: FixedStep::new(),
             previous,
@@ -1340,6 +1362,62 @@ impl<
         }
     }
 
+    /// The flight with granting and removing outfits following `rules`
+    /// ([`Session::with_outfit_rules`]).
+    #[must_use]
+    pub fn with_outfit_rules(self, rules: OutfitRules) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_outfit_rules(rules)),
+            ..self
+        }
+    }
+
+    /// The flight with the set-expression hooks following `rules` where
+    /// their order is disputed ([`Session::with_hook_rules`]).
+    #[must_use]
+    pub fn with_hook_rules(self, rules: HookRules) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_hook_rules(rules)),
+            ..self
+        }
+    }
+
+    /// The flight with the ship-change set operators following `rules`
+    /// where the Bible and the engine disagree
+    /// ([`Session::with_ship_change_rules`]).
+    #[must_use]
+    pub fn with_ship_change_rules(self, rules: ShipChangeRules) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_ship_change_rules(rules)),
+            ..self
+        }
+    }
+
+    /// The flight with the moving set operators following `rules` where
+    /// the Bible and the engine disagree
+    /// ([`Session::with_script_effect_rules`]).
+    #[must_use]
+    pub fn with_script_effect_rules(self, rules: ScriptEffectRules) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_script_effect_rules(rules)),
+            ..self
+        }
+    }
+
+    /// The flight with the `T` set operator naming the ship from
+    /// `strings`' string lists ([`Session::with_strings`]).
+    #[must_use]
+    pub fn with_strings(self, strings: Rc<dyn CommCatalog>) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_strings(strings)),
+            ..self
+        }
+    }
+
     /// The flight with `bits` testing a ship's `Availability` for hire
     /// ([`Session::with_control_bits`]).
     #[must_use]
@@ -1375,10 +1453,15 @@ impl<
         Self { behaviour, ..self }
     }
 
-    /// The flight with its ships disabled as `rule` says.
+    /// The flight with its ships disabled as `rule` says: in the fight,
+    /// and in its session's changes of ship
+    /// ([`Session::with_disable_rule`]).
     #[must_use]
     pub fn with_disable_rule(self, disable_rule: Rc<dyn DisableRule>) -> Self {
         Self {
+            session: self
+                .session
+                .map(|session| session.with_disable_rule(Rc::clone(&disable_rule))),
             disable_rule,
             ..self
         }
@@ -1637,15 +1720,14 @@ impl<
         };
         let notes = session.take_fighter_notes();
         let pay = session.take_pay_notes();
-        let scene = SystemScene::load(&self.catalog, system);
-        self.map.show_course(system, session.course());
-        self.map.show_explored(session.pilot().explored());
-        self.previous = *session.player();
-        self.alpha = 0.0;
-        self.message = None;
         let date = session.date_text();
-        let mut said: Vec<String> = session
-            .take_messages()
+        let leads: Vec<_> = session.take_messages();
+        self.lay_out(system);
+        self.message = None;
+        let Some(scene) = &self.scene else {
+            return;
+        };
+        let mut said: Vec<String> = leads
             .into_iter()
             .map(arrival_lead)
             .next_back()
@@ -1664,10 +1746,121 @@ impl<
         if !said.is_empty() {
             self.show(said.join("  "));
         }
-        self.scene = Some(scene);
+    }
+
+    /// Lays out `system`, the session's: its scene, read from the catalog,
+    /// the course map's course and explored systems, and the ship drawn
+    /// from where it is, the last system's NPCs and effects let go.
+    fn lay_out(&mut self, system: SystemId) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        self.scene = Some(SystemScene::load(&self.catalog, system));
+        self.map.show_course(system, session.course());
+        self.map.show_explored(session.pilot().explored());
+        self.previous = *session.player();
+        self.alpha = 0.0;
         self.npc_previous.clear();
         self.effects.clear();
         self.read_npc_sheets();
+    }
+
+    /// The pilot flying, as the developer tools' desk: its edits reach
+    /// the session, moves read the catalog, and the course map's galaxy
+    /// names the places. `None` when the session failed.
+    pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, C>> {
+        let session = self.session.as_mut().ok()?;
+        Some(SessionDesk::new(session, &self.catalog, self.map.model()))
+    }
+
+    /// Catches the screen up with an edit made through the pilot desk:
+    /// when the session is in another system than the one laid out, it is
+    /// laid out as an arrival is, with no message; otherwise the course
+    /// map shows the session's course again and the ship is drawn where
+    /// the session has it, as after a move to another stellar. Nothing is
+    /// read when nothing moved.
+    pub fn resync(&mut self) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        let system = session.system();
+        if self.scene.as_ref().map(SystemScene::id) == Some(system) {
+            self.map.show_course(system, session.course());
+            self.previous = *session.player();
+            self.alpha = 0.0;
+        } else {
+            self.lay_out(system);
+        }
+    }
+
+    /// Takes off from the stellar landed on, and gives it; `None` when the
+    /// ship has not landed. The next frame draws the ship where it is, at
+    /// the stellar, not on its way from where it was, in the system a move
+    /// made while landed went to, laid out afresh; it shows no message
+    /// from before the landing, but says how many hired escorts defected
+    /// for want of the take-off's pay ([`defection_message`]); the
+    /// session populates the system's traffic afresh on its next tick
+    /// ([`Session::take_off`]).
+    pub fn take_off(&mut self) -> Option<StellarId> {
+        let stellar = self.session.as_mut().ok()?.take_off()?;
+        let said = self.took_off();
+        self.say_all(&said);
+        Some(stellar)
+    }
+
+    /// Catches the screen up with the session having taken off: the ship
+    /// drawn where it is, in the system laid out afresh if a move while
+    /// landed changed it, no message from before kept; gives what paying
+    /// the escorts for the take-off has to say.
+    fn took_off(&mut self) -> Vec<String> {
+        let pay = self
+            .session
+            .as_mut()
+            .map(Session::take_pay_notes)
+            .unwrap_or_default();
+        self.resync();
+        self.message = None;
+        pay_notes_message(&pay)
+    }
+
+    /// Shows `said`, joined by two spaces, when there is anything.
+    fn say_all(&mut self, said: &[String]) {
+        if !said.is_empty() {
+            self.say(said.join("  "));
+        }
+    }
+
+    /// Settles what the set expressions run since queued, as
+    /// [`Session::settle_script`] does, reading the catalog and drawing on
+    /// the flight's chance, and gives the stellar a `Q` made the ship take
+    /// off from, for the router to close its spaceport. A take-off is
+    /// caught up with as [`FlightView::take_off`] is, the `Q`'s message
+    /// shown before what the take-off's pay has to say. After a move in
+    /// flight the system the ship is in is laid out afresh, even the same
+    /// one, as the original kills its explosions and smoke, and how many
+    /// fighters were abandoned, if any, is shown after a `Q`'s message. A
+    /// move while landed shows once the ship takes off. When the session
+    /// now flies a class other than the one the player's sprite sheet was
+    /// read for, as after a `C`, `E` or `H`, the sheet is read afresh.
+    pub fn settle_script(&mut self) -> Option<StellarId> {
+        let session = self.session.as_mut().ok()?;
+        let settled = session.settle_script(&self.catalog, &mut self.chance);
+        let flying = session.landed().is_none();
+        let mut said: Vec<String> = settled.message.into_iter().collect();
+        if settled.took_off.is_some() {
+            said.extend(self.took_off());
+        } else if flying && let Some(system) = settled.moved.map(|_| session.system()) {
+            let notes = session.take_fighter_notes();
+            self.lay_out(system);
+            said.extend(
+                notes
+                    .into_iter()
+                    .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count)),
+            );
+        }
+        self.say_all(&said);
+        self.follow_ship();
+        settled.took_off
     }
 
     /// Plays `effect` for the ship having come out of a gate into
@@ -1783,31 +1976,47 @@ impl<
 }
 
 impl<C: ShipSprites> FlightView<C> {
-    /// Buys a ship named `name` as [`Session::buy_ship`] does, on the
-    /// flight's chance, and reads the new ship's sprite sheet, so the new
-    /// hull is drawn once it takes off; a session that failed has no
+    /// Buys a ship named `name` as [`Session::buy_ship`] does, it and its
+    /// hooks drawing on the flight's chance, and reads the sprite sheet of
+    /// the class the session then flies (the one bought, or the one its
+    /// hooks changed it to), so the new hull is drawn once it takes off; a
+    /// refused purchase reads nothing, and a session that failed has no
     /// shipyard.
     pub fn buy_ship(&mut self, ship: ShipId, name: &str) -> Result<ShipPurchase, ShipRefusal> {
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
         let bought = session.buy_ship(ship, name, &mut self.chance)?;
-        self.sheet = self.catalog.ship_sheet(ship);
+        self.follow_ship();
         Ok(bought)
     }
 
     /// Assigns the ship captured, as [`Session::assign`] does, and says
     /// what it did; after "Use As My Ship" the new ship's sprite sheet is
-    /// read, and it is drawn where it is, not on its way from the old
+    /// read, once, and it is drawn where it is, not on its way from the old
     /// ship. `None` when no capture awaits its assignment.
     pub fn assign(&mut self, choice: Assignment) -> Option<Assigned> {
         let session = self.session.as_mut().ok()?;
         let assigned = session.assign(choice, &mut self.chance)?;
         if assigned == Assigned::MyShip {
-            self.sheet = self.catalog.ship_sheet(session.ship());
             self.previous = *session.player();
             self.alpha = 0.0;
         }
+        self.follow_ship();
         self.say(assigned_message(assigned));
         Some(assigned)
+    }
+
+    /// Reads the player's sprite sheet afresh when the session flies a
+    /// class other than the one it was read for, so a ship bought,
+    /// captured or changed by a set expression is drawn. A sheet that
+    /// cannot be read is kept against its class too, so it is not tried
+    /// again each frame.
+    fn follow_ship(&mut self) {
+        let Ok(session) = &self.session else { return };
+        let ship = session.ship();
+        if self.sheet_ship != Some(ship) {
+            self.sheet = self.catalog.ship_sheet(ship);
+            self.sheet_ship = Some(ship);
+        }
     }
 }
 
@@ -1836,27 +2045,6 @@ impl<C> FlightView<C> {
     /// to show the spaceport.
     pub fn take_landing(&mut self) -> Option<StellarId> {
         self.pending_landing.take()
-    }
-
-    /// Takes off from the stellar landed on, and gives it; `None` when the
-    /// ship has not landed. The next frame draws the ship where it is, at
-    /// the stellar, not on its way from where it was, and shows no message
-    /// from before the landing, but says how many hired escorts defected
-    /// for want of the take-off's pay ([`defection_message`]); the
-    /// session populates the system's traffic afresh on its next tick
-    /// ([`Session::take_off`]).
-    pub fn take_off(&mut self) -> Option<StellarId> {
-        let session = self.session.as_mut().ok()?;
-        let stellar = session.take_off()?;
-        let pay = session.take_pay_notes();
-        self.previous = self.current();
-        self.alpha = 0.0;
-        self.message = None;
-        let said = pay_notes_message(&pay);
-        if !said.is_empty() {
-            self.say(said.join("  "));
-        }
-        Some(stellar)
     }
 
     /// The message on screen, if any.
@@ -2018,8 +2206,9 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// Buys or sells an outfit as [`Session::outfit`] does, on the
-    /// flight's chance; a session that failed has no outfitter.
+    /// Buys or sells an outfit as [`Session::outfit`] does, it and its
+    /// hook drawing on the flight's chance; a session that failed has no
+    /// outfitter.
     pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
         match &mut self.session {
             Ok(session) => session.outfit(order, &mut self.chance),
@@ -2759,6 +2948,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::devtools::{PilotDesk, PilotEdit};
     use crate::draw::lights_tint;
     use crate::flight::catalog::{
         Blink, BoomLook, GovtId, LayerSheet, StatusBarLayout, TargetCard, WeaponLook,
@@ -2990,8 +3180,10 @@ mod tests {
             self.ships.clone()
         }
 
+        /// Sol and Alpha Centauri; Barnard, which has no stellars, only
+        /// when Alpha Centauri links on to it.
         fn system_exists(&self, id: SystemId) -> bool {
-            id == SystemId(130)
+            matches!(id.0, 130 | 131) || (id.0 == 132 && self.onward)
         }
 
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
@@ -3009,6 +3201,7 @@ mod tests {
                 position: Vec2::new(x, y),
                 links: links.iter().copied().map(SystemId).collect(),
                 govt: None,
+                stellars: Vec::new(),
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
@@ -5280,10 +5473,12 @@ mod tests {
                 require: 0,
                 require_govt: -1,
                 buy_random: 100,
-                availability: String::new(),
+                availability: nova_sim::Test::default(),
                 item_class: 0,
                 lc_name: "multi-jumping organ".to_owned(),
                 lc_plural: "multi-jumping organs".to_owned(),
+                on_purchase: nova_sim::Script::default(),
+                on_sell: nova_sim::Script::default(),
             }],
             defaults: vec![(OutfitId(275), 1)],
             onward: true,
@@ -5732,6 +5927,95 @@ mod tests {
         view.pilot().expect("flying").clone()
     }
 
+    // Pilot edits.
+
+    /// A view of Ada docked at Earth, the landing taken, with the systems
+    /// read so far forgotten.
+    fn landed_view() -> View {
+        let mut view = FlightView::with_pilot(catalog(), docked_pilot("Ada"));
+        view.take_landing();
+        view.catalog().systems_read.borrow_mut().clear();
+        view
+    }
+
+    fn move_to(view: &mut View, system: i16, stellar: i16) {
+        let mut desk = view.pilot_desk().expect("flying");
+        desk.edit(PilotEdit::MoveTo {
+            system: SystemId(system),
+            stellar: StellarId(stellar),
+        })
+        .expect("moves");
+    }
+
+    #[test]
+    fn a_session_that_failed_has_no_pilot_desk() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert!(view.pilot_desk().is_none());
+        view.resync();
+        assert!(view.scene().is_none());
+    }
+
+    #[test]
+    fn the_pilot_desk_reads_the_session_and_names_from_the_map() {
+        let mut view = landed_view();
+        let desk = view.pilot_desk().expect("flying");
+        let sheet = desk.sheet().expect("a pilot");
+        assert_eq!(sheet.name, "Ada");
+        assert_eq!(sheet.system.name, "Sol");
+        assert_eq!(desk.systems().len(), 3);
+    }
+
+    #[test]
+    fn after_a_move_resync_lays_out_the_new_system() {
+        let mut view = landed_view();
+        move_to(&mut view, 131, 140);
+        view.resync();
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(*view.catalog().systems_read.borrow(), [SystemId(131)]);
+        assert_eq!(view.course_map().current(), Some(SystemId(131)));
+        assert_eq!(view.course_map().route(), []);
+        assert!(
+            view.course_map()
+                .explored()
+                .is_some_and(|explored| explored.contains(&SystemId(131)))
+        );
+        assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
+        assert_eq!(view.message(), None, "no arrival message");
+        view.resync();
+        assert_eq!(
+            *view.catalog().systems_read.borrow(),
+            [SystemId(131)],
+            "nothing moved, nothing read"
+        );
+    }
+
+    #[test]
+    fn after_a_move_within_the_system_resync_drops_the_course_and_reads_nothing() {
+        let mut view = landed_view();
+        plot(&mut view, 131);
+        assert_eq!(view.course_map().route(), [SystemId(131)]);
+        view.tick(TICK / 2);
+        assert!(view.alpha() > 0.0, "between steps");
+        move_to(&mut view, 130, 129);
+        view.resync();
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+        assert_eq!(view.course_map().route(), []);
+        assert_eq!(*view.catalog().systems_read.borrow(), []);
+        assert_eq!(view.alpha(), 0.0);
+        assert_eq!(view.shown_position(), Point::new(300.0, -200.0));
+    }
+
+    #[test]
+    fn a_resync_with_nothing_moved_reads_nothing() {
+        let mut view = landed_view();
+        view.resync();
+        assert_eq!(*view.catalog().systems_read.borrow(), []);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+    }
+
     #[test]
     fn a_pilot_docked_at_a_stellar_resumes_landed_there_silently() {
         let pilot = docked_pilot("Ada");
@@ -5762,13 +6046,13 @@ mod tests {
     #[test]
     fn a_pilot_whose_system_is_gone_cannot_fly() {
         let mut pilot = docked_pilot("Ada");
-        pilot.explore(SystemId(131));
-        let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 131");
+        pilot.explore(SystemId(132));
+        let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 132");
         let moved = nova_sim::save::decode(&text).expect("a pilot");
         let view = FlightView::with_pilot(catalog(), moved);
         assert_eq!(
             view.session().err(),
-            Some("the pilot's system, sÿst 131, does not exist")
+            Some("the pilot's system, sÿst 132, does not exist")
         );
         assert_eq!(view.pilot(), None);
     }
@@ -5915,10 +6199,12 @@ mod tests {
                 require: 0,
                 require_govt: -1,
                 buy_random: 100,
-                availability: String::new(),
+                availability: nova_sim::Test::default(),
                 item_class: 0,
                 lc_name: "fuel tank".to_owned(),
                 lc_plural: "fuel tanks".to_owned(),
+                on_purchase: nova_sim::Script::default(),
+                on_sell: nova_sim::Script::default(),
             }],
             ..catalog()
         }
@@ -6073,7 +6359,7 @@ mod tests {
                 price_delta: -15,
                 duration: 30,
                 freq: 35,
-                activate_on: String::new(),
+                activate_on: nova_sim::Test::default(),
             }],
             ..catalog()
         }
@@ -6144,7 +6430,8 @@ mod tests {
                 buy_random: 100,
                 hire_random: 0,
                 require: 0,
-                availability: String::new(),
+                availability: nova_sim::Test::default(),
+                appear_on: nova_sim::Test::default(),
                 flags3: 0,
                 disp_weight: 0,
                 max_gun: 0,
@@ -6155,6 +6442,9 @@ mod tests {
                 comm_name: String::new(),
                 inherent_govt: None,
                 escort_type: -1,
+                on_capture: nova_sim::Script::default(),
+                on_purchase: nova_sim::Script::default(),
+                on_retire: nova_sim::Script::default(),
             }],
             ..outfitting()
         }
@@ -6195,7 +6485,15 @@ mod tests {
         );
         assert_eq!(view.reserves().fuel.max, 350.0, "its tank");
         // Off again, the new hull is drawn, at the new speed.
+        view.settle_script();
         view.take_off().expect("took off");
+        view.settle_script();
+        view.tick(TICK);
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(129)],
+            "read once"
+        );
         let mut list = DrawList::new();
         view.draw(&mut list);
         assert!(
@@ -6537,6 +6835,117 @@ mod tests {
             Ok(RuleSource::Engine)
         );
     }
+
+    // The set-expression hooks.
+
+    /// Rolls the second outcome of every roll, so `R(a b)` takes `a`.
+    #[derive(Debug)]
+    struct RollsOne;
+
+    impl Chance for RollsOne {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            n.min(1)
+        }
+    }
+
+    fn rolling_one() -> SharedChance {
+        SharedChance::new(Rc::new(RefCell::new(RollsOne)))
+    }
+
+    fn bit_set(view: &View, n: u16) -> bool {
+        let bit = nova_sim::Bit::new(n).expect("a bit");
+        view.pilot().is_some_and(|pilot| pilot.control_bit(bit))
+    }
+
+    #[test]
+    fn an_outfits_on_purchase_runs_on_the_flights_chance() {
+        let mut catalog = outfitting();
+        catalog.outfits[0].on_purchase = nova_sim::Script::parse("R(b1 b2)");
+        let mut view = FlightView::new(catalog).with_chance(rolling_one());
+        land_now(&mut view);
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert!(bit_set(&view, 1));
+        assert!(!bit_set(&view, 2));
+    }
+
+    #[test]
+    fn a_ships_on_purchase_runs_on_the_flights_chance() {
+        let mut catalog = shipbuying();
+        catalog.ships[0].on_purchase = nova_sim::Script::parse("R(b3 b4)");
+        let mut view = FlightView::new(catalog).with_chance(rolling_one());
+        land_now(&mut view);
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert!(bit_set(&view, 3));
+        assert!(!bit_set(&view, 4));
+    }
+
+    #[test]
+    fn a_ships_on_purchase_h_reads_only_the_final_class_sheet_once() {
+        let mut catalog = shipbuying();
+        catalog.ships[0].on_purchase = nova_sim::Script::parse("H130");
+        let other = ShipRecord {
+            id: ShipId(130),
+            ..catalog.ships[0].clone()
+        };
+        catalog.ships.push(other);
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(130)));
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(130)]
+        );
+        view.settle_script();
+        view.take_off().expect("took off");
+        view.settle_script();
+        view.tick(TICK);
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(130)],
+            "a failed read is not tried again"
+        );
+        assert_eq!(view.frame(), None, "no sheet for 130");
+    }
+
+    /// The first `chär`'s `OnStart` is `on_start`.
+    fn starting_with(on_start: &str) -> FakeCatalog {
+        let base = catalog();
+        FakeCatalog {
+            character: Ok(CharacterStart {
+                on_start: nova_sim::Script::parse(on_start),
+                ..base.character.clone().expect("a chär")
+            }),
+            ..base
+        }
+    }
+
+    #[test]
+    fn beginning_runs_on_start_once_and_the_map_shows_what_it_explored() {
+        let catalog = starting_with("R(b5 b6) ^b7 X131");
+        let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        let mut view = FlightView::with_pilot(catalog, pilot).with_chance(rolling_one());
+        assert!(!bit_set(&view, 7), "flying runs nothing");
+        view.begin();
+        assert!(bit_set(&view, 5), "on the flight's chance");
+        assert!(bit_set(&view, 7), "once");
+        let explored = view
+            .course_map()
+            .explored()
+            .map(|set| set.iter().copied().collect::<Vec<_>>());
+        assert_eq!(explored, Some(vec![SystemId(130), SystemId(131)]));
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..starting_with("b5")
+        };
+        let mut broken = FlightView::new(broken);
+        broken.begin();
+        assert_eq!(broken.pilot(), None);
+    }
     // Traffic.
 
     use std::collections::VecDeque;
@@ -6613,7 +7022,8 @@ mod tests {
             buy_random: 100,
             hire_random: 0,
             require: 0,
-            availability: String::new(),
+            availability: nova_sim::Test::default(),
+            appear_on: nova_sim::Test::default(),
             flags3: 0,
             disp_weight: 0,
             max_gun: 0,
@@ -6624,6 +7034,9 @@ mod tests {
             comm_name: String::new(),
             inherent_govt: None,
             escort_type: -1,
+            on_capture: nova_sim::Script::default(),
+            on_purchase: nova_sim::Script::default(),
+            on_retire: nova_sim::Script::default(),
         };
         FakeCatalog {
             traffic: systems
@@ -7117,10 +7530,12 @@ mod tests {
             require: 0,
             require_govt: -1,
             buy_random: 100,
-            availability: String::new(),
+            availability: nova_sim::Test::default(),
             item_class: 0,
             lc_name: format!("gun {id}"),
             lc_plural: format!("guns {id}"),
+            on_purchase: nova_sim::Script::default(),
+            on_sell: nova_sim::Script::default(),
         }
     }
 
@@ -8251,6 +8666,7 @@ mod tests {
             _grant: &nova_sim::grant::PersonGrant,
             _stock: &[nova_sim::grant::GrantStock],
             _free_mass: i64,
+            _grant_max: nova_sim::RuleSource,
             _chance: &mut dyn Chance,
         ) -> Option<nova_sim::grant::Granted> {
             None
@@ -8488,7 +8904,11 @@ mod tests {
     #[test]
     fn use_as_escort_says_so() {
         let mut view = captured();
+        view.tick(TICK / 2);
+        let alpha = view.alpha();
+        assert!(alpha > 0.0, "between steps");
         assert_eq!(view.assign(Assignment::Escort), Some(Assigned::Escort));
+        assert_eq!(view.alpha(), alpha, "the old ship flies on");
         assert_eq!(view.message(), Some(ASSIGNED_ESCORT));
         let pilot = view.pilot().expect("a pilot");
         assert_eq!(pilot.escorts().len(), 1);
@@ -8498,10 +8918,21 @@ mod tests {
     #[test]
     fn use_as_my_ship_flies_and_draws_the_captured_ship() {
         let mut view = captured();
+        view.tick(TICK / 2);
+        assert!(view.alpha() > 0.0, "between steps");
+        let mut asked = view.catalog().sheets_asked.borrow().clone();
         assert_eq!(view.assign(Assignment::MyShip), Some(Assigned::MyShip));
+        assert_eq!(view.alpha(), 0.0, "drawn where it is");
         assert_eq!(view.message(), Some(RETAINED_OLD_SHIP));
         assert_eq!(view.session().expect("flying").ship(), ShipId(129));
-        assert!(view.catalog().sheets_asked.borrow().contains(&ShipId(129)));
+        asked.push(ShipId(129));
+        assert_eq!(*view.catalog().sheets_asked.borrow(), asked, "read once");
+        view.settle_script();
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            asked,
+            "not again once settled"
+        );
         let drawn_player = sprites(&drawn(&view))
             .into_iter()
             .filter(|&(_, center)| center == VIEW_CENTER)
@@ -8568,10 +8999,12 @@ mod tests {
                 require: 0,
                 require_govt: -1,
                 buy_random: 100,
-                availability: String::new(),
+                availability: nova_sim::Test::default(),
                 item_class: 0,
                 lc_name: "rocket".to_owned(),
                 lc_plural: "rockets".to_owned(),
+                on_purchase: nova_sim::Script::default(),
+                on_sell: nova_sim::Script::default(),
             },
         ];
         let (_, chance) = scripted(&placed(750, 750, 0));
@@ -9321,7 +9754,7 @@ mod tests {
     struct Nothing;
 
     impl ControlBits for Nothing {
-        fn allows(&self, _expression: &str) -> bool {
+        fn allows(&self, _test: &nova_sim::TestExpr, _pilot: &dyn nova_sim::PilotFacts) -> bool {
             false
         }
     }
@@ -9381,7 +9814,7 @@ mod tests {
             hail_quote: 1,
             link_mission: None,
             flags: 0,
-            active_on: String::new(),
+            active_on: nova_sim::Test::default(),
             subtitle: "Top Gun".to_owned(),
             flags2: 0,
             grant_class: 0,
@@ -9457,6 +9890,233 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_outfit_rules_reach_the_session() {
+        let rules = OutfitRules {
+            remove_refund: RuleSource::Bible,
+            ..OutfitRules::default()
+        };
+        let view = flight().with_outfit_rules(rules);
+        assert_eq!(view.session().expect("flying").outfit_rules(), rules);
+    }
+
+    #[test]
+    fn the_hook_rules_reach_the_session() {
+        let rules = nova_sim::HookRules {
+            purchase_paint_order: RuleSource::Bible,
+            ..nova_sim::HookRules::default()
+        };
+        let view = flight().with_hook_rules(rules);
+        assert_eq!(view.session().expect("flying").hook_rules(), rules);
+    }
+
+    #[test]
+    fn the_ship_change_rules_reach_the_session() {
+        let rules = nova_sim::ShipChangeRules {
+            cargo: RuleSource::Bible,
+            ..nova_sim::ShipChangeRules::default()
+        };
+        let view = flight().with_ship_change_rules(rules);
+        assert_eq!(view.session().expect("flying").ship_change_rules(), rules);
+    }
+
+    #[test]
+    fn the_script_effect_rules_reach_the_session() {
+        let rules = ScriptEffectRules {
+            arrival: RuleSource::Bible,
+            ..ScriptEffectRules::default()
+        };
+        let view = flight().with_script_effect_rules(rules);
+        assert_eq!(view.session().expect("flying").script_effect_rules(), rules);
+    }
+
+    /// Runs set expression `text` on `view`'s session.
+    fn run_set(view: &mut View, text: &str) {
+        let expr = nova_sim::SetExpr::parse(text).expect("parses");
+        let session = view.session.as_mut().expect("flying");
+        session.run_set(&expr, &mut NeverFires);
+    }
+
+    #[test]
+    fn a_move_in_flight_lays_out_the_system_moved_to_once_settled() {
+        let mut view = flight();
+        view.catalog().systems_read.borrow_mut().clear();
+        run_set(&mut view, "M131");
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+        view.settle_script();
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(*view.catalog().systems_read.borrow(), [SystemId(131)]);
+        assert_eq!(view.course_map().current(), Some(SystemId(131)));
+        assert_eq!(view.shown_position(), Point::new(0.0, 0.0), "on Proxima");
+        assert_eq!(view.message(), None);
+        view.settle_script();
+        assert_eq!(
+            *view.catalog().systems_read.borrow(),
+            [SystemId(131)],
+            "nothing more to settle"
+        );
+    }
+
+    #[test]
+    fn an_h_from_a_set_expression_redraws_the_new_hull_once_settled() {
+        let mut view = FlightView::new(shipbuying());
+        assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
+        run_set(&mut view, "H129");
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(129)));
+        view.settle_script();
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(129)]
+        );
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2001, 2201], "ship 129's sheet, and its lights");
+        assert_eq!(view.frame(), Some(0), "of 72 rotations");
+    }
+
+    #[test]
+    fn an_outfits_on_purchase_h_redraws_the_new_hull() {
+        let mut catalog = shipbuying();
+        catalog.outfits[0].on_purchase = nova_sim::Script::parse("H129");
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert_eq!(view.session().map(Session::ship), Ok(ShipId(129)));
+        view.settle_script();
+        view.settle_script();
+        assert_eq!(
+            *view.catalog().sheets_asked.borrow(),
+            [ShipId(128), ShipId(129)],
+            "once"
+        );
+        view.take_off().expect("took off");
+        let ids: Vec<_> = ship_sprites(&view).iter().map(|(i, _)| i.id).collect();
+        assert_eq!(ids, [2001, 2201], "the new hull");
+    }
+
+    #[test]
+    fn settling_reads_no_sheet_when_the_class_is_unchanged() {
+        let mut view = FlightView::new(shipbuying());
+        view.settle_script();
+        ticks(&mut view, 3);
+        run_set(&mut view, "b1");
+        view.settle_script();
+        view.tick(TICK);
+        assert_eq!(*view.catalog().sheets_asked.borrow(), [ShipId(128)]);
+    }
+
+    #[test]
+    fn a_move_within_the_system_lays_it_out_afresh() {
+        let mut view = flight();
+        view.catalog().systems_read.borrow_mut().clear();
+        run_set(&mut view, "N130");
+        view.settle_script();
+        assert_eq!(*view.catalog().systems_read.borrow(), [SystemId(130)]);
+    }
+
+    #[test]
+    fn a_move_while_landed_is_laid_out_once_the_ship_takes_off() {
+        let mut view = landed_view();
+        run_set(&mut view, "M131");
+        view.settle_script();
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+        assert_eq!(*view.catalog().systems_read.borrow(), []);
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
+        assert!(
+            view.course_map()
+                .explored()
+                .is_some_and(|explored| explored.contains(&SystemId(131))),
+            "the take-off explores"
+        );
+    }
+
+    /// `view` with `STR#` 25048 holding one message.
+    fn told(view: View) -> View {
+        let strings = FakeCatalog {
+            strings: vec![(25048, vec!["Off you go, <PSN>.".to_owned()])],
+            ..catalog()
+        };
+        view.with_strings(Rc::new(strings))
+    }
+
+    #[test]
+    fn a_q_in_flight_shows_its_message() {
+        let mut view = told(flight());
+        run_set(&mut view, "Q25048");
+        assert_eq!(view.settle_script(), None);
+        assert_eq!(view.message(), Some("Off you go, <PSN>."));
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::ScriptMessage)]);
+    }
+
+    #[test]
+    fn a_landed_q_takes_off_and_shows_its_message() {
+        let mut view = told(landed_view());
+        run_set(&mut view, "M131 Q25048");
+        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        let session = view.session().expect("flying");
+        assert_eq!(session.landed(), None);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
+        assert_eq!(view.message(), Some("Off you go, <PSN>."));
+        assert_eq!(view.settle_script(), None, "settled");
+    }
+
+    #[test]
+    fn a_landed_q_shows_the_take_offs_pay_after_its_message() {
+        let mut view = told(paying(50, true));
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        run_set(&mut view, "Q25048");
+        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        let said = format!("Off you go, <PSN>.  {DEFECTED_ONE}");
+        assert_eq!(view.message(), Some(said.as_str()));
+    }
+
+    #[test]
+    fn fighters_abandoned_in_a_move_are_told_after_a_qs_message() {
+        let rules = ScriptEffectRules {
+            arrival: RuleSource::Bible,
+            ..ScriptEffectRules::default()
+        };
+        let mut view = told(fighters_out()).with_script_effect_rules(rules);
+        run_set(&mut view, "Q25048 M131");
+        assert_eq!(view.settle_script(), None);
+        assert_eq!(
+            view.message(),
+            Some("Off you go, <PSN>.  (Two fighters abandoned)")
+        );
+        assert_eq!(view.pilot().expect("flying").escorts(), []);
+        view.message = None;
+        assert_eq!(view.settle_script(), None);
+        assert_eq!(view.message(), None, "nothing more to tell");
+    }
+
+    #[test]
+    fn the_disable_rule_reaches_the_session_too() {
+        let rule = Rc::new(Counting::default());
+        let view = flight().with_disable_rule(rule.clone());
+        let session = view.session().expect("flying");
+        assert!(
+            !session
+                .disable_rule()
+                .disabled(nova_sim::Gauge::full(10.0), &session.hull())
+        );
+        assert_eq!(rule.asked.get(), 1, "the session asks the rule given");
+    }
+
+    #[test]
+    fn the_string_lists_reach_the_session() {
+        let strings = FakeCatalog {
+            strings: vec![(25040, vec!["Kestrel".to_owned()])],
+            ..catalog()
+        };
+        let view = flight().with_strings(Rc::new(strings));
+        assert_eq!(
+            view.session().expect("flying").strings().string_list(25040),
+            ["Kestrel"]
+        );
+    }
+
     // Boarding grants.
 
     #[test]
@@ -9527,6 +10187,7 @@ mod tests {
             grant: &nova_sim::grant::PersonGrant,
             stock: &[nova_sim::grant::GrantStock],
             _free_mass: i64,
+            _grant_max: nova_sim::RuleSource,
             _chance: &mut dyn Chance,
         ) -> Option<nova_sim::grant::Granted> {
             let first = nova_sim::grant::candidates(grant.class, stock)
@@ -9581,10 +10242,12 @@ mod tests {
             require: 0,
             require_govt: -1,
             buy_random: 100,
-            availability: String::new(),
+            availability: nova_sim::Test::default(),
             item_class: 7,
             lc_name: "spare part".to_owned(),
             lc_plural: "spare parts".to_owned(),
+            on_purchase: nova_sim::Script::default(),
+            on_sell: nova_sim::Script::default(),
         }];
         catalog
     }

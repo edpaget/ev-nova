@@ -1,8 +1,9 @@
 //! The catalog ports: what a flight session starts from
 //! ([`PilotCatalog`]), what its NPC traffic is spawned from
 //! ([`TrafficCatalog`]), what its ships fight with ([`CombatCatalog`]) and
-//! the words a hailed ship answers with ([`CommCatalog`]), in the
-//! simulation's own terms.
+//! the game's string lists ([`CommCatalog`]), which a hailed ship answers
+//! from and the `T` set operator names the ship from, in the simulation's
+//! own terms.
 
 use std::rc::Rc;
 
@@ -11,11 +12,12 @@ pub use nova_data::{
     SystemId, WeaponId,
 };
 
+use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
 /// A new pilot's start, from the first `chär`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CharacterStart {
     /// The starting `shïp`, if it names one.
     pub ship: Option<ShipId>,
@@ -29,6 +31,9 @@ pub struct CharacterStart {
     /// The starting legal records, `Govt1-4` with `Status1-4`: each
     /// government and the record with it, or `None` for an unused slot.
     pub legal: [Option<(GovtId, i16)>; 4],
+    /// Its `OnStart` set expression, parsed: run once on a new pilot,
+    /// before its first save (see the session's `hooks`).
+    pub on_start: Script,
 }
 
 /// A new pilot's starting date, raw from the `chär`: the
@@ -67,6 +72,11 @@ pub struct StarSystem {
     /// Its controlling government, `Govt`, or `None` when it is
     /// independent (-1).
     pub govt: Option<GovtId>,
+    /// Each of its `NavDefs` slots, in order: the stellar's `spöb` `Flags`
+    /// and `Flags2`, raw, or `None` for an empty slot or a stellar that
+    /// cannot be read. The [`exploration`](crate::exploration) rules read
+    /// whether the system is inhabited from them.
+    pub stellars: Vec<Option<(u32, u16)>>,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
@@ -162,8 +172,13 @@ pub struct OutfitRecord {
     /// Its `BuyRandom`, raw: the percent chance a day that it is for
     /// sale, as [`outfitter`](crate::outfitter) reads it.
     pub buy_random: i16,
-    /// Its `Availability` control-bit expression.
-    pub availability: String,
+    /// Its `Availability` control-bit test, parsed.
+    pub availability: Test,
+    /// Its `OnPurchase` set expression, parsed: run once for each unit
+    /// bought (see the session's `hooks`).
+    pub on_purchase: Script,
+    /// Its `OnSell` set expression, parsed: run once for each unit sold.
+    pub on_sell: Script,
     /// Its `ItemClass`, raw: the class a person's `GrantClass` grants
     /// from (see [`grant`](crate::grant)).
     pub item_class: i16,
@@ -204,8 +219,21 @@ pub struct ShipRecord {
     pub hire_random: i16,
     /// Its `Require` bits.
     pub require: u64,
-    /// Its `Availability` control-bit expression.
-    pub availability: String,
+    /// Its `Availability` control-bit test, parsed.
+    pub availability: Test,
+    /// Its `AppearOn` control-bit test, parsed. The Bible: "Ships of this
+    /// type will not show up in dude resources if this expression
+    /// evaluates to false" (see [`spawn`](crate::traffic::spawn)).
+    pub appear_on: Test,
+    /// Its `OnPurchase` set expression, parsed: run when the player buys
+    /// one (see the session's `hooks`).
+    pub on_purchase: Script,
+    /// Its `OnCapture` set expression, parsed: run when the player
+    /// captures one, as an escort or as its own ship.
+    pub on_capture: Script,
+    /// Its `OnRetire` set expression, parsed: run when the player trades
+    /// one in or leaves it for a captured ship.
+    pub on_retire: Script,
     /// Its `Flags3`.
     pub flags3: u16,
     /// Its `DispWeight`: higher shows nearer the top.
@@ -284,10 +312,10 @@ pub struct JunkRecord {
     pub sold_at: Vec<StellarId>,
     /// Its `BoughtAt` stellars, the unused (-1) slots left out.
     pub bought_at: Vec<StellarId>,
-    /// Its `BuyOn` control-bit expression.
-    pub buy_on: String,
-    /// Its `SellOn` control-bit expression.
-    pub sell_on: String,
+    /// Its `BuyOn` control-bit test, parsed.
+    pub buy_on: Test,
+    /// Its `SellOn` control-bit test, parsed.
+    pub sell_on: Test,
     /// Its `Flags`, raw: [`TRIBBLES`](crate::market::TRIBBLES) and
     /// [`PERISHABLE`](crate::market::PERISHABLE) are read.
     pub flags: u16,
@@ -317,8 +345,8 @@ pub struct DisasterRecord {
     pub duration: i16,
     /// Its `Freq`: the percent chance each day that it starts.
     pub freq: i16,
-    /// Its `ActivateOn` control-bit expression.
-    pub activate_on: String,
+    /// Its `ActivateOn` control-bit test, parsed.
+    pub activate_on: Test,
 }
 
 /// A system's traffic, raw from its `sÿst`: the
@@ -380,8 +408,8 @@ pub struct FleetRecord {
     pub govt: Option<GovtId>,
     /// Its `LinkSyst`, raw.
     pub link_syst: i16,
-    /// Its `AppearOn` control-bit expression.
-    pub appear_on: String,
+    /// Its `AppearOn` control-bit test, parsed.
+    pub appear_on: Test,
 }
 
 /// One of a person's weapon slots that names a weapon, raw from its
@@ -435,8 +463,8 @@ pub struct PersonRecord {
     pub link_mission: Option<i16>,
     /// Its `Flags`.
     pub flags: u16,
-    /// Its `ActiveOn` control-bit expression.
-    pub active_on: String,
+    /// Its `ActiveOn` control-bit test, parsed.
+    pub active_on: Test,
     /// Its subtitle, the 64-byte string at 0x13A.
     pub subtitle: String,
     /// Its `Flags2`.
@@ -704,8 +732,8 @@ impl<T: CombatCatalog + ?Sized> CombatCatalog for Rc<T> {
     }
 }
 
-/// The game data a hailed ship's words come from: string lists, read
-/// whole.
+/// The game's string lists (`STR#`), read whole: a hailed ship's words
+/// come from them, and the names the `T` set operator gives the ship.
 pub trait CommCatalog {
     /// Every string of `STR#` `id`, in order; none when it is missing or
     /// cannot be read.
@@ -974,10 +1002,12 @@ mod tests {
                 require: 0,
                 require_govt: -1,
                 buy_random: 100,
-                availability: String::new(),
+                availability: Test::default(),
                 item_class: 0,
                 lc_name: "scoop".to_owned(),
                 lc_plural: "scoops".to_owned(),
+                on_purchase: crate::control::Script::default(),
+                on_sell: crate::control::Script::default(),
             }]
         }
 
@@ -1036,6 +1066,7 @@ mod tests {
                 position: Vec2::new(5.0, -6.0),
                 links: vec![SystemId(131)],
                 govt: None,
+                stellars: Vec::new(),
             }]
         }
 
@@ -1057,8 +1088,8 @@ mod tests {
                 base_price: 1200,
                 sold_at: vec![StellarId(128)],
                 bought_at: Vec::new(),
-                buy_on: String::new(),
-                sell_on: String::new(),
+                buy_on: Test::default(),
+                sell_on: Test::default(),
                 flags: 0,
             }]
         }
@@ -1192,7 +1223,7 @@ mod tests {
                 }],
                 govt: None,
                 link_syst: -1,
-                appear_on: String::new(),
+                appear_on: Test::default(),
             }]
         }
 

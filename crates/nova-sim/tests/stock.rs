@@ -1,11 +1,15 @@
 //! A flight session over the stock data: the first `chär` starts a session
-//! with its ship's handling and reserves in a system that exists, Port
+//! with its ship's handling and reserves in a system that exists, and a
+//! new pilot begins with the bits its blank `OnStart` sets (none); Port
 //! Kane's exchange trades at its levels, an event at any stellar may be
 //! placed there but not at uninhabited Reflex-ion, and its outfitter
-//! sells what its tech levels allow on a day every roll fires; Viking's shipyard sells
-//! what its tech levels and the ships' `BuyRandom` allow, and trades the
-//! Shuttle in; on a day no roll fires, both sell only their items of
-//! `BuyRandom` 100; the ships go by
+//! sells what its tech levels allow on a day every roll fires, and the
+//! Vell-os map only once its control bit is set, which explores the
+//! systems around and is not added, and the Cheap Thorium Reactor, whose
+//! `OnPurchase` and `OnSell` set and clear its bit; Viking's shipyard
+//! sells what its tech levels and the ships' `BuyRandom` allow, and
+//! trades the Shuttle in; on a day no roll fires, both sell only their
+//! items of `BuyRandom` 100; the ships go by
 //! their names without the designers' notes. Port Kane sells
 //! fuel and uninhabited Reflex-ion sells none. The date reads with the
 //! first `chär`'s affixes. HG-Kania leads to HG-Tichel. NPC traffic flies the
@@ -32,6 +36,7 @@ use nova_data::GameData;
 use nova_data::records::character::Character;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
+use nova_sim::Test;
 use nova_sim::fuel::FUEL_SCOOP;
 use nova_sim::market::commodities;
 use nova_sim::{
@@ -74,6 +79,34 @@ fn a_new_pilot_starts_as_the_first_chär_says() {
     );
     assert_eq!(pilot.stellar(), None);
     assert_eq!(pilot.explored().collect::<Vec<_>>(), [pilot.system()]);
+}
+
+/// A new stock pilot, flown and begun, holds exactly the bits its first
+/// `chär`'s `OnStart` writes: in the stock 1.0.10 data that `OnStart` is
+/// blank, so none, and running it tells nothing.
+#[test]
+fn a_new_stock_pilot_begins_with_the_bits_its_chärs_on_start_sets() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let (_, first) = data.records::<Character>().next().expect("a chär");
+    let on_start = first.expect("decodes").record.on_start.as_str().to_owned();
+    assert_eq!(on_start, "", "the stock OnStart is blank");
+    let writes = nova_sim::SetExpr::parse(&on_start)
+        .expect("parses")
+        .writes();
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    let mut session = Session::fly(&data, pilot).expect("flies");
+    session.begin(&data, &mut NeverFires);
+    let set: Vec<nova_sim::Bit> = session.pilot().control_bits().iter().collect();
+    let expected: Vec<nova_sim::Bit> = writes
+        .iter()
+        .filter(|(_, write)| *write == nova_sim::BitWrite::Set)
+        .map(|(bit, _)| *bit)
+        .collect();
+    assert_eq!(set, expected);
+    assert_eq!(session.take_script_notes(), []);
 }
 
 /// A stock session's date reads "June 23, 1177 NC": the first `chär`'s
@@ -352,7 +385,7 @@ fn the_food_surplus_targets_port_kane() {
             price_delta: -15,
             duration: 30,
             freq: 35,
-            activate_on: String::new(),
+            activate_on: Test::default(),
         }
     );
     assert_eq!(data.junk().len(), 23);
@@ -437,6 +470,107 @@ fn port_kanes_outfitter_sells_what_its_tech_levels_allow() {
     let fiber = row(180).expect("Carbon Fiber");
     assert_eq!(fiber.buy, Err(OutfitRefusal::NotForSale));
     assert_eq!((outfitter.cash, outfitter.free_mass), (25_000, 8));
+}
+
+/// Stock `oütf` 342, "Area Map - Vell-os", tech level 0 and hidden while
+/// its `Availability`, `b9999`, does not hold: Port Kane's outfitter does
+/// not list it to a new pilot, and lists it, for sale, once control bit
+/// 9999 is set through the session's bit edit.
+#[test]
+fn port_kanes_outfitter_lists_the_vell_os_map_only_once_its_bit_is_set() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = at_port_kane(&data);
+    let map = OutfitId(342);
+    let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
+    assert!(outfitter.row(map).is_none(), "bit 9999 is clear");
+    session.set_control_bit(nova_sim::Bit::new(9999).expect("a bit"), true);
+    let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
+    let row = outfitter.row(map).expect("listed once bit 9999 is set");
+    assert_eq!(row.name, "Area Map - Vell-os");
+    assert_eq!(row.buy, Ok(()));
+}
+
+/// Buying the stock Vell-os map (`oütf` 342, `ModType` 16, `ModVal` 2, no
+/// cost) at Port Kane, once bit 9999 is set, explores the systems within
+/// 2 jumps of Port Kane's and does not add it. By the engine's depth-first
+/// walk every system a jump away is explored and none beyond 2 jumps; by
+/// the Bible's reading, exactly every system within 2 jumps, worked out
+/// here breadth first along the stock hyperlinks.
+#[test]
+fn buying_the_stock_vell_os_map_explores_two_jumps_and_adds_nothing() {
+    use std::collections::BTreeSet;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let map = OutfitId(342);
+    let record = data
+        .outfits()
+        .into_iter()
+        .find(|outfit| outfit.id == map)
+        .expect("the Vell-os map");
+    assert_eq!(record.mods[0], (16, 2), "a map of 2 jumps");
+    let bought = |rules: nova_sim::OutfitRules| {
+        let mut session = at_port_kane(&data).with_outfit_rules(rules);
+        session.set_control_bit(nova_sim::Bit::new(9999).expect("a bit"), true);
+        let cash = session.pilot().cash();
+        let order = OutfitOrder {
+            outfit: map,
+            direction: Direction::Buy,
+        };
+        assert_eq!(session.outfit(order, &mut NeverFires), Ok(()));
+        assert_eq!(session.pilot().owned(map), 0, "not added");
+        assert_eq!(session.pilot().cash(), cash, "it costs nothing");
+        session
+    };
+    let engine = bought(nova_sim::OutfitRules::default());
+    let home = engine.pilot().system();
+    let stars = engine.star_map();
+    let rule = nova_sim::HyperlinkRule::Engine;
+    let one: BTreeSet<SystemId> = std::iter::once(home)
+        .chain(stars.jumps(home, rule))
+        .collect();
+    let two: BTreeSet<SystemId> = one
+        .iter()
+        .flat_map(|&system| stars.jumps(system, rule))
+        .chain(one.iter().copied())
+        .collect();
+    assert!(two.len() > one.len(), "{one:?} {two:?}");
+    let explored: BTreeSet<SystemId> = engine.pilot().explored().collect();
+    assert!(one.is_subset(&explored), "{explored:?}");
+    assert!(explored.is_subset(&two), "{explored:?}");
+    let bible = bought(nova_sim::OutfitRules {
+        map_explore: nova_sim::RuleSource::Bible,
+        ..nova_sim::OutfitRules::default()
+    });
+    assert_eq!(bible.pilot().explored().collect::<BTreeSet<_>>(), two);
+}
+
+/// Port Kane (special tech 57) sells the Cheap Thorium Reactor (`oütf`
+/// 358), whose `OnPurchase` sets bit 9011 and whose `OnSell` clears it.
+#[test]
+fn the_stock_cheap_thorium_reactor_sets_its_bit_when_bought_and_clears_it_when_sold() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = at_port_kane(&data);
+    assert!(session.transact(|pilot| pilot.set_cash(1_000_000)));
+    let reactor = OutfitId(358);
+    let bit = nova_sim::Bit::new(9011).expect("a bit");
+    let order = |direction| OutfitOrder {
+        outfit: reactor,
+        direction,
+    };
+    // On a day every roll fires, as its `BuyRandom` is below 100.
+    assert_eq!(session.outfit(order(Direction::Buy), &mut Fires), Ok(()));
+    assert_eq!(session.pilot().owned(reactor), 1);
+    assert!(session.control_bit(bit), "OnPurchase b9011");
+    assert_eq!(session.outfit(order(Direction::Sell), &mut Fires), Ok(()));
+    assert!(!session.control_bit(bit), "OnSell !b9011");
 }
 
 /// Buying a Battery Pack takes 10,000 of the Shuttle's 25,000 credits
@@ -655,7 +789,7 @@ fn a_new_stock_pilot_owns_its_shuttles_light_blaster() {
 /// 250,000 each), a Wraith Cannon (151, 200,000) and its 30 Wraithii
 /// (152, 1,000 each); its default items are the Nil'kemorya Jammer (245,
 /// 125,000) and the Cloaking Organ (269, 1,000,000). A Striker from a
-/// version 10 save owns its stock weapons once flown, and trades in for
+/// version 13 save owns its stock weapons once flown, and trades in for
 /// a quarter of its 1,000,000 and half of its 1,855,000 in outfits,
 /// 1,177,500. With 29 Wraithii fired it trades in for exactly the
 /// original's logged 1,163,000 ("Striker (262) has a trade-in value of
@@ -678,7 +812,7 @@ fn the_strikers_stock_weapons_are_its_outfits_and_it_trades_in_as_the_original_l
     let pilot = Pilot::new(&data, "Striker").expect("the stock first chär starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
-    save["version"] = serde_json::json!(10);
+    save["version"] = serde_json::json!(13);
     save.as_object_mut()
         .expect("an object")
         .remove("stock_weapons_fitted");
@@ -689,7 +823,7 @@ fn the_strikers_stock_weapons_are_its_outfits_and_it_trades_in_as_the_original_l
         {"outfit": 245, "count": 1},
         {"outfit": 269, "count": 1}
     ]);
-    let old = nova_sim::save::decode(&save.to_string()).expect("a version 10 pilot");
+    let old = nova_sim::save::decode(&save.to_string()).expect("a version 13 pilot");
     let mut session = Session::fly(&data, old).expect("flies");
     assert_eq!(session.landed(), Some(StellarId(157)), "docked at Viking");
     let owned: std::collections::BTreeMap<OutfitId, u16> = session.pilot().outfits().collect();
@@ -2816,6 +2950,9 @@ fn boarding_dr_ralph_grants_his_map_half_the_time() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let grant = PersonGrant::of(&person_record(&data, 162)).expect("Dr Ralph grants");
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    let fields = data.ship_fields(pilot.ship()).expect("its ship");
+    let free = fields.free_mass;
     let stock: Vec<GrantStock> = data
         .outfits()
         .iter()
@@ -2823,12 +2960,11 @@ fn boarding_dr_ralph_grants_his_map_half_the_time() {
             outfit: outfit.id,
             item_class: outfit.item_class,
             mass: outfit.mass,
+            unit_mass: nova_sim::outfitter::unit_mass(outfit, fields.mass),
             owned: 0,
             max: outfit.max,
         })
         .collect();
-    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
-    let free = data.ship_fields(pilot.ship()).expect("its ship").free_mass;
     let rule = nova_sim::NovaBoarding::default();
     let granted = |odds| {
         let draws: &'static [(u32, u32)] = if odds == 49 {
@@ -2836,7 +2972,13 @@ fn boarding_dr_ralph_grants_his_map_half_the_time() {
         } else {
             &[(100, 50)]
         };
-        rule.grant(&grant, &stock, i64::from(free), &mut ByBound(draws))
+        rule.grant(
+            &grant,
+            &stock,
+            i64::from(free),
+            RuleSource::Engine,
+            &mut ByBound(draws),
+        )
     };
     assert_eq!(
         granted(49),
@@ -2872,7 +3014,23 @@ fn persons_in(
     rules: NovaPersons,
     chance: &mut ByBound,
 ) -> Vec<i16> {
+    persons_with_bits(data, system, gone, rules, &[], chance)
+}
+
+/// The persons `sÿst` `system` is populated with, as [`persons_in`] says,
+/// with the control bits `bits` set.
+fn persons_with_bits(
+    data: &GameData,
+    system: i16,
+    gone: &[i16],
+    rules: NovaPersons,
+    bits: &[u16],
+    chance: &mut ByBound,
+) -> Vec<i16> {
     let mut session = flying_in(data, system, gone, rules);
+    for &bit in bits {
+        session.set_control_bit(nova_sim::Bit::new(bit).expect("a bit"), true);
+    }
     session.populate(data, chance);
     session
         .npcs()
@@ -2982,20 +3140,22 @@ fn jack_folstam_appears_in_nesre_primus_and_by_the_engines_slip_in_jraphit() {
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let rolled = || ByBound(&[(7, 0), (1022, 3), (100, 99)]);
     let engine = NovaPersons::default();
-    assert_eq!(persons_in(&data, 132, &[], engine, &mut rolled()), [131]);
-    assert_eq!(
-        persons_in(&data, 260, &[], engine, &mut rolled()),
-        [131],
-        "the slip"
-    );
+    // His `ActiveOn` is `b0 & !b8`.
+    let active = |system, rules, bits: &[u16]| {
+        persons_with_bits(&data, system, &[], rules, bits, &mut rolled())
+    };
+    assert_eq!(active(132, engine, &[0]), [131]);
+    assert_eq!(active(260, engine, &[0]), [131], "the slip");
     let bible = NovaPersons::from_rulebook(
         &Rulebook::default().with_override(RuleKey::LinkSystSlip, RuleSource::Bible),
     );
     assert_eq!(
-        persons_in(&data, 260, &[], bible, &mut rolled()),
+        active(260, bible, &[0]),
         Vec::<i16>::new(),
         "no slip by the Bible"
     );
+    assert_eq!(active(132, engine, &[]), Vec::<i16>::new(), "bit 0 clear");
+    assert_eq!(active(132, engine, &[0, 8]), Vec::<i16>::new(), "bit 8 set");
     let jack = person_record(&data, 131);
     let table = table_of(&data, 132);
     let valkyrie = &table.ships[&ShipId(279)];

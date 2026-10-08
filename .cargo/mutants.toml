@@ -20,6 +20,9 @@ exclude_re = [
     # has already returned for a price of 0, so `price < 0` and
     # `price <= 0` choose the same.
     "replace < with <= in Market::quotient",
+    # Cleaning a legal record raises one below none to none: with `<=` a
+    # record of none is set to none too, which changes nothing.
+    "replace < with <= in clean_records",
     # The shipyard's trade-in leaves out outfits flagged persistent (0x0004)
     # or unsellable (0x0008): two distinct bits, so `|` and `^` combine them
     # the same.
@@ -118,7 +121,27 @@ exclude_re = [
     # step up, so rounding a price exactly at it either way gives it back.
     "replace < with <= in price_flux",
     "replace > with >= in price_flux",
-    # Until control bits exist, `control_bits_allow` holds for every
-    # expression, so the adapter's body and `true` are the same.
-    "replace <impl ControlBits for NoControlBits>::allows -> bool with true",
+    # `ControlBitSet`'s word count, `(9999 + 1).div_ceil(64)`, is 157;
+    # `9999 - 1` and `9999 * 1` round up to the same 157 words, so the
+    # set's size and every bit's word are unchanged. (A mutant outside a
+    # function is named by its line alone, hence no `in`.)
+    "nova-sim/src/control\\.rs:\\d+:\\d+: replace \\+ with (-|\\*)$",
+    # A fresh pilot is male, which is `Gender`'s default, so its body and
+    # `Default::default()` are the same.
+    "replace <impl PilotFacts for FreshPilot>::gender -> (crate::pilot::)?Gender with Default::default\\(\\)",
+    # The session's pilot view counts the game as paid for always (the
+    # engine takes it as registered), so `Session`'s `paid`, which asks
+    # that view, and `true` are the same.
+    "replace <impl PilotFacts for Session>::paid -> bool with true",
+    # `H`'s engine mask is the persistent bit (0x0004) and the mission
+    # persistent bit (0x0020): two distinct bits, so `|` and `^` combine
+    # them the same. (A constant, named by its line alone.)
+    "nova-sim/src/ship_change\\.rs:\\d+:\\d+: replace \\| with \\^$",
+    # The ship-change clamp lowers a count to its `Max` when it is above
+    # it; with `<=` a count already at its `Max` is set to it again, which
+    # changes nothing.
+    "replace < with <= in carried_outfits",
+    # The session's default string lists hold none: the body already
+    # returns an empty list.
+    "replace <impl CommCatalog for NoStrings>::string_list -> Vec<String> with vec!\\[\\]",
 ]

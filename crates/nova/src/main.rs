@@ -27,7 +27,9 @@
 //! flies a fresh pilot that is never saved.
 //!
 //! With `--features dev-tools` (`mise run dev`), `` ` `` toggles the
-//! developer tools.
+//! developer tools: the resource browser, and the Pilot window, which
+//! edits the pilot flying (credits, reserves, date, location and control
+//! bits), saved as any change is.
 //!
 //! Text in Charcoal uses the game's own `Fonts/Charcoal.ttf` beside
 //! `Nova Files` when it is there and usable, and the bundled font
@@ -82,8 +84,22 @@
 //! Use As Escort and joins the fleet as itself), and the boarding
 //! grants: `"grant_count"` (whether a grant is half its `GrantCount` to
 //! all of it, as the engine and the Bible have it, or one to all of it)
-//! and `"grant_max"` (whether a grant may pass the outfit's `Max`, or is
-//! held to it), the shops' `"buy_random"` (whether an outfit's
+//! and `"grant_max"` (whether a grant, by boarding or by `G`, may pass
+//! the outfit's `Max`, or is held to it and to the free mass), and the
+//! outfit effects: `"map_explore"` (whether a map explores the engine's
+//! depth-first way, or every system within its jumps), `"invalid_map"`
+//! (whether a map that explores nothing is used up, or kept as an
+//! outfit), `"remove_refund"` (whether `D` pays nothing for the
+//! outfit it removes, or what selling it would) and `"refit_reserves"`
+//! (whether a refit by `G`, `D` or boarding keeps a shield or armour
+//! above its most, or holds each to it), and the set-expression
+//! hooks: `"purchase_paint_order"` (whether buying a ship clears its
+//! paint after the new ship's `OnPurchase`, losing a paint it grants, or
+//! before it), `"capture_hook_order"` (whether Use As My Ship runs
+//! `OnRetire` and `OnCapture` before the outfit swap, which strips a
+//! non-persistent outfit they grant, or after it) and
+//! `"start_ship_purchase"` (whether a new pilot's starting ship runs no
+//! `OnPurchase`, or runs it once before `OnStart`), the shops' `"buy_random"` (whether an outfit's
 //! `BuyRandom` below 1 is never for sale and a ship's below 0 always, as
 //! the engine has it, or as the Bible says), and the cargo's
 //! `"junk_flags"` (whether held tribbles `jünk` can overfill the hold and
@@ -128,6 +144,10 @@
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!
+//! When the game data loads, each data file that could not be loaded and
+//! each control-bit expression that does not parse is reported as a line
+//! on standard error, and the game runs without them.
+//!
 //! Usage: `nova [NOVA_FILES_DIR]`, or set `NOVA_DATA` to the `Nova Files`
 //! directory. Exits 2 on a usage error and 1 when the data or the window
 //! cannot be opened.
@@ -143,6 +163,7 @@ use nova::audio::{game_audio, music_warning};
 use nova::chance::SplitMix;
 use nova::config::{Os, pilots_dir, settings_path};
 use nova::fonts::game_fonts;
+use nova::load::data_warnings;
 use nova::platform::Runner;
 use nova::rulebook::game_rulebook;
 use nova::saves::FilePilots;
@@ -175,6 +196,9 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    for warning in data_warnings(&data) {
+        eprintln!("{warning}");
+    }
     let warn = |warning: Option<String>| {
         if let Some(warning) = warning {
             eprintln!("{warning}");

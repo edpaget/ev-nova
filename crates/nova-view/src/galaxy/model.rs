@@ -103,6 +103,7 @@ fn star_system(entry: &SystemEntry) -> StarSystem {
         position: Vec2::new(entry.x.into(), entry.y.into()),
         links: entry.links.clone(),
         govt: entry.govt,
+        stellars: Vec::new(),
     }
 }
 
