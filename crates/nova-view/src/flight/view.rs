@@ -8648,7 +8648,7 @@ mod tests {
     struct Nothing;
 
     impl ControlBits for Nothing {
-        fn allows(&self, _test: &nova_sim::TestExpr) -> bool {
+        fn allows(&self, _test: &nova_sim::TestExpr, _pilot: &dyn nova_sim::PilotFacts) -> bool {
             false
         }
     }

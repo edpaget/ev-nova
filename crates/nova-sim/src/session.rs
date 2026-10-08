@@ -279,6 +279,7 @@ use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
 use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
+use crate::control::{ControlBits, NovaBits};
 use crate::date::{self, GameDate};
 use crate::escort::EscortDuty;
 use crate::flight::{Controls, ShipState, step};
@@ -293,7 +294,7 @@ use crate::govt::Governments;
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
-use crate::hire::{ControlBits, HireTerms, NoControlBits, NovaHire, PayNote};
+use crate::hire::{HireTerms, NovaHire, PayNote};
 use crate::hyperspace::{
     HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing,
@@ -608,7 +609,7 @@ impl Session {
             fleet: Vec::new(),
             restock_persons: false,
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
-            control_bits: hire::Shared(Rc::new(NoControlBits)),
+            control_bits: hire::Shared(Rc::new(NovaBits)),
             hire_require: RuleSource::Engine,
             hire_rolls: BTreeMap::new(),
             take_off_pay: RuleSource::Engine,
@@ -793,12 +794,18 @@ impl Session {
                 .filter_map(|escort| escort.person)
                 .collect(),
         );
+        let facts = control::Facts {
+            pilot: &self.pilot,
+            ammo_outfits: &self.ammo_outfits,
+            armament: &self.armament,
+        };
         let world = World {
             persons: PersonWorld {
                 rules: &*self.person_rules.0,
                 gone: &self.pilot.gone_persons,
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.control_bits.0,
+                pilot: &facts,
                 fleet: &self.pilot.escorts,
             },
             ..World::new(&[])
@@ -830,6 +837,11 @@ impl Session {
                 self.populate(catalog, chance);
             } else {
                 let system_govt = self.star_map.govt(self.pilot.system);
+                let facts = control::Facts {
+                    pilot: &self.pilot,
+                    ammo_outfits: &self.ammo_outfits,
+                    armament: &self.armament,
+                };
                 let world = World {
                     sites: &self.sites,
                     player: Some(self.player_side()),
@@ -841,6 +853,7 @@ impl Session {
                         gone: &self.pilot.gone_persons,
                         grudges: &self.pilot.grudges,
                         control_bits: &*self.control_bits.0,
+                        pilot: &facts,
                         fleet: &self.pilot.escorts,
                     },
                 };
@@ -871,6 +884,7 @@ impl Session {
                 gone: &self.pilot.gone_persons,
                 grudges: &self.pilot.grudges,
                 control_bits: &*self.control_bits.0,
+                pilot: self,
                 fleet: &self.pilot.escorts,
             },
         }

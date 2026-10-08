@@ -113,7 +113,4 @@ exclude_re = [
     # step up, so rounding a price exactly at it either way gives it back.
     "replace < with <= in price_flux",
     "replace > with >= in price_flux",
-    # Until control bits exist, `control_bits_allow` holds for every
-    # expression, so the adapter's body and `true` are the same.
-    "replace <impl ControlBits for NoControlBits>::allows -> bool with true",
 ]

@@ -159,7 +159,7 @@ use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HailView,
-    HireTerms, LegalCode, NoControlBits, NovaAi, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
+    HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
     NovaPersons, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule, RuleKey,
     RuleSource, Rulebook, Take, Taken, pilot_key,
 };
@@ -387,7 +387,7 @@ impl AppScreen {
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
-            control_bits: Rc::new(NoControlBits),
+            control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
             comm_quote: RuleSource::Engine,
             comm: None,
@@ -538,9 +538,10 @@ impl AppScreen {
         Self { hire_terms, ..self }
     }
 
-    /// The router with `bits` testing a ship for hire's `Availability` in
-    /// each flight ([`FlightView::with_control_bits`]); none hold false
-    /// until others are given.
+    /// The router with `bits` testing a ship for hire's `Availability` and
+    /// a person's `ActiveOn` against the pilot in each flight
+    /// ([`FlightView::with_control_bits`]); Nova's
+    /// ([`NovaBits`](nova_sim::NovaBits)) until others are given.
     #[must_use]
     pub fn with_control_bits(self, control_bits: Rc<dyn ControlBits>) -> Self {
         Self {
@@ -590,7 +591,7 @@ impl AppScreen {
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
-            .with_control_bits(Rc::new(NoControlBits))
+            .with_control_bits(Rc::new(NovaBits))
             .with_person_rules(Rc::new(NovaPersons::from_rulebook(rulebook)))
             .with_comm_quote(rulebook.source_for(RuleKey::CommQuote))
     }
@@ -5726,6 +5727,10 @@ mod tests {
             engine,
             rules_of(&AppScreen::new(data())),
             "the engine's are the router's defaults"
+        );
+        assert!(
+            engine.contains(&("control_bits", "NovaBits".to_owned())),
+            "the real control bits: {engine:?}"
         );
         for key in RuleKey::ALL {
             let rulebook = Rulebook::default().with_override(key, RuleSource::Bible);

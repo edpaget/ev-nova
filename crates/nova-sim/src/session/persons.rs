@@ -291,7 +291,7 @@ mod tests {
     use crate::catalog::{PersonId, PersonRecord, ShipId, SystemId, SystemTraffic};
     use crate::chance::{Chance, NeverFires};
     use crate::control::Test;
-    use crate::hire::ControlBits;
+    use crate::control::{ControlBits, PilotFacts};
     use crate::person::{PersonRoll, PersonRules};
     use crate::pilot::Pilot;
     use crate::rulebook::RuleSource;
@@ -299,8 +299,8 @@ mod tests {
 
     /// System 130 has no traffic of its own (`AvgShips` `avg_ships`) and
     /// one Person slot, naming "Ace" (`përs` 600, subtitle "Top Gun",
-    /// `ActiveOn` "b3", flying ship 129) at 100 %. Person 601, linked
-    /// anywhere, flies ship 129 too.
+    /// flying ship 129) at 100 %. Person 601, linked anywhere, flies ship
+    /// 129 too.
     fn peopled(avg_ships: i16) -> FakePilotCatalog {
         let mut slots: [(Option<PersonId>, i16); 8] = Default::default();
         slots[0] = (Some(PersonId(600)), 100);
@@ -317,7 +317,6 @@ mod tests {
                 PersonRecord {
                     name: "Ace".to_owned(),
                     subtitle: "Top Gun".to_owned(),
-                    active_on: Test::parse("b3"),
                     link_syst: 131,
                     ..person(600, 129)
                 },
@@ -365,7 +364,7 @@ mod tests {
     struct NoneHold;
 
     impl ControlBits for NoneHold {
-        fn allows(&self, _test: &crate::control::TestExpr) -> bool {
+        fn allows(&self, _test: &crate::control::TestExpr, _pilot: &dyn PilotFacts) -> bool {
             false
         }
     }
@@ -377,6 +376,25 @@ mod tests {
             .expect("starts")
             .with_control_bits(Rc::new(NoneHold));
         assert_eq!(persons(&populated(&catalog, session)), []);
+    }
+
+    #[test]
+    fn through_the_real_control_bits_a_person_follows_its_active_on_bit() {
+        let mut catalog = peopled(0);
+        catalog.persons[0].active_on = Test::parse("b3");
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            persons(&populated(&catalog, session)),
+            [],
+            "never while bit 3 is clear"
+        );
+        let mut session = Session::start(&catalog).expect("starts");
+        session.set_control_bit(crate::control::Bit::new(3).expect("in range"), true);
+        assert_eq!(
+            persons(&populated(&catalog, session)),
+            [Some(600)],
+            "at 100 % once it is set"
+        );
     }
 
     /// Brings the first person who may appear, and no slot's.
@@ -857,7 +875,6 @@ mod tests {
         catalog.traffic[0].1.persons[1] = (Some(PersonId(601)), 100);
         catalog.persons[0].flags = flags[0];
         catalog.persons[0].hail_quote = 1;
-        catalog.persons[0].active_on = Test::default();
         catalog.persons[1] = PersonRecord {
             name: "Bee".to_owned(),
             flags: flags[1],

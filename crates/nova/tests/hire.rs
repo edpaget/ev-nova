@@ -897,7 +897,7 @@ impl nova_sim::HireTerms for Sevens {
 struct NothingHolds;
 
 impl nova_sim::ControlBits for NothingHolds {
-    fn allows(&self, _test: &nova_sim::TestExpr) -> bool {
+    fn allows(&self, _test: &nova_sim::TestExpr, _pilot: &dyn nova_sim::PilotFacts) -> bool {
         false
     }
 }

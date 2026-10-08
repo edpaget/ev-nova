@@ -5,8 +5,10 @@
 //! executable (each address below is in `EV Nova.app/Contents/MacOS/EV
 //! Nova`), as defaults, not a contract. The fee and the wage sit behind
 //! the [`HireTerms`] port, with Nova's [`NovaHire`] as the default, and the
-//! control-bit test behind the [`ControlBits`] port, so a plug-in's rules
-//! or the control bits of the missions roadmap replace them at the edge.
+//! control-bit test behind the [`ControlBits`] port, with Nova's
+//! [`NovaBits`](crate::NovaBits) reading the pilot, so a plug-in's rules
+//! replace them at the edge. A ship whose `Availability` did not parse is
+//! never available.
 //!
 //! # Which ships are for hire (`_SetupPortAvailableShipTypes` @0xbbe3)
 //!
@@ -117,8 +119,7 @@
 use std::fmt::Debug;
 
 use crate::catalog::{LandingSite, ShipId, ShipRecord};
-use crate::control::TestExpr;
-use crate::market::control_bits_allow;
+use crate::control::{ControlBits, PilotFacts, Test};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::shipyard::{HIDE_BITS, ShipFlags3, ShipSpecs};
 use crate::wares::{self, HideHigher};
@@ -249,24 +250,6 @@ pub fn price_flux(price: i32, ship_tech: i16, stellar_tech: i16) -> i64 {
     (price / step * step).max(1)
 }
 
-/// Whether the control-bit test a record names holds: the port the hire
-/// list asks a ship's `Availability`.
-pub trait ControlBits: Debug {
-    /// Whether `test` holds.
-    fn allows(&self, test: &TestExpr) -> bool;
-}
-
-/// The control bits until they exist: every expression holds, as
-/// [`control_bits_allow`] says. rdm `missions-and-storylines` replaces it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct NoControlBits;
-
-impl ControlBits for NoControlBits {
-    fn allows(&self, test: &TestExpr) -> bool {
-        control_bits_allow(test)
-    }
-}
-
 /// Why a ship cannot be hired.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HireRefusal {
@@ -385,11 +368,18 @@ pub(crate) struct Bar<'a> {
     pub(crate) terms: &'a dyn HireTerms,
     /// The control-bit test.
     pub(crate) control_bits: &'a dyn ControlBits,
+    /// What the control-bit test reads about the player.
+    pub(crate) pilot: &'a dyn PilotFacts,
     /// Whether `Require` gates hiring ([`RuleKey::HireRequire`]).
     pub(crate) hire_require: RuleSource,
 }
 
 impl Bar<'_> {
+    /// Whether `test` holds: never when it did not parse.
+    fn allows(&self, test: &Test) -> bool {
+        test.holds(|test| self.control_bits.allows(test, self.pilot))
+    }
+
     /// The list, each class's roll of so many percent answered by
     /// `rolled`, asked by ascending ID and only for a class that passes
     /// its tech level and is neither never nor always for hire.
@@ -411,9 +401,7 @@ impl Bar<'_> {
                 continue;
             }
             let required = wares::requirement_met(ship.require, self.contributed);
-            let available = ship
-                .availability
-                .holds(|test| self.control_bits.allows(test));
+            let available = self.allows(&ship.availability);
             if wares::hidden(ship.flags3, HIDE_BITS, required, available)
                 || !sweep.on_sale(ship.disp_weight)
             {
@@ -600,14 +588,6 @@ mod tests {
             NovaHire::from_rulebook(&others).hire_fee,
             RuleSource::Engine
         );
-    }
-
-    #[test]
-    fn without_control_bits_every_expression_holds() {
-        for text in ["b33", "", "!b1 & b2"] {
-            let tree = TestExpr::parse(text).expect("parses");
-            assert!(NoControlBits.allows(&tree), "{text}");
-        }
     }
 
     #[test]

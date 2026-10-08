@@ -39,7 +39,8 @@
 //! - [`control`]: the control bits missions and storylines script with,
 //!   held as a [`ControlBitSet`] indexed by [`Bit`]; a record's parsed
 //!   control-bit [`Test`], and evaluating one against the [`PilotFacts`]
-//!   it reads ([`control::holds`]).
+//!   it reads ([`control::holds`]), through the [`ControlBits`] port with
+//!   Nova's [`NovaBits`].
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence
@@ -97,8 +98,8 @@
 //! - [`hire`]: hiring escorts in the bar: which ships are for hire today
 //!   ([`HireList`], [`HireRow`], [`HireRefusal`]), the [`HireTerms`] port
 //!   with Nova's [`NovaHire`] fee and daily wage ([`price_flux`]), the
-//!   [`ControlBits`] port a ship's `Availability` goes through
-//!   ([`NoControlBits`] until control bits exist), what a hire did
+//!   [`ControlBits`] port a ship's `Availability` goes through, what a
+//!   hire did
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
@@ -247,7 +248,9 @@ pub use combat::defence::{Allegiance, PointDefenceRule};
 pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
-pub use control::{Bit, BitWrite, ControlBitSet, PilotFacts, Test, TestExpr};
+pub use control::{
+    Bit, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Test, TestExpr,
+};
 pub use date::GameDate;
 pub use escort::{
     ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
@@ -264,10 +267,7 @@ pub use hail::{
     HailOption, HailOptions, HailRefusal, HailView, Help, JoinFleet, Release, Reply,
 };
 pub use handling::{Handling, ShipFields};
-pub use hire::{
-    ControlBits, HireList, HireRefusal, HireRow, HireTerms, Hired, NoControlBits, NovaHire,
-    PayNote, price_flux,
-};
+pub use hire::{HireList, HireRefusal, HireRow, HireTerms, Hired, NovaHire, PayNote, price_flux};
 pub use hyperspace::{
     HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule, MultiJumpRule,
     RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,

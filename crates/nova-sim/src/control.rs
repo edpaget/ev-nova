@@ -22,7 +22,12 @@
 //! holds when as many of its terms hold as its comparison asks. Test
 //! evaluation draws nothing at random: the test grammar has no random
 //! operand.
+//!
+//! The rules that test a record's control bits (bar hire, a person's
+//! `ActiveOn`) ask the [`ControlBits`] port, which the caller wires at the
+//! edge; [`NovaBits`] is the original's evaluation, [`holds`].
 
+use std::fmt::Debug;
 use std::sync::Arc;
 
 pub use nova_data::{Bit, BitWrite, Comparison, ParsedTest, TestExpr, TestOperand};
@@ -31,7 +36,7 @@ use crate::catalog::{OutfitId, SystemId};
 use crate::pilot::Gender;
 
 /// What a control-bit test reads about the pilot.
-pub trait PilotFacts {
+pub trait PilotFacts: Debug {
     /// Whether control bit `bit` is set.
     fn bit(&self, bit: Bit) -> bool;
     /// The player's gender.
@@ -66,6 +71,23 @@ pub fn holds(test: &TestExpr, pilot: &(impl PilotFacts + ?Sized)) -> bool {
                 Comparison::Equal => count == value,
             }
         }
+    }
+}
+
+/// Whether a control-bit test holds for the pilot: the port the rules
+/// that test a record's control bits ask.
+pub trait ControlBits: Debug {
+    /// Whether `test` holds for `pilot`.
+    fn allows(&self, test: &TestExpr, pilot: &dyn PilotFacts) -> bool;
+}
+
+/// The original's control bits: a test holds as [`holds`] says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NovaBits;
+
+impl ControlBits for NovaBits {
+    fn allows(&self, test: &TestExpr, pilot: &dyn PilotFacts) -> bool {
+        holds(test, pilot)
     }
 }
 
@@ -326,7 +348,7 @@ mod tests {
 
     /// A pilot view holding these bits, outfits and explored systems, this
     /// gender, and paid as `paid` says.
-    #[derive(Default)]
+    #[derive(Debug, Default)]
     struct FakePilot {
         bits: Vec<u16>,
         female: bool,
@@ -465,6 +487,26 @@ mod tests {
             assert_eq!(eval("( [b1 b2 !b3] < 1)", &pilot), count < 1, "{bits:?}");
             assert_eq!(eval("( [b1 b2 !b3] = 2)", &pilot), count == 2, "{bits:?}");
         }
+    }
+
+    #[test]
+    fn novas_control_bits_hold_as_the_evaluator_says() {
+        for (text, bits) in [
+            ("b3", &[3][..]),
+            ("b3", &[][..]),
+            ("!b3 & g", &[][..]),
+            ("", &[][..]),
+        ] {
+            let tree = TestExpr::parse(text).expect("parses");
+            let pilot = with_bits(bits);
+            assert_eq!(
+                NovaBits.allows(&tree, &pilot),
+                holds(&tree, &pilot),
+                "{text} {bits:?}"
+            );
+        }
+        assert!(NovaBits.allows(&TestExpr::parse("b3").expect("parses"), &with_bits(&[3])));
+        assert!(!NovaBits.allows(&TestExpr::parse("b3").expect("parses"), &with_bits(&[])));
     }
 
     #[test]

@@ -150,9 +150,7 @@ impl<'a> PersonDraw<'a> {
                 person.linked
                     && record.ai_type > 0
                     && !self.world.gone.contains(id)
-                    // Control bits: every `ActiveOn` holds until
-                    // missions-and-storylines brings them.
-                    && record.active_on.holds(|test| self.world.control_bits.allows(test))
+                    && self.world.allows(&record.active_on)
                     && !(arriving && person.derelict)
                     && !self.world.in_fleet(**id)
                     && !self.named_here(table, &record.name)
@@ -260,12 +258,7 @@ pub fn initial(
             continue;
         };
         let world = draw.world;
-        if world.gone.contains(&id)
-            || world.in_fleet(id)
-            || !person
-                .record
-                .active_on
-                .holds(|test| world.control_bits.allows(test))
+        if world.gone.contains(&id) || world.in_fleet(id) || !world.allows(&person.record.active_on)
         {
             continue;
         }
@@ -528,9 +521,9 @@ mod tests {
     use crate::catalog::{DudeId, EscortRecord, FleetRecord};
     use crate::catalog::{PersonId, PersonRecord};
     use crate::combat::hull::Condition;
+    use crate::control::{ControlBits, PilotFacts};
     use crate::control::{Test, TestExpr};
     use crate::handling::ShipFields;
-    use crate::hire::ControlBits;
     use crate::person::{NovaPersons, PersonWorld};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
@@ -1181,7 +1174,7 @@ mod tests {
     struct Refusing(u16);
 
     impl ControlBits for Refusing {
-        fn allows(&self, test: &TestExpr) -> bool {
+        fn allows(&self, test: &TestExpr, _pilot: &dyn PilotFacts) -> bool {
             !test.reads().iter().any(|bit| bit.get() == self.0)
         }
     }
