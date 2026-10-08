@@ -158,10 +158,11 @@ use std::time::Duration;
 use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
 use nova_sim::{
-    Allegiance, Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HailView,
-    HireTerms, HookRules, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire,
-    NovaLaw, NovaPersons, OutfitRules, PersonRules, Pilot, PilotKeeper, PilotStore,
-    PointDefenceRule, RuleKey, RuleSource, Rulebook, Session, Take, Taken, pilot_key,
+    Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
+    HailView, HireTerms, HookRules, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable,
+    NovaHire, NovaLaw, NovaPersons, OutfitRules, PersonRules, Pilot, PilotKeeper, PilotStore,
+    PointDefenceRule, RuleKey, RuleSource, Rulebook, Session, ShipChangeRules, Take, Taken,
+    pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -312,6 +313,9 @@ pub struct AppScreen {
     /// The order of each flight's set-expression hooks where it is
     /// disputed.
     hook_rules: HookRules,
+    /// How each flight's ship-change set operators go where the rules are
+    /// disputed.
+    ship_change_rules: ShipChangeRules,
     /// The control-bit test a ship for hire's `Availability` goes
     /// through in each flight.
     control_bits: Rc<dyn ControlBits>,
@@ -399,6 +403,7 @@ impl AppScreen {
             comm_quote: RuleSource::Engine,
             outfit_rules: OutfitRules::default(),
             hook_rules: HookRules::default(),
+            ship_change_rules: ShipChangeRules::default(),
             comm: None,
             haggle: None,
         }
@@ -602,12 +607,24 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's ship-change set operators following
+    /// `rules` where they are disputed
+    /// ([`FlightView::with_ship_change_rules`]); the engine's until others
+    /// are given.
+    #[must_use]
+    pub fn with_ship_change_rules(self, rules: ShipChangeRules) -> Self {
+        Self {
+            ship_change_rules: rules,
+            ..self
+        }
+    }
+
     /// The router with Nova's rules, each disputed one as `rulebook`
     /// chooses: the NPCs' behaviour, disabling, point defence, the law,
     /// boarding, hailing, the escorts' and fighters' rules, hiring, the
-    /// persons' rules, granting and removing outfits, and the order of
-    /// the set-expression hooks. This is the edge where every [`RuleKey`]
-    /// meets its setting.
+    /// persons' rules, granting and removing outfits, the order of the
+    /// set-expression hooks, and changing the ship by set operator. This
+    /// is the edge where every [`RuleKey`] meets its setting.
     #[must_use]
     pub fn with_rulebook(self, rulebook: &Rulebook) -> Self {
         self.with_behaviour(Rc::new(NovaAi::from_rulebook(rulebook)))
@@ -628,6 +645,7 @@ impl AppScreen {
             .with_comm_quote(rulebook.source_for(RuleKey::CommQuote))
             .with_outfit_rules(OutfitRules::from_rulebook(rulebook))
             .with_hook_rules(HookRules::from_rulebook(rulebook))
+            .with_ship_change_rules(ShipChangeRules::from_rulebook(rulebook))
     }
 
     /// The comm dialog, while a hail is under way.
@@ -657,8 +675,9 @@ impl AppScreen {
     /// A flight over the game data, `new` from it, rolling on the router's
     /// chance, its effects on the router's effects chance, deciding as its
     /// behaviour says, disabling ships, engaging missiles and judging
-    /// crimes as its rules say, and laying out its HUD's text with the
-    /// router's metrics, if it has any.
+    /// crimes as its rules say, naming its ship from the game data's
+    /// string lists, and laying out its HUD's text with the router's
+    /// metrics, if it has any.
     fn flight(
         &self,
         new: impl FnOnce(Rc<GameData>) -> FlightView<Rc<GameData>>,
@@ -684,6 +703,8 @@ impl AppScreen {
             .with_comm_quote(self.comm_quote)
             .with_outfit_rules(self.outfit_rules)
             .with_hook_rules(self.hook_rules)
+            .with_ship_change_rules(self.ship_change_rules)
+            .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
@@ -5798,6 +5819,27 @@ pub(super) mod tests {
             flight(&screen).session().expect("flying").hook_rules(),
             rules
         );
+        let rules = ShipChangeRules {
+            persistence: RuleSource::Bible,
+            ..ShipChangeRules::default()
+        };
+        let mut screen = AppScreen::new(data()).with_ship_change_rules(rules);
+        fly(&mut screen);
+        assert_eq!(
+            flight(&screen)
+                .session()
+                .expect("flying")
+                .ship_change_rules(),
+            rules
+        );
+    }
+
+    #[test]
+    fn each_flight_names_its_ship_from_the_game_datas_string_lists() {
+        let mut screen = AppScreen::new(trading_data());
+        fly(&mut screen);
+        let strings = flight(&screen).session().expect("flying").strings();
+        assert_eq!(strings.string_list(4000), ["Food"]);
     }
 
     /// The rule-bearing parts of `screen`, each by name, as they print.
@@ -5821,6 +5863,10 @@ pub(super) mod tests {
             ("comm_quote", format!("{:?}", screen.comm_quote)),
             ("outfit_rules", format!("{:?}", screen.outfit_rules)),
             ("hook_rules", format!("{:?}", screen.hook_rules)),
+            (
+                "ship_change_rules",
+                format!("{:?}", screen.ship_change_rules),
+            ),
         ]
     }
 
@@ -5853,6 +5899,10 @@ pub(super) mod tests {
             RuleKey::PurchasePaintOrder
             | RuleKey::CaptureHookOrder
             | RuleKey::StartShipPurchase => "hook_rules",
+            RuleKey::ShipChangePersistence
+            | RuleKey::ShipChangeMax
+            | RuleKey::ShipChangeCargo
+            | RuleKey::ShipChangeReserves => "ship_change_rules",
         }
     }
 

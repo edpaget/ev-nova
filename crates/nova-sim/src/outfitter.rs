@@ -77,7 +77,8 @@
 //! selling a launcher before its ammunition,
 //! and `ModType` 27's raised maximums. Which outfits a ship bought in the
 //! [`shipyard`](crate::shipyard) keeps is the shipyard's (flag 0x0004);
-//! flag 0x0020 only concerns a mission's change of ship.
+//! flag 0x0020 only concerns a mission's change of ship, the `H` set
+//! operator (see [`ship_change`](crate::ship_change)).
 
 use std::collections::BTreeMap;
 
@@ -102,6 +103,9 @@ impl OutfitFlags {
     pub const CANNOT_SELL: u16 = 0x0008;
     /// Removed after purchase: buying it only pays.
     pub const REMOVE_AFTER_PURCHASE: u16 = 0x0010;
+    /// Stays with the player when a mission's set operator changes its
+    /// ship (`H`): see [`ship_change`](crate::ship_change).
+    pub const MISSION_PERSISTENT: u16 = 0x0020;
     /// Not shown unless the player meets its `Require`, or owns one.
     pub const HIDE_UNLESS_REQUIRED: u16 = 0x0100;
     /// Its price is its `Cost` times the ship's `Mass`.

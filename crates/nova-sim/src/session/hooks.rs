@@ -6,7 +6,8 @@
 //! **Running one.** [`Session::run_script`] runs a record's [`Script`]
 //! as [`Session::run_set`] runs a set expression: the bits written, `R(...)`
 //! drawn on the caller's [`Chance`], the other operators handed to the
-//! session's registry (by default `G`, `D` and `X`; any other is skipped
+//! session's registry (by default `G`, `D`, `X`, `C`, `E`, `H` and `T`;
+//! any other is skipped
 //! and told once a session as a [`ScriptNote`](crate::ScriptNote)). A
 //! blank script, or one that did not parse, does nothing at all: no save
 //! is due and nothing is told.
@@ -35,8 +36,8 @@
 //! Elsewhere: the player ship's `OnRetire` when it is destroyed
 //! (`_HandlePlayer` @0x6f49d) and its `OnPurchase` after the post-loss
 //! reset (@0x68f55) wait for the player's death; the ship-change
-//! operators `C`, `E` and `H` run neither (`_EvalSetExp` never calls
-//! `_EvalMissionBitSetString`).
+//! operators `C`, `E` and `H` run no hook at all (`_EvalSetExp` never
+//! calls `_EvalMissionBitSetString`; see the `ship_change` module).
 
 use super::Session;
 use crate::catalog::{PilotCatalog, ShipId};

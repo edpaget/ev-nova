@@ -218,9 +218,13 @@
 //! due. A set expression runs on the session ([`Session::run_set`]),
 //! writing bits, with its other operators handled as
 //! [`Session::with_set_ops`] says: by default [`nova_set_ops`], which
-//! grants (`G`) and removes (`D`) outfits and explores systems (`X`);
-//! one nothing handles is skipped and told once
-//! ([`Session::take_script_notes`]).
+//! grants (`G`) and removes (`D`) outfits, explores systems (`X`),
+//! changes the player's ship outside the shipyard (`C`, `E`, `H`, as
+//! [`Session::with_ship_change_rules`] says where the rules are
+//! disputed) and renames it (`T`, from the string lists
+//! [`Session::with_strings`] gives); one nothing handles is skipped and
+//! told once ([`Session::take_script_notes`]). See the `ship_change`
+//! module.
 //!
 //! Buying an outfit, a boarding grant and `G` share one grant path, the
 //! original's: a map explores, a clean-record outfit cleans the legal
@@ -272,9 +276,13 @@ mod hire;
 mod hooks;
 mod outfits;
 mod persons;
+mod ship_change;
 
 pub use control::nova_set_ops;
 pub use hooks::HookRules;
+pub use ship_change::{
+    ChangeShipOp, ChangeShipWithDefaultsOp, RenameShipOp, ReplaceShipOp, ShipChangeRules,
+};
 
 pub use edit::RelocateRefusal;
 pub use persons::PersonQuote;
@@ -301,7 +309,7 @@ use crate::combat::armament::{
     Armament, Arsenal, OutfitRounds, Trigger, next_secondary, outfit_rounds,
 };
 use crate::combat::beam::Beam;
-use crate::combat::hull::{Condition, HullSpec};
+use crate::combat::hull::{Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
 use crate::combat::weapon::Ammo;
@@ -546,6 +554,15 @@ pub struct Session {
     /// The order of the set-expression hooks where it is disputed (see
     /// [`Session::with_hook_rules`]).
     hook_rules: HookRules,
+    /// How the ship-change set operators go where the rules are disputed
+    /// (see [`Session::with_ship_change_rules`]).
+    ship_change_rules: ShipChangeRules,
+    /// When the player's ship is disabled after a change of ship (see
+    /// [`Session::with_disable_rule`]).
+    disable_rule: hire::Shared<dyn DisableRule>,
+    /// The string lists `T` names the ship from (see
+    /// [`Session::with_strings`]).
+    strings: ship_change::Strings,
 }
 
 impl Session {
@@ -665,6 +682,9 @@ impl Session {
             quotes: Vec::new(),
             outfit_rules: OutfitRules::default(),
             hook_rules: HookRules::default(),
+            ship_change_rules: ShipChangeRules::default(),
+            disable_rule: Self::nova_disable(),
+            strings: ship_change::Strings::none(),
             pilot,
         };
         session.refit(false);
@@ -1807,9 +1827,10 @@ impl Session {
     /// Changes the pilot with `change`, while the ship is landed (in the
     /// spaceport), and says whether it did: in flight nothing changes and
     /// `change` is not called. A save is due after a change. `change` must
-    /// not change the ship class, which only [`Session::buy_ship`]
-    /// changes, nor the outfits, which only [`Session::outfit`] and
-    /// [`Session::buy_ship`] change, so the fields and the stats follow.
+    /// not change the ship class, which only [`Session::buy_ship`],
+    /// [`Session::assign`] and the ship-change set operators change, nor
+    /// the outfits, which only they, [`Session::outfit`] and the other
+    /// set operators change, so the fields and the stats follow.
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
         if self.landed.is_none() {
             return false;

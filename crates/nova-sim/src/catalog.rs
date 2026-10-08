@@ -1,8 +1,9 @@
 //! The catalog ports: what a flight session starts from
 //! ([`PilotCatalog`]), what its NPC traffic is spawned from
 //! ([`TrafficCatalog`]), what its ships fight with ([`CombatCatalog`]) and
-//! the words a hailed ship answers with ([`CommCatalog`]), in the
-//! simulation's own terms.
+//! the game's string lists ([`CommCatalog`]), which a hailed ship answers
+//! from and the `T` set operator names the ship from, in the simulation's
+//! own terms.
 
 use std::rc::Rc;
 
@@ -697,8 +698,8 @@ impl<T: CombatCatalog + ?Sized> CombatCatalog for Rc<T> {
     }
 }
 
-/// The game data a hailed ship's words come from: string lists, read
-/// whole.
+/// The game's string lists (`STR#`), read whole: a hailed ship's words
+/// come from them, and the names the `T` set operator gives the ship.
 pub trait CommCatalog {
     /// Every string of `STR#` `id`, in order; none when it is missing or
     /// cannot be read.

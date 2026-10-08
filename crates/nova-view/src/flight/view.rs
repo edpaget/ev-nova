@@ -256,7 +256,7 @@ use nova_sim::{
 };
 use nova_sim::{
     ControlBits, HireList, HireRefusal, HireTerms, Hired, HookRules, OutfitRules, PayNote,
-    PersonRules,
+    PersonRules, ShipChangeRules,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -1161,6 +1161,29 @@ impl<
         }
     }
 
+    /// The flight with the ship-change set operators following `rules`
+    /// where the Bible and the engine disagree
+    /// ([`Session::with_ship_change_rules`]).
+    #[must_use]
+    pub fn with_ship_change_rules(self, rules: ShipChangeRules) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_ship_change_rules(rules)),
+            ..self
+        }
+    }
+
+    /// The flight with the `T` set operator naming the ship from
+    /// `strings`' string lists ([`Session::with_strings`]).
+    #[must_use]
+    pub fn with_strings(self, strings: Rc<dyn CommCatalog>) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_strings(strings)),
+            ..self
+        }
+    }
+
     /// The flight with `bits` testing a ship's `Availability` for hire
     /// ([`Session::with_control_bits`]).
     #[must_use]
@@ -1196,10 +1219,15 @@ impl<
         Self { behaviour, ..self }
     }
 
-    /// The flight with its ships disabled as `rule` says.
+    /// The flight with its ships disabled as `rule` says: in the fight,
+    /// and in its session's changes of ship
+    /// ([`Session::with_disable_rule`]).
     #[must_use]
     pub fn with_disable_rule(self, disable_rule: Rc<dyn DisableRule>) -> Self {
         Self {
+            session: self
+                .session
+                .map(|session| session.with_disable_rule(Rc::clone(&disable_rule))),
             disable_rule,
             ..self
         }
@@ -9069,6 +9097,42 @@ mod tests {
         };
         let view = flight().with_hook_rules(rules);
         assert_eq!(view.session().expect("flying").hook_rules(), rules);
+    }
+
+    #[test]
+    fn the_ship_change_rules_reach_the_session() {
+        let rules = nova_sim::ShipChangeRules {
+            cargo: RuleSource::Bible,
+            ..nova_sim::ShipChangeRules::default()
+        };
+        let view = flight().with_ship_change_rules(rules);
+        assert_eq!(view.session().expect("flying").ship_change_rules(), rules);
+    }
+
+    #[test]
+    fn the_disable_rule_reaches_the_session_too() {
+        let rule = Rc::new(Counting::default());
+        let view = flight().with_disable_rule(rule.clone());
+        let session = view.session().expect("flying");
+        assert!(
+            !session
+                .disable_rule()
+                .disabled(nova_sim::Gauge::full(10.0), &session.hull())
+        );
+        assert_eq!(rule.asked.get(), 1, "the session asks the rule given");
+    }
+
+    #[test]
+    fn the_string_lists_reach_the_session() {
+        let strings = FakeCatalog {
+            strings: vec![(25040, vec!["Kestrel".to_owned()])],
+            ..catalog()
+        };
+        let view = flight().with_strings(Rc::new(strings));
+        assert_eq!(
+            view.session().expect("flying").strings().string_list(25040),
+            ["Kestrel"]
+        );
     }
 
     // Boarding grants.

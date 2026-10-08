@@ -44,12 +44,17 @@
 //! | [`PurchasePaintOrder`](RuleKey::PurchasePaintOrder) | `purchase_paint_order` | buying a ship clears the paint after the new ship's `OnPurchase`, so a paint it grants is lost ([`HookRules`](crate::HookRules)) | the paint is cleared before the hook, so a paint it grants stays\* |
 //! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, which strips a non-persistent outfit either grants ([`HookRules`](crate::HookRules)) | they run after the swap, so it stays\* |
 //! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` ([`HookRules`](crate::HookRules)) | it runs once, right before the `chär`'s `OnStart`\* |
+//! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 ([`ShipChangeRules`](crate::ShipChangeRules)) | only one flagged 0x0020 |
+//! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its `Max` after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
+//! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the cargo is trimmed to the new hold, as a purchase trims it\* |
+//! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it ([`ShipChangeRules`](crate::ShipChangeRules)) | each is held to its new most\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
 //! `remove_refund`, `purchase_paint_order`, `capture_hook_order`,
-//! `start_ship_purchase` or `comm_quote`
+//! `start_ship_purchase`, `ship_change_cargo`, `ship_change_reserves` or
+//! `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -358,6 +363,40 @@ rule_keys! {
     /// here, so the other reading is the obvious alternative, not
     /// anything the Bible says (see [`HookRules`](crate::HookRules)).
     StartShipPurchase => "start_ship_purchase",
+    /// Which outfits survive the `H` set operator's change of ship: by
+    /// the engine, any flagged persistent (0x0004) or persistent through a
+    /// mission's change of ship (0x0020), as it tests both bits
+    /// (`_EvalSetExp` @0x154d5, `testb $0x24`); by the Bible's `oütf`
+    /// flag 0x0020 ("persistent in the case where the player's ship is
+    /// changed by a mission set operator", 0x0004 governing buying and
+    /// capture), only those flagged 0x0020 (see
+    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangePersistence => "ship_change_persistence",
+    /// Whether the `E` and `H` set operators hold the outfits owned to
+    /// their `Max`: by the engine, every outfit, old and new, is clamped
+    /// to its limit once the new class's default items are added
+    /// (`_HasMaxOfItem` @0x4512, called @0x15648); by the Bible's "the
+    /// player will keep all of his previous outfit items", nothing is
+    /// clamped (see [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeMax => "ship_change_max",
+    /// What becomes of the cargo on a `C`, `E` or `H` change of ship: by
+    /// the engine, it is all kept, even past the new hold, as the change
+    /// never calls `_DestroyPartialFleetCargo` (`_EvalSetExp`
+    /// @0x15493-0x156da); otherwise it is trimmed to the new hold as a
+    /// purchase trims it. The Bible is silent here, so the other reading
+    /// is the obvious alternative, not anything the Bible says (see
+    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeCargo => "ship_change_cargo",
+    /// What becomes of a shield or armour above the new class's most on a
+    /// `C`, `E` or `H` change of ship: by the engine, it is kept, as the
+    /// change clamps nothing (`_EvalSetExp` @0x15493-0x156da) and flight
+    /// regenerates the shield and armour only below their most, clamping
+    /// the fuel alone (`_HandlePlayer` @0x6cf99, @0x6d01d, @0x6d9e1), so
+    /// the surplus lasts until damage or landing takes it; otherwise each
+    /// is held to its new most. The Bible is silent here, so the other
+    /// reading is the obvious alternative, not anything the Bible says
+    /// (see [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeReserves => "ship_change_reserves",
 }
 
 impl RuleKey {
@@ -377,10 +416,18 @@ impl RuleKey {
 
 /// Which source each disputed rule follows: a default for all, and an
 /// override for any one.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rulebook {
     default: RuleSource,
     overrides: [Option<RuleSource>; RuleKey::ALL.len()],
+}
+
+/// Every rule following the engine, overriding none. (Written out, as
+/// `Default` derives only for arrays of up to 32 rules.)
+impl Default for Rulebook {
+    fn default() -> Self {
+        Self::new(RuleSource::default())
+    }
 }
 
 impl Rulebook {
@@ -505,9 +552,20 @@ mod tests {
                 RuleKey::RemoveRefund,
                 RuleKey::PurchasePaintOrder,
                 RuleKey::CaptureHookOrder,
-                RuleKey::StartShipPurchase
+                RuleKey::StartShipPurchase,
+                RuleKey::ShipChangePersistence,
+                RuleKey::ShipChangeMax,
+                RuleKey::ShipChangeCargo,
+                RuleKey::ShipChangeReserves
             ]
         );
+        assert_eq!(
+            RuleKey::ShipChangePersistence.key(),
+            "ship_change_persistence"
+        );
+        assert_eq!(RuleKey::ShipChangeMax.key(), "ship_change_max");
+        assert_eq!(RuleKey::ShipChangeCargo.key(), "ship_change_cargo");
+        assert_eq!(RuleKey::ShipChangeReserves.key(), "ship_change_reserves");
         assert_eq!(RuleKey::PurchasePaintOrder.key(), "purchase_paint_order");
         assert_eq!(RuleKey::CaptureHookOrder.key(), "capture_hook_order");
         assert_eq!(RuleKey::StartShipPurchase.key(), "start_ship_purchase");

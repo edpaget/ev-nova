@@ -163,6 +163,8 @@
 //!   commanding its escorts, launching and docking the fighters of its
 //!   bays and the NPC carriers' ([`Sortie`]), and hiring escorts in the
 //!   bar and paying their wages.
+//! - [`ship_change`]: changing the player's ship outside the shipyard,
+//!   as the `C`, `E` and `H` set operators do: which outfits carry over.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -225,6 +227,7 @@ pub mod rulebook;
 pub mod save;
 pub mod saves;
 pub mod session;
+pub mod ship_change;
 pub mod shipyard;
 pub mod sound;
 pub mod stats;
@@ -304,7 +307,9 @@ pub use reserves::{Gauge, Reserve, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
-pub use session::{HookRules, LandPress, PersonQuote, RelocateRefusal, Session, nova_set_ops};
+pub use session::{
+    HookRules, LandPress, PersonQuote, RelocateRefusal, Session, ShipChangeRules, nova_set_ops,
+};
 pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;
