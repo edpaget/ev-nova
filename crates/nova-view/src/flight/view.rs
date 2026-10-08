@@ -267,6 +267,7 @@ use super::jump::{JumpEffect, JumpPhase};
 use super::sprite::rotation_frame;
 use super::target::{self, TargetShown};
 use super::weapons::{self, BeamShown, ShotShown};
+use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
 use crate::system::camera::Camera;
@@ -1423,15 +1424,14 @@ impl<
         };
         let notes = session.take_fighter_notes();
         let pay = session.take_pay_notes();
-        let scene = SystemScene::load(&self.catalog, system);
-        self.map.show_course(system, session.course());
-        self.map.show_explored(session.pilot().explored());
-        self.previous = *session.player();
-        self.alpha = 0.0;
-        self.message = None;
         let date = session.date_text();
-        let mut said: Vec<String> = session
-            .take_messages()
+        let leads: Vec<_> = session.take_messages();
+        self.lay_out(system);
+        self.message = None;
+        let Some(scene) = &self.scene else {
+            return;
+        };
+        let mut said: Vec<String> = leads
             .into_iter()
             .map(arrival_lead)
             .next_back()
@@ -1450,10 +1450,48 @@ impl<
         if !said.is_empty() {
             self.show(said.join("  "));
         }
-        self.scene = Some(scene);
+    }
+
+    /// Lays out `system`, the session's: its scene, read from the catalog,
+    /// the course map's course and explored systems, and the ship drawn
+    /// from where it is, the last system's NPCs and effects let go.
+    fn lay_out(&mut self, system: SystemId) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        self.scene = Some(SystemScene::load(&self.catalog, system));
+        self.map.show_course(system, session.course());
+        self.map.show_explored(session.pilot().explored());
+        self.previous = *session.player();
+        self.alpha = 0.0;
         self.npc_previous.clear();
         self.effects.clear();
         self.read_npc_sheets();
+    }
+
+    /// The pilot flying, as the developer tools' desk: its edits reach
+    /// the session, moves read the catalog, and the course map's galaxy
+    /// names the places. `None` when the session failed.
+    pub fn pilot_desk(&mut self) -> Option<SessionDesk<'_, C>> {
+        let session = self.session.as_mut().ok()?;
+        Some(SessionDesk::new(session, &self.catalog, self.map.model()))
+    }
+
+    /// Catches the screen up with an edit made through the pilot desk:
+    /// when the session is in another system than the one laid out, it is
+    /// laid out as an arrival is, with no message; otherwise the course
+    /// map shows the session's course again. Nothing is read when nothing
+    /// moved.
+    pub fn resync(&mut self) {
+        let Ok(session) = &self.session else {
+            return;
+        };
+        let system = session.system();
+        if self.scene.as_ref().map(SystemScene::id) == Some(system) {
+            self.map.show_course(system, session.course());
+        } else {
+            self.lay_out(system);
+        }
     }
 
     /// Plays `effect` for the ship having come out of a gate into
@@ -2510,6 +2548,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::devtools::{PilotDesk, PilotEdit};
     use crate::draw::lights_tint;
     use crate::flight::catalog::{
         Blink, BoomLook, GovtId, LayerSheet, StatusBarLayout, TargetCard, WeaponLook,
@@ -2741,8 +2780,10 @@ mod tests {
             self.ships.clone()
         }
 
+        /// Sol and Alpha Centauri; Barnard, which has no stellars, only
+        /// when Alpha Centauri links on to it.
         fn system_exists(&self, id: SystemId) -> bool {
-            id == SystemId(130)
+            matches!(id.0, 130 | 131) || (id.0 == 132 && self.onward)
         }
 
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
@@ -5478,6 +5519,79 @@ mod tests {
         view.pilot().expect("flying").clone()
     }
 
+    // Pilot edits.
+
+    /// A view of Ada docked at Earth, the landing taken, with the systems
+    /// read so far forgotten.
+    fn landed_view() -> View {
+        let mut view = FlightView::with_pilot(catalog(), docked_pilot("Ada"));
+        view.take_landing();
+        view.catalog().systems_read.borrow_mut().clear();
+        view
+    }
+
+    fn move_to(view: &mut View, system: i16, stellar: i16) {
+        let mut desk = view.pilot_desk().expect("flying");
+        desk.edit(PilotEdit::MoveTo {
+            system: SystemId(system),
+            stellar: StellarId(stellar),
+        })
+        .expect("moves");
+    }
+
+    #[test]
+    fn a_session_that_failed_has_no_pilot_desk() {
+        let mut view = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert!(view.pilot_desk().is_none());
+        view.resync();
+        assert!(view.scene().is_none());
+    }
+
+    #[test]
+    fn the_pilot_desk_reads_the_session_and_names_from_the_map() {
+        let mut view = landed_view();
+        let desk = view.pilot_desk().expect("flying");
+        let sheet = desk.sheet().expect("a pilot");
+        assert_eq!(sheet.name, "Ada");
+        assert_eq!(sheet.system.name, "Sol");
+        assert_eq!(desk.systems().len(), 3);
+    }
+
+    #[test]
+    fn after_a_move_resync_lays_out_the_new_system() {
+        let mut view = landed_view();
+        move_to(&mut view, 131, 140);
+        view.resync();
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(*view.catalog().systems_read.borrow(), [SystemId(131)]);
+        assert_eq!(view.course_map().current(), Some(SystemId(131)));
+        assert_eq!(view.course_map().route(), []);
+        assert!(
+            view.course_map()
+                .explored()
+                .is_some_and(|explored| explored.contains(&SystemId(131)))
+        );
+        assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
+        assert_eq!(view.message(), None, "no arrival message");
+        view.resync();
+        assert_eq!(
+            *view.catalog().systems_read.borrow(),
+            [SystemId(131)],
+            "nothing moved, nothing read"
+        );
+    }
+
+    #[test]
+    fn a_resync_with_nothing_moved_reads_nothing() {
+        let mut view = landed_view();
+        view.resync();
+        assert_eq!(*view.catalog().systems_read.borrow(), []);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+    }
+
     #[test]
     fn a_pilot_docked_at_a_stellar_resumes_landed_there_silently() {
         let pilot = docked_pilot("Ada");
@@ -5508,13 +5622,13 @@ mod tests {
     #[test]
     fn a_pilot_whose_system_is_gone_cannot_fly() {
         let mut pilot = docked_pilot("Ada");
-        pilot.explore(SystemId(131));
-        let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 131");
+        pilot.explore(SystemId(132));
+        let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 132");
         let moved = nova_sim::save::decode(&text).expect("a pilot");
         let view = FlightView::with_pilot(catalog(), moved);
         assert_eq!(
             view.session().err(),
-            Some("the pilot's system, sÿst 131, does not exist")
+            Some("the pilot's system, sÿst 132, does not exist")
         );
         assert_eq!(view.pilot(), None);
     }
