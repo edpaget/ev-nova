@@ -15,11 +15,12 @@
 //!   over it. With stellars but none landable it selects nothing and
 //!   refuses with [`LandingRefusal::NotLandable`] for the nearest; with no
 //!   stellars, [`LandingRefusal::NoStellars`].
-//! - a stellar that cannot be landed on (only Tab selects one): refuses
-//!   with [`LandingRefusal::NotLandable`], wherever the ship is, before
-//!   any check of range or speed (`STR#` 2002 #84/#88/#90, "Your ship is
-//!   unable to land on ... The planet's environment is too hostile.").
-//! - a landable stellar, selected by Tab or an earlier L: lands on it if
+//! - a stellar that cannot be landed on (only a slot key or a click
+//!   selects one): refuses with [`LandingRefusal::NotLandable`], wherever
+//!   the ship is, before any check of range or speed (`STR#` 2002
+//!   #84/#88/#90, "Your ship is unable to land on ... The planet's
+//!   environment is too hostile.").
+//! - a landable stellar, however selected: lands on it if
 //!   [`check_landing`] allows. A refusal keeps the target, and the player
 //!   tries again (the manual: "If you're too far away, or if you're moving
 //!   too fast ... your ship's computer will beep at you and you can try

@@ -65,8 +65,10 @@
 //! before outfits were kept owns its ship's default items.
 //!
 //! The player selects one of the system's stellars as the navigation
-//! target ([`Session::select_next_stellar`]), in the order the
-//! [`navigation`](crate::navigation) rule gives, or with the land key
+//! target ([`Session::select_stellar`]) by its slot in the system's
+//! navigation defaults, as the nearest landable one, or by clicking it,
+//! as the [`navigation`](crate::navigation) rules say, and clears it with
+//! Nav Off ([`Session::clear_nav_target`]); or with the land key
 //! ([`Session::land`]), which selects the nearest landable stellar when
 //! there is no target and lands on the target when there is one. Landing
 //! clears it. The target is not part of the pilot, so it is not saved,
@@ -349,13 +351,13 @@ use crate::hyperspace::{
     MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing,
     jump_zone, next_hyper_destination,
 };
-use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
+use crate::landing::{LandOutcome, LandingRefusal, land_or_select, nearest_landable};
 use crate::legal::{self, Crime, LegalCode};
 use crate::market::{
     self, Direction, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal,
 };
 use crate::message::SimMessage;
-use crate::navigation::next_stellar;
+use crate::navigation::stellar_under;
 use crate::outfit_effects::OutfitRules;
 use crate::outfitter::{
     self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
@@ -384,6 +386,23 @@ enum Jump {
     PreJump { to: SystemId, bearing: Option<f32> },
     /// The jump to the system has begun.
     Hyperspace(SystemId),
+}
+
+/// Which stellar [`Session::select_stellar`] makes the navigation
+/// target, by the original's means (`_HandlePlayer` @0x68390).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StellarPick {
+    /// The stellar in this slot of the system's navigation defaults,
+    /// from 0: the original's keys 1-4 and F1-F4 (@0x69cf6-0x69f17).
+    Slot(usize),
+    /// The nearest landable stellar, the one the land key selects with no
+    /// target ([`nearest_landable`]): the original's F5, which picks
+    /// through the same `_FindNearestStellar` (@0x276c) its land key does.
+    Nearest,
+    /// The stellar under a click at this point in the system
+    /// ([`stellar_under`]): the original's click in space
+    /// (@0x6a5f9-0x6a6fc).
+    At(Vec2),
 }
 
 /// What [`Session::land`] did, when it was not refused.
@@ -1695,13 +1714,34 @@ impl Session {
         self.pay_escorts(self.stats.jump_days);
     }
 
-    /// Selects the next of the system's stellars as the navigation target,
-    /// as the [`navigation`](crate::navigation) rule says, and gives it;
-    /// `None`, and nothing is selected, when the system has no stellars.
-    pub fn select_next_stellar(&mut self) -> Option<StellarId> {
-        let stellars: Vec<StellarId> = self.sites.iter().map(|site| site.id).collect();
-        self.nav_target = next_stellar(&stellars, self.nav_target);
-        self.nav_target
+    /// Makes the stellar `pick` finds the navigation target, as the
+    /// original's stellar slot keys, F5 and a click in space do, and
+    /// gives it. The course is left alone: the original keeps its route
+    /// and only moves its selection. `None`, and nothing changes, during
+    /// a jump (pre-jump stage too, as the original skips its nav inputs
+    /// while jumping) or when `pick` finds nothing: an empty slot, no
+    /// landable stellar, or a click on none.
+    pub fn select_stellar(&mut self, pick: StellarPick) -> Option<StellarId> {
+        if self.jump.is_some() {
+            return None;
+        }
+        let picked = match pick {
+            StellarPick::Slot(slot) => self.sites.get(slot).map(|site| site.id),
+            StellarPick::Nearest => nearest_landable(self.player.position, &self.sites),
+            StellarPick::At(at) => stellar_under(&self.sites, at),
+        }?;
+        self.nav_target = Some(picked);
+        Some(picked)
+    }
+
+    /// Clears the navigation target, as the original's Nav Off key does
+    /// (`_HandlePlayer` @0x69a17-0x69b63), and says whether there was one
+    /// to clear. Nothing changes during a jump (pre-jump stage too).
+    pub fn clear_nav_target(&mut self) -> bool {
+        if self.jump.is_some() {
+            return false;
+        }
+        self.nav_target.take().is_some()
     }
 
     /// Presses Hyper Select (the original's `\` key): plots a one-jump
@@ -3810,17 +3850,22 @@ mod tests {
     }
 
     #[test]
-    fn l_with_a_target_selected_by_tab_lands_on_it_at_once() {
+    fn l_with_a_target_picked_by_its_slot_lands_on_it_at_once() {
         let mut session = Session::start(&catalog()).expect("starts");
-        assert_eq!(session.select_next_stellar(), Some(StellarId(128)));
+        assert_eq!(
+            session.select_stellar(StellarPick::Slot(0)),
+            Some(StellarId(128))
+        );
         assert_eq!(
             session.land(),
             Ok(LandOutcome::Landed(StellarId(128)).into())
         );
         // Planet 129 is far away: L refuses and keeps it.
         session.take_off();
-        session.select_next_stellar();
-        assert_eq!(session.select_next_stellar(), Some(StellarId(129)));
+        assert_eq!(
+            session.select_stellar(StellarPick::Slot(1)),
+            Some(StellarId(129))
+        );
         assert_eq!(
             session.land(),
             Err(LandingRefusal::TooFar {
@@ -12828,48 +12873,21 @@ mod tests {
     }
 
     #[test]
-    fn tab_selects_the_systems_stellars_in_navigation_order_and_wraps() {
-        let mut session = Session::start(&three_stellars()).expect("starts");
-        for expected in [131, 128, 129, 131, 128] {
-            assert_eq!(session.select_next_stellar(), Some(StellarId(expected)));
-            assert_eq!(session.nav_target(), Some(StellarId(expected)));
-        }
-    }
-
-    #[test]
-    fn a_system_with_no_stellars_has_no_target_to_select() {
-        let empty = FakePilotCatalog {
-            sites: Vec::new(),
-            ..catalog()
-        };
-        let mut session = Session::start(&empty).expect("starts");
-        assert_eq!(session.select_next_stellar(), None);
-        assert_eq!(session.nav_target(), None);
-    }
-
-    #[test]
     fn the_target_and_the_course_are_independent() {
         let mut session = Session::start(&three_stellars()).expect("starts");
-        session.select_next_stellar();
+        session.select_stellar(StellarPick::Slot(0));
         session.plot_course(SystemId(132)).expect("a route");
         assert_eq!(session.nav_target(), Some(StellarId(131)));
-        session.select_next_stellar();
+        session.select_stellar(StellarPick::Slot(1));
         assert_eq!(session.course(), ids(&[131, 132]));
         assert_eq!(session.nav_target(), Some(StellarId(128)));
-    }
-
-    #[test]
-    fn selecting_a_target_makes_no_save_due() {
-        let mut session = Session::start(&three_stellars()).expect("starts");
-        session.select_next_stellar();
-        assert!(!session.take_save_due());
     }
 
     #[test]
     fn arriving_in_another_system_clears_the_target() {
         let catalog = three_stellars();
         let mut session = Session::start(&catalog).expect("starts");
-        session.select_next_stellar();
+        session.select_stellar(StellarPick::Slot(0));
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
         begin_jump_now(&mut session).expect("jumps");
@@ -12880,7 +12898,151 @@ mod tests {
         );
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert_eq!(session.nav_target(), None);
-        assert_eq!(session.select_next_stellar(), Some(StellarId(140)));
+        assert_eq!(
+            session.select_stellar(StellarPick::Slot(0)),
+            Some(StellarId(140))
+        );
+    }
+
+    #[test]
+    fn a_slot_pick_selects_the_stellar_the_system_lists_there() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        for (slot, expected) in [(0, 131), (2, 129), (1, 128)] {
+            assert_eq!(
+                session.select_stellar(StellarPick::Slot(slot)),
+                Some(StellarId(expected))
+            );
+            assert_eq!(session.nav_target(), Some(StellarId(expected)));
+        }
+    }
+
+    #[test]
+    fn a_slot_past_the_last_stellar_selects_nothing_and_keeps_the_target() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        session.select_stellar(StellarPick::Slot(2));
+        assert_eq!(session.select_stellar(StellarPick::Slot(3)), None);
+        assert_eq!(session.nav_target(), Some(StellarId(129)));
+    }
+
+    #[test]
+    fn the_nearest_pick_selects_what_l_would_from_no_target() {
+        let mut catalog = three_stellars();
+        // 128, the nearest, cannot be landed on: L passes over it.
+        catalog.sites[0].1[1].flags = 0;
+        let mut session = Session::start(&catalog).expect("starts");
+        session.select_stellar(StellarPick::Slot(2));
+        assert_eq!(
+            session.select_stellar(StellarPick::Nearest),
+            Some(StellarId(131))
+        );
+        assert_eq!(session.nav_target(), Some(StellarId(131)));
+
+        let mut session = Session::start(&catalog).expect("starts");
+        let LandPress::Outcome(LandOutcome::Selected { stellar, .. }) =
+            session.land().expect("selects")
+        else {
+            panic!("L selects");
+        };
+        assert_eq!(stellar, StellarId(131), "L agrees");
+    }
+
+    #[test]
+    fn a_click_pick_selects_the_stellar_under_it_or_nothing() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        assert_eq!(
+            session.select_stellar(StellarPick::At(Vec2::new(940.0, 30.0))),
+            Some(StellarId(131))
+        );
+        assert_eq!(
+            session.select_stellar(StellarPick::At(Vec2::new(500.0, 500.0))),
+            None
+        );
+        assert_eq!(session.nav_target(), Some(StellarId(131)), "kept");
+        assert_eq!(
+            session.select_stellar(StellarPick::At(Vec2::new(2000.0, 0.0))),
+            Some(StellarId(129))
+        );
+    }
+
+    #[test]
+    fn a_system_with_no_stellars_has_none_to_pick() {
+        let empty = FakePilotCatalog {
+            sites: Vec::new(),
+            ..catalog()
+        };
+        let mut session = Session::start(&empty).expect("starts");
+        for pick in [
+            StellarPick::Slot(0),
+            StellarPick::Nearest,
+            StellarPick::At(Vec2::ZERO),
+        ] {
+            assert_eq!(session.select_stellar(pick), None, "{pick:?}");
+        }
+        assert_eq!(session.nav_target(), None);
+    }
+
+    #[test]
+    fn picking_a_stellar_leaves_the_course_alone_and_makes_no_save_due() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        session.select_stellar(StellarPick::Slot(0));
+        session.select_stellar(StellarPick::Nearest);
+        assert_eq!(session.course(), ids(&[131, 132]));
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_new_pick_replaces_the_target_and_l_lands_on_it() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        session.select_stellar(StellarPick::Slot(0));
+        assert_eq!(session.nav_target(), Some(StellarId(131)));
+        assert_eq!(
+            session.select_stellar(StellarPick::Slot(1)),
+            Some(StellarId(128))
+        );
+        // The ship starts over 128, at rest.
+        assert_eq!(
+            session.land(),
+            Ok(LandOutcome::Landed(StellarId(128)).into())
+        );
+    }
+
+    #[test]
+    fn clearing_the_target_leaves_none() {
+        let mut session = Session::start(&three_stellars()).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        session.select_stellar(StellarPick::Slot(0));
+        assert!(session.clear_nav_target());
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(session.course(), ids(&[131, 132]), "course kept");
+        assert!(!session.clear_nav_target(), "nothing to clear");
+        assert_eq!(session.nav_target(), None);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn no_stellar_is_picked_or_cleared_during_a_jump() {
+        let mut session = Session::start(&hub()).expect("starts");
+        session.select_next_system();
+        session.select_stellar(StellarPick::Slot(0));
+        fly_out(&mut session);
+        session.player.heading = 90.0;
+        assert_eq!(session.begin_jump(), Ok(SystemId(134)));
+        for stage in ["pre-jump", "in hyperspace"] {
+            for pick in [
+                StellarPick::Slot(1),
+                StellarPick::Nearest,
+                StellarPick::At(Vec2::new(30.0, -40.0)),
+            ] {
+                assert_eq!(session.select_stellar(pick), None, "{stage} {pick:?}");
+            }
+            assert!(!session.clear_nav_target(), "{stage}");
+            assert_eq!(session.nav_target(), Some(StellarId(131)), "{stage}");
+            if session.jumping().is_none() {
+                begin_jump_now(&mut session).expect("jumps");
+            }
+        }
+        assert_eq!(session.jumping(), Some(SystemId(134)));
     }
 
     // Hyper Select.
@@ -12925,7 +13087,7 @@ mod tests {
     fn a_hyper_select_clears_the_stellar_nav_target() {
         let mut session = Session::start(&hub()).expect("starts");
         session.plot_course(SystemId(131)).expect("a route");
-        session.select_next_stellar();
+        session.select_stellar(StellarPick::Slot(0));
         assert_eq!(
             session.select_next_system(),
             Some(SystemId(134)),
