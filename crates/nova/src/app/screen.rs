@@ -49,9 +49,10 @@
 //! and Tab, F and I do nothing.
 //!
 //! At a trade center, the spaceport's Trade Center opens the session's
-//! exchange, laid out by the interface file's "Trade" dialog. There B buys
-//! and S sells a ton of the selected good, and with Alt held the most;
-//! the router makes each trade through the session, hands the exchange as
+//! exchange, laid out by the interface file's "Trade" dialog. There a
+//! plain B buys and S sells up to ten tons of the selected good (a ton by
+//! the `trade_lot` rule's other reading), and with Alt held the most; the
+//! router makes each trade through the session, hands the exchange as
 //! it now is back to the screen, and saves the pilot after the input.
 //!
 //! At an outfitter, the spaceport's Outfitter opens the session's
