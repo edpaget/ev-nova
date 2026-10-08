@@ -356,14 +356,20 @@ impl From<LandOutcome> for LandPress {
     }
 }
 
-/// What lasts one opening of the outfitter, and whether it limits what is
-/// sold (see [`outfitter::Bought`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What lasts one opening of the outfitter, whether it limits what is
+/// sold (see [`outfitter::Bought`]), and how a sale refunds (see
+/// [`outfitter::refund`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Opening {
     /// The once-an-opening flags.
     bought: outfitter::Bought,
     /// Whether they limit a map or clean-record outfit.
     limit: RuleSource,
+    /// How many of each outfit the player owned when the outfitter opened,
+    /// as `_DoOutfitDialog` copies them on entry (@0x5badd-0x5bafa).
+    owned: BTreeMap<OutfitId, u16>,
+    /// Whether an outfit bought since then refunds in full.
+    refund: RuleSource,
 }
 
 /// The player's ship, flying in one system.
@@ -505,8 +511,11 @@ pub struct Session {
     /// The once-an-opening flags, whether the last outfit bought since the
     /// outfitter opened was a map or a clean record (see
     /// [`outfitter::Bought`]), and whether they limit what is sold (see
-    /// [`Session::with_outfit_limit`]). The flags are not saved: the
-    /// original keeps them in globals `_DoOutfitDialog` clears on opening.
+    /// [`Session::with_outfit_limit`]); the counts owned when it opened,
+    /// and how a sale refunds against them (see
+    /// [`Session::with_outfit_refund`]). None of it is saved: the
+    /// original keeps the flags in globals `_DoOutfitDialog` clears on
+    /// opening, and the counts in its locals.
     opening: Opening,
     /// Each ship class's roll for sale since the last landing, drawn the
     /// first time the shipyard's list asks it.
@@ -699,6 +708,7 @@ impl Session {
             quotes: Vec::new(),
             pilot,
         };
+        session.open_opening();
         session.refit(false);
         session.restock_fleet();
         Ok(session)
@@ -1817,7 +1827,7 @@ impl Session {
         self.leave_with_fighters(true);
         self.hire_rolls.clear();
         self.outfit_rolls.clear();
-        self.opening.bought = outfitter::Bought::default();
+        self.open_opening();
         self.ship_rolls.clear();
         self.ship_redraws.clear();
         self.save_due = true;
@@ -1985,6 +1995,24 @@ impl Session {
     #[must_use]
     pub fn outfit_limit(&self) -> RuleSource {
         self.opening.limit
+    }
+
+    /// This session with an outfit sold as `source` says
+    /// ([`RuleKey::OutfitRefund`](crate::RuleKey::OutfitRefund)): by the
+    /// engine's default, one bought since the outfitter opened refunds
+    /// its full price and any other half; by the other reading, every one
+    /// half (see [`outfitter::refund`]).
+    #[must_use]
+    pub fn with_outfit_refund(mut self, source: RuleSource) -> Self {
+        self.opening.refund = source;
+        self
+    }
+
+    /// How a sold outfit refunds: by the engine ([`RuleSource::Engine`])
+    /// or always at half.
+    #[must_use]
+    pub fn outfit_refund(&self) -> RuleSource {
+        self.opening.refund
     }
 
     /// This session with a `jünk` of negative or zero price traded as
@@ -2204,7 +2232,18 @@ impl Session {
     /// as `_DoOutfitDialog` does on entry (@0x5bb37-0x5bb44), so a map or
     /// clean-record outfit can be bought again (see [`outfitter`]).
     pub fn open_outfitter(&mut self) {
+        self.open_opening();
+    }
+
+    /// Starts an opening of the outfitter: clears the once-an-opening
+    /// flags and copies the counts owned, as `_DoOutfitDialog` does on
+    /// entry (@0x5badd-0x5bafa, @0x5bb37-0x5bb44). A landing, and a
+    /// session's start, do it too, so a sale made without the dialog
+    /// opened first (a headless one) refunds against the counts owned
+    /// since then, and an outfit owned before never refunds in full.
+    fn open_opening(&mut self) {
         self.opening.bought = outfitter::Bought::default();
+        self.opening.owned = self.pilot.outfits.clone();
     }
 
     /// Buys or sells one outfit as `order` asks, the rolls not drawn yet
@@ -2226,7 +2265,16 @@ impl Session {
             .find(|record| record.id == order.outfit)
             .cloned()
             .ok_or(OutfitRefusal::NotListed)?;
-        self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, price));
+        let amount = match order.direction {
+            market::Direction::Buy => price,
+            market::Direction::Sell => outfitter::refund(
+                price,
+                self.pilot.owned(order.outfit),
+                self.opening.owned.get(&order.outfit).copied().unwrap_or(0),
+                self.opening.refund,
+            ),
+        };
+        self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, amount));
         if order.direction == market::Direction::Buy {
             self.opening.bought = outfitter::Bought::after_buying(&record);
         }
@@ -6639,7 +6687,11 @@ mod tests {
         assert_eq!(session.pilot().cash(), 24_000);
         assert_eq!(session.outfit(sell(SPEED), &mut NeverFires), Ok(()));
         assert_eq!(session.handling(), before);
-        assert_eq!(session.pilot().cash(), 24_500, "sold for half");
+        assert_eq!(
+            session.pilot().cash(),
+            25_000,
+            "bought this opening: sold back in full"
+        );
     }
 
     #[test]
@@ -6704,7 +6756,7 @@ mod tests {
             .expect("bought");
         assert_eq!(session.outfit_count(sell(SPEED), 5, &mut NeverFires), Ok(3));
         assert_eq!(session.pilot().owned(SPEED), 0);
-        assert_eq!(session.pilot().cash(), 25_000 - 3000 + 1500);
+        assert_eq!(session.pilot().cash(), 25_000, "bought this opening");
     }
 
     #[test]
@@ -6757,6 +6809,92 @@ mod tests {
             Ok(1)
         );
         assert_eq!(session.pilot().owned(WIDGET_RACK), 1);
+    }
+
+    // Refunds.
+
+    #[test]
+    fn an_outfit_bought_this_opening_sells_back_in_full() {
+        let mut session = outfitted(&outfitting());
+        session.open_outfitter();
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
+        assert_eq!(session.pilot().cash(), 25_000);
+    }
+
+    #[test]
+    fn an_outfit_owned_before_the_opening_sells_back_at_half() {
+        let mut session = outfitted(&outfitting());
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        session.open_outfitter();
+        session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
+        assert_eq!(session.pilot().cash(), 24_000 + 500);
+    }
+
+    #[test]
+    fn a_counted_sale_refunds_in_full_only_above_the_opening_count() {
+        let mut session = outfitted(&outfitting());
+        session
+            .outfit_count(buy(SPEED), 2, &mut NeverFires)
+            .expect("bought");
+        session.open_outfitter();
+        session
+            .outfit_count(buy(SPEED), 2, &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.pilot().cash(), 21_000);
+        assert_eq!(session.outfit_count(sell(SPEED), 3, &mut NeverFires), Ok(3));
+        assert_eq!(session.pilot().cash(), 21_000 + 2 * 1000 + 500);
+        assert_eq!(session.pilot().owned(SPEED), 1);
+    }
+
+    #[test]
+    fn reopening_the_outfitter_takes_a_new_copy() {
+        let mut session = outfitted(&outfitting());
+        session.open_outfitter();
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        session.open_outfitter();
+        session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
+        assert_eq!(session.pilot().cash(), 24_000 + 500);
+    }
+
+    #[test]
+    fn landing_takes_the_copy() {
+        let mut session = outfitted(&outfitting());
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        session.take_off();
+        land_now(&mut session).expect("lands");
+        session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
+        assert_eq!(session.pilot().cash(), 24_000 + 500);
+    }
+
+    #[test]
+    fn a_session_resumed_docked_takes_the_copy() {
+        let catalog = outfitting();
+        let mut session = outfitted(&catalog);
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        let pilot = session.pilot().clone();
+        let mut resumed = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(resumed.landed(), Some(StellarId(128)));
+        resumed.outfit(sell(SPEED), &mut NeverFires).expect("sold");
+        assert_eq!(resumed.pilot().cash(), 24_000 + 500, "owned on resuming");
+    }
+
+    #[test]
+    fn the_bible_reading_refunds_half_whenever_bought() {
+        let mut session = outfitted(&outfitting()).with_outfit_refund(RuleSource::Bible);
+        assert_eq!(session.outfit_refund(), RuleSource::Bible);
+        session.open_outfitter();
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
+        assert_eq!(session.pilot().cash(), 24_000 + 500);
+        let session = session.with_outfit_refund(RuleSource::Engine);
+        assert_eq!(session.outfit_refund(), RuleSource::Engine);
+    }
+
+    #[test]
+    fn the_engine_reading_is_the_default() {
+        let session = outfitted(&outfitting());
+        assert_eq!(session.outfit_refund(), RuleSource::Engine);
     }
 
     #[test]

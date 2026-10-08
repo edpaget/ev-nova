@@ -230,7 +230,9 @@
 //!   `ModType` 27 outfit raises its target's `Max`
 //!   ([`FlightView::with_raised_max`]), and whether a map or clean-record
 //!   outfit is sold only once an opening
-//!   ([`FlightView::with_outfit_limit`]); the router tells the flight
+//!   ([`FlightView::with_outfit_limit`]), and whether one bought since
+//!   the outfitter opened sells back in full
+//!   ([`FlightView::with_outfit_refund`]); the router tells the flight
 //!   each time the outfitter opens ([`FlightView::open_outfitter`]). How
 //!   an active `öops` event prices its commodity on the exchange is set
 //!   there too
@@ -1191,6 +1193,18 @@ impl<
     pub fn with_trade_debt(self, source: RuleSource) -> Self {
         Self {
             session: self.session.map(|session| session.with_trade_debt(source)),
+            ..self
+        }
+    }
+
+    /// The flight with a sold outfit refunded as `source` says
+    /// ([`Session::with_outfit_refund`]).
+    #[must_use]
+    pub fn with_outfit_refund(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_outfit_refund(source)),
             ..self
         }
     }
@@ -6362,6 +6376,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::trade_debt),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_outfit_refund_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_outfit_refund(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.outfit_refund(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::outfit_refund),
             Ok(RuleSource::Engine)
         );
     }

@@ -141,8 +141,9 @@
 //! until others are
 //! given. Each flight's outfitter sells a map
 //! or clean-record outfit as the router says
-//! ([`AppScreen::with_outfit_limit`]), the engine's until another is
-//! given; each time the spaceport's outfitter opens, the flight is told
+//! ([`AppScreen::with_outfit_limit`]) and refunds a sold outfit as it
+//! says ([`AppScreen::with_outfit_refund`]), the engine's until others
+//! are given; each time the spaceport's outfitter opens, the flight is told
 //! ([`FlightView::open_outfitter`]) and the outfitter shown afresh.
 //! Each flight's persons
 //! appear as the router's rules say ([`AppScreen::with_person_rules`])
@@ -365,6 +366,9 @@ pub struct AppScreen {
     /// Whether each flight's outfitter sells a map or clean-record outfit
     /// only once an opening.
     outfit_limit: RuleSource,
+    /// Whether an outfit bought since each flight's outfitter opened
+    /// sells back in full.
+    outfit_refund: RuleSource,
     /// Whether each take-off pays each flight's hired escorts a day.
     take_off_pay: RuleSource,
     /// Which wage each flight's hired escorts are paid.
@@ -467,6 +471,7 @@ impl AppScreen {
             trade_count: RuleSource::Engine,
             trade_debt: RuleSource::Engine,
             outfit_limit: RuleSource::Engine,
+            outfit_refund: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
@@ -740,6 +745,18 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's outfitter refunding a sold outfit as
+    /// `source` says ([`FlightView::with_outfit_refund`]); the engine's
+    /// (in full when bought since the outfitter opened) until another is
+    /// given.
+    #[must_use]
+    pub fn with_outfit_refund(self, source: RuleSource) -> Self {
+        Self {
+            outfit_refund: source,
+            ..self
+        }
+    }
+
     /// The router with each take-off paying each flight's hired escorts a
     /// day's wages, or not, as `source` says
     /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
@@ -834,6 +851,7 @@ impl AppScreen {
             .with_trade_count(rulebook.source_for(RuleKey::TradeCount))
             .with_trade_debt(rulebook.source_for(RuleKey::TradeDebt))
             .with_outfit_limit(rulebook.source_for(RuleKey::OutfitLimit))
+            .with_outfit_refund(rulebook.source_for(RuleKey::OutfitRefund))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
@@ -901,6 +919,7 @@ impl AppScreen {
             .with_trade_count(self.trade_count)
             .with_trade_debt(self.trade_debt)
             .with_outfit_limit(self.outfit_limit)
+            .with_outfit_refund(self.outfit_refund)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
@@ -4859,10 +4878,10 @@ mod tests {
         }
         assert_eq!(pilot(&screen).owned(BOOSTER), 2, "greyed");
         assert_eq!(store.writes(), writes, "nothing to save");
-        // S sells one back for half.
+        // S sells one back, bought since the outfitter opened: in full.
         screen.input(&key(Key::Char('s'), true));
         assert_eq!(pilot(&screen).owned(BOOSTER), 1);
-        assert_eq!(pilot(&screen).cash(), 250);
+        assert_eq!(pilot(&screen).cash(), 500);
         // Escape closes the outfitter; the spaceport stays.
         screen.input(&key(Key::Escape, true));
         assert!(spaceport(&screen).open_outfitter().is_none());
@@ -6374,6 +6393,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_outfit_refund_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_outfit_refund(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.outfit_refund(), source);
+            assert_eq!(session.outfit_limit(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.outfit_refund(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_outfit_limit_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_outfit_limit(source);
@@ -6466,6 +6500,7 @@ mod tests {
             ("trade_count", format!("{:?}", screen.trade_count)),
             ("trade_debt", format!("{:?}", screen.trade_debt)),
             ("outfit_limit", format!("{:?}", screen.outfit_limit)),
+            ("outfit_refund", format!("{:?}", screen.outfit_refund)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
@@ -6503,6 +6538,7 @@ mod tests {
             RuleKey::TradeCount => "trade_count",
             RuleKey::TradeDebt => "trade_debt",
             RuleKey::OutfitLimit => "outfit_limit",
+            RuleKey::OutfitRefund => "outfit_refund",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
             RuleKey::EscortWage => "escort_wage",

@@ -118,7 +118,13 @@
 //! [`OutfitFlags::SELL_ANYWHERE`], the ship would be left with negative
 //! free mass, it is one whose `Max` a `ModType` 27 item raises, while it
 //! holds more than that leaves (below), or it is a launcher whose
-//! ammunition must be sold first (below). A sale pays [`RESALE_PERCENT`] of the price and removes one.
+//! ammunition must be sold first (below). A sale removes one and pays
+//! its [`refund`]: by the engine, the full price for an outfit bought
+//! since the outfitter opened (its count owned above the count owned on
+//! opening), and [`RESALE_PERCENT`] of the price for any other; by the
+//! rulebook's other reading
+//! ([`RuleKey::OutfitRefund`](crate::RuleKey::OutfitRefund)), always
+//! [`RESALE_PERCENT`].
 //! Selling cargo space below the cargo held is allowed: the exchange then
 //! shows no space free until enough is sold.
 //!
@@ -290,10 +296,12 @@ pub const CLEAN_RECORD: i16 = 21;
 /// sets the clean-record flag (`Bought::after_buying`).
 pub const PAINT: i16 = 43;
 
-/// What an outfit sells back for, as a percentage of its price. The
-/// Bible does not say; the community guide (evnova.miraheze.org,
-/// "Nova:Making Money") sells the Scarab's Matter/Antimatter Reactor,
-/// whose stock `Cost` is 5,000,000, "for 2.5 million credits".
+/// What an outfit owned when the outfitter opened sells back for, as a
+/// percentage of its price: the engine's 0.5 (@0xdd128). One bought since
+/// sells back in full by the engine ([`refund`]). The Bible does not say;
+/// the community guide (evnova.miraheze.org, "Nova:Making Money") sells
+/// the Scarab's Matter/Antimatter Reactor, whose stock `Cost` is
+/// 5,000,000, "for 2.5 million credits".
 pub const RESALE_PERCENT: i64 = 50;
 
 /// One outfit the player asks to buy or sell.
@@ -713,10 +721,31 @@ const HIDE_BITS: HideBits = HideBits {
     unless_available: OutfitFlags::HIDE_UNLESS_AVAILABLE,
 };
 
-/// What one outfit priced at `price` sells back for.
+/// What one outfit priced at `price` sells back for at half.
 #[must_use]
 pub fn resale(price: i64) -> i64 {
     price.saturating_mul(RESALE_PERCENT) / 100
+}
+
+/// What selling one outfit priced at `price` refunds, the player owning
+/// `owned` of it before the sale and having owned `opened_with` when the
+/// outfitter opened, as `source` says
+/// ([`RuleKey::OutfitRefund`](crate::RuleKey::OutfitRefund)).
+///
+/// By the engine ([`RuleSource::Engine`]), `_DoOutfitDialog` compares the
+/// count owned before the sale with its copy of the counts taken on
+/// opening (@0x5ceee-0x5cefa): one bought since, the count above the copy,
+/// refunds the full price; any other refunds [`resale`], the price times
+/// 0.5 (the double at @0xdd128) truncated toward zero (@0x5cefc-0x5cf08).
+/// By the other reading, the port's earlier behaviour, every sale refunds
+/// [`resale`].
+#[must_use]
+pub fn refund(price: i64, owned: u16, opened_with: u16, source: RuleSource) -> i64 {
+    if source == RuleSource::Engine && owned > opened_with {
+        price
+    } else {
+        resale(price)
+    }
 }
 
 /// Every mod of the outfits `owned`, each record's four `ModType`s and
@@ -1254,13 +1283,14 @@ impl Shop<'_> {
     }
 }
 
-/// Buys or sells one of `record` at `price` as `direction` says, paying
-/// or being paid.
-pub(crate) fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direction, price: i64) {
+/// Buys or sells one of `record` as `direction` says, paying `amount`,
+/// the price, for a buy, or being paid `amount`, the [`refund`], for a
+/// sale.
+pub(crate) fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direction, amount: i64) {
     let owned = pilot.owned(record.id);
     let owned = match direction {
         Direction::Buy => {
-            pilot.cash = pilot.cash.saturating_sub(price);
+            pilot.cash = pilot.cash.saturating_sub(amount);
             if record.flags & OutfitFlags::REMOVE_AFTER_PURCHASE == 0 {
                 owned.saturating_add(1)
             } else {
@@ -1268,7 +1298,7 @@ pub(crate) fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direct
             }
         }
         Direction::Sell => {
-            pilot.cash = pilot.cash.saturating_add(resale(price));
+            pilot.cash = pilot.cash.saturating_add(amount);
             owned.saturating_sub(1)
         }
     };
@@ -3397,13 +3427,35 @@ mod tests {
     }
 
     #[test]
-    fn a_sale_pays_half_the_price_truncated_and_removes_one() {
+    fn a_sale_pays_the_refund_and_removes_one() {
         let mut pilot = owning(&[(128, 2)]);
-        settle(&mut pilot, &heavy(), Direction::Sell, 4001);
+        settle(&mut pilot, &heavy(), Direction::Sell, 2000);
         assert_eq!((pilot.cash, pilot.owned(OutfitId(128))), (12_000, 1));
         settle(&mut pilot, &heavy(), Direction::Sell, 4001);
-        assert_eq!(pilot.cash, 14_000);
+        assert_eq!(pilot.cash, 16_001);
         assert_eq!(pilot.outfits().count(), 0, "none left is none listed");
+    }
+
+    #[test]
+    fn an_outfit_bought_since_the_opening_refunds_in_full() {
+        assert_eq!(refund(15_001, 3, 2, RuleSource::Engine), 15_001);
+        assert_eq!(refund(15_001, 1, 0, RuleSource::Engine), 15_001);
+    }
+
+    #[test]
+    fn an_outfit_owned_at_the_opening_refunds_half() {
+        assert_eq!(refund(15_001, 2, 2, RuleSource::Engine), 7_500);
+        assert_eq!(refund(15_001, 1, 2, RuleSource::Engine), 7_500);
+    }
+
+    #[test]
+    fn the_bible_reading_always_refunds_half() {
+        assert_eq!(refund(15_001, 3, 2, RuleSource::Bible), 7_500);
+        assert_eq!(refund(15_001, 2, 2, RuleSource::Bible), 7_500);
+    }
+
+    #[test]
+    fn half_the_price_is_truncated_toward_zero() {
         assert_eq!(resale(5_000_000), 2_500_000);
         assert_eq!(resale(15_001), 7_500);
         assert_eq!(resale(i64::MAX), i64::MAX / 100);

@@ -115,7 +115,9 @@
 //! the new ship, goods in order), and the outfitter's `"outfit_limit"`
 //! (whether a map or clean-record outfit is refused while the last outfit
 //! bought since the outfitter opened was of its kind, as the engine has
-//! it, or has no limit); every key is listed in
+//! it, or has no limit) and `"outfit_refund"` (whether an outfit bought
+//! since the outfitter opened sells back at its full price, as the engine
+//! has it, or every outfit at half); every key is listed in
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!
