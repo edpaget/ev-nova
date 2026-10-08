@@ -522,12 +522,13 @@ pub(crate) fn keep_cargo(
         RuleSource::Engine => {
             let share = new_ships_share(capacity, escort_tons(escorts.iter().copied()));
             for (good, tons) in cargo.iter_mut() {
-                let held = i64::from(*tons);
                 let part = (f64::from(*tons) * share) as i64;
+                // The engine sets a `jünk` to 0 when its part is above
+                // what is held (@0xcf94-0xcfe4); below none, the clamp to none
+                // after does the same.
                 let kept = match good {
                     Good::Commodity(_) => part,
-                    Good::Junk(_) if part > held => 0,
-                    Good::Junk(_) => held - part,
+                    Good::Junk(_) => i64::from(*tons) - part,
                 };
                 *tons = u32::try_from(kept.max(0)).unwrap_or(u32::MAX);
             }
