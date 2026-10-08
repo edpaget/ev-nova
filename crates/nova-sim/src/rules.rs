@@ -3,7 +3,7 @@
 //! [`Descriptor`] tools can list without running it.
 
 use crate::chance::Chance;
-use crate::rulebook::Rulebook;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 /// What every context a rule reads offers the core: the rule set its
 /// disputed rules choose their reading by.
@@ -12,12 +12,13 @@ pub trait Context {
     fn rulebook(&self) -> &Rulebook;
 }
 
-/// What a rule is, told without running it: its name and the original's
-/// address or routine it reproduces.
+/// What a rule is, told without running it: its name, the original's
+/// address or routine it reproduces, and the disputed rule it reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Descriptor {
     name: &'static str,
     reproduces: &'static str,
+    reads: Option<RuleKey>,
 }
 
 impl Descriptor {
@@ -33,6 +34,22 @@ impl Descriptor {
     pub fn reproduces(&self) -> &'static str {
         self.reproduces
     }
+
+    /// The disputed rule whose reading the rule follows, if any: set by
+    /// the constructor that built a disputed rule, and by no other.
+    #[must_use]
+    pub fn reads(&self) -> Option<RuleKey> {
+        self.reads
+    }
+}
+
+/// `engine` or `other`, as the rule set says `key` follows the engine or
+/// the Bible.
+fn reading<F>(rules: &Rulebook, key: RuleKey, engine: F, other: F) -> F {
+    match rules.source_for(key) {
+        RuleSource::Engine => engine,
+        RuleSource::Bible => other,
+    }
 }
 
 /// One "can I?" rule over a context `C`: it passes, or refuses with a
@@ -46,6 +63,13 @@ pub struct Check<C, R> {
 enum CheckHow<C, R> {
     /// One reading, whatever the rule set.
     Plain(fn(&C) -> Result<(), R>),
+    /// The engine's reading and the other, chosen by the rule set's
+    /// source for `key`.
+    Disputed {
+        key: RuleKey,
+        engine: fn(&C) -> Result<(), R>,
+        other: fn(&C) -> Result<(), R>,
+    },
 }
 
 impl<C, R> Check<C, R> {
@@ -57,8 +81,32 @@ impl<C, R> Check<C, R> {
         f: fn(&C) -> Result<(), R>,
     ) -> Self {
         Self {
-            about: Descriptor { name, reproduces },
+            about: Descriptor {
+                name,
+                reproduces,
+                reads: None,
+            },
             how: CheckHow::Plain(f),
+        }
+    }
+
+    /// A check with the engine's reading, `engine`, and the other,
+    /// `other`, following the rule set's source for `key`.
+    #[must_use]
+    pub const fn disputed(
+        name: &'static str,
+        reproduces: &'static str,
+        key: RuleKey,
+        engine: fn(&C) -> Result<(), R>,
+        other: fn(&C) -> Result<(), R>,
+    ) -> Self {
+        Self {
+            about: Descriptor {
+                name,
+                reproduces,
+                reads: Some(key),
+            },
+            how: CheckHow::Disputed { key, engine, other },
         }
     }
 
@@ -67,11 +115,16 @@ impl<C, R> Check<C, R> {
     pub fn about(&self) -> &Descriptor {
         &self.about
     }
+}
 
-    /// Runs the check on `facts`.
-    fn run(&self, facts: &C, _chance: &mut dyn Chance) -> Result<(), R> {
+impl<C: Context, R> Check<C, R> {
+    /// Runs the check on `facts`, in the reading the rule set chooses.
+    fn decide(&self, facts: &C) -> Result<(), R> {
         match self.how {
             CheckHow::Plain(f) => f(facts),
+            CheckHow::Disputed { key, engine, other } => {
+                reading(facts.rulebook(), key, engine, other)(facts)
+            }
         }
     }
 }
@@ -109,8 +162,8 @@ impl<C, R> Checks<C, R> {
 impl<C: Context, R> Checks<C, R> {
     /// The first refusal, in the list's order, or `Ok` when every check
     /// passes. The checks after a refusal are not run.
-    pub fn first_refusal(&self, facts: &C, chance: &mut dyn Chance) -> Result<(), R> {
-        self.0.iter().try_for_each(|check| check.run(facts, chance))
+    pub fn first_refusal(&self, facts: &C, _chance: &mut dyn Chance) -> Result<(), R> {
+        self.0.iter().try_for_each(|check| check.decide(facts))
     }
 
     /// Every check that refuses, in the list's order, each with its
@@ -118,12 +171,10 @@ impl<C: Context, R> Checks<C, R> {
     pub fn all_refusals(&self, facts: &C) -> Vec<(&Descriptor, Verdict<R>)> {
         self.0
             .iter()
-            .filter_map(
-                |check| match check.run(facts, &mut crate::chance::NeverFires) {
-                    Ok(()) => None,
-                    Err(reason) => Some((check.about(), Verdict::Refuses(reason))),
-                },
-            )
+            .filter_map(|check| match check.decide(facts) {
+                Ok(()) => None,
+                Err(reason) => Some((check.about(), Verdict::Refuses(reason))),
+            })
             .collect()
     }
 }
@@ -277,6 +328,165 @@ mod tests {
         }
     }
 
+    /// Why the toy mission offer is not offered.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum OfferRefusal {
+        NoBar,
+        TooGreen,
+    }
+
+    /// A toy mission offer: what it asks of the pilot.
+    struct MissionOffer {
+        min_combat: u16,
+    }
+
+    /// What the toy offer reads about the pilot.
+    struct PilotRecord {
+        combat: u16,
+    }
+
+    /// The stellar the toy offer would be made at.
+    struct Stellar {
+        has_bar: bool,
+    }
+
+    /// A non-shop context: a mission offer, the pilot, the stellar and
+    /// the rule set.
+    struct Offer {
+        mission: MissionOffer,
+        pilot: PilotRecord,
+        stellar: Stellar,
+        rules: Rulebook,
+    }
+
+    impl Context for Offer {
+        fn rulebook(&self) -> &Rulebook {
+            &self.rules
+        }
+    }
+
+    /// An offer asking a combat rating of 10 of a pilot rated 10, at a
+    /// stellar with a bar, under the default rule set.
+    fn offer() -> Offer {
+        Offer {
+            mission: MissionOffer { min_combat: 10 },
+            pilot: PilotRecord { combat: 10 },
+            stellar: Stellar { has_bar: true },
+            rules: Rulebook::default(),
+        }
+    }
+
+    /// The toy offer's checks: a bar, then the combat rating (disputed:
+    /// the engine refuses below the offer's minimum, the other reading at
+    /// or below it; `CrimeGains` is only a convenient key).
+    fn offer_checks() -> Checks<Offer, OfferRefusal> {
+        [
+            Check::plain("bar", "toy: the stellar's bar", |facts: &Offer| {
+                if facts.stellar.has_bar {
+                    Ok(())
+                } else {
+                    Err(OfferRefusal::NoBar)
+                }
+            }),
+            Check::disputed(
+                "rating",
+                "toy: the offer's combat rating",
+                RuleKey::CrimeGains,
+                |facts: &Offer| {
+                    if facts.pilot.combat < facts.mission.min_combat {
+                        Err(OfferRefusal::TooGreen)
+                    } else {
+                        Ok(())
+                    }
+                },
+                |facts: &Offer| {
+                    if facts.pilot.combat <= facts.mission.min_combat {
+                        Err(OfferRefusal::TooGreen)
+                    } else {
+                        Ok(())
+                    }
+                },
+            ),
+        ]
+        .into()
+    }
+
+    #[test]
+    fn a_mission_offer_refuses_without_a_bar() {
+        let facts = Offer {
+            stellar: Stellar { has_bar: false },
+            pilot: PilotRecord { combat: 0 },
+            ..offer()
+        };
+        assert_eq!(
+            offer_checks().first_refusal(&facts, &mut NeverFires),
+            Err(OfferRefusal::NoBar)
+        );
+    }
+
+    #[test]
+    fn a_disputed_check_follows_the_rule_set() {
+        let checks = offer_checks();
+        for source in RuleSource::ALL {
+            let facts = Offer {
+                rules: Rulebook::default().with_override(RuleKey::CrimeGains, source),
+                ..offer()
+            };
+            let expected = match source {
+                RuleSource::Engine => Ok(()),
+                RuleSource::Bible => Err(OfferRefusal::TooGreen),
+            };
+            assert_eq!(
+                checks.first_refusal(&facts, &mut NeverFires),
+                expected,
+                "{source:?}"
+            );
+            let all: Vec<_> = checks
+                .all_refusals(&facts)
+                .into_iter()
+                .map(|(about, verdict)| (about.name(), verdict))
+                .collect();
+            let expected: Vec<_> = expected
+                .err()
+                .map(|reason| ("rating", Verdict::Refuses(reason)))
+                .into_iter()
+                .collect();
+            assert_eq!(all, expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_disputed_check_ignores_other_keys_overrides() {
+        let checks = offer_checks();
+        let engine = Offer {
+            rules: Rulebook::default().with_override(RuleKey::TradeDebt, RuleSource::Bible),
+            ..offer()
+        };
+        assert_eq!(checks.first_refusal(&engine, &mut NeverFires), Ok(()));
+        let bible = Offer {
+            rules: Rulebook::new(RuleSource::Bible)
+                .with_override(RuleKey::TradeDebt, RuleSource::Engine),
+            ..offer()
+        };
+        assert_eq!(
+            checks.first_refusal(&bible, &mut NeverFires),
+            Err(OfferRefusal::TooGreen)
+        );
+    }
+
+    #[test]
+    fn a_disputed_rules_descriptor_names_its_key() {
+        let checks = offer_checks();
+        let reads: Vec<_> = checks
+            .descriptors()
+            .map(|about| (about.name(), about.reads()))
+            .collect();
+        assert_eq!(
+            reads,
+            [("bar", None), ("rating", Some(RuleKey::CrimeGains))]
+        );
+    }
+
     /// A context no facts can be built for, whose every rule panics if
     /// run.
     enum Panics {}
@@ -285,6 +495,13 @@ mod tests {
         [
             Check::plain("first", "@0x1000", |_: &Panics| panic!("first ran")),
             Check::plain("second", "a routine", |_: &Panics| panic!("second ran")),
+            Check::disputed(
+                "third",
+                "@0x2000",
+                RuleKey::TradeDebt,
+                |_: &Panics| panic!("third's engine reading ran"),
+                |_: &Panics| panic!("third's other reading ran"),
+            ),
         ]
         .into()
     }
@@ -294,8 +511,15 @@ mod tests {
         let checks = panicking();
         let listed: Vec<_> = checks
             .descriptors()
-            .map(|about| (about.name(), about.reproduces()))
+            .map(|about| (about.name(), about.reproduces(), about.reads()))
             .collect();
-        assert_eq!(listed, [("first", "@0x1000"), ("second", "a routine")]);
+        assert_eq!(
+            listed,
+            [
+                ("first", "@0x1000", None),
+                ("second", "a routine", None),
+                ("third", "@0x2000", Some(RuleKey::TradeDebt)),
+            ]
+        );
     }
 }
