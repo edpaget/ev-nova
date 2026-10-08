@@ -6373,11 +6373,17 @@ mod tests {
 
     #[test]
     fn a_sale_leaves_the_limit_as_it_is() {
-        for (mut session, first, _) in each_limited(RuleSource::Engine) {
-            session.outfit(sell(first), &mut NeverFires).expect("sold");
+        // A plain outfit is sold, not the limited one: were a sale to
+        // reset the flags, selling the map or record would set them again.
+        for first in [MAP, RECORD] {
+            let mut session = outfitted(&limiting());
+            session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+            session.outfit(buy(first), &mut NeverFires).expect("bought");
+            session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
             assert_eq!(
                 session.outfit(buy(first), &mut NeverFires),
-                Err(OutfitRefusal::BoughtThisOpening)
+                Err(OutfitRefusal::BoughtThisOpening),
+                "{first:?} after selling {SPEED:?}"
             );
         }
     }
