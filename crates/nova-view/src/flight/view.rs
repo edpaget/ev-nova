@@ -9274,6 +9274,25 @@ mod tests {
     }
 
     #[test]
+    fn fighters_abandoned_in_a_move_are_told_after_a_qs_message() {
+        let rules = ScriptEffectRules {
+            arrival: RuleSource::Bible,
+            ..ScriptEffectRules::default()
+        };
+        let mut view = told(fighters_out()).with_script_effect_rules(rules);
+        run_set(&mut view, "Q25048 M131");
+        assert_eq!(view.settle_script(), None);
+        assert_eq!(
+            view.message(),
+            Some("Off you go, <PSN>.  (Two fighters abandoned)")
+        );
+        assert_eq!(view.pilot().expect("flying").escorts(), []);
+        view.message = None;
+        assert_eq!(view.settle_script(), None);
+        assert_eq!(view.message(), None, "nothing more to tell");
+    }
+
+    #[test]
     fn the_disable_rule_reaches_the_session_too() {
         let rule = Rc::new(Counting::default());
         let view = flight().with_disable_rule(rule.clone());
