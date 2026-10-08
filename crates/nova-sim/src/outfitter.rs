@@ -1786,6 +1786,7 @@ mod tests {
         assert_eq!(at(&[(128, 2), (140, 3)], 1), limit, "not 1 + 3, nor + 5");
         assert_eq!(at(&[(128, 1), (141, 1)], 2), limit, "2 - 1");
         assert_eq!(at(&[], 0), limit, "an unowned outfit adds nothing");
+        assert_eq!(at(&[(140, 0)], 0), limit, "nor one owned none of");
         assert_eq!(at(&[(142, 1)], 0), Ok(()), "its first mod of 45");
         assert_eq!(at(&[(128, 1), (142, 1)], 0), Ok(()), "0 + 2, 1 owned");
         assert_eq!(at(&[(128, 2), (142, 1)], 0), limit, "0 + 2, 2 owned");

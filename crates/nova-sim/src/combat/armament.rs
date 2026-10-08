@@ -658,8 +658,9 @@ impl Arsenal {
                 let &(_, weapon) = record.mods.iter().find(|&&(kind, _)| kind == MOD_WEAPON)?;
                 let weapon = WeaponId(weapon);
                 let spec = self.weapon(weapon)?;
+                // A bay's rounds are already its own (`WeaponSpec::new`).
                 let ammo = match spec.ammo {
-                    Ammo::Rounds(ammo) if !spec.is_bay() => ammo,
+                    Ammo::Rounds(ammo) => ammo,
                     _ => weapon,
                 };
                 let magazine = Magazine {
