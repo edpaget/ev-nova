@@ -89,8 +89,10 @@
 //! outfit effects: `"map_explore"` (whether a map explores the engine's
 //! depth-first way, or every system within its jumps), `"invalid_map"`
 //! (whether a map that explores nothing is used up, or kept as an
-//! outfit) and `"remove_refund"` (whether `D` pays nothing for the
-//! outfit it removes, or what selling it would), and the set-expression
+//! outfit), `"remove_refund"` (whether `D` pays nothing for the
+//! outfit it removes, or what selling it would) and `"refit_reserves"`
+//! (whether a refit by `G`, `D` or boarding keeps a shield or armour
+//! above its most, or holds each to it), and the set-expression
 //! hooks: `"purchase_paint_order"` (whether buying a ship clears its
 //! paint after the new ship's `OnPurchase`, losing a paint it grants, or
 //! before it), `"capture_hook_order"` (whether Use As My Ship runs

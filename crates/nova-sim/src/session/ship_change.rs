@@ -59,12 +59,14 @@
 //! due.
 //!
 //! A shield or armour kept above its most lasts until damage takes it or
-//! the ship is next refitted, which holds every reserve to its most: a
-//! later `G` or `D`, in the same expression or after, or flying the pilot
-//! again from a save ([`Session::fly`]; the save itself keeps the
-//! surplus). The reload agrees with the original,
-//! whose `_LoadPilotData` fills the shield and armour (@0x754dc), so no
-//! surplus outlasts a load there either; the refit does not (below).
+//! a refit holds it. A later `G` or `D`, in the same expression or
+//! after, or a boarding grant, keeps it by the engine reading of
+//! [`RuleKey::RefitReserves`](crate::RuleKey::RefitReserves), as the
+//! original's `_SystemInfoToShipStats` clamps no reserve, and holds it by
+//! the other. The outfitter and flying the pilot again from a save
+//! ([`Session::fly`]; the save itself keeps the surplus) hold it either
+//! way, as the original's outfitter does when it closes (@0x5da4b-0x5dad4)
+//! and its `_LoadPilotData` fills the shield and armour (@0x754dc).
 //!
 //! - `Cxxx` ([`ChangeShipOp`]) keeps every outfit and adds no default.
 //! - `Exxx` ([`ChangeShipWithDefaultsOp`]) keeps every outfit and adds the
@@ -80,10 +82,7 @@
 //! ones an outfit backs and gives no new ones, and `E` and `H`'s
 //! `WCount` and `AmmoLoad` are only approximated by that mount; and the
 //! limit held to is `Max` alone, without `ModType` 27, `MaxAmmo` times
-//! the launchers, or the gun and turret slots. A later `G` or `D` holds a
-//! kept surplus to the most, where the original's, which works the stats
-//! out with the same `_SystemInfoToShipStats` that clamps no reserve in
-//! the block above, leaves it to damage.
+//! the launchers, or the gun and turret slots.
 //! [`Session::buy_ship`] and [`Session::assign`] keep their own carry,
 //! which folding onto [`carried_outfits`]
 //! waits for: a purchase's carry is a trade (`Max` and the free mass,
@@ -388,7 +387,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
     use crate::market::Good;
-    use crate::outfit_effects::Rgb15;
+    use crate::outfit_effects::{OutfitRules, Rgb15};
     use crate::outfitter::outfit_mods;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
@@ -978,28 +977,95 @@ mod tests {
     }
 
     #[test]
-    fn a_reload_holds_a_kept_surplus_to_the_new_most() {
+    fn a_reload_holds_a_kept_surplus_to_the_new_most_by_either_reading() {
         let catalog = changing();
-        for (op, held) in [
-            ("C130", Reserves::full(110.0, 20.0, 100.0)),
-            ("H130", Reserves::full(10.0, 20.0, 100.0)),
-        ] {
-            let mut session = session(&catalog);
-            run(&mut session, op);
-            let kept = session.reserves();
-            assert_eq!((kept.shield.now, kept.armor.now), (130.0, 45.0), "{op}");
-            let pilot = save::decode(&save::encode(session.pilot())).expect("loads");
-            assert_eq!(pilot.reserves(), kept, "{op}: the save keeps the surplus");
-            let reloaded = Session::fly(&catalog, pilot).expect("flies");
-            assert_eq!(reloaded.reserves(), held, "{op}: flying it holds it");
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            for (op, held) in [
+                ("C130", Reserves::full(110.0, 20.0, 100.0)),
+                ("H130", Reserves::full(10.0, 20.0, 100.0)),
+            ] {
+                let mut session = session(&catalog).with_outfit_rules(OutfitRules {
+                    refit_reserves: source,
+                    ..OutfitRules::default()
+                });
+                run(&mut session, op);
+                let kept = session.reserves();
+                assert_eq!(
+                    (kept.shield.now, kept.armor.now),
+                    (130.0, 45.0),
+                    "{op}, {source:?}"
+                );
+                let pilot = save::decode(&save::encode(session.pilot())).expect("loads");
+                assert_eq!(
+                    pilot.reserves(),
+                    kept,
+                    "{op}, {source:?}: the save keeps the surplus"
+                );
+                let reloaded = Session::fly(&catalog, pilot).expect("flies");
+                assert_eq!(
+                    reloaded.reserves(),
+                    held,
+                    "{op}, {source:?}: flying it holds it"
+                );
+            }
+        }
+    }
+
+    /// The reserves `C130` leaves the [`session`]: the shield and armour
+    /// above the new class's most, by the engine reading of
+    /// `ship_change_reserves`.
+    fn kept_surplus(shield_max: f32) -> Reserves {
+        Reserves {
+            shield: Gauge {
+                now: 130.0,
+                max: shield_max,
+            },
+            armor: Gauge {
+                now: 45.0,
+                max: 20.0,
+            },
+            fuel: Gauge::full(100.0),
         }
     }
 
     #[test]
-    fn a_later_refit_in_the_same_expression_holds_a_kept_surplus_to_the_most() {
+    fn by_the_engine_a_later_g_or_d_keeps_a_kept_surplus() {
         let catalog = changing();
         for op in ["C130 G400", "C130 D400"] {
             let mut session = session(&catalog);
+            run(&mut session, op);
+            assert_eq!(
+                session.reserves(),
+                kept_surplus(110.0),
+                "{op}: the licence changes no most, and nothing is held"
+            );
+        }
+        let mut session = session(&catalog);
+        run(&mut session, "C130 G403");
+        assert_eq!(
+            session.reserves(),
+            Reserves {
+                shield: Gauge {
+                    now: 180.0,
+                    max: 160.0
+                },
+                ..kept_surplus(160.0)
+            },
+            "a shield gained over the surplus and kept; the armour kept"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_later_g_or_d_holds_a_kept_surplus_to_the_most() {
+        let catalog = changing();
+        let holding = |catalog| {
+            session(catalog).with_outfit_rules(OutfitRules {
+                refit_reserves: RuleSource::Bible,
+                ..OutfitRules::default()
+            })
+        };
+        for op in ["C130 G400", "C130 D400"] {
+            let mut session = holding(&catalog);
             run(&mut session, op);
             assert_eq!(
                 session.reserves(),
@@ -1007,7 +1073,7 @@ mod tests {
                 "{op}: the licence changes no most"
             );
         }
-        let mut session = session(&catalog);
+        let mut session = holding(&catalog);
         run(&mut session, "C130 G403");
         assert_eq!(
             session.reserves(),

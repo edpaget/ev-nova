@@ -6070,7 +6070,8 @@ pub(super) mod tests {
             RuleKey::MapExplore
             | RuleKey::InvalidMap
             | RuleKey::GrantMax
-            | RuleKey::RemoveRefund => "outfit_rules",
+            | RuleKey::RemoveRefund
+            | RuleKey::RefitReserves => "outfit_rules",
             RuleKey::PurchasePaintOrder
             | RuleKey::CaptureHookOrder
             | RuleKey::StartShipPurchase => "hook_rules",

@@ -41,6 +41,7 @@
 //! | [`MapExplore`](RuleKey::MapExplore) | `map_explore` | a map of `ModVal` N explores depth first, so it may miss systems within N jumps, and "inhabited" reads a system's first four stellars ([`OutfitRules`](crate::OutfitRules)) | every system within N jumps, and any stellar |
 //! | [`InvalidMap`](RuleKey::InvalidMap) | `invalid_map` | a map whose `ModVal` explores nothing (0, -2 to -999) is used up ([`OutfitRules`](crate::OutfitRules)) | it is added to the outfits as a plain item\* |
 //! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing ([`OutfitRules`](crate::OutfitRules)) | it pays what selling the outfit would\* |
+//! | [`RefitReserves`](RuleKey::RefitReserves) | `refit_reserves` | a refit by `G`, `D` or boarding keeps a shield or armour above the new most until damage, the outfitter or a reload takes it ([`OutfitRules`](crate::OutfitRules)) | each is held to its most\* |
 //! | [`PurchasePaintOrder`](RuleKey::PurchasePaintOrder) | `purchase_paint_order` | buying a ship clears the paint after the new ship's `OnPurchase`, so a paint it grants is lost ([`HookRules`](crate::HookRules)) | the paint is cleared before the hook, so a paint it grants stays\* |
 //! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, which strips a non-persistent outfit either grants ([`HookRules`](crate::HookRules)) | they run after the swap, so it stays\* |
 //! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` ([`HookRules`](crate::HookRules)) | it runs once, right before the `chär`'s `OnStart`\* |
@@ -57,9 +58,10 @@
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
-//! `remove_refund`, `purchase_paint_order`, `capture_hook_order`,
-//! `start_ship_purchase`, `ship_change_cargo`, `ship_change_reserves`,
-//! `move_arrival`, `move_keep_flag`, `script_sound` or `comm_quote`
+//! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
+//! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
+//! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
+//! `script_sound` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -346,6 +348,20 @@ rule_keys! {
     /// alternative, not anything the Bible says (see
     /// [`OutfitRules`](crate::OutfitRules)).
     RemoveRefund => "remove_refund",
+    /// What becomes of a shield or armour above its most when `G`, `D`
+    /// or a boarding grant or ammunition take refits the ship: by the
+    /// engine, it is kept, as each works the stats out through
+    /// `_SystemInfoToShipStats` (`_EvalSetExp` @0x15489,
+    /// `_DoPlunderDialog` @0x93226), which with
+    /// `_ResetPlayerPrecalcedValues` (@0xc357-0xca32) clamps no reserve,
+    /// so the surplus lasts until damage, the outfitter closing
+    /// (`_DoOutfitDialog` @0x5da4b-0x5dad4) or a reload
+    /// (`_LoadPilotData` @0x754dc) takes it; otherwise each is held to
+    /// its most. The fuel is held to its most either way, as flight
+    /// clamps it every frame (`_HandlePlayer` @0x6d9e1). The Bible is
+    /// silent here, so the other reading is the obvious alternative, not
+    /// anything the Bible says (see [`OutfitRules`](crate::OutfitRules)).
+    RefitReserves => "refit_reserves",
     /// When buying a ship clears its paint: by the engine, after the new
     /// ship's `OnPurchase` runs (`_DoShipyardDialog` @0x5f00d, then
     /// @0x5f022), so a paint that hook grants is lost; otherwise before
@@ -606,6 +622,7 @@ mod tests {
                 RuleKey::MapExplore,
                 RuleKey::InvalidMap,
                 RuleKey::RemoveRefund,
+                RuleKey::RefitReserves,
                 RuleKey::PurchasePaintOrder,
                 RuleKey::CaptureHookOrder,
                 RuleKey::StartShipPurchase,
@@ -638,6 +655,7 @@ mod tests {
         assert_eq!(RuleKey::MapExplore.key(), "map_explore");
         assert_eq!(RuleKey::InvalidMap.key(), "invalid_map");
         assert_eq!(RuleKey::RemoveRefund.key(), "remove_refund");
+        assert_eq!(RuleKey::RefitReserves.key(), "refit_reserves");
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
         assert_eq!(RuleKey::GrantCount.key(), "grant_count");
         assert_eq!(RuleKey::GrantMax.key(), "grant_max");

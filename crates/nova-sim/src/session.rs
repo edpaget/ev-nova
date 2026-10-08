@@ -781,8 +781,26 @@ impl Session {
     /// Recomputes the stats from the outfits the pilot owns: each gauge
     /// holds up to the stats' most, keeping no more than that, and when
     /// `gain`, one whose most rose gains as much. The hull and the weapons
-    /// follow the ship and the outfits, ready to fire.
+    /// follow the ship and the outfits, ready to fire. The outfitter, the
+    /// shipyard, capture, a change of ship and a reload refit this way;
+    /// `G`, `D` and boarding refit as [`OutfitRules::refit_reserves`]
+    /// says (see [`Session::script_refit`]).
     fn refit(&mut self, gain: bool) {
+        self.refit_reserves(gain, true);
+    }
+
+    /// Refits as `G`, `D` and boarding do: the shield and armour held to
+    /// their most only by the other reading of
+    /// [`RuleKey::RefitReserves`](crate::RuleKey::RefitReserves), the
+    /// engine's keeping a surplus (`_SystemInfoToShipStats` @0xca33
+    /// clamps no reserve), and the fuel always held.
+    fn script_refit(&mut self, gain: bool) {
+        self.refit_reserves(gain, self.outfit_rules.refit_reserves == RuleSource::Bible);
+    }
+
+    /// [`Session::refit`], holding the shield and armour to their most
+    /// only when `hold`; the fuel is always held.
+    fn refit_reserves(&mut self, gain: bool, hold: bool) {
         self.hull = self.arsenal.hull(self.pilot.ship);
         self.armament = self
             .arsenal
@@ -795,12 +813,12 @@ impl Session {
         self.secondary = carried.or_else(|| self.next_secondary(None, false));
         let stats = self.current_stats();
         let reserves = &mut self.pilot.reserves;
-        for (gauge, max) in [
-            (&mut reserves.shield, stats.shield),
-            (&mut reserves.armor, stats.armor),
-            (&mut reserves.fuel, stats.fuel),
+        for (gauge, max, hold) in [
+            (&mut reserves.shield, stats.shield, hold),
+            (&mut reserves.armor, stats.armor, hold),
+            (&mut reserves.fuel, stats.fuel, true),
         ] {
-            refit(gauge, max, gain);
+            refit(gauge, max, gain, hold);
         }
         self.stats = stats;
     }
@@ -2271,7 +2289,7 @@ impl Session {
         for _ in 0..granted.count {
             self.grant_outfit(granted.outfit);
         }
-        self.refit(true);
+        self.script_refit(true);
         Some(granted)
     }
 
@@ -2473,7 +2491,7 @@ impl Session {
             *self.pilot.outfits.entry(outfit).or_default() += 1;
             count += 1;
         }
-        self.refit(true);
+        self.script_refit(true);
         count
     }
 
@@ -2740,14 +2758,17 @@ fn fill_in(pilot: &mut Pilot, defaults: &BTreeMap<OutfitId, u16>, ships: &[ShipR
     }
 }
 
-/// Sets `gauge` to hold up to `max`, keeping no more than that; when
-/// `gain` and that is more than it held, it gains the difference.
-fn refit(gauge: &mut Gauge, max: f32, gain: bool) {
+/// Sets `gauge` to hold up to `max`, and when `hold`, keeping no more
+/// than that; when `gain` and that is more than it held, it gains the
+/// difference.
+fn refit(gauge: &mut Gauge, max: f32, gain: bool, hold: bool) {
     if gain {
         gauge.now += (max - gauge.max).max(0.0);
     }
     gauge.max = max;
-    gauge.now = gauge.now.min(max);
+    if hold {
+        gauge.now = gauge.now.min(max);
+    }
 }
 
 #[cfg(test)]
@@ -5472,6 +5493,37 @@ mod tests {
             .expect("bought");
         assert!(session.pilot().has_explored(SystemId(131)), "it explores");
         assert_eq!(session.pilot().owned(OutfitId(310)), 0);
+    }
+
+    #[test]
+    fn the_outfitter_holds_a_surplus_shield_and_armour_by_either_reading() {
+        // `_DoOutfitDialog` clamps the reserves when it closes
+        // (@0x5da4b-0x5dad4), whatever `refit_reserves` says of `G`, `D`
+        // and boarding.
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            for order in [buy(OutfitId(302)), sell(OutfitId(302))] {
+                let mut session = outfitted(&outfitting()).with_outfit_rules(OutfitRules {
+                    refit_reserves: source,
+                    ..OutfitRules::default()
+                });
+                if order.direction == Direction::Sell {
+                    session.pilot.outfits.insert(OutfitId(302), 1);
+                    session.refit(false);
+                }
+                let (shield, armor) = (session.stats().shield, session.stats().armor);
+                session.pilot.reserves.shield.now = shield + 5.0;
+                session.pilot.reserves.armor.now = armor + 5.0;
+                session.outfit(order, &mut NeverFires).expect("traded");
+                let (shield, armor) = (session.stats().shield, session.stats().armor);
+                let reserves = session.reserves();
+                assert_eq!(
+                    reserves.shield,
+                    Gauge::full(shield),
+                    "{source:?}, {order:?}"
+                );
+                assert_eq!(reserves.armor, Gauge::full(armor), "{source:?}, {order:?}");
+            }
+        }
     }
 
     #[test]
@@ -8810,6 +8862,38 @@ mod tests {
     }
 
     #[test]
+    fn the_ammo_take_keeps_a_surplus_shield_and_armour_by_the_engine_and_holds_them_by_the_other_reading()
+     {
+        for (source, surplus) in [(RuleSource::Engine, 5.0), (RuleSource::Bible, 0.0)] {
+            let mut session = ammo_session(&ammo_aboard(1, 20)).with_outfit_rules(OutfitRules {
+                refit_reserves: source,
+                ..OutfitRules::default()
+            });
+            let (shield, armor) = (session.stats().shield, session.stats().armor);
+            session.pilot.reserves.shield.now = shield + 5.0;
+            session.pilot.reserves.armor.now = armor + 5.0;
+            take(&mut session, Take::Ammo, &[]);
+            let reserves = session.reserves();
+            assert_eq!(
+                reserves.shield,
+                Gauge {
+                    now: shield + surplus,
+                    max: shield
+                },
+                "{source:?}"
+            );
+            assert_eq!(
+                reserves.armor,
+                Gauge {
+                    now: armor + surplus,
+                    max: armor
+                },
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
     fn each_take_grows_the_self_destruct_threshold_truncated() {
         let catalog = ammo_aboard(1, 20);
         let mut session = ammo_session(&catalog);
@@ -9568,6 +9652,42 @@ mod tests {
                 .expect("boards");
             assert_eq!(boarded.pilot().owned(OutfitId(200)), owned, "boarded");
             assert_eq!(g(alongside(&catalog).with_outfit_rules(rules)), owned, "G");
+        }
+    }
+
+    #[test]
+    fn a_boarding_grant_keeps_a_surplus_shield_and_armour_by_the_engine_and_holds_them_by_the_other_reading()
+     {
+        let catalog = granting();
+        for (source, surplus) in [(RuleSource::Engine, 5.0), (RuleSource::Bible, 0.0)] {
+            let mut session = alongside_ace(&catalog).with_outfit_rules(OutfitRules {
+                refit_reserves: source,
+                ..OutfitRules::default()
+            });
+            let (shield, armor) = (session.stats().shield, session.stats().armor);
+            session.pilot.reserves.shield.now = shield + 5.0;
+            session.pilot.reserves.armor.now = armor + 5.0;
+            board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS)
+                .0
+                .expect("boards");
+            assert_eq!(session.pilot().owned(OutfitId(200)), 2);
+            let reserves = session.reserves();
+            assert_eq!(
+                reserves.shield,
+                Gauge {
+                    now: shield + 20.0 + surplus,
+                    max: shield + 20.0
+                },
+                "{source:?}: the grant's shield gained"
+            );
+            assert_eq!(
+                reserves.armor,
+                Gauge {
+                    now: armor + surplus,
+                    max: armor
+                },
+                "{source:?}"
+            );
         }
     }
 

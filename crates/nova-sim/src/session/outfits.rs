@@ -24,13 +24,26 @@
 //! goes, at once.) A boarding grant goes through it once for each unit
 //! granted (`_DoPlunderDialog` @0x93216). And `G`.
 //!
+//! **The refit.** The outfitter refits holding the shield, armour and
+//! fuel to their most, as the original clamps all three when its dialog
+//! closes (`_DoOutfitDialog` @0x5da4b-0x5dad4), after buying and selling
+//! alike. `G`, `D` and a boarding grant (or ammunition take) work the
+//! stats out through the original's `_SystemInfoToShipStats` (@0xca33,
+//! `_DoPlunderDialog` @0x93226), which clamps no reserve: the fuel is
+//! held to its new most, as flight clamps it every frame, and a shield
+//! or armour above it is kept by the engine and held to it by the other
+//! reading of [`RuleKey::RefitReserves`](crate::RuleKey::RefitReserves).
+//!
 //! **The operators** ([`nova_set_ops`](crate::nova_set_ops) registers
 //! them), each run between the original's `_ShipStatsToSystemInfo` and
 //! `_SystemInfoToShipStats`, so the ship's stats follow:
 //!
 //! - `Gxxx` ([`GrantOutfitOp`], `_EvalSetExp` @0x1541d) grants one of the
 //!   outfit through the grant path, then refits the ship, gaining as a
-//!   purchase does. By the engine it checks neither the outfit's `Max`
+//!   purchase does. The fuel is held to the new most; a shield or armour
+//!   above it is kept by the engine (`_SystemInfoToShipStats` clamps no
+//!   reserve) and held to it by the other reading of
+//!   [`RuleKey::RefitReserves`](crate::RuleKey::RefitReserves). By the engine it checks neither the outfit's `Max`
 //!   nor the free mass; by the other reading of
 //!   [`RuleKey::GrantMax`](crate::RuleKey::GrantMax), an outfit the grant
 //!   would add is refused, changing nothing, when the player owns its
@@ -40,7 +53,10 @@
 //! - `Dxxx` ([`RemoveOutfitOp`], @0x1544b) removes one of an outfit owned
 //!   (128 to 639), and with none owned does nothing at all. The ship is
 //!   refitted without gaining, so its mass and stats are freed as by a
-//!   sale and the reserves are held to the new most. By the engine it
+//!   sale. The fuel is held to the new most; a shield or armour above it
+//!   is kept by the engine (`_SystemInfoToShipStats` clamps no reserve)
+//!   and held to it by the other reading of
+//!   [`RuleKey::RefitReserves`](crate::RuleKey::RefitReserves). By the engine it
 //!   pays nothing; by the other reading of
 //!   [`RuleKey::RemoveRefund`](crate::RuleKey::RemoveRefund) it pays what
 //!   selling the outfit would.
@@ -190,7 +206,7 @@ impl Session {
     fn script_grant(&mut self, outfit: OutfitId) {
         if self.script_may_grant(outfit) {
             self.grant_outfit(outfit);
-            self.refit(true);
+            self.script_refit(true);
         }
     }
 
@@ -206,7 +222,7 @@ impl Session {
                 .map_or(0, |record| unit_price(record, self.fields.mass));
             self.pilot.cash = self.pilot.cash.saturating_add(resale(price));
         }
-        self.refit(false);
+        self.script_refit(false);
     }
 
     /// `X`: explores `system` when it is on the star map.
@@ -571,7 +587,11 @@ mod tests {
         assert_eq!(session.pilot().owned(SHIELD), 1);
         assert_eq!(session.free_mass(), free + 1);
         assert_eq!(session.stats().shield, shield - 10.0);
-        assert_eq!(session.reserves().shield.now, shield - 10.0, "held to it");
+        assert_eq!(
+            session.reserves().shield.now,
+            shield,
+            "by the engine the surplus is kept"
+        );
         assert_eq!(session.pilot().cash(), cash, "no refund");
         run(&mut session, "D305");
         assert_eq!(
@@ -579,6 +599,47 @@ mod tests {
             0,
             "none left is none listed"
         );
+    }
+
+    #[test]
+    fn d_keeps_a_surplus_shield_and_armour_by_the_engine_and_holds_them_by_the_other_reading() {
+        for (source, held) in [(RuleSource::Engine, false), (RuleSource::Bible, true)] {
+            let rules = OutfitRules {
+                refit_reserves: source,
+                ..OutfitRules::default()
+            };
+            let mut session = scripted(&mapped()).with_outfit_rules(rules);
+            run(&mut session, "G305");
+            let (shield, armor, fuel) = (
+                session.stats().shield,
+                session.stats().armor,
+                session.stats().fuel,
+            );
+            let reserves = &mut session.pilot.reserves;
+            reserves.shield.now = shield + 5.0;
+            reserves.armor.now = armor + 7.0;
+            reserves.fuel.now = fuel + 9.0;
+            run(&mut session, "D305");
+            let (shield, armor, fuel) = (
+                session.stats().shield,
+                session.stats().armor,
+                session.stats().fuel,
+            );
+            let reserves = session.reserves();
+            assert_eq!(
+                (reserves.shield.max, reserves.armor.max, reserves.fuel.max),
+                (shield, armor, fuel),
+                "{source:?}: the mosts follow the stats"
+            );
+            if held {
+                assert_eq!(reserves.shield.now, shield, "{source:?}");
+                assert_eq!(reserves.armor.now, armor, "{source:?}");
+            } else {
+                assert_eq!(reserves.shield.now, shield + 15.0, "{source:?}");
+                assert_eq!(reserves.armor.now, armor + 7.0, "{source:?}");
+            }
+            assert_eq!(reserves.fuel.now, fuel, "{source:?}: the fuel is held");
+        }
     }
 
     #[test]

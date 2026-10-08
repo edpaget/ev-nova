@@ -74,12 +74,17 @@ pub struct OutfitRules {
     /// Whether `D` pays for the outfit it removes
     /// ([`RuleKey::RemoveRefund`]).
     pub remove_refund: RuleSource,
+    /// Whether a refit by `G`, `D` or boarding keeps a shield or armour
+    /// above its most, or holds each to it ([`RuleKey::RefitReserves`]):
+    /// the outfitter and a reload hold them either way, and the fuel is
+    /// always held.
+    pub refit_reserves: RuleSource,
 }
 
 impl OutfitRules {
     /// The rules `rulebook` chooses: its [`RuleKey::MapExplore`],
-    /// [`RuleKey::InvalidMap`], [`RuleKey::GrantMax`] and
-    /// [`RuleKey::RemoveRefund`] entries.
+    /// [`RuleKey::InvalidMap`], [`RuleKey::GrantMax`],
+    /// [`RuleKey::RemoveRefund`] and [`RuleKey::RefitReserves`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
@@ -87,6 +92,7 @@ impl OutfitRules {
             invalid_map: rulebook.source_for(RuleKey::InvalidMap),
             grant_max: rulebook.source_for(RuleKey::GrantMax),
             remove_refund: rulebook.source_for(RuleKey::RemoveRefund),
+            refit_reserves: rulebook.source_for(RuleKey::RefitReserves),
         }
     }
 }
@@ -421,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn the_outfit_rules_follow_their_four_rulebook_keys() {
+    fn the_outfit_rules_follow_their_five_rulebook_keys() {
         assert_eq!(
             OutfitRules::from_rulebook(&Rulebook::default()),
             OutfitRules::default()
@@ -433,6 +439,7 @@ mod tests {
                 invalid_map: RuleSource::Engine,
                 grant_max: RuleSource::Engine,
                 remove_refund: RuleSource::Engine,
+                refit_reserves: RuleSource::Engine,
             }
         );
         let bible = |key| {
@@ -463,6 +470,13 @@ mod tests {
             bible(RuleKey::RemoveRefund),
             OutfitRules {
                 remove_refund: RuleSource::Bible,
+                ..OutfitRules::default()
+            }
+        );
+        assert_eq!(
+            bible(RuleKey::RefitReserves),
+            OutfitRules {
+                refit_reserves: RuleSource::Bible,
                 ..OutfitRules::default()
             }
         );
