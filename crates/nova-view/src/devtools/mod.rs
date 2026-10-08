@@ -17,6 +17,10 @@
 //! - [`browser`]: the [`ResourceBrowser`], the index read once, searched,
 //!   and the [`Selection`] with its record, files, preview and the text
 //!   the panel shows for them.
+//! - [`pilot`]: the [`PilotDesk`] port, the pilot flying as a
+//!   [`PilotSheet`] and each [`PilotEdit`] to it, or why it was refused.
+//! - [`editor`]: the [`PilotEditor`], the sheet shown, the drafts of each
+//!   edit and the status line.
 //!
 //! egui draws the overlay only in the `nova` crate's `dev-tools` build,
 //! and only renders this model's strings and images.
@@ -24,8 +28,10 @@
 pub mod browser;
 pub mod catalog;
 pub mod data;
+pub mod editor;
 pub mod frame_time;
 pub mod overlay;
+pub mod pilot;
 pub mod preview;
 pub mod search;
 
@@ -34,7 +40,9 @@ pub use catalog::{
     Origin, RecordView, ResType, ResourceCatalog, ResourceDetail, ResourceSummary, SourceInfo,
     type_code,
 };
+pub use editor::{Draft, NO_PILOT, PilotEditor};
 pub use frame_time::{FRAME_WINDOW, FrameTimes};
 pub use overlay::{DevOverlay, Routing, TOGGLE_KEY};
+pub use pilot::{EditRefusal, PilotDesk, PilotEdit, PilotSheet, Place};
 pub use preview::{MAX_PREVIEW_SIDE, Preview, preview};
 pub use search::{Query, fold};
