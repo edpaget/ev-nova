@@ -1,6 +1,70 @@
-//! The rules core: an ordered list of checks over any context, each check
-//! passing or refusing with a reason, and each one described by a
-//! [`Descriptor`] tools can list without running it.
+//! The rules core: the decisions a shop or an offer makes, written as
+//! rules over a context of facts, generic over the context so that it
+//! knows nothing of sessions, rows or shops.
+//!
+//! # Rules
+//!
+//! A rule is one decision with a [`Descriptor`]: its name, the original's
+//! address or routine it reproduces, the disputed rule it reads (if any)
+//! and whether it draws on the chance. Its constructor sets the last two,
+//! so a descriptor cannot say otherwise than the rule does. Tools list a
+//! list's descriptors ([`Checks::descriptors`]) without running any rule.
+//!
+//! There are two kinds, kept apart:
+//!
+//! - A [`Check`] answers "can I?": it passes, or refuses with a reason
+//!   `R`. A [`Checks`] list holds checks in order. Gameplay asks its
+//!   [`first_refusal`](Checks::first_refusal); tools ask its
+//!   [`all_refusals`](Checks::all_refusals), every reason with its
+//!   descriptor ("why isn't this offered here?").
+//! - A [`Value`] answers "what does it show?": it gives data `T`, such as a
+//!   price, a count, a maximum or a pay. No list takes one, and nothing
+//!   turns one into a check or back.
+//!
+//! Rules are `fn` pointers over `&C`, and lists are built by functions
+//! rather than kept in `static`s, so that a context may borrow (a
+//! `fn(&C<'static>)` would take no shorter-lived context).
+//!
+//! # Readings
+//!
+//! Where the Nova Bible and the original engine disagree, a rule is
+//! disputed ([`Check::disputed`], [`Value::disputed`]): it holds the
+//! engine's reading and the other, and runs the one the context's rule
+//! set gives, by [`Rulebook::source_for`] its [`RuleKey`]. The context
+//! hands the rule set over through [`Context::rulebook`], the one thing
+//! the core asks of it. The choice is part of the rule, not its caller's.
+//!
+//! # Draws
+//!
+//! A drawing check ([`Check::drawing`]) draws on the [`Chance`] handed to
+//! [`first_refusal`](Checks::first_refusal) beside the context, not kept
+//! in it. Its draws come in the list's order, and stop at the first
+//! refusal, as the original's do when a later check is never reached.
+//! [`all_refusals`](Checks::all_refusals) is handed no chance, so it can
+//! never draw on the game's: it reports each drawing check as
+//! [`Verdict::Draws`] without running it. (A caller wanting the outcome
+//! runs `first_refusal` on a chance of its own.)
+//!
+//! A draw that the original makes while building what a shop shows, such
+//! as the outfitter's day rolls (`wares::DayRolls`),
+//! belongs in the facts: the caller draws it, keeps it, and hands it in.
+//! A drawing check is for a draw made in check order, such as a mission
+//! offer's `Rand`.
+//!
+//! # State
+//!
+//! The core holds none. Every rule reads the context through `&C`, and
+//! state that lasts a visit or a day is the caller's, borrowed through
+//! the context; writing it back is the caller's job too. So the same
+//! context gives the same result each time it is evaluated: with any
+//! chance for a list that does not draw, always for `all_refusals`, and
+//! with chances scripted alike for a list that draws.
+//!
+//! # Out of scope
+//!
+//! Event-driven dispatch ("on this event, if this test holds, run this set
+//! expression, once") belongs to the story runtime. At most, a
+//! dispatcher's guard is a rule.
 
 use crate::chance::Chance;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
