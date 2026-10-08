@@ -535,9 +535,10 @@ pub struct Session {
     /// [`Session::with_raised_max`]).
     raised_max: RuleSource,
     /// How an active `öops` event prices its commodity, how a `jünk` of
-    /// negative or zero price is traded, and which ways a `jünk` row
-    /// trades (see [`Session::with_event_price`],
-    /// [`Session::with_junk_price`] and [`Session::with_junk_trade`]).
+    /// negative or zero price is traded, which ways a `jünk` row trades,
+    /// and how many tons a plain trade moves (see
+    /// [`Session::with_event_price`], [`Session::with_junk_price`],
+    /// [`Session::with_junk_trade`] and [`Session::with_trade_lot`]).
     exchange_rules: market::ExchangeRules,
     /// What cargo a ship purchase keeps (see
     /// [`Session::with_purchase_cargo`]).
@@ -2016,6 +2017,24 @@ impl Session {
     #[must_use]
     pub fn junk_trade(&self) -> RuleSource {
         self.exchange_rules.junk_trade
+    }
+
+    /// This session with a plain trade at the exchange moving as many tons
+    /// as `source` says ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)):
+    /// by the engine's default, a plain buy moves
+    /// min(trunc(cash / price), 10, free) and a plain sale min(held, 10);
+    /// by the other reading, a ton (see [`market`]).
+    #[must_use]
+    pub fn with_trade_lot(mut self, source: RuleSource) -> Self {
+        self.exchange_rules.trade_lot = source;
+        self
+    }
+
+    /// How many tons a plain trade at the exchange moves: by the engine
+    /// ([`RuleSource::Engine`]) or by the other reading.
+    #[must_use]
+    pub fn trade_lot(&self) -> RuleSource {
+        self.exchange_rules.trade_lot
     }
 
     /// This session with a launcher's sale refused for its ammunition as
@@ -5052,7 +5071,7 @@ mod tests {
         );
         assert_eq!(session.market().expect("an exchange").free, 0);
         assert_eq!(
-            session.trade(order(&session, FOOD, Direction::Buy, Lot::One)),
+            session.trade(order(&session, FOOD, Direction::Buy, Lot::Click)),
             Err(TradeRefusal::NoSpace)
         );
     }
@@ -5075,18 +5094,19 @@ mod tests {
         land_now(&mut session).expect("lands");
         session.take_save_due();
         assert_eq!(
-            session.trade(order(&session, FOOD, Direction::Buy, Lot::One)),
-            Ok(1)
+            session.trade(order(&session, FOOD, Direction::Buy, Lot::Click)),
+            Ok(10),
+            "a click buys 10 tons"
         );
-        assert_eq!(session.pilot().cash(), 925);
-        assert_eq!(session.pilot().held(FOOD), 1);
+        assert_eq!(session.pilot().cash(), 1000 - 10 * 75);
+        assert_eq!(session.pilot().held(FOOD), 10);
         assert!(session.take_save_due());
         assert_eq!(
             session.trade(order(&session, METAL, Direction::Buy, Lot::Max)),
-            Ok(5)
+            Ok(1)
         );
-        assert_eq!(session.pilot().cash(), 125, "cash ran out first");
-        assert_eq!(session.market().expect("an exchange").free, 14);
+        assert_eq!(session.pilot().cash(), 90, "cash ran out first");
+        assert_eq!(session.market().expect("an exchange").free, 9);
     }
 
     #[test]
@@ -5103,7 +5123,7 @@ mod tests {
         );
         session.take_save_due();
         assert_eq!(
-            session.trade(order(&session, FOOD, Direction::Buy, Lot::One)),
+            session.trade(order(&session, FOOD, Direction::Buy, Lot::Click)),
             Err(TradeRefusal::NoSpace)
         );
         assert_eq!(session.pilot().cash(), 775);
@@ -5112,7 +5132,9 @@ mod tests {
 
     #[test]
     fn selling_pays_the_local_price() {
-        let mut session = Session::start(&exchange()).expect("starts");
+        let mut session = Session::start(&exchange())
+            .expect("starts")
+            .with_trade_lot(RuleSource::Bible);
         land_now(&mut session).expect("lands");
         assert_eq!(
             session.trade(order(&session, METAL, Direction::Buy, Lot::Max)),
@@ -5121,7 +5143,7 @@ mod tests {
         assert_eq!(session.pilot().cash(), 40);
         session.take_save_due();
         assert_eq!(
-            session.trade(order(&session, METAL, Direction::Sell, Lot::One)),
+            session.trade(order(&session, METAL, Direction::Sell, Lot::Click)),
             Ok(1)
         );
         assert_eq!(session.pilot().cash(), 40 + 160);
@@ -5139,7 +5161,7 @@ mod tests {
         let mut session = Session::start(&exchange()).expect("starts");
         let flying = session.clone();
         assert_eq!(
-            session.trade(order(&session, FOOD, Direction::Buy, Lot::One)),
+            session.trade(order(&session, FOOD, Direction::Buy, Lot::Click)),
             Err(TradeRefusal::NoMarket)
         );
         assert_eq!(session, flying);
@@ -5147,8 +5169,8 @@ mod tests {
         session.take_save_due();
         let landed = session.clone();
         for refused in [
-            order(&session, FOOD, Direction::Sell, Lot::One),
-            order(&session, Good::Commodity(1), Direction::Buy, Lot::One),
+            order(&session, FOOD, Direction::Sell, Lot::Click),
+            order(&session, Good::Commodity(1), Direction::Buy, Lot::Click),
         ] {
             assert!(session.trade(refused).is_err(), "{refused:?}");
         }
@@ -5201,7 +5223,7 @@ mod tests {
         );
         assert_eq!(session.pilot().cash(), 1000 - 12 * 80);
         assert_eq!(
-            session.trade(order(&session, opals, Direction::Sell, Lot::One)),
+            session.trade(order(&session, opals, Direction::Sell, Lot::Click)),
             Err(TradeRefusal::NotTraded),
             "by the Bible, not bought here"
         );
@@ -5234,14 +5256,15 @@ mod tests {
         let opals = Good::Junk(JunkId(146));
         let mut session = Session::start(&catalog)
             .expect("starts")
-            .with_junk_trade(RuleSource::Bible);
+            .with_junk_trade(RuleSource::Bible)
+            .with_trade_lot(RuleSource::Bible);
         land_now(&mut session).expect("lands");
         let (high, low) = (2, 3);
         let on = |row, direction| Order {
             row,
             good: opals,
             direction,
-            lot: Lot::One,
+            lot: Lot::Click,
         };
         assert_eq!(session.trade(on(low, Direction::Buy)), Ok(1));
         assert_eq!(session.pilot().cash(), 1000 - 80, "100 / 1.25");
@@ -5274,7 +5297,9 @@ mod tests {
             ..exchange()
         };
         let opals = Good::Junk(JunkId(146));
-        let mut session = Session::start(&catalog).expect("starts");
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_trade_lot(RuleSource::Bible);
         land_now(&mut session).expect("lands");
         let prices: Vec<_> = session
             .market()
@@ -5289,7 +5314,7 @@ mod tests {
             row,
             good: opals,
             direction,
-            lot: Lot::One,
+            lot: Lot::Click,
         };
         assert_eq!(session.trade(on(low, Direction::Buy)), Ok(1));
         assert_eq!(session.pilot().cash(), 1000 - 80, "the low row's price");
@@ -5325,7 +5350,9 @@ mod tests {
             (Some(RuleSource::Engine), Ok(1)),
             (Some(RuleSource::Bible), Err(TradeRefusal::NotTraded)),
         ] {
-            let session = Session::start(&catalog).expect("starts");
+            let session = Session::start(&catalog)
+                .expect("starts")
+                .with_trade_lot(RuleSource::Bible);
             let mut session = match source {
                 Some(source) => session.with_junk_trade(source),
                 None => session,
@@ -5335,7 +5362,7 @@ mod tests {
             assert!(session.transact(|pilot| {
                 pilot.cargo.insert(opals, 3);
             }));
-            let sale = order(&session, opals, Direction::Sell, Lot::One);
+            let sale = order(&session, opals, Direction::Sell, Lot::Click);
             assert_eq!(session.trade(sale), sold, "{source:?}");
             let paid = if sold.is_ok() { 80 } else { 0 };
             assert_eq!(session.pilot().cash(), 1000 + paid, "{source:?}");
@@ -5406,6 +5433,69 @@ mod tests {
         );
     }
 
+    #[test]
+    fn by_the_engine_a_buy_on_a_negative_price_is_offered_and_changes_nothing() {
+        let waste = Good::Junk(JunkId(146));
+        let mut session = junk_session(-100, None);
+        session.take_save_due();
+        let market = session.market().expect("an exchange");
+        let row = market
+            .rows
+            .iter()
+            .position(|row| row.good == waste)
+            .expect("listed");
+        assert!(market.row_allows(row, Direction::Buy), "100 >= -125");
+        let before = session.clone();
+        for lot in [Lot::Click, Lot::Max] {
+            assert_eq!(
+                session.trade(order(&session, waste, Direction::Buy, lot)),
+                Err(TradeRefusal::CannotAfford),
+                "{lot:?}"
+            );
+        }
+        assert_eq!(session, before);
+        assert_eq!(session.pilot().cash(), 100);
+        assert_eq!(session.pilot().held(waste), 3);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn the_session_trades_a_click_as_its_rule_says() {
+        for (source, tons) in [
+            (None, 10),
+            (Some(RuleSource::Engine), 10),
+            (Some(RuleSource::Bible), 1),
+        ] {
+            let session = Session::start(&exchange()).expect("starts");
+            let mut session = match source {
+                Some(source) => session.with_trade_lot(source),
+                None => session,
+            };
+            let source = source.unwrap_or_default();
+            assert_eq!(session.trade_lot(), source);
+            land_now(&mut session).expect("lands");
+            assert_eq!(
+                session.market().map(|market| market.trade_lot),
+                Some(source)
+            );
+            session.take_save_due();
+            assert_eq!(
+                session.trade(order(&session, FOOD, Direction::Buy, Lot::Click)),
+                Ok(tons),
+                "{source:?}"
+            );
+            assert_eq!(session.pilot().cash(), 1000 - 75 * i64::from(tons));
+            assert_eq!(session.pilot().held(FOOD), tons);
+            assert!(session.take_save_due());
+            assert_eq!(
+                session.trade(order(&session, FOOD, Direction::Sell, Lot::Click)),
+                Ok(tons),
+                "{source:?}"
+            );
+            assert_eq!(session.pilot().cash(), 1000);
+        }
+    }
+
     // Tribbles and perishables.
 
     const FURBALLS: Good = Good::Junk(JunkId(128));
@@ -5436,11 +5526,13 @@ mod tests {
     }
 
     /// `session`, landed on planet 128 of [`breeding`], buys `tons` of
-    /// each good.
+    /// each good, a ton a click: it is left on the other reading of
+    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot).
     fn buy_goods(session: &mut Session, tons: &[(Good, u32)]) {
+        session.exchange_rules.trade_lot = RuleSource::Bible;
         for &(good, tons) in tons {
             for _ in 0..tons {
-                let bought = session.trade(order(session, good, Direction::Buy, Lot::One));
+                let bought = session.trade(order(session, good, Direction::Buy, Lot::Click));
                 assert_eq!(bought, Ok(1), "{good:?}");
             }
         }
@@ -5661,7 +5753,8 @@ mod tests {
         for (source, price) in [(RuleSource::Engine, 60), (RuleSource::Bible, 78)] {
             let mut session = Session::start(&catalog)
                 .expect("starts")
-                .with_event_price(source);
+                .with_event_price(source)
+                .with_trade_lot(RuleSource::Bible);
             assert_eq!(session.event_price(), source);
             jump_with(
                 &mut session,
@@ -5678,7 +5771,7 @@ mod tests {
             );
             let cash = session.pilot().cash();
             assert_eq!(
-                session.trade(order(&session, FOOD, Direction::Buy, Lot::One)),
+                session.trade(order(&session, FOOD, Direction::Buy, Lot::Click)),
                 Ok(1)
             );
             assert_eq!(cash - session.pilot().cash(), price, "{source:?}");
@@ -6465,7 +6558,7 @@ mod tests {
         session.pilot.cargo.remove(&Good::Junk(JunkId(146)));
         session.pilot.cargo.insert(FOOD, 9);
         session
-            .trade(order(&session, FOOD, Direction::Sell, Lot::One))
+            .trade(order(&session, FOOD, Direction::Sell, Lot::Click))
             .expect("sold");
         assert_eq!(
             session.outfit(buy(EXPANSION), &mut NeverFires),

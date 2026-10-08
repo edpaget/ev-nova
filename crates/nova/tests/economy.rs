@@ -872,16 +872,15 @@ fn trade_at_a_profit(game: &mut Harness) {
     );
     assert_eq!(game.pilot().stellar(), Some(StellarId(129)));
 
-    // 3. Beta Prime buys food high, at 125: ten tons sold, bought for 800,
-    //    earn 1,250, a profit of 450; ten stay in the hold.
+    // 3. Beta Prime buys food high, at 125: S sells ten tons, as a plain
+    //    sale moves up to ten, bought for 800, earn 1,250, a profit of
+    //    450; ten stay in the hold.
     game.open(7);
     assert_eq!(
         game.trade().market().row(FOOD).map(|row| row.price),
         Some(125)
     );
-    for _ in 0..10 {
-        game.press(KeyCode::KeyS);
-    }
+    game.press(KeyCode::KeyS);
     assert_eq!(game.pilot().held(FOOD), 10);
     assert_eq!(game.pilot().cash(), 9650);
     game.press(KeyCode::Escape);

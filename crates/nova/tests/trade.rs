@@ -9,7 +9,8 @@
 //! what is saved, and "restarts" with a new app over the same store.
 //!
 //! A new pilot lands, opens the Trade Center, which lists only the goods
-//! the planet trades at its prices, and buys food until the hold is full;
+//! the planet trades at its prices, and buys food until the hold is full,
+//! up to ten tons a press;
 //! each trade saves the pilot. In a new app the pilot resumes docked with
 //! its cargo, and selling pays the local price.
 
@@ -565,15 +566,15 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
         assert!(!shown.contains(&untraded.to_owned()), "{untraded}");
     }
 
-    // B buys a ton, and the pilot is saved.
+    // B buys up to ten tons, here filling the hold, and the pilot is saved.
     let writes = store.writes();
     game.press(KeyCode::KeyB);
-    assert_eq!(game.pilot().held(FOOD), 1);
-    assert_eq!(game.pilot().cash(), cash - 75);
+    assert_eq!(game.pilot().held(FOOD), 10);
+    assert_eq!(game.pilot().cash(), cash - 10 * 75);
     assert_eq!(store.writes(), writes + 1);
-    assert_eq!(saved(&store, "Ada").held(FOOD), 1);
+    assert_eq!(saved(&store, "Ada").held(FOOD), 10);
 
-    // Holding B keeps buying until the hold is full, then buys nothing.
+    // Holding B buys nothing more once the hold is full.
     game.key(KeyCode::KeyB, true, false);
     for _ in 0..15 {
         game.key(KeyCode::KeyB, true, true);
@@ -619,10 +620,11 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     );
     assert!(texts(&game.frame()).contains(&status(0, full)));
 
-    // Selling pays the local price: a ton with S, the rest with Alt-S.
+    // Selling pays the local price: S sells up to ten tons, here all of
+    // them, and Alt-S then has nothing left to sell.
     game.press(KeyCode::KeyS);
-    assert_eq!(game.pilot().cash(), full + 75);
-    assert_eq!(game.pilot().held(FOOD), 9);
+    assert_eq!(game.pilot().held(FOOD), 0);
+    assert_eq!(game.pilot().cash(), cash);
     game.key(KeyCode::AltRight, true, false);
     game.press(KeyCode::KeyS);
     game.key(KeyCode::AltRight, false, false);

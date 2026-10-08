@@ -1605,6 +1605,7 @@ mod tests {
             cash: 1000,
             capacity: 10,
             free: 10,
+            ..Market::default()
         }
     }
 
@@ -1681,7 +1682,7 @@ mod tests {
                 row: 0,
                 good: Good::Commodity(0),
                 direction: Direction::Buy,
-                lot: Lot::One,
+                lot: Lot::Click,
             })
         );
         assert_eq!(view.take_trade(), None, "once");
@@ -1728,7 +1729,7 @@ mod tests {
         view.input(&key(Key::Alt));
         view.release_keys();
         view.input(&key(Key::Char('b')));
-        assert_eq!(view.take_trade().map(|order| order.lot), Some(Lot::One));
+        assert_eq!(view.take_trade().map(|order| order.lot), Some(Lot::Click));
         view.input(&key(Key::Alt));
         view.input(&key(Key::Char('b')));
         assert_eq!(view.take_trade().map(|order| order.lot), Some(Lot::Max));

@@ -47,6 +47,7 @@
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
+//! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for the most (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -92,6 +93,10 @@
 //! §§ The Bible says nothing of a limit on buying a map or clean-record
 //! outfit. The other reading is the port's earlier behaviour, with no
 //! limit, not anything the Bible says.
+//!
+//! ¶¶ The Bible says nothing of how many tons a click at the exchange
+//! trades. The other reading is the port's earlier behaviour, one ton a
+//! click, not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -448,6 +453,14 @@ rule_keys! {
     /// before the engine's was found, not anything the Bible says (see
     /// [`outfitter`](crate::outfitter)).
     OutfitLimit => "outfit_limit",
+    /// How many tons a plain Buy or Sell at the exchange moves. By the
+    /// engine, a plain buy moves min(trunc(cash / price), 10, free) tons
+    /// (`_DoTradeDialog` @0x5e268-0x5e278) and a plain sale min(held, 10)
+    /// (@0x5e48d-0x5e4fa); only Option opens the quantity dialog. By the
+    /// other reading, a plain trade moves 1 ton. The Bible says nothing of
+    /// it, so the other reading is the port's earlier behaviour, not
+    /// anything the Bible says (see [`market`](crate::market)).
+    TradeLot => "trade_lot",
 }
 
 impl RuleKey {
@@ -606,9 +619,12 @@ mod tests {
                 RuleKey::PurchaseCargo,
                 RuleKey::JunkPrice,
                 RuleKey::JunkTrade,
-                RuleKey::OutfitLimit
+                RuleKey::OutfitLimit,
+                RuleKey::TradeLot
             ]
         );
+        assert_eq!(RuleKey::TradeLot.key(), "trade_lot");
+        assert_eq!(RuleKey::from_key("trade_lot"), Some(RuleKey::TradeLot));
         assert_eq!(RuleKey::OutfitLimit.key(), "outfit_limit");
         assert_eq!(
             RuleKey::from_key("outfit_limit"),

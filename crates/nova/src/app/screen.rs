@@ -127,8 +127,9 @@
 //! ([`AppScreen::with_purchase_cargo`]), the engine's until another is
 //! given. Each flight's exchange trades a `jünk` of negative or zero
 //! price as the router says ([`AppScreen::with_junk_price`]), and trades
-//! each `jünk` row the ways it says ([`AppScreen::with_junk_trade`]), the
-//! engine's until others are given. Each flight's outfitter sells a map
+//! each `jünk` row the ways it says ([`AppScreen::with_junk_trade`]), and
+//! moves as many tons a plain trade as it says
+//! ([`AppScreen::with_trade_lot`]), the engine's until others are given. Each flight's outfitter sells a map
 //! or clean-record outfit as the router says
 //! ([`AppScreen::with_outfit_limit`]), the engine's until another is
 //! given; each time the spaceport's outfitter opens, the flight is told
@@ -339,6 +340,8 @@ pub struct AppScreen {
     junk_price: RuleSource,
     /// Which ways each flight's exchange trades a `jünk` row.
     junk_trade: RuleSource,
+    /// How many tons a plain trade on each flight's exchange moves.
+    trade_lot: RuleSource,
     /// Whether each flight's outfitter sells a map or clean-record outfit
     /// only once an opening.
     outfit_limit: RuleSource,
@@ -439,6 +442,7 @@ impl AppScreen {
             purchase_cargo: RuleSource::Engine,
             junk_price: RuleSource::Engine,
             junk_trade: RuleSource::Engine,
+            trade_lot: RuleSource::Engine,
             outfit_limit: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
@@ -655,6 +659,17 @@ impl AppScreen {
         }
     }
 
+    /// The router with a plain trade on each flight's exchange moving as
+    /// many tons as `source` says ([`FlightView::with_trade_lot`]); the
+    /// engine's (up to 10 a click) until another is given.
+    #[must_use]
+    pub fn with_trade_lot(self, source: RuleSource) -> Self {
+        Self {
+            trade_lot: source,
+            ..self
+        }
+    }
+
     /// The router with each flight's outfitter selling a map or
     /// clean-record outfit as `source` says
     /// ([`FlightView::with_outfit_limit`]); the engine's (once an opening)
@@ -756,6 +771,7 @@ impl AppScreen {
             .with_purchase_cargo(rulebook.source_for(RuleKey::PurchaseCargo))
             .with_junk_price(rulebook.source_for(RuleKey::JunkPrice))
             .with_junk_trade(rulebook.source_for(RuleKey::JunkTrade))
+            .with_trade_lot(rulebook.source_for(RuleKey::TradeLot))
             .with_outfit_limit(rulebook.source_for(RuleKey::OutfitLimit))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
@@ -819,6 +835,7 @@ impl AppScreen {
             .with_purchase_cargo(self.purchase_cargo)
             .with_junk_price(self.junk_price)
             .with_junk_trade(self.junk_trade)
+            .with_trade_lot(self.trade_lot)
             .with_outfit_limit(self.outfit_limit)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
@@ -4548,15 +4565,18 @@ mod tests {
         click_port_item(&mut screen, 7);
         let writes = store.writes();
         screen.input(&key(Key::Char('b'), true));
-        assert_eq!(pilot(&screen).cash(), 925);
-        assert_eq!(pilot(&screen).held(FOOD), 1);
+        assert_eq!(pilot(&screen).cash(), 250, "a click buys up to 10 tons");
+        assert_eq!(pilot(&screen).held(FOOD), 10);
         let open = spaceport(&screen).open_trade().expect("trading");
-        assert_eq!(open.market().row(FOOD).map(|row| row.held), Some(1));
-        assert_eq!(open.market().cash, 925);
+        assert_eq!(open.market().row(FOOD).map(|row| row.held), Some(10));
+        assert_eq!(open.market().cash, 250);
         assert_eq!(store.writes(), writes + 1, "saved after the input");
-        assert_eq!(saved(&store, "Ada").held(FOOD), 1);
-        // A max buy, then a click on Buy with nothing left to buy with.
+        assert_eq!(saved(&store, "Ada").held(FOOD), 10);
+        // A max sale and a max buy, then a click on Buy with no space.
         screen.input(&key(Key::Alt, true));
+        screen.input(&key(Key::Char('s'), true));
+        assert_eq!(pilot(&screen).held(FOOD), 0, "everything held");
+        assert_eq!(pilot(&screen).cash(), 1000);
         screen.input(&key(Key::Char('b'), true));
         screen.input(&key(Key::Alt, false));
         assert_eq!(pilot(&screen).held(FOOD), 10, "the hold is full");
@@ -4773,11 +4793,11 @@ mod tests {
         let open = spaceport(&screen).open_trade().expect("trading");
         assert_eq!(open.market().cash, 500, "the outfit was paid for");
         screen.input(&key(Key::Char('b'), true));
-        assert_eq!(pilot(&screen).held(FOOD), 1);
+        assert_eq!(pilot(&screen).held(FOOD), 6, "500 at 75");
         screen.input(&key(Key::Escape, true));
         click_port_item(&mut screen, 8);
         let open = spaceport(&screen).open_outfitter().expect("outfitting");
-        assert_eq!(open.outfitter().cash, 425, "the food was paid for");
+        assert_eq!(open.outfitter().cash, 50, "the food was paid for");
     }
 
     /// [`Dialogs`], with "Trade" and "Outfit" too.
@@ -6181,6 +6201,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_trade_lot_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_trade_lot(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.trade_lot(), source);
+            assert_eq!(session.junk_trade(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.trade_lot(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_outfit_limit_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_outfit_limit(source);
@@ -6268,6 +6303,7 @@ mod tests {
             ("purchase_cargo", format!("{:?}", screen.purchase_cargo)),
             ("junk_price", format!("{:?}", screen.junk_price)),
             ("junk_trade", format!("{:?}", screen.junk_trade)),
+            ("trade_lot", format!("{:?}", screen.trade_lot)),
             ("outfit_limit", format!("{:?}", screen.outfit_limit)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
@@ -6301,6 +6337,7 @@ mod tests {
             RuleKey::PurchaseCargo => "purchase_cargo",
             RuleKey::JunkPrice => "junk_price",
             RuleKey::JunkTrade => "junk_trade",
+            RuleKey::TradeLot => "trade_lot",
             RuleKey::OutfitLimit => "outfit_limit",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",

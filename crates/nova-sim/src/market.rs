@@ -174,10 +174,18 @@
 //! every good the fleet holds is held on the player's ship. The free
 //! space is that less everything held.
 //!
-//! Buying one lot ([`Lot::One`]) is
-//! a ton, and the most ([`Lot::Max`]) is as much as both the free space
-//! and the cash allow; selling one is a ton, and the most everything
-//! held. A trade that would move nothing is refused.
+//! A plain click on Buy or Sell ([`Lot::Click`]) moves up to
+//! [`CLICK_TONS`], as [`RuleKey::TradeLot`](crate::RuleKey::TradeLot)
+//! says. By the engine (the default), a plain buy moves
+//! min(trunc(cash / price), 10, free) tons (`_DoTradeDialog`
+//! @0x5e268-0x5e278) and a plain sale min(held, 10) (@0x5e48d-0x5e4fa);
+//! by the other reading, the port's earlier one, a ton. The most
+//! ([`Lot::Max`]) is as much as both the free space and the cash allow
+//! for a buy, and everything held for a sale: what the original's Option
+//! quantity dialog offers by default (@0x5e23a-0x5e25a, @0x5e44f-0x5e47f).
+//! A trade that would move nothing is refused. The Buy button is enabled
+//! as `_CanBuyGoods` has it, which a row priced below nothing can pass
+//! with nothing then bought ([`Market::row_allows`]).
 
 use std::collections::BTreeMap;
 
@@ -291,11 +299,18 @@ pub enum Direction {
 /// How much one trade moves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lot {
-    /// A ton.
-    One,
+    /// A plain click or key on Buy or Sell: up to [`CLICK_TONS`] tons, or
+    /// a ton by the other reading of
+    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot).
+    Click,
     /// As much as possible.
     Max,
 }
+
+/// The most tons a [`Lot::Click`] moves by the engine: a plain buy moves
+/// min(trunc(cash / price), 10, free) (`_DoTradeDialog`
+/// @0x5e268-0x5e278) and a plain sale min(held, 10) (@0x5e48d-0x5e4fa).
+pub const CLICK_TONS: u32 = 10;
 
 /// One trade the player asks for, on the row of the exchange the player
 /// selected, as the original trades on `_selTradeItem` (0x3b54dc).
@@ -655,6 +670,9 @@ pub struct Market {
     pub capacity: u32,
     /// The cargo space free, in tons.
     pub free: u32,
+    /// How many tons a [`Lot::Click`] moves
+    /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)).
+    pub trade_lot: RuleSource,
 }
 
 impl Market {
@@ -697,7 +715,7 @@ impl Market {
                     return Err(TradeRefusal::NoSpace);
                 }
                 let wanted = match lot {
-                    Lot::One => 1,
+                    Lot::Click => self.click_tons().min(self.free),
                     Lot::Max => self.free,
                 };
                 // A good priced at nothing is limited by space alone; one
@@ -717,19 +735,37 @@ impl Market {
             }
             Direction::Sell => match (row.held, lot) {
                 (0, _) => Err(TradeRefusal::NoneHeld),
-                (_, Lot::One) => Ok(1),
+                (held, Lot::Click) => Ok(held.min(self.click_tons())),
                 (held, Lot::Max) => Ok(held),
             },
         }
     }
 
-    /// Whether a ton can be traded `direction` on row `index` now: the
-    /// row trades that way, and there is the space, cash or cargo for it.
+    /// The most tons a [`Lot::Click`] moves, as
+    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot) says: [`CLICK_TONS`]
+    /// by the engine, a ton by the other reading.
+    const fn click_tons(&self) -> u32 {
+        match self.trade_lot {
+            RuleSource::Engine => CLICK_TONS,
+            RuleSource::Bible => 1,
+        }
+    }
+
+    /// Whether the Buy or Sell button of row `index` is enabled now. A buy
+    /// is, as `_CanBuyGoods` has it (@0xccec-0xcd31), where the row is sold
+    /// here, the cash is at least its price, compared signed, and space is
+    /// free: so on a row priced below nothing it is enabled, though the
+    /// buy then moves nothing. A sale is, as `_CanSellGoods` has it
+    /// (@0x4a94), where the row is bought here and some of it is held.
     #[must_use]
     pub fn row_allows(&self, index: usize, direction: Direction) -> bool {
-        self.rows
-            .get(index)
-            .is_some_and(|row| self.row_tons(row, direction, Lot::One).is_ok())
+        self.rows.get(index).is_some_and(|row| {
+            row.trades(direction)
+                && match direction {
+                    Direction::Buy => self.free > 0 && self.cash >= row.price,
+                    Direction::Sell => row.held > 0,
+                }
+        })
     }
 }
 
@@ -757,6 +793,9 @@ pub(crate) struct ExchangeRules {
     /// Which ways a listed `jünk` row trades
     /// ([`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade)).
     pub(crate) junk_trade: RuleSource,
+    /// How many tons a plain trade moves
+    /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)).
+    pub(crate) trade_lot: RuleSource,
 }
 
 /// The exchange of `stellar`, with these `flags`, for `pilot` with
@@ -835,6 +874,7 @@ pub(crate) fn market(
         cash: pilot.cash,
         capacity,
         free: capacity.saturating_sub(held),
+        trade_lot: rules.trade_lot,
     })
 }
 
@@ -1930,6 +1970,26 @@ mod tests {
     }
 
     #[test]
+    fn the_exchange_trades_a_click_by_its_rule() {
+        for trade_lot in RuleSource::ALL {
+            let found = market(
+                &goods(),
+                StellarId(137),
+                PORT_KANE,
+                &pilot(500),
+                10,
+                ExchangeRules {
+                    trade_lot,
+                    ..ExchangeRules::default()
+                },
+                Markup::Standard,
+            )
+            .expect("trades");
+            assert_eq!(found.trade_lot, trade_lot);
+        }
+    }
+
+    #[test]
     fn the_exchange_lists_the_commodities_traded_at_their_levels() {
         let flags = PORT_KANE;
         let found = market(
@@ -1957,6 +2017,7 @@ mod tests {
                 cash: 500,
                 capacity: 10,
                 free: 10,
+                trade_lot: RuleSource::Engine,
             }
         );
         let some = TRADE | (1 << 24) | (4 << 12);
@@ -2178,12 +2239,16 @@ mod tests {
         let empty = both_ways(400, Markup::Standard, &pilot(1000), 10);
         assert_eq!(low(&empty, Direction::Buy, Lot::Max), Ok(3), "1000 at 320");
         assert_eq!(high(&empty, Direction::Buy, Lot::Max), Ok(2), "1000 at 500");
-        assert_eq!(high(&empty, Direction::Buy, Lot::One), Ok(1));
+        assert_eq!(
+            high(&empty, Direction::Buy, Lot::Click),
+            Ok(2),
+            "1000 at 500"
+        );
         for row in [0, 1] {
             assert!(empty.row_allows(row, Direction::Buy), "{row}");
             assert!(!empty.row_allows(row, Direction::Sell), "{row} none held");
             assert_eq!(
-                on(row)(&empty, Direction::Sell, Lot::One),
+                on(row)(&empty, Direction::Sell, Lot::Click),
                 Err(TradeRefusal::NoneHeld)
             );
         }
@@ -2196,7 +2261,7 @@ mod tests {
         assert_eq!(low(&holding, Direction::Sell, Lot::Max), Ok(3));
         assert_eq!(low(&holding, Direction::Buy, Lot::Max), Ok(1), "499 at 320");
         assert_eq!(
-            high(&holding, Direction::Buy, Lot::One),
+            high(&holding, Direction::Buy, Lot::Click),
             Err(TradeRefusal::CannotAfford),
             "499 at 500"
         );
@@ -2208,7 +2273,7 @@ mod tests {
         let full = both_ways(400, Markup::Standard, &pilot(1000), 0);
         for row in [0, 1] {
             assert_eq!(
-                on(row)(&full, Direction::Buy, Lot::One),
+                on(row)(&full, Direction::Buy, Lot::Click),
                 Err(TradeRefusal::NoSpace)
             );
         }
@@ -2240,7 +2305,7 @@ mod tests {
         for direction in [Direction::Buy, Direction::Sell] {
             for (row, good) in [(2, TWO_WAY), (usize::MAX, TWO_WAY), (0, FOOD), (1, OPALS)] {
                 assert_eq!(
-                    market.tons(order(row, good, direction, Lot::One)),
+                    market.tons(order(row, good, direction, Lot::Click)),
                     Err(TradeRefusal::NotTraded),
                     "{row} {good:?} {direction:?}"
                 );
@@ -2574,8 +2639,15 @@ mod tests {
             ]
         );
         assert_eq!(found.events, ["An enormous food surplus"]);
-        assert_eq!(found.tons(order(0, FOOD, Direction::Buy, Lot::One)), Ok(1));
-        assert_eq!(found.tons(order(0, FOOD, Direction::Sell, Lot::One)), Ok(1));
+        assert_eq!(
+            found.tons(order(0, FOOD, Direction::Buy, Lot::Click)),
+            Ok(8),
+            "8 tons free"
+        );
+        assert_eq!(
+            found.tons(order(0, FOOD, Direction::Sell, Lot::Click)),
+            Ok(2)
+        );
 
         let priced_at_0 = patched(&[(0, StringPatch::Unreadable)]);
         let unreadable = Goods::new(&priced_at_0, Vec::new(), disasters());
@@ -2861,7 +2933,7 @@ mod tests {
         let buy = |cash, lot| bought(cash).tons(order(0, ODD, Direction::Buy, lot));
         assert_eq!(buy(1999, Lot::Max), Ok(3), "1999 at 500");
         assert_eq!(buy(100_000, Lot::Max), Ok(10), "the free space");
-        assert_eq!(buy(499, Lot::One), Err(TradeRefusal::CannotAfford));
+        assert_eq!(buy(499, Lot::Click), Err(TradeRefusal::CannotAfford));
         assert!(bought(500).row_allows(0, Direction::Buy));
         assert!(!bought(499).row_allows(0, Direction::Buy));
         let mut holding = pilot(0);
@@ -2882,7 +2954,7 @@ mod tests {
             let found = junk_market_by(400, ways, rules, &holding);
             assert_eq!(junk_rows(&found), [row], "{ways:?}");
             assert_eq!(
-                found.tons(order(0, ODD, refused, Lot::One)),
+                found.tons(order(0, ODD, refused, Lot::Click)),
                 Err(TradeRefusal::NotTraded),
                 "{ways:?}"
             );
@@ -2910,14 +2982,18 @@ mod tests {
     fn by_the_engine_a_negative_junk_price_buys_nothing() {
         for cash in [0, 1000, -1000] {
             let found = junk_market(-100, ONLY_SOLD, RuleSource::Engine, &pilot(cash));
-            for lot in [Lot::One, Lot::Max] {
+            for lot in [Lot::Click, Lot::Max] {
                 assert_eq!(
                     found.tons(order(0, ODD, Direction::Buy, lot)),
                     Err(TradeRefusal::CannotAfford),
                     "{cash} {lot:?}"
                 );
             }
-            assert!(!found.row_allows(0, Direction::Buy), "{cash}");
+            assert_eq!(
+                found.row_allows(0, Direction::Buy),
+                cash >= -80,
+                "{cash}: enabled as `_CanBuyGoods` has it"
+            );
         }
     }
 
@@ -2945,7 +3021,7 @@ mod tests {
             assert_eq!(junk_rows(&found), [], "{ways:?}");
             for direction in [Direction::Buy, Direction::Sell] {
                 assert_eq!(
-                    found.tons(order(0, ODD, direction, Lot::One)),
+                    found.tons(order(0, ODD, direction, Lot::Click)),
                     Err(TradeRefusal::NotTraded),
                     "{ways:?} {direction:?}"
                 );
@@ -2980,7 +3056,7 @@ mod tests {
             "the free space, at 1 a ton"
         );
         assert_eq!(
-            found.tons(order(1, ODD, Direction::Buy, Lot::One)),
+            found.tons(order(1, ODD, Direction::Buy, Lot::Click)),
             Err(TradeRefusal::NotTraded),
             "no row 1"
         );
@@ -2994,7 +3070,7 @@ mod tests {
         let one_way = junk_market_by(1, BOTH_WAYS, one_way, &holding);
         assert_eq!(junk_rows(&one_way), [(1, false, true)]);
         assert_eq!(
-            one_way.tons(order(0, ODD, Direction::Buy, Lot::One)),
+            one_way.tons(order(0, ODD, Direction::Buy, Lot::Click)),
             Err(TradeRefusal::NotTraded)
         );
     }
@@ -3131,6 +3207,7 @@ mod tests {
             cash,
             capacity: 100,
             free,
+            trade_lot: RuleSource::Engine,
         }
     }
 
@@ -3149,20 +3226,57 @@ mod tests {
     const WATER: Good = Good::Junk(JunkId(134));
 
     #[test]
-    fn buying_one_is_a_ton_and_the_most_is_what_space_and_cash_allow() {
+    fn a_click_buys_up_to_10_tons_and_the_most_is_what_space_and_cash_allow() {
         let buy = |market: &Market, lot| market.tons(order(0, FOOD, Direction::Buy, lot));
-        assert_eq!(buy(&stall(1000, 0, 50), Lot::One), Ok(1));
+        assert_eq!(buy(&stall(100_000, 0, 50), Lot::Click), Ok(10), "10");
+        assert_eq!(buy(&stall(1100, 0, 50), Lot::Click), Ok(10), "cash for 11");
+        assert_eq!(buy(&stall(399, 0, 50), Lot::Click), Ok(3), "cash");
+        assert_eq!(buy(&stall(100_000, 0, 4), Lot::Click), Ok(4), "space");
+        assert_eq!(buy(&stall(100_000, 0, 11), Lot::Click), Ok(10));
+        assert_eq!(buy(&stall(100, 0, 1), Lot::Click), Ok(1));
+        assert_eq!(CLICK_TONS, 10);
         assert_eq!(buy(&stall(1000, 0, 50), Lot::Max), Ok(10), "cash");
         assert_eq!(buy(&stall(1099, 0, 50), Lot::Max), Ok(10));
+        assert_eq!(buy(&stall(5000, 0, 50), Lot::Max), Ok(50), "past 10");
         assert_eq!(buy(&stall(100_000, 0, 7), Lot::Max), Ok(7), "space");
         assert_eq!(buy(&stall(700, 0, 7), Lot::Max), Ok(7), "both");
-        assert_eq!(buy(&stall(100, 0, 1), Lot::One), Ok(1));
+    }
+
+    /// `market` traded by `trade_lot`.
+    fn lots_by(trade_lot: RuleSource, market: Market) -> Market {
+        Market {
+            trade_lot,
+            ..market
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_click_trades_a_ton() {
+        let one_ton = |market: Market| lots_by(RuleSource::Bible, market);
+        let buy = |market: &Market, lot| market.tons(order(0, FOOD, Direction::Buy, lot));
+        let sell = |market: &Market, lot| market.tons(order(0, FOOD, Direction::Sell, lot));
+        assert_eq!(buy(&one_ton(stall(100_000, 0, 50)), Lot::Click), Ok(1));
+        assert_eq!(sell(&one_ton(stall(0, 25, 0)), Lot::Click), Ok(1));
+        assert_eq!(buy(&one_ton(stall(5000, 0, 50)), Lot::Max), Ok(50));
+        assert_eq!(sell(&one_ton(stall(0, 25, 0)), Lot::Max), Ok(25));
+        assert_eq!(
+            buy(&one_ton(stall(99, 0, 50)), Lot::Click),
+            Err(TradeRefusal::CannotAfford)
+        );
+        assert_eq!(
+            sell(&one_ton(stall(0, 0, 50)), Lot::Click),
+            Err(TradeRefusal::NoneHeld)
+        );
+        let engine = lots_by(RuleSource::Engine, stall(100_000, 25, 50));
+        assert_eq!(engine, stall(100_000, 25, 50), "the engine's by default");
+        assert_eq!(buy(&engine, Lot::Click), Ok(10));
+        assert_eq!(sell(&engine, Lot::Click), Ok(10));
     }
 
     #[test]
     fn a_buy_with_no_space_or_not_enough_cash_for_a_ton_is_refused() {
         let buy = |market: &Market, lot| market.tons(order(0, FOOD, Direction::Buy, lot));
-        for lot in [Lot::One, Lot::Max] {
+        for lot in [Lot::Click, Lot::Max] {
             assert_eq!(buy(&stall(1000, 0, 0), lot), Err(TradeRefusal::NoSpace));
             assert_eq!(buy(&stall(99, 0, 5), lot), Err(TradeRefusal::CannotAfford));
             assert_eq!(
@@ -3177,17 +3291,23 @@ mod tests {
     fn a_good_priced_at_nothing_is_limited_only_by_space() {
         let buy = |market: &Market, lot| market.tons(order(2, WATER, Direction::Buy, lot));
         assert_eq!(buy(&stall(0, 0, 9), Lot::Max), Ok(9));
-        assert_eq!(buy(&stall(-5, 0, 9), Lot::One), Ok(1));
+        assert_eq!(buy(&stall(-5, 0, 9), Lot::Click), Ok(9));
+        assert_eq!(buy(&stall(-5, 0, 50), Lot::Click), Ok(10));
+        assert_eq!(buy(&stall(0, 0, 50), Lot::Max), Ok(50));
         assert_eq!(buy(&stall(0, 0, 0), Lot::Max), Err(TradeRefusal::NoSpace));
     }
 
     #[test]
-    fn selling_one_is_a_ton_and_the_most_everything_held() {
+    fn a_click_sells_up_to_10_tons_and_the_most_everything_held() {
         let sell = |market: &Market, lot| market.tons(order(0, FOOD, Direction::Sell, lot));
-        assert_eq!(sell(&stall(0, 6, 0), Lot::One), Ok(1));
+        assert_eq!(sell(&stall(0, 25, 0), Lot::Click), Ok(10));
+        assert_eq!(sell(&stall(0, 11, 0), Lot::Click), Ok(10));
+        assert_eq!(sell(&stall(0, 10, 0), Lot::Click), Ok(10));
+        assert_eq!(sell(&stall(0, 4, 0), Lot::Click), Ok(4));
+        assert_eq!(sell(&stall(0, 25, 0), Lot::Max), Ok(25));
         assert_eq!(sell(&stall(0, 6, 0), Lot::Max), Ok(6));
         assert_eq!(sell(&stall(0, 1, 0), Lot::Max), Ok(1));
-        for lot in [Lot::One, Lot::Max] {
+        for lot in [Lot::Click, Lot::Max] {
             assert_eq!(sell(&stall(0, 0, 9), lot), Err(TradeRefusal::NoneHeld));
         }
     }
@@ -3197,7 +3317,7 @@ mod tests {
     #[test]
     fn a_good_not_traded_that_way_or_at_all_is_refused() {
         let market = stall(10_000, 5, 5);
-        for lot in [Lot::One, Lot::Max] {
+        for lot in [Lot::Click, Lot::Max] {
             let refused = Err(TradeRefusal::NotTraded);
             assert_eq!(market.tons(order(1, OPALS, Direction::Buy, lot)), refused);
             assert_eq!(market.tons(order(2, WATER, Direction::Sell, lot)), refused);
@@ -3217,16 +3337,57 @@ mod tests {
     }
 
     #[test]
-    fn row_allows_is_whether_a_ton_would_go_through() {
+    fn row_allows_a_sale_of_anything_held_on_a_row_bought_here() {
         let market = stall(150, 1, 3);
-        assert!(market.row_allows(0, Direction::Buy));
         assert!(market.row_allows(0, Direction::Sell));
-        assert!(!market.row_allows(1, Direction::Buy));
         assert!(market.row_allows(1, Direction::Sell));
-        assert!(!stall(99, 0, 3).row_allows(0, Direction::Buy));
+        assert!(!market.row_allows(2, Direction::Sell), "not bought here");
         assert!(!stall(99, 0, 3).row_allows(0, Direction::Sell));
+        assert!(!market.row_allows(3, Direction::Sell), "no such row");
         assert_eq!(market.row(OPALS).map(|row| row.price), Some(500));
         assert_eq!(market.row(Good::Commodity(3)), None);
+    }
+
+    /// As `_CanBuyGoods` (@0xccec-0xcd31): the row is sold here, cash is
+    /// at least the price, compared signed, and a ton of space is free.
+    #[test]
+    fn row_allows_a_buy_with_cash_for_the_price_and_space_free() {
+        let buy = |market: &Market, index| market.row_allows(index, Direction::Buy);
+        assert!(buy(&stall(100, 0, 3), 0), "cash = price");
+        assert!(!buy(&stall(99, 0, 3), 0), "cash = price - 1");
+        assert!(buy(&stall(150, 1, 1), 0));
+        assert!(!buy(&stall(100_000, 0, 0), 0), "no space");
+        assert!(!buy(&stall(100_000, 0, 50), 1), "not sold here");
+        assert!(buy(&stall(0, 0, 3), 2), "water at 0");
+        assert!(!buy(&stall(100_000, 0, 50), 3), "no such row");
+    }
+
+    /// A stall whose only row is a `jünk` at -200, traded both ways, for
+    /// a player with `cash` and `free` tons free.
+    fn negative(cash: i64, free: u32) -> Market {
+        Market {
+            rows: vec![row(OPALS, "Opals", -200)],
+            ..stall(cash, 0, free)
+        }
+    }
+
+    #[test]
+    fn row_allows_a_buy_at_a_negative_price_that_then_moves_nothing() {
+        let buy = |market: &Market| market.row_allows(0, Direction::Buy);
+        for cash in [0, -100, -200, 5000] {
+            let market = negative(cash, 3);
+            assert!(buy(&market), "cash {cash}");
+            for lot in [Lot::Click, Lot::Max] {
+                assert_eq!(
+                    market.tons(order(0, OPALS, Direction::Buy, lot)),
+                    Err(TradeRefusal::CannotAfford),
+                    "cash {cash}"
+                );
+            }
+        }
+        assert!(!buy(&negative(-500, 3)), "cash below the price");
+        assert!(!buy(&negative(-201, 3)), "cash below the price");
+        assert!(!buy(&negative(0, 0)), "no space");
     }
 
     #[test]
@@ -3235,11 +3396,16 @@ mod tests {
         settle(&mut pilot, order(0, FOOD, Direction::Buy, Lot::Max), 4, 93);
         assert_eq!(pilot.cash, 1000 - 372);
         assert_eq!(pilot.held(FOOD), 4);
-        settle(&mut pilot, order(1, OPALS, Direction::Buy, Lot::One), 1, 0);
+        settle(
+            &mut pilot,
+            order(1, OPALS, Direction::Buy, Lot::Click),
+            1,
+            0,
+        );
         assert_eq!(pilot.held(OPALS), 1);
         settle(
             &mut pilot,
-            order(0, FOOD, Direction::Sell, Lot::One),
+            order(0, FOOD, Direction::Sell, Lot::Click),
             1,
             150,
         );
@@ -3274,7 +3440,12 @@ mod tests {
         );
         assert_eq!(pilot.cash, i64::MAX);
         pilot.cargo.insert(OPALS, u32::MAX);
-        settle(&mut pilot, order(1, OPALS, Direction::Buy, Lot::One), 5, 0);
+        settle(
+            &mut pilot,
+            order(1, OPALS, Direction::Buy, Lot::Click),
+            5,
+            0,
+        );
         assert_eq!(pilot.held(OPALS), u32::MAX);
     }
 

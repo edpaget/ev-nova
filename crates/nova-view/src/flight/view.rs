@@ -236,7 +236,8 @@
 //!   there too
 //!   ([`FlightView::with_event_price`]), how it trades a `jünk` of
 //!   negative or zero price ([`FlightView::with_junk_price`]), which ways
-//!   it trades a `jünk` row ([`FlightView::with_junk_trade`]), and what
+//!   it trades a `jünk` row ([`FlightView::with_junk_trade`]), how many
+//!   tons a plain trade moves ([`FlightView::with_trade_lot`]), and what
 //!   cargo a ship purchase keeps ([`FlightView::with_purchase_cargo`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
@@ -1142,6 +1143,16 @@ impl<
     pub fn with_junk_trade(self, source: RuleSource) -> Self {
         Self {
             session: self.session.map(|session| session.with_junk_trade(source)),
+            ..self
+        }
+    }
+
+    /// The flight with a plain trade at the exchange moving as many tons
+    /// as `source` says ([`Session::with_trade_lot`]).
+    #[must_use]
+    pub fn with_trade_lot(self, source: RuleSource) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_trade_lot(source)),
             ..self
         }
     }
@@ -5745,7 +5756,7 @@ mod tests {
         row: 0,
         good: Good::Commodity(0),
         direction: Direction::Buy,
-        lot: Lot::One,
+        lot: Lot::Click,
     };
 
     #[test]
@@ -5760,13 +5771,13 @@ mod tests {
             market.row(Good::Commodity(0)).map(|row| row.price),
             Some(75)
         );
-        assert_eq!(view.trade(BUY_FOOD), Ok(1));
-        assert_eq!(view.pilot().map(Pilot::cash), Some(925));
+        assert_eq!(view.trade(BUY_FOOD), Ok(10), "a click buys up to 10");
+        assert_eq!(view.pilot().map(Pilot::cash), Some(1000 - 10 * 75));
         assert!(view.take_save_due(), "a trade");
         assert_eq!(
             view.market()
                 .and_then(|m| m.row(Good::Commodity(0)).map(|row| row.held)),
-            Some(1)
+            Some(10)
         );
         let broken = FakeCatalog {
             character: Err(StartError::NoCharacter),
@@ -6257,6 +6268,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::junk_trade),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_trade_lot_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_trade_lot(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.trade_lot(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::trade_lot),
             Ok(RuleSource::Engine)
         );
     }
