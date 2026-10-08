@@ -232,13 +232,13 @@ use crate::catalog::{
     CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord, PilotCatalog, StellarId,
     StringPatch,
 };
-use crate::chance::Chance;
+use crate::chance::{Chance, NeverFires};
 use crate::control::Gate;
 use crate::fuel::OutfitMod;
 use crate::landing::StellarFlags;
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::rules::{Context, Value};
+use crate::rules::{Check, Checks, Context, Value};
 
 /// How many standard commodities there are.
 pub const COMMODITIES: u8 = 6;
@@ -774,20 +774,12 @@ impl Market {
         direction: Direction,
         lot: Lot,
     ) -> Result<u32, TradeRefusal> {
-        if !row.trades(direction) {
-            return Err(TradeRefusal::NotTraded);
-        }
+        // `_CanBuyGoods` greys Buy while cash < price, compared signed
+        // (@0xcd07-0xcd0d), so no buy reaches the quotient there
+        // ([`Market::row_allows`]).
+        refusal(&can(direction), &RowTrade { market: self, row })?;
         let most = match direction {
             Direction::Buy => {
-                if self.free == 0 {
-                    return Err(TradeRefusal::NoSpace);
-                }
-                // `_CanBuyGoods` greys Buy while cash < price, compared
-                // signed (@0xcd07-0xcd0d), so no buy reaches the quotient
-                // there ([`Market::row_allows`]).
-                if self.cash < row.price {
-                    return Err(TradeRefusal::CannotAfford);
-                }
                 if lot == Lot::Click {
                     let wanted = self.click_tons().min(self.free);
                     let affordable = self
@@ -808,9 +800,8 @@ impl Market {
                     .filter(|&most| most > 0)
                     .ok_or(TradeRefusal::CannotAfford)?
             }
-            Direction::Sell => match (row.held, lot) {
-                (0, _) => return Err(TradeRefusal::NoneHeld),
-                (held, Lot::Click) => return Ok(held.min(self.click_tons())),
+            Direction::Sell => match lot {
+                Lot::Click => return Ok(row.held.min(self.click_tons())),
                 _ => u32::try_from(self.most(row, direction)).unwrap_or(0),
             },
         };
@@ -900,16 +891,118 @@ impl Market {
     /// free: so on a row priced below nothing it is enabled, though the
     /// buy then moves nothing. A sale is, as `_CanSellGoods` has it
     /// (@0x4a94), where the row is bought here and some of it is held.
+    /// The same Buy and Sell checks refuse an order in [`Market::tons`]
+    /// before it is sized.
     #[must_use]
     pub fn row_allows(&self, index: usize, direction: Direction) -> bool {
-        self.rows.get(index).is_some_and(|row| {
-            row.trades(direction)
-                && match direction {
-                    Direction::Buy => self.free > 0 && self.cash >= row.price,
-                    Direction::Sell => row.held > 0,
-                }
-        })
+        self.rows
+            .get(index)
+            .is_some_and(|row| refusal(&can(direction), &RowTrade { market: self, row }).is_ok())
     }
+}
+
+/// One row of an exchange, asked whether it trades and how much: the
+/// facts the Buy and Sell checks and the most read.
+#[derive(Clone, Copy)]
+struct RowTrade<'a> {
+    /// The exchange: its cash, free space and rule set.
+    market: &'a Market,
+    /// The row: its price, the tons held and the ways it trades.
+    row: &'a MarketRow,
+}
+
+impl Context for RowTrade<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        &self.market.rules
+    }
+}
+
+/// The first of `checks` that refuses `facts`, if any.
+fn refusal<C: Context>(checks: &Checks<C, TradeRefusal>, facts: &C) -> Result<(), TradeRefusal> {
+    // No exchange check draws (`no_exchange_check_draws`), so no chance
+    // is ever asked.
+    checks.first_refusal(facts, &mut NeverFires)
+}
+
+/// Whether a row can be traded `direction`: [`can_buy`] or [`can_sell`].
+fn can<'a>(direction: Direction) -> Checks<RowTrade<'a>, TradeRefusal> {
+    match direction {
+        Direction::Buy => can_buy(),
+        Direction::Sell => can_sell(),
+    }
+}
+
+/// Whether Buy is enabled on a row, as `_CanBuyGoods` has it
+/// (@0xccec-0xcd31): the row is sold here, a ton of space is free, and
+/// the cash is at least the price, compared signed. The original tests
+/// the cash before the space and gives no reason; the port refuses for
+/// the space first.
+fn can_buy<'a>() -> Checks<RowTrade<'a>, TradeRefusal> {
+    [
+        Check::plain(
+            "sold here",
+            "the row's ways as listed (`jünk ways`); `_CanBuyGoods` @0xccec asks no list",
+            sold_here,
+        ),
+        Check::plain("space free", "`_CanBuyGoods` @0xcd0f-0xcd26", space_free),
+        Check::plain(
+            "cash for the price",
+            "`_CanBuyGoods` @0xcd07-0xcd0d, signed",
+            cash_for_the_price,
+        ),
+    ]
+    .into()
+}
+
+/// Whether Sell is enabled on a row, as `_CanSellGoods` has it
+/// (@0x4a94): the row is bought here, and some of it is held.
+fn can_sell<'a>() -> Checks<RowTrade<'a>, TradeRefusal> {
+    [
+        Check::plain(
+            "bought here",
+            "the row's ways as listed (`jünk ways`); `_CanSellGoods` @0x4a94 asks no list",
+            bought_here,
+        ),
+        Check::plain(
+            "held",
+            "`_CanSellGoods` @0x4aab-0x4ab1 (a commodity), @0x4ad9 (a `jünk`)",
+            held,
+        ),
+    ]
+    .into()
+}
+
+/// `Ok` when `holds`, else `refusal`.
+fn holds(holds: bool, refusal: TradeRefusal) -> Result<(), TradeRefusal> {
+    if holds { Ok(()) } else { Err(refusal) }
+}
+
+/// The row is sold here: by the engine every listed row is.
+fn sold_here(trade: &RowTrade) -> Result<(), TradeRefusal> {
+    holds(trade.row.sold_here, TradeRefusal::NotTraded)
+}
+
+/// A ton of space is free.
+fn space_free(trade: &RowTrade) -> Result<(), TradeRefusal> {
+    holds(trade.market.free > 0, TradeRefusal::NoSpace)
+}
+
+/// The cash is at least the price, compared signed.
+fn cash_for_the_price(trade: &RowTrade) -> Result<(), TradeRefusal> {
+    holds(
+        trade.market.cash >= trade.row.price,
+        TradeRefusal::CannotAfford,
+    )
+}
+
+/// The row is bought here: by the engine every listed row is.
+fn bought_here(trade: &RowTrade) -> Result<(), TradeRefusal> {
+    holds(trade.row.bought_here, TradeRefusal::NotTraded)
+}
+
+/// Some of the row's good is held.
+fn held(trade: &RowTrade) -> Result<(), TradeRefusal> {
+    holds(trade.row.held > 0, TradeRefusal::NoneHeld)
 }
 
 impl MarketRow {
@@ -1523,6 +1616,7 @@ pub(crate) fn step_junk(
 mod tests {
     use super::*;
     use crate::control::{Gate, Test};
+    use crate::rules::Verdict;
     use crate::testkit::{AllowAll, RefuseBits, Scripted, catalog};
 
     // Price levels and prices.
@@ -3970,6 +4064,143 @@ mod tests {
         assert!(!buy(&stall(100_000, 0, 50), 1), "not sold here");
         assert!(buy(&stall(0, 0, 3), 2), "water at 0");
         assert!(!buy(&stall(100_000, 0, 50), 3), "no such row");
+    }
+
+    // Can: the Buy and Sell checks.
+
+    /// Row `index` of `market`, as the checks read it.
+    fn trade(market: &Market, index: usize) -> RowTrade<'_> {
+        RowTrade {
+            market,
+            row: &market.rows[index],
+        }
+    }
+
+    /// Each check of `checks` with its citation, in order.
+    fn listed_checks<C>(checks: &Checks<C, TradeRefusal>) -> Vec<(&'static str, &'static str)> {
+        checks
+            .descriptors()
+            .map(|about| (about.name(), about.reproduces()))
+            .collect()
+    }
+
+    /// The verdict of each check of `checks` that refuses `facts`, in
+    /// order.
+    fn verdicts<C: Context>(
+        checks: &Checks<C, TradeRefusal>,
+        facts: &C,
+    ) -> Vec<Verdict<TradeRefusal>> {
+        checks
+            .all_refusals(facts)
+            .into_iter()
+            .map(|(_, verdict)| verdict)
+            .collect()
+    }
+
+    /// The Buy checks are `_CanBuyGoods`'s (@0xccec-0xcd31), and the row's
+    /// ways. The original tests the cash (@0xcd07-0xcd0d) before the space
+    /// (@0xcd0f-0xcd26), and returns only whether both hold: a greyed
+    /// button carries no reason, and the port drops a refused order's
+    /// reason too. So the order cannot be seen, and the port keeps space
+    /// before cash, as a buy with neither has always been refused for its
+    /// space (`a_buy_with_no_space_or_not_enough_cash_for_a_ton_is_refused`).
+    #[test]
+    fn the_buy_checks_are_canbuygoods_checks_in_the_ports_order() {
+        assert_eq!(
+            listed_checks(&can_buy()),
+            [
+                (
+                    "sold here",
+                    "the row's ways as listed (`jünk ways`); `_CanBuyGoods` @0xccec asks no list"
+                ),
+                ("space free", "`_CanBuyGoods` @0xcd0f-0xcd26"),
+                (
+                    "cash for the price",
+                    "`_CanBuyGoods` @0xcd07-0xcd0d, signed"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_sell_checks_are_cansellgoods_checks_in_order() {
+        assert_eq!(
+            listed_checks(&can_sell()),
+            [
+                (
+                    "bought here",
+                    "the row's ways as listed (`jünk ways`); `_CanSellGoods` @0x4a94 asks no list"
+                ),
+                (
+                    "held",
+                    "`_CanSellGoods` @0x4aab-0x4ab1 (a commodity), @0x4ad9 (a `jünk`)"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_buy_checks_refuse_in_list_order() {
+        let refuses = Verdict::Refuses;
+        let broke = stall(0, 0, 0);
+        assert_eq!(
+            verdicts(&can(Direction::Buy), &trade(&broke, 1)),
+            [
+                refuses(TradeRefusal::NotTraded),
+                refuses(TradeRefusal::NoSpace),
+                refuses(TradeRefusal::CannotAfford),
+            ],
+            "opals, not sold here"
+        );
+        assert_eq!(
+            verdicts(&can(Direction::Buy), &trade(&broke, 0)),
+            [
+                refuses(TradeRefusal::NoSpace),
+                refuses(TradeRefusal::CannotAfford),
+            ]
+        );
+        let roomy = stall(0, 0, 5);
+        assert_eq!(
+            verdicts(&can(Direction::Buy), &trade(&roomy, 0)),
+            [refuses(TradeRefusal::CannotAfford)]
+        );
+        let first = |market: &Market, index| refusal(&can(Direction::Buy), &trade(market, index));
+        assert_eq!(first(&broke, 1), Err(TradeRefusal::NotTraded));
+        assert_eq!(first(&broke, 0), Err(TradeRefusal::NoSpace));
+        assert_eq!(first(&roomy, 0), Err(TradeRefusal::CannotAfford));
+        assert_eq!(first(&stall(100, 0, 5), 0), Ok(()));
+    }
+
+    #[test]
+    fn the_sell_checks_refuse_in_list_order() {
+        let refuses = Verdict::Refuses;
+        let empty = stall(0, 0, 0);
+        assert_eq!(
+            verdicts(&can(Direction::Sell), &trade(&empty, 2)),
+            [
+                refuses(TradeRefusal::NotTraded),
+                refuses(TradeRefusal::NoneHeld),
+            ],
+            "water, not bought here"
+        );
+        assert_eq!(
+            verdicts(&can(Direction::Sell), &trade(&empty, 0)),
+            [refuses(TradeRefusal::NoneHeld)]
+        );
+        let first = |market: &Market, index| refusal(&can(Direction::Sell), &trade(market, index));
+        assert_eq!(first(&empty, 2), Err(TradeRefusal::NotTraded));
+        assert_eq!(first(&empty, 0), Err(TradeRefusal::NoneHeld));
+        assert_eq!(first(&stall(0, 1, 0), 0), Ok(()));
+    }
+
+    #[test]
+    fn no_exchange_check_draws() {
+        for direction in [Direction::Buy, Direction::Sell] {
+            for about in can(direction).descriptors() {
+                assert!(!about.draws(), "{}", about.name());
+                assert_eq!(about.reads(), None, "{}", about.name());
+            }
+        }
     }
 
     /// A stall whose only row is a `jünk` at -200, traded both ways, for
