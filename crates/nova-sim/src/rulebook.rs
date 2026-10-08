@@ -41,6 +41,7 @@
 //! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
 //! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b; [`Session`](crate::Session)) | tribbles goods grow only into free space, and perishable goods always decay‡ |
 //! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)) | a launcher cannot be sold while any of its ammunition is held§ |
+//! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)) | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -63,6 +64,10 @@
 //! § The Bible says nothing of selling a launcher before its ammunition.
 //! The other reading is the phase's first wording of the rule (refuse
 //! while any of its ammunition is owned), not anything the Bible says.
+//!
+//! ¶ The Bible gives the multiplier as the number of items, and says the
+//! `Max` is unchanged with none. It says nothing of selling. Its reading
+//! here refuses a sale only past the maximum it gives after the sale.
 //!
 //! # Adding a rule
 //!
@@ -343,6 +348,19 @@ rule_keys! {
     /// rule, not anything the Bible says (see
     /// [`outfitter`](crate::outfitter)).
     LauncherSale => "launcher_sale",
+    /// How an `oütf` of `ModType` 27 raises the `Max` of the outfit its
+    /// `ModVal` names, and when one can be sold. By the engine, the
+    /// target's `Max` is multiplied by the sum, over the outfits owned, of
+    /// the count owned times that outfit's `ModType` 27 mods naming it, at
+    /// least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), so an outfit with two
+    /// such mods counts twice; selling one of n raisers is refused while
+    /// the target owned exceeds its raw `Max` x (n - 1), other raisers
+    /// ignored and with no floor (`_DoOutfitDialog` @0x5c7be-0x5ca6f). By
+    /// the Bible, the multiplier is the number of owned items with any
+    /// such mod, at least 1, and a sale is refused while the target owned
+    /// exceeds that maximum after the sale (see
+    /// [`outfitter`](crate::outfitter)).
+    RaisedMax => "raised_max",
 }
 
 impl RuleKey {
@@ -487,9 +505,12 @@ mod tests {
                 RuleKey::PersonJoin,
                 RuleKey::BuyRandom,
                 RuleKey::JunkFlags,
-                RuleKey::LauncherSale
+                RuleKey::LauncherSale,
+                RuleKey::RaisedMax
             ]
         );
+        assert_eq!(RuleKey::RaisedMax.key(), "raised_max");
+        assert_eq!(RuleKey::from_key("raised_max"), Some(RuleKey::RaisedMax));
         assert_eq!(RuleKey::LauncherSale.key(), "launcher_sale");
         assert_eq!(
             RuleKey::from_key("launcher_sale"),

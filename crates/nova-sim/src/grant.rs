@@ -18,8 +18,9 @@
 //! 1. *The odds*: `Rand(100) + 1` at most `GrantProb` grants
 //!    ([`GRANT_ROLL`]).
 //! 2. *The candidates* ([`candidates`]): the outfits whose `ItemClass` is
-//!    the `GrantClass` and that the player owns fewer than `Max` of; with
-//!    none, nothing is granted.
+//!    the `GrantClass` and that the player owns fewer than `Max` of, a
+//!    `Max` that `ModType` 27 raises read raised; with none, nothing is
+//!    granted.
 //! 3. *The pick*: one of k candidates in ascending ID by `Rand(k)`, drawn
 //!    only when k is 2 or more. The original draws `Rand(512)` until it
 //!    lands on a candidate, so each is as likely.
@@ -96,7 +97,7 @@ impl PersonGrant {
 }
 
 /// One outfit as a grant sees it: its `ItemClass`, its raw `Mass`, how
-/// many the player owns and its `Max`.
+/// many the player owns and its `Max`, as `ModType` 27 raises it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GrantStock {
     /// The outfit.
@@ -107,7 +108,8 @@ pub struct GrantStock {
     pub mass: i16,
     /// How many the player owns.
     pub owned: u16,
-    /// Its `Max`.
+    /// Its `Max`, as `ModType` 27 raises it (see
+    /// [`outfitter`](crate::outfitter)), held to an `i16`.
     pub max: i16,
 }
 

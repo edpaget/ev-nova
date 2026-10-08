@@ -1692,6 +1692,45 @@ mod tests {
     }
 
     #[test]
+    fn a_raiser_does_not_widen_a_bays_room_past_the_fighters_raw_max() {
+        // A bay of `MaxAmmo` 0 holds the Viper outfit's raw `Max` of 2
+        // (`_CanBuyFighter` @0x5c3d-0x5c4f), which two raisers owned do
+        // not raise, though they raise its `Max` to 4.
+        let mut catalog = spaceport();
+        catalog.weapons[0].max_ammo = 0;
+        catalog
+            .outfits
+            .iter_mut()
+            .find(|record| record.id == VIPERS)
+            .expect("the Viper outfit")
+            .max = 2;
+        catalog
+            .outfits
+            .push(outfit(170, &[(crate::outfitter::RAISES_MAX, VIPERS.0)]));
+        for (aboard, sold) in [
+            (1, Ok(())),
+            (2, Err(crate::outfitter::OutfitRefusal::MaxOwned)),
+        ] {
+            let mut session = fleet(&catalog, aboard, vec![]);
+            session.pilot.cash = 1_000_000;
+            session.pilot.outfits.insert(OutfitId(170), 2);
+            land_now(&mut session).expect("lands");
+            let order = crate::outfitter::OutfitOrder {
+                outfit: VIPERS,
+                direction: crate::market::Direction::Buy,
+            };
+            assert_eq!(
+                session
+                    .outfitter(&mut NeverFires)
+                    .expect("open")
+                    .check(order),
+                sold,
+                "{aboard} aboard"
+            );
+        }
+    }
+
+    #[test]
     fn the_session_reads_the_launcher_sale_as_its_rule_says() {
         let session = Session::start(&catalog()).expect("starts");
         assert_eq!(session.launcher_sale(), RuleSource::Engine);

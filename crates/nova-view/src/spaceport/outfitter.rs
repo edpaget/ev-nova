@@ -36,7 +36,9 @@
 //! its ammunition gets the #208-212 sentence ([`ammunition_first`]),
 //! which the original shows in a text dialog when Sell is clicked, Sell
 //! left enabled (`_DoOutfitDialog` @0x5ce5a); here Sell is greyed and the
-//! sentence is an info-box line, as #207 is.
+//! sentence is an info-box line, as #207 is. An outfit that cannot be sold
+//! for the `Max` it raises (`ModType` 27) gets the same #208/#212
+//! sentence, naming the outfit to sell first ([`raised_first`]).
 //!
 //! Buy and Sell, clicked or with B and S (key repeats too, so holding a
 //! key keeps going, but only on the outfit the key went down on: when an
@@ -171,6 +173,16 @@ pub fn ammunition_first(rounds: u32, ammo: Option<&LcNames>, launcher: &str) -> 
     format!("{SELL_FIRST} {number} {ammunition} {BEFORE_SELLING} {launcher}.")
 }
 
+/// The original's words for selling `outfit` (its `LCName`) before `count`
+/// of the outfit whose `Max` it raises, named by `target`'s `LCName` or
+/// `LCPlural` (`_DoOutfitDialog` @0x5c874-0x5ca11): the launcher's
+/// sentence ([`ammunition_first`]), #208, the count, the target, #212,
+/// the outfit and a full stop.
+#[must_use]
+pub fn raised_first(count: u32, target: &LcNames, outfit: &str) -> String {
+    ammunition_first(count, Some(target), outfit)
+}
+
 /// The original's words for why one of `row` cannot be bought or sold, if
 /// it has any, `names` giving the outfits' lower-case names. A gun or
 /// turret limit is worded as `Max`: #219 when the player owns one or more
@@ -194,6 +206,11 @@ pub fn refusal_text(
             let launcher = names.get(&row.id).map_or("", |names| &names.singular);
             let ammo = ammo.and_then(|ammo| names.get(&ammo));
             return Some(ammunition_first(rounds, ammo, launcher));
+        }
+        OutfitRefusal::RaisedFirst { count, target } => {
+            let outfit = names.get(&row.id).map_or("", |names| &names.singular);
+            let target = names.get(&target).cloned().unwrap_or_default();
+            return Some(raised_first(count, &target, outfit));
         }
         _ => return None,
     };
@@ -1000,6 +1017,29 @@ mod tests {
             ),
             said("You need to sell two units of ammunition before you can sell your .")
         );
+        let raised = OutfitRefusal::RaisedFirst {
+            count: 2,
+            target: OutfitId(200),
+        };
+        assert_eq!(
+            worded(raised, 1),
+            said("You need to sell two  before you can sell your ."),
+            "no names known: empty words, no panic"
+        );
+        let names = BTreeMap::from([
+            (
+                OutfitId(128),
+                LcNames {
+                    singular: "widget rack".to_owned(),
+                    plural: "widget racks".to_owned(),
+                },
+            ),
+            (OutfitId(200), widgets()),
+        ]);
+        assert_eq!(
+            refusal_text(raised, &row(128, "Rack", 1, 1, 1), &names),
+            said("You need to sell two widgets before you can sell your widget rack.")
+        );
         for silent in [
             OutfitRefusal::NoOutfitter,
             OutfitRefusal::NotListed,
@@ -1019,6 +1059,31 @@ mod tests {
             singular: "Viper".to_owned(),
             plural: "Vipers".to_owned(),
         }
+    }
+
+    fn widgets() -> LcNames {
+        LcNames {
+            singular: "widget".to_owned(),
+            plural: "widgets".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_words_for_selling_a_raiser_before_its_targets() {
+        let widgets = widgets();
+        let words = |count| raised_first(count, &widgets, "widget rack");
+        assert_eq!(
+            words(2),
+            "You need to sell two widgets before you can sell your widget rack."
+        );
+        assert_eq!(
+            words(1),
+            "You need to sell one widget before you can sell your widget rack."
+        );
+        assert_eq!(
+            words(1234),
+            "You need to sell 1,234 widgets before you can sell your widget rack."
+        );
     }
 
     #[test]

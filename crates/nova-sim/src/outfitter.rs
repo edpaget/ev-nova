@@ -98,8 +98,9 @@
 //! when the player owns none, the outfit is flagged
 //! [`OutfitFlags::CANNOT_SELL`], it is neither for sale here nor flagged
 //! [`OutfitFlags::SELL_ANYWHERE`], the ship would be left with negative
-//! free mass, or it is a launcher whose ammunition must be sold first
-//! (below). A sale pays [`RESALE_PERCENT`] of the price and removes one.
+//! free mass, it is one whose `Max` a `ModType` 27 item raises, while it
+//! holds more than that leaves (below), or it is a launcher whose
+//! ammunition must be sold first (below). A sale pays [`RESALE_PERCENT`] of the price and removes one.
 //! Selling cargo space below the cargo held is allowed: the exchange then
 //! shows no space free until enough is sold.
 //!
@@ -113,6 +114,25 @@
 //! limit of 0 or less buys none. A turret is the same with `MaxTur` and
 //! [`MORE_TURRETS`], checked after the gun limit for an outfit flagged
 //! both. Selling never checks them.
+//!
+//! **Raised maximums** (`ModType` 27, [`RAISES_MAX`]). An outfit's mod of
+//! `ModType` 27 names, by its raw `ModVal`, an outfit whose `Max` it
+//! raises. By the engine, the target's `Max` is multiplied by the sum,
+//! over the outfits owned, of the count owned times that outfit's mods
+//! naming it, or by 1 when that is none (`_HasMaxOfItem` @0x45e9-0x46c3):
+//! owning one raiser leaves the `Max` as it is, two double it, and a
+//! `Max` of 0 or less stays none. The buy check reads it in place of the
+//! `Max`, before the gun limit; a fighter's bay room keeps the raw `Max`
+//! (`_CanBuyFighter` @0x5c3d-0x5c4f). Selling one of n raisers is refused,
+//! after the free mass and before the launcher, while the target held is
+//! more than its raw `Max` x (n - 1), other raisers ignored and with no
+//! floor, the first such mod in slot order naming the excess to be sold
+//! first (`_DoOutfitDialog` @0x5c7be-0x5ca6f), so the last raiser cannot
+//! be sold while any of its target is held. By the Bible, the multiplier
+//! counts each item owned once, and a sale is refused only while the
+//! target held is more than the maximum left after it
+//! ([`RuleKey::RaisedMax`](crate::RuleKey::RaisedMax)). Boarding reads the
+//! raised `Max` too (see [`grant`](crate::grant)).
 //!
 //! **A launcher before its ammunition** (`_DoOutfitDialog`
 //! @0x5ca75-0x5cbe0, after the free mass). A launcher is an outfit whose
@@ -128,10 +148,10 @@
 //! (`STR#` 2002 #208-212); [`Outfitter::lc_names`] carries the names its
 //! words need.
 //!
-//! Not modelled yet: `MaxAmmo` for ammunition other than fighters, and
-//! `ModType` 27's raised maximums. Which outfits a ship bought in the
-//! [`shipyard`](crate::shipyard) keeps is the shipyard's (flag 0x0004);
-//! flag 0x0020 only concerns a mission's change of ship.
+//! Not modelled yet: `MaxAmmo` for ammunition other than fighters. Which
+//! outfits a ship bought in the [`shipyard`](crate::shipyard) keeps is
+//! the shipyard's (flag 0x0004); flag 0x0020 only concerns a mission's
+//! change of ship.
 
 use std::collections::BTreeMap;
 
@@ -180,6 +200,9 @@ impl OutfitFlags {
 pub const MORE_GUNS: i16 = 45;
 /// The `oütf` `ModType` that changes the ship's `MaxTur` by its `ModVal`.
 pub const MORE_TURRETS: i16 = 46;
+/// The `oütf` `ModType` that multiplies the `Max` of the outfit its
+/// `ModVal` names.
+pub const RAISES_MAX: i16 = 27;
 
 /// What an outfit sells back for, as a percentage of its price. The
 /// Bible does not say; the community guide (evnova.miraheze.org,
@@ -239,6 +262,14 @@ pub enum OutfitRefusal {
         /// The outfit that names the ammunition, if any.
         ammo: Option<OutfitId>,
     },
+    /// It raises the `Max` of `target` (`ModType` 27), and `count` of that
+    /// must be sold first.
+    RaisedFirst {
+        /// How many of `target` to sell first.
+        count: u32,
+        /// The outfit whose `Max` it raises.
+        target: OutfitId,
+    },
 }
 
 /// An outfit's lower-case names, as the outfitter's words use them.
@@ -285,7 +316,8 @@ pub struct Outfitter {
     pub free_mass: i64,
     /// The `LCName` and `LCPlural` of every outfit a refusal's words name:
     /// each launcher refused for its ammunition, and the outfit naming
-    /// that ammunition.
+    /// that ammunition; each raiser refused for its target, and that
+    /// target.
     pub lc_names: BTreeMap<OutfitId, LcNames>,
 }
 
@@ -497,6 +529,40 @@ fn raised(
     i32::from(base) + mods
 }
 
+/// `record`'s `Max` as the [`RAISES_MAX`] outfits `owned` raise it, read
+/// as `source` says ([`RuleKey::RaisedMax`](crate::RuleKey::RaisedMax)).
+/// By the engine, the multiplier is the sum, over the outfits owned, of
+/// the count owned times the number of its mods naming `record`; by the
+/// Bible, the count owned of each outfit with any such mod. Either way it
+/// is at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), so a `Max` of 0 or less
+/// stays so. The engine's sums and product are 16-bit (`addw`/`imulw`)
+/// and wrap; here they are wide and saturate.
+pub(crate) fn raised_max(
+    record: &OutfitRecord,
+    owned: &BTreeMap<OutfitId, u16>,
+    records: &[OutfitRecord],
+    source: RuleSource,
+) -> i64 {
+    let raisers: i64 = records
+        .iter()
+        .filter_map(|raiser| Some((raiser, *owned.get(&raiser.id)?)))
+        .map(|(raiser, count)| {
+            let mods: i64 = raiser
+                .mods
+                .iter()
+                .filter(|&&(kind, val)| kind == RAISES_MAX && val == record.id.0)
+                .map(|_| 1)
+                .sum();
+            let mods = match source {
+                RuleSource::Engine => mods,
+                RuleSource::Bible => mods.min(1),
+            };
+            i64::from(count) * mods
+        })
+        .fold(0, i64::saturating_add);
+    i64::from(record.max).saturating_mul(raisers.max(1))
+}
+
 /// How many of the outfits `owned` are flagged `flag`.
 fn flagged(flag: u16, owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord]) -> i32 {
     records
@@ -578,6 +644,8 @@ pub(crate) struct Shop<'a> {
     pub(crate) launchers: &'a BTreeMap<OutfitId, Launcher>,
     /// How a launcher's sale reads ([`Launcher::excess`]).
     pub(crate) launcher_sale: RuleSource,
+    /// How a `ModType` 27 outfit raises its target's `Max` ([`raised_max`]).
+    pub(crate) raised_max: RuleSource,
 }
 
 impl Shop<'_> {
@@ -598,6 +666,94 @@ impl Shop<'_> {
             names.insert(named.id, lc_names(named));
         }
         Some(OutfitRefusal::AmmunitionFirst { rounds, ammo })
+    }
+
+    /// Why one of `owned` of `record` cannot be sold for the outfits whose
+    /// `Max` it raises, if it cannot, with the names its words need put in
+    /// `names`: its own and the target's (`_DoOutfitDialog`
+    /// @0x5c7be-0x5ca6f). Each of its [`RAISES_MAX`] mods is checked in
+    /// slot order against `all`, the outfits owned, and the first whose
+    /// target is held past what is left refuses. By the engine, that is
+    /// the target's raw `Max` x (`owned` - 1), other raisers ignored and
+    /// with no floor; by the Bible, the target's [`raised_max`] once one
+    /// `record` is sold. The original reads only a `ModVal` of 128-639
+    /// (@0x5c819-0x5c827); one outside names no outfit and none of it is
+    /// owned, so it never refuses here either.
+    fn raised_first(
+        &self,
+        record: &OutfitRecord,
+        owned: u16,
+        all: &BTreeMap<OutfitId, u16>,
+        names: &mut BTreeMap<OutfitId, LcNames>,
+    ) -> Option<OutfitRefusal> {
+        let after = || {
+            let mut after = all.clone();
+            match owned.saturating_sub(1) {
+                0 => after.remove(&record.id),
+                left => after.insert(record.id, left),
+            };
+            after
+        };
+        let (count, target, target_record) = record
+            .mods
+            .iter()
+            .filter(|&&(kind, _)| kind == RAISES_MAX)
+            .find_map(|&(_, val)| {
+                let target = OutfitId(val);
+                let held = i64::from(all.get(&target).copied().unwrap_or(0));
+                let target_record = self.records.iter().find(|other| other.id == target);
+                let left = match (self.raised_max, target_record) {
+                    (_, None) => 0,
+                    (RuleSource::Engine, Some(other)) => {
+                        i64::from(other.max) * (i64::from(owned) - 1)
+                    }
+                    (RuleSource::Bible, Some(other)) => {
+                        raised_max(other, &after(), self.records, RuleSource::Bible)
+                    }
+                };
+                let excess = held - left;
+                (excess > 0).then_some((excess, target, target_record))
+            })?;
+        names.insert(record.id, lc_names(record));
+        if let Some(other) = target_record {
+            names.insert(other.id, lc_names(other));
+        }
+        Some(OutfitRefusal::RaisedFirst {
+            count: u32::try_from(count).unwrap_or(u32::MAX),
+            target,
+        })
+    }
+
+    /// Whether `pilot` can sell one of `record` here, or why not, with the
+    /// names a refusal's words need put in `names`: `here` is whether it
+    /// can be sold here at all (for sale, or sold anywhere), and
+    /// `free_after` the ship's free mass once it is sold (see the module
+    /// docs).
+    fn sale(
+        &self,
+        record: &OutfitRecord,
+        pilot: &Pilot,
+        here: bool,
+        free_after: i64,
+        names: &mut BTreeMap<OutfitId, LcNames>,
+    ) -> Result<(), OutfitRefusal> {
+        let owned = pilot.owned(record.id);
+        if owned == 0 {
+            Err(OutfitRefusal::NoneOwned)
+        } else if record.flags & OutfitFlags::CANNOT_SELL != 0 {
+            Err(OutfitRefusal::CannotSell)
+        } else if !here {
+            Err(OutfitRefusal::NotBoughtHere)
+        } else if free_after < 0 {
+            Err(OutfitRefusal::NegativeFreeMass)
+        } else if let Some(refusal) = self
+            .raised_first(record, owned, &pilot.outfits, names)
+            .or_else(|| self.ammunition_first(record, owned, names))
+        {
+            Err(refusal)
+        } else {
+            Ok(())
+        }
     }
 
     /// The outfitter, for `pilot`, each outfit's roll for the day kept in
@@ -650,7 +806,9 @@ impl Shop<'_> {
             let mass = unit_mass(record, self.fields.mass);
             let buying = if !buyable {
                 Err(OutfitRefusal::NotForSale)
-            } else if i32::from(owned) >= i32::from(record.max) {
+            } else if i64::from(owned)
+                >= raised_max(record, &pilot.outfits, self.records, self.raised_max)
+            {
                 Err(if record.max <= 0 {
                     OutfitRefusal::NoneAllowed
                 } else {
@@ -673,19 +831,13 @@ impl Shop<'_> {
             } else {
                 Ok(())
             };
-            let selling = if owned == 0 {
-                Err(OutfitRefusal::NoneOwned)
-            } else if record.flags & OutfitFlags::CANNOT_SELL != 0 {
-                Err(OutfitRefusal::CannotSell)
-            } else if !for_sale && !sells_anywhere {
-                Err(OutfitRefusal::NotBoughtHere)
-            } else if free + mass < 0 {
-                Err(OutfitRefusal::NegativeFreeMass)
-            } else if let Some(refusal) = self.ammunition_first(record, owned, &mut names) {
-                Err(refusal)
-            } else {
-                Ok(())
-            };
+            let selling = self.sale(
+                record,
+                pilot,
+                for_sale || sells_anywhere,
+                free + mass,
+                &mut names,
+            );
             rows.push((
                 record.disp_weight,
                 OutfitRow {
@@ -809,6 +961,7 @@ mod tests {
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
             launcher_sale: RuleSource::Engine,
+            raised_max: RuleSource::Engine,
         }
     }
 
@@ -1476,6 +1629,7 @@ mod tests {
                 hardpoints: ROOMY,
                 launchers: &NO_LAUNCHERS,
                 launcher_sale: RuleSource::Engine,
+                raised_max: RuleSource::Engine,
             }
             .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
             .expect("open")
@@ -1563,6 +1717,7 @@ mod tests {
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
             launcher_sale: RuleSource::Engine,
+            raised_max: RuleSource::Engine,
         }
         .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
         .expect("open");
@@ -1580,6 +1735,7 @@ mod tests {
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
             launcher_sale: RuleSource::Engine,
+            raised_max: RuleSource::Engine,
         }
         .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
         .expect("open");
@@ -1594,6 +1750,7 @@ mod tests {
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
             launcher_sale: RuleSource::Engine,
+            raised_max: RuleSource::Engine,
         }
         .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
         .expect("open");
@@ -2091,6 +2248,330 @@ mod tests {
             outfitter.lc_names,
             BTreeMap::from([(OutfitId(128), names("missile rack", "missile racks"))])
         );
+    }
+
+    // ModType 27: raised maximums.
+
+    /// Target B (200, `Max` 4, "widget"/"widgets"), raisers A (201) and
+    /// C (202) each naming it once, and D (203) naming it twice; E (204,
+    /// `Max` 1, "gizmo"/"gizmos") is named by no one, and F (205) raises
+    /// another outfit.
+    fn raisers() -> Vec<OutfitRecord> {
+        vec![
+            OutfitRecord {
+                max: 4,
+                lc_name: "widget".to_owned(),
+                lc_plural: "widgets".to_owned(),
+                ..outfit(200, &[])
+            },
+            OutfitRecord {
+                lc_name: "widget rack".to_owned(),
+                lc_plural: "widget racks".to_owned(),
+                ..outfit(201, &[(RAISES_MAX, 200)])
+            },
+            outfit(202, &[(MORE_SPEED, 1), (RAISES_MAX, 200)]),
+            outfit(203, &[(RAISES_MAX, 200), (RAISES_MAX, 200)]),
+            OutfitRecord {
+                max: 1,
+                lc_name: "gizmo".to_owned(),
+                lc_plural: "gizmos".to_owned(),
+                ..outfit(204, &[])
+            },
+            outfit(205, &[(RAISES_MAX, 204)]),
+        ]
+    }
+
+    fn owned_map(owned: &[(i16, u16)]) -> BTreeMap<OutfitId, u16> {
+        owned.iter().map(|&(id, n)| (OutfitId(id), n)).collect()
+    }
+
+    /// B's `Max` as `source` raises it, owning `owned`, among `records`.
+    fn max_of(records: &[OutfitRecord], owned: &[(i16, u16)], source: RuleSource) -> i64 {
+        raised_max(&records[0], &owned_map(owned), records, source)
+    }
+
+    #[test]
+    fn a_target_max_is_multiplied_by_the_raisers_owned_at_least_once() {
+        let records = raisers();
+        for source in RuleSource::ALL {
+            let at = |owned: &[(i16, u16)]| max_of(&records, owned, source);
+            assert_eq!(at(&[]), 4, "no raiser: unchanged");
+            assert_eq!(at(&[(201, 1)]), 4, "one raiser: x 1");
+            assert_eq!(at(&[(201, 2)]), 8, "two: doubled");
+            assert_eq!(at(&[(201, 3)]), 12);
+            assert_eq!(at(&[(201, 1), (202, 1)]), 8, "one A and one C");
+            assert_eq!(at(&[(201, 0), (202, 2)]), 8, "an A owned none of");
+            assert_eq!(at(&[(205, 3)]), 4, "a raiser of another outfit");
+            assert_eq!(at(&[(200, 9)]), 4, "the target itself");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_each_mod_naming_the_target_counts_and_by_the_bible_each_item() {
+        let records = raisers();
+        assert_eq!(max_of(&records, &[(203, 1)], RuleSource::Engine), 8);
+        assert_eq!(max_of(&records, &[(203, 1)], RuleSource::Bible), 4);
+        assert_eq!(max_of(&records, &[(203, 2)], RuleSource::Engine), 16);
+        assert_eq!(max_of(&records, &[(203, 2)], RuleSource::Bible), 8);
+    }
+
+    #[test]
+    fn a_max_of_none_or_less_is_not_raised() {
+        for max in [0, -1] {
+            let mut records = raisers();
+            records[0].max = max;
+            for source in RuleSource::ALL {
+                assert_eq!(
+                    max_of(&records, &[(201, 2)], source),
+                    i64::from(max) * 2,
+                    "{max} {source:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_raised_max_saturates() {
+        let records = [
+            OutfitRecord {
+                max: i16::MAX,
+                ..outfit(200, &[])
+            },
+            outfit(201, &[(RAISES_MAX, 200); 4]),
+        ];
+        let owned = &[(201, u16::MAX)];
+        assert_eq!(
+            max_of(&records, owned, RuleSource::Engine),
+            i64::from(i16::MAX) * i64::from(u16::MAX) * 4
+        );
+        assert_eq!(
+            max_of(&records, owned, RuleSource::Bible),
+            i64::from(i16::MAX) * i64::from(u16::MAX)
+        );
+    }
+
+    #[test]
+    fn an_owned_mod_type_27_outfit_raises_its_targets_max_in_the_buy_check() {
+        let records = raisers();
+        let at = |owned: &[(i16, u16)]| buys(&open(&records, &owning(owned)), 200);
+        assert_eq!(at(&[(200, 3), (201, 1)]), Ok(()));
+        assert_eq!(at(&[(200, 4), (201, 1)]), Err(OutfitRefusal::MaxOwned));
+        assert_eq!(at(&[(200, 4), (201, 2)]), Ok(()), "raised to 8");
+        assert_eq!(at(&[(200, 7), (201, 2)]), Ok(()));
+        assert_eq!(at(&[(200, 8), (201, 2)]), Err(OutfitRefusal::MaxOwned));
+        assert_eq!(at(&[(200, 8), (203, 1)]), Err(OutfitRefusal::MaxOwned));
+        assert_eq!(at(&[(200, 7), (203, 1)]), Ok(()), "by the engine, 8");
+    }
+
+    #[test]
+    fn the_buy_check_reads_the_raised_max_as_its_rule_says() {
+        let records = raisers();
+        let site = port();
+        let bible = Shop {
+            raised_max: RuleSource::Bible,
+            ..shop(&records, &site)
+        };
+        let outfitter = |owned: &[(i16, u16)]| {
+            bible
+                .outfitter(&owning(owned), &mut DayRolls::default(), &mut NeverFires)
+                .expect("open")
+        };
+        assert_eq!(
+            buys(&outfitter(&[(200, 4), (203, 1)]), 200),
+            Err(OutfitRefusal::MaxOwned),
+            "one item, two mods: x 1"
+        );
+        assert_eq!(buys(&outfitter(&[(200, 4), (203, 2)]), 200), Ok(()));
+    }
+
+    #[test]
+    fn a_raised_max_still_refuses_a_target_of_max_none() {
+        let mut records = raisers();
+        for max in [0, -1] {
+            records[0].max = max;
+            let outfitter = open(&records, &owning(&[(201, 2)]));
+            assert_eq!(buys(&outfitter, 200), Err(OutfitRefusal::NoneAllowed));
+        }
+    }
+
+    #[test]
+    fn the_raised_max_comes_before_the_gun_limit() {
+        let mut records = raisers();
+        records[0].flags = OutfitFlags::GUN;
+        let at =
+            |owned: &[(i16, u16)]| buys(&armed(&records, &owning(owned), hardpoints(7, 0)), 200);
+        assert_eq!(at(&[(200, 8), (201, 2)]), Err(OutfitRefusal::MaxOwned));
+        assert_eq!(at(&[(200, 7), (201, 2)]), Err(OutfitRefusal::GunLimit));
+        assert_eq!(at(&[(200, 6), (201, 2)]), Ok(()));
+    }
+
+    #[test]
+    fn a_fighter_room_of_none_refuses_whatever_the_raised_max() {
+        let records = raisers();
+        let site = port();
+        let room = |n: u32| BTreeMap::from([(OutfitId(200), n)]);
+        let at = |fighter_room: &BTreeMap<OutfitId, u32>| {
+            let outfitter = Shop {
+                fighter_room,
+                ..shop(&records, &site)
+            }
+            .outfitter(
+                &owning(&[(200, 4), (201, 2)]),
+                &mut DayRolls::default(),
+                &mut NeverFires,
+            )
+            .expect("open");
+            buys(&outfitter, 200)
+        };
+        assert_eq!(at(&room(0)), Err(OutfitRefusal::MaxOwned));
+        assert_eq!(at(&room(1)), Ok(()));
+    }
+
+    /// The outfitter at [`port`] owning `owned` of `records`, the raised
+    /// `Max` read as `source` says.
+    fn raising(records: &[OutfitRecord], owned: &[(i16, u16)], source: RuleSource) -> Outfitter {
+        let site = port();
+        Shop {
+            raised_max: source,
+            ..shop(records, &site)
+        }
+        .outfitter(&owning(owned), &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter")
+    }
+
+    fn raised_first(count: u32, target: i16) -> Result<(), OutfitRefusal> {
+        Err(OutfitRefusal::RaisedFirst {
+            count,
+            target: OutfitId(target),
+        })
+    }
+
+    #[test]
+    fn by_the_engine_a_raiser_cannot_be_sold_while_its_target_overfills_the_rest() {
+        let records = raisers();
+        let at =
+            |owned: &[(i16, u16)]| row(&raising(&records, owned, RuleSource::Engine), 201).sell;
+        assert_eq!(at(&[(201, 2), (200, 6)]), raised_first(2, 200));
+        assert_eq!(at(&[(201, 2), (200, 4)]), Ok(()));
+        assert_eq!(at(&[(201, 1), (200, 1)]), raised_first(1, 200), "no floor");
+        assert_eq!(at(&[(201, 1)]), Ok(()));
+        assert_eq!(
+            at(&[(201, 2), (202, 1), (200, 6)]),
+            raised_first(2, 200),
+            "C ignored"
+        );
+        assert_eq!(at(&[(201, 3), (200, 9)]), raised_first(1, 200));
+        assert_eq!(at(&[(201, 3), (200, 8)]), Ok(()));
+    }
+
+    #[test]
+    fn by_the_bible_a_raiser_sells_while_the_targets_maximum_after_the_sale_holds_them() {
+        let records = raisers();
+        let at = |owned: &[(i16, u16)]| row(&raising(&records, owned, RuleSource::Bible), 201).sell;
+        assert_eq!(at(&[(201, 1), (200, 3)]), Ok(()), "4 after");
+        assert_eq!(at(&[(201, 1), (200, 4)]), Ok(()));
+        assert_eq!(at(&[(201, 1), (200, 5)]), raised_first(1, 200));
+        assert_eq!(
+            at(&[(201, 2), (202, 1), (200, 6)]),
+            Ok(()),
+            "A and C: 8 after"
+        );
+        assert_eq!(at(&[(201, 2), (202, 1), (200, 9)]), raised_first(1, 200));
+        assert_eq!(at(&[(201, 3), (200, 9)]), raised_first(1, 200));
+        assert_eq!(at(&[(201, 3), (200, 8)]), Ok(()));
+    }
+
+    #[test]
+    fn the_first_refusing_mod_names_the_target() {
+        let mut records = raisers();
+        records.push(outfit(206, &[(RAISES_MAX, 200), (RAISES_MAX, 204)]));
+        // By the engine none is left of either; by the Bible, their `Max`.
+        for (source, second, both) in [(RuleSource::Engine, 2, 6), (RuleSource::Bible, 1, 2)] {
+            let at = |owned: &[(i16, u16)]| row(&raising(&records, owned, source), 206).sell;
+            assert_eq!(
+                at(&[(206, 1), (204, 2)]),
+                raised_first(second, 204),
+                "{source:?}"
+            );
+            assert_eq!(
+                at(&[(206, 1), (200, 6), (204, 2)]),
+                raised_first(both, 200),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_raiser_of_an_unknown_target_sells() {
+        let records = [outfit(207, &[(RAISES_MAX, 999)])];
+        for source in RuleSource::ALL {
+            let outfitter = raising(&records, &[(207, 1)], source);
+            assert_eq!(row(&outfitter, 207).sell, Ok(()), "{source:?}");
+            assert_eq!(outfitter.lc_names, BTreeMap::new());
+        }
+    }
+
+    #[test]
+    fn negative_free_mass_comes_before_a_raised_max_and_it_before_the_ammunition() {
+        let [launcher, ammo] = racks();
+        let launcher = OutfitRecord {
+            mods: [(RAISES_MAX, 200), (0, 0), (0, 0), (0, 0)],
+            ..launcher
+        };
+        let target = raisers().swap_remove(0);
+        let site = port();
+        let records = [launcher.clone(), ammo.clone(), target.clone()];
+        let launchers = rack(4, 2);
+        let outfitter = Shop {
+            launchers: &launchers,
+            ..shop(&records, &site)
+        }
+        .outfitter(
+            &owning(&[(128, 1), (200, 1)]),
+            &mut DayRolls::default(),
+            &mut NeverFires,
+        )
+        .expect("open");
+        assert_eq!(sell(&outfitter), raised_first(1, 200));
+        let expansion = OutfitRecord {
+            mass: -20,
+            ..launcher
+        };
+        let cargo = OutfitRecord {
+            mass: 40,
+            ..outfit(130, &[])
+        };
+        let records = [expansion, ammo, target, cargo];
+        let outfitter = Shop {
+            launchers: &launchers,
+            ..shop(&records, &site)
+        }
+        .outfitter(
+            &owning(&[(128, 1), (200, 1), (130, 1)]),
+            &mut DayRolls::default(),
+            &mut NeverFires,
+        )
+        .expect("open");
+        assert_eq!(sell(&outfitter), Err(OutfitRefusal::NegativeFreeMass));
+    }
+
+    #[test]
+    fn the_outfitter_carries_the_names_a_raised_max_refusal_needs() {
+        let records = raisers();
+        let names = |singular: &str, plural: &str| LcNames {
+            singular: singular.to_owned(),
+            plural: plural.to_owned(),
+        };
+        let refused = raising(&records, &[(201, 1), (200, 1)], RuleSource::Engine);
+        assert_eq!(
+            refused.lc_names,
+            BTreeMap::from([
+                (OutfitId(200), names("widget", "widgets")),
+                (OutfitId(201), names("widget rack", "widget racks")),
+            ])
+        );
+        let sold = raising(&records, &[(201, 2), (200, 1)], RuleSource::Engine);
+        assert_eq!(sold.lc_names, BTreeMap::new(), "none refused");
     }
 
     // Settling.

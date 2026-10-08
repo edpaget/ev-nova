@@ -515,6 +515,9 @@ pub struct Session {
     /// When a launcher cannot be sold for its ammunition (see
     /// [`Session::with_launcher_sale`]).
     launcher_sale: RuleSource,
+    /// How a `ModType` 27 outfit raises its target's `Max` (see
+    /// [`Session::with_raised_max`]).
+    raised_max: RuleSource,
     /// Whether each take-off pays the hired escorts a day's wages (see
     /// [`Session::with_take_off_pay`]).
     take_off_pay: RuleSource,
@@ -653,6 +656,7 @@ impl Session {
             frame: 0,
             junk_flags: RuleSource::Engine,
             launcher_sale: RuleSource::Engine,
+            raised_max: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
@@ -1902,6 +1906,25 @@ impl Session {
         self.launcher_sale
     }
 
+    /// This session with a `ModType` 27 outfit raising its target's `Max`
+    /// as `source` says
+    /// ([`RuleKey::RaisedMax`](crate::RuleKey::RaisedMax)): by the engine's
+    /// default, by the outfits owned times their mods naming it, and one
+    /// of n raisers sold only while the target held fits its raw `Max` x
+    /// (n - 1); in the outfitter and when boarding (see [`outfitter`]).
+    #[must_use]
+    pub fn with_raised_max(mut self, source: RuleSource) -> Self {
+        self.raised_max = source;
+        self
+    }
+
+    /// How a `ModType` 27 outfit raises its target's `Max`: by the engine
+    /// ([`RuleSource::Engine`]) or by the Bible.
+    #[must_use]
+    pub fn raised_max(&self) -> RuleSource {
+        self.raised_max
+    }
+
     /// The player's ship class's `MaxGun` and `MaxTur`; none for a class
     /// with no record, like any class field that cannot be read.
     fn hardpoints(&self) -> Hardpoints {
@@ -1928,6 +1951,7 @@ impl Session {
             hardpoints: self.hardpoints(),
             launchers: &self.launchers(),
             launcher_sale: self.launcher_sale,
+            raised_max: self.raised_max,
         }
         .outfitter(&self.pilot, &mut self.outfit_rolls, chance)
     }
@@ -2289,7 +2313,7 @@ impl Session {
                 item_class: record.item_class,
                 mass: record.mass,
                 owned: self.pilot.owned(record.id),
-                max: record.max,
+                max: clamp_i16(self.raised_max_of(record)),
             })
             .collect();
         let free_mass = outfitter::free_mass(
@@ -2477,9 +2501,17 @@ impl Session {
         taken
     }
 
+    /// `record`'s `Max` as the `ModType` 27 outfits owned raise it, as
+    /// the boarding's calls of `_HasMaxOfItem` read it (`_DoPlunderDialog`
+    /// @0x93119, @0x93192, @0x93d9f; see [`outfitter::raised_max`]).
+    fn raised_max_of(&self, record: &OutfitRecord) -> i64 {
+        outfitter::raised_max(record, &self.pilot.outfits, &self.outfits, self.raised_max)
+    }
+
     /// Takes up to `rounds` of ammunition outfit `outfit`, one at a time
-    /// while the free mass covers it and it is below its `Max`, and gives
-    /// how many; the ship is refitted with them.
+    /// while the free mass covers it and it is below its `Max` as
+    /// `ModType` 27 raises it (read again for each, as `_HasMaxOfItem` is
+    /// at @0x93d9f), and gives how many; the ship is refitted with them.
     fn take_ammo(&mut self, outfit: OutfitId, rounds: u32) -> u32 {
         let Some(record) = self
             .outfits
@@ -2492,7 +2524,7 @@ impl Session {
         let unit = outfitter::unit_mass(&record, self.fields.mass);
         let mut count = 0;
         while count < rounds
-            && i32::from(self.pilot.owned(outfit)) < i32::from(record.max)
+            && i64::from(self.pilot.owned(outfit)) < self.raised_max_of(&record)
             && outfitter::free_mass(
                 self.fields,
                 &self.standard(),
@@ -2746,6 +2778,12 @@ impl Aboard {
             odds: plunder.odds,
         }
     }
+}
+
+/// `value` held to the range of an `i16`, as a boarding grant reads a
+/// raised `Max` (see [`GrantStock::max`]).
+fn clamp_i16(value: i64) -> i16 {
+    i16::try_from(value.clamp(i64::from(i16::MIN), i64::from(i16::MAX))).unwrap_or_default()
 }
 
 /// Sets `gauge` to hold up to `max`, keeping no more than that; when
@@ -5857,6 +5895,84 @@ mod tests {
                 },
             }
         );
+    }
+
+    /// A widget (305, `Max` 2) and a widget rack (306) that raises it.
+    const WIDGET: OutfitId = OutfitId(305);
+    const WIDGET_RACK: OutfitId = OutfitId(306);
+
+    /// [`outfitting`] with the widget and its rack for sale too.
+    fn raising() -> FakePilotCatalog {
+        let mut catalog = outfitting();
+        catalog.outfits.push(OutfitRecord {
+            max: 2,
+            ..outfit(305, &[])
+        });
+        catalog
+            .outfits
+            .push(outfit(306, &[(crate::outfitter::RAISES_MAX, WIDGET.0)]));
+        catalog
+    }
+
+    #[test]
+    fn a_session_buys_past_max_with_two_raisers_owned() {
+        let mut session = outfitted(&raising());
+        for _ in 0..2 {
+            assert_eq!(session.outfit(buy(WIDGET), &mut NeverFires), Ok(()));
+        }
+        assert_eq!(
+            session.outfit(buy(WIDGET), &mut NeverFires),
+            Err(OutfitRefusal::MaxOwned)
+        );
+        session
+            .outfit(buy(WIDGET_RACK), &mut NeverFires)
+            .expect("one");
+        assert_eq!(
+            session.outfit(buy(WIDGET), &mut NeverFires),
+            Err(OutfitRefusal::MaxOwned),
+            "one rack leaves it"
+        );
+        session
+            .outfit(buy(WIDGET_RACK), &mut NeverFires)
+            .expect("two");
+        for _ in 0..2 {
+            assert_eq!(session.outfit(buy(WIDGET), &mut NeverFires), Ok(()));
+        }
+        assert_eq!(session.pilot().owned(WIDGET), 4);
+        assert_eq!(
+            session.outfit(buy(WIDGET), &mut NeverFires),
+            Err(OutfitRefusal::MaxOwned)
+        );
+    }
+
+    #[test]
+    fn the_session_reads_the_raised_max_as_its_rule_says() {
+        let catalog = raising();
+        assert_eq!(outfitted(&catalog).raised_max(), RuleSource::Engine);
+        for (source, sold) in [
+            (
+                RuleSource::Engine,
+                Err(OutfitRefusal::RaisedFirst {
+                    count: 1,
+                    target: WIDGET,
+                }),
+            ),
+            (RuleSource::Bible, Ok(())),
+        ] {
+            let mut session = outfitted(&catalog).with_raised_max(source);
+            assert_eq!(session.raised_max(), source);
+            session
+                .outfit(buy(WIDGET_RACK), &mut NeverFires)
+                .expect("a rack");
+            session
+                .outfit(buy(WIDGET), &mut NeverFires)
+                .expect("a widget");
+            assert_eq!(
+                session.outfit(sell(WIDGET_RACK), &mut NeverFires),
+                sold,
+                "{source:?}"
+            );
+        }
     }
 
     // The shipyard.
@@ -9370,6 +9486,28 @@ mod tests {
     }
 
     #[test]
+    fn taking_ammo_stops_at_the_max_a_mod_type_27_raises() {
+        let mut catalog = ammo_aboard(1, 4);
+        catalog
+            .outfits
+            .push(outfit(320, &[(crate::outfitter::RAISES_MAX, 310)]));
+        for (raisers, count) in [(0, 4), (1, 4), (2, 8)] {
+            let mut session = ammo_session(&catalog);
+            if raisers > 0 {
+                session.pilot.outfits.insert(OutfitId(320), raisers);
+            }
+            assert_eq!(
+                take(&mut session, Take::Ammo, &[]).0,
+                Taken::Ammo {
+                    outfit: OutfitId(310),
+                    count
+                },
+                "{raisers}"
+            );
+        }
+    }
+
+    #[test]
     fn each_take_grows_the_self_destruct_threshold_truncated() {
         let catalog = ammo_aboard(1, 20);
         let mut session = ammo_session(&catalog);
@@ -10086,6 +10224,48 @@ mod tests {
         assert_eq!(session.take_grant(), None, "taken once");
         assert!(!session.take_save_due(), "as plunder, a grant makes none");
         assert!(session.boarding().is_some(), "the plunder dialog opens");
+    }
+
+    #[test]
+    fn a_grant_may_pick_an_outfit_whose_max_a_raiser_raises() {
+        let mut catalog = granting();
+        catalog
+            .outfits
+            .iter_mut()
+            .find(|record| record.id == OutfitId(200))
+            .expect("the booster")
+            .max = 2;
+        catalog
+            .outfits
+            .push(outfit(205, &[(crate::outfitter::RAISES_MAX, 200)]));
+        for (raisers, granted) in [(0, None), (1, None), (2, Some(2))] {
+            let mut session = alongside_ace(&catalog);
+            session.pilot.outfits.insert(OutfitId(200), 2);
+            if raisers > 0 {
+                session.pilot.outfits.insert(OutfitId(205), raisers);
+            }
+            let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+            assert!(boarded.is_ok(), "{raisers}");
+            assert_eq!(
+                session.take_grant().map(|granted| granted.count),
+                granted,
+                "{raisers}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_raised_max_past_an_i16_is_held_to_its_range() {
+        for (value, held) in [
+            (i64::MIN, i16::MIN),
+            (i64::from(i16::MIN) - 1, i16::MIN),
+            (-5, -5),
+            (0, 0),
+            (i64::from(i16::MAX), i16::MAX),
+            (i64::from(i16::MAX) + 1, i16::MAX),
+        ] {
+            assert_eq!(clamp_i16(value), held, "{value}");
+        }
     }
 
     #[test]
