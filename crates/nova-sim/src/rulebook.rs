@@ -41,11 +41,15 @@
 //! | [`MapExplore`](RuleKey::MapExplore) | `map_explore` | a map of `ModVal` N explores depth first, so it may miss systems within N jumps, and "inhabited" reads a system's first four stellars ([`OutfitRules`](crate::OutfitRules)) | every system within N jumps, and any stellar |
 //! | [`InvalidMap`](RuleKey::InvalidMap) | `invalid_map` | a map whose `ModVal` explores nothing (0, -2 to -999) is used up ([`OutfitRules`](crate::OutfitRules)) | it is added to the outfits as a plain item\* |
 //! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing ([`OutfitRules`](crate::OutfitRules)) | it pays what selling the outfit would\* |
+//! | [`PurchasePaintOrder`](RuleKey::PurchasePaintOrder) | `purchase_paint_order` | buying a ship clears the paint after the new ship's `OnPurchase`, so a paint it grants is lost ([`HookRules`](crate::HookRules)) | the paint is cleared before the hook, so a paint it grants stays\* |
+//! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, which strips a non-persistent outfit either grants ([`HookRules`](crate::HookRules)) | they run after the swap, so it stays\* |
+//! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` ([`HookRules`](crate::HookRules)) | it runs once, right before the `chär`'s `OnStart`\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
-//! `remove_refund` or `comm_quote`
+//! `remove_refund`, `purchase_paint_order`, `capture_hook_order`,
+//! `start_ship_purchase` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -332,6 +336,28 @@ rule_keys! {
     /// alternative, not anything the Bible says (see
     /// [`OutfitRules`](crate::OutfitRules)).
     RemoveRefund => "remove_refund",
+    /// When buying a ship clears its paint: by the engine, after the new
+    /// ship's `OnPurchase` runs (`_DoShipyardDialog` @0x5f00d, then
+    /// @0x5f022), so a paint that hook grants is lost; otherwise before
+    /// it, so the paint stays. The Bible is silent here, so the other
+    /// reading is the obvious alternative, not anything the Bible says
+    /// (see [`HookRules`](crate::HookRules)).
+    PurchasePaintOrder => "purchase_paint_order",
+    /// When "Use As My Ship" runs the old ship's `OnRetire` and the
+    /// captured ship's `OnCapture`: by the engine, before the outfit swap
+    /// (`_DoShipCapture` @0x41662 and @0x416c9, then @0x419dd), so a
+    /// non-persistent outfit either grants is stripped; otherwise after
+    /// it, so the outfit stays. The Bible is silent here, so the other
+    /// reading is the obvious alternative, not anything the Bible says
+    /// (see [`HookRules`](crate::HookRules)).
+    CaptureHookOrder => "capture_hook_order",
+    /// Whether a new pilot's starting ship runs its `OnPurchase`: by the
+    /// engine, it does not (`_DoNewPilot` runs only the `chär`'s
+    /// `OnStart`, @0x19345); otherwise it runs once, right before
+    /// `OnStart`, as though the ship were bought. The Bible is silent
+    /// here, so the other reading is the obvious alternative, not
+    /// anything the Bible says (see [`HookRules`](crate::HookRules)).
+    StartShipPurchase => "start_ship_purchase",
 }
 
 impl RuleKey {
@@ -476,9 +502,15 @@ mod tests {
                 RuleKey::PersonJoin,
                 RuleKey::MapExplore,
                 RuleKey::InvalidMap,
-                RuleKey::RemoveRefund
+                RuleKey::RemoveRefund,
+                RuleKey::PurchasePaintOrder,
+                RuleKey::CaptureHookOrder,
+                RuleKey::StartShipPurchase
             ]
         );
+        assert_eq!(RuleKey::PurchasePaintOrder.key(), "purchase_paint_order");
+        assert_eq!(RuleKey::CaptureHookOrder.key(), "capture_hook_order");
+        assert_eq!(RuleKey::StartShipPurchase.key(), "start_ship_purchase");
         assert_eq!(RuleKey::MapExplore.key(), "map_explore");
         assert_eq!(RuleKey::InvalidMap.key(), "invalid_map");
         assert_eq!(RuleKey::RemoveRefund.key(), "remove_refund");

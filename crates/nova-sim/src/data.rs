@@ -61,6 +61,7 @@ impl PilotCatalog for GameData {
             legal: std::array::from_fn(|slot| {
                 character.record.govt[slot].map(|govt| (govt, character.record.status[slot]))
             }),
+            on_start: self.set_expr(character.record.on_start.as_str()).into(),
         })
     }
 
@@ -101,6 +102,9 @@ impl PilotCatalog for GameData {
                     require: record.require.bits(),
                     availability: self.test_expr(record.availability.as_str()).into(),
                     appear_on: self.test_expr(record.appear_on.as_str()).into(),
+                    on_purchase: self.set_expr(record.on_purchase.as_str()).into(),
+                    on_capture: self.set_expr(record.on_capture.as_str()).into(),
+                    on_retire: self.set_expr(record.on_retire.as_str()).into(),
                     flags3: record.flags3.bits(),
                     disp_weight: record.disp_weight,
                     max_gun: record.max_gun,
@@ -143,6 +147,8 @@ impl PilotCatalog for GameData {
                     require: record.require.bits(),
                     require_govt: record.require_govt,
                     availability: self.test_expr(record.availability.as_str()).into(),
+                    on_purchase: self.set_expr(record.on_purchase.as_str()).into(),
+                    on_sell: self.set_expr(record.on_sell.as_str()).into(),
                     item_class: record.item_class,
                     lc_name: record.lc_name.as_str().to_owned(),
                     lc_plural: record.lc_plural.as_str().to_owned(),
@@ -683,7 +689,7 @@ mod tests {
         DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
         StartDate, StellarId, StockWeapon, WeaponId, WeaponRecord,
     };
-    use crate::control::Test;
+    use crate::control::{Script, Test};
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -705,6 +711,11 @@ mod tests {
 
     /// Whether two tests are the one parse, shared.
     fn shared(a: &Test, b: &Test) -> bool {
+        std::sync::Arc::ptr_eq(&a.0, &b.0)
+    }
+
+    /// Whether two scripts are the one parse, shared.
+    fn shared_script(a: &Script, b: &Script) -> bool {
         std::sync::Arc::ptr_eq(&a.0, &b.0)
     }
 
@@ -784,10 +795,25 @@ mod tests {
                 start: StartDate::default(),
                 cash: 0,
                 legal: [None; 4],
+                on_start: Script::default(),
             })
         );
         let shipless = store(&[(Character::TYPE, 128, character(-1, [130, -1, -1, -1]))]);
         assert_eq!(shipless.first_character().map(|c| c.ship), Ok(None));
+    }
+
+    #[test]
+    fn the_start_carries_the_chärs_on_start_parsed() {
+        let mut bytes = character(128, [130, -1, -1, -1]);
+        bytes[0x32..0x38].copy_from_slice(b"b5 !b6");
+        let data = store(&[(Character::TYPE, 128, bytes)]);
+        assert_eq!(
+            data.first_character().map(|c| c.on_start),
+            Ok(Script::parse("b5 !b6"))
+        );
+        let first = data.first_character().expect("reads").on_start;
+        let again = data.first_character().expect("reads").on_start;
+        assert!(shared_script(&first, &again), "parsed once");
     }
 
     #[test]
@@ -1021,6 +1047,9 @@ mod tests {
         put_i16s(&mut bytes, 0x48, &[1129]);
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
         put_i16s(&mut bytes, 0x732, &[2]);
+        bytes[0x26A..0x26E].copy_from_slice(b"b300");
+        bytes[0x3D0..0x3D5].copy_from_slice(b"^b301");
+        bytes[0x4CF..0x4D3].copy_from_slice(b"!b30");
         bytes
     }
 
@@ -1064,6 +1093,9 @@ mod tests {
             comm_name: "heavy shuttle".to_owned(),
             inherent_govt: Some(GovtId(129)),
             escort_type: 2,
+            on_capture: Script::parse("^b301"),
+            on_purchase: Script::parse("b300"),
+            on_retire: Script::parse("!b30"),
         };
         assert_eq!(
             data.ships(),
@@ -1093,6 +1125,13 @@ mod tests {
                 "AppearOn parsed once: {:?}",
                 a.id
             );
+            for (a, b) in [
+                (&a.on_purchase, &b.on_purchase),
+                (&a.on_capture, &b.on_capture),
+                (&a.on_retire, &b.on_retire),
+            ] {
+                assert!(shared_script(a, b), "each hook parsed once: {a:?}");
+            }
         }
     }
 
@@ -1154,6 +1193,8 @@ mod tests {
         bytes[0x32B..0x334].copy_from_slice(b"Big\\nGun!");
         bytes[0x36B..0x372].copy_from_slice(b"big gun");
         put_i16s(&mut bytes, 0x3F2, &[1128]);
+        bytes[0x12D..0x131].copy_from_slice(b"b400");
+        bytes[0x22C..0x231].copy_from_slice(b"!b400");
         bytes
     }
 
@@ -1192,6 +1233,8 @@ mod tests {
             item_class: 0,
             lc_name: "big gun".to_owned(),
             lc_plural: String::new(),
+            on_purchase: Script::parse("b400"),
+            on_sell: Script::parse("!b400"),
         };
         assert_eq!(
             data.outfits(),
@@ -1208,6 +1251,8 @@ mod tests {
                 "parsed once: {:?}",
                 a.id
             );
+            assert!(shared_script(&a.on_purchase, &b.on_purchase), "{:?}", a.id);
+            assert!(shared_script(&a.on_sell, &b.on_sell), "{:?}", a.id);
         }
     }
 

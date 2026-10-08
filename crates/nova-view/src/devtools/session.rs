@@ -189,6 +189,7 @@ mod tests {
                 },
                 cash: 1000,
                 legal: [None; 4],
+                on_start: nova_sim::Script::default(),
             })
         }
 

@@ -1,8 +1,11 @@
 //! A flight session over the stock data: the first `chär` starts a session
-//! with its ship's handling and reserves in a system that exists, Port
+//! with its ship's handling and reserves in a system that exists, and a
+//! new pilot begins with the bits its blank `OnStart` sets (none); Port
 //! Kane's exchange trades at its levels, and its outfitter sells what its
 //! tech levels allow, and the Vell-os map only once its control bit is
-//! set, which explores the systems around and is not added; Viking's shipyard sells what its tech levels and the
+//! set, which explores the systems around and is not added, and the Cheap
+//! Thorium Reactor, whose `OnPurchase` and `OnSell` set and clear its
+//! bit; Viking's shipyard sells what its tech levels and the
 //! ships' `BuyRandom` allow, and trades the Shuttle in; the ships go by
 //! their names without the designers' notes. Port Kane sells
 //! fuel and uninhabited Reflex-ion sells none. The date reads with the
@@ -71,6 +74,34 @@ fn a_new_pilot_starts_as_the_first_chär_says() {
     );
     assert_eq!(pilot.stellar(), None);
     assert_eq!(pilot.explored().collect::<Vec<_>>(), [pilot.system()]);
+}
+
+/// A new stock pilot, flown and begun, holds exactly the bits its first
+/// `chär`'s `OnStart` writes: in the stock 1.0.10 data that `OnStart` is
+/// blank, so none, and running it tells nothing.
+#[test]
+fn a_new_stock_pilot_begins_with_the_bits_its_chärs_on_start_sets() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let (_, first) = data.records::<Character>().next().expect("a chär");
+    let on_start = first.expect("decodes").record.on_start.as_str().to_owned();
+    assert_eq!(on_start, "", "the stock OnStart is blank");
+    let writes = nova_sim::SetExpr::parse(&on_start)
+        .expect("parses")
+        .writes();
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    let mut session = Session::fly(&data, pilot).expect("flies");
+    session.begin(&data, &mut NeverFires);
+    let set: Vec<nova_sim::Bit> = session.pilot().control_bits().iter().collect();
+    let expected: Vec<nova_sim::Bit> = writes
+        .iter()
+        .filter(|(_, write)| *write == nova_sim::BitWrite::Set)
+        .map(|(bit, _)| *bit)
+        .collect();
+    assert_eq!(set, expected);
+    assert_eq!(session.take_script_notes(), []);
 }
 
 /// A stock session's date reads "June 23, 1177 NC": the first `chär`'s
@@ -438,7 +469,7 @@ fn buying_the_stock_vell_os_map_explores_two_jumps_and_adds_nothing() {
             outfit: map,
             direction: Direction::Buy,
         };
-        assert_eq!(session.outfit(order), Ok(()));
+        assert_eq!(session.outfit(order, &mut NeverFires), Ok(()));
         assert_eq!(session.pilot().owned(map), 0, "not added");
         assert_eq!(session.pilot().cash(), cash, "it costs nothing");
         session
@@ -466,6 +497,35 @@ fn buying_the_stock_vell_os_map_explores_two_jumps_and_adds_nothing() {
     assert_eq!(bible.pilot().explored().collect::<BTreeSet<_>>(), two);
 }
 
+/// Port Kane (special tech 57) sells the Cheap Thorium Reactor (`oütf`
+/// 358), whose `OnPurchase` sets bit 9011 and whose `OnSell` clears it.
+#[test]
+fn the_stock_cheap_thorium_reactor_sets_its_bit_when_bought_and_clears_it_when_sold() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = at_port_kane(&data);
+    assert!(session.transact(|pilot| pilot.set_cash(1_000_000)));
+    let reactor = OutfitId(358);
+    let bit = nova_sim::Bit::new(9011).expect("a bit");
+    let order = |direction| OutfitOrder {
+        outfit: reactor,
+        direction,
+    };
+    assert_eq!(
+        session.outfit(order(Direction::Buy), &mut NeverFires),
+        Ok(())
+    );
+    assert_eq!(session.pilot().owned(reactor), 1);
+    assert!(session.control_bit(bit), "OnPurchase b9011");
+    assert_eq!(
+        session.outfit(order(Direction::Sell), &mut NeverFires),
+        Ok(())
+    );
+    assert!(!session.control_bit(bit), "OnSell !b9011");
+}
+
 /// Buying a Battery Pack takes 10,000 of the Shuttle's 25,000 credits
 /// and 3 of its 8 tons free, and raises its fuel from 300 to 400.
 #[test]
@@ -480,7 +540,7 @@ fn a_battery_pack_adds_a_jump_of_fuel_to_the_shuttle() {
         outfit: OutfitId(256),
         direction: Direction::Buy,
     };
-    assert_eq!(session.outfit(battery), Ok(()));
+    assert_eq!(session.outfit(battery, &mut NeverFires), Ok(()));
     let outfitter = session.outfitter().expect("an outfitter");
     assert_eq!((outfitter.cash, outfitter.free_mass), (15_000, 5));
     assert_eq!(session.pilot().owned(OutfitId(256)), 1);
@@ -572,7 +632,9 @@ fn a_heavy_shuttle_trades_in_the_shuttle() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let mut session = at_viking(&data);
-    let bought = session.buy_ship(ShipId(129)).expect("bought");
+    let bought = session
+        .buy_ship(ShipId(129), &mut NeverFires)
+        .expect("bought");
     assert_eq!((bought.price, bought.trade_in), (17_500, 2500));
     assert_eq!(session.ship(), ShipId(129));
     assert_eq!(session.pilot().cash(), 10_000);

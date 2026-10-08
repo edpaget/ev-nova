@@ -137,6 +137,8 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
         item_class: 0,
         lc_name: format!("outfit {id}"),
         lc_plural: format!("outfits {id}"),
+        on_purchase: crate::control::Script::default(),
+        on_sell: crate::control::Script::default(),
     }
 }
 
@@ -170,6 +172,9 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         comm_name: format!("ship {id}"),
         inherent_govt: None,
         escort_type: -1,
+        on_capture: crate::control::Script::default(),
+        on_purchase: crate::control::Script::default(),
+        on_retire: crate::control::Script::default(),
     }
 }
 

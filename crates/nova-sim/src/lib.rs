@@ -259,8 +259,8 @@ pub use combat::hull::{Condition, DisableRule, HullSpec, NovaDisable};
 pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
 pub use control::{
-    Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, ScriptNote, SetExpr,
-    SetOp, SetOpHandler, SetOpKind, SetRegistry, Test, TestExpr,
+    Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
+    SetExpr, SetOp, SetOpHandler, SetOpKind, SetRegistry, Test, TestExpr,
 };
 pub use date::GameDate;
 pub use escort::{
@@ -303,7 +303,7 @@ pub use reserves::{Gauge, Reserve, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
-pub use session::{LandPress, PersonQuote, RelocateRefusal, Session, nova_set_ops};
+pub use session::{HookRules, LandPress, PersonQuote, RelocateRefusal, Session, nova_set_ops};
 pub use shipyard::{ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;

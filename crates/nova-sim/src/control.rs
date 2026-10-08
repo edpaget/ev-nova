@@ -45,7 +45,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 pub use nova_data::{
-    Bit, BitWrite, Comparison, ParsedTest, SetExpr, SetOp, SetOpKind, TestExpr, TestOperand,
+    Bit, BitWrite, Comparison, ParsedSet, ParsedTest, SetExpr, SetOp, SetOpKind, TestExpr,
+    TestOperand,
 };
 
 pub use self::set::{BitStore, SetOpHandler, SetRegistry, execute};
@@ -304,9 +305,67 @@ impl From<ParsedTest> for Test {
     }
 }
 
+/// A record's set-expression hook: its operators, parsed once and shared,
+/// or why it did not parse. The default is a blank script, which has no
+/// operators. A script that did not parse does nothing when run: the safe
+/// direction, where a broken hook writes no bit rather than half its bits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Script(pub(crate) ParsedSet);
+
+impl Script {
+    /// `text` parsed.
+    #[must_use]
+    pub fn parse(text: &str) -> Self {
+        Self(Arc::new(SetExpr::parse(text)))
+    }
+
+    /// The operators, or `None` when the script did not parse.
+    #[must_use]
+    pub fn tree(&self) -> Option<&SetExpr> {
+        self.0.as_ref().as_ref().ok()
+    }
+}
+
+impl Default for Script {
+    fn default() -> Self {
+        Self(Arc::new(Ok(SetExpr::default())))
+    }
+}
+
+impl From<ParsedSet> for Script {
+    fn from(parsed: ParsedSet) -> Self {
+        Self(parsed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_default_script_is_blank() {
+        assert_eq!(Script::default(), Script::parse(""));
+        assert_eq!(Script::default().tree().map(|set| set.ops.len()), Some(0));
+    }
+
+    #[test]
+    fn a_script_gives_its_operators() {
+        let script = Script::parse("b7 !b8");
+        assert_eq!(script.tree(), SetExpr::parse("b7 !b8").ok().as_ref());
+        assert_eq!(script.tree().map(|set| set.ops.len()), Some(2));
+    }
+
+    #[test]
+    fn a_script_that_did_not_parse_has_no_tree() {
+        assert_eq!(Script::parse("b1&").tree(), None);
+    }
+
+    #[test]
+    fn a_script_from_a_parse_shares_it() {
+        let parsed: ParsedSet = Arc::new(SetExpr::parse("b2"));
+        let script = Script::from(Arc::clone(&parsed));
+        assert!(Arc::ptr_eq(&script.0, &parsed));
+    }
 
     #[test]
     fn a_default_test_is_blank_and_always_holds() {

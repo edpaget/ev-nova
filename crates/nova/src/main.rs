@@ -90,7 +90,14 @@
 //! depth-first way, or every system within its jumps), `"invalid_map"`
 //! (whether a map that explores nothing is used up, or kept as an
 //! outfit) and `"remove_refund"` (whether `D` pays nothing for the
-//! outfit it removes, or what selling it would); every key is listed in
+//! outfit it removes, or what selling it would), and the set-expression
+//! hooks: `"purchase_paint_order"` (whether buying a ship clears its
+//! paint after the new ship's `OnPurchase`, losing a paint it grants, or
+//! before it), `"capture_hook_order"` (whether Use As My Ship runs
+//! `OnRetire` and `OnCapture` before the outfit swap, which strips a
+//! non-persistent outfit they grant, or after it) and
+//! `"start_ship_purchase"` (whether a new pilot's starting ship runs no
+//! `OnPurchase`, or runs it once before `OnStart`); every key is listed in
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!

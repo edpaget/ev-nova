@@ -159,9 +159,9 @@ use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HailView,
-    HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
-    NovaPersons, OutfitRules, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule,
-    RuleKey, RuleSource, Rulebook, Session, Take, Taken, pilot_key,
+    HireTerms, HookRules, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire,
+    NovaLaw, NovaPersons, OutfitRules, PersonRules, Pilot, PilotKeeper, PilotStore,
+    PointDefenceRule, RuleKey, RuleSource, Rulebook, Session, Take, Taken, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -309,6 +309,9 @@ pub struct AppScreen {
     /// How each flight grants and removes outfits where the rules are
     /// disputed.
     outfit_rules: OutfitRules,
+    /// The order of each flight's set-expression hooks where it is
+    /// disputed.
+    hook_rules: HookRules,
     /// The control-bit test a ship for hire's `Availability` goes
     /// through in each flight.
     control_bits: Rc<dyn ControlBits>,
@@ -395,6 +398,7 @@ impl AppScreen {
             person_rules: Rc::new(NovaPersons::default()),
             comm_quote: RuleSource::Engine,
             outfit_rules: OutfitRules::default(),
+            hook_rules: HookRules::default(),
             comm: None,
             haggle: None,
         }
@@ -587,11 +591,23 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's set-expression hooks in the order
+    /// `rules` say where it is disputed ([`FlightView::with_hook_rules`]);
+    /// the engine's until others are given.
+    #[must_use]
+    pub fn with_hook_rules(self, rules: HookRules) -> Self {
+        Self {
+            hook_rules: rules,
+            ..self
+        }
+    }
+
     /// The router with Nova's rules, each disputed one as `rulebook`
     /// chooses: the NPCs' behaviour, disabling, point defence, the law,
     /// boarding, hailing, the escorts' and fighters' rules, hiring, the
-    /// persons' rules, and granting and removing outfits. This is the edge where every [`RuleKey`] meets
-    /// its setting.
+    /// persons' rules, granting and removing outfits, and the order of
+    /// the set-expression hooks. This is the edge where every [`RuleKey`]
+    /// meets its setting.
     #[must_use]
     pub fn with_rulebook(self, rulebook: &Rulebook) -> Self {
         self.with_behaviour(Rc::new(NovaAi::from_rulebook(rulebook)))
@@ -611,6 +627,7 @@ impl AppScreen {
             .with_person_rules(Rc::new(NovaPersons::from_rulebook(rulebook)))
             .with_comm_quote(rulebook.source_for(RuleKey::CommQuote))
             .with_outfit_rules(OutfitRules::from_rulebook(rulebook))
+            .with_hook_rules(HookRules::from_rulebook(rulebook))
     }
 
     /// The comm dialog, while a hail is under way.
@@ -666,6 +683,7 @@ impl AppScreen {
             .with_person_rules(Rc::clone(&self.person_rules))
             .with_comm_quote(self.comm_quote)
             .with_outfit_rules(self.outfit_rules)
+            .with_hook_rules(self.hook_rules)
             .with_hyperspace_effects(self.prefs.hyperspace_effects);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
@@ -1463,8 +1481,10 @@ impl AppScreen {
 
     /// The New Pilot dialog's input. A name already saved, or one no file
     /// can be saved under, is refused; any other creates the pilot with the
-    /// gender chosen, saves it at once (so Open Pilot lists it before it
-    /// lands) and flies it.
+    /// gender chosen and flies it, begins its game (the `chär`'s `OnStart`,
+    /// [`FlightView::begin`]) and saves it at once, with what that did (so
+    /// Open Pilot lists it before it lands), as `_DoNewPilot` runs
+    /// `OnStart` before the first save.
     fn new_pilot_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.new_pilot.as_mut().expect("open");
         dialog.input(input);
@@ -1486,14 +1506,13 @@ impl AppScreen {
                 }
                 match Pilot::new(self.data.as_ref(), &name) {
                     Ok(pilot) => {
-                        let pilot = pilot.with_gender(gender);
-                        if let Some(keeper) = keeper
-                            && let Err(warning) = keeper.save(&pilot)
-                        {
-                            self.warnings.push(warning);
-                        }
                         self.close_new_pilot();
-                        self.start_flight(pilot);
+                        self.start_flight(pilot.with_gender(gender));
+                        if let Some(flight) = &mut self.flight {
+                            flight.begin();
+                            flight.take_save_due();
+                        }
+                        self.save_pilot();
                     }
                     Err(error) => {
                         let why = error.to_string();
@@ -2031,6 +2050,20 @@ pub(super) mod tests {
     }
 
     fn game_data(trading: bool, outfitting: bool, shipbuying: bool) -> Rc<GameData> {
+        game_data_starting(trading, outfitting, shipbuying, b"")
+    }
+
+    /// [`data`], where the `chär`'s `OnStart` is `on_start`.
+    fn starting_data(on_start: &[u8]) -> Rc<GameData> {
+        game_data_starting(false, false, false, on_start)
+    }
+
+    fn game_data_starting(
+        trading: bool,
+        outfitting: bool,
+        shipbuying: bool,
+        on_start: &[u8],
+    ) -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
         anim[0x04..0x06].copy_from_slice(&1_i16.to_be_bytes());
@@ -2046,6 +2079,7 @@ pub(super) mod tests {
             average[at..at + 2].copy_from_slice(&value.to_be_bytes());
         }
         let mut character = vec![0; Character::SIZE.expect("fixed")];
+        character[0x32..0x32 + on_start.len()].copy_from_slice(on_start);
         let mut stellar = landable();
         let mut fork = ForkBuilder::new();
         if trading {
@@ -3876,6 +3910,27 @@ pub(super) mod tests {
         assert_eq!(store.keys(), ["Ada"], "saved at once");
         assert_eq!(saved(&store, "Ada"), *pilot(&screen));
         assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_new_pilot_runs_the_chärs_on_start_once_and_is_saved_with_what_it_did() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(starting_data(b"^b5 X129"))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        let bit_5 = nova_sim::Bit::new(5).expect("a bit");
+        assert!(pilot(&screen).control_bit(bit_5), "toggled once");
+        assert!(pilot(&screen).has_explored(nova_sim::SystemId(129)));
+        assert_eq!(saved(&store, "Ada"), *pilot(&screen), "saved with them");
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+        // Opening the pilot runs no OnStart: a second toggle would clear it.
+        assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
+        let mut screen = AppScreen::new(starting_data(b"^b5 X129"))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        choose(&mut screen, MenuChoice::OpenPilot);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(pilot(&screen).control_bit(bit_5));
     }
 
     #[test]
@@ -5733,6 +5788,16 @@ pub(super) mod tests {
             flight(&screen).session().expect("flying").outfit_rules(),
             rules
         );
+        let rules = HookRules {
+            capture_hook_order: RuleSource::Bible,
+            ..HookRules::default()
+        };
+        let mut screen = AppScreen::new(data()).with_hook_rules(rules);
+        fly(&mut screen);
+        assert_eq!(
+            flight(&screen).session().expect("flying").hook_rules(),
+            rules
+        );
     }
 
     /// The rule-bearing parts of `screen`, each by name, as they print.
@@ -5755,6 +5820,7 @@ pub(super) mod tests {
             ("person_rules", format!("{:?}", screen.person_rules)),
             ("comm_quote", format!("{:?}", screen.comm_quote)),
             ("outfit_rules", format!("{:?}", screen.outfit_rules)),
+            ("hook_rules", format!("{:?}", screen.hook_rules)),
         ]
     }
 
@@ -5784,6 +5850,9 @@ pub(super) mod tests {
             | RuleKey::InvalidMap
             | RuleKey::GrantMax
             | RuleKey::RemoveRefund => "outfit_rules",
+            RuleKey::PurchasePaintOrder
+            | RuleKey::CaptureHookOrder
+            | RuleKey::StartShipPurchase => "hook_rules",
         }
     }
 

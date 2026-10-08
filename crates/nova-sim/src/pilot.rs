@@ -450,6 +450,7 @@ mod tests {
                 start: START,
                 cash,
                 legal: legal.map(|slot| slot.map(|(govt, record)| (GovtId(govt), record))),
+                on_start: crate::control::Script::default(),
             }),
             ..catalog()
         }

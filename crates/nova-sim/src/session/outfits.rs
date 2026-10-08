@@ -16,8 +16,9 @@
 //!
 //! **Its callers.** A purchase in the outfitter
 //! ([`Session::outfit`]) pays, then grants (`_DoOutfitDialog`
-//! @0x5c21d); an outfit flagged "remove after purchase" (`Flags` 0x0010)
-//! that the grant added is taken away again. (The original takes every
+//! @0x5c21d), then runs the outfit's `OnPurchase` (see the `hooks`
+//! module); an outfit flagged "remove after purchase" (`Flags` 0x0010)
+//! that the grant added is taken away again after that. (The original takes every
 //! such outfit owned away when the outfitter closes, @0x5daeb-0x5dafa,
 //! one granted by boarding or `G` too; here only the one just bought
 //! goes, at once.) A boarding grant goes through it once for each unit

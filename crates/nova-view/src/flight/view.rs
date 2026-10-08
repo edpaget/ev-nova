@@ -255,7 +255,8 @@ use nova_sim::{
     flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
-    ControlBits, HireList, HireRefusal, HireTerms, Hired, OutfitRules, PayNote, PersonRules,
+    ControlBits, HireList, HireRefusal, HireTerms, Hired, HookRules, OutfitRules, PayNote,
+    PersonRules,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -956,6 +957,17 @@ impl<
         Self::flying(catalog, session)
     }
 
+    /// Begins a new pilot's game as [`Session::begin`] does, on the
+    /// flight's chance, and shows on the course map any system it
+    /// explored: for a pilot just created, before its first save. A
+    /// session that failed begins nothing.
+    pub fn begin(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.begin(&self.catalog, &mut self.chance);
+            self.map.show_explored(session.pilot().explored());
+        }
+    }
+
     fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
         let session = session.map_err(|err| err.to_string());
         let (scene, sheet, status_bar) = match &session {
@@ -1135,6 +1147,16 @@ impl<
     pub fn with_outfit_rules(self, rules: OutfitRules) -> Self {
         Self {
             session: self.session.map(|session| session.with_outfit_rules(rules)),
+            ..self
+        }
+    }
+
+    /// The flight with the set-expression hooks following `rules` where
+    /// their order is disputed ([`Session::with_hook_rules`]).
+    #[must_use]
+    pub fn with_hook_rules(self, rules: HookRules) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_hook_rules(rules)),
             ..self
         }
     }
@@ -1622,12 +1644,13 @@ impl<
 }
 
 impl<C: ShipSprites> FlightView<C> {
-    /// Buys a ship as [`Session::buy_ship`] does, and reads the new ship's
+    /// Buys a ship as [`Session::buy_ship`] does, its hooks drawing on the
+    /// flight's chance, and reads the new ship's
     /// sprite sheet, so the new hull is drawn once it takes off; a session
     /// that failed has no shipyard.
     pub fn buy_ship(&mut self, ship: ShipId) -> Result<ShipPurchase, ShipRefusal> {
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
-        let bought = session.buy_ship(ship)?;
+        let bought = session.buy_ship(ship, &mut self.chance)?;
         self.sheet = self.catalog.ship_sheet(ship);
         Ok(bought)
     }
@@ -1848,11 +1871,12 @@ impl<C> FlightView<C> {
         self.session.as_ref().ok()?.outfitter()
     }
 
-    /// Buys or sells an outfit as [`Session::outfit`] does; a session that
-    /// failed has no outfitter.
+    /// Buys or sells an outfit as [`Session::outfit`] does, its hook
+    /// drawing on the flight's chance; a session that failed has no
+    /// outfitter.
     pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
         match &mut self.session {
-            Ok(session) => session.outfit(order),
+            Ok(session) => session.outfit(order, &mut self.chance),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
         }
     }
@@ -5087,6 +5111,8 @@ mod tests {
                 item_class: 0,
                 lc_name: "multi-jumping organ".to_owned(),
                 lc_plural: "multi-jumping organs".to_owned(),
+                on_purchase: nova_sim::Script::default(),
+                on_sell: nova_sim::Script::default(),
             }],
             defaults: vec![(OutfitId(275), 1)],
             onward: true,
@@ -5807,6 +5833,8 @@ mod tests {
                 item_class: 0,
                 lc_name: "fuel tank".to_owned(),
                 lc_plural: "fuel tanks".to_owned(),
+                on_purchase: nova_sim::Script::default(),
+                on_sell: nova_sim::Script::default(),
             }],
             ..catalog()
         }
@@ -5994,6 +6022,9 @@ mod tests {
                 comm_name: String::new(),
                 inherent_govt: None,
                 escort_type: -1,
+                on_capture: nova_sim::Script::default(),
+                on_purchase: nova_sim::Script::default(),
+                on_retire: nova_sim::Script::default(),
             }],
             ..outfitting()
         }
@@ -6049,6 +6080,88 @@ mod tests {
         let mut broken = FlightView::new(broken);
         assert_eq!(broken.shipyard(), None);
         assert_eq!(broken.buy_ship(ShipId(129)), Err(ShipRefusal::NoShipyard));
+    }
+
+    // The set-expression hooks.
+
+    /// Rolls the second outcome of every roll, so `R(a b)` takes `a`.
+    #[derive(Debug)]
+    struct RollsOne;
+
+    impl Chance for RollsOne {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            n.min(1)
+        }
+    }
+
+    fn rolling_one() -> SharedChance {
+        SharedChance::new(Rc::new(RefCell::new(RollsOne)))
+    }
+
+    fn bit_set(view: &View, n: u16) -> bool {
+        let bit = nova_sim::Bit::new(n).expect("a bit");
+        view.pilot().is_some_and(|pilot| pilot.control_bit(bit))
+    }
+
+    #[test]
+    fn an_outfits_on_purchase_runs_on_the_flights_chance() {
+        let mut catalog = outfitting();
+        catalog.outfits[0].on_purchase = nova_sim::Script::parse("R(b1 b2)");
+        let mut view = FlightView::new(catalog).with_chance(rolling_one());
+        land_now(&mut view);
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert!(bit_set(&view, 1));
+        assert!(!bit_set(&view, 2));
+    }
+
+    #[test]
+    fn a_ships_on_purchase_runs_on_the_flights_chance() {
+        let mut catalog = shipbuying();
+        catalog.ships[0].on_purchase = nova_sim::Script::parse("R(b3 b4)");
+        let mut view = FlightView::new(catalog).with_chance(rolling_one());
+        land_now(&mut view);
+        view.buy_ship(ShipId(129)).expect("bought");
+        assert!(bit_set(&view, 3));
+        assert!(!bit_set(&view, 4));
+    }
+
+    /// The first `chär`'s `OnStart` is `on_start`.
+    fn starting_with(on_start: &str) -> FakeCatalog {
+        let base = catalog();
+        FakeCatalog {
+            character: Ok(CharacterStart {
+                on_start: nova_sim::Script::parse(on_start),
+                ..base.character.clone().expect("a chär")
+            }),
+            ..base
+        }
+    }
+
+    #[test]
+    fn beginning_runs_on_start_once_and_the_map_shows_what_it_explored() {
+        let catalog = starting_with("R(b5 b6) ^b7 X131");
+        let pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        let mut view = FlightView::with_pilot(catalog, pilot).with_chance(rolling_one());
+        assert!(!bit_set(&view, 7), "flying runs nothing");
+        view.begin();
+        assert!(bit_set(&view, 5), "on the flight's chance");
+        assert!(bit_set(&view, 7), "once");
+        let explored = view
+            .course_map()
+            .explored()
+            .map(|set| set.iter().copied().collect::<Vec<_>>());
+        assert_eq!(explored, Some(vec![SystemId(130), SystemId(131)]));
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..starting_with("b5")
+        };
+        let mut broken = FlightView::new(broken);
+        broken.begin();
+        assert_eq!(broken.pilot(), None);
     }
     // Traffic.
 
@@ -6138,6 +6251,9 @@ mod tests {
             comm_name: String::new(),
             inherent_govt: None,
             escort_type: -1,
+            on_capture: nova_sim::Script::default(),
+            on_purchase: nova_sim::Script::default(),
+            on_retire: nova_sim::Script::default(),
         };
         FakeCatalog {
             traffic: systems
@@ -8049,6 +8165,8 @@ mod tests {
             item_class: 0,
             lc_name: "rocket".to_owned(),
             lc_plural: "rockets".to_owned(),
+            on_purchase: nova_sim::Script::default(),
+            on_sell: nova_sim::Script::default(),
         }];
         let (_, chance) = scripted(&placed(750, 750, 0));
         let mut view = FlightView::new(catalog)
@@ -8943,6 +9061,16 @@ mod tests {
         assert_eq!(view.session().expect("flying").outfit_rules(), rules);
     }
 
+    #[test]
+    fn the_hook_rules_reach_the_session() {
+        let rules = nova_sim::HookRules {
+            purchase_paint_order: RuleSource::Bible,
+            ..nova_sim::HookRules::default()
+        };
+        let view = flight().with_hook_rules(rules);
+        assert_eq!(view.session().expect("flying").hook_rules(), rules);
+    }
+
     // Boarding grants.
 
     #[test]
@@ -9071,6 +9199,8 @@ mod tests {
             item_class: 7,
             lc_name: "spare part".to_owned(),
             lc_plural: "spare parts".to_owned(),
+            on_purchase: nova_sim::Script::default(),
+            on_sell: nova_sim::Script::default(),
         }];
         catalog
     }

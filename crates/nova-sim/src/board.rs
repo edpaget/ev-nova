@@ -75,7 +75,10 @@
 //! takes it over, while a ship slot is free in the system
 //! ([`MAX_SHIPS_IN_SYSTEM`]) for the old ship, which joins the fleet with
 //! its class's stock loadout, full; with no slot free the whole swap is
-//! dropped. A player of no crew captures straight into the fleet.
+//! dropped. A player of no crew captures straight into the fleet. The
+//! captured class's `OnCapture` runs before it joins the fleet, and on
+//! "Use As My Ship" the old class's `OnRetire` runs first; no hook runs
+//! when the swap is dropped (see the session's `hooks`).
 //!
 //! **A person's grant** ([`BoardingRule::grant`]): boarding a person may
 //! also give the player outfits of its `GrantClass`, as

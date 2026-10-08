@@ -11,12 +11,12 @@ pub use nova_data::{
     SystemId, WeaponId,
 };
 
-use crate::control::Test;
+use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
 /// A new pilot's start, from the first `chär`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CharacterStart {
     /// The starting `shïp`, if it names one.
     pub ship: Option<ShipId>,
@@ -30,6 +30,9 @@ pub struct CharacterStart {
     /// The starting legal records, `Govt1-4` with `Status1-4`: each
     /// government and the record with it, or `None` for an unused slot.
     pub legal: [Option<(GovtId, i16)>; 4],
+    /// Its `OnStart` set expression, parsed: run once on a new pilot,
+    /// before its first save (see the session's `hooks`).
+    pub on_start: Script,
 }
 
 /// A new pilot's starting date, raw from the `chär`: the
@@ -165,6 +168,11 @@ pub struct OutfitRecord {
     pub require_govt: i16,
     /// Its `Availability` control-bit test, parsed.
     pub availability: Test,
+    /// Its `OnPurchase` set expression, parsed: run once for each unit
+    /// bought (see the session's `hooks`).
+    pub on_purchase: Script,
+    /// Its `OnSell` set expression, parsed: run once for each unit sold.
+    pub on_sell: Script,
     /// Its `ItemClass`, raw: the class a person's `GrantClass` grants
     /// from (see [`grant`](crate::grant)).
     pub item_class: i16,
@@ -211,6 +219,15 @@ pub struct ShipRecord {
     /// type will not show up in dude resources if this expression
     /// evaluates to false" (see [`spawn`](crate::traffic::spawn)).
     pub appear_on: Test,
+    /// Its `OnPurchase` set expression, parsed: run when the player buys
+    /// one (see the session's `hooks`).
+    pub on_purchase: Script,
+    /// Its `OnCapture` set expression, parsed: run when the player
+    /// captures one, as an escort or as its own ship.
+    pub on_capture: Script,
+    /// Its `OnRetire` set expression, parsed: run when the player trades
+    /// one in or leaves it for a captured ship.
+    pub on_retire: Script,
     /// Its `Flags3`.
     pub flags3: u16,
     /// Its `DispWeight`: higher shows nearer the top.
@@ -942,6 +959,8 @@ mod tests {
                 item_class: 0,
                 lc_name: "scoop".to_owned(),
                 lc_plural: "scoops".to_owned(),
+                on_purchase: crate::control::Script::default(),
+                on_sell: crate::control::Script::default(),
             }]
         }
 

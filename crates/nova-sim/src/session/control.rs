@@ -27,6 +27,11 @@
 //! and sounds (`M`, `N`, `Q`, `P`), and those of the missions (`A`, `F`,
 //! `S`), ranks (`K`, `L`) and stellars (`Y`, `U`), which other work
 //! registers.
+//!
+//! **Hooks.** The records' set-expression hooks (the `chär`'s `OnStart`,
+//! an outfit's `OnPurchase` and `OnSell`, a ship's `OnPurchase`,
+//! `OnCapture` and `OnRetire`) run through [`Session::run_set`] where
+//! the original runs them: see the `hooks` module.
 
 use std::rc::Rc;
 
