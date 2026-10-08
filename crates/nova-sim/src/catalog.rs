@@ -755,6 +755,9 @@ pub trait PilotCatalog {
     fn junk(&self) -> Vec<JunkRecord>;
     /// Every `öops` that can be read, by ascending ID.
     fn disasters(&self) -> Vec<DisasterRecord>;
+    /// Every `spöb` that can be read, by ascending ID, with its `Flags`,
+    /// raw.
+    fn stellar_flags(&self) -> Vec<(StellarId, u32)>;
     /// The first `chär`'s `DatePrefix` and `DateSuffix`, or none (both
     /// empty) when there is no `chär` or it does not decode.
     fn date_affixes(&self) -> DateAffixes;
@@ -808,6 +811,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn disasters(&self) -> Vec<DisasterRecord> {
         (**self).disasters()
+    }
+
+    fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+        (**self).stellar_flags()
     }
 
     fn date_affixes(&self) -> DateAffixes {
@@ -864,6 +871,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn disasters(&self) -> Vec<DisasterRecord> {
         (**self).disasters()
+    }
+
+    fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+        (**self).stellar_flags()
     }
 
     fn date_affixes(&self) -> DateAffixes {
@@ -1035,6 +1046,11 @@ mod tests {
                 ..DisasterRecord::default()
             }]
         }
+
+        /// Stellar 128, uninhabited.
+        fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+            vec![(StellarId(128), 0x20)]
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1059,6 +1075,7 @@ mod tests {
             format!("{:?}", catalog.ships()),
             format!("{:?}", catalog.date_affixes()),
             format!("{:?}", catalog.gate_sites()),
+            format!("{:?}", catalog.stellar_flags()),
         ]
     }
 
@@ -1086,6 +1103,7 @@ mod tests {
             r#"DateAffixes { prefix: "Year ", suffix: " NC" }"#
         );
         assert!(direct[16].contains("StellarId(1405)"), "{direct:?}");
+        assert_eq!(direct[17], "[(StellarId(128), 32)]");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

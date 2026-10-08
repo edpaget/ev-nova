@@ -51,7 +51,10 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) commodities: CommodityStrings,
     pub(crate) junk: Vec<JunkRecord>,
     pub(crate) disasters: Vec<DisasterRecord>,
-    /// How many times the goods (commodities, `jünk` and `öops`) were read.
+    /// Every `spöb`'s `Flags`, read with the goods.
+    pub(crate) stellars: Vec<(StellarId, u32)>,
+    /// How many times the goods (commodities, `jünk`, `öops` and the
+    /// stellars' flags) were read.
     pub(crate) goods_reads: RefCell<usize>,
     /// Each system's traffic; any other has none.
     pub(crate) traffic: Vec<(SystemId, SystemTraffic)>,
@@ -351,6 +354,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         commodities: CommodityStrings::default(),
         junk: Vec::new(),
         disasters: Vec::new(),
+        stellars: Vec::new(),
         goods_reads: RefCell::default(),
         traffic: Vec::new(),
         dudes: Vec::new(),
@@ -458,6 +462,11 @@ impl PilotCatalog for FakePilotCatalog {
     fn disasters(&self) -> Vec<DisasterRecord> {
         *self.goods_reads.borrow_mut() += 1;
         self.disasters.clone()
+    }
+
+    fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+        *self.goods_reads.borrow_mut() += 1;
+        self.stellars.clone()
     }
 
     fn date_affixes(&self) -> DateAffixes {
@@ -637,6 +646,14 @@ impl Scripted {
         Self {
             rolls: rolls.iter().rev().copied().collect(),
             ..Self::default()
+        }
+    }
+
+    /// This script, rolling `rolls`, in order, then 0.
+    pub(crate) fn and_rolling(self, rolls: &[u16]) -> Self {
+        Self {
+            rolls: rolls.iter().rev().copied().collect(),
+            ..self
         }
     }
 }

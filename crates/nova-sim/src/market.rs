@@ -34,16 +34,21 @@
 //!
 //! Each day ([`step_day`]), every active event's days left go down by
 //! one, and those that reach none end; then every `öops` that is not
-//! active, names a stellar, has a `Freq` above 0, a `Duration` above 0, a
-//! standard commodity and an `ActivateOn` that holds, starts with
-//! `Duration` days left if a `Freq` % [`Chance`] fires. While an event is
-//! active its `PriceDelta` is added to that commodity's price at its
-//! stellar; several add up, and a price never goes below 0. The exchange
-//! shows the names of the events active at its stellar.
+//! active, has a stellar to start at, a `Freq` above 0, a `Duration`
+//! above 0, a standard commodity and an `ActivateOn` that holds, starts
+//! with `Duration` days left if a `Freq` % [`Chance`] fires. While an
+//! event is active its `PriceDelta` is added to that commodity's price at
+//! its stellar; several add up, and a price never goes below 0. The
+//! exchange shows the names of the events active at its stellar.
 //!
-//! An `öops` whose `Stellar` is -2 (news only) never moves a price, and
-//! -1 ("any stellar") is not modelled: no stock record uses it, and it
-//! would need a second draw to pick the stellar. Neither is ever rolled.
+//! An event starts at its stellar: the `spöb` its `Stellar` names, from
+//! 128 up, or, for a `Stellar` of -1 ("any stellar"), an even pick by
+//! [`Chance`], once the `Freq` roll fires, among [`event_stellars`] by
+//! ID: the stellars 128 to 2175 that are not uninhabited, whether or not
+//! they trade. It stays there for its run, and is saved with it. A
+//! `Stellar` of -2 (news only) or 0 to 127 is never rolled. With no
+//! candidate a -1 event never starts either; here we leave the original,
+//! whose draw never ends and hangs the game.
 //!
 //! # Cargo
 //!
@@ -231,16 +236,20 @@ pub struct Goods {
     commodities: Vec<(u8, Commodity)>,
     junk: Vec<JunkRecord>,
     disasters: Vec<DisasterRecord>,
+    /// The stellars a `Stellar` -1 event may be placed at, by ascending ID.
+    stellars: Vec<StellarId>,
 }
 
 impl Goods {
-    /// The goods and events `catalog` holds.
+    /// The goods and events `catalog` holds, and the stellars an event
+    /// may be placed at.
     pub fn read(catalog: &impl PilotCatalog) -> Self {
         Self::new(
             &catalog.commodity_strings(),
             catalog.junk(),
             catalog.disasters(),
         )
+        .with_stellars(&catalog.stellar_flags())
     }
 
     /// The goods from these commodity strings, `jünk` and `öops`.
@@ -254,7 +263,16 @@ impl Goods {
             commodities: commodities(strings),
             junk,
             disasters,
+            stellars: Vec::new(),
         }
+    }
+
+    /// These goods, with a `Stellar` -1 event placed among
+    /// [`event_stellars`] of `stellars`, each `spöb` with its `Flags`.
+    #[must_use]
+    pub fn with_stellars(mut self, stellars: &[(StellarId, u32)]) -> Self {
+        self.stellars = event_stellars(stellars);
+        self
     }
 
     /// `good`'s name, as the exchange names it; none for a good that is
@@ -381,9 +399,12 @@ pub(crate) fn market(
     }
     let here: Vec<&DisasterRecord> = pilot
         .events
-        .keys()
-        .filter_map(|id| goods.disasters.iter().find(|event| event.id == *id))
-        .filter(|event| event.stellar == stellar.0 && standard(event.commodity).is_some())
+        .iter()
+        .filter_map(|(id, active)| {
+            let event = goods.disasters.iter().find(|event| event.id == *id)?;
+            (place(*active, event) == Some(stellar) && standard(event.commodity).is_some())
+                .then_some(event)
+        })
         .collect();
     let mut rows: Vec<MarketRow> = goods
         .commodities
@@ -478,20 +499,74 @@ pub(crate) fn settle(pilot: &mut Pilot, order: Order, tons: u32, price: i64) {
     }
 }
 
+/// The lowest `spöb` ID: an event's `Stellar` names a stellar only from
+/// here up (the original's "above 127", @0x41b3c).
+const FIRST_STELLAR: i16 = 128;
+
+/// How many `spöb` slots the original loads: IDs 128 to 2175 (@0x7721a,
+/// @0x779e7).
+const STELLAR_SLOTS: i16 = 2048;
+
+/// The `Stellar` of an event at any stellar, drawn when it starts.
+const ANY_STELLAR: i16 = -1;
+
+/// The stellar a record's `Stellar` names, if it names one.
+fn fixed_stellar(stellar: i16) -> Option<StellarId> {
+    (stellar >= FIRST_STELLAR).then_some(StellarId(stellar))
+}
+
+/// The stellars a `Stellar` -1 event may be placed at, by ascending ID:
+/// those from 128 to 2175 whose `Flags` (`stellars` gives them raw) are
+/// not uninhabited, whether or not they trade.
+#[must_use]
+pub fn event_stellars(stellars: &[(StellarId, u32)]) -> Vec<StellarId> {
+    let mut candidates: Vec<StellarId> = stellars
+        .iter()
+        .filter(|(id, flags)| {
+            (FIRST_STELLAR..FIRST_STELLAR + STELLAR_SLOTS).contains(&id.0)
+                && flags & StellarFlags::UNINHABITED == 0
+        })
+        .map(|&(id, _)| id)
+        .collect();
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates
+}
+
+/// An event under way: its days left and the stellar it is at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ActiveEvent {
+    /// The days it has left.
+    pub(crate) days: u16,
+    /// The stellar it is at; `None` for its record's own `Stellar`, which
+    /// only a save from before version 13 holds.
+    pub(crate) stellar: Option<StellarId>,
+}
+
+/// The stellar `active`, an event of `event`'s, is at: the one it
+/// stored, or else its record's.
+fn place(active: ActiveEvent, event: &DisasterRecord) -> Option<StellarId> {
+    active.stellar.or_else(|| fixed_stellar(event.stellar))
+}
+
 /// One day's events: the active ones age, and each that can start is
 /// rolled once on `chance`.
 pub(crate) fn step_day(
     goods: &Goods,
-    events: &mut BTreeMap<DisasterId, u16>,
+    events: &mut BTreeMap<DisasterId, ActiveEvent>,
     chance: &mut (impl Chance + ?Sized),
 ) {
-    events.retain(|id, days| {
-        *days = days.saturating_sub(1);
-        *days > 0 && goods.disasters.iter().any(|event| event.id == *id)
+    events.retain(|id, active| {
+        active.days = active.days.saturating_sub(1);
+        active.days > 0 && goods.disasters.iter().any(|event| event.id == *id)
     });
     for event in &goods.disasters {
+        let fixed = fixed_stellar(event.stellar);
+        let drawn = event.stellar == ANY_STELLAR && !goods.stellars.is_empty();
+        if fixed.is_none() && !drawn {
+            continue;
+        }
         let can_start = !events.contains_key(&event.id)
-            && event.stellar >= 0
             && event.freq > 0
             && event.duration > 0
             && standard(event.commodity).is_some()
@@ -500,11 +575,26 @@ pub(crate) fn step_day(
             continue;
         }
         let percent = u8::try_from(event.freq.min(100)).unwrap_or(100);
-        if chance.fires(percent) {
-            let days = u16::try_from(event.duration).unwrap_or(u16::MAX);
-            events.insert(event.id, days);
+        if !chance.fires(percent) {
+            continue;
         }
+        // The `Freq` roll comes first, as the original's (@0x41b08,
+        // @0x41b5b).
+        let Some(stellar) = fixed.or_else(|| draw(&goods.stellars, chance)) else {
+            continue;
+        };
+        let days = u16::try_from(event.duration).unwrap_or(u16::MAX);
+        let stellar = Some(stellar);
+        events.insert(event.id, ActiveEvent { days, stellar });
     }
+}
+
+/// An even pick among `stellars` on `chance`; none if the roll is out of
+/// range.
+fn draw(stellars: &[StellarId], chance: &mut (impl Chance + ?Sized)) -> Option<StellarId> {
+    // At most `STELLAR_SLOTS` of them, so the count fits.
+    let sides = u16::try_from(stellars.len()).unwrap_or(u16::MAX);
+    stellars.get(usize::from(chance.roll(sides))).copied()
 }
 
 #[cfg(test)]
@@ -899,12 +989,36 @@ mod tests {
         assert_eq!(over.free, 0, "more held than there is space");
     }
 
-    /// The exchange at `stellar` with these events active.
+    /// An event of `record`'s, which is at `stellar`, with `days` left.
+    fn at(record: &DisasterRecord, days: u16) -> (DisasterId, ActiveEvent) {
+        let stellar = Some(StellarId(record.stellar));
+        (record.id, ActiveEvent { days, stellar })
+    }
+
+    /// The exchange at `stellar` with these events active, each at its
+    /// record's stellar.
     fn with_events(stellar: StellarId, flags: u32, active: &[(i16, u16)]) -> Market {
         let mut pilot = pilot(0);
+        let records = disasters();
         pilot.events = active
             .iter()
-            .map(|&(id, days)| (DisasterId(id), days))
+            .map(|&(id, days)| {
+                records
+                    .iter()
+                    .find(|record| record.id == DisasterId(id))
+                    .map_or_else(
+                        || {
+                            (
+                                DisasterId(id),
+                                ActiveEvent {
+                                    days,
+                                    stellar: None,
+                                },
+                            )
+                        },
+                        |record| at(record, days),
+                    )
+            })
             .collect();
         market(&goods(), stellar, flags, &pilot, 0).expect("trades")
     }
@@ -958,7 +1072,13 @@ mod tests {
             }],
         );
         let mut pilot = pilot(0);
-        pilot.events = BTreeMap::from([(DisasterId(140), 3)]);
+        pilot.events = BTreeMap::from([(
+            DisasterId(140),
+            ActiveEvent {
+                days: 3,
+                stellar: Some(EARTH),
+            },
+        )]);
         let found = market(&goods, EARTH, PORT_KANE, &pilot, 0).expect("trades");
         assert_eq!(price(&found, Good::Commodity(0)), 0);
         let negative = Goods::new(&strings(&["Food"], &["-40"]), Vec::new(), Vec::new());
@@ -981,10 +1101,69 @@ mod tests {
             }],
         );
         let mut pilot = pilot(0);
-        pilot.events = BTreeMap::from([(DisasterId(140), 3)]);
+        pilot.events = BTreeMap::from([(
+            DisasterId(140),
+            ActiveEvent {
+                days: 3,
+                stellar: Some(EARTH),
+            },
+        )]);
         let found = market(&goods, EARTH, PORT_KANE, &pilot, 0).expect("trades");
         assert_eq!(found.events, Vec::<String>::new());
         assert_eq!(price(&found, Good::Commodity(5)), 440);
+    }
+
+    /// The exchange at `here` (Port Kane's levels) with one food event
+    /// (-15) active, its record's `Stellar` `record`, stored at `stored`.
+    fn one_event(record: i16, stored: Option<StellarId>, here: StellarId) -> Market {
+        let goods = Goods::new(
+            &stock(),
+            Vec::new(),
+            vec![DisasterRecord {
+                id: DisasterId(128),
+                name: "Surplus".to_owned(),
+                stellar: record,
+                price_delta: -15,
+                ..DisasterRecord::default()
+            }],
+        );
+        let mut pilot = pilot(0);
+        pilot.events = BTreeMap::from([(
+            DisasterId(128),
+            ActiveEvent {
+                days: 3,
+                stellar: stored,
+            },
+        )]);
+        market(&goods, here, PORT_KANE, &pilot, 0).expect("trades")
+    }
+
+    /// Food's price and the events shown at `market`.
+    fn food_and_events(market: &Market) -> (i64, Vec<String>) {
+        (price(market, Good::Commodity(0)), market.events.clone())
+    }
+
+    #[test]
+    fn an_event_moves_the_price_and_shows_at_its_stored_stellar_only() {
+        let surplus = (78, vec!["Surplus".to_owned()]);
+        let quiet = (93, Vec::new());
+        for record in [-1, 140] {
+            let mars = one_event(record, Some(MARS), MARS);
+            assert_eq!(food_and_events(&mars), surplus, "{record}");
+            let earth = one_event(record, Some(MARS), EARTH);
+            assert_eq!(food_and_events(&earth), quiet, "{record}");
+        }
+    }
+
+    #[test]
+    fn an_event_from_an_older_save_is_at_its_records_stellar() {
+        let surplus = (78, vec!["Surplus".to_owned()]);
+        let quiet = (93, Vec::new());
+        assert_eq!(food_and_events(&one_event(140, None, EARTH)), surplus);
+        assert_eq!(food_and_events(&one_event(140, None, MARS)), quiet);
+        for here in [EARTH, MARS, StellarId(-1)] {
+            assert_eq!(food_and_events(&one_event(-1, None, here)), quiet);
+        }
     }
 
     // Buying and selling.
@@ -1136,8 +1315,35 @@ mod tests {
 
     // Events.
 
-    fn days(events: &BTreeMap<DisasterId, u16>) -> Vec<(i16, u16)> {
-        events.iter().map(|(id, &days)| (id.0, days)).collect()
+    #[test]
+    fn the_event_stellars_are_the_inhabited_stellars_128_to_2175_by_id() {
+        let stellars = [
+            (StellarId(2175), TRADE),
+            (StellarId(150), 0),
+            (StellarId(127), TRADE),
+            (StellarId(141), TRADE | StellarFlags::UNINHABITED),
+            (StellarId(2176), TRADE),
+            (StellarId(128), StellarFlags::CAN_LAND),
+            (StellarId(150), 0),
+        ];
+        assert_eq!(
+            event_stellars(&stellars),
+            [StellarId(128), StellarId(150), StellarId(2175)]
+        );
+        assert_eq!(event_stellars(&[]), []);
+    }
+
+    fn days(events: &BTreeMap<DisasterId, ActiveEvent>) -> Vec<(i16, u16)> {
+        events
+            .iter()
+            .map(|(id, active)| (id.0, active.days))
+            .collect()
+    }
+
+    /// Event `id`, at Earth with `days` left.
+    fn on_earth(id: i16, days: u16) -> (DisasterId, ActiveEvent) {
+        let stellar = Some(EARTH);
+        (DisasterId(id), ActiveEvent { days, stellar })
     }
 
     #[test]
@@ -1147,6 +1353,19 @@ mod tests {
         step_day(&goods(), &mut events, &mut chance);
         assert_eq!(chance.asked, [35, 40, 50], "each öops by ID, at its Freq");
         assert_eq!(days(&events), [(128, 30), (130, 25)]);
+        assert_eq!(
+            events
+                .values()
+                .map(|active| active.stellar)
+                .collect::<Vec<_>>(),
+            [Some(StellarId(140)); 2],
+            "each at its record's stellar"
+        );
+        assert_eq!(
+            chance.sides_asked,
+            Vec::<u16>::new(),
+            "a fixed stellar draws nothing"
+        );
     }
 
     #[test]
@@ -1162,7 +1381,7 @@ mod tests {
 
     #[test]
     fn an_active_event_ages_a_day_at_a_time_and_is_not_rolled_again() {
-        let mut events = BTreeMap::from([(DisasterId(128), 3)]);
+        let mut events = BTreeMap::from([on_earth(128, 3)]);
         let mut chance = Scripted::default();
         step_day(&goods(), &mut events, &mut chance);
         assert_eq!(days(&events), [(128, 2)]);
@@ -1203,7 +1422,7 @@ mod tests {
 
     #[test]
     fn an_event_whose_öops_is_gone_ends() {
-        let mut events = BTreeMap::from([(DisasterId(999), 20), (DisasterId(128), 20)]);
+        let mut events = BTreeMap::from([on_earth(999, 20), on_earth(128, 20)]);
         step_day(&goods(), &mut events, &mut Scripted::default());
         assert_eq!(days(&events), [(128, 19)]);
     }
@@ -1223,7 +1442,7 @@ mod tests {
             &stock(),
             Vec::new(),
             vec![
-                event(128, -1, 0, 10, 50),
+                event(128, 127, 0, 10, 50),
                 event(129, -2, 0, 10, 50),
                 event(130, 140, 0, 10, 0),
                 event(131, 140, 0, 10, -5),
@@ -1232,13 +1451,98 @@ mod tests {
                 event(134, 140, -1, 10, 50),
                 event(135, 140, 6, 10, 50),
                 event(136, 140, 5, 10, 250),
+                event(137, 0, 0, 10, 50),
             ],
-        );
+        )
+        .with_stellars(&[(StellarId(140), TRADE)]);
         let mut events = BTreeMap::new();
         let mut chance = Scripted::answering(&[true]);
         step_day(&goods, &mut events, &mut chance);
-        assert_eq!(chance.asked, [100], "only the last, its Freq clamped");
+        assert_eq!(chance.asked, [100], "only 136, its Freq clamped");
         assert_eq!(days(&events), [(136, 10)]);
+    }
+
+    /// A food event 128 at any stellar (Freq 50, Duration 10), with
+    /// candidates 150 and 140, and the uninhabited 141.
+    fn anywhere() -> Goods {
+        Goods::new(
+            &stock(),
+            Vec::new(),
+            vec![DisasterRecord {
+                id: DisasterId(128),
+                stellar: -1,
+                price_delta: -15,
+                duration: 10,
+                freq: 50,
+                ..DisasterRecord::default()
+            }],
+        )
+        .with_stellars(&[
+            (StellarId(150), TRADE),
+            (StellarId(140), 0),
+            (StellarId(141), TRADE | StellarFlags::UNINHABITED),
+        ])
+    }
+
+    /// Event 128 at `stellar` with `days` left.
+    fn placed(stellar: i16, days: u16) -> BTreeMap<DisasterId, ActiveEvent> {
+        let stellar = Some(StellarId(stellar));
+        BTreeMap::from([(DisasterId(128), ActiveEvent { days, stellar })])
+    }
+
+    #[test]
+    fn an_any_stellar_event_starts_at_the_stellar_its_roll_picks() {
+        let mut events = BTreeMap::new();
+        let mut chance = Scripted::answering(&[true]).and_rolling(&[1]);
+        step_day(&anywhere(), &mut events, &mut chance);
+        assert_eq!(chance.asked, [50]);
+        assert_eq!(chance.sides_asked, [2], "140 and 150, not the uninhabited");
+        assert_eq!(events, placed(150, 10));
+        let mut events = BTreeMap::new();
+        let mut chance = Scripted::answering(&[true]).and_rolling(&[0]);
+        step_day(&anywhere(), &mut events, &mut chance);
+        assert_eq!(events, placed(140, 10));
+    }
+
+    #[test]
+    fn an_any_stellar_event_whose_roll_is_out_of_range_does_not_start() {
+        let mut events = BTreeMap::new();
+        let mut chance = Scripted::answering(&[true]).and_rolling(&[2]);
+        step_day(&anywhere(), &mut events, &mut chance);
+        assert_eq!(chance.sides_asked, [2]);
+        assert_eq!(events, BTreeMap::new());
+    }
+
+    #[test]
+    fn an_any_stellar_event_whose_chance_does_not_fire_draws_no_stellar() {
+        let mut events = BTreeMap::new();
+        let mut chance = Scripted::default();
+        step_day(&anywhere(), &mut events, &mut chance);
+        assert_eq!(chance.asked, [50]);
+        assert_eq!(chance.sides_asked, Vec::<u16>::new());
+        assert_eq!(events, BTreeMap::new());
+    }
+
+    #[test]
+    fn an_any_stellar_event_with_no_candidate_is_never_rolled() {
+        let goods = Goods::new(&stock(), Vec::new(), anywhere().disasters);
+        let mut events = BTreeMap::new();
+        let mut chance = Scripted::answering(&[true]);
+        step_day(&goods, &mut events, &mut chance);
+        assert_eq!(chance.asked, Vec::<u8>::new());
+        assert_eq!(chance.sides_asked, Vec::<u16>::new());
+        assert_eq!(events, BTreeMap::new());
+    }
+
+    #[test]
+    fn an_any_stellar_event_keeps_its_stellar_as_it_ages() {
+        let mut events = placed(150, 3);
+        let mut chance = Scripted::answering(&[true, true]).and_rolling(&[0, 0]);
+        step_day(&anywhere(), &mut events, &mut chance);
+        assert_eq!(events, placed(150, 2));
+        step_day(&anywhere(), &mut events, &mut chance);
+        assert_eq!(events, placed(150, 1));
+        assert_eq!(chance.sides_asked, Vec::<u16>::new(), "never drawn again");
     }
 
     #[test]

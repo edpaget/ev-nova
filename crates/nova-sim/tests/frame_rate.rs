@@ -84,6 +84,10 @@ impl PilotCatalog for Pilot {
         Vec::new()
     }
 
+    fn stellar_flags(&self) -> Vec<(nova_sim::StellarId, u32)> {
+        Vec::new()
+    }
+
     fn date_affixes(&self) -> DateAffixes {
         DateAffixes::default()
     }

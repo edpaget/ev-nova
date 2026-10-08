@@ -41,7 +41,7 @@ use crate::catalog::{
 use crate::combat::armament::Arsenal;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
-use crate::market::Good;
+use crate::market::{ActiveEvent, Good};
 use crate::outfitter::outfit_mods;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
@@ -76,9 +76,9 @@ pub struct Pilot {
     /// The tons held of each good the ship carries; none of a good not
     /// listed.
     pub(crate) cargo: BTreeMap<Good, u32>,
-    /// The planetary events under way, each `öops` with the days it has
-    /// left.
-    pub(crate) events: BTreeMap<DisasterId, u16>,
+    /// The planetary events under way: each `öops` with the days it has
+    /// left and the stellar it is at.
+    pub(crate) events: BTreeMap<DisasterId, ActiveEvent>,
     /// How many of each outfit the ship carries; none of an outfit not
     /// listed.
     pub(crate) outfits: BTreeMap<OutfitId, u16>,
@@ -307,7 +307,7 @@ impl Pilot {
     /// Every planetary event under way, by `öops` ID, with the days it has
     /// left.
     pub fn events(&self) -> impl Iterator<Item = (DisasterId, u16)> + '_ {
-        self.events.iter().map(|(&id, &days)| (id, days))
+        self.events.iter().map(|(&id, active)| (id, active.days))
     }
 
     /// How many of `outfit` the ship carries.
@@ -569,7 +569,11 @@ mod tests {
         use crate::catalog::JunkId;
         let mut pilot = Pilot::new(&catalog(), "").expect("starts");
         pilot.cargo = BTreeMap::from([(Good::Junk(JunkId(146)), 2), (Good::Commodity(3), 7)]);
-        pilot.events = BTreeMap::from([(DisasterId(130), 4), (DisasterId(128), 9)]);
+        let active = |days| ActiveEvent {
+            days,
+            stellar: Some(StellarId(140)),
+        };
+        pilot.events = BTreeMap::from([(DisasterId(130), active(4)), (DisasterId(128), active(9))]);
         assert_eq!(pilot.held(Good::Commodity(3)), 7);
         assert_eq!(pilot.held(Good::Junk(JunkId(146))), 2);
         assert_eq!(pilot.held(Good::Commodity(0)), 0);

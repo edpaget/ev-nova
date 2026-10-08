@@ -1,7 +1,8 @@
 //! A flight session over the stock data: the first `chär` starts a session
 //! with its ship's handling and reserves in a system that exists, Port
-//! Kane's exchange trades at its levels, and its outfitter sells what its
-//! tech levels allow on a day every roll fires; Viking's shipyard sells
+//! Kane's exchange trades at its levels, an event at any stellar may be
+//! placed there but not at uninhabited Reflex-ion, and its outfitter
+//! sells what its tech levels allow on a day every roll fires; Viking's shipyard sells
 //! what its tech levels and the ships' `BuyRandom` allow, and trades the
 //! Shuttle in; on a day no roll fires, both sell only their items of
 //! `BuyRandom` 100; the ships go by
@@ -357,6 +358,19 @@ fn the_food_surplus_targets_port_kane() {
         strings.base_prices,
         ["75", "350", "750", "900", "200", "550"]
     );
+}
+
+/// An `öops` at any stellar may be placed at Port Kane (`spöb` 137), but
+/// not at uninhabited Reflex-ion (129).
+#[test]
+fn an_any_stellar_event_may_be_placed_at_port_kane_but_not_reflex_ion() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let candidates = nova_sim::market::event_stellars(&data.stellar_flags());
+    assert!(candidates.contains(&StellarId(137)), "{candidates:?}");
+    assert!(!candidates.contains(&StellarId(129)), "{candidates:?}");
 }
 
 /// Port Kane (tech level 4, special tech 6, 55, 57, 58 and 81, of the

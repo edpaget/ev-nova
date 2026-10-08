@@ -40,12 +40,18 @@
 //!   named, so the upgrade saves `null`, and flying the pilot names it
 //!   after its class ([`Session::fly`](crate::Session::fly)). The next
 //!   save keeps that name.
+//! - Version 13: adds the stellar each event under way is at, kept from
+//!   the day it starts, as the original keeps and saves it. An older
+//!   save's events were all at their record's `Stellar`, which only the
+//!   game data knows, so the upgrade saves `null`, read as the record's
+//!   own stellar. The next save keeps `null`.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
 //! day, each reserve as how much the ship has and can hold, each good held
 //! as its kind (`commodity` with its number, or `junk` with its ID) and
-//! tons, each event as its `öops` ID and days left, each outfit as its
+//! tons, each event as its `öops` ID, days left and the `spöb` ID it is
+//! at (`null` for its record's own), each outfit as its
 //! `oütf` ID and how many, and each escort as its `shïp` ID, reserves,
 //! standing order (`defend`, `attack`, `hold`, `dock`, or `null` for
 //! none), whether it is `carried`, its `wage` in credits a day (`null`
@@ -64,12 +70,12 @@ use serde_json::Value;
 use crate::catalog::{DisasterId, GovtId, JunkId, OutfitId, PersonId, ShipId, StellarId, SystemId};
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
-use crate::market::Good;
+use crate::market::{ActiveEvent, Good};
 use crate::pilot::{Escort, Pilot};
 use crate::reserves::{Gauge, Reserves};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 12;
+pub const CURRENT: u64 = 13;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -223,11 +229,14 @@ struct SavedCargo {
     tons: u32,
 }
 
-/// An event under way, and the days it has left.
+/// An event under way, the days it has left, and the stellar it is at.
 #[derive(Serialize, Deserialize)]
 struct SavedEvent {
     disaster: i16,
     days: u16,
+    /// `None` for its record's own `Stellar`.
+    #[serde(deserialize_with = "Option::deserialize")]
+    stellar: Option<i16>,
 }
 
 /// An outfit carried, and how many.
@@ -311,9 +320,10 @@ pub fn encode(pilot: &Pilot) -> String {
         events: pilot
             .events
             .iter()
-            .map(|(id, &days)| SavedEvent {
+            .map(|(id, active)| SavedEvent {
                 disaster: id.0,
-                days,
+                days: active.days,
+                stellar: active.stellar.map(|stellar| stellar.0),
             })
             .collect(),
         outfits: (!pilot.default_outfits_pending).then(|| {
@@ -359,6 +369,7 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     person_escorts,
     stock_weapons,
     ship_names,
+    event_stellars,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -385,17 +396,17 @@ fn escorts(save: &mut Value) {
 
 /// Version 5 to 6: no escort has a standing order.
 fn escort_orders(save: &mut Value) {
-    add_to_escorts(save, "order", &Value::Null);
+    add_to_each(save, "escorts", "order", &Value::Null);
 }
 
 /// Version 6 to 7: no escort is a carried fighter.
 fn carried_fighters(save: &mut Value) {
-    add_to_escorts(save, "carried", &Value::Bool(false));
+    add_to_each(save, "escorts", "carried", &Value::Bool(false));
 }
 
 /// Version 7 to 8: no escort was hired, so none has a wage.
 fn hired_escorts(save: &mut Value) {
-    add_to_escorts(save, "wage", &Value::Null);
+    add_to_each(save, "escorts", "wage", &Value::Null);
 }
 
 /// Version 8 to 9: every person alive, and no grudges.
@@ -405,7 +416,7 @@ fn persons(save: &mut Value) {
 
 /// Version 9 to 10: no escort is a person.
 fn person_escorts(save: &mut Value) {
-    add_to_escorts(save, "person", &Value::Null);
+    add_to_each(save, "escorts", "person", &Value::Null);
 }
 
 /// Version 10 to 11: the ship's stock weapons, not yet fitted as outfits.
@@ -422,14 +433,19 @@ fn ship_names(save: &mut Value) {
     }
 }
 
-/// Adds `field` to every escort in `save`, as `value`.
-fn add_to_escorts(save: &mut Value, field: &str, value: &Value) {
-    let Some(escorts) = save.get_mut("escorts").and_then(Value::as_array_mut) else {
+/// Version 12 to 13: every event at its record's own stellar.
+fn event_stellars(save: &mut Value) {
+    add_to_each(save, "events", "stellar", &Value::Null);
+}
+
+/// Adds `field` to every entry of `save`'s `list`, as `value`.
+fn add_to_each(save: &mut Value, list: &str, field: &str, value: &Value) {
+    let Some(entries) = save.get_mut(list).and_then(Value::as_array_mut) else {
         return;
     };
-    for escort in escorts {
-        if let Some(escort) = escort.as_object_mut() {
-            escort.insert(field.to_owned(), value.clone());
+    for entry in entries {
+        if let Some(entry) = entry.as_object_mut() {
+            entry.insert(field.to_owned(), value.clone());
         }
     }
 }
@@ -503,7 +519,11 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         events: saved
             .events
             .into_iter()
-            .map(|saved| (DisasterId(saved.disaster), saved.days))
+            .map(|saved| {
+                let stellar = saved.stellar.map(StellarId);
+                let days = saved.days;
+                (DisasterId(saved.disaster), ActiveEvent { days, stellar })
+            })
             .collect(),
         default_outfits_pending: saved.outfits.is_none(),
         stock_weapons_pending: !saved.stock_weapons_fitted,
@@ -545,6 +565,11 @@ mod tests {
     use crate::pilot::Escort;
     use crate::reserves::{Gauge, Reserves};
 
+    /// An event under way with `days` left, at `stellar`.
+    fn active(days: u16, stellar: Option<StellarId>) -> ActiveEvent {
+        ActiveEvent { days, stellar }
+    }
+
     /// A pilot with every field away from its default.
     fn seasoned() -> Pilot {
         Pilot {
@@ -573,7 +598,10 @@ mod tests {
             explored: BTreeSet::from([SystemId(130), SystemId(131), SystemId(200)]),
             legal: BTreeMap::from([(GovtId(128), -40), (GovtId(129), 300)]),
             cargo: BTreeMap::from([(Good::Commodity(2), 7), (Good::Junk(JunkId(146)), 2)]),
-            events: BTreeMap::from([(DisasterId(128), 12), (DisasterId(130), 1)]),
+            events: BTreeMap::from([
+                (DisasterId(128), active(12, Some(StellarId(150)))),
+                (DisasterId(130), active(1, None)),
+            ]),
             outfits: BTreeMap::from([(OutfitId(256), 3), (OutfitId(128), 1)]),
             default_outfits_pending: false,
             stock_weapons_pending: false,
@@ -691,7 +719,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 12);
+        assert_eq!(CURRENT, 13);
         assert_eq!(value["stock_weapons_fitted"], true);
         assert_eq!(value["gone_persons"], serde_json::json!([151, 600]));
         assert_eq!(value["grudges"], serde_json::json!([510]));
@@ -717,7 +745,10 @@ mod tests {
         );
         assert_eq!(
             value["events"],
-            serde_json::json!([{"disaster": 128, "days": 12}, {"disaster": 130, "days": 1}])
+            serde_json::json!([
+                {"disaster": 128, "days": 12, "stellar": 150},
+                {"disaster": 130, "days": 1, "stellar": null}
+            ])
         );
         assert_eq!(
             value["outfits"],
@@ -747,7 +778,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 12"), "{text}");
+        assert!(text.contains("\n  \"version\": 13"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -1283,7 +1314,7 @@ mod tests {
         assert!(!pilot.default_outfits_pending);
         assert_eq!(pilot.owned(OutfitId(200)), 1);
         let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
-        assert_eq!(value["version"], 12);
+        assert_eq!(value["version"], 13);
         assert_eq!(value["stock_weapons_fitted"], false);
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
         for text in [
@@ -1346,7 +1377,7 @@ mod tests {
         assert!(!pilot.stock_weapons_pending);
         assert_eq!(pilot.owned(OutfitId(200)), 1);
         let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
-        assert_eq!(value["version"], 12);
+        assert_eq!(value["version"], 13);
         assert_eq!(value["ship_name"], serde_json::Value::Null);
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
         for text in [
@@ -1355,6 +1386,67 @@ mod tests {
         ] {
             assert_eq!(decode(text).expect("loads").ship_name(), None, "{text}");
         }
+    }
+
+    /// A version 12 save: before events kept the stellar they are at.
+    const VERSION_12: &str = r#"{
+        "version": 12,
+        "name": "Veteran",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [],
+        "cargo": [],
+        "events": [{"disaster": 128, "days": 12}],
+        "outfits": [{"outfit": 200, "count": 1}],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": []
+    }"#;
+
+    #[test]
+    fn a_version_12_save_loads_its_events_at_their_records_stellar() {
+        let pilot = decode(VERSION_12).expect("loads");
+        assert_eq!(pilot.name(), "Veteran");
+        assert_eq!(pilot.ship_name(), Some("Kestrel"));
+        assert_eq!(
+            pilot.events,
+            BTreeMap::from([(DisasterId(128), active(12, None))])
+        );
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], 13);
+        assert_eq!(
+            value["events"],
+            serde_json::json!([{"disaster": 128, "days": 12, "stellar": null}])
+        );
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [
+            VERSION_11, VERSION_10, VERSION_9, VERSION_8, VERSION_7, VERSION_6, VERSION_5,
+            VERSION_4, VERSION_3, VERSION_2, VERSION_1,
+        ] {
+            assert_eq!(decode(text).expect("loads").events().count(), 0, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_current_save_event_missing_its_stellar_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        if let Some(event) = value["events"][0].as_object_mut() {
+            event.remove("stellar");
+        }
+        assert!(unusable(&value.to_string()).contains("stellar"));
     }
 
     #[test]
@@ -1500,12 +1592,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 12", "\"version\": 13");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 13 }));
+        let newer = encode(&seasoned()).replace("\"version\": 13", "\"version\": 14");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 14 }));
         assert_eq!(
-            SaveError::Newer { version: 13 }.to_string(),
+            SaveError::Newer { version: 14 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 13, and this version of Nova reads up to 12)."
+             (it is version 14, and this version of Nova reads up to 13)."
         );
     }
 
@@ -1552,7 +1644,7 @@ mod tests {
         let mut pilot = seasoned();
         pilot.cargo.insert(Good::Commodity(9), 4);
         pilot.cargo.insert(Good::Junk(JunkId(-7)), 1);
-        pilot.events.insert(DisasterId(999), 3);
+        pilot.events.insert(DisasterId(999), active(3, None));
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
     }
 

@@ -1629,7 +1629,13 @@ mod tests {
         pilot.course = vec![SystemId(131), SystemId(132)];
         pilot.explore(SystemId(131));
         pilot.set_legal_record(GovtId(128), 40);
-        pilot.events = BTreeMap::from([(DisasterId(128), 3)]);
+        pilot.events = BTreeMap::from([(
+            DisasterId(128),
+            crate::market::ActiveEvent {
+                days: 3,
+                stellar: Some(StellarId(140)),
+            },
+        )]);
         pilot.name = "Ada".to_owned();
         pilot.escorts = vec![crate::pilot::Escort {
             ship: ShipId(130),

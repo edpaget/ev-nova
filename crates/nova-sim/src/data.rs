@@ -288,6 +288,12 @@ impl PilotCatalog for GameData {
             })
             .collect()
     }
+
+    fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+        self.records::<Stellar>()
+            .filter_map(|(id, stellar)| Some((StellarId(id), stellar.ok()?.record.flags.bits())))
+            .collect()
+    }
 }
 
 /// Reads the records afresh on every call; a session asks each time it
@@ -1644,6 +1650,22 @@ mod tests {
         );
         assert_eq!(store(&[]).disasters(), []);
     }
+
+    #[test]
+    fn stellar_flags_lists_every_readable_spöb_by_id_with_its_flags() {
+        let data = store(&[
+            (Stellar::TYPE, 130, stellar(0, 0, 0, 0x20, 0)),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 0x2, 0)),
+            (Stellar::TYPE, 129, short(stellar(0, 0, 0, 1, 0))),
+        ]);
+        assert_eq!(
+            data.stellar_flags(),
+            [(StellarId(128), 0x2), (StellarId(130), 0x20)],
+            "the unreadable 129 left out"
+        );
+        assert_eq!(store(&[]).stellar_flags(), []);
+    }
+
     /// A `wëap` with every field the combat catalog reads set to
     /// something of its own.
     fn weapon_bytes() -> Vec<u8> {

@@ -4508,12 +4508,12 @@ mod tests {
     fn a_session_reads_the_goods_once_when_it_starts() {
         let catalog = exchange();
         let mut session = Session::start(&catalog).expect("starts");
-        assert_eq!(*catalog.goods_reads.borrow(), 3);
+        assert_eq!(*catalog.goods_reads.borrow(), 4);
         land_now(&mut session).expect("lands");
         assert!(session.market().is_some());
         session.take_off();
         jump(&mut session, &catalog, 131);
-        assert_eq!(*catalog.goods_reads.borrow(), 3);
+        assert_eq!(*catalog.goods_reads.borrow(), 4);
     }
 
     #[test]
@@ -4736,11 +4736,82 @@ mod tests {
         assert_eq!(market.events, Vec::<String>::new());
     }
 
+    /// [`surplus`], its event at any stellar: 139 or 140.
+    fn drifting() -> FakePilotCatalog {
+        let mut catalog = surplus();
+        catalog.disasters[0].stellar = -1;
+        catalog.stellars = vec![(StellarId(139), TRADES), (StellarId(140), TRADES)];
+        catalog
+    }
+
+    /// The stellar each event under way is at.
+    fn places(session: &Session) -> Vec<(DisasterId, Option<StellarId>)> {
+        session
+            .pilot
+            .events
+            .iter()
+            .map(|(&id, active)| (id, active.stellar))
+            .collect()
+    }
+
+    #[test]
+    fn an_any_stellar_event_starts_at_a_drawn_stellar_and_moves_the_price_there_only() {
+        let catalog = drifting();
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = Scripted::answering(&[true]).and_rolling(&[1]);
+        jump_with(&mut session, &catalog, 131, &mut chance);
+        assert_eq!(chance.sides_asked, [2]);
+        assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(140)))]);
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
+        let market = session.market().expect("an exchange");
+        assert_eq!(market.row(FOOD).map(|row| row.price), Some(60));
+        assert_eq!(market.events, ["An enormous food surplus"]);
+
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = Scripted::answering(&[true]).and_rolling(&[0]);
+        jump_with(&mut session, &catalog, 131, &mut chance);
+        assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(139)))]);
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
+        let market = session.market().expect("an exchange");
+        assert_eq!(market.row(FOOD).map(|row| row.price), Some(75));
+        assert_eq!(market.events, Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_any_stellar_event_keeps_its_stellar_across_a_save_and_reload() {
+        let catalog = drifting();
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = Scripted::answering(&[true]).and_rolling(&[1]);
+        jump_with(&mut session, &catalog, 131, &mut chance);
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
+        let saved = crate::save::encode(session.pilot());
+        let pilot = crate::save::decode(&saved).expect("loads");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(140)))]);
+        let market = session.market().expect("docked at the exchange");
+        assert_eq!(market.events, ["An enormous food surplus"]);
+        session.take_off();
+        let mut chance = Scripted::default();
+        jump_with(&mut session, &catalog, 132, &mut chance);
+        assert_eq!(
+            session.pilot().events().collect::<Vec<_>>(),
+            [(DisasterId(128), 29)]
+        );
+        assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(140)))]);
+        assert_eq!(chance.sides_asked, Vec::<u16>::new(), "not drawn again");
+    }
+
     #[test]
     fn each_day_of_a_jump_ages_the_events() {
         let catalog = surplus();
         let mut session = Session::start(&catalog).expect("starts");
-        session.pilot.events.insert(DisasterId(128), 5);
+        session.pilot.events.insert(
+            DisasterId(128),
+            crate::market::ActiveEvent {
+                days: 5,
+                stellar: Some(StellarId(140)),
+            },
+        );
         jump(&mut session, &catalog, 131);
         assert_eq!(
             session.pilot().events().collect::<Vec<_>>(),

@@ -2815,6 +2815,10 @@ mod tests {
             self.disasters.clone()
         }
 
+        fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+            Vec::new()
+        }
+
         /// Stock's: no prefix, and " NC".
         fn date_affixes(&self) -> DateAffixes {
             DateAffixes {
