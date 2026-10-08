@@ -549,6 +549,9 @@ pub struct Session {
     /// How a sale at the outfitter is refused for the free mass (see
     /// [`Session::with_sale_mass`]).
     sale_mass: RuleSource,
+    /// Whether an unsellable outfit counts in the trade-in (see
+    /// [`Session::with_trade_in_outfits`]).
+    trade_in_outfits: RuleSource,
     /// How an active `öops` event prices its commodity, how a `jünk` of
     /// negative or zero price is traded, which ways a `jünk` row trades,
     /// how many tons a plain trade moves, how the most a buy moves
@@ -705,6 +708,7 @@ impl Session {
             raised_max: RuleSource::Engine,
             outfit_count: RuleSource::Engine,
             sale_mass: RuleSource::Engine,
+            trade_in_outfits: RuleSource::Engine,
             exchange_rules: market::ExchangeRules::default(),
             purchase_cargo: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
@@ -2213,6 +2217,23 @@ impl Session {
         self.sale_mass
     }
 
+    /// This session with the trade-in counting outfits as `source` says
+    /// ([`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits)): by
+    /// the engine's default, every outfit owned but a persistent one; by
+    /// the other reading, not an unsellable one either.
+    #[must_use]
+    pub fn with_trade_in_outfits(mut self, source: RuleSource) -> Self {
+        self.trade_in_outfits = source;
+        self
+    }
+
+    /// Which outfits the trade-in counts: by the engine
+    /// ([`RuleSource::Engine`]) or leaving out unsellable ones too.
+    #[must_use]
+    pub fn trade_in_outfits(&self) -> RuleSource {
+        self.trade_in_outfits
+    }
+
     /// This session with an active `öops` event pricing its commodity as
     /// `source` says ([`RuleKey::EventPrice`](crate::RuleKey::EventPrice)):
     /// by the engine's default, at its `BasePrice` plus its `PriceDelta`,
@@ -2383,6 +2404,7 @@ impl Session {
             fields: self.fields,
             site,
             buy_random: self.buy_random,
+            trade_in_outfits: self.trade_in_outfits,
         }
         .shipyard(&self.pilot, &mut self.ship_rolls, chance)
     }
@@ -8064,6 +8086,43 @@ mod tests {
             17_500 / 4 + 500 + 500 + 1000 + 20 * 10,
             "a quarter of the hull, and half its tank, gun, launcher and rockets"
         );
+    }
+
+    #[test]
+    fn the_trade_in_outfits_rule_round_trips_and_defaults_to_the_engine() {
+        let session = outfitted(&shipbuying());
+        assert_eq!(session.trade_in_outfits(), RuleSource::Engine);
+        let session = session.with_trade_in_outfits(RuleSource::Bible);
+        assert_eq!(session.trade_in_outfits(), RuleSource::Bible);
+        let session = session.with_trade_in_outfits(RuleSource::Engine);
+        assert_eq!(session.trade_in_outfits(), RuleSource::Engine);
+    }
+
+    #[test]
+    fn by_the_engine_the_trade_in_counts_an_unsellable_outfit_but_not_a_persistent_one() {
+        // An unsellable 3000-credit map and a persistent 1000-credit
+        // licence on ship 128, whose hull trades in for 2500.
+        let mut catalog = shipbuying();
+        catalog.outfits.push(OutfitRecord {
+            cost: 3000,
+            flags: OutfitFlags::CANNOT_SELL,
+            ..outfit(330, &[])
+        });
+        catalog.outfits.push(OutfitRecord {
+            cost: 1000,
+            flags: OutfitFlags::PERSISTENT,
+            ..outfit(331, &[])
+        });
+        let trade_in = |source| {
+            let mut session = outfitted(&catalog).with_trade_in_outfits(source);
+            session.pilot.outfits = BTreeMap::from([(OutfitId(330), 1), (OutfitId(331), 1)]);
+            session
+                .shipyard(&mut NeverFires)
+                .expect("a shipyard")
+                .trade_in
+        };
+        assert_eq!(trade_in(RuleSource::Engine), 2500 + 1500);
+        assert_eq!(trade_in(RuleSource::Bible), 2500);
     }
 
     #[test]

@@ -122,7 +122,9 @@
 //! has it, or moves one) and `"sale_mass"` (whether an outfit of mass 0
 //! or more sells while the free mass is below 0, the free mass read
 //! clamped at 0 as the engine has it, or a sale is refused whenever it
-//! would leave the free mass below 0); every key is listed in
+//! would leave the free mass below 0), and the shipyard's
+//! `"trade_in_outfits"` (whether a ship's trade-in counts an unsellable
+//! outfit, as the engine has it, or leaves it out); every key is listed in
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!

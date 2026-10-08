@@ -1220,6 +1220,18 @@ impl<
         }
     }
 
+    /// The flight with the trade-in counting outfits as `source` says
+    /// ([`Session::with_trade_in_outfits`]).
+    #[must_use]
+    pub fn with_trade_in_outfits(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_trade_in_outfits(source)),
+            ..self
+        }
+    }
+
     /// The flight with a sold outfit refunded as `source` says
     /// ([`Session::with_outfit_refund`]).
     #[must_use]
@@ -6466,6 +6478,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::sale_mass),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_trade_in_outfits_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_trade_in_outfits(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.trade_in_outfits(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::trade_in_outfits),
             Ok(RuleSource::Engine)
         );
     }

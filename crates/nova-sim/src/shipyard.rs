@@ -62,10 +62,12 @@
 //! # Price and trade-in
 //!
 //! A ship's price is its `Cost`, never below none. The player's ship trades
-//! in for [`TRADE_IN_PERCENT`] of its class's `Cost`, plus what each
-//! outfit it carries would sell back for at the outfitter
-//! ([`resale`]), except a persistent one, which the player
-//! keeps, and one that cannot be sold. The final price is the price less
+//! in for [`TRADE_IN_PERCENT`] of its class's `Cost`, plus half of each
+//! outfit line it carries (count × price), except a persistent one, which
+//! the player keeps, the total never below none ([`trade_in`]). By the
+//! engine an outfit that cannot be sold counts too; by the Bible it does
+//! not ([`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits)). The
+//! final price is the price less
 //! the trade-in, and may be negative: the player is then paid. A buy is
 //! refused when the ship cannot be bought here, or when the cash and the
 //! trade-in together do not cover the price.
@@ -313,27 +315,45 @@ pub fn ship_price(ship: &ShipRecord) -> i64 {
     i64::from(ship.cost).max(0)
 }
 
-/// What a ship of class `cost` and `mass` carrying `owned` trades in for:
-/// [`TRADE_IN_PERCENT`] of its `Cost` (never below none), plus the resale
-/// of each outfit owned that has a record and is neither persistent nor
-/// unsellable, priced on that ship.
+/// What a ship of class `cost` and `mass` carrying `owned` trades in for,
+/// as `_PlayerShipTradeInPrice` (@0xb079-0xb144) values it.
+///
+/// The hull starts the total at [`TRADE_IN_PERCENT`] of its `Cost`,
+/// truncated toward zero and not clamped, so a negative `Cost` starts it
+/// below 0 (@0xb0b7-0xb0cc). Then, by ascending ID, each outfit owned
+/// that has a record and a count above 0, and is not persistent, adds half
+/// its whole line, count × its price on that ship, the total truncated
+/// toward zero after each (@0xb0d5-0xb0e1, @0xb109-0xb11f). The persistent
+/// flag is the record byte `_LoadObjectData` sets from `Flags` 0x0004
+/// (@0x78cad-0x78cb3). By the engine an unsellable outfit counts; by
+/// `source` [`RuleSource::Bible`] it adds nothing either
+/// ([`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits)). Only the
+/// final total is clamped at 0 (@0xb131-0xb138).
 #[must_use]
 pub fn trade_in(
     cost: i32,
     mass: i16,
     owned: &BTreeMap<OutfitId, u16>,
     records: &[OutfitRecord],
+    source: RuleSource,
 ) -> i64 {
-    let hull = i64::from(cost).max(0) * TRADE_IN_PERCENT / 100;
-    let kept = OutfitFlags::PERSISTENT | OutfitFlags::CANNOT_SELL;
-    records
+    let skipped = match source {
+        RuleSource::Engine => OutfitFlags::PERSISTENT,
+        RuleSource::Bible => OutfitFlags::PERSISTENT | OutfitFlags::CANNOT_SELL,
+    };
+    let hull = i64::from(cost) * TRADE_IN_PERCENT / 100;
+    owned
         .iter()
-        .filter(|record| record.flags & kept == 0)
-        .filter_map(|record| Some((record, *owned.get(&record.id)?)))
-        .fold(hull, |total, (record, count)| {
-            let each = resale(unit_price(record, mass));
-            total.saturating_add(each.saturating_mul(i64::from(count)))
+        .filter(|&(_, &count)| count > 0)
+        .filter_map(|(id, &count)| {
+            let record = records.iter().find(|record| record.id == *id)?;
+            (record.flags & skipped == 0).then_some((record, count))
         })
+        .fold(hull, |total, (record, count)| {
+            let line = unit_price(record, mass).saturating_mul(i64::from(count));
+            total.saturating_mul(2).saturating_add(line) / 2
+        })
+        .max(0)
 }
 
 /// Everything the shipyard rules read about the ship and where it is.
@@ -348,6 +368,8 @@ pub(crate) struct Yard<'a> {
     pub(crate) site: &'a LandingSite,
     /// How `BuyRandom` reads ([`buy_roll`]).
     pub(crate) buy_random: RuleSource,
+    /// Whether an unsellable outfit counts in the trade-in ([`trade_in`]).
+    pub(crate) trade_in_outfits: RuleSource,
 }
 
 impl Yard<'_> {
@@ -359,7 +381,13 @@ impl Yard<'_> {
             .iter()
             .find(|ship| ship.id == pilot.ship)
             .map_or(0, |ship| ship.cost);
-        trade_in(cost, self.fields.mass, &pilot.outfits, self.outfits)
+        trade_in(
+            cost,
+            self.fields.mass,
+            &pilot.outfits,
+            self.outfits,
+            self.trade_in_outfits,
+        )
     }
 
     /// The shipyard, for `pilot`, each class's roll for the day kept in
@@ -705,6 +733,7 @@ mod tests {
             fields: FAST,
             site,
             buy_random: RuleSource::Engine,
+            trade_in_outfits: RuleSource::Engine,
         }
     }
 
@@ -1115,18 +1144,90 @@ mod tests {
 
     #[test]
     fn the_hull_trades_in_for_a_quarter_of_its_cost() {
+        let hull = |cost| trade_in(cost, 40, &BTreeMap::new(), &[], RuleSource::Engine);
         assert_eq!(TRADE_IN_PERCENT, 25);
-        assert_eq!(trade_in(10_000, 40, &BTreeMap::new(), &[]), 2500);
+        assert_eq!(hull(10_000), 2500);
+        assert_eq!(hull(10_003), 2500, "truncated");
+        assert_eq!(hull(i32::MAX), i64::from(i32::MAX) / 4);
+    }
+
+    #[test]
+    fn a_negative_hull_is_clamped_only_after_the_outfits_are_added() {
+        let records = upgrades();
+        let engine = |cost, owned: &[(i16, u16)]| {
+            trade_in(cost, 40, &map(owned), &records, RuleSource::Engine)
+        };
+        assert_eq!(engine(-400, &[]), 0);
+        assert_eq!(engine(-4000, &[(128, 1)]), 0, "-1000 + 1000");
+        assert_eq!(engine(-4000, &[(128, 2)]), 1000, "-1000 + 2000");
+        assert_eq!(engine(-4000, &[(128, 3)]), 2000);
+    }
+
+    #[test]
+    fn each_step_truncates_toward_zero_by_ascending_id() {
+        // A hull of trunc(-6 / 4) = -1; then trunc(-1 + 3 / 2) = 0 and
+        // trunc(0 + 1 / 2) = 0. Walked 129 first, it would come to 1.
+        let records = [
+            OutfitRecord {
+                cost: 3,
+                ..outfit(128, &[])
+            },
+            OutfitRecord {
+                cost: 1,
+                ..outfit(129, &[])
+            },
+        ];
         assert_eq!(
-            trade_in(10_003, 40, &BTreeMap::new(), &[]),
-            2500,
-            "truncated"
+            trade_in(
+                -6,
+                40,
+                &map(&[(128, 1), (129, 1)]),
+                &records,
+                RuleSource::Engine
+            ),
+            0
         );
-        assert_eq!(trade_in(-400, 40, &BTreeMap::new(), &[]), 0);
+        // A hull of trunc(-10 / 4) = -2; trunc(-2 + 3 / 2) = 0, not
+        // floor(-0.5) = -1, so trunc(0 + 1 / 2) + ... stays at 0 and a
+        // further 3-credit line gives 1.
+        let more = [
+            records[0].clone(),
+            records[1].clone(),
+            OutfitRecord {
+                cost: 3,
+                ..outfit(130, &[])
+            },
+        ];
         assert_eq!(
-            trade_in(i32::MAX, 40, &BTreeMap::new(), &[]),
-            i64::from(i32::MAX) / 4
+            trade_in(
+                -10,
+                40,
+                &map(&[(128, 1), (129, 1), (130, 1)]),
+                &more,
+                RuleSource::Engine
+            ),
+            1
         );
+    }
+
+    #[test]
+    fn an_outfits_line_is_halved_whole_not_unit_by_unit() {
+        let rounds = [OutfitRecord {
+            cost: 25,
+            ..outfit(128, &[])
+        }];
+        let line = |count| {
+            trade_in(
+                10_000,
+                40,
+                &map(&[(128, count)]),
+                &rounds,
+                RuleSource::Engine,
+            ) - 2500
+        };
+        assert_eq!(line(20), 250, "not 20 * 12 = 240");
+        assert_eq!(line(1), 12);
+        assert_eq!(line(3), 37);
     }
 
     /// A 2000-credit tank, a persistent 1000-credit licence, an unsellable
@@ -1157,35 +1258,52 @@ mod tests {
     }
 
     #[test]
-    fn the_outfits_trade_in_at_their_resale_but_persistent_or_unsellable_ones_add_nothing() {
+    fn by_the_engine_the_outfits_trade_in_at_half_but_persistent_ones_add_nothing() {
         let records = upgrades();
+        let engine =
+            |owned: &[(i16, u16)]| trade_in(10_000, 40, &map(owned), &records, RuleSource::Engine);
         let hull = 2500;
+        assert_eq!(engine(&[(128, 3)]), hull + 3000);
+        assert_eq!(engine(&[(129, 1)]), hull, "persistent");
+        assert_eq!(engine(&[(130, 2)]), hull + 3000, "unsellable, but counted");
+        assert_eq!(engine(&[(131, 1)]), hull + 200, "priced on the old ship");
+        assert_eq!(engine(&[(999, 5)]), hull, "no record");
+        assert_eq!(engine(&[(128, 0)]), hull, "none owned");
         assert_eq!(
-            trade_in(10_000, 40, &map(&[(128, 3)]), &records),
-            hull + 3000
-        );
-        assert_eq!(trade_in(10_000, 40, &map(&[(129, 1)]), &records), hull);
-        assert_eq!(trade_in(10_000, 40, &map(&[(130, 2)]), &records), hull);
-        assert_eq!(
-            trade_in(10_000, 40, &map(&[(131, 1)]), &records),
-            hull + 200,
-            "priced on the old ship"
-        );
-        assert_eq!(trade_in(10_000, 40, &map(&[(999, 5)]), &records), hull);
-        assert_eq!(
-            trade_in(10_000, 40, &map(&[(128, 1), (129, 1), (131, 2)]), &records),
-            hull + 1000 + 400
+            engine(&[(128, 1), (129, 1), (130, 1), (131, 2)]),
+            hull + 1000 + 1500 + 400
         );
         let dear = [OutfitRecord {
             cost: i32::MAX,
             flags: OutfitFlags::PRICE_BY_MASS,
             ..outfit(128, &[])
         }];
-        let each = i64::from(i32::MAX) * i64::from(i16::MAX) / 2;
+        let unit = i64::from(i32::MAX) * i64::from(i16::MAX);
         assert_eq!(
-            trade_in(10_000, i16::MAX, &map(&[(128, u16::MAX)]), &dear),
-            hull + each * i64::from(u16::MAX),
+            trade_in(
+                10_000,
+                i16::MAX,
+                &map(&[(128, u16::MAX)]),
+                &dear,
+                RuleSource::Engine
+            ),
+            hull + unit * i64::from(u16::MAX) / 2,
             "no overflow"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_unsellable_ones_add_nothing_either() {
+        let records = upgrades();
+        let bible =
+            |owned: &[(i16, u16)]| trade_in(10_000, 40, &map(owned), &records, RuleSource::Bible);
+        let hull = 2500;
+        assert_eq!(bible(&[(128, 3)]), hull + 3000);
+        assert_eq!(bible(&[(129, 1)]), hull);
+        assert_eq!(bible(&[(130, 2)]), hull);
+        assert_eq!(
+            bible(&[(128, 1), (129, 1), (130, 1), (131, 2)]),
+            hull + 1000 + 400
         );
     }
 
@@ -1427,7 +1545,13 @@ mod tests {
     #[test]
     fn the_old_ships_stock_weapons_go_in_its_trade_in() {
         assert_eq!(
-            trade_in(10_000, 40, &map(&[(201, 20), (205, 2)]), &armoury()),
+            trade_in(
+                10_000,
+                40,
+                &map(&[(201, 20), (205, 2)]),
+                &armoury(),
+                RuleSource::Engine
+            ),
             2500 + 2 * 500 + 20 * 5,
             "half of each, like any outfit owned"
         );

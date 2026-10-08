@@ -377,6 +377,8 @@ pub struct AppScreen {
     /// Whether a sale at each flight's outfitter of an outfit of mass 0
     /// or more is refused while the free mass is below 0.
     sale_mass: RuleSource,
+    /// Whether each flight's trade-in counts an unsellable outfit.
+    trade_in_outfits: RuleSource,
     /// Whether each take-off pays each flight's hired escorts a day.
     take_off_pay: RuleSource,
     /// Which wage each flight's hired escorts are paid.
@@ -482,6 +484,7 @@ impl AppScreen {
             outfit_refund: RuleSource::Engine,
             outfit_count: RuleSource::Engine,
             sale_mass: RuleSource::Engine,
+            trade_in_outfits: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
@@ -790,6 +793,17 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's trade-in counting outfits as
+    /// `source` says ([`FlightView::with_trade_in_outfits`]); the engine's
+    /// (every outfit but a persistent one) until another is given.
+    #[must_use]
+    pub fn with_trade_in_outfits(self, source: RuleSource) -> Self {
+        Self {
+            trade_in_outfits: source,
+            ..self
+        }
+    }
+
     /// The router with each take-off paying each flight's hired escorts a
     /// day's wages, or not, as `source` says
     /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
@@ -887,6 +901,7 @@ impl AppScreen {
             .with_outfit_refund(rulebook.source_for(RuleKey::OutfitRefund))
             .with_outfit_count(rulebook.source_for(RuleKey::OutfitCount))
             .with_sale_mass(rulebook.source_for(RuleKey::SaleMass))
+            .with_trade_in_outfits(rulebook.source_for(RuleKey::TradeInOutfits))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
@@ -957,6 +972,7 @@ impl AppScreen {
             .with_outfit_refund(self.outfit_refund)
             .with_outfit_count(self.outfit_count)
             .with_sale_mass(self.sale_mass)
+            .with_trade_in_outfits(self.trade_in_outfits)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
@@ -6513,6 +6529,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_trade_in_outfits_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_trade_in_outfits(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.trade_in_outfits(), source);
+            assert_eq!(session.sale_mass(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.trade_in_outfits(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_outfit_limit_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_outfit_limit(source);
@@ -6608,6 +6639,7 @@ mod tests {
             ("outfit_refund", format!("{:?}", screen.outfit_refund)),
             ("outfit_count", format!("{:?}", screen.outfit_count)),
             ("sale_mass", format!("{:?}", screen.sale_mass)),
+            ("trade_in_outfits", format!("{:?}", screen.trade_in_outfits)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
@@ -6648,6 +6680,7 @@ mod tests {
             RuleKey::OutfitRefund => "outfit_refund",
             RuleKey::OutfitCount => "outfit_count",
             RuleKey::SaleMass => "sale_mass",
+            RuleKey::TradeInOutfits => "trade_in_outfits",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
             RuleKey::EscortWage => "escort_wage",
