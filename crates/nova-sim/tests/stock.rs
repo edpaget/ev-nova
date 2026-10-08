@@ -2,7 +2,7 @@
 //! with its ship's handling and reserves in a system that exists, Port
 //! Kane's exchange trades at its levels, and its outfitter sells what its
 //! tech levels allow, and the Vell-os map only once its control bit is
-//! set; Viking's shipyard sells what its tech levels and the
+//! set, which explores the systems around and is not added; Viking's shipyard sells what its tech levels and the
 //! ships' `BuyRandom` allow, and trades the Shuttle in; the ships go by
 //! their names without the designers' notes. Port Kane sells
 //! fuel and uninhabited Reflex-ion sells none. The date reads with the
@@ -408,6 +408,62 @@ fn port_kanes_outfitter_lists_the_vell_os_map_only_once_its_bit_is_set() {
     let row = outfitter.row(map).expect("listed once bit 9999 is set");
     assert_eq!(row.name, "Area Map - Vell-os");
     assert_eq!(row.buy, Ok(()));
+}
+
+/// Buying the stock Vell-os map (`oütf` 342, `ModType` 16, `ModVal` 2, no
+/// cost) at Port Kane, once bit 9999 is set, explores the systems within
+/// 2 jumps of Port Kane's and does not add it. By the engine's depth-first
+/// walk every system a jump away is explored and none beyond 2 jumps; by
+/// the Bible's reading, exactly every system within 2 jumps, worked out
+/// here breadth first along the stock hyperlinks.
+#[test]
+fn buying_the_stock_vell_os_map_explores_two_jumps_and_adds_nothing() {
+    use std::collections::BTreeSet;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let map = OutfitId(342);
+    let record = data
+        .outfits()
+        .into_iter()
+        .find(|outfit| outfit.id == map)
+        .expect("the Vell-os map");
+    assert_eq!(record.mods[0], (16, 2), "a map of 2 jumps");
+    let bought = |rules: nova_sim::OutfitRules| {
+        let mut session = at_port_kane(&data).with_outfit_rules(rules);
+        session.set_control_bit(nova_sim::Bit::new(9999).expect("a bit"), true);
+        let cash = session.pilot().cash();
+        let order = OutfitOrder {
+            outfit: map,
+            direction: Direction::Buy,
+        };
+        assert_eq!(session.outfit(order), Ok(()));
+        assert_eq!(session.pilot().owned(map), 0, "not added");
+        assert_eq!(session.pilot().cash(), cash, "it costs nothing");
+        session
+    };
+    let engine = bought(nova_sim::OutfitRules::default());
+    let home = engine.pilot().system();
+    let stars = engine.star_map();
+    let rule = nova_sim::HyperlinkRule::Engine;
+    let one: BTreeSet<SystemId> = std::iter::once(home)
+        .chain(stars.jumps(home, rule))
+        .collect();
+    let two: BTreeSet<SystemId> = one
+        .iter()
+        .flat_map(|&system| stars.jumps(system, rule))
+        .chain(one.iter().copied())
+        .collect();
+    assert!(two.len() > one.len(), "{one:?} {two:?}");
+    let explored: BTreeSet<SystemId> = engine.pilot().explored().collect();
+    assert!(one.is_subset(&explored), "{explored:?}");
+    assert!(explored.is_subset(&two), "{explored:?}");
+    let bible = bought(nova_sim::OutfitRules {
+        map_explore: nova_sim::RuleSource::Bible,
+        ..nova_sim::OutfitRules::default()
+    });
+    assert_eq!(bible.pilot().explored().collect::<BTreeSet<_>>(), two);
 }
 
 /// Buying a Battery Pack takes 10,000 of the Shuttle's 25,000 credits

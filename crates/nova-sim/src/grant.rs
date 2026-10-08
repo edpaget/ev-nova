@@ -36,16 +36,15 @@
 //!    taken as none when below none, the count drops by one. At none,
 //!    nothing is granted and nothing said.
 //!
-//! The outfits granted are added as bought ones are, and the ship is
-//! refitted with them; a grant ignores `Flags` 0x0010 ("remove after
-//! purchase") and makes no save due. The flight says what was granted.
-//!
-//! **Deferred**: the original's `_GrantOutfitItem` (@0x44d4f), which the
-//! outfitter's purchases also go through, explores the map for an outfit
-//! of `ModType` 16, clears the legal record for 21 and paints the ship for
-//! 43, instead of adding it. Here, as in the outfitter, they are added as
-//! plain items (rdm task `outfit-mod-type-effects`); stock Dr Ralph's map
-//! is one. The sound the original plays with the message is deferred too.
+//! Each outfit granted goes through the grant path the outfitter's
+//! purchases take, once a unit (`_GrantOutfitItem` @0x44d4f, called from
+//! @0x93216): a map (`ModType` 16) explores, an outfit of `ModType` 21
+//! cleans the legal record and one of 43 paints the ship instead of being
+//! added (see [`outfit_effects`](crate::outfit_effects)); anything else is
+//! added. The ship is then refitted once. A grant ignores `Flags` 0x0010
+//! ("remove after purchase") and makes no save due. The flight says what
+//! was granted, a map's grant too. The sound the original plays with the
+//! message is deferred.
 //!
 //! The values are defaults, not a contract.
 

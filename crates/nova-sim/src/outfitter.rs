@@ -57,8 +57,14 @@
 //! it, `_CanBuyFighter` @0x5a82; refused as `Max` owned), the ship's
 //! `Holds` is negative and the outfit adds mass
 //! space, there is not the free mass for it, or the player cannot pay. A
-//! buy pays the price and adds one, or with
-//! [`OutfitFlags::REMOVE_AFTER_PURCHASE`] only pays. A sale is refused
+//! buy pays the price, then grants one through the session's grant path,
+//! as the original's `_DoOutfitDialog` calls `_GrantOutfitItem`
+//! (@0x5c21d): a map explores, a clean-record outfit cleans the legal
+//! record and a paint paints the ship instead of being added (see
+//! [`outfit_effects`](crate::outfit_effects)), and anything else is added,
+//! but taken away again with [`OutfitFlags::REMOVE_AFTER_PURCHASE`] (the
+//! original takes it away as the outfitter closes, @0x5daeb-0x5dafa). A
+//! sale is refused
 //! when the player owns none, the outfit is flagged
 //! [`OutfitFlags::CANNOT_SELL`], it is neither for sale here nor flagged
 //! [`OutfitFlags::SELL_ANYWHERE`], or the ship would be left with negative
@@ -432,28 +438,21 @@ impl Shop<'_> {
     }
 }
 
-/// Buys or sells one of `record` at `price` as `direction` says, paying
-/// or being paid.
+/// Settles one of `record` at `price` as `direction` says: a buy pays,
+/// the outfit then going through the session's grant path (see the
+/// module docs); a sale is paid and removes one.
 pub(crate) fn settle(pilot: &mut Pilot, record: &OutfitRecord, direction: Direction, price: i64) {
-    let owned = pilot.owned(record.id);
-    let owned = match direction {
-        Direction::Buy => {
-            pilot.cash = pilot.cash.saturating_sub(price);
-            if record.flags & OutfitFlags::REMOVE_AFTER_PURCHASE == 0 {
-                owned.saturating_add(1)
-            } else {
-                owned
-            }
-        }
+    match direction {
+        Direction::Buy => pilot.cash = pilot.cash.saturating_sub(price),
         Direction::Sell => {
             pilot.cash = pilot.cash.saturating_add(resale(price));
-            owned.saturating_sub(1)
+            let owned = pilot.owned(record.id).saturating_sub(1);
+            if owned == 0 {
+                pilot.outfits.remove(&record.id);
+            } else {
+                pilot.outfits.insert(record.id, owned);
+            }
         }
-    };
-    if owned == 0 {
-        pilot.outfits.remove(&record.id);
-    } else {
-        pilot.outfits.insert(record.id, owned);
     }
 }
 
@@ -1269,23 +1268,12 @@ mod tests {
     // Settling.
 
     #[test]
-    fn a_buy_pays_and_adds_one() {
+    fn a_buy_only_pays_leaving_the_outfit_to_the_grant_path() {
         let mut pilot = pilot();
         settle(&mut pilot, &heavy(), Direction::Buy, 4000);
-        assert_eq!((pilot.cash, pilot.owned(OutfitId(128))), (6000, 1));
+        assert_eq!((pilot.cash, pilot.owned(OutfitId(128))), (6000, 0));
         settle(&mut pilot, &heavy(), Direction::Buy, 4000);
-        assert_eq!((pilot.cash, pilot.owned(OutfitId(128))), (2000, 2));
-    }
-
-    #[test]
-    fn a_buy_removed_after_purchase_only_pays() {
-        let permit = OutfitRecord {
-            flags: OutfitFlags::REMOVE_AFTER_PURCHASE,
-            ..heavy()
-        };
-        let mut pilot = pilot();
-        settle(&mut pilot, &permit, Direction::Buy, 4000);
-        assert_eq!(pilot.cash, 6000);
+        assert_eq!(pilot.cash, 2000);
         assert_eq!(pilot.outfits().count(), 0);
     }
 

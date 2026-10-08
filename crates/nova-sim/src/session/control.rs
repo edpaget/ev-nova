@@ -18,20 +18,27 @@
 //! session (see [`control::execute`](crate::control::execute)): it writes
 //! the pilot's bits, drawing `R(...)` on the caller's [`Chance`], and
 //! hands every other operator to the registry given by
-//! [`Session::with_set_ops`], empty by default. A bit changed makes a save
-//! due. An operator nothing handles is skipped, and its kind told once a
-//! session as a [`ScriptNote`] ([`Session::take_script_notes`]); which
-//! kinds were told is never saved.
+//! [`Session::with_set_ops`]: by default [`nova_set_ops`], Nova's `G`, `D`
+//! and `X` (see the `outfits` module). Any change to the pilot makes a
+//! save due. An operator nothing handles is skipped, and its kind told
+//! once a session as a [`ScriptNote`] ([`Session::take_script_notes`]);
+//! which kinds were told is never saved. After this phase the operators
+//! still unhandled are the ship changes (`C`, `E`, `H`, `T`), the moves
+//! and sounds (`M`, `N`, `Q`, `P`), and those of the missions (`A`, `F`,
+//! `S`), ranks (`K`, `L`) and stellars (`Y`, `U`), which other work
+//! registers.
 
 use std::rc::Rc;
 
 use super::Session;
 use super::hire::Shared;
+use super::outfits::{ExploreOp, GrantOutfitOp, RemoveOutfitOp};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
 use crate::control::{
-    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetRegistry, execute,
+    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOpKind, SetRegistry,
+    execute,
 };
 use crate::pilot::{Gender, Pilot};
 
@@ -116,9 +123,21 @@ impl BitStore for Session {
     }
 }
 
+/// Nova's set operators beyond the bit writes and `R(...)`: `G`, `D` and
+/// `X` (see the `outfits` module). Later work registers more onto it with
+/// [`SetRegistry::with`].
+#[must_use]
+pub fn nova_set_ops() -> SetRegistry<Session> {
+    SetRegistry::new()
+        .with(SetOpKind::GrantOutfit, Rc::new(GrantOutfitOp))
+        .with(SetOpKind::RemoveOutfit, Rc::new(RemoveOutfitOp))
+        .with(SetOpKind::Explore, Rc::new(ExploreOp))
+}
+
 impl Session {
     /// This session with `registry` handling the set operators beyond the
-    /// bit writes and `R(...)` (see the module docs): none by default.
+    /// bit writes and `R(...)` (see the module docs): [`nova_set_ops`] by
+    /// default.
     #[must_use]
     pub fn with_set_ops(mut self, registry: Rc<SetRegistry<Session>>) -> Self {
         self.set_ops = Shared(registry);
@@ -129,11 +148,11 @@ impl Session {
     /// on `chance`.
     pub fn run_set(&mut self, expr: &SetExpr, chance: &mut (impl Chance + ?Sized)) {
         let registry = Rc::clone(&self.set_ops.0);
-        let before = self.pilot.control_bits().clone();
+        let before = self.pilot.clone();
         let mut told = std::mem::take(&mut self.unhandled_ops);
         let unhandled = execute(expr, self, &registry, &mut &mut *chance, &mut told);
         self.unhandled_ops = told;
-        if *self.pilot.control_bits() != before {
+        if self.pilot != before {
             self.save_due = true;
         }
         self.script_notes
@@ -344,11 +363,68 @@ mod tests {
             [ScriptNote::Unhandled(SetOpKind::StartMission)]
         );
         assert_eq!(session.take_script_notes(), [], "taken");
-        session.run_set(&set("G150"), &mut Scripted::default());
+        session.run_set(&set("C150"), &mut Scripted::default());
         assert_eq!(
             session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::GrantOutfit)]
+            [ScriptNote::Unhandled(SetOpKind::ChangeShip)]
         );
+    }
+
+    #[test]
+    fn novas_set_ops_are_g_d_and_x() {
+        assert_eq!(
+            nova_set_ops().kinds().collect::<Vec<_>>(),
+            [
+                SetOpKind::GrantOutfit,
+                SetOpKind::RemoveOutfit,
+                SetOpKind::Explore
+            ]
+        );
+    }
+
+    #[test]
+    fn the_operators_still_unhandled_are_the_ship_change_move_sound_and_other_work() {
+        let mut session = session();
+        session.run_set(
+            &set(
+                "A128 F129 S130 G128 D128 C128 E128 H128 M130 N130 K128 L128 P128 Y128 U128 \
+                  T128 Q128 X131",
+            ),
+            &mut Scripted::default(),
+        );
+        assert_eq!(
+            session.take_script_notes(),
+            [
+                SetOpKind::AbortMission,
+                SetOpKind::FailMission,
+                SetOpKind::StartMission,
+                SetOpKind::ChangeShip,
+                SetOpKind::ChangeShipWithDefaults,
+                SetOpKind::ReplaceShip,
+                SetOpKind::MoveTo,
+                SetOpKind::MoveKeepPosition,
+                SetOpKind::ActivateRank,
+                SetOpKind::DeactivateRank,
+                SetOpKind::PlaySound,
+                SetOpKind::DestroyStellar,
+                SetOpKind::RegenerateStellar,
+                SetOpKind::RenameShip,
+                SetOpKind::LeaveStellar,
+            ]
+            .map(ScriptNote::Unhandled)
+        );
+        assert!(session.pilot().has_explored(SystemId(131)), "X ran");
+    }
+
+    #[test]
+    fn any_change_to_the_pilot_by_a_set_expression_makes_a_save_due() {
+        let mut session = session();
+        session.run_set(&set("X131"), &mut Scripted::default());
+        assert!(session.take_save_due());
+        session.run_set(&set("X131"), &mut Scripted::default());
+        assert!(!session.take_save_due(), "explored already");
+        session.run_set(&set("G300"), &mut Scripted::default());
+        assert!(session.take_save_due());
     }
 
     #[test]

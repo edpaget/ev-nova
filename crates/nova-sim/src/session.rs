@@ -217,8 +217,16 @@
 //! set or cleared with [`Session::set_control_bit`], which makes a save
 //! due. A set expression runs on the session ([`Session::run_set`]),
 //! writing bits, with its other operators handled as
-//! [`Session::with_set_ops`] says; one nothing handles is skipped and
-//! told once ([`Session::take_script_notes`]).
+//! [`Session::with_set_ops`] says: by default [`nova_set_ops`], which
+//! grants (`G`) and removes (`D`) outfits and explores systems (`X`);
+//! one nothing handles is skipped and told once
+//! ([`Session::take_script_notes`]).
+//!
+//! Buying an outfit, a boarding grant and `G` share one grant path, the
+//! original's: a map explores, a clean-record outfit cleans the legal
+//! record and a paint paints the ship instead of being added, as
+//! [`Session::with_outfit_rules`] says where the rules are disputed (see
+//! the `outfits` module and [`outfit_effects`](crate::outfit_effects)).
 //!
 //! For tests and the developer tools, plain edits put the pilot into a
 //! given state without flying it there: its credits
@@ -263,6 +271,8 @@ mod hail;
 mod hire;
 mod outfits;
 mod persons;
+
+pub use control::nova_set_ops;
 
 pub use edit::RelocateRefusal;
 pub use persons::PersonQuote;
@@ -316,7 +326,7 @@ use crate::hyperspace::{
 };
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::legal::{self, Crime, LegalCode};
-use crate::market::{self, Good, Goods, Market, Order, TradeRefusal};
+use crate::market::{self, Direction, Good, Goods, Market, Order, TradeRefusal};
 use crate::message::SimMessage;
 use crate::navigation::next_stellar;
 use crate::outfit_effects::OutfitRules;
@@ -641,7 +651,7 @@ impl Session {
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             pay_notes: Vec::new(),
-            set_ops: hire::Shared(Rc::new(SetRegistry::new())),
+            set_ops: hire::Shared(Rc::new(control::nova_set_ops())),
             unhandled_ops: BTreeSet::new(),
             script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
@@ -1863,6 +1873,12 @@ impl Session {
             .cloned()
             .ok_or(OutfitRefusal::NotListed)?;
         self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, price));
+        if order.direction == Direction::Buy
+            && self.grant_outfit(record.id)
+            && record.flags & OutfitFlags::REMOVE_AFTER_PURCHASE != 0
+        {
+            self.remove_after_purchase(record.id);
+        }
         self.refit(true);
         Ok(())
     }
@@ -2142,15 +2158,10 @@ impl Session {
                 max: record.max,
             })
             .collect();
-        let free_mass = outfitter::free_mass(
-            self.fields,
-            &self.defaults,
-            &self.pilot.outfits,
-            &self.outfits,
-        );
-        let granted = rule.grant(&grant, &stock, free_mass, chance)?;
-        let owned = self.pilot.outfits.entry(granted.outfit).or_default();
-        *owned = owned.saturating_add(granted.count);
+        let granted = rule.grant(&grant, &stock, self.free_mass(), chance)?;
+        for _ in 0..granted.count {
+            self.grant_outfit(granted.outfit);
+        }
         self.refit(true);
         Some(granted)
     }
@@ -5242,6 +5253,71 @@ mod tests {
         assert_eq!(session.outfit(sell(SPEED)), Ok(()));
         assert_eq!(session.handling(), before);
         assert_eq!(session.pilot().cash(), 24_500, "sold for half");
+    }
+
+    /// The outfitting catalog with a map of 1 jump (306), an outfit
+    /// cleaning the record with government 140 (307), a paint (308), a
+    /// plain outfit removed after purchase (309) and a map removed after
+    /// purchase (310) for sale too.
+    fn outfitting_effects() -> FakePilotCatalog {
+        use crate::outfit_effects::{CLEAN_RECORD, MAP, PAINT};
+        let mut catalog = outfitting();
+        catalog.outfits.extend([
+            outfit(306, &[(MAP, 1)]),
+            outfit(307, &[(CLEAN_RECORD, 140)]),
+            outfit(308, &[(PAINT, 0x7C00)]),
+            OutfitRecord {
+                flags: OutfitFlags::REMOVE_AFTER_PURCHASE,
+                ..outfit(309, &[(MORE_SHIELD, 50)])
+            },
+            OutfitRecord {
+                flags: OutfitFlags::REMOVE_AFTER_PURCHASE,
+                ..outfit(310, &[(MAP, 1)])
+            },
+        ]);
+        catalog
+    }
+
+    #[test]
+    fn buying_a_map_pays_and_explores_and_adds_nothing() {
+        let mut session = outfitted(&outfitting_effects());
+        assert_eq!(session.outfit(buy(OutfitId(306))), Ok(()));
+        assert_eq!(session.pilot().cash(), 24_000);
+        assert_eq!(
+            session.pilot().explored().collect::<Vec<_>>(),
+            [SystemId(130), SystemId(131)]
+        );
+        assert_eq!(session.pilot().owned(OutfitId(306)), 0);
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn buying_a_clean_record_outfit_clears_the_record_and_a_paint_paints() {
+        let mut session = outfitted(&outfitting_effects());
+        session.pilot.legal.insert(GovtId(140), -300);
+        session.outfit(buy(OutfitId(307))).expect("bought");
+        assert_eq!(session.pilot().legal_record(GovtId(140)), 0);
+        assert_eq!(session.pilot().owned(OutfitId(307)), 0);
+        session.outfit(buy(OutfitId(308))).expect("bought");
+        assert_eq!(
+            session.pilot().paint(),
+            Some(crate::outfit_effects::Rgb15 { r: 31, g: 0, b: 0 })
+        );
+        assert_eq!(session.pilot().owned(OutfitId(308)), 0);
+        assert_eq!(session.pilot().cash(), 23_000);
+    }
+
+    #[test]
+    fn an_outfit_removed_after_purchase_still_acts_but_is_not_kept() {
+        let mut session = outfitted(&outfitting_effects());
+        let shield = session.stats().shield;
+        session.outfit(buy(OutfitId(309))).expect("bought");
+        assert_eq!(session.pilot().owned(OutfitId(309)), 0);
+        assert_eq!(session.stats().shield, shield, "not kept");
+        assert_eq!(session.pilot().cash(), 24_000, "paid for");
+        session.outfit(buy(OutfitId(310))).expect("bought");
+        assert!(session.pilot().has_explored(SystemId(131)), "it explores");
+        assert_eq!(session.pilot().owned(OutfitId(310)), 0);
     }
 
     #[test]
@@ -9242,6 +9318,25 @@ mod tests {
         assert!(boarded.is_ok());
         assert_eq!(session.pilot().owned(OutfitId(200)), 1);
         assert_eq!(session.take_grant().map(|granted| granted.count), Some(1));
+    }
+
+    #[test]
+    fn boarding_a_person_granting_a_map_explores_and_adds_nothing() {
+        let mut catalog = granting();
+        catalog.outfits[0].mods = [(crate::outfit_effects::MAP, 1), (0, 0), (0, 0), (0, 0)];
+        let mut session = alongside_ace(&catalog);
+        let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert!(boarded.is_ok());
+        assert_eq!(session.pilot().owned(OutfitId(200)), 0);
+        assert!(session.pilot().has_explored(SystemId(131)), "a jump away");
+        assert_eq!(
+            session.take_grant(),
+            Some(Granted {
+                outfit: OutfitId(200),
+                count: 2,
+            }),
+            "it is still told"
+        );
     }
 
     #[test]
