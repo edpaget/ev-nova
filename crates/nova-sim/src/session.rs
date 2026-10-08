@@ -2412,18 +2412,11 @@ impl Session {
             site,
             fighter_room: &self.fighter_room(),
             ammo_caps: &self.ammo_caps(),
-            buy_random: self.rules.source_for(RuleKey::BuyRandom),
             hardpoints: self.hardpoints(),
             free_cargo: self.free_cargo(),
             launchers: &self.launchers(),
-            launcher_sale: self.rules.source_for(RuleKey::LauncherSale),
-            raised_max: self.rules.source_for(RuleKey::RaisedMax),
-            bought: self
-                .opening
-                .bought
-                .under(self.rules.source_for(RuleKey::OutfitLimit)),
-            outfit_count: self.rules.source_for(RuleKey::OutfitCount),
-            sale_mass: self.rules.source_for(RuleKey::SaleMass),
+            bought: self.opening.bought,
+            rules: self.rules,
             gate: self.gate(),
         }
         .outfitter(&self.pilot, &mut rolls, chance);
@@ -2547,8 +2540,7 @@ impl Session {
             outfits: &self.outfits,
             fields: self.fields,
             site,
-            buy_random: self.rules.source_for(RuleKey::BuyRandom),
-            trade_in_outfits: self.rules.source_for(RuleKey::TradeInOutfits),
+            rules: self.rules,
             gate: self.gate(),
         }
         .shipyard(&self.pilot, &mut rolls, chance);

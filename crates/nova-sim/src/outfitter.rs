@@ -262,7 +262,7 @@ use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
 use crate::market::{Direction, MORE_CARGO};
 use crate::pilot::Pilot;
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::wares::{self, ALWAYS_RANDOM, DayRolls, HideBits, HideHigher, Roll};
 
 /// The `oütf` `Flags` bits the outfitter reads (the Bible).
@@ -1047,8 +1047,6 @@ pub(crate) struct Shop<'a> {
     /// 16-bit product (`_HasMaxOfItem` @0x457e-0x45e4; see the module
     /// docs).
     pub(crate) ammo_caps: &'a BTreeMap<OutfitId, i16>,
-    /// How `BuyRandom` reads ([`buy_roll`]).
-    pub(crate) buy_random: RuleSource,
     /// The ship class's `MaxGun` and `MaxTur`.
     pub(crate) hardpoints: Hardpoints,
     /// The ship's own free cargo: its cargo space less every ton held,
@@ -1057,20 +1055,13 @@ pub(crate) struct Shop<'a> {
     pub(crate) free_cargo: i64,
     /// Each launcher outfit, with the ammunition it holds.
     pub(crate) launchers: &'a BTreeMap<OutfitId, Launcher>,
-    /// How a launcher's sale reads ([`Launcher::excess`]).
-    pub(crate) launcher_sale: RuleSource,
-    /// How a `ModType` 27 outfit raises its target's `Max` ([`raised_max`]).
-    pub(crate) raised_max: RuleSource,
-    /// The once-an-opening flags, as the rule reads them
-    /// ([`Bought::under`]).
+    /// The once-an-opening flags, as they stand: the shop reads them as
+    /// [`RuleKey::OutfitLimit`] says ([`Bought::under`]).
     pub(crate) bought: Bought,
-    /// What Option does with Buy or Sell, carried to the outfitter
-    /// ([`Outfitter::outfit_count`]).
-    pub(crate) outfit_count: RuleSource,
-    /// How a sale is refused for the free mass ([`sale_lacks_mass`]).
-    pub(crate) sale_mass: RuleSource,
     /// The control-bit test of an outfit's `Availability`.
     pub(crate) gate: Gate<'a>,
+    /// How each disputed rule reads ([`Rulebook::source_for`]).
+    pub(crate) rules: Rulebook,
 }
 
 impl Shop<'_> {
@@ -1084,7 +1075,7 @@ impl Shop<'_> {
         names: &mut BTreeMap<OutfitId, LcNames>,
     ) -> Option<OutfitRefusal> {
         let launcher = self.launchers.get(&record.id)?;
-        let rounds = launcher.excess(owned, self.launcher_sale)?;
+        let rounds = launcher.excess(owned, self.rules.source_for(RuleKey::LauncherSale))?;
         names.insert(record.id, lc_names(record));
         let ammo = launcher.ammo;
         if let Some(named) = self.records.iter().find(|named| Some(named.id) == ammo) {
@@ -1127,7 +1118,7 @@ impl Shop<'_> {
                 let target = OutfitId(val);
                 let held = i64::from(all.get(&target).copied().unwrap_or(0));
                 let target_record = self.records.iter().find(|other| other.id == target);
-                let left = match (self.raised_max, target_record) {
+                let left = match (self.rules.source_for(RuleKey::RaisedMax), target_record) {
                     (_, None) => 0,
                     (RuleSource::Engine, Some(other)) => {
                         i64::from(other.max) * (i64::from(owned) - 1)
@@ -1170,7 +1161,7 @@ impl Shop<'_> {
             Err(OutfitRefusal::CannotSell)
         } else if !here {
             Err(OutfitRefusal::NotBoughtHere)
-        } else if sale_lacks_mass(mass, free, self.sale_mass) {
+        } else if sale_lacks_mass(mass, free, self.rules.source_for(RuleKey::SaleMass)) {
             Err(OutfitRefusal::NegativeFreeMass)
         } else if let Some(refusal) = self
             .raised_first(record, owned, &pilot.outfits, names)
@@ -1201,9 +1192,10 @@ impl Shop<'_> {
         all: &BTreeMap<OutfitId, u16>,
         armed: &Armed,
     ) -> Option<OutfitRefusal> {
+        let raised = self.rules.source_for(RuleKey::RaisedMax);
         if self.at_ammo_cap(record.id, owned) {
             Some(OutfitRefusal::MaxOwned)
-        } else if i64::from(owned) >= raised_max(record, all, self.records, self.raised_max) {
+        } else if i64::from(owned) >= raised_max(record, all, self.records, raised) {
             Some(if record.max <= 0 {
                 OutfitRefusal::NoneAllowed
             } else {
@@ -1234,8 +1226,9 @@ impl Shop<'_> {
         if let Some(&ammo) = self.ammo_caps.get(&record.id) {
             cap = cap.min(ammo);
         }
-        if raise_multiplier(record, all, self.records, self.raised_max) > 1 {
-            cap = saturate_i16(raised_max(record, all, self.records, self.raised_max));
+        let raised = self.rules.source_for(RuleKey::RaisedMax);
+        if raise_multiplier(record, all, self.records, raised) > 1 {
+            cap = saturate_i16(raised_max(record, all, self.records, raised));
         }
         if record.flags & OutfitFlags::GUN != 0 {
             cap = cap.min(saturate_i16(i64::from(armed.gun_limit)));
@@ -1244,6 +1237,13 @@ impl Shop<'_> {
             cap = cap.min(saturate_i16(i64::from(armed.turret_limit)));
         }
         cap
+    }
+
+    /// The once-an-opening flags as [`RuleKey::OutfitLimit`] reads them
+    /// ([`Bought::under`]).
+    fn limits(&self) -> Bought {
+        self.bought
+            .under(self.rules.source_for(RuleKey::OutfitLimit))
     }
 
     /// The outfitter, for `pilot`, each outfit's roll for the day kept in
@@ -1263,6 +1263,7 @@ impl Shop<'_> {
         let mut sorted: Vec<&OutfitRecord> = self.records.iter().collect();
         sorted.sort_by_key(|record| record.id);
         let armed = Armed::of(self.hardpoints, &pilot.outfits, self.records);
+        let buy_random = self.rules.source_for(RuleKey::BuyRandom);
         let mut sweep = HideHigher::default();
         let mut rows = Vec::new();
         let mut names = BTreeMap::new();
@@ -1276,7 +1277,7 @@ impl Shop<'_> {
                     rolls.hold(record.id);
                     true
                 } else {
-                    let roll = buy_roll(record.buy_random, self.buy_random);
+                    let roll = buy_roll(record.buy_random, buy_random);
                     rolls.today(record.id, roll, chance)
                 };
             let for_sale = today && sweep.on_sale(record.disp_weight);
@@ -1313,7 +1314,7 @@ impl Shop<'_> {
                 Err(OutfitRefusal::NoExpansion)
             } else if expansion.is_some_and(|size| self.free_cargo < i64::from(size)) {
                 Err(OutfitRefusal::NoCargoRoom)
-            } else if self.bought.refuses(record) {
+            } else if self.limits().refuses(record) {
                 Err(OutfitRefusal::BoughtThisOpening)
             } else if price > pilot.cash {
                 Err(OutfitRefusal::CannotAfford)
@@ -1351,7 +1352,7 @@ impl Shop<'_> {
             cash: pilot.cash,
             free_mass: free,
             lc_names: names,
-            outfit_count: self.outfit_count,
+            outfit_count: self.rules.source_for(RuleKey::OutfitCount),
         })
     }
 }
@@ -1451,14 +1452,10 @@ mod tests {
             site,
             fighter_room: &NO_FIGHTERS,
             ammo_caps: &NO_CAPS,
-            buy_random: RuleSource::Engine,
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
-            launcher_sale: RuleSource::Engine,
-            raised_max: RuleSource::Engine,
             bought: Bought::default(),
-            outfit_count: RuleSource::Engine,
-            sale_mass: RuleSource::Engine,
+            rules: Rulebook::default(),
             gate: Gate::FRESH,
         }
     }
@@ -1676,7 +1673,7 @@ mod tests {
         let records = [buying(128, 0), buying(129, -1)];
         let site = port();
         let bible = Shop {
-            buy_random: RuleSource::Bible,
+            rules: Rulebook::default().with_override(RuleKey::BuyRandom, RuleSource::Bible),
             ..shop(&records, &site)
         };
         let mut chance = Scripted::default();
@@ -2210,14 +2207,10 @@ mod tests {
                 site: &port(),
                 fighter_room,
                 ammo_caps: &NO_CAPS,
-                buy_random: RuleSource::Engine,
                 hardpoints: ROOMY,
                 launchers: &NO_LAUNCHERS,
-                launcher_sale: RuleSource::Engine,
-                raised_max: RuleSource::Engine,
                 bought: Bought::default(),
-                outfit_count: RuleSource::Engine,
-                sale_mass: RuleSource::Engine,
+                rules: Rulebook::default(),
                 gate: Gate::FRESH,
             }
             .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
@@ -2334,14 +2327,10 @@ mod tests {
             site: &port(),
             fighter_room: &NO_FIGHTERS,
             ammo_caps: &NO_CAPS,
-            buy_random: RuleSource::Engine,
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
-            launcher_sale: RuleSource::Engine,
-            raised_max: RuleSource::Engine,
             bought: Bought::default(),
-            outfit_count: RuleSource::Engine,
-            sale_mass: RuleSource::Engine,
+            rules: Rulebook::default(),
             gate: Gate::FRESH,
         }
         .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
@@ -2770,7 +2759,7 @@ mod tests {
         let site = port();
         let sell_of = |source, id| {
             let outfitter = Shop {
-                sale_mass: source,
+                rules: Rulebook::default().with_override(RuleKey::SaleMass, source),
                 ..shop(&records, &site)
             }
             .outfitter(&pilot, &mut DayRolls::default(), &mut NeverFires)
@@ -3004,7 +2993,7 @@ mod tests {
         let site = port();
         Shop {
             launchers,
-            launcher_sale: source,
+            rules: Rulebook::default().with_override(RuleKey::LauncherSale, source),
             ..shop(records, &site)
         }
         .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
@@ -3317,7 +3306,7 @@ mod tests {
         let records = raisers();
         let site = port();
         let bible = Shop {
-            raised_max: RuleSource::Bible,
+            rules: Rulebook::default().with_override(RuleKey::RaisedMax, RuleSource::Bible),
             ..shop(&records, &site)
         };
         let outfitter = |owned: &[(i16, u16)]| {
@@ -3490,7 +3479,7 @@ mod tests {
     fn raising(records: &[OutfitRecord], owned: &[(i16, u16)], source: RuleSource) -> Outfitter {
         let site = port();
         Shop {
-            raised_max: source,
+            rules: Rulebook::default().with_override(RuleKey::RaisedMax, source),
             ..shop(records, &site)
         }
         .outfitter(&owning(owned), &mut DayRolls::default(), &mut NeverFires)
@@ -3892,7 +3881,7 @@ mod tests {
         let outfitter = Shop {
             ammo_caps: &ammo_caps,
             hardpoints,
-            raised_max: source,
+            rules: Rulebook::default().with_override(RuleKey::RaisedMax, source),
             ..shop(records, &site)
         }
         .outfitter(&owning(owned), &mut DayRolls::default(), &mut NeverFires)
@@ -4072,7 +4061,7 @@ mod tests {
         let site = port();
         for source in RuleSource::ALL {
             let outfitter = Shop {
-                outfit_count: source,
+                rules: Rulebook::default().with_override(RuleKey::OutfitCount, source),
                 ..shop(&records, &site)
             }
             .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)

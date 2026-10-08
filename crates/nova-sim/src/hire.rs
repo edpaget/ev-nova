@@ -352,8 +352,9 @@ pub(crate) struct Bar<'a> {
     pub(crate) control_bits: &'a dyn ControlBits,
     /// What the control-bit test reads about the player.
     pub(crate) pilot: &'a dyn PilotFacts,
-    /// Whether `Require` gates hiring ([`RuleKey::HireRequire`]).
-    pub(crate) hire_require: RuleSource,
+    /// How each disputed rule reads: among them whether `Require` gates
+    /// hiring ([`RuleKey::HireRequire`]).
+    pub(crate) rules: Rulebook,
 }
 
 impl Bar<'_> {
@@ -399,7 +400,8 @@ impl Bar<'_> {
                 true,
             );
             let fee = self.terms.fee(ship, self.site);
-            let gated = self.hire_require == RuleSource::Bible && !required;
+            let gated =
+                self.rules.source_for(RuleKey::HireRequire) == RuleSource::Bible && !required;
             let hire = if !available || gated {
                 Err(HireRefusal::NotForHire)
             } else if !self.room {

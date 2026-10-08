@@ -230,7 +230,7 @@ impl Session {
             terms: &*self.hire_terms.0,
             control_bits: &*self.control_bits.0,
             pilot: &facts,
-            hire_require: self.rules.source_for(RuleKey::HireRequire),
+            rules: self.rules,
         };
         let rolls = &mut self.hire_rolls;
         Some(bar.list(|ship, percent| rolls.today(ship, Roll::Chance(percent), chance)))

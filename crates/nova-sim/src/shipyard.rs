@@ -186,7 +186,7 @@ use crate::landing::StellarFlags;
 use crate::market::{EscortHolds, Good, escort_tons, fleet_holds};
 use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_price};
 use crate::pilot::{Pilot, merged, tally};
-use crate::rulebook::RuleSource;
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::stats::ShipStats;
 use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll};
 
@@ -367,10 +367,8 @@ pub(crate) struct Yard<'a> {
     pub(crate) fields: ShipFields,
     /// The stellar landed on.
     pub(crate) site: &'a LandingSite,
-    /// How `BuyRandom` reads ([`buy_roll`]).
-    pub(crate) buy_random: RuleSource,
-    /// Whether an unsellable outfit counts in the trade-in ([`trade_in`]).
-    pub(crate) trade_in_outfits: RuleSource,
+    /// How each disputed rule reads ([`Rulebook::source_for`]).
+    pub(crate) rules: Rulebook,
     /// The control-bit test of a ship's `Availability`.
     pub(crate) gate: Gate<'a>,
 }
@@ -389,7 +387,7 @@ impl Yard<'_> {
             self.fields.mass,
             &pilot.outfits,
             self.outfits,
-            self.trade_in_outfits,
+            self.rules.source_for(RuleKey::TradeInOutfits),
         )
     }
 
@@ -415,7 +413,11 @@ impl Yard<'_> {
             let required = wares::requirement_met(ship.require, contributed);
             let available = self.gate.allows(&ship.availability);
             let for_sale = wares::tech_allows(ship.tech_level, self.site)
-                && rolls.today(ship.id, buy_roll(ship.buy_random, self.buy_random), chance)
+                && rolls.today(
+                    ship.id,
+                    buy_roll(ship.buy_random, self.rules.source_for(RuleKey::BuyRandom)),
+                    chance,
+                )
                 && sweep.on_sale(ship.disp_weight);
             let buyable = for_sale && required && available;
             sweep.note(
@@ -736,8 +738,7 @@ mod tests {
             outfits,
             fields: FAST,
             site,
-            buy_random: RuleSource::Engine,
-            trade_in_outfits: RuleSource::Engine,
+            rules: Rulebook::default(),
             gate: Gate::FRESH,
         }
     }
@@ -927,7 +928,7 @@ mod tests {
         let ships = [buying(129, -1), buying(130, 0), buying(131, 100)];
         let site = port();
         let bible = Yard {
-            buy_random: RuleSource::Bible,
+            rules: Rulebook::default().with_override(RuleKey::BuyRandom, RuleSource::Bible),
             ..yard(&ships, &[], &site)
         };
         let shipyard = bible
