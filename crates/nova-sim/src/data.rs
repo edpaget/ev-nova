@@ -6,7 +6,6 @@
 
 use std::collections::BTreeMap;
 
-use nova_data::GameData;
 use nova_data::records::character::Character;
 use nova_data::records::disaster::Disaster;
 use nova_data::records::dude::Dude;
@@ -19,9 +18,11 @@ use nova_data::records::person::Person;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::stellar::Stellar;
+use nova_data::records::string::StrResource;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
+use nova_data::{GameData, Record};
 
 use crate::blink::Blink;
 use crate::catalog::{
@@ -29,8 +30,8 @@ use crate::catalog::{
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
     GovtRecord, HullRecord, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, StockWeapon, SystemId, SystemTraffic,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    StarSystem, StartDate, StartError, StellarId, StockWeapon, StringPatch, SystemId,
+    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -207,7 +208,7 @@ impl PilotCatalog for GameData {
         CommodityStrings {
             names: strings(self, COMMODITY_NAMES),
             base_prices: strings(self, BASE_PRICES),
-            price_patches: Default::default(),
+            price_patches: patches(self, PRICE_PATCHES),
         }
     }
 
@@ -636,6 +637,32 @@ const COMMODITY_NAMES: i16 = 4000;
 /// The `STR#` pricing them, "Base Prices".
 const BASE_PRICES: i16 = 4004;
 
+/// The first `'STR '` patching `STR#` 4004, the Bible's Appendix III:
+/// 9300 + n patches commodity n's base price.
+const PRICE_PATCHES: i16 = 9300;
+
+/// `data`'s six `'STR '` patches from `first` up, raw. A zero-byte one is
+/// [`StringPatch::Empty`]; any other that cannot be read is
+/// [`StringPatch::Unreadable`]. Bytes past a readable string are ignored,
+/// as the original reads only as many as its length byte says.
+fn patches(data: &GameData, first: i16) -> [StringPatch; 6] {
+    std::array::from_fn(|n| {
+        let id = first + i16::try_from(n).expect("one of six");
+        match data.get::<StrResource>(id) {
+            None => StringPatch::Absent,
+            Some(Ok(entry)) => StringPatch::Text(entry.record.text.as_str().to_owned()),
+            Some(Err(_)) => {
+                let bytes = data.resource(StrResource::TYPE, id);
+                if bytes.is_some_and(|bytes| bytes.resource.data().is_empty()) {
+                    StringPatch::Empty
+                } else {
+                    StringPatch::Unreadable
+                }
+            }
+        }
+    })
+}
+
 /// Every string of `data`'s `STR#` `id`; none when it is missing or
 /// cannot be read.
 fn strings(data: &GameData, id: i16) -> Vec<String> {
@@ -665,7 +692,6 @@ mod tests {
     use std::io;
     use std::path::Path;
 
-    use nova_data::Record;
     use nova_data::graphics::RLED;
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::disaster::Disaster;
@@ -1523,6 +1549,130 @@ mod tests {
                 base_prices: vec!["75".into()],
                 price_patches: Default::default(),
             }
+        );
+    }
+
+    /// A data file, `/data/Nova Data`, and a plug-in,
+    /// `/plugins/Price Patch.npif`, each holding a fork.
+    struct Layered {
+        data: Vec<u8>,
+        plugin: Vec<u8>,
+    }
+
+    impl DirLister for Layered {
+        fn list(&self, dir: &Path) -> io::Result<Vec<Listing>> {
+            let name = if dir == Path::new("/data") {
+                "Nova Data"
+            } else {
+                "Price Patch.npif"
+            };
+            Ok(vec![Listing {
+                name: name.into(),
+                kind: EntryKind::File,
+            }])
+        }
+    }
+
+    impl ForkReader for Layered {
+        fn read_fork(&self, path: &Path, fork: Fork) -> io::Result<Option<Vec<u8>>> {
+            let bytes = if path.starts_with("/data") {
+                &self.data
+            } else {
+                &self.plugin
+            };
+            Ok((fork == Fork::Data).then(|| bytes.clone()))
+        }
+    }
+
+    fn fork(resources: &[(ResType, i16, Vec<u8>)]) -> Vec<u8> {
+        resources
+            .iter()
+            .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
+                fork.resource(*ty, *id, None, data)
+            })
+            .build()
+            .bytes
+    }
+
+    /// The store of a data file and a plug-in holding these resources.
+    fn layered(data: &[(ResType, i16, Vec<u8>)], plugin: &[(ResType, i16, Vec<u8>)]) -> GameData {
+        let files = Layered {
+            data: fork(data),
+            plugin: fork(plugin),
+        };
+        GameData::load(
+            &files,
+            &files,
+            Path::new("/data"),
+            Some(Path::new("/plugins")),
+        )
+        .expect("opens")
+    }
+
+    /// A `'STR '` of `text`: its length byte, then the text.
+    fn str_resource(text: &str) -> Vec<u8> {
+        let mut bytes = vec![u8::try_from(text.len()).expect("short")];
+        bytes.extend(text.as_bytes());
+        bytes
+    }
+
+    const STOCK_PRICES: [&str; 6] = ["75", "350", "750", "900", "200", "550"];
+
+    #[test]
+    fn a_plugins_str_patches_arrive_raw_beside_str_4004() {
+        let data = layered(
+            &[
+                (StrList::TYPE, 4000, str_list(&["Food"])),
+                (StrList::TYPE, 4004, str_list(&STOCK_PRICES)),
+            ],
+            &[
+                (StrResource::TYPE, 9301, str_resource("999")),
+                (StrResource::TYPE, 9302, Vec::new()),
+                (StrResource::TYPE, 9303, str_resource("")),
+                (StrResource::TYPE, 9304, b"\x05ab".to_vec()),
+                (StrResource::TYPE, 9305, b"\x03550xyz".to_vec()),
+                (StrList::TYPE, 9300, str_list(&["1"])),
+            ],
+        );
+        assert_eq!(
+            data.commodity_strings(),
+            CommodityStrings {
+                names: vec!["Food".into()],
+                base_prices: STOCK_PRICES.map(str::to_owned).to_vec(),
+                price_patches: [
+                    StringPatch::Absent,
+                    StringPatch::Text("999".into()),
+                    StringPatch::Empty,
+                    StringPatch::Text(String::new()),
+                    StringPatch::Unreadable,
+                    StringPatch::Text("550".into()),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn a_str_patch_in_any_file_counts() {
+        let data = layered(
+            &[
+                (StrResource::TYPE, 9300, str_resource("10")),
+                (StrResource::TYPE, 9306, str_resource("70")),
+                (StrResource::TYPE, 9299, str_resource("0")),
+            ],
+            &[],
+        );
+        let patches = data.commodity_strings().price_patches;
+        assert_eq!(
+            patches,
+            [
+                StringPatch::Text("10".into()),
+                StringPatch::Absent,
+                StringPatch::Absent,
+                StringPatch::Absent,
+                StringPatch::Absent,
+                StringPatch::Absent,
+            ],
+            "only 9300-9305 patch prices"
         );
     }
 

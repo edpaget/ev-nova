@@ -33,11 +33,13 @@ use nova_data::records::character::Character;
 use nova_data::records::ship::Ship;
 use nova_data::records::stellar::Stellar;
 use nova_sim::fuel::FUEL_SCOOP;
+use nova_sim::market::commodities;
 use nova_sim::{
     Chance, Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good,
     GovtId, JunkId, LandOutcome, LandPress, LandingRefusal, NeverFires, OutfitId, OutfitMod,
     OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields,
-    ShipId, ShipState, ShipStats, StartDate, StellarId, SystemId, Vec2, check_landing, services,
+    ShipId, ShipState, ShipStats, StartDate, StellarId, StringPatch, SystemId, Vec2, check_landing,
+    services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -358,6 +360,16 @@ fn the_food_surplus_targets_port_kane() {
         strings.base_prices,
         ["75", "350", "750", "900", "200", "550"]
     );
+    assert_eq!(
+        strings.price_patches,
+        <[StringPatch; 6]>::default(),
+        "stock data has no 'STR '"
+    );
+    let prices: Vec<i64> = commodities(&strings)
+        .into_iter()
+        .map(|(_, commodity)| commodity.base_price)
+        .collect();
+    assert_eq!(prices, [75, 350, 750, 900, 200, 550]);
 }
 
 /// An `öops` at any stellar may be placed at Port Kane (`spöb` 137), but
