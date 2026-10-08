@@ -1746,6 +1746,26 @@ mod tests {
     }
 
     #[test]
+    fn a_pilot_desk_edit_that_cannot_be_saved_is_a_warning() {
+        let window = FakeWindow::new((1024, 768), 1.0);
+        let store = MemoryPilots::new();
+        let mut app = desk_app(&window, &store);
+        create(&mut app.screen, "Ada");
+        assert_eq!(app.take_warnings(), Vec::<String>::new(), "created");
+        store.fail_writes(true);
+        app.pilot_desk_frame(|_, desk| {
+            desk.expect("flying")
+                .edit(PilotEdit::Credits(321))
+                .expect("made");
+            true
+        });
+        assert_eq!(
+            app.take_warnings(),
+            ["nova: cannot save the pilot Ada in memory (the disk is full)"]
+        );
+    }
+
+    #[test]
     fn a_pilot_desk_frame_with_no_edit_saves_nothing() {
         let window = FakeWindow::new((1024, 768), 1.0);
         let store = MemoryPilots::new();
