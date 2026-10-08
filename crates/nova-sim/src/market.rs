@@ -3672,6 +3672,7 @@ mod tests {
         let most = |cash, price| at(cash, price).row_max(0, Direction::Buy);
         assert_eq!(most((1 << 32) + 100_000, 10), Some(32_000), "not 10,000");
         assert_eq!(most(32_767_000, 40_000), Some(1000), "at 32767, not 819");
+        assert_eq!(most(32_767_000, -40_000), Some(-999), "at -32768");
         let other = quotient_by(RuleSource::Bible, at(32_767_000, 40_000));
         assert_eq!(other.row_max(0, Direction::Buy), Some(819));
     }

@@ -15,6 +15,11 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The exchange's single-float quotient holds a price past 16 bits at
+    # i16::MIN when it is below 0 and i16::MAX otherwise. `Market::quotient`
+    # has already returned for a price of 0, so `price < 0` and
+    # `price <= 0` choose the same.
+    "replace < with <= in Market::quotient",
     # The shipyard's trade-in leaves out outfits flagged persistent (0x0004)
     # or unsellable (0x0008): two distinct bits, so `|` and `^` combine them
     # the same.
