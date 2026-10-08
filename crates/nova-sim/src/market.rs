@@ -2022,6 +2022,15 @@ mod tests {
     }
 
     #[test]
+    fn an_event_with_no_days_left_is_rolled_that_day() {
+        let mut events = BTreeMap::from([on_earth(128, 0)]);
+        let mut chance = Scripted::answering(&[true]);
+        step_day(&goods(), &mut events, &mut chance);
+        assert_eq!(chance.asked, [35, 40, 50], "as the original's slot at 0");
+        assert_eq!(days(&events), [(128, 30)]);
+    }
+
+    #[test]
     fn an_event_that_ends_on_a_day_is_rolled_the_next() {
         let mut events = BTreeMap::from([on_earth(128, 1)]);
         let mut chance = Scripted::answering(&[true; 3]);
