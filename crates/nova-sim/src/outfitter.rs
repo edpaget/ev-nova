@@ -86,19 +86,29 @@
 //! # Buying and selling
 //!
 //! Each order buys or sells one, and a refused one changes nothing. A buy
-//! is refused when the outfit cannot be bought here, the player owns its
+//! is refused, checked in `_CanBuyOutfitItem`'s order (@0x4e7c4-0x4ebbc),
+//! when the outfit cannot be bought here, the player owns its
 //! ammunition cap (below) or its `Max` already, it is a gun or a turret
-//! past the ship's limit (below), it is a fighter whose bays have no room
+//! past the ship's limit (below), there is not the free mass for it (an
+//! outfit of mass 0 or less always fits, even when the free mass is
+//! negative, @0x4e88a-0x4e892), it is a fighter whose bays have no room
 //! left (their [`capacity`](crate::bay::capacity), the fighters out
 //! counted against it, `_CanBuyFighter` @0x5a82; refused as
-//! [`OutfitRefusal::BaysFull`]), the ship's
-//! `Holds` is negative and the outfit is a mass expansion (the last of
-//! its mods of [`MORE_CARGO`] has a negative `ModVal`, whatever its
-//! `Mass`: `_LoadObjectData` flags a class of negative `Holds`,
-//! @0x7a6a5-0x7a6d3, and only `_CanBuyOutfitItem` reads the flag,
-//! @0x4e8bc-0x4e8d2, @0x4e94f-0x4e97e), there is not the free mass for
-//! it (an outfit of mass 0 or less always fits, even when the free mass
-//! is negative, @0x4e88a-0x4e892), or the player cannot pay. A
+//! [`OutfitRefusal::BaysFull`]), it is a mass expansion (the last of its
+//! mods of [`MORE_CARGO`] has a negative `ModVal`, whatever its `Mass`,
+//! @0x4e8bc-0x4e8d2, @0x4e94f-0x4e95a) and either the ship's `Holds` is
+//! negative (`_LoadObjectData` flags such a class, @0x7a6a5-0x7a6d3, and
+//! only `_CanBuyOutfitItem` reads the flag, @0x4e95c-0x4e97e) or the
+//! ship's own free cargo is below the size of that `ModVal` (its cargo
+//! space, every owned `ModType` 2 counted, less every commodity and jünk
+//! held, the escorts' holds not counted: `_ShipTotalHolds()` less
+//! `_TotalCargo(player)`, @0x4e980-0x4e9a8), or the player cannot pay. An
+//! outfit whose first mod is `ModType` 3 is never tested as a mass
+//! expansion (@0x4e8f6). The original's `Require` and `Availability` come
+//! after the expansion tests; here they refuse first, as
+//! [`OutfitRefusal::NotForSale`], which no player can tell apart: the
+//! original returns only whether the outfit can be bought, which enables
+//! its Buy button, and never shows or tells apart a refusal. A
 //! buy pays the price and adds one, or with
 //! [`OutfitFlags::REMOVE_AFTER_PURCHASE`] only pays. A sale is refused
 //! when the player owns none, the outfit is flagged
@@ -187,6 +197,7 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{GovtId, LandingSite, OutfitId, OutfitRecord};
 use crate::chance::Chance;
+use crate::combat::armament::MOD_AMMO;
 use crate::fuel::OutfitMod;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
@@ -249,7 +260,9 @@ pub struct OutfitOrder {
     pub direction: Direction,
 }
 
-/// Why an outfit cannot be bought or sold.
+/// Why an outfit cannot be bought or sold. A buy gives the first refusal
+/// in `_CanBuyOutfitItem`'s order (see the module docs). The original
+/// names none: it only disables its Buy button (0xded08, @0x5c1c4-0x5c1cc).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutfitRefusal {
     /// There is no outfitter: the ship is not landed, or the stellar has
@@ -279,6 +292,10 @@ pub enum OutfitRefusal {
     /// a negative `ModVal`), and the ship's `Holds` is negative, which
     /// forbids that (`_CanBuyOutfitItem` @0x4e94f-0x4e97e).
     NoExpansion,
+    /// It is a mass expansion, and the ship's own free cargo (its cargo
+    /// space less every ton held) is below the size of its `ModVal`
+    /// (`_CanBuyOutfitItem` @0x4e980-0x4e9a8).
+    NoCargoRoom,
     /// The player cannot pay for it.
     CannotAfford,
     /// The player owns none.
@@ -450,16 +467,22 @@ pub fn unit_mass(outfit: &OutfitRecord, ship_mass: i16) -> i64 {
     }
 }
 
-/// Whether `outfit` is a mass expansion, as `_CanBuyOutfitItem` reads
-/// one: the last of its mods of [`MORE_CARGO`] has a negative `ModVal`
-/// (@0x4e8bc-0x4e8d2, @0x4e94f-0x4e95a). Its `Mass` plays no part.
-fn mass_expansion(outfit: &OutfitRecord) -> bool {
+/// The cargo space `outfit` takes, when `_CanBuyOutfitItem` tests it as
+/// a mass expansion: the size of the last of its mods of [`MORE_CARGO`],
+/// when that `ModVal` is negative (@0x4e8bc-0x4e8d2, @0x4e94f-0x4e95a).
+/// Its `Mass` plays no part. An outfit whose first mod is `ModType` 3
+/// ([`MOD_AMMO`]) is never tested as one (@0x4e8f6).
+fn mass_expansion(outfit: &OutfitRecord) -> Option<u16> {
+    if outfit.mods[0].0 == MOD_AMMO {
+        return None;
+    }
     outfit
         .mods
         .iter()
         .rev()
         .find(|&&(mod_type, _)| mod_type == MORE_CARGO)
-        .is_some_and(|&(_, mod_val)| mod_val < 0)
+        .filter(|&&(_, mod_val)| mod_val < 0)
+        .map(|&(_, mod_val)| mod_val.unsigned_abs())
 }
 
 /// Whether an outfit of `mass` does not fit in `free` tons; only one of
@@ -713,6 +736,10 @@ pub(crate) struct Shop<'a> {
     pub(crate) buy_random: RuleSource,
     /// The ship class's `MaxGun` and `MaxTur`.
     pub(crate) hardpoints: Hardpoints,
+    /// The ship's own free cargo: its cargo space less every ton held,
+    /// below zero when more is held than it has space for
+    /// (`_ShipTotalHolds() - _TotalCargo(player)`, @0x4e980-0x4e9a8).
+    pub(crate) free_cargo: i64,
     /// Each launcher outfit, with the ammunition it holds.
     pub(crate) launchers: &'a BTreeMap<OutfitId, Launcher>,
     /// How a launcher's sale reads ([`Launcher::excess`]).
@@ -915,16 +942,19 @@ impl Shop<'_> {
             } else {
                 OutfitRefusal::NoSpace
             });
+            let expansion = mass_expansion(record);
             let buying = if !buyable {
                 Err(OutfitRefusal::NotForSale)
             } else if let Some(refusal) = has_max {
                 Err(refusal)
-            } else if self.fighter_room.get(&record.id) == Some(&0) {
-                Err(OutfitRefusal::BaysFull)
-            } else if mass_expansion(record) && self.fields.holds < 0 {
-                Err(OutfitRefusal::NoExpansion)
             } else if let Some(refusal) = no_space {
                 Err(refusal)
+            } else if self.fighter_room.get(&record.id) == Some(&0) {
+                Err(OutfitRefusal::BaysFull)
+            } else if expansion.is_some() && self.fields.holds < 0 {
+                Err(OutfitRefusal::NoExpansion)
+            } else if expansion.is_some_and(|size| self.free_cargo < i64::from(size)) {
+                Err(OutfitRefusal::NoCargoRoom)
             } else if price > pilot.cash {
                 Err(OutfitRefusal::CannotAfford)
             } else {
@@ -1049,12 +1079,16 @@ mod tests {
         turrets: 99,
     };
 
+    /// More free cargo than any mass expansion a test buys needs.
+    const ROOMY_CARGO: i64 = 99_999;
+
     /// The outfitter of `records` at `site`, reading `BuyRandom` by the
     /// engine.
     fn shop<'a>(records: &'a [OutfitRecord], site: &'a LandingSite) -> Shop<'a> {
         Shop {
             records,
             fields: FAST,
+            free_cargo: ROOMY_CARGO,
             standard: &NO_STANDARD,
             site,
             fighter_room: &NO_FIGHTERS,
@@ -1725,6 +1759,7 @@ mod tests {
             Shop {
                 records: std::slice::from_ref(&fighters),
                 fields: FAST,
+                free_cargo: ROOMY_CARGO,
                 standard: &NO_STANDARD,
                 site: &port(),
                 fighter_room,
@@ -1825,6 +1860,18 @@ mod tests {
     /// The outfitter of a ship of `holds` selling outfit 128 with `mods`
     /// and `mass`.
     fn holds_outfitter(holds: i16, mods: &[(i16, i16)], mass: i16) -> Outfitter {
+        cargo_outfitter(holds, mods, mass, ROOMY_CARGO, &pilot())
+    }
+
+    /// The outfitter of a ship of `holds` with `free_cargo` tons of cargo
+    /// room, selling `pilot` outfit 128 with `mods` and `mass`.
+    fn cargo_outfitter(
+        holds: i16,
+        mods: &[(i16, i16)],
+        mass: i16,
+        free_cargo: i64,
+        pilot: &Pilot,
+    ) -> Outfitter {
         let records = [OutfitRecord {
             mass,
             ..outfit(128, mods)
@@ -1832,6 +1879,7 @@ mod tests {
         Shop {
             records: &records,
             fields: ShipFields { holds, ..FAST },
+            free_cargo,
             standard: &NO_STANDARD,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
@@ -1842,8 +1890,97 @@ mod tests {
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
         }
-        .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+        .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
         .expect("open")
+    }
+
+    /// Whether `cargo_outfitter` would sell one, to a new pilot.
+    fn cargo_shop(
+        holds: i16,
+        mods: &[(i16, i16)],
+        mass: i16,
+        free_cargo: i64,
+    ) -> Result<(), OutfitRefusal> {
+        buy(&cargo_outfitter(holds, mods, mass, free_cargo, &pilot()))
+    }
+
+    #[test]
+    fn a_mass_expansion_needs_free_cargo_of_its_size() {
+        // `_CanBuyOutfitItem` @0x4e980-0x4e9a8: free cargo >= |ModVal|.
+        let expansion = [(MORE_CARGO, -10)];
+        assert_eq!(cargo_shop(10, &expansion, 0, 10), Ok(()), "exactly");
+        assert_eq!(
+            cargo_shop(10, &expansion, 0, 9),
+            Err(OutfitRefusal::NoCargoRoom)
+        );
+        assert_eq!(
+            cargo_shop(10, &[(MORE_CARGO, -11)], 0, 10),
+            Err(OutfitRefusal::NoCargoRoom)
+        );
+        assert_eq!(
+            cargo_shop(10, &expansion, 0, -1),
+            Err(OutfitRefusal::NoCargoRoom),
+            "more held than the space"
+        );
+        assert_eq!(
+            cargo_shop(10, &[(MORE_CARGO, i16::MIN)], 0, 32_768),
+            Ok(()),
+            "the largest expansion, by its size"
+        );
+        assert_eq!(
+            cargo_shop(10, &[(MORE_CARGO, i16::MIN)], 0, 32_767),
+            Err(OutfitRefusal::NoCargoRoom)
+        );
+        assert_eq!(
+            cargo_shop(10, &[(MORE_CARGO, -11), (MORE_CARGO, -10)], 0, 10),
+            Ok(()),
+            "the last cargo mod's size"
+        );
+        assert_eq!(
+            cargo_shop(10, &[(MORE_CARGO, 50)], 0, 0),
+            Ok(()),
+            "a cargo pod needs no room"
+        );
+        assert_eq!(
+            cargo_shop(-10, &expansion, 0, 0),
+            Err(OutfitRefusal::NoExpansion),
+            "negative Holds first"
+        );
+    }
+
+    #[test]
+    fn an_outfit_whose_first_mod_is_ammunition_is_never_a_mass_expansion() {
+        // `_CanBuyOutfitItem` @0x4e8f6: the else-if chain skips the
+        // expansion tests when slot 0 is `ModType` 3.
+        let ammo_first = [(MOD_AMMO, 128), (MORE_CARGO, -5)];
+        assert_eq!(cargo_shop(-1, &ammo_first, 0, 0), Ok(()), "negative Holds");
+        assert_eq!(cargo_shop(10, &ammo_first, 0, 0), Ok(()), "no room");
+        let ammo_second = [(MORE_CARGO, -5), (MOD_AMMO, 128)];
+        assert_eq!(
+            cargo_shop(-1, &ammo_second, 0, 0),
+            Err(OutfitRefusal::NoExpansion)
+        );
+        assert_eq!(
+            cargo_shop(10, &ammo_second, 0, 0),
+            Err(OutfitRefusal::NoCargoRoom)
+        );
+    }
+
+    #[test]
+    fn the_free_mass_is_checked_before_the_expansion_tests() {
+        // `_CanBuyOutfitItem`: free mass @0x4e88a before @0x4e94f.
+        let expansion = [(MORE_CARGO, -5)];
+        let negative = cargo_outfitter(-1, &expansion, 31, ROOMY_CARGO, &pilot());
+        assert_eq!(buy(&negative), Err(OutfitRefusal::NoSpaceForAny));
+        let cramped = cargo_outfitter(10, &expansion, 31, 0, &pilot());
+        assert_eq!(buy(&cramped), Err(OutfitRefusal::NoSpaceForAny));
+        assert_eq!(words(&cramped), Some(OutfitRefusal::NoSpaceForAny));
+        let more = cargo_outfitter(10, &expansion, 16, 0, &owning(&[(128, 1)]));
+        assert_eq!(buy(&more), Err(OutfitRefusal::NoSpace));
+        assert_eq!(words(&more), Some(OutfitRefusal::NoSpace));
+        let light = cargo_outfitter(10, &expansion, 30, 0, &pilot());
+        assert_eq!(buy(&light), Err(OutfitRefusal::NoCargoRoom));
+        assert_eq!(words(&light), None, "the room plays no part in the words");
     }
 
     #[test]
@@ -1855,7 +1992,7 @@ mod tests {
             "massless"
         );
         assert_eq!(
-            holds_shop(-1, &[(3, 1), (MORE_CARGO, -5)], 1),
+            holds_shop(-1, &[(MORE_SPEED, 1), (MORE_CARGO, -5)], 1),
             Err(OutfitRefusal::NoExpansion),
             "in any slot, with mass"
         );
@@ -1920,11 +2057,13 @@ mod tests {
     fn a_fighter_refused_for_full_bays_carries_the_mass_words_when_it_lacks_the_mass() {
         // `_OutfitDialogUpdate` @0x57e33-0x57e4f: the words never consult
         // `_CanBuyOutfitItem`, so `_CanBuyFighter` plays no part in them.
+        // `_CanBuyOutfitItem` checks the free mass (@0x4e88a) before
+        // `_CanBuyFighter` (@0x4e938), so the buy is refused for the mass.
         let none = bays_full(&[weighing(31)], &pilot());
-        assert_eq!(buy(&none), Err(OutfitRefusal::BaysFull));
+        assert_eq!(buy(&none), Err(OutfitRefusal::NoSpaceForAny));
         assert_eq!(words(&none), Some(OutfitRefusal::NoSpaceForAny));
         let one = bays_full(&[weighing(31)], &owning(&[(128, 1)]));
-        assert_eq!(buy(&one), Err(OutfitRefusal::BaysFull));
+        assert_eq!(buy(&one), Err(OutfitRefusal::NoSpace));
         assert_eq!(words(&one), Some(OutfitRefusal::NoSpace));
         let fits = bays_full(&[weighing(30)], &pilot());
         assert_eq!(buy(&fits), Err(OutfitRefusal::BaysFull));
@@ -1954,7 +2093,7 @@ mod tests {
     #[test]
     fn a_mass_expansion_refused_on_negative_holds_carries_the_mass_words() {
         let heavy = holds_outfitter(-1, &[(MORE_CARGO, -5)], 31);
-        assert_eq!(buy(&heavy), Err(OutfitRefusal::NoExpansion));
+        assert_eq!(buy(&heavy), Err(OutfitRefusal::NoSpaceForAny));
         assert_eq!(words(&heavy), Some(OutfitRefusal::NoSpaceForAny));
         let light = holds_outfitter(-1, &[(MORE_CARGO, -5)], 30);
         assert_eq!(buy(&light), Err(OutfitRefusal::NoExpansion));

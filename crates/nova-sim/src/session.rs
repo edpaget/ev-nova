@@ -2010,6 +2010,16 @@ impl Session {
             })
     }
 
+    /// The ship's own free cargo, as the outfitter reads it for a mass
+    /// expansion: its cargo space less every ton held, commodities and
+    /// jünk, below zero when it holds more than that (`_CanBuyOutfitItem`
+    /// @0x4e980-0x4e9a8 subtracts `_TotalCargo(player)` from
+    /// `_ShipTotalHolds()`). The escorts' holds add nothing.
+    fn free_cargo(&self) -> i64 {
+        let held: i64 = self.pilot.cargo.values().map(|&tons| i64::from(tons)).sum();
+        i64::from(self.stats.capacity) - held
+    }
+
     /// The outfitter of the stellar the ship is docked at, if it has
     /// landed at one, drawing on `chance` each outfit's roll for the day
     /// not drawn yet since the landing (see [`outfitter`]).
@@ -2025,6 +2035,7 @@ impl Session {
             ammo_caps: &self.ammo_caps(),
             buy_random: self.buy_random,
             hardpoints: self.hardpoints(),
+            free_cargo: self.free_cargo(),
             launchers: &self.launchers(),
             launcher_sale: self.launcher_sale,
             raised_max: self.raised_max,
@@ -6005,6 +6016,73 @@ mod tests {
         assert_eq!(session.market().expect("an exchange").free, 30);
         session.outfit(sell(CARGO), &mut NeverFires).expect("sold");
         assert_eq!(session.capacity(), 20);
+    }
+
+    const EXPANSION: OutfitId = OutfitId(305);
+
+    /// [`outfitting`] also selling a mass expansion of 12 tons (outfit
+    /// 305, massless), with ship class 129 a trader of 15 tons.
+    fn expanding() -> FakePilotCatalog {
+        let mut catalog = outfitting();
+        catalog.outfits.push(OutfitRecord {
+            mass: 0,
+            ..outfit(305, &[(crate::market::MORE_CARGO, -12)])
+        });
+        catalog.ship_records.push(holds_record(129, 15, 1));
+        catalog
+    }
+
+    /// Whether the outfitter would sell `session` a mass expansion.
+    fn expansion_buy(session: &mut Session) -> Result<(), OutfitRefusal> {
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+        outfitter.check(buy(EXPANSION))
+    }
+
+    #[test]
+    fn a_mass_expansion_needs_the_ships_own_free_cargo() {
+        // `_CanBuyOutfitItem` @0x4e980-0x4e9a8: `_ShipTotalHolds`, not
+        // `_TotalFleetHolds`, less `_TotalCargo` (commodities and jünk).
+        let mut session = outfitted(&expanding());
+        session.pilot.escorts = vec![fleet_escort(129)];
+        assert_eq!(session.capacity(), 35, "the fleet's space");
+        session.pilot.cargo.insert(FOOD, 8);
+        assert_eq!(expansion_buy(&mut session), Ok(()), "exactly 12 free");
+        session.pilot.cargo.insert(FOOD, 9);
+        assert_eq!(
+            expansion_buy(&mut session),
+            Err(OutfitRefusal::NoCargoRoom),
+            "a commodity; the escort's holds add nothing"
+        );
+        session.pilot.cargo.insert(FOOD, 8);
+        session.pilot.cargo.insert(Good::Junk(JunkId(146)), 1);
+        assert_eq!(
+            expansion_buy(&mut session),
+            Err(OutfitRefusal::NoCargoRoom),
+            "a jünk"
+        );
+        session.pilot.cargo.remove(&Good::Junk(JunkId(146)));
+        session.pilot.cargo.insert(FOOD, 9);
+        session
+            .trade(order(FOOD, Direction::Sell, Lot::One))
+            .expect("sold");
+        assert_eq!(
+            session.outfit(buy(EXPANSION), &mut NeverFires),
+            Ok(()),
+            "room once a ton is sold"
+        );
+        assert_eq!(session.pilot().owned(EXPANSION), 1);
+    }
+
+    #[test]
+    fn an_owned_mass_expansion_lowers_the_free_cargo_the_next_needs() {
+        let mut session = outfitted(&expanding());
+        assert_eq!(session.outfit(buy(EXPANSION), &mut NeverFires), Ok(()));
+        assert_eq!(session.capacity(), 8);
+        assert_eq!(
+            session.outfit(buy(EXPANSION), &mut NeverFires),
+            Err(OutfitRefusal::NoCargoRoom),
+            "8 tons left, 12 needed"
+        );
     }
 
     #[test]
