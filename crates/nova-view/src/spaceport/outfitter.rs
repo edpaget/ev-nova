@@ -1067,6 +1067,7 @@ mod tests {
             OutfitRefusal::NotForSale,
             OutfitRefusal::NoExpansion,
             OutfitRefusal::NoCargoRoom,
+            OutfitRefusal::BoughtThisOpening,
             OutfitRefusal::CannotAfford,
             OutfitRefusal::NoneOwned,
             OutfitRefusal::CannotSell,

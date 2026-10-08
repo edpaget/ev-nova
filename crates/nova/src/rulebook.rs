@@ -402,6 +402,23 @@ mod tests {
     }
 
     #[test]
+    fn the_outfit_limit_rule_is_overridden_by_its_key() {
+        let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"outfit_limit": "bible"}}"#);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine().with_override(RuleKey::OutfitLimit, RuleSource::Bible)
+        );
+        let (rulebook, _) =
+            rulebook_of(r#"{"rules": "bible", "rule_overrides": {"outfit_limit": "engine"}}"#);
+        assert_eq!(
+            rulebook.source_for(RuleKey::OutfitLimit),
+            RuleSource::Engine
+        );
+        assert_eq!(rulebook.source_for(RuleKey::JunkTrade), RuleSource::Bible);
+    }
+
+    #[test]
     fn the_junk_price_rule_is_overridden_by_its_key() {
         let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"junk_price": "bible"}}"#);
         assert_eq!(warnings, Vec::<String>::new());

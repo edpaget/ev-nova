@@ -356,6 +356,16 @@ impl From<LandOutcome> for LandPress {
     }
 }
 
+/// What lasts one opening of the outfitter, and whether it limits what is
+/// sold (see [`outfitter::Bought`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Opening {
+    /// The once-an-opening flags.
+    bought: outfitter::Bought,
+    /// Whether they limit a map or clean-record outfit.
+    limit: RuleSource,
+}
+
 /// The player's ship, flying in one system.
 // Each flag is its own part of the flight's state, set and read on its
 // own.
@@ -492,6 +502,12 @@ pub struct Session {
     /// Each outfit's roll for sale since the last landing, drawn the first
     /// time the outfitter's list asks it.
     outfit_rolls: DayRolls<OutfitId>,
+    /// The once-an-opening flags, whether the last outfit bought since the
+    /// outfitter opened was a map or a clean record (see
+    /// [`outfitter::Bought`]), and whether they limit what is sold (see
+    /// [`Session::with_outfit_limit`]). The flags are not saved: the
+    /// original keeps them in globals `_DoOutfitDialog` clears on opening.
+    opening: Opening,
     /// Each ship class's roll for sale since the last landing, drawn the
     /// first time the shipyard's list asks it.
     ship_rolls: DayRolls<ShipId>,
@@ -573,6 +589,7 @@ impl Session {
     /// # Errors
     ///
     /// When the ship cannot be read, or the system no longer exists.
+    #[allow(clippy::too_many_lines)] // one line per field of the session
     pub fn fly(
         catalog: &(impl PilotCatalog + CombatCatalog),
         mut pilot: Pilot,
@@ -658,6 +675,7 @@ impl Session {
             hire_require: RuleSource::Engine,
             hire_rolls: DayRolls::default(),
             outfit_rolls: DayRolls::default(),
+            opening: Opening::default(),
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             buy_random: RuleSource::Engine,
@@ -1794,6 +1812,7 @@ impl Session {
         self.leave_with_fighters(true);
         self.hire_rolls.clear();
         self.outfit_rolls.clear();
+        self.opening.bought = outfitter::Bought::default();
         self.ship_rolls.clear();
         self.ship_redraws.clear();
         self.save_due = true;
@@ -1945,6 +1964,24 @@ impl Session {
         self.purchase_cargo
     }
 
+    /// This session with a map or clean-record outfit sold as `source`
+    /// says ([`RuleKey::OutfitLimit`](crate::RuleKey::OutfitLimit)): by
+    /// the engine's default, refused while the last outfit bought since
+    /// the outfitter opened was of its kind; by the other reading, with no
+    /// limit (see [`outfitter`]).
+    #[must_use]
+    pub fn with_outfit_limit(mut self, source: RuleSource) -> Self {
+        self.opening.limit = source;
+        self
+    }
+
+    /// Whether a map or clean-record outfit is sold only once an opening:
+    /// by the engine ([`RuleSource::Engine`]) or with no limit.
+    #[must_use]
+    pub fn outfit_limit(&self) -> RuleSource {
+        self.opening.limit
+    }
+
     /// This session with a `jünk` of negative or zero price traded as
     /// `source` says ([`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice)):
     /// by the engine's default, at its signed price, a negative one
@@ -2076,8 +2113,16 @@ impl Session {
             launchers: &self.launchers(),
             launcher_sale: self.launcher_sale,
             raised_max: self.raised_max,
+            bought: self.opening.bought.under(self.opening.limit),
         }
         .outfitter(&self.pilot, &mut self.outfit_rolls, chance)
+    }
+
+    /// The outfitter dialog opens: the once-an-opening flags are cleared,
+    /// as `_DoOutfitDialog` does on entry (@0x5bb37-0x5bb44), so a map or
+    /// clean-record outfit can be bought again (see [`outfitter`]).
+    pub fn open_outfitter(&mut self) {
+        self.opening.bought = outfitter::Bought::default();
     }
 
     /// Buys or sells one outfit as `order` asks, the rolls not drawn yet
@@ -2100,6 +2145,9 @@ impl Session {
             .cloned()
             .ok_or(OutfitRefusal::NotListed)?;
         self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, price));
+        if order.direction == market::Direction::Buy {
+            self.opening.bought = outfitter::Bought::after_buying(&record);
+        }
         self.refit(true);
         Ok(())
     }
@@ -6246,6 +6294,124 @@ mod tests {
         assert_eq!(session.market().expect("an exchange").free, 30);
         session.outfit(sell(CARGO), &mut NeverFires).expect("sold");
         assert_eq!(session.capacity(), 20);
+    }
+
+    const MAP: OutfitId = OutfitId(306);
+    const OTHER_MAP: OutfitId = OutfitId(307);
+    const RECORD: OutfitId = OutfitId(308);
+    const OTHER_RECORD: OutfitId = OutfitId(309);
+
+    /// [`outfitting`] also selling two maps (306, 307) and two clean
+    /// records (308, 309).
+    fn limiting() -> FakePilotCatalog {
+        let mut catalog = outfitting();
+        catalog.outfits.extend([
+            outfit(306, &[(outfitter::EXPLORES_MAP, 5)]),
+            outfit(307, &[(outfitter::EXPLORES_MAP, 7)]),
+            outfit(308, &[(outfitter::CLEAN_RECORD, 128)]),
+            outfit(309, &[(outfitter::CLEAN_RECORD, 129)]),
+        ]);
+        catalog
+    }
+
+    /// For each of the map pair and the record pair, a session that has
+    /// just bought the first of the pair, with the pair.
+    fn each_limited(source: RuleSource) -> Vec<(Session, OutfitId, OutfitId)> {
+        [(MAP, OTHER_MAP), (RECORD, OTHER_RECORD)]
+            .into_iter()
+            .map(|(first, other)| {
+                let mut session = outfitted(&limiting()).with_outfit_limit(source);
+                session.outfit(buy(first), &mut NeverFires).expect("bought");
+                (session, first, other)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_map_or_clean_record_is_refused_again_until_another_outfit_is_bought() {
+        for (mut session, first, other) in each_limited(RuleSource::Engine) {
+            let (cash, owned) = (session.pilot().cash(), session.pilot().owned(first));
+            session.take_save_due();
+            for again in [first, other] {
+                assert_eq!(
+                    session.outfit(buy(again), &mut NeverFires),
+                    Err(OutfitRefusal::BoughtThisOpening),
+                    "{again:?} after {first:?}"
+                );
+            }
+            assert_eq!(session.pilot().cash(), cash);
+            assert_eq!(session.pilot().owned(first), owned);
+            assert!(!session.take_save_due(), "a refusal changes nothing");
+            session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+            assert_eq!(session.outfit(buy(first), &mut NeverFires), Ok(()));
+        }
+    }
+
+    #[test]
+    fn a_map_and_a_clean_record_do_not_limit_each_other() {
+        let mut session = outfitted(&limiting());
+        session.outfit(buy(MAP), &mut NeverFires).expect("bought");
+        assert_eq!(session.outfit(buy(RECORD), &mut NeverFires), Ok(()));
+        assert_eq!(session.outfit(buy(MAP), &mut NeverFires), Ok(()), "lifted");
+    }
+
+    #[test]
+    fn opening_the_outfitter_again_lifts_the_limit() {
+        for (mut session, first, _) in each_limited(RuleSource::Engine) {
+            session.open_outfitter();
+            assert_eq!(session.outfit(buy(first), &mut NeverFires), Ok(()));
+        }
+    }
+
+    #[test]
+    fn the_next_landing_lifts_the_limit() {
+        for (mut session, first, _) in each_limited(RuleSource::Engine) {
+            relanded(&mut session);
+            assert_eq!(session.outfit(buy(first), &mut NeverFires), Ok(()));
+        }
+    }
+
+    #[test]
+    fn a_sale_leaves_the_limit_as_it_is() {
+        for (mut session, first, _) in each_limited(RuleSource::Engine) {
+            session.outfit(sell(first), &mut NeverFires).expect("sold");
+            assert_eq!(
+                session.outfit(buy(first), &mut NeverFires),
+                Err(OutfitRefusal::BoughtThisOpening)
+            );
+        }
+    }
+
+    #[test]
+    fn the_outfitter_greys_the_buy_but_keeps_the_words() {
+        for (mut session, first, _) in each_limited(RuleSource::Engine) {
+            let outfitter = session.outfitter(&mut NeverFires).expect("open");
+            let row = outfitter.row(first).expect("listed");
+            assert_eq!(row.buy, Err(OutfitRefusal::BoughtThisOpening));
+            assert_eq!(row.words, None);
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_nothing_is_limited() {
+        assert_eq!(
+            outfitted(&limiting()).outfit_limit(),
+            RuleSource::Engine,
+            "the engine's by default"
+        );
+        for (mut session, first, other) in each_limited(RuleSource::Bible) {
+            assert_eq!(session.outfit_limit(), RuleSource::Bible);
+            assert_eq!(session.outfit(buy(first), &mut NeverFires), Ok(()));
+            assert_eq!(session.outfit(buy(other), &mut NeverFires), Ok(()));
+        }
+        // The flags kept under the other reading apply once it changes.
+        let mut session = outfitted(&limiting()).with_outfit_limit(RuleSource::Bible);
+        session.outfit(buy(MAP), &mut NeverFires).expect("bought");
+        let mut session = session.with_outfit_limit(RuleSource::Engine);
+        assert_eq!(
+            session.outfit(buy(MAP), &mut NeverFires),
+            Err(OutfitRefusal::BoughtThisOpening)
+        );
     }
 
     const EXPANSION: OutfitId = OutfitId(305);

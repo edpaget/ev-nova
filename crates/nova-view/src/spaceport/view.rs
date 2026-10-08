@@ -243,6 +243,8 @@ pub struct SpaceportView {
     left: bool,
     /// Whether Recharge has been clicked since this was last taken.
     recharge: bool,
+    /// Whether the outfitter has opened since this was last taken.
+    outfitter_opened: bool,
     /// The sounds made since they were last taken, kept here so a service
     /// that closes keeps its sounds.
     sounds: Vec<Sound>,
@@ -319,6 +321,7 @@ impl SpaceportView {
             barkeeping: None,
             left: false,
             recharge: false,
+            outfitter_opened: false,
             sounds: Vec::new(),
         }
     }
@@ -430,6 +433,14 @@ impl SpaceportView {
             Some(Open::Outfitter(screen)) => screen.take_order(),
             _ => None,
         }
+    }
+
+    /// Whether the outfitter given has opened since this was last asked,
+    /// once each time it opens: whoever flies the ship clears what lasts
+    /// only an opening, then shows the outfitter afresh with
+    /// [`SpaceportView::set_outfitter`].
+    pub fn take_outfitter_opened(&mut self) -> bool {
+        std::mem::take(&mut self.outfitter_opened)
     }
 
     /// Shows `outfitter`, the outfitter after an order: the outfitter open
@@ -715,6 +726,7 @@ impl SpaceportView {
                     )))
                 }
                 (_, Some(outfitting), _, Service::Outfitter) => {
+                    self.outfitter_opened = true;
                     let layout = outfitting
                         .template
                         .clone()
@@ -1832,6 +1844,26 @@ mod tests {
             Some(Service::Bar)
         );
         assert!(view.open_outfitter().is_none());
+    }
+
+    #[test]
+    fn opening_the_outfitter_is_reported_once_each_time() {
+        let mut view = outfitting(Ok(outfit_template()));
+        assert!(!view.take_outfitter_opened(), "nothing open");
+        click_item(&mut view, 8);
+        assert!(view.take_outfitter_opened());
+        assert!(!view.take_outfitter_opened(), "once");
+        view.input(&key(Key::Escape));
+        assert!(!view.take_outfitter_opened(), "closing is not opening");
+        click_item(&mut view, 10);
+        assert!(!view.take_outfitter_opened(), "the bar is not it");
+        view.input(&key(Key::Escape));
+        click_item(&mut view, 8);
+        assert!(view.take_outfitter_opened(), "opened again");
+        // The placeholder outfitter has no flags to clear.
+        let mut view = view_of(&outfitting_port());
+        click_item(&mut view, 8);
+        assert!(!view.take_outfitter_opened());
     }
 
     #[test]

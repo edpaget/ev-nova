@@ -226,10 +226,14 @@
 //!   ([`FlightView::with_buy_random`]). How held tribbles and perishable
 //!   `jünk` grow and decay in flight is set there too
 //!   ([`FlightView::with_junk_flags`]), when a launcher cannot be sold
-//!   for its ammunition ([`FlightView::with_launcher_sale`]), and how a
+//!   for its ammunition ([`FlightView::with_launcher_sale`]), how a
 //!   `ModType` 27 outfit raises its target's `Max`
-//!   ([`FlightView::with_raised_max`]). How an active `öops` event prices
-//!   its commodity on the exchange is set there too
+//!   ([`FlightView::with_raised_max`]), and whether a map or clean-record
+//!   outfit is sold only once an opening
+//!   ([`FlightView::with_outfit_limit`]); the router tells the flight
+//!   each time the outfitter opens ([`FlightView::open_outfitter`]). How
+//!   an active `öops` event prices its commodity on the exchange is set
+//!   there too
 //!   ([`FlightView::with_event_price`]), how it trades a `jünk` of
 //!   negative or zero price ([`FlightView::with_junk_price`]), which ways
 //!   it trades a `jünk` row ([`FlightView::with_junk_trade`]), and what
@@ -1142,6 +1146,18 @@ impl<
         }
     }
 
+    /// The flight with a map or clean-record outfit sold as `source` says
+    /// ([`Session::with_outfit_limit`]).
+    #[must_use]
+    pub fn with_outfit_limit(self, source: RuleSource) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_outfit_limit(source)),
+            ..self
+        }
+    }
+
     /// The flight with a `ModType` 27 outfit raising its target's `Max`
     /// as `source` says ([`Session::with_raised_max`]).
     #[must_use]
@@ -1894,6 +1910,14 @@ impl<C> FlightView<C> {
     /// session that failed.
     pub fn outfitter(&mut self) -> Option<Outfitter> {
         self.session.as_mut().ok()?.outfitter(&mut self.chance)
+    }
+
+    /// The outfitter opens, as [`Session::open_outfitter`] has it; a
+    /// session that failed has none.
+    pub fn open_outfitter(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.open_outfitter();
+        }
     }
 
     /// Buys or sells an outfit as [`Session::outfit`] does, on the
@@ -5828,6 +5852,27 @@ mod tests {
     }
 
     #[test]
+    fn opening_the_outfitter_lifts_the_sessions_once_an_opening_limit() {
+        let mut catalog = outfitting();
+        catalog.character = Ok(CharacterStart {
+            cash: 5000,
+            ..catalog.character.expect("a chär")
+        });
+        catalog.outfits[0].mods[0] = (nova_sim::outfitter::EXPLORES_MAP, 5);
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert_eq!(view.outfit(BUY_TANK), Err(OutfitRefusal::BoughtThisOpening));
+        view.open_outfitter();
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..outfitting()
+        };
+        FlightView::new(broken).open_outfitter();
+    }
+
+    #[test]
     fn recharging_goes_through_the_session() {
         use nova_sim::RechargeRefusal;
         let mut view = FlightView::new(outfitting());
@@ -6212,6 +6257,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::junk_trade),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_outfit_limit_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_outfit_limit(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.outfit_limit(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::outfit_limit),
             Ok(RuleSource::Engine)
         );
     }

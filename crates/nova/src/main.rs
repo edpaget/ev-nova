@@ -98,11 +98,14 @@
 //! it, or is never below 0, a row priced 0 listed and bought free) and
 //! `"junk_trade"` (whether every listed `jünk` row is bought and sold at
 //! its own price, as the engine has it, or its `SoldAt` row is bought
-//! only and its `BoughtAt` row sold only, as the Bible says), and
+//! only and its `BoughtAt` row sold only, as the Bible says),
 //! the shipyard's `"purchase_cargo"` (whether a ship purchase keeps the
 //! new ship's share of each good against the trader escorts' holds, then
 //! trims to the fleet's holds, as the engine has it, or keeps what fits
-//! the new ship, goods in order); every key is listed in
+//! the new ship, goods in order), and the outfitter's `"outfit_limit"`
+//! (whether a map or clean-record outfit is refused while the last outfit
+//! bought since the outfitter opened was of its kind, as the engine has
+//! it, or has no limit); every key is listed in
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!

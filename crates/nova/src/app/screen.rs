@@ -128,7 +128,11 @@
 //! given. Each flight's exchange trades a `jünk` of negative or zero
 //! price as the router says ([`AppScreen::with_junk_price`]), and trades
 //! each `jünk` row the ways it says ([`AppScreen::with_junk_trade`]), the
-//! engine's until others are given.
+//! engine's until others are given. Each flight's outfitter sells a map
+//! or clean-record outfit as the router says
+//! ([`AppScreen::with_outfit_limit`]), the engine's until another is
+//! given; each time the spaceport's outfitter opens, the flight is told
+//! ([`FlightView::open_outfitter`]) and the outfitter shown afresh.
 //! Each flight's persons
 //! appear as the router's rules say ([`AppScreen::with_person_rules`])
 //! and say their comm quotes as it says ([`AppScreen::with_comm_quote`]),
@@ -335,6 +339,9 @@ pub struct AppScreen {
     junk_price: RuleSource,
     /// Which ways each flight's exchange trades a `jünk` row.
     junk_trade: RuleSource,
+    /// Whether each flight's outfitter sells a map or clean-record outfit
+    /// only once an opening.
+    outfit_limit: RuleSource,
     /// Whether each take-off pays each flight's hired escorts a day.
     take_off_pay: RuleSource,
     /// Which wage each flight's hired escorts are paid.
@@ -432,6 +439,7 @@ impl AppScreen {
             purchase_cargo: RuleSource::Engine,
             junk_price: RuleSource::Engine,
             junk_trade: RuleSource::Engine,
+            outfit_limit: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
@@ -647,6 +655,18 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight's outfitter selling a map or
+    /// clean-record outfit as `source` says
+    /// ([`FlightView::with_outfit_limit`]); the engine's (once an opening)
+    /// until another is given.
+    #[must_use]
+    pub fn with_outfit_limit(self, source: RuleSource) -> Self {
+        Self {
+            outfit_limit: source,
+            ..self
+        }
+    }
+
     /// The router with each take-off paying each flight's hired escorts a
     /// day's wages, or not, as `source` says
     /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
@@ -736,6 +756,7 @@ impl AppScreen {
             .with_purchase_cargo(rulebook.source_for(RuleKey::PurchaseCargo))
             .with_junk_price(rulebook.source_for(RuleKey::JunkPrice))
             .with_junk_trade(rulebook.source_for(RuleKey::JunkTrade))
+            .with_outfit_limit(rulebook.source_for(RuleKey::OutfitLimit))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
@@ -798,6 +819,7 @@ impl AppScreen {
             .with_purchase_cargo(self.purchase_cargo)
             .with_junk_price(self.junk_price)
             .with_junk_trade(self.junk_trade)
+            .with_outfit_limit(self.outfit_limit)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
@@ -1664,7 +1686,8 @@ impl AppScreen {
         }
     }
 
-    /// The spaceport's input, all of it: an order on its exchange trades,
+    /// The spaceport's input, all of it: the outfitter opening tells the
+    /// flight and shows its outfitter afresh; an order on its exchange trades,
     /// and one in its outfitter buys or sells, and the exchange and the
     /// outfitter as they then are go back to it. A ship asked for in its
     /// shipyard opens the prompt for its name, when it can be bought; the
@@ -1675,6 +1698,15 @@ impl AppScreen {
     fn spaceport_input(&mut self, input: &Input) -> ScreenAction {
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         spaceport.input(input);
+        // A new opening clears what lasts one, and the outfitter it opened
+        // on was the cached one: it shows the flight's afresh.
+        if spaceport.take_outfitter_opened() {
+            let flight = self.flight.as_mut().expect(ENTERED);
+            flight.open_outfitter();
+            if let Some(outfitter) = flight.outfitter() {
+                spaceport.set_outfitter(outfitter);
+            }
+        }
         let trade = spaceport.take_trade();
         let outfit = spaceport.take_outfit();
         let ship = spaceport.take_ship();
@@ -6149,6 +6181,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_outfit_limit_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_outfit_limit(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.outfit_limit(), source);
+            assert_eq!(session.raised_max(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.outfit_limit(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_event_price_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_event_price(source);
@@ -6221,6 +6268,7 @@ mod tests {
             ("purchase_cargo", format!("{:?}", screen.purchase_cargo)),
             ("junk_price", format!("{:?}", screen.junk_price)),
             ("junk_trade", format!("{:?}", screen.junk_trade)),
+            ("outfit_limit", format!("{:?}", screen.outfit_limit)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
@@ -6253,6 +6301,7 @@ mod tests {
             RuleKey::PurchaseCargo => "purchase_cargo",
             RuleKey::JunkPrice => "junk_price",
             RuleKey::JunkTrade => "junk_trade",
+            RuleKey::OutfitLimit => "outfit_limit",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
             RuleKey::EscortWage => "escort_wage",

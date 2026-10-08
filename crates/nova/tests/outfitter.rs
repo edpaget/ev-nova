@@ -15,6 +15,9 @@
 //! no more, and a fuel tank; each order saves the pilot. It takes off
 //! faster, with more fuel. In a new app the pilot's outfits are restored,
 //! and so are the stats they give.
+//!
+//! With a map for sale too, a map bought once greys Buy for the rest of
+//! that opening of the outfitter, and the next opening lifts it.
 
 use std::io;
 use std::path::Path;
@@ -232,6 +235,24 @@ fn spin() -> Vec<u8> {
 }
 
 fn game_data() -> Rc<GameData> {
+    game_data_with(Vec::new())
+}
+
+/// The map's ID: `oütf` 132, a `ModType` 16 explorer, massless, up to 5,
+/// for 1000 credits, shown first.
+const MAP: OutfitId = OutfitId(132);
+
+/// The game data with an area map for sale too.
+fn mapped_data() -> Rc<GameData> {
+    game_data_with(vec![(
+        Outfit::TYPE,
+        132,
+        outfit(50, 0, 1, (16, 5), 5, 1000, "Area Map"),
+    )])
+}
+
+/// The game data, with `extra` resources besides.
+fn game_data_with(extra: Vec<(ResType, i16, Vec<u8>)>) -> Rc<GameData> {
     let mut resources = vec![
         (Character::TYPE, 128, character()),
         (Ship::TYPE, 128, ship()),
@@ -267,6 +288,7 @@ fn game_data() -> Rc<GameData> {
         ),
         (Desc::TYPE, 3000, desc("Bolted-on thrusters.")),
     ];
+    resources.extend(extra);
     for state in [7500, 7503, 7506] {
         resources.push((PICT, state, pict(13, 25, [200, 0, 0])));
         resources.push((PICT, state + 1, pict(2, 25, [0, 200, 0])));
@@ -404,7 +426,12 @@ impl Harness {
     /// The app on the main menu, keeping pilots in `store`, before any
     /// frame.
     fn opening(store: &MemoryPilots) -> Self {
-        let data = game_data();
+        Self::opening_with(store, game_data())
+    }
+
+    /// The app on the main menu over `data`, keeping pilots in `store`,
+    /// before any frame.
+    fn opening_with(store: &MemoryPilots, data: Rc<GameData>) -> Self {
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let screen = start_screen(Rc::clone(&data))
@@ -699,4 +726,52 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     let shown = texts(&game.frame());
     assert!(shown.contains(&"You Have: 2".to_owned()), "{shown:?}");
     assert!(shown.contains(&"Available: 1 tons".to_owned()), "{shown:?}");
+}
+
+/// The colour the Buy button's label is drawn in.
+fn buy_color(frame: &Frame) -> nova_view::Color {
+    frame
+        .batches
+        .iter()
+        .find_map(|batch| match batch {
+            Batch::Text(runs) => runs.iter().find(|run| run.text == "Buy"),
+            _ => None,
+        })
+        .expect("Buy drawn")
+        .color
+}
+
+#[test]
+fn a_map_bought_greys_buy_until_the_outfitter_opens_again() {
+    let store = MemoryPilots::new();
+    let mut game = Harness::opening_with(&store, mapped_data());
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    game.frame();
+    game.land();
+    game.open_outfitter();
+    let cell = game.outfitter().cell_bounds(0).expect("a cell").center();
+    game.click(cell);
+    let enabled = buy_color(&game.frame());
+    game.press(KeyCode::KeyB);
+    assert_eq!(game.pilot().owned(MAP), 1);
+    assert_eq!(game.pilot().cash(), 24_000);
+
+    // Bought once this opening: Buy greys, and B buys nothing more.
+    assert_ne!(buy_color(&game.frame()), enabled, "Buy greyed");
+    game.press(KeyCode::KeyB);
+    assert_eq!(game.pilot().owned(MAP), 1);
+    assert_eq!(game.pilot().cash(), 24_000);
+
+    // Done, then the Outfitter again: Buy is enabled and buys.
+    game.press(KeyCode::Escape);
+    game.open_outfitter();
+    let cell = game.outfitter().cell_bounds(0).expect("a cell").center();
+    game.click(cell);
+    assert_eq!(buy_color(&game.frame()), enabled, "Buy enabled again");
+    game.press(KeyCode::KeyB);
+    assert_eq!(game.pilot().owned(MAP), 2);
+    assert_eq!(game.pilot().cash(), 23_000);
 }

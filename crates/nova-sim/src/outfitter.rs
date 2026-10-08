@@ -102,7 +102,9 @@
 //! ship's own free cargo is below the size of that `ModVal` (its cargo
 //! space, every owned `ModType` 2 counted, less every commodity and jünk
 //! held, the escorts' holds not counted: `_ShipTotalHolds()` less
-//! `_TotalCargo(player)`, @0x4e980-0x4e9a8), or the player cannot pay. An
+//! `_TotalCargo(player)`, @0x4e980-0x4e9a8), it is limited to once an
+//! opening and was bought since the outfitter opened (below), or the
+//! player cannot pay. An
 //! outfit whose first mod is `ModType` 3 is never tested as a mass
 //! expansion (@0x4e8f6). The original's `Require` and `Availability` come
 //! after the expansion tests; here they refuse first, as
@@ -128,6 +130,25 @@
 //! raised `Max`, the gun and turret limits), its refusal; otherwise, when
 //! the outfit's mass is above 0 and above the unclamped free mass
 //! (@0x57e33-0x57e45), the mass words by the count owned; otherwise none.
+//!
+//! **Once an opening** (`_boughtMap` and `_boughtID`, [`Bought`]). By the
+//! engine, an outfit with a mod of [`EXPLORES_MAP`] (16) in any slot, or
+//! failing that of [`CLEAN_RECORD`] (21), is refused while its flag is
+//! set, unless its first mod is `ModType` 3 or it has any [`MORE_CARGO`]
+//! mod (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, after the expansion tests
+//! and before the cash). Every buy sets the flags afresh
+//! ([`Bought::after_buying`], `_GrantOutfitItem` @0x44d67-0x44f8b): a map
+//! sets the map flag, a clean record without a [`PAINT`] mod the record
+//! flag, and any other outfit clears both, which lifts the limit. Both
+//! are cleared each time the outfitter opens (`_DoOutfitDialog`
+//! @0x5bb37-0x5bb44), so a landing lifts it too; a sale leaves them
+//! alone. Only the Buy button shows it: the info box never reads the
+//! flags, so its words are unchanged. The other reading has no limit
+//! ([`RuleKey::OutfitLimit`](crate::RuleKey::OutfitLimit)). Not modelled:
+//! an outfit's `OnPurchase` granting another outfit inside the dialog,
+//! which would move the flags in the original; and the option-held
+//! quantity buy (@0x5c0c0-0x5c2ff), as each order here buys one and is
+//! checked afresh, which stops after one as the original's loop does.
 //!
 //! **Ammunition cap** (`_HasMaxOfItem` @0x457e-0x45e4, before `Max`). An
 //! outfit whose **first** mod is `ModType` 3 naming a weapon of `MaxAmmo`
@@ -245,6 +266,16 @@ pub const MORE_TURRETS: i16 = 46;
 /// `ModVal` names.
 pub const RAISES_MAX: i16 = 27;
 
+/// The `oütf` `ModType` that explores a map: the outfitter sells one only
+/// once an opening ([`Bought`]).
+pub const EXPLORES_MAP: i16 = 16;
+/// The `oütf` `ModType` that clears the player's legal record: the
+/// outfitter sells one only once an opening ([`Bought`]).
+pub const CLEAN_RECORD: i16 = 21;
+/// The `oütf` `ModType` that paints the ship: an outfit with one never
+/// sets the clean-record flag ([`Bought::after_buying`]).
+pub const PAINT: i16 = 43;
+
 /// What an outfit sells back for, as a percentage of its price. The
 /// Bible does not say; the community guide (evnova.miraheze.org,
 /// "Nova:Making Money") sells the Scarab's Matter/Antimatter Reactor,
@@ -296,6 +327,12 @@ pub enum OutfitRefusal {
     /// space less every ton held) is below the size of its `ModVal`
     /// (`_CanBuyOutfitItem` @0x4e980-0x4e9a8).
     NoCargoRoom,
+    /// It explores a map ([`EXPLORES_MAP`]) and a map was the last outfit
+    /// bought since the outfitter opened (`_boughtMap`), or it clears the
+    /// legal record ([`CLEAN_RECORD`]) and a clean record was
+    /// (`_boughtID`; `_CanBuyOutfitItem` @0x4e9aa-0x4e9c5). See
+    /// [`Bought`].
+    BoughtThisOpening,
     /// The player cannot pay for it.
     CannotAfford,
     /// The player owns none.
@@ -483,6 +520,89 @@ fn mass_expansion(outfit: &OutfitRecord) -> Option<u16> {
         .find(|&&(mod_type, _)| mod_type == MORE_CARGO)
         .filter(|&&(_, mod_val)| mod_val < 0)
         .map(|&(_, mod_val)| mod_val.unsigned_abs())
+}
+
+/// Which of the once-an-opening flags limits an outfit
+/// ([`opening_limit`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OpeningLimit {
+    /// The map flag, `_boughtMap`.
+    Map,
+    /// The clean-record flag, `_boughtID`.
+    Record,
+}
+
+/// Which flag, if any, limits `outfit` to once an opening, as
+/// `_CanBuyOutfitItem`'s else-if chain reads its mods in any slot
+/// (@0x4e8bc-0x4e9c5): none when its first mod is [`MOD_AMMO`] (the
+/// fighter path) or it has any [`MORE_CARGO`] mod (the mass-expansion
+/// path); otherwise the map flag for an [`EXPLORES_MAP`] mod; otherwise
+/// the record flag for a [`CLEAN_RECORD`] mod.
+pub(crate) fn opening_limit(outfit: &OutfitRecord) -> Option<OpeningLimit> {
+    let has = |kind: i16| outfit.mods.iter().any(|&(mod_type, _)| mod_type == kind);
+    if outfit.mods[0].0 == MOD_AMMO || has(MORE_CARGO) {
+        None
+    } else if has(EXPLORES_MAP) {
+        Some(OpeningLimit::Map)
+    } else if has(CLEAN_RECORD) {
+        Some(OpeningLimit::Record)
+    } else {
+        None
+    }
+}
+
+/// The once-an-opening flags: whether the last outfit bought since the
+/// outfitter opened explored a map (`_boughtMap`) or cleared the legal
+/// record (`_boughtID`). The original clears both each time the
+/// outfitter dialog opens (`_DoOutfitDialog` @0x5bb37-0x5bb44) and sets
+/// them on every grant ([`Bought::after_buying`]); see the module docs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Bought {
+    /// `_boughtMap`.
+    pub(crate) map: bool,
+    /// `_boughtID`.
+    pub(crate) record: bool,
+}
+
+impl Bought {
+    /// The flags after `record` is bought, whatever they were
+    /// (`_GrantOutfitItem` @0x44d4f): both cleared (@0x44d67-0x44d7d);
+    /// then the map flag set when any slot has an [`EXPLORES_MAP`] mod,
+    /// whatever its `ModVal` (@0x44ea9-0x44eaf); otherwise the record flag
+    /// set when any slot has a [`CLEAN_RECORD`] mod and none a [`PAINT`]
+    /// mod (@0x44ecc-0x44f8b). Unlike [`opening_limit`], an ammunition or
+    /// cargo mod plays no part.
+    #[must_use]
+    pub(crate) fn after_buying(record: &OutfitRecord) -> Self {
+        let has = |kind: i16| record.mods.iter().any(|&(mod_type, _)| mod_type == kind);
+        let map = has(EXPLORES_MAP);
+        Self {
+            map,
+            record: !map && has(CLEAN_RECORD) && !has(PAINT),
+        }
+    }
+
+    /// The flags as the outfitter reads them, by `source`
+    /// ([`RuleKey::OutfitLimit`](crate::RuleKey::OutfitLimit)): by the
+    /// engine, as they are; by the other reading, always clear, so
+    /// nothing is limited.
+    #[must_use]
+    pub(crate) fn under(self, source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => self,
+            RuleSource::Bible => Self::default(),
+        }
+    }
+
+    /// Whether these flags refuse a buy of `outfit` ([`opening_limit`]).
+    #[must_use]
+    pub(crate) fn refuses(self, outfit: &OutfitRecord) -> bool {
+        match opening_limit(outfit) {
+            Some(OpeningLimit::Map) => self.map,
+            Some(OpeningLimit::Record) => self.record,
+            None => false,
+        }
+    }
 }
 
 /// Whether an outfit of `mass` does not fit in `free` tons; only one of
@@ -746,6 +866,9 @@ pub(crate) struct Shop<'a> {
     pub(crate) launcher_sale: RuleSource,
     /// How a `ModType` 27 outfit raises its target's `Max` ([`raised_max`]).
     pub(crate) raised_max: RuleSource,
+    /// The once-an-opening flags, as the rule reads them
+    /// ([`Bought::under`]).
+    pub(crate) bought: Bought,
 }
 
 impl Shop<'_> {
@@ -955,6 +1078,8 @@ impl Shop<'_> {
                 Err(OutfitRefusal::NoExpansion)
             } else if expansion.is_some_and(|size| self.free_cargo < i64::from(size)) {
                 Err(OutfitRefusal::NoCargoRoom)
+            } else if self.bought.refuses(record) {
+                Err(OutfitRefusal::BoughtThisOpening)
             } else if price > pilot.cash {
                 Err(OutfitRefusal::CannotAfford)
             } else {
@@ -1098,6 +1223,7 @@ mod tests {
             launchers: &NO_LAUNCHERS,
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
+            bought: Bought::default(),
         }
     }
 
@@ -1769,6 +1895,7 @@ mod tests {
                 launchers: &NO_LAUNCHERS,
                 launcher_sale: RuleSource::Engine,
                 raised_max: RuleSource::Engine,
+                bought: Bought::default(),
             }
             .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
             .expect("open")
@@ -1889,6 +2016,7 @@ mod tests {
             launchers: &NO_LAUNCHERS,
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
+            bought: Bought::default(),
         }
         .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
         .expect("open")
@@ -3171,5 +3299,171 @@ mod tests {
                 at(0, 0, 2)
             ]
         );
+    }
+
+    // Once an opening: maps and clean records.
+
+    /// The flags as `_GrantOutfitItem` leaves them after buying an outfit
+    /// with `mods`.
+    fn after(mods: &[(i16, i16)]) -> Bought {
+        Bought::after_buying(&outfit(128, mods))
+    }
+
+    /// The flags with only the map one set, or only the record one.
+    const MAP_BOUGHT: Bought = Bought {
+        map: true,
+        record: false,
+    };
+    const RECORD_BOUGHT: Bought = Bought {
+        map: false,
+        record: true,
+    };
+
+    #[test]
+    fn a_map_or_a_clean_record_in_any_slot_is_limited() {
+        // `_CanBuyOutfitItem` @0x4e8bc-0x4e8f4 scans slots 0-3.
+        for slot in 0..4 {
+            let mut mods = [(0, 0); 4];
+            mods[slot] = (EXPLORES_MAP, 5);
+            assert_eq!(
+                opening_limit(&outfit(128, &mods)),
+                Some(OpeningLimit::Map),
+                "map in slot {slot}"
+            );
+            mods[slot] = (CLEAN_RECORD, 128);
+            assert_eq!(
+                opening_limit(&outfit(128, &mods)),
+                Some(OpeningLimit::Record),
+                "record in slot {slot}"
+            );
+        }
+        assert_eq!(opening_limit(&outfit(128, &[(MORE_FUEL, 5)])), None);
+    }
+
+    #[test]
+    fn a_map_and_a_clean_record_are_limited_by_the_map_flag_only() {
+        // The else-if chain tests the map before the record (@0x4e9aa).
+        let both = outfit(128, &[(CLEAN_RECORD, 128), (EXPLORES_MAP, 5)]);
+        assert_eq!(opening_limit(&both), Some(OpeningLimit::Map));
+        assert!(!RECORD_BOUGHT.refuses(&both));
+        assert!(MAP_BOUGHT.refuses(&both));
+    }
+
+    #[test]
+    fn ammunition_first_or_any_cargo_mod_is_never_limited() {
+        // Slot 0 `ModType` 3 takes the fighter path (@0x4e8f6); any
+        // `ModType` 2 the mass-expansion path (@0x4e94f), whatever its
+        // sign.
+        let fighter = outfit(128, &[(MOD_AMMO, 200), (EXPLORES_MAP, 5)]);
+        let more = outfit(128, &[(EXPLORES_MAP, 5), (MORE_CARGO, 10)]);
+        let less = outfit(128, &[(CLEAN_RECORD, 128), (MORE_CARGO, -10)]);
+        for record in [&fighter, &more, &less] {
+            assert_eq!(opening_limit(record), None, "{:?}", record.mods);
+            let all = Bought {
+                map: true,
+                record: true,
+            };
+            assert!(!all.refuses(record));
+        }
+        // Ammunition in a later slot does not take the fighter path.
+        assert_eq!(
+            opening_limit(&outfit(128, &[(EXPLORES_MAP, 5), (MOD_AMMO, 200)])),
+            Some(OpeningLimit::Map)
+        );
+    }
+
+    #[test]
+    fn buying_a_map_sets_the_map_flag_and_clears_the_record_flag() {
+        // `_GrantOutfitItem` clears both (@0x44d67-0x44d7d), then sets
+        // `_boughtMap` for a `ModType` 16 whatever its `ModVal`
+        // (@0x44ea9-0x44eaf).
+        assert_eq!(after(&[(EXPLORES_MAP, 5)]), MAP_BOUGHT);
+        assert_eq!(after(&[(MORE_FUEL, 1), (EXPLORES_MAP, 0)]), MAP_BOUGHT);
+        assert_eq!(after(&[(EXPLORES_MAP, -2)]), MAP_BOUGHT);
+        assert_eq!(after(&[(CLEAN_RECORD, 128), (EXPLORES_MAP, 5)]), MAP_BOUGHT);
+        // A cargo mod does not stop the grant setting it.
+        assert_eq!(after(&[(MORE_CARGO, -10), (EXPLORES_MAP, 5)]), MAP_BOUGHT);
+    }
+
+    #[test]
+    fn buying_a_clean_record_without_paint_sets_the_record_flag() {
+        // @0x44ecc-0x44f8b: a `ModType` 21, with no map and no paint mod.
+        assert_eq!(after(&[(CLEAN_RECORD, 128)]), RECORD_BOUGHT);
+        assert_eq!(after(&[(MORE_FUEL, 1), (CLEAN_RECORD, 128)]), RECORD_BOUGHT);
+        assert_eq!(after(&[(CLEAN_RECORD, 128), (PAINT, 3)]), Bought::default());
+        assert_eq!(after(&[(PAINT, 3), (CLEAN_RECORD, 128)]), Bought::default());
+    }
+
+    #[test]
+    fn buying_any_other_outfit_clears_both_flags() {
+        assert_eq!(after(&[(MORE_FUEL, 5)]), Bought::default());
+        assert_eq!(after(&[]), Bought::default());
+        assert_eq!(after(&[(PAINT, 3)]), Bought::default());
+    }
+
+    #[test]
+    fn the_flags_are_read_as_the_outfit_limit_rule_says() {
+        let all = Bought {
+            map: true,
+            record: true,
+        };
+        assert_eq!(all.under(RuleSource::Engine), all);
+        assert_eq!(all.under(RuleSource::Bible), Bought::default());
+    }
+
+    /// The outfitter of `records` after `bought`, to `pilot`.
+    fn limited(records: &[OutfitRecord], bought: Bought, pilot: &Pilot) -> Outfitter {
+        let site = port();
+        Shop {
+            bought,
+            ..shop(records, &site)
+        }
+        .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
+        .expect("open")
+    }
+
+    #[test]
+    fn a_map_bought_this_opening_refuses_every_map_but_not_a_record() {
+        let records = [
+            outfit(128, &[(EXPLORES_MAP, 5)]),
+            outfit(129, &[(EXPLORES_MAP, 7)]),
+            outfit(130, &[(CLEAN_RECORD, 128)]),
+            outfit(131, &[(MORE_FUEL, 5)]),
+        ];
+        let outfitter = limited(&records, MAP_BOUGHT, &pilot());
+        assert_eq!(buys(&outfitter, 128), Err(OutfitRefusal::BoughtThisOpening));
+        assert_eq!(buys(&outfitter, 129), Err(OutfitRefusal::BoughtThisOpening));
+        assert_eq!(buys(&outfitter, 130), Ok(()));
+        assert_eq!(buys(&outfitter, 131), Ok(()));
+        // The info box does not read the flags (`_OutfitDialogUpdate`).
+        assert_eq!(row(&outfitter, 128).words, None);
+        let outfitter = limited(&records, RECORD_BOUGHT, &pilot());
+        assert_eq!(buys(&outfitter, 128), Ok(()));
+        assert_eq!(buys(&outfitter, 130), Err(OutfitRefusal::BoughtThisOpening));
+        let outfitter = limited(&records, Bought::default(), &pilot());
+        assert_eq!(buys(&outfitter, 128), Ok(()));
+        assert_eq!(buys(&outfitter, 130), Ok(()));
+    }
+
+    #[test]
+    fn the_opening_limit_comes_after_max_and_free_mass_and_before_cash() {
+        let records = [OutfitRecord {
+            max: 1,
+            ..outfit(128, &[(EXPLORES_MAP, 5)])
+        }];
+        let outfitter = limited(&records, MAP_BOUGHT, &owning(&[(128, 1)]));
+        assert_eq!(buy(&outfitter), Err(OutfitRefusal::MaxOwned));
+        assert_eq!(words(&outfitter), Some(OutfitRefusal::MaxOwned));
+        let mut broke = pilot();
+        broke.cash = 0;
+        let outfitter = limited(&records, MAP_BOUGHT, &broke);
+        assert_eq!(buy(&outfitter), Err(OutfitRefusal::BoughtThisOpening));
+        assert_eq!(words(&outfitter), None);
+        let heavy = [OutfitRecord {
+            mass: 99,
+            ..outfit(128, &[(EXPLORES_MAP, 5)])
+        }];
+        let outfitter = limited(&heavy, MAP_BOUGHT, &pilot());
+        assert_eq!(buy(&outfitter), Err(OutfitRefusal::NoSpaceForAny));
     }
 }
