@@ -220,6 +220,14 @@
 //! [`Session::with_set_ops`] says; one nothing handles is skipped and
 //! told once ([`Session::take_script_notes`]).
 //!
+//! For tests and the developer tools, plain edits put the pilot into a
+//! given state without flying it there: its credits
+//! ([`Session::set_credits`]), shield, armour and fuel within the ship's
+//! maxima ([`Session::set_reserve`]), the date ([`Session::set_date`]),
+//! and, while landed, a move to a stellar of another system
+//! ([`Session::relocate`]). Each keeps the session consistent and makes a
+//! save due; see the `edit` module.
+//!
 //! Persons (see [`person`](crate::person)) appear in the systems their
 //! records allow, by the session's [`PersonRules`]
 //! ([`Session::with_person_rules`]), named by their records

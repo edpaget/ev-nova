@@ -27,7 +27,9 @@
 //! flies a fresh pilot that is never saved.
 //!
 //! With `--features dev-tools` (`mise run dev`), `` ` `` toggles the
-//! developer tools.
+//! developer tools: the resource browser, and the Pilot window, which
+//! edits the pilot flying (credits, reserves, date, location and control
+//! bits), saved as any change is.
 //!
 //! Text in Charcoal uses the game's own `Fonts/Charcoal.ttf` beside
 //! `Nova Files` when it is there and usable, and the bundled font
