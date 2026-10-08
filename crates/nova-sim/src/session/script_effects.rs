@@ -149,8 +149,8 @@ use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
 
 /// The disputed rules of the moving set operators that the session
-/// follows (see [`Session::with_script_effect_rules`]): the engine's by
-/// default.
+/// follows, projected from its rule set (see [`Session::with_rules`]):
+/// the engine's by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ScriptEffectRules {
     /// Where `M` puts a ship in flight in a system with no stellar
@@ -217,30 +217,9 @@ pub struct Settled {
 }
 
 impl Session {
-    /// This session with the moving set operators following `rules` where
-    /// the Bible and the engine disagree: the engine's by default.
-    #[must_use]
-    pub fn with_script_effect_rules(mut self, rules: ScriptEffectRules) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self
-            .rules
-            .with_override(RuleKey::MoveStarless, rules.starless);
-        self.rules = self
-            .rules
-            .with_override(RuleKey::MoveArrival, rules.arrival);
-        self.rules = self
-            .rules
-            .with_override(RuleKey::MoveKeepFlag, rules.keep_flag);
-        self.rules = self
-            .rules
-            .with_override(RuleKey::BlankLeave, rules.blank_leave);
-        self.rules = self.rules.with_override(RuleKey::ScriptSound, rules.sound);
-        self
-    }
-
-    /// The rules the moving set operators follow.
-    #[must_use]
-    pub fn script_effect_rules(&self) -> ScriptEffectRules {
+    /// The rules the moving set operators follow, projected from the
+    /// session's rule set ([`Session::with_rules`]).
+    fn script_effect_rules(&self) -> ScriptEffectRules {
         ScriptEffectRules::from_rulebook(&self.rules)
     }
 

@@ -211,56 +211,37 @@
 //!   under the HUD, in the colours the [`EscortMenuLooks`] port gives,
 //!   read when the screen is built. Option-Tab targets the next escort
 //!   ([`TargetPick::NextEscort`]), as for a hail. The escorts' standing
-//!   orders reset, or not, on entering a system as the screen's session
-//!   is told ([`FlightView::with_escort_orders`]).
+//!   orders reset, or not, on entering a system as the session's rule
+//!   set says ([`FlightView::with_rules`]).
 //! - The player's fighters launch from its bays as its secondary weapon
 //!   (W selects a bay, Ctrl launches), and the fighter types every bay in
 //!   the system launches have their sheets read with the traffic's. What
 //!   a fighter launched does first, and what becomes of the fighters out
-//!   as the player leaves a system, follow the session's rules
-//!   ([`FlightView::with_fighter_launch`],
-//!   [`FlightView::with_fighter_recall`]); fighters abandoned in a jump
+//!   as the player leaves a system, follow the session's rule set
+//!   ([`FlightView::with_rules`]); fighters abandoned in a jump
 //!   are told on arrival ([`fighters_abandoned_message`]).
 //! - Landed at an outfitter or a shipyard, the router asks the flight
 //!   for its list ([`FlightView::outfitter`], [`FlightView::shipyard`])
 //!   and trades through it ([`FlightView::outfit`],
 //!   [`FlightView::outfit_counted`], [`FlightView::buy_ship`]), each item's roll for the day drawn on the
-//!   flight's chance; how `BuyRandom` reads is set on the screen
-//!   ([`FlightView::with_buy_random`]). How held tribbles and perishable
-//!   `jünk` grow and decay in flight is set there too
-//!   ([`FlightView::with_junk_flags`]), when a launcher cannot be sold
-//!   for its ammunition ([`FlightView::with_launcher_sale`]), how a
-//!   `ModType` 27 outfit raises its target's `Max`
-//!   ([`FlightView::with_raised_max`]), and whether a map or clean-record
-//!   outfit is sold only once an opening
-//!   ([`FlightView::with_outfit_limit`]), and whether one bought since
-//!   the outfitter opened sells back in full
-//!   ([`FlightView::with_outfit_refund`]), and what Option on Buy or
-//!   Sell does there ([`FlightView::with_outfit_count`]); the router tells the flight
-//!   each time the outfitter opens ([`FlightView::open_outfitter`]). How
-//!   an active `öops` event prices its commodity on the exchange is set
-//!   there too
-//!   ([`FlightView::with_event_price`]), how it trades a `jünk` of
-//!   negative or zero price ([`FlightView::with_junk_price`]), which ways
-//!   it trades a `jünk` row ([`FlightView::with_junk_trade`]), how many
-//!   tons a plain trade moves ([`FlightView::with_trade_lot`]), how the
-//!   most a buy moves divides the cash by the price
-//!   ([`FlightView::with_trade_quotient`]), what Option on Buy or Sell
-//!   does ([`FlightView::with_trade_count`]), how a buy reads cash below
-//!   nothing ([`FlightView::with_trade_debt`]), and what
-//!   cargo a ship purchase keeps ([`FlightView::with_purchase_cargo`]).
+//!   flight's chance; the router tells the flight each time the
+//!   outfitter opens ([`FlightView::open_outfitter`]). Where the shops,
+//!   the exchange and the tribbles and perishables in flight follow a
+//!   disputed rule, they read it from the session's rule set
+//!   ([`FlightView::with_rules`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
 //!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance;
-//!   the session's hiring rules are set on the screen
-//!   ([`FlightView::with_hire_require`], [`FlightView::with_take_off_pay`],
-//!   [`FlightView::with_escort_wage`], [`FlightView::with_hire_terms`],
-//!   [`FlightView::with_control_bits`]). Hired escorts who defect unpaid
+//!   the session's hire terms and control bits are set on the screen
+//!   ([`FlightView::with_hire_terms`], [`FlightView::with_control_bits`]),
+//!   and its disputed hiring rules come from its rule set
+//!   ([`FlightView::with_rules`]). Hired escorts who defect unpaid
 //!   on arrival or at take-off are told ([`defection_message`]).
 //! - Persons appear as the session's rules say
 //!   ([`FlightView::with_person_rules`]); the target panel shows a
 //!   person's own name and subtitle, a person hailed says its comm quote
-//!   as [`FlightView::with_comm_quote`] says, and each step a person may
+//!   as the session's rule set says ([`FlightView::with_rules`]), and
+//!   each step a person may
 //!   say its hail quote ([`Session::tick_quotes`], right after the
 //!   traffic's tick), shown in the message line for
 //!   [`HAIL_QUOTE_SHOWN_FOR`], the last one said winning.
@@ -280,15 +261,12 @@ use nova_sim::{
     HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
     NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleSource, Rulebook, Rules, Session,
-    ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage,
-    StartError, StellarId, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog,
-    Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
+    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, Rulebook, Rules, Session, ShipId,
+    ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
+    StellarId, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2,
+    flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
-use nova_sim::{
-    ControlBits, HireList, HireRefusal, HireTerms, Hired, HookRules, OutfitRules, PayNote,
-    PersonRules, ScriptEffectRules, ShipChangeRules,
-};
+use nova_sim::{ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules};
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
@@ -1085,263 +1063,6 @@ impl<
         }
     }
 
-    /// The flight with its escorts' standing orders reset, or kept, on
-    /// entering a system as `source` says
-    /// ([`Session::with_escort_orders`]).
-    #[must_use]
-    pub fn with_escort_orders(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_escort_orders(source)),
-            ..self
-        }
-    }
-
-    /// The flight with the fighters the player launches doing first as
-    /// `source` says ([`Session::with_fighter_launch`]).
-    #[must_use]
-    pub fn with_fighter_launch(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_fighter_launch(source)),
-            ..self
-        }
-    }
-
-    /// The flight with the player's fighters out, as it leaves a system,
-    /// following `source` ([`Session::with_fighter_recall`]).
-    #[must_use]
-    pub fn with_fighter_recall(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_fighter_recall(source)),
-            ..self
-        }
-    }
-
-    /// The flight with `BuyRandom` read as `source` says
-    /// ([`Session::with_buy_random`]).
-    #[must_use]
-    pub fn with_buy_random(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_buy_random(source)),
-            ..self
-        }
-    }
-
-    /// The flight with held tribbles and perishable `jünk` growing and
-    /// decaying as `source` says ([`Session::with_junk_flags`]).
-    #[must_use]
-    pub fn with_junk_flags(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_junk_flags(source)),
-            ..self
-        }
-    }
-
-    /// The flight with a launcher's sale refused for its ammunition as
-    /// `source` says ([`Session::with_launcher_sale`]).
-    #[must_use]
-    pub fn with_launcher_sale(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_launcher_sale(source)),
-            ..self
-        }
-    }
-
-    /// The flight with a ship purchase keeping the cargo as `source` says
-    /// ([`Session::with_purchase_cargo`]).
-    #[must_use]
-    pub fn with_purchase_cargo(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_purchase_cargo(source)),
-            ..self
-        }
-    }
-
-    /// The flight with a `jünk` of negative or zero price traded as
-    /// `source` says ([`Session::with_junk_price`]).
-    #[must_use]
-    pub fn with_junk_price(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_junk_price(source)),
-            ..self
-        }
-    }
-
-    /// The flight with each listed `jünk` row traded as `source` says
-    /// ([`Session::with_junk_trade`]).
-    #[must_use]
-    pub fn with_junk_trade(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_junk_trade(source)),
-            ..self
-        }
-    }
-
-    /// The flight with a plain trade at the exchange moving as many tons
-    /// as `source` says ([`Session::with_trade_lot`]).
-    #[must_use]
-    pub fn with_trade_lot(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_trade_lot(source)),
-            ..self
-        }
-    }
-
-    /// The flight with the most a buy at the exchange moves dividing the
-    /// cash by the price as `source` says
-    /// ([`Session::with_trade_quotient`]).
-    #[must_use]
-    pub fn with_trade_quotient(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_trade_quotient(source)),
-            ..self
-        }
-    }
-
-    /// The flight with Option on Buy or Sell at the exchange asking for a
-    /// count or trading the most as `source` says
-    /// ([`Session::with_trade_count`]).
-    #[must_use]
-    pub fn with_trade_count(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_trade_count(source)),
-            ..self
-        }
-    }
-
-    /// The flight with a buy at the exchange reading cash below nothing
-    /// as `source` says ([`Session::with_trade_debt`]).
-    #[must_use]
-    pub fn with_trade_debt(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_trade_debt(source)),
-            ..self
-        }
-    }
-
-    /// The flight with Option on Buy or Sell at the outfitter doing as
-    /// `source` says ([`Session::with_outfit_count`]).
-    #[must_use]
-    pub fn with_outfit_count(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_outfit_count(source)),
-            ..self
-        }
-    }
-
-    /// The flight with a sale at the outfitter refused for the free mass
-    /// as `source` says ([`Session::with_sale_mass`]).
-    #[must_use]
-    pub fn with_sale_mass(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_sale_mass(source)),
-            ..self
-        }
-    }
-
-    /// The flight with the trade-in counting outfits as `source` says
-    /// ([`Session::with_trade_in_outfits`]).
-    #[must_use]
-    pub fn with_trade_in_outfits(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_trade_in_outfits(source)),
-            ..self
-        }
-    }
-
-    /// The flight with a sold outfit refunded as `source` says
-    /// ([`Session::with_outfit_refund`]).
-    #[must_use]
-    pub fn with_outfit_refund(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_outfit_refund(source)),
-            ..self
-        }
-    }
-
-    /// The flight with a map or clean-record outfit sold as `source` says
-    /// ([`Session::with_outfit_limit`]).
-    #[must_use]
-    pub fn with_outfit_limit(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_outfit_limit(source)),
-            ..self
-        }
-    }
-
-    /// The flight with a `ModType` 27 outfit raising its target's `Max`
-    /// as `source` says ([`Session::with_raised_max`]).
-    #[must_use]
-    pub fn with_raised_max(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_raised_max(source)),
-            ..self
-        }
-    }
-
-    /// The flight with an active `öops` event pricing its commodity as
-    /// `source` says ([`Session::with_event_price`]).
-    #[must_use]
-    pub fn with_event_price(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_event_price(source)),
-            ..self
-        }
-    }
-
-    /// The flight with an unmet `Require` refusing a hire, or not, as
-    /// `source` says ([`Session::with_hire_require`]).
-    #[must_use]
-    pub fn with_hire_require(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_hire_require(source)),
-            ..self
-        }
-    }
-
-    /// The flight with each take-off paying the hired escorts a day's
-    /// wages, or not, as `source` says ([`Session::with_take_off_pay`]).
-    #[must_use]
-    pub fn with_take_off_pay(self, source: RuleSource) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_take_off_pay(source)),
-            ..self
-        }
-    }
-
-    /// The flight with a hired escort paid the wage `source` says
-    /// ([`Session::with_escort_wage`]).
-    #[must_use]
-    pub fn with_escort_wage(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_escort_wage(source)),
-            ..self
-        }
-    }
-
     /// The flight with `terms` giving the fee and wage of a hire
     /// ([`Session::with_hire_terms`]).
     #[must_use]
@@ -1358,62 +1079,6 @@ impl<
     pub fn with_person_rules(self, rules: Rc<dyn PersonRules>) -> Self {
         Self {
             session: self.session.map(|session| session.with_person_rules(rules)),
-            ..self
-        }
-    }
-
-    /// The flight with a person's comm quote said as `source` says
-    /// ([`Session::with_comm_quote`]).
-    #[must_use]
-    pub fn with_comm_quote(self, source: RuleSource) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_comm_quote(source)),
-            ..self
-        }
-    }
-
-    /// The flight with granting and removing outfits following `rules`
-    /// ([`Session::with_outfit_rules`]).
-    #[must_use]
-    pub fn with_outfit_rules(self, rules: OutfitRules) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_outfit_rules(rules)),
-            ..self
-        }
-    }
-
-    /// The flight with the set-expression hooks following `rules` where
-    /// their order is disputed ([`Session::with_hook_rules`]).
-    #[must_use]
-    pub fn with_hook_rules(self, rules: HookRules) -> Self {
-        Self {
-            session: self.session.map(|session| session.with_hook_rules(rules)),
-            ..self
-        }
-    }
-
-    /// The flight with the ship-change set operators following `rules`
-    /// where the Bible and the engine disagree
-    /// ([`Session::with_ship_change_rules`]).
-    #[must_use]
-    pub fn with_ship_change_rules(self, rules: ShipChangeRules) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_ship_change_rules(rules)),
-            ..self
-        }
-    }
-
-    /// The flight with the moving set operators following `rules` where
-    /// the Bible and the engine disagree
-    /// ([`Session::with_script_effect_rules`]).
-    #[must_use]
-    pub fn with_script_effect_rules(self, rules: ScriptEffectRules) -> Self {
-        Self {
-            session: self
-                .session
-                .map(|session| session.with_script_effect_rules(rules)),
             ..self
         }
     }
@@ -2971,9 +2636,9 @@ mod tests {
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
     };
     use crate::{Blend, DrawCommand, Font};
-    use nova_sim::RuleKey;
     use nova_sim::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
     use nova_sim::{BlinkChance, GLOW_CRUISE, HashedRolls, glow_level};
+    use nova_sim::{RuleKey, RuleSource};
 
     /// The first `chär` flies ship 128 (an average ship that turns 3° a
     /// tick, with a 36-rotation, 40 x 40 sheet, `rlëD` 2000) from system

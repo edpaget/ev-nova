@@ -55,8 +55,9 @@ use crate::catalog::{GovtId, OutfitRecord};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 /// The disputed rules of granting and removing outfits that the session
-/// follows (see [`Session::with_outfit_rules`](crate::Session::with_outfit_rules)):
-/// the engine's by default.
+/// follows, projected from its rule set (see
+/// [`Session::with_rules`](crate::Session::with_rules)): the engine's by
+/// default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OutfitRules {
     /// Which systems a map explores, and which are inhabited

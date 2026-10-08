@@ -13,8 +13,8 @@
 //! outfitter's and the shipyard's `BuyRandom` rolls follow the same rule
 //! ([`Session::outfitter`], [`Session::shipyard`]), buying a ship drawing
 //! its class's roll again. Whether an unmet `Require` refuses a hire
-//! follows
-//! [`Session::with_hire_require`].
+//! follows the rule set's
+//! [`RuleKey::HireRequire`](crate::RuleKey::HireRequire).
 //!
 //! **Hiring** ([`Session::hire`]) takes what the terms charge from the
 //! cash and adds the ship to the fleet, an escort as a ship captured is
@@ -24,9 +24,10 @@
 //! A refused hire changes nothing.
 //!
 //! **Paying.** Each hired escort is paid its wage for each day of a jump,
-//! once the date has moved on, and for one day at each take-off as
-//! [`Session::with_take_off_pay`] says; the wage it is paid follows
-//! [`Session::with_escort_wage`]. One the cash does not cover defects,
+//! once the date has moved on, and for one day at each take-off as the
+//! rule set reads [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay);
+//! the wage it is paid follows
+//! [`RuleKey::EscortWage`](crate::RuleKey::EscortWage). One the cash does not cover defects,
 //! its record and its NPC gone at once, so it is never placed in the next
 //! system, and the flight is told how many defected
 //! ([`Session::take_pay_notes`]), which makes a save due; paying alone
@@ -94,61 +95,6 @@ impl Session {
         self
     }
 
-    /// This session with an unmet `Require` refusing a hire, or not, as
-    /// `source` says ([`RuleKey::HireRequire`](crate::RuleKey::HireRequire)):
-    /// by the engine's default it does not.
-    #[must_use]
-    pub fn with_hire_require(mut self, source: RuleSource) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self.rules.with_override(RuleKey::HireRequire, source);
-        self
-    }
-
-    /// Whether an unmet `Require` refuses a hire: not by the engine
-    /// ([`RuleSource::Engine`]), and so by the other reading.
-    #[must_use]
-    pub fn hire_require(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::HireRequire)
-    }
-
-    /// This session with each take-off paying the hired escorts a day's
-    /// wages, or not, as `source` says
-    /// ([`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay)): by the
-    /// engine's default it does.
-    #[must_use]
-    pub fn with_take_off_pay(mut self, source: RuleSource) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self.rules.with_override(RuleKey::TakeOffPay, source);
-        self
-    }
-
-    /// Whether each take-off pays the hired escorts a day's wages: by the
-    /// engine ([`RuleSource::Engine`]) it does; otherwise only a jump's
-    /// days are paid.
-    #[must_use]
-    pub fn take_off_pay(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::TakeOffPay)
-    }
-
-    /// This session with a hired escort paid, and showing when hailed,
-    /// the wage `source` says
-    /// ([`RuleKey::EscortWage`](crate::RuleKey::EscortWage)): by the
-    /// engine's default, the wage its ship type's record gives now.
-    #[must_use]
-    pub fn with_escort_wage(mut self, source: RuleSource) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self.rules.with_override(RuleKey::EscortWage, source);
-        self
-    }
-
-    /// Which wage a hired escort is paid: by the engine
-    /// ([`RuleSource::Engine`]), its ship type's now; otherwise the wage
-    /// it was hired at.
-    #[must_use]
-    pub fn escort_wage(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::EscortWage)
-    }
-
     /// What paying the escorts did since this was last taken, in order;
     /// taking it empties the list.
     pub fn take_pay_notes(&mut self) -> Vec<PayNote> {
@@ -156,7 +102,7 @@ impl Session {
     }
 
     /// The wage hired `escort` is paid a day (see
-    /// [`Session::with_escort_wage`]): by the engine, the terms' wage of
+    /// [`RuleKey::EscortWage`]): by the engine, the terms' wage of
     /// its ship type's record, or the wage it was hired at when there is
     /// none; otherwise the wage it was hired at. None for an escort not
     /// hired.

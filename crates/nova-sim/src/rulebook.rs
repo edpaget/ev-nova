@@ -271,7 +271,7 @@ rule_keys! {
     /// the engine, every one is reset to formation; otherwise they are
     /// kept. The Bible is silent here, so the other reading is the
     /// intended behaviour, not anything the Bible says (see
-    /// [`Session::with_escort_orders`](crate::Session::with_escort_orders)).
+    /// [`Session::with_rules`](crate::Session::with_rules)).
     EscortOrders => "escort_orders",
     /// What a fighter the player launches from a bay does first: by the
     /// engine, it takes the standing order of the first ship of its class
@@ -281,7 +281,7 @@ rule_keys! {
     /// ("choose a target and then launch your fighters"). The Bible is
     /// silent here, so the other reading is the intended behaviour, not
     /// anything the Bible says (see
-    /// [`Session::with_fighter_launch`](crate::Session::with_fighter_launch)).
+    /// [`Session::with_rules`](crate::Session::with_rules)).
     FighterLaunch => "fighter_launch",
     /// What becomes of the player's fighters out when it leaves the
     /// system: by the engine, those whose ship type holds a jump's fuel
@@ -291,7 +291,7 @@ rule_keys! {
     /// `_InstantFighterRecall` does. The Bible is silent here, so the
     /// other reading is the intended behaviour, not anything the Bible
     /// says (see
-    /// [`Session::with_fighter_recall`](crate::Session::with_fighter_recall)).
+    /// [`Session::with_rules`](crate::Session::with_rules)).
     FighterRecall => "fighter_recall",
     /// Whether a ship's `Require` gates hiring it in the bar: by the
     /// engine, it does not (`_CalcShipCanBuy`'s hire branch never checks
@@ -300,7 +300,7 @@ rule_keys! {
     /// greyed and refused, as it does in the shipyard. The Bible speaks
     /// of `Require` only for purchase, so the other reading is the
     /// intended behaviour, not anything the Bible says (see
-    /// [`Session::with_hire_require`](crate::Session::with_hire_require)).
+    /// [`Session::with_rules`](crate::Session::with_rules)).
     HireRequire => "hire_require",
     /// Whether leaving the spaceport costs the hired escorts' wages for a
     /// day: by the engine, each take-off pays every hired escort a day's
@@ -309,7 +309,7 @@ rule_keys! {
     /// days that pass, which here means a jump's. The Bible is silent
     /// here, so the other reading is the intended behaviour, not anything
     /// the Bible says (see
-    /// [`Session::with_take_off_pay`](crate::Session::with_take_off_pay)).
+    /// [`Session::with_rules`](crate::Session::with_rules)).
     TakeOffPay => "take_off_pay",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
@@ -325,7 +325,7 @@ rule_keys! {
     /// otherwise the wage kept on its record when it was hired, as the
     /// phase has it. The Bible is silent here, so the other reading is
     /// the intended behaviour, not anything the Bible says (see
-    /// [`Session::with_escort_wage`](crate::Session::with_escort_wage)).
+    /// [`Session::with_rules`](crate::Session::with_rules)).
     EscortWage => "escort_wage",
     /// How often a person (`përs`) takes an ordinary ship's place, and
     /// which: by the engine, a draw of `Rand(7)` of 0, then `Rand(1022)`
@@ -372,7 +372,7 @@ rule_keys! {
     /// attitude. The Bible says only that it is "displayed in the
     /// communications dialog", so the other reading is the intended
     /// behaviour, not anything the Bible says (see
-    /// [`Session::with_comm_quote`](crate::Session::with_comm_quote)).
+    /// [`Session::with_rules`](crate::Session::with_rules)).
     CommQuote => "comm_quote",
     /// How many outfits boarding a person grants: by the engine,
     /// trunc((50 + `Rand(51)`) x `GrantCount` / 100), at least 1

@@ -32,7 +32,7 @@
 //! order is kept on its record ([`Escort::order`](crate::Escort)) and
 //! saved. On entering a system the session follows its
 //! [`RuleKey::EscortOrders`](crate::RuleKey::EscortOrders) source
-//! ([`Session::with_escort_orders`]): by the engine, every escort's order
+//! ([`Session::with_rules`]): by the engine, every escort's order
 //! is reset to formation, as the original's `_RespawnEscort` (@0x3d546)
 //! and `_HandlePlayer` (@0x6e3bb-0x6e44b) do; by the other reading, the
 //! orders are kept.
@@ -76,23 +76,6 @@ use crate::traffic::npc::{AiType, Mode, Npc, NpcId, NpcPerson};
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
-    /// This session with its escorts' standing orders reset, or kept, on
-    /// entering a system as `source` says (see the module docs): the
-    /// engine's reset by default.
-    #[must_use]
-    pub fn with_escort_orders(mut self, source: RuleSource) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self.rules.with_override(RuleKey::EscortOrders, source);
-        self
-    }
-
-    /// Whether the escorts' standing orders are reset on entering a
-    /// system ([`RuleSource::Engine`]) or kept.
-    #[must_use]
-    pub fn escort_orders(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::EscortOrders)
-    }
-
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, and each is placed on its
     /// slot.

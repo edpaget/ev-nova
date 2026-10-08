@@ -75,7 +75,7 @@ use crate::grant::{GrantStock, held_to_max};
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records};
 use crate::outfitter::{self, resale, unit_mass, unit_price};
 use crate::pilot::Pilot;
-use crate::rulebook::{RuleKey, RuleSource};
+use crate::rulebook::RuleSource;
 
 /// The outfit IDs the grant path and `D` take: an index below 0x200
 /// (`_GrantOutfitItem` @0x44d5c, `_EvalSetExp` @0x15427 and @0x15455).
@@ -103,30 +103,9 @@ fn take_one(pilot: &mut Pilot, outfit: OutfitId) -> bool {
 }
 
 impl Session {
-    /// This session with granting and removing outfits following `rules`
-    /// where the Bible and the engine disagree: the engine's by default.
-    #[must_use]
-    pub fn with_outfit_rules(mut self, rules: OutfitRules) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self
-            .rules
-            .with_override(RuleKey::MapExplore, rules.map_explore);
-        self.rules = self
-            .rules
-            .with_override(RuleKey::InvalidMap, rules.invalid_map);
-        self.rules = self.rules.with_override(RuleKey::GrantMax, rules.grant_max);
-        self.rules = self
-            .rules
-            .with_override(RuleKey::RemoveRefund, rules.remove_refund);
-        self.rules = self
-            .rules
-            .with_override(RuleKey::RefitReserves, rules.refit_reserves);
-        self
-    }
-
-    /// The rules granting and removing outfits follow.
-    #[must_use]
-    pub fn outfit_rules(&self) -> OutfitRules {
+    /// The rules granting and removing outfits follow, projected from
+    /// the session's rule set ([`Session::with_rules`]).
+    pub(super) fn outfit_rules(&self) -> OutfitRules {
         OutfitRules::from_rulebook(&self.rules)
     }
 
@@ -299,7 +278,7 @@ mod tests {
     use crate::catalog::{GovtId, GovtRecord, StarSystem};
     use crate::control::{ScriptNote, SetExpr};
     use crate::outfit_effects::{CLEAN_RECORD, MAP, PAINT, Rgb15};
-    use crate::rulebook::Rulebook;
+    use crate::rulebook::{RuleKey, Rulebook};
     use crate::stats::MORE_SHIELD;
     use crate::testkit::{FakePilotCatalog, Scripted, catalog, govt, outfit, star};
 

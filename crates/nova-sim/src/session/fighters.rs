@@ -13,7 +13,7 @@
 //!   ([`Escort::carried`]), of no government, on its formation slot, as
 //!   phase 8's escorts. What it does first follows the rulebook's
 //!   [`RuleKey::FighterLaunch`](crate::RuleKey::FighterLaunch)
-//!   ([`Session::with_fighter_launch`]): by the engine it takes the
+//!   ([`Session::with_rules`]): by the engine it takes the
 //!   standing order of the fleet's first escort of its class, Return to
 //!   Hangar excepted, and no target (`_LaunchFighter` @0x3dbec, `_EscortAI`
 //!   @0x83ae4-0x83b34); by the other reading, launched while the player
@@ -432,39 +432,6 @@ impl Session {
                 }
             }
         }
-    }
-    /// This session with the fighters the player launches doing first as
-    /// `source` says (see the module docs): the engine's by default.
-    #[must_use]
-    pub fn with_fighter_launch(mut self, source: RuleSource) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self.rules.with_override(RuleKey::FighterLaunch, source);
-        self
-    }
-
-    /// What a fighter the player launches does first: by the engine, its
-    /// class's standing order; otherwise it attacks the player's target.
-    #[must_use]
-    pub fn fighter_launch(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::FighterLaunch)
-    }
-
-    /// This session with the player's fighters out, as it leaves the
-    /// system, following `source` (see the module docs): the engine's by
-    /// default.
-    #[must_use]
-    pub fn with_fighter_recall(mut self, source: RuleSource) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self.rules.with_override(RuleKey::FighterRecall, source);
-        self
-    }
-
-    /// What becomes of the player's fighters out as it leaves the system:
-    /// by the engine, they follow a jump if they can and stay out while
-    /// it is landed; otherwise they go back into their bays.
-    #[must_use]
-    pub fn fighter_recall(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::FighterRecall)
     }
 }
 

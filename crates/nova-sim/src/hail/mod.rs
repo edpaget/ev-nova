@@ -333,7 +333,7 @@ pub struct HailView {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EscortStatus {
     /// The wage a hired escort is paid a day, as
-    /// [`Session::with_escort_wage`](crate::Session::with_escort_wage)
+    /// [`Session::with_rules`](crate::Session::with_rules)
     /// says; none for one not hired.
     pub wage: Option<i64>,
 }

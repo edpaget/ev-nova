@@ -47,7 +47,8 @@ use crate::control::Script;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
 /// The disputed orders of the set-expression hooks that the session
-/// follows (see [`Session::with_hook_rules`]): the engine's by default.
+/// follows, projected from its rule set (see [`Session::with_rules`]):
+/// the engine's by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HookRules {
     /// Whether buying a ship clears the paint after the new ship's
@@ -87,26 +88,9 @@ pub(super) enum ShipHook {
 }
 
 impl Session {
-    /// This session with the hooks following `rules` where their order is
-    /// disputed: the engine's by default.
-    #[must_use]
-    pub fn with_hook_rules(mut self, rules: HookRules) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self
-            .rules
-            .with_override(RuleKey::PurchasePaintOrder, rules.purchase_paint_order);
-        self.rules = self
-            .rules
-            .with_override(RuleKey::CaptureHookOrder, rules.capture_hook_order);
-        self.rules = self
-            .rules
-            .with_override(RuleKey::StartShipPurchase, rules.start_ship_purchase);
-        self
-    }
-
-    /// The rules the hooks follow.
-    #[must_use]
-    pub fn hook_rules(&self) -> HookRules {
+    /// The rules the hooks follow, projected from the session's rule set
+    /// ([`Session::with_rules`]).
+    pub(super) fn hook_rules(&self) -> HookRules {
         HookRules::from_rulebook(&self.rules)
     }
 

@@ -124,8 +124,8 @@ use crate::shipyard;
 const ARMOR_BUMP: f32 = 1.0;
 
 /// The disputed rules of the ship-change set operators that the session
-/// follows (see [`Session::with_ship_change_rules`]): the engine's by
-/// default.
+/// follows, projected from its rule set (see [`Session::with_rules`]):
+/// the engine's by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ShipChangeRules {
     /// Which outfits `H` keeps ([`RuleKey::ShipChangePersistence`]).
@@ -203,27 +203,9 @@ impl CommCatalog for NoStrings {
 }
 
 impl Session {
-    /// This session with the ship-change set operators following `rules`
-    /// where the Bible and the engine disagree: the engine's by default.
-    #[must_use]
-    pub fn with_ship_change_rules(mut self, rules: ShipChangeRules) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self
-            .rules
-            .with_override(RuleKey::ShipChangePersistence, rules.persistence);
-        self.rules = self.rules.with_override(RuleKey::ShipChangeMax, rules.max);
-        self.rules = self
-            .rules
-            .with_override(RuleKey::ShipChangeCargo, rules.cargo);
-        self.rules = self
-            .rules
-            .with_override(RuleKey::ShipChangeReserves, rules.reserves);
-        self
-    }
-
-    /// The rules the ship-change set operators follow.
-    #[must_use]
-    pub fn ship_change_rules(&self) -> ShipChangeRules {
+    /// The rules the ship-change set operators follow, projected from
+    /// the session's rule set ([`Session::with_rules`]).
+    fn ship_change_rules(&self) -> ShipChangeRules {
         ShipChangeRules::from_rulebook(&self.rules)
     }
 

@@ -160,7 +160,7 @@ pub struct Escort {
     /// The daily wage it was hired at in the bar, which may be none; `None`
     /// for an escort that was not hired (a ship captured, or the old ship
     /// kept after "Use As My Ship"). Which wage a hired escort is paid
-    /// each day follows [`Session::with_escort_wage`](crate::Session::with_escort_wage)
+    /// each day follows [`Session::with_rules`](crate::Session::with_rules)
     /// (see [`hire`](crate::hire)).
     pub wage: Option<i64>,
     /// The person (`përs`) this escort is, flying as itself, its name,

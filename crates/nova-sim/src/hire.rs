@@ -52,7 +52,7 @@
 //! is no more than the cash. The hire branch never checks `Require`,
 //! whereas buying does: the rulebook's
 //! [`RuleKey::HireRequire`](crate::RuleKey::HireRequire) chooses
-//! ([`Session::with_hire_require`](crate::Session::with_hire_require)).
+//! ([`Session::with_rules`](crate::Session::with_rules)).
 //! One that cannot be hired shows greyed and is refused
 //! ([`HireRefusal`]).
 //!
@@ -98,7 +98,7 @@
 //! (`_HandlePlayer` @0x6c616), and one day at each take-off by the engine
 //! (`_DoEscortLand` @0x40853, which in the original pays for its landing
 //! day), as the rulebook's [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay)
-//! chooses ([`Session::with_take_off_pay`](crate::Session::with_take_off_pay)).
+//! chooses ([`Session::with_rules`](crate::Session::with_rules)).
 //!
 //! # Not modelled
 //!

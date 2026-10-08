@@ -9,7 +9,8 @@
 //! [`Session::npc_subtitle`]).
 //!
 //! **Hailed.** A person's comm quote (`STR#` 7100 #`CommQuote`, when it
-//! is above 0) is said as [`Session::with_comm_quote`] says: by the
+//! is above 0) is said as the rule set reads
+//! [`RuleKey::CommQuote`](crate::RuleKey::CommQuote): by the
 //! engine, as Greetings' answer from a friendly person, in place of its
 //! advice; otherwise as the hail's opening line, whatever its attitude.
 //! A person's `HailPict` shows in the comm dialog
@@ -49,7 +50,6 @@ use crate::person::{
     ESCAPE_POD, Eligible, GRUDGE, HAIL_QUOTES, PersonRules, QUOTE_GAP_TICKS, QUOTE_ODDS,
     QUOTE_SHOWN_TICKS, QuoteTags, QuoteView, expand_tags, quote_eligible,
 };
-use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::{Npc, NpcId};
 
 /// A person's hail quote said, for the flight's message line.
@@ -83,23 +83,6 @@ impl Session {
     #[must_use]
     pub fn person_rules(&self) -> &dyn PersonRules {
         &*self.person_rules.0
-    }
-
-    /// This session with a person's comm quote said as `source` says
-    /// ([`RuleKey::CommQuote`](crate::RuleKey::CommQuote)): by the
-    /// engine's default, as a friendly person's answer to Greetings;
-    /// otherwise in place of the hail's opening line.
-    #[must_use]
-    pub fn with_comm_quote(mut self, source: RuleSource) -> Self {
-        // Shim until callers use with_rules (removed in this phase).
-        self.rules = self.rules.with_override(RuleKey::CommQuote, source);
-        self
-    }
-
-    /// When a person's comm quote is said.
-    #[must_use]
-    pub fn comm_quote(&self) -> RuleSource {
-        self.rules.source_for(RuleKey::CommQuote)
     }
 
     /// `npc`'s comm quote, an entry in `STR#` 7100, when it is a person
@@ -297,7 +280,7 @@ mod tests {
     use crate::person::{PersonRoll, PersonRules};
     use crate::pilot::Pilot;
     use crate::rulebook::RuleSource;
-    use crate::rulebook::Rulebook;
+    use crate::rulebook::{RuleKey, Rulebook};
     use crate::testkit::{FAST, FakePilotCatalog, person, ship};
 
     /// System 130 has no traffic of its own (`AvgShips` `avg_ships`) and
