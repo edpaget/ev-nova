@@ -767,100 +767,25 @@ impl Market {
     }
 
     /// How many tons `lot` of `row` would move `direction`, or why it
-    /// moves none.
+    /// moves none: refused by the Buy or Sell checks ([`Market::row_allows`]),
+    /// then by the order's own, and otherwise sized.
     fn row_tons(
         &self,
         row: &MarketRow,
         direction: Direction,
         lot: Lot,
     ) -> Result<u32, TradeRefusal> {
+        let trade = RowTrade { market: self, row };
         // `_CanBuyGoods` greys Buy while cash < price, compared signed
-        // (@0xcd07-0xcd0d), so no buy reaches the quotient there
-        // ([`Market::row_allows`]).
-        refusal(&can(direction), &RowTrade { market: self, row })?;
-        let most = match direction {
-            Direction::Buy => {
-                if lot == Lot::Click {
-                    let wanted = self.click_tons().min(self.free);
-                    let affordable = self
-                        .quotient(row.price, RuleSource::Bible)
-                        .map_or(wanted, |tons| {
-                            u32::try_from(tons.max(0)).unwrap_or(u32::MAX)
-                        });
-                    return match wanted.min(affordable) {
-                        0 => Err(TradeRefusal::CannotAfford),
-                        tons => Ok(tons),
-                    };
-                }
-                // A good priced below nothing buys none, as the engine's
-                // cash / price is negative and its `jle` @0x5e27d skips
-                // the buy.
-                u32::try_from(self.most(row, direction))
-                    .ok()
-                    .filter(|&most| most > 0)
-                    .ok_or(TradeRefusal::CannotAfford)?
-            }
-            Direction::Sell => match lot {
-                Lot::Click => return Ok(row.held.min(self.click_tons())),
-                _ => u32::try_from(self.most(row, direction)).unwrap_or(0),
-            },
+        // (@0xcd07-0xcd0d), so no buy reaches the quotient there.
+        refusal(&can(direction), &trade)?;
+        let order = RowOrder {
+            trade,
+            direction,
+            lot,
         };
-        match lot {
-            Lot::Count(n) if n == 0 || n > most => Err(TradeRefusal::OutOfRange),
-            Lot::Count(n) => Ok(n),
-            Lot::Click | Lot::Max => Ok(most),
-        }
-    }
-
-    /// The most `row` offers `direction`: the maximum the original's
-    /// quantity dialog opens with (`_DoTradeDialog`), signed, as it can be
-    /// 0 or less. A buy's is min(cash / price, free), the quotient as
-    /// [`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient) says,
-    /// and anything from 32001 up made 32000 (@0x5e23a-0x5e24c); a row
-    /// priced at nothing is limited by space alone. A sale's is
-    /// min(held, 32000) (@0x5e44f-0x5e457).
-    fn most(&self, row: &MarketRow, direction: Direction) -> i64 {
-        let tons = match direction {
-            Direction::Buy => {
-                let space = i64::from(self.free);
-                self.quotient(row.price, self.trade_quotient)
-                    .map_or(space, |tons| tons.min(space))
-            }
-            Direction::Sell => i64::from(row.held),
-        };
-        tons.min(LOT_CAP)
-    }
-
-    /// The cash divided by `price`, as `source` says, or `None` at a price
-    /// of nothing, which the engine never lists (phase 23). The cash is
-    /// read as [`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt) says: by
-    /// the engine signed, so cash below nothing at a price below nothing
-    /// gives a positive quotient; by the other reading cash below nothing
-    /// counts as none, so a price below nothing gives 0 or less. By the
-    /// engine's division, trunc(f32(cash) / f32(price))
-    /// (@0x5e21d-0x5e234), the cash is held in the engine's 32 bits and
-    /// the price in its 16, each held at the least or most it can hold
-    /// rather than wrapped past it; above 2^24 cash it can round up to a
-    /// ton more than the cash covers. By the other division, exact
-    /// integer division.
-    fn quotient(&self, price: i64, source: RuleSource) -> Option<i64> {
-        if price == 0 {
-            return None;
-        }
-        let cash = match self.trade_debt {
-            RuleSource::Engine => self.cash,
-            RuleSource::Bible => self.cash.max(0),
-        };
-        Some(match source {
-            RuleSource::Engine => {
-                let cash =
-                    i32::try_from(cash).unwrap_or(if cash < 0 { i32::MIN } else { i32::MAX });
-                let price =
-                    i16::try_from(price).unwrap_or(if price < 0 { i16::MIN } else { i16::MAX });
-                (cash as f32 / f32::from(price)) as i64
-            }
-            RuleSource::Bible => cash / price,
-        })
+        refusal(&order_checks(direction), &order)?;
+        Ok(tons().of(&order))
     }
 
     /// The most row `index` offers `direction` ([`Lot::Max`]), which the
@@ -872,17 +797,7 @@ impl Market {
         self.rows
             .get(index)
             .filter(|row| row.trades(direction))
-            .map(|row| self.most(row, direction))
-    }
-
-    /// The most tons a [`Lot::Click`] moves, as
-    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot) says: [`CLICK_TONS`]
-    /// by the engine, a ton by the other reading.
-    const fn click_tons(&self) -> u32 {
-        match self.trade_lot {
-            RuleSource::Engine => CLICK_TONS,
-            RuleSource::Bible => 1,
-        }
+            .map(|row| most(direction).of(&RowTrade { market: self, row }))
     }
 
     /// Whether the Buy or Sell button of row `index` is enabled now. A buy
@@ -1003,6 +918,236 @@ fn bought_here(trade: &RowTrade) -> Result<(), TradeRefusal> {
 /// Some of the row's good is held.
 fn held(trade: &RowTrade) -> Result<(), TradeRefusal> {
     holds(trade.row.held > 0, TradeRefusal::NoneHeld)
+}
+
+/// How many tons a [`Lot::Click`] moves at most, as
+/// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot) says: [`CLICK_TONS`]
+/// by the engine, a ton by the other reading.
+fn click_lot<'a>() -> Value<RowTrade<'a>, u32> {
+    Value::disputed(
+        "click lot",
+        "`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa",
+        RuleKey::TradeLot,
+        ten_tons,
+        one_ton,
+    )
+}
+
+/// The engine's click: up to [`CLICK_TONS`].
+fn ten_tons(_: &RowTrade) -> u32 {
+    CLICK_TONS
+}
+
+/// The other reading's click: a ton.
+fn one_ton(_: &RowTrade) -> u32 {
+    1
+}
+
+/// The cash a buy divides by the price, as
+/// [`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt) says: by the engine
+/// signed, so cash below nothing at a price below nothing gives a
+/// positive quotient; by the other reading cash below nothing counts as
+/// none, so a price below nothing gives 0 or less.
+fn cash_divided<'a>() -> Value<RowTrade<'a>, i64> {
+    Value::disputed(
+        "cash divided",
+        "`_DoTradeDialog` @0x5e21d-0x5e234",
+        RuleKey::TradeDebt,
+        signed_cash,
+        cash_never_below_none,
+    )
+}
+
+/// The engine's cash: signed.
+fn signed_cash(trade: &RowTrade) -> i64 {
+    trade.market.cash
+}
+
+/// The other reading's cash: none when below nothing.
+fn cash_never_below_none(trade: &RowTrade) -> i64 {
+    trade.market.cash.max(0)
+}
+
+/// The [`cash_divided`] divided by the row's price, as
+/// [`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient) says, or
+/// `None` at a price of nothing, which the engine never lists (phase 23).
+/// By the engine's division, trunc(f32(cash) / f32(price)), the cash is
+/// held in the engine's 32 bits and the price in its 16, each held at the
+/// least or most it can hold rather than wrapped past it; above 2^24 cash
+/// it can round up to a ton more than the cash covers. By the other
+/// division, exact integer division.
+fn quotient<'a>() -> Value<RowTrade<'a>, Option<i64>> {
+    Value::disputed(
+        "quotient",
+        "`_DoTradeDialog` @0x5e21d-0x5e234",
+        RuleKey::TradeQuotient,
+        engine_quotient,
+        exact_quotient,
+    )
+}
+
+/// The engine's quotient, in single floats.
+fn engine_quotient(trade: &RowTrade) -> Option<i64> {
+    let price = trade.row.price;
+    if price == 0 {
+        return None;
+    }
+    let cash = cash_divided().of(trade);
+    let cash = i32::try_from(cash).unwrap_or(if cash < 0 { i32::MIN } else { i32::MAX });
+    let price = i16::try_from(price).unwrap_or(if price < 0 { i16::MIN } else { i16::MAX });
+    Some((cash as f32 / f32::from(price)) as i64)
+}
+
+/// The exact quotient, in integers.
+fn exact_quotient(trade: &RowTrade) -> Option<i64> {
+    let price = trade.row.price;
+    (price != 0).then(|| cash_divided().of(trade) / price)
+}
+
+/// The [`cash_divided`] a plain buy divides by the row's price: exact
+/// integer division whatever
+/// [`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient) says, as the
+/// single-float quotient differs from it only above 2^24 cash, where it
+/// is at least 512 and a click moves at most 10 either way ([`Lot::Click`]).
+fn click_quotient<'a>() -> Value<RowTrade<'a>, Option<i64>> {
+    Value::plain(
+        "click quotient",
+        "`_DoTradeDialog` @0x5e268-0x5e278",
+        exact_quotient,
+    )
+}
+
+/// The most a buy on a row offers, which the original's quantity dialog
+/// opens with, signed, as it can be 0 or less: min([`quotient`], free),
+/// and anything from 32001 up made 32000; a row priced at nothing is
+/// limited by space alone.
+fn buy_most<'a>() -> Value<RowTrade<'a>, i64> {
+    Value::plain("buy most", "`_DoTradeDialog` @0x5e23a-0x5e25a", most_bought)
+}
+
+/// The quotient or the free space, whichever is less, at most 32000.
+fn most_bought(trade: &RowTrade) -> i64 {
+    let space = i64::from(trade.market.free);
+    quotient()
+        .of(trade)
+        .map_or(space, |tons| tons.min(space))
+        .min(LOT_CAP)
+}
+
+/// The most a sale on a row offers: min(held, 32000).
+fn sell_most<'a>() -> Value<RowTrade<'a>, i64> {
+    Value::plain("sell most", "`_DoTradeDialog` @0x5e44f-0x5e47f", most_sold)
+}
+
+/// Everything held, at most 32000.
+fn most_sold(trade: &RowTrade) -> i64 {
+    i64::from(trade.row.held).min(LOT_CAP)
+}
+
+/// The most a row offers `direction`: [`buy_most`] or [`sell_most`].
+fn most<'a>(direction: Direction) -> Value<RowTrade<'a>, i64> {
+    match direction {
+        Direction::Buy => buy_most(),
+        Direction::Sell => sell_most(),
+    }
+}
+
+/// One order on a row: the row, the way and the lot, as the order's
+/// checks and its tons read them.
+#[derive(Clone, Copy)]
+struct RowOrder<'a> {
+    /// The row traded.
+    trade: RowTrade<'a>,
+    /// Buying or selling.
+    direction: Direction,
+    /// How much.
+    lot: Lot,
+}
+
+impl Context for RowOrder<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        self.trade.rulebook()
+    }
+}
+
+/// Whether an order the Buy or Sell checks allow moves anything. A buy
+/// must move a ton: a click its tons, any other lot the most; so a good
+/// priced below nothing buys none, as the engine's cash / price is then
+/// negative and its `jle` @0x5e27d skips the buy. A counted lot must
+/// then be from 1 up to the most ([`TradeRefusal::OutOfRange`]).
+fn order_checks<'a>(direction: Direction) -> Checks<RowOrder<'a>, TradeRefusal> {
+    let in_range = |reproduces| Check::plain("count in range", reproduces, count_in_range);
+    match direction {
+        Direction::Buy => [
+            Check::plain(
+                "moves a ton",
+                "`_DoTradeDialog` `jle` @0x5e27d",
+                moves_a_ton,
+            ),
+            in_range(
+                "`_DoTradeDialog` `jle` @0x5e27d skips none; \
+                 the quantity dialog gives no more than the most",
+            ),
+        ]
+        .into(),
+        Direction::Sell => [in_range(
+            "`_DoTradeDialog` `jle` @0x5e4d8 skips none; \
+             the quantity dialog gives no more than the most",
+        )]
+        .into(),
+    }
+}
+
+/// A buy moves a ton: a click's tons, or the most, above 0.
+fn moves_a_ton(order: &RowOrder) -> Result<(), TradeRefusal> {
+    let tons = match order.lot {
+        Lot::Click => i64::from(click_bought(&order.trade)),
+        Lot::Max | Lot::Count(_) => buy_most().of(&order.trade),
+    };
+    holds(tons > 0, TradeRefusal::CannotAfford)
+}
+
+/// A counted lot is from 1 up to the most; any other lot passes.
+fn count_in_range(order: &RowOrder) -> Result<(), TradeRefusal> {
+    match order.lot {
+        Lot::Count(n) => holds(
+            n > 0 && i64::from(n) <= most(order.direction).of(&order.trade),
+            TradeRefusal::OutOfRange,
+        ),
+        Lot::Click | Lot::Max => Ok(()),
+    }
+}
+
+/// The tons an order the checks allow moves: a click's, the most, or
+/// its count.
+fn tons<'a>() -> Value<RowOrder<'a>, u32> {
+    Value::plain(
+        "tons",
+        "`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa (a click); \
+         @0x5e23a-0x5e25a, @0x5e44f-0x5e47f (the most); the quantity dialog's count",
+        order_tons,
+    )
+}
+
+/// A plain buy's tons: min(cash / price, [`click_lot`], free), the cash
+/// divided exactly ([`click_quotient`]); at a price of nothing, the click
+/// lot or the free space.
+fn click_bought(trade: &RowTrade) -> u32 {
+    let wanted = click_lot().of(trade).min(trade.market.free);
+    click_quotient().of(trade).map_or(wanted, |tons| {
+        wanted.min(u32::try_from(tons.max(0)).unwrap_or(u32::MAX))
+    })
+}
+
+/// A click buys [`click_bought`] and sells min(held, [`click_lot`]);
+/// [`Lot::Max`] moves the most and [`Lot::Count`] its count.
+fn order_tons(order: &RowOrder) -> u32 {
+    match (order.lot, order.direction) {
+        (Lot::Count(n), _) => n,
+        (Lot::Click, Direction::Buy) => click_bought(&order.trade),
+        (Lot::Click, Direction::Sell) => order.trade.row.held.min(click_lot().of(&order.trade)),
+        (Lot::Max, direction) => u32::try_from(most(direction).of(&order.trade)).unwrap_or(0),
+    }
 }
 
 impl MarketRow {
@@ -1616,7 +1761,7 @@ pub(crate) fn step_junk(
 mod tests {
     use super::*;
     use crate::control::{Gate, Test};
-    use crate::rules::Verdict;
+    use crate::rules::{Descriptor, Verdict};
     use crate::testkit::{AllowAll, RefuseBits, Scripted, catalog};
 
     // Price levels and prices.
@@ -3854,11 +3999,21 @@ mod tests {
             (event_price().about().reads(), RuleKey::EventPrice),
             (junk_price().about().reads(), RuleKey::JunkPrice),
             (junk_ways().about().reads(), RuleKey::JunkTrade),
+            (click_lot().about().reads(), RuleKey::TradeLot),
+            (cash_divided().about().reads(), RuleKey::TradeDebt),
+            (quotient().about().reads(), RuleKey::TradeQuotient),
         ];
         for (reads, key) in disputed {
             assert_eq!(reads, Some(key));
         }
-        for plain in [level_price().about(), commodity_price().about()] {
+        for plain in [
+            *level_price().about(),
+            *commodity_price().about(),
+            *click_quotient().about(),
+            *buy_most().about(),
+            *sell_most().about(),
+            *tons().about(),
+        ] {
             assert_eq!(plain.reads(), None, "{}", plain.name());
         }
     }
@@ -3949,7 +4104,7 @@ mod tests {
     /// `market` traded by `trade_lot`.
     fn lots_by(trade_lot: RuleSource, market: Market) -> Market {
         Market {
-            trade_lot,
+            rules: market.rules.with_override(RuleKey::TradeLot, trade_lot),
             ..market
         }
     }
@@ -3972,7 +4127,11 @@ mod tests {
             Err(TradeRefusal::NoneHeld)
         );
         let engine = lots_by(RuleSource::Engine, stall(100_000, 25, 50));
-        assert_eq!(engine, stall(100_000, 25, 50), "the engine's by default");
+        assert_eq!(
+            stall(100_000, 25, 50).rules.source_for(RuleKey::TradeLot),
+            RuleSource::Engine,
+            "the engine's by default"
+        );
         assert_eq!(buy(&engine, Lot::Click), Ok(10));
         assert_eq!(sell(&engine, Lot::Click), Ok(10));
     }
@@ -4200,6 +4359,10 @@ mod tests {
                 assert!(!about.draws(), "{}", about.name());
                 assert_eq!(about.reads(), None, "{}", about.name());
             }
+            for about in order_checks(direction).descriptors() {
+                assert!(!about.draws(), "{}", about.name());
+                assert_eq!(about.reads(), None, "{}", about.name());
+            }
         }
     }
 
@@ -4215,7 +4378,7 @@ mod tests {
     /// `market` reading its cash below nothing as `trade_debt` says.
     fn debt_by(trade_debt: RuleSource, market: Market) -> Market {
         Market {
-            trade_debt,
+            rules: market.rules.with_override(RuleKey::TradeDebt, trade_debt),
             ..market
         }
     }
@@ -4341,7 +4504,9 @@ mod tests {
     /// `market` dividing its cash by a price as `trade_quotient` says.
     fn quotient_by(trade_quotient: RuleSource, market: Market) -> Market {
         Market {
-            trade_quotient,
+            rules: market
+                .rules
+                .with_override(RuleKey::TradeQuotient, trade_quotient),
             ..market
         }
     }
@@ -4447,7 +4612,10 @@ mod tests {
     #[test]
     fn by_the_engine_the_most_a_buy_moves_is_the_single_float_quotient() {
         let market = dear(32_766_999);
-        assert_eq!(market, quotient_by(RuleSource::Engine, dear(32_766_999)));
+        assert_eq!(
+            market.rules.source_for(RuleKey::TradeQuotient),
+            RuleSource::Engine
+        );
         let buy = |lot| market.tons(order(0, FOOD, Direction::Buy, lot));
         assert_eq!(market.row_max(0, Direction::Buy), Some(1000));
         assert_eq!(buy(Lot::Max), Ok(1000));
@@ -4565,6 +4733,266 @@ mod tests {
                 }
             }
         }
+    }
+
+    // The tons rules.
+
+    #[test]
+    fn click_lot_is_10_by_the_engine_and_1_by_the_other_reading() {
+        let market = stall(100_000, 25, 50);
+        assert_eq!(click_lot().of(&trade(&market, 0)), 10);
+        let one_ton = lots_by(RuleSource::Bible, market);
+        assert_eq!(click_lot().of(&trade(&one_ton, 0)), 1);
+    }
+
+    #[test]
+    fn cash_divided_is_signed_by_the_engine_and_never_below_0_by_the_other() {
+        for (cash, engine, other) in [(-5, -5, 0), (0, 0, 0), (500, 500, 500)] {
+            let signed = debt_by(RuleSource::Engine, stall(cash, 0, 9));
+            assert_eq!(cash_divided().of(&trade(&signed, 0)), engine, "{cash}");
+            let none = debt_by(RuleSource::Bible, stall(cash, 0, 9));
+            assert_eq!(cash_divided().of(&trade(&none, 0)), other, "{cash}");
+        }
+    }
+
+    #[test]
+    fn quotient_is_single_float_by_the_engine_and_exact_by_the_other() {
+        let at = |source, market: Market| {
+            let market = quotient_by(source, market);
+            quotient().of(&trade(&market, 0))
+        };
+        assert_eq!(at(RuleSource::Engine, dear(32_766_999)), Some(1000));
+        assert_eq!(at(RuleSource::Bible, dear(32_766_999)), Some(999));
+        for source in RuleSource::ALL {
+            let at_nothing = quotient_by(source, stall(500, 0, 9));
+            assert_eq!(quotient().of(&trade(&at_nothing, 2)), None, "{source:?}");
+            assert_eq!(at(source, negative(-200, 3)), Some(1), "{source:?}");
+            let none = debt_by(RuleSource::Bible, negative(-200, 3));
+            assert_eq!(at(source, none), Some(0), "{source:?}");
+            assert_eq!(at(source, negative(1000, 3)), Some(-5), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn click_quotient_is_exact_whatever_the_quotient_rule() {
+        for source in RuleSource::ALL {
+            let at = |market: Market, index| {
+                let market = quotient_by(source, market);
+                click_quotient().of(&trade(&market, index))
+            };
+            assert_eq!(at(dear(32_766_999), 0), Some(999), "{source:?}");
+            assert_eq!(at(stall(399, 0, 9), 0), Some(3), "{source:?}");
+            assert_eq!(at(stall(500, 0, 9), 2), None, "{source:?}");
+            assert_eq!(at(negative(-200, 3), 0), Some(1), "{source:?}");
+            let none = debt_by(RuleSource::Bible, negative(-200, 3));
+            assert_eq!(at(none, 0), Some(0), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn buy_most_is_the_quotient_or_the_space_at_most_32000() {
+        let at = |market: Market, index| buy_most().of(&trade(&market, index));
+        assert_eq!(at(stall(5000, 0, 70), 0), 50, "the quotient");
+        assert_eq!(at(stall(100_000, 0, 7), 0), 7, "the space");
+        assert_eq!(at(stall(100_000_000, 0, 40_000), 0), 32_000);
+        assert_eq!(at(stall(100_000_000, 0, 32_001), 0), 32_000);
+        assert_eq!(at(stall(100_000_000, 0, 31_999), 0), 31_999);
+        assert_eq!(at(stall(0, 0, 9), 2), 9, "at no price, the space");
+        assert_eq!(at(stall(0, 0, 40_000), 2), 32_000);
+        assert_eq!(at(negative(1000, 3), 0), -5, "below nothing");
+        assert_eq!(at(dear(32_766_999), 0), 1000, "by the engine");
+        assert_eq!(at(quotient_by(RuleSource::Bible, dear(32_766_999)), 0), 999);
+    }
+
+    #[test]
+    fn sell_most_is_everything_held_at_most_32000() {
+        let at = |held| sell_most().of(&trade(&stall(0, held, 0), 0));
+        assert_eq!(at(25), 25);
+        assert_eq!(at(0), 0);
+        assert_eq!(at(31_999), 31_999);
+        assert_eq!(at(32_000), 32_000);
+        assert_eq!(at(40_000), 32_000);
+    }
+
+    /// `lot` of row `index` of `market`, `direction`, as the order rules
+    /// read it.
+    fn row_order(market: &Market, index: usize, direction: Direction, lot: Lot) -> RowOrder<'_> {
+        RowOrder {
+            trade: trade(market, index),
+            direction,
+            lot,
+        }
+    }
+
+    #[test]
+    fn tons_sizes_a_click_the_most_and_a_count() {
+        let buy =
+            |market: &Market, index, lot| tons().of(&row_order(market, index, Direction::Buy, lot));
+        let sell = |market: &Market, lot| tons().of(&row_order(market, 0, Direction::Sell, lot));
+        assert_eq!(buy(&stall(100_000, 0, 50), 0, Lot::Click), 10, "10");
+        assert_eq!(buy(&stall(399, 0, 50), 0, Lot::Click), 3, "the cash");
+        assert_eq!(buy(&stall(100_000, 0, 4), 0, Lot::Click), 4, "the space");
+        assert_eq!(buy(&stall(0, 0, 9), 2, Lot::Click), 9, "at no price");
+        assert_eq!(buy(&negative(-199, 3), 0, Lot::Click), 0, "0 at -200");
+        let one_ton = lots_by(RuleSource::Bible, stall(100_000, 25, 50));
+        assert_eq!(buy(&one_ton, 0, Lot::Click), 1);
+        assert_eq!(sell(&one_ton, Lot::Click), 1);
+        assert_eq!(sell(&stall(0, 25, 0), Lot::Click), 10);
+        assert_eq!(sell(&stall(0, 4, 0), Lot::Click), 4);
+        assert_eq!(buy(&stall(5000, 0, 70), 0, Lot::Max), 50);
+        assert_eq!(sell(&stall(0, 25, 0), Lot::Max), 25);
+        assert_eq!(sell(&stall(0, 40_000, 0), Lot::Max), 32_000);
+        assert_eq!(buy(&stall(5000, 0, 70), 0, Lot::Count(7)), 7);
+        assert_eq!(sell(&stall(0, 25, 0), Lot::Count(3)), 3);
+    }
+
+    #[test]
+    fn the_order_checks_refuse_a_ton_before_the_count() {
+        let named = |direction| -> Vec<&str> {
+            order_checks(direction)
+                .descriptors()
+                .map(Descriptor::name)
+                .collect()
+        };
+        assert_eq!(named(Direction::Buy), ["moves a ton", "count in range"]);
+        assert_eq!(named(Direction::Sell), ["count in range"]);
+        let refuses = Verdict::Refuses;
+        let buy = |market: &Market, lot| {
+            verdicts(
+                &order_checks(Direction::Buy),
+                &row_order(market, 0, Direction::Buy, lot),
+            )
+        };
+        let poor = stall(99, 0, 5);
+        assert_eq!(
+            buy(&poor, Lot::Count(0)),
+            [
+                refuses(TradeRefusal::CannotAfford),
+                refuses(TradeRefusal::OutOfRange),
+            ]
+        );
+        assert_eq!(
+            refusal(
+                &order_checks(Direction::Buy),
+                &row_order(&poor, 0, Direction::Buy, Lot::Count(0))
+            ),
+            Err(TradeRefusal::CannotAfford)
+        );
+        assert_eq!(
+            buy(&poor, Lot::Count(1)),
+            [
+                refuses(TradeRefusal::CannotAfford),
+                refuses(TradeRefusal::OutOfRange),
+            ],
+            "1 is past a most of 0"
+        );
+        assert_eq!(buy(&poor, Lot::Max), [refuses(TradeRefusal::CannotAfford)]);
+        assert_eq!(
+            buy(&negative(-199, 3), Lot::Click),
+            [refuses(TradeRefusal::CannotAfford)]
+        );
+        let rich = stall(5000, 0, 70);
+        assert_eq!(
+            buy(&rich, Lot::Count(51)),
+            [refuses(TradeRefusal::OutOfRange)]
+        );
+        assert_eq!(
+            buy(&rich, Lot::Count(0)),
+            [refuses(TradeRefusal::OutOfRange)]
+        );
+        for lot in [Lot::Click, Lot::Max, Lot::Count(1), Lot::Count(50)] {
+            assert_eq!(buy(&rich, lot), [], "{lot:?}");
+        }
+        let sell = |lot| {
+            let holding = stall(0, 25, 0);
+            verdicts(
+                &order_checks(Direction::Sell),
+                &row_order(&holding, 0, Direction::Sell, lot),
+            )
+        };
+        assert_eq!(sell(Lot::Count(26)), [refuses(TradeRefusal::OutOfRange)]);
+        assert_eq!(sell(Lot::Count(0)), [refuses(TradeRefusal::OutOfRange)]);
+        for lot in [Lot::Click, Lot::Max, Lot::Count(1), Lot::Count(25)] {
+            assert_eq!(sell(lot), [], "{lot:?}");
+        }
+    }
+
+    #[test]
+    fn an_order_reads_its_rows_rule_set() {
+        let market = Market {
+            rules: Rulebook::new(RuleSource::Bible),
+            ..stall(0, 0, 0)
+        };
+        let order = row_order(&market, 0, Direction::Buy, Lot::Click);
+        assert_eq!(order.rulebook(), &Rulebook::new(RuleSource::Bible));
+        assert_eq!(
+            trade(&market, 0).rulebook(),
+            &Rulebook::new(RuleSource::Bible)
+        );
+    }
+
+    #[test]
+    fn the_snapshot_reads_its_rules_from_its_rule_set() {
+        let engine = dear(32_766_999);
+        let bible = Market {
+            rules: Rulebook::new(RuleSource::Bible),
+            ..engine.clone()
+        };
+        let buy = |market: &Market, lot| market.tons(order(0, FOOD, Direction::Buy, lot));
+        assert_eq!(buy(&engine, Lot::Click), Ok(10));
+        assert_eq!(buy(&bible, Lot::Click), Ok(1));
+        assert_eq!(buy(&engine, Lot::Max), Ok(1000));
+        assert_eq!(buy(&bible, Lot::Max), Ok(999));
+        assert_eq!(engine.row_max(0, Direction::Buy), Some(1000));
+        assert_eq!(bible.row_max(0, Direction::Buy), Some(999));
+        let in_debt = negative(-200, 3);
+        let none = Market {
+            rules: Rulebook::new(RuleSource::Bible),
+            ..in_debt.clone()
+        };
+        let opals = order(0, OPALS, Direction::Buy, Lot::Click);
+        assert_eq!(in_debt.tons(opals), Ok(1));
+        assert_eq!(none.tons(opals), Err(TradeRefusal::CannotAfford));
+    }
+
+    #[test]
+    fn the_tons_rules_cite_the_originals_addresses() {
+        let cited = [
+            click_lot().about().reproduces(),
+            cash_divided().about().reproduces(),
+            quotient().about().reproduces(),
+            click_quotient().about().reproduces(),
+            buy_most().about().reproduces(),
+            sell_most().about().reproduces(),
+        ];
+        assert_eq!(
+            cited,
+            [
+                "`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa",
+                "`_DoTradeDialog` @0x5e21d-0x5e234",
+                "`_DoTradeDialog` @0x5e21d-0x5e234",
+                "`_DoTradeDialog` @0x5e268-0x5e278",
+                "`_DoTradeDialog` @0x5e23a-0x5e25a",
+                "`_DoTradeDialog` @0x5e44f-0x5e47f",
+            ]
+        );
+        let order_cited: Vec<_> = [Direction::Buy, Direction::Sell]
+            .into_iter()
+            .flat_map(|direction| {
+                order_checks(direction)
+                    .descriptors()
+                    .map(Descriptor::reproduces)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            order_cited,
+            [
+                "`_DoTradeDialog` `jle` @0x5e27d",
+                "`_DoTradeDialog` `jle` @0x5e27d skips none; the quantity dialog gives no more than the most",
+                "`_DoTradeDialog` `jle` @0x5e4d8 skips none; the quantity dialog gives no more than the most",
+            ]
+        );
     }
 
     #[test]

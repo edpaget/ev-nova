@@ -16,10 +16,10 @@ additional_cargo_args = ["--all-features"]
 
 exclude_re = [
     # The exchange's single-float quotient holds a price past 16 bits at
-    # i16::MIN when it is below 0 and i16::MAX otherwise. `Market::quotient`
+    # i16::MIN when it is below 0 and i16::MAX otherwise. `engine_quotient`
     # has already returned for a price of 0, so `price < 0` and
     # `price <= 0` choose the same.
-    "replace < with <= in Market::quotient",
+    "replace < with <= in engine_quotient",
     # Cleaning a legal record raises one below none to none: with `<=` a
     # record of none is set to none too, which changes nothing.
     "replace < with <= in clean_records",
