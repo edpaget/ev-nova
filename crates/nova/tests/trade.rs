@@ -43,7 +43,7 @@ use nova_render::{Batch, FontFaces, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
-use nova_sim::{Good, Pilot, PilotKeeper, PilotStore, RuleSource};
+use nova_sim::{Good, Pilot, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook};
 use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
@@ -369,7 +369,7 @@ impl Harness {
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let screen = start_screen(Rc::clone(&data))
-            .with_trade_lot(trade_lot)
+            .with_rules(Rulebook::default().with_override(RuleKey::TradeLot, trade_lot))
             .with_pilots(Some(keeper), metrics.clone())
             .with_dialogs(Rc::new(interface()), metrics);
         Self {

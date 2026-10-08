@@ -2149,7 +2149,7 @@ fn a_hail_option_registered_at_the_edge_shows_its_button_and_its_reply() {
 
 // Escorts.
 
-use nova_sim::{AiType, EscortOrder, NovaAi, RuleSource};
+use nova_sim::{AiType, EscortOrder, NovaAi, RuleKey, RuleSource};
 
 /// A `sÿst` at map (`x`, 0) with these hyperlinks, `stellar` if any, and
 /// `dudes` at an equal share, one ship of each on average; independent.
@@ -2650,7 +2650,7 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
         let source = saved_escort_orders(text);
         let store = MemoryPilots::new();
         let mut game = escorted(&store, &[], &[130], |screen| {
-            screen.with_escort_orders(source)
+            screen.with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source))
         });
         game.tap(Key::Char('d'));
         let shown = run_texts(&game.frame());
@@ -2674,7 +2674,7 @@ fn standing_orders_are_saved_and_reset_on_reopening_unless_the_settings_keep_the
         let mut game = reopened(&store, &[], |screen| {
             screen
                 .with_behaviour(escorts_only())
-                .with_escort_orders(source)
+                .with_rules(Rulebook::default().with_override(RuleKey::EscortOrders, source))
         });
         game.open_pilot_to(Showing::Spaceport);
         game.tap(Key::Escape);
@@ -2980,7 +2980,9 @@ fn by_the_settings_fighter_launch_a_fighter_attacks_the_target_at_once() {
     );
     assert_eq!(source, RuleSource::Bible);
     let store = MemoryPilots::new();
-    let mut game = carrying(&store, &[129], |screen| screen.with_fighter_launch(source));
+    let mut game = carrying(&store, &[129], |screen| {
+        screen.with_rules(Rulebook::default().with_override(RuleKey::FighterLaunch, source))
+    });
     game.tap(Key::Tab);
     let pirate = game.session().target().map(|npc| npc.id).expect("targeted");
     game.launch();
@@ -3086,7 +3088,9 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     );
     assert_eq!(source, RuleSource::Bible);
     let store = MemoryPilots::new();
-    let mut game = carrying(&store, &[], |screen| screen.with_fighter_recall(source));
+    let mut game = carrying(&store, &[], |screen| {
+        screen.with_rules(Rulebook::default().with_override(RuleKey::FighterRecall, source))
+    });
     game.launch();
     // L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
@@ -3095,7 +3099,9 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     let saved = nova_sim::save::decode(&store.text("Ada").expect("saved")).expect("a pilot");
     assert_eq!(saved.escorts(), []);
     assert_eq!(saved.owned(nova_sim::OutfitId(128)), 2, "both aboard");
-    let mut game = refly(&store, &[], |screen| screen.with_fighter_recall(source));
+    let mut game = refly(&store, &[], |screen| {
+        screen.with_rules(Rulebook::default().with_override(RuleKey::FighterRecall, source))
+    });
     game.open_pilot_to(Showing::Spaceport);
     game.tap(Key::Escape);
     game.frame();

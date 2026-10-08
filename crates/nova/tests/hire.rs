@@ -55,7 +55,9 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
 use nova_sim::hire::DEFECTED_ONE;
-use nova_sim::{Chance, Pilot, PilotKeeper, PilotStore, RuleKey, RuleSource, Session, ShipId};
+use nova_sim::{
+    Chance, Pilot, PilotKeeper, PilotStore, RuleKey, RuleSource, Rulebook, Session, ShipId,
+};
 use nova_view::Key;
 use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
@@ -860,7 +862,7 @@ fn a_take_off_pays_a_days_wages_unless_the_settings_choose_the_other_reading() {
         let store = MemoryPilots::new();
         let pilot = hiring_already(&ada(), 1000, true);
         let mut game = Game::with_pilot(&store, &pilot, Showing::Spaceport, |screen| {
-            screen.with_take_off_pay(source)
+            screen.with_rules(Rulebook::default().with_override(RuleKey::TakeOffPay, source))
         });
         game.tap(Key::Escape);
         assert_eq!(game.showing(), Showing::Flight, "{text}");
