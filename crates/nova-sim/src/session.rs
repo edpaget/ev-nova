@@ -5845,7 +5845,7 @@ mod tests {
     }
 
     #[test]
-    fn buying_a_ship_or_using_a_capture_as_my_ship_keeps_the_ships_name() {
+    fn buying_a_ship_keeps_the_ships_name() {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);
         session.pilot.ship_name = Some("Kestrel".to_owned());
@@ -9151,6 +9151,7 @@ mod tests {
         session.pilot.outfits = BTreeMap::from([(OutfitId(400), 1), (OutfitId(401), 2)]);
         session.pilot.cargo.insert(Good::Commodity(2), 4);
         session.pilot.cash = 777;
+        session.pilot.ship_name = Some("Kestrel".to_owned());
         let trader = &mut session.traffic.npcs_mut()[0];
         trader.state.position = Vec2::new(5.0, -3.0);
         trader.state.velocity = Vec2::new(0.25, 0.0);
@@ -9171,6 +9172,7 @@ mod tests {
         );
         assert_eq!(chance.asked, [300], "the fuel drawn below its Fuel");
         assert_eq!(session.ship(), ShipId(129));
+        assert_eq!(session.pilot().ship_name(), Some("Kestrel"), "unrenamed");
         assert_eq!(
             *session.player(),
             ShipState {

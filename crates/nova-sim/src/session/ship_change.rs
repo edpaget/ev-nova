@@ -243,11 +243,11 @@ impl Session {
 
     /// Changes the player's ship to class `ship`, its outfits carried as
     /// `carry` says and held to their `Max` when `clamp` (see the module
-    /// docs), and says whether it did: not when the session has no
-    /// record of the class, which changes nothing.
-    pub(crate) fn change_ship(&mut self, ship: ShipId, carry: OutfitCarry, clamp: bool) -> bool {
+    /// docs); nothing changes when the session has no record of the
+    /// class.
+    fn change_ship(&mut self, ship: ShipId, carry: OutfitCarry, clamp: bool) {
         let Some(record) = self.ship_record(ship).cloned() else {
-            return false;
+            return;
         };
         let before = self.pilot.reserves;
         let defaults = pilot::tally(record.defaults.iter().copied());
@@ -267,21 +267,16 @@ impl Session {
         }
         self.bump_armor();
         self.save_due = true;
-        true
     }
 
     /// Raises the player's armour [`ARMOR_BUMP`] at a time, never past
-    /// its most, while the session's disable rule has its ship disabled.
+    /// its most, while the session's disable rule has its ship disabled,
+    /// as the original's loop does (@0x15677-0x156c5). It ends at the
+    /// most, so a rule that never lets the ship fly still ends.
     fn bump_armor(&mut self) {
         let rule = Rc::clone(&self.disable_rule.0);
         let armor = &mut self.pilot.reserves.armor;
-        // At most the steps up to its most, so a rule that never lets it
-        // fly still ends.
-        let steps = (armor.max - armor.now).ceil().max(0.0) as u32;
-        for _ in 0..steps {
-            if !rule.disabled(*armor, &self.hull) {
-                return;
-            }
+        while armor.now < armor.max && rule.disabled(*armor, &self.hull) {
             armor.now = (armor.now + ARMOR_BUMP).min(armor.max);
         }
     }
@@ -964,6 +959,14 @@ mod tests {
     }
 
     // T.
+
+    #[test]
+    fn the_string_lists_print_as_such_and_are_equal_only_to_themselves() {
+        let none = Strings::none();
+        assert_eq!(format!("{none:?}"), "Strings");
+        assert_eq!(none, none.clone());
+        assert_ne!(none, Strings::none(), "another list");
+    }
 
     /// String lists by ID, recording each list asked for.
     #[derive(Debug, Default)]
