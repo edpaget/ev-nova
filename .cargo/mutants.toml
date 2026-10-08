@@ -120,7 +120,7 @@ exclude_re = [
     "nova-sim/src/control\\.rs:\\d+:\\d+: replace \\+ with (-|\\*)$",
     # A fresh pilot is male, which is `Gender`'s default, so its body and
     # `Default::default()` are the same.
-    "replace <impl PilotFacts for FreshPilot>::gender -> crate::pilot::Gender with Default::default\\(\\)",
+    "replace <impl PilotFacts for FreshPilot>::gender -> (crate::pilot::)?Gender with Default::default\\(\\)",
     # The session's pilot view counts the game as paid for always (the
     # engine takes it as registered), so `Session`'s `paid`, which asks
     # that view, and `true` are the same.
