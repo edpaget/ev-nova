@@ -18,6 +18,9 @@
 //!   a scrolling box with a Done button.
 //! - [`text_field`]: a one-line [`TextField`] that typed characters fill
 //!   and Backspace empties.
+//! - [`edit_dialog`]: the edit-field modal shell ([`EditDialog`]) the
+//!   "Text Input" and quantity dialogs share, each with its own
+//!   [`Confirm`] policy.
 //! - [`text_input`]: the "Text Input" dialog ([`TextInputDialog`]): a
 //!   prompt and a line of text to type, such as the new ship's name.
 //! - [`quantity`]: the quantity dialog ([`QuantityDialog`]): how many
@@ -44,6 +47,7 @@ pub mod comm;
 pub mod data;
 pub mod desc;
 pub mod dialog;
+pub mod edit_dialog;
 pub mod new_pilot;
 pub mod plunder;
 pub mod prefs;
@@ -62,6 +66,7 @@ pub use desc::DescDialog;
 pub use dialog::{
     Dialog, DialogEvent, DialogFrame, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role,
 };
+pub use edit_dialog::{Confirm, EditDialog, EditItems};
 pub use new_pilot::{NewPilotDialog, NewPilotOutcome};
 pub use plunder::{AssignmentDialog, PlunderDialog, PlunderShown};
 pub use prefs::PrefsDialog;

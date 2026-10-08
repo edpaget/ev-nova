@@ -14,31 +14,25 @@
 //! no cancel item: Escape does nothing, and only a click on Cancel
 //! declines, as the count 0 (@0x56fae, @0x57138). Nothing filters what is
 //! typed; the key that opened it types nothing into it
-//! ([`QuantityDialog::flush_typed_key`]).
+//! ([`EditDialog::flush_typed_key`]).
 //!
 //! OK checks the field ([`check`]) and, refusing it, beeps (the alert,
-//! [`UiSound::Alert`], for the original's `SysBeep`), sets the field and
-//! stays open. Without the interface file, [`QuantityDialog::fallback`]
-//! lays out the same items itself.
+//! [`UiSound::Alert`](crate::sound::UiSound::Alert), for the original's
+//! `SysBeep`), sets the field and stays open. Without the interface file,
+//! [`QuantityDialog::fallback`] lays out the same items itself.
 //!
 //! The dialog has no stock frame: like "Text Input", it is drawn over a
-//! dark backdrop with a 1-unit outline.
+//! dark backdrop with a 1-unit outline. It is the shared edit-field shell
+//! ([`EditDialog`]) with the [`Count`] policy.
 
 use std::rc::Rc;
-use std::time::Duration;
 
-use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
-use crate::screen::{Screen, ScreenAction};
-use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 
-use super::button::{ButtonSkin, ButtonStyle};
-use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, Role, outline,
-};
-use super::prefs::{BACKDROP, BORDER};
+use super::button::ButtonStyle;
+use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement, Role};
+use super::edit_dialog::{Confirm, EditDialog, EditItems};
 use super::text_field::TextField;
 
 /// The dialog's `DLOG` (and `DITL`) ID.
@@ -95,32 +89,57 @@ pub fn check(text: &str, max: i64) -> Check {
     }
 }
 
-/// The quantity dialog: the prompt, the count typed, and OK or Cancel.
-#[derive(Clone)]
-pub struct QuantityDialog {
-    dialog: Dialog,
-    field: TextField,
+/// The quantity dialog's rule ([`check`]): OK confirms a count from 0 to
+/// `max`, and Cancel gives 0.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Count {
     /// The most OK confirms.
     max: i64,
-    metrics: Rc<dyn TextMetrics>,
-    /// The count chosen: 0 for Cancel.
-    outcome: Option<u32>,
-    /// Whether the next input is dropped if it is typed text.
-    flushing: bool,
-    sounds: Vec<Sound>,
 }
 
-impl std::fmt::Debug for QuantityDialog {
+impl Confirm for Count {
+    type Outcome = u32;
+
+    /// Confirms the count, or resets the field as [`check`] says.
+    fn confirm(&self, field: &mut TextField) -> Option<u32> {
+        match check(field.text(), self.max) {
+            Check::Accept(count) => Some(count),
+            Check::Reject(text) => {
+                field.set_text(&text);
+                None
+            }
+        }
+    }
+
+    /// Cancel is the count 0.
+    fn cancelled(&self) -> u32 {
+        0
+    }
+}
+
+/// The quantity dialog: the prompt, the count typed, and OK or Cancel.
+pub type QuantityDialog = EditDialog<Count>;
+
+impl std::fmt::Debug for EditDialog<Count> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QuantityDialog")
-            .field("text", &self.field.text())
-            .field("max", &self.max)
-            .field("outcome", &self.outcome)
+            .field("text", &self.field().text())
+            .field("max", &self.policy().max)
+            .field("outcome", &self.outcome())
             .finish_non_exhaustive()
     }
 }
 
-impl QuantityDialog {
+/// The items the shell drives.
+const ITEMS: EditItems = EditItems {
+    id: QUANTITY_DIALOG,
+    ok: OK_ITEM,
+    prompt: PROMPT_ITEM,
+    field: FIELD_ITEM,
+    cancel: CANCEL_ITEM,
+};
+
+impl EditDialog<Count> {
     /// The dialog `template` (stock `DLOG` 1003) asking `prompt`, OK
     /// titled `title` (say "Buy" and [`PROMPT`]), its field holding `max`,
     /// selected whole; its buttons labelled in `style` and its text
@@ -137,41 +156,27 @@ impl QuantityDialog {
         style: ButtonStyle,
         metrics: Rc<dyn TextMetrics>,
     ) -> Result<Self, String> {
-        let editable = matches!(
-            template.items.get(FIELD_ITEM - 1),
-            Some(ItemTemplate {
-                kind: ItemSpec::EditText(_),
-                ..
-            })
-        );
-        if !editable || template.items.len() < CANCEL_ITEM {
-            return Err(format!(
-                "DITL {QUANTITY_DIALOG} has no edit text item {FIELD_ITEM} and Cancel item \
-                 {CANCEL_ITEM}"
-            ));
-        }
         // `SetControlTitle` on item 1: a standard button keeps its title
         // from the template, so the copy laid out is retitled.
         let mut retitled = template.clone();
-        if let ItemSpec::Button(label) = &mut retitled.items[OK_ITEM - 1].kind {
+        if let Some(ItemTemplate {
+            kind: ItemSpec::Button(label),
+            ..
+        }) = retitled.items.get_mut(OK_ITEM - 1)
+        {
             title.clone_into(label);
         }
         let roles = [(OK_ITEM, Role::Button(title.to_owned()))];
-        let mut dialog = Dialog::new(&retitled, &roles, Rc::clone(&metrics))
-            .with_buttons(ButtonSkin::NOVA, style)
-            .with_default(Some(OK_ITEM))
-            .with_cancel(None);
-        dialog.set_text(PROMPT_ITEM, prompt);
-        let field_rect = dialog.item_bounds(FIELD_ITEM).expect("checked above");
-        Ok(Self {
-            dialog,
-            field: TextField::with_text(field_rect, usize::MAX, &max.to_string()),
-            max,
+        Self::laid_out(
+            &retitled,
+            ITEMS,
+            &roles,
+            prompt,
+            &max.to_string(),
+            Count { max },
+            style,
             metrics,
-            outcome: None,
-            flushing: false,
-            sounds: Vec::new(),
-        })
+        )
     }
 
     /// The dialog laid out without the interface file, as the stock one
@@ -187,41 +192,6 @@ impl QuantityDialog {
     ) -> Self {
         Self::new(&fallback_template(), max, title, prompt, style, metrics)
             .expect("the fallback has a field and Cancel")
-    }
-
-    /// Drops the next input if it is typed text, as the original's
-    /// keyDown that opened the dialog is consumed: the key that opened it
-    /// then types nothing into it. Any other input ends the flush.
-    pub fn flush_typed_key(&mut self) {
-        self.flushing = true;
-    }
-
-    /// The field.
-    #[must_use]
-    pub fn field(&self) -> &TextField {
-        &self.field
-    }
-
-    /// The dialog itself, for its layout.
-    #[must_use]
-    pub fn dialog(&self) -> &Dialog {
-        &self.dialog
-    }
-
-    /// The count chosen, once: 0 when Cancel was clicked.
-    pub fn take_outcome(&mut self) -> Option<u32> {
-        self.outcome.take()
-    }
-
-    /// OK: confirms the count, or beeps and resets the field.
-    fn confirm(&mut self) {
-        match check(self.field.text(), self.max) {
-            Check::Accept(count) => self.outcome = Some(count),
-            Check::Reject(text) => {
-                self.sounds.push(Sound::Ui(UiSound::Alert));
-                self.field.set_text(&text);
-            }
-        }
     }
 }
 
@@ -262,66 +232,18 @@ fn fallback_template() -> DialogTemplate {
     }
 }
 
-impl Screen for QuantityDialog {
-    /// Typed characters, Backspace and Space go to the field; after
-    /// [`flush_typed_key`](Self::flush_typed_key), the next typed
-    /// character is dropped. Everything else goes to the dialog: OK (or
-    /// Return) checks the count, and Cancel declines. It never quits.
-    fn input(&mut self, input: &Input) -> ScreenAction {
-        if std::mem::take(&mut self.flushing) && matches!(input, Input::Text(_)) {
-            return ScreenAction::None;
-        }
-        let typing = matches!(
-            input,
-            Input::Text(_)
-                | Input::Key {
-                    key: Key::Backspace | Key::Space,
-                    ..
-                }
-        );
-        if typing {
-            self.field.input(input);
-            return ScreenAction::None;
-        }
-        let event = self.dialog.input(input);
-        self.sounds.extend(self.dialog.take_sound().map(Sound::Ui));
-        match event {
-            Some(DialogEvent::Item(OK_ITEM)) => self.confirm(),
-            Some(DialogEvent::Item(CANCEL_ITEM)) => self.outcome = Some(0),
-            _ => {}
-        }
-        ScreenAction::None
-    }
-
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
-
-    /// The backdrop and its outline, the dialog, and the field.
-    fn draw(&self, list: &mut DrawList) {
-        let bounds = self.dialog.bounds();
-        fill_rect(list, bounds, BACKDROP);
-        outline(list, bounds, BORDER);
-        self.dialog.draw(list);
-        self.field.draw(&*self.metrics, list);
-    }
-
-    fn cancel_pointer(&mut self) {
-        self.dialog.cancel_pointer();
-    }
-
-    /// OK's and Cancel's sounds as they are clicked, and the alert as a
-    /// count is refused, in order.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
-    use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::draw::{DrawCommand, DrawList, fill_rect};
+    use crate::input::{Input, Key, MouseButton};
+    use crate::screen::Screen;
+    use crate::sound::{Sound, UiSound};
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::dialog::outline;
+    use crate::ui::prefs::{BACKDROP, BORDER};
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
@@ -426,7 +348,7 @@ mod tests {
     /// Replaces the field with `text` and presses Return: the outcome and
     /// the sounds made.
     fn entered(dialog: &mut QuantityDialog, text: &str) -> (Option<u32>, Vec<Sound>) {
-        dialog.field.set_text("");
+        dialog.field_mut().set_text("");
         typed(dialog, text);
         dialog.take_sounds();
         dialog.input(&key(Key::Enter));

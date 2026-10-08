@@ -12,33 +12,28 @@
 //! Return confirms (@0x5530a), and there is no cancel item: Escape does
 //! nothing, and only a click on Cancel declines. The original flushes
 //! pending events as it opens (@0x55422-0x55429), so the key that opened
-//! it types nothing into it ([`TextInputDialog::flush_typed_key`]).
+//! it types nothing into it ([`EditDialog::flush_typed_key`]).
 //!
 //! The field takes text of any length, but OK refuses one longer than
-//! the most asked for: it beeps (the alert, [`UiSound::Alert`]), selects
+//! the most asked for: it beeps (the alert,
+//! [`UiSound::Alert`](crate::sound::UiSound::Alert)), selects
 //! the first characters up to one less than that, and stays open
 //! (@0x554a9-0x554e7). An empty text is confirmed, and the text is never
 //! trimmed. Without the interface file, [`TextInputDialog::fallback`]
 //! lays out the same items itself. The pictures are not drawn yet.
 //!
 //! The dialog has no stock frame: like the New Pilot dialog, it is drawn
-//! over a dark backdrop with a 1-unit outline.
+//! over a dark backdrop with a 1-unit outline. It is the shared
+//! edit-field shell ([`EditDialog`]) with the [`Length`] policy.
 
 use std::rc::Rc;
-use std::time::Duration;
 
-use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
-use crate::input::{Input, Key};
-use crate::screen::{Screen, ScreenAction};
-use crate::sound::{Sound, UiSound};
 use crate::text::TextMetrics;
 
-use super::button::{ButtonSkin, ButtonStyle};
-use super::dialog::{
-    Dialog, DialogEvent, DialogTemplate, ItemSpec, ItemTemplate, Placement, outline,
-};
-use super::prefs::{BACKDROP, BORDER};
+use super::button::ButtonStyle;
+use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
+use super::edit_dialog::{Confirm, EditDialog, EditItems};
 use super::text_field::TextField;
 
 /// The dialog's `DLOG` (and `DITL`) ID.
@@ -61,30 +56,55 @@ pub enum TextInputOutcome {
     Cancel,
 }
 
-/// "Text Input": a prompt, the text typed, and OK or Cancel.
-#[derive(Clone)]
-pub struct TextInputDialog {
-    dialog: Dialog,
-    field: TextField,
+/// "Text Input"'s rule: OK confirms a text of at most `max_chars`
+/// characters, and refuses a longer one selecting the first characters up
+/// to one less.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Length {
     /// The longest text OK confirms, in characters.
     max_chars: usize,
-    metrics: Rc<dyn TextMetrics>,
-    outcome: Option<TextInputOutcome>,
-    /// Whether the next input is dropped if it is typed text.
-    flushing: bool,
-    sounds: Vec<Sound>,
 }
 
-impl std::fmt::Debug for TextInputDialog {
+impl Confirm for Length {
+    type Outcome = TextInputOutcome;
+
+    /// Confirms the text, or refuses one too long.
+    fn confirm(&self, field: &mut TextField) -> Option<TextInputOutcome> {
+        if field.text().chars().count() > self.max_chars {
+            field.select_first(self.max_chars.saturating_sub(1));
+            return None;
+        }
+        Some(TextInputOutcome::Confirm(field.text().to_owned()))
+    }
+
+    /// Cancel declines.
+    fn cancelled(&self) -> TextInputOutcome {
+        TextInputOutcome::Cancel
+    }
+}
+
+/// "Text Input": a prompt, the text typed, and OK or Cancel.
+pub type TextInputDialog = EditDialog<Length>;
+
+impl std::fmt::Debug for EditDialog<Length> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextInputDialog")
-            .field("text", &self.field.text())
-            .field("outcome", &self.outcome)
+            .field("text", &self.field().text())
+            .field("outcome", &self.outcome())
             .finish_non_exhaustive()
     }
 }
 
-impl TextInputDialog {
+/// The items the shell drives.
+const ITEMS: EditItems = EditItems {
+    id: TEXT_INPUT_DIALOG,
+    ok: OK_ITEM,
+    prompt: PROMPT_ITEM,
+    field: FIELD_ITEM,
+    cancel: CANCEL_ITEM,
+};
+
+impl EditDialog<Length> {
     /// The dialog `template` (stock `DLOG` 3001) asking `prompt`, its
     /// field holding `default`, selected whole, and confirming no more
     /// than `max_chars` characters; its buttons labelled in `style` and
@@ -101,34 +121,16 @@ impl TextInputDialog {
         style: ButtonStyle,
         metrics: Rc<dyn TextMetrics>,
     ) -> Result<Self, String> {
-        let editable = matches!(
-            template.items.get(FIELD_ITEM - 1),
-            Some(ItemTemplate {
-                kind: ItemSpec::EditText(_),
-                ..
-            })
-        );
-        if !editable || template.items.len() < CANCEL_ITEM {
-            return Err(format!(
-                "DITL {TEXT_INPUT_DIALOG} has no edit text item {FIELD_ITEM} and Cancel item \
-                 {CANCEL_ITEM}"
-            ));
-        }
-        let mut dialog = Dialog::new(template, &[], Rc::clone(&metrics))
-            .with_buttons(ButtonSkin::NOVA, style)
-            .with_default(Some(OK_ITEM))
-            .with_cancel(None);
-        dialog.set_text(PROMPT_ITEM, prompt);
-        let field_rect = dialog.item_bounds(FIELD_ITEM).expect("checked above");
-        Ok(Self {
-            dialog,
-            field: TextField::with_text(field_rect, usize::MAX, default),
-            max_chars,
+        Self::laid_out(
+            template,
+            ITEMS,
+            &[],
+            prompt,
+            default,
+            Length { max_chars },
+            style,
             metrics,
-            outcome: None,
-            flushing: false,
-            sounds: Vec::new(),
-        })
+        )
     }
 
     /// The dialog laid out without the interface file, as the stock one
@@ -150,41 +152,6 @@ impl TextInputDialog {
             metrics,
         )
         .expect("the fallback has a field and Cancel")
-    }
-
-    /// Drops the next input if it is typed text, as the original flushes
-    /// the events pending as it opens: the key that opened the dialog
-    /// then types nothing into it. Any other input ends the flush.
-    pub fn flush_typed_key(&mut self) {
-        self.flushing = true;
-    }
-
-    /// The field.
-    #[must_use]
-    pub fn field(&self) -> &TextField {
-        &self.field
-    }
-
-    /// The dialog itself, for its layout.
-    #[must_use]
-    pub fn dialog(&self) -> &Dialog {
-        &self.dialog
-    }
-
-    /// What the player chose, once.
-    pub fn take_outcome(&mut self) -> Option<TextInputOutcome> {
-        self.outcome.take()
-    }
-
-    /// OK: confirms the text, or refuses one too long.
-    fn confirm(&mut self) {
-        let text = self.field.text();
-        if text.chars().count() > self.max_chars {
-            self.sounds.push(Sound::Ui(UiSound::Alert));
-            self.field.select_first(self.max_chars.saturating_sub(1));
-            return;
-        }
-        self.outcome = Some(TextInputOutcome::Confirm(text.to_owned()));
     }
 }
 
@@ -228,67 +195,16 @@ fn fallback_template() -> DialogTemplate {
     }
 }
 
-impl Screen for TextInputDialog {
-    /// Typed characters, Backspace and Space go to the field (Space types
-    /// only a space); after [`flush_typed_key`](Self::flush_typed_key), the
-    /// next typed character is dropped. Everything else goes to the
-    /// dialog: OK (or Return) confirms, and Cancel declines. It never
-    /// quits.
-    fn input(&mut self, input: &Input) -> ScreenAction {
-        if std::mem::take(&mut self.flushing) && matches!(input, Input::Text(_)) {
-            return ScreenAction::None;
-        }
-        let typing = matches!(
-            input,
-            Input::Text(_)
-                | Input::Key {
-                    key: Key::Backspace | Key::Space,
-                    ..
-                }
-        );
-        if typing {
-            self.field.input(input);
-            return ScreenAction::None;
-        }
-        let event = self.dialog.input(input);
-        self.sounds.extend(self.dialog.take_sound().map(Sound::Ui));
-        match event {
-            Some(DialogEvent::Item(OK_ITEM)) => self.confirm(),
-            Some(DialogEvent::Item(CANCEL_ITEM)) => self.outcome = Some(TextInputOutcome::Cancel),
-            _ => {}
-        }
-        ScreenAction::None
-    }
-
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
-
-    /// The backdrop and its outline, the dialog, and the field.
-    fn draw(&self, list: &mut DrawList) {
-        let bounds = self.dialog.bounds();
-        fill_rect(list, bounds, BACKDROP);
-        outline(list, bounds, BORDER);
-        self.dialog.draw(list);
-        self.field.draw(&*self.metrics, list);
-    }
-
-    fn cancel_pointer(&mut self) {
-        self.dialog.cancel_pointer();
-    }
-
-    /// OK's and Cancel's sounds as they are clicked, and the alert as a
-    /// text too long is refused, in order.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draw::DrawCommand;
-    use crate::input::MouseButton;
+    use crate::draw::{DrawCommand, DrawList, fill_rect};
+    use crate::input::{Input, Key, MouseButton};
+    use crate::screen::Screen;
+    use crate::sound::{Sound, UiSound};
     use crate::text::fixture::MonoMetrics;
+    use crate::ui::dialog::outline;
+    use crate::ui::prefs::{BACKDROP, BORDER};
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
         Bounds::at(Point::new(x, y), w, h)
