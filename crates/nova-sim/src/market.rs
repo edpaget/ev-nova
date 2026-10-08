@@ -626,7 +626,7 @@ impl Market {
 
     /// The row of `good` that trades `direction`: for a buy, the row of
     /// it the stellar sells, and for a sale, the row it buys. A `jünk`
-    /// listed both ways has one row each way (see [`market`]).
+    /// listed both ways has one row each way (see [`market`](crate::market)).
     #[must_use]
     pub fn trading(&self, good: Good, direction: Direction) -> Option<&MarketRow> {
         self.rows
