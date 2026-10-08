@@ -1819,6 +1819,11 @@ mod tests {
         );
         assert_eq!(holds_shop(-1, &[(MORE_CARGO, 5)], 1), Ok(()), "a cargo pod");
         assert_eq!(
+            holds_shop(-1, &[(MORE_CARGO, 0)], 0),
+            Ok(()),
+            "a ModVal of none"
+        );
+        assert_eq!(
             holds_shop(-1, &[(MORE_CARGO, -5), (MORE_CARGO, 5)], 0),
             Ok(()),
             "the last cargo mod counts"
