@@ -53,7 +53,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
-use crate::ui::quantity::QuantityDialog;
+use crate::ui::quantity::{PROMPT, QuantityDialog};
 
 /// The "Trade" dialog's `DLOG` (and `DITL`) ID.
 pub const TRADE_DIALOG: i16 = 1001;
@@ -334,11 +334,23 @@ impl TradeScreen {
             return;
         };
         let metrics = Rc::clone(&laid.metrics.0);
+        let title = match direction {
+            Direction::Buy => BUY_LABEL,
+            Direction::Sell => SELL_LABEL,
+        };
         let built = laid.quantity.as_ref().and_then(|template| {
-            QuantityDialog::new(template, max, direction, self.style, Rc::clone(&metrics)).ok()
+            QuantityDialog::new(
+                template,
+                max,
+                title,
+                PROMPT,
+                self.style,
+                Rc::clone(&metrics),
+            )
+            .ok()
         });
-        let mut dialog =
-            built.unwrap_or_else(|| QuantityDialog::fallback(max, direction, self.style, metrics));
+        let mut dialog = built
+            .unwrap_or_else(|| QuantityDialog::fallback(max, title, PROMPT, self.style, metrics));
         if by_key {
             dialog.flush_typed_key();
         }

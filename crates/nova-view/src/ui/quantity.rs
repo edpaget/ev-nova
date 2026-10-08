@@ -5,10 +5,10 @@
 //! when Option is held on Buy or Sell (`_DoTradeDialog` @0x5e211,
 //! @0x5e45c), and at the outfitter and for a race bet too. The stock
 //! dialog is 172 x 72, centred: OK (item 1), the prompt (item 2), the
-//! count (item 3) and Cancel (item 4). OK is titled "Buy" or "Sell"
-//! (`STR#` 150 #2/#3, @0x56e66-0x56ebd) and the prompt replaced with
-//! "Enter quantity:" (`STR#` 2002 #371, @0x56ec2-0x56f2c), which never
-//! names the good. The field opens holding the maximum
+//! count (item 3) and Cancel (item 4). The caller titles OK and replaces
+//! the prompt: at the exchange "Buy" or "Sell" (`STR#` 150 #2/#3,
+//! @0x56e66-0x56ebd) and "Enter quantity:" ([`PROMPT`], `STR#` 2002 #371,
+//! @0x56ec2-0x56f2c), which never names the good. The field opens holding the maximum
 //! (@0x56f61-0x56f86), selected whole (@0x56e0b-0x56e28), so typing
 //! replaces it. OK is the default item, so Return confirms, and there is
 //! no cancel item: Escape does nothing, and only a click on Cancel
@@ -27,14 +27,11 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::Direction;
-
 use crate::draw::{DrawList, fill_rect};
 use crate::geometry::{Bounds, Point};
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
-use crate::spaceport::trade::{BUY_LABEL, SELL_LABEL};
 use crate::text::TextMetrics;
 
 use super::button::{ButtonSkin, ButtonStyle};
@@ -55,7 +52,7 @@ pub const FIELD_ITEM: usize = 3;
 /// Cancel's item.
 pub const CANCEL_ITEM: usize = 4;
 
-/// The prompt: `STR#` 2002 #371.
+/// The prompt asking for a count of goods or outfits: `STR#` 2002 #371.
 pub const PROMPT: &str = "Enter quantity:";
 
 /// What OK makes of the field ([`check`]).
@@ -124,8 +121,8 @@ impl std::fmt::Debug for QuantityDialog {
 }
 
 impl QuantityDialog {
-    /// The dialog `template` (stock `DLOG` 1003) asking how many to trade
-    /// `direction`, OK titled "Buy" or "Sell", its field holding `max`,
+    /// The dialog `template` (stock `DLOG` 1003) asking `prompt`, OK
+    /// titled `title` (say "Buy" and [`PROMPT`]), its field holding `max`,
     /// selected whole; its buttons labelled in `style` and its text
     /// measured by `metrics`. `max` may be 0 or less.
     ///
@@ -135,7 +132,8 @@ impl QuantityDialog {
     pub fn new(
         template: &DialogTemplate,
         max: i64,
-        direction: Direction,
+        title: &str,
+        prompt: &str,
         style: ButtonStyle,
         metrics: Rc<dyn TextMetrics>,
     ) -> Result<Self, String> {
@@ -152,10 +150,6 @@ impl QuantityDialog {
                  {CANCEL_ITEM}"
             ));
         }
-        let title = match direction {
-            Direction::Buy => BUY_LABEL,
-            Direction::Sell => SELL_LABEL,
-        };
         // `SetControlTitle` on item 1: a standard button keeps its title
         // from the template, so the copy laid out is retitled.
         let mut retitled = template.clone();
@@ -167,7 +161,7 @@ impl QuantityDialog {
             .with_buttons(ButtonSkin::NOVA, style)
             .with_default(Some(OK_ITEM))
             .with_cancel(None);
-        dialog.set_text(PROMPT_ITEM, PROMPT);
+        dialog.set_text(PROMPT_ITEM, prompt);
         let field_rect = dialog.item_bounds(FIELD_ITEM).expect("checked above");
         Ok(Self {
             dialog,
@@ -181,15 +175,17 @@ impl QuantityDialog {
     }
 
     /// The dialog laid out without the interface file, as the stock one
-    /// is: OK, the prompt, the field and Cancel, centred.
+    /// is: OK titled `title`, the prompt `prompt`, the field and Cancel,
+    /// centred.
     #[must_use]
     pub fn fallback(
         max: i64,
-        direction: Direction,
+        title: &str,
+        prompt: &str,
         style: ButtonStyle,
         metrics: Rc<dyn TextMetrics>,
     ) -> Self {
-        Self::new(&fallback_template(), max, direction, style, metrics)
+        Self::new(&fallback_template(), max, title, prompt, style, metrics)
             .expect("the fallback has a field and Cancel")
     }
 
@@ -370,11 +366,12 @@ mod tests {
         }
     }
 
-    fn dialog_of(max: i64, direction: Direction) -> QuantityDialog {
+    fn dialog_of(max: i64, title: &str) -> QuantityDialog {
         QuantityDialog::new(
             &stock(),
             max,
-            direction,
+            title,
+            PROMPT,
             ButtonStyle::STOCK,
             Rc::new(MonoMetrics),
         )
@@ -382,7 +379,7 @@ mod tests {
     }
 
     fn dialog() -> QuantityDialog {
-        dialog_of(12, Direction::Buy)
+        dialog_of(12, "Buy")
     }
 
     fn key(key: Key) -> Input {
@@ -460,8 +457,30 @@ mod tests {
 
     #[test]
     fn a_sale_titles_ok_sell() {
-        let dialog = dialog_of(3, Direction::Sell);
+        let dialog = dialog_of(3, "Sell");
         assert_eq!(texts(&dialog), ["Sell", "Enter quantity:", "Cancel", "3"]);
+    }
+
+    #[test]
+    fn the_caller_gives_the_title_and_prompt() {
+        let dialog = QuantityDialog::new(
+            &stock(),
+            5,
+            "Bet",
+            "Amount to bet:",
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+        .expect("builds");
+        assert_eq!(texts(&dialog), ["Bet", "Amount to bet:", "Cancel", "5"]);
+        let fallback = QuantityDialog::fallback(
+            5,
+            "Bet",
+            "Amount to bet:",
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        );
+        assert_eq!(texts(&fallback), ["Bet", "Amount to bet:", "Cancel", "5"]);
     }
 
     #[test]
@@ -471,7 +490,8 @@ mod tests {
         let dialog = QuantityDialog::new(
             &template,
             3,
-            Direction::Sell,
+            "Sell",
+            PROMPT,
             ButtonStyle::STOCK,
             Rc::new(MonoMetrics),
         )
@@ -558,7 +578,7 @@ mod tests {
 
     #[test]
     fn below_a_maximum_under_nothing_only_cancel_leaves() {
-        let mut dialog = dialog_of(-2, Direction::Buy);
+        let mut dialog = dialog_of(-2, "Buy");
         assert_eq!(dialog.field().text(), "-2");
         assert_eq!(entered(&mut dialog, "0"), (None, vec![ALERT]));
         assert_eq!(dialog.field().text(), "-2");
@@ -573,7 +593,7 @@ mod tests {
 
     #[test]
     fn at_a_maximum_of_nothing_0_is_confirmed() {
-        let mut dialog = dialog_of(0, Direction::Sell);
+        let mut dialog = dialog_of(0, "Sell");
         dialog.input(&key(Key::Enter));
         assert_eq!(dialog.take_outcome(), Some(0));
     }
@@ -654,7 +674,8 @@ mod tests {
             QuantityDialog::new(
                 template,
                 12,
-                Direction::Buy,
+                "Buy",
+                PROMPT,
                 ButtonStyle::STOCK,
                 Rc::new(MonoMetrics),
             )
@@ -674,7 +695,7 @@ mod tests {
     #[test]
     fn the_fallback_lays_out_the_same_items_centred() {
         let mut dialog =
-            QuantityDialog::fallback(12, Direction::Buy, ButtonStyle::STOCK, Rc::new(MonoMetrics));
+            QuantityDialog::fallback(12, "Buy", PROMPT, ButtonStyle::STOCK, Rc::new(MonoMetrics));
         let bounds = dialog.dialog().bounds();
         assert_eq!((bounds.width(), bounds.height()), (172.0, 72.0));
         let origin = bounds.min;
