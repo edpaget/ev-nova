@@ -546,6 +546,9 @@ pub struct Session {
     /// What Option does with Buy or Sell at the outfitter (see
     /// [`Session::with_outfit_count`]).
     outfit_count: RuleSource,
+    /// How a sale at the outfitter is refused for the free mass (see
+    /// [`Session::with_sale_mass`]).
+    sale_mass: RuleSource,
     /// How an active `öops` event prices its commodity, how a `jünk` of
     /// negative or zero price is traded, which ways a `jünk` row trades,
     /// how many tons a plain trade moves, how the most a buy moves
@@ -701,6 +704,7 @@ impl Session {
             launcher_sale: RuleSource::Engine,
             raised_max: RuleSource::Engine,
             outfit_count: RuleSource::Engine,
+            sale_mass: RuleSource::Engine,
             exchange_rules: market::ExchangeRules::default(),
             purchase_cargo: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
@@ -2190,6 +2194,25 @@ impl Session {
         self.outfit_count
     }
 
+    /// This session with a sale at the outfitter refused for the free
+    /// mass as `source` says
+    /// ([`RuleKey::SaleMass`](crate::RuleKey::SaleMass)): by the engine's
+    /// default, only an outfit of negative mass, when the free mass read
+    /// clamped at 0 plus its mass is below 0; by the other reading, any
+    /// sale that would leave the free mass below 0.
+    #[must_use]
+    pub fn with_sale_mass(mut self, source: RuleSource) -> Self {
+        self.sale_mass = source;
+        self
+    }
+
+    /// How a sale is refused for the free mass: by the engine
+    /// ([`RuleSource::Engine`]) or whenever it would leave less than none.
+    #[must_use]
+    pub fn sale_mass(&self) -> RuleSource {
+        self.sale_mass
+    }
+
     /// This session with an active `öops` event pricing its commodity as
     /// `source` says ([`RuleKey::EventPrice`](crate::RuleKey::EventPrice)):
     /// by the engine's default, at its `BasePrice` plus its `PriceDelta`,
@@ -2249,6 +2272,7 @@ impl Session {
             raised_max: self.raised_max,
             bought: self.opening.bought.under(self.opening.limit),
             outfit_count: self.outfit_count,
+            sale_mass: self.sale_mass,
         }
         .outfitter(&self.pilot, &mut self.outfit_rolls, chance)
     }
@@ -6945,6 +6969,74 @@ mod tests {
             let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
             assert_eq!(outfitter.outfit_count, source, "{source:?}");
         }
+    }
+
+    #[test]
+    fn the_sale_mass_rule_round_trips_and_defaults_to_the_engine() {
+        let session = outfitted(&outfitting());
+        assert_eq!(session.sale_mass(), RuleSource::Engine);
+        let session = session.with_sale_mass(RuleSource::Bible);
+        assert_eq!(session.sale_mass(), RuleSource::Bible);
+        let session = session.with_sale_mass(RuleSource::Engine);
+        assert_eq!(session.sale_mass(), RuleSource::Engine);
+    }
+
+    /// A session landed at the outfitter over its mass limit: of its 30
+    /// tons free, a 50-ton outfit (311) and four 5-ton boosters take 70
+    /// and three pods (310) give back 30, so -10 tons are free.
+    fn over_the_mass_limit(source: RuleSource) -> Session {
+        let mut catalog = outfitting();
+        catalog.outfits[0].mass = 5;
+        catalog.outfits.push(OutfitRecord {
+            mass: -10,
+            ..outfit(310, &[])
+        });
+        catalog.outfits.push(OutfitRecord {
+            mass: 50,
+            ..outfit(311, &[])
+        });
+        let mut session = outfitted(&catalog).with_sale_mass(source);
+        session.pilot.outfits =
+            BTreeMap::from([(OutfitId(311), 1), (SPEED, 4), (OutfitId(310), 3)]);
+        let outfitter = session.outfitter(&mut NeverFires).expect("open");
+        assert_eq!(outfitter.free_mass, -10);
+        session
+    }
+
+    #[test]
+    fn by_the_engine_a_counted_sale_of_mass_0_or_more_sells_in_full_below_0_free() {
+        let mut session = over_the_mass_limit(RuleSource::Engine);
+        assert_eq!(
+            session.outfit_counted(sell(SPEED), 4, &mut NeverFires),
+            Ok(4),
+            "-10 free, each 5-ton booster sold regardless"
+        );
+        // Now 10 free: one pod leaves 0, and the next would leave -10.
+        let pod = OutfitId(310);
+        assert_eq!(session.outfit_counted(sell(pod), 3, &mut NeverFires), Ok(1));
+        assert_eq!(session.pilot().owned(pod), 2);
+    }
+
+    #[test]
+    fn by_the_engine_a_pod_is_refused_while_the_free_mass_is_below_0() {
+        let mut session = over_the_mass_limit(RuleSource::Engine);
+        assert_eq!(
+            session.outfit_counted(sell(OutfitId(310)), 3, &mut NeverFires),
+            Err(OutfitRefusal::NegativeFreeMass),
+            "max(-10, 0) - 10 < 0"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_counted_sale_below_0_free_is_refused_at_once() {
+        let mut session = over_the_mass_limit(RuleSource::Bible);
+        let before = session.pilot().clone();
+        assert_eq!(
+            session.outfit_counted(sell(SPEED), 4, &mut NeverFires),
+            Err(OutfitRefusal::NegativeFreeMass),
+            "-10 + 5 < 0"
+        );
+        assert_eq!(session.pilot(), &before);
     }
 
     #[test]

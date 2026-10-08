@@ -502,6 +502,20 @@ mod tests {
     }
 
     #[test]
+    fn the_sale_mass_rule_is_overridden_by_its_key() {
+        let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"sale_mass": "bible"}}"#);
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            rulebook,
+            engine().with_override(RuleKey::SaleMass, RuleSource::Bible)
+        );
+        let (rulebook, _) =
+            rulebook_of(r#"{"rules": "bible", "rule_overrides": {"sale_mass": "engine"}}"#);
+        assert_eq!(rulebook.source_for(RuleKey::SaleMass), RuleSource::Engine);
+        assert_eq!(rulebook.source_for(RuleKey::OutfitCount), RuleSource::Bible);
+    }
+
+    #[test]
     fn the_outfit_limit_rule_is_overridden_by_its_key() {
         let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"outfit_limit": "bible"}}"#);
         assert_eq!(warnings, Vec::<String>::new());

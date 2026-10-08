@@ -115,8 +115,13 @@
 //! [`OutfitFlags::REMOVE_AFTER_PURCHASE`] only pays. A sale is refused
 //! when the player owns none, the outfit is flagged
 //! [`OutfitFlags::CANNOT_SELL`], it is neither for sale here nor flagged
-//! [`OutfitFlags::SELL_ANYWHERE`], the ship would be left with negative
-//! free mass, it is one whose `Max` a `ModType` 27 item raises, while it
+//! [`OutfitFlags::SELL_ANYWHERE`], it lacks the free mass (by the engine,
+//! only an outfit of negative mass, when the free mass clamped at 0 plus
+//! its mass is below 0, so one of mass 0 or more sells even while the
+//! free mass is below 0; by the rulebook's other reading
+//! ([`RuleKey::SaleMass`](crate::RuleKey::SaleMass)), whenever the sale
+//! would leave the free mass below 0), it is one whose `Max` a
+//! `ModType` 27 item raises, while it
 //! holds more than that leaves (below), or it is a launcher whose
 //! ammunition must be sold first (below). A sale removes one and pays
 //! its [`refund`]: by the engine, the full price for an outfit bought
@@ -134,8 +139,10 @@
 //! for them, so whatever refuses the buy first plays no part. When
 //! `_HasMaxOfItem(item, 0, 0)` holds (@0x57dd6: the ammunition cap, the
 //! raised `Max`, the gun and turret limits), its refusal; otherwise, when
-//! the outfit's mass is above 0 and above the unclamped free mass
-//! (@0x57e33-0x57e45), the mass words by the count owned; otherwise none.
+//! the outfit's mass is above 0 and above `_ShipFreeMass`, the free mass
+//! clamped at 0 (@0x57e33-0x57e45, @0xb506-0xb50a; for a mass above 0
+//! that is the same as above the free mass), the mass words by the count
+//! owned; otherwise none.
 //!
 //! **Once an opening** (`_boughtMap` and `_boughtID`, [`Bought`]). By the
 //! engine, an outfit with a mod of [`EXPLORES_MAP`] (16) in any slot, or
@@ -365,7 +372,10 @@ pub enum OutfitRefusal {
     CannotSell,
     /// It is not for sale here, and cannot be sold anywhere.
     NotBoughtHere,
-    /// Selling it would leave the ship with negative free mass.
+    /// The ship lacks the free mass to sell it: by the engine, it is of
+    /// negative mass and the free mass clamped at 0 plus its mass is
+    /// below 0; by the other reading, selling it would leave the free
+    /// mass below 0 (see [`RuleKey::SaleMass`](crate::RuleKey::SaleMass)).
     NegativeFreeMass,
     /// The ship's guns are at its `MaxGun`, as `ModType` 45 changes it.
     GunLimit,
@@ -721,9 +731,29 @@ impl Bought {
 /// Whether an outfit of `mass` does not fit in `free` tons; only one of
 /// positive mass can lack it, whatever the free mass
 /// (`_CanBuyOutfitItem` @0x4e88a-0x4e892, `_OutfitDialogUpdate`
-/// @0x57e3c-0x57e45, both reading the unclamped free mass).
+/// @0x57e3c-0x57e45). Both read `_ShipFreeMass`, which clamps the free
+/// mass at 0 (@0xb506-0xb50a); for a positive mass, `mass > max(free, 0)`
+/// exactly when `mass > free`, so `free` is read unclamped here.
 fn lacks_mass(mass: i64, free: i64) -> bool {
     mass > 0 && mass > free
+}
+
+/// Whether a sale of an outfit of `mass` is refused for the ship's free
+/// mass, `free` tons before the sale, as `source` reads it
+/// ([`RuleKey::SaleMass`](crate::RuleKey::SaleMass)).
+///
+/// By the engine, an outfit of mass 0 or more is never checked
+/// (`_DoOutfitDialog` @0x5c735-0x5c73e, the mass from
+/// `_AdjustedItemMass`, which leaves a mass of 0 or less as it is); one of
+/// negative mass is refused when the free mass, clamped at 0 by
+/// `_ShipFreeMass` (@0xb506-0xb50a), plus its mass is below 0
+/// (@0x5c740-0x5c747). By the other reading, any sale is refused that
+/// would leave the unclamped free mass below 0.
+fn sale_lacks_mass(mass: i64, free: i64, source: RuleSource) -> bool {
+    match source {
+        RuleSource::Engine => mass < 0 && free.max(0) + mass < 0,
+        RuleSource::Bible => free + mass < 0,
+    }
 }
 
 /// Whether an outfit with `flags` is hidden from a player who owns none,
@@ -1023,6 +1053,8 @@ pub(crate) struct Shop<'a> {
     /// What Option does with Buy or Sell, carried to the outfitter
     /// ([`Outfitter::outfit_count`]).
     pub(crate) outfit_count: RuleSource,
+    /// How a sale is refused for the free mass ([`sale_lacks_mass`]).
+    pub(crate) sale_mass: RuleSource,
 }
 
 impl Shop<'_> {
@@ -1103,15 +1135,16 @@ impl Shop<'_> {
 
     /// Whether `pilot` can sell one of `record` here, or why not, with the
     /// names a refusal's words need put in `names`: `here` is whether it
-    /// can be sold here at all (for sale, or sold anywhere), and
-    /// `free_after` the ship's free mass once it is sold (see the module
-    /// docs).
+    /// can be sold here at all (for sale, or sold anywhere), `mass` its
+    /// mass and `free` the ship's free mass before it is sold (see the
+    /// module docs).
     fn sale(
         &self,
         record: &OutfitRecord,
         pilot: &Pilot,
         here: bool,
-        free_after: i64,
+        mass: i64,
+        free: i64,
         names: &mut BTreeMap<OutfitId, LcNames>,
     ) -> Result<(), OutfitRefusal> {
         let owned = pilot.owned(record.id);
@@ -1121,7 +1154,7 @@ impl Shop<'_> {
             Err(OutfitRefusal::CannotSell)
         } else if !here {
             Err(OutfitRefusal::NotBoughtHere)
-        } else if free_after < 0 {
+        } else if sale_lacks_mass(mass, free, self.sale_mass) {
             Err(OutfitRefusal::NegativeFreeMass)
         } else if let Some(refusal) = self
             .raised_first(record, owned, &pilot.outfits, names)
@@ -1275,7 +1308,8 @@ impl Shop<'_> {
                 record,
                 pilot,
                 for_sale || sells_anywhere,
-                free + mass,
+                mass,
+                free,
                 &mut names,
             );
             rows.push((
@@ -1414,6 +1448,7 @@ mod tests {
             raised_max: RuleSource::Engine,
             bought: Bought::default(),
             outfit_count: RuleSource::Engine,
+            sale_mass: RuleSource::Engine,
         }
     }
 
@@ -2088,6 +2123,7 @@ mod tests {
                 raised_max: RuleSource::Engine,
                 bought: Bought::default(),
                 outfit_count: RuleSource::Engine,
+                sale_mass: RuleSource::Engine,
             }
             .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
             .expect("open")
@@ -2210,6 +2246,7 @@ mod tests {
             raised_max: RuleSource::Engine,
             bought: Bought::default(),
             outfit_count: RuleSource::Engine,
+            sale_mass: RuleSource::Engine,
         }
         .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
         .expect("open")
@@ -2587,6 +2624,76 @@ mod tests {
         let zero = open(&to_none, &owning(&[(128, 1), (129, 1)]));
         assert_eq!(zero.free_mass, 20);
         assert_eq!(sell(&zero), Ok(()), "leaves none free");
+    }
+
+    #[test]
+    fn by_the_engine_only_an_outfit_of_negative_mass_lacks_mass_to_sell_on_the_clamped_free_mass() {
+        let engine = |mass, free| sale_lacks_mass(mass, free, RuleSource::Engine);
+        assert!(!engine(0, -5), "mass 0 is never checked");
+        assert!(!engine(10, -5), "positive mass is never checked");
+        assert!(engine(-1, -5), "the free mass reads 0, and 0 - 1 < 0");
+        assert!(engine(-1, 0), "0 - 1 < 0");
+        assert!(engine(-20, 10));
+        assert!(!engine(-20, 20), "leaves exactly none");
+        assert!(!engine(-20, 30));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_sale_lacks_mass_when_the_unclamped_free_mass_after_is_negative() {
+        let bible = |mass, free| sale_lacks_mass(mass, free, RuleSource::Bible);
+        assert!(bible(0, -5), "-5 + 0 < 0");
+        assert!(!bible(10, -5), "-5 + 10 = 5");
+        assert!(bible(3, -5), "-5 + 3 < 0, where the engine sells");
+        assert!(!bible(10, -10), "-10 + 10 = 0");
+        assert!(bible(-20, 10));
+        assert!(!bible(-20, 20), "leaves exactly none");
+    }
+
+    #[test]
+    fn by_the_engine_an_outfit_of_mass_0_or_more_sells_while_the_free_mass_is_below_0() {
+        // FAST has 30 tons free: 30 - 60 - 5 - 0 + 20 = -15.
+        let records = [
+            OutfitRecord {
+                mass: -20,
+                ..outfit(128, &[])
+            },
+            OutfitRecord {
+                mass: 60,
+                ..outfit(129, &[])
+            },
+            OutfitRecord {
+                mass: 5,
+                ..outfit(130, &[])
+            },
+            OutfitRecord {
+                mass: 0,
+                ..outfit(131, &[])
+            },
+        ];
+        let pilot = owning(&[(128, 1), (129, 1), (130, 1), (131, 1)]);
+        let site = port();
+        let sell_of = |source, id| {
+            let outfitter = Shop {
+                sale_mass: source,
+                ..shop(&records, &site)
+            }
+            .outfitter(&pilot, &mut DayRolls::default(), &mut NeverFires)
+            .expect("open");
+            assert_eq!(outfitter.free_mass, -15);
+            outfitter.check(OutfitOrder {
+                outfit: OutfitId(id),
+                direction: Direction::Sell,
+            })
+        };
+        let refused = Err(OutfitRefusal::NegativeFreeMass);
+        assert_eq!(sell_of(RuleSource::Engine, 131), Ok(()), "mass 0");
+        assert_eq!(sell_of(RuleSource::Engine, 130), Ok(()), "mass 5");
+        assert_eq!(sell_of(RuleSource::Engine, 129), Ok(()), "mass 60");
+        assert_eq!(sell_of(RuleSource::Engine, 128), refused, "mass -20");
+        assert_eq!(sell_of(RuleSource::Bible, 131), refused, "-15 + 0 < 0");
+        assert_eq!(sell_of(RuleSource::Bible, 130), refused, "-15 + 5 < 0");
+        assert_eq!(sell_of(RuleSource::Bible, 129), Ok(()), "-15 + 60 = 45");
+        assert_eq!(sell_of(RuleSource::Bible, 128), refused, "-15 - 20 < 0");
     }
 
     // Guns and turrets.

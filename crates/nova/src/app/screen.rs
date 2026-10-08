@@ -374,6 +374,9 @@ pub struct AppScreen {
     /// Whether Option on Buy or Sell at each flight's outfitter asks for
     /// a count or changes nothing.
     outfit_count: RuleSource,
+    /// Whether a sale at each flight's outfitter of an outfit of mass 0
+    /// or more is refused while the free mass is below 0.
+    sale_mass: RuleSource,
     /// Whether each take-off pays each flight's hired escorts a day.
     take_off_pay: RuleSource,
     /// Which wage each flight's hired escorts are paid.
@@ -478,6 +481,7 @@ impl AppScreen {
             outfit_limit: RuleSource::Engine,
             outfit_refund: RuleSource::Engine,
             outfit_count: RuleSource::Engine,
+            sale_mass: RuleSource::Engine,
             take_off_pay: RuleSource::Engine,
             escort_wage: RuleSource::Engine,
             hire_terms: Rc::new(NovaHire::default()),
@@ -774,6 +778,18 @@ impl AppScreen {
         }
     }
 
+    /// The router with a sale at each flight's outfitter refused for the
+    /// free mass as `source` says ([`FlightView::with_sale_mass`]); the
+    /// engine's (only an outfit of negative mass, against the free mass
+    /// clamped at 0) until another is given.
+    #[must_use]
+    pub fn with_sale_mass(self, source: RuleSource) -> Self {
+        Self {
+            sale_mass: source,
+            ..self
+        }
+    }
+
     /// The router with each take-off paying each flight's hired escorts a
     /// day's wages, or not, as `source` says
     /// ([`FlightView::with_take_off_pay`]); the engine's (it does) until
@@ -870,6 +886,7 @@ impl AppScreen {
             .with_outfit_limit(rulebook.source_for(RuleKey::OutfitLimit))
             .with_outfit_refund(rulebook.source_for(RuleKey::OutfitRefund))
             .with_outfit_count(rulebook.source_for(RuleKey::OutfitCount))
+            .with_sale_mass(rulebook.source_for(RuleKey::SaleMass))
             .with_take_off_pay(rulebook.source_for(RuleKey::TakeOffPay))
             .with_escort_wage(rulebook.source_for(RuleKey::EscortWage))
             .with_hire_terms(Rc::new(NovaHire::from_rulebook(rulebook)))
@@ -939,6 +956,7 @@ impl AppScreen {
             .with_outfit_limit(self.outfit_limit)
             .with_outfit_refund(self.outfit_refund)
             .with_outfit_count(self.outfit_count)
+            .with_sale_mass(self.sale_mass)
             .with_take_off_pay(self.take_off_pay)
             .with_escort_wage(self.escort_wage)
             .with_hire_terms(Rc::clone(&self.hire_terms))
@@ -6480,6 +6498,21 @@ mod tests {
     }
 
     #[test]
+    fn the_routers_sale_mass_reaches_every_flight() {
+        for source in RuleSource::ALL {
+            let mut screen = AppScreen::new(data()).with_sale_mass(source);
+            fly(&mut screen);
+            let session = flight(&screen).session().expect("flying");
+            assert_eq!(session.sale_mass(), source);
+            assert_eq!(session.outfit_count(), RuleSource::Engine);
+        }
+        let mut screen = AppScreen::new(data());
+        fly(&mut screen);
+        let session = flight(&screen).session().expect("flying");
+        assert_eq!(session.sale_mass(), RuleSource::Engine);
+    }
+
+    #[test]
     fn the_routers_outfit_limit_reaches_every_flight() {
         for source in RuleSource::ALL {
             let mut screen = AppScreen::new(data()).with_outfit_limit(source);
@@ -6574,6 +6607,7 @@ mod tests {
             ("outfit_limit", format!("{:?}", screen.outfit_limit)),
             ("outfit_refund", format!("{:?}", screen.outfit_refund)),
             ("outfit_count", format!("{:?}", screen.outfit_count)),
+            ("sale_mass", format!("{:?}", screen.sale_mass)),
             ("take_off_pay", format!("{:?}", screen.take_off_pay)),
             ("escort_wage", format!("{:?}", screen.escort_wage)),
             ("hire_terms", format!("{:?}", screen.hire_terms)),
@@ -6613,6 +6647,7 @@ mod tests {
             RuleKey::OutfitLimit => "outfit_limit",
             RuleKey::OutfitRefund => "outfit_refund",
             RuleKey::OutfitCount => "outfit_count",
+            RuleKey::SaleMass => "sale_mass",
             RuleKey::TakeOffPay => "take_off_pay",
             RuleKey::HireFee => "hire_terms",
             RuleKey::EscortWage => "escort_wage",

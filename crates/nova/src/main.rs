@@ -117,9 +117,12 @@
 //! bought since the outfitter opened was of its kind, as the engine has
 //! it, or has no limit), `"outfit_refund"` (whether an outfit bought
 //! since the outfitter opened sells back at its full price, as the engine
-//! has it, or every outfit at half) and `"outfit_count"` (whether Option
+//! has it, or every outfit at half), `"outfit_count"` (whether Option
 //! on Buy or Sell asks for a count in the quantity dialog, as the engine
-//! has it, or moves one); every key is listed in
+//! has it, or moves one) and `"sale_mass"` (whether an outfit of mass 0
+//! or more sells while the free mass is below 0, the free mass read
+//! clamped at 0 as the engine has it, or a sale is refused whenever it
+//! would leave the free mass below 0); every key is listed in
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!

@@ -1210,6 +1210,16 @@ impl<
         }
     }
 
+    /// The flight with a sale at the outfitter refused for the free mass
+    /// as `source` says ([`Session::with_sale_mass`]).
+    #[must_use]
+    pub fn with_sale_mass(self, source: RuleSource) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_sale_mass(source)),
+            ..self
+        }
+    }
+
     /// The flight with a sold outfit refunded as `source` says
     /// ([`Session::with_outfit_refund`]).
     #[must_use]
@@ -6442,6 +6452,20 @@ mod tests {
         let view = flight();
         assert_eq!(
             view.session().map(Session::outfit_count),
+            Ok(RuleSource::Engine)
+        );
+    }
+
+    #[test]
+    fn with_sale_mass_reaches_the_session() {
+        for source in RuleSource::ALL {
+            let view = flight().with_sale_mass(source);
+            let session = view.session().expect("flying");
+            assert_eq!(session.sale_mass(), source);
+        }
+        let view = flight();
+        assert_eq!(
+            view.session().map(Session::sale_mass),
             Ok(RuleSource::Engine)
         );
     }
