@@ -1,7 +1,8 @@
 //! A flight session over the stock data: the first `chär` starts a session
 //! with its ship's handling and reserves in a system that exists, Port
 //! Kane's exchange trades at its levels, and its outfitter sells what its
-//! tech levels allow; Viking's shipyard sells what its tech levels and the
+//! tech levels allow, and the Vell-os map only once its control bit is
+//! set; Viking's shipyard sells what its tech levels and the
 //! ships' `BuyRandom` allow, and trades the Shuttle in; the ships go by
 //! their names without the designers' notes. Port Kane sells
 //! fuel and uninhabited Reflex-ion sells none. The date reads with the
@@ -386,6 +387,27 @@ fn port_kanes_outfitter_sells_what_its_tech_levels_allow() {
     let fiber = row(180).expect("Carbon Fiber");
     assert_eq!(fiber.buy, Err(OutfitRefusal::NotForSale));
     assert_eq!((outfitter.cash, outfitter.free_mass), (25_000, 8));
+}
+
+/// Stock `oütf` 342, "Area Map - Vell-os", tech level 0 and hidden while
+/// its `Availability`, `b9999`, does not hold: Port Kane's outfitter does
+/// not list it to a new pilot, and lists it, for sale, once control bit
+/// 9999 is set through the session's bit edit.
+#[test]
+fn port_kanes_outfitter_lists_the_vell_os_map_only_once_its_bit_is_set() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = at_port_kane(&data);
+    let map = OutfitId(342);
+    let outfitter = session.outfitter().expect("an outfitter");
+    assert!(outfitter.row(map).is_none(), "bit 9999 is clear");
+    session.set_control_bit(nova_sim::Bit::new(9999).expect("a bit"), true);
+    let outfitter = session.outfitter().expect("an outfitter");
+    let row = outfitter.row(map).expect("listed once bit 9999 is set");
+    assert_eq!(row.name, "Area Map - Vell-os");
+    assert_eq!(row.buy, Ok(()));
 }
 
 /// Buying a Battery Pack takes 10,000 of the Shuttle's 25,000 credits
