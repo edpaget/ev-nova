@@ -151,6 +151,9 @@
 //! - [`rulebook`]: the rules where the Nova Bible and the original engine
 //!   disagree: each follows a [`RuleSource`], the engine's by default, as
 //!   the [`Rulebook`] says, by its [`RuleKey`].
+//! - [`rules`]: the rules core: ordered [`Checks`](rules::Checks) over
+//!   any context, each refusing with a reason and described by a
+//!   [`Descriptor`](rules::Descriptor) tools list without running it.
 //! - [`save`]: the save schema: a pilot as versioned JSON and back,
 //!   upgrading older saves.
 //! - [`saves`]: the [`PilotStore`] port pilots are saved through, the key
@@ -224,6 +227,7 @@ pub mod pre_jump;
 pub mod recharge;
 pub mod reserves;
 pub mod rulebook;
+pub mod rules;
 pub mod save;
 pub mod saves;
 pub mod session;
