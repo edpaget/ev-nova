@@ -207,6 +207,7 @@ impl PilotCatalog for GameData {
         CommodityStrings {
             names: strings(self, COMMODITY_NAMES),
             base_prices: strings(self, BASE_PRICES),
+            price_patches: Default::default(),
         }
     }
 
@@ -1503,6 +1504,7 @@ mod tests {
             CommodityStrings {
                 names: vec!["Food".into(), "Industrial".into(), "*Cargo".into()],
                 base_prices: vec!["75".into(), "lots".into()],
+                price_patches: Default::default(),
             }
         );
     }
@@ -1519,6 +1521,7 @@ mod tests {
             CommodityStrings {
                 names: Vec::new(),
                 base_prices: vec!["75".into()],
+                price_patches: Default::default(),
             }
         );
     }

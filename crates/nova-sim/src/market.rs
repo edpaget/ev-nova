@@ -5,7 +5,12 @@
 //! # Commodities and prices
 //!
 //! The six standard commodities are named by `STR#` 4000 and priced by
-//! `STR#` 4004 ([`CommodityStrings`]); one whose base price is missing or
+//! `STR#` 4004 ([`CommodityStrings`]). A plug-in's `'STR '` 9300 + n
+//! replaces commodity n's 4004 string whenever it exists, whatever it
+//! holds (`_InitObjects` @0x1cedd-0x1cf43). An empty (zero-byte) one
+//! from 9301 up takes the string commodity n - 1 was priced from; an
+//! empty 9300, or one that cannot be read, leaves the commodity
+//! untraded. A commodity whose base price is missing or
 //! is not a whole number, or that has no name, is never traded. A
 //! stellar with the trade-center flag trades commodity n when its `spöb`
 //! flags give it a price level, in the nibble at bit 28 - 4n (food at 28
@@ -90,6 +95,7 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{
     CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord, PilotCatalog, StellarId,
+    StringPatch,
 };
 use crate::chance::Chance;
 use crate::fuel::OutfitMod;
@@ -246,7 +252,7 @@ pub fn commodities(strings: &CommodityStrings) -> Vec<(u8, Commodity)> {
         .filter_map(|n| {
             let at = usize::from(n);
             let name = strings.names.get(at)?;
-            let base_price = strings.base_prices.get(at)?.trim().parse::<i32>().ok()?;
+            let base_price = base_price_string(strings, at)?.trim().parse::<i32>().ok()?;
             Some((
                 n,
                 Commodity {
@@ -256,6 +262,26 @@ pub fn commodities(strings: &CommodityStrings) -> Vec<(u8, Commodity)> {
             ))
         })
         .collect()
+}
+
+/// The string that prices commodity `n`: its `'STR '` 9300 + n patch when
+/// one exists, whatever it holds, or else its `STR#` 4004 string
+/// (`_InitObjects` @0x1cedd-0x1cf43).
+///
+/// The original copies a patch into a buffer it reuses from slot to slot.
+/// An empty (zero-byte) patch copies nothing, so slot n takes the string
+/// slot n - 1 took. For slot 0 the buffer is uninitialised, and a patch
+/// whose length byte runs past its data reads stale bytes, so for both
+/// there is no string and the commodity is not traded, as for any price
+/// the sim cannot read. Stock data and editor-written plug-ins never have
+/// such a patch.
+fn base_price_string(strings: &CommodityStrings, n: usize) -> Option<&str> {
+    match strings.price_patches.get(n) {
+        Some(StringPatch::Text(text)) => Some(text),
+        Some(StringPatch::Empty) => base_price_string(strings, n.checked_sub(1)?),
+        Some(StringPatch::Unreadable) => None,
+        Some(StringPatch::Absent) | None => strings.base_prices.get(n).map(String::as_str),
+    }
 }
 
 /// Everything the exchange trades and every event that can move its
@@ -880,7 +906,29 @@ mod tests {
         CommodityStrings {
             names: names.iter().map(|&s| s.to_owned()).collect(),
             base_prices: prices.iter().map(|&s| s.to_owned()).collect(),
+            price_patches: Default::default(),
         }
+    }
+
+    /// [`stock`] with these `'STR '` 9300 + n patches.
+    fn patched(patches: &[(usize, StringPatch)]) -> CommodityStrings {
+        let mut strings = stock();
+        for (n, patch) in patches {
+            strings.price_patches[*n] = patch.clone();
+        }
+        strings
+    }
+
+    fn text(s: &str) -> StringPatch {
+        StringPatch::Text(s.to_owned())
+    }
+
+    /// Each traded commodity's number and base price.
+    fn prices(strings: &CommodityStrings) -> Vec<(u8, i64)> {
+        commodities(strings)
+            .into_iter()
+            .map(|(n, commodity)| (n, commodity.base_price))
+            .collect()
     }
 
     /// Stock `STR#` 4000's first strings and `STR#` 4004.
@@ -938,6 +986,109 @@ mod tests {
         assert_eq!(commodities(&CommodityStrings::default()), []);
         let padded = commodities(&strings(&["Food"], &[" 75 "]));
         assert_eq!(padded, [(0, commodity("Food", 75))], "spaces are trimmed");
+    }
+
+    // Plug-in price patches.
+
+    const STOCK_PRICES: [(u8, i64); 6] =
+        [(0, 75), (1, 350), (2, 750), (3, 900), (4, 200), (5, 550)];
+
+    #[test]
+    fn a_price_patch_replaces_its_commoditys_str_4004_string() {
+        assert_eq!(
+            commodities(&patched(&[(1, text("999"))])),
+            [
+                (0, commodity("Food", 75)),
+                (1, commodity("Industrial", 999)),
+                (2, commodity("Medical Supplies", 750)),
+                (3, commodity("Luxury Goods", 900)),
+                (4, commodity("Metal", 200)),
+                (5, commodity("Equipment", 550)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_price_patch_wins_whatever_it_holds() {
+        let found = prices(&patched(&[
+            (1, text("lots")),
+            (2, text("")),
+            (3, text(" 120 ")),
+        ]));
+        assert_eq!(found, [(0, 75), (3, 120), (4, 200), (5, 550)]);
+    }
+
+    #[test]
+    fn an_unreadable_price_patch_leaves_its_commodity_untraded() {
+        let found = prices(&patched(&[
+            (0, StringPatch::Unreadable),
+            (4, StringPatch::Unreadable),
+        ]));
+        assert_eq!(found, [(1, 350), (2, 750), (3, 900), (5, 550)]);
+    }
+
+    #[test]
+    fn a_price_patch_prices_a_commodity_str_4004_lacks() {
+        let mut five = patched(&[(5, text("550"))]);
+        five.base_prices.truncate(5);
+        assert_eq!(prices(&five), STOCK_PRICES);
+
+        let mut none = patched(&[(0, text("10")), (4, text("40"))]);
+        none.base_prices.clear();
+        assert_eq!(prices(&none), [(0, 10), (4, 40)]);
+    }
+
+    #[test]
+    fn each_slot_is_patched_on_its_own() {
+        let found = prices(&patched(&[(0, text("1")), (5, text("6"))]));
+        assert_eq!(
+            found,
+            [(0, 1), (1, 350), (2, 750), (3, 900), (4, 200), (5, 6)]
+        );
+    }
+
+    #[test]
+    fn an_empty_price_patch_takes_the_string_the_slot_before_took() {
+        let after_stock = prices(&patched(&[(2, StringPatch::Empty)]));
+        assert_eq!(
+            after_stock,
+            [(0, 75), (1, 350), (2, 350), (3, 900), (4, 200), (5, 550)]
+        );
+
+        let after_patch = prices(&patched(&[(3, text("999")), (4, StringPatch::Empty)]));
+        assert_eq!(
+            after_patch,
+            [(0, 75), (1, 350), (2, 750), (3, 999), (4, 999), (5, 550)]
+        );
+
+        let chained = prices(&patched(&[
+            (1, StringPatch::Empty),
+            (2, StringPatch::Empty),
+        ]));
+        assert_eq!(
+            chained,
+            [(0, 75), (1, 75), (2, 75), (3, 900), (4, 200), (5, 550)]
+        );
+
+        let mut short = patched(&[(5, StringPatch::Empty)]);
+        short.base_prices.truncate(4);
+        assert_eq!(
+            prices(&short),
+            [(0, 75), (1, 350), (2, 750), (3, 900)],
+            "the slot before has no string"
+        );
+    }
+
+    #[test]
+    fn an_empty_price_patch_after_an_unreadable_one_or_first_is_untraded() {
+        let after_unreadable = prices(&patched(&[
+            (1, StringPatch::Unreadable),
+            (2, StringPatch::Empty),
+        ]));
+        assert_eq!(after_unreadable, [(0, 75), (3, 900), (4, 200), (5, 550)]);
+
+        let first = prices(&patched(&[(0, StringPatch::Empty)]));
+        assert_eq!(first, [(1, 350), (2, 750), (3, 900), (4, 200), (5, 550)]);
     }
 
     // The exchange.

@@ -5638,6 +5638,7 @@ mod tests {
             commodities: CommodityStrings {
                 names: vec!["Food".to_owned()],
                 base_prices: vec!["75".to_owned()],
+                price_patches: Default::default(),
             },
             ..catalog()
         }
@@ -8056,6 +8057,7 @@ mod tests {
         catalog.commodities = CommodityStrings {
             names: vec!["Food".to_owned()],
             base_prices: vec!["75".to_owned()],
+            price_patches: Default::default(),
         };
         for record in &mut catalog.ships {
             if record.id == ShipId(129) {

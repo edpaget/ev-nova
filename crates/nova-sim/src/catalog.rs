@@ -232,14 +232,33 @@ pub struct ShipRecord {
 
 /// The standard commodities, raw from their string lists: `STR#` 4000
 /// "All Cargo" names them and `STR#` 4004 "Base Prices" prices them, the
-/// nth string for commodity n (from 0); the [`market`](crate::market)
-/// rules decide which are traded.
+/// nth string for commodity n (from 0). A plug-in's `'STR '` 9300 + n
+/// patches commodity n's 4004 string. The [`market`](crate::market)
+/// rules decide which string prices each commodity, and which are traded.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommodityStrings {
     /// Every string of `STR#` 4000, in order; none when it is missing.
     pub names: Vec<String>,
     /// Every string of `STR#` 4004, in order; none when it is missing.
     pub base_prices: Vec<String>,
+    /// `'STR '` 9300-9305, the nth for commodity n.
+    pub price_patches: [StringPatch; 6],
+}
+
+/// A plug-in's `'STR '` patch of one `STR#` string (the Bible's
+/// Appendix III).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum StringPatch {
+    /// No `'STR '` with that ID: the `STR#` string stands.
+    #[default]
+    Absent,
+    /// The `'STR '` text, whatever it holds.
+    Text(String),
+    /// A `'STR '` with that ID and no bytes at all. The original then
+    /// leaves its string buffer as the slot before it left it.
+    Empty,
+    /// A `'STR '` with that ID whose length byte runs past its data.
+    Unreadable,
 }
 
 /// A special commodity, raw from its `jünk`.
@@ -1016,6 +1035,7 @@ mod tests {
             CommodityStrings {
                 names: vec!["Food".to_owned()],
                 base_prices: vec!["75".to_owned()],
+                price_patches: Default::default(),
             }
         }
 

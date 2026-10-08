@@ -4512,6 +4512,7 @@ mod tests {
             base_prices: ["75", "350", "750", "900", "200"]
                 .map(str::to_owned)
                 .to_vec(),
+            price_patches: Default::default(),
         }
     }
 

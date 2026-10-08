@@ -231,8 +231,8 @@ pub use catalog::{
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
     GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, StockWeapon, SystemId, SystemTraffic,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    StarSystem, StartDate, StartError, StellarId, StockWeapon, StringPatch, SystemId,
+    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
