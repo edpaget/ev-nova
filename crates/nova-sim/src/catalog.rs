@@ -202,6 +202,10 @@ pub struct ShipRecord {
     pub require: u64,
     /// Its `Availability` control-bit test, parsed.
     pub availability: Test,
+    /// Its `AppearOn` control-bit test, parsed. The Bible: "Ships of this
+    /// type will not show up in dude resources if this expression
+    /// evaluates to false" (see [`spawn`](crate::traffic::spawn)).
+    pub appear_on: Test,
     /// Its `Flags3`.
     pub flags3: u16,
     /// Its `DispWeight`: higher shows nearer the top.

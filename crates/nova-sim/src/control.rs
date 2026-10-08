@@ -23,9 +23,13 @@
 //! evaluation draws nothing at random: the test grammar has no random
 //! operand.
 //!
-//! The rules that test a record's control bits (bar hire, a person's
-//! `ActiveOn`) ask the [`ControlBits`] port, which the caller wires at the
-//! edge; [`NovaBits`] is the original's evaluation, [`holds`].
+//! The rules that test a record's control bits ask the [`ControlBits`]
+//! port, which the caller wires at the edge, for the player's pilot (a
+//! [`Gate`]): bar hire and the shipyard (`shïp` `Availability`), a
+//! person's `ActiveOn`, the outfitter (`oütf` `Availability`), the
+//! exchange (`jünk` `BuyOn` and `SellOn`), the day's events (`öops`
+//! `ActivateOn`), and the traffic (`flët` and `shïp` `AppearOn`).
+//! [`NovaBits`] is the original's evaluation, [`holds`].
 //!
 //! # Running a set expression
 //!

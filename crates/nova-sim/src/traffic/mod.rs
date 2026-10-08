@@ -567,6 +567,7 @@ mod tests {
                     },
                     armament: Armament::new([(WeaponSpec::new(&weapon(128)), 2)]),
                     rounds: BTreeMap::from([(WeaponId(138), 7)]),
+                    appear_on: Test::default(),
                 },
             )]),
             ..SpawnTable::default()

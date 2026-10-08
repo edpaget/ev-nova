@@ -159,6 +159,7 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         hire_random: 0,
         require: 0,
         availability: Test::default(),
+        appear_on: Test::default(),
         flags3: 0,
         disp_weight: 0,
         max_gun: 2,

@@ -100,6 +100,7 @@ impl PilotCatalog for GameData {
                     hire_random: record.hire_random,
                     require: record.require.bits(),
                     availability: self.test_expr(record.availability.as_str()).into(),
+                    appear_on: self.test_expr(record.appear_on.as_str()).into(),
                     flags3: record.flags3.bits(),
                     disp_weight: record.disp_weight,
                     max_gun: record.max_gun,
@@ -1003,6 +1004,7 @@ mod tests {
         put_i16s(&mut bytes, 0x3C, &[25, 30, 41, 2, 3]);
         bytes[0x64..0x6C].copy_from_slice(&0x10_u64.to_be_bytes());
         bytes[0x6C..0x70].copy_from_slice(b"b422");
+        bytes[0x16B..0x16F].copy_from_slice(b"!b17");
         bytes[0x380..0x388].copy_from_slice(&0x0000_0002_0000_0001_u64.to_be_bytes());
         put_i16s(&mut bytes, 0x388, &[45, 40]);
         bytes[0x5CE..0x5DD].copy_from_slice(b"Heavy\\nShuttle!");
@@ -1043,6 +1045,7 @@ mod tests {
             hire_random: 40,
             require: 0x0000_0002_0000_0001,
             availability: Test::parse("b422"),
+            appear_on: Test::parse("!b17"),
             flags3: 0x4100,
             disp_weight: 25,
             max_gun: 4,
@@ -1075,6 +1078,11 @@ mod tests {
             assert!(
                 shared(&a.availability, &b.availability),
                 "parsed once: {:?}",
+                a.id
+            );
+            assert!(
+                shared(&a.appear_on, &b.appear_on),
+                "AppearOn parsed once: {:?}",
                 a.id
             );
         }

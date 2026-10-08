@@ -6116,6 +6116,21 @@ mod tests {
     }
 
     #[test]
+    fn populating_tests_a_fleets_appear_on_through_the_sessions_control_bits() {
+        let mut catalog = fleeted();
+        catalog.fleets[0].appear_on = Test::parse("b7");
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut linked_fleet_draws(2));
+        assert_eq!(fleet_of(&session), [], "bit 7 is clear");
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        session.populate(&catalog, &mut linked_fleet_draws(2));
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        let mut refusing = session.with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));
+        refusing.populate(&catalog, &mut linked_fleet_draws(2));
+        assert_eq!(fleet_of(&refusing), []);
+    }
+
+    #[test]
     fn arriving_brings_in_the_fleet_linked_to_the_new_systems_government() {
         let catalog = fleeted();
         let mut session = Session::start(&catalog).expect("starts");
