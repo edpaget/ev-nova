@@ -2150,13 +2150,7 @@ impl Session {
         let stock: Vec<GrantStock> = self
             .outfits
             .iter()
-            .map(|record| GrantStock {
-                outfit: record.id,
-                item_class: record.item_class,
-                mass: record.mass,
-                owned: self.pilot.owned(record.id),
-                max: record.max,
-            })
+            .map(|record| self.grant_stock(record))
             .collect();
         let granted = rule.grant(&grant, &stock, self.free_mass(), chance)?;
         for _ in 0..granted.count {
@@ -9318,6 +9312,44 @@ mod tests {
         assert!(boarded.is_ok());
         assert_eq!(session.pilot().owned(OutfitId(200)), 1);
         assert_eq!(session.take_grant().map(|granted| granted.count), Some(1));
+    }
+
+    #[test]
+    fn held_to_the_max_boarding_and_g_weigh_an_outfit_as_the_outfitter_does() {
+        // Of a `Mass` scaled by Flags 0x0400 on the ship's 40 tons, with
+        // 30 tons free: 20 raw is 8, 75 is 30 and 80 is 32. Held to the
+        // `Max`, boarding (granting one) and `G` agree, by the scaled mass.
+        let rules = OutfitRules {
+            grant_max: RuleSource::Bible,
+            ..OutfitRules::default()
+        };
+        let held = NovaBoarding {
+            grant_max: RuleSource::Bible,
+            ..NovaBoarding::default()
+        };
+        for (mass, fits) in [(20, true), (75, true), (80, false)] {
+            let mut catalog = granting();
+            catalog.persons[0].grant_count = 1;
+            catalog.outfits[0].mass = mass;
+            catalog.outfits[0].flags = OutfitFlags::MASS_BY_MASS;
+            let mut boarded = alongside_ace(&catalog);
+            assert_eq!(boarded.free_mass(), 30);
+            board_drawing(&mut boarded, held, &ACE_DRAWS)
+                .0
+                .expect("boards");
+            let mut scripted = alongside(&catalog)
+                .with_set_ops(std::rc::Rc::new(crate::nova_set_ops()))
+                .with_outfit_rules(rules);
+            let expr = crate::control::SetExpr::parse("G200").expect("parses");
+            scripted.run_set(&expr, &mut Draws::of(&[]));
+            let owned = u16::from(fits);
+            assert_eq!(
+                boarded.pilot().owned(OutfitId(200)),
+                owned,
+                "boarded {mass}"
+            );
+            assert_eq!(scripted.pilot().owned(OutfitId(200)), owned, "G {mass}");
+        }
     }
 
     #[test]

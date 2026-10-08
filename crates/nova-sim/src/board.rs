@@ -581,7 +581,9 @@ pub struct NovaBoarding {
     /// ([`RuleKey::GrantCount`]).
     pub grant_count: RuleSource,
     /// Whether a grant may pass the outfit's `Max`: by the engine, it
-    /// may; otherwise it is held to it ([`RuleKey::GrantMax`]).
+    /// may; otherwise it is held to it, and to the free mass as the
+    /// outfitter weighs it ([`RuleKey::GrantMax`],
+    /// [`held_to_max`](crate::grant::held_to_max)).
     pub grant_max: RuleSource,
 }
 
@@ -1437,12 +1439,13 @@ mod tests {
     }
 
     /// Outfit 200, of class 7 and `Mass` `mass`, `owned` of a `Max` of
-    /// `max` owned.
+    /// `max` owned, unscaled by `Flags` 0x0400.
     fn spare(mass: i16, owned: u16, max: i16) -> GrantStock {
         GrantStock {
             outfit: OutfitId(200),
             item_class: 7,
             mass,
+            unit_mass: i64::from(mass),
             owned,
             max,
         }

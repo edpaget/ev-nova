@@ -34,7 +34,8 @@
 //!   [`RuleKey::GrantMax`](crate::RuleKey::GrantMax), an outfit the grant
 //!   would add is refused, changing nothing, when the player owns its
 //!   `Max` already or its mass (as the outfitter weighs it) is more than
-//!   the free mass.
+//!   the free mass: the check a boarding grant is held to by that
+//!   reading too ([`held_to_max`]).
 //! - `Dxxx` ([`RemoveOutfitOp`], @0x1544b) removes one of an outfit owned
 //!   (128 to 639), and with none owned does nothing at all. The ship is
 //!   refitted without gaining, so its mass and stats are freed as by a
@@ -53,6 +54,7 @@ use crate::catalog::{OutfitId, OutfitRecord, SystemId};
 use crate::chance::Chance;
 use crate::control::{SetOp, SetOpHandler};
 use crate::exploration::map_reveals;
+use crate::grant::{GrantStock, held_to_max};
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records};
 use crate::outfitter::{self, resale, unit_mass, unit_price};
 use crate::pilot::Pilot;
@@ -117,6 +119,18 @@ impl Session {
         )
     }
 
+    /// `record` as a grant sees it on the pilot's ship.
+    pub(crate) fn grant_stock(&self, record: &OutfitRecord) -> GrantStock {
+        GrantStock {
+            outfit: record.id,
+            item_class: record.item_class,
+            mass: record.mass,
+            unit_mass: unit_mass(record, self.fields.mass),
+            owned: self.pilot.owned(record.id),
+            max: record.max,
+        }
+    }
+
     /// The ship's free mass, with the outfits the pilot owns.
     pub(crate) fn free_mass(&self) -> i64 {
         outfitter::free_mass(
@@ -157,16 +171,17 @@ impl Session {
         effect.added
     }
 
-    /// Whether `G` may grant `outfit` (see the module docs): always by
-    /// the engine; by the other reading, unless the grant would add it
-    /// while the player owns its `Max` or it outweighs the free mass.
+    /// Whether `G` may grant `outfit` (see the module docs): unless the
+    /// grant would add it and [`held_to_max`] holds a grant of one to
+    /// none, as a boarding grant is held.
     fn script_may_grant(&self, outfit: OutfitId) -> bool {
-        if self.outfit_rules.grant_max == RuleSource::Engine || !self.grant_effect(outfit).added {
+        if !self.grant_effect(outfit).added {
             return true;
         }
         self.outfit_record(outfit).is_none_or(|record| {
-            i32::from(self.pilot.owned(outfit)) < i32::from(record.max)
-                && unit_mass(record, self.fields.mass) <= self.free_mass()
+            let stock = self.grant_stock(record);
+            held_to_max(self.outfit_rules.grant_max, 1, &stock, self.free_mass())
+                .is_none_or(|count| count > 0)
         })
     }
 

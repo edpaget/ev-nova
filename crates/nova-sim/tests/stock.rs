@@ -2678,6 +2678,9 @@ fn boarding_dr_ralph_grants_his_map_half_the_time() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let grant = PersonGrant::of(&person_record(&data, 162)).expect("Dr Ralph grants");
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    let fields = data.ship_fields(pilot.ship()).expect("its ship");
+    let free = fields.free_mass;
     let stock: Vec<GrantStock> = data
         .outfits()
         .iter()
@@ -2685,12 +2688,11 @@ fn boarding_dr_ralph_grants_his_map_half_the_time() {
             outfit: outfit.id,
             item_class: outfit.item_class,
             mass: outfit.mass,
+            unit_mass: nova_sim::outfitter::unit_mass(outfit, fields.mass),
             owned: 0,
             max: outfit.max,
         })
         .collect();
-    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
-    let free = data.ship_fields(pilot.ship()).expect("its ship").free_mass;
     let rule = nova_sim::NovaBoarding::default();
     let granted = |odds| {
         let draws: &'static [(u32, u32)] = if odds == 49 {
