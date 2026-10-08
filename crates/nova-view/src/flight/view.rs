@@ -280,10 +280,10 @@ use nova_sim::{
     HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
     NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleSource, Rules, Session, ShipId,
-    ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
-    StellarId, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2,
-    flight::normalized, flight::shortest_turn, glow_level, lights_level,
+    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleSource, Rulebook, Rules, Session,
+    ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage,
+    StartError, StellarId, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog,
+    Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
     ControlBits, HireList, HireRefusal, HireTerms, Hired, HookRules, OutfitRules, PayNote,
@@ -1072,6 +1072,16 @@ impl<
             metrics: None,
             escort_menu: EscortMenu::default(),
             escort_colors,
+        }
+    }
+
+    /// The flight with every disputed rule reading as `rules` says
+    /// ([`Session::with_rules`]).
+    #[must_use]
+    pub fn with_rules(self, rules: Rulebook) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_rules(rules)),
+            ..self
         }
     }
 
@@ -2961,6 +2971,7 @@ mod tests {
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
     };
     use crate::{Blend, DrawCommand, Font};
+    use nova_sim::RuleKey;
     use nova_sim::hyperspace::{JumpRefusal, MIN_JUMP_DISTANCE};
     use nova_sim::{BlinkChance, GLOW_CRUISE, HashedRolls, glow_level};
 
@@ -6599,241 +6610,22 @@ mod tests {
     }
 
     #[test]
-    fn with_buy_random_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_buy_random(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.buy_random(), source);
-        }
-        let view = flight();
+    fn every_rule_reaches_the_session_through_the_flight() {
+        let every = RuleKey::ALL
+            .into_iter()
+            .fold(Rulebook::default(), |book, key| {
+                book.with_override(key, RuleSource::Bible)
+            });
         assert_eq!(
-            view.session().map(Session::buy_random),
-            Ok(RuleSource::Engine)
+            flight().session().map(Session::rules),
+            Ok(&Rulebook::default())
         );
-    }
-
-    #[test]
-    fn with_event_price_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_event_price(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.event_price(), source);
+        let view = flight().with_rules(every);
+        let rules = view.session().expect("flying").rules();
+        assert_eq!(rules, &every);
+        for key in RuleKey::ALL {
+            assert_eq!(rules.source_for(key), RuleSource::Bible, "{key:?}");
         }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::event_price),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_raised_max_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_raised_max(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.raised_max(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::raised_max),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_launcher_sale_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_launcher_sale(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.launcher_sale(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::launcher_sale),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_purchase_cargo_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_purchase_cargo(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.purchase_cargo(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::purchase_cargo),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_junk_price_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_junk_price(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.junk_price(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::junk_price),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_junk_trade_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_junk_trade(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.junk_trade(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::junk_trade),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_trade_lot_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_trade_lot(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.trade_lot(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::trade_lot),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_trade_quotient_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_trade_quotient(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.trade_quotient(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::trade_quotient),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_trade_count_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_trade_count(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.trade_count(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::trade_count),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_trade_debt_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_trade_debt(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.trade_debt(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::trade_debt),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_outfit_count_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_outfit_count(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.outfit_count(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::outfit_count),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_sale_mass_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_sale_mass(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.sale_mass(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::sale_mass),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_trade_in_outfits_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_trade_in_outfits(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.trade_in_outfits(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::trade_in_outfits),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_outfit_refund_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_outfit_refund(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.outfit_refund(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::outfit_refund),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_outfit_limit_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_outfit_limit(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.outfit_limit(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::outfit_limit),
-            Ok(RuleSource::Engine)
-        );
-    }
-
-    #[test]
-    fn with_junk_flags_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_junk_flags(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.junk_flags(), source);
-        }
-        let view = flight();
-        assert_eq!(
-            view.session().map(Session::junk_flags),
-            Ok(RuleSource::Engine)
-        );
     }
 
     // The set-expression hooks.
@@ -9315,20 +9107,6 @@ mod tests {
         assert_eq!(view.pilot().expect("flying").escorts(), []);
     }
 
-    #[test]
-    fn both_fighter_rules_reach_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_fighter_launch(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.fighter_launch(), source);
-            assert_eq!(session.fighter_recall(), RuleSource::Engine);
-            let view = flight().with_fighter_recall(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.fighter_recall(), source);
-            assert_eq!(session.fighter_launch(), RuleSource::Engine);
-        }
-    }
-
     /// [`boardable`] with ship 130, a warship escort (`EscortType` 2,
     /// `InherentAI` 3), whose sheet cannot be read, and the pilot's fleet
     /// one of them; its traffic ship (NPC 0) placed 100 above the player;
@@ -9552,14 +9330,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_escort_orders_rule_reaches_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_escort_orders(source);
-            assert_eq!(view.session().expect("flying").escort_orders(), source);
-        }
-    }
-
     // Hiring escorts and paying them.
 
     use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
@@ -9693,7 +9463,8 @@ mod tests {
         assert_eq!(view.take_off(), Some(StellarId(128)));
         assert_eq!(view.message(), Some(DEFECTED_ONE));
         assert_eq!(view.pilot().expect("flying").escorts(), []);
-        let mut kept = paying(50, true).with_take_off_pay(RuleSource::Bible);
+        let mut kept = paying(50, true)
+            .with_rules(Rulebook::default().with_override(RuleKey::TakeOffPay, RuleSource::Bible));
         kept.take_off().expect("took off");
         assert_eq!(kept.message(), None);
         assert_eq!(kept.pilot().expect("flying").escorts().len(), 1);
@@ -9760,22 +9531,7 @@ mod tests {
     }
 
     #[test]
-    fn the_hiring_rules_reach_the_session() {
-        for source in RuleSource::ALL {
-            let view = flight().with_hire_require(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.hire_require(), source);
-            assert_eq!(session.take_off_pay(), RuleSource::Engine);
-            assert_eq!(session.escort_wage(), RuleSource::Engine);
-            let view = flight().with_take_off_pay(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.take_off_pay(), source);
-            assert_eq!(session.hire_require(), RuleSource::Engine);
-            let view = flight().with_escort_wage(source);
-            let session = view.session().expect("flying");
-            assert_eq!(session.escort_wage(), source);
-            assert_eq!(session.take_off_pay(), RuleSource::Engine);
-        }
+    fn the_hire_ports_reach_the_session() {
         let always: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
         let mut view = FlightView::new(hiring())
             .with_chance(SharedChance::new(always))
@@ -9884,50 +9640,6 @@ mod tests {
             format!("{:?}", view.session().expect("flying").person_rules()),
             format!("{rules:?}")
         );
-        for source in RuleSource::ALL {
-            let view = flight().with_comm_quote(source);
-            assert_eq!(view.session().expect("flying").comm_quote(), source);
-        }
-    }
-
-    #[test]
-    fn the_outfit_rules_reach_the_session() {
-        let rules = OutfitRules {
-            remove_refund: RuleSource::Bible,
-            ..OutfitRules::default()
-        };
-        let view = flight().with_outfit_rules(rules);
-        assert_eq!(view.session().expect("flying").outfit_rules(), rules);
-    }
-
-    #[test]
-    fn the_hook_rules_reach_the_session() {
-        let rules = nova_sim::HookRules {
-            purchase_paint_order: RuleSource::Bible,
-            ..nova_sim::HookRules::default()
-        };
-        let view = flight().with_hook_rules(rules);
-        assert_eq!(view.session().expect("flying").hook_rules(), rules);
-    }
-
-    #[test]
-    fn the_ship_change_rules_reach_the_session() {
-        let rules = nova_sim::ShipChangeRules {
-            cargo: RuleSource::Bible,
-            ..nova_sim::ShipChangeRules::default()
-        };
-        let view = flight().with_ship_change_rules(rules);
-        assert_eq!(view.session().expect("flying").ship_change_rules(), rules);
-    }
-
-    #[test]
-    fn the_script_effect_rules_reach_the_session() {
-        let rules = ScriptEffectRules {
-            arrival: RuleSource::Bible,
-            ..ScriptEffectRules::default()
-        };
-        let view = flight().with_script_effect_rules(rules);
-        assert_eq!(view.session().expect("flying").script_effect_rules(), rules);
     }
 
     /// Runs set expression `text` on `view`'s session.
@@ -10074,11 +9786,8 @@ mod tests {
 
     #[test]
     fn fighters_abandoned_in_a_move_are_told_after_a_qs_message() {
-        let rules = ScriptEffectRules {
-            arrival: RuleSource::Bible,
-            ..ScriptEffectRules::default()
-        };
-        let mut view = told(fighters_out()).with_script_effect_rules(rules);
+        let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
+        let mut view = told(fighters_out()).with_rules(rules);
         run_set(&mut view, "Q25048 M131");
         assert_eq!(view.settle_script(), None);
         assert_eq!(
