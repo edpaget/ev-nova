@@ -9,10 +9,12 @@
 //! what is saved, and "restarts" with a new app over the same store.
 //!
 //! A new pilot lands, opens the Trade Center, which lists only the goods
-//! the planet trades at its prices, and buys food until the hold is full,
-//! up to ten tons a press;
-//! each trade saves the pilot. In a new app the pilot resumes docked with
-//! its cargo, and selling pays the local price.
+//! the planet trades at its prices, and fills the hold with one press of
+//! B, a plain buy moving up to ten tons; each trade saves the pilot. In a
+//! new app, where a plain trade moves a ton (the `trade_lot` rule's other
+//! reading), the pilot resumes docked with its cargo: S sells a ton at
+//! the local price and Alt-S the rest, then holding B buys a ton a repeat
+//! and Alt-B fills the hold again.
 
 use std::io;
 use std::path::Path;
@@ -40,7 +42,7 @@ use nova_render::{Batch, FontFaces, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
-use nova_sim::{Good, Pilot, PilotKeeper, PilotStore};
+use nova_sim::{Good, Pilot, PilotKeeper, PilotStore, RuleSource};
 use nova_view::MouseButton;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
@@ -360,12 +362,13 @@ struct Harness {
 
 impl Harness {
     /// The app on the main menu, keeping pilots in `store`, before any
-    /// frame.
-    fn opening(store: &MemoryPilots) -> Self {
+    /// frame, a plain trade moving as many tons as `trade_lot` says.
+    fn opening(store: &MemoryPilots, trade_lot: RuleSource) -> Self {
         let data = game_data();
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let screen = start_screen(Rc::clone(&data))
+            .with_trade_lot(trade_lot)
             .with_pilots(Some(keeper), metrics.clone())
             .with_dialogs(Rc::new(interface()), metrics);
         Self {
@@ -539,7 +542,7 @@ fn status(free: u32, cash: i64) -> String {
 #[test]
 fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     let store = MemoryPilots::new();
-    let mut game = Harness::opening(&store);
+    let mut game = Harness::opening(&store, RuleSource::Engine);
     let new_pilot = game.menu_button(MenuChoice::NewPilot);
     game.click(new_pilot);
     game.type_name("Ada");
@@ -570,27 +573,12 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     let writes = store.writes();
     game.press(KeyCode::KeyB);
     assert_eq!(game.pilot().held(FOOD), 10);
-    assert_eq!(game.pilot().cash(), cash - 10 * 75);
-    assert_eq!(store.writes(), writes + 1);
-    assert_eq!(saved(&store, "Ada").held(FOOD), 10);
-
-    // Holding B buys nothing more once the hold is full.
-    game.key(KeyCode::KeyB, true, false);
-    for _ in 0..15 {
-        game.key(KeyCode::KeyB, true, true);
-    }
-    game.key(KeyCode::KeyB, false, false);
-    assert_eq!(game.pilot().held(FOOD), 10);
     let full = cash - 10 * 75;
     assert_eq!(game.pilot().cash(), full);
+    assert_eq!(store.writes(), writes + 1);
+    assert_eq!(saved(&store, "Ada").held(FOOD), 10);
     assert!(texts(&game.frame()).contains(&status(0, full)));
     assert_eq!(game.trade().market().free, 0);
-    let writes = store.writes();
-    game.key(KeyCode::AltLeft, true, false);
-    game.press(KeyCode::KeyB);
-    game.key(KeyCode::AltLeft, false, false);
-    assert_eq!(game.pilot().held(FOOD), 10, "no space left");
-    assert_eq!(store.writes(), writes, "nothing to save");
 
     // Done closes the exchange; closing the window saves the cargo.
     game.press(KeyCode::Escape);
@@ -606,8 +594,9 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     assert_eq!(game.handle(WindowEvent::CloseRequested), Control::Exit);
     assert_eq!(saved(&store, "Ada"), landed);
 
-    // A new app resumes the pilot docked, with its cargo.
-    let mut game = Harness::opening(&store);
+    // A new app, a plain trade there moving a ton (the `trade_lot` rule's
+    // other reading), resumes the pilot docked, with its cargo.
+    let mut game = Harness::opening(&store, RuleSource::Bible);
     let open_pilot = game.menu_button(MenuChoice::OpenPilot);
     game.click(open_pilot);
     game.press(KeyCode::Enter);
@@ -620,16 +609,34 @@ fn a_pilot_buys_until_the_hold_is_full_and_sells_its_cargo_after_a_restart() {
     );
     assert!(texts(&game.frame()).contains(&status(0, full)));
 
-    // Selling pays the local price: S sells up to ten tons, here all of
-    // them, and Alt-S then has nothing left to sell.
+    // Selling pays the local price: S sells a ton, and Alt-S everything
+    // left.
     game.press(KeyCode::KeyS);
-    assert_eq!(game.pilot().held(FOOD), 0);
-    assert_eq!(game.pilot().cash(), cash);
+    assert_eq!(game.pilot().held(FOOD), 9);
+    assert_eq!(game.pilot().cash(), full + 75);
     game.key(KeyCode::AltRight, true, false);
     game.press(KeyCode::KeyS);
     game.key(KeyCode::AltRight, false, false);
-    assert_eq!(game.pilot().held(FOOD), 0);
+    assert_eq!(game.pilot().held(FOOD), 0, "everything left is sold");
     assert_eq!(game.pilot().cash(), cash);
     assert!(texts(&game.frame()).contains(&status(10, cash)));
-    assert_eq!(saved(&store, "Ada").cash(), cash);
+    assert_eq!(saved(&store, "Ada").held(FOOD), 0);
+
+    // Holding B buys a ton on the press and a ton on each repeat.
+    game.key(KeyCode::KeyB, true, false);
+    for _ in 0..3 {
+        game.key(KeyCode::KeyB, true, true);
+    }
+    game.key(KeyCode::KeyB, false, false);
+    assert_eq!(game.pilot().held(FOOD), 4, "the press and three repeats");
+    assert_eq!(game.pilot().cash(), cash - 4 * 75);
+
+    // Alt-B buys the most: here the six tons of space left.
+    game.key(KeyCode::AltLeft, true, false);
+    game.press(KeyCode::KeyB);
+    game.key(KeyCode::AltLeft, false, false);
+    assert_eq!(game.pilot().held(FOOD), 10, "the hold is full");
+    assert_eq!(game.pilot().cash(), full);
+    assert!(texts(&game.frame()).contains(&status(0, full)));
+    assert_eq!(saved(&store, "Ada").held(FOOD), 10);
 }
