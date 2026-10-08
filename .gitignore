@@ -7,3 +7,5 @@ mutants.out*/
 /windows-data
 # Lore notes live in the sibling ev-nova-notes repo; a local symlink may point there.
 /notes
+# Local helper script to build and run nova.
+/run-nova.sh
