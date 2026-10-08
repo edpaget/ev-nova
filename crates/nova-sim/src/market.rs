@@ -723,6 +723,8 @@ pub struct Market {
     pub capacity: u32,
     /// The cargo space free, in tons.
     pub free: u32,
+    /// The rule set the exchange was built by, which its questions read.
+    pub rules: Rulebook,
     /// How many tons a [`Lot::Click`] moves
     /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)).
     pub trade_lot: RuleSource,
@@ -921,21 +923,43 @@ impl MarketRow {
     }
 }
 
-/// The exchange of `stellar`, with these `flags`, for `pilot` with
-/// `capacity` tons of cargo space, its `jünk` tests asked of `gate`,
-/// priced by `rules`, its low and high prices by `markup`; `None` without
-/// a trade center.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn market(
-    goods: &Goods,
-    stellar: StellarId,
-    flags: u32,
-    pilot: &Pilot,
-    capacity: u32,
-    gate: Gate,
-    rules: &Rulebook,
-    markup: Markup,
-) -> Option<Market> {
+/// What an exchange is built from, gathered once: the goods and events,
+/// the stellar and its `spöb` `Flags`, the player's pilot and the fleet's
+/// cargo space, the control-bit tests a `jünk` asks (a [`Gate`]), the
+/// rule set and the stellar's [`Markup`].
+#[derive(Clone, Copy)]
+pub(crate) struct Exchange<'a> {
+    /// Everything the exchange trades and every event that can move its
+    /// prices.
+    pub(crate) goods: &'a Goods,
+    /// The stellar the exchange is at.
+    pub(crate) stellar: StellarId,
+    /// The stellar's `spöb` `Flags`: its trade center and price levels.
+    pub(crate) flags: u32,
+    /// The player's pilot: cash, cargo and the events under way.
+    pub(crate) pilot: &'a Pilot,
+    /// The fleet's cargo space, in tons ([`fleet_holds`]).
+    pub(crate) capacity: u32,
+    /// What a `jünk`'s `BuyOn` and `SellOn` tests are asked of.
+    pub(crate) gate: Gate<'a>,
+    /// The rule set the exchange is priced and traded by.
+    pub(crate) rules: Rulebook,
+    /// What the stellar's low and high prices are marked down and up by.
+    pub(crate) markup: Markup,
+}
+
+/// The exchange `exchange` describes; `None` without a trade center.
+pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
+    let &Exchange {
+        goods,
+        stellar,
+        flags,
+        pilot,
+        capacity,
+        gate,
+        ref rules,
+        markup,
+    } = exchange;
     let source = rules.source_for(RuleKey::EventPrice);
     if flags & StellarFlags::TRADE_CENTER == 0 {
         return None;
@@ -1000,6 +1024,7 @@ pub(crate) fn market(
         cash: pilot.cash,
         capacity,
         free: capacity.saturating_sub(held),
+        rules: *rules,
         trade_lot: rules.source_for(RuleKey::TradeLot),
         trade_quotient: rules.source_for(RuleKey::TradeQuotient),
         trade_count: rules.source_for(RuleKey::TradeCount),
@@ -2065,46 +2090,108 @@ mod tests {
     fn without_a_trade_center_there_is_no_exchange() {
         let flags = PORT_KANE & !StellarFlags::TRADE_CENTER;
         assert_eq!(
-            market(
-                &goods(),
-                EARTH,
-                flags,
-                &pilot(0),
-                10,
-                Gate::FRESH,
-                &rules(RuleSource::Engine),
-                Markup::Standard
-            ),
+            market(&Exchange {
+                capacity: 10,
+                rules: rules(RuleSource::Engine),
+                ..exchange(&goods(), EARTH, flags, &pilot(0))
+            }),
             None
         );
         assert_eq!(
-            market(
-                &goods(),
-                MARS,
-                0,
-                &pilot(0),
-                10,
-                Gate::FRESH,
-                &rules(RuleSource::Engine),
-                Markup::Standard
-            ),
+            market(&Exchange {
+                capacity: 10,
+                rules: rules(RuleSource::Engine),
+                ..exchange(&goods(), MARS, 0, &pilot(0))
+            }),
             None
         );
+    }
+
+    /// The exchange's facts, as [`market`] takes them: `goods` at
+    /// `stellar` with these `flags`, for `pilot`, with no cargo space, the
+    /// fresh pilot's tests, the default rule set and the standard markup.
+    fn exchange<'a>(
+        goods: &'a Goods,
+        stellar: StellarId,
+        flags: u32,
+        pilot: &'a Pilot,
+    ) -> Exchange<'a> {
+        Exchange {
+            goods,
+            stellar,
+            flags,
+            pilot,
+            capacity: 0,
+            gate: Gate::FRESH,
+            rules: Rulebook::default(),
+            markup: Markup::Standard,
+        }
+    }
+
+    #[test]
+    fn a_market_is_built_from_one_exchange_context() {
+        let goods = goods();
+        let mut holding = pilot(500);
+        holding.cargo = BTreeMap::from([(Good::Commodity(0), 3)]);
+        let rules = Rulebook::default().with_override(RuleKey::TradeLot, RuleSource::Bible);
+        let found = market(&Exchange {
+            capacity: 10,
+            rules,
+            markup: Markup::Dominated,
+            ..exchange(&goods, StellarId(137), PORT_KANE, &holding)
+        })
+        .expect("trades");
+        let rows: Vec<_> = found
+            .rows
+            .iter()
+            .map(|row| (row.good, row.price, row.held))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (Good::Commodity(0), 112, 3),
+                (Good::Commodity(1), 350, 0),
+                (Good::Commodity(2), 1125, 0),
+                (Good::Commodity(3), 900, 0),
+                (Good::Commodity(4), 200, 0),
+                (Good::Commodity(5), 366, 0),
+            ],
+            "Port Kane's levels by 1.5"
+        );
+        assert_eq!((found.cash, found.capacity, found.free), (500, 10, 7));
+        assert_eq!(found.rules, rules);
+    }
+
+    #[test]
+    fn a_market_carries_the_rule_set_it_was_built_by() {
+        let goods = goods();
+        let pilot = pilot(500);
+        for key in [
+            RuleKey::TradeLot,
+            RuleKey::TradeQuotient,
+            RuleKey::TradeCount,
+            RuleKey::TradeDebt,
+        ] {
+            for source in RuleSource::ALL {
+                let rules = Rulebook::default().with_override(key, source);
+                let found = market(&Exchange {
+                    rules,
+                    ..exchange(&goods, StellarId(137), PORT_KANE, &pilot)
+                })
+                .expect("trades");
+                assert_eq!(found.rules, rules, "{key:?} {source:?}");
+            }
+        }
     }
 
     #[test]
     fn the_exchange_trades_a_click_by_its_rule() {
         for trade_lot in RuleSource::ALL {
-            let found = market(
-                &goods(),
-                StellarId(137),
-                PORT_KANE,
-                &pilot(500),
-                10,
-                Gate::FRESH,
-                &Rulebook::default().with_override(RuleKey::TradeLot, trade_lot),
-                Markup::Standard,
-            )
+            let found = market(&Exchange {
+                capacity: 10,
+                rules: Rulebook::default().with_override(RuleKey::TradeLot, trade_lot),
+                ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
+            })
             .expect("trades");
             assert_eq!(found.trade_lot, trade_lot);
         }
@@ -2113,16 +2200,11 @@ mod tests {
     #[test]
     fn the_exchange_divides_by_its_quotient_rule() {
         for trade_quotient in RuleSource::ALL {
-            let found = market(
-                &goods(),
-                StellarId(137),
-                PORT_KANE,
-                &pilot(500),
-                10,
-                Gate::FRESH,
-                &Rulebook::default().with_override(RuleKey::TradeQuotient, trade_quotient),
-                Markup::Standard,
-            )
+            let found = market(&Exchange {
+                capacity: 10,
+                rules: Rulebook::default().with_override(RuleKey::TradeQuotient, trade_quotient),
+                ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
+            })
             .expect("trades");
             assert_eq!(found.trade_quotient, trade_quotient);
         }
@@ -2131,16 +2213,11 @@ mod tests {
     #[test]
     fn the_exchange_carries_its_count_rule() {
         for trade_count in RuleSource::ALL {
-            let found = market(
-                &goods(),
-                StellarId(137),
-                PORT_KANE,
-                &pilot(500),
-                10,
-                Gate::FRESH,
-                &Rulebook::default().with_override(RuleKey::TradeCount, trade_count),
-                Markup::Standard,
-            )
+            let found = market(&Exchange {
+                capacity: 10,
+                rules: Rulebook::default().with_override(RuleKey::TradeCount, trade_count),
+                ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
+            })
             .expect("trades");
             assert_eq!(found.trade_count, trade_count);
         }
@@ -2149,16 +2226,11 @@ mod tests {
     #[test]
     fn the_exchange_carries_its_debt_rule() {
         for trade_debt in RuleSource::ALL {
-            let found = market(
-                &goods(),
-                StellarId(137),
-                PORT_KANE,
-                &pilot(500),
-                10,
-                Gate::FRESH,
-                &Rulebook::default().with_override(RuleKey::TradeDebt, trade_debt),
-                Markup::Standard,
-            )
+            let found = market(&Exchange {
+                capacity: 10,
+                rules: Rulebook::default().with_override(RuleKey::TradeDebt, trade_debt),
+                ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
+            })
             .expect("trades");
             assert_eq!(found.trade_debt, trade_debt);
         }
@@ -2167,16 +2239,11 @@ mod tests {
     #[test]
     fn the_exchange_lists_the_commodities_traded_at_their_levels() {
         let flags = PORT_KANE;
-        let found = market(
-            &goods(),
-            StellarId(137),
-            flags,
-            &pilot(500),
-            10,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 10,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), StellarId(137), flags, &pilot(500))
+        })
         .expect("trades");
         assert_eq!(
             found,
@@ -2193,6 +2260,7 @@ mod tests {
                 cash: 500,
                 capacity: 10,
                 free: 10,
+                rules: rules(RuleSource::Engine),
                 trade_lot: RuleSource::Engine,
                 trade_quotient: RuleSource::Engine,
                 trade_count: RuleSource::Engine,
@@ -2200,16 +2268,10 @@ mod tests {
             }
         );
         let some = TRADE | (1 << 24) | (4 << 12);
-        let found = market(
-            &goods(),
-            StellarId(137),
-            some,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), StellarId(137), some, &pilot(0))
+        })
         .expect("trades");
         assert_eq!(
             found.rows,
@@ -2218,32 +2280,20 @@ mod tests {
                 row(Good::Commodity(4), "Metal", 250),
             ]
         );
-        let none = market(
-            &goods(),
-            StellarId(137),
-            TRADE,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let none = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), StellarId(137), TRADE, &pilot(0))
+        })
         .expect("trades");
         assert_eq!(none.rows, [], "a trade center that trades nothing");
     }
 
     #[test]
     fn junk_is_sold_low_where_it_is_sold_and_bought_high_where_it_is_bought() {
-        let at_earth = market(
-            &goods(),
-            EARTH,
-            TRADE,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let at_earth = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, TRADE, &pilot(0))
+        })
         .expect("trades");
         assert_eq!(
             at_earth.rows,
@@ -2253,28 +2303,16 @@ mod tests {
             ],
             "by ID, each traded both ways by the engine"
         );
-        let at_mars = market(
-            &goods(),
-            MARS,
-            TRADE,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let at_mars = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), MARS, TRADE, &pilot(0))
+        })
         .expect("trades");
         assert_eq!(at_mars.rows, [row(Good::Junk(JunkId(146)), "Opals", 1500)]);
-        let elsewhere = market(
-            &goods(),
-            StellarId(150),
-            TRADE,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let elsewhere = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), StellarId(150), TRADE, &pilot(0))
+        })
         .expect("trades");
         assert_eq!(elsewhere.rows, []);
     }
@@ -2289,16 +2327,10 @@ mod tests {
     fn by_the_bible_junk_is_only_bought_where_it_is_sold_and_sold_where_it_is_bought() {
         let at = |stellar| {
             let rules = trading_by(RuleSource::Bible);
-            market(
-                &goods(),
-                stellar,
-                TRADE,
-                &pilot(0),
-                0,
-                Gate::FRESH,
-                &rules,
-                Markup::Standard,
-            )
+            market(&Exchange {
+                rules,
+                ..exchange(&goods(), stellar, TRADE, &pilot(0))
+            })
             .expect("trades")
             .rows
         };
@@ -2327,16 +2359,10 @@ mod tests {
     #[test]
     fn commodities_trade_both_ways_by_either_reading() {
         for source in RuleSource::ALL {
-            let found = market(
-                &goods(),
-                StellarId(137),
-                PORT_KANE,
-                &pilot(0),
-                0,
-                Gate::FRESH,
-                &trading_by(source),
-                Markup::Standard,
-            )
+            let found = market(&Exchange {
+                rules: trading_by(source),
+                ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(0))
+            })
             .expect("trades");
             assert_eq!(found.rows.len(), 6, "{source:?}");
             for row in &found.rows {
@@ -2366,16 +2392,12 @@ mod tests {
             ..unlisted()
         };
         let goods = Goods::new(&CommodityStrings::default(), vec![both], Vec::new());
-        market(
-            &goods,
-            EARTH,
-            TRADE,
-            pilot,
+        market(&Exchange {
             capacity,
-            Gate::FRESH,
-            &trading_by(junk_trade),
+            rules: trading_by(junk_trade),
             markup,
-        )
+            ..exchange(&goods, EARTH, TRADE, pilot)
+        })
         .expect("trades")
     }
 
@@ -2499,16 +2521,11 @@ mod tests {
 
     /// The (good, price) rows at `stellar`, with `flags`, by `markup`.
     fn priced(stellar: StellarId, flags: u32, markup: Markup) -> Vec<(Good, i64)> {
-        market(
-            &goods(),
-            stellar,
-            flags,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
+        market(&Exchange {
+            rules: rules(RuleSource::Engine),
             markup,
-        )
+            ..exchange(&goods(), stellar, flags, &pilot(0))
+        })
         .expect("trades")
         .rows
         .iter()
@@ -2567,16 +2584,11 @@ mod tests {
     /// `BoughtAt` row at the high price first, then its `SoldAt` row at the
     /// low price.
     fn gold_at_earth(goods: &Goods, gate: Gate) -> Vec<i64> {
-        let found = market(
-            goods,
-            EARTH,
-            TRADE,
-            &pilot(0),
-            0,
+        let found = market(&Exchange {
             gate,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+            rules: rules(RuleSource::Engine),
+            ..exchange(goods, EARTH, TRADE, &pilot(0))
+        })
         .expect("trades");
         found
             .rows
@@ -2646,16 +2658,10 @@ mod tests {
     #[test]
     fn junk_follows_the_commodities() {
         let flags = TRADE | (2 << 28);
-        let found = market(
-            &goods(),
-            MARS,
-            flags,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), MARS, flags, &pilot(0))
+        })
         .expect("trades");
         let listed: Vec<_> = found.rows.iter().map(|row| row.good).collect();
         assert_eq!(listed, [Good::Commodity(0), Good::Junk(JunkId(146))]);
@@ -2670,16 +2676,11 @@ mod tests {
             (Good::Commodity(5), 4),
             (Good::Junk(JunkId(999)), 1),
         ]);
-        let found = market(
-            &goods(),
-            EARTH,
-            TRADE | (2 << 28),
-            &pilot,
-            12,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 12,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, TRADE | (2 << 28), &pilot)
+        })
         .expect("trades");
         let held: Vec<_> = found.rows.iter().map(|row| (row.good, row.held)).collect();
         assert_eq!(
@@ -2695,16 +2696,11 @@ mod tests {
             (12, 2),
             "everything held counts"
         );
-        let over = market(
-            &goods(),
-            EARTH,
-            TRADE,
-            &pilot,
-            5,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let over = market(&Exchange {
+            capacity: 5,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, TRADE, &pilot)
+        })
         .expect("trades");
         assert_eq!(over.free, 0, "more held than there is space");
     }
@@ -2745,16 +2741,10 @@ mod tests {
                     )
             })
             .collect();
-        market(
-            &goods(),
-            stellar,
-            flags,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(source),
-            Markup::Standard,
-        )
+        market(&Exchange {
+            rules: rules(source),
+            ..exchange(&goods(), stellar, flags, &pilot)
+        })
         .expect("trades")
     }
 
@@ -2833,16 +2823,10 @@ mod tests {
         let goods = Goods::new(&stock(), Vec::new(), records);
         let mut pilot = pilot(0);
         pilot.events = BTreeMap::from([at(&disasters()[2], 7), at(&disasters()[0], 1)]);
-        let found = market(
-            &goods,
-            EARTH,
-            PORT_KANE,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods, EARTH, PORT_KANE, &pilot)
+        })
         .expect("trades");
         assert_eq!(
             price(&found, Good::Commodity(0)),
@@ -2874,16 +2858,10 @@ mod tests {
                 stellar: Some(EARTH),
             },
         )]);
-        market(
-            &goods,
-            EARTH,
-            flags,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(source),
-            Markup::Standard,
-        )
+        market(&Exchange {
+            rules: rules(source),
+            ..exchange(&goods, EARTH, flags, &pilot)
+        })
         .expect("trades")
     }
 
@@ -2903,16 +2881,11 @@ mod tests {
         let mut buyer = pilot(1000);
         buyer.events = BTreeMap::from([at(&disasters()[0], 30)]);
         buyer.cargo = BTreeMap::from([(FOOD, 2)]);
-        let found = market(
-            &goods(),
-            EARTH,
-            industrial_only,
-            &buyer,
-            10,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 10,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, industrial_only, &buyer)
+        })
         .expect("trades");
         assert_eq!(
             found.rows,
@@ -2939,29 +2912,19 @@ mod tests {
 
         let priced_at_0 = patched(&[(0, StringPatch::Unreadable)]);
         let unreadable = Goods::new(&priced_at_0, Vec::new(), disasters());
-        let found = market(
-            &unreadable,
-            EARTH,
-            industrial_only,
-            &buyer,
-            10,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 10,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&unreadable, EARTH, industrial_only, &buyer)
+        })
         .expect("trades");
         assert_eq!(price(&found, FOOD), 5, "a commodity priced at 0, 0 - 15");
 
-        let found = market(
-            &goods(),
-            MARS,
-            industrial_only,
-            &buyer,
-            10,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 10,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), MARS, industrial_only, &buyer)
+        })
         .expect("trades");
         assert_eq!(found.row(FOOD), None, "an event at another stellar");
     }
@@ -3013,16 +2976,10 @@ mod tests {
                 ("", food_high, 5),
             ] {
                 let goods = Goods::new(&strings(&["Food"], &[base]), Vec::new(), Vec::new());
-                let found = market(
-                    &goods,
-                    EARTH,
-                    flags,
-                    &pilot(0),
-                    0,
-                    Gate::FRESH,
-                    &rules(source),
-                    Markup::Standard,
-                )
+                let found = market(&Exchange {
+                    rules: rules(source),
+                    ..exchange(&goods, EARTH, flags, &pilot(0))
+                })
                 .expect("trades");
                 assert_eq!(price(&found, FOOD), expected, "{base} {source:?}");
             }
@@ -3051,16 +3008,10 @@ mod tests {
                 let rules = Rulebook::default()
                     .with_override(RuleKey::EventPrice, event_price)
                     .with_override(RuleKey::JunkPrice, junk_price);
-                let found = market(
-                    &goods,
-                    EARTH,
-                    TRADE,
-                    &pilot(0),
-                    0,
-                    Gate::FRESH,
-                    &rules,
-                    Markup::Standard,
-                )
+                let found = market(&Exchange {
+                    rules,
+                    ..exchange(&goods, EARTH, TRADE, &pilot(0))
+                })
                 .expect("trades");
                 let prices: Vec<_> = found.rows.iter().map(|row| row.price).collect();
                 assert_eq!(prices, expected, "{rules:?}");
@@ -3130,16 +3081,10 @@ mod tests {
                 )
             })
             .collect();
-        market(
-            &goods,
-            EARTH,
-            flags,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(source),
-            Markup::Standard,
-        )
+        market(&Exchange {
+            rules: rules(source),
+            ..exchange(&goods, EARTH, flags, &pilot)
+        })
         .expect("trades")
     }
 
@@ -3193,16 +3138,11 @@ mod tests {
             ..unlisted()
         };
         let goods = Goods::new(&CommodityStrings::default(), vec![odd], Vec::new());
-        market(
-            &goods,
-            EARTH,
-            TRADE,
-            pilot,
-            10,
-            Gate::FRESH,
-            &rules,
-            Markup::Standard,
-        )
+        market(&Exchange {
+            capacity: 10,
+            rules,
+            ..exchange(&goods, EARTH, TRADE, pilot)
+        })
         .expect("trades")
     }
 
@@ -3401,16 +3341,10 @@ mod tests {
                 stellar: Some(EARTH),
             },
         )]);
-        let found = market(
-            &goods,
-            EARTH,
-            PORT_KANE,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods, EARTH, PORT_KANE, &pilot)
+        })
         .expect("trades");
         assert_eq!(found.events, Vec::<String>::new());
         assert_eq!(price(&found, Good::Commodity(5)), 440);
@@ -3443,16 +3377,10 @@ mod tests {
                 stellar: stored,
             },
         )]);
-        market(
-            &goods,
-            here,
-            PORT_KANE,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(source),
-            Markup::Standard,
-        )
+        market(&Exchange {
+            rules: rules(source),
+            ..exchange(&goods, here, PORT_KANE, &pilot)
+        })
         .expect("trades")
     }
 
@@ -3513,6 +3441,7 @@ mod tests {
             cash,
             capacity: 100,
             free,
+            rules: Rulebook::default(),
             trade_lot: RuleSource::Engine,
             trade_quotient: RuleSource::Engine,
             trade_count: RuleSource::Engine,

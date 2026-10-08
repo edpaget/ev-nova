@@ -2036,16 +2036,16 @@ impl Session {
     pub fn market(&self) -> Option<Market> {
         let stellar = self.landed?;
         let site = self.sites.iter().find(|site| site.id == stellar)?;
-        market::market(
-            &self.goods,
+        market::market(&market::Exchange {
+            goods: &self.goods,
             stellar,
-            site.flags,
-            &self.pilot,
-            self.capacity(),
-            self.gate(),
-            &self.rules,
-            self.markup(site),
-        )
+            flags: site.flags,
+            pilot: &self.pilot,
+            capacity: self.capacity(),
+            gate: self.gate(),
+            rules: self.rules,
+            markup: self.markup(site),
+        })
     }
 
     /// The markup at `site`, one of the system's: by whether it has a
