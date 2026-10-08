@@ -528,6 +528,8 @@ pub(crate) fn purchase(
         .saturating_add(quote.trade_in)
         .saturating_add(refund);
     let stats = ShipStats::new(new.fields, &outfit_mods(&pilot.outfits, records));
+    // The new ship's own space, not the fleet's: the original's trim
+    // waits for rdm `phase/shop-and-trade-fidelity/phase-17-shipyard-fleet-cargo`.
     let mut room = stats.capacity;
     let mut left_behind = BTreeMap::new();
     for (good, tons) in &mut pilot.cargo {

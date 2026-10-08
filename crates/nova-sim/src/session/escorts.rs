@@ -14,7 +14,9 @@
 //! (`_MakeEscortsHyperWithParent` @0x3fd54) and arrives with its shield
 //! and armour as they were; taking off, and flying a pilot, restock them
 //! full (`_RespawnEscort` @0x3d4b8, restock 1 @0x674c2), the fuel as
-//! recorded. Landed, the escorts wait in the record.
+//! recorded. Landed, the escorts wait in the record. A trader escort's
+//! `Holds` count in the fleet's cargo space, in flight and landed (see
+//! [`market`](crate::market)).
 //!
 //! **Person escorts.** An escort that is a person
 //! ([`Escort::person`](crate::Escort)) flies as itself in every system:

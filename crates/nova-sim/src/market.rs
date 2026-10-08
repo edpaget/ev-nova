@@ -60,10 +60,8 @@
 //! perishable goods decay only while there is space, and a good with both
 //! flags decays only beside a perishable-only good; by the Bible,
 //! tribbles goods grow only into free space and perishable goods always
-//! decay. The free space is the cargo space the ship and its outfits give
-//! ([`cargo_capacity`]) less everything held; the original counts the
-//! fleet's escort holds too, which waits for rdm
-//! `phase/shop-and-trade-fidelity/phase-11-exchange-fleet-holds`.
+//! decay. The free space is the fleet's cargo space ([`fleet_holds`],
+//! below) less everything held.
 //!
 //! # Events
 //!
@@ -101,7 +99,18 @@
 //! # Cargo
 //!
 //! A ship carries `|Holds|` tons, plus each outfit's `ModVal` of
-//! [`MORE_CARGO`] for each one carried. Buying one lot ([`Lot::One`]) is
+//! [`MORE_CARGO`] for each one carried ([`cargo_capacity`]).
+//!
+//! The exchange measures the fleet's cargo space ([`fleet_holds`],
+//! `_TotalFleetHolds` @0xc24d-0xc356): the ship's own, plus the `Holds`
+//! of each of the player's escorts whose ship class's `InherentAI` is 2
+//! or less (a trader, or any value below 1), at most [`MAX_FLEET_HOLDS`]
+//! tons. A warship or interceptor escort adds nothing, nor does a fighter
+//! launched from the player's bays, nor any escort's outfits or cargo:
+//! every good the fleet holds is held on the player's ship. The free
+//! space is that less everything held.
+//!
+//! Buying one lot ([`Lot::One`]) is
 //! a ton, and the most ([`Lot::Max`]) is as much as both the free space
 //! and the cash allow; selling one is a ton, and the most everything
 //! held. A trade that would move nothing is refused.
@@ -242,6 +251,7 @@ pub fn band_price(base: i64, level: PriceLevel) -> i64 {
 
 /// The cargo space, in tons, of a ship with `holds` and these `outfits`;
 /// never below none. [`ShipStats`](crate::stats::ShipStats) gives a ship's.
+/// This is the ship's own space; the fleet's is [`fleet_holds`].
 #[must_use]
 pub fn cargo_capacity(holds: i16, outfits: &[OutfitMod]) -> u32 {
     let pods: i64 = outfits
@@ -251,6 +261,37 @@ pub fn cargo_capacity(holds: i16, outfits: &[OutfitMod]) -> u32 {
         .sum();
     let tons = i64::from(holds).abs() + pods;
     u32::try_from(tons.max(0)).unwrap_or(u32::MAX)
+}
+
+/// The most cargo space a fleet has (`_TotalFleetHolds` @0xc33e-0xc349).
+pub const MAX_FLEET_HOLDS: u32 = 32_000;
+
+/// What the fleet's cargo space needs of one of the player's escorts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EscortHolds {
+    /// Its ship class's `Holds`, raw.
+    pub holds: i16,
+    /// Its ship class's `InherentAI`, raw.
+    pub inherent_ai: i16,
+    /// Whether it is a fighter launched from one of the player's bays
+    /// (the original's AI type 5).
+    pub carried: bool,
+}
+
+/// The fleet's cargo space, in tons (`_TotalFleetHolds` @0xc24d-0xc356):
+/// the ship's own `ship` tons plus the `Holds` of each escort that is not
+/// a launched fighter and whose `InherentAI` is
+/// [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI) or less, at most
+/// [`MAX_FLEET_HOLDS`] and never below none.
+#[must_use]
+pub fn fleet_holds(ship: u32, escorts: impl IntoIterator<Item = EscortHolds>) -> u32 {
+    let escorts: i64 = escorts
+        .into_iter()
+        .filter(|escort| !escort.carried && escort.inherent_ai <= crate::escort::FREIGHTER_AI)
+        .map(|escort| i64::from(escort.holds))
+        .sum();
+    let tons = (i64::from(ship) + escorts).clamp(0, i64::from(MAX_FLEET_HOLDS));
+    u32::try_from(tons).unwrap_or(MAX_FLEET_HOLDS)
 }
 
 /// Whether a control-bit test `expression` holds.
@@ -946,6 +987,64 @@ mod tests {
             cargo_capacity(i16::MAX, &[cargo(i16::MAX, u16::MAX); 8]),
             u32::try_from(32_767 + 8 * 32_767 * 65_535_i64).unwrap_or(u32::MAX)
         );
+    }
+
+    // The fleet's cargo space.
+
+    /// An escort out of no bay, of `Holds` `holds` and `InherentAI`
+    /// `inherent_ai`.
+    fn escort(holds: i16, inherent_ai: i16) -> EscortHolds {
+        EscortHolds {
+            holds,
+            inherent_ai,
+            carried: false,
+        }
+    }
+
+    #[test]
+    fn the_fleets_holds_are_the_ships_with_no_escorts() {
+        assert_eq!(fleet_holds(20, []), 20);
+    }
+
+    #[test]
+    fn a_trader_escort_adds_its_holds() {
+        assert_eq!(fleet_holds(20, [escort(15, 1), escort(30, 2)]), 65);
+    }
+
+    #[test]
+    fn a_warship_or_interceptor_escort_adds_nothing() {
+        assert_eq!(fleet_holds(20, [escort(15, 3), escort(30, 4)]), 20);
+    }
+
+    #[test]
+    fn an_inherent_ai_below_1_counts_as_a_trader() {
+        assert_eq!(fleet_holds(20, [escort(15, 0), escort(30, -1)]), 65);
+    }
+
+    #[test]
+    fn a_launched_fighter_adds_nothing() {
+        let fighter = EscortHolds {
+            carried: true,
+            ..escort(15, 1)
+        };
+        assert_eq!(fleet_holds(20, [fighter]), 20);
+    }
+
+    #[test]
+    fn a_negative_escort_holds_takes_space_away_but_never_below_none() {
+        assert_eq!(fleet_holds(20, [escort(-5, 1)]), 15);
+        assert_eq!(fleet_holds(20, [escort(-50, 1)]), 0);
+    }
+
+    #[test]
+    fn the_fleets_holds_stop_at_32000() {
+        assert_eq!(MAX_FLEET_HOLDS, 32_000);
+        assert_eq!(fleet_holds(31_990, [escort(10, 1)]), 32_000);
+        assert_eq!(fleet_holds(31_990, [escort(11, 1)]), 32_000);
+        assert_eq!(fleet_holds(31_990, [escort(9, 1)]), 31_999);
+        assert_eq!(fleet_holds(40_000, []), 32_000, "the ship's too");
+        assert_eq!(fleet_holds(u32::MAX, [escort(1, 1)]), 32_000);
+        assert_eq!(fleet_holds(0, [escort(i16::MAX, 1); 6]), 32_000);
     }
 
     // Control bits.

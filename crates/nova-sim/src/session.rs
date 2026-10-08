@@ -300,7 +300,7 @@ use crate::hyperspace::{
 };
 use crate::landing::{LandOutcome, LandingRefusal, land_or_select};
 use crate::legal::{self, Crime, LegalCode};
-use crate::market::{self, Good, Goods, Market, Order, TradeRefusal};
+use crate::market::{self, EscortHolds, Good, Goods, Market, Order, TradeRefusal};
 use crate::message::SimMessage;
 use crate::navigation::next_stellar;
 use crate::outfitter::{
@@ -786,10 +786,11 @@ impl Session {
         let frame = self.frame;
         self.frame = market::next_frame(frame);
         if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
+            let capacity = self.capacity();
             market::step_junk(
                 &self.goods,
                 &mut self.pilot.cargo,
-                self.stats.capacity,
+                capacity,
                 self.junk_flags,
             );
         }
@@ -1839,7 +1840,7 @@ impl Session {
             stellar,
             site.flags,
             &self.pilot,
-            self.stats.capacity,
+            self.capacity(),
             self.event_price,
         )
     }
@@ -2133,10 +2134,26 @@ impl Session {
         Ok(price)
     }
 
-    /// The ship's cargo space, in tons.
+    /// The fleet's cargo space, in tons (`_TotalFleetHolds`): the ship's
+    /// own, with its cargo outfits, plus the `Holds` of each trader escort
+    /// ([`market::fleet_holds`]). The exchange and the jünk step measure
+    /// free space against it.
     #[must_use]
     pub fn capacity(&self) -> u32 {
-        self.stats.capacity
+        market::fleet_holds(self.stats.capacity, self.escort_holds())
+    }
+
+    /// What the fleet's cargo space needs of each escort whose ship class
+    /// has a record.
+    fn escort_holds(&self) -> impl Iterator<Item = EscortHolds> + '_ {
+        self.pilot.escorts.iter().filter_map(|escort| {
+            let record = self.ship_record(escort.ship)?;
+            Some(EscortHolds {
+                holds: record.fields.holds,
+                inherent_ai: record.inherent_ai,
+                carried: escort.carried,
+            })
+        })
     }
 
     /// How the ship performs, with the outfits it carries.
@@ -2484,6 +2501,8 @@ impl Session {
                     return Taken::Nothing;
                 };
                 let held: u32 = self.pilot.cargo.values().sum();
+                // The ship's own space, not the fleet's: plunder into
+                // pooled holds waits for rdm task `boarding-follow-up`.
                 let stored = tons.min(self.stats.capacity.saturating_sub(held));
                 if stored > 0 {
                     *self.pilot.cargo.entry(good).or_default() += stored;
@@ -4694,6 +4713,90 @@ mod tests {
         assert_eq!(plain.market(), None, "no trade center");
     }
 
+    /// An escort of ship class `ship`, out of no bay.
+    fn fleet_escort(ship: i16) -> Escort {
+        Escort {
+            ship: ShipId(ship),
+            reserves: Reserves::default(),
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        }
+    }
+
+    /// Ship class `id`'s record, of `Holds` `holds` and `InherentAI`
+    /// `inherent_ai`.
+    fn holds_record(id: i16, holds: i16, inherent_ai: i16) -> ShipRecord {
+        ShipRecord {
+            inherent_ai,
+            ..ship(id, ShipFields { holds, ..FAST })
+        }
+    }
+
+    /// [`exchange`] with ship classes 129 a trader of 15 tons, 130 a
+    /// warship of 50 and 131 a trader of 5; 132 has no record.
+    fn fleet_exchange() -> FakePilotCatalog {
+        FakePilotCatalog {
+            ship_records: vec![
+                holds_record(129, 15, 1),
+                holds_record(130, 50, 3),
+                holds_record(131, 5, 1),
+            ],
+            ..exchange()
+        }
+    }
+
+    /// A session of [`fleet_exchange`], landed, whose fleet is a trader
+    /// escort (129), a warship (130), a launched fighter (131) and an
+    /// escort with no record (132).
+    fn landed_with_a_fleet() -> Session {
+        let mut session = Session::start(&fleet_exchange()).expect("starts");
+        session.pilot.escorts = vec![
+            fleet_escort(129),
+            fleet_escort(130),
+            Escort {
+                carried: true,
+                ..fleet_escort(131)
+            },
+            fleet_escort(132),
+        ];
+        land_now(&mut session).expect("lands");
+        session
+    }
+
+    #[test]
+    fn the_exchange_counts_trader_escorts_holds() {
+        let session = landed_with_a_fleet();
+        assert_eq!(session.capacity(), 35);
+        let market = session.market().expect("an exchange");
+        assert_eq!((market.capacity, market.free), (35, 35));
+    }
+
+    #[test]
+    fn the_exchanges_free_space_is_the_fleets_less_everything_held() {
+        let mut session = landed_with_a_fleet();
+        session.pilot.set_cash(100_000);
+        assert_eq!(session.trade(order(FOOD, Direction::Buy, Lot::Max)), Ok(35));
+        assert_eq!(session.market().expect("an exchange").free, 0);
+        assert_eq!(
+            session.trade(order(FOOD, Direction::Buy, Lot::One)),
+            Err(TradeRefusal::NoSpace)
+        );
+    }
+
+    #[test]
+    fn the_exchanges_cargo_space_stops_at_32000() {
+        let catalog = FakePilotCatalog {
+            ship_records: vec![holds_record(129, 20_000, 2)],
+            ..exchange()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        session.pilot.escorts = vec![fleet_escort(129), fleet_escort(129)];
+        land_now(&mut session).expect("lands");
+        assert_eq!(session.market().expect("an exchange").capacity, 32_000);
+    }
+
     #[test]
     fn buying_pays_loads_and_makes_a_save_due() {
         let mut session = Session::start(&exchange()).expect("starts");
@@ -4930,6 +5033,42 @@ mod tests {
         take_off_with(&mut session, &[]);
         assert_eq!(steps_in(&mut session, 15), [15], "still the 15th tick");
         assert_eq!(session.pilot().held(FURBALLS), 20, "the hold filled");
+    }
+
+    /// A session of [`breeding`] by `source`, whose fleet is a trader
+    /// escort of `holds` tons (ship class 129), that has filled the ship's
+    /// own 20 tons with furballs at planet 128 and taken off.
+    fn furballs_in_a_full_ship(source: RuleSource, holds: Option<i16>) -> Session {
+        let catalog = FakePilotCatalog {
+            ship_records: vec![holds_record(129, holds.unwrap_or(0), 1)],
+            ..breeding()
+        };
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_junk_flags(source);
+        if holds.is_some() {
+            session.pilot.escorts = vec![fleet_escort(129)];
+        }
+        land_now(&mut session).expect("lands");
+        take_off_with(&mut session, &[(FURBALLS, 20)]);
+        session
+    }
+
+    #[test]
+    fn tribbles_grow_into_a_trader_escorts_holds() {
+        let mut session = furballs_in_a_full_ship(RuleSource::Engine, Some(5));
+        assert_eq!(steps_in(&mut session, 15), [15]);
+        assert_eq!(session.pilot().held(FURBALLS), 21);
+        let mut alone = furballs_in_a_full_ship(RuleSource::Engine, None);
+        assert_eq!(steps_in(&mut alone, 15), Vec::<u32>::new());
+        assert_eq!(alone.pilot().held(FURBALLS), 20, "no free space");
+    }
+
+    #[test]
+    fn by_the_bible_tribbles_grow_only_into_the_fleets_free_space() {
+        let mut session = furballs_in_a_full_ship(RuleSource::Bible, Some(2));
+        assert_eq!(steps_in(&mut session, 600), [15, 265]);
+        assert_eq!(session.pilot().held(FURBALLS), 22);
     }
 
     #[test]

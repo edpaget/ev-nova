@@ -17,7 +17,8 @@
 //!   to the shield, armour and fuel capacity, after the [`crate::reserves`]
 //!   rules read the `shïp`'s own.
 //! - [`MORE_CARGO`](crate::market::MORE_CARGO) (2) adds cargo space, as
-//!   [`cargo_capacity`] says.
+//!   [`cargo_capacity`] says: the ship's own space, which the fleet's
+//!   ([`fleet_holds`](crate::market::fleet_holds)) builds on.
 //! - [`FUEL_SCOOP`](crate::fuel::FUEL_SCOOP) (18) regenerates fuel, as
 //!   [`fuel_regen_per_tick`] says.
 //! - [`HYPERSPACE_DAYS`] (22) adds days to each jump's
