@@ -36,12 +36,16 @@
 //! | [`PersonCredits`](RuleKey::PersonCredits) | `person_credits` | a person carries half its `Credits` in thousands, kept in 16 bits, and a draw of as many more ([`NovaBoarding`](crate::NovaBoarding)) | its `Credits`, ±25 % |
 //! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
 //! | [`GrantCount`](RuleKey::GrantCount) | `grant_count` | boarding a person grants trunc((50 + `Rand(51)`) x `GrantCount` / 100) outfits, at least 1 ([`NovaBoarding`](crate::NovaBoarding)) | 1 + `Rand(GrantCount)`\* |
-//! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a grant may take the player past the outfit's `Max` ([`NovaBoarding`](crate::NovaBoarding)) | it is held to `Max` less the owned\* |
+//! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a boarding grant may take the player past the outfit's `Max` ([`NovaBoarding`](crate::NovaBoarding)), and `G` past its `Max` and the free mass ([`OutfitRules`](crate::OutfitRules)) | both are held to `Max` less the owned and to the free mass\* |
 //! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: the original offers its `LinkMission`, which waits for missions ([`JoinFleet`](crate::hail::nova::JoinFleet)) | a person whose record allows it lists Use As Escort and joins the fleet as itself, for good\* |
+//! | [`MapExplore`](RuleKey::MapExplore) | `map_explore` | a map of `ModVal` N explores depth first, so it may miss systems within N jumps, and "inhabited" reads a system's first four stellars ([`OutfitRules`](crate::OutfitRules)) | every system within N jumps, and any stellar |
+//! | [`InvalidMap`](RuleKey::InvalidMap) | `invalid_map` | a map whose `ModVal` explores nothing (0, -2 to -999) is used up ([`OutfitRules`](crate::OutfitRules)) | it is added to the outfits as a plain item\* |
+//! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing ([`OutfitRules`](crate::OutfitRules)) | it pays what selling the outfit would\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
-//! `hire_fee`, `escort_wage`, `grant_max`, `person_join` or `comm_quote`
+//! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
+//! `remove_refund` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -277,11 +281,14 @@ rule_keys! {
     /// [`grant`](crate::grant)).
     GrantCount => "grant_count",
     /// Whether a grant may take the player past the outfit's `Max`: by the
-    /// engine, it may, as only an outfit's owned count is tested before
-    /// the pick (`_DoPlunderDialog` @0x93119); otherwise the count is held
-    /// to `Max` less the owned. The Bible is silent here, so the other
-    /// reading is the obvious fix, not anything the Bible says (see
-    /// [`grant`](crate::grant)).
+    /// engine, a boarding grant may, as only an outfit's owned count is
+    /// tested before the pick (`_DoPlunderDialog` @0x93119), though its
+    /// count is held to the free mass; and `G` may pass both the `Max`
+    /// and the free mass, as `_GrantOutfitItem` checks neither (@0x44d4f).
+    /// Otherwise both are held to `Max` less the owned and to the free
+    /// mass. The Bible is silent here, so the other reading is the
+    /// obvious fix, not anything the Bible says (see
+    /// [`grant`](crate::grant) and [`OutfitRules`](crate::OutfitRules)).
     GrantMax => "grant_max",
     /// Whether a person offers to join the player when hailed: by the
     /// engine, none does, as the original brings a person to fly with the
@@ -295,6 +302,36 @@ rule_keys! {
     /// anything the Bible says (see
     /// [`JoinFleet`](crate::hail::nova::JoinFleet)).
     PersonJoin => "person_join",
+    /// Which systems a map outfit (`ModType` 16) of `ModVal` N above 0
+    /// explores, and which systems count as inhabited for a `ModVal` of
+    /// -1: by the engine, a depth-first walk from the player's system
+    /// that follows each system's Con links in order and never enters a
+    /// system twice (`_RecursiveAutoExplore` @0xd942), so a system first
+    /// reached by a long way round, too deep to go on, is never entered
+    /// again by a shorter one and the systems beyond it within N jumps
+    /// are missed; and a system is inhabited when one of its *first four*
+    /// stellars is neither uninhabited (`Flags` 0x0020) nor a hypergate
+    /// or wormhole (`Flags2` 0x1000, 0x2000) (`_SystemIsInhabited`
+    /// @0x4c4a). By the Bible ("how many jumps away from the current
+    /// system to explore"), every system within N jumps, and any stellar
+    /// of the system counts (see
+    /// [`exploration`](crate::exploration)).
+    MapExplore => "map_explore",
+    /// What becomes of a map outfit whose `ModVal` explores nothing (0,
+    /// or -2 to -999): by the engine, it is used up all the same, as any
+    /// map slot keeps the outfit from being added (`_GrantOutfitItem`
+    /// @0x44ea9); otherwise it is no map, and is added to the outfits as
+    /// a plain item. The Bible is silent on those values, so the other
+    /// reading is the obvious fix, not anything the Bible says (see
+    /// [`outfit_effects`](crate::outfit_effects)).
+    InvalidMap => "invalid_map",
+    /// What the `D` set operator pays for the outfit it removes: by the
+    /// engine, nothing (`_EvalSetExp` @0x1544b only lowers the count);
+    /// otherwise what selling the outfit at the outfitter would. The
+    /// Bible is silent here, so the other reading is the obvious
+    /// alternative, not anything the Bible says (see
+    /// [`OutfitRules`](crate::OutfitRules)).
+    RemoveRefund => "remove_refund",
 }
 
 impl RuleKey {
@@ -436,9 +473,15 @@ mod tests {
                 RuleKey::CommQuote,
                 RuleKey::GrantCount,
                 RuleKey::GrantMax,
-                RuleKey::PersonJoin
+                RuleKey::PersonJoin,
+                RuleKey::MapExplore,
+                RuleKey::InvalidMap,
+                RuleKey::RemoveRefund
             ]
         );
+        assert_eq!(RuleKey::MapExplore.key(), "map_explore");
+        assert_eq!(RuleKey::InvalidMap.key(), "invalid_map");
+        assert_eq!(RuleKey::RemoveRefund.key(), "remove_refund");
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
         assert_eq!(RuleKey::GrantCount.key(), "grant_count");
         assert_eq!(RuleKey::GrantMax.key(), "grant_max");

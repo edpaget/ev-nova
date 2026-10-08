@@ -160,8 +160,8 @@ use nova_sim::board::MAX_ESCORTS;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, ControlBits, DisableRule, HailOptions, HailView,
     HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
-    NovaPersons, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule, RuleKey,
-    RuleSource, Rulebook, Session, Take, Taken, pilot_key,
+    NovaPersons, OutfitRules, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule,
+    RuleKey, RuleSource, Rulebook, Session, Take, Taken, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -306,6 +306,9 @@ pub struct AppScreen {
     person_rules: Rc<dyn PersonRules>,
     /// When each flight's persons say their comm quotes.
     comm_quote: RuleSource,
+    /// How each flight grants and removes outfits where the rules are
+    /// disputed.
+    outfit_rules: OutfitRules,
     /// The control-bit test a ship for hire's `Availability` goes
     /// through in each flight.
     control_bits: Rc<dyn ControlBits>,
@@ -391,6 +394,7 @@ impl AppScreen {
             control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
             comm_quote: RuleSource::Engine,
+            outfit_rules: OutfitRules::default(),
             comm: None,
             haggle: None,
         }
@@ -572,10 +576,21 @@ impl AppScreen {
         }
     }
 
+    /// The router with each flight granting and removing outfits as
+    /// `rules` say ([`FlightView::with_outfit_rules`]); the engine's
+    /// until others are given.
+    #[must_use]
+    pub fn with_outfit_rules(self, rules: OutfitRules) -> Self {
+        Self {
+            outfit_rules: rules,
+            ..self
+        }
+    }
+
     /// The router with Nova's rules, each disputed one as `rulebook`
     /// chooses: the NPCs' behaviour, disabling, point defence, the law,
-    /// boarding, hailing, the escorts' and fighters' rules, hiring, and
-    /// the persons' rules. This is the edge where every [`RuleKey`] meets
+    /// boarding, hailing, the escorts' and fighters' rules, hiring, the
+    /// persons' rules, and granting and removing outfits. This is the edge where every [`RuleKey`] meets
     /// its setting.
     #[must_use]
     pub fn with_rulebook(self, rulebook: &Rulebook) -> Self {
@@ -595,6 +610,7 @@ impl AppScreen {
             .with_control_bits(Rc::new(NovaBits))
             .with_person_rules(Rc::new(NovaPersons::from_rulebook(rulebook)))
             .with_comm_quote(rulebook.source_for(RuleKey::CommQuote))
+            .with_outfit_rules(OutfitRules::from_rulebook(rulebook))
     }
 
     /// The comm dialog, while a hail is under way.
@@ -649,6 +665,7 @@ impl AppScreen {
             .with_control_bits(Rc::clone(&self.control_bits))
             .with_person_rules(Rc::clone(&self.person_rules))
             .with_comm_quote(self.comm_quote)
+            .with_outfit_rules(self.outfit_rules)
             .with_hyperspace_effects(self.prefs.hyperspace_effects);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
@@ -5705,6 +5722,16 @@ pub(super) mod tests {
             let session = flight(&screen).session().expect("flying");
             assert_eq!(session.comm_quote(), source);
         }
+        let rules = OutfitRules {
+            invalid_map: RuleSource::Bible,
+            ..OutfitRules::default()
+        };
+        let mut screen = AppScreen::new(data()).with_outfit_rules(rules);
+        fly(&mut screen);
+        assert_eq!(
+            flight(&screen).session().expect("flying").outfit_rules(),
+            rules
+        );
     }
 
     /// The rule-bearing parts of `screen`, each by name, as they print.
@@ -5726,32 +5753,34 @@ pub(super) mod tests {
             ("control_bits", format!("{:?}", screen.control_bits)),
             ("person_rules", format!("{:?}", screen.person_rules)),
             ("comm_quote", format!("{:?}", screen.comm_quote)),
+            ("outfit_rules", format!("{:?}", screen.outfit_rules)),
         ]
     }
 
-    /// The setting each rule's key reaches.
-    fn setting_of(key: RuleKey) -> &'static str {
+    /// The settings each rule's key reaches.
+    fn settings_of(key: RuleKey) -> &'static [&'static str] {
         match key {
-            RuleKey::CrimeGains => "law",
+            RuleKey::CrimeGains => &["law"],
             RuleKey::EmptyBooty
             | RuleKey::CrewlessCapture
             | RuleKey::PersonCredits
-            | RuleKey::GrantCount
-            | RuleKey::GrantMax => "boarding_rule",
-            RuleKey::PiracyPolice | RuleKey::EscortAi | RuleKey::PersonCoward => "behaviour",
-            RuleKey::QuietHails | RuleKey::LongAdvice | RuleKey::PersonJoin => "hail_options",
-            RuleKey::EscortOrders => "escort_orders",
-            RuleKey::FighterLaunch => "fighter_launch",
-            RuleKey::FighterRecall => "fighter_recall",
-            RuleKey::HireRequire => "hire_require",
-            RuleKey::TakeOffPay => "take_off_pay",
-            RuleKey::HireFee => "hire_terms",
-            RuleKey::EscortWage => "escort_wage",
+            | RuleKey::GrantCount => &["boarding_rule"],
+            RuleKey::GrantMax => &["boarding_rule", "outfit_rules"],
+            RuleKey::PiracyPolice | RuleKey::EscortAi | RuleKey::PersonCoward => &["behaviour"],
+            RuleKey::QuietHails | RuleKey::LongAdvice | RuleKey::PersonJoin => &["hail_options"],
+            RuleKey::EscortOrders => &["escort_orders"],
+            RuleKey::FighterLaunch => &["fighter_launch"],
+            RuleKey::FighterRecall => &["fighter_recall"],
+            RuleKey::HireRequire => &["hire_require"],
+            RuleKey::TakeOffPay => &["take_off_pay"],
+            RuleKey::HireFee => &["hire_terms"],
+            RuleKey::EscortWage => &["escort_wage"],
             RuleKey::PersonOdds
             | RuleKey::SystemPersons
             | RuleKey::LinkSystSlip
-            | RuleKey::ShieldMod => "person_rules",
-            RuleKey::CommQuote => "comm_quote",
+            | RuleKey::ShieldMod => &["person_rules"],
+            RuleKey::CommQuote => &["comm_quote"],
+            RuleKey::MapExplore | RuleKey::InvalidMap | RuleKey::RemoveRefund => &["outfit_rules"],
         }
     }
 
@@ -5776,7 +5805,7 @@ pub(super) mod tests {
                 .filter(|(was, now)| was.1 != now.1)
                 .map(|(was, _)| was.0)
                 .collect();
-            assert_eq!(changed, [setting_of(key)], "{key:?}");
+            assert_eq!(changed, settings_of(key), "{key:?}");
         }
         let all =
             rules_of(&AppScreen::new(data()).with_rulebook(&Rulebook::new(RuleSource::Bible)));

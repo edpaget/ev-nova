@@ -66,6 +66,8 @@
 //!   menu's [`ClassRow`]s, an escort NPC's [`EscortDuty`], the formation
 //!   it keeps beside the player, and how it scores the threats to the
 //!   player.
+//! - [`exploration`]: which systems a map outfit explores
+//!   ([`exploration::map_reveals`]) and which are inhabited.
 //! - [`flight`]: one tick of a ship's Newtonian flight, [`step`], under
 //!   the player's [`Controls`].
 //! - [`fuel`]: how much fuel a ship regenerates each tick, from its
@@ -121,6 +123,10 @@
 //!   view words them.
 //! - [`navigation`]: the navigation target Tab selects, [`next_stellar`]:
 //!   the system's stellars in their `NavDef` order, wrapping.
+//! - [`outfit_effects`]: what granting an outfit does: a map explores, a
+//!   clean-record outfit cleans the legal record and a paint paints the
+//!   ship ([`Rgb15`]) instead of being added
+//!   ([`outfit_effects::GrantEffect`]), and the disputed [`OutfitRules`].
 //! - [`outfitter`]: the outfitter: which outfits a stellar lists and sells
 //!   ([`Outfitter`]), their price and mass, the ship's free mass, and
 //!   buying and selling one at a time ([`OutfitOrder`]).
@@ -188,6 +194,7 @@ pub mod control;
 pub mod data;
 pub mod date;
 pub mod escort;
+pub mod exploration;
 #[cfg(any(test, feature = "fixture"))]
 pub mod fixture;
 pub mod flight;
@@ -206,6 +213,7 @@ pub mod legal;
 pub mod market;
 pub mod message;
 pub mod navigation;
+pub mod outfit_effects;
 pub mod outfitter;
 pub mod person;
 pub mod pilot;
@@ -283,6 +291,7 @@ pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
 pub use navigation::{next_after, next_stellar};
+pub use outfit_effects::{OutfitRules, Rgb15};
 pub use outfitter::{OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
 pub use person::{
     COMM_QUOTES, ESCAPE_POD, GRUDGE, HAIL_QUOTES, NovaPersons, PersonRoll, PersonRules,

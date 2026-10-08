@@ -261,6 +261,7 @@ mod escorts;
 mod fighters;
 mod hail;
 mod hire;
+mod outfits;
 mod persons;
 
 pub use edit::RelocateRefusal;
@@ -318,6 +319,7 @@ use crate::legal::{self, Crime, LegalCode};
 use crate::market::{self, Good, Goods, Market, Order, TradeRefusal};
 use crate::message::SimMessage;
 use crate::navigation::next_stellar;
+use crate::outfit_effects::OutfitRules;
 use crate::outfitter::{
     self, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
 };
@@ -525,6 +527,9 @@ pub struct Session {
     quote_clock: persons::QuoteClock,
     /// The hail quotes said since they were last taken.
     quotes: Vec<persons::PersonQuote>,
+    /// How granting and removing outfits go where the rules are disputed
+    /// (see [`Session::with_outfit_rules`]).
+    outfit_rules: OutfitRules,
 }
 
 impl Session {
@@ -643,6 +648,7 @@ impl Session {
             comm_quote: RuleSource::Engine,
             quote_clock: persons::QuoteClock::default(),
             quotes: Vec::new(),
+            outfit_rules: OutfitRules::default(),
             pilot,
         };
         session.refit(false);

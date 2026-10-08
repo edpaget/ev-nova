@@ -198,6 +198,14 @@ impl PilotCatalog for GameData {
                     position: Vec2::new(f32::from(system.x_pos), f32::from(system.y_pos)),
                     links: system.con.into_iter().flatten().collect(),
                     govt: system.govt,
+                    stellars: system
+                        .nav_def
+                        .iter()
+                        .map(|slot| {
+                            let stellar = self.get::<Stellar>(slot.as_ref()?.0)?.ok()?.record;
+                            Some((stellar.flags.bits(), stellar.flags2.bits()))
+                        })
+                        .collect(),
                 })
             })
             .collect()
@@ -1432,12 +1440,14 @@ mod tests {
                     position: Vec2::new(-20.0, 40.0),
                     links: Vec::new(),
                     govt: None,
+                    stellars: vec![None; 16],
                 },
                 StarSystem {
                     id: SystemId(131),
                     position: Vec2::new(600.0, -75.0),
                     links: vec![SystemId(130), SystemId(999), SystemId(131)],
                     govt: Some(GovtId(140)),
+                    stellars: vec![None; 16],
                 },
             ]
         );
@@ -1481,6 +1491,27 @@ mod tests {
                 Some(SoundId(10_000)),
             ]
         );
+    }
+
+    #[test]
+    fn a_systems_stellars_on_the_star_map_are_each_nav_slots_flags_raw() {
+        let mut bytes = system_with(&[129, 999, 128, 131]);
+        put_i16s(&mut bytes, 0x04, &[-1; 16]);
+        let data = store(&[
+            (System::TYPE, 130, bytes),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 0x0000_0021, 0)),
+            (
+                Stellar::TYPE,
+                129,
+                flagged2(stellar(0, 0, 0, 0x8001, 0), 0x3000),
+            ),
+            (Stellar::TYPE, 131, short(stellar(0, 0, 0, 1, 0))),
+        ]);
+        let map = data.star_map();
+        let mut expected = vec![Some((0x8001, 0x3000)), None, Some((0x21, 0)), None];
+        expected.resize(16, None);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map[0].stellars, expected, "missing and unreadable are None");
     }
 
     #[test]

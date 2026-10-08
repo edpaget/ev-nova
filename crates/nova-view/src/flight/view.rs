@@ -254,7 +254,9 @@ use nova_sim::{
     Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2,
     flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
-use nova_sim::{ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules};
+use nova_sim::{
+    ControlBits, HireList, HireRefusal, HireTerms, Hired, OutfitRules, PayNote, PersonRules,
+};
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
@@ -1123,6 +1125,16 @@ impl<
     pub fn with_comm_quote(self, source: RuleSource) -> Self {
         Self {
             session: self.session.map(|session| session.with_comm_quote(source)),
+            ..self
+        }
+    }
+
+    /// The flight with granting and removing outfits following `rules`
+    /// ([`Session::with_outfit_rules`]).
+    #[must_use]
+    pub fn with_outfit_rules(self, rules: OutfitRules) -> Self {
+        Self {
+            session: self.session.map(|session| session.with_outfit_rules(rules)),
             ..self
         }
     }
@@ -2804,6 +2816,7 @@ mod tests {
                 position: Vec2::new(x, y),
                 links: links.iter().copied().map(SystemId).collect(),
                 govt: None,
+                stellars: Vec::new(),
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
@@ -8917,6 +8930,16 @@ mod tests {
             let view = flight().with_comm_quote(source);
             assert_eq!(view.session().expect("flying").comm_quote(), source);
         }
+    }
+
+    #[test]
+    fn the_outfit_rules_reach_the_session() {
+        let rules = OutfitRules {
+            remove_refund: RuleSource::Bible,
+            ..OutfitRules::default()
+        };
+        let view = flight().with_outfit_rules(rules);
+        assert_eq!(view.session().expect("flying").outfit_rules(), rules);
     }
 
     // Boarding grants.

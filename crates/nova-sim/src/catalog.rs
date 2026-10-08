@@ -68,6 +68,11 @@ pub struct StarSystem {
     /// Its controlling government, `Govt`, or `None` when it is
     /// independent (-1).
     pub govt: Option<GovtId>,
+    /// Each of its `NavDefs` slots, in order: the stellar's `spöb` `Flags`
+    /// and `Flags2`, raw, or `None` for an empty slot or a stellar that
+    /// cannot be read. The [`exploration`](crate::exploration) rules read
+    /// whether the system is inhabited from them.
+    pub stellars: Vec<Option<(u32, u16)>>,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
@@ -995,6 +1000,7 @@ mod tests {
                 position: Vec2::new(5.0, -6.0),
                 links: vec![SystemId(131)],
                 govt: None,
+                stellars: Vec::new(),
             }]
         }
 

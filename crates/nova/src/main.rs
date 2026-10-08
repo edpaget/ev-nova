@@ -84,8 +84,13 @@
 //! Use As Escort and joins the fleet as itself), and the boarding
 //! grants: `"grant_count"` (whether a grant is half its `GrantCount` to
 //! all of it, as the engine and the Bible have it, or one to all of it)
-//! and `"grant_max"` (whether a grant may pass the outfit's `Max`, or is
-//! held to it); every key is listed in
+//! and `"grant_max"` (whether a grant, by boarding or by `G`, may pass
+//! the outfit's `Max`, or is held to it and to the free mass), and the
+//! outfit effects: `"map_explore"` (whether a map explores the engine's
+//! depth-first way, or every system within its jumps), `"invalid_map"`
+//! (whether a map that explores nothing is used up, or kept as an
+//! outfit) and `"remove_refund"` (whether `D` pays nothing for the
+//! outfit it removes, or what selling it would); every key is listed in
 //! `nova_sim::rulebook`. They are set by editing the file; a sound change
 //! in the Preferences dialog keeps them.
 //!

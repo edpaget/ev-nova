@@ -282,6 +282,11 @@ struct Node {
     /// The systems one jump reaches by the engine: every system at the
     /// position of one it lists, except itself, by ascending ID.
     jumps: BTreeSet<SystemId>,
+    /// The same systems in the order its Con slots list them, each
+    /// position's systems by ascending ID, each once.
+    ordered_jumps: Vec<SystemId>,
+    /// Each of its `NavDefs` slots' `Flags` and `Flags2`, raw.
+    stellars: Vec<Option<(u32, u16)>>,
 }
 
 impl Node {
@@ -327,6 +332,8 @@ impl StarMap {
                 links: BTreeSet::new(),
                 listed,
                 jumps: BTreeSet::new(),
+                ordered_jumps: Vec::new(),
+                stellars: system.stellars,
             };
             nodes.insert(from, node);
         }
@@ -337,22 +344,22 @@ impl StarMap {
         for (&id, node) in &nodes {
             at.entry(key(node)).or_default().push(id);
         }
-        let jumps: Vec<(SystemId, BTreeSet<SystemId>)> = nodes
+        let jumps: Vec<(SystemId, Vec<SystemId>)> = nodes
             .iter()
             .map(|(&from, node)| {
-                let reached = node
-                    .listed
-                    .iter()
-                    .flat_map(|to| &at[&key(&nodes[to])])
-                    .copied()
-                    .filter(|&to| to != from)
-                    .collect();
+                let mut reached = Vec::new();
+                for &to in node.listed.iter().flat_map(|to| &at[&key(&nodes[to])]) {
+                    if to != from && !reached.contains(&to) {
+                        reached.push(to);
+                    }
+                }
                 (from, reached)
             })
             .collect();
         for (from, reached) in jumps {
             if let Some(node) = nodes.get_mut(&from) {
-                node.jumps = reached;
+                node.jumps = reached.iter().copied().collect();
+                node.ordered_jumps = reached;
             }
         }
         for (a, b) in links {
@@ -417,6 +424,38 @@ impl StarMap {
             .get(&id)
             .map(|node| node.jumps(rule).iter().copied().collect())
             .unwrap_or_default()
+    }
+
+    /// The systems one jump from `id` reaches under `rule`, in the order a
+    /// walk along its links meets them: by the engine's, its own Con
+    /// slots in record order, each standing for the systems at its
+    /// position by ascending ID, each system once (as
+    /// `_RecursiveAutoExplore` @0xda21-0xdaac follows Con1 to Con16);
+    /// both ways, its [`StarMap::neighbours`]. Empty when it is not on the
+    /// map.
+    #[must_use]
+    pub fn ordered_jumps(&self, id: SystemId, rule: HyperlinkRule) -> Vec<SystemId> {
+        match rule {
+            HyperlinkRule::Engine => self
+                .nodes
+                .get(&id)
+                .map(|node| node.ordered_jumps.clone())
+                .unwrap_or_default(),
+            HyperlinkRule::BothWays => self.neighbours(id),
+        }
+    }
+
+    /// Every system on the map, by ascending ID.
+    pub fn systems(&self) -> impl Iterator<Item = SystemId> + '_ {
+        self.nodes.keys().copied()
+    }
+
+    /// System `id`'s `NavDefs` slots' stellar `Flags` and `Flags2`, raw,
+    /// in order (see [`StarSystem::stellars`]): empty when it is not on
+    /// the map.
+    #[must_use]
+    pub fn stellars(&self, id: SystemId) -> &[Option<(u32, u16)>] {
+        self.nodes.get(&id).map_or(&[], |node| &node.stellars)
     }
 
     /// System `id`'s controlling government: `None` when it is
@@ -593,6 +632,7 @@ mod tests {
             position: Vec2::new(f32::from(id), 0.0),
             links: links.iter().copied().map(SystemId).collect(),
             govt: None,
+            stellars: Vec::new(),
         }
     }
 
@@ -961,6 +1001,7 @@ mod tests {
             position: Vec2::new(-150.0, 75.0),
             links: Vec::new(),
             govt: None,
+            stellars: Vec::new(),
         }]);
         assert_eq!(map.position(SystemId(128)), Some(Vec2::new(-150.0, 75.0)));
         assert_eq!(map.position(SystemId(129)), None);
@@ -979,6 +1020,52 @@ mod tests {
         assert_eq!(map.govt(SystemId(128)), Some(GovtId(140)));
         assert_eq!(map.govt(SystemId(129)), None, "independent");
         assert_eq!(map.govt(SystemId(130)), None, "not on the map");
+    }
+
+    #[test]
+    fn the_ordered_jumps_follow_the_con_slots_by_the_engine_and_the_ids_both_ways() {
+        // 128 lists 131, 129 and 130, and 129 shares its position with
+        // 132; 133 lists 128, which does not list it.
+        let map = StarMap::new(vec![
+            system(128, &[131, 129, 128, 131, 999, 130]),
+            system_at(129, (5.0, 5.0), &[]),
+            system(130, &[]),
+            system(131, &[]),
+            system_at(132, (5.0, 5.0), &[]),
+            system(133, &[128]),
+        ]);
+        assert_eq!(
+            map.ordered_jumps(SystemId(128), HyperlinkRule::Engine),
+            ids(&[131, 129, 132, 130])
+        );
+        assert_eq!(
+            map.ordered_jumps(SystemId(128), HyperlinkRule::BothWays),
+            ids(&[129, 130, 131, 133])
+        );
+        assert_eq!(
+            map.ordered_jumps(SystemId(133), HyperlinkRule::Engine),
+            ids(&[128])
+        );
+        assert_eq!(map.ordered_jumps(SystemId(999), HyperlinkRule::Engine), []);
+        assert_eq!(
+            map.systems().collect::<Vec<_>>(),
+            ids(&[128, 129, 130, 131, 132, 133])
+        );
+    }
+
+    #[test]
+    fn a_systems_stellars_are_its_records() {
+        let flags = vec![Some((0x20, 0)), None, Some((1, 0x1000))];
+        let map = StarMap::new(vec![
+            StarSystem {
+                stellars: flags.clone(),
+                ..system(128, &[])
+            },
+            system(129, &[]),
+        ]);
+        assert_eq!(map.stellars(SystemId(128)), flags.as_slice());
+        assert_eq!(map.stellars(SystemId(129)), []);
+        assert_eq!(map.stellars(SystemId(130)), [], "not on the map");
     }
 
     // Jumping.
