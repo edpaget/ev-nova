@@ -4924,6 +4924,20 @@ mod tests {
     }
 
     #[test]
+    fn the_exchange_counts_a_trader_escorts_negative_holds_by_its_size() {
+        let catalog = FakePilotCatalog {
+            ship_records: vec![holds_record(129, -5, 1)],
+            ..exchange()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        session.pilot.escorts = vec![fleet_escort(129)];
+        land_now(&mut session).expect("lands");
+        assert_eq!(session.capacity(), 25);
+        let market = session.market().expect("an exchange");
+        assert_eq!((market.capacity, market.free), (25, 25));
+    }
+
+    #[test]
     fn the_exchanges_free_space_is_the_fleets_less_everything_held() {
         let mut session = landed_with_a_fleet();
         session.pilot.set_cash(100_000);

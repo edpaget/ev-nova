@@ -28,8 +28,10 @@ pub struct ShipFields {
     /// `FuelRegen`: ticks per unit of fuel regenerated; 0 or below is
     /// none (see [`crate::fuel`]).
     pub fuel_regen: i16,
-    /// `Holds`: cargo space, in tons (see [`crate::market`]); negative
-    /// forbids mass expansions (see [`crate::outfitter`]).
+    /// `Holds`: cargo space, in tons (see [`crate::market`]); a negative
+    /// one is as many tons as its size and forbids buying mass expansions
+    /// (see [`crate::outfitter`]), as `_LoadObjectData` negates it and
+    /// flags the class (@0x7a6a5-0x7a6d3).
     pub holds: i16,
     /// `Mass`: the ship's mass, in tons, which some outfits' price and
     /// mass scale with.

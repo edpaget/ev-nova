@@ -116,13 +116,17 @@
 //!
 //! # Cargo
 //!
-//! A ship carries `|Holds|` tons, plus each outfit's `ModVal` of
-//! [`MORE_CARGO`] for each one carried ([`cargo_capacity`]).
+//! A ship carries `|Holds|` tons ([`hold_tons`]), plus each outfit's
+//! `ModVal` of [`MORE_CARGO`] for each one carried ([`cargo_capacity`]).
+//! The engine reads a negative `Holds` as its size everywhere:
+//! `_LoadObjectData` negates it in place as it loads the class
+//! (@0x7a6a5-0x7a6d3), and only the outfitter reads that it was negative
+//! ([`OutfitRefusal::NoExpansion`](crate::outfitter::OutfitRefusal::NoExpansion)).
 //!
 //! The exchange measures the fleet's cargo space ([`fleet_holds`],
 //! `_TotalFleetHolds` @0xc24d-0xc356): the ship's own, plus the `Holds`
-//! of each of the player's escorts whose ship class's `InherentAI` is 2
-//! or less (a trader, or any value below 1), at most [`MAX_FLEET_HOLDS`]
+//! (its size) of each of the player's escorts whose ship class's
+//! `InherentAI` is 2 or less (a trader, or any value below 1), at most [`MAX_FLEET_HOLDS`]
 //! tons. A warship or interceptor escort adds nothing, nor does a fighter
 //! launched from the player's bays, nor any escort's outfits or cargo:
 //! every good the fleet holds is held on the player's ship. The free
@@ -330,8 +334,17 @@ pub fn cargo_capacity(holds: i16, outfits: &[OutfitMod]) -> u32 {
         .filter(|outfit| outfit.mod_type == MORE_CARGO)
         .map(|outfit| i64::from(outfit.mod_val) * i64::from(outfit.count))
         .sum();
-    let tons = i64::from(holds).abs() + pods;
+    let tons = i64::from(hold_tons(holds)) + pods;
     u32::try_from(tons.max(0)).unwrap_or(u32::MAX)
+}
+
+/// The tons a ship class's `Holds` gives: the size of a negative one, as
+/// `_LoadObjectData` negates it in place (@0x7a6a5-0x7a6d3). The engine
+/// leaves -32768, which negates to itself, negative; this reads it as
+/// 32768.
+#[must_use]
+pub fn hold_tons(holds: i16) -> u16 {
+    holds.unsigned_abs()
 }
 
 /// The most cargo space a fleet has (`_TotalFleetHolds` @0xc33e-0xc349).
@@ -340,7 +353,8 @@ pub const MAX_FLEET_HOLDS: u32 = 32_000;
 /// What the fleet's cargo space needs of one of the player's escorts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EscortHolds {
-    /// Its ship class's `Holds`, raw.
+    /// Its ship class's `Holds`, as the data gives it; a negative one
+    /// counts as its size ([`escort_tons`]).
     pub holds: i16,
     /// Its ship class's `InherentAI`, raw.
     pub inherent_ai: i16,
@@ -351,26 +365,26 @@ pub struct EscortHolds {
 
 /// The summed `Holds` of the escorts [`fleet_holds`] counts: each that is
 /// not a launched fighter and whose `InherentAI` is
-/// [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI) or less, raw, with no
-/// cap and possibly below none. A ship purchase divides the cargo by it
+/// [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI) or less, each a negative
+/// one's size (@0x7a6a5-0x7a6d3), with no cap. A ship purchase divides the cargo by it
 /// uncapped ([`shipyard`](crate::shipyard)).
 #[must_use]
 pub fn escort_tons(escorts: impl IntoIterator<Item = EscortHolds>) -> i64 {
     escorts
         .into_iter()
         .filter(|escort| !escort.carried && escort.inherent_ai <= crate::escort::FREIGHTER_AI)
-        .map(|escort| i64::from(escort.holds))
+        .map(|escort| i64::from(hold_tons(escort.holds)))
         .sum()
 }
 
 /// The fleet's cargo space, in tons (`_TotalFleetHolds` @0xc24d-0xc356):
-/// the ship's own `ship` tons plus the `Holds` of each escort that is not
-/// a launched fighter and whose `InherentAI` is
-/// [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI) or less, at most
-/// [`MAX_FLEET_HOLDS`] and never below none.
+/// the ship's own `ship` tons plus the `Holds` (each a negative one's
+/// size) of each escort that is not a launched fighter and whose
+/// `InherentAI` is [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI) or less
+/// ([`escort_tons`]), at most [`MAX_FLEET_HOLDS`].
 #[must_use]
 pub fn fleet_holds(ship: u32, escorts: impl IntoIterator<Item = EscortHolds>) -> u32 {
-    let tons = (i64::from(ship) + escort_tons(escorts)).clamp(0, i64::from(MAX_FLEET_HOLDS));
+    let tons = (i64::from(ship) + escort_tons(escorts)).min(i64::from(MAX_FLEET_HOLDS));
     u32::try_from(tons).unwrap_or(MAX_FLEET_HOLDS)
 }
 
@@ -1230,9 +1244,10 @@ mod tests {
     }
 
     #[test]
-    fn a_negative_escort_holds_takes_space_away_but_never_below_none() {
-        assert_eq!(fleet_holds(20, [escort(-5, 1)]), 15);
-        assert_eq!(fleet_holds(20, [escort(-50, 1)]), 0);
+    fn a_negative_escort_holds_adds_its_size() {
+        // `_LoadObjectData` negates a negative `Holds` (@0x7a6a5-0x7a6d3).
+        assert_eq!(fleet_holds(20, [escort(-5, 1)]), 25);
+        assert_eq!(fleet_holds(20, [escort(-50, 1)]), 70);
     }
 
     #[test]
@@ -1255,8 +1270,8 @@ mod tests {
         assert_eq!(escort_tons([]), 0);
         assert_eq!(
             escort_tons([escort(15, 1), escort(30, 3), fighter, escort(-5, 0)]),
-            10,
-            "the trader and the negative one, not the warship or the fighter"
+            20,
+            "the trader and the negative one's size, not the warship or the fighter"
         );
         assert_eq!(
             escort_tons([escort(i16::MAX, 2); 2]),

@@ -79,8 +79,10 @@
 //! trade-in. Each persistent one carries over as far as the new ship
 //! allows: first no more than its `Max`; then, by ascending ID, one at a
 //! time while the new ship still has free mass for it with its own default
-//! items fitted (they are fitted regardless, so their mass is not room),
-//! and never a mass expansion onto a ship whose `Holds` is negative. Every
+//! items fitted (they are fitted regardless, so their mass is not room).
+//! A mass expansion carries onto a ship whose `Holds` is negative too: the
+//! purchase never reads the class's no-expansions flag (@0x5ee1b-0x5ee4f),
+//! which only the outfitter does. Every
 //! persistent one that does not carry over is sold back at the outfitter's
 //! rate, priced on the old ship, and the refund is credited on top (it
 //! does not count towards affording the ship). The new ship's default
@@ -95,8 +97,11 @@
 //! the new class, launched fighters dropped and the outfits above are in
 //! place. A is the new ship's cargo space (its `Holds` and the `ModType` 2
 //! outfits now owned, @0xcd4c-0xcdcd) and B is A plus the `Holds` of the
-//! escorts the fleet's holds count ([`escort_tons`], @0xce08-0xcf0d), with
-//! no 32000 cap; f = min(1, A/B) in doubles (@0xcf27-0xcf37), and none
+//! escorts the fleet's holds count ([`escort_tons`], @0xce08-0xcf0d), each
+//! a negative one's size (`_LoadObjectData` negates it, @0x7a6a5-0x7a6d3),
+//! with no 32000 cap; f = A/B in doubles (@0xcf27-0xcf37), so B is never
+//! below A and f never above 1 (the engine's `minsd` cap at 1, @0xcf33,
+//! never bites), and none
 //! when A is none (the engine's 0/0 NaN acts so). Each commodity becomes
 //! trunc(held x f) (for the player's slot the second write, @0xcf6c,
 //! wins), and each `jünk` loses trunc(held x f), so with no such escorts
@@ -177,7 +182,7 @@ use crate::combat::armament::{StockFit, fit_stock, fitted};
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
 use crate::market::{EscortHolds, Good, control_bits_allow, escort_tons, fleet_holds};
-use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_mass, unit_price};
+use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_price};
 use crate::pilot::{Pilot, merged, tally};
 use crate::rulebook::RuleSource;
 use crate::stats::ShipStats;
@@ -522,15 +527,12 @@ pub(crate) fn keep_cargo(
         RuleSource::Engine => {
             let share = new_ships_share(capacity, escort_tons(escorts.iter().copied()));
             for (good, tons) in cargo.iter_mut() {
-                let part = (f64::from(*tons) * share) as i64;
-                // The engine sets a `jünk` to 0 when its part is above
-                // what is held (@0xcf94-0xcfe4); below none, the clamp to none
-                // after does the same.
-                let kept = match good {
+                // The share is in 0..=1, so the part is in 0..=held.
+                let part = (f64::from(*tons) * share) as u32;
+                *tons = match good {
                     Good::Commodity(_) => part,
-                    Good::Junk(_) => i64::from(*tons) - part,
+                    Good::Junk(_) => tons.saturating_sub(part),
                 };
-                *tons = u32::try_from(kept.max(0)).unwrap_or(u32::MAX);
             }
             trim_to(cargo, fleet_holds(capacity, escorts.iter().copied()));
         }
@@ -555,18 +557,18 @@ pub(crate) fn keep_cargo(
 
 /// The new ship's share of the fleet's cargo space when it buys a ship
 /// (`_DestroyPartialFleetCargo` @0xcf27-0xcf37): its own `capacity` over
-/// that plus the `escorts` tons, at most 1, in doubles. With no space of
-/// its own the share is none: the engine's 0/0 is NaN, which converts to
-/// a value that keeps nothing of a commodity and takes nothing of a
-/// `jünk`, as none does. The cap is `minsd` with 1 first (@0xcf33), so
-/// escorts that bring the fleet to no space give A/0 = +inf and so 1, and
-/// below none give a negative share, kept as it is.
+/// that plus the `escorts` tons, in doubles. With no space of its own the
+/// share is none: the engine's 0/0 is NaN, which converts to a value that
+/// keeps nothing of a commodity and takes nothing of a `jünk`, as none
+/// does. The escorts' tons are never below none ([`escort_tons`]), so the
+/// share is never above 1 and the engine's `minsd` cap at 1 (@0xcf33)
+/// never bites.
 fn new_ships_share(capacity: u32, escorts: i64) -> f64 {
     if capacity == 0 {
         return 0.0;
     }
     let own = f64::from(capacity);
-    (own / (own + escorts as f64)).min(1.0)
+    own / (own + escorts as f64)
 }
 
 /// Cuts each commodity in `cargo` by `holds` over everything held when
@@ -612,12 +614,10 @@ pub(crate) fn purchase(
     });
     for (record, count) in persistent {
         let most = u16::try_from(record.max).unwrap_or(0);
-        let expansion_refused = unit_mass(record, new.fields.mass) < 0 && new.fields.holds < 0;
         for unit in 0..count {
             let mut trial = carried.clone();
             *trial.entry(record.id).or_default() += 1;
             let fits = unit < most
-                && !expansion_refused
                 && free_mass(new.fields, &standard, &merged(&trial, &standard), records) >= 0;
             if fits {
                 carried = trial;
@@ -1586,27 +1586,26 @@ mod tests {
     }
 
     #[test]
-    fn a_persistent_mass_expansion_onto_negative_holds_is_sold_back() {
-        let records = [persistent(140, -5, 1), persistent(141, 0, 1)];
+    fn a_persistent_mass_expansion_carries_onto_negative_holds() {
+        // The purchase never reads the class's no-expansions flag
+        // (@0x5ee1b-0x5ee4f).
+        let expansion = OutfitRecord {
+            mods: [(MORE_CARGO, -5), (0, 0), (0, 0), (0, 0)],
+            ..persistent(140, -5, 1)
+        };
+        let records = [expansion, persistent(141, 0, 1)];
         let negative = ShipRecord {
             fields: ShipFields { holds: -1, ..HEAVY },
             ..heavy()
         };
         let mut pilot = owning(&[(140, 1), (141, 1)]);
         let bought = buy(&mut pilot, &negative, &records);
-        assert_eq!(pilot.outfits().collect::<Vec<_>>(), [(OutfitId(141), 1)]);
-        assert_eq!(bought.sold_back, map(&[(140, 1)]));
-        let mut pilot = owning(&[(140, 1)]);
-        let empty_holds = ShipRecord {
-            fields: ShipFields { holds: 0, ..HEAVY },
-            ..heavy()
-        };
-        buy(&mut pilot, &empty_holds, &records);
         assert_eq!(
-            pilot.owned(OutfitId(140)),
-            1,
-            "only negative Holds forbids it"
+            pilot.outfits().collect::<Vec<_>>(),
+            [(OutfitId(140), 1), (OutfitId(141), 1)]
         );
+        assert_eq!(bought.sold_back, map(&[]));
+        assert_eq!(bought.refund, 0);
     }
 
     #[test]
@@ -1759,40 +1758,28 @@ mod tests {
     }
 
     #[test]
-    fn by_the_engine_an_escort_of_negative_holds_does_not_raise_the_share_past_all() {
-        // A = 20, B = 15: A/B = 1.33, capped at 1 (@0xcf27-0xcf37).
+    fn by_the_engine_an_escort_of_negative_holds_takes_a_share_by_its_size() {
+        // `_LoadObjectData` negates a negative `Holds` (@0x7a6a5-0x7a6d3):
+        // A = 20, B = 25, f = 0.8. Food keeps trunc(8.0), metal
+        // trunc(5.6), and the opals lose trunc(3.2).
         assert_eq!(
             kept(
-                &[(FOOD, 10), (OPALS, 4)],
+                &[(FOOD, 10), (METAL, 7), (OPALS, 4)],
                 20,
                 &[trader(-5)],
                 RuleSource::Engine
             ),
-            (vec![(FOOD, 10)], BTreeMap::from([(OPALS, 4)]))
+            (
+                vec![(FOOD, 8), (METAL, 5), (OPALS, 1)],
+                BTreeMap::from([(FOOD, 2), (METAL, 2), (OPALS, 3)])
+            )
         );
     }
 
     #[test]
-    fn by_the_engine_escorts_bringing_the_fleet_to_no_space_share_all_and_trim_all() {
-        // A = 10, B = 0: A/0 is +inf, and `minsd` gives 1 (@0xcf33); the
-        // fleet's holds are then none, so the trim takes every commodity.
-        assert_eq!(
-            kept(
-                &[(FOOD, 10), (OPALS, 4)],
-                10,
-                &[trader(-10)],
-                RuleSource::Engine
-            ),
-            (vec![], BTreeMap::from([(FOOD, 10), (OPALS, 4)]))
-        );
-    }
-
-    #[test]
-    fn by_the_engine_escorts_bringing_the_fleet_below_no_space_add_to_each_junk() {
-        // A = 10, B = -20: f = A/B = -0.5, which `minsd` keeps (@0xcf33).
-        // Each commodity becomes trunc(10 x -0.5), clamped to none
-        // (@0xcf7c-0xcf84); each `jünk` loses trunc(4 x -0.5) = -2, so
-        // gains 2 (@0xcfc0-0xcfc3).
+    fn by_the_engine_escorts_of_negative_holds_beyond_the_ship_keep_each_junk_in_part() {
+        // A = 10, B = 40, f = 0.25: food keeps trunc(2.5), the opals lose
+        // trunc(1.0).
         assert_eq!(
             kept(
                 &[(FOOD, 10), (OPALS, 4)],
@@ -1800,7 +1787,10 @@ mod tests {
                 &[trader(-30)],
                 RuleSource::Engine
             ),
-            (vec![(OPALS, 6)], BTreeMap::from([(FOOD, 10)]))
+            (
+                vec![(FOOD, 2), (OPALS, 3)],
+                BTreeMap::from([(FOOD, 8), (OPALS, 1)])
+            )
         );
     }
 

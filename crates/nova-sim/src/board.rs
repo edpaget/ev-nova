@@ -22,7 +22,9 @@
 //! **What is on board** ([`Plunder::roll`]), rolled once a boarding, from
 //! its `düde`'s `Booty` (none for a fleet's ship) and its `shïp`: credits
 //! with [`MONEY`], about 2.5-5 % of its `Cost` and at least
-//! [`MIN_CREDITS`]; a commodity its booty names, half its holds and a
+//! [`MIN_CREDITS`]; a commodity its booty names, half its holds (a
+//! negative `Holds` read as its size, as `_LoadObjectData` negates it,
+//! @0x7a6a5-0x7a6d3; `_SetPlunderValues` @0x92430-0x92481) and a
 //! draw of as many more (the original draws `Rand(7)` until it hits a
 //! named commodity, and would loop for ever on a booty naming none; here
 //! a booty with no commodity bit gives no cargo); all the rounds of one
@@ -97,7 +99,7 @@ use crate::combat::aim::angle_off;
 use crate::combat::hull::Condition;
 use crate::flight::ShipState;
 use crate::grant::{GrantStock, Granted, PersonGrant};
-use crate::market::Good;
+use crate::market::{Good, hold_tons};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::traffic::npc::NpcId;
 
@@ -283,7 +285,8 @@ impl Plunder {
 }
 
 /// The cargo on board `prize`, rolled on `chance`: one of the commodities
-/// its booty names, then half its holds and a draw of as many more; none
+/// its booty names, then half its holds ([`hold_tons`]) and a draw of as
+/// many more; none
 /// without a commodity bit, and none when half the holds is none.
 fn cargo(prize: &Prize, chance: &mut dyn Chance) -> Option<(Good, u32)> {
     let named: Vec<u8> = (0..6u8)
@@ -293,7 +296,7 @@ fn cargo(prize: &Prize, chance: &mut dyn Chance) -> Option<(Good, u32)> {
         return None;
     }
     let commodity = named[chance.below(named.len() as u32) as usize];
-    let half = u32::try_from(prize.holds / 2).unwrap_or(0);
+    let half = u32::from(hold_tons(prize.holds) / 2);
     if half == 0 {
         return None;
     }
@@ -1119,7 +1122,7 @@ mod tests {
         let (plunder, asked) = roll(&prize(0x0040), &[0]);
         assert_eq!(plunder.cargo, None);
         assert_eq!(asked, [26, 30]);
-        for holds in [0, 1, -4] {
+        for holds in [0, 1] {
             let (plunder, asked) = roll(
                 &Prize {
                     holds,
@@ -1129,6 +1132,23 @@ mod tests {
             );
             assert_eq!(plunder.cargo, None, "{holds}");
             assert_eq!(asked, [26, 1, 30], "{holds}: only the good drawn");
+        }
+    }
+
+    #[test]
+    fn a_negative_holds_carries_cargo_by_its_size() {
+        // `_LoadObjectData` negates a negative `Holds` (@0x7a6a5-0x7a6d3),
+        // so `_SetPlunderValues` draws on its size (@0x92430-0x92481).
+        for holds in [4, -4] {
+            let (plunder, asked) = roll(
+                &Prize {
+                    holds,
+                    ..prize(0x0001)
+                },
+                &[0, 0, 1],
+            );
+            assert_eq!(asked[..3], [26, 1, 2], "{holds}");
+            assert_eq!(plunder.cargo, Some((Good::Commodity(0), 3)), "{holds}");
         }
     }
 
