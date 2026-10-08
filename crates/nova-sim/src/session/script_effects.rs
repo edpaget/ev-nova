@@ -339,8 +339,9 @@ impl Session {
             self.pilot.stellar = None;
         }
         self.sites = sites;
-        self.jump = None;
-        self.stop_thrust();
+        if self.jump.take().is_some() {
+            self.stop_thrust();
+        }
         self.leave_scene();
         if rules.arrival == RuleSource::Bible {
             self.pilot.explore(system);
@@ -801,6 +802,21 @@ mod tests {
         assert_eq!(session.preparing_jump(), None);
         assert!(!session.thrusting());
         assert_eq!(session.engine_glow(), 0);
+    }
+
+    #[test]
+    fn a_move_in_flight_with_no_jump_to_give_up_leaves_the_thrust_on() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        let thrust = crate::flight::Controls {
+            thrust: true,
+            ..crate::flight::Controls::default()
+        };
+        session.tick(thrust);
+        session.take_sounds();
+        moved(&mut session, &catalog, "N131");
+        assert!(session.thrusting());
+        assert_eq!(session.take_sounds(), [], "no stop sounded");
     }
 
     #[test]
