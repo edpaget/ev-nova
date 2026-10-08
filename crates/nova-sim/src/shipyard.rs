@@ -16,12 +16,10 @@
 //! A ship for sale can be *bought* when its `Require` bits are met, by the
 //! `Contribute` of the ship flown and of the outfits the player owns (a
 //! `shïp` has no `RequireGovt`, so `Require` applies everywhere), and its
-//! `Availability` holds. `Availability` goes through
-//! [`control_bits_allow`], which holds for every test that parsed until the
-//! shipyard moves onto the [`ControlBits`](crate::ControlBits) port, so
-//! for now every ship gated by one is available: the Vell-os ships (stock
-//! 381-383, tech level 1, `Cost` 0) show, free, at every shipyard, as stock
-//! `oütf` 342 does at every outfitter.
+//! `Availability` holds. `Availability` is tested through the
+//! [`ControlBits`](crate::ControlBits) port for the player's pilot (a
+//! [`Gate`]), as `_SetupPortAvailableShipTypes` (@0xbd52) and
+//! `_CalcShipCanBuy` (@0x4f901) do; one that did not parse never holds.
 //!
 //! # What it lists
 //!
@@ -93,9 +91,10 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord};
+use crate::control::Gate;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
-use crate::market::{Good, control_bits_allow};
+use crate::market::Good;
 use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_mass, unit_price};
 use crate::pilot::{Pilot, tally};
 use crate::stats::ShipStats;
@@ -251,6 +250,8 @@ pub(crate) struct Yard<'a> {
     pub(crate) fields: ShipFields,
     /// The stellar landed on.
     pub(crate) site: &'a LandingSite,
+    /// The control-bit test of a ship's `Availability`.
+    pub(crate) gate: Gate<'a>,
 }
 
 impl Yard<'_> {
@@ -278,7 +279,7 @@ impl Yard<'_> {
         let mut rows = Vec::new();
         for ship in sorted {
             let required = wares::requirement_met(ship.require, contributed);
-            let available = ship.availability.holds(control_bits_allow);
+            let available = self.gate.allows(&ship.availability);
             let for_sale = buy_random_allows(ship.buy_random)
                 && wares::tech_allows(ship.tech_level, self.site)
                 && sweep.on_sale(ship.disp_weight);
@@ -434,7 +435,7 @@ mod tests {
     use crate::market::MORE_CARGO;
     use crate::reserves::Reserves;
     use crate::stats::{MORE_FUEL, MORE_SHIELD};
-    use crate::testkit::{FAST, catalog, outfit, planet, ship};
+    use crate::testkit::{AllowAll, FAST, RefuseBits, catalog, outfit, planet, ship};
 
     /// A shipyard of tech level 4 with special tech 6 and 55.
     fn port() -> LandingSite {
@@ -479,6 +480,7 @@ mod tests {
             outfits,
             fields: FAST,
             site,
+            gate: Gate::FRESH,
         }
         .shipyard(pilot)
     }
@@ -671,17 +673,75 @@ mod tests {
         );
     }
 
+    fn gated(id: i16, flags3: u16, availability: &str) -> ShipRecord {
+        ShipRecord {
+            flags3,
+            availability: Test::parse(availability),
+            ..cheap(id)
+        }
+    }
+
+    fn open_gated(ships: &[ShipRecord], gate: Gate, pilot: &Pilot) -> Shipyard {
+        Yard {
+            ships,
+            outfits: &[],
+            fields: FAST,
+            site: &port(),
+            gate,
+        }
+        .shipyard(pilot)
+        .expect("a shipyard")
+    }
+
     #[test]
-    fn hide_unless_available_shows_an_available_ship() {
-        // Availability always holds until control bits exist.
-        let gated = ShipRecord {
-            flags3: ShipFlags3::HIDE_UNLESS_AVAILABLE,
-            availability: Test::parse("b422"),
-            ..cheap(129)
+    fn a_ship_whose_availability_is_refused_shows_greyed() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
         };
-        let shipyard = open(&[gated], &pilot());
+        let ships = [gated(129, 0, "b7"), gated(130, 0, "b8")];
+        let shipyard = open_gated(&ships, refusing, &pilot());
+        assert_eq!(listed(&shipyard), [129, 130]);
+        assert_eq!(row(&shipyard, 129).buy, Err(ShipRefusal::NotForSale));
+        assert_eq!(row(&shipyard, 130).buy, Ok(()), "another bit holds");
+    }
+
+    #[test]
+    fn hide_unless_available_hides_a_refused_ship() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let ships = [gated(129, ShipFlags3::HIDE_UNLESS_AVAILABLE, "b7")];
+        assert!(listed(&open_gated(&ships, refusing, &pilot())).is_empty());
+    }
+
+    #[test]
+    fn a_new_pilots_clear_bit_refuses_a_ship_by_novas_bits() {
+        let ships = [
+            gated(129, ShipFlags3::HIDE_UNLESS_AVAILABLE, "b422"),
+            gated(130, 0, "b422"),
+            gated(131, ShipFlags3::HIDE_UNLESS_AVAILABLE, "!b422"),
+        ];
+        let shipyard = open(&ships, &pilot());
+        assert_eq!(listed(&shipyard), [130, 131]);
+        assert_eq!(row(&shipyard, 130).buy, Err(ShipRefusal::NotForSale));
+        assert_eq!(row(&shipyard, 131).buy, Ok(()));
+    }
+
+    #[test]
+    fn a_malformed_ship_availability_is_never_met() {
+        let allowing = Gate {
+            control_bits: &AllowAll,
+            ..Gate::FRESH
+        };
+        let ships = [
+            gated(129, 0, "b1 &"),
+            gated(130, ShipFlags3::HIDE_UNLESS_AVAILABLE, "b1 &"),
+        ];
+        let shipyard = open_gated(&ships, allowing, &pilot());
         assert_eq!(listed(&shipyard), [129]);
-        assert_eq!(row(&shipyard, 129).buy, Ok(()));
+        assert_eq!(row(&shipyard, 129).buy, Err(ShipRefusal::NotForSale));
     }
 
     #[test]

@@ -1831,6 +1831,7 @@ impl Session {
             defaults: &self.defaults,
             site,
             fighter_room: &self.fighter_room(),
+            gate: self.gate(),
         }
         .outfitter(&self.pilot)
     }
@@ -1865,6 +1866,7 @@ impl Session {
             outfits: &self.outfits,
             fields: self.fields,
             site,
+            gate: self.gate(),
         }
         .shipyard(&self.pilot)
     }
@@ -5103,6 +5105,41 @@ mod tests {
         assert_eq!(session.outfit(buy(SPEED)), Err(OutfitRefusal::NoOutfitter));
     }
 
+    /// The outfitting catalog with outfit 305 sold only on control bit 7,
+    /// and hidden while it is refused.
+    fn outfitting_on_bit_7() -> FakePilotCatalog {
+        let mut catalog = outfitting();
+        catalog.outfits.push(OutfitRecord {
+            flags: crate::outfitter::OutfitFlags::HIDE_UNLESS_AVAILABLE,
+            availability: crate::control::Test::parse("b7"),
+            ..outfit(305, &[])
+        });
+        catalog
+    }
+
+    #[test]
+    fn an_outfit_is_listed_once_the_bit_its_availability_tests_is_set() {
+        let gated = OutfitId(305);
+        let mut session = outfitted(&outfitting_on_bit_7());
+        let outfitter = session.outfitter().expect("an outfitter");
+        assert_eq!(outfitter.row(gated), None);
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        let outfitter = session.outfitter().expect("an outfitter");
+        assert_eq!(outfitter.row(gated).map(|row| row.buy), Some(Ok(())));
+        assert_eq!(session.outfit(buy(gated)), Ok(()));
+    }
+
+    #[test]
+    fn the_outfitter_tests_availability_through_the_sessions_control_bits() {
+        let gated = OutfitId(305);
+        let mut session = outfitted(&outfitting_on_bit_7())
+            .with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        let outfitter = session.outfitter().expect("an outfitter");
+        assert_eq!(outfitter.row(gated), None);
+        assert_eq!(session.outfit(buy(gated)), Err(OutfitRefusal::NotListed));
+    }
+
     #[test]
     fn a_session_reads_the_outfits_once_when_it_starts() {
         let catalog = outfitting();
@@ -5477,6 +5514,19 @@ mod tests {
         let mut session = outfitted(&plain);
         assert_eq!(session.shipyard(), None, "no shipyard here");
         assert_eq!(session.buy_ship(NEW), Err(ShipRefusal::NoShipyard));
+    }
+
+    #[test]
+    fn the_shipyard_tests_availability_through_the_sessions_control_bits() {
+        let mut catalog = shipbuying();
+        catalog.ship_records[1].availability = crate::control::Test::parse("b7");
+        let mut session = outfitted(&catalog);
+        session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
+        let mut refusing = session
+            .clone()
+            .with_control_bits(Rc::new(crate::testkit::RefuseBits(&[7])));
+        assert_eq!(refusing.buy_ship(NEW), Err(ShipRefusal::NotForSale));
+        session.buy_ship(NEW).expect("bought while bit 7 is set");
     }
 
     #[test]

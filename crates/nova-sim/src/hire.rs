@@ -119,7 +119,7 @@
 use std::fmt::Debug;
 
 use crate::catalog::{LandingSite, ShipId, ShipRecord};
-use crate::control::{ControlBits, PilotFacts, Test};
+use crate::control::{ControlBits, Gate, PilotFacts, Test};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::shipyard::{HIDE_BITS, ShipFlags3, ShipSpecs};
 use crate::wares::{self, HideHigher};
@@ -377,7 +377,11 @@ pub(crate) struct Bar<'a> {
 impl Bar<'_> {
     /// Whether `test` holds: never when it did not parse.
     fn allows(&self, test: &Test) -> bool {
-        test.holds(|test| self.control_bits.allows(test, self.pilot))
+        Gate {
+            control_bits: self.control_bits,
+            pilot: self.pilot,
+        }
+        .allows(test)
     }
 
     /// The list, each class's roll of so many percent answered by

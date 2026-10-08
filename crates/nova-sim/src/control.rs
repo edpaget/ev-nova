@@ -104,6 +104,61 @@ impl ControlBits for NovaBits {
     }
 }
 
+/// The port a rule tests a record's control bits through, and the pilot
+/// it tests them for.
+#[derive(Clone, Copy, Debug)]
+pub struct Gate<'a> {
+    /// The control-bit test.
+    pub control_bits: &'a dyn ControlBits,
+    /// What the control-bit test reads about the player.
+    pub pilot: &'a dyn PilotFacts,
+}
+
+impl Gate<'_> {
+    /// Whether `test` holds: never when it did not parse, and then the
+    /// port is not asked.
+    #[must_use]
+    pub fn allows(&self, test: &Test) -> bool {
+        test.holds(|test| self.control_bits.allows(test, self.pilot))
+    }
+}
+
+impl Gate<'static> {
+    /// A new pilot (no bit set, male, paid for, owning nothing and having
+    /// explored nowhere) tested by Nova's control bits.
+    pub const FRESH: Self = Self {
+        control_bits: &NovaBits,
+        pilot: &FreshPilot,
+    };
+}
+
+/// A new pilot, as a control-bit test reads one: no bit set, male, paid
+/// for, owning nothing and having explored nowhere.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FreshPilot;
+
+impl PilotFacts for FreshPilot {
+    fn bit(&self, _bit: Bit) -> bool {
+        false
+    }
+
+    fn gender(&self) -> Gender {
+        Gender::Male
+    }
+
+    fn paid(&self, _days: u16) -> bool {
+        true
+    }
+
+    fn has_outfit(&self, _outfit: OutfitId) -> bool {
+        false
+    }
+
+    fn explored(&self, _system: SystemId) -> bool {
+        false
+    }
+}
+
 /// What running a set expression has to tell the player's side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScriptNote {
@@ -528,6 +583,69 @@ mod tests {
         }
         assert!(NovaBits.allows(&TestExpr::parse("b3").expect("parses"), &with_bits(&[3])));
         assert!(!NovaBits.allows(&TestExpr::parse("b3").expect("parses"), &with_bits(&[])));
+    }
+
+    #[test]
+    fn a_gate_asks_its_port_about_its_pilot() {
+        /// Holds a test while its pilot holds bit 4, recording each ask.
+        #[derive(Debug, Default)]
+        struct Recording(std::cell::RefCell<Vec<TestExpr>>);
+
+        impl ControlBits for Recording {
+            fn allows(&self, test: &TestExpr, pilot: &dyn PilotFacts) -> bool {
+                self.0.borrow_mut().push(test.clone());
+                pilot.bit(bit(4))
+            }
+        }
+
+        let port = Recording::default();
+        let with_4 = with_bits(&[4]);
+        let gate = Gate {
+            control_bits: &port,
+            pilot: &with_4,
+        };
+        assert!(gate.allows(&Test::parse("b9")));
+        let without = with_bits(&[]);
+        let gate = Gate {
+            pilot: &without,
+            ..gate
+        };
+        assert!(!gate.allows(&Test::parse("b9")));
+        let asked = TestExpr::parse("b9").expect("parses");
+        assert_eq!(*port.0.borrow(), [asked.clone(), asked]);
+    }
+
+    #[test]
+    fn a_gate_refuses_a_malformed_test_without_asking_its_port() {
+        let gate = Gate {
+            control_bits: &crate::testkit::AllowAll,
+            ..Gate::FRESH
+        };
+        assert!(gate.allows(&Test::parse("b1")));
+        assert!(!gate.allows(&Test::parse("b1 &")));
+    }
+
+    #[test]
+    fn the_fresh_gate_tests_a_new_pilot_by_novas_bits() {
+        let fresh = Gate::FRESH;
+        assert!(fresh.allows(&Test::default()), "blank");
+        assert!(!fresh.allows(&Test::parse("b3")), "no bit is set");
+        assert!(fresh.allows(&Test::parse("!b3 & g")), "male");
+        assert!(fresh.allows(&Test::parse("p30")), "paid");
+        assert!(!fresh.allows(&Test::parse("o130")), "owning nothing");
+        assert!(!fresh.allows(&Test::parse("e128")), "explored nowhere");
+    }
+
+    #[test]
+    fn the_refusing_fake_refuses_tests_that_read_its_bits() {
+        let gate = Gate {
+            control_bits: &crate::testkit::RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        assert!(!gate.allows(&Test::parse("b7")));
+        assert!(!gate.allows(&Test::parse("!b7")), "it reads bit 7");
+        assert!(gate.allows(&Test::parse("!b8")));
+        assert!(gate.allows(&Test::default()));
     }
 
     #[test]

@@ -31,7 +31,7 @@ use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
 use crate::control::{
-    Bit, BitStore, ControlBitSet, PilotFacts, ScriptNote, SetExpr, SetRegistry, execute,
+    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetRegistry, execute,
 };
 use crate::pilot::{Gender, Pilot};
 
@@ -152,6 +152,15 @@ impl Session {
             pilot: &self.pilot,
             ammo_outfits: &self.ammo_outfits,
             armament: &self.armament,
+        }
+    }
+
+    /// The session's control bits ([`Session::with_control_bits`]) and its
+    /// pilot, as the rules that test a record's control bits ask them.
+    pub(crate) fn gate(&self) -> Gate<'_> {
+        Gate {
+            control_bits: &*self.control_bits.0,
+            pilot: self,
         }
     }
 

@@ -18,11 +18,11 @@
 //! ones; 2128-2383 everywhere but that government's; 3128-3383 everywhere
 //! but that government's and independent ones. Alliances are not modelled
 //! until governments' relations are, so "this government or its allies"
-//! is this government alone. `Availability` goes through
-//! [`control_bits_allow`], which holds for every test that parsed until
-//! the outfitter moves onto the [`ControlBits`](crate::ControlBits) port,
-//! so for now every outfit gated by one is available (stock `oütf` 342,
-//! "Area Map - Vell-os", shows everywhere).
+//! is this government alone. `Availability` is tested through the
+//! [`ControlBits`](crate::ControlBits) port for the player's pilot (a
+//! [`Gate`]), as `_CanBuyOutfitItem` does (@0x4eb51); one that did not
+//! parse never holds. An outfit whose `Availability` does not hold is
+//! listed but cannot be bought, and can still be sold.
 //!
 //! `BuyRandom`, the percent chance a day that an outfit is for sale, is
 //! not applied yet: every outfit is for sale every day.
@@ -76,10 +76,11 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{GovtId, LandingSite, OutfitId, OutfitRecord};
+use crate::control::Gate;
 use crate::fuel::OutfitMod;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
-use crate::market::{Direction, control_bits_allow};
+use crate::market::Direction;
 use crate::pilot::Pilot;
 use crate::wares::{self, HideBits, HideHigher};
 
@@ -337,6 +338,8 @@ pub(crate) struct Shop<'a> {
     /// For every ammunition outfit of a fighter bay, the fighters the
     /// ship's bays can still take (see [`bay`](crate::bay)).
     pub(crate) fighter_room: &'a BTreeMap<OutfitId, u32>,
+    /// The control-bit test of an outfit's `Availability`.
+    pub(crate) gate: Gate<'a>,
 }
 
 impl Shop<'_> {
@@ -355,7 +358,7 @@ impl Shop<'_> {
             let owned = pilot.owned(record.id);
             let required = !requirements_apply(record.require_govt, self.site.govt)
                 || wares::requirement_met(record.require, contributed);
-            let available = record.availability.holds(control_bits_allow);
+            let available = self.gate.allows(&record.availability);
             let for_sale = tech_allows(record, self.site) && sweep.on_sale(record.disp_weight);
             let buyable = for_sale && required && available;
             sweep.note(
@@ -459,7 +462,7 @@ mod tests {
     use super::*;
     use crate::control::Test;
     use crate::stats::{MORE_FUEL, MORE_SPEED};
-    use crate::testkit::{FAST, catalog, outfit, planet};
+    use crate::testkit::{AllowAll, FAST, RefuseBits, catalog, outfit, planet};
 
     /// An outfitter of tech level 4 with special tech 6 and 55, of
     /// government 128.
@@ -514,8 +517,22 @@ mod tests {
             defaults: &NO_DEFAULTS,
             site,
             fighter_room: &NO_FIGHTERS,
+            gate: Gate::FRESH,
         }
         .outfitter(pilot)
+    }
+
+    fn open_gated(records: &[OutfitRecord], gate: Gate, pilot: &Pilot) -> Outfitter {
+        Shop {
+            records,
+            fields: FAST,
+            defaults: &NO_DEFAULTS,
+            site: &port(),
+            fighter_room: &NO_FIGHTERS,
+            gate,
+        }
+        .outfitter(pilot)
+        .expect("an outfitter")
     }
 
     fn open(records: &[OutfitRecord], pilot: &Pilot) -> Outfitter {
@@ -718,17 +735,90 @@ mod tests {
         assert_eq!(row(&outfitter, 128).buy, Ok(()));
     }
 
+    fn gated(id: i16, flags: u16, availability: &str) -> OutfitRecord {
+        OutfitRecord {
+            flags,
+            availability: Test::parse(availability),
+            ..outfit(id, &[])
+        }
+    }
+
     #[test]
-    fn hide_unless_available_shows_an_available_outfit() {
-        // Availability always holds until control bits exist.
-        let gated = OutfitRecord {
-            flags: OutfitFlags::HIDE_UNLESS_AVAILABLE,
-            availability: Test::parse("b9999"),
-            ..outfit(128, &[])
+    fn an_outfit_whose_availability_is_refused_is_listed_but_not_for_sale() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
         };
-        let outfitter = open(&[gated], &pilot());
+        let records = [gated(128, 0, "b7"), gated(129, 0, "b8")];
+        let outfitter = open_gated(&records, refusing, &pilot());
+        assert_eq!(listed(&outfitter), [128, 129]);
+        assert_eq!(row(&outfitter, 128).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(row(&outfitter, 129).buy, Ok(()), "another bit holds");
+    }
+
+    #[test]
+    fn hide_unless_available_hides_a_refused_outfit_unless_one_is_owned() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let records = [gated(128, OutfitFlags::HIDE_UNLESS_AVAILABLE, "b7")];
+        assert!(listed(&open_gated(&records, refusing, &pilot())).is_empty());
+        let owner = owning(&[(128, 1)]);
+        let outfitter = open_gated(&records, refusing, &owner);
         assert_eq!(listed(&outfitter), [128]);
-        assert_eq!(row(&outfitter, 128).buy, Ok(()));
+        assert_eq!(row(&outfitter, 128).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(row(&outfitter, 128).sell, Ok(()), "still sold back");
+    }
+
+    #[test]
+    fn a_new_pilots_clear_bit_refuses_an_outfit_by_novas_bits() {
+        let records = [
+            gated(128, OutfitFlags::HIDE_UNLESS_AVAILABLE, "b7"),
+            gated(129, 0, "b7"),
+            gated(130, OutfitFlags::HIDE_UNLESS_AVAILABLE, "!b7"),
+        ];
+        let outfitter = open(&records, &pilot());
+        assert_eq!(listed(&outfitter), [129, 130]);
+        assert_eq!(row(&outfitter, 129).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(row(&outfitter, 130).buy, Ok(()));
+    }
+
+    #[test]
+    fn a_malformed_availability_is_never_met() {
+        let records = [
+            gated(128, 0, "b1 &"),
+            gated(129, OutfitFlags::HIDE_UNLESS_AVAILABLE, "b1 &"),
+        ];
+        let allowing = Gate {
+            control_bits: &AllowAll,
+            ..Gate::FRESH
+        };
+        let outfitter = open_gated(&records, allowing, &pilot());
+        assert_eq!(listed(&outfitter), [128]);
+        assert_eq!(row(&outfitter, 128).buy, Err(OutfitRefusal::NotForSale));
+    }
+
+    #[test]
+    fn a_refused_outfit_hides_nothing_higher() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let records = [
+            OutfitRecord {
+                disp_weight: 5,
+                ..gated(129, OutfitFlags::HIDE_HIGHER, "b7")
+            },
+            OutfitRecord {
+                disp_weight: 5,
+                ..outfit(130, &[])
+            },
+        ];
+        assert_eq!(
+            listed(&open_gated(&records, refusing, &pilot())),
+            [129, 130]
+        );
     }
 
     #[test]
@@ -974,6 +1064,7 @@ mod tests {
                 defaults: &NO_DEFAULTS,
                 site: &port(),
                 fighter_room,
+                gate: Gate::FRESH,
             }
             .outfitter(pilot)
             .expect("open")
@@ -1057,6 +1148,7 @@ mod tests {
             defaults: &NO_DEFAULTS,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
+            gate: Gate::FRESH,
         }
         .outfitter(&pilot())
         .expect("open");
@@ -1070,6 +1162,7 @@ mod tests {
             defaults: &NO_DEFAULTS,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
+            gate: Gate::FRESH,
         }
         .outfitter(&pilot())
         .expect("open");
@@ -1080,6 +1173,7 @@ mod tests {
             defaults: &NO_DEFAULTS,
             site: &port(),
             fighter_room: &NO_FIGHTERS,
+            gate: Gate::FRESH,
         }
         .outfitter(&pilot())
         .expect("open");

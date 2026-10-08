@@ -85,7 +85,7 @@ use crate::chance::Chance;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::Condition;
 use crate::combat::weapon::{Ammo, WeaponSpec};
-use crate::control::{ControlBits, NovaBits, PilotFacts, Test};
+use crate::control::{ControlBits, FreshPilot, Gate, NovaBits, PilotFacts, Test};
 use crate::govt::Governments;
 use crate::pilot::Escort;
 use crate::reserves::Reserves;
@@ -626,34 +626,18 @@ impl PersonWorld<'_> {
     /// when it did not parse.
     #[must_use]
     pub fn allows(&self, test: &Test) -> bool {
-        test.holds(|test| self.control_bits.allows(test, self.pilot))
+        self.gate().allows(test)
     }
 }
 
-/// A new pilot, as a control-bit test reads one: no bit set, male, paid
-/// for, owning nothing and having explored nowhere.
-#[derive(Clone, Copy, Debug)]
-struct FreshPilot;
-
-impl PilotFacts for FreshPilot {
-    fn bit(&self, _bit: crate::control::Bit) -> bool {
-        false
-    }
-
-    fn gender(&self) -> crate::pilot::Gender {
-        crate::pilot::Gender::Male
-    }
-
-    fn paid(&self, _days: u16) -> bool {
-        true
-    }
-
-    fn has_outfit(&self, _outfit: crate::catalog::OutfitId) -> bool {
-        false
-    }
-
-    fn explored(&self, _system: crate::catalog::SystemId) -> bool {
-        false
+impl<'a> PersonWorld<'a> {
+    /// The control bits and the pilot view, as a [`Gate`].
+    #[must_use]
+    pub fn gate(&self) -> Gate<'a> {
+        Gate {
+            control_bits: self.control_bits,
+            pilot: self.pilot,
+        }
     }
 }
 
