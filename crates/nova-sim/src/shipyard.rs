@@ -558,7 +558,9 @@ pub(crate) fn keep_cargo(
 /// that plus the `escorts` tons, at most 1, in doubles. With no space of
 /// its own the share is none: the engine's 0/0 is NaN, which converts to
 /// a value that keeps nothing of a commodity and takes nothing of a
-/// `jünk`, as none does.
+/// `jünk`, as none does. The cap is `minsd` with 1 first (@0xcf33), so
+/// escorts that bring the fleet to no space give A/0 = +inf and so 1, and
+/// below none give a negative share, kept as it is.
 fn new_ships_share(capacity: u32, escorts: i64) -> f64 {
     if capacity == 0 {
         return 0.0;
@@ -1754,6 +1756,52 @@ mod tests {
                 "{escorts:?}"
             );
         }
+    }
+
+    #[test]
+    fn by_the_engine_an_escort_of_negative_holds_does_not_raise_the_share_past_all() {
+        // A = 20, B = 15: A/B = 1.33, capped at 1 (@0xcf27-0xcf37).
+        assert_eq!(
+            kept(
+                &[(FOOD, 10), (OPALS, 4)],
+                20,
+                &[trader(-5)],
+                RuleSource::Engine
+            ),
+            (vec![(FOOD, 10)], BTreeMap::from([(OPALS, 4)]))
+        );
+    }
+
+    #[test]
+    fn by_the_engine_escorts_bringing_the_fleet_to_no_space_share_all_and_trim_all() {
+        // A = 10, B = 0: A/0 is +inf, and `minsd` gives 1 (@0xcf33); the
+        // fleet's holds are then none, so the trim takes every commodity.
+        assert_eq!(
+            kept(
+                &[(FOOD, 10), (OPALS, 4)],
+                10,
+                &[trader(-10)],
+                RuleSource::Engine
+            ),
+            (vec![], BTreeMap::from([(FOOD, 10), (OPALS, 4)]))
+        );
+    }
+
+    #[test]
+    fn by_the_engine_escorts_bringing_the_fleet_below_no_space_add_to_each_junk() {
+        // A = 10, B = -20: f = A/B = -0.5, which `minsd` keeps (@0xcf33).
+        // Each commodity becomes trunc(10 x -0.5), clamped to none
+        // (@0xcf7c-0xcf84); each `jünk` loses trunc(4 x -0.5) = -2, so
+        // gains 2 (@0xcfc0-0xcfc3).
+        assert_eq!(
+            kept(
+                &[(FOOD, 10), (OPALS, 4)],
+                10,
+                &[trader(-30)],
+                RuleSource::Engine
+            ),
+            (vec![(OPALS, 6)], BTreeMap::from([(FOOD, 10)]))
+        );
     }
 
     #[test]
