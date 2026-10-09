@@ -145,6 +145,9 @@ impl PilotCatalog for Home {
             govt: None,
             flags2: 0,
             destroyed: false,
+            graphic: 0,
+            dead_graphic: None,
+            type_counts_frames: true,
         }]
     }
 
@@ -178,6 +181,10 @@ impl PilotCatalog for Home {
 
     fn stellar_lives(&self) -> Vec<StellarLife> {
         self.lives.clone()
+    }
+
+    fn fallback_sheet_reads(&self) -> bool {
+        true
     }
 }
 

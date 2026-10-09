@@ -696,6 +696,10 @@ pub struct Session {
     /// (see the `stellars` module); never saved, as a load is itself a
     /// rebuild point.
     rebuilt: Rebuilt,
+    /// Whether graphic type 0's sheet can be read, read from the catalog
+    /// as the session starts: what a rebuild point fills an empty sprite
+    /// slot with (see the `stellars` module).
+    fallback_reads: bool,
 }
 
 impl Session {
@@ -844,6 +848,7 @@ impl Session {
             strength: BTreeMap::new(),
             destroying: BTreeSet::new(),
             rebuilt: Rebuilt::default(),
+            fallback_reads: catalog.fallback_sheet_reads(),
             pilot,
         };
         session.set_player_system(system, here, dock);
@@ -1973,6 +1978,7 @@ impl Session {
             &self.sites,
             self.galaxy.govt(self.pilot.system),
             |govt| self.pilot.legal_record(govt),
+            |site| self.landing_reach(site),
         )?;
         match outcome {
             LandOutcome::Selected { stellar, .. } => self.nav_target = Some(stellar),
@@ -3813,8 +3819,14 @@ mod tests {
         assert_eq!(session.nav_target(), Some(StellarId(128)), "kept");
         assert_eq!(
             refusal,
-            crate::landing::check_landing(&flying, &planet(128, 30.0, -40.0), None, |_| 0)
-                .map(|_| StellarId(128))
+            crate::landing::check_landing(
+                &flying,
+                &planet(128, 30.0, -40.0),
+                None,
+                |_| 0,
+                crate::landing::LandingReach::Box(175.0)
+            )
+            .map(|_| StellarId(128))
         );
         assert!(refusal.is_err(), "{refusal:?}");
         assert_eq!(session.landed(), None);

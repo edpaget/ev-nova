@@ -99,6 +99,10 @@ impl PilotCatalog for Pilot {
     fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
         Vec::new()
     }
+
+    fn fallback_sheet_reads(&self) -> bool {
+        true
+    }
 }
 
 /// The script, by half-seconds: thrust for a second, turn right for half

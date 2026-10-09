@@ -43,8 +43,8 @@ use nova_sim::{
     Chance, Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good,
     GovtId, JunkId, LandOutcome, LandPress, LandingRefusal, NeverFires, OutfitId, OutfitMod,
     OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields,
-    ShipId, ShipState, ShipStats, StartDate, StellarId, StringPatch, SystemId, Vec2, check_landing,
-    services,
+    ShipId, ShipState, ShipStats, StartDate, StellarId, StellarShown, StringPatch, SystemId,
+    TypeWidth, Vec2, check_landing, landing_reach, services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -210,6 +210,14 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
             kania,
             session.star_map().govt(session.system()),
             |govt| session.pilot().legal_record(govt),
+            landing_reach(
+                kania,
+                StellarShown {
+                    frame: true,
+                    type_width: TypeWidth::Frame,
+                },
+                RuleSource::Engine,
+            ),
         ),
         Err(LandingRefusal::Denied {
             stellar: kania.id,

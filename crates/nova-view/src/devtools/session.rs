@@ -175,6 +175,9 @@ mod tests {
             govt: None,
             flags2,
             destroyed: false,
+            graphic: 0,
+            dead_graphic: None,
+            type_counts_frames: true,
         }
     }
 
@@ -263,6 +266,10 @@ mod tests {
 
         fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
             Vec::new()
+        }
+
+        fn fallback_sheet_reads(&self) -> bool {
+            true
         }
     }
 

@@ -17,12 +17,13 @@ use nova_data::records::outfit::Outfit;
 use nova_data::records::person::Person;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
+use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string::StrResource;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
-use nova_data::{GameData, Record};
+use nova_data::{GameData, Record, stellar_spin_id};
 
 use crate::blink::Blink;
 use crate::catalog::{
@@ -194,6 +195,10 @@ impl PilotCatalog for GameData {
                     govt: stellar.govt,
                     flags2: stellar.flags2.bits(),
                     destroyed: false,
+                    graphic: stellar.graphic_type,
+                    dead_graphic: matches!(self.stellar_dead_sprite(id), Ok(Some(_)))
+                        .then_some(stellar.dead_type),
+                    type_counts_frames: counts_frames(self, stellar.graphic_type),
                 })
             })
             .collect()
@@ -332,6 +337,20 @@ impl PilotCatalog for GameData {
             })
             .collect()
     }
+
+    fn fallback_sheet_reads(&self) -> bool {
+        stellar_spin_id(0).is_some_and(|spin| self.spin_sheet(spin).is_ok())
+    }
+}
+
+/// Whether graphic type `graphic`'s `spïn` in `data` reads and gives a
+/// frame count above 0, its `xTiles` × `yTiles` in 32 bits, as the
+/// original's `_LoadMasterStellarSprite` multiplies them
+/// (@0x1ed8c-0x1ed97).
+fn counts_frames(data: &GameData, graphic: i16) -> bool {
+    stellar_spin_id(graphic)
+        .and_then(|spin| data.get::<Spin>(spin)?.ok())
+        .is_some_and(|spin| i32::from(spin.record.x_tiles) * i32::from(spin.record.y_tiles) > 0)
 }
 
 /// Reads the records afresh on every call; a session asks each time it
@@ -1473,6 +1492,9 @@ mod tests {
                     govt: None,
                     flags2: 0x1200,
                     destroyed: false,
+                    graphic: 0,
+                    dead_graphic: Some(0),
+                    type_counts_frames: true,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -1486,8 +1508,102 @@ mod tests {
                     govt: None,
                     flags2: 0,
                     destroyed: false,
+                    graphic: 7,
+                    dead_graphic: Some(0),
+                    type_counts_frames: false,
                 },
             ]
+        );
+    }
+
+    /// `bytes`, a `spöb`, with this `DeadType`.
+    fn dead_as(mut bytes: Vec<u8>, dead_type: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x240, &[dead_type]);
+        bytes
+    }
+
+    #[test]
+    fn a_landing_sites_dead_graphic_is_its_dead_type_when_that_sheet_reads() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129, 130, 131, 132])),
+            (Stellar::TYPE, 128, dead_as(stellar(0, 0, 4, 1, 0), 3)),
+            (Stellar::TYPE, 129, dead_as(stellar(0, 0, 4, 1, 0), -1)),
+            (Stellar::TYPE, 130, dead_as(stellar(0, 0, 4, 1, 0), 5)),
+            (Stellar::TYPE, 131, dead_as(stellar(0, 0, 4, 1, 0), 300)),
+            (Stellar::TYPE, 132, dead_as(stellar(0, 0, -2, 1, 0), 6)),
+            (Spin::TYPE, 1003, spin(1003)),
+            (RLED, 1003, sheet(12, 30)),
+            // 1005 names a sheet that is not there.
+            (Spin::TYPE, 1005, spin(1005)),
+            (Spin::TYPE, 1006, spin(1006)),
+            (RLED, 1006, sheet(4, 4)),
+        ]);
+        assert_eq!(
+            data.landing_sites(SystemId(130))
+                .iter()
+                .map(|site| (site.id.0, site.graphic, site.dead_graphic))
+                .collect::<Vec<_>>(),
+            [
+                (128, 4, Some(3)),
+                (129, 4, None),
+                (130, 4, None),
+                (131, 4, None),
+                (132, -2, Some(6)),
+            ]
+        );
+    }
+
+    /// A `spïn` naming `rlëD` 1000, `x_tiles` across and `y_tiles` down.
+    fn tiled(x_tiles: i16, y_tiles: i16) -> Vec<u8> {
+        let mut bytes = spin(1000);
+        put_i16s(&mut bytes, 0x08, &[x_tiles, y_tiles]);
+        bytes
+    }
+
+    #[test]
+    fn a_landing_site_counts_frames_when_its_type_spins_tiles_multiply_above_0() {
+        for (x_tiles, y_tiles, counts) in [
+            (1, 1, true),
+            (6, 6, true),
+            (-2, -3, true),
+            (0, 5, false),
+            (5, 0, false),
+            (-1, 4, false),
+            (4, -1, false),
+            // 32 bits, as the original multiplies: no word wrap.
+            (300, 300, true),
+            (300, -300, false),
+        ] {
+            let data = store(&[
+                (System::TYPE, 130, system_with(&[128])),
+                (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
+                (Spin::TYPE, 1000, tiled(x_tiles, y_tiles)),
+                (RLED, 1000, sheet(12, 30)),
+            ]);
+            assert_eq!(
+                data.landing_sites(SystemId(130))[0].type_counts_frames,
+                counts,
+                "{x_tiles} x {y_tiles}"
+            );
+        }
+        let no_spin = store(&[
+            (System::TYPE, 130, system_with(&[128])),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
+        ]);
+        assert!(!no_spin.landing_sites(SystemId(130))[0].type_counts_frames);
+    }
+
+    #[test]
+    fn the_fallback_sheet_reads_when_spin_1000_and_its_sheet_do() {
+        assert!(
+            store(&[(Spin::TYPE, 1000, spin(1000)), (RLED, 1000, sheet(4, 4))])
+                .fallback_sheet_reads()
+        );
+        assert!(!store(&[(Spin::TYPE, 1000, spin(1000))]).fallback_sheet_reads());
+        assert!(!store(&[(RLED, 1000, sheet(4, 4))]).fallback_sheet_reads());
+        assert!(
+            !store(&[(Spin::TYPE, 1001, spin(1000)), (RLED, 1000, sheet(4, 4))])
+                .fallback_sheet_reads()
         );
     }
 

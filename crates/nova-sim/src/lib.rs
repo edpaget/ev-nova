@@ -306,8 +306,9 @@ pub use hyperspace::{
     Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,
 };
 pub use landing::{
-    Clearance, LandOutcome, LandingRefusal, Service, check_landing, is_landable, land_or_select,
-    landing_radius, nearest_landable, services,
+    Clearance, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH, OUT_OF_RANGE_FRAME_WIDTH,
+    REACH_PER_WIDTH, Service, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH, check_landing,
+    is_landable, land_or_select, landing_radius, landing_reach, nearest_landable, services,
 };
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};

@@ -54,6 +54,7 @@ use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::flight::ShipState;
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
+use crate::rulebook::RuleSource;
 
 /// The fastest a ship can land, in pixels a tick (30 pixels a second): a
 /// third of an average ship's top speed. An average engine brakes to it
@@ -147,6 +148,86 @@ pub fn landing_radius(site: &LandingSite) -> f32 {
         })
 }
 
+/// The original's reach when the stellar's sprite slot shows no frame
+/// (`_HandlePlayerDockRequest` @0x66cc7).
+pub const NO_FRAME_REACH: f32 = 75.0;
+
+/// The width `_GetStellarSpriteXSize` gives a stellar whose `Type` master
+/// is not loaded (@0xad2d).
+pub const UNLOADED_TYPE_WIDTH: u32 = 150;
+
+/// The width `_GetStellarSpriteXSize` gives a loaded `Type` master whose
+/// frame index is outside its frame count (@0xacff).
+pub const OUT_OF_RANGE_FRAME_WIDTH: u32 = 32;
+
+/// The reach per pixel of width: the double at 0xdd6e8.
+pub const REACH_PER_WIDTH: f64 = 1.75;
+
+/// Which width `_GetStellarSpriteXSize` reads of a stellar's `Type` master.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeWidth {
+    /// The master is loaded and its frame index is in range: the `Type`
+    /// frame's width.
+    Frame,
+    /// The master is loaded but its frame index is outside its frame
+    /// count: [`OUT_OF_RANGE_FRAME_WIDTH`].
+    OutOfRange,
+    /// The master is not loaded: [`UNLOADED_TYPE_WIDTH`].
+    Unloaded,
+}
+
+/// What the landing distance reads of a stellar besides its frame size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StellarShown {
+    /// Whether its sprite slot shows any frame.
+    pub frame: bool,
+    /// Which width its `Type` master gives.
+    pub type_width: TypeWidth,
+}
+
+/// How close the ship's centre must be to a stellar's to land on it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LandingReach {
+    /// Both the x and the y distance strictly below this: the original's
+    /// box.
+    Box(f32),
+    /// The distance at most this: the other reading's circle,
+    /// [`landing_radius`].
+    Circle(f32),
+}
+
+impl LandingReach {
+    /// Whether a ship `offset` from the stellar's centre is over it.
+    #[must_use]
+    pub fn holds(self, offset: Vec2) -> bool {
+        match self {
+            Self::Box(reach) => offset.x.abs() < reach && offset.y.abs() < reach,
+            Self::Circle(radius) => offset.length() <= radius,
+        }
+    }
+}
+
+/// `site`'s landing reach under `source`, given what it shows: see the
+/// module docs.
+#[must_use]
+pub fn landing_reach(site: &LandingSite, shown: StellarShown, source: RuleSource) -> LandingReach {
+    if source == RuleSource::Bible {
+        return LandingReach::Circle(landing_radius(site));
+    }
+    if !shown.frame {
+        return LandingReach::Box(NO_FRAME_REACH);
+    }
+    let width = match (shown.type_width, site.frame_size) {
+        (TypeWidth::Frame, Some((width, _))) => width,
+        (TypeWidth::OutOfRange, _) => OUT_OF_RANGE_FRAME_WIDTH,
+        (TypeWidth::Frame | TypeWidth::Unloaded, _) => UNLOADED_TYPE_WIDTH,
+    };
+    // Truncated, as `cvttsd2si` does: rounding, not a word wrap.
+    #[allow(clippy::cast_possible_truncation)]
+    let reach = (f64::from(width) * REACH_PER_WIDTH).trunc() as f32;
+    LandingReach::Box(reach)
+}
+
 /// The reply to a request for clearance, the land key's first press.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Clearance {
@@ -186,13 +267,15 @@ pub fn land_or_select(
     sites: &[LandingSite],
     system_govt: Option<GovtId>,
     record: impl Fn(GovtId) -> i16,
+    reach: impl Fn(&LandingSite) -> LandingReach,
 ) -> Result<LandOutcome, LandingRefusal> {
     let target = target.and_then(|id| sites.iter().find(|site| site.id == id));
     if let Some(site) = target {
         if !is_landable(site) {
             return Err(not_landable(site));
         }
-        return check_landing(player, site, system_govt, record).map(LandOutcome::Landed);
+        return check_landing(player, site, system_govt, record, reach(site))
+            .map(LandOutcome::Landed);
     }
     let Some(site) = nearest_landable_site(player.position, sites) else {
         return Err(
@@ -287,9 +370,10 @@ pub fn check_landing(
     site: &LandingSite,
     system_govt: Option<GovtId>,
     record: impl Fn(GovtId) -> i16,
+    reach: LandingReach,
 ) -> Result<StellarId, LandingRefusal> {
     let (stellar, station) = (site.id, is_station(site));
-    if (site.position - player.position).length() > landing_radius(site) {
+    if !reach.holds(site.position - player.position) {
         return Err(LandingRefusal::TooFar { stellar, station });
     }
     if !is_landable(site) {
@@ -411,6 +495,9 @@ mod tests {
             govt: None,
             flags2: 0,
             destroyed: false,
+            graphic: 0,
+            dead_graphic: None,
+            type_counts_frames: true,
         }
     }
 
@@ -434,10 +521,37 @@ mod tests {
         ship(0.0, 0.0, 0.0, 0.0)
     }
 
+    /// `site`'s reach by the engine's reading, its `Type` master loaded
+    /// and a frame shown.
+    fn engine_reach(site: &LandingSite) -> LandingReach {
+        landing_reach(site, LOADED, RuleSource::Engine)
+    }
+
+    /// A stellar whose slot shows a frame and whose `Type` master is
+    /// loaded.
+    const LOADED: StellarShown = StellarShown {
+        frame: true,
+        type_width: TypeWidth::Frame,
+    };
+
+    /// [`check_landing`] with `site`'s [`engine_reach`].
+    fn check(
+        player: &ShipState,
+        site: &LandingSite,
+        system_govt: Option<GovtId>,
+        record: impl Fn(GovtId) -> i16,
+    ) -> Result<StellarId, LandingRefusal> {
+        check_landing(player, site, system_govt, record, engine_reach(site))
+    }
+
     #[test]
     fn the_named_values() {
         assert_eq!(LANDING_SPEED, 1.0);
         assert_eq!(UNKNOWN_STELLAR_RADIUS, 32.0);
+        assert_eq!(NO_FRAME_REACH, 75.0);
+        assert_eq!(UNLOADED_TYPE_WIDTH, 150);
+        assert_eq!(OUT_OF_RANGE_FRAME_WIDTH, 32);
+        assert_eq!(REACH_PER_WIDTH, 1.75);
         assert_eq!(
             [
                 StellarFlags::CAN_LAND,
@@ -516,14 +630,14 @@ mod tests {
         )));
         assert!(!is_dockable(&destroyed(F::CAN_LAND)));
         assert_eq!(
-            check_landing(&parked(), &destroyed(F::CAN_LAND), None, |_| 0),
+            check(&parked(), &destroyed(F::CAN_LAND), None, |_| 0),
             Err(LandingRefusal::NotLandable {
                 stellar: StellarId(128),
                 station: false,
             })
         );
         assert_eq!(
-            check_landing(
+            check(
                 &parked(),
                 &destroyed(F::CAN_LAND | F::ONLY_WHEN_DESTROYED),
                 None,
@@ -649,7 +763,7 @@ mod tests {
     fn a_slow_ship_over_a_landable_stellar_lands_on_it() {
         let target = site(128, 10.0, -20.0);
         assert_eq!(
-            check_landing(&ship(5.0, -15.0, 0.5, -0.5), &target, None, |_| 0),
+            check(&ship(5.0, -15.0, 0.5, -0.5), &target, None, |_| 0),
             Ok(StellarId(128))
         );
     }
@@ -657,18 +771,19 @@ mod tests {
     #[test]
     fn too_far_names_the_target() {
         assert_eq!(
-            check_landing(&parked(), &site(129, 0.0, -300.0), None, |_| 0),
+            check(&parked(), &site(129, 0.0, -300.0), None, |_| 0),
             Err(LandingRefusal::TooFar {
                 stellar: StellarId(129),
                 station: false,
             })
         );
+        // 100 wide: exactly on the strict 175 box's edge.
         let station = LandingSite {
             flags: StellarFlags::CAN_LAND | StellarFlags::STATION,
-            ..site(131, 0.0, 51.0)
+            ..site(131, 0.0, 175.0)
         };
         assert_eq!(
-            check_landing(&parked(), &station, None, |_| 0),
+            check(&parked(), &station, None, |_| 0),
             Err(LandingRefusal::TooFar {
                 stellar: StellarId(131),
                 station: true,
@@ -679,14 +794,166 @@ mod tests {
     #[test]
     fn exactly_at_the_radius_is_over_it_and_just_beyond_is_not() {
         let target = site(128, 0.0, 0.0);
-        assert_eq!(
-            check_landing(&ship(30.0, 40.0, 0.0, 0.0), &target, None, |_| 0),
-            Ok(StellarId(128))
-        );
+        let circle = LandingReach::Circle(landing_radius(&target));
+        let at = |x, y| check_landing(&ship(x, y, 0.0, 0.0), &target, None, |_| 0, circle);
+        assert_eq!(at(30.0, 40.0), Ok(StellarId(128)));
         assert!(matches!(
-            check_landing(&ship(30.0, 40.01, 0.0, 0.0), &target, None, |_| 0),
+            at(30.0, 40.01),
             Err(LandingRefusal::TooFar { .. })
         ));
+    }
+
+    #[test]
+    fn exactly_at_the_box_edge_is_too_far_and_just_inside_lands() {
+        // 100 wide: a reach of 175 on each axis.
+        let target = site(128, 0.0, 0.0);
+        assert_eq!(engine_reach(&target), LandingReach::Box(175.0));
+        for (x, y) in [(174.9, 0.0), (0.0, -174.9), (-174.9, 174.9)] {
+            assert_eq!(
+                check(&ship(x, y, 0.0, 0.0), &target, None, |_| 0),
+                Ok(StellarId(128)),
+                "({x}, {y})"
+            );
+        }
+        for (x, y) in [(175.0, 0.0), (0.0, -175.0), (175.0, 175.0), (-175.0, 10.0)] {
+            assert!(
+                matches!(
+                    check(&ship(x, y, 0.0, 0.0), &target, None, |_| 0),
+                    Err(LandingRefusal::TooFar { .. })
+                ),
+                "({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn the_same_reach_decides_too_fast_and_too_far() {
+        let target = site(128, 0.0, 0.0);
+        let reach = LandingReach::Box(175.0);
+        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, None, |_| 0, reach);
+        assert!(matches!(fast(174.0), Err(LandingRefusal::TooFast { .. })));
+        assert!(matches!(fast(175.0), Err(LandingRefusal::TooFar { .. })));
+        // Outside today's 50 circle but inside the box: too fast, not too
+        // far.
+        assert!(matches!(fast(60.0), Err(LandingRefusal::TooFast { .. })));
+        let circle = LandingReach::Circle(50.0);
+        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, None, |_| 0, circle);
+        assert!(matches!(fast(50.0), Err(LandingRefusal::TooFast { .. })));
+        assert!(matches!(fast(60.0), Err(LandingRefusal::TooFar { .. })));
+    }
+
+    #[test]
+    fn a_box_holds_strictly_inside_on_each_axis() {
+        let reach = LandingReach::Box(175.0);
+        assert!(reach.holds(Vec2::new(174.9, -174.9)));
+        assert!(!reach.holds(Vec2::new(175.0, 0.0)), "strict on x");
+        assert!(!reach.holds(Vec2::new(0.0, -175.0)), "strict on y");
+        assert!(!reach.holds(Vec2::new(-175.0, 0.0)), "either sign");
+        assert!(!reach.holds(Vec2::new(0.0, 175.0)), "either sign");
+        assert!(!reach.holds(Vec2::new(10.0, 180.0)), "x inside, y not");
+        assert!(!reach.holds(Vec2::new(180.0, 10.0)), "y inside, x not");
+        assert!(
+            reach.holds(Vec2::new(170.0, 170.0)),
+            "a diagonal outside a 175 circle"
+        );
+    }
+
+    #[test]
+    fn a_circle_holds_at_most_its_radius() {
+        let reach = LandingReach::Circle(50.0);
+        assert!(reach.holds(Vec2::new(30.0, 40.0)));
+        assert!(reach.holds(Vec2::new(-30.0, -40.0)));
+        assert!(!reach.holds(Vec2::new(30.0, 40.01)));
+        assert!(!reach.holds(Vec2::new(40.0, 40.0)), "inside the box of 50");
+    }
+
+    fn sized(width: u32, height: u32) -> LandingSite {
+        LandingSite {
+            frame_size: Some((width, height)),
+            ..site(128, 0.0, 0.0)
+        }
+    }
+
+    fn shown(frame: bool, type_width: TypeWidth) -> StellarShown {
+        StellarShown { frame, type_width }
+    }
+
+    #[test]
+    fn by_the_engine_the_reach_is_the_type_width_times_1_75_truncated() {
+        let engine = |site: &LandingSite, shown| landing_reach(site, shown, RuleSource::Engine);
+        let box_of = LandingReach::Box;
+        assert_eq!(engine(&sized(100, 60), LOADED), box_of(175.0));
+        assert_eq!(engine(&sized(15, 15), LOADED), box_of(26.0), "26.25");
+        assert_eq!(engine(&sized(140, 85), LOADED), box_of(245.0), "the width");
+        assert_eq!(
+            engine(&sized(85, 140), LOADED),
+            box_of(148.0),
+            "not the height"
+        );
+        assert_eq!(engine(&sized(325, 325), LOADED), box_of(568.0), "568.75");
+    }
+
+    #[test]
+    fn by_the_engine_an_unloaded_type_is_150_wide_and_out_of_range_32() {
+        let engine = |site: &LandingSite, shown| landing_reach(site, shown, RuleSource::Engine);
+        let box_of = LandingReach::Box;
+        for site in [sized(100, 60), sized(200, 60)] {
+            assert_eq!(
+                engine(&site, shown(true, TypeWidth::Unloaded)),
+                box_of(262.0),
+                "262.5"
+            );
+            assert_eq!(
+                engine(&site, shown(true, TypeWidth::OutOfRange)),
+                box_of(56.0)
+            );
+        }
+        let unknown = LandingSite {
+            frame_size: None,
+            ..site(128, 0.0, 0.0)
+        };
+        assert_eq!(engine(&unknown, LOADED), box_of(262.0));
+        assert_eq!(
+            engine(&unknown, shown(true, TypeWidth::OutOfRange)),
+            box_of(56.0)
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_slot_with_no_frame_reaches_75_whatever_the_width() {
+        for type_width in [TypeWidth::Frame, TypeWidth::OutOfRange, TypeWidth::Unloaded] {
+            for site in [sized(15, 15), sized(100, 60), sized(325, 325)] {
+                assert_eq!(
+                    landing_reach(&site, shown(false, type_width), RuleSource::Engine),
+                    LandingReach::Box(75.0)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_bible_the_reach_is_always_todays_circle() {
+        let unknown = LandingSite {
+            frame_size: None,
+            ..site(128, 0.0, 0.0)
+        };
+        for (site, radius) in [
+            (sized(100, 60), 50.0),
+            (sized(140, 185), 92.5),
+            (sized(200, 60), 100.0),
+            (unknown, 32.0),
+        ] {
+            for frame in [true, false] {
+                for type_width in [TypeWidth::Frame, TypeWidth::OutOfRange, TypeWidth::Unloaded] {
+                    assert_eq!(
+                        landing_reach(&site, shown(frame, type_width), RuleSource::Bible),
+                        LandingReach::Circle(radius),
+                        "{:?} {frame} {type_width:?}",
+                        site.frame_size
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -694,17 +961,14 @@ mod tests {
         // 129's centre is nearer, but 128 is the target and the ship is
         // within its radius too.
         let target = site(128, 40.0, 0.0);
-        assert_eq!(
-            check_landing(&parked(), &target, None, |_| 0),
-            Ok(StellarId(128))
-        );
+        assert_eq!(check(&parked(), &target, None, |_| 0), Ok(StellarId(128)));
     }
 
     #[test]
     fn a_stellar_without_the_can_land_flag_is_not_landable() {
         for (flags, station) in [(0, false), (StellarFlags::STATION, true)] {
             assert_eq!(
-                check_landing(&parked(), &with_flags(flags), None, |_| 0),
+                check(&parked(), &with_flags(flags), None, |_| 0),
                 Err(LandingRefusal::NotLandable {
                     stellar: StellarId(128),
                     station,
@@ -717,7 +981,7 @@ mod tests {
     fn a_stellar_landable_only_once_destroyed_is_not_landable() {
         let flags = StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED;
         assert_eq!(
-            check_landing(&parked(), &with_flags(flags), None, |_| 0),
+            check(&parked(), &with_flags(flags), None, |_| 0),
             Err(LandingRefusal::NotLandable {
                 stellar: StellarId(128),
                 station: false,
@@ -738,7 +1002,7 @@ mod tests {
         let can_land = StellarFlags::CAN_LAND;
         for min_status in [1, 32767] {
             assert_eq!(
-                check_landing(&parked(), &needing(min_status, can_land), GOVT, |_| 0),
+                check(&parked(), &needing(min_status, can_land), GOVT, |_| 0),
                 Err(LandingRefusal::Denied {
                     stellar: StellarId(128),
                     station: false,
@@ -748,7 +1012,7 @@ mod tests {
         }
         let station = can_land | StellarFlags::STATION;
         assert_eq!(
-            check_landing(&parked(), &needing(5, station), GOVT, |_| 4),
+            check(&parked(), &needing(5, station), GOVT, |_| 4),
             Err(LandingRefusal::Denied {
                 stellar: StellarId(128),
                 station: true,
@@ -762,7 +1026,7 @@ mod tests {
         let can_land = StellarFlags::CAN_LAND;
         for (min_status, record) in [(-32767, 0), (0, 0), (5, 5), (5, 6), (-3, -3)] {
             assert_eq!(
-                check_landing(&parked(), &needing(min_status, can_land), GOVT, |_| record),
+                check(&parked(), &needing(min_status, can_land), GOVT, |_| record),
                 Ok(StellarId(128)),
                 "{min_status} {record}"
             );
@@ -773,7 +1037,7 @@ mod tests {
     fn an_uninhabited_stellar_ignores_min_status() {
         let flags = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
         assert_eq!(
-            check_landing(&parked(), &needing(32767, flags), None, |_| 0),
+            check(&parked(), &needing(32767, flags), None, |_| 0),
             Ok(StellarId(128))
         );
         // Even under a government whose record of the pilot is far below.
@@ -782,7 +1046,7 @@ mod tests {
             ..needing(32767, flags)
         };
         assert_eq!(
-            check_landing(&parked(), &governed, Some(B), |_| -32768),
+            check(&parked(), &governed, Some(B), |_| -32768),
             Ok(StellarId(128))
         );
     }
@@ -817,7 +1081,7 @@ mod tests {
 
     #[test]
     fn a_stellars_own_government_keeps_the_record_landing_reads() {
-        let land = |site, system| check_landing(&parked(), &governed_by(site), system, record);
+        let land = |site, system| check(&parked(), &governed_by(site), system, record);
         assert_eq!(land(Some(A), Some(B)), Ok(StellarId(128)));
         assert_eq!(land(Some(B), Some(A)), denied());
         assert_eq!(land(Some(A), None), Ok(StellarId(128)));
@@ -826,7 +1090,7 @@ mod tests {
 
     #[test]
     fn a_stellar_without_a_government_falls_back_to_its_systems() {
-        let land = |system| check_landing(&parked(), &governed_by(None), system, record);
+        let land = |system| check(&parked(), &governed_by(None), system, record);
         assert_eq!(land(Some(A)), Ok(StellarId(128)));
         assert_eq!(land(Some(B)), denied());
     }
@@ -838,12 +1102,9 @@ mod tests {
             govt: None,
             ..needing(min_status, StellarFlags::CAN_LAND)
         };
+        assert_eq!(check(&parked(), &needs(0), None, never), Ok(StellarId(128)));
         assert_eq!(
-            check_landing(&parked(), &needs(0), None, never),
-            Ok(StellarId(128))
-        );
-        assert_eq!(
-            check_landing(&parked(), &needs(1), None, never),
+            check(&parked(), &needs(1), None, never),
             Err(LandingRefusal::Denied {
                 stellar: StellarId(128),
                 station: false,
@@ -859,7 +1120,7 @@ mod tests {
         let speed = fast.velocity.length();
         assert!(speed > LANDING_SPEED, "{speed}");
         assert_eq!(
-            check_landing(&fast, &target, None, |_| 0),
+            check(&fast, &target, None, |_| 0),
             Err(LandingRefusal::TooFast {
                 stellar: StellarId(128),
                 station: false,
@@ -868,7 +1129,7 @@ mod tests {
         );
         let station = with_flags(StellarFlags::CAN_LAND | StellarFlags::STATION);
         assert!(matches!(
-            check_landing(&fast, &station, None, |_| 0),
+            check(&fast, &station, None, |_| 0),
             Err(LandingRefusal::TooFast { station: true, .. })
         ));
     }
@@ -877,11 +1138,11 @@ mod tests {
     fn exactly_the_landing_speed_lands() {
         let target = site(128, 0.0, 0.0);
         assert_eq!(
-            check_landing(&ship(0.0, 0.0, 0.0, 1.0), &target, None, |_| 0),
+            check(&ship(0.0, 0.0, 0.0, 1.0), &target, None, |_| 0),
             Ok(StellarId(128))
         );
         assert_eq!(
-            check_landing(&ship(0.0, 0.0, -1.0, 0.0), &target, None, |_| 0),
+            check(&ship(0.0, 0.0, -1.0, 0.0), &target, None, |_| 0),
             Ok(StellarId(128))
         );
     }
@@ -891,18 +1152,18 @@ mod tests {
         // Not landable, denied and too fast at once: not landable.
         let fast = ship(0.0, 0.0, 5.0, 0.0);
         assert!(matches!(
-            check_landing(&fast, &needing(10, 0), None, |_| 0),
+            check(&fast, &needing(10, 0), None, |_| 0),
             Err(LandingRefusal::NotLandable { .. })
         ));
         // Denied and too fast: denied.
         assert!(matches!(
-            check_landing(&fast, &needing(10, StellarFlags::CAN_LAND), None, |_| 0),
+            check(&fast, &needing(10, StellarFlags::CAN_LAND), None, |_| 0),
             Err(LandingRefusal::Denied { .. })
         ));
         // Too far comes first of all.
         let far = ship(0.0, 500.0, 5.0, 0.0);
         assert!(matches!(
-            check_landing(&far, &needing(10, 0), None, |_| 0),
+            check(&far, &needing(10, 0), None, |_| 0),
             Err(LandingRefusal::TooFar { .. })
         ));
     }
@@ -927,7 +1188,14 @@ mod tests {
         player: &ShipState,
         sites: &[LandingSite],
     ) -> Result<LandOutcome, LandingRefusal> {
-        land_or_select(target.map(StellarId), player, sites, None, |_| 0)
+        land_or_select(
+            target.map(StellarId),
+            player,
+            sites,
+            None,
+            |_| 0,
+            engine_reach,
+        )
     }
 
     fn selected(stellar: i16, station: bool, clearance: Clearance) -> LandOutcome {
@@ -987,7 +1255,14 @@ mod tests {
         ));
         let strict = [needing(5, StellarFlags::CAN_LAND)];
         assert_eq!(
-            land_or_select(Some(StellarId(128)), &parked(), &strict, GOVT, |_| 4),
+            land_or_select(
+                Some(StellarId(128)),
+                &parked(),
+                &strict,
+                GOVT,
+                |_| 4,
+                engine_reach
+            ),
             Err(LandingRefusal::Denied {
                 stellar: StellarId(128),
                 station: false,
@@ -1060,7 +1335,16 @@ mod tests {
     #[test]
     fn the_clearance_given_follows_the_record_and_traffic_control() {
         let strict = [needing(5, StellarFlags::CAN_LAND)];
-        let select = |record| land_or_select(None, &parked(), &strict, GOVT, move |_| record);
+        let select = |record| {
+            land_or_select(
+                None,
+                &parked(),
+                &strict,
+                GOVT,
+                move |_| record,
+                engine_reach,
+            )
+        };
         assert_eq!(select(4), Ok(selected(128, false, Clearance::Denied)));
         assert_eq!(select(5), Ok(selected(128, false, Clearance::Granted)));
         let uninhabited = [needing(
@@ -1068,7 +1352,14 @@ mod tests {
             StellarFlags::CAN_LAND | StellarFlags::UNINHABITED | StellarFlags::STATION,
         )];
         assert_eq!(
-            land_or_select(None, &parked(), &uninhabited, GOVT, |_| -32768),
+            land_or_select(
+                None,
+                &parked(),
+                &uninhabited,
+                GOVT,
+                |_| -32768,
+                engine_reach
+            ),
             Ok(selected(128, true, Clearance::NoTrafficControl))
         );
         // The record read is the stellar's government's.
@@ -1077,7 +1368,7 @@ mod tests {
             ..needing(10, StellarFlags::CAN_LAND)
         }];
         assert_eq!(
-            land_or_select(None, &parked(), &governed, Some(A), record),
+            land_or_select(None, &parked(), &governed, Some(A), record, engine_reach),
             Ok(selected(128, false, Clearance::Denied))
         );
     }

@@ -85,6 +85,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) lives: Vec<StellarLife>,
     /// How many times the stellars' lives were read.
     pub(crate) life_reads: RefCell<usize>,
+    /// Whether graphic type 0's sheet reads: yes, by default.
+    pub(crate) fallback_reads: bool,
 }
 
 /// Stellar `id` of `Strength` 100 and `dead_time`, starting the game
@@ -140,6 +142,9 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         govt: None,
         flags2: 0,
         destroyed: false,
+        graphic: 0,
+        dead_graphic: None,
+        type_counts_frames: true,
     }
 }
 
@@ -408,6 +413,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         gate_reads: RefCell::default(),
         lives: Vec::new(),
         life_reads: RefCell::default(),
+        fallback_reads: true,
     }
 }
 
@@ -520,6 +526,10 @@ impl PilotCatalog for FakePilotCatalog {
     fn stellar_lives(&self) -> Vec<StellarLife> {
         *self.life_reads.borrow_mut() += 1;
         self.lives.clone()
+    }
+
+    fn fallback_sheet_reads(&self) -> bool {
+        self.fallback_reads
     }
 }
 

@@ -102,6 +102,10 @@ impl PilotCatalog for Pilot {
     fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
         Vec::new()
     }
+
+    fn fallback_sheet_reads(&self) -> bool {
+        true
+    }
 }
 
 /// Stellar 128 at the centre, where the ship starts, 200 x 200, with
@@ -119,6 +123,9 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         govt: None,
         flags2: 0,
         destroyed: false,
+        graphic: 0,
+        dead_graphic: None,
+        type_counts_frames: true,
     }
 }
 

@@ -32,6 +32,7 @@
 //! | [`DayRolls`](RuleKey::DayRolls) | `day_rolls` | the shop and hire rolls are drawn once a day in the daily step, and a landing keeps them (`_IncrementGameTime` @0xb7c4-0xb833; see [`story`](crate::story)) | a landing forgets them, and each is drawn the first time a list asks for it¶¶¶¶ |
 //! | [`YOnDestroy`](RuleKey::YOnDestroy) | `y_on_destroy` | `Y` runs no `OnDestroy`: only a shot's destruction does (`_EvalSetExp` @0x15a38-0x15ae6, `_CheckShotProximities` @0x374a9; see [`story`](crate::story)) | `Y` runs `OnDestroy` as it destroys a whole stellar: "evaluated when the stellar is destroyed" |
 //! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, @0x33244-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see [`story`](crate::story)) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
+//! | [`LandingDistance`](RuleKey::LandingDistance) | `landing_distance` | the ship lands when it is strictly within trunc(1.75 × the `Type` frame's width) of the stellar's centre on each axis; the width is 150 while the `Type` master is not loaded (a destroyed stellar from a rebuild point until a flight frame loads it again, or a `Type` sheet that cannot be read) and 32 when its `spïn` gives no frame count, and the reach is 75 when the stellar's slot shows no frame (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd, @0x6773a-0x677b2; `_GetStellarSpriteXSize` @0xac91-0xad2d; see [`landing`](crate::landing)) | within half the larger side of the `Type` frame, as a circle, or 32 with no sprite\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear ([`NovaPersons`](crate::NovaPersons)) | 5 %, one of those who may appear picked evenly |
@@ -84,7 +85,7 @@
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
-//! `script_sound` or `comm_quote`
+//! `script_sound`, `landing_distance` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -404,6 +405,20 @@ rule_keys! {
     /// throughout (see the [`story`](crate::story) module's "Built by
     /// phase 9").
     DeadTypeFallback => "dead_type_fallback",
+    /// How close the player's ship must be to a stellar to land on it,
+    /// dock at it or enter it: by the engine, strictly within trunc(1.75 ×
+    /// the width) of its centre on each axis, as the original's dock
+    /// request (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd) checks both
+    /// for landing and for which refusal it gives (@0x6773a-0x677b2), the
+    /// width being `_GetStellarSpriteXSize`'s (@0xac91-0xad2d): the `Type`
+    /// frame's, 150 while the `Type` master is not loaded, 32 when its
+    /// `spïn` gives no frame count, and the reach 75 when the stellar's
+    /// slot shows no frame; otherwise half the larger side of the `Type`
+    /// frame, as a circle, or 32 with no sprite, the port's earlier
+    /// radius. The Bible says nothing of a landing distance, so the other
+    /// reading is the intended behaviour, not anything the Bible says
+    /// (see the [`story`](crate::story) module's "Built by phase 10").
+    LandingDistance => "landing_distance",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -1089,6 +1104,11 @@ mod tests {
             RuleKey::from_key("dead_type_fallback"),
             Some(RuleKey::DeadTypeFallback)
         );
+        assert_eq!(RuleKey::LandingDistance.key(), "landing_distance");
+        assert_eq!(
+            RuleKey::from_key("landing_distance"),
+            Some(RuleKey::LandingDistance)
+        );
     }
 
     #[test]
@@ -1114,6 +1134,7 @@ mod tests {
                 RuleKey::DayRolls,
                 RuleKey::YOnDestroy,
                 RuleKey::DeadTypeFallback,
+                RuleKey::LandingDistance,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,

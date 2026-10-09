@@ -3032,6 +3032,9 @@ mod tests {
             govt: None,
             flags2: 0,
             destroyed: false,
+            graphic: 0,
+            dead_graphic: None,
+            type_counts_frames: true,
         }
     }
 
@@ -3160,6 +3163,10 @@ mod tests {
 
         fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
             self.lives.clone()
+        }
+
+        fn fallback_sheet_reads(&self) -> bool {
+            true
         }
     }
 
@@ -4875,7 +4882,8 @@ mod tests {
 
     #[test]
     fn a_refusal_is_forgotten_once_the_ship_lands() {
-        let mut view = flight_among(vec![site(140, (0.0, -12.0), StellarFlags::CAN_LAND)]);
+        // 20 wide: within 35 on each axis is over it.
+        let mut view = flight_among(vec![site(140, (0.0, -40.0), StellarFlags::CAN_LAND)]);
         land_now(&mut view);
         assert_eq!(view.message(), Some(TOO_FAR_PLANET));
         // Nudge the ship and drift over the planet.
@@ -4883,12 +4891,12 @@ mod tests {
         ticks(&mut view, 1);
         view.input(&key(Key::Up, false));
         for _ in 0..100 {
-            if player(&view).position.y <= -4.0 {
+            if player(&view).position.y <= -6.0 {
                 break;
             }
             ticks(&mut view, 1);
         }
-        assert!(player(&view).position.y <= -4.0, "{:?}", player(&view));
+        assert!(player(&view).position.y <= -6.0, "{:?}", player(&view));
         assert!(view.elapsed < MESSAGE_SHOWN_FOR, "still on screen");
         view.input(&key(LAND, true));
         assert_eq!(view.take_landing(), Some(StellarId(140)));

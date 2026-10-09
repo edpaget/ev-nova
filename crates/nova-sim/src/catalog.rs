@@ -117,6 +117,17 @@ pub struct LandingSite {
     /// the galaxy overlay stamps it
     /// ([`OverlaidGalaxy::site`](crate::story::OverlaidGalaxy::site)).
     pub destroyed: bool,
+    /// Its `Type`, raw: the graphic type whose master the original's
+    /// landing distance reads (see [`landing`](crate::landing)).
+    pub graphic: i16,
+    /// Its `DeadType`, when that is 0 to 255 and its sheet can be read:
+    /// the graphic it shows while destroyed.
+    pub dead_graphic: Option<i16>,
+    /// Whether its `Type`'s `spïn` gives a frame count above 0, `xTiles` ×
+    /// `yTiles`: the original reads a width of 32 for a loaded `Type`
+    /// master without one (`_LoadMasterStellarSprite` @0x1ed8c-0x1ed97,
+    /// `_GetStellarSpriteXSize` @0xaced-0xacff).
+    pub type_counts_frames: bool,
 }
 
 /// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
@@ -858,6 +869,9 @@ pub trait PilotCatalog {
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
     fn stellar_lives(&self) -> Vec<StellarLife>;
+    /// Whether graphic type 0's sheet (`spïn` 1000) can be read: the
+    /// frames the original's rebuild gives a sprite slot it left empty.
+    fn fallback_sheet_reads(&self) -> bool;
 }
 
 /// A borrowed catalog is a catalog.
@@ -920,6 +934,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn stellar_lives(&self) -> Vec<StellarLife> {
         (**self).stellar_lives()
+    }
+
+    fn fallback_sheet_reads(&self) -> bool {
+        (**self).fallback_sheet_reads()
     }
 }
 
@@ -984,6 +1002,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn stellar_lives(&self) -> Vec<StellarLife> {
         (**self).stellar_lives()
+    }
+
+    fn fallback_sheet_reads(&self) -> bool {
+        (**self).fallback_sheet_reads()
     }
 }
 
@@ -1085,6 +1107,9 @@ mod tests {
                 govt: None,
                 flags2: 0,
                 destroyed: false,
+                graphic: 4,
+                dead_graphic: Some(5),
+                type_counts_frames: true,
             }]
         }
 
@@ -1172,6 +1197,11 @@ mod tests {
                 on_regen: Script::default(),
             }]
         }
+
+        /// `spïn` 1000 cannot be read.
+        fn fallback_sheet_reads(&self) -> bool {
+            false
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1198,6 +1228,7 @@ mod tests {
             format!("{:?}", catalog.gate_sites()),
             format!("{:?}", catalog.stellar_flags()),
             format!("{:?}", catalog.stellar_lives()),
+            format!("{}", catalog.fallback_sheet_reads()),
         ]
     }
 
@@ -1227,6 +1258,11 @@ mod tests {
         assert!(direct[16].contains("StellarId(1405)"), "{direct:?}");
         assert_eq!(direct[17], "[(StellarId(128), 32)]");
         assert!(direct[18].contains("dead_time: 7"), "{direct:?}");
+        assert!(
+            direct[5].contains("graphic: 4, dead_graphic: Some(5)"),
+            "{direct:?}"
+        );
+        assert_eq!(direct[19], "false", "forwarded, not a default");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

@@ -86,12 +86,12 @@
 //! `_CheckShotProximities` (@0x44015).
 
 use super::Session;
-use crate::catalog::StellarId;
+use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::stellar::StellarTarget;
 use crate::control::{Script, ScriptNote};
-use crate::landing::landing_radius;
+use crate::landing::{LandingReach, StellarShown, landing_radius, landing_reach};
 use crate::legal::{self, Crime, LegalCode};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Countdown;
@@ -128,16 +128,26 @@ impl Session {
     pub(super) fn rebuild_quietly(&mut self) -> bool {
         let galaxy = &self.galaxy;
         self.rebuilt
-            .rebuild(self.sites.iter().map(|site| site.id), |id| {
-                galaxy.destroyed(id)
-            })
+            .rebuild(&self.sites, |id| galaxy.destroyed(id), self.fallback_reads)
     }
 
     /// A flight frame's sprite tick (see the module docs): every stellar
     /// it finds whole is no longer dead since the last rebuild point.
     pub(super) fn see_stellars(&mut self) {
         let galaxy = &self.galaxy;
-        self.rebuilt.frame(|id| galaxy.destroyed(id));
+        self.rebuilt.frame(&self.sites, |id| galaxy.destroyed(id));
+    }
+
+    /// How close the ship must be to `site`, one of the stellars shown, to
+    /// land on it, by [`RuleKey::LandingDistance`]: the original's box
+    /// reads what the last rebuild point and the flight frames since left
+    /// of its sprite slot and its `Type` master (see the module docs).
+    pub(super) fn landing_reach(&self, site: &LandingSite) -> LandingReach {
+        let shown = StellarShown {
+            frame: self.rebuilt.shows_frame(site.id),
+            type_width: self.rebuilt.type_width(site),
+        };
+        landing_reach(site, shown, self.rules.source_for(RuleKey::LandingDistance))
     }
 
     /// `Y`: destroys `stellar` (see the module docs), drawing on `chance`
@@ -1819,5 +1829,234 @@ mod tests {
         fire(&mut session, 1);
         assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
         assert!(session.dead_since_rebuild(StellarId(128)));
+    }
+
+    // The landing distance after a rebuild point.
+
+    use crate::flight::ShipState;
+    use crate::landing::{LandOutcome, TypeWidth};
+    use crate::session::LandPress;
+
+    /// The flags of a stellar landable only once destroyed, as a planet or
+    /// a station.
+    fn ruin_flags(station: bool) -> u32 {
+        let flags = StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED;
+        if station {
+            flags | StellarFlags::STATION
+        } else {
+            flags
+        }
+    }
+
+    /// [`catalog`] with system 130 holding stellar 128 at the centre,
+    /// `width` square, of graphic type 10 and `DeadType` `dead_graphic`,
+    /// with `flags`, back after 5 days; and planet 129 far away, of
+    /// graphic type `other_graphic`.
+    fn landing_at(
+        width: u32,
+        flags: u32,
+        dead_graphic: Option<i16>,
+        other_graphic: i16,
+    ) -> FakePilotCatalog {
+        let mut catalog = catalog().living([life(128, 5)]);
+        catalog.sites[0].1 = vec![
+            LandingSite {
+                frame_size: Some((width, width)),
+                flags,
+                graphic: 10,
+                dead_graphic,
+                ..crate::testkit::planet(128, 0.0, 0.0)
+            },
+            LandingSite {
+                graphic: other_graphic,
+                ..crate::testkit::planet(129, 2000.0, 0.0)
+            },
+        ];
+        catalog
+    }
+
+    /// Stellar 128 of `width`, landable only once destroyed, with a
+    /// `DeadType` sheet, sharing no graphic.
+    fn ruin(width: u32, station: bool) -> FakePilotCatalog {
+        landing_at(width, ruin_flags(station), Some(11), 12)
+    }
+
+    /// A rebuild point: an in-flight `M` into the same system.
+    fn rebuild(session: &mut Session, catalog: &FakePilotCatalog) {
+        settle(session, catalog, "M130");
+    }
+
+    /// A flight frame.
+    fn frame(session: &mut Session) {
+        session.tick_combat(Rules::default(), &mut NeverFires);
+    }
+
+    /// The land key pressed in a session of `catalog` with `rules`, after
+    /// `setup`, with 128 targeted and the ship at rest at `offset` from
+    /// its centre: the stellar landed on, or the refusal.
+    fn land_at(
+        catalog: &FakePilotCatalog,
+        rules: &Rulebook,
+        setup: &dyn Fn(&mut Session),
+        offset: Vec2,
+    ) -> Result<StellarId, LandingRefusal> {
+        let mut session = quiet(catalog).with_rules(*rules);
+        setup(&mut session);
+        session.player = ShipState {
+            position: offset,
+            ..ShipState::default()
+        };
+        session.nav_target = Some(StellarId(128));
+        match session.land()? {
+            LandPress::Outcome(LandOutcome::Landed(stellar)) => Ok(stellar),
+            other => panic!("not a landing: {other:?}"),
+        }
+    }
+
+    /// Whether, after `setup`, the ship lands at `inside` on either axis
+    /// and is too far at `outside`.
+    fn reaches(
+        catalog: &FakePilotCatalog,
+        rules: &Rulebook,
+        setup: &dyn Fn(&mut Session),
+        inside: f32,
+        outside: f32,
+    ) -> bool {
+        let at = |offset| land_at(catalog, rules, setup, offset);
+        [Vec2::new(inside, 0.0), Vec2::new(0.0, -inside)]
+            .into_iter()
+            .all(|offset| at(offset) == Ok(StellarId(128)))
+            && [Vec2::new(outside, 0.0), Vec2::new(0.0, -outside)]
+                .into_iter()
+                .all(|offset| matches!(at(offset), Err(LandingRefusal::TooFar { .. })))
+    }
+
+    fn engine() -> Rulebook {
+        Rulebook::default()
+    }
+
+    fn other_reading() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::LandingDistance, RuleSource::Bible)
+    }
+
+    #[test]
+    fn a_destroyed_stellar_lands_within_its_type_width_until_a_rebuild_point_then_150() {
+        for station in [false, true] {
+            // 100 and 200 wide: narrower and wider than 150.
+            for (width, inside, outside) in [(100, 174.0, 175.0), (200, 349.0, 350.0)] {
+                let catalog = ruin(width, station);
+                let rules = engine();
+                let destroyed = |session: &mut Session| run(session, "Y128");
+                assert!(
+                    reaches(&catalog, &rules, &destroyed, inside, outside),
+                    "{width} {station}: before a rebuild point"
+                );
+                let rebuilt = |session: &mut Session| {
+                    run(session, "Y128");
+                    frame(session);
+                    rebuild(session, &catalog);
+                };
+                assert!(
+                    reaches(&catalog, &rules, &rebuilt, 261.0, 262.0),
+                    "{width} {station}: after one"
+                );
+                let seen_whole = |session: &mut Session| {
+                    run(session, "Y128");
+                    rebuild(session, &catalog);
+                    run(session, "U128");
+                    frame(session);
+                    run(session, "Y128");
+                };
+                assert!(
+                    reaches(&catalog, &rules, &seen_whole, inside, outside),
+                    "{width} {station}: a frame found it whole"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_destroyed_stellar_sharing_its_type_with_a_whole_one_keeps_its_width() {
+        let catalog = landing_at(100, ruin_flags(false), Some(11), 10);
+        let rebuilt = |session: &mut Session| {
+            run(session, "Y128");
+            rebuild(session, &catalog);
+        };
+        assert!(reaches(&catalog, &engine(), &rebuilt, 174.0, 175.0));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_destroyed_stellar_always_lands_within_its_type_circle() {
+        for (width, radius) in [(100, 50.0), (200, 100.0)] {
+            let catalog = ruin(width, false);
+            let rules = other_reading();
+            let destroyed = |session: &mut Session| run(session, "Y128");
+            let rebuilt = |session: &mut Session| {
+                run(session, "Y128");
+                rebuild(session, &catalog);
+            };
+            for setup in [&destroyed as &dyn Fn(&mut Session), &rebuilt] {
+                assert!(reaches(&catalog, &rules, setup, radius, radius + 0.5));
+                assert!(
+                    matches!(
+                        land_at(
+                            &catalog,
+                            &rules,
+                            setup,
+                            Vec2::new(radius * 0.8, radius * 0.8)
+                        ),
+                        Err(LandingRefusal::TooFar { .. })
+                    ),
+                    "a circle, not a box"
+                );
+            }
+        }
+    }
+
+    /// `Y128`, then a rebuild point, reading `catalog`.
+    fn destroyed_and_rebuilt(catalog: &FakePilotCatalog) -> impl Fn(&mut Session) + '_ {
+        move |session: &mut Session| {
+            run(session, "Y128");
+            rebuild(session, catalog);
+        }
+    }
+
+    #[test]
+    fn a_slot_left_with_no_frame_reaches_75() {
+        let mut catalog = landing_at(100, ruin_flags(false), None, 12);
+        catalog.fallback_reads = false;
+        let rebuilt = destroyed_and_rebuilt(&catalog);
+        assert!(reaches(&catalog, &engine(), &rebuilt, 74.0, 75.0));
+        assert!(
+            reaches(&catalog, &other_reading(), &rebuilt, 50.0, 50.5),
+            "the other reading's circle"
+        );
+        // With graphic type 0 to fill the slot, it shows a frame, and the
+        // freed `Type` reads 150.
+        let filled = landing_at(100, ruin_flags(false), None, 12);
+        let rebuilt = destroyed_and_rebuilt(&filled);
+        assert!(reaches(&filled, &engine(), &rebuilt, 261.0, 262.0));
+    }
+
+    #[test]
+    fn a_loaded_type_whose_spin_counts_no_frames_reaches_56() {
+        let mut catalog = ruin(100, false);
+        catalog.sites[0].1[0].flags = StellarFlags::CAN_LAND;
+        catalog.sites[0].1[0].type_counts_frames = false;
+        let whole = |_: &mut Session| {};
+        assert!(reaches(&catalog, &engine(), &whole, 55.0, 56.0));
+        assert!(reaches(&catalog, &other_reading(), &whole, 50.0, 50.5));
+    }
+
+    #[test]
+    fn a_session_flown_has_rebuilt_its_masters_at_once() {
+        let catalog = ruin(100, false);
+        let session = quiet(&catalog);
+        let site = session.sites[0];
+        assert_eq!(session.rebuilt.type_width(&site), TypeWidth::Frame);
+        assert_eq!(
+            session.landing_reach(&site),
+            crate::landing::LandingReach::Box(175.0)
+        );
     }
 }
