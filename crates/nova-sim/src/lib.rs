@@ -333,6 +333,7 @@ pub use session::{
 pub use shipyard::{ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;
 pub use stats::ShipStats;
+pub use story::DrawnSheet;
 pub use targeting::TargetPick;
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
 pub use traffic::{Traffic, World};

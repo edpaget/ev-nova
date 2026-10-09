@@ -1169,12 +1169,12 @@
 //!   stellar shot down in a frame is destroyed at that frame's look. So
 //!   `Y`, `U`, `Y` with no frame between keeps graphic type 0, and with a
 //!   frame while whole draws `Type` until the next rebuild point.
-//! - **The sheet rule** stays nova-view's system scene's, where phase 7
-//!   put it: a destroyed stellar draws its `DeadType` sheet when that can
-//!   be read; otherwise graphic type 0's while dead since the last
-//!   rebuild, by the engine's reading; otherwise its `Type` sheet. The
-//!   sim decides when the state changes, the view only which sheet it
-//!   picks.
+//! - **The sheet rule** is the session's since phase 12
+//!   (`Session::drawn_sheet`, a [`DrawnSheet`]): a destroyed stellar
+//!   draws its `DeadType` sheet when that can be read; otherwise graphic
+//!   type 0's while dead since the last rebuild, by the engine's reading;
+//!   otherwise its `Type` sheet. The view draws the sheet it names, and
+//!   the click box reads the same answer (see "Built by phase 11").
 //! - **Problems.** A `DeadType` sheet that exists but cannot be read is in
 //!   the scene's problems (`spöb <id> DeadType: <reason>`), as a broken
 //!   `Type` sheet is, and so is `spïn` 1000 when it cannot be read and a
@@ -1383,16 +1383,18 @@
 //! - **The rule** is `navigation::stellar_under`, which now takes the
 //!   frame size drawn for each site from its caller; `None` still gives
 //!   the 64-pixel placeholder.
-//! - **The sheet drawn** is `Session::drawn_frame_size` (the session's
-//!   `stellars` module), the sim's copy of the view's
-//!   `SceneStellar::drawn` and `SystemScene::set_destroyed`: the
-//!   `DeadType` sheet's frame while destroyed, when there is one
-//!   (`LandingSite::dead_frame_size`); graphic type 0's
-//!   (`PilotCatalog::fallback_frame_size`, read as the session starts)
-//!   while destroyed and dead since the last rebuild point, by
+//! - **The sheet drawn** is decided once, by `Session::drawn_sheet` (the
+//!   session's `stellars` module; one owner since phase 12): the
+//!   `DeadType` sheet while destroyed, when there is one
+//!   (`LandingSite::dead_frame_size`); graphic type 0's while destroyed
+//!   and dead since the last rebuild point, by
 //!   [`dead_type_fallback`](crate::RuleKey::DeadTypeFallback)'s engine
-//!   reading; the `Type` sheet's otherwise. With graphic type 0's sheet
-//!   unreadable no sheet is drawn, and the placeholder is clicked.
+//!   reading; the `Type` sheet otherwise. `Session::drawn_frame_size`
+//!   gives that sheet's frame (graphic type 0's from
+//!   `PilotCatalog::fallback_frame_size`, read as the session starts),
+//!   and the flight view's `SceneStellar::drawn` draws the sheet the
+//!   same answer names. With graphic type 0's sheet unreadable no sheet
+//!   is drawn, and the placeholder is clicked.
 //! - **Readings.** No new key: the Bible says nothing of the click's
 //!   target, and the click follows whichever sheet is drawn, so
 //!   `dead_type_fallback` decides it under both readings. By the Bible's
@@ -1609,6 +1611,7 @@ pub use dispatch::DuplicateSubscription;
 pub use galaxy::{
     Countdown, GalaxyOverlay, HiddenMove, OverlaidGalaxy, StellarOverride, SystemOverride,
 };
+pub use rebuild::DrawnSheet;
 
 use crate::catalog::{StellarId, SystemId};
 use crate::control::{Script, Test};

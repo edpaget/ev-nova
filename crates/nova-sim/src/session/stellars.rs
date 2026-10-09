@@ -98,8 +98,8 @@ use crate::control::{Script, ScriptNote};
 use crate::landing::{LandingReach, StellarShown, landing_radius, landing_reach};
 use crate::legal::{self, Crime, LegalCode};
 use crate::rulebook::{RuleKey, RuleSource};
-use crate::story::Countdown;
 use crate::story::wreck::{self, Tick};
+use crate::story::{Countdown, DrawnSheet};
 
 /// How many killings the player is convicted of for shooting a stellar
 /// down: `_SlapWithPenalty` runs ten times (@0x374e1-0x3751f).
@@ -138,24 +138,44 @@ impl Session {
         )
     }
 
+    /// Which sheet `stellar` draws (see the module docs): its `DeadType`
+    /// sheet while destroyed, when that can be read; graphic type 0's
+    /// while destroyed and dead since the last rebuild point, by
+    /// [`RuleKey::DeadTypeFallback`]'s engine reading, whether or not
+    /// graphic type 0's sheet can be read; its `Type` sheet otherwise, and
+    /// for a stellar that is not among those shown. The click box
+    /// ([`Session::select_stellar`]) and the views read this one answer.
+    #[must_use]
+    pub fn drawn_sheet(&self, stellar: StellarId) -> DrawnSheet {
+        self.sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .map_or(DrawnSheet::Type, |site| self.site_sheet(site))
+    }
+
+    /// [`Session::drawn_sheet`] for `site`, one of the stellars shown.
+    fn site_sheet(&self, site: &LandingSite) -> DrawnSheet {
+        if !site.destroyed {
+            DrawnSheet::Type
+        } else if site.dead_frame_size.is_some() {
+            DrawnSheet::Dead
+        } else if self.rebuilt.dead(site.id)
+            && self.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine
+        {
+            DrawnSheet::TypeZero
+        } else {
+            DrawnSheet::Type
+        }
+    }
+
     /// The frame size of the sheet drawn for `site`, one of the stellars
-    /// shown, or `None` when no sheet is: the box a click on it reads (see
-    /// the module docs). It must match the view's `SceneStellar::drawn`
-    /// with `SystemScene::set_destroyed`'s graphic type 0: the `DeadType`
-    /// sheet while destroyed, when there is one; graphic type 0's while
-    /// destroyed and dead since the last rebuild point, by
-    /// [`RuleKey::DeadTypeFallback`]'s engine reading; the `Type` sheet
-    /// otherwise.
+    /// shown ([`Session::drawn_sheet`]), or `None` when no sheet is: the
+    /// box a click on it reads (see the module docs).
     pub(super) fn drawn_frame_size(&self, site: &LandingSite) -> Option<(u32, u32)> {
-        match site.dead_frame_size {
-            Some(dead) if site.destroyed => Some(dead),
-            _ if site.destroyed
-                && self.rebuilt.dead(site.id)
-                && self.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
-            {
-                self.fallback_frame
-            }
-            _ => site.frame_size,
+        match self.site_sheet(site) {
+            DrawnSheet::Type => site.frame_size,
+            DrawnSheet::Dead => site.dead_frame_size,
+            DrawnSheet::TypeZero => self.fallback_frame,
         }
     }
 
@@ -2163,6 +2183,80 @@ mod tests {
         rebuild(&mut session, &catalog);
         assert_eq!(click(&mut session, 90.0, 0.0), None);
         assert_eq!(click(&mut session, 34.0, 0.0), Some(StellarId(128)));
+    }
+
+    // The sheet drawn (story-runtime phase 12's one owner).
+
+    /// The sheet stellar 128 draws.
+    fn sheet_128(session: &Session) -> DrawnSheet {
+        session.drawn_sheet(StellarId(128))
+    }
+
+    #[test]
+    fn a_stellar_with_a_dead_type_sheet_draws_it_while_destroyed() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        let mut session = quiet(&catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::Type, "whole");
+        run(&mut session, "Y128");
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead);
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead, "a rebuild point");
+        run(&mut session, "U128");
+        assert_eq!(sheet_128(&session), DrawnSheet::Type, "regenerated");
+    }
+
+    #[test]
+    fn by_the_engine_a_stellar_with_no_dead_type_sheet_draws_type_zero_while_dead_since_a_rebuild()
+    {
+        for fallback in [Some((200, 200)), None] {
+            let catalog = clicking(None, fallback);
+            let mut session = quiet(&catalog);
+            run(&mut session, "Y128");
+            assert_eq!(sheet_128(&session), DrawnSheet::Type, "{fallback:?}");
+            rebuild(&mut session, &catalog);
+            assert_eq!(sheet_128(&session), DrawnSheet::TypeZero, "{fallback:?}");
+            frame(&mut session);
+            assert_eq!(sheet_128(&session), DrawnSheet::TypeZero, "{fallback:?}");
+            // `U`, then `Y` before a frame sees it whole.
+            run(&mut session, "U128");
+            assert_eq!(sheet_128(&session), DrawnSheet::Type, "{fallback:?}");
+            run(&mut session, "Y128");
+            assert_eq!(sheet_128(&session), DrawnSheet::TypeZero, "{fallback:?}");
+            // `U`, a frame while whole, then `Y`.
+            run(&mut session, "U128");
+            frame(&mut session);
+            run(&mut session, "Y128");
+            assert_eq!(sheet_128(&session), DrawnSheet::Type, "{fallback:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_bible_a_stellar_with_no_dead_type_sheet_draws_its_type() {
+        let catalog = clicking(None, Some((200, 200)));
+        let mut session = quiet(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::DeadTypeFallback, RuleSource::Bible),
+        );
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::Type);
+        // The Bible's reading changes nothing for a `DeadType` sheet.
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        let mut session = quiet(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::DeadTypeFallback, RuleSource::Bible),
+        );
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(sheet_128(&session), DrawnSheet::Dead);
+    }
+
+    #[test]
+    fn a_stellar_not_shown_draws_its_type() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100))).living([life(140, 5)]);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y140");
+        rebuild(&mut session, &catalog);
+        assert!(session.galaxy().destroyed(StellarId(140)));
+        assert_eq!(session.drawn_sheet(StellarId(140)), DrawnSheet::Type);
     }
 
     #[test]

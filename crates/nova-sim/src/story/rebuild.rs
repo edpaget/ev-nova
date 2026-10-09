@@ -41,6 +41,21 @@ use std::collections::BTreeSet;
 use crate::catalog::{LandingSite, StellarId};
 use crate::landing::TypeWidth;
 
+/// Which of its sheets a stellar shown draws (see the `story` module's
+/// "Built by phase 11" and "Built by phase 12"): decided once, by
+/// `Session::drawn_sheet`, and read by the click box and the views.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DrawnSheet {
+    /// Its `Type` sheet.
+    #[default]
+    Type,
+    /// Its `DeadType` sheet.
+    Dead,
+    /// Graphic type 0's sheet (`spïn` 1000), which the original's rebuild
+    /// fills an empty sprite slot with.
+    TypeZero,
+}
+
 /// The stellar sprites as the original's last rebuild point and the
 /// flight frames since left them (see the module docs): the stellars shown
 /// that were destroyed at the last rebuild point and have not been seen

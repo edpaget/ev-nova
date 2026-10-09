@@ -286,11 +286,10 @@ use nova_sim::{
     HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
     NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleKey, Rulebook, Rules, Session,
-    ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage,
-    StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal,
-    TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level,
-    lights_level,
+    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, Rulebook, Rules, Session, ShipId,
+    ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
+    StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog,
+    Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
     ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules, SessionEvent,
@@ -1000,20 +999,16 @@ struct Redrawn {
     rebuilt: bool,
 }
 
-/// Draws each stellar of `scene` as `session` holds it: by whether its
-/// galaxy holds it destroyed, its `DeadType` sheet or its `Type` sheet, as
-/// the original's per-frame sprite tick picks them (story-runtime phase
-/// 7), and, by the session's reading of [`RuleKey::DeadTypeFallback`],
-/// graphic type 0's sheet for one with no `DeadType` sheet that has been
-/// dead since the last rebuild point (story-runtime phase 9).
+/// Draws each stellar of `scene` as `session` holds it: destroyed as its
+/// galaxy holds it, and with the sheet the session says it draws
+/// ([`Session::drawn_sheet`]: its `DeadType` sheet, graphic type 0's or
+/// its `Type` sheet, story-runtime phases 7, 9 and 12), which the click
+/// box reads too.
 fn show_destroyed(scene: &mut SystemScene, session: &Session) {
-    scene.set_destroyed(
-        |id| StellarLook {
-            destroyed: session.galaxy().destroyed(id),
-            dead_since_rebuild: session.dead_since_rebuild(id),
-        },
-        session.rules().source_for(RuleKey::DeadTypeFallback),
-    );
+    scene.set_destroyed(|id| StellarLook {
+        destroyed: session.galaxy().destroyed(id),
+        drawn: session.drawn_sheet(id),
+    });
 }
 
 /// Text metrics, shared.
@@ -2930,6 +2925,42 @@ mod tests {
         /// The stellars that can be destroyed and regenerated: none, by
         /// default.
         lives: Vec<nova_sim::StellarLife>,
+        /// The Moon's (129) sheets and graphic type 0's, given to the sim
+        /// and the view alike: the defaults, unless set.
+        moon: Option<MoonSheets>,
+    }
+
+    /// The sizes of the Moon's (129) `Type` sheet (1129) and `DeadType`
+    /// sheet (2129, when there is one), and of graphic type 0's sheet,
+    /// each square.
+    #[derive(Clone, Copy, Debug)]
+    struct MoonSheets {
+        width: u32,
+        dead_width: Option<u32>,
+        zero_width: u32,
+    }
+
+    impl FakeCatalog {
+        /// System `system`'s landing sites, before any `DeadType`.
+        fn system_sites(&self, system: SystemId) -> Vec<LandingSite> {
+            match system.0 {
+                130 => {
+                    let mut sites = self.sites.clone();
+                    if let Some(moon) = self.moon {
+                        for site in sites.iter_mut().filter(|site| site.id == StellarId(129)) {
+                            site.frame_size = Some((moon.width, moon.width));
+                            site.dead_graphic = moon.dead_width.map(|_| 9);
+                            site.dead_frame_size = moon.dead_width.map(|w| (w, w));
+                        }
+                    }
+                    sites
+                }
+                131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
+                132 if self.onward => Vec::new(),
+                133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
+                other => panic!("asked for sÿst {other}'s sites"),
+            }
+        }
     }
 
     /// No strings unless a test sets them.
@@ -3015,6 +3046,7 @@ mod tests {
             reborn: false,
             gates: Vec::new(),
             lives: Vec::new(),
+            moon: None,
         }
     }
 
@@ -3103,14 +3135,18 @@ mod tests {
                 || (id.0 == 133 && self.reborn)
         }
 
+        /// Earth (128) and Proxima (140) have the `DeadType` sheet the
+        /// view draws for them ([`dying`]).
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
-            match system.0 {
-                130 => self.sites.clone(),
-                131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
-                132 if self.onward => Vec::new(),
-                133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
-                other => panic!("asked for sÿst {other}'s sites"),
+            let mut sites = self.system_sites(system);
+            for site in sites
+                .iter_mut()
+                .filter(|site| matches!(site.id.0, 128 | 140))
+            {
+                site.dead_graphic = Some(site.id.0 - 100);
+                site.dead_frame_size = Some((30, 30));
             }
+            sites
         }
 
         fn star_map(&self) -> Vec<StarSystem> {
@@ -3167,7 +3203,10 @@ mod tests {
         }
 
         fn fallback_frame_size(&self) -> Option<(u32, u32)> {
-            Some((100, 100))
+            Some(
+                self.moon
+                    .map_or((100, 100), |moon| (moon.zero_width, moon.zero_width)),
+            )
         }
     }
 
@@ -3269,6 +3308,24 @@ mod tests {
                 ),
                 other => panic!("asked for sÿst {other}"),
             };
+            let mut stellars = stellars;
+            let mut zero = 40;
+            if let Some(moon) = self.moon {
+                zero = moon.zero_width;
+                let square = |image_id, width| StellarSheet {
+                    image_id,
+                    frames: NonZeroU16::MIN,
+                    frame_width: width,
+                    frame_height: width,
+                };
+                for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(129)) {
+                    stellar.sprite = Ok(StellarSheet {
+                        frames: stellar.sprite.as_ref().expect("a sheet").frames,
+                        ..square(1129, moon.width)
+                    });
+                    stellar.dead_sprite = moon.dead_width.map(|w| Ok(square(2129, w)));
+                }
+            }
             SystemContents {
                 id,
                 name: name.to_owned(),
@@ -3276,8 +3333,8 @@ mod tests {
                 type_zero_sprite: Ok(StellarSheet {
                     image_id: TYPE_ZERO,
                     frames: NonZeroU16::MIN,
-                    frame_width: 40,
-                    frame_height: 40,
+                    frame_width: zero,
+                    frame_height: zero,
                 }),
                 problems: Vec::new(),
             }
@@ -10300,6 +10357,87 @@ mod tests {
         arrive_now(&mut view);
         assert_eq!(view.session().expect("flying").system(), SystemId(130));
         assert_eq!(moon(&view), Moon::TypeZero);
+    }
+
+    // The sheet drawn and the click box agree (story-runtime phase 12).
+
+    /// A flight in Sol whose Moon (129) can be destroyed, 50 square, with
+    /// a `DeadType` sheet 70 square when `dead`, and graphic type 0's
+    /// sheet 90 square: every one taller than a small sprite, so a click
+    /// box is its frame alone. Nothing is to the Moon's right.
+    fn agreeing(dead: bool, reading: RuleSource) -> View {
+        FlightView::new(FakeCatalog {
+            lives: vec![life(129, 0)],
+            moon: Some(MoonSheets {
+                width: 50,
+                dead_width: dead.then_some(70),
+                zero_width: 90,
+            }),
+            ..catalog()
+        })
+        .with_rules(Rulebook::default().with_override(RuleKey::DeadTypeFallback, reading))
+    }
+
+    /// The `rlëD` of the Moon's sheet drawn, having checked that a click
+    /// just inside that sheet's right edge picks the Moon and one just
+    /// outside picks nothing.
+    fn moon_drawn_and_clicked(view: &mut View) -> i16 {
+        let moon = &view.scene().expect("a scene").stellars()[1];
+        assert_eq!(moon.id, StellarId(129));
+        let sheet = moon.drawn().clone().expect("a sheet");
+        let (at, half) = (moon.position, sheet.frame_width as f32 / 2.0);
+        for (dx, picked) in [(half - 1.0, Some(StellarId(129))), (half + 1.0, None)] {
+            view.session.as_mut().expect("flying").clear_nav_target();
+            view.select_stellar(StellarPick::At(Vec2::new(at.x + dx, at.y)));
+            let target = view.session().expect("flying").nav_target();
+            assert_eq!(target, picked, "{} at +{dx}", sheet.image_id);
+        }
+        sheet.image_id
+    }
+
+    /// The Moon's sheet drawn whole, after `Y129` and a frame, after an
+    /// in-flight `M130` and a frame, after `U129` and a frame, and after
+    /// `Y129` and a frame, each agreeing with the click box.
+    fn agreement_walk(mut view: View) -> [i16; 5] {
+        let whole = moon_drawn_and_clicked(&mut view);
+        run_set(&mut view, "Y129");
+        view.tick(TICK);
+        let destroyed = moon_drawn_and_clicked(&mut view);
+        run_set(&mut view, "M130");
+        settle_session(&mut view);
+        view.tick(TICK);
+        let rebuilt = moon_drawn_and_clicked(&mut view);
+        run_set(&mut view, "U129");
+        view.tick(TICK);
+        let regenerated = moon_drawn_and_clicked(&mut view);
+        run_set(&mut view, "Y129");
+        view.tick(TICK);
+        [
+            whole,
+            destroyed,
+            rebuilt,
+            regenerated,
+            moon_drawn_and_clicked(&mut view),
+        ]
+    }
+
+    #[test]
+    fn the_sheet_drawn_and_the_click_box_agree_through_y_a_rebuild_point_and_u() {
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(
+                agreement_walk(agreeing(true, reading)),
+                [1129, 2129, 2129, 1129, 2129],
+                "{reading:?}"
+            );
+        }
+        assert_eq!(
+            agreement_walk(agreeing(false, RuleSource::Engine)),
+            [1129, 1129, TYPE_ZERO, 1129, 1129]
+        );
+        assert_eq!(
+            agreement_walk(agreeing(false, RuleSource::Bible)),
+            [1129; 5]
+        );
     }
 
     #[test]
