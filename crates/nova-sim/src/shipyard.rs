@@ -2340,14 +2340,17 @@ mod tests {
             Ok(())
         );
         assert_eq!(can(listing(true, -15_000)), Err(ShipRefusal::CannotAfford));
+        let mut overflowing = Shipyard {
+            trade_in: 1,
+            ..listing(true, 0)
+        };
+        overflowing.rows[0].price = i64::MIN;
         assert_eq!(
-            can(Shipyard {
-                trade_in: i64::MAX,
-                ..listing(true, 0)
-            }),
-            Ok(()),
-            "the final price saturates and is none"
+            overflowing.final_price(&overflowing.rows[0]),
+            i64::MIN,
+            "the final price saturates"
         );
+        assert_eq!(can(overflowing), Ok(()), "a saturated final price is none");
     }
 
     #[test]

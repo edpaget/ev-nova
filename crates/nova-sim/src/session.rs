@@ -8544,6 +8544,33 @@ mod tests {
         );
         assert_eq!(poor, before);
         assert!(!poor.take_save_due());
+        let cheap = FakePilotCatalog {
+            ship_records: vec![
+                ship(128, FAST),
+                ShipRecord {
+                    cost: 1000,
+                    defaults: vec![(TANK, 1)],
+                    ..ship(129, HEAVY)
+                },
+            ],
+            ..shipbuying()
+        };
+        let mut indebted = outfitted(&cheap);
+        indebted.pilot.cash = -1;
+        let unchanged = indebted.clone();
+        assert_eq!(
+            indebted.buy_ship(NEW, "Kestrel", &mut NeverFires),
+            Err(ShipRefusal::CannotAfford),
+            "the 2,500 trade-in covers the 1,000 price and the debt"
+        );
+        assert_eq!(indebted, unchanged);
+        let mut even = outfitted(&cheap);
+        even.pilot.cash = 0;
+        let bought = even
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("cash 0 buys a ship whose trade-in exceeds its price");
+        assert_eq!((bought.price, bought.trade_in), (1000, 2500));
+        assert_eq!(even.pilot().cash(), 2500 - 1000, "paid the difference");
     }
 
     #[test]
