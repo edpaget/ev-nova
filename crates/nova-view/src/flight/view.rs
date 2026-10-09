@@ -12,7 +12,8 @@
 //! [`StatusBars`] port, the galaxy for its course map, through the
 //! [`GalaxyCatalog`] port, and the look of every weapon and explosion type,
 //! through the [`CombatLooks`] port. After that it reads only when the
-//! ship arrives in another system: that system, and when the system's NPC
+//! session tells it entered a system afresh: that system, and when the
+//! player's ship changes class: its sprite sheet, and when the system's NPC
 //! traffic is populated: its traffic, through the [`TrafficCatalog`]
 //! port, and the target cards and codes of the ship types and governments
 //! it brings. Drawing and input never read anything.
@@ -59,10 +60,20 @@
 //! landed at an outfitter, so can its outfitter ([`FlightView::outfitter`],
 //! [`FlightView::outfit`]); and landed at a shipyard, a new ship can be
 //! bought ([`FlightView::shipyard`], [`FlightView::buy_ship`]), whose
-//! sprite sheet is read then. Whenever the session flies a class other
-//! than the one the player's sprite sheet was read for, after a purchase,
-//! a capture, or a `C`, `E` or `H` set operator (settled with
-//! [`FlightView::settle_script`]), the sheet is read afresh, once.
+//! sprite sheet is read then.
+//!
+//! The screen redraws from what the session tells it
+//! ([`SessionEvent`]), never from which of the session's methods ran or
+//! what it gave. Each frame first takes the session's events, so a change
+//! made outside the screen's own methods (an edit through the pilot desk,
+//! a set expression run by a control bit) is drawn by the next frame; each
+//! of the screen's own methods that drives the session takes them last,
+//! so the change is drawn at once. A change of ship, after a purchase, a
+//! capture, or a `C`, `E` or `H` set operator, reads the player's sprite
+//! sheet afresh when the class is another than the one it was read for,
+//! once; a system entered afresh, by a jump, a gate, a move or a
+//! relocation, is laid out; and a move to another stellar of the system
+//! shown draws the ship there.
 //!
 //! The HUD is drawn over everything but a jump's fade: the status bar against the
 //! right edge, its radar showing the stellars around the ship as drawn,
@@ -187,7 +198,9 @@
 //!   dialog over the paused flight; each press there goes through
 //!   [`FlightView::plunder`], and a capture's assignment through
 //!   [`FlightView::assign`], each saying what it did as a message. After
-//!   "Use As My Ship" the new ship's sprite sheet is read, once. Boarding a
+//!   "Use As My Ship" the ship is drawn where it is, not on its way from
+//!   the old one, and the session tells the change of ship, so the new
+//!   ship's sprite sheet is read, once. Boarding a
 //!   person that grants outfits says what it retrieved
 //!   ([`grant_message`]) for [`GRANT_SHOWN_FOR`].
 //! - Y (a press) hails the target ([`Session::hail`]), the comm dialog
@@ -273,7 +286,9 @@ use nova_sim::{
     StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog,
     Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
-use nova_sim::{ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules};
+use nova_sim::{
+    ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules, SessionEvent,
+};
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
@@ -961,6 +976,19 @@ pub struct FlightView<C> {
     escort_colors: EscortMenuColors,
 }
 
+/// What [`FlightView::catch_up`] redrew, from the session's events.
+// Each flag is one kind of event, folded on its own.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Redrawn {
+    /// The ship changed: its sprite sheet followed.
+    ship: bool,
+    /// A system was entered afresh: it was laid out.
+    system: bool,
+    /// The ship was put at another stellar of the system shown.
+    stellar: bool,
+}
+
 /// Text metrics, shared.
 #[derive(Clone)]
 struct Metrics(Rc<dyn TextMetrics>);
@@ -1406,22 +1434,25 @@ impl<
             .is_ok_and(|session| session.preparing_jump().is_some())
     }
 
-    /// Ends the jump: the ship arrives in the next system, which is read
-    /// and laid out, and drawn from where the ship arrives.
+    /// Ends the jump: the ship arrives in the next system, caught up with
+    /// as [`FlightView::arrived`] says.
     fn arrive(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
         };
-        if let Some(system) = session.arrive(&self.catalog, &mut self.chance) {
-            self.load_arrival(system);
+        if session.arrive(&self.catalog, &mut self.chance).is_some() {
+            self.arrived();
         }
     }
 
-    /// Lays out `system`, which the ship has just arrived in, drawn from
-    /// where it arrives, and shows the session's arrival message in the
-    /// original's words, followed by how many fighters were abandoned and
-    /// how many hired escorts defected unpaid, if any, the fighters first.
-    fn load_arrival(&mut self, system: SystemId) {
+    /// Catches up with the ship having arrived in a system
+    /// ([`FlightView::catch_up`], which lays it out from the session's
+    /// event, drawn from where the ship arrives), and shows the session's
+    /// arrival message in the original's words, naming the scene laid
+    /// out, followed by how many fighters were abandoned and how many
+    /// hired escorts defected unpaid, if any, the fighters first.
+    fn arrived(&mut self) {
+        self.catch_up();
         let Ok(session) = &mut self.session else {
             return;
         };
@@ -1429,7 +1460,6 @@ impl<
         let pay = session.take_pay_notes();
         let date = session.date_text();
         let leads: Vec<_> = session.take_messages();
-        self.lay_out(system);
         self.message = None;
         let Some(scene) = &self.scene else {
             return;
@@ -1453,6 +1483,45 @@ impl<
         if !said.is_empty() {
             self.show(said.join("  "));
         }
+    }
+
+    /// Catches the screen up with what the session has told since this
+    /// was last called ([`Session::take_events`]), and gives what it
+    /// redrew. Several events of a kind ask for one reaction, decided by
+    /// the events alone and never by what the session was last asked to
+    /// do: a change of ship reads the player's sprite sheet afresh
+    /// ([`FlightView::follow_ship`]); a system entered afresh is laid out
+    /// ([`FlightView::lay_out`]); otherwise a move to another stellar of
+    /// the system shown draws the ship there ([`FlightView::place_ship`]).
+    ///
+    /// The only caller of [`Session::take_events`]: each frame calls it
+    /// first, so a change made outside the view's own methods (a
+    /// developer tools' edit, a set expression a control bit runs) is
+    /// drawn by the next frame; and each of the view's methods that drives
+    /// the session between frames calls it last, so its caller sees the
+    /// screen caught up at once. Taking the events again finds none.
+    fn catch_up(&mut self) -> Redrawn {
+        let Ok(session) = &mut self.session else {
+            return Redrawn::default();
+        };
+        let mut redrawn = Redrawn::default();
+        for event in session.take_events() {
+            match event {
+                SessionEvent::ShipChanged => redrawn.ship = true,
+                SessionEvent::SystemChanged => redrawn.system = true,
+                SessionEvent::StellarChanged => redrawn.stellar = true,
+            }
+        }
+        let system = session.system();
+        if redrawn.ship {
+            self.follow_ship();
+        }
+        if redrawn.system {
+            self.lay_out(system);
+        } else if redrawn.stellar {
+            self.place_ship();
+        }
+        redrawn
     }
 
     /// Lays out `system`, the session's: its scene, read from the catalog,
@@ -1480,30 +1549,34 @@ impl<
         Some(SessionDesk::new(session, &self.catalog, self.map.model()))
     }
 
-    /// Catches the screen up with an edit made through the pilot desk:
-    /// when the session is in another system than the one laid out, it is
-    /// laid out as an arrival is, with no message; otherwise the course
-    /// map shows the session's course again and the ship is drawn where
-    /// the session has it, as after a move to another stellar. Nothing is
-    /// read when nothing moved.
-    pub fn resync(&mut self) {
+    /// Draws the ship where the session has it, not on its way from where
+    /// it was, and shows the session's course again on the course map:
+    /// after a move to another stellar of the system shown, and a
+    /// take-off.
+    fn place_ship(&mut self) {
         let Ok(session) = &self.session else {
             return;
         };
-        let system = session.system();
-        if self.scene.as_ref().map(SystemScene::id) == Some(system) {
-            self.map.show_course(system, session.course());
-            self.previous = *session.player();
-            self.alpha = 0.0;
-        } else {
-            self.lay_out(system);
-        }
+        self.map.show_course(session.system(), session.course());
+        self.previous = *session.player();
+        self.alpha = 0.0;
+    }
+
+    /// Catches the screen up with an edit made through the pilot desk now,
+    /// rather than on the next frame, from the session's events (see the
+    /// module docs): a move to another system is laid out as an arrival
+    /// is, with no message, and one to another stellar of the system shown
+    /// draws the ship there, the course map showing the session's course
+    /// again. Nothing is read when nothing moved.
+    pub fn resync(&mut self) {
+        self.catch_up();
     }
 
     /// Takes off from the stellar landed on, and gives it; `None` when the
     /// ship has not landed. The next frame draws the ship where it is, at
     /// the stellar, not on its way from where it was, in the system a move
-    /// made while landed went to, laid out afresh; it shows no message
+    /// made while landed went to, laid out afresh as the session tells
+    /// ([`SessionEvent`]); it shows no message
     /// from before the landing, but says how many hired escorts defected
     /// for want of the take-off's pay ([`defection_message`]); the
     /// session populates the system's traffic afresh on its next tick
@@ -1516,16 +1589,17 @@ impl<
     }
 
     /// Catches the screen up with the session having taken off: the ship
-    /// drawn where it is, in the system laid out afresh if a move while
-    /// landed changed it, no message from before kept; gives what paying
-    /// the escorts for the take-off has to say.
+    /// drawn where it is, in the system laid out afresh if the session
+    /// tells a move while landed changed it, no message from before kept;
+    /// gives what paying the escorts for the take-off has to say.
     fn took_off(&mut self) -> Vec<String> {
         let pay = self
             .session
             .as_mut()
             .map(Session::take_pay_notes)
             .unwrap_or_default();
-        self.resync();
+        self.catch_up();
+        self.place_ship();
         self.message = None;
         pay_notes_message(&pay)
     }
@@ -1542,13 +1616,13 @@ impl<
     /// the flight's chance, and gives the stellar a `Q` made the ship take
     /// off from, for the router to close its spaceport. A take-off is
     /// caught up with as [`FlightView::take_off`] is, the `Q`'s message
-    /// shown before what the take-off's pay has to say. After a move in
-    /// flight the system the ship is in is laid out afresh, even the same
-    /// one, as the original kills its explosions and smoke, and how many
-    /// fighters were abandoned, if any, is shown after a `Q`'s message. A
-    /// move while landed shows once the ship takes off. When the session
-    /// now flies a class other than the one the player's sprite sheet was
-    /// read for, as after a `C`, `E` or `H`, the sheet is read afresh.
+    /// shown before what the take-off's pay has to say. Otherwise the
+    /// screen catches up with what the session told ([`SessionEvent`]): a
+    /// move in flight lays out the system the ship is in afresh, even the
+    /// same one, as the original kills its explosions and smoke, and how
+    /// many fighters were abandoned, if any, is shown after a `Q`'s
+    /// message; a move while landed shows once the ship takes off; and a
+    /// `C`, `E` or `H` reads the player's sprite sheet afresh.
     pub fn settle_script(&mut self) -> Option<StellarId> {
         let session = self.session.as_mut().ok()?;
         let settled = session.settle_script(&self.catalog, &mut self.chance);
@@ -1556,9 +1630,12 @@ impl<
         let mut said: Vec<String> = settled.message.into_iter().collect();
         if settled.took_off.is_some() {
             said.extend(self.took_off());
-        } else if flying && let Some(system) = settled.moved.map(|_| session.system()) {
-            let notes = session.take_fighter_notes();
-            self.lay_out(system);
+        } else if self.catch_up().system && flying {
+            let notes = self
+                .session
+                .as_mut()
+                .map(Session::take_fighter_notes)
+                .unwrap_or_default();
             said.extend(
                 notes
                     .into_iter()
@@ -1566,15 +1643,14 @@ impl<
             );
         }
         self.say_all(&said);
-        self.follow_ship();
         settled.took_off
     }
 
-    /// Plays `effect` for the ship having come out of a gate into
-    /// `system`, laid out as an arrival is.
-    fn came_through(&mut self, system: SystemId, effect: JumpEffect) {
+    /// Plays `effect` for the ship having come out of a gate, caught up
+    /// with as an arrival is ([`FlightView::arrived`]).
+    fn came_through(&mut self, effect: JumpEffect) {
         self.held.clear();
-        self.load_arrival(system);
+        self.arrived();
         self.fade_in = Some(effect);
     }
 
@@ -1627,7 +1703,7 @@ impl<
                 kind: GateKind::Wormhole,
                 ..
             }) => match session.enter_wormhole(&self.catalog, &mut self.chance) {
-                Ok(system) => self.came_through(system, JumpEffect::flash()),
+                Ok(_) => self.came_through(JumpEffect::flash()),
                 Err(refusal) => self.gate_refused(Some(refusal)),
             },
             Err(refusal) => {
@@ -1673,33 +1749,34 @@ impl<
             return;
         };
         match session.enter_hypergate(choice, &self.catalog, &mut self.chance) {
-            Ok(system) => {
+            Ok(_) => {
                 let effect = JumpEffect::emerging(self.hyperspace_effects);
-                self.came_through(system, effect);
+                self.came_through(effect);
             }
             Err(refusal) => self.gate_refused(Some(refusal)),
         }
     }
-}
 
-impl<C: ShipSprites> FlightView<C> {
     /// Buys a ship named `name` as [`Session::buy_ship`] does, it and its
-    /// hooks drawing on the flight's chance, and reads the sprite sheet of
-    /// the class the session then flies (the one bought, or the one its
-    /// hooks changed it to), so the new hull is drawn once it takes off; a
-    /// refused purchase reads nothing, and a session that failed has no
-    /// shipyard.
+    /// hooks drawing on the flight's chance, and catches up with the
+    /// change of ship it tells ([`SessionEvent::ShipChanged`]): the sprite
+    /// sheet of the class the session then flies (the one bought, or the
+    /// one its hooks changed it to) is read, once, so the new hull is
+    /// drawn once it takes off; a refused purchase tells nothing and
+    /// reads nothing, and a session that failed has no shipyard.
     pub fn buy_ship(&mut self, ship: ShipId, name: &str) -> Result<ShipPurchase, ShipRefusal> {
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
         let bought = session.buy_ship(ship, name, &mut self.chance)?;
-        self.follow_ship();
+        self.catch_up();
         Ok(bought)
     }
 
     /// Assigns the ship captured, as [`Session::assign`] does, and says
-    /// what it did; after "Use As My Ship" the new ship's sprite sheet is
-    /// read, once, and it is drawn where it is, not on its way from the old
-    /// ship. `None` when no capture awaits its assignment.
+    /// what it did; after "Use As My Ship" it is drawn where it is, not on
+    /// its way from the old ship, and the change of ship the session tells
+    /// is caught up with ([`SessionEvent::ShipChanged`]), reading the new
+    /// ship's sprite sheet, once. `None` when no capture awaits its
+    /// assignment.
     pub fn assign(&mut self, choice: Assignment) -> Option<Assigned> {
         let session = self.session.as_mut().ok()?;
         let assigned = session.assign(choice, &mut self.chance)?;
@@ -1707,16 +1784,17 @@ impl<C: ShipSprites> FlightView<C> {
             self.previous = *session.player();
             self.alpha = 0.0;
         }
-        self.follow_ship();
+        self.catch_up();
         self.say(assigned_message(assigned));
         Some(assigned)
     }
 
     /// Reads the player's sprite sheet afresh when the session flies a
     /// class other than the one it was read for, so a ship bought,
-    /// captured or changed by a set expression is drawn. A sheet that
-    /// cannot be read is kept against its class too, so it is not tried
-    /// again each frame.
+    /// captured or changed by a set expression is drawn; called only when
+    /// the session tells the ship changed ([`FlightView::catch_up`]), which
+    /// it may tell of the class it was. A sheet that cannot be read is
+    /// kept against its class too, so it is not tried again.
     fn follow_ship(&mut self) {
         let Ok(session) = &self.session else { return };
         let ship = session.ship();
@@ -2458,8 +2536,10 @@ impl<
         ScreenAction::None
     }
 
-    /// Runs the simulation's steps for `dt` with the keys held, and advances
-    /// the stellars' animations. While the map is open nothing moves. During
+    /// First catches the screen up with what the session has told since
+    /// (see the module docs), map open or not. Then runs the simulation's
+    /// steps for `dt` with the keys held, and advances the stellars'
+    /// animations. While the map is open nothing moves. During
     /// the pre-jump stage the session flies on, and the streak starts on
     /// the step the session begins the jump, which is the last step run.
     /// While the stars streak and the old system fades out only the
@@ -2468,6 +2548,7 @@ impl<
     /// the fade-in or the white flash, plays over it; that plays on with
     /// the map open too, as the original's display fade does.
     fn tick(&mut self, dt: Duration) {
+        self.catch_up();
         if let Some(effect) = &mut self.fade_in {
             effect.advance(dt);
             if effect.done() {
@@ -9560,6 +9641,121 @@ mod tests {
         view.message = None;
         assert_eq!(view.settle_script(), None);
         assert_eq!(view.message(), None, "nothing more to tell");
+    }
+
+    // Session events.
+
+    /// The ships whose sheets `view` has asked for.
+    fn sheets(view: &View) -> Vec<ShipId> {
+        view.catalog().sheets_asked.borrow().clone()
+    }
+
+    fn systems_read(view: &View) -> Vec<SystemId> {
+        view.catalog().systems_read.borrow().clone()
+    }
+
+    /// Settles `view`'s session by itself, not through the view.
+    fn settle_session(view: &mut View) {
+        let session = view.session.as_mut().expect("flying");
+        let _ = session.settle_script(&view.catalog, &mut NeverFires);
+    }
+
+    #[test]
+    fn the_hull_redraws_from_the_event_on_the_next_frame() {
+        let mut view = FlightView::new(shipbuying());
+        run_set(&mut view, "H129");
+        settle_session(&mut view);
+        assert_eq!(sheets(&view), [ShipId(128)], "not before the frame");
+        view.tick(TICK);
+        assert_eq!(
+            sheets(&view),
+            [ShipId(128), ShipId(129)],
+            "a set expression"
+        );
+        view.tick(TICK);
+        assert_eq!(sheets(&view), [ShipId(128), ShipId(129)], "once");
+
+        let mut view = captured();
+        let asked = sheets(&view).len();
+        let session = view.session.as_mut().expect("flying");
+        assert_eq!(
+            session.assign(Assignment::MyShip, &mut NeverFires),
+            Some(Assigned::MyShip)
+        );
+        assert_eq!(view.sheet_ship, Some(ShipId(128)), "not before the frame");
+        view.tick(TICK);
+        assert_eq!(view.sheet_ship, Some(ShipId(129)), "a capture");
+        let player = sheets(&view)[asked..]
+            .iter()
+            .filter(|&&ship| ship == ShipId(129))
+            .count();
+        assert_eq!(player, 1, "read once, beside the old ship's as an escort");
+
+        let mut view = FlightView::new(shipbuying());
+        land_now(&mut view);
+        let session = view.session.as_mut().expect("flying");
+        session
+            .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
+            .expect("bought");
+        view.tick(TICK);
+        assert_eq!(sheets(&view), [ShipId(128), ShipId(129)], "a purchase");
+    }
+
+    #[test]
+    fn the_system_is_laid_out_from_the_event() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.catalog().systems_read.borrow_mut().clear();
+        jump_now(&mut view);
+        arrive_now(&mut view);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(systems_read(&view), [SystemId(131)], "a jump");
+
+        let mut view = FlightView::new(holed());
+        view.catalog().systems_read.borrow_mut().clear();
+        land_now(&mut view);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(systems_read(&view), [SystemId(131)], "a wormhole");
+
+        let mut view = flight();
+        view.catalog().systems_read.borrow_mut().clear();
+        run_set(&mut view, "M131");
+        settle_session(&mut view);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(systems_read(&view), [SystemId(131)], "a set expression");
+
+        let mut view = landed_view();
+        move_to(&mut view, 131, 140);
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(systems_read(&view), [SystemId(131)], "a relocation");
+    }
+
+    #[test]
+    fn a_desk_move_redraws_with_no_extra_call() {
+        let mut view = landed_view();
+        move_to(&mut view, 131, 140);
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(systems_read(&view), [SystemId(131)]);
+        assert_eq!(view.course_map().current(), Some(SystemId(131)));
+        assert_eq!(view.shown_position(), Point::new(0.0, 0.0), "at Proxima");
+
+        let mut view = landed_view();
+        plot(&mut view, 131);
+        move_to(&mut view, 130, 129);
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+        assert_eq!(systems_read(&view), [], "the scene kept");
+        assert_eq!(view.course_map().route(), [], "the course cleared");
+        assert_eq!(
+            view.shown_position(),
+            Point::new(300.0, -200.0),
+            "at the Moon"
+        );
     }
 
     #[test]
