@@ -9877,6 +9877,41 @@ mod tests {
         assert_eq!(session.course(), [SystemId(131)], "kept");
     }
 
+    /// A flight of `reborn` Sol, bound for Alpha Centauri, Alpha Reborn
+    /// explored.
+    fn bound_for_alpha_with_reborn_explored() -> View {
+        let catalog = FakeCatalog {
+            reborn: true,
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        let explore = nova_sim::SetExpr::parse("X133").expect("parses");
+        session.run_set(&explore, &mut NeverFires);
+        FlightView::with_pilot(catalog, session.pilot().clone())
+    }
+
+    #[test]
+    fn the_nav_area_shows_the_system_standing_for_a_hidden_next_hop() {
+        let mut view = bound_for_alpha_with_reborn_explored();
+        change_galaxy(&mut view, hiding(131));
+        view.tick(TICK);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Alpha Reborn"]);
+    }
+
+    #[test]
+    fn the_nav_area_shows_no_destination_for_a_hop_with_no_system_visible_at_its_place() {
+        let mut view = bound_for_alpha_with_reborn_explored();
+        change_galaxy(&mut view, |overlay| {
+            overlay.set_visible(SystemId(131), Some(false));
+            overlay.set_visible(SystemId(133), Some(false));
+        });
+        view.tick(TICK);
+        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION]);
+        let session = view.session().expect("flying");
+        assert_eq!(session.course(), [SystemId(131)], "kept");
+    }
+
     #[test]
     fn several_galaxy_changes_before_a_frame_rebuild_the_map_once() {
         let mut view = flight();
