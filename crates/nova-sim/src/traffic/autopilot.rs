@@ -6,7 +6,12 @@
 //! - [`Goal::Land`]: it heads for the stellar at full speed, steering out
 //!   any sideways drift, and brakes (Down and thrust) once its stopping
 //!   distance reaches the distance left. It lands within the stellar's
-//!   [`landing_radius`] at or below [`LANDING_SPEED`].
+//!   [`landing_radius`] at or below [`LANDING_SPEED`]. That circle is not
+//!   the player's landing distance
+//!   ([`RuleKey::LandingDistance`](crate::RuleKey::LandingDistance)):
+//!   the original lands an NPC within a quarter of the `Type` width on
+//!   each axis, inclusive, with no speed gate (`_HighLevelAIHandler`
+//!   @0x8dbdf-0x8dc5a), story-runtime phase 16 (npc-landing-reach).
 //! - [`Goal::JumpOut`]: it heads straight out from the centre at full
 //!   speed, and jumps once it is its stats' jump distance out.
 //! - [`Goal::Follow`]: it keeps within [`FOLLOW_DISTANCE`] of its lead,

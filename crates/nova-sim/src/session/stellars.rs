@@ -56,7 +56,11 @@
 //! rebuild points, and the session keeps which stellars shown that rebuild
 //! found destroyed until a flight frame finds them whole
 //! ([`Session::dead_since_rebuild`]; see the `story` module's "Built by
-//! phase 9" and `story::rebuild`). Each point rebuilds after the
+//! phase 9" and `story::rebuild`), with the stellar masters loaded and
+//! the sprite slots left with no frame, which the player's landing
+//! distance reads ([`Session::land`], by
+//! [`RuleKey::LandingDistance`]; "Built by phase 10"). Each point
+//! rebuilds after the
 //! transition's own writes, and tells
 //! [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
 //! when the set changed:

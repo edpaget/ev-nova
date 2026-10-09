@@ -21,9 +21,17 @@
 //! - story-runtime phase 9: the flight view draws such a stellar with no
 //!   `DeadType` sheet with graphic type 0
 //!   ([`RuleKey::DeadTypeFallback`](crate::RuleKey::DeadTypeFallback));
-//! - story-runtime phase 10: its `Type` master was freed, so its landing
-//!   radius falls back to 150 until a frame reloads it (plus that phase's
-//!   own check for a master another stellar of the system shares);
+//! - story-runtime phase 10: the masters loaded and the slots left with
+//!   no frame, which the player's landing distance reads
+//!   ([`RuleKey::LandingDistance`](crate::RuleKey::LandingDistance)). A
+//!   rebuild point loads the master of each graphic a stellar shown
+//!   shows, freeing every other, and graphic type 0's when it fills an
+//!   empty slot; a slot is left with no frame when its stellar shows
+//!   nothing that can be read and graphic type 0 cannot be read either.
+//!   A flight frame loads the master of each graphic shown that can be
+//!   read and fills its slot. So a destroyed stellar's `Type` master is
+//!   unloaded from a rebuild point until a frame finds it whole, unless
+//!   another stellar shown keeps it loaded;
 //! - story-runtime phase 12: the frame count and frame index kept from the
 //!   last rebuild, re-read on `SessionEvent::StellarsRebuilt` and
 //!   `SessionEvent::SystemChanged`.

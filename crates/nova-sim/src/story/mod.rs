@@ -917,7 +917,8 @@
 //! their own phases, each to add a key with the original's reading as
 //! the default: story-runtime phase 9 (a `DeadType` with no sheet draws
 //! `spïn` 1000 after a rebuild; built, see "Built by phase 9"), phase 10
-//! (the 150 landing-radius fallback), phase 11 (clicking a destroyed
+//! (the original's landing distance and its 150 fallback; built, see
+//! "Built by phase 10"), phase 11 (clicking a destroyed
 //! stellar by its `DeadType` sheet) and phase 12 (the frame count kept
 //! from the last rebuild).
 //!
@@ -983,8 +984,8 @@
 //!   request multiplies it by 1.75 (the double at 0xdd6e8) and lands when
 //!   both the x and the y distance are below that (@0x66cdf-0x66cfd), or
 //!   below 75 when the stellar's slot shows no frame (@0x66cc7). The
-//!   engine's `landing_radius` reads `Type`'s frame too, but as half its
-//!   larger side; story-runtime phase 10 owns the difference.
+//!   engine now does the same by default (see "Built by phase 10" and
+//!   "Checked for phase 10", which corrects the 32 above).
 //! - **Clicking** (`_HandlePlayer` @0x6a5f9-0x6a686) uses the drawn slot's
 //!   rectangle, so a destroyed stellar is picked by its `DeadType` sheet;
 //!   the engine's `stellar_under` reads `Type`'s (story-runtime phase 11).
@@ -1150,10 +1151,10 @@
 //!   and no flight frame has found whole since, read through
 //!   `Session::dead_since_rebuild`. It is never saved: a load is itself a
 //!   rebuild point, so `Session::fly` works it out again from the loaded
-//!   overlay. Story-runtime phases 10 (the 150 landing radius of a
-//!   stellar whose `Type` master the rebuild freed) and 12 (the frame
-//!   count and frame index kept from the last rebuild) read the same
-//!   state.
+//!   overlay. Story-runtime phases 10 (the masters loaded and the
+//!   empty slots the landing distance reads; see "Built by phase 10")
+//!   and 12 (the frame count and frame index kept from the last rebuild)
+//!   read the same state.
 //! - **The rebuild points** are the engine's transitions the 17 callers of
 //!   `_HandleStellarSystemVisibility` map to (the `stellars` module of the
 //!   session lists them): every way into a system but a landed `M` or `N`,
@@ -1258,6 +1259,119 @@
 //! - **Stock data**: no stock `spöb` has a `DeadType` in 0 to 255 whose
 //!   sheet cannot be read, and `spïn` 1000 reads, so the stock scenes
 //!   report no new problem (`stock_system_view`).
+//!
+//! ## Built by phase 10
+//!
+//! The player lands within the original's distance: a box around the
+//! stellar, both the x and the y distance strictly below trunc(1.75 × the
+//! width), the width `_GetStellarSpriteXSize`'s, read from the `Type`
+//! master. It is 150 while that master is not loaded, so a destroyed
+//! stellar lands within 262 from the next rebuild point until a flight
+//! frame finds it whole, whatever its `Type`'s width, unless another
+//! stellar shown keeps its `Type` loaded.
+//!
+//! - **The rule** is the `landing` module's: `LandingReach` (a box or a
+//!   circle) and `landing_reach`, which reads the site, a `StellarShown`
+//!   and the rule source. `check_landing` and `land_or_select` take the
+//!   reach, so landing, docking at a station, entering a gate or a
+//!   wormhole, and the choice between `TooFar` and `TooFast` all read it.
+//! - **The state** is phase 9's `Rebuilt`, which now also keeps the
+//!   graphics whose master is loaded and the stellars whose slot shows
+//!   no frame, at the same rebuild points and flight frames (see the
+//!   `rebuild` submodule). The session reads `PilotCatalog::
+//!   fallback_sheet_reads` (whether `spïn` 1000 reads) as it starts, and
+//!   each `LandingSite` carries its `Type`, its `DeadType` when that
+//!   sheet reads, and whether its `Type`'s `spïn` counts frames.
+//! - **Not switched**: NPC landing keeps the `landing_radius` circle
+//!   (story-runtime phase 16, npc-landing-reach), and so does the disc
+//!   the shots hit (phase 8: the original tests shots pixel by pixel).
+//!   Selecting the nearest stellar, clicking one, and the views are
+//!   unchanged.
+//!
+//! **Readings.** The Rulebook key
+//! [`landing_distance`](crate::RuleKey::LandingDistance) defaults to the
+//! engine's box. The Bible says nothing of a landing distance; the other
+//! reading is the port's earlier circle, half the larger side of the
+//! `Type` frame, or 32 with no sprite, whatever was rebuilt.
+//!
+//! ## Checked for phase 10
+//!
+//! - **`_GetStellarSpriteXSize`** (@0xac91-0xad37) gives, in order: 150
+//!   for a stellar index above 0x7ff (@0xac9c); 150 when the stellar's
+//!   +0x14 is not the player's system (+0x74 of the first ship,
+//!   @0xacb9-0xacc1; a stellar in two visible systems, story-runtime
+//!   phase 18, stellar-in-a-second-system-reach); 150 when `Type` (+0x0e)
+//!   is outside 0 to 255 (@0xacc3-0xacd0), its `_masterStellarSprite`
+//!   entry is null (@0xacdf) or that master has no current frame (+0x50,
+//!   @0xace6); 32 when the master's frame index (+0x68) is below 0 or
+//!   not below its frame count (+0x54, @0xaced-0xacff); otherwise the
+//!   master's rect width, +0x20 less +0x1c (@0xacf4-0xacf8). Each 150
+//!   is logged and returned at @0xad2d.
+//! - **The 32 is reachable**, unlike the scouting's guess. A master's
+//!   frame index is 0 from `_SWSetCurrentFrameIndex(sprite, 0)` as
+//!   `_SWCreateSpriteFromRLEResource` finishes (@0xa9bdc; the write at
+//!   @0xa9add is to the frame, not the sprite), and nothing sets a
+//!   master's frame index after: of the 16 reads of the
+//!   `_masterStellarSprite` table (0x3b5040), only `_LoadMasterStellarSprite`
+//!   writes into a live master (the rebuild's free @0x32e10 and
+//!   `_DestroySpriteWorld`, `_Bye` and `_SetupSpriteWorld` only take it
+//!   apart or clear the table), and the clones
+//!   (`_SWCloneFramesFromMaster` @0xac436) write only the slot. But `_LoadMasterStellarSprite` then
+//!   overwrites the master's frame count with the `spïn`'s `xTiles` ×
+//!   `yTiles`, multiplied in 32 bits (@0x1ed8c-0x1ed97). So a loaded
+//!   master whose `spïn` tiles multiply to 0 or less reads 32, and the
+//!   dock request's reach is trunc(32 × 1.75) = 56. The engine carries it
+//!   as `TypeWidth::OutOfRange` from `LandingSite::type_counts_frames`.
+//!   Stock `xTiles` × `yTiles` always equals the frame count, so stock
+//!   never reaches it.
+//! - **Such a `spïn` shown in a slot** has more effects the engine does
+//!   not copy, filed as story-runtime phase 19
+//!   (no-frame-count-spin-in-a-slot): a clone copies the count
+//!   into the slot (@0xac4ec) and sets its frame through
+//!   `_SWSetCurrentFrameIndex`, which divides by it (`idivl` @0xa90e7),
+//!   so a product of 0 divides by zero, and with a negative one it
+//!   returns before setting the frame (@0xa90ee), leaving the slot's
+//!   frame as it was: none after a rebuild, which empties it (@0x32e7a)
+//!   without filling it with graphic type 0, as its frames are not null
+//!   (@0x33241-0x33250).
+//! - **The dock request** (`_HandlePlayerDockRequest`): after the
+//!   clearance state 0x3b544c above 0x2ed (@0x66c18), the ship's +0x4c at
+//!   most 0 (@0x66c32) and each velocity axis at most 0.75 (the float at
+//!   0xdd658, @0x66c3c-0x66c66; story-runtime phase 17,
+//!   per-axis-landing-speed), it takes |trunc(dx)| and |trunc(dy)|
+//!   (@0x66c78-0x66cc3), sets the reach to 75 (@0x66cc7), and when the
+//!   slot (the stellar's +0x00) has a current frame (+0x50, @0x66ccf)
+//!   replaces it with cvttsd2si(width × 1.75), 0xdd6e8 being the double
+//!   1.75 (@0x66cd9-0x66ceb). It lands only if the reach is above both
+//!   (@0x66cef-0x66cfd), a strict box; with an integer reach,
+//!   |trunc(d)| < reach is |d| < reach. The `cwtl` and `cmpw` narrow the
+//!   distances and the reach to 16 bits, a word wrap not copied. A
+//!   failed request computes the same reach the same way
+//!   (@0x67720-0x677b2) and replies "too fast" (`STR#` 2002 #69-72,
+//!   @0x677c2-0x677f8) inside it and "too far" (#65-68, @0x67802-0x67838)
+//!   outside; a failed distance check also jumps to "too far" (@0x67687
+//!   to @0x67806).
+//! - **NPC landing** (`_HighLevelAIHandler` @0x8dbdf, AI state +0xc8c8
+//!   0x14) reads the same width as a quarter, rounded towards 0
+//!   (@0x8dbf1-0x8dbfa), inclusive on each axis (@0x8dc1b, @0x8dc40),
+//!   with no 75 case and no speed gate: story-runtime phase 16. Nothing
+//!   else calls `_GetStellarSpriteXSize`, and indirect.txt takes its
+//!   address nowhere.
+//! - **The masters freed** (@0x32d18-0x32e4e): a rebuild marks the
+//!   graphic each stellar shown shows (`DeadType` when destroyed,
+//!   @0x32d18-0x32d38) whose master is loaded, frees every master not
+//!   marked, then loads the master of each stellar's shown graphic
+//!   (@0x32f37-0x32f46) and clones it in (@0x32ff6); a slot left with no
+//!   frames gets graphic type 0's (@0x33241-0x332d0). The sprite tick
+//!   (`_HandleStellarSprites` @0x2e7be-0x2e7e5) loads and clones the
+//!   shown graphic's master for every slot on every frame. So a `Type`
+//!   master is unloaded exactly from a rebuild point at which no stellar
+//!   shown shows it until a frame at which one does.
+//! - **The slot shows no frame** when its +0x50 is null: a rebuild
+//!   nulls it (@0x32e7a) and only a clone of a master with frames sets
+//!   it, so a stellar showing no readable graphic, with `spïn` 1000
+//!   unreadable too, shows none (75) until a frame finds a graphic it can
+//!   clone.
 
 //! # Mission lifecycle
 //!

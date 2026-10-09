@@ -27,11 +27,14 @@
 //!   again").
 //!
 //! The ship lands on its target when it is over it, within its
-//! [`landing_radius`], and no faster than [`LANDING_SPEED`].
+//! [`LandingReach`], and no faster than [`LANDING_SPEED`].
 //! [`check_landing`] gives the stellar, or the first [`LandingRefusal`]
 //! that applies, in this order:
 //!
-//! 1. [`LandingRefusal::TooFar`]: the ship is not over the target.
+//! 1. [`LandingRefusal::TooFar`]: the ship is not over the target, by
+//!    its reach. The same reach decides whether a ship moving too fast
+//!    is told it is too far or too fast, as the original's dock request
+//!    reads it again for its refusal (@0x6773a-0x677b2).
 //! 2. [`LandingRefusal::NotLandable`]: the stellar lacks the can-land flag,
 //!    or it is destroyed, or it can be landed on only once destroyed and
 //!    is not ([`is_landable`]).
@@ -49,6 +52,35 @@
 //! checks; the [`Session`](crate::Session) enters one instead of docking
 //! ([`LandPress::AtGate`](crate::LandPress::AtGate), see
 //! [`gate`](crate::gate)).
+//!
+//! **The reach** ([`landing_reach`]) follows
+//! [`RuleKey::LandingDistance`](crate::RuleKey::LandingDistance). By the
+//! engine's reading, the original's dock request
+//! (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd): a box, the ship over
+//! the stellar when both its x and its y distance from the centre are
+//! strictly below trunc([`REACH_PER_WIDTH`] × the width), the width being
+//! `_GetStellarSpriteXSize`'s (@0xac91-0xad2d):
+//!
+//! - the `Type` frame's width ([`TypeWidth::Frame`]) while the `Type`
+//!   master is loaded, the frame's width and not its larger side;
+//! - [`UNLOADED_TYPE_WIDTH`], 150, while it is not
+//!   ([`TypeWidth::Unloaded`]): a destroyed stellar from a rebuild point
+//!   until a flight frame loads it again, unless another stellar shown
+//!   keeps it loaded, or a `Type` whose sheet cannot be read;
+//! - [`OUT_OF_RANGE_FRAME_WIDTH`], 32, for a loaded master whose `spïn`
+//!   gives no frame count ([`TypeWidth::OutOfRange`]);
+//!
+//! and the reach is [`NO_FRAME_REACH`], 75, whatever the width, when the
+//! stellar's sprite slot shows no frame. The session keeps which masters
+//! are loaded and which slots are empty (see the `story` module's "Built
+//! by phase 10"). By the other reading, the port's earlier circle: within
+//! [`landing_radius`] of the centre.
+//!
+//! NPCs land by their own rule, which stays on the [`landing_radius`]
+//! circle under either reading: the original's is a quarter of the same
+//! width, inclusive (story-runtime phase 16, npc-landing-reach). The
+//! original's speed gate is per axis (story-runtime phase 17,
+//! per-axis-landing-speed).
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
 use crate::flight::ShipState;
@@ -137,9 +169,12 @@ pub enum LandingRefusal {
     },
 }
 
-/// How close the ship's centre must be to `site`'s centre to be over it:
-/// half the larger side of its sprite's frame, which is what the player
-/// sees as its disc, or [`UNKNOWN_STELLAR_RADIUS`] without a sprite.
+/// Half the larger side of `site`'s sprite's frame, which is what the
+/// player sees as its disc, or [`UNKNOWN_STELLAR_RADIUS`] without a
+/// sprite: the landing radius of [`RuleKey::LandingDistance`]'s other
+/// reading, the radius NPCs land within, and the disc the shots hit.
+///
+/// [`RuleKey::LandingDistance`]: crate::RuleKey::LandingDistance
 #[must_use]
 pub fn landing_radius(site: &LandingSite) -> f32 {
     site.frame_size
@@ -260,7 +295,8 @@ pub enum LandOutcome {
 /// What the land key does with the navigation target `target`, for the
 /// ship `player` among the system's stellars `sites` (in navigation
 /// order), in a system governed by `system_govt`, where `record` gives the
-/// pilot's legal record with a government: see the module docs.
+/// pilot's legal record with a government and `reach` a stellar's
+/// [`LandingReach`]: see the module docs.
 pub fn land_or_select(
     target: Option<StellarId>,
     player: &ShipState,
@@ -362,9 +398,10 @@ fn has(site: &LandingSite, flag: u32) -> bool {
 }
 
 /// Whether `player` lands on `site`, in a system governed by
-/// `system_govt`: the stellar, or the first refusal that applies (see the
-/// module docs). `record` gives the pilot's legal record with a
-/// government; see [`landing_record`] for which one landing reads.
+/// `system_govt`, over it within `reach`: the stellar, or the first
+/// refusal that applies (see the module docs). `record` gives the
+/// pilot's legal record with a government; see [`landing_record`] for
+/// which one landing reads.
 pub fn check_landing(
     player: &ShipState,
     site: &LandingSite,
