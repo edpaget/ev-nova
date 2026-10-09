@@ -12163,6 +12163,122 @@ mod tests {
         assert_eq!(session.reserves().fuel.now, 0.0);
     }
 
+    /// The outfits the player owns, as pairs of raw IDs and counts.
+    fn owned_ids(session: &Session) -> Vec<(i16, u16)> {
+        session
+            .pilot()
+            .outfits()
+            .map(|(id, count)| (id.0, count))
+            .collect()
+    }
+
+    #[test]
+    fn a_capture_keeps_only_0x0004_whatever_ship_change_persistence_says() {
+        // 404 is persistent through a mission's change of ship (0x0020)
+        // alone: `H` keeps it by either reading, a capture by neither.
+        let mut catalog = kitted();
+        catalog.outfits.push(OutfitRecord {
+            flags: OutfitFlags::MISSION_PERSISTENT,
+            ..outfit(404, &[])
+        });
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::ShipChangePersistence, source);
+            let mut session = captured(&catalog).with_rules(rules);
+            session.pilot.outfits = BTreeMap::from([(OutfitId(400), 1), (OutfitId(404), 1)]);
+            session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+            assert_eq!(owned_ids(&session), [(400, 1), (402, 1)], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_capture_holds_no_outfit_to_its_max_whatever_ship_change_max_says() {
+        // 400 (persistent, owned once) and 402 are both up to 1, and the
+        // trader's default items are one more 400 and three 402.
+        let mut catalog = kitted();
+        for record in &mut catalog.outfits {
+            if matches!(record.id.0, 400 | 402) {
+                record.max = 1;
+            }
+        }
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(129) {
+                record.defaults = vec![(OutfitId(400), 1), (OutfitId(402), 3)];
+            }
+        }
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::ShipChangeMax, source);
+            let mut session = captured(&catalog).with_rules(rules);
+            session.pilot.outfits = BTreeMap::from([(OutfitId(400), 1)]);
+            session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+            assert_eq!(owned_ids(&session), [(400, 2), (402, 3)], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_capture_tops_the_stock_weapons_up_rather_than_adding_them() {
+        // The trader stocks two blasters (held by 250, here persistent)
+        // and a homing missile (252) with 6 rounds (403); the player owns
+        // a blaster, and the trader's default items hold 4 rounds.
+        let mut catalog = kitted();
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(129) {
+                hull.weapons = vec![
+                    StockWeapon {
+                        weapon: WeaponId(128),
+                        count: 2,
+                        ammo: 0,
+                    },
+                    StockWeapon {
+                        weapon: WeaponId(134),
+                        count: 1,
+                        ammo: 6,
+                    },
+                ];
+            }
+        }
+        catalog.outfits.push(outfit(403, &[(MOD_AMMO, 134)]));
+        for record in &mut catalog.outfits {
+            if record.id == OutfitId(250) {
+                record.flags = OutfitFlags::PERSISTENT;
+            }
+        }
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(129) {
+                record.defaults = vec![(OutfitId(402), 1), (OutfitId(403), 4)];
+            }
+        }
+        let mut session = captured(&catalog);
+        session.pilot.outfits = BTreeMap::from([(OutfitId(250), 1)]);
+        session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+        assert_eq!(
+            owned_ids(&session),
+            [(250, 2), (252, 1), (402, 1), (403, 6)],
+            "what is held already counts: no blaster or round doubled"
+        );
+    }
+
+    #[test]
+    fn a_capture_holds_its_reserves_whatever_ship_change_reserves_says() {
+        // 404, persistent, takes 35 armour: the trader's 45 falls to 10,
+        // below the 17 a take-over leaves.
+        let mut catalog = kitted();
+        catalog.outfits.push(OutfitRecord {
+            flags: OutfitFlags::PERSISTENT,
+            ..outfit(404, &[(crate::stats::MORE_ARMOR, -35)])
+        });
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::ShipChangeReserves, source);
+            let mut session = captured(&catalog).with_rules(rules);
+            session.pilot.outfits = BTreeMap::from([(OutfitId(404), 1)]);
+            session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+            assert_eq!(
+                session.reserves().armor,
+                Gauge::full(10.0),
+                "held to its most: {source:?}"
+            );
+        }
+    }
+
     // Boarding grants.
 
     use crate::grant::Granted;
