@@ -112,6 +112,10 @@ pub struct LandingSite {
     /// [`market`](crate::market) its always-dominated bit
     /// ([`DOMINATED`](crate::market::DOMINATED), 0x0020).
     pub flags2: u16,
+    /// Whether it is destroyed: never in the catalog, which gives `false`;
+    /// the galaxy overlay stamps it
+    /// ([`OverlaidGalaxy::site`](crate::story::OverlaidGalaxy::site)).
+    pub destroyed: bool,
 }
 
 /// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
@@ -1042,6 +1046,7 @@ mod tests {
                 special_tech: [0; 8],
                 govt: None,
                 flags2: 0,
+                destroyed: false,
             }]
         }
 

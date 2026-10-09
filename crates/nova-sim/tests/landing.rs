@@ -114,6 +114,7 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         special_tech: [0; 8],
         govt: None,
         flags2: 0,
+        destroyed: false,
     }
 }
 

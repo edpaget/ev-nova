@@ -398,6 +398,39 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_never_lands_on_a_destroyed_stellar_unless_landable_only_once_destroyed() {
+        let mut sites = sites();
+        sites[0].destroyed = true;
+        sites[3].destroyed = true;
+        let mut chance = Draws::of(&[1]);
+        assert_eq!(
+            decide(&npc(1, AiType::WimpyTrader), &sites, &[], &mut chance),
+            Goal::Land(StellarId(131))
+        );
+        assert_eq!(chance.asked, [2], "130 and 131");
+    }
+
+    #[test]
+    fn a_ship_bound_for_a_stellar_destroyed_since_decides_again() {
+        let mut bound = npc(1, AiType::WimpyTrader);
+        bound.goal = Goal::Land(StellarId(128));
+        let mut sites = sites();
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            decide(&bound, &sites, &[], &mut chance),
+            Goal::Land(StellarId(128)),
+            "kept"
+        );
+        sites[0].destroyed = true;
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            decide(&bound, &sites, &[], &mut chance),
+            Goal::Land(StellarId(130))
+        );
+        assert_eq!(chance.asked, [1], "only 130 is left");
+    }
+
+    #[test]
     fn a_ship_with_nowhere_to_land_jumps_out() {
         let unlandable = &sites()[1..2];
         for ai_type in TRADERS.into_iter().chain(FIGHTERS) {

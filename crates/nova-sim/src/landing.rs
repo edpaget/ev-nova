@@ -33,7 +33,8 @@
 //!
 //! 1. [`LandingRefusal::TooFar`]: the ship is not over the target.
 //! 2. [`LandingRefusal::NotLandable`]: the stellar lacks the can-land flag,
-//!    or can be landed on only once destroyed (nothing is destroyed yet).
+//!    or it is destroyed, or it can be landed on only once destroyed and
+//!    is not ([`is_landable`]).
 //! 3. [`LandingRefusal::Denied`]: the pilot's legal record with the
 //!    stellar's government, or its system's when it has none, is below the
 //!    stellar's `MinStatus`, which the Bible says uninhabited stellars
@@ -212,13 +213,17 @@ pub fn land_or_select(
     })
 }
 
-/// Whether `site` can be landed on at all, by its flags alone: it has the
-/// can-land flag and is not landable only once destroyed. The pilot's
-/// record does not count, so a stellar that would deny clearance is
-/// landable.
+/// Whether `site` can be landed on at all, by its flags and whether it is
+/// destroyed: it has the can-land flag, and it is destroyed exactly when
+/// it is landable only once destroyed, as the original's
+/// `_StellarIsLandable` reads it (@0xa989-0xa9f7). So a destroyed stellar
+/// cannot be landed on, unless it can be landed on only once destroyed.
+/// The pilot's record does not count, so a stellar that would deny
+/// clearance is landable.
 #[must_use]
 pub fn is_landable(site: &LandingSite) -> bool {
-    has(site, StellarFlags::CAN_LAND) && !has(site, StellarFlags::ONLY_WHEN_DESTROYED)
+    has(site, StellarFlags::CAN_LAND)
+        && site.destroyed == has(site, StellarFlags::ONLY_WHEN_DESTROYED)
 }
 
 /// Whether a pilot may be docked at `site`: it is [landable](is_landable)
@@ -395,6 +400,7 @@ mod tests {
             special_tech: [0; 8],
             govt: None,
             flags2: 0,
+            destroyed: false,
         }
     }
 
@@ -477,6 +483,66 @@ mod tests {
             ..with_flags(F::CAN_LAND)
         };
         assert!(is_landable(&strict));
+    }
+
+    #[test]
+    fn destroyed_a_stellar_is_landable_only_when_it_can_be_landed_on_only_once_destroyed() {
+        use StellarFlags as F;
+        let destroyed = |flags| LandingSite {
+            destroyed: true,
+            ..with_flags(flags)
+        };
+        for (flags, landable) in [
+            (0, false),
+            (F::CAN_LAND, false),
+            (F::CAN_LAND | F::STATION, false),
+            (F::CAN_LAND | F::ONLY_WHEN_DESTROYED, true),
+            (F::ONLY_WHEN_DESTROYED, false),
+        ] {
+            assert_eq!(is_landable(&destroyed(flags)), landable, "{flags:#x}");
+        }
+        assert!(is_dockable(&destroyed(
+            F::CAN_LAND | F::ONLY_WHEN_DESTROYED
+        )));
+        assert!(!is_dockable(&destroyed(F::CAN_LAND)));
+        assert_eq!(
+            check_landing(&parked(), &destroyed(F::CAN_LAND), None, |_| 0),
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(128),
+                station: false,
+            })
+        );
+        assert_eq!(
+            check_landing(
+                &parked(),
+                &destroyed(F::CAN_LAND | F::ONLY_WHEN_DESTROYED),
+                None,
+                |_| 0
+            ),
+            Ok(StellarId(128))
+        );
+    }
+
+    #[test]
+    fn the_nearest_landable_stellar_skips_a_destroyed_one() {
+        let sites = [
+            LandingSite {
+                destroyed: true,
+                ..site(128, 0.0, 10.0)
+            },
+            site(129, 0.0, 300.0),
+            LandingSite {
+                flags: StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED,
+                destroyed: true,
+                ..site(130, 0.0, 500.0)
+            },
+        ];
+        assert_eq!(nearest_landable(Vec2::ZERO, &sites), Some(StellarId(129)));
+        assert_eq!(
+            nearest_landable(Vec2::new(0.0, 450.0), &sites),
+            Some(StellarId(130)),
+            "landable only once destroyed, and destroyed"
+        );
     }
 
     #[test]

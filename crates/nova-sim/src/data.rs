@@ -192,6 +192,7 @@ impl PilotCatalog for GameData {
                     special_tech,
                     govt: stellar.govt,
                     flags2: stellar.flags2.bits(),
+                    destroyed: false,
                 })
             })
             .collect()
@@ -1451,6 +1452,7 @@ mod tests {
                     special_tech: [0; 8],
                     govt: None,
                     flags2: 0x1200,
+                    destroyed: false,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -1463,6 +1465,7 @@ mod tests {
                     special_tech: [0; 8],
                     govt: None,
                     flags2: 0,
+                    destroyed: false,
                 },
             ]
         );

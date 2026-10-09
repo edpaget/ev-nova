@@ -113,6 +113,7 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         special_tech: [0; 8],
         govt: None,
         flags2: 0,
+        destroyed: false,
     }
 }
 

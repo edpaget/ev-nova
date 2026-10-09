@@ -174,6 +174,7 @@ mod tests {
             special_tech: [0; 8],
             govt: None,
             flags2,
+            destroyed: false,
         }
     }
 

@@ -284,11 +284,16 @@ impl OverlaidGalaxy {
         self.overlay.system(system).govt.unwrap_or(catalog)
     }
 
-    /// `site` with the overlay's government for its stellar, if any.
+    /// `site` with the overlay's government for its stellar, if any, and
+    /// destroyed exactly when the overlay holds it destroyed.
     #[must_use]
     pub fn site(&self, site: LandingSite) -> LandingSite {
-        let govt = self.overlay.stellar(site.id).govt.unwrap_or(site.govt);
-        LandingSite { govt, ..site }
+        let change = self.overlay.stellar(site.id);
+        LandingSite {
+            govt: change.govt.unwrap_or(site.govt),
+            destroyed: change.destroyed.is_some(),
+            ..site
+        }
     }
 
     /// Whether `nebula` is active: unless the overlay says otherwise.
@@ -519,6 +524,30 @@ mod tests {
             galaxy.site(governed(130, Some(GovtId(5)))),
             governed(130, None)
         );
+    }
+
+    #[test]
+    fn a_stellar_is_destroyed_as_the_overlay_says_whatever_its_site_said() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_destroyed(StellarId(128), Some(Countdown { days_left: 0 }));
+        overlay.set_stellar_govt(StellarId(129), Some(None));
+        let galaxy = OverlaidGalaxy::new(systems(), overlay);
+        let site = |id, destroyed| LandingSite {
+            destroyed,
+            govt: Some(GovtId(5)),
+            ..planet(id, 0.0, 0.0)
+        };
+        assert_eq!(galaxy.site(site(128, false)), site(128, true));
+        assert_eq!(galaxy.site(site(128, true)), site(128, true));
+        assert_eq!(
+            galaxy.site(site(129, true)),
+            LandingSite {
+                govt: None,
+                ..site(129, false)
+            },
+            "not destroyed, and independent"
+        );
+        assert_eq!(galaxy.site(site(130, false)), site(130, false));
     }
 
     #[test]
