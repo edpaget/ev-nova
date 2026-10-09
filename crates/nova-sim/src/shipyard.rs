@@ -2053,6 +2053,38 @@ mod tests {
     }
 
     #[test]
+    fn each_shipyard_context_hands_over_the_rule_set_it_was_given() {
+        // No disputed rule reads these contexts yet, so only this pins
+        // that a later one would follow the rule set given.
+        let rules = Rulebook::default()
+            .with_override(RuleKey::TradeInOutfits, RuleSource::Bible)
+            .with_override(RuleKey::PurchaseCargo, RuleSource::Bible);
+        assert_ne!(rules, Rulebook::default());
+        let shipyard = Shipyard {
+            rules,
+            ..listing(true, 50_000)
+        };
+        assert_eq!(shipyard.rulebook(), &rules);
+        let asked = RowShip {
+            shipyard: &shipyard,
+            row: &shipyard.rows[0],
+        };
+        assert_eq!(asked.rulebook(), &rules);
+        let pilot = pilot();
+        let new = heavy();
+        let sale = Sale {
+            rules,
+            ..sale(&pilot, &new, "Kestrel", &[], &[])
+        };
+        let settled = Settled {
+            sale: &sale,
+            quote: QUOTE,
+            refund: 0,
+        };
+        assert_eq!(settled.rulebook(), &rules);
+    }
+
+    #[test]
     fn the_purchase_value_rules_cite_the_originals_addresses() {
         let cited = [
             carried().about().reproduces(),
