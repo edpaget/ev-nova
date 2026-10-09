@@ -1036,7 +1036,13 @@
 //! [`y_on_destroy`](crate::RuleKey::YOnDestroy) defaults to the engine:
 //! `Y` runs no `OnDestroy`. By the Bible's "evaluated when the stellar is
 //! destroyed", `Y` runs it after destroying a whole stellar: not on one
-//! destroyed already, nor on an invincible one it leaves whole. No key for
+//! destroyed already, nor on an invincible one it leaves whole.
+//! That reading can loop, where the original cannot, since its `Y` runs
+//! no `OnDestroy`: an `OnDestroy` of `U128 Y128`, or two that regenerate
+//! and destroy each other, would run without end. So an `OnDestroy` never
+//! runs inside itself, whether a shot or a `Y` started it: the `Y` still
+//! destroys the stellar, and the skipped run is reported as
+//! [`ScriptNote::OnDestroyReentered`](crate::ScriptNote::OnDestroyReentered). No key for
 //! the ten killings, the daily repair, `Y`'s explosion on an invincible
 //! stellar or shots passing through one, which the Bible's `Strength`
 //! ("0 or -1 for an invincible stellar") agrees with, nor for the

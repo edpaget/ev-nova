@@ -688,6 +688,9 @@ pub struct Session {
     /// ID; one not here has its full `Strength` (see the `stellars`
     /// module). Never saved, as the original saves none.
     strength: BTreeMap<StellarId, i64>,
+    /// The stellars whose `OnDestroy` is running, so that none runs again
+    /// inside itself (see the `stellars` module); never saved.
+    destroying: BTreeSet<StellarId>,
 }
 
 impl Session {
@@ -834,6 +837,7 @@ impl Session {
                 .map(|life| (life.id, life))
                 .collect(),
             strength: BTreeMap::new(),
+            destroying: BTreeSet::new(),
             pilot,
         };
         session.set_player_system(system, here, dock);

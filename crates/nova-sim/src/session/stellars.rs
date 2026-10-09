@@ -15,7 +15,8 @@
 //!   it makes the stellar's explosion at its centre, invincible or not
 //!   (@0x15a59-0x15ab4). By [`RuleKey::YOnDestroy`]'s engine reading it
 //!   runs no `OnDestroy`; by the Bible's it runs it once it has destroyed
-//!   a whole stellar.
+//!   a whole stellar, unless that stellar's `OnDestroy` is running
+//!   already, which is reported as a `ScriptNote` instead.
 //! - `Uxxx` regenerates the stellar at once and runs no `OnRegen`, which
 //!   runs only as it regenerates on its own (@0x15aeb-0x15b20).
 //!
@@ -55,6 +56,7 @@ use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::stellar::StellarTarget;
+use crate::control::{Script, ScriptNote};
 use crate::landing::landing_radius;
 use crate::legal::{self, Crime, LegalCode};
 use crate::rulebook::{RuleKey, RuleSource};
@@ -89,7 +91,7 @@ impl Session {
             self.set_stellar_state(stellar, Some(countdown));
             if !destroyed_before && self.rules.source_for(RuleKey::YOnDestroy) == RuleSource::Bible
             {
-                self.run_script(&life.on_destroy, chance);
+                self.run_on_destroy(stellar, &life.on_destroy, chance);
             }
         }
     }
@@ -100,6 +102,26 @@ impl Session {
     pub(super) fn regenerate_stellar(&mut self, stellar: StellarId) {
         self.strength.remove(&stellar);
         self.set_stellar_state(stellar, None);
+    }
+
+    /// Runs `stellar`'s `OnDestroy`, `script`, drawing on `chance`, unless
+    /// it is running already: then it is reported once as
+    /// [`ScriptNote::OnDestroyReentered`] and not run again, so a script
+    /// that regenerates and destroys its own stellar, or two that destroy
+    /// each other, end.
+    fn run_on_destroy(
+        &mut self,
+        stellar: StellarId,
+        script: &Script,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if !self.destroying.insert(stellar) {
+            self.script_notes
+                .push(ScriptNote::OnDestroyReentered { stellar });
+            return;
+        }
+        self.run_script(script, chance);
+        self.destroying.remove(&stellar);
     }
 
     /// The stellars shown that shots can hit this tick: each whole one of
@@ -174,7 +196,7 @@ impl Session {
         }
         let countdown = wreck::countdown_on_destroy(&life);
         self.set_stellar_state(stellar, Some(countdown));
-        self.run_script(&life.on_destroy, chance);
+        self.run_on_destroy(stellar, &life.on_destroy, chance);
         self.set_stellar_state(stellar, Some(countdown));
         self.strength.remove(&stellar);
         if by == ShipRef::Player {
@@ -1361,5 +1383,63 @@ mod tests {
             session.take_events(),
             [SessionEvent::GalaxyChanged, SessionEvent::GalaxyChanged]
         );
+    }
+
+    // An `OnDestroy` running already.
+
+    use crate::control::ScriptNote;
+
+    fn bible() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::YOnDestroy, RuleSource::Bible)
+    }
+
+    fn reentered(stellar: i16) -> ScriptNote {
+        ScriptNote::OnDestroyReentered {
+            stellar: StellarId(stellar),
+        }
+    }
+
+    #[test]
+    fn by_the_bible_an_on_destroy_destroying_its_stellar_again_runs_once() {
+        let catalog = catalog().living([destroying("^b5 U128 Y128")]);
+        let mut session = quiet(&catalog).with_rules(bible());
+        run(&mut session, "Y128");
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+        assert!(
+            session.control_bit(bit(5)),
+            "once: a toggle run again clears it"
+        );
+        assert_eq!(session.take_script_notes(), [reentered(128)]);
+        assert!(session.destroying.is_empty(), "done");
+        run(&mut session, "U128 Y128");
+        assert!(!session.control_bit(bit(5)), "run again once it had ended");
+    }
+
+    #[test]
+    fn by_the_bible_two_on_destroys_destroying_each_other_run_once_each() {
+        let catalog = catalog().living([
+            destroying("^b5 U129 Y129"),
+            StellarLife {
+                on_destroy: Script::parse("^b6 U128 Y128"),
+                ..life(129, 3)
+            },
+        ]);
+        let mut session = quiet(&catalog).with_rules(bible());
+        run(&mut session, "Y128");
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+        assert_eq!(destroyed(&session, 129), Some(left(3)));
+        assert!(session.control_bit(bit(5)) && session.control_bit(bit(6)));
+        assert_eq!(session.take_script_notes(), [reentered(128)]);
+    }
+
+    #[test]
+    fn by_the_bible_a_shot_downs_on_destroy_destroying_its_stellar_again_runs_once() {
+        let catalog = shooting([destroying("^b5 U128 Y128")]);
+        let mut session = quiet(&catalog).with_rules(bible());
+        fire(&mut session, 3);
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+        assert!(session.control_bit(bit(5)));
+        assert_eq!(session.take_script_notes(), [reentered(128)]);
+        assert!(session.destroying.is_empty());
     }
 }
