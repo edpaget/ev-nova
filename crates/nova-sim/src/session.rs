@@ -310,7 +310,7 @@ pub use events::SessionEvent;
 pub use persons::PersonQuote;
 pub use script_effects::{ScriptEffectRules, Settled};
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use self::entry::{Arrival, Entry, NextSites, Placement, ShipPlacement};
@@ -2217,18 +2217,16 @@ impl Session {
     /// A sale need not lower a count owned: an `OnSell` can grant the
     /// outfit sold back and change the listing again (`^b7 G128`), so
     /// every pass restarts. The original has no guard against that and
-    /// would sell forever. The port ends the order instead when a restart
-    /// would leave the counts owned, the listing and the control bits as
-    /// an earlier restart of the order left them, as from there it would
-    /// only repeat itself. An `OnSell` that grants back more than it sells
-    /// (`^b7 G128 G128`) never repeats a restart, so the port also ends
-    /// the order once it has restarted [`RESTART_CEILING`] times. This
-    /// deliberate divergence is reachable only by plug-ins: no stock
-    /// `OnSell` changes the listing, so a stock order restarts at most a
-    /// few times. An order that ends in the original never repeats a
-    /// restart, so the repeat check leaves it unchanged; one that restarts
-    /// more than the ceiling (a plug-in `OnSell` relisting on each of more
-    /// than 512 sales) is cut short there.
+    /// would sell forever, or until a count owned saturates. The port
+    /// ends the order instead once it has restarted [`RESTART_CEILING`]
+    /// times: a deliberate divergence reachable only by plug-ins, as no
+    /// stock `OnSell` changes the listing. It keeps no repeat check: a
+    /// sale's future also depends on `OnSell`'s `R(...)` draws and on
+    /// state no cheap key holds (explored systems, the ship), so an order
+    /// that comes back to the counts, listing and bits of an earlier
+    /// restart can still end in the original. The ceiling's one cost is
+    /// that a plug-in order relisting on more than 512 sales is cut short
+    /// where the original would finish.
     pub fn outfit_order(
         &mut self,
         order: OutfitOrder,
@@ -2249,9 +2247,7 @@ impl Session {
                     Vec::new()
                 };
                 let mut selected = None;
-                // What each restart left: the counts owned, the listing
-                // and the control bits.
-                let mut restarts = HashSet::new();
+                let mut restarts = 0;
                 order_loop::run_on(count, |pass| {
                     let asked = OutfitOrder {
                         outfit: selected.unwrap_or(order.outfit),
@@ -2262,18 +2258,13 @@ impl Session {
                     if after == listing {
                         return Ok(Onward::Next);
                     }
-                    let left = (
-                        self.pilot.outfits.clone(),
-                        after.clone(),
-                        self.pilot.control_bits().clone(),
-                    );
-                    // The port's guard: this restart would repeat one
-                    // before it, so the order would never end, or the
-                    // order has restarted RESTART_CEILING times already.
-                    if restarts.len() >= RESTART_CEILING || restarts.contains(&left) {
+                    // The port's guard, the ceiling alone: no repeat
+                    // check, as `OnSell`'s random draws and unkeyed state
+                    // can end an order that revisits an earlier state.
+                    if restarts >= RESTART_CEILING {
                         return Ok(Onward::Stop);
                     }
-                    restarts.insert(left);
+                    restarts += 1;
                     listing = after;
                     selected = Some(FIRST_OUTFIT);
                     Ok(Onward::From(if listing.is_empty() {
@@ -3296,8 +3287,10 @@ impl Session {
 /// `OnSell` that changes the listing, a restart needs an outfit's
 /// listing to change with its count owned, and after the first only
 /// `oütf` 128 is sold, so a stock order restarts at most a few times; a
-/// ceiling far above that keeps an order an `OnSell` grows from running
-/// some 65,000 passes.
+/// ceiling far above that keeps an order an `OnSell` relists forever, or
+/// grows, from hanging. It is the only guard: there is no repeat check,
+/// as `OnSell`'s random draws and state outside any cheap key can end an
+/// order that revisits an earlier restart's state.
 const RESTART_CEILING: usize = LIST_SLOTS as usize;
 
 /// The outfits `outfitter` lists, in order; none when there is no

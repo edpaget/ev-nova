@@ -486,19 +486,42 @@ mod tests {
     }
 
     #[test]
-    fn by_the_engine_a_sale_that_relists_and_grants_itself_back_ends_once_a_restart_repeats() {
+    fn by_the_engine_a_sale_that_relists_and_grants_itself_back_ends_at_the_restart_ceiling() {
         // Each sale toggles bit 7, which lists or hides 305, and grants
-        // the blaster back: the original would restart forever. The third
-        // sale brings back the counts, listing and bits of the first
-        // restart, so the order ends there.
+        // the blaster back: the original would restart forever. The port
+        // ends the order once it has restarted 512 times, on the 513th
+        // sale.
         let mut session = selling_blasters("^b7 G128", 1, crate::RuleSource::Engine);
         let order = session.outfit_order(sell(BLASTER), 2, &mut Scripted::default());
-        assert_eq!((order.run.done, order.run.stopped), (3, None));
+        assert_eq!((order.run.done, order.run.stopped), (513, None));
         assert_eq!(session.pilot().owned(BLASTER), 1);
-        assert!(session.control_bit(bit(7)), "toggled three times");
+        assert!(session.control_bit(bit(7)), "toggled 513 times");
         let mut bible = selling_blasters("^b7 G128", 1, crate::RuleSource::Bible);
         let order = bible.outfit_order(sell(BLASTER), 2, &mut Scripted::default());
         assert_eq!((order.run.done, order.run.stopped), (2, None));
+    }
+
+    #[test]
+    fn by_the_engine_a_random_on_sell_that_revisits_a_state_still_ends_as_the_original() {
+        // Each sale toggles bit 7, relisting, and draws: a 1 grants the
+        // blaster back, a 0 sets bit 8. Drawing 1, 1, 1, 0: the third sale
+        // brings back the counts, listing and bits of the first restart,
+        // yet the fourth sells the last blaster, and the restart after it
+        // finds none, as the original's order does.
+        let mut session = selling_blasters("^b7 R(G128 b8)", 1, crate::RuleSource::Engine);
+        let mut chance = Scripted::default().and_rolling(&[1, 1, 1, 0]);
+        let order = session.outfit_order(sell(BLASTER), 2, &mut chance);
+        assert_eq!(order.run.done, 4);
+        assert_eq!(
+            order
+                .run
+                .stopped
+                .map(|stopped| (stopped.pass, stopped.refusal)),
+            Some((1, OutfitRefusal::NoneOwned))
+        );
+        assert_eq!(session.pilot().owned(BLASTER), 0);
+        assert!(!session.control_bit(bit(7)), "toggled four times");
+        assert!(session.control_bit(bit(8)), "the last draw");
     }
 
     #[test]

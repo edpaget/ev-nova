@@ -116,8 +116,8 @@ pub enum Onward {
     /// pass is `at + 1`, while that is below the count.
     From(u32),
     /// The loop ends after this pass, whatever the count: the port's end
-    /// to a restart that would repeat one before it, which the original
-    /// never makes (see
+    /// to an order that has restarted as often as it allows, which the
+    /// original never makes (see
     /// [`Session::outfit_order`](crate::Session::outfit_order)).
     Stop,
 }
@@ -137,8 +137,8 @@ pub enum Onward {
 /// pass that went through, so it can pass the count. [`Onward::Stop`]
 /// ends the loop after its pass. The loop ends only if the restarts do,
 /// and nothing here bounds them: the driver relies on its pass for that
-/// (the session's sell arm stops a restart that would repeat one before
-/// it, see [`Session::outfit_order`](crate::Session::outfit_order)).
+/// (the session's sell arm stops once an order has restarted 512 times,
+/// see [`Session::outfit_order`](crate::Session::outfit_order)).
 pub fn run_on<R>(count: u32, mut pass: impl FnMut(Pass) -> Result<Onward, R>) -> OrderRun<R> {
     let mut done = 0;
     let mut stopped = None;

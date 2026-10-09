@@ -188,7 +188,7 @@ fn operand_holds(operand: TestOperand, pilot: &(impl PilotFacts + ?Sized)) -> bo
 const WORDS: usize = (Bit::MAX as usize + 1).div_ceil(64);
 
 /// The 10,000 control bits, 0-9999, each set or clear.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ControlBitSet {
     words: [u64; WORDS],
 }

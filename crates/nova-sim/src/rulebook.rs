@@ -179,11 +179,12 @@
 //! ††††† The Bible says nothing of a counted sale. The other reading is
 //! the port's earlier behaviour, the ordered outfit sold for each pass
 //! whatever the listing does, not anything the Bible says. By the engine
-//! reading the port also ends an order whose restart would repeat an
-//! earlier one's counts owned, listing and control bits, or that has
-//! restarted 512 times, where the
-//! original has no guard and would sell forever: a deliberate divergence
-//! that only a plug-in `OnSell` granting the outfit back can reach.
+//! reading the port also ends an order once it has restarted 512 times,
+//! where the original has no guard and would sell forever: a deliberate
+//! divergence that only a plug-in `OnSell` granting the outfit back can
+//! reach. The ceiling is the only guard, with no repeat check, as
+//! `OnSell`'s random draws and state outside any cheap key can end an
+//! order that revisits an earlier restart's state.
 //!
 //! \*\*\*\*\* The Bible says only that a persistent outfit "stays with
 //! you when you trade ships", as the engine has it. The other reading is
@@ -783,11 +784,12 @@ rule_keys! {
     /// sell more than its count; with 128 not owned they do nothing. By
     /// the other reading, the ordered outfit and the pass index are kept.
     /// A sale that leaves the listing unchanged is the same by both. By
-    /// the engine reading the port ends an order whose restart would
-    /// repeat an earlier one's counts owned, listing and control bits, or
-    /// that has restarted 512 times, where the original, with no such
-    /// guard, would sell forever (an `OnSell` that grants the outfit back
-    /// and relists, reachable only by plug-ins). The
+    /// the engine reading the port ends an order once it has restarted
+    /// 512 times, where the original, with no such guard, would sell
+    /// forever (an `OnSell` that grants the outfit back and relists,
+    /// reachable only by plug-ins). The ceiling is the only guard, with
+    /// no repeat check, as `OnSell`'s random draws and state outside any
+    /// cheap key can end an order that revisits an earlier state. The
     /// Bible says nothing of it, so the other reading is the port's
     /// earlier behaviour, not anything the Bible says (see
     /// [`Session::outfit_order`](crate::Session::outfit_order)).
