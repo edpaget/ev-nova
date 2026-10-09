@@ -24,6 +24,8 @@
 //! - [`grid`]: the parts the Outfitter and the Shipyard share: the grid
 //!   of cells, a `ShortName`'s lines, and the selected item's picture and
 //!   description.
+//! - [`modal`]: the [`ModalHost`](modal::ModalHost) the screens open
+//!   their dialogs in, over themselves.
 
 pub mod bar;
 pub mod catalog;
@@ -31,6 +33,7 @@ pub mod data;
 pub mod grid;
 pub mod hire;
 pub mod layout;
+pub mod modal;
 pub mod outfitter;
 pub mod service;
 pub mod shipyard;
