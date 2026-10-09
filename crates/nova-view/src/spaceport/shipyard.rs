@@ -31,9 +31,13 @@
 //! Buy Ship, clicked or with B, requests the selected ship, and is greyed
 //! when it cannot be bought, the class flown among them (`_CalcShipCanBuy`
 //! @0x4f6f5-0x4f6fc; the original has no words for why). B acts
-//! on a press only, never a key repeat, unlike the Outfitter's: a held B
-//! would otherwise trade the ship just bought for another of its class,
-//! and its outfits with it. The screen only records the request
+//! on a press only, never a key repeat, unlike the Outfitter's. A held B
+//! no longer re-buys the class just bought, which is now the class flown
+//! and refused ([`ShipRefusal::AlreadyFlown`](nova_sim::shipyard::ShipRefusal::AlreadyFlown)),
+//! but the purchase draws that class's roll again, and when the shipyard
+//! given back no longer lists it, the selection falls on another class,
+//! which a held B would otherwise trade the new ship and its outfits
+//! for. The screen only records the request
 //! ([`ShipyardScreen::take_request`]): whoever holds the session asks for
 //! the new ship's name ([`ShipNaming`]) and opens the "Text Input" prompt
 //! with it ([`ShipyardScreen::open_naming`], [`TextInputDialog`]), as the
