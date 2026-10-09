@@ -80,6 +80,7 @@ use nova_sim::{Direction, LcNames, OutfitId, OutfitOrder, OutfitRefusal, OutfitR
 use super::catalog::SpaceportCatalog;
 use super::grid::{self, CellGrid, Shown, text};
 use super::layout::DONE_LABEL;
+use super::quantity_ask::QuantityAsk;
 use super::trade::{BUY_LABEL, MAX_LOT_KEY, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -95,7 +96,7 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::comm::grouped;
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
-use crate::ui::quantity::{PROMPT, QuantityDialog};
+use crate::ui::quantity::QuantityDialog;
 
 /// The "Outfit" dialog's `DLOG` (and `DITL`) ID.
 pub const OUTFIT_DIALOG: i16 = 1002;
@@ -295,15 +296,6 @@ struct Laid {
     metrics: MetricsHandle,
     /// The outfit whose picture and description are shown, and them.
     shown: Option<(OutfitId, Shown)>,
-    /// The quantity dialog's template, if the interface file has one.
-    quantity: Option<DialogTemplate>,
-}
-
-/// The quantity dialog open over the outfitter, and the order it counts.
-#[derive(Clone, Debug)]
-struct Asking {
-    order: OutfitOrder,
-    dialog: QuantityDialog,
 }
 
 /// The Outfitter of the stellar landed on.
@@ -324,12 +316,10 @@ pub struct OutfitterScreen {
     /// outfit selected then, if any: its repeats act on that outfit
     /// alone.
     held: Option<(Key, Option<OutfitId>)>,
-    /// Whether Alt is held.
-    counting: bool,
-    /// The quantity dialog, while it is open.
-    asking: Option<Asking>,
+    /// The quantity dialog, while it is open, the order it counts, and
+    /// whether Alt is held.
+    quantity: QuantityAsk<OutfitOrder>,
     closed: bool,
-    style: ButtonStyle,
     sounds: Vec<Sound>,
 }
 
@@ -373,7 +363,6 @@ impl OutfitterScreen {
                 dialog,
                 metrics: MetricsHandle(metrics),
                 shown: None,
-                quantity: quantity.ok(),
             }
         });
         let mut screen = Self {
@@ -384,10 +373,8 @@ impl OutfitterScreen {
             grid: CellGrid::default(),
             order: None,
             held: None,
-            counting: false,
-            asking: None,
+            quantity: QuantityAsk::new(quantity.ok(), style),
             closed: false,
-            style,
             sounds: Vec::new(),
         };
         screen.read_pictures();
@@ -440,7 +427,7 @@ impl OutfitterScreen {
     /// The quantity dialog, while it is open.
     #[must_use]
     pub fn quantity(&self) -> Option<&QuantityDialog> {
-        self.asking.as_ref().map(|asking| &asking.dialog)
+        self.quantity.dialog()
     }
 
     /// Where cell `index` (counted from the grid's first row shown) is,
@@ -564,68 +551,17 @@ impl OutfitterScreen {
         let asked = self
             .outfitter
             .count_asked(order.outfit, direction)
-            .filter(|_| self.counting);
+            .filter(|_| self.quantity.alt_held());
         match asked {
-            Some(max) => self.open_quantity(order, max, by_key),
+            Some(max) => {
+                if let Ok(laid) = &self.laid {
+                    let metrics = Rc::clone(&laid.metrics.0);
+                    self.quantity
+                        .open(order, order.direction, i64::from(max), by_key, metrics);
+                }
+            }
             None => self.order = Some((order, 1)),
         }
-    }
-
-    /// Opens the quantity dialog over the outfitter for `order`, at
-    /// `max`, laid out by its template or its fallback.
-    fn open_quantity(&mut self, order: OutfitOrder, max: u32, by_key: bool) {
-        let Ok(laid) = &self.laid else {
-            return;
-        };
-        let metrics = Rc::clone(&laid.metrics.0);
-        let title = match order.direction {
-            Direction::Buy => BUY_LABEL,
-            Direction::Sell => SELL_LABEL,
-        };
-        let max = i64::from(max);
-        let built = laid.quantity.as_ref().and_then(|template| {
-            QuantityDialog::new(
-                template,
-                max,
-                title,
-                PROMPT,
-                self.style,
-                Rc::clone(&metrics),
-            )
-            .ok()
-        });
-        let mut dialog = built
-            .unwrap_or_else(|| QuantityDialog::fallback(max, title, PROMPT, self.style, metrics));
-        if by_key {
-            dialog.flush_typed_key();
-        }
-        self.asking = Some(Asking { order, dialog });
-    }
-
-    /// Gives `input` to the quantity dialog open, after following Alt, and
-    /// records a count above 0 confirmed there as the order; 0 or Cancel
-    /// closes it with none.
-    fn quantity_input(&mut self, input: &Input) {
-        let Some(asking) = &mut self.asking else {
-            return;
-        };
-        if let Input::Key {
-            key: COUNT_KEY,
-            pressed,
-            ..
-        } = *input
-        {
-            self.counting = pressed;
-        }
-        asking.dialog.input(input);
-        self.sounds.extend(asking.dialog.take_sounds());
-        let Some(count) = asking.dialog.take_outcome() else {
-            return;
-        };
-        if count > 0 {
-            self.order = Some((asking.order, count));
-        }
-        self.asking = None;
     }
 
     /// Asks to go `direction` for `key` going down: a press asks for the
@@ -745,18 +681,13 @@ impl Screen for OutfitterScreen {
     /// Every input goes to the outfitter, or to the quantity dialog while
     /// it is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if self.asking.is_some() {
-            self.quantity_input(input);
+        if self.quantity.is_open() {
+            if let Some(counted) = self.quantity.input(input, &mut self.sounds) {
+                self.order = Some(counted);
+            }
             return ScreenAction::None;
         }
-        if let Input::Key {
-            key: COUNT_KEY,
-            pressed,
-            ..
-        } = *input
-        {
-            self.counting = pressed;
-        }
+        self.quantity.follow_alt(input);
         if self.laid.is_err() {
             if let Input::Key {
                 key: Key::Enter | Key::Escape,
@@ -823,25 +754,20 @@ impl Screen for OutfitterScreen {
         self.draw_selected(laid, list);
         self.draw_arrows(laid, list);
         laid.dialog.draw(list);
-        if let Some(asking) = &self.asking {
-            asking.dialog.draw(list);
-        }
+        self.quantity.draw(list);
     }
 
     fn cancel_pointer(&mut self) {
-        if let Some(asking) = &mut self.asking {
-            asking.dialog.cancel_pointer();
-        } else if let Ok(laid) = &mut self.laid {
+        if !self.quantity.cancel_pointer()
+            && let Ok(laid) = &mut self.laid
+        {
             laid.dialog.cancel_pointer();
         }
     }
 
     /// Lets go of Alt, and of the keys held in the quantity dialog.
     fn release_keys(&mut self) {
-        self.counting = false;
-        if let Some(asking) = &mut self.asking {
-            asking.dialog.release_keys();
-        }
+        self.quantity.release_keys();
     }
 
     /// The buttons' sounds and the quantity dialog's, in order.
