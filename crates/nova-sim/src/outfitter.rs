@@ -191,7 +191,7 @@
 //! limit or once an opening for a buy, and the free mass, a raised
 //! `Max`, a launcher's ammunition or none left for a sale. A counted buy
 //! stops at its first refusal; a counted sale runs on past it to the
-//! count (@0x5d19c-0x5d1b1) A sale that changes the listing
+//! count (@0x5d19c-0x5d1b1). A sale that changes the listing
 //! makes the passes left check and sell `oütf` 128 ([`FIRST_OUTFIT`]),
 //! listed or not, from index 1 (or 513 when nothing is listed), as
 //! [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale) says.

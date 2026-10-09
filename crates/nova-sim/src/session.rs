@@ -2213,6 +2213,17 @@ impl Session {
     /// (@0x5d017-0x5d150); `done` counts every sale the order made, so it
     /// can pass the count. By the other reading, the ordered outfit and
     /// the pass index are kept.
+    ///
+    /// A sale need not lower a count owned: an `OnSell` can grant the
+    /// outfit sold back and change the listing again (`^b7 G128`), so
+    /// every pass restarts. The original has no guard against that and
+    /// would sell forever. The port ends the order instead when a restart
+    /// would leave the counts owned, the listing and the control bits as
+    /// an earlier restart of the order left them, as from there it would
+    /// only repeat itself. This deliberate divergence is reachable only
+    /// by plug-ins: no stock `OnSell` both grants and relists. An order
+    /// that ends in the original never repeats a restart, so it is
+    /// unchanged.
     pub fn outfit_order(
         &mut self,
         order: OutfitOrder,
@@ -2225,9 +2236,17 @@ impl Session {
                 if self.rules.source_for(RuleKey::RelistedSale) == RuleSource::Engine =>
             {
                 // The listing as the first pass sees it: building it draws
-                // the rolls that pass would, so that pass draws none.
-                let mut listing = listed(self.outfitter(chance).as_ref());
+                // the rolls that pass would, so that pass draws none. A
+                // count of none runs no pass, so it builds nothing.
+                let mut listing = if count > 0 {
+                    listed(self.outfitter(chance).as_ref())
+                } else {
+                    Vec::new()
+                };
                 let mut selected = None;
+                // What each restart left: the counts owned, the listing
+                // and the control bits.
+                let mut restarts = Vec::new();
                 order_loop::run_on(count, |pass| {
                     let asked = OutfitOrder {
                         outfit: selected.unwrap_or(order.outfit),
@@ -2238,6 +2257,17 @@ impl Session {
                     if after == listing {
                         return Ok(Onward::Next);
                     }
+                    let left = (
+                        self.pilot.outfits.clone(),
+                        after.clone(),
+                        self.pilot.control_bits().clone(),
+                    );
+                    if restarts.contains(&left) {
+                        // The port's guard: this restart would repeat one
+                        // before it, so the order would never end.
+                        return Ok(Onward::Stop);
+                    }
+                    restarts.push(left);
                     listing = after;
                     selected = Some(FIRST_OUTFIT);
                     Ok(Onward::From(if listing.is_empty() {
@@ -3255,8 +3285,6 @@ impl Session {
     }
 }
 
-/// `value` held to the range of an `i16`, as a boarding grant reads a
-/// raised `Max` (see [`GrantStock::max`]).
 /// The outfits `outfitter` lists, in order; none when there is no
 /// outfitter.
 fn listed(outfitter: Option<&Outfitter>) -> Vec<OutfitId> {
@@ -3265,6 +3293,8 @@ fn listed(outfitter: Option<&Outfitter>) -> Vec<OutfitId> {
     })
 }
 
+/// `value` held to the range of an `i16`, as a boarding grant reads a
+/// raised `Max` (see [`GrantStock::max`]).
 fn clamp_i16(value: i64) -> i16 {
     i16::try_from(value.clamp(i64::from(i16::MIN), i64::from(i16::MAX))).unwrap_or_default()
 }
@@ -7441,6 +7471,40 @@ mod tests {
         );
         assert_eq!(pilot.owned(SPEED), 0);
         assert_eq!((order, pilot), sold(RuleSource::Bible));
+    }
+
+    #[test]
+    fn a_sale_of_none_draws_no_roll_and_changes_nothing_by_either_reading() {
+        // A booster of `BuyRandom` 50, not owned and not rolled yet.
+        let mut catalog = relisting_catalog();
+        catalog.outfits.push(OutfitRecord {
+            buy_random: 50,
+            ..outfit(313, &[])
+        });
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = landed_owning(
+                &catalog,
+                relisted_by(source),
+                &[(BLASTER, 3), (CONTRABAND, 2)],
+            );
+            let before = session.clone();
+            let mut chance = Scripted::default();
+            let order = session.outfit_order(sell(CONTRABAND), 0, &mut chance);
+            assert_eq!(
+                order.run,
+                OrderRun {
+                    done: 0,
+                    stopped: None
+                },
+                "{source:?}"
+            );
+            assert_eq!(
+                (chance.asked, chance.sides_asked),
+                (vec![], vec![]),
+                "{source:?}"
+            );
+            assert!(session == before, "{source:?}: unchanged");
+        }
     }
 
     #[test]

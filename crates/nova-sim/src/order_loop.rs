@@ -115,6 +115,11 @@ pub enum Onward {
     /// loop's relisting resets -0x63a (@0x5d0fe-0x5d120), so the next
     /// pass is `at + 1`, while that is below the count.
     From(u32),
+    /// The loop ends after this pass, whatever the count: the port's end
+    /// to a restart that would repeat one before it, which the original
+    /// never makes (see
+    /// [`Session::outfit_order`](crate::Session::outfit_order)).
+    Stop,
 }
 
 /// Runs `pass` for every index from 0 up to `count`, handing it the
@@ -129,10 +134,11 @@ pub enum Onward {
 /// the one it names, as a sale that changes the listing does
 /// (@0x5d0fe-0x5d120). A restart keeps the first refusal and the
 /// `alerted` flag, as -0x63e is never reset by it. `done` counts every
-/// pass that went through, so it can pass the count. The loop ends only
-/// if the restarts do: the driver relies on its pass for that (the
-/// session's restarts come only from sales, and each lowers a count
-/// owned).
+/// pass that went through, so it can pass the count. [`Onward::Stop`]
+/// ends the loop after its pass. The loop ends only if the restarts do,
+/// and nothing here bounds them: the driver relies on its pass for that
+/// (the session's sell arm stops a restart that would repeat one before
+/// it, see [`Session::outfit_order`](crate::Session::outfit_order)).
 pub fn run_on<R>(count: u32, mut pass: impl FnMut(Pass) -> Result<Onward, R>) -> OrderRun<R> {
     let mut done = 0;
     let mut stopped = None;
@@ -147,8 +153,10 @@ pub fn run_on<R>(count: u32, mut pass: impl FnMut(Pass) -> Result<Onward, R>) ->
         }) {
             Ok(onward) => {
                 done += 1;
-                if let Onward::From(from) = onward {
-                    at = from;
+                match onward {
+                    Onward::Next => {}
+                    Onward::From(from) => at = from,
+                    Onward::Stop => break,
                 }
             }
             Err(refusal) if !alerted => {
@@ -517,6 +525,27 @@ mod tests {
                 (3, true)
             ]
         );
+    }
+
+    #[test]
+    fn a_stop_ends_the_loop_after_its_pass_counted() {
+        let mut seen = Vec::new();
+        let run = run_on(4, |pass: Pass| -> Result<Onward, u32> {
+            seen.push(pass.index);
+            Ok(if pass.index == 1 {
+                Onward::Stop
+            } else {
+                Onward::Next
+            })
+        });
+        assert_eq!(
+            run,
+            OrderRun {
+                done: 2,
+                stopped: None
+            }
+        );
+        assert_eq!(seen, [0, 1]);
     }
 
     #[test]

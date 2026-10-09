@@ -468,6 +468,57 @@ mod tests {
         assert_eq!(sold(crate::RuleSource::Bible), (0, 1), "two boosters");
     }
 
+    /// [`outfitting_on_bit_7`] also selling a blaster (128) whose
+    /// `OnSell` is `on_sell`, owning `blasters` of it, by `source`'s
+    /// reading of `RelistedSale`.
+    fn selling_blasters(on_sell: &str, blasters: u16, source: crate::RuleSource) -> Session {
+        let mut catalog = outfitting_on_bit_7();
+        catalog.outfits.push(OutfitRecord {
+            on_sell: Script::parse(on_sell),
+            ..outfit(128, &[])
+        });
+        let mut session = outfitted(&catalog).with_rules(
+            crate::rulebook::Rulebook::default()
+                .with_override(crate::RuleKey::RelistedSale, source),
+        );
+        session.pilot.outfits = BTreeMap::from([(BLASTER, blasters)]);
+        session
+    }
+
+    #[test]
+    fn by_the_engine_a_sale_that_relists_and_grants_itself_back_ends_once_a_restart_repeats() {
+        // Each sale toggles bit 7, which lists or hides 305, and grants
+        // the blaster back: the original would restart forever. The third
+        // sale brings back the counts, listing and bits of the first
+        // restart, so the order ends there.
+        let mut session = selling_blasters("^b7 G128", 1, crate::RuleSource::Engine);
+        let order = session.outfit_order(sell(BLASTER), 2, &mut Scripted::default());
+        assert_eq!((order.run.done, order.run.stopped), (3, None));
+        assert_eq!(session.pilot().owned(BLASTER), 1);
+        assert!(session.control_bit(bit(7)), "toggled three times");
+        let mut bible = selling_blasters("^b7 G128", 1, crate::RuleSource::Bible);
+        let order = bible.outfit_order(sell(BLASTER), 2, &mut Scripted::default());
+        assert_eq!((order.run.done, order.run.stopped), (2, None));
+    }
+
+    #[test]
+    fn by_the_engine_a_relisting_that_repeats_a_listing_with_other_counts_goes_on() {
+        // Each sale toggles bit 7, so every sale relists, the listing
+        // alternating; the counts owned fall each time, so no restart
+        // repeats one before and all four blasters are sold.
+        let mut session = selling_blasters("^b7", 4, crate::RuleSource::Engine);
+        let order = session.outfit_order(sell(BLASTER), 3, &mut Scripted::default());
+        assert_eq!(order.run.done, 4);
+        assert_eq!(
+            order
+                .run
+                .stopped
+                .map(|stopped| (stopped.pass, stopped.refusal)),
+            Some((1, OutfitRefusal::NoneOwned))
+        );
+        assert_eq!(session.pilot().owned(BLASTER), 0);
+    }
+
     // The shipyard.
 
     /// [`shipbuying`] with ship 128's `OnRetire` and `OnPurchase`, and
