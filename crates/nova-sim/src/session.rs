@@ -309,6 +309,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use self::hooks::ShipHook;
+use self::ship_change::ClassChange;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::bay::FighterNote;
 use crate::board::{
@@ -3000,7 +3001,7 @@ impl Session {
         // Capture keeps by 0x0004 alone and holds nothing to its `Max`,
         // whatever the ship-change rules say, and tops the stock weapons
         // up rather than adding them.
-        self.pilot.outfits = carried_outfits(
+        let mut outfits = carried_outfits(
             &self.pilot.outfits,
             OutfitCarry::Persistent {
                 mask: OutfitFlags::PERSISTENT,
@@ -3010,29 +3011,23 @@ impl Session {
             records,
         );
         let fits = self.arsenal.stock_fits(record.id, records);
-        fit_stock(&mut self.pilot.outfits, &fits, records);
-        if !hooks_first {
-            self.retire_for_capture(record.id, chance);
-        }
-        self.pilot.ship = record.id;
-        self.fields = record.fields;
-        self.defaults = defaults;
-        self.stock = armament::fitted(&fits);
-        self.player = npc.state;
+        fit_stock(&mut outfits, &fits, records);
         let share = if self.arsenal.hull(record.id).tough {
             TOUGH_TAKEOVER_ARMOR_SHARE
         } else {
             TAKEOVER_ARMOR_SHARE
         };
-        let reserves = &mut self.pilot.reserves;
-        reserves.shield.now = 0.0;
-        reserves.armor.now =
-            f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
-        reserves.fuel.now = u32::try_from(record.fields.fuel)
-            .ok()
-            .filter(|&fuel| fuel > 0)
-            .map_or(0.0, |fuel| chance.below(fuel) as f32);
-        self.refit(false, ReservePolicy::Hold);
+        let takeover = ClassChange {
+            outfits,
+            reserves: ReservePolicy::Hold,
+        };
+        self.become_class(&record, takeover, |session| {
+            if !hooks_first {
+                session.retire_for_capture(record.id, chance);
+            }
+            session.take_over_reserves(&record, share, chance);
+        });
+        self.player = npc.state;
         for other in self.traffic.npcs_mut() {
             if other.leader == Some(npc.id) {
                 other.leader = None;
@@ -3048,8 +3043,22 @@ impl Session {
         if let Some(id) = placed {
             self.snap(id);
         }
-        self.save_due = true;
         Some(Assigned::MyShip)
+    }
+
+    /// The reserves a ship of `record` is taken over with: no shield,
+    /// `share` of its armour and [`TAKEOVER_ARMOR_BASE`], and its fuel
+    /// drawn on `chance` below its `Fuel` (none, with no draw, for no
+    /// tank).
+    fn take_over_reserves(&mut self, record: &ShipRecord, share: f64, chance: &mut dyn Chance) {
+        let reserves = &mut self.pilot.reserves;
+        reserves.shield.now = 0.0;
+        reserves.armor.now =
+            f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
+        reserves.fuel.now = u32::try_from(record.fields.fuel)
+            .ok()
+            .filter(|&fuel| fuel > 0)
+            .map_or(0.0, |fuel| chance.below(fuel) as f32);
     }
 }
 
