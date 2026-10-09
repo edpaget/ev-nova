@@ -6084,7 +6084,11 @@ mod tests {
     }
 
     fn pass(index: u32, count: u32) -> Pass {
-        Pass { index, count }
+        Pass {
+            index,
+            count,
+            alerted: false,
+        }
     }
 
     #[test]
