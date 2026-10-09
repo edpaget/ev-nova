@@ -588,6 +588,31 @@ mod tests {
     }
 
     #[test]
+    fn d_refunds_half_the_cost_of_an_outfit_priced_by_mass_on_a_massless_ship() {
+        let mut catalog = mapped();
+        catalog.outfits.push(OutfitRecord {
+            cost: 100,
+            flags: outfitter::OutfitFlags::PRICE_BY_MASS,
+            ..outfit(310, &[])
+        });
+        let refund = |mass_price| {
+            let rules = Rulebook::default()
+                .with_override(RuleKey::RemoveRefund, RuleSource::Bible)
+                .with_override(RuleKey::MassPrice, mass_price);
+            let mut session = scripted(&catalog).with_rules(rules);
+            run(&mut session, "G310");
+            assert_eq!(session.pilot().owned(OutfitId(310)), 1);
+            session.fields.mass = 0;
+            let cash = session.pilot().cash();
+            run(&mut session, "D310");
+            assert_eq!(session.pilot().owned(OutfitId(310)), 0);
+            session.pilot().cash() - cash
+        };
+        assert_eq!(refund(RuleSource::Engine), 50, "half the cost");
+        assert_eq!(refund(RuleSource::Bible), 0, "half of 100 x 0");
+    }
+
+    #[test]
     fn d_of_an_outfit_not_owned_changes_nothing() {
         let mut session = scripted(&mapped());
         let before = session.clone();

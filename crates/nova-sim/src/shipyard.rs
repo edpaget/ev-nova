@@ -447,7 +447,7 @@ pub fn ship_price(ship: &ShipRecord) -> i64 {
 /// below 0 (@0xb0b7-0xb0cc). Then, by ascending ID, each outfit owned
 /// that has a record and is not persistent adds half its whole line,
 /// count × its price on that ship ([`unit_price`], as `rules` reads
-/// [`RuleKey::MassPrice`](crate::RuleKey::MassPrice); inlined
+/// [`RuleKey::MassPrice`]; inlined
 /// @0xb0e3-0xb106), the total truncated toward zero after
 /// each (@0xb0da-0xb0e1, @0xb109-0xb11f). The engine also skips a count of
 /// 0 (@0xb0d5-0xb0d8); here that outfit's line of 0 leaves the total as it
@@ -1940,6 +1940,42 @@ mod tests {
     }
 
     #[test]
+    fn the_trade_in_prices_an_outfit_by_mass_at_least_at_its_cost() {
+        // Two of #131, 10 credits a ton of ship, on a class of mass 0.
+        let ships = [ShipRecord {
+            cost: 10_000,
+            ..ship(128, FAST)
+        }];
+        let records = upgrades();
+        let site = port();
+        let pilot = owning(&[(131, 2)]);
+        let traded = |source| {
+            Yard {
+                fields: ShipFields { mass: 0, ..FAST },
+                rules: Rulebook::default().with_override(RuleKey::MassPrice, source),
+                ..yard(&ships, &records, &site)
+            }
+            .shipyard(&pilot, &mut DayRolls::default(), &mut NeverFires)
+            .expect("a shipyard")
+            .trade_in
+        };
+        assert_eq!(traded(RuleSource::Engine), 2500 + 10, "half of 2 x 10");
+        assert_eq!(traded(RuleSource::Bible), 2500);
+        assert_eq!(
+            trade_in(
+                10_000,
+                -2,
+                &map(&[(131, 2)]),
+                &records,
+                RuleSource::Engine,
+                &Rulebook::default()
+            ),
+            2510,
+            "the cost below mass 0"
+        );
+    }
+
+    #[test]
     fn a_buy_is_refused_when_cash_and_trade_in_do_not_cover_the_price() {
         let ships = [
             ShipRecord {
@@ -2579,6 +2615,36 @@ mod tests {
         assert_eq!(bought.refund, resale(100 * i64::from(FAST.mass)));
         assert_eq!(bought.refund, 2000);
         assert_eq!(pilot.cash(), 10_000 - 17_500 + 2500 + 2000);
+    }
+
+    #[test]
+    fn a_persistent_outfit_sold_back_from_a_massless_ship_refunds_half_its_cost() {
+        // 100 credits a ton of ship and 20 tons: it does not fit HEAVY, and
+        // sells back as fitted to the old ship, of mass 0.
+        let by_mass = [OutfitRecord {
+            cost: 100,
+            flags: OutfitFlags::PERSISTENT | OutfitFlags::PRICE_BY_MASS,
+            ..persistent(140, 20, 1)
+        }];
+        let pilot = owning(&[(140, 1)]);
+        let new = heavy();
+        let bought = |source| {
+            purchase(
+                &Sale {
+                    old_mass: 0,
+                    rules: Rulebook::default().with_override(RuleKey::MassPrice, source),
+                    ..sale(&pilot, &new, "Kestrel", &[], &by_mass)
+                },
+                QUOTE,
+            )
+        };
+        let engine = apply(&mut pilot.clone(), bought(RuleSource::Engine));
+        assert_eq!(engine.sold_back, map(&[(140, 1)]));
+        assert_eq!(engine.refund, resale(100));
+        assert_eq!(engine.refund, 50);
+        let other = apply(&mut pilot.clone(), bought(RuleSource::Bible));
+        assert_eq!(other.sold_back, map(&[(140, 1)]));
+        assert_eq!(other.refund, 0);
     }
 
     #[test]

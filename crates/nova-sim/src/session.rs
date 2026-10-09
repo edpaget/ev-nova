@@ -6889,6 +6889,33 @@ mod tests {
     }
 
     #[test]
+    fn the_sessions_outfitter_charges_an_outfit_priced_by_mass_as_its_rules_say() {
+        // Armour 100 credits a ton of ship, on a start class of mass 0.
+        const ARMOUR: OutfitId = OutfitId(320);
+        let mut catalog = outfitting();
+        catalog.outfits.push(OutfitRecord {
+            cost: 100,
+            flags: OutfitFlags::PRICE_BY_MASS,
+            ..outfit(320, &[])
+        });
+        catalog.ships = vec![(ShipId(128), Ok(ShipFields { mass: 0, ..FAST }))];
+        let charged = |source| {
+            let rules = Rulebook::default().with_override(RuleKey::MassPrice, source);
+            let mut session = outfitted(&catalog).with_rules(rules);
+            let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+            let price = outfitter.row(ARMOUR).expect("listed").price;
+            let cash = session.pilot().cash();
+            session
+                .outfit(buy(ARMOUR), &mut NeverFires)
+                .expect("bought");
+            assert_eq!(session.pilot().owned(ARMOUR), 1);
+            (price, cash - session.pilot().cash())
+        };
+        assert_eq!(charged(RuleSource::Engine), (100, 100), "the cost");
+        assert_eq!(charged(RuleSource::Bible), (0, 0), "100 x 0");
+    }
+
+    #[test]
     fn a_session_reads_the_outfits_once_when_it_starts() {
         let catalog = outfitting();
         let mut session = outfitted(&catalog);

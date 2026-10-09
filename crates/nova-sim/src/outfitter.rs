@@ -2971,6 +2971,43 @@ mod tests {
     }
 
     #[test]
+    fn the_outfitter_lists_and_refunds_an_outfit_priced_by_mass_on_a_massless_ship() {
+        let records = [priced(100, true)];
+        let site = port();
+        let mut owner = owning(&[(128, 1)]);
+        owner.cash = 500;
+        let visit = OutfitVisit {
+            opened_with: owner.outfits.clone(),
+            ..OutfitVisit::default()
+        };
+        let at = |source| {
+            Shop {
+                fields: ShipFields { mass: 0, ..FAST },
+                visit: &visit,
+                rules: Rulebook::default().with_override(RuleKey::MassPrice, source),
+                ..shop(&records, &site)
+            }
+            .outfitter(&owner, &mut DayRolls::default(), &mut NeverFires)
+            .expect("an outfitter")
+        };
+        let engine = at(RuleSource::Engine);
+        assert_eq!(row(&engine, 128).price, 100, "the cost");
+        assert_eq!(
+            engine.refund(OutfitId(128)),
+            Some(50),
+            "half, owned on entry"
+        );
+        assert_eq!(
+            engine.count_max(OutfitId(128), Direction::Buy),
+            Some(5),
+            "the cash over the cost"
+        );
+        let other = at(RuleSource::Bible);
+        assert_eq!(row(&other, 128).price, 0);
+        assert_eq!(other.refund(OutfitId(128)), Some(0));
+    }
+
+    #[test]
     fn the_outfit_price_rule_reads_mass_price_and_cites_adjusted_item_cost() {
         assert_eq!(outfit_price().about().reads(), Some(RuleKey::MassPrice));
         let cited = outfit_price().about().reproduces();
