@@ -1199,6 +1199,40 @@ mod tests {
         assert_eq!(booms(&events, 2).len(), 1, "the shot's own");
     }
 
+    /// [`shooting`]'s session with the ship 200 pixels left of 128's
+    /// centre and `off` below it, at rest, facing right, after one shot
+    /// and the 20 ticks it then flies: the fight's events.
+    fn shot_from_afar(off: f32) -> Vec<CombatEvent> {
+        let catalog = shooting([life(128, 2)]);
+        let mut session = quiet(&catalog);
+        session.player = crate::flight::ShipState {
+            position: Vec2::new(30.0 - 200.0, -40.0 + off),
+            velocity: Vec2::ZERO,
+            heading: 90.0,
+        };
+        let mut events = fire(&mut session, 1);
+        for _ in 0..20 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            events.extend(session.take_combat_events());
+        }
+        events
+    }
+
+    #[test]
+    fn a_shot_strikes_a_stellar_on_the_edge_of_its_disc() {
+        let seen = booms(&shot_from_afar(0.0), 2);
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(
+            (seen[0] - Vec2::new(30.0 - 50.0, -40.0)).length() < 1e-3,
+            "half its 100-pixel frame from its centre: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_shot_passing_just_outside_a_stellars_disc_misses_it() {
+        assert_eq!(booms(&shot_from_afar(51.0), 2), []);
+    }
+
     #[test]
     fn shots_pass_through_an_invincible_stellar_and_one_with_no_sprite() {
         let catalog = shooting([StellarLife {
