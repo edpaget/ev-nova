@@ -786,7 +786,9 @@ pub(crate) mod dispatch;
 pub mod galaxy;
 
 pub use dispatch::DuplicateSubscription;
-pub use galaxy::{GalaxyOverlay, HiddenMove, OverlaidGalaxy, StellarOverride, SystemOverride};
+pub use galaxy::{
+    Countdown, GalaxyOverlay, HiddenMove, OverlaidGalaxy, StellarOverride, SystemOverride,
+};
 
 use crate::catalog::{StellarId, SystemId};
 use crate::control::{Script, Test};

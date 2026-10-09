@@ -9,8 +9,8 @@
 //!   [`StarMap`] has the visible systems alone, with those governments
 //!   ([`StarMap::with_hidden`]).
 //! - A stellar's government is the overlay's when it has one, else its
-//!   record's ([`OverlaidGalaxy::site`]). Its destroyed state is held and
-//!   saved; story-runtime phase 5 reads it.
+//!   record's ([`OverlaidGalaxy::site`]). A destroyed stellar holds its
+//!   regeneration [`Countdown`], saved.
 //! - A nebula is active unless the overlay says otherwise.
 //! - A system at the same place as a hidden one stands in for it
 //!   ([`OverlaidGalaxy::same_place`]): the lowest-ID visible system at its
@@ -36,14 +36,24 @@ pub struct SystemOverride {
     pub govt: Option<Option<GovtId>>,
 }
 
+/// A destroyed stellar's regeneration countdown: the days left until the
+/// daily step restores it (see the `story` module's "Galaxy overlay").
+/// The original keeps it at the stellar's +0x47c (@0xb68a).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Countdown {
+    /// The days left: at 1 or 0 the next day restores it.
+    pub days_left: u16,
+}
+
 /// What the overlay changes of one stellar. The default changes nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StellarOverride {
     /// Its government: `Some(None)` makes it independent, and `None` leaves
     /// its record's.
     pub govt: Option<Option<GovtId>>,
-    /// Whether it is destroyed (story-runtime phase 5 reads it).
-    pub destroyed: bool,
+    /// Its regeneration countdown while it is destroyed; `None` while it is
+    /// not.
+    pub destroyed: Option<Countdown>,
 }
 
 /// What play has changed over the static galaxy: per system, per stellar
@@ -134,9 +144,10 @@ impl GalaxyOverlay {
         edit(&mut self.stellars, stellar, |change| change.govt = govt)
     }
 
-    /// Sets whether `stellar` is destroyed, and says whether that changed
-    /// anything.
-    pub fn set_destroyed(&mut self, stellar: StellarId, destroyed: bool) -> bool {
+    /// Sets `stellar` destroyed with the countdown `destroyed`, or not
+    /// destroyed with `None`, and says whether that changed anything: a
+    /// new countdown does.
+    pub fn set_destroyed(&mut self, stellar: StellarId, destroyed: Option<Countdown>) -> bool {
         edit(&mut self.stellars, stellar, |change| {
             change.destroyed = destroyed;
         })
@@ -382,8 +393,16 @@ mod tests {
         assert_eq!(overlay, GalaxyOverlay::default());
 
         let p = StellarId(128);
-        assert!(!overlay.set_destroyed(p, false));
-        assert!(overlay.set_destroyed(p, true));
+        assert!(!overlay.set_destroyed(p, None));
+        assert!(overlay.set_destroyed(p, Some(Countdown { days_left: 3 })));
+        assert!(
+            !overlay.set_destroyed(p, Some(Countdown { days_left: 3 })),
+            "the same countdown"
+        );
+        assert!(
+            overlay.set_destroyed(p, Some(Countdown { days_left: 0 })),
+            "another countdown"
+        );
         assert!(overlay.set_stellar_govt(p, Some(Some(GovtId(140)))));
         assert!(!overlay.set_stellar_govt(p, Some(Some(GovtId(140)))));
         assert!(overlay.set_stellar_govt(p, Some(Some(GovtId(141)))));
@@ -391,12 +410,16 @@ mod tests {
             overlay.stellar(p),
             StellarOverride {
                 govt: Some(Some(GovtId(141))),
-                destroyed: true,
+                destroyed: Some(Countdown { days_left: 0 }),
             }
         );
-        assert!(overlay.set_destroyed(p, false));
+        assert!(overlay.set_destroyed(p, None));
+        assert!(!overlay.is_empty(), "the government is left");
         assert!(overlay.set_stellar_govt(p, None));
         assert!(overlay.is_empty());
+        assert!(overlay.set_destroyed(p, Some(Countdown { days_left: 0 })));
+        assert!(overlay.set_destroyed(p, None));
+        assert!(overlay.is_empty(), "a destroyed state alone, dropped");
 
         let n = NebulaId(128);
         assert!(!overlay.set_nebula_active(n, None));
@@ -413,7 +436,7 @@ mod tests {
         let mut overlay = GalaxyOverlay::default();
         overlay.set_govt(SystemId(9), Some(None));
         overlay.set_visible(SystemId(2), Some(true));
-        overlay.set_destroyed(StellarId(300), true);
+        overlay.set_destroyed(StellarId(300), Some(Countdown { days_left: 2 }));
         overlay.set_stellar_govt(StellarId(129), Some(Some(GovtId(5))));
         overlay.set_nebula_active(NebulaId(7), Some(false));
         overlay.set_nebula_active(NebulaId(3), Some(true));
