@@ -280,7 +280,7 @@ use crate::order_loop::{OrderRun, Pass};
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
-use crate::wares::{self, ALWAYS_RANDOM, DayRolls, HideBits, HideHigher, Roll};
+use crate::wares::{self, ALWAYS_RANDOM, DayRolls, HideBits, HideHigher, Roll, ShownTons};
 
 /// The `oütf` `Flags` bits the outfitter reads (the Bible).
 #[derive(Clone, Copy, Debug)]
@@ -579,10 +579,18 @@ impl Outfitter {
 
     /// The ship's free mass as `_ShipFreeMass` reads it, clamped at none
     /// (@0xb506-0xb50a): what the buy's free mass check, the info box's
-    /// mass words and the engine's reading of a sale read.
+    /// mass words, its "Available:" line ([`Outfitter::free_mass_shown`])
+    /// and the engine's reading of a sale read.
     #[must_use]
     pub fn free_mass_clamped(&self) -> i64 {
         self.free_mass.max(0)
+    }
+
+    /// The info box's "Available:" line: the free mass clamped at none,
+    /// with "ton" at exactly 1 and "tons" otherwise.
+    #[must_use]
+    pub fn free_mass_shown(&self) -> ShownTons {
+        free_mass_shown().of(self)
     }
 
     /// `outfit`'s row as the outfitter's rules ask about it, if it is
@@ -792,6 +800,23 @@ impl Outfitter {
             None
         }
     }
+}
+
+/// The free mass the info box's "Available:" line shows
+/// ([`Outfitter::free_mass_shown`]).
+fn free_mass_shown() -> Value<Outfitter, ShownTons> {
+    Value::plain(
+        "free mass shown",
+        "`_OutfitDialogUpdate` @0x57d66-0x57d9d: `_ShipFreeMass` read as `free_mass_clamped` \
+         (`cmovs` @0x57d74), `_tonString` (`STR#` 2002 #1) at exactly 1 @0x57d8b-0x57d95, else \
+         `_tonsString` (#2)",
+        clamped_tons,
+    )
+}
+
+/// The clamped free mass, with its unit.
+fn clamped_tons(outfitter: &Outfitter) -> ShownTons {
+    ShownTons::of(outfitter.free_mass_clamped())
 }
 
 /// Whether Option (Alt here) on Buy or Sell asks for a count, as
@@ -2164,6 +2189,7 @@ mod tests {
     use crate::rules::Descriptor;
     use crate::stats::{MORE_FUEL, MORE_SPEED};
     use crate::testkit::{AllowAll, FAST, RefuseBits, Scripted, catalog, outfit, planet};
+    use crate::wares::TonUnit;
 
     /// An outfitter of tech level 4 with special tech 6 and 55, of
     /// government 128.
@@ -4784,6 +4810,37 @@ mod tests {
     }
 
     #[test]
+    fn the_free_mass_shown_is_clamped_at_none_with_a_ton_at_exactly_one() {
+        for (free_mass, tons, unit) in [
+            (-15, 0, TonUnit::Tons),
+            (0, 0, TonUnit::Tons),
+            (1, 1, TonUnit::Ton),
+            (2, 2, TonUnit::Tons),
+            (30, 30, TonUnit::Tons),
+        ] {
+            let outfitter = Outfitter {
+                free_mass,
+                ..Outfitter::default()
+            };
+            assert_eq!(
+                outfitter.free_mass_shown(),
+                ShownTons { tons, unit },
+                "{free_mass}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_free_mass_shown_names_what_it_reproduces() {
+        let value = free_mass_shown();
+        let about = value.about();
+        assert_eq!(about.name(), "free mass shown");
+        assert!(about.reproduces().contains("@0x57d66-0x57d9d"));
+        assert!(about.reproduces().contains("free_mass_clamped"));
+        assert_eq!(about.reads(), None);
+    }
+
+    #[test]
     fn no_outfitter_check_draws() {
         let lists = [can_buy(), has_max(), sell_flag(), sale_checks()];
         for about in lists.iter().flat_map(Checks::descriptors) {
@@ -4796,6 +4853,7 @@ mod tests {
             *available().about(),
             *max_multiplier().about(),
             *option_asks_count().about(),
+            *free_mass_shown().about(),
             *refund_value().about(),
         ] {
             assert!(!about.draws(), "{}", about.name());

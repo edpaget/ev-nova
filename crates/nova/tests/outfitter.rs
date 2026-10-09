@@ -725,7 +725,7 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     game.open_outfitter();
     let shown = texts(&game.frame());
     assert!(shown.contains(&"You Have: 2".to_owned()), "{shown:?}");
-    assert!(shown.contains(&"Available: 1 tons".to_owned()), "{shown:?}");
+    assert!(shown.contains(&"Available: 1 ton".to_owned()), "{shown:?}");
 }
 
 /// The colour the Buy button's label is drawn in.

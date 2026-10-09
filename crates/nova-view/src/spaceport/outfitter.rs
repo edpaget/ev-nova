@@ -86,6 +86,7 @@ use std::time::Duration;
 
 use nova_sim::{
     Direction, LcNames, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter, SaleAlert,
+    ShownTons, TonUnit,
 };
 
 use super::catalog::SpaceportCatalog;
@@ -172,6 +173,19 @@ pub const MASS_LABEL: &str = "Item Mass:";
 pub const OWNED_LABEL: &str = "You Have:";
 /// `STR#` 2002 #218.
 pub const AVAILABLE_LABEL: &str = "Available:";
+/// `STR#` 2002 #1 (`_tonString`).
+pub const TON: &str = "ton";
+/// `STR#` 2002 #2 (`_tonsString`).
+pub const TONS: &str = "tons";
+
+/// `shown`'s number and the words for its unit; the core picks the unit.
+pub(crate) fn tons_text(shown: ShownTons) -> String {
+    let unit = match shown.unit {
+        TonUnit::Ton => TON,
+        TonUnit::Tons => TONS,
+    };
+    format!("{} {unit}", shown.tons)
+}
 /// `STR#` 2002 #219.
 pub const MAX_OWNED: &str = "Can't have any more!";
 /// `STR#` 2002 #220.
@@ -729,7 +743,10 @@ impl OutfitterScreen {
             format!("{PRICE_LABEL} {}", row.price),
             format!("{MASS_LABEL} {} tons", row.mass),
             format!("{OWNED_LABEL} {}", row.owned),
-            format!("{AVAILABLE_LABEL} {} tons", self.outfitter.free_mass),
+            format!(
+                "{AVAILABLE_LABEL} {}",
+                tons_text(self.outfitter.free_mass_shown())
+            ),
         ];
         let sale = OutfitOrder {
             outfit: row.id,
@@ -1946,6 +1963,23 @@ mod tests {
             *art.asked.borrow(),
             ["PICT -26768", "PICT 32767", "dësc -29768", "dësc 32767"]
         );
+    }
+
+    #[test]
+    fn the_available_line_is_the_clamped_free_mass_with_a_ton_at_exactly_1() {
+        for (free_mass, line) in [
+            (-3, "Available: 0 tons"),
+            (0, "Available: 0 tons"),
+            (1, "Available: 1 ton"),
+            (2, "Available: 2 tons"),
+        ] {
+            let shown = words(&screen_of(Outfitter {
+                free_mass,
+                ..outfitter()
+            }));
+            assert!(shown.contains(&line.to_owned()), "{free_mass}: {shown:?}");
+            assert!(!shown.contains(&"Available: -3 tons".to_owned()));
+        }
     }
 
     #[test]
