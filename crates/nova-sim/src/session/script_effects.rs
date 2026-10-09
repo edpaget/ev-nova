@@ -42,9 +42,14 @@
 //! nothing (the original indexes it blindly). Each move makes a save
 //! due. In flight a move gives up a jump being prepared.
 //!
+//! A move enters the system as every way in does, by its rows of the
+//! table in the `entry` module ([`Session::enter_system`]): `move_to`
+//! only chooses where the ship goes, as below.
+//!
 //! In flight, the ship is in the new system: its stellars read, the
 //! navigation target, a gate's pending entry, the shots and beams, the
-//! strikes, the player's target, the boarding and the hail let go. `M`
+//! strikes, the player's target, the boarding and the hail let go; a
+//! held `P` sound is kept, and no arrival sounds or is raised. `M`
 //! puts it at rest on the system's first stellar, whatever that is (a
 //! gate too); in a system with no stellar it stays where it is, moving
 //! as it was, unless [`ScriptEffectRules::starless`] puts it at rest at

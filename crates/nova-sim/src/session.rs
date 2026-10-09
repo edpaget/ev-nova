@@ -1584,6 +1584,10 @@ impl Session {
     /// is populated with its traffic ([`Session::populate`]), the last
     /// system's gone, and so are the shots and beams in flight; the
     /// fighters out are carried or left behind as the fighter rules say.
+    ///
+    /// It enters that system as every way in does, by its row of the
+    /// table in the `entry` module, which also lets go of the strikes, the
+    /// target, the boarding, the hail and a held `P` sound.
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -1899,9 +1903,13 @@ impl Session {
     /// no fuel is used, the minimum jump distance does not count, and the
     /// ship is in the new system, explored, its stellars read, with the
     /// course and the navigation target cleared, its thrust stopped,
-    /// populated with its traffic ([`Session::populate`]), the fight left
-    /// behind and [`SimSound::Arrived`]. It raises [`SimMessage::PassedWormhole`] or
-    /// [`SimMessage::ExitedHypergate`].
+    /// populated with its traffic ([`Session::populate`]), even when it is
+    /// the system gone in, the fight left behind and
+    /// [`SimSound::Arrived`]. It raises [`SimMessage::PassedWormhole`] or
+    /// [`SimMessage::ExitedHypergate`], and no [`SimMessage::Arrived`].
+    /// The ship enters the system by the gate's row of the table in the
+    /// `entry` module, which keeps a held `P` sound and lets go of the
+    /// strikes, the target, the boarding and the hail.
     pub fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -1983,8 +1991,10 @@ impl Session {
     /// explored, and the next traffic tick populates the system afresh
     /// ([`Session::tick_traffic`]). After a landed move the ship flies in
     /// the system moved to, from where the move left it, and after an `N`
-    /// from where it touched down (see the `script_effects` module).
-    /// `None`, and nothing changes, when it has not landed.
+    /// from where it touched down (see the `script_effects` module): the
+    /// take-off swaps in the stellars the landed move's row of the table
+    /// in the `entry` module left for it. `None`, and nothing changes,
+    /// when it has not landed.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         self.frame = market::AFTER_TAKE_OFF_FRAME;

@@ -16,9 +16,13 @@
 //!   cleared, the ship at rest at the stellar's centre with its heading
 //!   kept, the bar's hire rolls and the shops' `BuyRandom` rolls drawn
 //!   afresh, and the outfitter's opening started anew. The last system's
-//!   traffic and fight are left behind, and the next take-off populates
-//!   the new system. It makes no sound and raises no message, and leaves
-//!   the ship, its outfits, stats and reserves as they were. It is
+//!   traffic, fleet and fight are left behind, with the strikes, the
+//!   target, the boarding, the hail and a gate's pending entry, and the
+//!   next take-off populates the new system; a held `P` sound and the
+//!   fighters out are kept. It enters the system by the relocation's row
+//!   of the table in the `entry` module ([`Session::enter_system`]). It
+//!   makes no sound and raises no message, and leaves the ship, its
+//!   outfits, stats and reserves as they were. It is
 //!   refused ([`RelocateRefusal`]) in flight, a jump under way included,
 //!   and for a system or stellar that is not there, a gate, or a stellar
 //!   that cannot be landed on. A move to the stellar the ship is already
