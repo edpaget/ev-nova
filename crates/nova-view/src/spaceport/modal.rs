@@ -13,6 +13,7 @@ use crate::draw::DrawList;
 use crate::input::Input;
 use crate::screen::Screen;
 use crate::sound::Sound;
+use crate::ui::desc::DescDialog;
 use crate::ui::edit_dialog::{Confirm, EditDialog};
 
 /// A dialog a screen hosts modally: a [`Screen`] that reports, once, what
@@ -30,6 +31,16 @@ impl<P: Confirm> Modal for EditDialog<P> {
 
     fn take_outcome(&mut self) -> Option<P::Outcome> {
         EditDialog::take_outcome(self)
+    }
+}
+
+/// "Desc Dialog" reports Done, once, as it closes: Done, Return or
+/// Escape. It has nothing to choose, so its outcome is `()`.
+impl Modal for DescDialog {
+    type Outcome = ();
+
+    fn take_outcome(&mut self) -> Option<()> {
+        DescDialog::take_done(self)
     }
 }
 
@@ -116,11 +127,13 @@ mod tests {
     use crate::color::Color;
     use crate::draw::{DrawCommand, fill_rect};
     use crate::geometry::{Bounds, Point};
-    use crate::input::Key;
+    use crate::input::{Key, MouseButton};
     use crate::screen::ScreenAction;
     use crate::sound::UiSound;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::button::ButtonStyle;
+    use crate::ui::desc::DONE_ITEM;
+    use crate::ui::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
     use crate::ui::quantity::{PROMPT, QuantityDialog};
     use crate::ui::text_input::TextInputOutcome;
 
@@ -354,6 +367,76 @@ mod tests {
         assert_eq!(
             host.input(&key(Key::Enter), &mut Vec::new()),
             Some(("row", 7))
+        );
+        assert!(!host.is_open());
+    }
+
+    /// "Desc Dialog"'s shape, small: Done (1) at (100, 90), a parked
+    /// picture (2) and a text box (3).
+    fn desc_template() -> DialogTemplate {
+        let item = |bounds, enabled, kind| ItemTemplate {
+            bounds,
+            enabled,
+            kind,
+        };
+        let rect = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 200.0, 120.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(rect(100.0, 90.0, 99.0, 25.0), true, ItemSpec::User),
+                item(
+                    rect(10.0, 150.0, 20.0, 20.0),
+                    false,
+                    ItemSpec::Picture(1431),
+                ),
+                item(rect(10.0, 10.0, 60.0, 36.0), false, ItemSpec::User),
+            ],
+        }
+    }
+
+    fn desc() -> DescDialog {
+        DescDialog::new(
+            &desc_template(),
+            "words",
+            ButtonStyle::STOCK,
+            Rc::new(MonoMetrics),
+        )
+    }
+
+    #[test]
+    fn the_desc_dialog_reports_done_once_as_a_modal() {
+        for input in [key(Key::Enter), key(Key::Escape)] {
+            let mut dialog = desc();
+            dialog.input(&key(Key::Down));
+            assert_eq!(dialog.take_outcome(), None, "{input:?}");
+            dialog.input(&input);
+            assert_eq!(dialog.take_outcome(), Some(()), "{input:?}");
+            assert_eq!(dialog.take_outcome(), None, "{input:?}");
+            assert!(dialog.closed(), "{input:?}");
+        }
+        let mut dialog = desc();
+        let done = dialog
+            .dialog()
+            .item_bounds(DONE_ITEM)
+            .expect("Done")
+            .center();
+        for pressed in [true, false] {
+            dialog.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: done,
+            });
+        }
+        assert_eq!(dialog.take_outcome(), Some(()));
+        assert_eq!(dialog.take_outcome(), None);
+        let mut host = ModalHost::default();
+        host.open((), desc());
+        assert_eq!(host.input(&key(Key::Char('i')), &mut Vec::new()), None);
+        assert!(host.is_open());
+        assert_eq!(
+            host.input(&key(Key::Enter), &mut Vec::new()),
+            Some(((), ()))
         );
         assert!(!host.is_open());
     }
