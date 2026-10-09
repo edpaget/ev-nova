@@ -131,8 +131,11 @@ impl Session {
     /// stellars shown are dead since the last one.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
         let galaxy = &self.galaxy;
-        self.rebuilt
-            .rebuild(&self.sites, |id| galaxy.destroyed(id), self.fallback_reads)
+        self.rebuilt.rebuild(
+            &self.sites,
+            |id| galaxy.destroyed(id),
+            self.fallback_frame.is_some(),
+        )
     }
 
     /// A flight frame's sprite tick (see the module docs): every stellar
@@ -2028,7 +2031,7 @@ mod tests {
     #[test]
     fn a_slot_left_with_no_frame_reaches_75() {
         let mut catalog = landing_at(100, ruin_flags(false), None, 12);
-        catalog.fallback_reads = false;
+        catalog.fallback_frame = None;
         let rebuilt = destroyed_and_rebuilt(&catalog);
         assert!(reaches(&catalog, &engine(), &rebuilt, 74.0, 75.0));
         assert!(

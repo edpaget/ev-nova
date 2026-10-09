@@ -180,6 +180,12 @@ impl PilotCatalog for GameData {
                     .stellar_sprite(id)
                     .ok()
                     .map(|sprite| (sprite.sheet.frame_width(), sprite.sheet.frame_height()));
+                let dead_frame_size = match self.stellar_dead_sprite(id) {
+                    Ok(Some(sprite)) => {
+                        Some((sprite.sheet.frame_width(), sprite.sheet.frame_height()))
+                    }
+                    _ => None,
+                };
                 let mut special_tech = [0; 8];
                 special_tech[..3].copy_from_slice(&stellar.special_tech1_3);
                 special_tech[3..].copy_from_slice(&stellar.special_tech4_8);
@@ -196,8 +202,8 @@ impl PilotCatalog for GameData {
                     flags2: stellar.flags2.bits(),
                     destroyed: false,
                     graphic: stellar.graphic_type,
-                    dead_graphic: matches!(self.stellar_dead_sprite(id), Ok(Some(_)))
-                        .then_some(stellar.dead_type),
+                    dead_graphic: dead_frame_size.map(|_| stellar.dead_type),
+                    dead_frame_size,
                     type_counts_frames: counts_frames(self, stellar.graphic_type),
                 })
             })
@@ -338,8 +344,9 @@ impl PilotCatalog for GameData {
             .collect()
     }
 
-    fn fallback_sheet_reads(&self) -> bool {
-        stellar_spin_id(0).is_some_and(|spin| self.spin_sheet(spin).is_ok())
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        let sheet = self.spin_sheet(stellar_spin_id(0)?).ok()?.sheet;
+        Some((sheet.frame_width(), sheet.frame_height()))
     }
 }
 
@@ -1494,6 +1501,7 @@ mod tests {
                     destroyed: false,
                     graphic: 0,
                     dead_graphic: Some(0),
+                    dead_frame_size: Some((12, 30)),
                     type_counts_frames: true,
                 },
                 LandingSite {
@@ -1510,6 +1518,7 @@ mod tests {
                     destroyed: false,
                     graphic: 7,
                     dead_graphic: Some(0),
+                    dead_frame_size: Some((12, 30)),
                     type_counts_frames: false,
                 },
             ]
@@ -1549,6 +1558,35 @@ mod tests {
                 (130, 4, None),
                 (131, 4, None),
                 (132, -2, Some(6)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_landing_sites_dead_frame_size_is_its_dead_type_sheets_frame() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129, 130, 131])),
+            (Stellar::TYPE, 128, dead_as(stellar(0, 0, 4, 1, 0), 3)),
+            (Stellar::TYPE, 129, dead_as(stellar(0, 0, 4, 1, 0), -1)),
+            (Stellar::TYPE, 130, dead_as(stellar(0, 0, 4, 1, 0), 5)),
+            (Stellar::TYPE, 131, dead_as(stellar(0, 0, 3, 1, 0), 6)),
+            (Spin::TYPE, 1003, spin(1003)),
+            (RLED, 1003, sheet(12, 30)),
+            // 1005 names a sheet that is not there.
+            (Spin::TYPE, 1005, spin(1005)),
+            (Spin::TYPE, 1006, spin(1006)),
+            (RLED, 1006, sheet(50, 20)),
+        ]);
+        assert_eq!(
+            data.landing_sites(SystemId(130))
+                .iter()
+                .map(|site| (site.id.0, site.frame_size, site.dead_frame_size))
+                .collect::<Vec<_>>(),
+            [
+                (128, None, Some((12, 30))),
+                (129, None, None),
+                (130, None, None),
+                (131, Some((12, 30)), Some((50, 20))),
             ]
         );
     }
@@ -1594,31 +1632,39 @@ mod tests {
     }
 
     #[test]
-    fn the_fallback_sheet_reads_when_spin_1000_and_its_sheet_do() {
-        assert!(
-            store(&[(Spin::TYPE, 1000, spin(1000)), (RLED, 1000, sheet(4, 4))])
-                .fallback_sheet_reads()
+    fn the_fallback_frame_size_is_spin_1000s_frame_when_it_reads() {
+        assert_eq!(
+            store(&[(Spin::TYPE, 1000, spin(1000)), (RLED, 1000, sheet(30, 12))])
+                .fallback_frame_size(),
+            Some((30, 12))
         );
-        assert!(!store(&[(Spin::TYPE, 1000, spin(1000))]).fallback_sheet_reads());
-        assert!(!store(&[(RLED, 1000, sheet(4, 4))]).fallback_sheet_reads());
-        assert!(
-            !store(&[(Spin::TYPE, 1001, spin(1000)), (RLED, 1000, sheet(4, 4))])
-                .fallback_sheet_reads()
+        assert_eq!(
+            store(&[(Spin::TYPE, 1000, spin(1000))]).fallback_frame_size(),
+            None
+        );
+        assert_eq!(
+            store(&[(RLED, 1000, sheet(4, 4))]).fallback_frame_size(),
+            None
+        );
+        assert_eq!(
+            store(&[(Spin::TYPE, 1001, spin(1000)), (RLED, 1000, sheet(4, 4))])
+                .fallback_frame_size(),
+            None
         );
     }
 
     #[test]
-    fn a_borrowed_or_shared_game_data_forwards_whether_the_fallback_sheet_reads() {
-        for (resources, reads) in [
+    fn a_borrowed_or_shared_game_data_forwards_the_fallback_frame_size() {
+        for (resources, size) in [
             (
-                vec![(Spin::TYPE, 1000, spin(1000)), (RLED, 1000, sheet(4, 4))],
-                true,
+                vec![(Spin::TYPE, 1000, spin(1000)), (RLED, 1000, sheet(30, 12))],
+                Some((30, 12)),
             ),
-            (vec![(Spin::TYPE, 1000, spin(1000))], false),
+            (vec![(Spin::TYPE, 1000, spin(1000))], None),
         ] {
             let data = std::rc::Rc::new(store(&resources));
-            assert_eq!(PilotCatalog::fallback_sheet_reads(&data), reads, "Rc");
-            assert_eq!(PilotCatalog::fallback_sheet_reads(&&*data), reads, "&");
+            assert_eq!(PilotCatalog::fallback_frame_size(&data), size, "Rc");
+            assert_eq!(PilotCatalog::fallback_frame_size(&&*data), size, "&");
         }
     }
 

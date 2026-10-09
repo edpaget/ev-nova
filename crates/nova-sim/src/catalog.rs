@@ -123,6 +123,10 @@ pub struct LandingSite {
     /// Its `DeadType`, when that is 0 to 255 and its sheet can be read:
     /// the graphic it shows while destroyed.
     pub dead_graphic: Option<i16>,
+    /// The frame width and height of its `DeadType`'s sheet, `Some`
+    /// exactly when [`dead_graphic`](Self::dead_graphic) is: the box a
+    /// click on it reads while destroyed (story-runtime phase 11).
+    pub dead_frame_size: Option<(u32, u32)>,
     /// Whether its `Type`'s `spïn` gives a frame count above 0, `xTiles` ×
     /// `yTiles`: the original reads a width of 32 for a loaded `Type`
     /// master without one (`_LoadMasterStellarSprite` @0x1ed8c-0x1ed97,
@@ -869,9 +873,10 @@ pub trait PilotCatalog {
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
     fn stellar_lives(&self) -> Vec<StellarLife>;
-    /// Whether graphic type 0's sheet (`spïn` 1000) can be read: the
-    /// frames the original's rebuild gives a sprite slot it left empty.
-    fn fallback_sheet_reads(&self) -> bool;
+    /// The frame width and height of graphic type 0's sheet (`spïn`
+    /// 1000), or `None` when it cannot be read: the frames the original's
+    /// rebuild gives a sprite slot it left empty.
+    fn fallback_frame_size(&self) -> Option<(u32, u32)>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -936,8 +941,8 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).stellar_lives()
     }
 
-    fn fallback_sheet_reads(&self) -> bool {
-        (**self).fallback_sheet_reads()
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        (**self).fallback_frame_size()
     }
 }
 
@@ -1004,8 +1009,8 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
         (**self).stellar_lives()
     }
 
-    fn fallback_sheet_reads(&self) -> bool {
-        (**self).fallback_sheet_reads()
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        (**self).fallback_frame_size()
     }
 }
 
@@ -1109,6 +1114,7 @@ mod tests {
                 destroyed: false,
                 graphic: 4,
                 dead_graphic: Some(5),
+                dead_frame_size: Some((60, 60)),
                 type_counts_frames: true,
             }]
         }
@@ -1198,9 +1204,9 @@ mod tests {
             }]
         }
 
-        /// `spïn` 1000 cannot be read.
-        fn fallback_sheet_reads(&self) -> bool {
-            false
+        /// `spïn` 1000's frames are 7 by 9.
+        fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+            Some((7, 9))
         }
     }
 
@@ -1228,7 +1234,7 @@ mod tests {
             format!("{:?}", catalog.gate_sites()),
             format!("{:?}", catalog.stellar_flags()),
             format!("{:?}", catalog.stellar_lives()),
-            format!("{}", catalog.fallback_sheet_reads()),
+            format!("{:?}", catalog.fallback_frame_size()),
         ]
     }
 
@@ -1262,7 +1268,7 @@ mod tests {
             direct[5].contains("graphic: 4, dead_graphic: Some(5)"),
             "{direct:?}"
         );
-        assert_eq!(direct[19], "false", "forwarded, not a default");
+        assert_eq!(direct[19], "Some((7, 9))", "forwarded, not a default");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

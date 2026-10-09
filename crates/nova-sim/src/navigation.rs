@@ -62,27 +62,35 @@ pub fn next_after<T: Copy + PartialEq>(items: &[T], current: Option<T>) -> Optio
 /// The stellar a click at `at` (in system coordinates) picks among
 /// `sites`, as the original's click in space does once no ship took it:
 /// the first, in navigation order, whose hit box holds `at`, edges
-/// included. The box is the sprite's frame centred on the stellar, grown
-/// by [`CLICK_MARGIN`] on each side when the frame is no taller than
-/// [`SMALL_SPRITE_HEIGHT`]; a stellar with no sprite is boxed by the
+/// included. The box is the frame of the sheet drawn for the stellar,
+/// which `drawn` gives (the original tests the sprite slot's current
+/// frame rect, so a destroyed stellar is clicked by the sheet it shows,
+/// story-runtime phase 11), centred on the stellar and grown by
+/// [`CLICK_MARGIN`] on each side when the frame is no taller than
+/// [`SMALL_SPRITE_HEIGHT`]; when `drawn` gives `None` the box is the
 /// 64-pixel placeholder the views draw (twice
 /// [`UNKNOWN_STELLAR_RADIUS`]). Landability does not count. `None` when
 /// the click is on no stellar.
 #[must_use]
-pub fn stellar_under(sites: &[LandingSite], at: Vec2) -> Option<StellarId> {
+pub fn stellar_under(
+    sites: &[LandingSite],
+    at: Vec2,
+    drawn: impl Fn(&LandingSite) -> Option<(u32, u32)>,
+) -> Option<StellarId> {
     sites
         .iter()
         .find(|site| {
-            let (half_width, half_height) = half_box(site);
+            let (half_width, half_height) = half_box(drawn(site));
             let offset = at - site.position;
             offset.x.abs() <= half_width && offset.y.abs() <= half_height
         })
         .map(|site| site.id)
 }
 
-/// Half the width and half the height of `site`'s click box.
-fn half_box(site: &LandingSite) -> (f32, f32) {
-    match site.frame_size {
+/// Half the width and half the height of the click box around a drawn
+/// frame of `frame_size`.
+fn half_box(frame_size: Option<(u32, u32)>) -> (f32, f32) {
+    match frame_size {
         None => (UNKNOWN_STELLAR_RADIUS, UNKNOWN_STELLAR_RADIUS),
         Some((width, height)) => {
             let margin = if height <= SMALL_SPRITE_HEIGHT {
@@ -133,12 +141,13 @@ mod tests {
     fn a_click_inside_a_stellars_sprite_picks_it() {
         let sites = [sized(128, 100.0, 50.0, Some((80, 60)))];
         assert_eq!(
-            stellar_under(&sites, Vec2::new(100.0, 50.0)),
+            stellar_under(&sites, Vec2::new(100.0, 50.0), |site| site.frame_size),
             Some(StellarId(128))
         );
         for corner in [(60.0, 20.0), (140.0, 80.0), (60.0, 80.0), (140.0, 20.0)] {
             assert_eq!(
-                stellar_under(&sites, Vec2::new(corner.0, corner.1)),
+                stellar_under(&sites, Vec2::new(corner.0, corner.1), |site| site
+                    .frame_size),
                 Some(StellarId(128)),
                 "{corner:?}"
             );
@@ -149,7 +158,11 @@ mod tests {
     fn a_click_just_outside_a_stellars_sprite_picks_nothing() {
         let sites = [sized(128, 100.0, 50.0, Some((80, 60)))];
         for at in [(59.5, 50.0), (140.5, 50.0), (100.0, 19.5), (100.0, 80.5)] {
-            assert_eq!(stellar_under(&sites, Vec2::new(at.0, at.1)), None, "{at:?}");
+            assert_eq!(
+                stellar_under(&sites, Vec2::new(at.0, at.1), |site| site.frame_size),
+                None,
+                "{at:?}"
+            );
         }
     }
 
@@ -159,13 +172,17 @@ mod tests {
         // Half of 30 is 15, half of 47 is 23.5: 16 more on each side.
         for at in [(31.0, 0.0), (-31.0, 0.0), (0.0, 39.5), (0.0, -39.5)] {
             assert_eq!(
-                stellar_under(&sites, Vec2::new(at.0, at.1)),
+                stellar_under(&sites, Vec2::new(at.0, at.1), |site| site.frame_size),
                 Some(StellarId(128)),
                 "{at:?}"
             );
         }
         for at in [(31.5, 0.0), (-31.5, 0.0), (0.0, 40.0), (0.0, -40.0)] {
-            assert_eq!(stellar_under(&sites, Vec2::new(at.0, at.1)), None, "{at:?}");
+            assert_eq!(
+                stellar_under(&sites, Vec2::new(at.0, at.1), |site| site.frame_size),
+                None,
+                "{at:?}"
+            );
         }
     }
 
@@ -173,11 +190,17 @@ mod tests {
     fn a_sprite_48_pixels_high_gets_no_margin() {
         let sites = [sized(128, 0.0, 0.0, Some((30, 48)))];
         assert_eq!(
-            stellar_under(&sites, Vec2::new(15.0, 24.0)),
+            stellar_under(&sites, Vec2::new(15.0, 24.0), |site| site.frame_size),
             Some(StellarId(128))
         );
-        assert_eq!(stellar_under(&sites, Vec2::new(15.5, 0.0)), None);
-        assert_eq!(stellar_under(&sites, Vec2::new(0.0, 24.5)), None);
+        assert_eq!(
+            stellar_under(&sites, Vec2::new(15.5, 0.0), |site| site.frame_size),
+            None
+        );
+        assert_eq!(
+            stellar_under(&sites, Vec2::new(0.0, 24.5), |site| site.frame_size),
+            None
+        );
     }
 
     #[test]
@@ -187,11 +210,11 @@ mod tests {
             sized(128, 0.0, 0.0, Some((100, 100))),
         ];
         assert_eq!(
-            stellar_under(&sites, Vec2::new(5.0, 0.0)),
+            stellar_under(&sites, Vec2::new(5.0, 0.0), |site| site.frame_size),
             Some(StellarId(131))
         );
         assert_eq!(
-            stellar_under(&sites, Vec2::new(-45.0, 0.0)),
+            stellar_under(&sites, Vec2::new(-45.0, 0.0), |site| site.frame_size),
             Some(StellarId(128)),
             "only under the second"
         );
@@ -201,15 +224,32 @@ mod tests {
     fn a_stellar_with_no_sprite_is_clicked_on_its_64_pixel_placeholder() {
         let sites = [sized(128, 0.0, 0.0, None)];
         assert_eq!(
-            stellar_under(&sites, Vec2::new(32.0, -32.0)),
+            stellar_under(&sites, Vec2::new(32.0, -32.0), |site| site.frame_size),
             Some(StellarId(128))
         );
-        assert_eq!(stellar_under(&sites, Vec2::new(32.5, 0.0)), None);
-        assert_eq!(stellar_under(&sites, Vec2::new(0.0, 32.5)), None);
+        assert_eq!(
+            stellar_under(&sites, Vec2::new(32.5, 0.0), |site| site.frame_size),
+            None
+        );
+        assert_eq!(
+            stellar_under(&sites, Vec2::new(0.0, 32.5), |site| site.frame_size),
+            None
+        );
+    }
+
+    #[test]
+    fn the_click_box_is_the_size_the_caller_says_is_drawn() {
+        let sites = [sized(128, 0.0, 0.0, Some((40, 40)))];
+        let drawn = |_: &LandingSite| Some((200, 200));
+        assert_eq!(
+            stellar_under(&sites, Vec2::new(90.0, 0.0), drawn),
+            Some(StellarId(128))
+        );
+        assert_eq!(stellar_under(&sites, Vec2::new(110.0, 0.0), drawn), None);
     }
 
     #[test]
     fn no_stellars_nothing_under_the_click() {
-        assert_eq!(stellar_under(&[], Vec2::ZERO), None);
+        assert_eq!(stellar_under(&[], Vec2::ZERO, |site| site.frame_size), None);
     }
 }

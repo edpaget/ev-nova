@@ -177,6 +177,7 @@ mod tests {
             destroyed: false,
             graphic: 0,
             dead_graphic: None,
+            dead_frame_size: None,
             type_counts_frames: true,
         }
     }
@@ -268,8 +269,8 @@ mod tests {
             Vec::new()
         }
 
-        fn fallback_sheet_reads(&self) -> bool {
-            true
+        fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+            Some((100, 100))
         }
     }
 

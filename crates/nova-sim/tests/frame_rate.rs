@@ -100,8 +100,8 @@ impl PilotCatalog for Pilot {
         Vec::new()
     }
 
-    fn fallback_sheet_reads(&self) -> bool {
-        true
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        Some((100, 100))
     }
 }
 

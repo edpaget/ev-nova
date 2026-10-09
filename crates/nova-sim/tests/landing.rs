@@ -103,8 +103,8 @@ impl PilotCatalog for Pilot {
         Vec::new()
     }
 
-    fn fallback_sheet_reads(&self) -> bool {
-        true
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        Some((100, 100))
     }
 }
 
@@ -125,6 +125,7 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         destroyed: false,
         graphic: 0,
         dead_graphic: None,
+        dead_frame_size: None,
         type_counts_frames: true,
     }
 }

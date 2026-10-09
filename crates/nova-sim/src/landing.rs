@@ -534,6 +534,7 @@ mod tests {
             destroyed: false,
             graphic: 0,
             dead_graphic: None,
+            dead_frame_size: None,
             type_counts_frames: true,
         }
     }

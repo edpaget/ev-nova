@@ -147,6 +147,7 @@ impl PilotCatalog for Home {
             destroyed: false,
             graphic: 0,
             dead_graphic: None,
+            dead_frame_size: None,
             type_counts_frames: true,
         }]
     }
@@ -183,8 +184,8 @@ impl PilotCatalog for Home {
         self.lives.clone()
     }
 
-    fn fallback_sheet_reads(&self) -> bool {
-        true
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        Some((100, 100))
     }
 }
 

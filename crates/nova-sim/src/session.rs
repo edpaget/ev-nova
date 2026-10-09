@@ -696,10 +696,11 @@ pub struct Session {
     /// (see the `stellars` module); never saved, as a load is itself a
     /// rebuild point.
     rebuilt: Rebuilt,
-    /// Whether graphic type 0's sheet can be read, read from the catalog
-    /// as the session starts: what a rebuild point fills an empty sprite
-    /// slot with (see the `stellars` module).
-    fallback_reads: bool,
+    /// Graphic type 0's sheet's frame size, or `None` when it cannot be
+    /// read, read from the catalog as the session starts: what a rebuild
+    /// point fills an empty sprite slot with, and the box a click on that
+    /// slot reads (see the `stellars` module).
+    fallback_frame: Option<(u32, u32)>,
 }
 
 impl Session {
@@ -848,7 +849,7 @@ impl Session {
             strength: BTreeMap::new(),
             destroying: BTreeSet::new(),
             rebuilt: Rebuilt::default(),
-            fallback_reads: catalog.fallback_sheet_reads(),
+            fallback_frame: catalog.fallback_frame_size(),
             pilot,
         };
         session.set_player_system(system, here, dock);
@@ -1842,7 +1843,7 @@ impl Session {
         let picked = match pick {
             StellarPick::Slot(slot) => self.sites.get(slot).map(|site| site.id),
             StellarPick::Nearest => nearest_landable(self.player.position, &self.sites),
-            StellarPick::At(at) => stellar_under(&self.sites, at),
+            StellarPick::At(at) => stellar_under(&self.sites, at, |site| site.frame_size),
         }?;
         self.nav_target = Some(picked);
         Some(picked)

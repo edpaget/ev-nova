@@ -1278,8 +1278,9 @@
 //! - **The state** is phase 9's `Rebuilt`, which now also keeps the
 //!   graphics whose master is loaded and the stellars whose slot shows
 //!   no frame, at the same rebuild points and flight frames (see the
-//!   `rebuild` submodule). The session reads `PilotCatalog::
-//!   fallback_sheet_reads` (whether `spïn` 1000 reads) as it starts, and
+//!   `rebuild` submodule). The session reads whether `spïn` 1000 reads
+//!   as it starts (phase 11 turns that into `PilotCatalog::
+//!   fallback_frame_size`, the sheet's frame size), and
 //!   each `LandingSite` carries its `Type`, its `DeadType` when that
 //!   sheet reads, and whether its `Type`'s `spïn` counts frames.
 //! - **Not switched**: NPC landing keeps the `landing_radius` circle
