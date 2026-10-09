@@ -855,10 +855,9 @@ fn can<'a>(direction: Direction) -> Checks<RowTrade<'a>, TradeRefusal> {
 }
 
 /// Whether Buy is enabled on a row, as `_CanBuyGoods` has it
-/// (@0xccec-0xcd31): the row is sold here, a ton of space is free, and
-/// the cash is at least the price, compared signed. The original tests
-/// the cash before the space and gives no reason; the port refuses for
-/// the space first.
+/// (@0xccec-0xcd31): the row is sold here, the cash is at least the
+/// price, compared signed (@0xcd07-0xcd0d), and a ton of space is free
+/// (@0xcd0f-0xcd26), in `_CanBuyGoods`'s order.
 fn can_buy<'a>() -> Checks<RowTrade<'a>, TradeRefusal> {
     [
         Check::plain(
@@ -866,12 +865,12 @@ fn can_buy<'a>() -> Checks<RowTrade<'a>, TradeRefusal> {
             "the row's ways as listed (`jünk ways`); `_CanBuyGoods` @0xccec asks no list",
             sold_here,
         ),
-        Check::plain("space free", "`_CanBuyGoods` @0xcd0f-0xcd26", space_free),
         Check::plain(
             "cash for the price",
             "`_CanBuyGoods` @0xcd07-0xcd0d, signed",
             cash_for_the_price,
         ),
+        Check::plain("space free", "`_CanBuyGoods` @0xcd0f-0xcd26", space_free),
     ]
     .into()
 }
@@ -4169,7 +4168,7 @@ mod tests {
                 buy(&stall(-500, 0, 5), lot),
                 Err(TradeRefusal::CannotAfford)
             );
-            assert_eq!(buy(&stall(0, 0, 0), lot), Err(TradeRefusal::NoSpace));
+            assert_eq!(buy(&stall(0, 0, 0), lot), Err(TradeRefusal::CannotAfford));
         }
     }
 
@@ -4280,14 +4279,12 @@ mod tests {
     }
 
     /// The Buy checks are `_CanBuyGoods`'s (@0xccec-0xcd31), and the row's
-    /// ways. The original tests the cash (@0xcd07-0xcd0d) before the space
-    /// (@0xcd0f-0xcd26), and returns only whether both hold: a greyed
-    /// button carries no reason, and the port drops a refused order's
-    /// reason too. So the order cannot be seen, and the port keeps space
-    /// before cash, as a buy with neither has always been refused for its
-    /// space (`a_buy_with_no_space_or_not_enough_cash_for_a_ton_is_refused`).
+    /// ways, in `_CanBuyGoods`'s order: the cash (@0xcd07-0xcd0d), then the
+    /// space (@0xcd0f-0xcd26). The original returns only whether both
+    /// hold, but the order decides which reason a buy with neither gives
+    /// (`a_buy_with_no_space_or_not_enough_cash_for_a_ton_is_refused`).
     #[test]
-    fn the_buy_checks_are_canbuygoods_checks_in_the_ports_order() {
+    fn the_buy_checks_are_canbuygoods_checks_in_order() {
         assert_eq!(
             listed_checks(&can_buy()),
             [
@@ -4295,11 +4292,11 @@ mod tests {
                     "sold here",
                     "the row's ways as listed (`jünk ways`); `_CanBuyGoods` @0xccec asks no list"
                 ),
-                ("space free", "`_CanBuyGoods` @0xcd0f-0xcd26"),
                 (
                     "cash for the price",
                     "`_CanBuyGoods` @0xcd07-0xcd0d, signed"
                 ),
+                ("space free", "`_CanBuyGoods` @0xcd0f-0xcd26"),
             ]
         );
     }
@@ -4329,16 +4326,16 @@ mod tests {
             verdicts(&can(Direction::Buy), &trade(&broke, 1)),
             [
                 refuses(TradeRefusal::NotTraded),
-                refuses(TradeRefusal::NoSpace),
                 refuses(TradeRefusal::CannotAfford),
+                refuses(TradeRefusal::NoSpace),
             ],
             "opals, not sold here"
         );
         assert_eq!(
             verdicts(&can(Direction::Buy), &trade(&broke, 0)),
             [
-                refuses(TradeRefusal::NoSpace),
                 refuses(TradeRefusal::CannotAfford),
+                refuses(TradeRefusal::NoSpace),
             ]
         );
         let roomy = stall(0, 0, 5);
@@ -4348,7 +4345,7 @@ mod tests {
         );
         let first = |market: &Market, index| refusal(&can(Direction::Buy), &trade(market, index));
         assert_eq!(first(&broke, 1), Err(TradeRefusal::NotTraded));
-        assert_eq!(first(&broke, 0), Err(TradeRefusal::NoSpace));
+        assert_eq!(first(&broke, 0), Err(TradeRefusal::CannotAfford));
         assert_eq!(first(&roomy, 0), Err(TradeRefusal::CannotAfford));
         assert_eq!(first(&stall(100, 0, 5), 0), Ok(()));
     }
