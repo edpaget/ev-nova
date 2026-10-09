@@ -1593,13 +1593,13 @@ impl Session {
             return None;
         };
         self.jump = None;
-        self.queued.sound = None;
         self.take_jump_cost(chance);
         let (mut from, mut at) = (self.pilot.system, first);
+        let mut hops = 0;
         if self.pilot.course.first() == Some(&first) {
-            self.pilot.course.remove(0);
+            hops = 1;
             for _ in 1..hops_per_jump(self.stats.multi_jump, self.multi_jump) {
-                let Some(&next) = self.pilot.course.first() else {
+                let Some(&next) = self.pilot.course.get(hops) else {
                     break;
                 };
                 if self.multi_jump == MultiJumpRule::PerHop {
@@ -1608,23 +1608,21 @@ impl Session {
                     }
                     self.take_jump_cost(chance);
                 }
-                self.pilot.course.remove(0);
+                hops += 1;
                 (from, at) = (at, next);
             }
         }
         let map = |id| self.star_map.position(id).unwrap_or_default();
-        self.player = arrival(map(from), map(at), self.stats.jump_distance);
-        let pilot = &mut self.pilot;
-        pilot.system = at;
-        pilot.stellar = None;
-        pilot.explore(at);
-        self.leave_with_fighters(false);
-        self.sites = catalog.landing_sites(at);
-        self.populate(catalog, chance);
-        self.combat.clear();
-        self.nav_target = None;
-        self.sounds.push(SimSound::Arrived);
-        self.messages.push(SimMessage::Arrived(at));
+        let entered = Arrival {
+            system: at,
+            sites: catalog.landing_sites(at),
+            placement: Placement {
+                ship: ShipPlacement::Arrive(arrival(map(from), map(at), self.stats.jump_distance)),
+                stellar: None,
+                hold: false,
+            },
+        };
+        self.enter_system(Entry::Jump { hops }, entered, catalog, chance);
         Some(at)
     }
 

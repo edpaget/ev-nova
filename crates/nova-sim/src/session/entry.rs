@@ -35,7 +35,6 @@ use crate::traffic::Traffic;
 pub(super) enum Entry {
     /// A hyperspace jump's arrival, having made `hops` hops along the
     /// course.
-    #[cfg_attr(not(test), expect(dead_code))]
     Jump { hops: usize },
     /// Out of a hypergate or wormhole.
     Gate,
