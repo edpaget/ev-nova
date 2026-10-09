@@ -573,4 +573,84 @@ mod tests {
         assert_eq!(flown.landed(), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(50.0, 60.0));
     }
+
+    /// [`atlas`], the player's ship carrying a blaster, outfit 250
+    /// holding it.
+    fn armed_atlas() -> FakePilotCatalog {
+        use crate::catalog::{HullRecord, StockWeapon, WeaponId, WeaponRecord};
+        use crate::testkit::{hull, weapon};
+        FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                reload: 2,
+                count: 30,
+                speed: 2000,
+                ..weapon(128)
+            }],
+            hulls: vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(128),
+                    count: 1,
+                    ammo: 0,
+                }],
+                ..hull(128)
+            }],
+            outfits: vec![outfit(250, &[(crate::combat::armament::MOD_WEAPON, 128)])],
+            ..atlas()
+        }
+    }
+
+    #[test]
+    fn a_move_lets_go_of_the_scene_and_the_fleet_and_keeps_a_held_sound_and_the_fighters_out() {
+        let catalog = armed_atlas();
+        let escort = |carried| Escort {
+            ship: ShipId(129),
+            reserves: Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried,
+            wage: None,
+            person: None,
+        };
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.escorts = vec![escort(false), escort(true)];
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        session.hold_fire(true, false);
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        session.hold_fire(false, false);
+        let combat = session.combat.clone();
+        assert_eq!(combat.shots().len(), 1);
+        land_now(&mut session).expect("lands");
+        session.combat = combat;
+        session.nav_target = Some(StellarId(129));
+        session.gate = Some(StellarId(129));
+        session.stage_scene(session.npcs()[0].id);
+        assert_eq!(session.fleet.len(), 2);
+        session.run_set(
+            &crate::control::SetExpr::parse("P300").expect("parses"),
+            &mut NeverFires,
+        );
+        session.take_sounds();
+        session.take_fighter_notes();
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert_eq!(session.shots(), []);
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(session.gate, None);
+        session.assert_scene_left("a relocation");
+        assert_eq!(session.fleet, []);
+        assert!(session.traffic_due);
+        assert_eq!(session.pilot().escorts().len(), 2, "the fighter still out");
+        assert_eq!(session.take_fighter_notes(), []);
+        session.take_off();
+        assert_eq!(session.take_sounds(), [crate::sound::SimSound::TookOff]);
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(
+            session.take_sounds(),
+            [crate::sound::SimSound::Script {
+                sound: crate::catalog::SoundId(300),
+                exclusive: true,
+            }]
+        );
+    }
 }

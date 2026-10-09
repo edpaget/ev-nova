@@ -74,6 +74,22 @@ pub(super) struct Talk {
     release: bool,
 }
 
+#[cfg(test)]
+impl Talk {
+    /// A hail of `npc` just opened, its conversation rolled on
+    /// [`NeverFires`](crate::chance::NeverFires), for the session's tests
+    /// that only need one under way.
+    pub(super) fn opened(npc: NpcId) -> Self {
+        Self {
+            npc,
+            conversation: Conversation::open(0, false, 0, &mut crate::chance::NeverFires),
+            reply: Reply::Comm(1),
+            ask: None,
+            release: false,
+        }
+    }
+}
+
 impl Session {
     /// Hails the player's target with `options` listed, its conversation
     /// rolled on `chance` (see [`hail`](crate::hail)), and gives the comm

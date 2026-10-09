@@ -917,6 +917,106 @@ mod tests {
         assert_eq!(session.fleet.iter().flatten().count(), 1);
     }
 
+    // What a move lets go of and keeps, by either reading of
+    // `MoveArrival`.
+
+    const READINGS: [RuleSource; 2] = [RuleSource::Engine, RuleSource::Bible];
+
+    /// The rules with `MoveArrival` read as `reading`.
+    fn arrival(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::MoveArrival, reading)
+    }
+
+    #[test]
+    fn a_move_in_flight_lets_go_of_the_boarding_and_the_hail_by_either_reading() {
+        let catalog = moving();
+        for reading in READINGS {
+            for text in ["M131", "N130"] {
+                let mut session = flying(&catalog).with_rules(arrival(reading));
+                session.stage_scene(NpcId(0));
+                moved(&mut session, &catalog, text);
+                session.assert_scene_left(&format!("{text} {reading:?}"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_move_keeps_a_held_sound_and_sounds_and_raises_no_arrival() {
+        let catalog = moving();
+        for reading in READINGS {
+            for text in ["M131", "N131"] {
+                let case = format!("{text} {reading:?}");
+                let mut session = flying(&catalog).with_rules(arrival(reading));
+                session.take_sounds();
+                session.take_messages();
+                run(&mut session, "P300");
+                moved(&mut session, &catalog, text);
+                assert_eq!(session.take_sounds(), [], "in flight: {case}");
+                assert_eq!(session.take_messages(), [], "in flight: {case}");
+                session.tick(crate::flight::Controls::default());
+                assert_eq!(
+                    session.take_sounds(),
+                    [mission_sound(300, true)],
+                    "in flight: {case}"
+                );
+                let mut session = landed(&catalog).with_rules(arrival(reading));
+                session.take_messages();
+                run(&mut session, "P300");
+                moved(&mut session, &catalog, text);
+                assert_eq!(session.take_sounds(), [], "landed: {case}");
+                assert_eq!(session.take_messages(), [], "landed: {case}");
+                session.take_off();
+                assert_eq!(session.take_sounds(), [SimSound::TookOff], "{case}");
+                session.tick(crate::flight::Controls::default());
+                assert_eq!(
+                    session.take_sounds(),
+                    [mission_sound(300, true)],
+                    "landed: {case}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn as_an_arrival_a_move_within_the_system_populates_it_afresh_on_the_chance_given() {
+        let catalog = moving();
+        let mut session = flying(&catalog).with_rules(arrival(RuleSource::Bible));
+        let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        run(&mut session, "N130");
+        let mut chance = crate::testkit::Draws::default();
+        let _ = session.settle_script(&catalog, &mut chance);
+        let after: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(after.len(), 2);
+        assert!(
+            after.iter().all(|id| !before.contains(id)),
+            "{before:?} {after:?}"
+        );
+        assert!(!chance.asked.is_empty(), "drawn on the chance given");
+    }
+
+    #[test]
+    fn a_landed_move_leaves_the_traffic_and_the_fighters_out_by_either_reading() {
+        let catalog = moving();
+        for reading in READINGS {
+            let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+            pilot.escorts = vec![escort(129, false), escort(130, true)];
+            let mut session = flying_with(&catalog, pilot).with_rules(arrival(reading));
+            land_now(&mut session).expect("lands");
+            let npcs = session.npcs().to_vec();
+            moved(&mut session, &catalog, "M131");
+            assert_eq!(session.npcs(), npcs, "{reading:?}");
+            assert_eq!(session.pilot().escorts().len(), 2, "{reading:?}");
+            assert_eq!(session.take_fighter_notes(), [], "{reading:?}");
+            assert_eq!(
+                ids(&session.sites),
+                [128, 129],
+                "the port's until the take-off: {reading:?}"
+            );
+            session.take_off();
+            assert_eq!(ids(&session.sites), [140, 141], "{reading:?}");
+        }
+    }
+
     // Landed.
 
     #[test]

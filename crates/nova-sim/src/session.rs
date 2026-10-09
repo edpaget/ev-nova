@@ -3090,6 +3090,39 @@ impl Aboard {
     }
 }
 
+#[cfg(test)]
+impl Session {
+    /// Puts the scene a system entry lets go of under way, aimed at
+    /// `npc`: a strike on it, it targeted, boarded and hailed. The
+    /// entry tests set the shots, the navigation target and a gate's
+    /// pending entry themselves, as each can.
+    fn stage_scene(&mut self, npc: NpcId) {
+        self.strikes = vec![Strike {
+            ship: ShipRef::Npc(npc),
+            by: ShipRef::Player,
+            damage: 1.0,
+            downed: None,
+        }];
+        self.target = Some(npc);
+        self.aboard = Some(Aboard {
+            npc,
+            ship: ShipId(129),
+            plunder: Plunder::default(),
+            captured: false,
+        });
+        self.talk = Some(hail::Talk::opened(npc));
+    }
+
+    /// Asserts the scene [`Session::stage_scene`] puts under way is let
+    /// go of: no strike, target, boarding or hail.
+    fn assert_scene_left(&self, case: &str) {
+        assert_eq!(self.strikes, [], "the strikes: {case}");
+        assert_eq!(self.target, None, "the target: {case}");
+        assert_eq!(self.aboard, None, "the boarding: {case}");
+        assert_eq!(self.talk, None, "the hail: {case}");
+    }
+}
+
 /// `value` held to the range of an `i16`, as a boarding grant reads a
 /// raised `Max` (see [`GrantStock::max`]).
 fn clamp_i16(value: i64) -> i16 {
@@ -4033,6 +4066,18 @@ mod tests {
             [SimMessage::Arrived(SystemId(131))]
         );
         assert_eq!(session.take_messages(), [], "taking empties the list");
+    }
+
+    #[test]
+    fn a_jumps_arrival_lets_go_of_the_strikes_the_boarding_and_the_hail() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        session.stage_scene(NpcId(0));
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        session.assert_scene_left("a jump");
     }
 
     #[test]
@@ -13528,5 +13573,222 @@ mod tests {
         );
         assert_eq!(session.engine_glow(), 0);
         assert!(!session.thrusting());
+    }
+
+    // Entering a system: what each way in lets go of, and the order of
+    // its draws.
+
+    /// `base` with traffic: two ships in 130 and three in 131 and 132,
+    /// all of düde 128 (ship 129, for govt 140); the player's ship
+    /// carries a blaster, outfit 250 holding it.
+    fn busy(base: FakePilotCatalog) -> FakePilotCatalog {
+        let dudes = trafficked(130, 2, 1);
+        let traffic = |system, avg| trafficked(system, avg, 1).traffic[0];
+        FakePilotCatalog {
+            traffic: vec![traffic(130, 2), traffic(131, 3), traffic(132, 3)],
+            dudes: dudes.dudes,
+            ship_records: dudes.ship_records,
+            weapons: vec![WeaponRecord {
+                reload: 2,
+                count: 30,
+                speed: 2000,
+                ..weapon(128)
+            }],
+            hulls: vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(128),
+                    count: 1,
+                    ammo: 0,
+                }],
+                ..hull(128)
+            }],
+            outfits: vec![outfit(250, &[(MOD_WEAPON, 128)])],
+            ..base
+        }
+    }
+
+    /// `session`, entering a gate, with an escort of ship 129 among the
+    /// system's traffic, a shot in flight, and the scene under way
+    /// ([`Session::stage_scene`]) aimed at its first NPC.
+    fn in_the_thick_of_it(mut session: Session, catalog: &FakePilotCatalog) -> Session {
+        session.pilot.escorts = vec![Escort {
+            ship: ShipId(129),
+            reserves: Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        }];
+        session.populate(catalog, &mut NeverFires);
+        session.hold_fire(true, false);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.hold_fire(false, false);
+        assert_eq!(session.shots().len(), 1);
+        session.stage_scene(session.npcs()[0].id);
+        session
+    }
+
+    /// Asserts `session` came out into a system of three düde ships,
+    /// the fight and the scene left behind and its escort on its slot.
+    fn assert_came_out_afresh(session: &Session, case: &str) {
+        assert_eq!(session.shots(), [], "{case}");
+        session.assert_scene_left(case);
+        let fleet: Vec<NpcId> = session.fleet.iter().flatten().copied().collect();
+        assert_eq!(fleet.len(), 1, "{case}");
+        let escort = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == fleet[0])
+            .expect("the escort is in");
+        let duty = escort.escort.expect("an escort");
+        assert_eq!(
+            escort.state.position,
+            crate::escort::slot_position(session.player(), duty.slot, duty.ships, duty.spacing),
+            "on its slot: {case}"
+        );
+        let dudes: Vec<&Npc> = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.id != fleet[0])
+            .collect();
+        assert_eq!(dudes.len(), 3, "{case}");
+        assert!(
+            dudes
+                .iter()
+                .all(|npc| (npc.ship, npc.govt) == (ShipId(129), Some(GovtId(140)))),
+            "{case}"
+        );
+    }
+
+    #[test]
+    fn a_gate_exit_leaves_the_fight_and_the_scene_and_populates_the_system_afresh() {
+        let catalog = busy(gated());
+        let mut session = in_the_thick_of_it(at_gate(&catalog), &catalog);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Ok(SystemId(131))
+        );
+        assert_came_out_afresh(&session, "a hypergate");
+        let catalog = busy(wormholes());
+        let mut session = in_the_thick_of_it(at_wormhole(&catalog), &catalog);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[0])),
+            Ok(SystemId(131))
+        );
+        assert_came_out_afresh(&session, "a wormhole");
+    }
+
+    #[test]
+    fn a_wormhole_back_into_the_system_it_went_in_still_populates_it_afresh() {
+        let catalog = busy(wormholes());
+        let mut session = at_wormhole(&catalog);
+        session.populate(&catalog, &mut NeverFires);
+        let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(before.len(), 2);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[1])),
+            Ok(SystemId(130))
+        );
+        let after: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(after.len(), 2);
+        assert!(
+            after.iter().all(|id| !before.contains(id)),
+            "{before:?} {after:?}"
+        );
+    }
+
+    /// One question asked of a [`Logged`] chance.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Draw {
+        Fires(u8),
+        Below(u32),
+        Roll(u16),
+    }
+
+    /// A [`Chance`] that answers as [`NeverFires`] does and logs every
+    /// question, in the order asked.
+    #[derive(Debug, Default)]
+    struct Logged(Vec<Draw>);
+
+    impl Chance for Logged {
+        fn fires(&mut self, percent: u8) -> bool {
+            self.0.push(Draw::Fires(percent));
+            NeverFires.fires(percent)
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.0.push(Draw::Below(n));
+            NeverFires.below(n)
+        }
+
+        fn roll(&mut self, sides: u16) -> u16 {
+            self.0.push(Draw::Roll(sides));
+            NeverFires.roll(sides)
+        }
+    }
+
+    /// The draws populating `system` of `catalog` asks, from a new
+    /// pilot's session.
+    fn population_draws(catalog: &FakePilotCatalog, system: i16) -> Vec<Draw> {
+        let mut session = Session::start(catalog).expect("starts");
+        session.pilot.system = SystemId(system);
+        let mut chance = Logged::default();
+        session.populate(catalog, &mut chance);
+        assert!(!chance.0.is_empty(), "the population draws");
+        chance.0
+    }
+
+    /// The surplus event (35 %, rolled each day) as `base`'s only one.
+    fn with_event(base: FakePilotCatalog) -> FakePilotCatalog {
+        FakePilotCatalog {
+            disasters: surplus().disasters,
+            ..base
+        }
+    }
+
+    #[test]
+    fn a_jumps_days_draw_before_the_population_of_the_system_arrived_in() {
+        let catalog = with_event(busy(catalog()));
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = Logged::default();
+        jump_with(&mut session, &catalog, 131, &mut chance);
+        let expected = [vec![Draw::Fires(35)], population_draws(&catalog, 131)].concat();
+        assert_eq!(chance.0, expected);
+    }
+
+    #[test]
+    fn a_gate_like_a_jump_draws_its_days_before_the_population() {
+        let catalog = with_event(busy(gated()));
+        let mut session = at_gate(&catalog).with_gate_arrival(GateArrivalRule::LikeJump);
+        let mut chance = Logged::default();
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut chance)
+            .expect("enters");
+        let expected = [vec![Draw::Fires(35)], population_draws(&catalog, 131)].concat();
+        assert_eq!(chance.0, expected);
+    }
+
+    #[test]
+    fn a_gate_rolls_its_heading_before_the_population() {
+        let catalog = busy(gated());
+        let mut session = at_gate(&catalog);
+        let mut chance = Logged::default();
+        session
+            .enter_hypergate(Some(SystemId(132)), &catalog, &mut chance)
+            .expect("enters");
+        let expected = [vec![Draw::Roll(360)], population_draws(&catalog, 132)].concat();
+        assert_eq!(chance.0, expected);
+    }
+
+    #[test]
+    fn a_wormhole_rolls_its_exit_before_the_population() {
+        let catalog = busy(wormholes());
+        let mut session = at_wormhole(&catalog);
+        let mut chance = Logged::default();
+        session
+            .enter_wormhole(&catalog, &mut chance)
+            .expect("enters");
+        let expected = [vec![Draw::Roll(2)], population_draws(&catalog, 131)].concat();
+        assert_eq!(chance.0, expected);
     }
 }

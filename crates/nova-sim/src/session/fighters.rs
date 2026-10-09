@@ -1511,6 +1511,79 @@ mod tests {
         assert_eq!(session.fleet.len(), 1);
     }
 
+    /// [`two_bays`], the ship starting over hypergate 300 at 130's
+    /// centre, linked to hypergate 310 in 131.
+    fn gated_bays() -> FakePilotCatalog {
+        use crate::catalog::{GateSite, LandingSite, StellarId, SystemId};
+        use crate::gate::HYPERGATE;
+        let gate = |id, system, links: [Option<StellarId>; 8]| GateSite {
+            id: StellarId(id),
+            system: SystemId(system),
+            position: Vec2::ZERO,
+            flags2: HYPERGATE,
+            links,
+            exit_angle: 90,
+        };
+        let mut to = [None; 8];
+        to[0] = Some(StellarId(310));
+        let mut back = [None; 8];
+        back[0] = Some(StellarId(300));
+        let mut catalog = two_bays();
+        catalog.sites[0].1 = vec![LandingSite {
+            flags2: HYPERGATE,
+            ..crate::testkit::planet(300, 0.0, 0.0)
+        }];
+        catalog.gates = vec![gate(300, 130, to), gate(310, 131, back)];
+        catalog
+    }
+
+    /// Presses L twice over the hypergate and comes out of it in 131.
+    fn through_the_gate(session: &mut Session, catalog: &FakePilotCatalog) {
+        use crate::catalog::SystemId;
+        session.land().expect("selects the gate");
+        assert!(matches!(
+            session.land(),
+            Ok(crate::session::LandPress::AtGate { .. })
+        ));
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), catalog, &mut NeverFires),
+            Ok(SystemId(131))
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_gate_exit_abandons_the_fighters_without_a_jumps_fuel() {
+        let catalog = gated_bays();
+        let mut session = both_out(&catalog, RuleSource::Engine);
+        through_the_gate(&mut session, &catalog);
+        assert_eq!(
+            session
+                .pilot()
+                .escorts()
+                .iter()
+                .map(|escort| escort.ship)
+                .collect::<Vec<_>>(),
+            [VIPER],
+            "the Dart's record is gone"
+        );
+        assert_eq!(session.pilot().owned(DARTS), 0, "no round back");
+        assert_eq!(session.take_fighter_notes(), [FighterNote::Abandoned(1)]);
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn by_the_other_reading_a_gate_exit_puts_every_fighter_out_back_aboard() {
+        let catalog = gated_bays();
+        let mut session = both_out(&catalog, RuleSource::Bible);
+        through_the_gate(&mut session, &catalog);
+        assert_eq!(session.pilot().escorts(), []);
+        assert_eq!(
+            (session.pilot().owned(VIPERS), session.pilot().owned(DARTS)),
+            (1, 1)
+        );
+        assert_eq!(session.take_fighter_notes(), [], "none abandoned");
+    }
+
     #[test]
     fn a_control_bit_test_counts_a_fighter_out_as_its_outfit() {
         use crate::control::PilotFacts;
