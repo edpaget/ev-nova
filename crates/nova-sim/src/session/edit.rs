@@ -117,7 +117,7 @@ impl Session {
         self.fleet.clear();
         self.hire_rolls.clear();
         self.outfit_rolls.clear();
-        self.open_opening();
+        self.open_outfit_visit();
         self.ship_rolls.clear();
         self.ship_redraws.clear();
         self.save_due = true;
@@ -507,10 +507,9 @@ mod tests {
         session.outfit_rolls.hold(crate::catalog::OutfitId(128));
         session.ship_rolls.hold(ShipId(129));
         session.ship_redraws.insert(ShipId(129));
-        session.opening.bought = crate::outfitter::Bought::after_buying(&crate::testkit::outfit(
-            128,
-            &[(crate::outfit_effects::MAP, 1)],
-        ));
+        session.outfit_visit.bought = crate::outfitter::Bought::after_buying(
+            &crate::testkit::outfit(128, &[(crate::outfit_effects::MAP, 1)]),
+        );
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
@@ -518,7 +517,10 @@ mod tests {
         assert_eq!(session.outfit_rolls, crate::wares::DayRolls::default());
         assert_eq!(session.ship_rolls, crate::wares::DayRolls::default());
         assert!(session.ship_redraws.is_empty());
-        assert_eq!(session.opening.bought, crate::outfitter::Bought::default());
+        assert_eq!(
+            session.outfit_visit.bought,
+            crate::outfitter::Bought::default()
+        );
     }
 
     #[test]

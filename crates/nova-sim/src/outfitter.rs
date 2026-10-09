@@ -519,8 +519,9 @@ pub struct Outfitter {
     /// The ship's own free cargo: its cargo space less every ton held
     /// (`_ShipTotalHolds() - _TotalCargo(player)`, @0x4e980-0x4e9a8).
     pub free_cargo: i64,
-    /// The once-an-opening flags as they stand ([`Bought`]).
-    pub bought: Bought,
+    /// The visit it was built in: the once-an-opening flags as they
+    /// stand, and the counts owned on entry ([`OutfitVisit`]).
+    pub visit: OutfitVisit,
     /// The rule set the outfitter was built by, which its questions read.
     pub rules: Rulebook,
 }
@@ -1001,6 +1002,7 @@ fn cargo_room(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
 fn not_bought_this_opening(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
     let refused = asked
         .outfitter
+        .visit
         .bought
         .refuses(asked.row.facts.opening_limit);
     holds(!refused, OutfitRefusal::BoughtThisOpening)
@@ -1332,6 +1334,49 @@ impl Bought {
     }
 }
 
+/// One visit to the outfitter: what lasts from the outfitter opening to
+/// its next opening. The once-an-opening flags ([`Bought`]), which limit
+/// what is sold as [`RuleKey::OutfitLimit`] reads, and how many of each
+/// outfit the player owned on entry, which a sale refunds against
+/// ([`refund`]). The session opens one each time the outfitter dialog
+/// opens (`_DoOutfitDialog` @0x5bb37-0x5bb44), on a landing and as it
+/// starts. None of it is saved: the original keeps the flags in globals
+/// `_DoOutfitDialog` clears on opening, and the counts in its locals.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OutfitVisit {
+    /// The once-an-opening flags (`_boughtMap`, `_boughtID`).
+    pub(crate) bought: Bought,
+    /// How many of each outfit the player owned when the outfitter
+    /// opened, as `_DoOutfitDialog` copies them on entry
+    /// (@0x5badd-0x5bafa).
+    pub(crate) opened_with: BTreeMap<OutfitId, u16>,
+}
+
+impl OutfitVisit {
+    /// A visit opened over `owned`: the flags clear and the counts
+    /// copied.
+    #[must_use]
+    pub(crate) fn open(owned: &BTreeMap<OutfitId, u16>) -> Self {
+        Self {
+            bought: Bought::default(),
+            opened_with: owned.clone(),
+        }
+    }
+
+    /// `record` is bought: the flags are set afresh
+    /// ([`Bought::after_buying`]); the counts on entry stay.
+    pub(crate) fn bought(&mut self, record: &OutfitRecord) {
+        self.bought = Bought::after_buying(record);
+    }
+
+    /// How many of `outfit` the player owned when the visit opened; none
+    /// when it owned none.
+    #[must_use]
+    pub(crate) fn opened_with(&self, outfit: OutfitId) -> u16 {
+        self.opened_with.get(&outfit).copied().unwrap_or(0)
+    }
+}
+
 /// Whether an outfit with `flags` is hidden from a player who owns none,
 /// given whether its `Require` is met (`required`) and its `Availability`
 /// holds (`available`).
@@ -1606,9 +1651,10 @@ pub(crate) struct Shop<'a> {
     pub(crate) free_cargo: i64,
     /// Each launcher outfit, with the ammunition it holds.
     pub(crate) launchers: &'a BTreeMap<OutfitId, Launcher>,
-    /// The once-an-opening flags, as they stand: the outfitter's `once an
-    /// opening` check reads them as [`RuleKey::OutfitLimit`] says.
-    pub(crate) bought: Bought,
+    /// The visit: the once-an-opening flags as they stand, which the
+    /// outfitter's `once an opening` check reads as
+    /// [`RuleKey::OutfitLimit`] says, and the counts owned on entry.
+    pub(crate) visit: &'a OutfitVisit,
     /// The control-bit test of an outfit's `Availability`.
     pub(crate) gate: Gate<'a>,
     /// How each disputed rule reads ([`Rulebook::source_for`]).
@@ -1692,7 +1738,7 @@ impl Shop<'_> {
             armed,
             holds: self.fields.holds,
             free_cargo: self.free_cargo,
-            bought: self.bought,
+            visit: self.visit.clone(),
             rules: self.rules,
         })
     }
@@ -1920,6 +1966,21 @@ mod tests {
     static NO_FIGHTERS: BTreeMap<OutfitId, u32> = BTreeMap::new();
     static NO_CAPS: BTreeMap<OutfitId, i16> = BTreeMap::new();
     static NO_LAUNCHERS: BTreeMap<OutfitId, Launcher> = BTreeMap::new();
+    static NO_VISIT: OutfitVisit = OutfitVisit {
+        bought: Bought {
+            map: false,
+            record: false,
+        },
+        opened_with: BTreeMap::new(),
+    };
+
+    /// A visit with the flags `bought` and nothing owned on entry.
+    fn with_flags(bought: Bought) -> OutfitVisit {
+        OutfitVisit {
+            bought,
+            ..OutfitVisit::default()
+        }
+    }
 
     /// Room for more guns and turrets than any test buys.
     const ROOMY: Hardpoints = Hardpoints {
@@ -1943,7 +2004,7 @@ mod tests {
             ammo_caps: &NO_CAPS,
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
-            bought: Bought::default(),
+            visit: &NO_VISIT,
             rules: Rulebook::default(),
             gate: Gate::FRESH,
         }
@@ -2692,7 +2753,7 @@ mod tests {
             fighter_room: &room,
             hardpoints: hardpoints(5, 1),
             launchers: &launchers,
-            bought: MAP_BOUGHT,
+            visit: &with_flags(MAP_BOUGHT),
             rules,
             ..shop(&records, &site)
         }
@@ -2707,10 +2768,8 @@ mod tests {
                 turret_limit: 1,
             }
         );
-        assert_eq!(
-            (outfitter.holds, outfitter.free_cargo, outfitter.bought),
-            (-3, 42, MAP_BOUGHT)
-        );
+        assert_eq!((outfitter.holds, outfitter.free_cargo), (-3, 42));
+        assert_eq!(outfitter.visit.bought, MAP_BOUGHT);
         assert_eq!(outfitter.rules, rules);
         assert_eq!((outfitter.cash, outfitter.free_mass), (10_000, 21));
         assert_eq!(
@@ -2871,7 +2930,7 @@ mod tests {
                 ammo_caps: &NO_CAPS,
                 hardpoints: ROOMY,
                 launchers: &NO_LAUNCHERS,
-                bought: Bought::default(),
+                visit: &NO_VISIT,
                 rules: Rulebook::default(),
                 gate: Gate::FRESH,
             }
@@ -2991,7 +3050,7 @@ mod tests {
             ammo_caps: &NO_CAPS,
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
-            bought: Bought::default(),
+            visit: &NO_VISIT,
             rules: Rulebook::default(),
             gate: Gate::FRESH,
         }
@@ -4796,7 +4855,7 @@ mod tests {
     }
 
     #[test]
-    fn the_flags_are_read_as_the_outfit_limit_rule_says() {
+    fn the_limit_rule_reads_the_visits_flags_under_each_reading() {
         // Both flags set: by the engine each refuses its outfit, as the
         // flags stand; by the other reading neither does, as if clear.
         let all = Bought {
@@ -4809,7 +4868,7 @@ mod tests {
             let outfitter = Outfitter {
                 rows: vec![row],
                 cash: 1,
-                bought: all,
+                visit: with_flags(all),
                 rules: Rulebook::default().with_override(RuleKey::OutfitLimit, source),
                 ..Outfitter::default()
             };
@@ -4821,11 +4880,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn opening_a_visit_clears_the_flags_and_copies_the_counts() {
+        let owned = BTreeMap::from([(OutfitId(128), 2), (OutfitId(130), 1)]);
+        let visit = OutfitVisit::open(&owned);
+        assert_eq!(visit.bought, Bought::default());
+        assert_eq!(visit.opened_with, owned);
+        assert_eq!(visit.opened_with(OutfitId(128)), 2);
+        assert_eq!(visit.opened_with(OutfitId(130)), 1);
+        assert_eq!(visit.opened_with(OutfitId(129)), 0, "not owned on entry");
+    }
+
+    #[test]
+    fn buying_sets_the_visits_flags_afresh_and_keeps_its_counts() {
+        let owned = BTreeMap::from([(OutfitId(128), 2)]);
+        let mut visit = OutfitVisit::open(&owned);
+        visit.bought(&outfit(129, &[(EXPLORES_MAP, 5)]));
+        assert_eq!(visit.bought, MAP_BOUGHT);
+        visit.bought(&outfit(130, &[(CLEAN_RECORD, 128)]));
+        assert_eq!(visit.bought, RECORD_BOUGHT);
+        visit.bought(&outfit(128, &[(MORE_FUEL, 5)]));
+        assert_eq!(visit.bought, Bought::default());
+        assert_eq!(visit.opened_with, owned, "the counts on entry kept");
+    }
+
+    #[test]
+    fn the_shop_hands_its_visit_to_the_outfitter() {
+        let records = [outfit(128, &[])];
+        let site = port();
+        let visit = OutfitVisit {
+            bought: MAP_BOUGHT,
+            opened_with: BTreeMap::from([(OutfitId(128), 3)]),
+        };
+        let outfitter = Shop {
+            visit: &visit,
+            ..shop(&records, &site)
+        }
+        .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter");
+        assert_eq!(outfitter.visit, visit);
+    }
+
     /// The outfitter of `records` after `bought`, to `pilot`.
     fn limited(records: &[OutfitRecord], bought: Bought, pilot: &Pilot) -> Outfitter {
         let site = port();
         Shop {
-            bought,
+            visit: &with_flags(bought),
             ..shop(records, &site)
         }
         .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
@@ -5185,7 +5285,7 @@ mod tests {
         let outfitter = Outfitter {
             rows: vec![refused],
             cash: 1000,
-            bought: MAP_BOUGHT,
+            visit: with_flags(MAP_BOUGHT),
             ..Outfitter::default()
         };
         assert_eq!(

@@ -362,7 +362,8 @@ use crate::message::SimMessage;
 use crate::navigation::stellar_under;
 use crate::order_loop::{self, OrderRun};
 use crate::outfitter::{
-    self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
+    self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, OutfitVisit, Outfitter, Shop,
+    outfit_mods,
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
@@ -429,18 +430,6 @@ impl From<LandOutcome> for LandPress {
     fn from(outcome: LandOutcome) -> Self {
         Self::Outcome(outcome)
     }
-}
-
-/// What lasts one opening of the outfitter: the flags that may limit what
-/// is sold (see [`outfitter::Bought`]), and the counts a sale refunds
-/// against (see [`outfitter::refund`]).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct Opening {
-    /// The once-an-opening flags.
-    bought: outfitter::Bought,
-    /// How many of each outfit the player owned when the outfitter opened,
-    /// as `_DoOutfitDialog` copies them on entry (@0x5badd-0x5bafa).
-    owned: BTreeMap<OutfitId, u16>,
 }
 
 /// The player's ship, flying in one system.
@@ -567,15 +556,12 @@ pub struct Session {
     /// Each outfit's roll for sale since the last landing, drawn the first
     /// time the outfitter's list asks it.
     outfit_rolls: DayRolls<OutfitId>,
-    /// The once-an-opening flags, whether the last outfit bought since the
-    /// outfitter opened was a map or a clean record (see
-    /// [`outfitter::Bought`]), which limit what is sold as
-    /// [`RuleKey::OutfitLimit`] reads; and the counts owned when it
+    /// The outfitter visit under way ([`OutfitVisit`]): the
+    /// once-an-opening flags, which limit what is sold as
+    /// [`RuleKey::OutfitLimit`] reads, and the counts owned when it
     /// opened, which a sale refunds against as [`RuleKey::OutfitRefund`]
-    /// reads. None of it is saved: the
-    /// original keeps the flags in globals `_DoOutfitDialog` clears on
-    /// opening, and the counts in its locals.
-    opening: Opening,
+    /// reads. None of it is saved.
+    outfit_visit: OutfitVisit,
     /// Each ship class's roll for sale since the last landing, drawn the
     /// first time the shipyard's list asks it.
     ship_rolls: DayRolls<ShipId>,
@@ -739,7 +725,7 @@ impl Session {
             control_bits: hire::Shared(Rc::new(NovaBits)),
             hire_rolls: DayRolls::default(),
             outfit_rolls: DayRolls::default(),
-            opening: Opening::default(),
+            outfit_visit: OutfitVisit::default(),
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             frame: 0,
@@ -759,7 +745,7 @@ impl Session {
             rules: Rulebook::default(),
             pilot,
         };
-        session.open_opening();
+        session.open_outfit_visit();
         session.refit(false);
         session.restock_fleet();
         Ok(session)
@@ -1979,7 +1965,7 @@ impl Session {
         self.leave_with_fighters(true);
         self.hire_rolls.clear();
         self.outfit_rolls.clear();
-        self.open_opening();
+        self.open_outfit_visit();
         self.ship_rolls.clear();
         self.ship_redraws.clear();
         self.save_due = true;
@@ -2126,7 +2112,7 @@ impl Session {
             hardpoints: self.hardpoints(),
             free_cargo: self.free_cargo(),
             launchers: &self.launchers(),
-            bought: self.opening.bought,
+            visit: &self.outfit_visit,
             rules: self.rules,
             gate: self.gate(),
         }
@@ -2139,18 +2125,17 @@ impl Session {
     /// as `_DoOutfitDialog` does on entry (@0x5bb37-0x5bb44), so a map or
     /// clean-record outfit can be bought again (see [`outfitter`]).
     pub fn open_outfitter(&mut self) {
-        self.open_opening();
+        self.open_outfit_visit();
     }
 
-    /// Starts an opening of the outfitter: clears the once-an-opening
-    /// flags and copies the counts owned, as `_DoOutfitDialog` does on
-    /// entry (@0x5badd-0x5bafa, @0x5bb37-0x5bb44). A landing, and a
-    /// session's start, do it too, so a sale made without the dialog
-    /// opened first (a headless one) refunds against the counts owned
-    /// since then, and an outfit owned before never refunds in full.
-    fn open_opening(&mut self) {
-        self.opening.bought = outfitter::Bought::default();
-        self.opening.owned = self.pilot.outfits.clone();
+    /// Opens a new outfitter visit: clears the once-an-opening flags and
+    /// copies the counts owned, as `_DoOutfitDialog` does on entry
+    /// (@0x5badd-0x5bafa, @0x5bb37-0x5bb44). A landing, and a session's
+    /// start, do it too, so a sale made without the dialog opened first
+    /// (a headless one) refunds against the counts owned since then, and
+    /// an outfit owned before never refunds in full.
+    fn open_outfit_visit(&mut self) {
+        self.outfit_visit = OutfitVisit::open(&self.pilot.outfits);
     }
 
     /// Buys or sells one outfit as `order` asks, the rolls not drawn yet
@@ -2204,14 +2189,14 @@ impl Session {
             Direction::Sell => outfitter::refund(
                 price,
                 self.pilot.owned(order.outfit),
-                self.opening.owned.get(&order.outfit).copied().unwrap_or(0),
+                self.outfit_visit.opened_with(order.outfit),
                 self.rules.source_for(RuleKey::OutfitRefund),
             ),
         };
         self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, amount));
         match order.direction {
             Direction::Buy => {
-                self.opening.bought = outfitter::Bought::after_buying(&record);
+                self.outfit_visit.bought(&record);
                 let added = self.grant_outfit(record.id);
                 self.run_script(&record.on_purchase, chance);
                 if added && record.flags & OutfitFlags::REMOVE_AFTER_PURCHASE != 0 {
@@ -6678,7 +6663,7 @@ mod tests {
 
     use crate::catalog::{GovtId, OutfitRecord};
     use crate::order_loop::{OrderRun, Stopped};
-    use crate::outfitter::{OutfitFlags, OutfitOrder, OutfitRefusal};
+    use crate::outfitter::{OutfitFlags, OutfitOrder, OutfitRefusal, OutfitVisit};
     use crate::stats::{MORE_FUEL, MORE_SHIELD, MORE_SPEED};
 
     const SPEED: OutfitId = OutfitId(300);
@@ -6930,6 +6915,68 @@ mod tests {
             Ok(1)
         );
         assert_eq!(session.pilot().owned(WIDGET_RACK), 1);
+    }
+
+    // The visit.
+
+    /// `session` after a booster and a map bought: the map flag set, and
+    /// a booster more than the visit opened with.
+    fn dirty_the_visit(session: &mut Session) {
+        session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        session.outfit(buy(MAP), &mut NeverFires).expect("bought");
+        assert_ne!(
+            session.outfit_visit,
+            OutfitVisit::open(&session.pilot.outfits)
+        );
+    }
+
+    /// Whether `session`'s visit is a new one, opened over its outfits.
+    fn opened_anew(session: &Session) -> bool {
+        session.outfit_visit == OutfitVisit::open(&session.pilot.outfits)
+    }
+
+    #[test]
+    fn opening_the_outfitter_opens_a_new_visit() {
+        let mut session = outfitted(&limiting());
+        dirty_the_visit(&mut session);
+        session.open_outfitter();
+        assert!(opened_anew(&session));
+    }
+
+    #[test]
+    fn landing_opens_a_new_visit() {
+        let mut session = outfitted(&limiting());
+        dirty_the_visit(&mut session);
+        session.take_off();
+        land_now(&mut session).expect("lands");
+        assert!(opened_anew(&session));
+    }
+
+    #[test]
+    fn a_session_starts_with_a_visit_opened() {
+        let catalog = limiting();
+        let mut session = outfitted(&catalog);
+        dirty_the_visit(&mut session);
+        let resumed = Session::fly(&catalog, session.pilot().clone()).expect("flies");
+        assert_eq!(resumed.pilot().owned(SPEED), 1);
+        assert!(opened_anew(&resumed));
+    }
+
+    #[test]
+    fn a_sale_leaves_the_visit_as_it_is() {
+        let mut session = outfitted(&limiting());
+        dirty_the_visit(&mut session);
+        let visit = session.outfit_visit.clone();
+        session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
+        assert_eq!(session.outfit_visit, visit);
+    }
+
+    #[test]
+    fn the_session_hands_its_visit_to_the_outfitter() {
+        let mut session = outfitted(&limiting());
+        session.outfit(buy(MAP), &mut NeverFires).expect("bought");
+        let outfitter = session.outfitter(&mut NeverFires).expect("open");
+        assert_eq!(outfitter.visit, session.outfit_visit);
     }
 
     // Refunds.
