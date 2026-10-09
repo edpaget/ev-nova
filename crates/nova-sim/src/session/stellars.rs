@@ -50,6 +50,40 @@
 //! A stellar the player is docked at stays the one docked at when `Y`
 //! destroys it: the spaceport stays open and the take-off works, as the
 //! original's port never asks; only landing there again is refused.
+//!
+//! **Rebuild points.** The original rebuilds the stellar sprites of the
+//! player's system (`_HandleStellarSystemVisibility` @0x32aa5) at its
+//! rebuild points, and the session keeps which stellars shown that rebuild
+//! found destroyed until a flight frame finds them whole
+//! ([`Session::dead_since_rebuild`]; see the `story` module's "Built by
+//! phase 9" and `story::rebuild`). Each point rebuilds after the
+//! transition's own writes, and tells
+//! [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
+//! when the set changed:
+//!
+//! - every way into a system but a landed `M` or `N`, as the last step of
+//!   `Session::enter_system`: an in-flight `M` or `N` (@0x159a3), even
+//!   into the same system, a gate's or a wormhole's exit (@0x63e8c,
+//!   @0x6473e), a jump's arrival (@0x6c203 and @0x6c597, one point) and
+//!   the developer tools' relocation, which docks as a landing does;
+//! - a landing, as it docks ([`Session::land`]; `_DoPortDialog`
+//!   @0x5fbf0), and the take-off ([`Session::take_off`]; @0x674c7 and
+//!   @0x67653, one point), after the stay's days and the stellars that
+//!   waited for it;
+//! - a new pilot, after its stellars that start destroyed and its
+//!   `OnStart` ([`Session::begin`]; `_DoNewPilot` @0x1937f);
+//! - a pilot flown (`Session::fly`: a load, @0x751cf and @0x75324, and the
+//!   main screen, @0x1a354, @0x1a8ca, @0x1b003 and @0x457ee), which tells
+//!   nothing, the view reading the state as it builds.
+//!
+//! A landed `M` or `N`, `Y`, `U`, the daily step, the shots and the galaxy
+//! overlay's changes are not rebuild points. The original's escape-pod
+//! rescue rebuilds too (@0x69135): the engine has none, and whoever builds
+//! it calls the rebuild. Its debug key that explores every system
+//! (@0x6dad1) has no counterpart. The flight frame that drops a stellar
+//! seen whole is the end of [`Session::tick_combat`] in flight, after the
+//! shots, as the original's sprite tick (@0x444d2) follows
+//! `_CheckShotProximities` (@0x44015).
 
 use super::Session;
 use crate::catalog::StellarId;
@@ -68,6 +102,44 @@ use crate::story::wreck::{self, Tick};
 const STELLAR_KILLINGS: usize = 10;
 
 impl Session {
+    /// Whether `stellar` has been dead since the last rebuild point: it
+    /// is among the stellars shown, the last rebuild point found it
+    /// destroyed, and no flight frame has found it whole since (see the
+    /// module docs). A stellar with no `DeadType` sheet draws graphic type
+    /// 0 while this holds, by
+    /// [`RuleKey::DeadTypeFallback`]'s engine reading.
+    #[must_use]
+    pub fn dead_since_rebuild(&self, stellar: StellarId) -> bool {
+        self.rebuilt.dead(stellar)
+    }
+
+    /// A rebuild point (see the module docs): the stellars shown that are
+    /// destroyed now are the ones dead since it, telling
+    /// [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
+    /// when that changed them.
+    pub(super) fn rebuild_stellars(&mut self) {
+        if self.rebuild_quietly() {
+            self.emit(super::SessionEvent::StellarsRebuilt);
+        }
+    }
+
+    /// A rebuild point that tells nothing: whether it changed which
+    /// stellars shown are dead since the last one.
+    pub(super) fn rebuild_quietly(&mut self) -> bool {
+        let galaxy = &self.galaxy;
+        self.rebuilt
+            .rebuild(self.sites.iter().map(|site| site.id), |id| {
+                galaxy.destroyed(id)
+            })
+    }
+
+    /// A flight frame's sprite tick (see the module docs): every stellar
+    /// it finds whole is no longer dead since the last rebuild point.
+    pub(super) fn see_stellars(&mut self) {
+        let galaxy = &self.galaxy;
+        self.rebuilt.frame(|id| galaxy.destroyed(id));
+    }
+
     /// `Y`: destroys `stellar` (see the module docs), drawing on `chance`
     /// for an `OnDestroy` the Bible's reading runs.
     pub(super) fn destroy_stellar(&mut self, stellar: StellarId, chance: &mut dyn Chance) {
@@ -1475,5 +1547,277 @@ mod tests {
         assert!(session.control_bit(bit(5)));
         assert_eq!(session.take_script_notes(), [reentered(128)]);
         assert!(session.destroying.is_empty());
+    }
+
+    // Rebuild points.
+
+    /// Whether each of `ids` is dead since the last rebuild point.
+    fn rebuilt(session: &Session, ids: &[i16]) -> Vec<bool> {
+        ids.iter()
+            .map(|&id| session.dead_since_rebuild(StellarId(id)))
+            .collect()
+    }
+
+    /// Runs `text` and settles any move it queued.
+    fn settle(session: &mut Session, catalog: &FakePilotCatalog, text: &str) {
+        run(session, text);
+        let _ = session.settle_script(catalog, &mut Scripted::default());
+    }
+
+    #[test]
+    fn a_stellar_destroyed_by_y_is_not_dead_since_a_rebuild_until_one() {
+        let catalog = wrecking();
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y129");
+        assert_eq!(rebuilt(&session, &[128, 129]), [false, false]);
+        assert!(
+            !session
+                .take_events()
+                .contains(&SessionEvent::StellarsRebuilt)
+        );
+    }
+
+    #[test]
+    fn a_move_in_flight_is_a_rebuild_point_even_into_the_same_system() {
+        for op in ["M130", "N130"] {
+            let catalog = wrecking();
+            let mut session = quiet(&catalog);
+            run(&mut session, "Y129");
+            settle(&mut session, &catalog, op);
+            assert_eq!(session.system(), SystemId(130), "{op}");
+            assert_eq!(rebuilt(&session, &[128, 129]), [false, true], "{op}");
+        }
+    }
+
+    #[test]
+    fn a_move_in_flight_into_another_system_rebuilds_its_stellars() {
+        for op in ["M131", "N131"] {
+            let catalog = wrecking();
+            let mut session = quiet(&catalog);
+            run(&mut session, "Y129 Y140");
+            settle(&mut session, &catalog, op);
+            assert_eq!(rebuilt(&session, &[129, 140]), [false, true], "{op}");
+        }
+    }
+
+    #[test]
+    fn a_hypergate_exit_is_a_rebuild_point() {
+        let catalog = crate::session::tests::gated().living([life(140, -1)]);
+        let mut session = crate::session::tests::at_gate(&catalog);
+        run(&mut session, "Y140");
+        assert!(!session.dead_since_rebuild(StellarId(140)), "not shown");
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires)
+            .expect("enters");
+        assert!(session.dead_since_rebuild(StellarId(140)));
+    }
+
+    #[test]
+    fn a_wormhole_exit_is_a_rebuild_point() {
+        let catalog = crate::session::tests::wormholes().living([life(140, -1)]);
+        let mut session = crate::session::tests::at_wormhole(&catalog);
+        run(&mut session, "Y140");
+        session
+            .enter_wormhole(&catalog, &mut Scripted::rolling(&[0]))
+            .expect("comes out");
+        assert_eq!(session.system(), SystemId(131));
+        assert!(session.dead_since_rebuild(StellarId(140)));
+    }
+
+    #[test]
+    fn a_jumps_arrival_is_a_rebuild_point() {
+        let catalog = wrecking();
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y140");
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        assert!(session.dead_since_rebuild(StellarId(140)));
+    }
+
+    #[test]
+    fn a_landing_and_the_take_off_are_rebuild_points() {
+        let catalog = wrecking();
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y129");
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        assert_eq!(rebuilt(&session, &[128, 129]), [false, true], "landed");
+        run(&mut session, "Y128 U129");
+        assert_eq!(rebuilt(&session, &[128, 129]), [false, true], "no frame");
+        session
+            .take_off(&mut Scripted::default())
+            .expect("takes off");
+        assert_eq!(rebuilt(&session, &[128, 129]), [true, false], "taken off");
+    }
+
+    #[test]
+    fn a_relocation_is_a_rebuild_point() {
+        let catalog = ruins();
+        let mut session = quiet(&catalog);
+        assert_eq!(
+            session.select_stellar(StellarPick::Slot(1)),
+            Some(StellarId(129))
+        );
+        session.player.position = Vec2::new(2000.0, 0.0);
+        assert_eq!(land_now(&mut session), Ok(StellarId(129)));
+        run(&mut session, "Y140");
+        assert_eq!(
+            session.relocate(&catalog, SystemId(131), StellarId(140)),
+            Ok(())
+        );
+        assert!(session.dead_since_rebuild(StellarId(140)));
+    }
+
+    #[test]
+    fn a_landed_move_is_no_rebuild_point_and_its_stellars_wait_for_the_take_off() {
+        let catalog = wrecking();
+        let mut session = quiet(&catalog);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        run(&mut session, "Y129 Y140");
+        settle(&mut session, &catalog, "M131");
+        assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
+        assert_eq!(rebuilt(&session, &[129, 140]), [false, false]);
+        session
+            .take_off(&mut Scripted::default())
+            .expect("takes off");
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(rebuilt(&session, &[129, 140]), [false, true]);
+    }
+
+    #[test]
+    fn a_new_pilot_rebuilds_after_its_stellars_that_start_destroyed_and_its_on_start() {
+        let catalog = FakePilotCatalog {
+            character: Ok(crate::catalog::CharacterStart {
+                on_start: Script::parse("Y129"),
+                ..catalog().character.expect("a chär")
+            }),
+            ..catalog().living([
+                StellarLife {
+                    flags2: 0x0040,
+                    ..life(128, 2)
+                },
+                life(129, 2),
+            ])
+        };
+        let mut session = quiet(&catalog);
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(rebuilt(&session, &[128, 129]), [true, true]);
+        assert!(
+            session
+                .take_events()
+                .contains(&SessionEvent::StellarsRebuilt)
+        );
+    }
+
+    #[test]
+    fn a_new_pilot_with_no_char_still_rebuilds() {
+        let catalog = FakePilotCatalog {
+            character: Err(crate::catalog::StartError::NoCharacter),
+            ..catalog().living([StellarLife {
+                flags2: 0x0040,
+                ..life(128, 2)
+            }])
+        };
+        let mut session = Session::fly(
+            &catalog,
+            crate::pilot::Pilot::new(&wrecking(), "").expect("a pilot"),
+        )
+        .expect("flies");
+        session.begin(&catalog, &mut Scripted::default());
+        assert!(session.dead_since_rebuild(StellarId(128)));
+    }
+
+    #[test]
+    fn a_pilot_flown_with_a_stellar_destroyed_is_dead_since_the_rebuild_at_once_untold() {
+        let catalog = wrecking();
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        let mut flown = Session::fly(&catalog, session.pilot().clone()).expect("flies");
+        assert_eq!(rebuilt(&flown, &[128, 129]), [true, false]);
+        assert_eq!(flown.take_events(), []);
+    }
+
+    #[test]
+    fn a_rebuild_point_tells_stellars_rebuilt_only_when_it_changed_them() {
+        let catalog = wrecking();
+        let mut session = quiet(&catalog);
+        settle(&mut session, &catalog, "M130");
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged],
+            "nothing destroyed"
+        );
+        run(&mut session, "Y129");
+        session.take_events();
+        settle(&mut session, &catalog, "M130");
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::StellarsRebuilt]
+        );
+        settle(&mut session, &catalog, "M130");
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged],
+            "the same again"
+        );
+    }
+
+    #[test]
+    fn a_flight_frame_drops_a_stellar_seen_whole_and_keeps_one_still_destroyed() {
+        let catalog = wrecking();
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128 Y129");
+        settle(&mut session, &catalog, "M130");
+        run(&mut session, "U128");
+        assert_eq!(rebuilt(&session, &[128, 129]), [true, true], "no frame yet");
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(rebuilt(&session, &[128, 129]), [false, true]);
+        run(&mut session, "Y128");
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(rebuilt(&session, &[128, 129]), [false, true], "not back");
+    }
+
+    #[test]
+    fn a_landed_frame_drops_nothing() {
+        let catalog = wrecking();
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y129");
+        land_now(&mut session).expect("lands");
+        run(&mut session, "U129");
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert!(session.dead_since_rebuild(StellarId(129)));
+    }
+
+    #[test]
+    fn y_u_the_daily_step_and_a_galaxy_change_are_no_rebuild_points() {
+        let catalog = wrecking();
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y129");
+        settle(&mut session, &catalog, "M130");
+        session.take_events();
+        run(&mut session, "Y128 U129");
+        assert_eq!(rebuilt(&session, &[128, 129]), [false, true], "Y and U");
+        session.pass_days(1, &mut Scripted::default());
+        assert_eq!(rebuilt(&session, &[128, 129]), [false, true], "a day");
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(128), Some(None));
+        });
+        assert_eq!(rebuilt(&session, &[128, 129]), [false, true], "the overlay");
+        assert!(
+            !session
+                .take_events()
+                .contains(&SessionEvent::StellarsRebuilt)
+        );
+    }
+
+    #[test]
+    fn a_frame_samples_after_its_shots_so_one_shot_down_in_it_stays_dead_since_the_rebuild() {
+        let catalog = shooting([life(128, 2)]);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        settle(&mut session, &catalog, "M130");
+        run(&mut session, "U128");
+        session.strength.insert(StellarId(128), 0);
+        fire(&mut session, 1);
+        assert_eq!(destroyed(&session, 128), Some(left(2)), "shot down");
+        assert!(session.dead_since_rebuild(StellarId(128)));
     }
 }

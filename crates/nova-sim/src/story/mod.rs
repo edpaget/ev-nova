@@ -23,7 +23,8 @@
 //! Where the original cannot settle a question, or the design does not
 //! follow it, the section names the [`Rulebook`](crate::Rulebook) key the
 //! building phase adds and its readings. Phase 2 adds `stay_days`, phase 3
-//! `story_reentry`, phase 5 `destroy_invincible`, phase 8 `y_on_destroy`.
+//! `story_reentry`, phase 5 `destroy_invincible`, phase 8 `y_on_destroy`,
+//! phase 9 `dead_type_fallback`.
 //!
 //! # Findings
 //!
@@ -1303,6 +1304,7 @@
 pub(crate) mod day;
 pub(crate) mod dispatch;
 pub mod galaxy;
+pub(crate) mod rebuild;
 pub(crate) mod wreck;
 
 pub use dispatch::DuplicateSubscription;

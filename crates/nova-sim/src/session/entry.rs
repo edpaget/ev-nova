@@ -189,6 +189,9 @@ pub(super) enum Reset {
     ArrivalSound,
     /// [`SimMessage::Arrived`] is raised.
     ArrivalMessage,
+    /// The stellars shown are rebuilt, last: a rebuild point (see the
+    /// `stellars` module).
+    Rebuild,
 }
 
 /// What becomes of the course.
@@ -277,6 +280,7 @@ fn jump(hops: usize) -> Resets {
             Reset::FightersOut,
             Reset::ArrivalSound,
             Reset::ArrivalMessage,
+            Reset::Rebuild,
         ],
         CourseStep::Drop(hops),
         TrafficStep::Populate,
@@ -303,6 +307,7 @@ fn gate() -> Resets {
             Reset::Hail,
             Reset::FightersOut,
             Reset::ArrivalSound,
+            Reset::Rebuild,
         ],
         CourseStep::Clear,
         TrafficStep::Populate,
@@ -345,6 +350,7 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
         Reset::Boarding,
         Reset::Hail,
         Reset::SaveDue,
+        Reset::Rebuild,
     ];
     if facts.system_changed {
         set.push(Reset::Stellar);
@@ -383,6 +389,7 @@ fn relocate() -> Resets {
             Reset::Hail,
             Reset::ShopRolls,
             Reset::SaveDue,
+            Reset::Rebuild,
         ],
         CourseStep::Clear,
         TrafficStep::Reset,
@@ -514,6 +521,9 @@ impl Session {
         // original's first nebula exploration (@0x6be12).
         if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. }) {
             self.raise(StoryEvent::Explored { system });
+        }
+        if resets.has(Reset::Rebuild) {
+            self.rebuild_stellars();
         }
     }
 
@@ -689,14 +699,15 @@ mod tests {
     }
 
     /// The scene every way in but a landed move lets go of, a gate's
-    /// pending entry aside.
-    const SCENE: [Reset; 6] = [
+    /// pending entry aside, and its stellars rebuilt.
+    const SCENE: [Reset; 7] = [
         Reset::NavTarget,
         Reset::Combat,
         Reset::Strikes,
         Reset::Target,
         Reset::Boarding,
         Reset::Hail,
+        Reset::Rebuild,
     ];
 
     fn with(base: &[Reset], more: &[Reset]) -> Vec<Reset> {

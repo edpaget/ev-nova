@@ -994,6 +994,9 @@ struct Redrawn {
     stellar: bool,
     /// The galaxy overlay changed: the course map was rebuilt.
     galaxy: bool,
+    /// A rebuild point changed which stellars shown are dead since it:
+    /// the stellars were drawn again.
+    rebuilt: bool,
 }
 
 /// Text metrics, shared.
@@ -1529,6 +1532,7 @@ impl<
                 SessionEvent::SystemChanged => redrawn.system = true,
                 SessionEvent::StellarChanged => redrawn.stellar = true,
                 SessionEvent::GalaxyChanged => redrawn.galaxy = true,
+                SessionEvent::StellarsRebuilt => redrawn.rebuilt = true,
             }
         }
         if redrawn.galaxy {
@@ -1545,7 +1549,7 @@ impl<
         } else if redrawn.stellar {
             self.place_ship();
         }
-        if redrawn.galaxy || redrawn.system {
+        if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
             self.show_destroyed();
         }
         redrawn

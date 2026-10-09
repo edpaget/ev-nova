@@ -402,6 +402,7 @@ use crate::shipyard::{self, Quote, ShipNaming, ShipPurchase, ShipRefusal, Shipya
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
+use crate::story::rebuild::Rebuilt;
 use crate::story::{Fate, OverlaidGalaxy, StoryEvent};
 use crate::targeting::{self, TargetPick};
 use crate::traffic::autopilot::Outcome;
@@ -691,6 +692,10 @@ pub struct Session {
     /// The stellars whose `OnDestroy` is running, so that none runs again
     /// inside itself (see the `stellars` module); never saved.
     destroying: BTreeSet<StellarId>,
+    /// The stellars shown that have been dead since the last rebuild point
+    /// (see the `stellars` module); never saved, as a load is itself a
+    /// rebuild point.
+    rebuilt: Rebuilt,
 }
 
 impl Session {
@@ -838,9 +843,14 @@ impl Session {
                 .collect(),
             strength: BTreeMap::new(),
             destroying: BTreeSet::new(),
+            rebuilt: Rebuilt::default(),
             pilot,
         };
         session.set_player_system(system, here, dock);
+        // A load and the main screen are rebuild points (@0x751cf,
+        // @0x75324, @0x1a354, @0x1a8ca, @0x1b003, @0x457ee): the view
+        // reads the state as it builds, so nothing is told.
+        session.rebuild_quietly();
         session.open_opening();
         session.refit(false, ReservePolicy::Hold);
         session.restock_fleet();
@@ -1350,6 +1360,7 @@ impl Session {
         self.orphan_fighters();
         self.clear_lost_target();
         self.strike_stellars(&stellars, rules.law, chance);
+        self.see_stellars();
     }
 
     /// Takes each NPC destroyed out of the system, raising
@@ -2166,6 +2177,8 @@ impl Session {
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
         self.raise(StoryEvent::Landed { stellar });
+        // The port dialog's rebuild point (@0x5fbf0).
+        self.rebuild_stellars();
     }
 
     /// What a landing, or a relocation, does to the day rolls, as
@@ -2245,6 +2258,8 @@ impl Session {
         self.sounds.push(SimSound::TookOff);
         self.save_due = true;
         self.raise(StoryEvent::TookOff { stellar });
+        // The dock request's rebuild point (@0x674c7, @0x67653).
+        self.rebuild_stellars();
         Some(stellar)
     }
 
@@ -14043,7 +14058,7 @@ mod tests {
     /// The ship starts over unlinked wormhole 400, at system 130's centre;
     /// unlinked wormhole 410 is in 131 at (-300, 40), and wormhole 420,
     /// linked to 410, in 132.
-    fn wormholes() -> FakePilotCatalog {
+    pub(super) fn wormholes() -> FakePilotCatalog {
         FakePilotCatalog {
             sites: vec![
                 (SystemId(130), vec![gate_landing(400, 0x2200)]),
@@ -14059,7 +14074,7 @@ mod tests {
     }
 
     /// `catalog`'s session with L pressed twice over the wormhole.
-    fn at_wormhole(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn at_wormhole(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.land().expect("clearance");
         assert_eq!(

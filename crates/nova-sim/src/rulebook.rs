@@ -31,6 +31,7 @@
 //! | [`DestroyInvincible`](RuleKey::DestroyInvincible) | `destroy_invincible` | `Y` leaves an invincible stellar (`Strength` 0 or -1) as it was, as `_StellarIsDestroyed` holds none destroyed (@0x4e1a; see [`story`](crate::story)) | `Y` destroys any stellar: "Yxxx - destroy stellar ID xxx" |
 //! | [`DayRolls`](RuleKey::DayRolls) | `day_rolls` | the shop and hire rolls are drawn once a day in the daily step, and a landing keeps them (`_IncrementGameTime` @0xb7c4-0xb833; see [`story`](crate::story)) | a landing forgets them, and each is drawn the first time a list asks for it¶¶¶¶ |
 //! | [`YOnDestroy`](RuleKey::YOnDestroy) | `y_on_destroy` | `Y` runs no `OnDestroy`: only a shot's destruction does (`_EvalSetExp` @0x15a38-0x15ae6, `_CheckShotProximities` @0x374a9; see [`story`](crate::story)) | `Y` runs `OnDestroy` as it destroys a whole stellar: "evaluated when the stellar is destroyed" |
+//! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, @0x33244-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see [`story`](crate::story)) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear ([`NovaPersons`](crate::NovaPersons)) | 5 %, one of those who may appear picked evenly |
@@ -390,6 +391,19 @@ rule_keys! {
     /// under [`RuleKey::DestroyInvincible`]'s engine reading; see the
     /// [`story`](crate::story) module's "Built by phase 8").
     YOnDestroy => "y_on_destroy",
+    /// What a destroyed stellar whose `DeadType` has no readable sheet
+    /// (-1, outside 0 to 255, no `spïn`, or an `rlëD` that cannot be
+    /// read) draws: by the engine, from the next rebuild point until a
+    /// flight frame sees it whole, graphic type 0 (`spïn` 1000), the
+    /// sheet the original's rebuild gives a sprite slot it left empty
+    /// (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f,
+    /// @0x33244-0x332d0), which its per-frame sprite tick replaces only
+    /// once it finds the stellar whole (`_HandleStellarSprites`
+    /// @0x2e77b-0x2e7e5); by the Bible, whose `DeadType` -1 is "Don't
+    /// display different graphic type when destroyed", its `Type` sheet
+    /// throughout (see the [`story`](crate::story) module's "Built by
+    /// phase 9").
+    DeadTypeFallback => "dead_type_fallback",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -1070,6 +1084,11 @@ mod tests {
         assert_eq!(RuleKey::from_key("day_rolls"), Some(RuleKey::DayRolls));
         assert_eq!(RuleKey::YOnDestroy.key(), "y_on_destroy");
         assert_eq!(RuleKey::from_key("y_on_destroy"), Some(RuleKey::YOnDestroy));
+        assert_eq!(RuleKey::DeadTypeFallback.key(), "dead_type_fallback");
+        assert_eq!(
+            RuleKey::from_key("dead_type_fallback"),
+            Some(RuleKey::DeadTypeFallback)
+        );
     }
 
     #[test]
@@ -1094,6 +1113,7 @@ mod tests {
                 RuleKey::DestroyInvincible,
                 RuleKey::DayRolls,
                 RuleKey::YOnDestroy,
+                RuleKey::DeadTypeFallback,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,
