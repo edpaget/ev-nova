@@ -68,6 +68,7 @@
 //! | [`SaleMass`](RuleKey::SaleMass) | `sale_mass` | only an outfit of negative mass is refused, when the free mass clamped at 0 plus its mass is below 0; one of mass 0 or more sells while the free mass is below 0 (`_DoOutfitDialog` @0x5c735-0x5c747, `_ShipFreeMass` @0xb506-0xb50a; [`Session`](crate::Session)) | a sale is refused whenever it would leave the free mass below 0\*\*\*\* |
 //! | [`SaleRefusal`](RuleKey::SaleRefusal) | `sale_refusal` | Sell is enabled by the Sell flag alone (some owned, not `CANNOT_SELL`). The free mass, a raised `Max` and a launcher's ammunition refuse only inside the sell loop. The first such refusal of an order shows its `STR#` 2002 #207-#212 words once in `DLOG` 3003, and nothing is sold. A counted sale runs on past it, each later pass refused silently; the sales before it stand (@0x5d19c-0x5d1b1) (`_DoOutfitDialog` @0x5c563-0x5c595, @0x5c735-0x5ce6c, flag -0x63e @0x5c6ca; `_OutfitFilter` @0x5808c-0x580b1; `_ShowTextDialog` @0x5a8cf; [`Outfitter::can`](crate::Outfitter::can) / [`Outfitter::sale_alert`](crate::Outfitter::sale_alert)) | Sell is greyed by any sale check too, and the info box words the first one; nothing is shown in a dialog‡‡‡‡ |
 //! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; [`Outfitter::check_at`](crate::Outfitter::check_at)) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
+//! | [`RelistedSale`](RuleKey::RelistedSale) | `relisted_sale` | a sale that changes the listing (`_SetupPortAvailableItems` true, @0x5d00a) resets the selection to `oütf` 128 and the loop index to 0, or 512 with nothing listed, so the passes left check and sell `oütf` 128, listed or not, and can outrun the count (`_DoOutfitDialog` @0x5d017-0x5d150, @0x5d164-0x5d1b1; [`Session`](crate::Session)) | the ordered outfit and the pass index are kept††††† |
 //! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; [`unit_price`](crate::outfitter::unit_price)) | `Cost` × `Mass`, never below 0§§§§ |
 //! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; [`Session`](crate::Session)) | an unsellable outfit is left out too†††† |
 //! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for a count (see [`TradeCount`](RuleKey::TradeCount)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
@@ -174,6 +175,10 @@
 //! ¶¶¶¶ The Bible says nothing of a counted sale. The other reading is
 //! the port's earlier behaviour, each pass of a counted sale checked as a
 //! single sale, not anything the Bible says.
+//!
+//! ††††† The Bible says nothing of a counted sale. The other reading is
+//! the port's earlier behaviour, the ordered outfit sold for each pass
+//! whatever the listing does, not anything the Bible says.
 //!
 //! \*\*\*\*\* The Bible says only that a persistent outfit "stays with
 //! you when you trade ships", as the engine has it. The other reading is
@@ -760,6 +765,23 @@ rule_keys! {
     /// behaviour, not anything the Bible says (see
     /// [`outfitter`](crate::outfitter)).
     CountedSale => "counted_sale",
+    /// Which outfit, and from which index, the passes of a counted sale
+    /// go on after a sale that changes the listing. By the engine, after
+    /// each sale `_DoOutfitDialog` rebuilds the list
+    /// (`_SetupPortAvailableItems` @0x5d00a), and when it changed
+    /// (@0xc216-0xc23d) sets the selected outfit to index 0, `oütf` 128,
+    /// listed or not (@0x5d01c), and the loop index -0x63a to 0, or to
+    /// 512 when nothing is listed (@0x5d0fe-0x5d120), before its
+    /// increment (@0x5d19c-0x5d1b1). So the passes left, from index 1 (or
+    /// 513), check and sell `oütf` 128 as any sale is checked and sold,
+    /// the Sell flag asking no list (@0x5d164-0x5d199), and an order can
+    /// sell more than its count; with 128 not owned they do nothing. By
+    /// the other reading, the ordered outfit and the pass index are kept.
+    /// A sale that leaves the listing unchanged is the same by both. The
+    /// Bible says nothing of it, so the other reading is the port's
+    /// earlier behaviour, not anything the Bible says (see
+    /// [`Session::outfit_order`](crate::Session::outfit_order)).
+    RelistedSale => "relisted_sale",
     /// How an outfit flagged 0x0200 (price by ship mass) is priced. By
     /// the engine, `_AdjustedItemCost` (@0x5869-0x5895) gives 0 for a
     /// `Cost` of 0 or less (@0x5872-0x5878). Otherwise, with the flag, it
@@ -1040,6 +1062,15 @@ mod tests {
     }
 
     #[test]
+    fn the_relisted_sale_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::RelistedSale.key(), "relisted_sale");
+        assert_eq!(
+            RuleKey::from_key("relisted_sale"),
+            Some(RuleKey::RelistedSale)
+        );
+    }
+
+    #[test]
     fn the_outfitters_rules_have_settings_keys_found_by_name() {
         assert_eq!(RuleKey::OutfitRefund.key(), "outfit_refund");
         assert_eq!(
@@ -1176,6 +1207,7 @@ mod tests {
                 RuleKey::SaleMass,
                 RuleKey::SaleRefusal,
                 RuleKey::CountedSale,
+                RuleKey::RelistedSale,
                 RuleKey::MassPrice,
                 RuleKey::TradeInOutfits,
                 RuleKey::TradeLot,
