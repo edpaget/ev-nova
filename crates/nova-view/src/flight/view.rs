@@ -274,13 +274,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
+use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
     ClassRow, Clearance, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
     EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId, Haggle,
     HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
-    NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
+    NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog,
     PlunderView, PointDefenceRule, RechargeRefusal, Reserves, Rulebook, Rules, Session, ShipId,
     ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
     StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog,
@@ -2008,6 +2009,26 @@ impl<C> FlightView<C> {
         match &mut self.session {
             Ok(session) => session.outfit_counted(order, count, &mut self.chance),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
+        }
+    }
+
+    /// Buys or sells up to `count` of an outfit as
+    /// [`Session::outfit_order`] does, on the flight's chance, giving the
+    /// whole run and its alert; a session that failed has no outfitter,
+    /// refused at the first pass with no alert.
+    pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
+        match &mut self.session {
+            Ok(session) => session.outfit_order(order, count, &mut self.chance),
+            Err(_) => OutfitRun {
+                run: OrderRun {
+                    done: 0,
+                    stopped: Some(Stopped {
+                        pass: 0,
+                        refusal: OutfitRefusal::NoOutfitter,
+                    }),
+                },
+                alert: None,
+            },
         }
     }
 
@@ -6007,7 +6028,8 @@ mod tests {
         assert_eq!(broken.trade(BUY_FOOD), Err(TradeRefusal::NoMarket));
     }
 
-    use nova_sim::{OutfitOrder, OutfitRefusal};
+    use nova_sim::order_loop::{OrderRun, Stopped};
+    use nova_sim::{OutfitOrder, OutfitRefusal, OutfitRun};
 
     /// Earth at the centre, an outfitter selling a fuel tank (+100 fuel,
     /// a ton, 1000 credits), the first `chär` holding 1000 credits.
@@ -6109,6 +6131,54 @@ mod tests {
         assert_eq!(
             broken.outfit_counted(BUY_TANK, 2),
             Err(OutfitRefusal::NoOutfitter)
+        );
+    }
+
+    #[test]
+    fn an_outfit_order_goes_through_the_session_with_its_run() {
+        let mut catalog = outfitting();
+        catalog.character = Ok(CharacterStart {
+            cash: 3000,
+            ..catalog.character.expect("a chär")
+        });
+        let refused = |refusal| OutfitRun {
+            run: OrderRun {
+                done: 0,
+                stopped: Some(Stopped { pass: 0, refusal }),
+            },
+            alert: None,
+        };
+        let mut view = FlightView::new(catalog);
+        assert_eq!(
+            view.outfit_order(BUY_TANK, 2),
+            refused(OutfitRefusal::NoOutfitter),
+            "in flight"
+        );
+        land_now(&mut view);
+        view.take_save_due();
+        assert_eq!(
+            view.outfit_order(BUY_TANK, 4),
+            OutfitRun {
+                run: OrderRun {
+                    done: 3,
+                    stopped: Some(Stopped {
+                        pass: 3,
+                        refusal: OutfitRefusal::CannotAfford,
+                    }),
+                },
+                alert: None,
+            }
+        );
+        assert_eq!(view.pilot().map(Pilot::cash), Some(0));
+        assert!(view.take_save_due(), "a purchase");
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..outfitting()
+        };
+        let mut broken = FlightView::new(broken);
+        assert_eq!(
+            broken.outfit_order(BUY_TANK, 2),
+            refused(OutfitRefusal::NoOutfitter)
         );
     }
 

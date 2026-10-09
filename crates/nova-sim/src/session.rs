@@ -367,10 +367,10 @@ use crate::market::{
 };
 use crate::message::SimMessage;
 use crate::navigation::stellar_under;
-use crate::order_loop::{self, OrderRun};
+use crate::order_loop::{self, OrderRun, Pass};
 use crate::outfitter::{
-    self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, OutfitVisit, Outfitter, Shop,
-    outfit_mods,
+    self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, OutfitRun, OutfitVisit, Outfitter,
+    SaleAlert, Shop, outfit_mods,
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
@@ -2182,20 +2182,46 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> OrderRun<OutfitRefusal> {
-        order_loop::run(count, |_pass| self.outfit_pass(order, chance))
+        self.outfit_order(order, count, chance).run
+    }
+
+    /// Buys or sells up to `count` of an outfit as
+    /// [`outfit_counted`](Self::outfit_counted) does, and gives the whole
+    /// run: where and why the order loop stopped, and the alert its
+    /// refused pass shows, if any ([`Outfitter::sale_alert`], asked of
+    /// the outfitter that pass was checked against, so its names and
+    /// counts are the click's). The alert fires only at the first pass
+    /// (see [`Outfitter::sale_alert`]).
+    pub fn outfit_order(
+        &mut self,
+        order: OutfitOrder,
+        count: u32,
+        chance: &mut dyn Chance,
+    ) -> OutfitRun {
+        let mut alert = None;
+        let run = order_loop::run(count, |pass| {
+            self.outfit_pass(order, pass, chance, &mut alert)
+        });
+        OutfitRun { run, alert }
     }
 
     /// One pass of an outfit order: builds the outfitter afresh, drawing
     /// on `chance` any roll not drawn yet, checks `order` against it and,
     /// when it goes through, buys or sells one (see
-    /// [`outfit`](Self::outfit)).
+    /// [`outfit`](Self::outfit)). When it is refused, `alert` is set to
+    /// the alert that outfitter gives for `pass`.
     fn outfit_pass(
         &mut self,
         order: OutfitOrder,
+        pass: Pass,
         chance: &mut dyn Chance,
+        alert: &mut Option<SaleAlert>,
     ) -> Result<(), OutfitRefusal> {
         let outfitter = self.outfitter(chance).ok_or(OutfitRefusal::NoOutfitter)?;
-        outfitter.check(order)?;
+        if let Err(refusal) = outfitter.check(order) {
+            *alert = outfitter.sale_alert(order, pass);
+            return Err(refusal);
+        }
         let price = outfitter.row(order.outfit).map_or(0, |row| row.price);
         let record = self
             .outfits
@@ -7208,6 +7234,11 @@ mod tests {
     /// tons free, a 50-ton outfit (311) and four 5-ton boosters take 70
     /// and three pods (310) give back 30, so -10 tons are free.
     fn over_the_mass_limit(source: RuleSource) -> Session {
+        over_the_mass_limit_by(Rulebook::default().with_override(RuleKey::SaleMass, source))
+    }
+
+    /// [`over_the_mass_limit`] by `rules`.
+    fn over_the_mass_limit_by(rules: Rulebook) -> Session {
         let mut catalog = outfitting();
         catalog.outfits[0].mass = 5;
         catalog.outfits.push(OutfitRecord {
@@ -7218,8 +7249,7 @@ mod tests {
             mass: 50,
             ..outfit(311, &[])
         });
-        let mut session = outfitted(&catalog)
-            .with_rules(Rulebook::default().with_override(RuleKey::SaleMass, source));
+        let mut session = outfitted(&catalog).with_rules(rules);
         session.pilot.outfits =
             BTreeMap::from([(OutfitId(311), 1), (SPEED, 4), (OutfitId(310), 3)]);
         let outfitter = session.outfitter(&mut NeverFires).expect("open");
@@ -7346,6 +7376,118 @@ mod tests {
             counted.outfit_counted(buy(SPEED), 12, &mut NeverFires),
             Ok(10)
         );
+    }
+
+    const POD: OutfitId = OutfitId(310);
+
+    #[test]
+    fn a_plain_sale_refused_in_the_loop_carries_its_alert_and_sells_nothing() {
+        let mut session = over_the_mass_limit(RuleSource::Engine);
+        session.take_save_due();
+        let before = session.pilot().clone();
+        let order = session.outfit_order(sell(POD), 1, &mut NeverFires);
+        assert_eq!(
+            order.run,
+            OrderRun {
+                done: 0,
+                stopped: Some(Stopped {
+                    pass: 0,
+                    refusal: OutfitRefusal::NegativeFreeMass,
+                }),
+            }
+        );
+        let alert = order.alert.expect("an alert");
+        assert_eq!(alert.outfit, POD);
+        assert_eq!(alert.refusal, OutfitRefusal::NegativeFreeMass);
+        assert!(!alert.plural, "a plain click names it in the singular");
+        assert_eq!(session.pilot(), &before);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_counted_sale_refused_at_its_first_pass_carries_a_plural_alert() {
+        let mut session = over_the_mass_limit(RuleSource::Engine);
+        let before = session.pilot().clone();
+        let order = session.outfit_order(sell(POD), 3, &mut NeverFires);
+        assert_eq!(order.run.done, 0);
+        let alert = order.alert.expect("an alert");
+        assert_eq!(alert.refusal, OutfitRefusal::NegativeFreeMass);
+        assert!(alert.plural, "passes remain");
+        assert_eq!(session.pilot(), &before);
+    }
+
+    #[test]
+    fn a_counted_sale_refused_part_way_carries_no_alert_yet() {
+        // Ten tons free once the boosters are sold: one pod leaves none,
+        // and the next is refused at pass 1.
+        let mut session = over_the_mass_limit(RuleSource::Engine);
+        session
+            .outfit_counted(sell(SPEED), 4, &mut NeverFires)
+            .expect("sold");
+        let order = session.outfit_order(sell(POD), 3, &mut NeverFires);
+        assert_eq!(
+            order.run,
+            OrderRun {
+                done: 1,
+                stopped: Some(Stopped {
+                    pass: 1,
+                    refusal: OutfitRefusal::NegativeFreeMass,
+                }),
+            }
+        );
+        assert_eq!(order.alert, None);
+    }
+
+    #[test]
+    fn by_the_other_reading_an_order_carries_no_alert() {
+        let mut session = over_the_mass_limit_by(
+            Rulebook::default().with_override(RuleKey::SaleRefusal, RuleSource::Bible),
+        );
+        for count in [1, 3] {
+            let order = session.outfit_order(sell(POD), count, &mut NeverFires);
+            assert_eq!(
+                order.run.stopped.map(|stopped| stopped.refusal),
+                Some(OutfitRefusal::NegativeFreeMass)
+            );
+            assert_eq!(order.alert, None, "{count}");
+        }
+    }
+
+    #[test]
+    fn outfit_and_outfit_counted_agree_with_outfit_order() {
+        let mut owning = outfitted(&outfitting());
+        owning
+            .outfit_counted(buy(SPEED), 3, &mut NeverFires)
+            .expect("bought");
+        let cases = [
+            (over_the_mass_limit(RuleSource::Engine), sell(POD), 3),
+            (over_the_mass_limit(RuleSource::Engine), sell(SPEED), 2),
+            (outfitted(&outfitting()), buy(SPEED), 12),
+            (owning, sell(SPEED), 5),
+        ];
+        for (session, order, count) in cases {
+            let (mut single, mut by_order) = (session.clone(), session.clone());
+            assert_eq!(
+                single.outfit(order, &mut NeverFires),
+                by_order
+                    .outfit_order(order, 1, &mut NeverFires)
+                    .run
+                    .counted()
+                    .map(|_| ()),
+                "{order:?}"
+            );
+            assert!(single == by_order, "{order:?}");
+            let (mut counted, mut by_order) = (session.clone(), session);
+            assert_eq!(
+                counted.outfit_counted(order, count, &mut NeverFires),
+                by_order
+                    .outfit_order(order, count, &mut NeverFires)
+                    .run
+                    .counted(),
+                "{order:?}"
+            );
+            assert!(counted == by_order, "{order:?}");
+        }
     }
 
     const MAP: OutfitId = OutfitId(306);

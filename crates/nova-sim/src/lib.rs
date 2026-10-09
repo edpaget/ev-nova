@@ -312,7 +312,7 @@ pub use navigation::{next_after, stellar_under};
 pub use outfit_effects::{OutfitRules, Rgb15};
 pub use outfitter::{
     Armed, Launcher, LcNames, OpeningLimit, OutfitFacts, OutfitOrder, OutfitRefusal, OutfitRow,
-    OutfitVisit, Outfitter, Raise,
+    OutfitRun, OutfitVisit, Outfitter, Raise, SaleAlert,
 };
 pub use person::{
     COMM_QUOTES, ESCAPE_POD, GRUDGE, HAIL_QUOTES, NovaPersons, PersonRoll, PersonRules,

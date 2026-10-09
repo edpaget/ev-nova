@@ -1274,6 +1274,9 @@ mod tests {
         bay.facts.ammo_names = Some(vipers());
         let screen = screen_of(Outfitter {
             rows: vec![bay],
+            rules: outfitter()
+                .rules
+                .with_override(RuleKey::SaleRefusal, RuleSource::Bible),
             ..outfitter()
         });
         let info = item(&screen, INFO_ITEM);
@@ -1867,6 +1870,9 @@ mod tests {
                 ..row(128, "Expansion", 100, -5, 1)
             }],
             free_mass: 4,
+            rules: Rulebook::default()
+                .with_override(RuleKey::OutfitCount, RuleSource::Engine)
+                .with_override(RuleKey::SaleRefusal, RuleSource::Bible),
             ..outfitter()
         };
         let screen = screen_of(overloaded);

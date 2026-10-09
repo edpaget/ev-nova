@@ -239,10 +239,22 @@
 //! the rounds are more than `MaxAmmo` x (n - 1), the excess to be sold
 //! first; in stock data only fighter bays have a `MaxAmmo`. The other
 //! reading refuses it while any round is held
-//! ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)). The
-//! original shows the refusal as a text dialog with Sell left enabled
-//! (`STR#` 2002 #208-212); [`Outfitter::lc_names`] gives the names its
-//! words need.
+//! ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)).
+//! [`Outfitter::lc_names`] gives the names its words need.
+//!
+//! **Sell's enable and a refusal in the sell loop**
+//! ([`RuleKey::SaleRefusal`](crate::RuleKey::SaleRefusal)). By the engine,
+//! the Sell flag alone enables Sell (some owned and not
+//! [`OutfitFlags::CANNOT_SELL`], @0x5c563-0x5c595, `_OutfitFilter`
+//! @0x5808c-0x580b1; [`Outfitter::can`]): the free mass, a raised `Max`
+//! and a launcher's ammunition refuse a sale only inside the sell loop
+//! ([`Outfitter::check`]), whose first refusal of an order shows its
+//! `STR#` 2002 #207-#212 words once in `DLOG` 3003 (flag -0x63e,
+//! @0x5c6ca; `_ShowTextDialog` @0x5a8cf; [`Outfitter::sale_alert`]), and
+//! nothing is sold; the info box never words them
+//! ([`Outfitter::sale_words`]). By the other reading, the port's earlier
+//! behaviour, they grey Sell too, and the info box words the first, with
+//! no dialog.
 //!
 //! **The reported cap** ([`Outfitter::cap`]). `_HasMaxOfItem` also
 //! reports out a cap, which only the quantity dialog reads: the `Max`,
@@ -264,6 +276,7 @@ use crate::fuel::OutfitMod;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
 use crate::market::{Direction, MORE_CARGO};
+use crate::order_loop::{OrderRun, Pass};
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
@@ -415,6 +428,34 @@ pub enum OutfitRefusal {
     },
 }
 
+/// The refusal text a sale refused inside the sell loop shows (`DLOG`
+/// 3003, `_DoOutfitDialog` @0x5c735-0x5ce6c; see
+/// [`Outfitter::sale_alert`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SaleAlert {
+    /// The outfit sold.
+    pub outfit: OutfitId,
+    /// Why: [`OutfitRefusal::NegativeFreeMass`],
+    /// [`OutfitRefusal::RaisedFirst`] or [`OutfitRefusal::AmmunitionFirst`].
+    pub refusal: OutfitRefusal,
+    /// The names the words need, as [`Outfitter::lc_names`] gives them:
+    /// the sold outfit's, and the ammunition's or the target's.
+    pub names: BTreeMap<OutfitId, LcNames>,
+    /// Whether the sold outfit is named in `LCPlural`: passes remain after
+    /// the refused one (pass < count - 1, @0x5c9ab-0x5c9dd, @0x5cd53).
+    pub plural: bool,
+}
+
+/// What an outfit order did: the order loop's run, and the alert its
+/// refused sale shows, if any ([`Outfitter::sale_alert`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutfitRun {
+    /// The passes that went through, and the refusal that stopped it.
+    pub run: OrderRun<OutfitRefusal>,
+    /// The alert the refused pass shows, if any.
+    pub alert: Option<SaleAlert>,
+}
+
 /// An outfit's lower-case names, as the outfitter's words use them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LcNames {
@@ -553,13 +594,36 @@ impl Outfitter {
         })
     }
 
-    /// Whether `order` can go through now, or why not: an outfit not
+    /// Whether `order`'s button is enabled, or why not: an outfit not
     /// listed is [`OutfitRefusal::NotListed`]; a buy is refused by the
     /// first of `_CanBuyOutfitItem`'s checks that refuses it, in the
     /// port's order (see the module docs); a sale by the Sell flag's
-    /// checks (some owned, sellable, sold here), then the sell loop's
+    /// checks (some owned, sellable, sold here) and then, as
+    /// [`RuleKey::SaleRefusal`](crate::RuleKey::SaleRefusal) says, by the
+    /// engine nothing more, so a sale only the sell loop refuses leaves
+    /// Sell enabled, or by the other reading the sell loop's checks too
     /// (the free mass, a raised `Max`, a launcher's ammunition).
     pub fn can(&self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
+        let asked = self.asked(order.outfit).ok_or(OutfitRefusal::NotListed)?;
+        match order.direction {
+            Direction::Buy => refusal(&can_buy(), &asked),
+            Direction::Sell => {
+                refusal(&sell_flag(), &asked)?;
+                if sale_checks_on_the_button().of(&asked) {
+                    refusal(&sale_checks(), &asked)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// Whether `order` goes through when clicked, or why not, whatever
+    /// the reading: a buy as [`can`](Self::can) says; a sale by the Sell
+    /// flag's checks, then the sell loop's (the free mass, a raised
+    /// `Max`, a launcher's ammunition), as each pass of `_DoOutfitDialog`'s
+    /// sell loop checks it (@0x5c735-0x5ce6c).
+    pub fn check(&self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
         let asked = self.asked(order.outfit).ok_or(OutfitRefusal::NotListed)?;
         match order.direction {
             Direction::Buy => refusal(&can_buy(), &asked),
@@ -570,10 +634,35 @@ impl Outfitter {
         }
     }
 
-    /// Whether `order` can go through now, or why not: the same as
-    /// [`can`](Self::can).
-    pub fn check(&self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
-        self.can(order)
+    /// Which sale refusal the info box words for `outfit` (`STR#` 2002
+    /// #207-#212), as [`RuleKey::SaleRefusal`](crate::RuleKey::SaleRefusal)
+    /// says: by the engine none, as `_OutfitDialogUpdate`'s only words are
+    /// #213-#222 (@0x57a12-0x57e68); by the other reading the first of
+    /// the sell loop's checks that refuses it, when the Sell flag is set.
+    /// `None` too when it is not listed.
+    #[must_use]
+    pub fn sale_words(&self, outfit: OutfitId) -> Option<OutfitRefusal> {
+        self.asked(outfit).and_then(|asked| sale_words().of(&asked))
+    }
+
+    /// The alert a sale refused inside the sell loop shows at `pass`, as
+    /// [`RuleKey::SaleRefusal`](crate::RuleKey::SaleRefusal) says: by the
+    /// engine, at the order's first pass, the sell loop's refusal of a
+    /// sale whose Sell flag is set, with the names its words need and
+    /// the sold outfit named in the plural while passes remain
+    /// (`_DoOutfitDialog` @0x5c735-0x5ce6c, @0x5c9ab-0x5c9dd, shown once
+    /// an order by the flag -0x63e @0x5c6ca, in `DLOG` 3003 by
+    /// `_ShowTextDialog` @0x5a8cf); by the other reading none. `None` for
+    /// a buy, an outfit not listed, a Sell-flag refusal, a sale that goes
+    /// through, and a refusal at a later pass.
+    #[must_use]
+    pub fn sale_alert(&self, order: OutfitOrder, pass: Pass) -> Option<SaleAlert> {
+        let asked = self.asked(order.outfit)?;
+        sale_alert_value().of(&SaleAsk {
+            asked,
+            direction: order.direction,
+            pass,
+        })
     }
 
     /// Which of the info box's words (`STR#` 2002 #219-#222) `outfit`
@@ -612,7 +701,8 @@ impl Outfitter {
     }
 
     /// The `LCName` and `LCPlural` of each outfit the words of
-    /// [`can`](Self::can)'s refusal of `order` name, worked out from that
+    /// [`check`](Self::check)'s refusal of `order` name (the click's,
+    /// whatever the reading), worked out from that
     /// refusal: a launcher refused for its ammunition, and the outfit
     /// naming that ammunition when it has a record; a raiser refused for
     /// its target, and that target when it has a record. None for any
@@ -623,7 +713,7 @@ impl Outfitter {
             return BTreeMap::new();
         };
         let facts = &row.facts;
-        let named = match self.can(order) {
+        let named = match self.check(order) {
             Err(OutfitRefusal::AmmunitionFirst { ammo, .. }) => ammo.zip(facts.ammo_names.clone()),
             Err(OutfitRefusal::RaisedFirst { target, .. }) => facts
                 .raises
@@ -753,6 +843,24 @@ impl Context for Outfitter {
 impl Context for RowOutfit<'_> {
     fn rulebook(&self) -> &Rulebook {
         self.outfitter.rulebook()
+    }
+}
+
+/// One listed outfit asked about one pass of an order: what the sale
+/// alert reads ([`Outfitter::sale_alert`]).
+#[derive(Clone, Copy)]
+struct SaleAsk<'a> {
+    /// The outfit, as its row is asked.
+    asked: RowOutfit<'a>,
+    /// Buying or selling.
+    direction: Direction,
+    /// The pass of the order.
+    pass: Pass,
+}
+
+impl Context for SaleAsk<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        self.asked.rulebook()
     }
 }
 
@@ -917,6 +1025,102 @@ fn sale_checks<'a>() -> Checks<RowOutfit<'a>, OutfitRefusal> {
         ),
     ]
     .into()
+}
+
+/// Whether the sell loop's checks ([`sale_checks`]) also decide Sell's
+/// enable, as [`RuleKey::SaleRefusal`] says: by the engine they run only
+/// inside the sell loop, so the Sell flag alone enables Sell; by the
+/// other reading they grey it too. Each check keeps its own descriptor
+/// and key: this value only says whether the list runs.
+fn sale_checks_on_the_button<'a>() -> Value<RowOutfit<'a>, bool> {
+    Value::disputed(
+        "sale checks on the button",
+        "`_DoOutfitDialog` @0x5c563-0x5c595 and `_OutfitFilter` @0x5808c-0x580b1 set \
+         the Sell flag by the count owned and `CANNOT_SELL` alone; the sale checks run \
+         only in the sell loop, @0x5c735-0x5ce6c",
+        RuleKey::SaleRefusal,
+        loop_only,
+        before_the_loop,
+    )
+}
+
+/// The engine's Sell enable: the sale checks run in the loop only.
+fn loop_only(_: &RowOutfit) -> bool {
+    false
+}
+
+/// The other reading's Sell enable: the sale checks grey Sell too.
+fn before_the_loop(_: &RowOutfit) -> bool {
+    true
+}
+
+/// The info box's sale words for an outfit ([`Outfitter::sale_words`]).
+fn sale_words<'a>() -> Value<RowOutfit<'a>, Option<OutfitRefusal>> {
+    Value::disputed(
+        "sale words",
+        "`_OutfitDialogUpdate` @0x57a12-0x57e68: only #213-#222",
+        RuleKey::SaleRefusal,
+        no_sale_words,
+        first_sale_refusal,
+    )
+}
+
+/// The engine's info box: no sale words.
+fn no_sale_words(_: &RowOutfit) -> Option<OutfitRefusal> {
+    None
+}
+
+/// The other reading's info box: the first sale check's refusal, when
+/// the Sell flag is set.
+fn first_sale_refusal(asked: &RowOutfit) -> Option<OutfitRefusal> {
+    refusal(&sell_flag(), asked).ok()?;
+    refusal(&sale_checks(), asked).err()
+}
+
+/// The alert a refused sale shows ([`Outfitter::sale_alert`]).
+fn sale_alert_value<'a>() -> Value<SaleAsk<'a>, Option<SaleAlert>> {
+    Value::disputed(
+        "sale alert",
+        "`_DoOutfitDialog` @0x5c735-0x5ce6c, -0x63e @0x5c6ca; `_ShowTextDialog` @0x5a8cf",
+        RuleKey::SaleRefusal,
+        alert_at_first_pass,
+        never_alerts,
+    )
+}
+
+/// The engine's alert: at the order's first pass, the sell loop's
+/// refusal of a sale whose Sell flag is set. A later pass's refusal
+/// gives none here: the port's loop stops at the first refusal, so a
+/// later one is the first the order shows only once a counted sale runs
+/// past a refusal.
+fn alert_at_first_pass(ask: &SaleAsk) -> Option<SaleAlert> {
+    if ask.direction != Direction::Sell || ask.pass.index != 0 {
+        return None;
+    }
+    let asked = &ask.asked;
+    refusal(&sell_flag(), asked).ok()?;
+    let refused = refusal(&sale_checks(), asked).err()?;
+    let order = OutfitOrder {
+        outfit: asked.row.id,
+        direction: Direction::Sell,
+    };
+    Some(SaleAlert {
+        outfit: asked.row.id,
+        refusal: refused,
+        names: asked.outfitter.lc_names(order),
+        plural: passes_remain(ask.pass),
+    })
+}
+
+/// The other reading's alert: none.
+fn never_alerts(_: &SaleAsk) -> Option<SaleAlert> {
+    None
+}
+
+/// Whether passes remain after `pass`: pass < count - 1
+/// (@0x5c9ab-0x5c9dd), none past the count.
+fn passes_remain(pass: Pass) -> bool {
+    pass.count.saturating_sub(pass.index) > 1
 }
 
 /// The outfit can be bought here at all: for sale today, its `Require`
@@ -1956,6 +2160,7 @@ mod tests {
     use super::*;
     use crate::chance::NeverFires;
     use crate::control::Test;
+    use crate::order_loop::Pass;
     use crate::rules::Descriptor;
     use crate::stats::{MORE_FUEL, MORE_SPEED};
     use crate::testkit::{AllowAll, FAST, RefuseBits, Scripted, catalog, outfit, planet};
@@ -3482,7 +3687,9 @@ mod tests {
                 ..counted(1, 1, ROOM, ROOM)
             }],
             free_mass: free,
-            rules: Rulebook::default().with_override(RuleKey::SaleMass, source),
+            rules: Rulebook::default()
+                .with_override(RuleKey::SaleMass, source)
+                .with_override(RuleKey::SaleRefusal, RuleSource::Bible),
             ..Outfitter::default()
         };
         outfitter.can(sell_of(128)) == Err(OutfitRefusal::NegativeFreeMass)
@@ -4256,7 +4463,9 @@ mod tests {
     fn raising(records: &[OutfitRecord], owned: &[(i16, u16)], source: RuleSource) -> Outfitter {
         let site = port();
         Shop {
-            rules: Rulebook::default().with_override(RuleKey::RaisedMax, source),
+            rules: Rulebook::default()
+                .with_override(RuleKey::RaisedMax, source)
+                .with_override(RuleKey::SaleRefusal, RuleSource::Bible),
             ..shop(records, &site)
         }
         .outfitter(&owning(owned), &mut DayRolls::default(), &mut NeverFires)
@@ -5065,7 +5274,9 @@ mod tests {
         let outfitter = Shop {
             ammo_caps: &ammo_caps,
             hardpoints,
-            rules: Rulebook::default().with_override(RuleKey::RaisedMax, source),
+            rules: Rulebook::default()
+                .with_override(RuleKey::RaisedMax, source)
+                .with_override(RuleKey::SaleRefusal, RuleSource::Bible),
             ..shop(records, &site)
         }
         .outfitter(&owning(owned), &mut DayRolls::default(), &mut NeverFires)
@@ -5459,7 +5670,10 @@ mod tests {
                 launcher,
             ),
         ] {
-            let outfitter = of_row(refused);
+            let outfitter = Outfitter {
+                rules: Rulebook::default().with_override(RuleKey::SaleRefusal, RuleSource::Bible),
+                ..of_row(refused)
+            };
             assert_eq!(
                 outfitter.can(order_128(Direction::Sell)),
                 Err(refusal),
@@ -5471,5 +5685,337 @@ mod tests {
                 "{refusal:?}"
             );
         }
+    }
+
+    // When Sell is enabled, and where a sale refused in the loop is worded
+    // (`RuleKey::SaleRefusal`).
+
+    /// The outfitter of `row` alone, `SaleRefusal` read as `source` says.
+    fn of_row_reading(row: OutfitRow, source: RuleSource) -> Outfitter {
+        Outfitter {
+            rules: Rulebook::default().with_override(RuleKey::SaleRefusal, source),
+            ..of_row(row)
+        }
+    }
+
+    /// Outfit 128, named, 3 owned, refused only by each of the sell
+    /// loop's checks in turn: the free mass, a raised `Max` (its target
+    /// named) and a launcher's ammunition (named), each with its refusal.
+    fn refused_in_the_loop() -> [(OutfitRefusal, OutfitRow); 3] {
+        let mut sold = counted(1, 3, ROOM, ROOM);
+        sold.facts.names = lc("rack", "racks");
+        let negative = OutfitRow {
+            mass: -5,
+            ..sold.clone()
+        };
+        let mut raiser = sold.clone();
+        raiser.facts.raises = vec![Raise {
+            target: OutfitId(200),
+            held: 5,
+            target_max: Some(2),
+            left_by_the_bible: 0,
+            target_names: Some(lc("widget", "widgets")),
+        }];
+        let mut launcher = sold;
+        launcher.facts.launcher = Some(Launcher {
+            max_ammo: 1,
+            rounds: 4,
+            ammo: Some(OutfitId(158)),
+        });
+        launcher.facts.ammo_names = Some(lc("round", "rounds"));
+        [
+            (OutfitRefusal::NegativeFreeMass, negative),
+            (
+                OutfitRefusal::RaisedFirst {
+                    count: 1,
+                    target: OutfitId(200),
+                },
+                raiser,
+            ),
+            (
+                OutfitRefusal::AmmunitionFirst {
+                    rounds: 2,
+                    ammo: Some(OutfitId(158)),
+                },
+                launcher,
+            ),
+        ]
+    }
+
+    /// Outfit 128 refused by each of the Sell flag's checks in turn, with
+    /// its refusal: none owned, `CANNOT_SELL`, and not sold here.
+    fn refused_by_the_sell_flag() -> [(OutfitRefusal, OutfitRow); 3] {
+        let mut unsellable = counted(1, 3, ROOM, ROOM);
+        unsellable.facts.flags = OutfitFlags::CANNOT_SELL;
+        let mut elsewhere = counted(1, 3, ROOM, ROOM);
+        elsewhere.facts.sold_here = false;
+        [
+            (OutfitRefusal::NoneOwned, counted(1, 0, ROOM, ROOM)),
+            (OutfitRefusal::CannotSell, unsellable),
+            (OutfitRefusal::NotBoughtHere, elsewhere),
+        ]
+    }
+
+    #[test]
+    fn by_the_engine_sell_is_enabled_by_the_sell_flag_alone() {
+        for (refusal, row) in refused_in_the_loop() {
+            for outfitter in [of_row(row.clone()), of_row_reading(row, RuleSource::Engine)] {
+                let sale = order_128(Direction::Sell);
+                assert_eq!(outfitter.can(sale), Ok(()), "{refusal:?}");
+                assert_eq!(outfitter.check(sale), Err(refusal), "{refusal:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_any_sale_check_greys_sell() {
+        for (refusal, row) in refused_in_the_loop() {
+            let outfitter = of_row_reading(row, RuleSource::Bible);
+            assert_eq!(
+                outfitter.can(order_128(Direction::Sell)),
+                Err(refusal),
+                "{refusal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_either_reading_a_sell_flag_refusal_greys_sell() {
+        for source in RuleSource::ALL {
+            for (refusal, row) in refused_by_the_sell_flag() {
+                let outfitter = of_row_reading(row, source);
+                let sale = order_128(Direction::Sell);
+                assert_eq!(outfitter.can(sale), Err(refusal), "{source:?} {refusal:?}");
+                assert_eq!(
+                    outfitter.check(sale),
+                    Err(refusal),
+                    "{source:?} {refusal:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_click_is_checked_by_every_sale_check_whatever_the_reading() {
+        for source in RuleSource::ALL {
+            for (refusal, row) in refused_in_the_loop() {
+                let outfitter = of_row_reading(row, source);
+                assert_eq!(
+                    outfitter.check(order_128(Direction::Sell)),
+                    Err(refusal),
+                    "{source:?}"
+                );
+            }
+            let sold = of_row_reading(counted(1, 3, ROOM, ROOM), source);
+            assert_eq!(sold.can(order_128(Direction::Sell)), Ok(()), "{source:?}");
+            assert_eq!(sold.check(order_128(Direction::Sell)), Ok(()), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn the_buttons_sale_checks_read_the_sale_refusal_rule_and_the_checks_keep_their_own() {
+        let button = sale_checks_on_the_button();
+        assert_eq!(button.about().name(), "sale checks on the button");
+        assert_eq!(button.about().reads(), Some(RuleKey::SaleRefusal));
+        assert_eq!(
+            button.about().reproduces(),
+            "`_DoOutfitDialog` @0x5c563-0x5c595 and `_OutfitFilter` @0x5808c-0x580b1 set \
+             the Sell flag by the count owned and `CANNOT_SELL` alone; the sale checks run \
+             only in the sell loop, @0x5c735-0x5ce6c"
+        );
+        assert!(!button.about().draws());
+        // The enable runs these two lists, each check under its own key.
+        assert_eq!(keys(&sell_flag()), [None; 3]);
+        assert_eq!(
+            keys(&sale_checks()),
+            [
+                Some(RuleKey::SaleMass),
+                Some(RuleKey::RaisedMax),
+                Some(RuleKey::LauncherSale),
+            ]
+        );
+        for about in [*sale_words().about(), *sale_alert_value().about()] {
+            assert_eq!(
+                about.reads(),
+                Some(RuleKey::SaleRefusal),
+                "{}",
+                about.name()
+            );
+            assert!(!about.draws(), "{}", about.name());
+        }
+        assert_eq!(sale_words().about().name(), "sale words");
+        assert_eq!(
+            sale_words().about().reproduces(),
+            "`_OutfitDialogUpdate` @0x57a12-0x57e68: only #213-#222"
+        );
+        assert_eq!(sale_alert_value().about().name(), "sale alert");
+        assert_eq!(
+            sale_alert_value().about().reproduces(),
+            "`_DoOutfitDialog` @0x5c735-0x5ce6c, -0x63e @0x5c6ca; `_ShowTextDialog` @0x5a8cf"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_the_info_box_has_no_sale_words() {
+        for (refusal, row) in refused_in_the_loop() {
+            for outfitter in [of_row(row.clone()), of_row_reading(row, RuleSource::Engine)] {
+                assert_eq!(outfitter.sale_words(OutfitId(128)), None, "{refusal:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_the_info_box_words_the_first_sale_check() {
+        for (refusal, row) in refused_in_the_loop() {
+            let outfitter = of_row_reading(row, RuleSource::Bible);
+            assert_eq!(outfitter.sale_words(OutfitId(128)), Some(refusal));
+            assert_eq!(outfitter.sale_words(OutfitId(129)), None, "not listed");
+        }
+        for (refusal, row) in refused_by_the_sell_flag() {
+            let outfitter = of_row_reading(row, RuleSource::Bible);
+            assert_eq!(outfitter.sale_words(OutfitId(128)), None, "{refusal:?}");
+        }
+        let sold = of_row_reading(counted(1, 3, ROOM, ROOM), RuleSource::Bible);
+        assert_eq!(sold.sale_words(OutfitId(128)), None, "sold");
+    }
+
+    fn pass(index: u32, count: u32) -> Pass {
+        Pass { index, count }
+    }
+
+    #[test]
+    fn by_the_engine_a_sale_refused_in_the_loop_alerts_naming_the_sold_outfit_singular_on_a_plain_click()
+     {
+        for (refusal, row) in refused_in_the_loop() {
+            let outfitter = of_row(row);
+            let sale = order_128(Direction::Sell);
+            let names = outfitter.lc_names(sale);
+            assert_eq!(
+                outfitter.sale_alert(sale, pass(0, 1)),
+                Some(SaleAlert {
+                    outfit: OutfitId(128),
+                    refusal,
+                    names,
+                    plural: false,
+                }),
+                "{refusal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_alert_names_the_ammunition_and_the_target_too() {
+        let [_, (_, raiser), (_, launcher)] = refused_in_the_loop();
+        let alert = of_row(raiser)
+            .sale_alert(order_128(Direction::Sell), pass(0, 1))
+            .expect("alerts");
+        assert_eq!(
+            alert.names,
+            BTreeMap::from([
+                (OutfitId(128), lc("rack", "racks")),
+                (OutfitId(200), lc("widget", "widgets")),
+            ])
+        );
+        let alert = of_row(launcher)
+            .sale_alert(order_128(Direction::Sell), pass(0, 1))
+            .expect("alerts");
+        assert_eq!(
+            alert.names,
+            BTreeMap::from([
+                (OutfitId(128), lc("rack", "racks")),
+                (OutfitId(158), lc("round", "rounds")),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_counted_sale_refused_at_its_first_pass_alerts_in_the_plural() {
+        for (refusal, row) in refused_in_the_loop() {
+            let outfitter = of_row(row);
+            let plural = |count| {
+                outfitter
+                    .sale_alert(order_128(Direction::Sell), pass(0, count))
+                    .map(|alert| alert.plural)
+            };
+            assert_eq!(plural(3), Some(true), "{refusal:?}");
+            assert_eq!(plural(2), Some(true), "{refusal:?}");
+            assert_eq!(plural(1), Some(false), "{refusal:?}");
+        }
+    }
+
+    #[test]
+    fn passes_remain_after_a_pass_but_the_last() {
+        assert!(!passes_remain(pass(0, 1)));
+        assert!(passes_remain(pass(0, 2)));
+        assert!(passes_remain(pass(1, 3)));
+        assert!(!passes_remain(pass(2, 3)));
+        assert!(!passes_remain(pass(3, 3)), "past the count");
+    }
+
+    #[test]
+    fn by_the_engine_a_refusal_after_the_first_pass_does_not_alert_yet() {
+        for (refusal, row) in refused_in_the_loop() {
+            let outfitter = of_row(row);
+            for index in [1, 2] {
+                assert_eq!(
+                    outfitter.sale_alert(order_128(Direction::Sell), pass(index, 3)),
+                    None,
+                    "{refusal:?} at {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_nothing_alerts() {
+        for (refusal, row) in refused_in_the_loop() {
+            let outfitter = of_row_reading(row, RuleSource::Bible);
+            for count in [1, 3] {
+                assert_eq!(
+                    outfitter.sale_alert(order_128(Direction::Sell), pass(0, count)),
+                    None,
+                    "{refusal:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_buy_a_sell_flag_refusal_or_an_accepted_sale_never_alerts() {
+        for (refusal, row) in refused_in_the_loop() {
+            let mut outfitter = of_row(row);
+            outfitter.free_mass = -1;
+            assert!(outfitter.check(order_128(Direction::Buy)).is_err());
+            assert_eq!(
+                outfitter.sale_alert(order_128(Direction::Buy), pass(0, 1)),
+                None,
+                "{refusal:?}"
+            );
+        }
+        for (refusal, row) in refused_by_the_sell_flag() {
+            let outfitter = of_row(row);
+            assert_eq!(
+                outfitter.sale_alert(order_128(Direction::Sell), pass(0, 1)),
+                None,
+                "{refusal:?}"
+            );
+        }
+        let sold = of_row(counted(1, 3, ROOM, ROOM));
+        assert_eq!(
+            sold.sale_alert(order_128(Direction::Sell), pass(0, 1)),
+            None,
+            "sold"
+        );
+        assert_eq!(
+            sold.sale_alert(
+                OutfitOrder {
+                    outfit: OutfitId(129),
+                    direction: Direction::Sell,
+                },
+                pass(0, 1)
+            ),
+            None,
+            "not listed"
+        );
     }
 }
