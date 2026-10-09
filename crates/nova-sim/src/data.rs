@@ -1608,6 +1608,21 @@ mod tests {
     }
 
     #[test]
+    fn a_borrowed_or_shared_game_data_forwards_whether_the_fallback_sheet_reads() {
+        for (resources, reads) in [
+            (
+                vec![(Spin::TYPE, 1000, spin(1000)), (RLED, 1000, sheet(4, 4))],
+                true,
+            ),
+            (vec![(Spin::TYPE, 1000, spin(1000))], false),
+        ] {
+            let data = std::rc::Rc::new(store(&resources));
+            assert_eq!(PilotCatalog::fallback_sheet_reads(&data), reads, "Rc");
+            assert_eq!(PilotCatalog::fallback_sheet_reads(&&*data), reads, "&");
+        }
+    }
+
+    #[test]
     fn a_landing_sites_tech_levels_and_government_are_its_spöbs() {
         let mut port = stellar(0, 0, 0, 0x05, 0);
         put_i16s(&mut port, 0x0C, &[4, 6, 55, 57, 128]);
