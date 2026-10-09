@@ -7050,7 +7050,11 @@ mod tests {
                 RuleSource::Engine
             );
             let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
-            assert_eq!(outfitter.outfit_count, source, "{source:?}");
+            assert_eq!(
+                outfitter.rules.source_for(RuleKey::OutfitCount),
+                source,
+                "{source:?}"
+            );
         }
     }
 

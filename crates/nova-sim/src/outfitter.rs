@@ -523,10 +523,6 @@ pub struct Outfitter {
     pub bought: Bought,
     /// The rule set the outfitter was built by, which its questions read.
     pub rules: Rulebook,
-    /// What Option (Alt here) does with Buy or Sell
-    /// ([`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount)), read by
-    /// [`count_asked`](Self::count_asked).
-    pub outfit_count: RuleSource,
 }
 
 impl Outfitter {
@@ -680,16 +676,41 @@ impl Outfitter {
 
     /// The count Option (Alt here) asks for when `outfit` is bought or
     /// sold: by the engine's reading of
-    /// [`outfit_count`](Self::outfit_count), the quantity dialog opens at
-    /// [`count_max`](Self::count_max), and with `None` the click moves
-    /// one; by the other reading it never opens.
+    /// [`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount), the quantity
+    /// dialog opens at [`count_max`](Self::count_max), and with `None` the
+    /// click moves one; by the other reading it never opens.
     #[must_use]
     pub fn count_asked(&self, outfit: OutfitId, direction: Direction) -> Option<u32> {
-        match self.outfit_count {
-            RuleSource::Engine => self.count_max(outfit, direction),
-            RuleSource::Bible => None,
+        if option_asks_count().of(self) {
+            self.count_max(outfit, direction)
+        } else {
+            None
         }
     }
+}
+
+/// Whether Option (Alt here) on Buy or Sell asks for a count, as
+/// [`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount) says: by the
+/// engine it opens the quantity dialog at [`Outfitter::count_max`]; by
+/// the other reading each click moves one.
+fn option_asks_count() -> Value<Outfitter, bool> {
+    Value::disputed(
+        "option asks count",
+        "`_DoOutfitDialog` @0x5c0c0-0x5c1aa, @0x5c5e3-0x5c628",
+        RuleKey::OutfitCount,
+        asks_a_count,
+        moves_one,
+    )
+}
+
+/// The engine's Option: a count.
+fn asks_a_count(_: &Outfitter) -> bool {
+    true
+}
+
+/// The other reading's Option: one a click.
+fn moves_one(_: &Outfitter) -> bool {
+    false
 }
 
 /// The most the quantity dialog offers, bought or sold (`0x7d00`,
@@ -1673,7 +1694,6 @@ impl Shop<'_> {
             free_cargo: self.free_cargo,
             bought: self.bought,
             rules: self.rules,
-            outfit_count: self.rules.source_for(RuleKey::OutfitCount),
         })
     }
 
@@ -4438,6 +4458,18 @@ mod tests {
     }
 
     #[test]
+    fn the_refund_and_count_values_read_their_keys() {
+        assert_eq!(
+            option_asks_count().about().reads(),
+            Some(RuleKey::OutfitCount)
+        );
+        assert_eq!(
+            option_asks_count().about().reproduces(),
+            "`_DoOutfitDialog` @0x5c0c0-0x5c1aa, @0x5c5e3-0x5c628"
+        );
+    }
+
+    #[test]
     fn no_outfitter_check_draws() {
         let lists = [can_buy(), has_max(), sell_flag(), sale_checks()];
         for about in lists.iter().flat_map(Checks::descriptors) {
@@ -4449,6 +4481,7 @@ mod tests {
             *required().about(),
             *available().about(),
             *max_multiplier().about(),
+            *option_asks_count().about(),
         ] {
             assert!(!about.draws(), "{}", about.name());
         }
@@ -5005,13 +5038,13 @@ mod tests {
     /// The most a row has room for: `Max` and cap alike.
     const ROOM: i16 = i16::MAX;
 
-    /// What Alt asks for `direction` on `row` with `cash`, `outfit_count`
-    /// reading as `source`.
+    /// What Alt asks for `direction` on `row` with `cash`,
+    /// [`RuleKey::OutfitCount`] reading as `source`.
     fn asked(row: OutfitRow, cash: i64, source: RuleSource, direction: Direction) -> Option<u32> {
         Outfitter {
             rows: vec![row],
             cash,
-            outfit_count: source,
+            rules: Rulebook::default().with_override(RuleKey::OutfitCount, source),
             ..Outfitter::default()
         }
         .count_asked(OutfitId(128), direction)
@@ -5020,7 +5053,10 @@ mod tests {
     #[test]
     fn by_the_engine_alt_asks_at_the_maximum() {
         let engine = RuleSource::Engine;
-        assert_eq!(Outfitter::default().outfit_count, engine);
+        assert_eq!(
+            Outfitter::default().rules.source_for(RuleKey::OutfitCount),
+            engine
+        );
         let buy = counted(1000, 0, ROOM, ROOM);
         assert_eq!(asked(buy.clone(), 3000, engine, Direction::Buy), Some(3));
         assert_eq!(asked(buy, 1999, engine, Direction::Buy), None, "at 1");
@@ -5051,7 +5087,7 @@ mod tests {
             }
             .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
             .expect("an outfitter");
-            assert_eq!(outfitter.outfit_count, source);
+            assert_eq!(outfitter.rules.source_for(RuleKey::OutfitCount), source);
         }
     }
 

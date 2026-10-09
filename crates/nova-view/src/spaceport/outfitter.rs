@@ -856,7 +856,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use nova_sim::{Launcher, OutfitFacts, RuleSource};
+    use nova_sim::{Launcher, OutfitFacts, RuleKey, RuleSource, Rulebook};
 
     use crate::draw::DrawCommand;
     use crate::font::Font;
@@ -983,7 +983,7 @@ mod tests {
             ],
             cash: 5000,
             free_mass: 5,
-            outfit_count: RuleSource::Engine,
+            rules: Rulebook::default().with_override(RuleKey::OutfitCount, RuleSource::Engine),
             ..Outfitter::default()
         }
     }
@@ -2514,7 +2514,7 @@ mod tests {
     #[test]
     fn by_the_other_count_reading_alt_records_one_and_never_opens_the_dialog() {
         let mut screen = screen_of(Outfitter {
-            outfit_count: RuleSource::Bible,
+            rules: Rulebook::default().with_override(RuleKey::OutfitCount, RuleSource::Bible),
             ..counting()
         });
         alt_click(&mut screen, BUY_ITEM);
