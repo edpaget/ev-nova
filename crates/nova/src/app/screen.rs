@@ -1525,7 +1525,8 @@ impl AppScreen {
             }
             // A plain click's count of 1 is exactly one order. A sale
             // refused in the sell loop shows its words over the
-            // outfitter; any other refusal changes nothing.
+            // outfitter, at whatever pass it is refused; the sales before
+            // it stand. Any other refusal changes nothing.
             if let Some((order, count)) = outfit
                 && let Some(alert) = flight.outfit_order(order, count).alert
             {
@@ -2037,7 +2038,14 @@ pub(super) mod tests {
     /// credits: with both owned, 5 tons are free, and selling the pod
     /// would leave -15.
     fn pod_data() -> Rc<GameData> {
-        game_data_full(true, true, false, 100, b"", b"", true)
+        game_data_full(true, true, false, 100, b"", b"", Some(500))
+    }
+
+    /// [`pod_data`], the pod 450 credits: the 1000 credits buy two pods
+    /// and the hold, leaving 25 tons free, so one pod sold leaves 5 and a
+    /// second would leave -15.
+    fn two_pod_data() -> Rc<GameData> {
+        game_data_full(true, true, false, 100, b"", b"", Some(450))
     }
 
     /// [`game_data`], ship 129 for sale on a `BuyRandom` of `buy_random`,
@@ -2058,12 +2066,13 @@ pub(super) mod tests {
             buy_random,
             on_start,
             on_purchase,
-            false,
+            None,
         )
     }
 
-    /// [`game_data_with`], the booster a pod of -20 tons and a 25-ton
-    /// hold (`oütf` 129) for sale too when `pod` ([`pod_data`]).
+    /// [`game_data_with`], the booster a pod of -20 tons priced `pod` and
+    /// a 25-ton hold (`oütf` 129) for sale too when `pod` is some
+    /// ([`pod_data`]).
     #[allow(clippy::fn_params_excessive_bools)] // A fixture's switches.
     fn game_data_full(
         trading: bool,
@@ -2072,7 +2081,7 @@ pub(super) mod tests {
         buy_random: i16,
         on_start: &[u8],
         on_purchase: &[u8],
-        pod: bool,
+        pod: Option<i32>,
     ) -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
@@ -2109,8 +2118,9 @@ pub(super) mod tests {
                 let leave = str_list(&["Off you go, <PSN>."]);
                 fork = fork.resource(StrList::TYPE, 25048, None, &leave);
             }
-            if pod {
+            if let Some(price) = pod {
                 booster[0x02..0x04].copy_from_slice(&(-20_i16).to_be_bytes());
+                booster[0x0E..0x12].copy_from_slice(&price.to_be_bytes());
                 let mut hold = booster_record(b"");
                 hold[0x02..0x04].copy_from_slice(&25_i16.to_be_bytes());
                 hold[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
@@ -4768,6 +4778,43 @@ pub(super) mod tests {
         screen.input(&key(Key::Escape, true));
         assert!(spaceport(&screen).open_outfitter().is_none());
         assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    #[test]
+    fn a_counted_sale_refused_part_way_keeps_its_sales_and_opens_its_words() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, two_pod_data());
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Right, true));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Left, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 2);
+        assert_eq!(pilot(&screen).owned(OutfitId(129)), 1);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().free_mass, 25);
+        let refund = open.outfitter().refund(BOOSTER).expect("a refund");
+        let (cash, writes) = (pilot(&screen).cash(), store.writes());
+        // Alt-S, as a Mac sends Option-S, then a count of 2.
+        screen.input(&key(Key::Alt, true));
+        screen.input(&key(Key::Char('s'), true));
+        screen.input(&Input::Text('ß'));
+        screen.input(&key(Key::Alt, false));
+        screen.input(&key(Key::Char('2'), true));
+        screen.input(&Input::Text('2'));
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "one sold, then refused");
+        assert_eq!(pilot(&screen).cash(), cash + refund);
+        assert_eq!(store.writes(), writes + 1, "saved after the input");
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        let alert = open.alert_dialog().expect("the words in DLOG 3003");
+        assert_eq!(alert.lines().join(" "), NEGATIVE_FREE_MASS);
+        screen.input(&key(Key::Escape, true));
+        let open = spaceport(&screen)
+            .open_outfitter()
+            .expect("still outfitting");
+        assert!(open.alert_dialog().is_none(), "Escape closed the words");
     }
 
     #[test]
