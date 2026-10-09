@@ -35,7 +35,6 @@ use crate::catalog::{
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
-use crate::story::wreck::STARTS_DESTROYED;
 
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
@@ -324,7 +323,7 @@ impl PilotCatalog for GameData {
                     id: StellarId(id),
                     strength: stellar.strength,
                     dead_time: stellar.dead_time,
-                    starts_destroyed: stellar.flags2.bits() & STARTS_DESTROYED != 0,
+                    flags2: stellar.flags2.bits(),
                     on_regen: self.set_expr(stellar.on_regen.as_str()).into(),
                 })
             })
@@ -2019,7 +2018,8 @@ mod tests {
     }
 
     #[test]
-    fn stellar_lives_list_every_readable_spöb_by_id_with_its_strength_dead_time_and_on_regen() {
+    fn stellar_lives_list_every_readable_spöb_by_id_with_its_strength_dead_time_flags2_and_on_regen()
+     {
         let mut whole = stellar(0, 0, 0, 0, 0);
         whole[0x23C..0x240].copy_from_slice(&70_000_i32.to_be_bytes());
         put_i16s(&mut whole, 0x242, &[-1]);
@@ -2036,16 +2036,11 @@ mod tests {
         assert_eq!(
             lives
                 .iter()
-                .map(|life| (
-                    life.id,
-                    life.strength,
-                    life.dead_time,
-                    life.starts_destroyed
-                ))
+                .map(|life| (life.id, life.strength, life.dead_time, life.flags2))
                 .collect::<Vec<_>>(),
             [
-                (StellarId(128), 70_000, -1, false),
-                (StellarId(130), -1, 3, true),
+                (StellarId(128), 70_000, -1, 0),
+                (StellarId(130), -1, 3, 0x0060),
             ],
             "the unreadable 129 left out"
         );
@@ -2059,10 +2054,6 @@ mod tests {
             shared_script(&lives[0].on_regen, &data.stellar_lives()[0].on_regen),
             "parsed once"
         );
-        let mut starts_whole = flagged2(stellar(0, 0, 0, 0, 0), !0x0040);
-        put_i16s(&mut starts_whole, 0x242, &[0]);
-        let data = store(&[(Stellar::TYPE, 131, starts_whole)]);
-        assert!(!data.stellar_lives()[0].starts_destroyed, "every other bit");
         assert_eq!(store(&[]).stellar_lives(), []);
     }
 

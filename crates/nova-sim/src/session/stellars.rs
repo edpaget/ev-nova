@@ -100,7 +100,9 @@ impl Session {
             .lives
             .values()
             .filter(|life| {
-                life.starts_destroyed && wreck::in_range(life.id) && wreck::destroys(life, reading)
+                wreck::starts_destroyed(life)
+                    && wreck::in_range(life.id)
+                    && wreck::destroys(life, reading)
             })
             .map(|life| (life.id, wreck::countdown_on_destroy(life)))
             .collect();
@@ -661,7 +663,9 @@ mod tests {
                 (2176, 2, true),
             ]
             .map(|(id, dead_time, starts_destroyed)| StellarLife {
-                starts_destroyed,
+                // `Flags2` 0x0040 starts it destroyed; 0x0020, which
+                // starts it dominated, does not.
+                flags2: if starts_destroyed { 0x0060 } else { 0x0020 },
                 ..life(id, dead_time)
             }),
         );

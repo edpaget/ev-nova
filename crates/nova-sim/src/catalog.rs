@@ -153,8 +153,9 @@ pub struct StellarLife {
     pub strength: i32,
     /// Its `DeadTime`: the days it stays destroyed, -1 for never.
     pub dead_time: i16,
-    /// Whether its `Flags2` has 0x0040: it starts the game destroyed.
-    pub starts_destroyed: bool,
+    /// Its `Flags2`, raw: the wreck rules read whether it starts the game
+    /// destroyed from it.
+    pub flags2: u16,
     /// Its `OnRegen`, run as it regenerates on its own.
     pub on_regen: Script,
 }
@@ -1156,7 +1157,7 @@ mod tests {
                 id: StellarId(128),
                 strength: 500,
                 dead_time: 7,
-                starts_destroyed: true,
+                flags2: 0x0040,
                 on_regen: Script::default(),
             }]
         }

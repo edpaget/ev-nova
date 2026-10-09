@@ -12,7 +12,13 @@ use crate::rulebook::RuleSource;
 
 /// The `spöb` `Flags2` bit of a stellar that starts the game destroyed
 /// (`_DoNewPilot` @0x192d6).
-pub(crate) const STARTS_DESTROYED: u16 = 0x0040;
+const STARTS_DESTROYED: u16 = 0x0040;
+
+/// Whether the stellar `life` starts the game destroyed: its `Flags2` has
+/// 0x0040 (`_DoNewPilot` @0x192d6), whatever its other bits.
+pub(crate) fn starts_destroyed(life: &StellarLife) -> bool {
+    life.flags2 & STARTS_DESTROYED != 0
+}
 
 /// The stellars `Y` and `U` act on: the original's 2048 slots
 /// (@0x15a3f-0x15a46, @0x15af2-0x15af9). Any other ID does nothing.
@@ -79,7 +85,7 @@ mod tests {
             id: StellarId(128),
             strength,
             dead_time,
-            starts_destroyed: false,
+            flags2: 0,
             on_regen: Script::default(),
         }
     }
@@ -122,6 +128,24 @@ mod tests {
     fn a_stellar_of_negative_dead_time_never_regenerates_on_its_own() {
         for days in [0, 1, 5] {
             assert_eq!(day(&life(100, -1), left(days)), Tick::Stays(left(1)));
+        }
+    }
+
+    #[test]
+    fn a_stellar_starts_the_game_destroyed_when_its_flags2_has_0x0040() {
+        for (flags2, starts) in [
+            (0x0040, true),
+            (0xffff, true),
+            (0x0060, true),
+            (0, false),
+            (0x0020, false),
+            (!0x0040, false),
+        ] {
+            let life = StellarLife {
+                flags2,
+                ..life(100, 0)
+            };
+            assert_eq!(starts_destroyed(&life), starts, "{flags2:#x}");
         }
     }
 

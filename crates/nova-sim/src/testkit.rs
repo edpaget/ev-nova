@@ -94,7 +94,7 @@ pub(crate) fn life(id: i16, dead_time: i16) -> StellarLife {
         id: StellarId(id),
         strength: 100,
         dead_time,
-        starts_destroyed: false,
+        flags2: 0,
         on_regen: crate::control::Script::default(),
     }
 }
