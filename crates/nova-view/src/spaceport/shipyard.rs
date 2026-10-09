@@ -890,7 +890,7 @@ impl Screen for ShipyardScreen {
 mod tests {
     use std::cell::RefCell;
 
-    use nova_sim::{Rulebook, ShipFacts, ShipFields, ShipRefusal, ShipSpecs};
+    use nova_sim::{Rulebook, ShipFacts, ShipFields, ShipSpecs};
 
     use super::*;
     use crate::draw::DrawCommand;
@@ -1043,7 +1043,6 @@ mod tests {
             short_name: short_name.to_owned(),
             price,
             specs: SPECS,
-            buy: Ok(()),
             facts: ShipFacts { buyable: true },
         }
     }
@@ -1056,12 +1055,8 @@ mod tests {
             rows: vec![
                 row(128, "Shuttle", 10_000),
                 row(129, "Heavy\\nShuttle", 17_500),
+                row(130, "*Courier", 90_000),
                 ShipRow {
-                    buy: Err(ShipRefusal::CannotAfford),
-                    ..row(130, "*Courier", 90_000)
-                },
-                ShipRow {
-                    buy: Err(ShipRefusal::NotForSale),
                     facts: ShipFacts { buyable: false },
                     ..row(131, "Viper", 20_000)
                 },

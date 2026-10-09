@@ -2106,7 +2106,6 @@ mod tests {
                     length: 0,
                     crew: 0,
                 },
-                buy: Ok(()),
                 facts: ShipFacts { buyable: true },
             }],
             trade_in: 2500,

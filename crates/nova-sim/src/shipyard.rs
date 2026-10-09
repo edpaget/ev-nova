@@ -244,8 +244,6 @@ pub struct ShipRow {
     pub price: i64,
     /// What the shipyard's Info shows of it.
     pub specs: ShipSpecs,
-    /// Whether it can be bought now, or why not.
-    pub buy: Result<(), ShipRefusal>,
     /// What the shipyard's rules read about the class, settled when the
     /// shipyard was built.
     pub facts: ShipFacts,
@@ -534,13 +532,6 @@ impl Yard<'_> {
                 continue;
             }
             let price = ship_price(ship);
-            let buy = if !buyable {
-                Err(ShipRefusal::NotForSale)
-            } else if pilot.cash.saturating_add(trade_in) < price {
-                Err(ShipRefusal::CannotAfford)
-            } else {
-                Ok(())
-            };
             rows.push((
                 ship.disp_weight,
                 ShipRow {
@@ -555,7 +546,6 @@ impl Yard<'_> {
                         length: ship.length,
                         crew: ship.crew,
                     },
-                    buy,
                     facts: ShipFacts { buyable },
                 },
             ));
@@ -1111,7 +1101,6 @@ mod tests {
                         length: 26,
                         crew: 4,
                     },
-                    buy: Ok(()),
                     facts: ShipFacts { buyable: true },
                 }],
                 trade_in: 0,
