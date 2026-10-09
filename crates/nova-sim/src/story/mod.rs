@@ -305,31 +305,45 @@
 //! counts, so the two differ only when a success script changes another
 //! mission's ships.
 //!
-//! **Re-entrancy (decided).** By default an event raised by a script is
-//! queued, and dispatched once the script has settled. A subscription's
-//! script runs as any script does today: `apply_op`'s arms apply their
-//! effects or queue them, and the queued moves and `Q` apply when
-//! [`Session::settle_script`](crate::Session::settle_script) settles. An
-//! event those effects raise waits until the current dispatch has
-//! finished and the script has settled, then dispatches in the order
-//! raised, first in, first out; never in the middle of a script:
+//! **Re-entrancy (decided).** Phase 3 adds the Rulebook key
+//! `story_reentry`, with two readings. Its default is the original's:
+//! **nested**. An event a script's operator raises is dispatched depth
+//! first, inside the script run, before the script's next operator, as
+//! `_EvalSetExp` (@0x150fc) does (see "Scripts that raise events"):
+//!
+//! - `S` accepts the mission and runs its `OnAccept` before the next
+//!   operator (`_DoMissionAccept` @0x15407, `OnAccept` @0xa1da2), with an
+//!   auto-aborted mission's `DatePostInc` days, crons and all (@0xa2186);
+//! - `A` aborts the mission and runs its `OnAbort` there (@0x1532e,
+//!   @0x99ba1);
+//! - `M` and `N` in flight enter the system, redraw its stellars and run
+//!   the enter-system subscriptions there (@0x159a3, @0x159a8).
+//!
+//! Today `apply_op` only queues a move, and
+//! [`Session::settle_script`](crate::Session::settle_script) applies it
+//! after the script, since a script has no catalog to read the new system
+//! from (see `script_effects`). So under the default the dispatcher
+//! settles inside the script run: once an operator has raised or queued
+//! something, it settles the queue there (the moves, and an
+//! `enter_system` they cause raising `EnteredSystem`), dispatches the
+//! events raised, depth first, and only then runs the next operator.
+//! Phase 3 builds that, handing the catalog to the script run.
+//!
+//! The other reading is **queued**, today's after-settle order. An event
+//! raised by a script waits until the current dispatch has finished and
+//! the script has settled, then dispatches in the order raised, first in,
+//! first out; never in the middle of a script:
 //!
 //! 1. a dispatch runs its subscriptions' scripts, in order;
 //! 2. `settle_script` applies the queued moves, and an `enter_system` they
 //!    cause raises `EnteredSystem`;
 //! 3. the dispatcher takes the next pending event, that one among them;
-//! 4. and so on until none is pending. At most 64 events are dispatched
-//!    from one settling, a guard against scripts that raise each other for
-//!    ever; phase 3 drops the rest and tells the session's diagnostics.
+//! 4. and so on until none is pending.
 //!
-//! The original nests instead (see "Scripts that raise events"). Phase 3
-//! adds the Rulebook key `story_reentry` for it, with two readings:
-//! `queued`, the default, and `nested`, where an event raised inside a
-//! script is dispatched depth first, before the script's next operator.
-//! The default departs from the original, where every other key's default
-//! follows it: a move cannot enter a system in the middle of a script,
-//! which has no catalog to read the system from (see `script_effects`),
-//! so phase 3 marks the departure in the rulebook's table.
+//! Under either reading at most 64 events are dispatched from one
+//! settling (nested: one outermost script run), a guard against scripts
+//! that raise each other for ever; phase 3 drops the rest and tells the
+//! session's diagnostics. Phase 3 tests both readings.
 //!
 //! A consumer's own effects, which are not set expressions (a mission's
 //! pay, legal record and `DatePostInc` days, a ship goal's count), are
@@ -450,7 +464,8 @@
 //!   jettisoned, found or plundered does the same (missions phase 5);
 //! - `S`, `A` and `F`, through `apply_op`: `S` accepts, running `OnAccept`
 //!   there as the original does, any event the accept raises being
-//!   queued (see "Dispatch"); `A` aborts there; `F` marks the mission
+//!   dispatched as `story_reentry` says, nested by default (see
+//!   "Dispatch"); `A` aborts there; `F` marks the mission
 //!   failed, and it fails at the next landing check.
 //!
 //! `EnteredSystem` moves no mission: the original's enter-system hook only
