@@ -739,15 +739,17 @@ impl OutfitterScreen {
             return;
         };
         let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
-        let mut lines = vec![
-            format!("{PRICE_LABEL} {}", row.price),
-            format!("{MASS_LABEL} {} tons", row.mass),
-            format!("{OWNED_LABEL} {}", row.owned),
+        // An outfit of `Mass` 0 or less shows neither mass line.
+        let mass = self.outfitter.item_mass_shown(row.id);
+        let mut lines = vec![format!("{PRICE_LABEL} {}", row.price)];
+        lines.extend(mass.map(|mass| format!("{MASS_LABEL} {}", tons_text(mass))));
+        lines.push(format!("{OWNED_LABEL} {}", row.owned));
+        lines.extend(mass.map(|_| {
             format!(
                 "{AVAILABLE_LABEL} {}",
                 tons_text(self.outfitter.free_mass_shown())
-            ),
-        ];
+            )
+        }));
         let sale = OutfitOrder {
             outfit: row.id,
             direction: Direction::Sell,
@@ -999,6 +1001,7 @@ mod tests {
             facts: OutfitFacts {
                 buyable: true,
                 sold_here: true,
+                mass_field: i16::try_from(mass).expect("a 16-bit mass"),
                 ..OutfitFacts::default()
             },
         }
@@ -1517,7 +1520,7 @@ mod tests {
             ("Map".to_owned(), name(3, "Map", 6.0), TEXT_COLOR),
             ("dësc 3000.".to_owned(), description, Color::WHITE),
             ("Item Price: 1000".to_owned(), line(0.0), TEXT_COLOR),
-            ("Item Mass: 1 tons".to_owned(), line(1.0), TEXT_COLOR),
+            ("Item Mass: 1 ton".to_owned(), line(1.0), TEXT_COLOR),
             ("You Have: 2".to_owned(), line(2.0), TEXT_COLOR),
             ("Available: 5 tons".to_owned(), line(3.0), TEXT_COLOR),
         ];
@@ -1983,6 +1986,33 @@ mod tests {
     }
 
     #[test]
+    fn the_item_mass_line_has_a_ton_at_exactly_1_and_no_line_without_mass() {
+        let lines = |mass| {
+            info_lines_of(Outfitter {
+                rows: vec![row(128, "Widget", 100, mass, 0)],
+                free_mass: 5,
+                ..outfitter()
+            })
+        };
+        let one = lines(1);
+        assert!(one.contains(&"Item Mass: 1 ton".to_owned()), "{one:?}");
+        assert!(one.contains(&"Available: 5 tons".to_owned()), "{one:?}");
+        let two = lines(2);
+        assert!(two.contains(&"Item Mass: 2 tons".to_owned()), "{two:?}");
+        for mass in [0, -5] {
+            let none = lines(mass);
+            assert!(
+                !none
+                    .iter()
+                    .any(|line| line.starts_with("Item Mass:") || line.starts_with("Available:")),
+                "{mass}: {none:?}"
+            );
+            assert!(none.contains(&"Item Price: 100".to_owned()), "{none:?}");
+            assert!(none.contains(&"You Have: 0".to_owned()), "{none:?}");
+        }
+    }
+
+    #[test]
     fn the_info_box_says_why_buy_or_sell_is_greyed_when_the_original_words_it() {
         let mut screen = screen();
         press(&mut screen, Key::Right);
@@ -2021,9 +2051,7 @@ mod tests {
             lines,
             [
                 "Item Price: 100",
-                "Item Mass: -5 tons",
                 "You Have: 1",
-                "Available: 4 tons",
                 MAX_OWNED,
                 NEGATIVE_FREE_MASS,
             ]
@@ -2820,7 +2848,9 @@ mod tests {
         for (row, line) in refused_in_the_loop() {
             let engine = info_box(&screen_of(loop_refusing(row.clone(), RuleSource::Engine)));
             assert!(!engine.contains(&line.to_owned()), "{engine:?}");
-            assert_eq!(engine.len(), 4, "{engine:?}");
+            // The price and the count owned: the rack is massless, so it
+            // shows no Item Mass or Available line.
+            assert_eq!(engine.len(), 2, "{engine:?}");
             let other = info_box(&screen_of(loop_refusing(row, RuleSource::Bible)));
             assert_eq!(other.last().map(String::as_str), Some(line), "{other:?}");
         }
