@@ -1861,7 +1861,10 @@ mod tests {
                 owned,
                 max: 10,
                 facts: OutfitFacts {
-                    buyable: true,
+                    listed: true,
+                    buy_tech: true,
+                    required: true,
+                    available: true,
                     sold_here: true,
                     ..OutfitFacts::default()
                 },

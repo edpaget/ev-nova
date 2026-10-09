@@ -17,8 +17,14 @@
 //! but greyed for its `Require` or `Availability`, an owned one, and an
 //! owned `SELL_ANYWHERE` or `Flags2` row that tech does not sell.
 //!
-//! An outfit for sale by tech can be *bought* when its `Require` bits are
-//! met and its `Availability` holds. `Require` is met when each of its
+//! A listed outfit can be *bought* when `_CanBuyOutfitItem`'s own tech
+//! test passes it (@0x4e7ff-0x4e83d), its `Require` bits are met and its
+//! `Availability` holds. By the engine that tech test is not the
+//! listing's: an outfit of `TechLevel` -1 always passes, and any other
+//! passes at or below the stellar's tech or by a `SpecialTech` slot, with
+//! no sign or 0x7fff test ([`wares::outfit_buy_tech_allows`]); by the
+//! Bible it is the listing's own test ([`RuleKey::TechLevel`]). So
+//! wherever tech lists an outfit, Buy's tech test passes it too. `Require` is met when each of its
 //! bits is in the `Contribute` of the ship or of an outfit the player
 //! owns. Its
 //! `RequireGovt` says where `Require` applies: -1, and any value outside
@@ -68,8 +74,9 @@
 //! roll a landing is the original's roll a day. Buying or selling an
 //! outfit draws no roll again. An outfit off today is not listed and
 //! takes no higher one off sale; one the player owns that is flagged
-//! [`OutfitFlags::SELL_ANYWHERE`] is still listed, sell-only, unless a
-//! lower hider takes it off (below).
+//! [`OutfitFlags::SELL_ANYWHERE`] is still listed, and can be bought
+//! only as `_CanBuyOutfitItem`'s tech test allows (below), unless a lower
+//! hider takes it off.
 //!
 //! # What it lists
 //!
@@ -82,8 +89,9 @@
 //! lower-numbered [`OutfitFlags::HIDE_HIGHER`] outfit of its `DispWeight`
 //! that is listed takes it off. The sweep runs after the `SELL_ANYWHERE`
 //! step (@0xc096-0xc0ba, then @0xc11f-0xc175), so such an outfit is not
-//! listed and cannot be sold there. Such a row can
-//! only be sold where the outfit is not for sale. Rows go by `DispWeight`,
+//! listed and cannot be sold there. Where tech does not sell it, such a
+//! row is sell-only unless `_CanBuyOutfitItem`'s own tech test passes it
+//! (see Buying and selling). Rows go by `DispWeight`,
 //! highest first, then by ID.
 //!
 //! At a stellar whose `Flags2` has [`BUYS_OWNED_OUTFITS`] (0x0400), every
@@ -96,8 +104,11 @@
 //! off sale (@0xc158); listed, it hides higher ones of its weight when it
 //! is [`OutfitFlags::HIDE_HIGHER`] itself, and it goes by `DispWeight`
 //! like any other row.
-//! Such a row is sell-only here: tech still refuses its Buy, as
-//! `_CanBuyOutfitItem`'s own tech test does (@0x4e7ff-0x4e83d). The
+//! Such a row is sell-only here unless `_CanBuyOutfitItem`'s own tech
+//! test passes it (@0x4e7ff-0x4e83d): by the engine, when its `TechLevel`
+//! is -1, another negative one at or below the stellar's, or 0x7fff with
+//! a slot of 0x7fff or at a stellar of 0x7fff; by the Bible, never, as the
+//! listing's test already refused it. The
 //! Bible says the stellar "can buy any nonpermanent outfits the player
 //! owns"; "nonpermanent" names no `oütf` flag, and the engine reads it as
 //! [`OutfitFlags::CANNOT_SELL`], the one bit that forbids a sale.
@@ -119,7 +130,9 @@
 //!
 //! Each order buys or sells one, and a refused one changes nothing. A buy
 //! is refused, checked in `_CanBuyOutfitItem`'s order (@0x4e7c4-0x4ebbc),
-//! when the outfit cannot be bought here, the player owns its
+//! when `_CanBuyOutfitItem`'s own tech test refuses it (@0x4e7ff-0x4e83d;
+//! the port first refuses a row that is not listed, which the original
+//! never asks about), the player owns its
 //! ammunition cap (below) or its `Max` already, it is a gun or a turret
 //! past the ship's limit (below), there is not the free mass for it (an
 //! outfit of mass 0 or less always fits, even when the free mass is
@@ -138,11 +151,11 @@
 //! opening and was bought since the outfitter opened (below), or the
 //! player cannot pay. An
 //! outfit whose first mod is `ModType` 3 is never tested as a mass
-//! expansion (@0x4e8f6). The original's `Require` and `Availability` come
-//! after the expansion tests; here they refuse first, as
-//! [`OutfitRefusal::NotForSale`], which no player can tell apart: the
-//! original returns only whether the outfit can be bought, which enables
-//! its Buy button, and never shows or tells apart a refusal. A
+//! expansion (@0x4e8f6). `Require` (@0x4e9cb-0x4eb37) and `Availability`
+//! (@0x4eb51-0x4eb58) come after the once-an-opening check and before
+//! the cash, each refused as [`OutfitRefusal::NotForSale`]. The original
+//! returns only whether the outfit can be bought, which enables its Buy
+//! button, and never shows or tells apart a refusal. A
 //! buy pays the price, then grants one through the session's grant path,
 //! as the original's `_DoOutfitDialog` calls `_GrantOutfitItem`
 //! (@0x5c21d): a map explores, a clean-record outfit cleans the legal
@@ -409,8 +422,10 @@ pub enum OutfitRefusal {
     NoOutfitter,
     /// The outfitter does not list the outfit.
     NotListed,
-    /// The outfit is listed but cannot be bought here: it is not for sale,
-    /// its `Require` is not met, or its `Availability` does not hold.
+    /// The outfit is listed but cannot be bought here:
+    /// `_CanBuyOutfitItem`'s own tech test refuses it, or its `Require` is
+    /// not met, or its `Availability` does not hold (or it is the row a
+    /// relisting asks for, which is not listed).
     NotForSale,
     /// The player owns its `Max` already.
     MaxOwned,
@@ -538,6 +553,8 @@ pub struct OutfitRow {
 /// What the outfitter's rules read about one outfit, settled when the
 /// outfitter is built: whatever needs the gate, the day's rolls or every
 /// record is worked out then, so the rules answer from these alone.
+// Each flag is its own fact, settled at build and read by its own check.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OutfitFacts {
     /// Its own `LCName` and `LCPlural`.
@@ -549,7 +566,21 @@ pub struct OutfitFacts {
     /// Whether it can be bought here at all: for sale here today by tech,
     /// its `Require` met and its `Availability` holding (see the module
     /// docs).
-    pub buyable: bool,
+    /// Whether it is in the list, so Buy can be asked of it: false only
+    /// for the row a relisting's sell loop asks for that is not listed
+    /// (`_OutfitFilter` @0x5806f-0x5808a and `_DoOutfitDialog`
+    /// @0x5c07a-0x5c0ba ask `_CanBuyOutfitItem` only of the selected list
+    /// item).
+    pub listed: bool,
+    /// Whether `_CanBuyOutfitItem`'s own tech test passes it
+    /// (@0x4e7ff-0x4e83d), as [`RuleKey::TechLevel`] reads it.
+    pub buy_tech: bool,
+    /// Whether its `Require` is met where its `RequireGovt` applies it
+    /// (`_CanBuyOutfitItem` @0x4e9cb-0x4eb37).
+    pub required: bool,
+    /// Whether its `Availability` holds (`_CanBuyOutfitItem`
+    /// @0x4eb51-0x4eb58).
+    pub available: bool,
     /// Whether it can be sold here at all: for sale here today, by tech or
     /// as an owned outfit at a stellar of `Flags2`
     /// [`BUYS_OWNED_OUTFITS`], or flagged [`OutfitFlags::SELL_ANYWHERE`].
@@ -1013,21 +1044,25 @@ fn holds(holds: bool, refusal: OutfitRefusal) -> Result<(), OutfitRefusal> {
 }
 
 /// Whether Buy is enabled for an outfit, as `_CanBuyOutfitItem` has it
-/// (@0x4e7c4-0x4ebbc), in the port's order: it can be bought here at
-/// all (the original tests `Require` and `Availability` after the
-/// expansion tests, and returns only whether the outfit can be bought,
-/// so no player can tell the order apart), then [`has_max_checks`], the
-/// free mass, the bays' room, the two mass-expansion tests, the
-/// once-an-opening flags and the cash.
+/// (@0x4e7c4-0x4ebbc): the row is listed (the port's own), then its own
+/// tech test, [`has_max_checks`], the free mass, the bays' room, the two
+/// mass-expansion tests, the once-an-opening flags, `Require`,
+/// `Availability` and the cash.
 fn can_buy<'a>() -> Checks<RowOutfit<'a>, OutfitRefusal> {
     let [ammunition, raised, guns, turrets] = has_max_checks();
     [
         Check::plain(
-            "for sale",
-            "`_CanBuyOutfitItem` tech @0x4e7f5-0x4e83d; `Require` @0x4e9cb-0x4eb37 and \
-             `Availability` @0x4eb51-0x4eb58, which the port refuses first; the day's \
-             roll and `HideHigher` as listed (`_SetupPortAvailableItems` @0xbedb)",
-            buyable,
+            "listed",
+            "port-only: Buy is asked only of the selected list item (`_OutfitFilter` \
+             @0x5806f-0x5808a, `_DoOutfitDialog` @0x5c07a-0x5c0ba); the row the \
+             relisting sell loop asks for is not one",
+            in_the_list,
+        ),
+        Check::plain(
+            "tech",
+            "`_CanBuyOutfitItem` @0x4e7ff-0x4e83d, as `buy tech` reads it at build \
+             (`TechLevel` -1 skips it @0x4e802)",
+            tech_buys,
         ),
         ammunition,
         raised,
@@ -1060,6 +1095,16 @@ fn can_buy<'a>() -> Checks<RowOutfit<'a>, OutfitRefusal> {
             RuleKey::OutfitLimit,
             not_bought_this_opening,
             never_limited,
+        ),
+        Check::plain(
+            "required",
+            "`_CanBuyOutfitItem` @0x4e9cb-0x4eb37",
+            requirement_holds,
+        ),
+        Check::plain(
+            "available",
+            "`_CanBuyOutfitItem` @0x4eb51-0x4eb58",
+            availability_holds,
         ),
         Check::plain(
             "cash",
@@ -1253,10 +1298,28 @@ fn passes_remain(pass: Pass) -> bool {
     pass.count.saturating_sub(pass.index) > 1
 }
 
-/// The outfit can be bought here at all: for sale today by tech, its
-/// `Require` met and its `Availability` holding.
-fn buyable(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
-    holds(asked.row.facts.buyable, OutfitRefusal::NotForSale)
+/// The row is listed, so Buy can be asked of it; refused as
+/// [`OutfitRefusal::NotForSale`].
+fn in_the_list(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
+    holds(asked.row.facts.listed, OutfitRefusal::NotForSale)
+}
+
+/// `_CanBuyOutfitItem`'s own tech test passes the outfit; refused as
+/// [`OutfitRefusal::NotForSale`].
+fn tech_buys(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
+    holds(asked.row.facts.buy_tech, OutfitRefusal::NotForSale)
+}
+
+/// The outfit's `Require` is met where it applies; refused as
+/// [`OutfitRefusal::NotForSale`].
+fn requirement_holds(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
+    holds(asked.row.facts.required, OutfitRefusal::NotForSale)
+}
+
+/// The outfit's `Availability` holds; refused as
+/// [`OutfitRefusal::NotForSale`].
+fn availability_holds(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
+    holds(asked.row.facts.available, OutfitRefusal::NotForSale)
 }
 
 /// The count owned is below the ammunition cap, if it has one, compared
@@ -2219,7 +2282,6 @@ impl Shop<'_> {
                 };
             let on_sale = sweep.on_sale(record.disp_weight);
             let for_sale = today && on_sale;
-            let buyable = for_sale && by_tech && required && available;
             let hidden = owned == 0 && hides(record.flags, required, available);
             let sells_anywhere = record.flags & OutfitFlags::SELL_ANYWHERE != 0;
             // The listing byte: the sweep (`_SetupPortAvailableItems`
@@ -2239,7 +2301,13 @@ impl Shop<'_> {
             let price = unit_price(record, self.fields.mass, &self.rules);
             let mass = unit_mass(record, self.fields.mass);
             let sold_here = !listed || for_sale || sells_anywhere;
-            let facts = self.facts(&offer, owned, buyable, sold_here);
+            let facts = OutfitFacts {
+                listed,
+                required,
+                available,
+                sold_here,
+                ..self.facts(&offer, owned)
+            };
             rows.push((
                 record.disp_weight,
                 OutfitRow {
@@ -2269,17 +2337,18 @@ impl Shop<'_> {
 
     /// The facts the outfitter's rules read about `offer`'s outfit, the
     /// player owning `owned` of it, settled as the outfitter is built:
-    /// whether it can be `buyable` here at all and `sold_here` at all, and
-    /// what the records, the ship and the rule set say of it.
-    fn facts(&self, offer: &Offer, owned: u16, buyable: bool, sold_here: bool) -> OutfitFacts {
+    /// whether Buy's own tech test passes it, and what the records, the
+    /// ship and the rule set say of it. The listing's outcomes (`listed`,
+    /// `required`, `available` and `sold_here`) are left false for the
+    /// build to fill in.
+    fn facts(&self, offer: &Offer, owned: u16) -> OutfitFacts {
         let record = offer.record;
         let multiplier = max_multiplier().of(offer);
         let launcher = self.launchers.get(&record.id).copied();
         OutfitFacts {
             names: lc_names(record),
             flags: record.flags,
-            buyable,
-            sold_here,
+            buy_tech: buy_tech().of(offer),
             ammo_cap: self.ammo_caps.get(&record.id).copied(),
             raised: (multiplier > 1).then(|| i64::from(record.max).saturating_mul(multiplier)),
             fighter_room: self.fighter_room.get(&record.id).copied(),
@@ -2292,6 +2361,7 @@ impl Shop<'_> {
                 .map(lc_names),
             raises: self.raises(record, owned, offer.owned),
             mass_field: record.mass,
+            ..OutfitFacts::default()
         }
     }
 
@@ -2364,6 +2434,26 @@ fn tech_listed<'a>() -> Value<Offer<'a>, bool> {
         engine_tech,
         bible_tech,
     )
+}
+
+/// Whether `_CanBuyOutfitItem`'s own tech test lets the outfit be bought
+/// at the stellar, as [`RuleKey::TechLevel`] says: by the engine,
+/// [`wares::outfit_buy_tech_allows`] (-1 always, no sign or 0x7fff test);
+/// by the Bible, [`wares::by_tech_level`], the listing's own reading.
+fn buy_tech<'a>() -> Value<Offer<'a>, bool> {
+    Value::disputed(
+        "buy tech",
+        "`_CanBuyOutfitItem` @0x4e7ff-0x4e83d; `_LoadObjectData` @0x78af3",
+        RuleKey::TechLevel,
+        engine_buy_tech,
+        bible_tech,
+    )
+}
+
+/// The engine's Buy tech test: -1 always, otherwise the stellar's tech
+/// or a slot.
+fn engine_buy_tech(offer: &Offer) -> bool {
+    wares::outfit_buy_tech_allows(offer.record.tech_level, offer.shop.site)
 }
 
 /// The engine's tech test: never below 0 or at 0x7fff.
@@ -3356,7 +3446,7 @@ mod tests {
         assert_eq!(outfitter.can(sell_of(128)), Ok(()));
         assert_eq!(outfitter.can(buy_of(128)), Err(OutfitRefusal::NotForSale));
         let facts = &row(&outfitter, 128).facts;
-        assert_eq!((facts.buyable, facts.sold_here), (false, true));
+        assert_eq!((buyable(facts), facts.sold_here), (false, true));
     }
 
     #[test]
@@ -3487,7 +3577,7 @@ mod tests {
         assert_eq!(outfitter.can(sell_of(128)), Ok(()));
         assert_eq!(outfitter.can(buy_of(128)), Err(OutfitRefusal::NotForSale));
         let facts = &row(&outfitter, 128).facts;
-        assert_eq!((facts.buyable, facts.sold_here), (false, true));
+        assert_eq!((buyable(facts), facts.sold_here), (false, true));
     }
 
     // Price, mass and free mass.
@@ -3689,7 +3779,10 @@ mod tests {
                 max: 7,
                 facts: OutfitFacts {
                     names: lc("outfit 128", "outfits 128"),
-                    buyable: true,
+                    listed: true,
+                    buy_tech: true,
+                    required: true,
+                    available: true,
                     sold_here: true,
                     mass_field: 1,
                     ..OutfitFacts::default()
@@ -3750,17 +3843,14 @@ mod tests {
             outfit(203, &[(MORE_CARGO, -7)]),
         ];
         let site = port();
-        let ship = ShipFields { holds: -3, ..FAST };
-        let caps = BTreeMap::from([(OutfitId(128), 6)]);
-        let room = BTreeMap::from([(OutfitId(128), 3)]);
         let launchers = rack(4, 2);
         let rules = Rulebook::default().with_override(RuleKey::SaleMass, RuleSource::Bible);
         let pilot = owning(&[(128, 2), (200, 5), (202, 2)]);
         let outfitter = Shop {
-            fields: ship,
+            fields: ShipFields { holds: -3, ..FAST },
             free_cargo: 42,
-            ammo_caps: &caps,
-            fighter_room: &room,
+            ammo_caps: &BTreeMap::from([(OutfitId(128), 6)]),
+            fighter_room: &BTreeMap::from([(OutfitId(128), 3)]),
             hardpoints: hardpoints(5, 1),
             launchers: &launchers,
             visit: &with_flags(MAP_BOUGHT),
@@ -3787,7 +3877,10 @@ mod tests {
             OutfitFacts {
                 names: lc("missile rack", "missile racks"),
                 flags: OutfitFlags::GUN | OutfitFlags::CANNOT_SELL,
-                buyable: true,
+                listed: true,
+                buy_tech: true,
+                required: true,
+                available: true,
                 sold_here: true,
                 ammo_cap: Some(6),
                 raised: Some(6),
@@ -3834,17 +3927,17 @@ mod tests {
         };
         let anywhere = open(&[off(OutfitFlags::SELL_ANYWHERE)], &owning(&[(128, 1)]));
         let facts = &row(&anywhere, 128).facts;
-        assert_eq!((facts.buyable, facts.sold_here), (false, true));
+        assert_eq!((buyable(facts), facts.sold_here), (false, true));
         let unmet = open(&[requiring(128, 0x2, -1)], &pilot());
         let facts = &row(&unmet, 128).facts;
-        assert_eq!((facts.buyable, facts.sold_here), (false, true), "for sale");
+        assert_eq!((buyable(facts), facts.sold_here), (false, true), "for sale");
         let refusing = Gate {
             control_bits: &RefuseBits(&[7]),
             ..Gate::FRESH
         };
         let gated = open_gated(&[gated(128, 0, "b7")], refusing, &pilot());
         let facts = &row(&gated, 128).facts;
-        assert_eq!((facts.buyable, facts.sold_here), (false, true));
+        assert_eq!((buyable(facts), facts.sold_here), (false, true));
     }
 
     // An outfit asked for: the row a relisting sells (see
@@ -3871,7 +3964,10 @@ mod tests {
         let asked = open_with(&records, &owner, Some(FIRST_OUTFIT));
         let found = row(&asked, 128);
         assert_eq!(found.owned, 1);
-        assert_eq!((found.facts.buyable, found.facts.sold_here), (false, true));
+        assert_eq!(
+            (buyable(&found.facts), found.facts.sold_here),
+            (false, true)
+        );
         assert_eq!(sell(&asked), Ok(()));
         let plain = open(&records, &owner);
         assert_eq!(listed(&plain), [129]);
@@ -3894,7 +3990,7 @@ mod tests {
     fn an_outfit_asked_for_that_is_off_today_cannot_be_bought() {
         let asked = open_with(&[buying(128, 50)], &pilot(), Some(FIRST_OUTFIT));
         assert!(listed(&asked).contains(&128));
-        assert!(!row(&asked, 128).facts.buyable);
+        assert!(!buyable(&row(&asked, 128).facts));
         assert_eq!(buy(&asked), Err(OutfitRefusal::NotForSale));
     }
 
@@ -3905,6 +4001,318 @@ mod tests {
         let asked = open_with(&records, &owner, Some(FIRST_OUTFIT));
         assert_eq!(asked, open(&records, &owner));
         assert_eq!(sell(&asked), Err(OutfitRefusal::NotListed));
+    }
+
+    // Buy's own tech test: `_CanBuyOutfitItem` @0x4e7ff-0x4e83d.
+
+    /// Outfit `id` of `tech_level`, flagged `SELL_ANYWHERE`.
+    fn anywhere(id: i16, tech_level: i16) -> OutfitRecord {
+        OutfitRecord {
+            flags: OutfitFlags::SELL_ANYWHERE,
+            ..tech(id, tech_level)
+        }
+    }
+
+    /// [`port`] of tech level `tech_level`, with `slots` as its first
+    /// special tech and 0 in the rest.
+    fn teching_site(tech_level: i16, slots: &[i16]) -> LandingSite {
+        let mut special_tech = [0; 8];
+        special_tech[..slots.len()].copy_from_slice(slots);
+        LandingSite {
+            tech_level,
+            special_tech,
+            ..port()
+        }
+    }
+
+    /// The outfitter of `records` at `site` for `pilot`, reading
+    /// `TechLevel` by `source`, with no roll drawn yet and none that
+    /// fires.
+    fn open_reading(
+        records: &[OutfitRecord],
+        site: &LandingSite,
+        pilot: &Pilot,
+        source: RuleSource,
+    ) -> Outfitter {
+        Shop {
+            rules: Rulebook::default().with_override(RuleKey::TechLevel, source),
+            ..shop(records, site)
+        }
+        .outfitter(pilot, &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter")
+    }
+
+    /// Whether a row's facts let it be bought at all, before the
+    /// counts, the mass and the cash: listed, past Buy's tech test, its
+    /// `Require` met and its `Availability` holding.
+    fn buyable(facts: &OutfitFacts) -> bool {
+        facts.listed && facts.buy_tech && facts.required && facts.available
+    }
+
+    const READINGS: [RuleSource; 2] = [RuleSource::Engine, RuleSource::Bible];
+
+    #[test]
+    fn an_owned_sell_anywhere_outfit_of_tech_minus_1_passes_buys_tech_test_at_any_stellar() {
+        let records = [anywhere(128, -1)];
+        let owner = owning(&[(128, 1)]);
+        for tech_level in [4, -5, i16::MIN] {
+            let site = teching_site(tech_level, &[]);
+            let engine = open_reading(&records, &site, &owner, RuleSource::Engine);
+            assert_eq!(listed(&engine), [128], "at {tech_level}");
+            assert_eq!(buy(&engine), Ok(()), "at {tech_level}");
+            let bible = open_reading(&records, &site, &owner, RuleSource::Bible);
+            assert_eq!(listed(&bible), [128], "at {tech_level}");
+            let by_tech = open_reading(&records, &site, &pilot(), RuleSource::Bible);
+            if tech_level == 4 {
+                assert_eq!(listed(&by_tech), [128], "tech lists it");
+                assert_eq!(buy(&bible), Ok(()));
+            } else {
+                assert_eq!(listed(&by_tech), Vec::<i16>::new(), "at {tech_level}");
+                assert_eq!(
+                    buy(&bible),
+                    Err(OutfitRefusal::NotForSale),
+                    "at {tech_level}"
+                );
+                assert_eq!(sell(&bible), Ok(()), "sell-only at {tech_level}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_owned_sell_anywhere_outfit_of_tech_minus_3_is_bought_at_a_stellar_of_tech_4() {
+        let records = [anywhere(128, -3)];
+        let owner = owning(&[(128, 1)]);
+        let site = teching_site(4, &[]);
+        let unowned = open_reading(&records, &site, &pilot(), RuleSource::Engine);
+        assert_eq!(listed(&unowned), Vec::<i16>::new(), "tech does not list it");
+        let engine = open_reading(&records, &site, &owner, RuleSource::Engine);
+        assert_eq!(listed(&engine), [128]);
+        assert_eq!(buy(&engine), Ok(()));
+        let by_tech = open_reading(&records, &site, &pilot(), RuleSource::Bible);
+        assert_eq!(listed(&by_tech), [128], "the Bible's tech lists it");
+        let bible = open_reading(&records, &site, &owner, RuleSource::Bible);
+        assert_eq!(buy(&bible), Ok(()));
+        let low = teching_site(-5, &[]);
+        for source in READINGS {
+            let outfitter = open_reading(&records, &low, &owner, source);
+            assert_eq!(listed(&outfitter), [128], "{source:?}");
+            assert_eq!(
+                buy(&outfitter),
+                Err(OutfitRefusal::NotForSale),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_owned_sell_anywhere_outfit_of_tech_0x7fff_is_bought_by_a_slot_of_0x7fff() {
+        let records = [anywhere(128, i16::MAX)];
+        let owner = owning(&[(128, 1)]);
+        let slotted = teching_site(4, &[6, 55, i16::MAX]);
+        let unowned = open_reading(&records, &slotted, &pilot(), RuleSource::Engine);
+        assert_eq!(listed(&unowned), Vec::<i16>::new(), "tech does not list it");
+        let by_tech = open_reading(&records, &slotted, &pilot(), RuleSource::Bible);
+        assert_eq!(listed(&by_tech), [128], "the Bible's tech lists it");
+        let top = teching_site(i16::MAX, &[]);
+        for source in READINGS {
+            let outfitter = open_reading(&records, &slotted, &owner, source);
+            assert_eq!(buy(&outfitter), Ok(()), "by a slot, {source:?}");
+            let outfitter = open_reading(&records, &top, &owner, source);
+            assert_eq!(buy(&outfitter), Ok(()), "at 0x7fff, {source:?}");
+            let outfitter = open_reading(&records, &port(), &owner, source);
+            assert_eq!(listed(&outfitter), [128], "{source:?}");
+            assert_eq!(
+                buy(&outfitter),
+                Err(OutfitRefusal::NotForSale),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_owned_sell_anywhere_outfit_above_the_stellars_tech_is_still_refused() {
+        let records = [anywhere(128, 9)];
+        let owner = owning(&[(128, 1)]);
+        for source in READINGS {
+            let outfitter = open_reading(&records, &port(), &owner, source);
+            assert_eq!(listed(&outfitter), [128], "{source:?}");
+            assert_eq!(
+                buy(&outfitter),
+                Err(OutfitRefusal::NotForSale),
+                "{source:?}"
+            );
+            assert_eq!(sell(&outfitter), Ok(()), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn past_buys_tech_test_an_off_tech_row_meets_the_rest_of_the_checks() {
+        let low = teching_site(-5, &[]);
+        let owner = owning(&[(128, 1)]);
+        let engine = |record: OutfitRecord, pilot: &Pilot| {
+            buy(&open_reading(&[record], &low, pilot, RuleSource::Engine))
+        };
+        let capped = OutfitRecord {
+            max: 1,
+            ..anywhere(128, -1)
+        };
+        assert_eq!(engine(capped, &owner), Err(OutfitRefusal::MaxOwned));
+        let heavy = OutfitRecord {
+            mass: 31,
+            ..anywhere(128, -1)
+        };
+        assert_eq!(engine(heavy, &owner), Err(OutfitRefusal::NoSpace));
+        let mut broke = owning(&[(128, 1)]);
+        broke.cash = 0;
+        assert_eq!(
+            engine(anywhere(128, -1), &broke),
+            Err(OutfitRefusal::CannotAfford)
+        );
+        let unmet = OutfitRecord {
+            require: 0x2,
+            require_govt: -1,
+            ..anywhere(128, -1)
+        };
+        assert_eq!(engine(unmet, &owner), Err(OutfitRefusal::NotForSale));
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let records = [OutfitRecord {
+            availability: Test::parse("b7"),
+            ..anywhere(128, -1)
+        }];
+        let gated = Shop {
+            gate: refusing,
+            ..shop(&records, &low)
+        }
+        .outfitter(&owner, &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter");
+        assert_eq!(listed(&gated), [128]);
+        assert_eq!(buy(&gated), Err(OutfitRefusal::NotForSale));
+    }
+
+    #[test]
+    fn a_flags2_0x0400_row_of_tech_minus_1_passes_buys_tech_test() {
+        let owner = owning(&[(128, 1)]);
+        let records = [tech(128, -1)];
+        for source in READINGS {
+            let outfitter = open_reading(&records, &buying_back(), &owner, source);
+            assert_eq!(buy(&outfitter), Ok(()), "at tech 4, {source:?}");
+        }
+        let low = LandingSite {
+            tech_level: -5,
+            special_tech: [0; 8],
+            ..buying_back()
+        };
+        let engine = open_reading(&records, &low, &owner, RuleSource::Engine);
+        assert_eq!(listed(&engine), [128]);
+        assert_eq!(buy(&engine), Ok(()));
+        let bible = open_reading(&records, &low, &owner, RuleSource::Bible);
+        assert_eq!(listed(&bible), [128]);
+        assert_eq!(buy(&bible), Err(OutfitRefusal::NotForSale));
+        assert_eq!(sell(&bible), Ok(()));
+        let top = [tech(128, i16::MAX)];
+        let slotted = LandingSite {
+            special_tech: [6, 55, i16::MAX, 0, 0, 0, 0, 0],
+            ..buying_back()
+        };
+        for source in READINGS {
+            let outfitter = open_reading(&top, &slotted, &owner, source);
+            assert_eq!(buy(&outfitter), Ok(()), "by a slot, {source:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_bible_buys_tech_test_is_the_listings() {
+        let levels = [
+            i16::MIN,
+            -5,
+            -3,
+            -1,
+            0,
+            3,
+            4,
+            5,
+            6,
+            9,
+            55,
+            i16::MAX - 1,
+            i16::MAX,
+        ];
+        let sites = [
+            teching_site(4, &[6, 55]),
+            teching_site(-5, &[0, -1]),
+            teching_site(i16::MAX, &[i16::MAX]),
+        ];
+        for site in &sites {
+            for level in levels {
+                let records = [tech(128, level)];
+                let asked = |source| {
+                    Shop {
+                        rules: Rulebook::default().with_override(RuleKey::TechLevel, source),
+                        ..shop(&records, site)
+                    }
+                    .outfitter_with(
+                        &pilot(),
+                        &mut DayRolls::default(),
+                        &mut NeverFires,
+                        Some(FIRST_OUTFIT),
+                    )
+                    .expect("an outfitter")
+                };
+                let bible = asked(RuleSource::Bible);
+                let facts = &row(&bible, 128).facts;
+                let at = format!("{level} at {}", site.tech_level);
+                assert_eq!(facts.listed, facts.buy_tech, "{at}");
+                if facts.listed {
+                    assert_eq!(buy(&bible), Ok(()), "{at}");
+                }
+                let engine = asked(RuleSource::Engine);
+                let facts = &row(&engine, 128).facts;
+                if facts.listed {
+                    assert!(facts.buy_tech, "{at}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_buy_tech_rule_reads_tech_level_and_cites_canbuyoutfititem() {
+        let value = buy_tech();
+        assert_eq!(value.about().reads(), Some(RuleKey::TechLevel));
+        assert_eq!(value.about().name(), "buy tech");
+        assert_eq!(
+            value.about().reproduces(),
+            "`_CanBuyOutfitItem` @0x4e7ff-0x4e83d; `_LoadObjectData` @0x78af3"
+        );
+    }
+
+    #[test]
+    fn require_and_availability_refuse_after_once_an_opening_and_before_the_cash() {
+        let map = OutfitRecord {
+            require: 0x2,
+            require_govt: -1,
+            ..outfit(128, &[(EXPLORES_MAP, 5)])
+        };
+        let limited_map = limited(&[map], MAP_BOUGHT, &pilot());
+        assert_eq!(buy(&limited_map), Err(OutfitRefusal::BoughtThisOpening));
+        let mut broke = pilot();
+        broke.cash = 0;
+        let unmet = open(&[requiring(128, 0x2, -1)], &broke);
+        assert_eq!(buy(&unmet), Err(OutfitRefusal::NotForSale));
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let refused = open_gated(&[gated(128, 0, "b7")], refusing, &broke);
+        assert_eq!(buy(&refused), Err(OutfitRefusal::NotForSale));
+        let at_max = OutfitRecord {
+            max: 1,
+            ..requiring(128, 0x2, -1)
+        };
+        let at_max = open(&[at_max], &owning(&[(128, 1)]));
+        assert_eq!(buy(&at_max), Err(OutfitRefusal::MaxOwned));
     }
 
     // Buying.
@@ -4306,17 +4714,17 @@ mod tests {
     }
 
     #[test]
-    fn a_row_not_for_sale_carries_the_words_it_meets() {
+    fn a_row_whose_require_is_unmet_carries_the_words_it_meets() {
         let unmet = |mass, max| OutfitRecord {
             mass,
             max,
             ..requiring(128, 0x2, -1)
         };
         let heavy = open(&[unmet(31, 5)], &pilot());
-        assert_eq!(buy(&heavy), Err(OutfitRefusal::NotForSale));
+        assert_eq!(buy(&heavy), Err(OutfitRefusal::NoSpaceForAny));
         assert_eq!(words(&heavy), Some(OutfitRefusal::NoSpaceForAny));
         let at_max = open(&[unmet(1, 1)], &owning(&[(128, 1)]));
-        assert_eq!(buy(&at_max), Err(OutfitRefusal::NotForSale));
+        assert_eq!(buy(&at_max), Err(OutfitRefusal::MaxOwned));
         assert_eq!(words(&at_max), Some(OutfitRefusal::MaxOwned));
         let none_allowed = open(&[unmet(1, 0)], &pilot());
         assert_eq!(words(&none_allowed), Some(OutfitRefusal::NoneAllowed));
@@ -5449,15 +5857,20 @@ mod tests {
     }
 
     #[test]
-    fn the_buy_checks_are_canbuyoutfititems_in_the_ports_order() {
+    fn the_buy_checks_are_canbuyoutfititems_in_its_order() {
         assert_eq!(
             listed_checks(&can_buy()),
             [
                 (
-                    "for sale",
-                    "`_CanBuyOutfitItem` tech @0x4e7f5-0x4e83d; `Require` @0x4e9cb-0x4eb37 and \
-                     `Availability` @0x4eb51-0x4eb58, which the port refuses first; the day's \
-                     roll and `HideHigher` as listed (`_SetupPortAvailableItems` @0xbedb)"
+                    "listed",
+                    "port-only: Buy is asked only of the selected list item (`_OutfitFilter` \
+                     @0x5806f-0x5808a, `_DoOutfitDialog` @0x5c07a-0x5c0ba); the row the \
+                     relisting sell loop asks for is not one"
+                ),
+                (
+                    "tech",
+                    "`_CanBuyOutfitItem` @0x4e7ff-0x4e83d, as `buy tech` reads it at build \
+                     (`TechLevel` -1 skips it @0x4e802)"
                 ),
                 (
                     "ammunition cap",
@@ -5481,6 +5894,8 @@ mod tests {
                 ("expansion allowed", "`_CanBuyOutfitItem` @0x4e94f-0x4e97e"),
                 ("cargo room", "`_CanBuyOutfitItem` @0x4e980-0x4e9a8"),
                 ("once an opening", "`_CanBuyOutfitItem` @0x4e9aa-0x4e9c5"),
+                ("required", "`_CanBuyOutfitItem` @0x4e9cb-0x4eb37"),
+                ("available", "`_CanBuyOutfitItem` @0x4eb51-0x4eb58"),
                 ("cash", "`_CanBuyOutfitItem` @0x4eb95-0x4ebad"),
             ]
         );
@@ -5493,7 +5908,7 @@ mod tests {
             has_max.iter().map(|&(name, _)| name).collect::<Vec<_>>(),
             ["ammunition cap", "raised max", "gun limit", "turret limit"]
         );
-        assert_eq!(has_max, listed_checks(&can_buy())[1..5]);
+        assert_eq!(has_max, listed_checks(&can_buy())[2..6]);
     }
 
     #[test]
@@ -5567,8 +5982,8 @@ mod tests {
 
     #[test]
     fn each_disputed_outfitter_rule_names_its_key() {
-        let mut buying = vec![None; 11];
-        buying[9] = Some(RuleKey::OutfitLimit);
+        let mut buying = vec![None; 14];
+        buying[10] = Some(RuleKey::OutfitLimit);
         assert_eq!(keys(&can_buy()), buying);
         assert_eq!(keys(&has_max()), [None; 4]);
         assert_eq!(keys(&sell_flag()), [None; 3]);
@@ -5581,6 +5996,7 @@ mod tests {
             ]
         );
         assert_eq!(max_multiplier().about().reads(), Some(RuleKey::RaisedMax));
+        assert_eq!(buy_tech().about().reads(), Some(RuleKey::TechLevel));
         for plain in [
             *info_words().about(),
             *reported_cap().about(),
@@ -6288,7 +6704,10 @@ mod tests {
             owned,
             max,
             facts: OutfitFacts {
-                buyable: true,
+                listed: true,
+                buy_tech: true,
+                required: true,
+                available: true,
                 sold_here: true,
                 ammo_cap: (cap < max).then_some(cap),
                 raised: (cap > max).then_some(i64::from(cap)),

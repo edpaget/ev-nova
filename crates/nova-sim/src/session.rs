@@ -8646,6 +8646,28 @@ mod tests {
     }
 
     #[test]
+    fn an_owned_sell_anywhere_outfit_of_tech_minus_1_is_bought_through_the_session() {
+        let map = OutfitRecord {
+            tech_level: -1,
+            cost: 4001,
+            flags: OutfitFlags::SELL_ANYWHERE,
+            ..outfit(310, &[])
+        };
+        let catalog = FakePilotCatalog {
+            defaults: vec![(ShipId(128), vec![(OutfitId(310), 2)])],
+            outfits: vec![map],
+            ..outfitting()
+        };
+        let mut session = outfitted(&catalog);
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+        assert!(outfitter.row(OutfitId(310)).is_some(), "listed, off tech");
+        assert_eq!(outfitter.can(buy(OutfitId(310))), Ok(()));
+        assert_eq!(session.outfit(buy(OutfitId(310)), &mut NeverFires), Ok(()));
+        assert_eq!(session.pilot().owned(OutfitId(310)), 3);
+        assert_eq!(session.pilot().cash(), 25_000 - 4001);
+    }
+
+    #[test]
     fn a_new_pilots_default_items_are_owned_and_its_reserves_full_with_them() {
         let catalog = FakePilotCatalog {
             defaults: vec![(ShipId(128), vec![(TANK, 1), (SHIELD, 2)])],

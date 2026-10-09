@@ -999,7 +999,10 @@ mod tests {
             owned,
             max: 10,
             facts: OutfitFacts {
-                buyable: true,
+                listed: true,
+                buy_tech: true,
+                required: true,
+                available: true,
                 sold_here: true,
                 mass_field: i16::try_from(mass).expect("a 16-bit mass"),
                 ..OutfitFacts::default()
@@ -1010,7 +1013,7 @@ mod tests {
     /// A map (1 owned) that can only be sold here.
     fn map() -> OutfitRow {
         let mut map = row(131, "Map", 0, 0, 1);
-        map.facts.buyable = false;
+        map.facts.buy_tech = false;
         map
     }
 
@@ -2130,7 +2133,7 @@ mod tests {
                 max,
                 ..widget(owned)
             };
-            row.facts.buyable = false;
+            row.facts.buy_tech = false;
             info_lines(row)
         };
         let heavy = not_for_sale(6, 10, 0);

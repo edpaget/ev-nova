@@ -1,6 +1,7 @@
 //! The rules the outfitter and the shipyard share: what a stellar's tech
 //! level sells ([`by_tech_level`], behind the outfit's and the ship's
-//! own guards), whether an item's `Require` is met, which hiding flag hides
+//! own guards) and, for an outfit, what Buy's own tech test lets be bought
+//! ([`outfit_buy_tech_allows`]), whether an item's `Require` is met, which hiding flag hides
 //! it, the hide-higher sweep over `DispWeight`, and the order the rows go
 //! in.
 //!
@@ -150,6 +151,20 @@ pub const OUTFIT_TECH_NEVER: i16 = i16::MAX;
 #[must_use]
 pub fn outfit_tech_allows(tech_level: i16, site: &LandingSite) -> bool {
     tech_level >= 0 && tech_level != OUTFIT_TECH_NEVER && by_tech_level(tech_level, site)
+}
+
+/// The outfit `TechLevel` that `_CanBuyOutfitItem` never tests by tech:
+/// Buy skips its tech test for it (`cmpw $-0x1` @0x4e802).
+pub const OUTFIT_TECH_ANY: i16 = -1;
+
+/// Whether `_CanBuyOutfitItem`'s own tech test lets an outfit of
+/// `tech_level` be bought at `site` (@0x4e7ff-0x4e83d): always at
+/// [`OUTFIT_TECH_ANY`], otherwise as [`by_tech_level`] says. Unlike
+/// [`outfit_tech_allows`] it has no `>= 0` and no 0x7fff test, so an
+/// outfit listed off tech can still pass it.
+#[must_use]
+pub fn outfit_buy_tech_allows(tech_level: i16, site: &LandingSite) -> bool {
+    tech_level == OUTFIT_TECH_ANY || by_tech_level(tech_level, site)
 }
 
 /// Whether a ship class of `tech_level` is for sale or hire, by tech
@@ -307,6 +322,74 @@ mod tests {
         assert!(!outfit_tech_allows(6, &low));
         assert!(outfit_tech_allows(i16::MAX - 1, &high));
         assert_eq!(OUTFIT_TECH_NEVER, 0x7fff);
+    }
+
+    #[test]
+    fn the_buy_tech_skip_is_tech_minus_1() {
+        assert_eq!(OUTFIT_TECH_ANY, -1);
+    }
+
+    #[test]
+    fn an_outfit_of_tech_minus_1_always_passes_buys_tech_test() {
+        for tech in [4, -5, i16::MIN] {
+            let at = teching(tech, &[]);
+            assert!(!at.special_tech.contains(&-1));
+            assert!(outfit_buy_tech_allows(-1, &at), "at {tech}");
+        }
+    }
+
+    #[test]
+    fn buys_tech_test_has_no_sign_or_0x7fff_test() {
+        let passes = [
+            (-3, teching(4, &[])),
+            (-3, teching(-5, &[-3])),
+            (i16::MAX, teching(i16::MAX, &[])),
+            (i16::MAX, teching(4, &[i16::MAX])),
+            (6, teching(4, &[6])),
+        ];
+        for (level, at) in &passes {
+            assert!(outfit_buy_tech_allows(*level, at), "{level} at {at:?}");
+        }
+        let refused = [
+            (-3, teching(-5, &[])),
+            (-2, teching(-5, &[])),
+            (i16::MAX, teching(4, &[])),
+            (9, teching(4, &[])),
+        ];
+        for (level, at) in &refused {
+            assert!(!outfit_buy_tech_allows(*level, at), "{level} at {at:?}");
+        }
+    }
+
+    #[test]
+    fn every_outfit_tech_lists_passes_buys_tech_test() {
+        let levels = [
+            i16::MIN,
+            -5,
+            -3,
+            -1,
+            0,
+            3,
+            4,
+            5,
+            6,
+            9,
+            55,
+            i16::MAX - 1,
+            i16::MAX,
+        ];
+        let sites = [
+            teching(4, &[6, 55]),
+            teching(-5, &[0, -1]),
+            teching(i16::MAX, &[i16::MAX]),
+        ];
+        for at in &sites {
+            for level in levels {
+                if outfit_tech_allows(level, at) {
+                    assert!(outfit_buy_tech_allows(level, at), "{level} at {at:?}");
+                }
+            }
+        }
     }
 
     #[test]

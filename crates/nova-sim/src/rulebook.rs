@@ -75,7 +75,7 @@
 //! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; [`Market::row_max`](crate::Market::row_max)) | exact integer division\*\*\* |
 //! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; [`Market::option_asks_count`](crate::Market::option_asks_count)) | Alt trades the most at once††† |
 //! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; [`Market::tons`](crate::Market::tons)) | cash below 0 counts as none‡‡‡ |
-//! | [`TechLevel`](RuleKey::TechLevel) | `tech_level` | an outfit of `TechLevel` below 0 or exactly 32767, and a ship of one below 0, is never sold by tech (`_SetupPortAvailableItems` @0xbf88-0xbf9d, `_SetupPortAvailableShipTypes` @0xbc4f-0xbc52; [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows), [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)) | any `TechLevel` at or below the stellar's, or equal to a slot, is sold ([`wares::by_tech_level`](crate::wares::by_tech_level)) |
+//! | [`TechLevel`](RuleKey::TechLevel) | `tech_level` | an outfit of `TechLevel` below 0 or exactly 32767, and a ship of one below 0, is never sold by tech (`_SetupPortAvailableItems` @0xbf88-0xbf9d, `_SetupPortAvailableShipTypes` @0xbc4f-0xbc52; [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows), [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)); and `_CanBuyOutfitItem` tests an outfit's Buy apart: one of `TechLevel` -1 always passes, any other passes at or below the stellar's tech or by a slot, with no sign or 0x7fff test (@0x4e7ff-0x4e83d; [`wares::outfit_buy_tech_allows`](crate::wares::outfit_buy_tech_allows)) | any `TechLevel` at or below the stellar's, or equal to a slot, is sold, and can be bought, by that one test ([`wares::by_tech_level`](crate::wares::by_tech_level)) |
 //! | [`PurchaseCarry`](RuleKey::PurchaseCarry) | `purchase_carry` | a ship purchase keeps every persistent outfit (`Flags` 0x0004) whatever its `Max` and mass, sells none back, and adds the new class's default items on top (`_DoShipyardDialog` @0x5ee1b-0x5ee97; [`Session`](crate::Session)) | each is kept up to its `Max` and while the new ship's free mass holds it, by ascending ID, and the rest sold back at the outfitter's rate on the old ship's mass\*\*\*\*\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
@@ -863,8 +863,17 @@ rule_keys! {
     /// class only when 0 or more, with no 0x7fff test
     /// (`_SetupPortAvailableShipTypes` @0xbc4b-0xbc52;
     /// [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows),
-    /// [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)). By the
-    /// other reading, any `TechLevel` at or below the stellar's is sold.
+    /// [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)). An
+    /// outfit's Buy runs a tech test of its own (`_CanBuyOutfitItem`
+    /// @0x4e7ff-0x4e83d; [`wares::outfit_buy_tech_allows`](crate::wares::outfit_buy_tech_allows)):
+    /// one of `TechLevel` -1 always passes (`cmpw $-0x1` @0x4e802), and any
+    /// other passes at or below the stellar's tech or by a slot, with no
+    /// sign or 0x7fff test, so an owned `SELL_ANYWHERE` or `Flags2` 0x0400
+    /// row listed off tech can still be bought. By the other reading, any
+    /// `TechLevel` at or below the stellar's is sold, and the listing and
+    /// Buy test that one rule: the Bible's `spöb` introduces the field with
+    /// "The next fields tell Nova what items and ships are available for
+    /// purchase at this stellar", and names no exception for -1.
     /// The Bible's `oütf` says "This item will be available at all
     /// spaceports with a tech level of this value or higher", its `shïp`
     /// "This ship will be available at all shipyards with a tech level of
