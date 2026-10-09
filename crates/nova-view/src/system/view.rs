@@ -232,6 +232,7 @@ mod tests {
             x,
             y,
             sprite,
+            dead_sprite: None,
             animation: AnimationData {
                 delay,
                 frame0_bias: 0,

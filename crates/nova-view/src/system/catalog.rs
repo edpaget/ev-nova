@@ -43,8 +43,12 @@ pub struct StellarContents {
     pub x: i16,
     /// Its Y position in the system; y grows down.
     pub y: i16,
-    /// Its sprite sheet, or why it cannot be shown.
+    /// Its sprite sheet (its `Type`'s), or why it cannot be shown.
     pub sprite: Result<StellarSheet, String>,
+    /// The sheet it draws while destroyed (its `DeadType`'s), or why it
+    /// cannot be shown; `None` when it draws no different graphic (a
+    /// `DeadType` outside 0 to 255).
+    pub dead_sprite: Option<Result<StellarSheet, String>>,
     /// Its animation fields.
     pub animation: AnimationData,
 }

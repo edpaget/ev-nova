@@ -176,6 +176,7 @@ mod tests {
                         frame_width: 8,
                         frame_height: 8,
                     }),
+                    dead_sprite: None,
                     animation: AnimationData::default(),
                 }]
             } else {

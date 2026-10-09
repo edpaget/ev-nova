@@ -3171,6 +3171,7 @@ mod tests {
                 frame_width: 20,
                 frame_height: 20,
             }),
+            dead_sprite: None,
             animation: AnimationData {
                 delay: 1,
                 frame0_bias: 0,

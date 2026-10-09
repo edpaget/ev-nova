@@ -78,6 +78,11 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
             .stellar_sprite(id)
             .map(|sprite| sheet(&sprite))
             .map_err(|err| err.to_string()),
+        dead_sprite: data
+            .stellar_dead_sprite(id)
+            .map(|sprite| sprite.as_ref().map(sheet))
+            .map_err(|err| err.to_string())
+            .transpose(),
         animation: AnimationData {
             delay: record.anim_delay,
             frame0_bias: record.frame0_bias,
@@ -170,11 +175,20 @@ mod tests {
         bytes
     }
 
-    /// A 1118-byte `spöb` at (`x`, `y`) of graphic type `graphic_type`.
+    /// A 1118-byte `spöb` at (`x`, `y`) of graphic type `graphic_type`,
+    /// with no different graphic when destroyed (`DeadType` -1).
     fn stellar(x: i16, y: i16, graphic_type: i16) -> Vec<u8> {
         let mut bytes = vec![0; 1118];
         assert_eq!(Some(bytes.len()), Stellar::SIZE);
         put_i16s(&mut bytes, 0x00, &[x, y, graphic_type]);
+        put_i16s(&mut bytes, 0x240, &[-1]);
+        bytes
+    }
+
+    /// `stellar` at (0, 0), type 0, with `DeadType` `dead_type`.
+    fn dead(dead_type: i16) -> Vec<u8> {
+        let mut bytes = stellar(0, 0, 0);
+        put_i16s(&mut bytes, 0x240, &[dead_type]);
         bytes
     }
 
@@ -241,6 +255,7 @@ mod tests {
             x: 0,
             y: 0,
             sprite: Ok(sheet_of(1000, 1, 8)),
+            dead_sprite: None,
             animation: AnimationData::default(),
         }
     }
@@ -260,6 +275,7 @@ mod tests {
                         x: 900,
                         y: -600,
                         sprite: Ok(sheet_of(1001, 4, 6)),
+                        dead_sprite: None,
                         animation: AnimationData {
                             delay: 2,
                             frame0_bias: -1,
@@ -319,6 +335,41 @@ mod tests {
         let places: Vec<_> = contents.stellars.iter().map(|s| (s.x, s.y)).collect();
         assert_eq!(places, [(5, 6), (7, 8)]);
         assert_eq!(contents.problems, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_dead_type_gives_the_sheet_drawn_while_destroyed_or_none() {
+        let mut resources = sol();
+        resources.push((System::TYPE, 131, None, system(&[140, 141, 142, 143])));
+        resources.push((Stellar::TYPE, 140, None, dead(3)));
+        resources.push((Stellar::TYPE, 141, None, dead(-1)));
+        resources.push((Stellar::TYPE, 142, None, dead(256)));
+        resources.push((Stellar::TYPE, 143, None, dead(2)));
+        resources.push((Spin::TYPE, 1003, None, spin(1003, 2)));
+        resources.push((RLED, 1003, None, sheet(2, 4)));
+        let contents = store(&resources).system(SystemId(131));
+        let dead: Vec<_> = contents
+            .stellars
+            .iter()
+            .map(|s| s.dead_sprite.clone())
+            .collect();
+        assert_eq!(
+            dead,
+            [
+                Some(Ok(sheet_of(1003, 2, 4))),
+                None,
+                None,
+                Some(Err(
+                    "spöb 143: no spïn 1002 for its graphic type 2".to_owned()
+                )),
+            ]
+        );
+        let alive: Vec<_> = contents.stellars.iter().map(|s| s.sprite.clone()).collect();
+        assert_eq!(
+            alive,
+            vec![Ok(sheet_of(1000, 1, 8)); 4],
+            "Type is unchanged"
+        );
     }
 
     #[test]

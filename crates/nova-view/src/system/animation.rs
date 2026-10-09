@@ -1,8 +1,12 @@
 //! A stellar's animation: which frame of its sheet shows when.
 //!
 //! A stellar animates when its sheet has more than one frame, its
-//! `AnimDelay` is above 0, and it is not marked to animate only when
-//! destroyed (`Flags2` 0x0080; nothing is destroyed in a viewer). Each
+//! `AnimDelay` is above 0, and its destroyed state is the one its flags
+//! name: a stellar marked to animate only when destroyed (`Flags2`
+//! 0x0080) animates only while destroyed, and any other only while not,
+//! as the original's sprite tick reads them every frame
+//! (`_HandleStellarSprites` @0x2e784-0x2e7bb). Nothing is destroyed in a
+//! viewer. Each
 //! frame then shows for `AnimDelay` ticks of 1/30 s, except frame 0, which
 //! shows `Frame0Bias` times as long when the bias is above 1. Frames run
 //! 0, 1, ..., n - 1 and wrap round. Otherwise frame 0 shows throughout.
@@ -34,10 +38,11 @@ struct Cycle {
 }
 
 impl Animation {
-    /// The animation of a sheet of `frames` frames with these fields.
+    /// The animation of a sheet of `frames` frames with these fields, for
+    /// a stellar that is `destroyed` or not.
     #[must_use]
-    pub fn new(frames: NonZeroU16, data: AnimationData) -> Self {
-        let animated = frames.get() > 1 && data.delay > 0 && !data.only_when_destroyed;
+    pub fn new(frames: NonZeroU16, data: AnimationData, destroyed: bool) -> Self {
+        let animated = frames.get() > 1 && data.delay > 0 && data.only_when_destroyed == destroyed;
         let cycle = animated.then(|| {
             let delay = u128::from(data.delay.unsigned_abs());
             let bias = u128::from(data.frame0_bias.max(1).unsigned_abs());
@@ -85,6 +90,7 @@ mod tests {
                 frame0_bias,
                 only_when_destroyed: false,
             },
+            false,
         )
     }
 
@@ -126,20 +132,60 @@ mod tests {
         assert!((0..100).all(|t| animation.frame(t) == 0), "{animation:?}");
     }
 
+    /// A 32-frame sheet with a delay of 2, animating only when destroyed
+    /// or not as `only_when_destroyed` says, for a stellar `destroyed`.
+    fn live(only_when_destroyed: bool, destroyed: bool) -> Animation {
+        Animation::new(
+            NonZeroU16::new(32).expect("non-zero"),
+            AnimationData {
+                delay: 2,
+                frame0_bias: -1,
+                only_when_destroyed,
+            },
+            destroyed,
+        )
+    }
+
     #[test]
     fn one_frame_no_delay_or_only_when_destroyed_stays_on_frame_0() {
         stays_on_frame_0(animation(1, 2, 0));
         // A Hypergate: 42 frames, but no delay.
         stays_on_frame_0(animation(42, 0, 0));
         stays_on_frame_0(animation(42, -1, 0));
-        stays_on_frame_0(Animation::new(
-            NonZeroU16::new(32).expect("non-zero"),
+        stays_on_frame_0(live(true, false));
+    }
+
+    #[test]
+    fn a_stellar_animates_only_while_its_destroyed_state_is_the_one_flags2_names() {
+        assert!(live(false, false).is_animated(), "a normal stellar, whole");
+        stays_on_frame_0(live(false, true));
+        stays_on_frame_0(live(true, false));
+        let dead = live(true, true);
+        assert!(dead.is_animated(), "only when destroyed, destroyed");
+        assert_eq!(frames(dead, [0, 2, 4]), [0, 1, 2]);
+        // No delay or one frame stays on frame 0 whatever the state.
+        let one_frame = |destroyed| {
+            Animation::new(
+                NonZeroU16::MIN,
+                AnimationData {
+                    delay: 2,
+                    frame0_bias: 0,
+                    only_when_destroyed: true,
+                },
+                destroyed,
+            )
+        };
+        stays_on_frame_0(one_frame(true));
+        let no_delay = Animation::new(
+            NonZeroU16::new(4).expect("non-zero"),
             AnimationData {
-                delay: 2,
-                frame0_bias: -1,
+                delay: 0,
+                frame0_bias: 0,
                 only_when_destroyed: true,
             },
-        ));
+            true,
+        );
+        stays_on_frame_0(no_delay);
     }
 
     #[test]

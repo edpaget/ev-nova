@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use super::animation::Animation;
 use super::camera::{CAMERA_MARGIN, Camera};
-use super::catalog::{StellarId, StellarSheet, SystemCatalog, SystemId};
+use super::catalog::{
+    AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemId,
+};
 use crate::draw::crossed_box;
 use crate::geometry::Bounds;
 use crate::time::ticks;
@@ -33,11 +35,57 @@ pub struct SceneStellar {
     pub name: String,
     /// Where it is, in world units.
     pub position: Point,
-    /// Its sprite sheet, or why it cannot be shown.
+    /// Its sprite sheet (its `Type`'s), or why it cannot be shown.
     pub sprite: Result<StellarSheet, String>,
-    /// When each of its frames shows; a stellar with no sheet stays on
-    /// frame 0.
+    /// The sheet it draws while destroyed (its `DeadType`'s), or why it
+    /// cannot be shown; `None` for no different graphic.
+    pub dead_sprite: Option<Result<StellarSheet, String>>,
+    /// Its animation fields.
+    pub animation_data: AnimationData,
+    /// Whether it is destroyed, as last set.
+    pub destroyed: bool,
+    /// When each frame of the sheet drawn shows; a stellar with no sheet
+    /// stays on frame 0.
     pub animation: Animation,
+}
+
+impl SceneStellar {
+    /// `stellar`, not destroyed.
+    fn new(stellar: StellarContents) -> Self {
+        let mut placed = Self {
+            id: stellar.id,
+            name: stellar.name,
+            position: Point::new(f32::from(stellar.x), f32::from(stellar.y)),
+            sprite: stellar.sprite,
+            dead_sprite: stellar.dead_sprite,
+            animation_data: stellar.animation,
+            destroyed: false,
+            animation: Animation::new(NonZeroU16::MIN, stellar.animation, false),
+        };
+        placed.animation = placed.animation_for_drawn();
+        placed
+    }
+
+    /// The sheet drawn: the `DeadType` sheet while destroyed, when there
+    /// is one that could be read; the `Type` sheet otherwise, which is the
+    /// Bible's "don't display different graphic type when destroyed" and
+    /// the original's reading between rebuilds (story-runtime phase 9 owns
+    /// its `spïn` 1000 after one).
+    pub fn drawn(&self) -> &Result<StellarSheet, String> {
+        match &self.dead_sprite {
+            Some(dead @ Ok(_)) if self.destroyed => dead,
+            _ => &self.sprite,
+        }
+    }
+
+    /// The animation of the sheet drawn, in the current state.
+    fn animation_for_drawn(&self) -> Animation {
+        let frames = self
+            .drawn()
+            .as_ref()
+            .map_or(NonZeroU16::MIN, |sheet| sheet.frames);
+        Animation::new(frames, self.animation_data, self.destroyed)
+    }
 }
 
 /// One system's stellars, in navigation order.
@@ -56,19 +104,7 @@ impl SystemScene {
         let stellars = contents
             .stellars
             .into_iter()
-            .map(|stellar| {
-                let frames = stellar
-                    .sprite
-                    .as_ref()
-                    .map_or(NonZeroU16::MIN, |sheet| sheet.frames);
-                SceneStellar {
-                    id: stellar.id,
-                    name: stellar.name,
-                    position: Point::new(f32::from(stellar.x), f32::from(stellar.y)),
-                    sprite: stellar.sprite,
-                    animation: Animation::new(frames, stellar.animation),
-                }
-            })
+            .map(SceneStellar::new)
             .collect();
         Self {
             id: contents.id,
@@ -102,6 +138,20 @@ impl SystemScene {
         &self.problems
     }
 
+    /// Marks each stellar destroyed or not as `destroyed` says, so that it
+    /// draws its `DeadType` or `Type` sheet. Only a stellar whose state
+    /// changed has its animation rebuilt for the sheet now drawn; every
+    /// other is left as it was.
+    pub fn set_destroyed(&mut self, destroyed: impl Fn(StellarId) -> bool) {
+        for stellar in &mut self.stellars {
+            let now = destroyed(stellar.id);
+            if stellar.destroyed != now {
+                stellar.destroyed = now;
+                stellar.animation = stellar.animation_for_drawn();
+            }
+        }
+    }
+
     /// Where the camera may go: the box round the system's centre and every
     /// stellar, grown by [`CAMERA_MARGIN`].
     #[must_use]
@@ -121,7 +171,7 @@ pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera, 
     let mut labels = Vec::new();
     for stellar in scene.stellars() {
         let at = camera.world_to_screen(stellar.position);
-        let (width, height) = match &stellar.sprite {
+        let (width, height) = match stellar.drawn() {
             Ok(sheet) => {
                 let frame = stellar.animation.frame(ticks(elapsed));
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
@@ -157,7 +207,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::system::catalog::{AnimationData, StellarContents, SystemContents};
+    use crate::system::catalog::SystemContents;
 
     /// Canned systems; records every system asked for.
     struct FakeCatalog {
@@ -207,6 +257,7 @@ mod tests {
             x,
             y,
             sprite,
+            dead_sprite: None,
             animation: WORMHOLE,
         }
     }
@@ -251,21 +302,30 @@ mod tests {
                     name: "Stellar 129".to_owned(),
                     position: Point::new(900.0, -600.0),
                     sprite: Ok(sheet(1001, 4)),
-                    animation: Animation::new(frames(4), WORMHOLE),
+                    dead_sprite: None,
+                    animation_data: WORMHOLE,
+                    destroyed: false,
+                    animation: Animation::new(frames(4), WORMHOLE, false),
                 },
                 SceneStellar {
                     id: StellarId(128),
                     name: "Stellar 128".to_owned(),
                     position: Point::new(0.0, 0.0),
                     sprite: Ok(sheet(1000, 1)),
-                    animation: Animation::new(frames(1), WORMHOLE),
+                    dead_sprite: None,
+                    animation_data: WORMHOLE,
+                    destroyed: false,
+                    animation: Animation::new(frames(1), WORMHOLE, false),
                 },
                 SceneStellar {
                     id: StellarId(140),
                     name: "Stellar 140".to_owned(),
                     position: Point::new(-1700.0, 900.0),
                     sprite: Err("no spïn 1002".to_owned()),
-                    animation: Animation::new(frames(1), WORMHOLE),
+                    dead_sprite: None,
+                    animation_data: WORMHOLE,
+                    destroyed: false,
+                    animation: Animation::new(frames(1), WORMHOLE, false),
                 },
             ]
         );
@@ -323,6 +383,148 @@ mod tests {
                 max: Point::new(5000.0 + CAMERA_MARGIN, 2500.0 + CAMERA_MARGIN),
             }
         );
+    }
+
+    /// Animates only when destroyed, every 2 ticks.
+    const DEAD_ANIMATED: AnimationData = AnimationData {
+        delay: 2,
+        frame0_bias: -1,
+        only_when_destroyed: true,
+    };
+
+    /// System 134: stellar 150 at (0, 0), whose `DeadType` sheet 2150 has
+    /// 3 frames of 16 x 16 and animates only when destroyed; 151 with no
+    /// different graphic; 152 whose `DeadType` sheet could not be read;
+    /// and a 4-frame wormhole 153, with no `DeadType`.
+    fn dying() -> FakeCatalog {
+        let dead_sheet = StellarSheet {
+            frame_width: 16,
+            frame_height: 16,
+            ..sheet(2150, 3)
+        };
+        FakeCatalog::new(vec![system(
+            134,
+            vec![
+                StellarContents {
+                    dead_sprite: Some(Ok(dead_sheet)),
+                    animation: DEAD_ANIMATED,
+                    ..stellar(150, 0, 0, Ok(sheet(1000, 1)))
+                },
+                stellar(151, 100, 0, Ok(sheet(1001, 1))),
+                StellarContents {
+                    dead_sprite: Some(Err("no spïn 1007".to_owned())),
+                    ..stellar(152, 200, 0, Ok(sheet(1002, 1)))
+                },
+                stellar(153, 300, 0, Ok(sheet(1003, 4))),
+            ],
+        )])
+    }
+
+    /// Each stellar's sprite drawn `elapsed` in, in order.
+    fn drawn(scene: &SystemScene, elapsed: Duration) -> Vec<ImageKey> {
+        let mut list = DrawList::new();
+        draw_stellars(
+            &mut list,
+            scene,
+            &Camera::centred_on(Point::default()),
+            elapsed,
+        );
+        list.iter()
+            .filter_map(|command| match command {
+                crate::DrawCommand::Sprite { image, .. } => Some(*image),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where `name` is drawn.
+    fn name_at(scene: &SystemScene, name: &str) -> Point {
+        let mut list = DrawList::new();
+        let camera = Camera::centred_on(Point::default());
+        draw_stellars(&mut list, scene, &camera, Duration::ZERO);
+        list.iter()
+            .find_map(|command| match command {
+                crate::DrawCommand::Text { text, origin, .. } if text == name => Some(*origin),
+                _ => None,
+            })
+            .expect("the name is drawn")
+    }
+
+    #[test]
+    fn a_destroyed_stellar_draws_its_dead_type_sheet_until_it_is_whole_again() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        let whole = [
+            ImageKey::sprite(1000, 0),
+            ImageKey::sprite(1001, 0),
+            ImageKey::sprite(1002, 0),
+            ImageKey::sprite(1003, 0),
+        ];
+        assert_eq!(drawn(&scene, Duration::ZERO), whole, "loaded whole");
+        scene.set_destroyed(|id| id == StellarId(150));
+        assert!(scene.stellars()[0].destroyed);
+        assert_eq!(
+            drawn(&scene, Duration::ZERO)[0],
+            ImageKey::sprite(2150, 0),
+            "the DeadType sheet"
+        );
+        assert_eq!(drawn(&scene, Duration::ZERO)[1..], whole[1..]);
+        scene.set_destroyed(|_| false);
+        assert!(!scene.stellars()[0].destroyed);
+        assert_eq!(drawn(&scene, Duration::ZERO), whole, "regenerated");
+    }
+
+    #[test]
+    fn a_destroyed_stellar_with_no_dead_type_sheet_keeps_its_type() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.set_destroyed(|_| true);
+        assert!(scene.stellars().iter().all(|stellar| stellar.destroyed));
+        assert_eq!(
+            drawn(&scene, Duration::ZERO)[1..3],
+            [ImageKey::sprite(1001, 0), ImageKey::sprite(1002, 0)],
+            "no different graphic, and an unreadable one"
+        );
+    }
+
+    #[test]
+    fn the_name_sits_under_the_sheet_drawn() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        let at = Camera::centred_on(Point::default()).world_to_screen(Point::default());
+        let whole = name_at(&scene, "Stellar 150");
+        assert_eq!(whole, Point::new(at.x - 4.0, at.y + 4.0 + NAME_GAP));
+        scene.set_destroyed(|id| id == StellarId(150));
+        let dead = name_at(&scene, "Stellar 150");
+        assert_eq!(dead, Point::new(at.x - 8.0, at.y + 8.0 + NAME_GAP));
+    }
+
+    #[test]
+    fn the_animation_follows_the_sheet_drawn_and_the_destroyed_state() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        let before = scene.stellars().to_vec();
+        assert!(!before[0].animation.is_animated(), "whole, so still");
+        assert!(before[3].animation.is_animated());
+        scene.set_destroyed(|id| id == StellarId(150));
+        let frames = |n| NonZeroU16::new(n).expect("non-zero");
+        assert_eq!(
+            scene.stellars()[0].animation,
+            Animation::new(frames(3), DEAD_ANIMATED, true)
+        );
+        // Three ticks in: frame 1 of the DeadType sheet.
+        assert_eq!(
+            drawn(&scene, Duration::from_millis(100))[0],
+            ImageKey::sprite(2150, 1)
+        );
+        assert_eq!(scene.stellars()[1..], before[1..], "the others untouched");
+        scene.set_destroyed(|id| id == StellarId(150) || id == StellarId(153));
+        assert!(
+            !scene.stellars()[3].animation.is_animated(),
+            "a normal stellar stops while destroyed"
+        );
+        assert_eq!(scene.stellars()[0], {
+            let mut dead = before[0].clone();
+            dead.destroyed = true;
+            dead.animation = Animation::new(frames(3), DEAD_ANIMATED, true);
+            dead
+        });
     }
 
     #[test]

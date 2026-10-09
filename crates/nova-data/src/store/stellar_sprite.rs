@@ -1,7 +1,7 @@
 //! Resolving a stellar object to its sprite sheet.
 
 use super::spin_sprite::SpinSpriteError;
-use super::{GameData, SourceFile};
+use super::{GameData, SourceFile, StoreEntry};
 use crate::error::DecodeError;
 use crate::graphics::{GraphicsError, SpriteSheet};
 use crate::records::stellar::Stellar;
@@ -103,16 +103,53 @@ impl GameData {
         &self,
         stellar: StellarId,
     ) -> Result<StellarSprite<'_>, StellarSpriteError> {
-        let id = stellar.0;
-        let entry = self
-            .get::<Stellar>(id)
-            .ok_or(StellarSpriteError::NoStellar(id))?
-            .map_err(|e| StellarSpriteError::Decode(e.clone()))?;
+        let entry = self.stellar_entry(stellar)?;
         let graphic_type = entry.record.graphic_type;
         let spin_id = stellar_spin_id(graphic_type).ok_or(StellarSpriteError::BadType {
-            stellar: id,
+            stellar: stellar.0,
             graphic_type,
         })?;
+        self.graphic_type_sprite(stellar, entry.source, graphic_type, spin_id)
+    }
+
+    /// Resolves `stellar`'s `DeadType` to the sprite sheet it draws while
+    /// destroyed, as [`stellar_sprite`](Self::stellar_sprite) resolves its
+    /// `Type`. `Ok(None)` when the `DeadType` is outside 0 to 255: the
+    /// Bible's -1 is "don't display different graphic type when
+    /// destroyed", and the engine reads any other such value the same way
+    /// (story-runtime phase 7). Otherwise the errors are
+    /// `stellar_sprite`'s, never [`StellarSpriteError::BadType`].
+    pub fn stellar_dead_sprite(
+        &self,
+        stellar: StellarId,
+    ) -> Result<Option<StellarSprite<'_>>, StellarSpriteError> {
+        let entry = self.stellar_entry(stellar)?;
+        let dead_type = entry.record.dead_type;
+        stellar_spin_id(dead_type)
+            .map(|spin_id| self.graphic_type_sprite(stellar, entry.source, dead_type, spin_id))
+            .transpose()
+    }
+
+    /// `stellar`'s `spöb`, which must exist and decode.
+    fn stellar_entry(
+        &self,
+        stellar: StellarId,
+    ) -> Result<StoreEntry<'_, Stellar>, StellarSpriteError> {
+        self.get::<Stellar>(stellar.0)
+            .ok_or(StellarSpriteError::NoStellar(stellar.0))?
+            .map_err(|e| StellarSpriteError::Decode(e.clone()))
+    }
+
+    /// The sheet of `stellar`'s graphic type `graphic_type`, `spïn`
+    /// `spin_id`, whose `spöb` came from `source`.
+    fn graphic_type_sprite<'a>(
+        &'a self,
+        stellar: StellarId,
+        source: &'a SourceFile,
+        graphic_type: i16,
+        spin_id: i16,
+    ) -> Result<StellarSprite<'a>, StellarSpriteError> {
+        let id = stellar.0;
         let spin = self.spin_sheet(spin_id).map_err(|err| match err {
             SpinSpriteError::NoSpin(spin) => StellarSpriteError::NoSpin {
                 stellar: id,
@@ -131,7 +168,7 @@ impl GameData {
             spin_id,
             image_id: spin.image_id,
             sheet: spin.sheet,
-            stellar: entry.source,
+            stellar: source,
             spin: spin.spin,
             sheet_source: spin.sheet_source,
         })
@@ -372,6 +409,81 @@ mod tests {
             }
         );
         assert_eq!(err.to_string(), "spïn 1003: no rlëD 2001 for its sprites");
+    }
+
+    /// A `spöb` of graphic type 3 whose `DeadType` is `dead_type`.
+    fn dead(dead_type: i16) -> Vec<u8> {
+        buf::<Stellar>().i16(0x04, 3).i16(0x240, dead_type).0
+    }
+
+    #[test]
+    fn a_dead_type_outside_0_to_255_is_no_different_graphic() {
+        for dead_type in [-1, -2, 256, i16::MIN] {
+            let data = store(&[("Dead", fork(&[(Stellar::TYPE, 128, dead(dead_type))]))]);
+            let sprite = data.stellar_dead_sprite(StellarId(128)).expect("no error");
+            assert!(sprite.is_none(), "{dead_type}");
+        }
+    }
+
+    #[test]
+    fn a_dead_type_resolves_through_its_spin_to_its_sheet() {
+        let data = store(&[(
+            "Dead",
+            fork(&[
+                (Stellar::TYPE, 128, dead(5)),
+                (Spin::TYPE, 1005, spin(2005, 2, 1, 3, 1)),
+                (RLED, 2005, sheet(3, 0x001F)),
+            ]),
+        )]);
+        let sprite = data
+            .stellar_dead_sprite(StellarId(128))
+            .expect("resolves")
+            .expect("a dead type");
+        assert_eq!((sprite.spin_id, sprite.image_id), (1005, 2005));
+        assert_eq!(sprite.sheet.frames().len(), 3);
+        assert_eq!(sprite.sheet.layout().columns(), 3);
+        assert_eq!(sprite.sheet.frames()[0].pixel(0, 0), Some([0, 0, 255, 255]));
+        assert_eq!(sprite.stellar.path, Path::new("/p/Dead"));
+        let alive = data.stellar_sprite(StellarId(128)).expect("type 3");
+        assert_eq!(alive.spin_id, 1003, "the Type sheet is unchanged");
+    }
+
+    #[test]
+    fn a_dead_type_of_0_is_spin_1000() {
+        let data = store(&[(
+            "Dead",
+            fork(&[
+                (Stellar::TYPE, 128, dead(0)),
+                (Spin::TYPE, 1000, spin(2010, 2, 1, 1, 1)),
+                (RLED, 2010, sheet(1, 0x001F)),
+            ]),
+        )]);
+        let sprite = data.stellar_dead_sprite(StellarId(128)).expect("resolves");
+        assert_eq!(sprite.map(|s| s.spin_id), Some(1000));
+    }
+
+    #[test]
+    fn a_dead_type_with_no_spin_is_no_spin() {
+        let data = store(&[("Dead", fork(&[(Stellar::TYPE, 128, dead(7))]))]);
+        let err = data
+            .stellar_dead_sprite(StellarId(128))
+            .expect_err("no spïn 1007");
+        assert_eq!(
+            err,
+            StellarSpriteError::NoSpin {
+                stellar: 128,
+                graphic_type: 7,
+                spin: 1007
+            }
+        );
+    }
+
+    #[test]
+    fn a_missing_stellar_has_no_dead_sprite_either() {
+        let err = store(&[])
+            .stellar_dead_sprite(StellarId(129))
+            .expect_err("absent");
+        assert_eq!(err, StellarSpriteError::NoStellar(129));
     }
 
     #[test]
