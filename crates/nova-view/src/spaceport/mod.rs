@@ -26,6 +26,8 @@
 //!   description.
 //! - [`modal`]: the [`ModalHost`](modal::ModalHost) the screens open
 //!   their dialogs in, over themselves.
+//! - [`quantity_ask`]: the [`QuantityAsk`](quantity_ask::QuantityAsk),
+//!   the quantity dialog as the exchange and the outfitter host it.
 
 pub mod bar;
 pub mod catalog;
@@ -35,6 +37,7 @@ pub mod hire;
 pub mod layout;
 pub mod modal;
 pub mod outfitter;
+pub mod quantity_ask;
 pub mod service;
 pub mod shipyard;
 pub mod trade;
