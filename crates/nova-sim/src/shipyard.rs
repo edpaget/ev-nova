@@ -3860,6 +3860,22 @@ mod tests {
     }
 
     #[test]
+    fn the_last_stock_slot_naming_a_weapon_sets_its_count() {
+        // Slots of 1 and then 3 of gun 130 (2 tons each): the standard
+        // equipment holds 3, so 5 + 6 = 11 to start, and the walk takes
+        // off the last slot's 3 guns, 6 tons, leaving 5. Summing the
+        // slots would take off 8 (leaving 3), and the first slot 2
+        // (leaving 9).
+        let class = freeing(129, 5, &[]);
+        let arsenal = stocking(&[weapon(130)], 129, &[(130, 1, 0), (130, 3, 0)]);
+        let outfits = [weighing(150, 2, &[(MOD_WEAPON, 130)])];
+        let shown = space(&class, &arsenal, &outfits);
+        assert_eq!(shown, 5);
+        assert_ne!(shown, floored_space(11, [8]), "summed");
+        assert_ne!(shown, floored_space(11, [2]), "the first slot");
+    }
+
+    #[test]
     fn the_space_takes_nothing_off_for_stock_of_none() {
         // A slot of no guns and no rounds, and a default item of none,
         // take no step, so `FreeMass` -7 is not floored to 0.
