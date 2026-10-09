@@ -95,6 +95,10 @@ impl PilotCatalog for Pilot {
     fn gate_sites(&self) -> Vec<nova_sim::GateSite> {
         Vec::new()
     }
+
+    fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
+        Vec::new()
+    }
 }
 
 /// The script, by half-seconds: thrust for a second, turn right for half

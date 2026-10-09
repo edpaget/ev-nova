@@ -3113,6 +3113,10 @@ mod tests {
         fn gate_sites(&self) -> Vec<GateSite> {
             self.gates.clone()
         }
+
+        fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
+            Vec::new()
+        }
     }
 
     /// The weapons, ship types' combat fields and governments given.

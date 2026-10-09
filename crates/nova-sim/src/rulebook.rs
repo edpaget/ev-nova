@@ -28,6 +28,7 @@
 //! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage ([`Session`](crate::Session)) | wages are paid only for a jump's days; the days a stay passes pay none\* |
 //! | [`StayDays`](RuleKey::StayDays) | `stay_days` | leaving the spaceport passes days: half as many as escorts sold or upgraded, a day if an outfit was bought or sold, four if a ship was bought, and the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa, @0x6020e, `_PlayerLandOnStellar` @0x63440; [`Session`](crate::Session)) | a stay passes no days: only a jump's and a gate's like a jump pass‡‡‡‡ |
 //! | [`StoryReentry`](RuleKey::StoryReentry) | `story_reentry` | an event a script raises is dispatched depth first, before the script's next operator (`_EvalSetExp` @0x150fc; `_DoMissionAccept` @0x15407; @0x159a3, @0x159a8; see [`story`](crate::story)) | it waits until the script has settled, then dispatches first in, first out§§§§ |
+//! | [`DestroyInvincible`](RuleKey::DestroyInvincible) | `destroy_invincible` | `Y` leaves an invincible stellar (`Strength` 0 or -1) as it was, as `_StellarIsDestroyed` holds none destroyed (@0x4e1a; see [`story`](crate::story)) | `Y` destroys any stellar: "Yxxx - destroy stellar ID xxx" |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear ([`NovaPersons`](crate::NovaPersons)) | 5 %, one of those who may appear picked evenly |
@@ -352,6 +353,16 @@ rule_keys! {
     /// other reading is the port's earlier after-settle order, not
     /// anything the Bible says.
     StoryReentry => "story_reentry",
+    /// Whether `Y` destroys an invincible stellar, one whose `Strength` is
+    /// 0 or -1: by the engine, it does not, as the original's
+    /// `_StellarIsDestroyed` holds a stellar destroyed only when its
+    /// `Strength` is above 0 (@0x4e1a), so the countdown `Y` sets
+    /// (@0x15ac8-0x15ade) leaves it landable and drawn whole, and its next
+    /// day restores it (@0xb700); by the Bible, whose `Y` is "destroy
+    /// stellar ID xxx" whatever its `Strength`, which it calls invincible
+    /// only to planetary weapons, it is destroyed (see the
+    /// [`story`](crate::story) module's "Galaxy overlay").
+    DestroyInvincible => "destroy_invincible",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -1015,6 +1026,22 @@ mod tests {
     }
 
     #[test]
+    fn the_story_rules_are_found_by_their_keys() {
+        assert_eq!(RuleKey::StayDays.key(), "stay_days");
+        assert_eq!(RuleKey::from_key("stay_days"), Some(RuleKey::StayDays));
+        assert_eq!(RuleKey::StoryReentry.key(), "story_reentry");
+        assert_eq!(
+            RuleKey::from_key("story_reentry"),
+            Some(RuleKey::StoryReentry)
+        );
+        assert_eq!(RuleKey::DestroyInvincible.key(), "destroy_invincible");
+        assert_eq!(
+            RuleKey::from_key("destroy_invincible"),
+            Some(RuleKey::DestroyInvincible)
+        );
+    }
+
+    #[test]
     fn each_rule_has_a_settings_key_found_by_name() {
         assert_eq!(
             RuleKey::ALL,
@@ -1033,6 +1060,7 @@ mod tests {
                 RuleKey::TakeOffPay,
                 RuleKey::StayDays,
                 RuleKey::StoryReentry,
+                RuleKey::DestroyInvincible,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,
@@ -1092,13 +1120,6 @@ mod tests {
         assert_eq!(RuleKey::CommQuote.key(), "comm_quote");
         assert_eq!(RuleKey::HireRequire.key(), "hire_require");
         assert_eq!(RuleKey::TakeOffPay.key(), "take_off_pay");
-        assert_eq!(RuleKey::StayDays.key(), "stay_days");
-        assert_eq!(RuleKey::from_key("stay_days"), Some(RuleKey::StayDays));
-        assert_eq!(RuleKey::StoryReentry.key(), "story_reentry");
-        assert_eq!(
-            RuleKey::from_key("story_reentry"),
-            Some(RuleKey::StoryReentry)
-        );
         assert_eq!(RuleKey::HireFee.key(), "hire_fee");
         assert_eq!(RuleKey::EscortWage.key(), "escort_wage");
         assert_eq!(RuleKey::FighterLaunch.key(), "fighter_launch");

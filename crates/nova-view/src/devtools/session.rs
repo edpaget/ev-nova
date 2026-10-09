@@ -260,6 +260,10 @@ mod tests {
         fn gate_sites(&self) -> Vec<GateSite> {
             Vec::new()
         }
+
+        fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
+            Vec::new()
+        }
     }
 
     impl CombatCatalog for Catalog {

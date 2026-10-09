@@ -319,6 +319,7 @@ mod outfits;
 mod persons;
 mod script_effects;
 mod ship_change;
+mod stellars;
 mod story;
 
 pub use hooks::HookRules;
@@ -346,7 +347,8 @@ use crate::board::{
 };
 use crate::catalog::{
     CombatCatalog, DateAffixes, GateSite, GovtId, LandingSite, OutfitId, OutfitRecord, PersonId,
-    PilotCatalog, ShipId, ShipRecord, StartError, StellarId, SystemId, TrafficCatalog, WeaponId,
+    PilotCatalog, ShipId, ShipRecord, StartError, StellarId, StellarLife, SystemId, TrafficCatalog,
+    WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -673,6 +675,10 @@ pub struct Session {
     /// The story runtime: the events raised and the ships watched (see the
     /// [`story`](crate::story) module); never saved.
     story: story::StoryRuntime,
+    /// Every stellar's life, by ID, read when the session starts: what `Y`
+    /// and the daily step read of a stellar's destruction and
+    /// regeneration (see the `stellars` module).
+    lives: BTreeMap<StellarId, StellarLife>,
 }
 
 impl Session {
@@ -813,6 +819,11 @@ impl Session {
             touchdown: player.position,
             rules: Rulebook::default(),
             story: story::StoryRuntime::default(),
+            lives: catalog
+                .stellar_lives()
+                .into_iter()
+                .map(|life| (life.id, life))
+                .collect(),
             pilot,
         };
         session.set_player_system(system, here, dock);

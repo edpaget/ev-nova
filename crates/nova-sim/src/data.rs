@@ -30,11 +30,12 @@ use crate::catalog::{
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
     GovtRecord, HullRecord, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, StockWeapon, StringPatch, SystemId,
+    StarSystem, StartDate, StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId,
     SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::story::wreck::STARTS_DESTROYED;
 
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
@@ -312,6 +313,21 @@ impl PilotCatalog for GameData {
     fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
         self.records::<Stellar>()
             .filter_map(|(id, stellar)| Some((StellarId(id), stellar.ok()?.record.flags.bits())))
+            .collect()
+    }
+
+    fn stellar_lives(&self) -> Vec<StellarLife> {
+        self.records::<Stellar>()
+            .filter_map(|(id, stellar)| {
+                let stellar = stellar.ok()?.record;
+                Some(StellarLife {
+                    id: StellarId(id),
+                    strength: stellar.strength,
+                    dead_time: stellar.dead_time,
+                    starts_destroyed: stellar.flags2.bits() & STARTS_DESTROYED != 0,
+                    on_regen: self.set_expr(stellar.on_regen.as_str()).into(),
+                })
+            })
             .collect()
     }
 }
@@ -2000,6 +2016,54 @@ mod tests {
                 a.id
             );
         }
+    }
+
+    #[test]
+    fn stellar_lives_list_every_readable_spöb_by_id_with_its_strength_dead_time_and_on_regen() {
+        let mut whole = stellar(0, 0, 0, 0, 0);
+        whole[0x23C..0x240].copy_from_slice(&70_000_i32.to_be_bytes());
+        put_i16s(&mut whole, 0x242, &[-1]);
+        whole[0x345..0x34A].copy_from_slice(b"b9 b8");
+        let mut wreck = flagged2(stellar(0, 0, 0, 0, 0), 0x0040 | 0x0020);
+        wreck[0x23C..0x240].copy_from_slice(&(-1_i32).to_be_bytes());
+        put_i16s(&mut wreck, 0x242, &[3]);
+        let data = store(&[
+            (Stellar::TYPE, 130, wreck),
+            (Stellar::TYPE, 128, whole),
+            (Stellar::TYPE, 129, short(stellar(0, 0, 0, 1, 0))),
+        ]);
+        let lives = data.stellar_lives();
+        assert_eq!(
+            lives
+                .iter()
+                .map(|life| (
+                    life.id,
+                    life.strength,
+                    life.dead_time,
+                    life.starts_destroyed
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (StellarId(128), 70_000, -1, false),
+                (StellarId(130), -1, 3, true),
+            ],
+            "the unreadable 129 left out"
+        );
+        assert_eq!(
+            lives[0].on_regen.tree().map(|expr| expr.ops.len()),
+            Some(2),
+            "b9 b8"
+        );
+        assert_eq!(lives[1].on_regen, Script::default(), "blank");
+        assert!(
+            shared_script(&lives[0].on_regen, &data.stellar_lives()[0].on_regen),
+            "parsed once"
+        );
+        let mut starts_whole = flagged2(stellar(0, 0, 0, 0, 0), !0x0040);
+        put_i16s(&mut starts_whole, 0x242, &[0]);
+        let data = store(&[(Stellar::TYPE, 131, starts_whole)]);
+        assert!(!data.stellar_lives()[0].starts_destroyed, "every other bit");
+        assert_eq!(store(&[]).stellar_lives(), []);
     }
 
     #[test]

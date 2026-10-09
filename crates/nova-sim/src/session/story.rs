@@ -2,16 +2,18 @@
 //! their sources and waiting for the next settling, the ships watched for
 //! their first sighting (see the `story` module's "Story events"), the
 //! daily step's participants run over the session's own state (its "Daily
-//! step"), and the galaxy overlay's one writer,
-//! [`Session::change_galaxy`], with the rule that keeps the player in a
-//! visible system (its "Galaxy overlay").
+//! step"), and the galaxy overlay's one writer, with the rule that keeps
+//! the player in a visible system (its "Galaxy overlay"): one core with
+//! two entries, [`Session::change_galaxy`] for any change, with a catalog,
+//! and `Session::set_stellar_state`, catalog-free, for a stellar's
+//! destroyed state alone.
 
 use std::collections::{BTreeSet, VecDeque};
 
 use super::entry::Dock;
 use super::script_effects::Settled;
 use super::{ScriptNote, Session, SessionEvent};
-use crate::catalog::{LandingSite, PilotCatalog, SystemId, TrafficCatalog};
+use crate::catalog::{LandingSite, PilotCatalog, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::{Script, Test};
 use crate::market;
@@ -20,7 +22,7 @@ use crate::rulebook::RuleKey;
 use crate::story::day::{self, Day, Participant};
 use crate::story::dispatch::{self, DuplicateSubscription, Reentry, Registry, Stage};
 use crate::story::{
-    Consumer, Fate, GalaxyOverlay, HiddenMove, OverlaidGalaxy, StoryEvent, Subscription,
+    Consumer, Countdown, Fate, GalaxyOverlay, HiddenMove, OverlaidGalaxy, StoryEvent, Subscription,
     SubscriptionId,
 };
 use crate::traffic::npc::NpcId;
@@ -296,16 +298,18 @@ impl Session {
         self.story.raised.iter().copied().collect()
     }
 
-    /// Changes the galaxy overlay as `change` says: its one writer (see the
-    /// `story` module's "Galaxy overlay"). A change that changes nothing
-    /// does nothing more. Otherwise the overlaid map is rebuilt, and a
+    /// Changes the galaxy overlay as `change` says: the one writer's entry
+    /// for any change (see the `story` module's "Galaxy overlay"). A
+    /// change that changes nothing does nothing more. Otherwise the
+    /// overlaid map is rebuilt, and a
     /// player whose system is now hidden moves as the original moves it
     /// ([`OverlaidGalaxy::hidden_move`]): only its system changes, and no
     /// story event is raised, no system explored and no day passed. In
     /// flight [`SessionEvent::SystemChanged`] is told; landed, the
     /// spaceport stays its stellar's and the new system's stellars wait
     /// for the take-off, as after a landed move. The stellars are read again
-    /// from `catalog` when the player moved or theirs changed government;
+    /// from `catalog` when the player moved or theirs changed government
+    /// or were destroyed or regenerated;
     /// when the player's system or its government changed, the traffic
     /// goes on with every ship in the system, its arrivals drawn from the
     /// new table ([`Traffic::retarget`](crate::Traffic::retarget)). A save
@@ -315,13 +319,10 @@ impl Session {
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
-        let before = self.pilot.galaxy.clone();
-        change(&mut self.pilot.galaxy);
-        if self.pilot.galaxy == before {
-            return false;
-        }
         let govt = self.galaxy.govt(self.pilot.system);
-        self.galaxy.set_overlay(self.pilot.galaxy.clone());
+        let Some(before) = self.write_galaxy(change) else {
+            return false;
+        };
         self.refresh_sites(catalog, &before);
         let moved = leave_hidden(&mut self.pilot, &mut self.galaxy);
         // The original rewrites only the system numbers (@0x998f1-0x99a36):
@@ -338,21 +339,80 @@ impl Session {
             let every: BTreeSet<NpcId> = self.traffic.npcs().iter().map(|npc| npc.id).collect();
             self.traffic.retarget(table, &every);
         }
-        self.save_due = true;
         self.emit(SessionEvent::GalaxyChanged);
         true
     }
 
+    /// The writer's one core, for both its entries: changes the pilot's
+    /// overlay as `change` says and, when that changed anything, the
+    /// galaxy's, rebuilding the overlaid map, and makes a save due. It
+    /// tells nothing: each entry tells what its change calls for. The
+    /// overlay as it was, when it changed.
+    fn write_galaxy(&mut self, change: impl FnOnce(&mut GalaxyOverlay)) -> Option<GalaxyOverlay> {
+        let before = self.pilot.galaxy.clone();
+        change(&mut self.pilot.galaxy);
+        if self.pilot.galaxy == before {
+            return None;
+        }
+        self.galaxy.set_overlay(self.pilot.galaxy.clone());
+        self.save_due = true;
+        Some(before)
+    }
+
+    /// Sets `stellar` destroyed with the countdown `destroyed`, or not
+    /// destroyed with `None`: the one writer's catalog-free entry, which
+    /// can change a stellar's destroyed state alone, so it never hides a
+    /// system, moves the player or changes a government (see the `story`
+    /// module's "Galaxy overlay"). A change makes a save due. When the
+    /// stellar is destroyed or regenerated, not only counted down, the
+    /// stellars shown and those waiting for the take-off are stamped
+    /// afresh and [`SessionEvent::GalaxyChanged`] is told once. Whether it
+    /// changed anything.
+    pub(super) fn set_stellar_state(
+        &mut self,
+        stellar: StellarId,
+        destroyed: Option<Countdown>,
+    ) -> bool {
+        let Some(before) = self.write_galaxy(|overlay| {
+            overlay.set_destroyed(stellar, destroyed);
+        }) else {
+            return false;
+        };
+        if before.stellar(stellar).destroyed.is_some() != destroyed.is_some() {
+            self.stamp_sites();
+            self.emit(SessionEvent::GalaxyChanged);
+        }
+        true
+    }
+
+    /// Stamps the stellars shown and those waiting for the take-off afresh
+    /// through the galaxy ([`OverlaidGalaxy::site`]): only whether each is
+    /// destroyed can have changed, which the overlay alone gives, so
+    /// nothing is read again. Which stellars are shown is
+    /// [`Session::set_player_system`]'s alone; this only stamps them.
+    fn stamp_sites(&mut self) {
+        let galaxy = &self.galaxy;
+        for site in self
+            .sites
+            .iter_mut()
+            .chain(self.next_sites.iter_mut().flatten())
+        {
+            *site = galaxy.site(*site);
+        }
+    }
+
     /// Reads the stellars again from `catalog` where the galaxy's change
-    /// from `before` gave one of them another government: those shown, and
-    /// those waiting for the take-off. Which stellars are shown is
-    /// [`Session::set_player_system`]'s alone; this only refreshes them.
+    /// from `before` gave one of them another government, or destroyed or
+    /// regenerated it: those shown, and those waiting for the take-off.
+    /// Which stellars are shown is [`Session::set_player_system`]'s alone;
+    /// this only refreshes them.
     fn refresh_sites(&mut self, catalog: &(impl PilotCatalog + ?Sized), before: &GalaxyOverlay) {
         let now = &self.pilot.galaxy;
         let changed = |sites: &[LandingSite]| {
-            sites
-                .iter()
-                .any(|site| before.stellar(site.id).govt != now.stellar(site.id).govt)
+            sites.iter().any(|site| {
+                let (was, is) = (before.stellar(site.id), now.stellar(site.id));
+                was.govt != is.govt || was.destroyed.is_some() != is.destroyed.is_some()
+            })
         };
         let shown_stale = changed(&self.sites);
         let waiting_stale = self.next_sites.as_deref().is_some_and(changed);
@@ -406,8 +466,8 @@ mod tests {
     use crate::date::GameDate;
     use crate::market::ActiveEvent;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-    use crate::session::Settled;
     use crate::session::tests::{NEW, buy, outfitted, sell, shipbuying, surplus};
+    use crate::session::{SessionEvent, Settled};
     use crate::story::{
         Consumer, DuplicateSubscription, Entrance, EventFilter, StoryEvent, StoryEventKind,
         Subscription, SubscriptionId,
@@ -1151,6 +1211,89 @@ mod tests {
         assert_eq!(bits(&session), [0_u16; 0], "deferred");
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert_eq!(bits(&session), [3]);
+    }
+
+    // The writer's catalog-free entry.
+
+    fn left(days_left: u16) -> Countdown {
+        Countdown { days_left }
+    }
+
+    #[test]
+    fn setting_a_stellars_state_tells_the_galaxy_changed_only_as_it_is_destroyed_or_regenerated() {
+        let catalog = testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.take_events();
+        session.take_save_due();
+        let s = StellarId(128);
+        assert!(!session.set_stellar_state(s, None), "whole already");
+        assert_eq!(session.take_events(), []);
+        assert!(!session.take_save_due());
+        assert!(session.set_stellar_state(s, Some(left(3))));
+        assert_eq!(session.take_events(), [SessionEvent::GalaxyChanged]);
+        assert!(session.take_save_due());
+        assert_eq!(session.pilot().galaxy.stellar(s).destroyed, Some(left(3)));
+        assert_eq!(*session.galaxy().overlay(), session.pilot().galaxy);
+        assert!(session.set_stellar_state(s, Some(left(2))), "counted down");
+        assert_eq!(session.take_events(), [], "still destroyed");
+        assert!(session.take_save_due());
+        assert!(!session.set_stellar_state(s, Some(left(2))));
+        assert!(!session.take_save_due());
+        assert!(session.set_stellar_state(s, None));
+        assert_eq!(session.take_events(), [SessionEvent::GalaxyChanged]);
+        assert!(session.take_save_due());
+        assert!(session.galaxy().overlay().is_empty());
+    }
+
+    #[test]
+    fn setting_a_stellars_state_stamps_the_stellars_shown_and_those_waiting() {
+        let catalog = testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(session.next_sites.is_some(), "131's wait for the take-off");
+        let reads = session_reads(&catalog);
+        session.set_stellar_state(StellarId(140), Some(left(1)));
+        session.set_stellar_state(StellarId(129), Some(left(1)));
+        session.assert_docked_among_shown();
+        let destroyed = |sites: &[LandingSite]| -> Vec<(i16, bool)> {
+            sites
+                .iter()
+                .map(|site| (site.id.0, site.destroyed))
+                .collect()
+        };
+        assert_eq!(destroyed(&session.sites), [(128, false), (129, true)]);
+        assert_eq!(
+            destroyed(session.next_sites.as_deref().expect("waiting")),
+            [(140, true)]
+        );
+        assert_eq!(session_reads(&catalog), reads, "nothing read again");
+        session.set_stellar_state(StellarId(129), None);
+        assert_eq!(destroyed(&session.sites), [(128, false), (129, false)]);
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert_eq!(destroyed(&session.sites), [(140, true)]);
+    }
+
+    /// How many times `catalog`'s stellars were read.
+    fn session_reads(catalog: &FakePilotCatalog) -> usize {
+        catalog.sites_asked.borrow().len()
+    }
+
+    #[test]
+    fn a_change_to_the_galaxy_that_destroys_a_stellar_shown_reads_it_again() {
+        let catalog = testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.take_events();
+        assert!(session.change_galaxy(&catalog, |overlay| {
+            overlay.set_destroyed(StellarId(128), Some(left(3)));
+        }));
+        assert!(session.sites[0].destroyed);
+        assert_eq!(session.take_events(), [SessionEvent::GalaxyChanged]);
+        assert!(session.change_galaxy(&catalog, |overlay| {
+            overlay.set_destroyed(StellarId(128), None);
+        }));
+        assert!(!session.sites[0].destroyed);
     }
 
     #[test]

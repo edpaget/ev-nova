@@ -98,6 +98,10 @@ impl PilotCatalog for Pilot {
     fn gate_sites(&self) -> Vec<nova_sim::GateSite> {
         Vec::new()
     }
+
+    fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
+        Vec::new()
+    }
 }
 
 /// Stellar 128 at the centre, where the ship starts, 200 x 200, with

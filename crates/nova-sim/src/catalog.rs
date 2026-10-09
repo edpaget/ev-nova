@@ -142,6 +142,23 @@ pub struct GateSite {
     pub exit_angle: i16,
 }
 
+/// What a stellar's destruction and regeneration read from its `spöb`
+/// (see the [`story`](crate::story) module's "Galaxy overlay"): the
+/// story's wreck rules decide what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StellarLife {
+    /// The `spöb`'s ID.
+    pub id: StellarId,
+    /// Its `Strength`: 0 or -1 for an invincible stellar.
+    pub strength: i32,
+    /// Its `DeadTime`: the days it stays destroyed, -1 for never.
+    pub dead_time: i16,
+    /// Whether its `Flags2` has 0x0040: it starts the game destroyed.
+    pub starts_destroyed: bool,
+    /// Its `OnRegen`, run as it regenerates on its own.
+    pub on_regen: Script,
+}
+
 /// An outfit, raw from its `oütf`: the [`outfitter`](crate::outfitter)
 /// rules decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -828,6 +845,9 @@ pub trait PilotCatalog {
     /// itself, by ascending ID, with the system it is in: where a
     /// hypergate or wormhole may lead.
     fn gate_sites(&self) -> Vec<GateSite>;
+    /// Every `spöb` that can be read, by ascending ID, with what its
+    /// destruction and regeneration read.
+    fn stellar_lives(&self) -> Vec<StellarLife>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -886,6 +906,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn gate_sites(&self) -> Vec<GateSite> {
         (**self).gate_sites()
+    }
+
+    fn stellar_lives(&self) -> Vec<StellarLife> {
+        (**self).stellar_lives()
     }
 }
 
@@ -946,6 +970,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn gate_sites(&self) -> Vec<GateSite> {
         (**self).gate_sites()
+    }
+
+    fn stellar_lives(&self) -> Vec<StellarLife> {
+        (**self).stellar_lives()
     }
 }
 
@@ -1121,6 +1149,17 @@ mod tests {
         fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
             vec![(StellarId(128), 0x20)]
         }
+
+        /// Stellar 128, back after 7 days.
+        fn stellar_lives(&self) -> Vec<StellarLife> {
+            vec![StellarLife {
+                id: StellarId(128),
+                strength: 500,
+                dead_time: 7,
+                starts_destroyed: true,
+                on_regen: Script::default(),
+            }]
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1146,6 +1185,7 @@ mod tests {
             format!("{:?}", catalog.date_affixes()),
             format!("{:?}", catalog.gate_sites()),
             format!("{:?}", catalog.stellar_flags()),
+            format!("{:?}", catalog.stellar_lives()),
         ]
     }
 
@@ -1174,6 +1214,7 @@ mod tests {
         );
         assert!(direct[16].contains("StellarId(1405)"), "{direct:?}");
         assert_eq!(direct[17], "[(StellarId(128), 32)]");
+        assert!(direct[18].contains("dead_time: 7"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

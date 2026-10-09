@@ -22,8 +22,9 @@
 //! Nova's `G`, `D` and `X` (see the `outfits` module), the ship changes
 //! `C`, `E`, `H` and `T` (see the `ship_change` module), and the moves `M` and `N`, the
 //! leave `Q`, which apply when [`Session::settle_script`] settles them,
-//! and the sound `P` (see the `script_effects` module). Any change to the pilot makes
-//! a save due. An operator nothing handles is skipped, and its kind told
+//! the sound `P` (see the `script_effects` module), and the stellars
+//! destroyed and regenerated, `Y` and `U` (see the `stellars` module).
+//! Any change to the pilot makes a save due. An operator nothing handles is skipped, and its kind told
 //! once a session as a [`ScriptNote`] ([`Session::take_script_notes`]);
 //! which kinds were told is never saved.
 //!
@@ -33,9 +34,9 @@
 //! where it settles the moves and dispatches the events raised before the
 //! next operator (see the [`story`](crate::story) module's "Dispatch").
 //! A script run inside another is one more run like it: an unhandled
-//! kind is told the first time it is met, outer or nested. The operators still unhandled
-//! are those of the missions (`A`, `F`, `S`), ranks (`K`, `L`) and
-//! stellars (`Y`, `U`), whose arms other work adds.
+//! kind is told the first time it is met, outer or nested. The operators
+//! still unhandled are those of the missions (`A`, `F`, `S`) and ranks
+//! (`K`, `L`), whose arms other work adds.
 //!
 //! **Hooks.** The records' set-expression hooks (the `chär`'s `OnStart`,
 //! an outfit's `OnPurchase` and `OnSell`, a ship's `OnPurchase`,
@@ -185,14 +186,14 @@ impl Session {
             }
             SetOp::LeaveStellar(list) => self.leave_stellar(list.0, chance),
             SetOp::PlaySound(sound) => self.play_script_sound(*sound),
-            // Missions, ranks and stellars: other roadmaps add their arms here.
+            SetOp::DestroyStellar(stellar) => self.destroy_stellar(*stellar),
+            SetOp::RegenerateStellar(stellar) => self.regenerate_stellar(*stellar),
+            // Missions and ranks: other roadmaps add their arms here.
             SetOp::AbortMission(_)
             | SetOp::FailMission(_)
             | SetOp::StartMission(_)
             | SetOp::ActivateRank(_)
             | SetOp::DeactivateRank(_)
-            | SetOp::DestroyStellar(_)
-            | SetOp::RegenerateStellar(_)
             // `execute` writes the bits and draws `R(...)` itself, never
             // handing them here.
             | SetOp::Set(_)
@@ -431,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_op_applies_novas_eleven_and_gives_back_the_rest() {
+    fn apply_op_applies_novas_thirteen_and_gives_back_the_rest() {
         let mut session = session();
         let expr = set(
             "A128 F129 S130 G128 D128 C128 E128 H128 M130 N130 K128 L128 P128 Y128 U128 \
@@ -462,8 +463,6 @@ mod tests {
                 SetOpKind::StartMission,
                 SetOpKind::ActivateRank,
                 SetOpKind::DeactivateRank,
-                SetOpKind::DestroyStellar,
-                SetOpKind::RegenerateStellar,
                 SetOpKind::Set,
                 SetOpKind::Clear,
                 SetOpKind::Toggle,
@@ -602,8 +601,6 @@ mod tests {
                 SetOpKind::StartMission,
                 SetOpKind::ActivateRank,
                 SetOpKind::DeactivateRank,
-                SetOpKind::DestroyStellar,
-                SetOpKind::RegenerateStellar,
             ]
             .map(ScriptNote::Unhandled)
         );

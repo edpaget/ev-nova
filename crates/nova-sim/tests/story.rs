@@ -109,6 +109,10 @@ impl PilotCatalog for Home {
     fn gate_sites(&self) -> Vec<nova_sim::GateSite> {
         Vec::new()
     }
+
+    fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
+        Vec::new()
+    }
 }
 
 /// No traffic anywhere.

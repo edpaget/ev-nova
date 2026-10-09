@@ -784,6 +784,7 @@
 pub(crate) mod day;
 pub(crate) mod dispatch;
 pub mod galaxy;
+pub(crate) mod wreck;
 
 pub use dispatch::DuplicateSubscription;
 pub use galaxy::{
