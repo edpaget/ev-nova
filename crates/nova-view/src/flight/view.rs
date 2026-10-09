@@ -9735,6 +9735,24 @@ mod tests {
     }
 
     #[test]
+    fn fighters_abandoned_are_told_only_with_the_layout_of_the_move_settled() {
+        let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
+        let mut view = fighters_out().with_rules(rules);
+        run_set(&mut view, "M131");
+        settle_session(&mut view);
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(view.settle_script(), None);
+        assert_eq!(view.message(), None, "no layout from this settling");
+        let session = view.session.as_mut().expect("flying");
+        assert_eq!(
+            session.take_fighter_notes(),
+            [FighterNote::Abandoned(2)],
+            "left for the next arrival"
+        );
+    }
+
+    #[test]
     fn a_desk_move_redraws_with_no_extra_call() {
         let mut view = landed_view();
         move_to(&mut view, 131, 140);
