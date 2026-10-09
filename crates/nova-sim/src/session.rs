@@ -327,7 +327,7 @@ use crate::catalog::{
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
-    self, Armament, Arsenal, OutfitRounds, Trigger, fit_stock, next_secondary, outfit_rounds,
+    Armament, Arsenal, OutfitRounds, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Condition, DisableRule, HullSpec};
@@ -858,8 +858,9 @@ impl Session {
     /// The outfitter, the shipyard, capture and a reload hold; `G`, `D`
     /// and boarding read [`RuleKey::RefitReserves`] and a change of ship
     /// reads [`RuleKey::ShipChangeReserves`] (see
-    /// [`ReservePolicy::reading`]). Capture and a change of ship refit
-    /// through [`Session::become_class`], by the policy they chose.
+    /// [`ReservePolicy::reading`]). Capture, a change of ship and a
+    /// purchase refit through [`Session::become_class`], by the policy
+    /// they chose.
     fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
         let hold = reserves == ReservePolicy::Hold;
         self.hull = self.arsenal.hull(self.pilot.ship);
@@ -2011,7 +2012,9 @@ impl Session {
     /// not change the ship class, which only [`Session::buy_ship`],
     /// [`Session::assign`] and the ship-change set operators change, nor
     /// the outfits, which only they, [`Session::outfit`] and the other
-    /// set operators change, so the fields and the stats follow.
+    /// set operators change, so the fields and the stats follow. A ship
+    /// purchase does not go through it: [`Session::buy_ship`] applies its
+    /// purchase through `Session::become_class`.
     pub fn transact(&mut self, change: impl FnOnce(&mut Pilot)) -> bool {
         if self.landed.is_none() {
             return false;
@@ -2356,20 +2359,12 @@ impl Session {
             },
             quote,
         );
-        let mut bought = None;
-        self.transact(|pilot| {
-            pilot.outfits = outfits;
-            pilot.ship = record.id;
-            settlement.settle(pilot);
+        self.become_class(&record, ClassChange::bought(outfits), |session| {
+            settlement.settle(&mut session.pilot);
             if !paint_last {
-                pilot.paint = None;
+                session.pilot.paint = None;
             }
-            bought = Some(report);
         });
-        self.fields = record.fields;
-        self.defaults = pilot::tally(record.defaults.iter().copied());
-        self.stock = armament::fitted(&fits);
-        self.refit(false, ReservePolicy::Hold);
         self.ship_redraws.insert(ship);
         self.ship_hook(record.id, ShipHook::Purchase, chance);
         if paint_last {
@@ -2377,7 +2372,7 @@ impl Session {
             // its `OnPurchase` has run (@0x5f00d); the save is due already.
             self.pilot.paint = None;
         }
-        bought.ok_or(ShipRefusal::NoShipyard)
+        Ok(report)
     }
 
     /// Fills the tank at the stellar the ship is docked at, as the

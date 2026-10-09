@@ -92,9 +92,9 @@
 //! 0x0004 alone, holding nothing to its `Max`, and topping its stock
 //! weapons up rather than adding them; its hooks and its take-over
 //! reserves run between the outfits and the class, and it always holds
-//! the reserves. [`Session::buy_ship`] alone keeps its own carry, a trade
-//! (`Max` and the free mass, the sale of the rest, the trade-in), until
-//! it becomes `become_class`'s third caller.
+//! the reserves. [`Session::buy_ship`] is the third caller, with the
+//! shipyard's carry (`Max` and the free mass, the sale of the rest) and
+//! the reserves held.
 //!
 //! **`Txxx`** ([`RenameShipOp`], @0x15b25-0x15be9) reads `STR#` `xxx`,
 //! the raw ID, with no range check, from the session's string lists
@@ -184,6 +184,18 @@ pub(super) struct ClassChange {
     pub(super) outfits: BTreeMap<OutfitId, u16>,
     /// How the refit treats a shield or armour above the new most.
     pub(super) reserves: ReservePolicy,
+}
+
+impl ClassChange {
+    /// A purchase's change: the shipyard's carry, the reserves held, as the
+    /// shipyard has always refitted. The settlement fills them first, so
+    /// holding takes nothing.
+    pub(super) fn bought(outfits: BTreeMap<OutfitId, u16>) -> Self {
+        Self {
+            outfits,
+            reserves: ReservePolicy::Hold,
+        }
+    }
 }
 
 /// The game's string lists, as `T` reads them, shared.
@@ -693,6 +705,23 @@ mod tests {
             assert_eq!((now.shield.now, now.armor.now), kept, "{reserves:?}");
             assert_eq!(now.fuel, Gauge::full(100.0), "{reserves:?}: always held");
         }
+    }
+
+    #[test]
+    fn a_purchases_class_change_holds_the_reserves() {
+        let outfits = owned(&[(LICENCE, 1)]);
+        let change = ClassChange::bought(outfits.clone());
+        assert_eq!(change.outfits, outfits);
+        assert_eq!(change.reserves, ReservePolicy::Hold);
+        let catalog = changing();
+        let mut session = session(&catalog);
+        session.become_class(
+            &record(&session, 130),
+            ClassChange::bought(BTreeMap::new()),
+            |_| {},
+        );
+        let now = session.reserves();
+        assert_eq!((now.shield.now, now.armor.now), (10.0, 20.0), "held");
     }
 
     // C.
