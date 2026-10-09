@@ -412,7 +412,8 @@ mod tests {
     fn a_counted_sale_refused_part_way_runs_on_sell_for_each_sale_made() {
         // A -10-ton pod whose OnSell toggles bit 400, three owned with a
         // 50-ton outfit: 30 + 30 - 50 = 10 tons free, so one pod sold
-        // leaves none and the next two passes are refused.
+        // leaves none and the second pass is refused. Two passes keep the
+        // count even: an OnSell on the refused pass would clear the bit.
         let pod = OutfitId(310);
         let mut catalog = outfitting();
         catalog.outfits.push(OutfitRecord {
@@ -428,7 +429,7 @@ mod tests {
         session.pilot.outfits = BTreeMap::from([(OutfitId(311), 1), (pod, 3)]);
         let free = session.outfitter(&mut Scripted::default()).expect("open");
         assert_eq!(free.free_mass, 10);
-        let order = session.outfit_order(sell(pod), 3, &mut Scripted::default());
+        let order = session.outfit_order(sell(pod), 2, &mut Scripted::default());
         assert_eq!(order.run.done, 1);
         assert_eq!(
             order
