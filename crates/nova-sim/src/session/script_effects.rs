@@ -42,6 +42,14 @@
 //! nothing (the original indexes it blindly). Each move makes a save
 //! due. In flight a move gives up a jump being prepared.
 //!
+//! [`Session::run_set`] stays catalog-free, so a script it runs in the
+//! middle of something else (a record's hook) always queues. The story
+//! runtime nests where a catalog is in hand. Its dispatcher entry point
+//! settles and dispatches after each operator, for the scripts it runs
+//! and for those run at a safe point. The events a deferred script's
+//! moves raise dispatch, nested, from the caller's next `settle_script`
+//! (see the [`story`](crate::story) module's "Dispatch").
+//!
 //! A move enters the system as every way in does, by its rows of the
 //! table in the `entry` module ([`Session::enter_system`]): `move_to`
 //! only chooses where the ship goes, as below.

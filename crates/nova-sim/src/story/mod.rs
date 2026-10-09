@@ -290,6 +290,16 @@
 //!   on `Pilot`, so it never depends on registration order. Ids are
 //!   unique: phase 3's registry refuses a second.
 //!
+//! **Registering and unregistering.** A mission's subscriptions, and its
+//! ships', are registered when it becomes active, keyed by its slot. When
+//! it ends (success, failure, `A` or an auto-abort), they are unregistered
+//! and their once-fired entries cleared, so a mission accepted into the
+//! reused slot starts fresh. A dispatch takes a snapshot of the matching
+//! ids, in [`dispatch_order`]'s order. Just before running each one, it
+//! checks the id is still registered. A subscription removed by an earlier
+//! script in the same dispatch is skipped. One added during the dispatch
+//! waits for the next event.
+//!
 //! **Order.** [`dispatch_order`] runs an event's subscriptions by id:
 //! consumer, then record, then hook. The consumers' order is
 //! [`Consumer`]'s, the same for every event, because only one event has
@@ -319,15 +329,39 @@
 //! - `M` and `N` in flight enter the system, redraw its stellars and run
 //!   the enter-system subscriptions there (@0x159a3, @0x159a8).
 //!
-//! Today `apply_op` only queues a move, and
-//! [`Session::settle_script`](crate::Session::settle_script) applies it
-//! after the script, since a script has no catalog to read the new system
-//! from (see `script_effects`). So under the default the dispatcher
-//! settles inside the script run: once an operator has raised or queued
-//! something, it settles the queue there (the moves, and an
-//! `enter_system` they cause raising `EnteredSystem`), dispatches the
-//! events raised, depth first, and only then runs the next operator.
-//! Phase 3 builds that, handing the catalog to the script run.
+//! **Where it nests.** [`Session::run_set`](crate::Session::run_set)
+//! stays catalog-free: `apply_op` only queues a move or a `Q`, and
+//! [`Session::settle_script`](crate::Session::settle_script) applies
+//! them, since a script has no catalog to read the new system from (see
+//! `script_effects`). Nesting goes through a separate dispatcher entry
+//! point that has the catalog, which phase 3 builds. It runs the scripts
+//! the story dispatcher runs, and the scripts of callers already at a
+//! safe point: `settle_script`, the landing, the take-off and the
+//! arrival. After each operator that raised or queued something, it
+//! settles the queue there (the moves, and the `EnteredSystem` an
+//! `enter_system` they cause raises), dispatches the events raised, depth
+//! first, and only then runs the next operator. So wherever a catalog is
+//! in hand, the original's nesting in the middle of a script is matched.
+//!
+//! A script run through `run_set` in the middle of something else defers
+//! instead. Those are the record hooks
+//! [`Session::run_script`](crate::Session::run_script) runs (see the
+//! `hooks` module):
+//!
+//! - `chär` `OnStart`, in [`Session::begin`](crate::Session::begin);
+//! - `oütf` `OnPurchase` and `OnSell`, in
+//!   [`Session::outfit`](crate::Session::outfit);
+//! - `shïp` `OnRetire` and `OnPurchase`, in
+//!   [`Session::buy_ship`](crate::Session::buy_ship);
+//! - `shïp` `OnCapture`, and `OnRetire` on Use As My Ship, in
+//!   [`Session::plunder`](crate::Session::plunder) and
+//!   [`Session::assign`](crate::Session::assign).
+//!
+//! `C`, `E` and `H` change ships and run no hook. The deferred effects
+//! queue as today. At the caller's next safe point, its `settle_script`,
+//! they settle, and the events they raise dispatch, nested from there.
+//! So under the default, nesting means depth first from the nearest safe
+//! point.
 //!
 //! The other reading is **queued**, today's after-settle order. An event
 //! raised by a script waits until the current dispatch has finished and
@@ -701,8 +735,10 @@ impl Subscription {
 
 /// The subscriptions `event` runs, in the order they run: those whose
 /// filter matches it, by [`SubscriptionId`] (consumer, then record, then
-/// hook), whatever order they come in. Which have fired once already,
-/// and whose guards hold, are the dispatcher's to ask.
+/// hook), whatever order they come in: the dispatch's snapshot. Which
+/// have fired once already, which are still registered when their turn
+/// comes, and whose guards hold, are the dispatcher's to ask (see the
+/// module docs' "Dispatch").
 #[must_use]
 pub fn dispatch_order<'a>(
     subscriptions: impl IntoIterator<Item = &'a Subscription>,
