@@ -1,6 +1,14 @@
 //! The map model: the galaxy laid out for drawing and clicking, built once
 //! from a [`Galaxy`].
 //!
+//! The catalog gives the static geometry: each system's position and each
+//! nebula's rectangle. A flight's session overrides the rest through its
+//! galaxy overlay ([`GalaxyModel::apply`]; see `nova_sim`'s `story` module,
+//! "Galaxy overlay"): which systems are drawn and hit, each one's
+//! government and so its colour, the hyperlinks, and which nebulae are
+//! active. The override rules are the session's; the model only reads
+//! them. Until one is applied, the catalog's galaxy is drawn as it is.
+//!
 //! - Each system's colour comes from its own government's map colour;
 //!   independent systems, and systems whose government is missing, are
 //!   [`NEUTRAL`].
@@ -18,6 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use nova_sim::story::OverlaidGalaxy;
 use nova_sim::{StarMap, StarSystem, Vec2};
 
 use super::catalog::{Galaxy, GovtId, NebulaEntry, NebulaPicture, SystemEntry, SystemId};
@@ -97,7 +106,7 @@ impl MapSystem {
 
 /// `entry` as the star map takes it: its links stay raw, for the star map
 /// to normalise.
-fn star_system(entry: &SystemEntry) -> StarSystem {
+pub(super) fn star_system(entry: &SystemEntry) -> StarSystem {
     StarSystem {
         id: entry.id,
         position: Vec2::new(entry.x.into(), entry.y.into()),
@@ -110,11 +119,17 @@ fn star_system(entry: &SystemEntry) -> StarSystem {
 /// The galaxy laid out for the map.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GalaxyModel {
-    /// Every system, by ascending ID.
+    /// Every system the catalog has, by ascending ID, coloured as it says.
+    catalog: Vec<MapSystem>,
+    /// Every system drawn, by ascending ID: the visible ones.
     systems: Vec<MapSystem>,
     /// Every hyperlink once, as (lower ID, higher ID), sorted.
     links: Vec<(SystemId, SystemId)>,
-    /// Every nebula that can be drawn.
+    /// Every government's map colour.
+    govt_colors: BTreeMap<GovtId, u32>,
+    /// Every nebula the catalog has that can be drawn.
+    catalog_nebulae: Vec<NebulaEntry>,
+    /// Every nebula drawn: the active ones.
     nebulae: Vec<NebulaEntry>,
     /// The catalog's problems, then the model's.
     problems: Vec<String>,
@@ -143,7 +158,7 @@ impl GalaxyModel {
             }
         }
         let links = StarMap::new(systems.iter().map(star_system).collect()).links();
-        let systems = systems
+        let systems: Vec<MapSystem> = systems
             .into_iter()
             .map(|entry| {
                 if let Some(govt) = entry.govt
@@ -155,7 +170,7 @@ impl GalaxyModel {
                 MapSystem { entry, color }
             })
             .collect();
-        let nebulae = nebulae
+        let nebulae: Vec<NebulaEntry> = nebulae
             .into_iter()
             .filter(|nebula| {
                 let problem = if nebula.width <= 0 || nebula.height <= 0 {
@@ -173,20 +188,46 @@ impl GalaxyModel {
             })
             .collect();
         Self {
+            catalog: systems.clone(),
             systems,
             links,
+            govt_colors,
+            catalog_nebulae: nebulae.clone(),
             nebulae,
             problems,
         }
     }
 
-    /// Every system, by ascending ID.
+    /// Draws the session's `galaxy` over the catalog's geometry: only its
+    /// visible systems, each coloured by its government there, its
+    /// hyperlinks, and only its active nebulae. The problems are the
+    /// catalog's, as built.
+    pub fn apply(&mut self, galaxy: &OverlaidGalaxy) {
+        self.systems = self
+            .catalog
+            .iter()
+            .filter(|system| galaxy.visible(system.entry.id))
+            .map(|system| MapSystem {
+                entry: system.entry.clone(),
+                color: system_color(galaxy.govt(system.entry.id), &self.govt_colors),
+            })
+            .collect();
+        self.links = galaxy.map().links();
+        self.nebulae = self
+            .catalog_nebulae
+            .iter()
+            .filter(|nebula| galaxy.nebula_active(nebula.id))
+            .cloned()
+            .collect();
+    }
+
+    /// Every system drawn, by ascending ID: every visible one.
     #[must_use]
     pub fn systems(&self) -> &[MapSystem] {
         &self.systems
     }
 
-    /// System `id`, if there is one.
+    /// System `id`, if it is drawn.
     #[must_use]
     pub fn system(&self, id: SystemId) -> Option<&MapSystem> {
         let at = self
@@ -202,16 +243,18 @@ impl GalaxyModel {
         &self.links
     }
 
-    /// Every nebula that can be drawn, by ascending ID.
+    /// Every nebula drawn, by ascending ID: every active one that can be
+    /// drawn.
     #[must_use]
     pub fn nebulae(&self) -> &[NebulaEntry] {
         &self.nebulae
     }
 
-    /// The smallest rectangle holding every system, or `None` for none.
+    /// The smallest rectangle holding every system the catalog has, drawn
+    /// or not, or `None` for none.
     #[must_use]
     pub fn bounds(&self) -> Option<Bounds> {
-        Bounds::around(self.systems.iter().map(MapSystem::position))
+        Bounds::around(self.catalog.iter().map(MapSystem::position))
     }
 
     /// Everything that could not be read or laid out, each a message
@@ -278,6 +321,7 @@ mod tests {
     use super::*;
     use crate::galaxy::catalog::NebulaId;
     use crate::galaxy::view::{MAP_CENTER, MAP_HEIGHT, SCALES};
+    use nova_sim::story::GalaxyOverlay;
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -736,5 +780,112 @@ mod tests {
         // Empty space selects nothing.
         let empty = at(MAP_CENTER.x, MAP_CENTER.y + 100.0);
         assert_eq!(model.click(empty, &view, Some(SystemId(130))), None);
+    }
+
+    // The session's galaxy.
+
+    /// 128 at (0, 0) lists 129; 129 at (50, 50), of government 128; 130 at
+    /// 129's place; 131 at (90, 0) lists 129. Nebulae 140 and 141 can be
+    /// drawn.
+    fn session_galaxy() -> Galaxy {
+        let mut systems = vec![
+            system(128, 0, 0, &[129]),
+            system(129, 50, 50, &[]),
+            system(130, 50, 50, &[]),
+            system(131, 90, 0, &[129]),
+        ];
+        systems[1].govt = Some(GovtId(128));
+        let picture = NebulaPicture {
+            id: 9500,
+            width: 30,
+            height: 30,
+        };
+        let entry = |id| NebulaEntry {
+            id: NebulaId(id),
+            ..nebula(vec![picture])
+        };
+        Galaxy {
+            systems,
+            govt_colors: BTreeMap::from([(GovtId(128), 0x002C_2CAF), (GovtId(129), 0x00CF_0C0C)]),
+            nebulae: vec![entry(140), entry(141)],
+            problems: vec!["from the catalog".to_owned()],
+        }
+    }
+
+    /// The session's galaxy over `galaxy`'s systems, with `change` made.
+    fn overlaid(galaxy: &Galaxy, change: impl FnOnce(&mut GalaxyOverlay)) -> OverlaidGalaxy {
+        let mut overlay = GalaxyOverlay::default();
+        change(&mut overlay);
+        OverlaidGalaxy::new(galaxy.systems.iter().map(star_system).collect(), overlay)
+    }
+
+    fn system_ids(model: &GalaxyModel) -> Vec<SystemId> {
+        model
+            .systems()
+            .iter()
+            .map(|system| system.entry.id)
+            .collect()
+    }
+
+    #[test]
+    fn with_no_override_the_sessions_galaxy_changes_nothing() {
+        let galaxy = session_galaxy();
+        let mut model = GalaxyModel::new(galaxy.clone());
+        let fresh = model.clone();
+        model.apply(&overlaid(&galaxy, |_| {}));
+        assert_eq!(model, fresh);
+    }
+
+    #[test]
+    fn a_hidden_system_is_neither_drawn_nor_hit_and_its_links_go_to_its_place() {
+        let galaxy = session_galaxy();
+        let mut model = GalaxyModel::new(galaxy.clone());
+        let bounds = model.bounds();
+        model.apply(&overlaid(&galaxy, |overlay| {
+            overlay.set_visible(SystemId(129), Some(false));
+        }));
+        assert_eq!(system_ids(&model), ids(&[128, 130, 131]));
+        assert_eq!(model.system(SystemId(129)), None);
+        assert_eq!(model.stack(SystemId(130)), ids(&[130]), "alone there now");
+        let view = view_at(0);
+        let place = view.world_to_screen(at(50.0, 50.0));
+        assert_eq!(model.hit(place, &view), Some(SystemId(130)));
+        assert_eq!(
+            model.links(),
+            [
+                (SystemId(128), SystemId(130)),
+                (SystemId(130), SystemId(131))
+            ]
+        );
+        assert_eq!(model.bounds(), bounds, "the geometry is the catalog's");
+        assert_eq!(model.problems(), ["from the catalog"], "unchanged");
+    }
+
+    #[test]
+    fn an_overridden_government_recolours_its_system() {
+        let galaxy = session_galaxy();
+        let mut model = GalaxyModel::new(galaxy.clone());
+        model.apply(&overlaid(&galaxy, |overlay| {
+            overlay.set_govt(SystemId(128), Some(Some(GovtId(129))));
+            overlay.set_govt(SystemId(129), Some(None));
+        }));
+        let colors: Vec<Color> = model.systems().iter().map(|s| s.color).collect();
+        assert_eq!(
+            colors,
+            [Color::from_rgb24(0x00CF_0C0C), NEUTRAL, NEUTRAL, NEUTRAL]
+        );
+    }
+
+    #[test]
+    fn an_inactive_nebula_is_not_drawn_and_shows_again_once_active() {
+        let galaxy = session_galaxy();
+        let mut model = GalaxyModel::new(galaxy.clone());
+        model.apply(&overlaid(&galaxy, |overlay| {
+            overlay.set_nebula_active(NebulaId(140), Some(false));
+        }));
+        let nebulae: Vec<NebulaId> = model.nebulae().iter().map(|nebula| nebula.id).collect();
+        assert_eq!(nebulae, [NebulaId(141)]);
+        model.apply(&overlaid(&galaxy, |_| {}));
+        assert_eq!(model, GalaxyModel::new(galaxy), "back to the catalog's");
     }
 }

@@ -143,7 +143,12 @@
 //!   router's Escape). A system clicked on the map becomes the
 //!   destination: the session plots the course there and the map shows
 //!   it. The map shows the systems the pilot has explored, and the rest
-//!   unexplored.
+//!   unexplored. It draws the session's galaxy ([`Session::galaxy`]):
+//!   the catalog's geometry with only the visible systems, links and
+//!   active nebulae, each system coloured by its government there, rebuilt
+//!   on the frame after each change to it; and the course as it is flown
+//!   ([`Session::course_shown`]), each hop the visible system standing
+//!   for it.
 //! - The HUD's nav area shows the navigation target, or else the next
 //!   system on the course (see [`hud`](super::hud)). As in the original
 //!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim::navigation)),
@@ -987,6 +992,8 @@ struct Redrawn {
     system: bool,
     /// The ship was put at another stellar of the system shown.
     stellar: bool,
+    /// The galaxy overlay changed: the course map was rebuilt.
+    galaxy: bool,
 }
 
 /// Text metrics, shared.
@@ -1056,7 +1063,8 @@ impl<
             .unwrap_or_default();
         let mut map = GalaxyMap::course(&catalog);
         if let Ok(session) = &session {
-            map.show_course(session.system(), session.course());
+            map.show_galaxy(session.galaxy());
+            map.show_course(session.system(), &session.course_shown());
             map.show_explored(session.pilot().explored());
         }
         let pending_landing = session.as_ref().ok().and_then(Session::landed);
@@ -1367,7 +1375,8 @@ impl<
         if let Ok(session) = &mut self.session {
             // A failed plot clears the course, which the map then shows.
             let _ = session.plot_course(destination);
-            self.map.show_course(session.system(), session.course());
+            self.map
+                .show_course(session.system(), &session.course_shown());
         }
     }
 
@@ -1382,18 +1391,21 @@ impl<
             let name = scene.stellars().iter().find(|stellar| stellar.id == target);
             return NavDisplay::Stellar(name.map(|s| s.name.clone()).unwrap_or_default());
         }
-        session.course().first().map_or(NavDisplay::None, |&next| {
-            let name = session
-                .pilot()
-                .has_explored(next)
-                .then(|| self.map.model().system(next))
-                .flatten()
-                .map(|system| system.entry.name.clone());
-            NavDisplay::Hyperspace {
-                name,
-                readiness: session.jump_readiness(),
-            }
-        })
+        session
+            .course_shown()
+            .first()
+            .map_or(NavDisplay::None, |&next| {
+                let name = session
+                    .pilot()
+                    .has_explored(next)
+                    .then(|| self.map.model().system(next))
+                    .flatten()
+                    .map(|system| system.entry.name.clone());
+                NavDisplay::Hyperspace {
+                    name,
+                    readiness: session.jump_readiness(),
+                }
+            })
     }
 
     /// Begins a jump, or shows why not.
@@ -1492,7 +1504,9 @@ impl<
     /// do: a change of ship reads the player's sprite sheet afresh
     /// ([`FlightView::follow_ship`]); a system entered afresh is laid out
     /// ([`FlightView::lay_out`]); otherwise a move to another stellar of
-    /// the system shown draws the ship there ([`FlightView::place_ship`]).
+    /// the system shown draws the ship there ([`FlightView::place_ship`]);
+    /// and a change to the galaxy draws the session's galaxy on the course
+    /// map ([`GalaxyMap::show_galaxy`]) with the course as it is flown.
     ///
     /// The only caller of [`Session::take_events`]: each frame calls it
     /// first, so a change made outside the view's own methods (a
@@ -1510,9 +1524,13 @@ impl<
                 SessionEvent::ShipChanged => redrawn.ship = true,
                 SessionEvent::SystemChanged => redrawn.system = true,
                 SessionEvent::StellarChanged => redrawn.stellar = true,
-                // The course map does not draw the galaxy overlay yet.
-                SessionEvent::GalaxyChanged => {}
+                SessionEvent::GalaxyChanged => redrawn.galaxy = true,
             }
+        }
+        if redrawn.galaxy {
+            self.map.show_galaxy(session.galaxy());
+            self.map
+                .show_course(session.system(), &session.course_shown());
         }
         let system = session.system();
         if redrawn.ship {
@@ -1534,7 +1552,7 @@ impl<
             return;
         };
         self.scene = Some(SystemScene::load(&self.catalog, system));
-        self.map.show_course(system, session.course());
+        self.map.show_course(system, &session.course_shown());
         self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
         self.alpha = 0.0;
@@ -1559,7 +1577,8 @@ impl<
         let Ok(session) = &self.session else {
             return;
         };
-        self.map.show_course(session.system(), session.course());
+        self.map
+            .show_course(session.system(), &session.course_shown());
         self.previous = *session.player();
         self.alpha = 0.0;
     }
@@ -9783,6 +9802,74 @@ mod tests {
         assert_eq!(systems_read(&view), [SystemId(131)], "one layout");
         assert_eq!(view.course_map().current(), Some(SystemId(131)));
         assert_eq!(view.shown_position(), Point::new(0.0, 0.0), "at Proxima");
+    }
+
+    // The galaxy overlay.
+
+    /// Changes `view`'s galaxy by itself, not through the view.
+    fn change_galaxy(view: &mut View, change: impl FnOnce(&mut nova_sim::story::GalaxyOverlay)) {
+        let session = view.session.as_mut().expect("flying");
+        assert!(session.change_galaxy(&view.catalog, change));
+    }
+
+    /// Hides system `id`.
+    fn hiding(id: i16) -> impl FnOnce(&mut nova_sim::story::GalaxyOverlay) {
+        move |overlay| {
+            overlay.set_visible(SystemId(id), Some(false));
+        }
+    }
+
+    /// Whether `view`'s course map draws system `id`.
+    fn on_the_course_map(view: &View, id: i16) -> bool {
+        view.course_map().model().system(SystemId(id)).is_some()
+    }
+
+    #[test]
+    fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.change_galaxy(&catalog, hiding(132));
+        let view = FlightView::with_pilot(catalog, session.pilot().clone());
+        assert!(!on_the_course_map(&view, 132));
+        assert!(on_the_course_map(&view, 131));
+    }
+
+    #[test]
+    fn a_change_to_the_galaxy_is_drawn_on_the_next_frame_and_not_before() {
+        let mut view = flight();
+        change_galaxy(&mut view, hiding(132));
+        assert!(on_the_course_map(&view, 132), "not before the frame");
+        view.tick(TICK);
+        assert!(!on_the_course_map(&view, 132));
+    }
+
+    #[test]
+    fn the_course_map_shows_the_course_as_it_is_flown() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        let mut view = FlightView::with_pilot(catalog, session.pilot().clone());
+        assert_eq!(view.course_map().route(), [SystemId(131)]);
+        change_galaxy(&mut view, hiding(131));
+        view.tick(TICK);
+        assert_eq!(view.course_map().route(), [], "no system at its place");
+        let session = view.session.as_ref().expect("flying");
+        assert_eq!(session.course(), [SystemId(131)], "kept");
+    }
+
+    #[test]
+    fn several_galaxy_changes_before_a_frame_rebuild_the_map_once() {
+        let mut view = flight();
+        change_galaxy(&mut view, hiding(132));
+        change_galaxy(&mut view, |overlay| {
+            overlay.set_visible(SystemId(132), None);
+            overlay.set_visible(SystemId(131), Some(false));
+        });
+        let redrawn = view.catch_up();
+        assert!(redrawn.galaxy);
+        assert!(on_the_course_map(&view, 132), "the last galaxy");
+        assert!(!on_the_course_map(&view, 131));
+        assert!(!view.catch_up().galaxy, "once");
     }
 
     #[test]
