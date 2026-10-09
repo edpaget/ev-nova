@@ -1571,6 +1571,17 @@ impl<
         redrawn
     }
 
+    /// Moves the clock on by `dt` and steps the stellars' animations by
+    /// the whole ticks of 1/30 s it crossed, as the original's sprite tick
+    /// runs every play frame, the jump's included.
+    fn step_stellars(&mut self, dt: Duration) {
+        let before = ticks(self.elapsed);
+        self.elapsed += dt;
+        if let Some(scene) = &mut self.scene {
+            scene.step(ticks(self.elapsed) - before);
+        }
+    }
+
     /// Draws each stellar of the scene shown as the session holds it
     /// ([`show_destroyed`]). The scene is not laid out again.
     fn show_destroyed(&mut self) {
@@ -2616,15 +2627,14 @@ impl<
         if self.map_open {
             return;
         }
+        self.step_stellars(dt);
         if let Some(effect) = &mut self.jump {
-            self.elapsed += dt;
             if effect.advance(dt) {
                 self.arrive();
                 self.fade_in = self.jump.take().filter(|effect| !effect.done());
             }
             return;
         }
-        self.elapsed += dt;
         let Steps { steps, alpha } = self.clock.advance(dt);
         let controls = self.controls();
         let fire = (
@@ -2706,7 +2716,7 @@ impl<
             }
             _ => starfield::draw(list, &camera),
         }
-        scene::draw_stellars(list, scene, &camera, self.elapsed);
+        scene::draw_stellars(list, scene, &camera);
         let beams = self.shown_beams(&camera);
         weapons::draw_beams(list, &beams, &self.looks, true);
         self.draw_npcs(list, &camera);
@@ -3831,7 +3841,6 @@ mod tests {
             &mut expected,
             view.scene().expect("a scene"),
             &view.camera(),
-            Duration::ZERO,
         );
         expected.sprite(ImageKey::sprite(2000, 0), VIEW_CENTER, Color::WHITE);
         expected.push(overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE));

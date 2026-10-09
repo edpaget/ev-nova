@@ -8,12 +8,13 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU16;
 
 use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, SystemId};
-use nova_view::system::SystemScene;
+use nova_view::system::{SystemScene, is_animated};
 use nova_view::{
     DrawCommand, DrawList, ImageKey, Input, Key, MouseButton, Navigator, Point, Screen,
 };
@@ -81,7 +82,12 @@ fn every_stock_systems_scene_matches_its_records() {
                     placed.id.0, spin.record.sprites_id
                 )),
             }
-            animated.insert(placed.id.0, (placed.animation.is_animated(), record));
+            let frames = placed
+                .sprite
+                .as_ref()
+                .map_or(NonZeroU16::MIN, |sheet| sheet.frames);
+            let moves = is_animated(placed.animation_data, placed.destroyed, frames);
+            animated.insert(placed.id.0, (moves, record));
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));

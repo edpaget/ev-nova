@@ -79,11 +79,7 @@ impl SystemView {
     #[must_use]
     pub fn frame(&self, index: usize) -> Option<u16> {
         let stellar = self.scene.stellars().get(index)?;
-        stellar
-            .sprite
-            .as_ref()
-            .ok()
-            .map(|_| stellar.animation.frame(ticks(self.elapsed)))
+        stellar.sprite.as_ref().ok().map(|_| stellar.frames.shown())
     }
 
     /// Whether either key for one way is held.
@@ -164,7 +160,9 @@ impl Screen for SystemView {
 
     /// Advances the animations and moves the camera for the keys held.
     fn tick(&mut self, dt: Duration) {
+        let before = ticks(self.elapsed);
         self.elapsed += dt;
+        self.scene.step(ticks(self.elapsed) - before);
         let seconds = dt.as_secs_f32();
         let (vx, vy) = (self.velocity(LEFT, RIGHT), self.velocity(UP, DOWN));
         self.camera.move_by(vx * seconds, vy * seconds);
@@ -172,7 +170,7 @@ impl Screen for SystemView {
 
     fn draw(&self, list: &mut DrawList) {
         starfield::draw(list, &self.camera);
-        scene::draw_stellars(list, &self.scene, &self.camera, self.elapsed);
+        scene::draw_stellars(list, &self.scene, &self.camera);
         self.draw_overlay(list);
     }
 
@@ -712,15 +710,13 @@ mod tests {
     fn an_animated_stellar_follows_its_animation_and_a_static_one_stays_put() {
         let mut view = sol();
         let tick = Duration::from_secs(1) / 30;
-        let wormhole = view.scene().stellars()[2].animation;
         let mut shown = Vec::new();
-        for t in 0..10 {
+        for _ in 0..10 {
             let list = drawn(&view);
             let keys = sprites(&list);
             assert_eq!(keys[0].0.frame, 0, "Earth stays on frame 0");
             assert_eq!(view.frame(0), Some(0));
-            assert_eq!(keys[2].0.frame, wormhole.frame(t));
-            assert_eq!(view.frame(2), Some(wormhole.frame(t)));
+            assert_eq!(view.frame(2), Some(keys[2].0.frame));
             shown.push(keys[2].0.frame);
             view.tick(tick);
         }

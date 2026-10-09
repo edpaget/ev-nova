@@ -1,12 +1,12 @@
 //! A system laid out for viewing: each stellar at its world position with
-//! its sheet (or why not) and its animation, read once from the catalog;
-//! and [`draw_stellars`], which draws them through a camera for every
-//! screen that shows a system.
+//! its sheet (or why not) and its animation, read once from the catalog
+//! and stepped tick by tick ([`SystemScene::step`]); and
+//! [`draw_stellars`], which draws them through a camera for every screen
+//! that shows a system.
 
 use std::num::NonZeroU16;
-use std::time::Duration;
 
-use super::animation::Animation;
+use super::animation::Frames;
 use super::camera::{CAMERA_MARGIN, Camera};
 use nova_sim::DrawnSheet;
 
@@ -15,7 +15,6 @@ use super::catalog::{
 };
 use crate::draw::crossed_box;
 use crate::geometry::Bounds;
-use crate::time::ticks;
 use crate::{Color, DrawList, ImageKey, Point};
 
 /// The side of the box drawn where a stellar's sprite cannot be shown.
@@ -51,9 +50,9 @@ pub struct SceneStellar {
     pub drawn: DrawnSheet,
     /// Graphic type 0's sheet (`spïn` 1000), or why it cannot be shown.
     pub type_zero_sprite: Result<StellarSheet, String>,
-    /// When each frame of the sheet drawn shows; a stellar with no sheet
-    /// stays on frame 0.
-    pub animation: Animation,
+    /// Its animation state: the frame of the sheet drawn that shows, and
+    /// when the next shows. A sheet that cannot be read counts 1 frame.
+    pub frames: Frames,
 }
 
 /// How a stellar looks, for [`SystemScene::set_destroyed`]: whether it is
@@ -70,7 +69,7 @@ pub struct StellarLook {
 impl SceneStellar {
     /// `stellar`, not destroyed, with graphic type 0's sheet `type_zero`.
     fn new(stellar: StellarContents, type_zero: Result<StellarSheet, String>) -> Self {
-        let mut placed = Self {
+        Self {
             id: stellar.id,
             name: stellar.name,
             position: Point::new(f32::from(stellar.x), f32::from(stellar.y)),
@@ -80,10 +79,8 @@ impl SceneStellar {
             destroyed: false,
             drawn: DrawnSheet::Type,
             type_zero_sprite: type_zero,
-            animation: Animation::new(NonZeroU16::MIN, stellar.animation, false),
-        };
-        placed.animation = placed.animation_for_drawn();
-        placed
+            frames: Frames::new(),
+        }
     }
 
     /// The sheet drawn, as [`drawn`](Self::drawn) names it: the `Type`
@@ -92,7 +89,12 @@ impl SceneStellar {
     /// type 0's sheet, as the original's rebuild fills a sprite slot it
     /// left empty (story-runtime phase 9).
     pub fn drawn(&self) -> &Result<StellarSheet, String> {
-        match (self.drawn, &self.dead_sprite) {
+        self.sheet(self.drawn)
+    }
+
+    /// The sheet `which` names (see [`drawn`](Self::drawn)).
+    fn sheet(&self, which: DrawnSheet) -> &Result<StellarSheet, String> {
+        match (which, &self.dead_sprite) {
             (DrawnSheet::Type, _) | (DrawnSheet::Dead, None) => &self.sprite,
             (DrawnSheet::Dead, Some(dead)) => dead,
             (DrawnSheet::TypeZero, _) => &self.type_zero_sprite,
@@ -104,13 +106,19 @@ impl SceneStellar {
         matches!(self.dead_sprite, Some(Ok(_)))
     }
 
-    /// The animation of the sheet drawn, in the current state.
-    fn animation_for_drawn(&self) -> Animation {
-        let frames = self
-            .drawn()
+    /// How many frames the sheet `which` names has: 1 when it cannot be
+    /// read.
+    fn frame_count(&self, which: DrawnSheet) -> NonZeroU16 {
+        self.sheet(which)
             .as_ref()
-            .map_or(NonZeroU16::MIN, |sheet| sheet.frames);
-        Animation::new(frames, self.animation_data, self.destroyed)
+            .map_or(NonZeroU16::MIN, |sheet| sheet.frames)
+    }
+
+    /// One tick of its animation, over the sheet drawn's frames.
+    fn step(&mut self) {
+        let drawn = self.frame_count(self.drawn);
+        self.frames
+            .step(self.animation_data, self.destroyed, drawn, drawn);
     }
 }
 
@@ -184,16 +192,27 @@ impl SystemScene {
     }
 
     /// Marks each stellar destroyed or not, and drawing the sheet, as
-    /// `look` says ([`SceneStellar::drawn`]). Only a stellar whose look
-    /// changed has its animation rebuilt for the sheet now drawn; every
-    /// other is left as it was.
+    /// `look` says ([`SceneStellar::drawn`]). A stellar whose sheet drawn
+    /// changed keeps the frame it shows while that is in range of the new
+    /// sheet, and shows frame 0 otherwise ([`Frames::swap`]); its
+    /// animation then reads the destroyed state at each tick.
     pub fn set_destroyed(&mut self, look: impl Fn(StellarId) -> StellarLook) {
         for stellar in &mut self.stellars {
             let now = look(stellar.id);
-            if stellar.destroyed != now.destroyed || stellar.drawn != now.drawn {
-                stellar.destroyed = now.destroyed;
+            stellar.destroyed = now.destroyed;
+            if stellar.drawn != now.drawn {
                 stellar.drawn = now.drawn;
-                stellar.animation = stellar.animation_for_drawn();
+                let drawn = stellar.frame_count(now.drawn);
+                stellar.frames.swap(drawn);
+            }
+        }
+    }
+
+    /// Steps every stellar's animation `ticks` ticks of 1/30 s.
+    pub fn step(&mut self, ticks: u128) {
+        for _ in 0..ticks {
+            for stellar in &mut self.stellars {
+                stellar.step();
             }
         }
     }
@@ -209,17 +228,17 @@ impl SystemScene {
     }
 }
 
-/// Draws every stellar of `scene` where `camera` puts it, `elapsed` into
-/// its animation: each sprite (or, without a sheet, a placeholder box and
-/// the reason), then every name under its stellar, so no sprite covers a
-/// name.
-pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera, elapsed: Duration) {
+/// Draws every stellar of `scene` where `camera` puts it, at the frame its
+/// animation shows: each sprite (or, without a sheet, a placeholder box
+/// and the reason), then every name under its stellar, so no sprite
+/// covers a name.
+pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
     let mut labels = Vec::new();
     for stellar in scene.stellars() {
         let at = camera.world_to_screen(stellar.position);
         let (width, height) = match stellar.drawn() {
             Ok(sheet) => {
-                let frame = stellar.animation.frame(ticks(elapsed));
+                let frame = stellar.frames.shown();
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
                 (sheet.frame_width as f32, sheet.frame_height as f32)
             }
@@ -343,7 +362,6 @@ mod tests {
         let scene = SystemScene::load(&catalog, SystemId(130));
         assert_eq!(scene.id(), SystemId(130));
         assert_eq!(scene.name(), "System 130");
-        let frames = |n| NonZeroU16::new(n).expect("non-zero");
         assert_eq!(
             scene.stellars(),
             [
@@ -357,7 +375,7 @@ mod tests {
                     destroyed: false,
                     drawn: DrawnSheet::Type,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
-                    animation: Animation::new(frames(4), WORMHOLE, false),
+                    frames: Frames::new(),
                 },
                 SceneStellar {
                     id: StellarId(128),
@@ -369,7 +387,7 @@ mod tests {
                     destroyed: false,
                     drawn: DrawnSheet::Type,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
-                    animation: Animation::new(frames(1), WORMHOLE, false),
+                    frames: Frames::new(),
                 },
                 SceneStellar {
                     id: StellarId(140),
@@ -381,13 +399,15 @@ mod tests {
                     destroyed: false,
                     drawn: DrawnSheet::Type,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
-                    animation: Animation::new(frames(1), WORMHOLE, false),
+                    frames: Frames::new(),
                 },
             ]
         );
-        assert!(scene.stellars()[0].animation.is_animated());
-        assert!(!scene.stellars()[2].animation.is_animated(), "no sheet");
         assert_eq!(scene.problems(), [] as [String; 0]);
+        let mut scene = scene;
+        scene.step(2);
+        let shown: Vec<u16> = scene.stellars().iter().map(|s| s.frames.shown()).collect();
+        assert_eq!(shown, [1, 0, 0], "129 animates; one frame or no sheet stay");
     }
 
     #[test]
@@ -500,15 +520,10 @@ mod tests {
         }
     }
 
-    /// Each stellar's sprite drawn `elapsed` in, in order.
-    fn drawn(scene: &SystemScene, elapsed: Duration) -> Vec<ImageKey> {
+    /// Each stellar's sprite drawn, in order.
+    fn drawn(scene: &SystemScene) -> Vec<ImageKey> {
         let mut list = DrawList::new();
-        draw_stellars(
-            &mut list,
-            scene,
-            &Camera::centred_on(Point::default()),
-            elapsed,
-        );
+        draw_stellars(&mut list, scene, &Camera::centred_on(Point::default()));
         list.iter()
             .filter_map(|command| match command {
                 crate::DrawCommand::Sprite { image, .. } => Some(*image),
@@ -521,7 +536,7 @@ mod tests {
     fn name_at(scene: &SystemScene, name: &str) -> Point {
         let mut list = DrawList::new();
         let camera = Camera::centred_on(Point::default());
-        draw_stellars(&mut list, scene, &camera, Duration::ZERO);
+        draw_stellars(&mut list, scene, &camera);
         list.iter()
             .find_map(|command| match command {
                 crate::DrawCommand::Text { text, origin, .. } if text == name => Some(*origin),
@@ -539,18 +554,18 @@ mod tests {
             ImageKey::sprite(1002, 0),
             ImageKey::sprite(1003, 0),
         ];
-        assert_eq!(drawn(&scene, Duration::ZERO), whole, "loaded whole");
+        assert_eq!(drawn(&scene), whole, "loaded whole");
         scene.set_destroyed(only_150_dead);
         assert!(scene.stellars()[0].destroyed);
         assert_eq!(
-            drawn(&scene, Duration::ZERO)[0],
+            drawn(&scene)[0],
             ImageKey::sprite(2150, 0),
             "the DeadType sheet"
         );
-        assert_eq!(drawn(&scene, Duration::ZERO)[1..], whole[1..]);
+        assert_eq!(drawn(&scene)[1..], whole[1..]);
         scene.set_destroyed(|_| WHOLE);
         assert!(!scene.stellars()[0].destroyed);
-        assert_eq!(drawn(&scene, Duration::ZERO), whole, "regenerated");
+        assert_eq!(drawn(&scene), whole, "regenerated");
     }
 
     #[test]
@@ -572,7 +587,7 @@ mod tests {
         scene.set_destroyed(|_| dead(DrawnSheet::Type));
         assert!(scene.stellars().iter().all(|stellar| stellar.destroyed));
         assert_eq!(
-            drawn(&scene, Duration::ZERO),
+            drawn(&scene),
             [
                 ImageKey::sprite(1000, 0),
                 ImageKey::sprite(1001, 0),
@@ -594,39 +609,63 @@ mod tests {
     }
 
     #[test]
-    fn the_animation_follows_the_sheet_drawn_and_the_destroyed_state() {
+    fn the_animation_follows_the_destroyed_state_tick_by_tick() {
         let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.step(3);
+        assert_eq!(
+            drawn(&scene)[0],
+            ImageKey::sprite(1000, 0),
+            "whole, so still"
+        );
+        assert_eq!(drawn(&scene)[3], ImageKey::sprite(1003, 1));
         let before = scene.stellars().to_vec();
-        assert!(!before[0].animation.is_animated(), "whole, so still");
-        assert!(before[3].animation.is_animated());
         scene.set_destroyed(only_150_dead);
-        let frames = |n| NonZeroU16::new(n).expect("non-zero");
-        assert_eq!(
-            scene.stellars()[0].animation,
-            Animation::new(frames(3), DEAD_ANIMATED, true)
-        );
-        // Three ticks in: frame 1 of the DeadType sheet.
-        assert_eq!(
-            drawn(&scene, Duration::from_millis(100))[0],
-            ImageKey::sprite(2150, 1)
-        );
         assert_eq!(scene.stellars()[1..], before[1..], "the others untouched");
+        scene.step(3);
+        assert_eq!(
+            drawn(&scene)[0],
+            ImageKey::sprite(2150, 1),
+            "three ticks in: frame 1 of the DeadType sheet"
+        );
+        assert_eq!(drawn(&scene)[3], ImageKey::sprite(1003, 3));
         scene.set_destroyed(|id| match id.0 {
             150 => dead(DrawnSheet::Dead),
             153 => dead(DrawnSheet::Type),
             _ => WHOLE,
         });
-        assert!(
-            !scene.stellars()[3].animation.is_animated(),
+        scene.step(1);
+        assert_eq!(drawn(&scene)[0], ImageKey::sprite(2150, 2));
+        assert_eq!(
+            drawn(&scene)[3],
+            ImageKey::sprite(1003, 0),
             "a normal stellar stops while destroyed"
         );
-        assert_eq!(scene.stellars()[0], {
-            let mut dead = before[0].clone();
-            dead.destroyed = true;
-            dead.drawn = DrawnSheet::Dead;
-            dead.animation = Animation::new(frames(3), DEAD_ANIMATED, true);
-            dead
-        });
+    }
+
+    #[test]
+    fn a_swap_keeps_the_frame_shown_while_it_is_in_range() {
+        let drawing = |sheet| {
+            move |_| StellarLook {
+                destroyed: false,
+                drawn: sheet,
+            }
+        };
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.step(2);
+        scene.set_destroyed(drawing(DrawnSheet::TypeZero));
+        assert_eq!(drawn(&scene)[3], ImageKey::sprite(TYPE_ZERO, 1), "kept");
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.step(6);
+        assert_eq!(drawn(&scene)[3], ImageKey::sprite(1003, 3));
+        scene.set_destroyed(drawing(DrawnSheet::TypeZero));
+        assert_eq!(
+            drawn(&scene)[3],
+            ImageKey::sprite(TYPE_ZERO, 0),
+            "frame 3 of 2"
+        );
+        scene.set_destroyed(drawing(DrawnSheet::TypeZero));
+        scene.step(1);
+        assert_eq!(drawn(&scene)[3], ImageKey::sprite(TYPE_ZERO, 0), "no swap");
     }
 
     #[test]
@@ -679,29 +718,24 @@ mod tests {
         let mut scene = SystemScene::load(&dying(), SystemId(134));
         scene.set_destroyed(|_| dead(DrawnSheet::TypeZero));
         assert_eq!(
-            drawn(&scene, Duration::ZERO),
+            drawn(&scene),
             [ImageKey::sprite(TYPE_ZERO, 0); 4],
             "whatever other sheet it has"
         );
         let sheets: Vec<DrawnSheet> = scene.stellars().iter().map(|s| s.drawn).collect();
         assert_eq!(sheets, [DrawnSheet::TypeZero; 4]);
-        let frames = |n| NonZeroU16::new(n).expect("non-zero");
+        scene.set_destroyed(|_| StellarLook {
+            destroyed: false,
+            drawn: DrawnSheet::TypeZero,
+        });
+        scene.step(4);
         assert_eq!(
-            scene.stellars()[3].animation,
-            Animation::new(frames(2), WORMHOLE, true),
-            "over type 0's frames, rebuilt though it was destroyed already"
+            drawn(&scene)[3],
+            ImageKey::sprite(TYPE_ZERO, 0),
+            "over type 0's 2 frames, not Type's 4"
         );
-
-        scene.set_destroyed(|_| dead(DrawnSheet::Type));
-        assert_eq!(
-            drawn(&scene, Duration::ZERO)[1..3],
-            [ImageKey::sprite(1001, 0), ImageKey::sprite(1002, 0)]
-        );
-        assert_eq!(
-            scene.stellars()[3].animation,
-            Animation::new(frames(4), WORMHOLE, true),
-            "back over Type's frames"
-        );
+        scene.step(2);
+        assert_eq!(drawn(&scene)[3], ImageKey::sprite(TYPE_ZERO, 1));
     }
 
     #[test]

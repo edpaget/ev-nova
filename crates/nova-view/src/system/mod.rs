@@ -21,7 +21,7 @@ pub mod scene;
 pub mod starfield;
 pub mod view;
 
-pub use animation::Animation;
+pub use animation::{Frames, is_animated};
 pub use camera::Camera;
 pub use catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
