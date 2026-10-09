@@ -114,7 +114,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use super::hire::Shared;
-use super::{ReservePolicy, Session};
+use super::{ReservePolicy, Session, SessionEvent};
 use crate::catalog::{CommCatalog, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::armament;
@@ -265,8 +265,9 @@ impl Session {
     /// writer of a change of class, deciding nothing itself. In order, it
     /// writes `change.outfits` as the outfits owned, runs `before_class`,
     /// takes the class, its fields, default items and stock weapons from
-    /// `ship`, refits by `change.reserves` and makes a save due. What the
-    /// change carries, and what runs between, is the caller's.
+    /// `ship`, refits by `change.reserves`, makes a save due and tells
+    /// [`SessionEvent::ShipChanged`]. What the change carries, and what
+    /// runs between, is the caller's.
     pub(super) fn become_class(
         &mut self,
         ship: &ShipRecord,
@@ -281,6 +282,7 @@ impl Session {
         self.stock = armament::fitted(&self.arsenal.stock_fits(ship.id, &self.outfits));
         self.refit(false, change.reserves);
         self.save_due = true;
+        self.emit(SessionEvent::ShipChanged);
     }
 
     /// Changes the player's ship to class `ship`, its outfits carried as
@@ -674,6 +676,33 @@ mod tests {
         assert_eq!(session.hull(), session.arsenal.hull(ShipId(129)));
         assert_eq!(session.armament.mounts().len(), 1, "405 mounts weapon 200");
         assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn become_class_tells_the_ship_changed() {
+        let catalog = changing();
+        let mut session = session(&catalog);
+        let change = ClassChange {
+            outfits: BTreeMap::new(),
+            reserves: ReservePolicy::Hold,
+        };
+        session.become_class(&record(&session, 129), change, |s| {
+            assert_eq!(s.take_events(), [], "not before the class is taken");
+        });
+        assert_eq!(session.take_events(), [SessionEvent::ShipChanged]);
+    }
+
+    #[test]
+    fn c_e_and_h_tell_the_ship_changed_and_a_class_with_no_record_tells_nothing() {
+        let catalog = changing();
+        for op in ["C129", "E129", "H129", "C128"] {
+            let mut session = session(&catalog);
+            run(&mut session, op);
+            assert_eq!(session.take_events(), [SessionEvent::ShipChanged], "{op}");
+        }
+        let mut session = session(&catalog);
+        run(&mut session, "C200");
+        assert_eq!(session.take_events(), []);
     }
 
     #[test]

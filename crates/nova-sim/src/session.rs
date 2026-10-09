@@ -122,6 +122,13 @@
 //! [`Session::take_sounds`]. A refused landing or
 //! jump emits nothing.
 //!
+//! A change of the player's ship, or of the system or stellar it is at,
+//! is told as a [`SessionEvent`], which a view drains with
+//! [`Session::take_events`] and redraws from, whatever made the change
+//! (see the `events` module). The other outboxes, the sounds among them,
+//! keep their own `take_*`; folding them into the events is a possible
+//! follow-up.
+//!
 //! In flight the engine glow's base level ([`Session::engine_glow`])
 //! ramps with the thrust each tick, as [`glow`](crate::glow) says, and
 //! landing and beginning a jump put it out.
@@ -285,6 +292,7 @@ mod control;
 mod edit;
 mod entry;
 mod escorts;
+mod events;
 mod fighters;
 mod hail;
 mod hire;
@@ -301,6 +309,7 @@ pub use ship_change::{
 };
 
 pub use edit::RelocateRefusal;
+pub use events::SessionEvent;
 pub use persons::PersonQuote;
 pub use script_effects::{
     LeaveStellarOp, MoveKeepPositionOp, MoveToOp, PlaySoundOp, ScriptEffectRules, Settled,
@@ -504,6 +513,8 @@ pub struct Session {
     sounds: Vec<SimSound>,
     /// The messages raised since they were last taken.
     messages: Vec<SimMessage>,
+    /// The events told since they were last taken.
+    events: Vec<SessionEvent>,
     /// Whether the pilot has changed in a way that should be saved since
     /// this was last taken.
     save_due: bool,
@@ -716,6 +727,7 @@ impl Session {
             engine_glow: 0,
             sounds: Vec::new(),
             messages: Vec::new(),
+            events: Vec::new(),
             save_due: false,
             date_affixes: catalog.date_affixes(),
             traffic: Traffic::new(),
@@ -2319,7 +2331,9 @@ impl Session {
     /// drawn yet are drawn on
     /// `chance`, and a purchase draws the class's roll again, as the
     /// original does (`_DoShipyardDialog` @0x5f0d5-0x5f0f8), the next time
-    /// the shipyard's list is built ([`shipyard`](Self::shipyard)).
+    /// the shipyard's list is built ([`shipyard`](Self::shipyard)). A
+    /// purchase tells [`SessionEvent::ShipChanged`] before `OnPurchase`
+    /// runs, which may tell it again; a refused one tells nothing.
     pub fn buy_ship(
         &mut self,
         ship: ShipId,
@@ -2356,6 +2370,9 @@ impl Session {
         self.defaults = pilot::tally(record.defaults.iter().copied());
         self.stock = armament::fitted(&fits);
         self.refit(false, ReservePolicy::Hold);
+        // Until the purchase writes the class through `become_class`,
+        // which tells it there, it tells it here.
+        self.emit(SessionEvent::ShipChanged);
         self.ship_redraws.insert(ship);
         self.ship_hook(record.id, ShipHook::Purchase, chance);
         if paint_last {
@@ -8050,6 +8067,35 @@ mod tests {
     }
 
     #[test]
+    fn a_purchase_tells_the_ship_changed_and_a_refused_one_tells_nothing() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session.take_events();
+        let _ = session.buy_ship(ShipId(999), "Kestrel", &mut NeverFires);
+        assert_eq!(session.take_events(), [], "refused");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.take_events(), [SessionEvent::ShipChanged]);
+    }
+
+    #[test]
+    fn an_on_purchase_change_of_ship_tells_the_ship_changed_again() {
+        let mut catalog = shipbuying();
+        catalog.ship_records[1].on_purchase = crate::control::Script::parse("H128");
+        let mut session = outfitted(&catalog);
+        session.take_events();
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.ship(), ShipId(128));
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::ShipChanged, SessionEvent::ShipChanged]
+        );
+    }
+
+    #[test]
     fn buying_a_ship_keeps_the_cargo_as_its_rule_says_with_the_trader_escorts() {
         let catalog = FakePilotCatalog {
             ship_records: [shipbuying().ship_records, vec![holds_record(130, 15, 1)]].concat(),
@@ -12734,6 +12780,29 @@ mod tests {
             Some(Assigned::MyShip),
             "62 NPCs and the player: one slot"
         );
+    }
+
+    #[test]
+    fn only_use_as_my_ship_tells_the_ship_changed() {
+        let catalog = boardable();
+        let mut escort = captured(&catalog);
+        escort.take_events();
+        escort.assign(Assignment::Escort, &mut Draws::of(&[]));
+        assert_eq!(escort.take_events(), [], "an escort");
+        let mut mine = captured(&catalog);
+        mine.take_events();
+        assert_eq!(
+            mine.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::MyShip)
+        );
+        assert_eq!(mine.take_events(), [SessionEvent::ShipChanged], "my ship");
+        let mut full = crowded(62);
+        full.take_events();
+        assert_eq!(
+            full.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::Abandoned)
+        );
+        assert_eq!(full.take_events(), [], "abandoned");
     }
 
     #[test]
