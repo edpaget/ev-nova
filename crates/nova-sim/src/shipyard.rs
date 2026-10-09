@@ -2868,6 +2868,17 @@ mod tests {
     }
 
     #[test]
+    fn by_the_port_outfits_that_are_not_persistent_go_with_the_old_ship() {
+        let records = upgrades();
+        let mut pilot = owning(&[(128, 2), (130, 1), (131, 1), (999, 1)]);
+        let bought = buy_by_the_port(&mut pilot, &heavy(), &records);
+        assert_eq!(pilot.outfits().count(), 0);
+        assert_eq!(bought.sold_back, BTreeMap::new(), "none sold back");
+        assert_eq!(bought.refund, 0, "in the trade-in, not sold back");
+        assert_eq!(pilot.cash(), 10_000 - 17_500 + 2500);
+    }
+
+    #[test]
     fn a_persistent_outfit_that_fits_carries_over() {
         let records = [persistent(140, 0, 1), persistent(141, 4, 3)];
         let mut pilot = owning(&[(140, 1), (141, 3)]);
