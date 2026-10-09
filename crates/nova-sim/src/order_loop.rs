@@ -10,7 +10,9 @@
 //! [`Pass`], the pass index, the whole count and whether an earlier pass
 //! was refused. [`run`], the buy loop's, stops at the first refusal;
 //! [`run_on`], the sell loop's, runs on past it to the count, as the
-//! original's sell loop never breaks (@0x5d19c-0x5d1b1). What one pass
+//! original's sell loop never breaks (@0x5d19c-0x5d1b1), and lets a pass
+//! that went through restart it from another index ([`Onward::From`]),
+//! as a sale that changes the listing does (@0x5d0fe-0x5d120). What one pass
 //! does is the caller's, through the pass function it supplies (the
 //! port for "run one pass"): the session's checks the order and applies
 //! it. The loop's [`OrderRun`] keeps its first refusal;
@@ -104,23 +106,51 @@ pub fn run<R>(count: u32, mut pass: impl FnMut(Pass) -> Result<(), R>) -> OrderR
     }
 }
 
+/// What a pass that went through does to the sell loop's index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Onward {
+    /// The loop goes on to the next index.
+    Next,
+    /// The loop's index becomes `at` before its increment, as the sell
+    /// loop's relisting resets -0x63a (@0x5d0fe-0x5d120), so the next
+    /// pass is `at + 1`, while that is below the count.
+    From(u32),
+}
+
 /// Runs `pass` for every index from 0 up to `count`, handing it the
 /// [`Pass`], and runs on past a refusal, as the original's sell loop
 /// (@0x5c6ee-0x5d1b1) never breaks (@0x5d19c-0x5d1b1). Every pass after
 /// the first refused one is handed `alerted: true`. The result counts the
 /// passes that went through and keeps the first refusal; a later one
 /// never replaces it. A count of none runs no pass.
-pub fn run_on<R>(count: u32, mut pass: impl FnMut(Pass) -> Result<(), R>) -> OrderRun<R> {
+///
+/// A pass that went through says where the loop goes on: [`Onward::Next`]
+/// to the next index, or [`Onward::From`] to restart from the index after
+/// the one it names, as a sale that changes the listing does
+/// (@0x5d0fe-0x5d120). A restart keeps the first refusal and the
+/// `alerted` flag, as -0x63e is never reset by it. `done` counts every
+/// pass that went through, so it can pass the count. The loop ends only
+/// if the restarts do: the driver relies on its pass for that (the
+/// session's restarts come only from sales, and each lowers a count
+/// owned).
+pub fn run_on<R>(count: u32, mut pass: impl FnMut(Pass) -> Result<Onward, R>) -> OrderRun<R> {
     let mut done = 0;
     let mut stopped = None;
-    for index in 0..count {
+    let mut index = 0;
+    while index < count {
         let alerted = stopped.is_some();
+        let mut at = index;
         match pass(Pass {
             index,
             count,
             alerted,
         }) {
-            Ok(()) => done += 1,
+            Ok(onward) => {
+                done += 1;
+                if let Onward::From(from) = onward {
+                    at = from;
+                }
+            }
             Err(refusal) if !alerted => {
                 stopped = Some(Stopped {
                     pass: index,
@@ -129,6 +159,7 @@ pub fn run_on<R>(count: u32, mut pass: impl FnMut(Pass) -> Result<(), R>) -> Ord
             }
             Err(_) => {}
         }
+        index = at + 1;
     }
     OrderRun { done, stopped }
 }
@@ -188,7 +219,7 @@ mod tests {
         }
 
         fn run_on(&mut self, count: u32) -> OrderRun<u32> {
-            run_on(count, |pass| self.pass(pass))
+            run_on(count, |pass| self.pass(pass).map(|()| Onward::Next))
         }
     }
 
@@ -392,6 +423,100 @@ mod tests {
             }
         );
         assert_eq!(none.seen, []);
+    }
+
+    #[test]
+    fn running_on_from_an_index_goes_on_from_the_one_after_it() {
+        let mut seen = Vec::new();
+        let mut restarted = false;
+        let run = run_on(4, |pass: Pass| -> Result<Onward, u32> {
+            seen.push(pass.index);
+            if pass.index == 2 && !restarted {
+                restarted = true;
+                return Ok(Onward::From(0));
+            }
+            Ok(Onward::Next)
+        });
+        assert_eq!(
+            run,
+            OrderRun {
+                done: 6,
+                stopped: None
+            }
+        );
+        assert_eq!(seen, [0, 1, 2, 1, 2, 3]);
+    }
+
+    #[test]
+    fn running_on_from_the_list_s_end_stops_unless_the_count_is_above_it() {
+        let from_the_end = |count| {
+            let mut seen = Vec::new();
+            let run = run_on(count, |pass: Pass| -> Result<Onward, u32> {
+                seen.push((pass.index, pass.count));
+                Ok(if pass.index == 0 {
+                    Onward::From(512)
+                } else {
+                    Onward::Next
+                })
+            });
+            (run, seen)
+        };
+        let (run, seen) = from_the_end(3);
+        assert_eq!(
+            run,
+            OrderRun {
+                done: 1,
+                stopped: None
+            }
+        );
+        assert_eq!(seen, [(0, 3)]);
+        let (run, seen) = from_the_end(515);
+        assert_eq!(
+            run,
+            OrderRun {
+                done: 3,
+                stopped: None
+            }
+        );
+        assert_eq!(seen, [(0, 515), (513, 515), (514, 515)]);
+    }
+
+    #[test]
+    fn a_restart_keeps_the_first_refusal_and_the_alerted_flag() {
+        let mut seen = Vec::new();
+        let mut visits = [0u32; 4];
+        let run = run_on(4, |pass: Pass| -> Result<Onward, u32> {
+            seen.push((pass.index, pass.alerted));
+            let index = usize::try_from(pass.index).unwrap();
+            visits[index] += 1;
+            let first = visits[index] == 1;
+            match pass.index {
+                1 if first => Err(1),
+                2 if first => Ok(Onward::From(0)),
+                _ => Ok(Onward::Next),
+            }
+        });
+        assert_eq!(
+            run,
+            OrderRun {
+                done: 5,
+                stopped: Some(Stopped {
+                    pass: 1,
+                    refusal: 1
+                })
+            }
+        );
+        assert_eq!(
+            seen,
+            [
+                (0, false),
+                (1, false),
+                (2, true),
+                (1, true),
+                (2, true),
+                (3, true)
+            ]
+        );
     }
 
     #[test]

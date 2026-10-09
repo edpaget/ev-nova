@@ -367,7 +367,7 @@ use crate::market::{
 };
 use crate::message::SimMessage;
 use crate::navigation::stellar_under;
-use crate::order_loop::{self, OrderRun, Pass};
+use crate::order_loop::{self, Onward, OrderRun, Pass};
 use crate::outfitter::{
     self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, OutfitRun, OutfitVisit, Outfitter,
     SaleAlert, Shop, outfit_mods,
@@ -2200,10 +2200,14 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> OutfitRun {
         let mut alert = None;
-        let pass = |pass| self.outfit_pass(order, pass, chance, &mut alert);
         let run = match order.direction {
-            Direction::Sell => order_loop::run_on(count, pass),
-            Direction::Buy => order_loop::run(count, pass),
+            Direction::Sell => order_loop::run_on(count, |pass| {
+                self.outfit_pass(order, pass, chance, &mut alert)
+                    .map(|()| Onward::Next)
+            }),
+            Direction::Buy => order_loop::run(count, |pass| {
+                self.outfit_pass(order, pass, chance, &mut alert)
+            }),
         };
         OutfitRun { run, alert }
     }
