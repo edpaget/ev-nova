@@ -2049,7 +2049,7 @@ mod tests {
     // The Shipyard.
 
     use crate::spaceport::shipyard::{ShipBaseImages, ShipyardCatalog, ShipyardScreen};
-    use nova_sim::{ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
+    use nova_sim::{Rulebook, ShipFacts, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
 
     use crate::spaceport::shipyard::ShipOrder;
 
@@ -2107,10 +2107,12 @@ mod tests {
                     crew: 0,
                 },
                 buy: Ok(()),
+                facts: ShipFacts { buyable: true },
             }],
             trade_in: 2500,
             cash: 25_000,
             current: ShipId(128),
+            rules: Rulebook::default(),
         }
     }
 

@@ -2271,7 +2271,7 @@ impl Session {
         let shipyard = self
             .listed_shipyard(chance)
             .ok_or(ShipRefusal::NoShipyard)?;
-        shipyard.check(ship)?;
+        shipyard.can(ship)?;
         let record = self
             .ships
             .iter()

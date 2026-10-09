@@ -327,7 +327,9 @@ pub use session::{
     HookRules, LandPress, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, Settled,
     ShipChangeRules, StellarPick, nova_set_ops,
 };
-pub use shipyard::{ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
+pub use shipyard::{
+    ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
+};
 pub use sound::SimSound;
 pub use stats::ShipStats;
 pub use targeting::TargetPick;

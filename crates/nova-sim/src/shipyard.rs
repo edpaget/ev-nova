@@ -178,7 +178,7 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord};
-use crate::chance::Chance;
+use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{StockFit, fit_stock, fitted};
 use crate::control::Gate;
 use crate::handling::ShipFields;
@@ -187,6 +187,7 @@ use crate::market::{EscortHolds, Good, escort_tons, fleet_holds};
 use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_price};
 use crate::pilot::{Pilot, merged, tally};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::rules::{Check, Checks, Context};
 use crate::stats::ShipStats;
 use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll};
 
@@ -245,6 +246,20 @@ pub struct ShipRow {
     pub specs: ShipSpecs,
     /// Whether it can be bought now, or why not.
     pub buy: Result<(), ShipRefusal>,
+    /// What the shipyard's rules read about the class, settled when the
+    /// shipyard was built.
+    pub facts: ShipFacts,
+}
+
+/// What the shipyard's rules read about one ship class, settled when the
+/// shipyard is built: whatever needs the gate or the day's roll is worked
+/// out then, so the rules answer from these alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShipFacts {
+    /// Whether it can be bought here at all: for sale here today (its
+    /// tech level, the day's roll and `HideHigher` as listed), its
+    /// `Require` met and its `Availability` holding (see the module docs).
+    pub buyable: bool,
 }
 
 /// What the shipyard's Info shows of a ship class, raw from its record.
@@ -273,6 +288,8 @@ pub struct Shipyard {
     pub cash: i64,
     /// The ship class flown.
     pub current: ShipId,
+    /// The rule set the shipyard was built by, which its questions read.
+    pub rules: Rulebook,
 }
 
 impl Shipyard {
@@ -282,9 +299,25 @@ impl Shipyard {
         self.rows.iter().find(|row| row.id == ship)
     }
 
-    /// Whether `ship` can be bought now, or why not.
+    /// Whether `ship` can be bought now, or why not: a class not listed
+    /// is [`ShipRefusal::NotListed`]; a listed one is refused by the first
+    /// of the buy checks that refuses it, in the port's order (for sale,
+    /// then the cash; see the module docs).
+    pub fn can(&self, ship: ShipId) -> Result<(), ShipRefusal> {
+        let row = self.row(ship).ok_or(ShipRefusal::NotListed)?;
+        refusal(
+            &can_buy(),
+            &RowShip {
+                shipyard: self,
+                row,
+            },
+        )
+    }
+
+    /// Whether `ship` can be bought now, or why not: the same as
+    /// [`can`](Self::can).
     pub fn check(&self, ship: ShipId) -> Result<(), ShipRefusal> {
-        self.row(ship).ok_or(ShipRefusal::NotListed)?.buy
+        self.can(ship)
     }
 
     /// What buying `row`'s ship costs after the trade-in: negative when
@@ -292,6 +325,78 @@ impl Shipyard {
     #[must_use]
     pub fn final_price(&self, row: &ShipRow) -> i64 {
         row.price.saturating_sub(self.trade_in)
+    }
+}
+
+/// One listed ship class, asked whether it can be bought: the facts the
+/// shipyard's buy checks read, all settled when the shipyard was built.
+#[derive(Clone, Copy)]
+struct RowShip<'a> {
+    /// The shipyard: its cash, the trade-in and the rule set.
+    shipyard: &'a Shipyard,
+    /// The row: its price and facts.
+    row: &'a ShipRow,
+}
+
+impl Context for Shipyard {
+    fn rulebook(&self) -> &Rulebook {
+        &self.rules
+    }
+}
+
+impl Context for RowShip<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        self.shipyard.rulebook()
+    }
+}
+
+/// The first of `checks` that refuses `facts`, if any.
+fn refusal<C: Context>(checks: &Checks<C, ShipRefusal>, facts: &C) -> Result<(), ShipRefusal> {
+    // No shipyard rule draws (`no_shipyard_rule_draws`), so no chance is
+    // ever asked.
+    checks.first_refusal(facts, &mut NeverFires)
+}
+
+/// Whether Buy Ship is enabled for a class, as `_CalcShipCanBuy` has it
+/// (@0x4f6a0-0x4f90a), in the port's order: it can be bought here at all,
+/// then the cash. The original tests the cash before `Require` and
+/// `Availability`, but only sets a flag, so no player can tell the order
+/// apart.
+fn can_buy<'a>() -> Checks<RowShip<'a>, ShipRefusal> {
+    [
+        Check::plain(
+            "for sale",
+            "`_CalcShipCanBuy` `Require` @0x4f80a-0x4f840 and `Availability` \
+             @0x4f8e3-0x4f90a, which the port refuses first; tech, the day's roll and \
+             `HideHigher` as listed (`_SetupPortAvailableShipTypes` @0xbc4b-0xbe2c)",
+            for_sale,
+        ),
+        Check::plain(
+            "cash",
+            "`_CalcShipCanBuy` @0x4f751-0x4f7eb: the price less the trade-in against the cash",
+            cash_covers_the_price,
+        ),
+    ]
+    .into()
+}
+
+/// The class can be bought here at all: for sale today, its `Require`
+/// met and its `Availability` holding.
+fn for_sale(asked: &RowShip) -> Result<(), ShipRefusal> {
+    if asked.row.facts.buyable {
+        Ok(())
+    } else {
+        Err(ShipRefusal::NotForSale)
+    }
+}
+
+/// The cash and the trade-in together cover the price.
+fn cash_covers_the_price(asked: &RowShip) -> Result<(), ShipRefusal> {
+    let shipyard = asked.shipyard;
+    if shipyard.cash.saturating_add(shipyard.trade_in) < asked.row.price {
+        Err(ShipRefusal::CannotAfford)
+    } else {
+        Ok(())
     }
 }
 
@@ -451,6 +556,7 @@ impl Yard<'_> {
                         crew: ship.crew,
                     },
                     buy,
+                    facts: ShipFacts { buyable },
                 },
             ));
         }
@@ -460,6 +566,7 @@ impl Yard<'_> {
             trade_in,
             cash: pilot.cash,
             current: pilot.ship,
+            rules: self.rules,
         })
     }
 }
@@ -691,6 +798,7 @@ mod tests {
     use crate::control::Test;
     use crate::market::MORE_CARGO;
     use crate::reserves::Reserves;
+    use crate::rules::Descriptor;
     use crate::stats::{MORE_FUEL, MORE_SHIELD};
     use crate::testkit::{AllowAll, FAST, RefuseBits, Scripted, catalog, outfit, planet, ship};
 
@@ -1004,10 +1112,12 @@ mod tests {
                         crew: 4,
                     },
                     buy: Ok(()),
+                    facts: ShipFacts { buyable: true },
                 }],
                 trade_in: 0,
                 cash: 50_000,
                 current: ShipId(128),
+                rules: Rulebook::default(),
             }
         );
     }
@@ -1439,6 +1549,95 @@ mod tests {
         let row = row(&shipyard, 129);
         assert_eq!(shipyard.final_price(row), 1000 - 10_000);
         assert_eq!(row.buy, Ok(()));
+    }
+
+    // The shipyard's questions.
+
+    /// Each check of `checks` with its citation, in order.
+    fn listed_checks<C>(checks: &Checks<C, ShipRefusal>) -> Vec<(&'static str, &'static str)> {
+        checks
+            .descriptors()
+            .map(|about| (about.name(), about.reproduces()))
+            .collect()
+    }
+
+    /// The disputed rule each check of `checks` reads, in order.
+    fn keys<C>(checks: &Checks<C, ShipRefusal>) -> Vec<Option<RuleKey>> {
+        checks.descriptors().map(Descriptor::reads).collect()
+    }
+
+    #[test]
+    fn the_buy_checks_are_for_sale_then_cash() {
+        assert_eq!(
+            listed_checks(&can_buy()),
+            [
+                (
+                    "for sale",
+                    "`_CalcShipCanBuy` `Require` @0x4f80a-0x4f840 and `Availability` \
+                     @0x4f8e3-0x4f90a, which the port refuses first; tech, the day's roll and \
+                     `HideHigher` as listed (`_SetupPortAvailableShipTypes` @0xbc4b-0xbe2c)"
+                ),
+                (
+                    "cash",
+                    "`_CalcShipCanBuy` @0x4f751-0x4f7eb: the price less the trade-in against \
+                     the cash"
+                ),
+            ]
+        );
+    }
+
+    /// A shipyard listing ship 129 at 17,500, `buyable` or not, with
+    /// `cash` and a 2,500 trade-in.
+    fn listing(buyable: bool, cash: i64) -> Shipyard {
+        Shipyard {
+            rows: vec![ShipRow {
+                facts: ShipFacts { buyable },
+                ..row(&open(&[heavy()], &pilot()), 129).clone()
+            }],
+            trade_in: 2500,
+            cash,
+            current: ShipId(128),
+            rules: Rulebook::default(),
+        }
+    }
+
+    #[test]
+    fn the_shipyard_answers_can_from_its_facts_and_cash() {
+        let can = |shipyard: Shipyard| shipyard.can(ShipId(129));
+        assert_eq!(can(listing(false, 50_000)), Err(ShipRefusal::NotForSale));
+        assert_eq!(
+            can(listing(false, 0)),
+            Err(ShipRefusal::NotForSale),
+            "for sale before the cash"
+        );
+        assert_eq!(can(listing(true, 15_000)), Ok(()), "exactly the price");
+        assert_eq!(can(listing(true, 14_999)), Err(ShipRefusal::CannotAfford));
+        assert_eq!(
+            listing(true, 14_999).check(ShipId(129)),
+            Err(ShipRefusal::CannotAfford)
+        );
+        assert_eq!(can(listing(true, 0)), Err(ShipRefusal::CannotAfford));
+        assert_eq!(
+            can(listing(true, i64::MAX)),
+            Ok(()),
+            "the cash and trade-in saturate"
+        );
+        assert_eq!(
+            listing(true, 50_000).can(ShipId(130)),
+            Err(ShipRefusal::NotListed)
+        );
+    }
+
+    #[test]
+    fn each_disputed_shipyard_rule_names_its_key() {
+        assert_eq!(keys(&can_buy()), [None, None]);
+    }
+
+    #[test]
+    fn no_shipyard_rule_draws() {
+        for about in can_buy().descriptors() {
+            assert!(!about.draws(), "{}", about.name());
+        }
     }
 
     // Buying a ship.
