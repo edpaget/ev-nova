@@ -84,11 +84,17 @@
 //! Not yet as the original: the limit held to is `Max` alone, without
 //! `ModType` 27, `MaxAmmo` times the launchers, or the gun and turret
 //! slots.
-//! [`Session::buy_ship`] and [`Session::assign`] keep their own carry,
-//! which folding onto [`carried_outfits`]
-//! waits for: a purchase's carry is a trade (`Max` and the free mass,
-//! the sale of the rest, the trade-in), and Use As My Ship keeps its own
-//! reserves and hook order.
+//!
+//! Each change of class decides its own carry and applies it through
+//! [`Session::become_class`], the one writer of the class, its fields,
+//! default items and stock, and the outfits owned. Use As My Ship
+//! ([`Session::assign`]) carries by [`carried_outfits`] too, keeping by
+//! 0x0004 alone, holding nothing to its `Max`, and topping its stock
+//! weapons up rather than adding them; its hooks and its take-over
+//! reserves run between the outfits and the class, and it always holds
+//! the reserves. [`Session::buy_ship`] alone keeps its own carry, a trade
+//! (`Max` and the free mass, the sale of the rest, the trade-in), until
+//! it becomes `become_class`'s third caller.
 //!
 //! **`Txxx`** ([`RenameShipOp`], @0x15b25-0x15be9) reads `STR#` `xxx`,
 //! the raw ID, with no range check, from the session's string lists

@@ -867,7 +867,8 @@ impl Session {
     /// The outfitter, the shipyard, capture and a reload hold; `G`, `D`
     /// and boarding read [`RuleKey::RefitReserves`] and a change of ship
     /// reads [`RuleKey::ShipChangeReserves`] (see
-    /// [`ReservePolicy::reading`]).
+    /// [`ReservePolicy::reading`]). Capture and a change of ship refit
+    /// through [`Session::become_class`], by the policy they chose.
     fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
         let hold = reserves == ReservePolicy::Hold;
         self.hull = self.arsenal.hull(self.pilot.ship);
@@ -2965,7 +2966,8 @@ impl Session {
     /// it joins the fleet; on "Use As My Ship" the old class's `OnRetire`
     /// runs first, both before the fuel draw and, as
     /// [`HookRules::capture_hook_order`] says, before or after the outfit
-    /// swap (see the `hooks` module).
+    /// swap (see the `hooks` module). The change of class is applied by
+    /// [`Session::become_class`], with the reserves held.
     pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
         let aboard = self.aboard.filter(|aboard| aboard.captured)?;
         self.aboard = None;
