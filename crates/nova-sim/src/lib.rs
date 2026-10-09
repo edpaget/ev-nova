@@ -124,6 +124,10 @@
 //! - [`navigation`]: how the player selects the stellar navigation
 //!   target: by its `NavDef` slot, the nearest, or a click
 //!   ([`stellar_under`]), as the original does.
+//! - [`order_loop`]: an order of a count run one pass at a time
+//!   ([`order_loop::run`]): each pass handed its [`order_loop::Pass`],
+//!   stopping at the first refusal, with the [`order_loop::OrderRun`]
+//!   keeping where and why.
 //! - [`outfit_effects`]: what granting an outfit does: a map explores, a
 //!   clean-record outfit cleans the legal record and a paint paints the
 //!   ship ([`Rgb15`]) instead of being added
@@ -223,6 +227,7 @@ pub mod legal;
 pub mod market;
 pub mod message;
 pub mod navigation;
+pub mod order_loop;
 pub mod outfit_effects;
 pub mod outfitter;
 pub mod person;
