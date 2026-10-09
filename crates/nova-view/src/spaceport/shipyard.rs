@@ -54,8 +54,8 @@
 //! Info, clicked or with I, opens the "Shipyard Info" panel (`DLOG`/`DITL`
 //! 1005 over `PICT` 8506) over the shipyard: the ship's name in item 3,
 //! and in item 5 its speed, acceleration, turn rate, guns, turrets, free
-//! space, length, mass, crew and how many jumps its fuel holds
-//! (#229-240). Its Done, Return and Escape close the panel alone. Without
+//! space, cargo space (#110), length, mass, crew and how many jumps its
+//! fuel holds (#229-240). Its Done, Return and Escape close the panel alone. Without
 //! that dialog, Info is greyed.
 //!
 //! Done, Return and Escape close the shipyard. Without its dialog, the
@@ -74,6 +74,7 @@ use super::grid::{
 };
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
+use super::outfitter::tons_text;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -151,6 +152,8 @@ pub const FINAL_PRICE_LABEL: &str = "Final Price:";
 pub const STAT_LABELS: [&str; 9] = [
     "Speed:", "Accel:", "Turn:", "Guns:", "Turrets:", "Space:", "Length:", "Mass:", "Crew:",
 ];
+/// `STR#` 2002 #110, the info panel's cargo space label.
+pub const CARGO_LABEL: &str = "Cargo:";
 /// `STR#` 2002 #238.
 pub const MAXIMUM_OF: &str = "Maximum of";
 /// `STR#` 2002 #239.
@@ -192,28 +195,26 @@ pub fn stat_lines(row: &ShipRow) -> Vec<String> {
 }
 
 /// The info panel's lines for a ship of `specs`: its speed,
-/// acceleration, turn rate, guns, turrets, free space, length, mass, crew
-/// and how many jumps its fuel holds.
+/// acceleration, turn rate, guns, turrets, free space, cargo space,
+/// length, mass, crew and how many jumps its fuel holds. Space, Cargo and
+/// Mass take "ton" at exactly 1 and "tons" otherwise.
 #[must_use]
 pub fn spec_lines(specs: ShipSpecs) -> Vec<String> {
     let fields = specs.fields;
-    let values = [
-        fields.speed.to_string(),
-        fields.accel.to_string(),
-        fields.maneuver.to_string(),
-        specs.max_gun.to_string(),
-        specs.max_tur.to_string(),
-        format!("{} tons", fields.free_mass),
-        specs.length.to_string(),
-        format!("{} tons", fields.mass),
-        specs.crew.to_string(),
+    let [speed, accel, turn, guns, turrets, space, length, mass, crew] = STAT_LABELS;
+    let mut lines = vec![
+        format!("{speed} {}", fields.speed),
+        format!("{accel} {}", fields.accel),
+        format!("{turn} {}", fields.maneuver),
+        format!("{guns} {}", specs.max_gun),
+        format!("{turrets} {}", specs.max_tur),
+        format!("{space} {}", tons_text(specs.space_shown())),
+        format!("{CARGO_LABEL} {}", tons_text(specs.cargo_shown())),
+        format!("{length} {}", specs.length),
+        format!("{mass} {}", tons_text(specs.mass_shown())),
+        format!("{crew} {}", specs.crew),
     ];
     let jumps = max_jumps(f32::from(fields.fuel));
-    let mut lines: Vec<String> = STAT_LABELS
-        .iter()
-        .zip(values)
-        .map(|(label, value)| format!("{label} {value}"))
-        .collect();
     let unit = if jumps == 1 { JUMP } else { JUMPS };
     lines.push(format!("{MAXIMUM_OF} {jumps} {unit}"));
     lines
@@ -1924,6 +1925,7 @@ mod tests {
                 "Guns: 2",
                 "Turrets: 1",
                 "Space: 12 tons",
+                "Cargo: 15 tons",
                 "Length: 26",
                 "Mass: 25 tons",
                 "Crew: 4",
@@ -1939,6 +1941,34 @@ mod tests {
         assert_eq!(fuel(199), "Maximum of 1 jump");
         assert_eq!(fuel(99), "Maximum of 0 jumps");
         assert_eq!(fuel(-100), "Maximum of 0 jumps");
+    }
+
+    #[test]
+    fn the_space_cargo_and_mass_lines_have_a_ton_at_exactly_1() {
+        let lines = |space, holds, mass| {
+            spec_lines(ShipSpecs {
+                fields: ShipFields {
+                    holds,
+                    mass,
+                    ..SPECS.fields
+                },
+                space,
+                ..SPECS
+            })
+        };
+        let has = |lines: &[String], line: &str| {
+            assert!(lines.contains(&line.to_owned()), "{line}: {lines:?}");
+        };
+        let one = lines(1, 1, 1);
+        has(&one, "Space: 1 ton");
+        has(&one, "Cargo: 1 ton");
+        has(&one, "Mass: 1 ton");
+        let none = lines(0, 0, 0);
+        has(&none, "Space: 0 tons");
+        has(&none, "Cargo: 0 tons");
+        has(&none, "Mass: 0 tons");
+        has(&lines(0, -15, 0), "Cargo: 15 tons");
+        has(&lines(-3, 0, 0), "Space: -3 tons");
     }
 
     /// The panel's item `number`.
@@ -1962,7 +1992,7 @@ mod tests {
         );
         let text = panel.scroll_text().expect("the stats");
         assert_eq!(text.lines()[0], "Speed: 300");
-        assert_eq!(text.lines().len(), 10);
+        assert_eq!(text.lines().len(), 11);
         let commands = drawn(&screen);
         let background = commands
             .iter()
