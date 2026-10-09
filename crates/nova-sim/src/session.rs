@@ -369,6 +369,7 @@ use crate::pre_jump::{self, PreJump};
 use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::shipyard::{self, Quote, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
@@ -2996,15 +2997,18 @@ impl Session {
         };
         let defaults = pilot::tally(record.defaults.iter().copied());
         let records = &self.outfits;
-        self.pilot.outfits.retain(|id, _| {
-            records
-                .iter()
-                .any(|record| record.id == *id && record.flags & OutfitFlags::PERSISTENT != 0)
-        });
-        for (&id, &count) in &defaults {
-            let owned = self.pilot.outfits.entry(id).or_default();
-            *owned = owned.saturating_add(count);
-        }
+        // Capture keeps by 0x0004 alone and holds nothing to its `Max`,
+        // whatever the ship-change rules say, and tops the stock weapons
+        // up rather than adding them.
+        self.pilot.outfits = carried_outfits(
+            &self.pilot.outfits,
+            OutfitCarry::Persistent {
+                mask: OutfitFlags::PERSISTENT,
+            },
+            &defaults,
+            false,
+            records,
+        );
         let fits = self.arsenal.stock_fits(record.id, records);
         fit_stock(&mut self.pilot.outfits, &fits, records);
         if !hooks_first {
