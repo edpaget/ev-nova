@@ -18,8 +18,9 @@ pub(crate) enum Participant {
     Tribute,
     /// The day's `öops` events (`_DisasterHandler` @0xb5bf).
     Events,
-    /// The stellars' defence regrowing and regeneration (@0xb5c4-0xb71e):
-    /// planet-domination and story-runtime phase 5.
+    /// The stellars (@0xb5c4-0xb71e): a destroyed one's regeneration,
+    /// built by story-runtime phase 5, and a dominated one's defence
+    /// regrowing, by rdm task planet-domination.
     Stellars,
     /// The reinforcement countdowns (@0xb724-0xb759), once reinforcements
     /// are built.

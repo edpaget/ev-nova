@@ -166,20 +166,21 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
                 market::step_day(&session.goods, &mut events, session.gate(), self.chance);
                 session.pilot.events = events;
             }
+            // The destroyed stellars' regeneration; the dominated ones'
+            // defence regrowing joins it with rdm task planet-domination.
+            Participant::Stellars => session.stellars_day(&mut *self.chance),
             Participant::DayPassed => session.raise(StoryEvent::DayPassed {
                 date: session.pilot.date,
             }),
             // Each slot is filled by its own phase: the crons by
             // crons-news-ranks phase 1, the missions' days left by missions
-            // phase 2, the tribute and the stellars' defence by rdm task
-            // planet-domination, the stellars' regeneration by
-            // story-runtime phase 5, the reinforcements once they are
-            // built, and the ranks by crons-news-ranks phase 3. The day
-            // rolls are still drawn afresh at each landing.
+            // phase 2, the tribute by rdm task planet-domination, the
+            // reinforcements once they are built, and the ranks by
+            // crons-news-ranks phase 3. The day rolls are still drawn
+            // afresh at each landing.
             Participant::Crons
             | Participant::MissionDays
             | Participant::Tribute
-            | Participant::Stellars
             | Participant::Reinforcements
             | Participant::Ranks
             | Participant::DayRolls => {}

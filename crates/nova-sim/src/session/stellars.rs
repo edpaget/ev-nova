@@ -16,14 +16,24 @@
 //! - `Uxxx` regenerates the stellar at once and runs no `OnRegen`, which
 //!   runs only as it regenerates on its own (@0x15aeb-0x15b20).
 //!
+//! The daily step's sixth participant counts each destroyed stellar down
+//! a day, by ascending ID (@0xb5c4-0xb71e): one of negative `DeadTime`
+//! stays destroyed for ever; any other regenerates once its countdown
+//! reaches 0, and runs its `OnRegen` there and then (@0xb6ee), so a
+//! `DayPassed` subscription that day sees what it set. A whole stellar's
+//! daily repair (@0xb700) has nothing to repair: stellars take no damage
+//! until shots can destroy them (story-runtime phase 8).
+//!
 //! A stellar the player is docked at stays the one docked at when `Y`
 //! destroys it: the spaceport stays open and the take-off works, as the
 //! original's port never asks; only landing there again is refused.
 
 use super::Session;
 use crate::catalog::StellarId;
+use crate::chance::Chance;
 use crate::rulebook::RuleKey;
-use crate::story::wreck;
+use crate::story::Countdown;
+use crate::story::wreck::{self, Tick};
 
 impl Session {
     /// `Y`: destroys `stellar` (see the module docs).
@@ -45,6 +55,42 @@ impl Session {
     /// slots, so any other is never destroyed.
     pub(super) fn regenerate_stellar(&mut self, stellar: StellarId) {
         self.set_stellar_state(stellar, None);
+    }
+
+    /// The daily step's stellars (see the module docs): each destroyed
+    /// stellar in turn, by ascending ID, counts a day down, or regenerates
+    /// and runs its `OnRegen` at once, through [`Session::run_set`],
+    /// drawing on `chance`. The overlay is read again after each, so a
+    /// stellar an `OnRegen` destroys is counted the same day when its ID is
+    /// higher, as the original's pass by index does. A destroyed stellar
+    /// with no record is left as it is.
+    pub(super) fn stellars_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        let mut after = None;
+        while let Some((stellar, countdown)) = self.next_destroyed(after) {
+            after = Some(stellar);
+            let Some(life) = self.lives.get(&stellar).cloned() else {
+                continue;
+            };
+            match wreck::day(&life, countdown) {
+                Tick::Stays(countdown) => {
+                    self.set_stellar_state(stellar, Some(countdown));
+                }
+                Tick::Regenerates => {
+                    self.set_stellar_state(stellar, None);
+                    self.run_script(&life.on_regen, chance);
+                }
+            }
+        }
+    }
+
+    /// The destroyed stellar of lowest ID above `after` (any, with none),
+    /// with its countdown.
+    fn next_destroyed(&self, after: Option<StellarId>) -> Option<(StellarId, Countdown)> {
+        self.pilot
+            .galaxy
+            .stellars()
+            .filter(|&(id, _)| after.is_none_or(|after| id > after))
+            .find_map(|(id, change)| Some((id, change.destroyed?)))
     }
 }
 
@@ -310,6 +356,149 @@ mod tests {
             }),
             "not again"
         );
+    }
+
+    // The daily step's stellars.
+
+    /// [`catalog`] with these lives, 128 and 129's `OnRegen` as given.
+    fn regenerating(lives: [(i16, i16, &str); 2]) -> FakePilotCatalog {
+        catalog().living(lives.map(|(id, dead_time, on_regen)| StellarLife {
+            on_regen: Script::parse(on_regen),
+            ..life(id, dead_time)
+        }))
+    }
+
+    fn bit(n: u16) -> Bit {
+        Bit::new(n).expect("a bit")
+    }
+
+    #[test]
+    fn a_destroyed_stellar_counts_its_days_down_and_regenerates_running_its_on_regen() {
+        use crate::story::{Consumer, EventFilter, StoryEventKind, Subscription, SubscriptionId};
+        let catalog = regenerating([(129, 2, "b7"), (128, 0, "")]);
+        let mut session = quiet(&catalog);
+        let id = SubscriptionId {
+            consumer: Consumer::Fixture,
+            record: 1,
+            hook: 0,
+        };
+        session
+            .register_story(Subscription {
+                guard: crate::control::Test::parse("b7"),
+                ..Subscription::new(
+                    id,
+                    EventFilter::Any(StoryEventKind::DayPassed),
+                    Script::parse("b8"),
+                )
+            })
+            .expect("registers");
+        land_now(&mut session).expect("lands");
+        run(&mut session, "Y129");
+        session
+            .take_off(&mut Scripted::default())
+            .expect("takes off");
+        assert_eq!(destroyed(&session, 129), Some(left(1)), "a day down");
+        assert!(!session.control_bit(bit(7)));
+        land_now(&mut session).expect("lands");
+        let _ = session.settle_script(&catalog, &mut Scripted::default());
+        assert!(!session.control_bit(bit(8)), "not yet");
+        session.take_events();
+        session
+            .take_off(&mut Scripted::default())
+            .expect("takes off");
+        assert_eq!(destroyed(&session, 129), None, "regenerated");
+        assert!(!shown_destroyed(&session, 129));
+        assert!(session.control_bit(bit(7)), "its OnRegen, in the day");
+        assert!(
+            session.take_events().contains(&SessionEvent::GalaxyChanged),
+            "told"
+        );
+        let _ = session.settle_script(&catalog, &mut Scripted::default());
+        assert!(session.control_bit(bit(8)), "the day's DayPassed saw it");
+    }
+
+    #[test]
+    fn a_stellar_of_dead_time_0_or_1_regenerates_on_its_next_day() {
+        for dead_time in [0, 1] {
+            let catalog = regenerating([(129, dead_time, "b7"), (128, 0, "")]);
+            let mut session = quiet(&catalog);
+            run(&mut session, "Y129");
+            session.pass_days(1, &mut Scripted::default());
+            assert_eq!(destroyed(&session, 129), None, "{dead_time}");
+            assert!(session.control_bit(bit(7)), "{dead_time}");
+        }
+    }
+
+    #[test]
+    fn days_passed_together_each_count_a_day() {
+        let catalog = regenerating([(129, 5, ""), (128, 0, "")]);
+        let mut session = quiet(&catalog);
+        session.stats.jump_days = 3;
+        run(&mut session, "Y129");
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        assert_eq!(destroyed(&session, 129), Some(left(2)));
+    }
+
+    #[test]
+    fn a_stellar_of_negative_dead_time_stays_destroyed() {
+        let catalog = regenerating([(140, -1, "b7"), (128, 0, "")]);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y140");
+        session.pass_days(10, &mut Scripted::default());
+        assert_eq!(destroyed(&session, 140), Some(left(1)));
+        assert!(!session.control_bit(bit(7)));
+    }
+
+    #[test]
+    fn an_on_regen_destroying_a_higher_stellar_has_it_counted_the_same_day() {
+        let catalog = regenerating([(128, 1, "Y129"), (129, 1, "b9")]);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        session.pass_days(1, &mut Scripted::default());
+        assert_eq!(destroyed(&session, 128), None);
+        assert_eq!(destroyed(&session, 129), None, "counted the same day");
+        assert!(session.control_bit(bit(9)));
+    }
+
+    #[test]
+    fn an_on_regen_destroying_a_lower_stellar_has_it_counted_from_the_next_day() {
+        let catalog = regenerating([(128, 1, "b9"), (129, 1, "Y128")]);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y129");
+        session.pass_days(1, &mut Scripted::default());
+        assert_eq!(destroyed(&session, 129), None);
+        assert_eq!(destroyed(&session, 128), Some(left(1)), "passed already");
+        assert!(!session.control_bit(bit(9)));
+        session.pass_days(1, &mut Scripted::default());
+        assert_eq!(destroyed(&session, 128), None);
+        assert!(session.control_bit(bit(9)));
+    }
+
+    #[test]
+    fn a_destroyed_stellar_with_no_record_is_left_as_it_is() {
+        let catalog = regenerating([(129, 1, ""), (128, 0, "")]);
+        let mut session = quiet(&catalog);
+        session.set_stellar_state(StellarId(300), Some(left(4)));
+        run(&mut session, "Y129");
+        session.pass_days(1, &mut Scripted::default());
+        assert_eq!(destroyed(&session, 300), Some(left(4)));
+        assert_eq!(destroyed(&session, 129), None, "the next one counted");
+    }
+
+    #[test]
+    fn by_the_bible_a_destroyed_invincible_stellar_counts_down_as_any() {
+        let rules =
+            Rulebook::default().with_override(RuleKey::DestroyInvincible, RuleSource::Bible);
+        let catalog = catalog().living([StellarLife {
+            strength: 0,
+            ..life(128, 2)
+        }]);
+        let mut session = quiet(&catalog).with_rules(rules);
+        run(&mut session, "Y128");
+        session.pass_days(1, &mut Scripted::default());
+        assert_eq!(destroyed(&session, 128), Some(left(1)));
+        session.pass_days(1, &mut Scripted::default());
+        assert_eq!(destroyed(&session, 128), None);
     }
 
     #[test]

@@ -43,6 +43,31 @@ pub(crate) fn destroys(life: &StellarLife, reading: RuleSource) -> bool {
     }
 }
 
+/// What a day does to a destroyed stellar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tick {
+    /// It stays destroyed, with this countdown.
+    Stays(Countdown),
+    /// It regenerates, and runs its `OnRegen`.
+    Regenerates,
+}
+
+/// What a day does to the destroyed stellar `life` with `countdown` left:
+/// one with a negative `DeadTime` stays destroyed with 1 day left
+/// (@0xb6f5), so it never regenerates on its own; any other counts a day
+/// down and regenerates at 0 or below (@0xb68a-0xb69d).
+pub(crate) fn day(life: &StellarLife, countdown: Countdown) -> Tick {
+    if life.dead_time < 0 {
+        return Tick::Stays(Countdown { days_left: 1 });
+    }
+    match countdown.days_left {
+        0 | 1 => Tick::Regenerates,
+        days => Tick::Stays(Countdown {
+            days_left: days - 1,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,6 +105,23 @@ mod tests {
             let life = life(strength, 0);
             assert_eq!(destroys(&life, RuleSource::Engine), engine, "{strength}");
             assert!(destroys(&life, RuleSource::Bible), "{strength}");
+        }
+    }
+
+    #[test]
+    fn a_day_counts_down_and_regenerates_at_one_day_left_or_none() {
+        let life = life(100, 2);
+        assert_eq!(day(&life, left(3)), Tick::Stays(left(2)));
+        assert_eq!(day(&life, left(2)), Tick::Stays(left(1)));
+        assert_eq!(day(&life, left(1)), Tick::Regenerates);
+        assert_eq!(day(&life, left(0)), Tick::Regenerates);
+        assert_eq!(day(&life, left(u16::MAX)), Tick::Stays(left(u16::MAX - 1)));
+    }
+
+    #[test]
+    fn a_stellar_of_negative_dead_time_never_regenerates_on_its_own() {
+        for days in [0, 1, 5] {
+            assert_eq!(day(&life(100, -1), left(days)), Tick::Stays(left(1)));
         }
     }
 
