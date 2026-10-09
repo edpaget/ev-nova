@@ -42,7 +42,8 @@
 //!   it reads ([`control::holds`]), through the [`ControlBits`] port with
 //!   Nova's [`NovaBits`]; and running a set expression
 //!   ([`control::execute`]), its operators beyond the bit writes handed to
-//!   a [`SetRegistry`].
+//!   the caller's dispatch (the session's: `Session::apply_op`, one match
+//!   over the set operators).
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence

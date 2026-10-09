@@ -33,7 +33,7 @@
 //! its sub-dialogs read, so the open spaceport serves the stellar it
 //! opened on until it is left.
 //!
-//! **Here.** [`MoveToOp`] (`Mxxx`) and [`MoveKeepPositionOp`] (`Nxxx`)
+//! **Here.** `Mxxx` and `Nxxx`
 //! only queue their move: a set expression runs in the middle of a
 //! purchase, a capture or a hook, with no catalog to read the new system
 //! from. [`Session::settle_script`] applies the moves in order at a safe
@@ -91,7 +91,7 @@
 //! as the fighter rules say and the system is populated
 //! ([`Session::populate`]).
 //!
-//! **`Qxxx`** ([`LeaveStellarOp`]) draws its message when it runs, from
+//! **`Qxxx`** draws its message when it runs, from
 //! the session's string lists ([`Session::with_strings`]; none by
 //! default), with a roll of as many sides as the list holds, as `T`
 //! draws, so the order of the draws is kept. Nothing moves until it is
@@ -114,7 +114,7 @@
 //! one, unless [`ScriptEffectRules::blank_leave`] makes the player leave
 //! all the same, with no message.
 //!
-//! **`Pxxx`** ([`PlaySoundOp`], @0x15a24) sets `_missionSoundID` to the
+//! **`Pxxx`** (@0x15a24) sets `_missionSoundID` to the
 //! raw `snd ` ID, with no range check, and only `_PlayGame` reads it,
 //! once a flight frame (@0x462fa): when it is not -1 and no mission sound
 //! is held (`_missionSnd`), it loads and plays it at the effects volume;
@@ -554,7 +554,7 @@ mod tests {
         );
     }
 
-    // Through the registry.
+    // Through run_set.
 
     #[test]
     fn m_and_n_are_queued_until_settled() {

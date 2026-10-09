@@ -17,17 +17,17 @@
 //! **Set expressions.** [`Session::run_set`] runs a set expression on the
 //! session (see [`control::execute`](crate::control::execute)): it writes
 //! the pilot's bits, drawing `R(...)` on the caller's [`Chance`], and
-//! hands every other operator to the registry given by
-//! [`Session::with_set_ops`]: by default [`nova_set_ops`], Nova's `G`, `D`
-//! and `X` (see the `outfits` module), the ship changes `C`, `E`, `H`
-//! and `T` (see the `ship_change` module), and the moves `M` and `N`, the
+//! hands every other operator to [`Session::apply_op`], one match over the
+//! set operators, which other roadmaps extend with a match arm. It applies
+//! Nova's `G`, `D` and `X` (see the `outfits` module), the ship changes
+//! `C`, `E`, `H` and `T` (see the `ship_change` module), and the moves `M` and `N`, the
 //! leave `Q`, which apply when [`Session::settle_script`] settles them,
 //! and the sound `P` (see the `script_effects` module). Any change to the pilot makes
 //! a save due. An operator nothing handles is skipped, and its kind told
 //! once a session as a [`ScriptNote`] ([`Session::take_script_notes`]);
 //! which kinds were told is never saved. The operators still unhandled
 //! are those of the missions (`A`, `F`, `S`), ranks (`K`, `L`) and
-//! stellars (`Y`, `U`), which other work registers.
+//! stellars (`Y`, `U`), whose arms other work adds.
 //!
 //! **Hooks.** The records' set-expression hooks (the `chär`'s `OnStart`,
 //! an outfit's `OnPurchase` and `OnSell`, a ship's `OnPurchase`,

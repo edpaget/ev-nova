@@ -68,11 +68,11 @@
 //! way, as the original's outfitter does when it closes (@0x5da4b-0x5dad4)
 //! and its `_LoadPilotData` fills the shield and armour (@0x754dc).
 //!
-//! - `Cxxx` ([`ChangeShipOp`]) keeps every outfit and adds no default.
-//! - `Exxx` ([`ChangeShipWithDefaultsOp`]) keeps every outfit and adds the
-//!   new class's default items; by the engine every outfit is then held
-//!   to its `Max` ([`ShipChangeRules::max`]).
-//! - `Hxxx` ([`ReplaceShipOp`]) keeps only the persistent outfits, as
+//! - `Cxxx` keeps every outfit and adds no default.
+//! - `Exxx` keeps every outfit and adds the new class's default items; by
+//!   the engine every outfit is then held to its `Max`
+//!   ([`ShipChangeRules::max`]).
+//! - `Hxxx` keeps only the persistent outfits, as
 //!   [`ShipChangeRules::persistence`] says, adds the default items, and
 //!   holds them as `E` does.
 //!
@@ -96,7 +96,7 @@
 //! (`Max` and the free mass, the sale of the rest, the trade-in), until
 //! it becomes `become_class`'s third caller.
 //!
-//! **`Txxx`** ([`RenameShipOp`], @0x15b25-0x15be9) reads `STR#` `xxx`,
+//! **`Txxx`** (@0x15b25-0x15be9) reads `STR#` `xxx`,
 //! the raw ID, with no range check, from the session's string lists
 //! ([`Session::with_strings`]; none by default, so `T` does nothing). It
 //! picks one of its strings evenly, a roll of as many sides as the list

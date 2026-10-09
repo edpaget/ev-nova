@@ -5,13 +5,11 @@
 //!
 //! **Running one.** [`Session::run_script`] runs a record's [`Script`]
 //! as [`Session::run_set`] runs a set expression: the bits written, `R(...)`
-//! drawn on the caller's [`Chance`], the other operators handed to the
-//! session's registry (by default `G`, `D`, `X`, `C`, `E`, `H`, `T`, `M`,
-//! `N`, `Q` and `P`;
-//! any other is skipped
-//! and told once a session as a [`ScriptNote`](crate::ScriptNote)). A
-//! blank script, or one that did not parse, does nothing at all: no save
-//! is due and nothing is told.
+//! drawn on the caller's [`Chance`], the other operators applied by
+//! `Session::apply_op` (`G`, `D`, `X`, `C`, `E`, `H`, `T`, `M`, `N`, `Q`
+//! and `P`; any other is skipped and told once a session as a
+//! [`ScriptNote`](crate::ScriptNote)). A blank script, or one that did
+//! not parse, does nothing at all: no save is due and nothing is told.
 //!
 //! **Where each runs**, in the original's order:
 //!

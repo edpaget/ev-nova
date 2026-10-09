@@ -230,8 +230,8 @@
 //! The pilot's control bits are read with [`Session::control_bit`] and
 //! set or cleared with [`Session::set_control_bit`], which makes a save
 //! due. A set expression runs on the session ([`Session::run_set`]),
-//! writing bits, with its other operators handled as
-//! [`Session::with_set_ops`] says: by default [`nova_set_ops`], which
+//! writing bits, with its other operators applied by `Session::apply_op`,
+//! one match over the set operators, which
 //! grants (`G`) and removes (`D`) outfits, explores systems (`X`),
 //! changes the player's ship outside the shipyard (`C`, `E`, `H`, as
 //! [`ShipChangeRules`] reads the rule set where the rules are

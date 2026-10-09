@@ -34,11 +34,11 @@
 //! or armour above it is kept by the engine and held to it by the other
 //! reading of [`RuleKey::RefitReserves`](crate::RuleKey::RefitReserves).
 //!
-//! **The operators** ([`nova_set_ops`](crate::nova_set_ops) registers
-//! them), each run between the original's `_ShipStatsToSystemInfo` and
-//! `_SystemInfoToShipStats`, so the ship's stats follow:
+//! **The operators** (arms of `Session::apply_op`), each run between the
+//! original's `_ShipStatsToSystemInfo` and `_SystemInfoToShipStats`, so
+//! the ship's stats follow:
 //!
-//! - `Gxxx` ([`GrantOutfitOp`], `_EvalSetExp` @0x1541d) grants one of the
+//! - `Gxxx` (`_EvalSetExp` @0x1541d) grants one of the
 //!   outfit through the grant path, then refits the ship, gaining as a
 //!   purchase does. The fuel is held to the new most; a shield or armour
 //!   above it is kept by the engine (`_SystemInfoToShipStats` clamps no
@@ -50,7 +50,7 @@
 //!   `Max` already or its mass (as the outfitter weighs it) is more than
 //!   the free mass: the check a boarding grant is held to by that
 //!   reading too ([`held_to_max`]).
-//! - `Dxxx` ([`RemoveOutfitOp`], @0x1544b) removes one of an outfit owned
+//! - `Dxxx` (@0x1544b) removes one of an outfit owned
 //!   (128 to 639), and with none owned does nothing at all. The ship is
 //!   refitted without gaining, so its mass and stats are freed as by a
 //!   sale. The fuel is held to the new most; a shield or armour above it
@@ -60,7 +60,7 @@
 //!   pays nothing; by the other reading of
 //!   [`RuleKey::RemoveRefund`](crate::RuleKey::RemoveRefund) it pays what
 //!   selling the outfit would.
-//! - `Xxxxx` ([`ExploreOp`], @0x15c71) explores the system. The original
+//! - `Xxxxx` (@0x15c71) explores the system. The original
 //!   writes the explored level of any slot 128 to 2175, a system or not;
 //!   here a system not on the star map is not explored, and the explored
 //!   systems are one set, where the original keeps `X`'s level 1 apart
