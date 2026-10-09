@@ -15,8 +15,7 @@ use crate::market;
 use crate::rulebook::RuleKey;
 use crate::story::day::{self, Day, Participant};
 use crate::story::dispatch::{self, DuplicateSubscription, Reentry, Registry, Stage};
-use crate::story::{Consumer, Subscription, SubscriptionId};
-use crate::story::{Fate, StoryEvent};
+use crate::story::{Consumer, Fate, StoryEvent, Subscription, SubscriptionId};
 use crate::traffic::npc::NpcId;
 
 /// The session's story runtime: the subscriptions registered, the events
@@ -645,6 +644,19 @@ mod tests {
         jump(&mut session, &catalog, 131).expect("arrives");
         let mut expected = vec![explored(131)];
         expected.extend(days_after(left, 2));
+        expected.push(entered(131, Entrance::Jump));
+        assert_eq!(session.story_raised(), expected);
+    }
+
+    #[test]
+    fn a_jumps_explored_follows_the_events_raised_before_it() {
+        let catalog = testkit::catalog();
+        let mut session = quiet(Session::start(&catalog).expect("starts"));
+        session.raise(LANDED_128);
+        let left = session.date();
+        jump(&mut session, &catalog, 131).expect("arrives");
+        let mut expected = vec![LANDED_128, explored(131)];
+        expected.extend(days_after(left, 1));
         expected.push(entered(131, Entrance::Jump));
         assert_eq!(session.story_raised(), expected);
     }
