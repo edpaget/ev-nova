@@ -375,7 +375,9 @@ use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::ship_change::{OutfitCarry, carried_outfits};
-use crate::shipyard::{self, Quote, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, Yard};
+use crate::shipyard::{
+    self, Purchase, Quote, Sale, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, Yard,
+};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::targeting::{self, TargetPick};
@@ -2336,22 +2338,34 @@ impl Session {
         let old_mass = self.fields.mass;
         self.drop_fighters(|_, _| false);
         let escorts: Vec<EscortHolds> = self.escort_holds().collect();
-        let fleet = shipyard::Fleet {
-            escorts: &escorts,
-            cargo: self.rules.source_for(RuleKey::PurchaseCargo),
-        };
-        let outfits = std::mem::take(&mut self.outfits);
-        let fits = self.arsenal.stock_fits(ship, &outfits);
+        let fits = self.arsenal.stock_fits(ship, &self.outfits);
+        let Purchase {
+            outfits,
+            settlement,
+            report,
+        } = shipyard::purchase(
+            &Sale {
+                pilot: &self.pilot,
+                old_mass,
+                new: &record,
+                name,
+                fits: &fits,
+                records: &self.outfits,
+                escorts: &escorts,
+                rules: self.rules,
+            },
+            quote,
+        );
         let mut bought = None;
         self.transact(|pilot| {
-            bought = Some(shipyard::purchase(
-                pilot, old_mass, &record, name, &fits, quote, &outfits, fleet,
-            ));
+            pilot.outfits = outfits;
+            pilot.ship = record.id;
+            settlement.settle(pilot);
             if !paint_last {
                 pilot.paint = None;
             }
+            bought = Some(report);
         });
-        self.outfits = outfits;
         self.fields = record.fields;
         self.defaults = pilot::tally(record.defaults.iter().copied());
         self.stock = armament::fitted(&fits);
