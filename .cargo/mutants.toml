@@ -144,4 +144,8 @@ exclude_re = [
     # The session's default string lists hold none: the body already
     # returns an empty list.
     "replace <impl CommCatalog for NoStrings>::string_list -> Vec<String> with vec!\\[\\]",
+    # `NoTraffic` is the catalog a relocation enters a system with: its
+    # row resets the traffic without reading a catalog, so no row ever
+    # calls any of these bodies.
+    "<impl TrafficCatalog for NoTraffic>::",
 ]

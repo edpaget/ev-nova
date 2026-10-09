@@ -30,12 +30,12 @@
 //!   repair, so the ship's condition stays as it was.
 
 use super::Session;
+use super::entry::{Arrival, Entry, NoTraffic, Placement, ShipPlacement};
 use crate::catalog::{PilotCatalog, StellarId, SystemId};
+use crate::chance::NeverFires;
 use crate::date::GameDate;
-use crate::geometry::Vec2;
 use crate::landing::is_dockable;
 use crate::reserves::Reserve;
-use crate::traffic::Traffic;
 
 /// Why [`Session::relocate`] refused to move the pilot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -100,27 +100,17 @@ impl Session {
         if !is_dockable(site) {
             return Err(RelocateRefusal::NotLandable);
         }
-        self.player.position = site.position;
-        self.player.velocity = Vec2::ZERO;
-        self.touchdown = site.position;
-        self.next_sites = None;
-        let pilot = &mut self.pilot;
-        pilot.system = system;
-        pilot.stellar = Some(stellar);
-        pilot.explore(system);
-        pilot.course.clear();
-        self.sites = sites;
-        self.landed = Some(stellar);
-        self.leave_scene();
-        self.traffic = Traffic::new();
-        self.traffic_due = true;
-        self.fleet.clear();
-        self.hire_rolls.clear();
-        self.outfit_rolls.clear();
-        self.open_opening();
-        self.ship_rolls.clear();
-        self.ship_redraws.clear();
-        self.save_due = true;
+        let placement = Placement {
+            ship: ShipPlacement::AtRest(site.position),
+            stellar: Some(stellar),
+            hold: false,
+        };
+        let arrival = Arrival {
+            system,
+            sites,
+            placement,
+        };
+        self.enter_system(Entry::Relocate, arrival, &NoTraffic, &mut NeverFires);
         Ok(())
     }
 

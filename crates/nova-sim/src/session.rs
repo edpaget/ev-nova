@@ -283,6 +283,7 @@
 
 mod control;
 mod edit;
+mod entry;
 mod escorts;
 mod fighters;
 mod hail;
