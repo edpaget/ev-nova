@@ -7218,9 +7218,12 @@ mod tests {
     fn the_outfitter_greys_the_buy_but_keeps_the_words() {
         for (mut session, first, _) in each_limited(RuleSource::Engine) {
             let outfitter = session.outfitter(&mut NeverFires).expect("open");
-            let row = outfitter.row(first).expect("listed");
-            assert_eq!(row.buy, Err(OutfitRefusal::BoughtThisOpening));
-            assert_eq!(row.words, None);
+            assert!(outfitter.row(first).is_some(), "listed");
+            assert_eq!(
+                outfitter.can(buy(first)),
+                Err(OutfitRefusal::BoughtThisOpening)
+            );
+            assert_eq!(outfitter.words(first), None);
         }
     }
 
@@ -7274,7 +7277,10 @@ mod tests {
         assert_eq!(outfitter.row(gated), None);
         session.set_control_bit(crate::control::Bit::new(7).expect("a bit"), true);
         let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
-        assert_eq!(outfitter.row(gated).map(|row| row.buy), Some(Ok(())));
+        assert_eq!(
+            outfitter.row(gated).map(|_| outfitter.can(buy(gated))),
+            Some(Ok(()))
+        );
         assert_eq!(session.outfit(buy(gated), &mut NeverFires), Ok(()));
     }
 
@@ -7623,9 +7629,12 @@ mod tests {
         };
         let mut session = outfitted(&catalog);
         let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
-        let row = outfitter.row(OutfitId(310)).expect("listed, sell-only");
-        assert_eq!(row.buy, Err(OutfitRefusal::NotForSale));
-        assert_eq!(row.sell, Ok(()));
+        assert!(outfitter.row(OutfitId(310)).is_some(), "listed, sell-only");
+        assert_eq!(
+            outfitter.can(buy(OutfitId(310))),
+            Err(OutfitRefusal::NotForSale)
+        );
+        assert_eq!(outfitter.can(sell(OutfitId(310))), Ok(()));
         assert_eq!(session.outfit(sell(OutfitId(310)), &mut NeverFires), Ok(()));
         assert_eq!(session.pilot().owned(OutfitId(310)), 1);
         assert_eq!(session.pilot().cash(), 25_000 + 2000);

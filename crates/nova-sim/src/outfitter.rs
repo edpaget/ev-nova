@@ -142,14 +142,14 @@
 //!
 //! **The info box's words** (`_OutfitDialogUpdate` @0x57dba-0x57e6f,
 //! `STR#` 2002 #219-#222) are worked out for each row on their own
-//! ([`OutfitRow::words`]); the original never asks `_CanBuyOutfitItem`
+//! ([`Outfitter::words`]); the original never asks `_CanBuyOutfitItem`
 //! for them, so whatever refuses the buy first plays no part. When
 //! `_HasMaxOfItem(item, 0, 0)` holds (@0x57dd6: the ammunition cap, the
 //! raised `Max`, the gun and turret limits), its refusal; otherwise, when
-//! the outfit's mass is above 0 and above `_ShipFreeMass`, the free mass
-//! clamped at 0 (@0x57e33-0x57e45, @0xb506-0xb50a; for a mass above 0
-//! that is the same as above the free mass), the mass words by the count
-//! owned; otherwise none.
+//! the outfit's mass is above `_ShipFreeMass`, the free mass clamped at 0
+//! ([`Outfitter::free_mass_clamped`]; @0x57e33-0x57e45, @0xb506-0xb50a;
+//! so an outfit of mass 0 or less never lacks it), the mass words by the
+//! count owned; otherwise none.
 //!
 //! **Once an opening** (`_boughtMap` and `_boughtID`, [`Bought`]). By the
 //! engine, an outfit with a mod of [`EXPLORES_MAP`] (16) in any slot, or
@@ -238,10 +238,10 @@
 //! reading refuses it while any round is held
 //! ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)). The
 //! original shows the refusal as a text dialog with Sell left enabled
-//! (`STR#` 2002 #208-212); [`Outfitter::lc_names`] carries the names its
+//! (`STR#` 2002 #208-212); [`Outfitter::lc_names`] gives the names its
 //! words need.
 //!
-//! **The reported cap** ([`OutfitRow::cap`]). `_HasMaxOfItem` also
+//! **The reported cap** ([`Outfitter::cap`]). `_HasMaxOfItem` also
 //! reports out a cap, which only the quantity dialog reads: the `Max`,
 //! lowered to a smaller ammunition cap, replaced by the raised `Max`, and
 //! lowered to the ship's whole gun or turret limit.
@@ -357,7 +357,7 @@ pub enum OutfitRefusal {
     /// from `_CanBuyOutfitItem` (@0x4e938), not from `_HasMaxOfItem`, so
     /// its info box gives this none of the #219/#220 words the other
     /// `Max` refusals get; it still shows the mass words #221/#222 when
-    /// the fighter also lacks the mass ([`OutfitRow::words`]).
+    /// the fighter also lacks the mass ([`Outfitter::words`]).
     BaysFull,
     /// The ship has not the free mass for another.
     NoSpace,
@@ -438,23 +438,6 @@ pub struct OutfitRow {
     pub owned: u16,
     /// Its `Max`.
     pub max: i16,
-    /// The `Max` that `_HasMaxOfItem(item, 0, &cap)` reports out
-    /// (@0x4512), which the quantity dialog's buy maximum reads: its
-    /// `Max`, as the ammunition cap, a raised `Max` and the gun and
-    /// turret limits change it (see [`Outfitter::count_max`]).
-    pub cap: i16,
-    /// Whether one can be bought now, or why not.
-    pub buy: Result<(), OutfitRefusal>,
-    /// Whether one can be sold now, or why not.
-    pub sell: Result<(), OutfitRefusal>,
-    /// Which of the info box's words (`STR#` 2002 #219-#222) it gets,
-    /// whatever [`buy`](Self::buy) says: the refusal `_HasMaxOfItem`
-    /// makes, if any (a `Max`, none allowed, the ammunition cap, a gun or
-    /// turret limit); otherwise [`OutfitRefusal::NoSpaceForAny`] with none
-    /// owned or [`OutfitRefusal::NoSpace`] with some, when it lacks the
-    /// mass; otherwise none (`_OutfitDialogUpdate` @0x57dba-0x57e6f, which
-    /// never consults `_CanBuyOutfitItem`; see the module docs).
-    pub words: Option<OutfitRefusal>,
     /// What the outfitter's rules read about the outfit, settled when the
     /// outfitter was built.
     pub facts: OutfitFacts,
@@ -540,11 +523,6 @@ pub struct Outfitter {
     pub bought: Bought,
     /// The rule set the outfitter was built by, which its questions read.
     pub rules: Rulebook,
-    /// The `LCName` and `LCPlural` of every outfit a refusal's words name:
-    /// each launcher refused for its ammunition, and the outfit naming
-    /// that ammunition; each raiser refused for its target, and that
-    /// target.
-    pub lc_names: BTreeMap<OutfitId, LcNames>,
     /// What Option (Alt here) does with Buy or Sell
     /// ([`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount)), read by
     /// [`count_asked`](Self::count_asked).
@@ -1321,18 +1299,6 @@ impl Bought {
         }
     }
 
-    /// The flags as the outfitter reads them, by `source`
-    /// ([`RuleKey::OutfitLimit`](crate::RuleKey::OutfitLimit)): by the
-    /// engine, as they are; by the other reading, always clear, so
-    /// nothing is limited.
-    #[must_use]
-    pub(crate) fn under(self, source: RuleSource) -> Self {
-        match source {
-            RuleSource::Engine => self,
-            RuleSource::Bible => Self::default(),
-        }
-    }
-
     /// Whether these flags refuse a buy of an outfit that `limit` limits
     /// ([`opening_limit`]).
     #[must_use]
@@ -1342,36 +1308,6 @@ impl Bought {
             Some(OpeningLimit::Record) => self.record,
             None => false,
         }
-    }
-}
-
-/// Whether an outfit of `mass` does not fit in `free` tons; only one of
-/// positive mass can lack it, whatever the free mass
-/// (`_CanBuyOutfitItem` @0x4e88a-0x4e892, `_OutfitDialogUpdate`
-/// @0x57e3c-0x57e45). Both read `_ShipFreeMass`, which clamps the free
-/// mass at 0 (@0xb506-0xb50a); for a positive mass, `mass > max(free, 0)`
-/// exactly when `mass > free`, so `free` is read unclamped here.
-fn lacks_mass(mass: i64, free: i64) -> bool {
-    mass > 0 && mass > free
-}
-
-/// Whether a sale of an outfit of `mass` is refused for the ship's free
-/// mass, `free` tons before the sale, as `source` reads it
-/// ([`RuleKey::SaleMass`](crate::RuleKey::SaleMass)).
-///
-/// By the engine, an outfit of mass 0 or more is never checked
-/// (`_DoOutfitDialog` @0x5c735-0x5c73e, the mass from
-/// `_AdjustedItemMass`, which leaves a mass of 0 or less as it is); one of
-/// negative mass is refused when the free mass, clamped at 0 by
-/// `_ShipFreeMass` (@0xb506-0xb50a), plus its mass is below 0
-/// (@0x5c740-0x5c747). The clamped free mass is never below 0, so that
-/// sum is below 0 only for a negative mass, and the engine's sign test
-/// needs no test of its own here. By the other reading, any sale is
-/// refused that would leave the unclamped free mass below 0.
-fn sale_lacks_mass(mass: i64, free: i64, source: RuleSource) -> bool {
-    match source {
-        RuleSource::Engine => free.max(0) + mass < 0,
-        RuleSource::Bible => free + mass < 0,
     }
 }
 
@@ -1611,18 +1547,6 @@ impl Armed {
             turret_limit: raised(hardpoints.turrets, MORE_TURRETS, owned, records),
         }
     }
-
-    /// Why one more outfit of `flags` cannot be bought, the gun limit
-    /// checked first, if either refuses it.
-    fn refusal(&self, flags: u16) -> Option<OutfitRefusal> {
-        if flags & OutfitFlags::GUN != 0 && self.guns >= self.gun_limit {
-            Some(OutfitRefusal::GunLimit)
-        } else if flags & OutfitFlags::TURRET != 0 && self.turrets >= self.turret_limit {
-            Some(OutfitRefusal::TurretLimit)
-        } else {
-            None
-        }
-    }
 }
 
 /// `record`'s lower-case names.
@@ -1661,8 +1585,8 @@ pub(crate) struct Shop<'a> {
     pub(crate) free_cargo: i64,
     /// Each launcher outfit, with the ammunition it holds.
     pub(crate) launchers: &'a BTreeMap<OutfitId, Launcher>,
-    /// The once-an-opening flags, as they stand: the shop reads them as
-    /// [`RuleKey::OutfitLimit`] says ([`Bought::under`]).
+    /// The once-an-opening flags, as they stand: the outfitter's `once an
+    /// opening` check reads them as [`RuleKey::OutfitLimit`] says.
     pub(crate) bought: Bought,
     /// The control-bit test of an outfit's `Availability`.
     pub(crate) gate: Gate<'a>,
@@ -1671,194 +1595,9 @@ pub(crate) struct Shop<'a> {
 }
 
 impl Shop<'_> {
-    /// Why one of `owned` of launcher `record` cannot be sold for its
-    /// ammunition, if it cannot, with the names its words need put in
-    /// `names`: its own, and those of the outfit naming its ammunition.
-    fn ammunition_first(
-        &self,
-        record: &OutfitRecord,
-        owned: u16,
-        names: &mut BTreeMap<OutfitId, LcNames>,
-    ) -> Option<OutfitRefusal> {
-        let launcher = self.launchers.get(&record.id)?;
-        let rounds = launcher.excess(owned, self.rules.source_for(RuleKey::LauncherSale))?;
-        names.insert(record.id, lc_names(record));
-        let ammo = launcher.ammo;
-        if let Some(named) = self.records.iter().find(|named| Some(named.id) == ammo) {
-            names.insert(named.id, lc_names(named));
-        }
-        Some(OutfitRefusal::AmmunitionFirst { rounds, ammo })
-    }
-
-    /// Why one of `owned` of `record` cannot be sold for the outfits whose
-    /// `Max` it raises, if it cannot, with the names its words need put in
-    /// `names`: its own and the target's (`_DoOutfitDialog`
-    /// @0x5c7be-0x5ca6f). Each of its [`RAISES_MAX`] mods is checked in
-    /// slot order against `all`, the outfits owned, and the first whose
-    /// target is held past what is left refuses. By the engine, that is
-    /// the target's raw `Max` x (`owned` - 1), other raisers ignored and
-    /// with no floor; by the Bible, the target's [`raised_max`] once one
-    /// `record` is sold. The original reads only a `ModVal` of 128-639
-    /// (@0x5c819-0x5c827); one outside names no outfit and none of it is
-    /// owned, so it never refuses here either.
-    fn raised_first(
-        &self,
-        record: &OutfitRecord,
-        owned: u16,
-        all: &BTreeMap<OutfitId, u16>,
-        names: &mut BTreeMap<OutfitId, LcNames>,
-    ) -> Option<OutfitRefusal> {
-        let after = || {
-            let mut after = all.clone();
-            match owned.saturating_sub(1) {
-                0 => after.remove(&record.id),
-                left => after.insert(record.id, left),
-            };
-            after
-        };
-        let (count, target, target_record) = record
-            .mods
-            .iter()
-            .filter(|&&(kind, _)| kind == RAISES_MAX)
-            .find_map(|&(_, val)| {
-                let target = OutfitId(val);
-                let held = i64::from(all.get(&target).copied().unwrap_or(0));
-                let target_record = self.records.iter().find(|other| other.id == target);
-                let left = match (self.rules.source_for(RuleKey::RaisedMax), target_record) {
-                    (_, None) => 0,
-                    (RuleSource::Engine, Some(other)) => {
-                        i64::from(other.max) * (i64::from(owned) - 1)
-                    }
-                    (RuleSource::Bible, Some(other)) => {
-                        raised_max(other, &after(), self.records, RuleSource::Bible)
-                    }
-                };
-                let excess = held - left;
-                (excess > 0).then_some((excess, target, target_record))
-            })?;
-        names.insert(record.id, lc_names(record));
-        if let Some(other) = target_record {
-            names.insert(other.id, lc_names(other));
-        }
-        Some(OutfitRefusal::RaisedFirst {
-            count: u32::try_from(count).unwrap_or(u32::MAX),
-            target,
-        })
-    }
-
-    /// Whether `pilot` can sell one of `record` here, or why not, with the
-    /// names a refusal's words need put in `names`: `here` is whether it
-    /// can be sold here at all (for sale, or sold anywhere), `mass` its
-    /// mass and `free` the ship's free mass before it is sold (see the
-    /// module docs).
-    fn sale(
-        &self,
-        record: &OutfitRecord,
-        pilot: &Pilot,
-        here: bool,
-        mass: i64,
-        free: i64,
-        names: &mut BTreeMap<OutfitId, LcNames>,
-    ) -> Result<(), OutfitRefusal> {
-        let owned = pilot.owned(record.id);
-        if owned == 0 {
-            Err(OutfitRefusal::NoneOwned)
-        } else if record.flags & OutfitFlags::CANNOT_SELL != 0 {
-            Err(OutfitRefusal::CannotSell)
-        } else if !here {
-            Err(OutfitRefusal::NotBoughtHere)
-        } else if sale_lacks_mass(mass, free, self.rules.source_for(RuleKey::SaleMass)) {
-            Err(OutfitRefusal::NegativeFreeMass)
-        } else if let Some(refusal) = self
-            .raised_first(record, owned, &pilot.outfits, names)
-            .or_else(|| self.ammunition_first(record, owned, names))
-        {
-            Err(refusal)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Whether `owned` of `outfit` reach its ammunition cap, if it has
-    /// one (`_HasMaxOfItem` @0x45cd-0x45d1; see the module docs).
-    fn at_ammo_cap(&self, outfit: OutfitId, owned: u16) -> bool {
-        self.ammo_caps
-            .get(&outfit)
-            .is_some_and(|&cap| i32::from(owned) >= i32::from(cap))
-    }
-
-    /// Why `_HasMaxOfItem(item, 0, 0)` says the player, owning `owned` of
-    /// `record` and `all` the outfits, has the most of it, if it does: its
-    /// ammunition cap, then its raised `Max`, then the gun and turret
-    /// limits `armed` gives (`_HasMaxOfItem` @0x4512; see the module docs).
-    fn has_max(
-        &self,
-        record: &OutfitRecord,
-        owned: u16,
-        all: &BTreeMap<OutfitId, u16>,
-        armed: &Armed,
-    ) -> Option<OutfitRefusal> {
-        let raised = self.rules.source_for(RuleKey::RaisedMax);
-        if self.at_ammo_cap(record.id, owned) {
-            Some(OutfitRefusal::MaxOwned)
-        } else if i64::from(owned) >= raised_max(record, all, self.records, raised) {
-            Some(if record.max <= 0 {
-                OutfitRefusal::NoneAllowed
-            } else {
-                OutfitRefusal::MaxOwned
-            })
-        } else {
-            armed.refusal(record.flags)
-        }
-    }
-
-    /// The cap `_HasMaxOfItem(item, 0, &cap)` reports out for `record`,
-    /// `all` the outfits owned and `armed` the ship's guns (@0x4512),
-    /// when it lets the outfit be bought: its `Max`, lowered to a smaller
-    /// ammunition cap (@0x45b2-0x45c1); replaced by the raised `Max`
-    /// when more than one raiser counts (@0x4681-0x46a0: the engine also
-    /// replaces it when the raised `Max` is the smaller, which with a
-    /// multiplier of 1 it never is); then, for a gun, lowered to the
-    /// ship's whole gun limit (@0x4798-0x47a7) and, for a turret, to its
-    /// whole turret limit (@0x482b-0x483a). Each is held in 16 bits
-    /// ([`saturate_i16`]), where the engine's `imulw` and `addw` wrap.
-    fn reported_max(
-        &self,
-        record: &OutfitRecord,
-        all: &BTreeMap<OutfitId, u16>,
-        armed: &Armed,
-    ) -> i16 {
-        let mut cap = record.max;
-        if let Some(&ammo) = self.ammo_caps.get(&record.id) {
-            cap = cap.min(ammo);
-        }
-        let raised = self.rules.source_for(RuleKey::RaisedMax);
-        if raise_multiplier(record, all, self.records, raised) > 1 {
-            cap = saturate_i16(raised_max(record, all, self.records, raised));
-        }
-        if record.flags & OutfitFlags::GUN != 0 {
-            cap = cap.min(saturate_i16(i64::from(armed.gun_limit)));
-        }
-        if record.flags & OutfitFlags::TURRET != 0 {
-            cap = cap.min(saturate_i16(i64::from(armed.turret_limit)));
-        }
-        cap
-    }
-
-    /// The once-an-opening flags as [`RuleKey::OutfitLimit`] reads them
-    /// ([`Bought::under`]).
-    fn limits(&self) -> Bought {
-        self.bought
-            .under(self.rules.source_for(RuleKey::OutfitLimit))
-    }
-
     /// The outfitter, for `pilot`, each outfit's roll for the day kept in
     /// `rolls` and any not drawn yet drawn on `chance` (see the module
     /// docs); `None` when the stellar has none.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the row's own answers go once the outfitter's questions replace them"
-    )]
     pub(crate) fn outfitter(
         &self,
         pilot: &Pilot,
@@ -1876,7 +1615,6 @@ impl Shop<'_> {
         let buy_random = self.rules.source_for(RuleKey::BuyRandom);
         let mut sweep = HideHigher::default();
         let mut rows = Vec::new();
-        let mut names = BTreeMap::new();
         for record in sorted {
             let owned = pilot.owned(record.id);
             let offer = Offer {
@@ -1910,40 +1648,6 @@ impl Shop<'_> {
             }
             let price = unit_price(record, self.fields.mass);
             let mass = unit_mass(record, self.fields.mass);
-            let has_max = self.has_max(record, owned, &pilot.outfits, &armed);
-            let no_space = lacks_mass(mass, free).then_some(if owned == 0 {
-                OutfitRefusal::NoSpaceForAny
-            } else {
-                OutfitRefusal::NoSpace
-            });
-            let expansion = mass_expansion(record);
-            let buying = if !buyable {
-                Err(OutfitRefusal::NotForSale)
-            } else if let Some(refusal) = has_max {
-                Err(refusal)
-            } else if let Some(refusal) = no_space {
-                Err(refusal)
-            } else if self.fighter_room.get(&record.id) == Some(&0) {
-                Err(OutfitRefusal::BaysFull)
-            } else if expansion.is_some() && self.fields.holds < 0 {
-                Err(OutfitRefusal::NoExpansion)
-            } else if expansion.is_some_and(|size| self.free_cargo < i64::from(size)) {
-                Err(OutfitRefusal::NoCargoRoom)
-            } else if self.limits().refuses(opening_limit(record)) {
-                Err(OutfitRefusal::BoughtThisOpening)
-            } else if price > pilot.cash {
-                Err(OutfitRefusal::CannotAfford)
-            } else {
-                Ok(())
-            };
-            let selling = self.sale(
-                record,
-                pilot,
-                for_sale || sells_anywhere,
-                mass,
-                free,
-                &mut names,
-            );
             let facts = self.facts(&offer, owned, buyable, for_sale || sells_anywhere);
             rows.push((
                 record.disp_weight,
@@ -1955,10 +1659,6 @@ impl Shop<'_> {
                     mass,
                     owned,
                     max: record.max,
-                    cap: self.reported_max(record, &pilot.outfits, &armed),
-                    buy: buying,
-                    sell: selling,
-                    words: has_max.or(no_space),
                     facts,
                 },
             ));
@@ -1973,13 +1673,10 @@ impl Shop<'_> {
             free_cargo: self.free_cargo,
             bought: self.bought,
             rules: self.rules,
-            lc_names: names,
             outfit_count: self.rules.source_for(RuleKey::OutfitCount),
         })
     }
-}
 
-impl Shop<'_> {
     /// The facts the outfitter's rules read about `offer`'s outfit, the
     /// player owning `owned` of it, settled as the outfitter is built:
     /// whether it can be `buyable` here at all and `sold_here` at all, and
@@ -2280,6 +1977,22 @@ mod tests {
         outfitter.row(OutfitId(id)).expect("listed")
     }
 
+    /// Buying one of outfit `id`.
+    fn buy_of(id: i16) -> OutfitOrder {
+        OutfitOrder {
+            outfit: OutfitId(id),
+            direction: Direction::Buy,
+        }
+    }
+
+    /// Selling one of outfit `id`.
+    fn sell_of(id: i16) -> OutfitOrder {
+        OutfitOrder {
+            outfit: OutfitId(id),
+            direction: Direction::Sell,
+        }
+    }
+
     // BuyRandom.
 
     #[test]
@@ -2483,7 +2196,12 @@ mod tests {
         ];
         let outfitter = open(&records, &pilot());
         assert_eq!(listed(&outfitter), [128, 129, 131, 132, 134, 135]);
-        assert!(outfitter.rows.iter().all(|row| row.buy.is_ok()));
+        assert!(
+            outfitter
+                .rows
+                .iter()
+                .all(|row| outfitter.can(buy_of(row.id.0)).is_ok())
+        );
     }
 
     #[test]
@@ -2531,12 +2249,12 @@ mod tests {
         ];
         let outfitter = open(&records, &pilot());
         assert_eq!(listed(&outfitter), [128, 129, 130, 140], "listed anyway");
-        assert_eq!(row(&outfitter, 128).buy, Ok(()), "the ship's bit");
-        assert_eq!(row(&outfitter, 129).buy, Err(OutfitRefusal::NotForSale));
-        assert_eq!(row(&outfitter, 130).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(outfitter.can(buy_of(128)), Ok(()), "the ship's bit");
+        assert_eq!(outfitter.can(buy_of(129)), Err(OutfitRefusal::NotForSale));
+        assert_eq!(outfitter.can(buy_of(130)), Err(OutfitRefusal::NotForSale));
         let licensed = open(&records, &owning(&[(140, 1)]));
-        assert_eq!(row(&licensed, 130).buy, Ok(()), "the licence's bit too");
-        assert_eq!(row(&licensed, 129).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(licensed.can(buy_of(130)), Ok(()), "the licence's bit too");
+        assert_eq!(licensed.can(buy_of(129)), Err(OutfitRefusal::NotForSale));
     }
 
     #[test]
@@ -2544,7 +2262,7 @@ mod tests {
         let records = [requiring(128, 0x2, -1)];
         let outfitter = open(&records, &owning(&[(999, 3)]));
         assert_eq!(listed(&outfitter), [128]);
-        assert_eq!(row(&outfitter, 128).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(outfitter.can(buy_of(128)), Err(OutfitRefusal::NotForSale));
     }
 
     #[test]
@@ -2586,8 +2304,8 @@ mod tests {
     fn requirements_scoped_to_another_government_are_met_here() {
         let records = [requiring(128, 0x2, 129), requiring(129, 0x2, 128)];
         let outfitter = open(&records, &pilot());
-        assert_eq!(row(&outfitter, 128).buy, Ok(()), "not applied here");
-        assert_eq!(row(&outfitter, 129).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(outfitter.can(buy_of(128)), Ok(()), "not applied here");
+        assert_eq!(outfitter.can(buy_of(129)), Err(OutfitRefusal::NotForSale));
     }
 
     // Flags that hide.
@@ -2606,8 +2324,8 @@ mod tests {
         assert_eq!(listed(&open(&records, &pilot())), [129]);
         let owned = open(&records, &owning(&[(128, 1)]));
         assert_eq!(listed(&owned), [128, 129]);
-        assert_eq!(row(&owned, 128).buy, Err(OutfitRefusal::NotForSale));
-        assert_eq!(row(&owned, 128).sell, Ok(()));
+        assert_eq!(owned.can(buy_of(128)), Err(OutfitRefusal::NotForSale));
+        assert_eq!(owned.can(sell_of(128)), Ok(()));
     }
 
     #[test]
@@ -2643,7 +2361,7 @@ mod tests {
             requiring(128, 0x3, -1),
         ];
         let outfitter = open(&records, &owning(&[(140, 1)]));
-        assert_eq!(row(&outfitter, 128).buy, Ok(()));
+        assert_eq!(outfitter.can(buy_of(128)), Ok(()));
     }
 
     fn gated(id: i16, flags: u16, availability: &str) -> OutfitRecord {
@@ -2663,8 +2381,8 @@ mod tests {
         let records = [gated(128, 0, "b7"), gated(129, 0, "b8")];
         let outfitter = open_gated(&records, refusing, &pilot());
         assert_eq!(listed(&outfitter), [128, 129]);
-        assert_eq!(row(&outfitter, 128).buy, Err(OutfitRefusal::NotForSale));
-        assert_eq!(row(&outfitter, 129).buy, Ok(()), "another bit holds");
+        assert_eq!(outfitter.can(buy_of(128)), Err(OutfitRefusal::NotForSale));
+        assert_eq!(outfitter.can(buy_of(129)), Ok(()), "another bit holds");
     }
 
     #[test]
@@ -2678,8 +2396,8 @@ mod tests {
         let owner = owning(&[(128, 1)]);
         let outfitter = open_gated(&records, refusing, &owner);
         assert_eq!(listed(&outfitter), [128]);
-        assert_eq!(row(&outfitter, 128).buy, Err(OutfitRefusal::NotForSale));
-        assert_eq!(row(&outfitter, 128).sell, Ok(()), "still sold back");
+        assert_eq!(outfitter.can(buy_of(128)), Err(OutfitRefusal::NotForSale));
+        assert_eq!(outfitter.can(sell_of(128)), Ok(()), "still sold back");
     }
 
     #[test]
@@ -2691,8 +2409,8 @@ mod tests {
         ];
         let outfitter = open(&records, &pilot());
         assert_eq!(listed(&outfitter), [129, 130]);
-        assert_eq!(row(&outfitter, 129).buy, Err(OutfitRefusal::NotForSale));
-        assert_eq!(row(&outfitter, 130).buy, Ok(()));
+        assert_eq!(outfitter.can(buy_of(129)), Err(OutfitRefusal::NotForSale));
+        assert_eq!(outfitter.can(buy_of(130)), Ok(()));
     }
 
     #[test]
@@ -2707,7 +2425,7 @@ mod tests {
         };
         let outfitter = open_gated(&records, allowing, &pilot());
         assert_eq!(listed(&outfitter), [128]);
-        assert_eq!(row(&outfitter, 128).buy, Err(OutfitRefusal::NotForSale));
+        assert_eq!(outfitter.can(buy_of(128)), Err(OutfitRefusal::NotForSale));
     }
 
     #[test]
@@ -2879,10 +2597,6 @@ mod tests {
                 mass: 1,
                 owned: 2,
                 max: 7,
-                cap: 7,
-                buy: Ok(()),
-                sell: Ok(()),
-                words: None,
                 facts: OutfitFacts {
                     names: lc("outfit 128", "outfits 128"),
                     buyable: true,
@@ -3399,7 +3113,7 @@ mod tests {
 
     /// The words outfit 128's row carries in `outfitter`.
     fn words(outfitter: &Outfitter) -> Option<OutfitRefusal> {
-        row(outfitter, 128).words
+        outfitter.words(OutfitId(128))
     }
 
     /// Outfit 128 of `mass` tons, up to 9999 owned: on the FAST ship's 30
@@ -3639,6 +3353,21 @@ mod tests {
         assert_eq!(sell(&zero), Ok(()), "leaves none free");
     }
 
+    /// Whether the sale's free mass check refuses one of an outfit of
+    /// `mass` on a ship of `free` tons free, read as `source` says.
+    fn sale_lacks_mass(mass: i64, free: i64, source: RuleSource) -> bool {
+        let outfitter = Outfitter {
+            rows: vec![OutfitRow {
+                mass,
+                ..counted(1, 1, ROOM, ROOM)
+            }],
+            free_mass: free,
+            rules: Rulebook::default().with_override(RuleKey::SaleMass, source),
+            ..Outfitter::default()
+        };
+        outfitter.can(sell_of(128)) == Err(OutfitRefusal::NegativeFreeMass)
+    }
+
     #[test]
     fn by_the_engine_only_an_outfit_of_negative_mass_lacks_mass_to_sell_on_the_clamped_free_mass() {
         let engine = |mass, free| sale_lacks_mass(mass, free, RuleSource::Engine);
@@ -3744,7 +3473,7 @@ mod tests {
     }
 
     fn buys(outfitter: &Outfitter, id: i16) -> Result<(), OutfitRefusal> {
-        row(outfitter, id).buy
+        outfitter.can(buy_of(id))
     }
 
     #[test]
@@ -3758,7 +3487,7 @@ mod tests {
             assert_eq!((buys(&full, 128), buys(&full, 129)), (limit, limit));
             assert_eq!(buys(&full, 130), Ok(()), "not a gun");
             let sold = owned[0].0;
-            assert_eq!(row(&full, sold).sell, Ok(()), "selling is free");
+            assert_eq!(full.can(sell_of(sold)), Ok(()), "selling is free");
         }
         let turrets = armed(&[turret(128)], &owning(&[(128, 1)]), hardpoints(1, 9));
         assert_eq!(buys(&turrets, 128), Ok(()), "turrets are not guns");
@@ -4081,7 +3810,7 @@ mod tests {
             plural: plural.to_owned(),
         };
         assert_eq!(
-            refused.lc_names,
+            refused.lc_names(sell_of(128)),
             BTreeMap::from([
                 (OutfitId(128), names("missile rack", "missile racks")),
                 (OutfitId(129), names("missile", "missiles")),
@@ -4093,7 +3822,7 @@ mod tests {
             &rack(4, 0),
             RuleSource::Engine,
         );
-        assert_eq!(sold.lc_names, BTreeMap::new(), "none refused");
+        assert_eq!(sold.lc_names(sell_of(128)), BTreeMap::new(), "none refused");
         let unnamed = BTreeMap::from([(
             OutfitId(128),
             Launcher {
@@ -4111,7 +3840,7 @@ mod tests {
             })
         );
         assert_eq!(
-            outfitter.lc_names,
+            outfitter.lc_names(sell_of(128)),
             BTreeMap::from([(OutfitId(128), names("missile rack", "missile racks"))])
         );
     }
@@ -4425,7 +4154,7 @@ mod tests {
     fn by_the_engine_a_raiser_cannot_be_sold_while_its_target_overfills_the_rest() {
         let records = raisers();
         let at =
-            |owned: &[(i16, u16)]| row(&raising(&records, owned, RuleSource::Engine), 201).sell;
+            |owned: &[(i16, u16)]| raising(&records, owned, RuleSource::Engine).can(sell_of(201));
         assert_eq!(at(&[(201, 2), (200, 6)]), raised_first(2, 200));
         assert_eq!(at(&[(201, 2), (200, 4)]), Ok(()));
         assert_eq!(at(&[(201, 1), (200, 1)]), raised_first(1, 200), "no floor");
@@ -4442,7 +4171,8 @@ mod tests {
     #[test]
     fn by_the_bible_a_raiser_sells_while_the_targets_maximum_after_the_sale_holds_them() {
         let records = raisers();
-        let at = |owned: &[(i16, u16)]| row(&raising(&records, owned, RuleSource::Bible), 201).sell;
+        let at =
+            |owned: &[(i16, u16)]| raising(&records, owned, RuleSource::Bible).can(sell_of(201));
         assert_eq!(at(&[(201, 1), (200, 3)]), Ok(()), "4 after");
         assert_eq!(at(&[(201, 1), (200, 4)]), Ok(()));
         assert_eq!(at(&[(201, 1), (200, 5)]), raised_first(1, 200));
@@ -4462,7 +4192,7 @@ mod tests {
         records.push(outfit(206, &[(RAISES_MAX, 200), (RAISES_MAX, 204)]));
         // By the engine none is left of either; by the Bible, their `Max`.
         for (source, second, both) in [(RuleSource::Engine, 2, 6), (RuleSource::Bible, 1, 2)] {
-            let at = |owned: &[(i16, u16)]| row(&raising(&records, owned, source), 206).sell;
+            let at = |owned: &[(i16, u16)]| raising(&records, owned, source).can(sell_of(206));
             assert_eq!(
                 at(&[(206, 1), (204, 2)]),
                 raised_first(second, 204),
@@ -4481,8 +4211,8 @@ mod tests {
         let records = [outfit(207, &[(RAISES_MAX, 999)])];
         for source in RuleSource::ALL {
             let outfitter = raising(&records, &[(207, 1)], source);
-            assert_eq!(row(&outfitter, 207).sell, Ok(()), "{source:?}");
-            assert_eq!(outfitter.lc_names, BTreeMap::new());
+            assert_eq!(outfitter.can(sell_of(207)), Ok(()), "{source:?}");
+            assert_eq!(outfitter.lc_names(sell_of(207)), BTreeMap::new());
         }
     }
 
@@ -4539,14 +4269,14 @@ mod tests {
         };
         let refused = raising(&records, &[(201, 1), (200, 1)], RuleSource::Engine);
         assert_eq!(
-            refused.lc_names,
+            refused.lc_names(sell_of(201)),
             BTreeMap::from([
                 (OutfitId(200), names("widget", "widgets")),
                 (OutfitId(201), names("widget rack", "widget racks")),
             ])
         );
         let sold = raising(&records, &[(201, 2), (200, 1)], RuleSource::Engine);
-        assert_eq!(sold.lc_names, BTreeMap::new(), "none refused");
+        assert_eq!(sold.lc_names(sell_of(201)), BTreeMap::new(), "none refused");
     }
 
     // The outfitter's questions.
@@ -5034,12 +4764,28 @@ mod tests {
 
     #[test]
     fn the_flags_are_read_as_the_outfit_limit_rule_says() {
+        // Both flags set: by the engine each refuses its outfit, as the
+        // flags stand; by the other reading neither does, as if clear.
         let all = Bought {
             map: true,
             record: true,
         };
-        assert_eq!(all.under(RuleSource::Engine), all);
-        assert_eq!(all.under(RuleSource::Bible), Bought::default());
+        let limited_by = |limit, source| {
+            let mut row = counted(1, 0, ROOM, ROOM);
+            row.facts.opening_limit = Some(limit);
+            let outfitter = Outfitter {
+                rows: vec![row],
+                cash: 1,
+                bought: all,
+                rules: Rulebook::default().with_override(RuleKey::OutfitLimit, source),
+                ..Outfitter::default()
+            };
+            outfitter.can(buy_of(128)) == Err(OutfitRefusal::BoughtThisOpening)
+        };
+        for limit in [OpeningLimit::Map, OpeningLimit::Record] {
+            assert!(limited_by(limit, RuleSource::Engine), "{limit:?}");
+            assert!(!limited_by(limit, RuleSource::Bible), "{limit:?}");
+        }
     }
 
     /// The outfitter of `records` after `bought`, to `pilot`.
@@ -5067,7 +4813,7 @@ mod tests {
         assert_eq!(buys(&outfitter, 130), Ok(()));
         assert_eq!(buys(&outfitter, 131), Ok(()));
         // The info box does not read the flags (`_OutfitDialogUpdate`).
-        assert_eq!(row(&outfitter, 128).words, None);
+        assert_eq!(outfitter.words(OutfitId(128)), None);
         let outfitter = limited(&records, RECORD_BOUGHT, &pilot());
         assert_eq!(buys(&outfitter, 128), Ok(()));
         assert_eq!(buys(&outfitter, 130), Err(OutfitRefusal::BoughtThisOpening));
@@ -5121,7 +4867,7 @@ mod tests {
         }
         .outfitter(&owning(owned), &mut DayRolls::default(), &mut NeverFires)
         .expect("an outfitter");
-        row(&outfitter, 200).cap
+        outfitter.cap(OutfitId(200)).expect("listed")
     }
 
     /// The cap reported for outfit 200 of [`raisers`] (`Max` 4), by the
@@ -5227,10 +4973,6 @@ mod tests {
             mass: 0,
             owned,
             max,
-            cap,
-            buy: Ok(()),
-            sell: Ok(()),
-            words: None,
             facts: OutfitFacts {
                 buyable: true,
                 sold_here: true,
@@ -5373,7 +5115,7 @@ mod tests {
         let records = [gun(128), gun(129)];
         let outfitter = armed(&records, &owning(&[(128, 1), (129, 1)]), hardpoints(3, 0));
         assert_eq!(buys(&outfitter, 128), Ok(()));
-        assert_eq!(row(&outfitter, 128).cap, 3);
+        assert_eq!(outfitter.cap(OutfitId(128)), Some(3));
         assert_eq!(outfitter.count_max(OutfitId(128), Direction::Buy), Some(2));
     }
 

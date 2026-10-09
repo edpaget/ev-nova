@@ -955,14 +955,6 @@ mod tests {
             mass,
             owned,
             max: 10,
-            cap: 10,
-            buy: Ok(()),
-            sell: if owned > 0 {
-                Ok(())
-            } else {
-                Err(OutfitRefusal::NoneOwned)
-            },
-            words: None,
             facts: OutfitFacts {
                 buyable: true,
                 sold_here: true,
@@ -974,7 +966,6 @@ mod tests {
     /// A map (1 owned) that can only be sold here.
     fn map() -> OutfitRow {
         let mut map = row(131, "Map", 0, 0, 1);
-        map.buy = Err(OutfitRefusal::NotForSale);
         map.facts.buyable = false;
         map
     }
@@ -987,16 +978,11 @@ mod tests {
             rows: vec![
                 row(128, "Light\\nBlaster", 1000, 1, 2),
                 row(129, "*Ammo\\nPack", 50, 0, 0),
-                OutfitRow {
-                    buy: Err(OutfitRefusal::NoSpaceForAny),
-                    words: Some(OutfitRefusal::NoSpaceForAny),
-                    ..row(130, "Big Gun", 9000, 10, 0)
-                },
+                row(130, "Big Gun", 9000, 10, 0),
                 map(),
             ],
             cash: 5000,
             free_mass: 5,
-            lc_names: BTreeMap::new(),
             outfit_count: RuleSource::Engine,
             ..Outfitter::default()
         }

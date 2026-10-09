@@ -310,6 +310,14 @@ fn at_port_kane(data: &GameData) -> Session {
     session
 }
 
+/// Buying one of `oütf` `id`.
+fn buying(id: i16) -> OutfitOrder {
+    OutfitOrder {
+        outfit: OutfitId(id),
+        direction: Direction::Buy,
+    }
+}
+
 /// Port Kane trades every standard commodity: food and medical supplies
 /// high, industrial, luxury goods and metal medium, equipment low, at the
 /// community's table of prices.
@@ -461,14 +469,17 @@ fn port_kanes_outfitter_sells_what_its_tech_levels_allow() {
         (battery.name.as_str(), battery.price, battery.mass),
         ("Battery Pack", 10_000, 3)
     );
-    assert_eq!(battery.buy, Ok(()));
+    assert_eq!(outfitter.can(buying(256)), Ok(()));
     assert_eq!(row(228).map(|r| r.name.as_str()), Some("Solar Panels"));
     let fission = row(179).expect("the Fission Reactor");
-    assert_eq!(fission.buy, Err(OutfitRefusal::NoSpaceForAny));
+    assert_eq!(
+        outfitter.can(buying(179)),
+        Err(OutfitRefusal::NoSpaceForAny)
+    );
     assert!(fission.mass > 8, "{}", fission.mass);
     assert!(row(177).is_none(), "the Fusion Reactor is tech 8");
-    let fiber = row(180).expect("Carbon Fiber");
-    assert_eq!(fiber.buy, Err(OutfitRefusal::NotForSale));
+    assert!(row(180).is_some(), "Carbon Fiber");
+    assert_eq!(outfitter.can(buying(180)), Err(OutfitRefusal::NotForSale));
     assert_eq!((outfitter.cash, outfitter.free_mass), (25_000, 8));
 }
 
@@ -490,7 +501,7 @@ fn port_kanes_outfitter_lists_the_vell_os_map_only_once_its_bit_is_set() {
     let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
     let row = outfitter.row(map).expect("listed once bit 9999 is set");
     assert_eq!(row.name, "Area Map - Vell-os");
-    assert_eq!(row.buy, Ok(()));
+    assert_eq!(outfitter.can(buying(342)), Ok(()));
 }
 
 /// Buying the stock Vell-os map (`oütf` 342, `ModType` 16, `ModVal` 2, no
@@ -616,11 +627,15 @@ fn the_shuttle_at_port_kane_buys_one_more_gun_and_then_none() {
     assert_eq!(session.pilot().owned(OutfitId(128)), 2);
     let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
     assert_eq!(outfitter.check(blaster), Err(OutfitRefusal::GunLimit));
-    if let Some(laser) = outfitter.row(OutfitId(270)) {
-        assert_eq!(laser.buy, Err(OutfitRefusal::GunLimit), "the mining laser");
+    if outfitter.row(OutfitId(270)).is_some() {
+        assert_eq!(
+            outfitter.can(buying(270)),
+            Err(OutfitRefusal::GunLimit),
+            "the mining laser"
+        );
     }
-    let battery = outfitter.row(OutfitId(256)).expect("the Battery Pack");
-    assert_eq!(battery.buy, Ok(()), "not a gun");
+    assert!(outfitter.row(OutfitId(256)).is_some(), "the Battery Pack");
+    assert_eq!(outfitter.can(buying(256)), Ok(()), "not a gun");
 }
 
 /// The Viper Bay (`oütf` 157) launches the Viper (`wëap` 149, `MaxAmmo`
