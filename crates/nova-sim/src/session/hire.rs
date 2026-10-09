@@ -467,6 +467,22 @@ mod tests {
     }
 
     #[test]
+    fn a_special_tech_slot_of_0_lists_a_ship_of_tech_0_for_hire() {
+        let tech = |id, tech_level| ShipRecord {
+            tech_level,
+            ..hireable(id, 100)
+        };
+        let mut catalog = barred(vec![tech(129, 0), tech(130, -1), tech(131, 1)]);
+        let mut site = bar();
+        site.tech_level = -5;
+        site.special_tech[1] = -1;
+        catalog.sites[0].1[0] = site;
+        let mut session = landed(&catalog, 25_000);
+        let list = session.escorts_for_hire(&mut NeverFires).expect("a bar");
+        assert_eq!(listed(&list), [129], "slot 0 lists tech 0; -1 never");
+    }
+
+    #[test]
     fn a_ship_whose_availability_does_not_hold_is_hidden_or_refused() {
         let gated = |id, flags3| ShipRecord {
             availability: Test::parse("b99"),

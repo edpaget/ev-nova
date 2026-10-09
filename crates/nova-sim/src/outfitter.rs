@@ -5,7 +5,12 @@
 //!
 //! An outfit is *for sale* at a stellar whose `TechLevel` is at or above
 //! the outfit's, or one of whose eight `SpecialTech` slots equals it
-//! exactly (a slot of 0 or below is unused). An outfit flagged
+//! exactly, each slot compared raw, so a slot of 0 sells an outfit of
+//! `TechLevel` 0. By the engine an outfit of `TechLevel` below 0 or of
+//! exactly 0x7fff is never sold by tech (`_SetupPortAvailableItems`
+//! @0xbf88-0xbfbd, [`wares::outfit_tech_allows`]); by the Bible it is
+//! sold like any other ([`RuleKey::TechLevel`],
+//! [`wares::by_tech_level`]). An outfit flagged
 //! [`OutfitFlags::HIDE_HIGHER`] that can be bought here takes every
 //! higher-numbered outfit of the same `DispWeight` off sale.
 //!
@@ -1531,12 +1536,6 @@ fn cap_reported(asked: &RowOutfit) -> i16 {
     cap
 }
 
-/// Whether `outfit` is for sale, by tech level alone, at `site`.
-#[must_use]
-pub fn tech_allows(outfit: &OutfitRecord, site: &LandingSite) -> bool {
-    wares::tech_allows(outfit.tech_level, site)
-}
-
 /// How an outfit of `buy_random` rolls for sale each day, read as
 /// `source` says ([`RuleKey::BuyRandom`](crate::RuleKey::BuyRandom)): by
 /// the engine, below 1 never and 100 or more always (`_LoadObjectData`
@@ -2112,7 +2111,7 @@ impl Shop<'_> {
             };
             let required = required().of(&offer);
             let available = available().of(&offer);
-            let today = tech_allows(record, self.site)
+            let today = tech_listed().of(&offer)
                 && if owned > 0 {
                     rolls.hold(record.id);
                     true
@@ -2246,6 +2245,29 @@ impl Context for Offer<'_> {
     fn rulebook(&self) -> &Rulebook {
         &self.shop.rules
     }
+}
+
+/// Whether an outfit's `TechLevel` puts it on sale at the stellar, as
+/// [`RuleKey::TechLevel`] says: by the engine,
+/// [`wares::outfit_tech_allows`]; by the Bible, [`wares::by_tech_level`].
+fn tech_listed<'a>() -> Value<Offer<'a>, bool> {
+    Value::disputed(
+        "tech",
+        "`_SetupPortAvailableItems` @0xbf88-0xbfbd; `_LoadObjectData` @0x78af3",
+        RuleKey::TechLevel,
+        engine_tech,
+        bible_tech,
+    )
+}
+
+/// The engine's tech test: never below 0 or at 0x7fff.
+fn engine_tech(offer: &Offer) -> bool {
+    wares::outfit_tech_allows(offer.record.tech_level, offer.shop.site)
+}
+
+/// The Bible's tech test: at or below the stellar's, or a slot exactly.
+fn bible_tech(offer: &Offer) -> bool {
+    wares::by_tech_level(offer.record.tech_level, offer.shop.site)
 }
 
 /// Whether an outfit's `Require` is met where it applies (see the module
@@ -2538,7 +2560,7 @@ mod tests {
     }
 
     #[test]
-    fn only_outfits_tech_allows_are_rolled_by_ascending_id() {
+    fn only_outfits_tech_lists_are_rolled_by_ascending_id() {
         let records = [
             buying(130, 40),
             buying(128, 60),
@@ -2685,9 +2707,21 @@ mod tests {
         assert_eq!(open_at(&[tech(128, 1)], &site, &pilot()), None);
     }
 
-    #[test]
-    fn it_sells_up_to_its_tech_level_and_its_special_tech_exactly() {
-        let records = [
+    /// The outfitter of `records` at `site`, reading `TechLevel` by
+    /// `source`, with no roll drawn yet and none that fires.
+    fn open_teching(records: &[OutfitRecord], site: &LandingSite, source: RuleSource) -> Vec<i16> {
+        let outfitter = Shop {
+            rules: Rulebook::default().with_override(RuleKey::TechLevel, source),
+            ..shop(records, site)
+        }
+        .outfitter(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter");
+        listed(&outfitter)
+    }
+
+    /// Outfits 128-135 of tech 3, 4, 5, 6, 55, 7, 0 and -3.
+    fn teched() -> [OutfitRecord; 8] {
+        [
             tech(128, 3),
             tech(129, 4),
             tech(130, 5),
@@ -2696,9 +2730,13 @@ mod tests {
             tech(133, 7),
             tech(134, 0),
             tech(135, -3),
-        ];
-        let outfitter = open(&records, &pilot());
-        assert_eq!(listed(&outfitter), [128, 129, 131, 132, 134, 135]);
+        ]
+    }
+
+    #[test]
+    fn it_sells_up_to_its_tech_level_and_its_special_tech_exactly() {
+        let outfitter = open(&teched(), &pilot());
+        assert_eq!(listed(&outfitter), [128, 129, 131, 132, 134]);
         assert!(
             outfitter
                 .rows
@@ -2708,16 +2746,55 @@ mod tests {
     }
 
     #[test]
-    fn an_unused_special_tech_slot_sells_nothing() {
+    fn by_the_bible_an_outfit_of_negative_tech_is_sold_at_or_above_it() {
+        assert_eq!(
+            open_teching(&teched(), &port(), RuleSource::Bible),
+            [128, 129, 131, 132, 134, 135]
+        );
+        assert_eq!(
+            open_teching(&teched(), &port(), RuleSource::Engine),
+            [128, 129, 131, 132, 134]
+        );
+    }
+
+    #[test]
+    fn a_special_tech_slot_of_0_sells_an_outfit_of_tech_0() {
         let site = LandingSite {
             tech_level: -5,
             special_tech: [0, -1, 0, 0, 0, 0, 0, 0],
             ..port()
         };
-        let outfitter = open_at(&[tech(128, 0), tech(129, -1)], &site, &pilot()).expect("open");
-        assert_eq!(listed(&outfitter), Vec::<i16>::new());
-        assert!(tech_allows(&tech(128, -5), &site));
-        assert!(tech_allows(&tech(128, -6), &site));
+        let records = [tech(128, 0), tech(129, -1)];
+        assert_eq!(open_teching(&records, &site, RuleSource::Engine), [128]);
+        assert_eq!(open_teching(&records, &site, RuleSource::Bible), [128, 129]);
+        let below = [tech(130, -5), tech(131, -6)];
+        assert_eq!(open_teching(&below, &site, RuleSource::Bible), [130, 131]);
+        assert_eq!(
+            open_teching(&below, &site, RuleSource::Engine),
+            Vec::<i16>::new()
+        );
+    }
+
+    #[test]
+    fn an_outfit_of_tech_0x7fff_is_never_listed() {
+        let site = LandingSite {
+            tech_level: i16::MAX,
+            ..port()
+        };
+        let records = [tech(128, i16::MAX), tech(129, i16::MAX - 1)];
+        assert_eq!(open_teching(&records, &site, RuleSource::Engine), [129]);
+        assert_eq!(open_teching(&records, &site, RuleSource::Bible), [128, 129]);
+    }
+
+    #[test]
+    fn the_tech_rule_reads_tech_level_and_cites_the_listing() {
+        let value = tech_listed();
+        assert_eq!(value.about().reads(), Some(RuleKey::TechLevel));
+        assert_eq!(value.about().name(), "tech");
+        assert_eq!(
+            value.about().reproduces(),
+            "`_SetupPortAvailableItems` @0xbf88-0xbfbd; `_LoadObjectData` @0x78af3"
+        );
     }
 
     #[test]

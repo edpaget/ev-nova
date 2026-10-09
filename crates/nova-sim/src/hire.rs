@@ -16,8 +16,12 @@
 //! lists a ship class for hire when, in this order:
 //!
 //! 1. its `TechLevel` is 0 or more and allowed there, as the shipyard's
-//!    is ([`wares::tech_allows`]); a negative one is never listed
-//!    (@0xbc4b-0xbc72);
+//!    engine reading has it ([`wares::ship_tech_allows`]): at or below
+//!    the stellar's, or equal to a `SpecialTech` slot, compared raw, so a
+//!    slot of 0 lists a class of `TechLevel` 0; a negative one is never
+//!    listed (@0xbc4b-0xbc72). The Bible speaks of purchase, not hire,
+//!    so [`RuleKey::TechLevel`] does not reach
+//!    the bar;
 //! 2. its roll for the day holds: a `HireRandom` of 0 or less is never
 //!    for hire, one of [`MAX_HIRE_RANDOM`] or more always (above 100
 //!    counts as 100, `_LoadObjectData` @0x7a35d), and any other is a
@@ -376,7 +380,7 @@ impl Bar<'_> {
         let mut sweep = HideHigher::default();
         let mut rows = Vec::new();
         for ship in sorted {
-            if ship.tech_level < 0 || !wares::tech_allows(ship.tech_level, self.site) {
+            if !wares::ship_tech_allows(ship.tech_level, self.site) {
                 continue;
             }
             let today = match Roll::of(ship.hire_random) {

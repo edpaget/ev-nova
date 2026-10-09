@@ -4,8 +4,15 @@
 //! # What a stellar sells
 //!
 //! A ship is *for sale* at a stellar with a shipyard when its `TechLevel`
-//! is allowed there, as an outfit's is ([`wares::tech_allows`]), and its
-//! `BuyRandom` roll holds today. The Bible's `shïp` gives `BuyRandom` as
+//! is allowed there and its `BuyRandom` roll holds today. Its `TechLevel`
+//! is allowed at or below the stellar's, or where one of the eight
+//! `SpecialTech` slots equals it exactly, each compared raw
+//! (`_SetupPortAvailableShipTypes` @0xbc5c-0xbc72). By the engine a class
+//! of `TechLevel` below 0 is never sold by tech (@0xbc4b-0xbc52), and one
+//! of 0x7fff is sold like any other ([`wares::ship_tech_allows`]); by the
+//! Bible a negative one is sold too
+//! ([`RuleKey::TechLevel`],
+//! [`wares::by_tech_level`]). The Bible's `shïp` gives `BuyRandom` as
 //! "the percent chance that a ship of this type will be available for
 //! purchase on a given day. A `BuyRandom` of 0 means this ship will never
 //! be made available for purchase" (stock data has 200 such NPC-only
@@ -537,7 +544,7 @@ impl Yard<'_> {
             };
             let required = required().of(&offer);
             let available = available().of(&offer);
-            let for_sale = wares::tech_allows(ship.tech_level, self.site)
+            let for_sale = tech_listed().of(&offer)
                 && rolls.today(ship.id, day_roll().of(&offer), chance)
                 && sweep.on_sale(ship.disp_weight);
             let buyable = for_sale && required && available;
@@ -608,6 +615,29 @@ impl Context for Flown<'_> {
     fn rulebook(&self) -> &Rulebook {
         &self.yard.rules
     }
+}
+
+/// Whether a class's `TechLevel` puts it on sale at the stellar, as
+/// [`RuleKey::TechLevel`] says: by the engine,
+/// [`wares::ship_tech_allows`]; by the Bible, [`wares::by_tech_level`].
+fn tech_listed<'a>() -> Value<ShipOffer<'a>, bool> {
+    Value::disputed(
+        "tech",
+        "`_SetupPortAvailableShipTypes` @0xbc4b-0xbc72; `_LoadObjectData` @0x7a161-0x7a165",
+        RuleKey::TechLevel,
+        engine_tech,
+        bible_tech,
+    )
+}
+
+/// The engine's tech test: never below 0.
+fn engine_tech(offer: &ShipOffer) -> bool {
+    wares::ship_tech_allows(offer.ship.tech_level, offer.yard.site)
+}
+
+/// The Bible's tech test: at or below the stellar's, or a slot exactly.
+fn bible_tech(offer: &ShipOffer) -> bool {
+    wares::by_tech_level(offer.ship.tech_level, offer.yard.site)
 }
 
 /// Whether a class's `Require` is met: a `shïp` has no `RequireGovt`, so
@@ -1272,9 +1302,9 @@ mod tests {
         assert_eq!(open_at(&[cheap(129)], &[], &site, &pilot()), None);
     }
 
-    #[test]
-    fn it_sells_up_to_its_tech_level_and_its_special_tech_exactly() {
-        let ships = [
+    /// Ships 129-136 of tech 3, 4, 5, 6, 55, 7, 0 and -3.
+    fn teched() -> [ShipRecord; 8] {
+        [
             tech(129, 3),
             tech(130, 4),
             tech(131, 5),
@@ -1283,10 +1313,101 @@ mod tests {
             tech(134, 7),
             tech(135, 0),
             tech(136, -3),
-        ];
-        let shipyard = open(&ships, &pilot());
-        assert_eq!(listed(&shipyard), [129, 130, 132, 133, 135, 136]);
+        ]
+    }
+
+    /// The ships listed of `ships` at `site`, reading `TechLevel` by
+    /// `source`, with no roll drawn yet and none that fires.
+    fn listed_teching(ships: &[ShipRecord], site: &LandingSite, source: RuleSource) -> Vec<i16> {
+        let shipyard = Yard {
+            rules: Rulebook::default().with_override(RuleKey::TechLevel, source),
+            ..yard(ships, &[], site)
+        }
+        .shipyard(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+        .expect("a shipyard");
+        listed(&shipyard)
+    }
+
+    #[test]
+    fn it_sells_up_to_its_tech_level_and_its_special_tech_exactly() {
+        let shipyard = open(&teched(), &pilot());
+        assert_eq!(listed(&shipyard), [129, 130, 132, 133, 135]);
         assert!(shipyard.rows.iter().all(|row| shipyard.can(row.id).is_ok()));
+    }
+
+    #[test]
+    fn by_the_bible_a_ship_of_negative_tech_is_sold_at_or_above_it() {
+        assert_eq!(
+            listed_teching(&teched(), &port(), RuleSource::Bible),
+            [129, 130, 132, 133, 135, 136]
+        );
+        assert_eq!(
+            listed_teching(&teched(), &port(), RuleSource::Engine),
+            [129, 130, 132, 133, 135]
+        );
+    }
+
+    #[test]
+    fn a_ship_of_tech_0x7fff_is_listed_where_tech_allows_it() {
+        let top = LandingSite {
+            tech_level: i16::MAX,
+            ..port()
+        };
+        let mut slotted = port();
+        slotted.special_tech[2] = i16::MAX;
+        let ships = [tech(129, i16::MAX)];
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(listed_teching(&ships, &top, source), [129], "{source:?}");
+            assert_eq!(
+                listed_teching(&ships, &slotted, source),
+                [129],
+                "{source:?}"
+            );
+            assert_eq!(
+                listed_teching(&ships, &port(), source),
+                Vec::<i16>::new(),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_special_tech_slot_of_0_sells_a_ship_of_tech_0() {
+        let site = LandingSite {
+            tech_level: -5,
+            special_tech: [0, -1, 0, 0, 0, 0, 0, 0],
+            ..port()
+        };
+        let ships = [tech(129, 0), tech(130, -1), tech(131, 1)];
+        assert_eq!(listed_teching(&ships, &site, RuleSource::Engine), [129]);
+        assert_eq!(listed_teching(&ships, &site, RuleSource::Bible), [129, 130]);
+    }
+
+    #[test]
+    fn a_class_tech_forbids_draws_no_roll() {
+        let ships = [
+            ShipRecord {
+                tech_level: -1,
+                ..buying(129, 50)
+            },
+            buying(130, 40),
+        ];
+        let mut chance = Scripted::answering(&[true]);
+        let shipyard = rolled(&ships, &pilot(), &mut DayRolls::default(), &mut chance);
+        assert_eq!(chance.asked, [40], "the negative class draws nothing");
+        assert_eq!(listed(&shipyard), [130]);
+    }
+
+    #[test]
+    fn the_tech_rule_reads_tech_level_and_cites_the_listing() {
+        let value = tech_listed();
+        assert_eq!(value.about().reads(), Some(RuleKey::TechLevel));
+        assert_eq!(value.about().name(), "tech");
+        assert_eq!(
+            value.about().reproduces(),
+            "`_SetupPortAvailableShipTypes` @0xbc4b-0xbc72; `_LoadObjectData` @0x7a161-0x7a165"
+        );
+        assert!(!value.about().draws());
     }
 
     #[test]

@@ -692,7 +692,9 @@ fn vikings_shipyard_sells_what_its_tech_levels_and_buy_random_allow() {
     let never: Vec<_> = data
         .ships()
         .into_iter()
-        .filter(|ship| ship.buy_random <= 0 && nova_sim::wares::tech_allows(ship.tech_level, &site))
+        .filter(|ship| {
+            ship.buy_random <= 0 && nova_sim::wares::ship_tech_allows(ship.tech_level, &site)
+        })
         .map(|ship| ship.id)
         .collect();
     // Among them the Cargo Drone, `shïp` 130, of tech level 4.

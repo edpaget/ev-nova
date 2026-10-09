@@ -74,6 +74,7 @@
 //! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; [`Market::row_max`](crate::Market::row_max)) | exact integer division\*\*\* |
 //! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; [`Market::option_asks_count`](crate::Market::option_asks_count)) | Alt trades the most at once††† |
 //! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; [`Market::tons`](crate::Market::tons)) | cash below 0 counts as none‡‡‡ |
+//! | [`TechLevel`](RuleKey::TechLevel) | `tech_level` | an outfit of `TechLevel` below 0 or exactly 32767, and a ship of one below 0, is never sold by tech (`_SetupPortAvailableItems` @0xbf88-0xbf9d, `_SetupPortAvailableShipTypes` @0xbc4f-0xbc52; [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows), [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)) | any `TechLevel` at or below the stellar's, or equal to a slot, is sold ([`wares::by_tech_level`](crate::wares::by_tech_level)) |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -815,6 +816,27 @@ rule_keys! {
     /// so the other reading is the port's earlier behaviour, not anything
     /// the Bible says (see [`market`](crate::market)).
     TradeDebt => "trade_debt",
+    /// Whether an outfit or a ship class of a negative `TechLevel`, or an
+    /// outfit of 0x7fff, is sold by tech. By the engine, never: an outfit
+    /// is tested by tech only when its `TechLevel` is 0 or more and not
+    /// 0x7fff (`_SetupPortAvailableItems` @0xbf88-0xbf9d), and a ship
+    /// class only when 0 or more, with no 0x7fff test
+    /// (`_SetupPortAvailableShipTypes` @0xbc4b-0xbc52;
+    /// [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows),
+    /// [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)). By the
+    /// other reading, any `TechLevel` at or below the stellar's is sold.
+    /// The Bible's `oütf` says "This item will be available at all
+    /// spaceports with a tech level of this value or higher", its `shïp`
+    /// "This ship will be available at all shipyards with a tech level of
+    /// this value or higher", and its `spöb` `TechLevel` "Only items and
+    /// ships with `TechLevels` at or below this value will be available"
+    /// ([`wares::by_tech_level`](crate::wares::by_tech_level)). Under both
+    /// readings a `SpecialTech` slot is compared raw, 0 and below
+    /// included: the Bible's "only items and ships with exactly this
+    /// `TechLevel` will appear here" gives no exception, and the engine
+    /// makes none (@0xbfb2-0xbfbd, @0xbc67-0xbc72). The bar's hire list
+    /// follows the engine alone (see [`hire`](crate::hire)).
+    TechLevel => "tech_level",
 }
 
 impl RuleKey {
@@ -964,7 +986,13 @@ mod tests {
     fn the_trade_debt_rule_is_found_by_its_key() {
         assert_eq!(RuleKey::TradeDebt.key(), "trade_debt");
         assert_eq!(RuleKey::from_key("trade_debt"), Some(RuleKey::TradeDebt));
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::TradeDebt));
+    }
+
+    #[test]
+    fn the_tech_level_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::TechLevel.key(), "tech_level");
+        assert_eq!(RuleKey::from_key("tech_level"), Some(RuleKey::TechLevel));
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::TechLevel));
     }
 
     #[test]
@@ -1127,7 +1155,8 @@ mod tests {
                 RuleKey::TradeLot,
                 RuleKey::TradeQuotient,
                 RuleKey::TradeCount,
-                RuleKey::TradeDebt
+                RuleKey::TradeDebt,
+                RuleKey::TechLevel
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

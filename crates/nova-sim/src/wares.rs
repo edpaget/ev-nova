@@ -1,5 +1,6 @@
 //! The rules the outfitter and the shipyard share: what a stellar's tech
-//! level sells, whether an item's `Require` is met, which hiding flag hides
+//! level sells ([`by_tech_level`], behind the outfit's and the ship's
+//! own guards), whether an item's `Require` is met, which hiding flag hides
 //! it, the hide-higher sweep over `DispWeight`, and the order the rows go
 //! in.
 //!
@@ -125,15 +126,39 @@ impl<K: Ord> DayRolls<K> {
 }
 
 /// Whether an item of `tech_level` is for sale, by tech level alone, at
-/// `site`: at or below its `TechLevel`, or exactly one of its eight
-/// `SpecialTech` slots (a slot of 0 or below is unused).
+/// `site`: at or below its `TechLevel`, compared signed, or exactly one
+/// of its eight `SpecialTech` slots, each compared raw, so a slot of 0 or
+/// below matches an item of that tech too. Outfits and ships share it
+/// (`_SetupPortAvailableItems` @0xbfa7-0xbfbd,
+/// `_SetupPortAvailableShipTypes` @0xbc5c-0xbc72), each behind its own
+/// guard ([`outfit_tech_allows`], [`ship_tech_allows`]); it is the
+/// Bible's reading for both
+/// ([`RuleKey::TechLevel`](crate::RuleKey::TechLevel)).
 #[must_use]
-pub fn tech_allows(tech_level: i16, site: &LandingSite) -> bool {
-    tech_level <= site.tech_level
-        || site
-            .special_tech
-            .iter()
-            .any(|&slot| slot > 0 && slot == tech_level)
+pub fn by_tech_level(tech_level: i16, site: &LandingSite) -> bool {
+    tech_level <= site.tech_level || site.special_tech.contains(&tech_level)
+}
+
+/// The outfit `TechLevel` tech never sells: `_SetupPortAvailableItems`
+/// skips the tech test for it (`cmpw $0x7fff` @0xbf93).
+pub const OUTFIT_TECH_NEVER: i16 = i16::MAX;
+
+/// Whether an outfit of `tech_level` is for sale, by tech level alone, at
+/// `site`, as the engine reads it: never below 0 or at
+/// [`OUTFIT_TECH_NEVER`] (`_SetupPortAvailableItems` @0xbf88-0xbf9d),
+/// otherwise as [`by_tech_level`] says.
+#[must_use]
+pub fn outfit_tech_allows(tech_level: i16, site: &LandingSite) -> bool {
+    tech_level >= 0 && tech_level != OUTFIT_TECH_NEVER && by_tech_level(tech_level, site)
+}
+
+/// Whether a ship class of `tech_level` is for sale or hire, by tech
+/// level alone, at `site`, as the engine reads it: never below 0
+/// (`_SetupPortAvailableShipTypes` @0xbc4b-0xbc52, with no 0x7fff test),
+/// otherwise as [`by_tech_level`] says.
+#[must_use]
+pub fn ship_tech_allows(tech_level: i16, site: &LandingSite) -> bool {
+    tech_level >= 0 && by_tech_level(tech_level, site)
 }
 
 /// The `Contribute` bits of a ship contributing `ship`, carrying `owned`:
@@ -240,7 +265,7 @@ mod tests {
     fn the_tech_level_sells_up_to_it_and_special_tech_exactly() {
         let allowed: Vec<i16> = [-3, 0, 3, 4, 5, 6, 7, 55, 56]
             .into_iter()
-            .filter(|&level| tech_allows(level, &site()))
+            .filter(|&level| by_tech_level(level, &site()))
             .collect();
         assert_eq!(allowed, [-3, 0, 3, 4, 6, 55]);
         let unused = LandingSite {
@@ -248,9 +273,71 @@ mod tests {
             special_tech: [0, -1, 0, 0, 0, 0, 0, 0],
             ..site()
         };
-        assert!(!tech_allows(0, &unused));
-        assert!(!tech_allows(-1, &unused));
-        assert!(tech_allows(-5, &unused));
+        assert!(by_tech_level(0, &unused), "a slot of 0 matches");
+        assert!(by_tech_level(-1, &unused), "a slot of -1 matches");
+        assert!(by_tech_level(-5, &unused));
+    }
+
+    /// Tech level `tech_level`, with `slots` as its first special tech.
+    fn teching(tech_level: i16, slots: &[i16]) -> LandingSite {
+        let mut special_tech = [0; 8];
+        special_tech[..slots.len()].copy_from_slice(slots);
+        LandingSite {
+            tech_level,
+            special_tech,
+            ..site()
+        }
+    }
+
+    #[test]
+    fn an_outfit_below_tech_0_or_of_tech_0x7fff_is_never_sold_by_tech() {
+        let low = teching(5, &[-3]);
+        let high = teching(i16::MAX, &[i16::MAX]);
+        for level in [-3, -1, i16::MIN, i16::MAX] {
+            assert!(!outfit_tech_allows(level, &low), "{level} at 5");
+            assert!(!outfit_tech_allows(level, &high), "{level} at 0x7fff");
+        }
+        for level in [0, 5] {
+            assert!(outfit_tech_allows(level, &low), "{level} at 5");
+            assert!(outfit_tech_allows(level, &high), "{level} at 0x7fff");
+        }
+        assert!(!outfit_tech_allows(6, &low));
+        assert!(outfit_tech_allows(i16::MAX - 1, &high));
+        assert_eq!(OUTFIT_TECH_NEVER, 0x7fff);
+    }
+
+    #[test]
+    fn a_ship_below_tech_0_is_never_sold_by_tech_but_0x7fff_is() {
+        let slotted = teching(5, &[-3, -1, i16::MIN]);
+        for level in [-3, -1, i16::MIN] {
+            assert!(!ship_tech_allows(level, &slotted), "{level}");
+            assert!(by_tech_level(level, &slotted), "{level}: its slot");
+        }
+        assert!(ship_tech_allows(0, &slotted));
+        assert!(ship_tech_allows(5, &slotted));
+        assert!(!ship_tech_allows(6, &slotted));
+        assert!(ship_tech_allows(i16::MAX, &teching(i16::MAX, &[])));
+        assert!(ship_tech_allows(i16::MAX, &teching(5, &[i16::MAX])));
+        assert!(!ship_tech_allows(i16::MAX, &teching(5, &[])));
+    }
+
+    #[test]
+    fn a_special_tech_slot_of_0_sells_tech_0() {
+        let site = teching(-5, &[0, -1]);
+        assert!(outfit_tech_allows(0, &site));
+        assert!(ship_tech_allows(0, &site));
+    }
+
+    #[test]
+    fn by_tech_level_compares_every_slot_raw() {
+        let site = teching(-5, &[0, -1]);
+        for level in [0, -1, -5, -6] {
+            assert!(by_tech_level(level, &site), "{level}");
+        }
+        for level in [-4, 1] {
+            assert!(!by_tech_level(level, &site), "{level}");
+        }
+        assert!(by_tech_level(9, &teching(-5, &[0, 0, 0, 0, 0, 0, 0, 9])));
     }
 
     #[test]
