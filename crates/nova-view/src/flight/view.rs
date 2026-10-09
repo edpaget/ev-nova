@@ -2883,6 +2883,10 @@ mod tests {
         fan: bool,
         /// Every stellar a gate may lead to: none, by default.
         gates: Vec<GateSite>,
+        /// Whether Alpha Reborn (133) exists, at Alpha Centauri's place,
+        /// with no links and Proxima Reborn (141) at its centre: not by
+        /// default.
+        reborn: bool,
     }
 
     /// No strings unless a test sets them.
@@ -2965,6 +2969,7 @@ mod tests {
             defaults: Vec::new(),
             onward: false,
             fan: false,
+            reborn: false,
             gates: Vec::new(),
         }
     }
@@ -3044,7 +3049,9 @@ mod tests {
         /// Sol and Alpha Centauri; Barnard, which has no stellars, only
         /// when Alpha Centauri links on to it.
         fn system_exists(&self, id: SystemId) -> bool {
-            matches!(id.0, 130 | 131) || (id.0 == 132 && self.onward)
+            matches!(id.0, 130 | 131)
+                || (id.0 == 132 && self.onward)
+                || (id.0 == 133 && self.reborn)
         }
 
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
@@ -3052,6 +3059,7 @@ mod tests {
                 130 => self.sites.clone(),
                 131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
                 132 if self.onward => Vec::new(),
+                133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
                 other => panic!("asked for sÿst {other}'s sites"),
             }
         }
@@ -3066,11 +3074,15 @@ mod tests {
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
-            vec![
+            let mut systems = vec![
                 star(130, (0.0, 0.0), sol),
                 star(131, (600.0, 0.0), onward),
                 star(132, (0.0, 600.0), &[]),
-            ]
+            ];
+            if self.reborn {
+                systems.push(star(133, (600.0, 0.0), &[]));
+            }
+            systems
         }
 
         fn commodity_strings(&self) -> CommodityStrings {
@@ -3175,6 +3187,10 @@ mod tests {
                 ),
                 131 => ("Alpha Centauri", vec![stellar(140, "Proxima", (0, 0), 1)]),
                 132 if self.onward => ("Barnard", Vec::new()),
+                133 if self.reborn => (
+                    "Alpha Reborn",
+                    vec![stellar(141, "Proxima Reborn", (0, 0), 1)],
+                ),
                 other => panic!("asked for sÿst {other}"),
             };
             SystemContents {
@@ -3199,12 +3215,16 @@ mod tests {
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
+            let mut systems = vec![
+                entry(130, "Sol", (0, 0), sol),
+                entry(131, "Alpha Centauri", (600, 0), onward),
+                entry(132, "Barnard", (0, 600), &[]),
+            ];
+            if self.reborn {
+                systems.push(entry(133, "Alpha Reborn", (600, 0), &[]));
+            }
             Galaxy {
-                systems: vec![
-                    entry(130, "Sol", (0, 0), sol),
-                    entry(131, "Alpha Centauri", (600, 0), onward),
-                    entry(132, "Barnard", (0, 600), &[]),
-                ],
+                systems,
                 ..Galaxy::default()
             }
         }
@@ -10815,6 +10835,24 @@ mod tests {
         assert_eq!(player(&view), stepped(arrived, THRUST, 3));
         assert_ne!(player(&view).position, arrived.position, "it flies");
         assert!(translucent_fade(&drawn(&view)), "still fading in");
+    }
+
+    #[test]
+    fn a_hypergate_whose_gates_system_is_hidden_is_picked_by_the_one_at_its_place() {
+        let mut view = FlightView::new(FakeCatalog {
+            reborn: true,
+            ..gated()
+        });
+        change_galaxy(&mut view, hiding(131));
+        view.tick(TICK);
+        land_now(&mut view);
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        let reborn = on_map(&view, 133);
+        click(&mut view, reborn);
+        tap(&mut view, MAP);
+        assert_eq!(system_of(&view), SystemId(133));
+        assert_eq!(player(&view).position, Vec2::new(100.0, 200.0), "at 310");
+        assert_eq!(view.scene().map(SystemScene::name), Some("Alpha Reborn"));
     }
 
     #[test]

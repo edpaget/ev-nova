@@ -44,10 +44,14 @@
 //!
 //! A stellar's system is the lowest-ID system that lists it, and a link
 //! to a stellar no system lists leads nowhere: the original's
-//! `_FindSystemFromStellar` with every system active. The gate's exit is
-//! then resolved to a visible system as every arrival is (see the
-//! [`story`](crate::story) module's "Galaxy overlay"); choosing among
-//! several systems listing the same gate by visibility waits for the
+//! `_FindSystemFromStellar` with every system active. Under the galaxy
+//! overlay a hypergate offers, and leads to, the visible system standing
+//! for that system ([`hypergate_offers`]): the original resolves each link
+//! through `_FindActiveCoLocatedSystem` both to draw it (@0xf20f) and to
+//! take it (@0x638ed), and a link with no system visible at its place is
+//! neither drawn nor taken. The exit is then entered as every arrival is
+//! (see the [`story`](crate::story) module's "Galaxy overlay"). Choosing
+//! among several systems listing the same gate by visibility waits for the
 //! port to give every lister.
 //!
 //! Not modelled: the `dësc` QuickTime movie a gate may play
@@ -187,10 +191,35 @@ pub fn hypergate_destinations(links: &[Option<StellarId>; 8], sites: &[GateSite]
     systems
 }
 
+/// The systems a hypergate with `links` offers on the overlaid `map`: each
+/// of [`hypergate_destinations`] as the visible system standing for it
+/// ([`Places::stand_in`](crate::hyperspace::Places::stand_in)), in slot
+/// order, each once, and none for a destination with no system visible at
+/// its place, as `_DrawMap` resolves each link and skips -1
+/// (@0xf206-0xf21a).
+#[must_use]
+pub fn hypergate_offers(
+    links: &[Option<StellarId>; 8],
+    sites: &[GateSite],
+    map: &StarMap,
+) -> Vec<SystemId> {
+    let mut offers = Vec::new();
+    for system in hypergate_destinations(links, sites) {
+        if let Some(offer) = map.places().stand_in(system)
+            && !offers.contains(&offer)
+        {
+            offers.push(offer);
+        }
+    }
+    offers
+}
+
 /// The gate a hypergate with `links` leads to when the player picks
-/// `chosen`: the first link, in slot order, whose system is `chosen` or
-/// sits at its map position on `map`, as `_FindActiveCoLocatedSystem`
-/// resolves a system. `None` when no link leads there.
+/// `chosen`: the first link, in slot order, whose gate's system has a
+/// visible system standing for it on the overlaid `map` and is `chosen`
+/// or at its place, as `_PlayerEnterHypergate` resolves each link through
+/// `_FindActiveCoLocatedSystem` (@0x638e4-0x638ff). `None` when no link
+/// leads there.
 #[must_use]
 pub fn hypergate_exit<'a>(
     links: &[Option<StellarId>; 8],
@@ -198,10 +227,11 @@ pub fn hypergate_exit<'a>(
     chosen: SystemId,
     map: &StarMap,
 ) -> Option<&'a GateSite> {
-    let at = map.position(chosen);
-    exits(links, sites)
-        .into_iter()
-        .find(|exit| exit.system == chosen || (at.is_some() && map.position(exit.system) == at))
+    let places = map.places();
+    exits(links, sites).into_iter().find(|exit| {
+        places.stand_in(exit.system).is_some()
+            && (exit.system == chosen || places.together(exit.system, chosen))
+    })
 }
 
 /// The wormhole a ship entering wormhole `here`, in `current_system`,
@@ -381,6 +411,56 @@ mod tests {
         assert_eq!(exit(483), Some(1418));
         assert_eq!(exit(600), None, "no link leads there");
         assert_eq!(exit(999), None, "not on the map");
+    }
+
+    /// 1405 in 129, 1413 in 298 and 1414 in 541, which share a place, and
+    /// 1418 in 483, alone; 298 and 483 hidden.
+    fn hidden_listers() -> ([GateSite; 4], StarMap) {
+        let sites = [
+            gate_site(1405, 129, HYPERGATE, &[]),
+            gate_site(1413, 298, HYPERGATE, &[]),
+            gate_site(1414, 541, HYPERGATE, &[]),
+            gate_site(1418, 483, HYPERGATE, &[]),
+        ];
+        let map = StarMap::with_hidden(
+            vec![
+                star(129, (0.0, 0.0), &[]),
+                star(298, (100.0, 100.0), &[]),
+                star(483, (100.0, 0.0), &[]),
+                star(541, (100.0, 100.0), &[]),
+            ],
+            &[SystemId(298), SystemId(483)].into(),
+        );
+        (sites, map)
+    }
+
+    #[test]
+    fn a_hypergate_offers_the_visible_system_standing_for_each_linked_gates() {
+        let (sites, map) = hidden_listers();
+        let offers = |ids: &[i16]| hypergate_offers(&links(ids), &sites, &map);
+        assert_eq!(
+            offers(&[1413, 1405, 1418, 1414]),
+            [SystemId(541), SystemId(129)],
+            "298 by 541, once; 483 by none (@0xf20f-0xf21a)"
+        );
+        assert_eq!(offers(&[]), []);
+        let every = StarMap::new(vec![star(298, (100.0, 100.0), &[])]);
+        assert_eq!(
+            hypergate_offers(&links(&[1413, 1405]), &sites, &every),
+            [SystemId(298), SystemId(129)],
+            "with none hidden, its destinations"
+        );
+    }
+
+    #[test]
+    fn a_hypergate_leads_through_a_hidden_listers_gate_to_the_system_at_its_place() {
+        let (sites, map) = hidden_listers();
+        let slots = links(&[1413, 1418, 1405]);
+        let exit = |chosen| hypergate_exit(&slots, &sites, SystemId(chosen), &map).map(|s| s.id.0);
+        assert_eq!(exit(541), Some(1413), "standing for 298 (@0x638ed)");
+        assert_eq!(exit(298), Some(1413), "298 itself");
+        assert_eq!(exit(483), None, "no system visible at its place");
+        assert_eq!(exit(129), Some(1405));
     }
 
     #[test]

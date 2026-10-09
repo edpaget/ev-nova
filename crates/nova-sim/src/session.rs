@@ -1952,7 +1952,8 @@ impl Session {
     /// Decides whether the hypergate whose entry is pending opens the
     /// hypergate map, read from `catalog`'s gate sites. A hypergate with
     /// links ([`has_links`], as `_StellarNumHyperLinks` counts them) offers
-    /// the systems its links lead to ([`gate::hypergate_destinations`]) for
+    /// the systems its links lead to, each as the visible system standing
+    /// for it on the overlaid map ([`gate::hypergate_offers`]), for
     /// the player to choose among, and the entry awaits
     /// [`Session::enter_hypergate`]: even when none leads anywhere, the
     /// map opens with nothing to pick, and closing it cancels. One without
@@ -1971,7 +1972,7 @@ impl Session {
         let sites = catalog.gate_sites();
         let links = Self::links_of(&sites, here);
         if has_links(&links) {
-            Ok(gate::hypergate_destinations(&links, &sites))
+            Ok(gate::hypergate_offers(&links, &sites, self.galaxy.map()))
         } else {
             self.gate = None;
             self.nav_target = None;
@@ -14699,6 +14700,38 @@ mod tests {
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
         assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn a_hypergate_offers_and_takes_the_system_standing_for_a_hidden_listers_gate() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        let mut session = at_gate(&catalog);
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Ok(ids(&[134, 132])),
+            "134 stands for 131"
+        );
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(134)), &catalog, &mut NeverFires),
+            Ok(SystemId(134))
+        );
+        assert_eq!(session.player().position, Vec2::new(100.0, 200.0), "at 310");
+        assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn a_hypergate_neither_offers_nor_takes_a_link_with_no_system_visible_at_its_place() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        let mut session = at_gate(&catalog);
+        hide(&mut session, &catalog, &[131, 134]);
+        assert_eq!(session.open_hypergate(&catalog), Ok(ids(&[132])));
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Err(GateRefusal::Cancelled)
+        );
     }
 
     #[test]
