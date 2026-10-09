@@ -536,10 +536,12 @@ mod tests {
     }
 
     #[test]
-    fn by_the_engine_a_relisting_that_repeats_a_listing_with_other_counts_goes_on() {
+    fn by_the_engine_a_relisting_that_alternates_its_listing_sells_until_none_is_left() {
         // Each sale toggles bit 7, so every sale relists, the listing
-        // alternating; the counts owned fall each time, so no restart
-        // repeats one before and all four blasters are sold.
+        // alternating, and the passes restart on the blaster. The counts
+        // owned fall with each sale, so the order sells all four blasters,
+        // well under the restart ceiling, and the pass after the last
+        // finds none.
         let mut session = selling_blasters("^b7", 4, crate::RuleSource::Engine);
         let order = session.outfit_order(sell(BLASTER), 3, &mut Scripted::default());
         assert_eq!(order.run.done, 4);
