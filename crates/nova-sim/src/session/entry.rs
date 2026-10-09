@@ -41,7 +41,6 @@ pub(super) enum Entry {
     #[cfg_attr(not(test), expect(dead_code))]
     Gate,
     /// `M` or `N`, landed or in flight.
-    #[cfg_attr(not(test), expect(dead_code))]
     ScriptMove { landed: bool },
     /// The developer tools' move, landed.
     Relocate,
@@ -80,7 +79,6 @@ pub(super) enum ShipPlacement {
     /// At rest at this position, its heading kept.
     AtRest(Vec2),
     /// Where it is, as it is.
-    #[cfg_attr(not(test), expect(dead_code))]
     Keep,
 }
 

@@ -137,9 +137,8 @@
 //! for missions, and the first stellar is the first of
 //! [`PilotCatalog::landing_sites`] until stellars can be destroyed.
 
-use std::collections::BTreeSet;
-
 use super::Session;
+use super::entry::{Arrival, Entry, Placement, ShipPlacement};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::{SetOp, SetOpHandler};
@@ -289,8 +288,9 @@ impl Session {
     }
 
     /// Moves the player to `system`, keeping the position when `keep`
-    /// (`N`) or else at its first stellar (`M`), read from `catalog` (see
-    /// the module docs).
+    /// (`N`) or else at its first stellar (`M`), read from `catalog`, and
+    /// enters it as a move (see the module docs): only the placement is
+    /// chosen here.
     fn move_to(
         &mut self,
         system: SystemId,
@@ -304,70 +304,26 @@ impl Session {
             .map(|site| (site.position, is_dockable(site).then_some(site.id)));
         let rules = self.script_effect_rules();
         let landed = self.landed.is_some();
-        if keep {
-            self.hold_position |= landed || rules.keep_flag == RuleSource::Engine;
-        }
-        let changed = system != self.pilot.system;
-        self.pilot.system = system;
-        self.save_due = true;
-        if landed {
-            self.pilot.stellar = None;
-            if !keep {
-                self.player.position = first.map_or(Vec2::ZERO, |(position, _)| position);
-                self.player.velocity = Vec2::ZERO;
-                self.pilot.stellar = first.and_then(|(_, dock)| dock);
+        let ship = match first {
+            _ if keep => ShipPlacement::Keep,
+            Some((position, _)) => ShipPlacement::AtRest(position),
+            None if landed || rules.starless == RuleSource::Bible => {
+                ShipPlacement::AtRest(Vec2::ZERO)
             }
-            self.next_sites = Some(sites);
-            if rules.arrival == RuleSource::Bible {
-                self.pilot.explore(system);
-                self.pilot.course.clear();
-            }
-            return;
-        }
-        if !keep {
-            match first {
-                Some((position, _)) => self.put_at_rest(position),
-                None if rules.starless == RuleSource::Bible => self.put_at_rest(Vec2::ZERO),
-                None => {}
-            }
-        }
-        if changed {
-            self.pilot.stellar = None;
-        }
-        self.sites = sites;
-        if self.jump.take().is_some() {
-            self.stop_thrust();
-        }
-        self.leave_scene();
-        if rules.arrival == RuleSource::Bible {
-            self.pilot.explore(system);
-            self.pilot.course.clear();
-            self.leave_with_fighters(false);
-            self.populate(catalog, chance);
-        } else if changed {
-            let table = self.spawn_table(catalog);
-            let fleet: BTreeSet<_> = self.fleet.iter().flatten().copied().collect();
-            self.traffic.retarget(table, &fleet);
-        }
-    }
-
-    /// Puts the ship at rest at `position`.
-    fn put_at_rest(&mut self, position: Vec2) {
-        self.player.position = position;
-        self.player.velocity = Vec2::ZERO;
-    }
-
-    /// Lets go of what belongs to the scene left: the navigation target,
-    /// a gate's pending entry, the shots and beams, the strikes, the
-    /// player's target, the boarding and the hail.
-    pub(super) fn leave_scene(&mut self) {
-        self.nav_target = None;
-        self.gate = None;
-        self.combat.clear();
-        self.strikes.clear();
-        self.target = None;
-        self.aboard = None;
-        self.talk = None;
+            None => ShipPlacement::Keep,
+        };
+        let stellar = first.and_then(|(_, dock)| dock).filter(|_| landed && !keep);
+        let placement = Placement {
+            ship,
+            stellar,
+            hold: keep && (landed || rules.keep_flag == RuleSource::Engine),
+        };
+        let arrival = Arrival {
+            system,
+            sites,
+            placement,
+        };
+        self.enter_system(Entry::ScriptMove { landed }, arrival, catalog, chance);
     }
 }
 
