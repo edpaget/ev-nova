@@ -360,6 +360,7 @@ use crate::market::{
 };
 use crate::message::SimMessage;
 use crate::navigation::stellar_under;
+use crate::order_loop::{self, OrderRun};
 use crate::outfitter::{
     self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
 };
@@ -2157,8 +2158,34 @@ impl Session {
     /// due, and the stats change with it. The outfit's `OnPurchase` or
     /// `OnSell` runs once, drawing on `chance` too (see the `hooks`
     /// module). When the ship is not landed at an outfitter, or the order
-    /// is refused, nothing changes and the refusal says why.
+    /// is refused, nothing changes and the refusal says why. It is the
+    /// order loop with a count of 1, as a plain click is (@0x5c69f; see
+    /// [`outfit_counted`](Self::outfit_counted)).
     pub fn outfit(
+        &mut self,
+        order: OutfitOrder,
+        chance: &mut dyn Chance,
+    ) -> Result<(), OutfitRefusal> {
+        self.outfit_run(order, 1, chance).counted().map(|_| ())
+    }
+
+    /// Runs the order loop ([`order_loop::run`]) for `count` of `order`,
+    /// each pass an [`outfit_pass`](Self::outfit_pass), and gives where
+    /// and why it stopped.
+    fn outfit_run(
+        &mut self,
+        order: OutfitOrder,
+        count: u32,
+        chance: &mut dyn Chance,
+    ) -> OrderRun<OutfitRefusal> {
+        order_loop::run(count, |_pass| self.outfit_pass(order, chance))
+    }
+
+    /// One pass of an outfit order: builds the outfitter afresh, drawing
+    /// on `chance` any roll not drawn yet, checks `order` against it and,
+    /// when it goes through, buys or sells one (see
+    /// [`outfit`](Self::outfit)).
+    fn outfit_pass(
         &mut self,
         order: OutfitOrder,
         chance: &mut dyn Chance,
@@ -2197,9 +2224,10 @@ impl Session {
         Ok(())
     }
 
-    /// Buys or sells up to `count` of an outfit as `order` asks, one
-    /// [`outfit`](Self::outfit) order at a time, and stops at the first
-    /// refusal, as `_DoOutfitDialog`'s loops do: the buy loop
+    /// Buys or sells up to `count` of an outfit as `order` asks, through
+    /// the order loop ([`order_loop::run`]) one pass at a time, each
+    /// checked as a single [`outfit`](Self::outfit) order is, and stops
+    /// at the first refusal, as `_DoOutfitDialog`'s loops do: the buy loop
     /// (@0x5c1bd-0x5c2ff) re-runs `_CanBuyOutfitItem` after each grant,
     /// and the sell loop (@0x5c6ee-0x5d1b1) checks each sale afresh, so
     /// each pass here is checked as a single order is. It gives how many
@@ -2214,15 +2242,7 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> Result<u32, OutfitRefusal> {
-        let mut done = 0;
-        while done < count {
-            match self.outfit(order, chance) {
-                Ok(()) => done += 1,
-                Err(refusal) if done == 0 => return Err(refusal),
-                Err(_) => break,
-            }
-        }
-        Ok(done)
+        self.outfit_run(order, count, chance).counted()
     }
 
     /// The shipyard of the stellar the ship is docked at, if it has landed
@@ -6657,6 +6677,7 @@ mod tests {
     // The outfitter.
 
     use crate::catalog::{GovtId, OutfitRecord};
+    use crate::order_loop::{OrderRun, Stopped};
     use crate::outfitter::{OutfitFlags, OutfitOrder, OutfitRefusal};
     use crate::stats::{MORE_FUEL, MORE_SHIELD, MORE_SPEED};
 
@@ -7119,6 +7140,62 @@ mod tests {
         );
         assert_eq!(session.pilot(), &before);
         assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_single_order_and_a_counted_order_of_one_take_the_same_loop() {
+        let mut mapped = outfitted(&limiting());
+        mapped.outfit(buy(MAP), &mut NeverFires).expect("bought");
+        let mut owning = outfitted(&outfitting());
+        owning.outfit(buy(SPEED), &mut NeverFires).expect("bought");
+        let cases = [
+            (outfitted(&outfitting()), buy(SPEED), Ok(1)),
+            (
+                mapped,
+                buy(OTHER_MAP),
+                Err(OutfitRefusal::BoughtThisOpening),
+            ),
+            (owning, sell(SPEED), Ok(1)),
+        ];
+        for (session, order, expected) in cases {
+            let (mut single, mut counted, mut run) = (session.clone(), session.clone(), session);
+            let one = single.outfit(order, &mut NeverFires);
+            assert_eq!(one.map(|()| 1), expected, "{order:?}");
+            assert_eq!(
+                counted.outfit_counted(order, 1, &mut NeverFires),
+                expected,
+                "{order:?}"
+            );
+            assert_eq!(
+                run.outfit_run(order, 1, &mut NeverFires).counted(),
+                expected,
+                "{order:?}"
+            );
+            assert!(single == counted && counted == run, "{order:?}");
+        }
+    }
+
+    #[test]
+    fn a_counted_order_refused_part_way_keeps_its_refusal_in_the_run() {
+        let mut session = outfitted(&outfitting());
+        let mut counted = session.clone();
+        let run = session.outfit_run(buy(SPEED), 12, &mut NeverFires);
+        let refusal = session
+            .outfitter(&mut NeverFires)
+            .expect("open")
+            .can(buy(SPEED))
+            .expect_err("refused at the max");
+        assert_eq!(
+            run,
+            OrderRun {
+                done: 10,
+                stopped: Some(Stopped { pass: 10, refusal }),
+            }
+        );
+        assert_eq!(
+            counted.outfit_counted(buy(SPEED), 12, &mut NeverFires),
+            Ok(10)
+        );
     }
 
     const MAP: OutfitId = OutfitId(306);
