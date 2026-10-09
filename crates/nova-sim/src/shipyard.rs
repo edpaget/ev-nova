@@ -30,7 +30,10 @@
 //! [`Chance`] the first time the list is built after a landing, by
 //! ascending ID and only for a class that tech allows whose reading is a
 //! chance of 1-99, and kept until the next landing or until the class is
-//! bought or declined. The original builds the list once each time the
+//! bought or declined. The build settles a class's `Require` and
+//! `Availability` before its roll and tests `HideHigher` after it, so a
+//! class whose `Require` is unmet, or one `HideHigher` takes off sale,
+//! still draws; the build loop draws, and no rule does. The original builds the list once each time the
 //! shipyard opens (`_SetupPortAvailableShipTypes`, called only @0x5e68f),
 //! so a roll drawn again after a purchase or a decline is drawn the next
 //! time the list is built, and until then the class can be bought as
@@ -120,6 +123,17 @@
 //! the date, the course, its legal records and the events under way)
 //! stays as it was.
 //!
+//! # The rules
+//!
+//! The listing reads value rules over each class as the shipyard is built
+//! (`required`, `available`, `day_roll` on
+//! [`RuleKey::BuyRandom`](crate::RuleKey::BuyRandom), `price`) and over
+//! the ship flown (`trade_in_value` on
+//! [`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits)), and
+//! settles in each row's [`ShipFacts`] whether the class can be bought
+//! here at all. [`Shipyard::can`] answers from the checks list `can_buy`:
+//! "for sale", then "cash". No rule draws.
+//!
 //! # Naming the ship
 //!
 //! The original asks for the new ship's name *before* it buys it: Buy
@@ -187,7 +201,7 @@ use crate::market::{EscortHolds, Good, escort_tons, fleet_holds};
 use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_price};
 use crate::pilot::{Pilot, merged, tally};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::rules::{Check, Checks, Context};
+use crate::rules::{Check, Checks, Context, Value};
 use crate::stats::ShipStats;
 use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll};
 
@@ -477,26 +491,19 @@ pub(crate) struct Yard<'a> {
 }
 
 impl Yard<'_> {
-    /// What `pilot`'s ship trades in for; a class with no record has no
-    /// `Cost`.
-    pub(crate) fn trade_in(&self, pilot: &Pilot) -> i64 {
-        let cost = self
-            .ships
-            .iter()
-            .find(|ship| ship.id == pilot.ship)
-            .map_or(0, |ship| ship.cost);
-        trade_in(
-            cost,
-            self.fields.mass,
-            &pilot.outfits,
-            self.outfits,
-            self.rules.source_for(RuleKey::TradeInOutfits),
-        )
-    }
-
     /// The shipyard, for `pilot`, each class's roll for the day kept in
-    /// `rolls` and any not drawn yet drawn on `chance` (see the module
-    /// docs); `None` when the stellar has none.
+    /// `rolls` and any not drawn yet drawn on `chance`; `None` when the
+    /// stellar has none.
+    ///
+    /// The draw order: the classes are walked by ascending ID; for each,
+    /// [`required`] and [`available`] are settled first (no draw), then
+    /// its tech level; only when tech allows is `rolls` asked for the
+    /// class's [`day_roll`], which draws once on `chance`, and only for a
+    /// roll of 1-99 not already kept; `HideHigher` is tested after the
+    /// roll. So a class `HideHigher` takes off sale, or one whose
+    /// `Require` is unmet, still draws; one tech forbids does not, nor
+    /// does a roll of always or never. No rule draws: the buy checks, the
+    /// value rules and the purchase never ask `chance`.
     pub(crate) fn shipyard(
         &self,
         pilot: &Pilot,
@@ -507,20 +514,21 @@ impl Yard<'_> {
             return None;
         }
         let contributed = wares::contributed(self.fields.contribute, &pilot.outfits, self.outfits);
-        let trade_in = self.trade_in(pilot);
+        let trade_in = trade_in_value().of(&Flown { yard: self, pilot });
         let mut sorted: Vec<&ShipRecord> = self.ships.iter().collect();
         sorted.sort_by_key(|ship| ship.id);
         let mut sweep = HideHigher::default();
         let mut rows = Vec::new();
         for ship in sorted {
-            let required = wares::requirement_met(ship.require, contributed);
-            let available = self.gate.allows(&ship.availability);
+            let offer = ShipOffer {
+                yard: self,
+                ship,
+                contributed,
+            };
+            let required = required().of(&offer);
+            let available = available().of(&offer);
             let for_sale = wares::tech_allows(ship.tech_level, self.site)
-                && rolls.today(
-                    ship.id,
-                    buy_roll(ship.buy_random, self.rules.source_for(RuleKey::BuyRandom)),
-                    chance,
-                )
+                && rolls.today(ship.id, day_roll().of(&offer), chance)
                 && sweep.on_sale(ship.disp_weight);
             let buyable = for_sale && required && available;
             sweep.note(
@@ -531,14 +539,13 @@ impl Yard<'_> {
             if !for_sale || wares::hidden(ship.flags3, HIDE_BITS, required, available) {
                 continue;
             }
-            let price = ship_price(ship);
             rows.push((
                 ship.disp_weight,
                 ShipRow {
                     id: ship.id,
                     name: ship.name.clone(),
                     short_name: ship.short_name.clone(),
-                    price,
+                    price: price().of(&offer),
                     specs: ShipSpecs {
                         fields: ship.fields,
                         max_gun: ship.max_gun,
@@ -559,6 +566,147 @@ impl Yard<'_> {
             rules: self.rules,
         })
     }
+}
+
+/// One ship class asked about as the shipyard is built: the facts the
+/// listing's value rules read.
+struct ShipOffer<'a> {
+    /// The yard: the site, the gate and the rule set.
+    yard: &'a Yard<'a>,
+    /// The class.
+    ship: &'a ShipRecord,
+    /// The `Contribute` bits of the ship flown and every outfit owned.
+    contributed: u64,
+}
+
+impl Context for ShipOffer<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        &self.yard.rules
+    }
+}
+
+/// The ship flown, asked what it trades in for.
+struct Flown<'a> {
+    /// The yard: every `shïp` and `oütf`, the ship's fields and the rule
+    /// set.
+    yard: &'a Yard<'a>,
+    /// The pilot: the class flown and the outfits owned.
+    pilot: &'a Pilot,
+}
+
+impl Context for Flown<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        &self.yard.rules
+    }
+}
+
+/// Whether a class's `Require` is met: a `shïp` has no `RequireGovt`, so
+/// it applies everywhere.
+fn required<'a>() -> Value<ShipOffer<'a>, bool> {
+    Value::plain(
+        "required",
+        "`_CalcShipCanBuy` @0x4f80a-0x4f840 (`_PlayerMeetsRequirements` @0x4f833); \
+         `_SetupPortAvailableShipTypes` @0xbce7-0xbd2b",
+        requirement_met,
+    )
+}
+
+/// Each of the class's `Require` bits is contributed.
+fn requirement_met(offer: &ShipOffer) -> bool {
+    wares::requirement_met(offer.ship.require, offer.contributed)
+}
+
+/// Whether a class's `Availability` holds, asked through the gate.
+fn available<'a>() -> Value<ShipOffer<'a>, bool> {
+    Value::plain(
+        "available",
+        "`_CalcShipCanBuy` @0x4f8e3-0x4f90a (`_EvalMissionBitTestString` @0x4f901); \
+         `_SetupPortAvailableShipTypes` @0xbd33-0xbd5b",
+        gate_allows,
+    )
+}
+
+/// The gate allows the class's `Availability`.
+fn gate_allows(offer: &ShipOffer) -> bool {
+    offer.yard.gate.allows(&offer.ship.availability)
+}
+
+/// How a class rolls for sale today, as
+/// [`RuleKey::BuyRandom`](crate::RuleKey::BuyRandom) reads its
+/// `BuyRandom` ([`buy_roll`]): the odds, not a draw.
+fn day_roll<'a>() -> Value<ShipOffer<'a>, Roll> {
+    Value::disputed(
+        "day roll",
+        "`_SetupPortAvailableShipTypes` @0xbc88-0xbc9d; `_LoadObjectData` @0x7a340-0x7a34a",
+        RuleKey::BuyRandom,
+        engine_day_roll,
+        bible_day_roll,
+    )
+}
+
+/// The engine's roll: below 0 is always.
+fn engine_day_roll(offer: &ShipOffer) -> Roll {
+    buy_roll(offer.ship.buy_random, RuleSource::Engine)
+}
+
+/// The Bible's roll: 0 or below is never.
+fn bible_day_roll(offer: &ShipOffer) -> Roll {
+    buy_roll(offer.ship.buy_random, RuleSource::Bible)
+}
+
+/// A class's price ([`ship_price`]).
+fn price<'a>() -> Value<ShipOffer<'a>, i64> {
+    Value::plain(
+        "price",
+        "`shïp` `Cost` (`_CalcShipCanBuy` @0x4f74b-0x4f751), without its \
+         `_ApplyPriceAndTechnologyFlux`, which is not modelled",
+        cost_price,
+    )
+}
+
+/// The class's `Cost`, never below none.
+fn cost_price(offer: &ShipOffer) -> i64 {
+    ship_price(offer.ship)
+}
+
+/// What the ship flown trades in for, as
+/// [`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits) says
+/// ([`trade_in`]); a class with no record has no `Cost`.
+fn trade_in_value<'a>() -> Value<Flown<'a>, i64> {
+    Value::disputed(
+        "trade-in",
+        "`_PlayerShipTradeInPrice` @0xb079-0xb144, the persistent byte @0xb0da-0xb0e1",
+        RuleKey::TradeInOutfits,
+        engine_trade_in,
+        bible_trade_in,
+    )
+}
+
+/// The engine's trade-in: an unsellable outfit counts.
+fn engine_trade_in(flown: &Flown) -> i64 {
+    flown_trade_in(flown, RuleSource::Engine)
+}
+
+/// The Bible's trade-in: an unsellable outfit adds nothing.
+fn bible_trade_in(flown: &Flown) -> i64 {
+    flown_trade_in(flown, RuleSource::Bible)
+}
+
+/// What the ship flown trades in for, read as `source` says.
+fn flown_trade_in(flown: &Flown, source: RuleSource) -> i64 {
+    let yard = flown.yard;
+    let cost = yard
+        .ships
+        .iter()
+        .find(|ship| ship.id == flown.pilot.ship)
+        .map_or(0, |ship| ship.cost);
+    trade_in(
+        cost,
+        yard.fields.mass,
+        &flown.pilot.outfits,
+        yard.outfits,
+        source,
+    )
 }
 
 /// The name prompt's opening words, `STR#` 2002 #120.
@@ -1010,6 +1158,46 @@ mod tests {
         let shipyard = rolled(&ships, &pilot(), &mut DayRolls::default(), &mut chance);
         assert_eq!(chance.asked, [20, 30], "by ascending ID");
         assert_eq!(listed(&shipyard), [130, 131]);
+    }
+
+    #[test]
+    fn the_listing_draws_each_classs_roll_by_ascending_id() {
+        let ships = [
+            buying(133, 30),
+            ShipRecord {
+                disp_weight: 5,
+                ..buying(131, 50)
+            },
+            ShipRecord {
+                tech_level: 9,
+                ..buying(132, 70)
+            },
+            ShipRecord {
+                require: 0x2,
+                ..buying(130, 40)
+            },
+            buying(134, 0),
+            ShipRecord {
+                disp_weight: 5,
+                flags3: ShipFlags3::HIDE_HIGHER,
+                ..buying(129, 100)
+            },
+            buying(135, 100),
+        ];
+        let mut rolls = DayRolls::default();
+        let mut chance = Scripted::answering(&[true, true, true]);
+        let shipyard = rolled(&ships, &pilot(), &mut rolls, &mut chance);
+        assert_eq!(
+            chance.asked,
+            [40, 50, 30],
+            "by ascending ID: 130 though its Require is unmet, 131 though HideHigher \
+             takes it off; not 132, which tech forbids, nor 129, 134 or 135, which \
+             are always or never"
+        );
+        assert_eq!(listed(&shipyard), [129, 130, 133, 135]);
+        let mut again = Scripted::default();
+        rolled(&ships, &pilot(), &mut rolls, &mut again);
+        assert!(again.asked.is_empty(), "a second build draws nothing");
     }
 
     #[test]
@@ -1483,6 +1671,28 @@ mod tests {
     }
 
     #[test]
+    fn the_trade_in_value_reads_trade_in_outfits() {
+        let ships = [ShipRecord {
+            cost: 10_000,
+            ..ship(128, FAST)
+        }];
+        let records = upgrades();
+        let site = port();
+        let pilot = owning(&[(130, 1)]);
+        let trade_in = |source| {
+            Yard {
+                rules: Rulebook::default().with_override(RuleKey::TradeInOutfits, source),
+                ..yard(&ships, &records, &site)
+            }
+            .shipyard(&pilot, &mut DayRolls::default(), &mut NeverFires)
+            .expect("a shipyard")
+            .trade_in
+        };
+        assert_eq!(trade_in(RuleSource::Engine), 2500 + 1500);
+        assert_eq!(trade_in(RuleSource::Bible), 2500, "unsellable");
+    }
+
+    #[test]
     fn a_buy_is_refused_when_cash_and_trade_in_do_not_cover_the_price() {
         let ships = [
             ShipRecord {
@@ -1620,11 +1830,53 @@ mod tests {
     #[test]
     fn each_disputed_shipyard_rule_names_its_key() {
         assert_eq!(keys(&can_buy()), [None, None]);
+        assert_eq!(day_roll().about().reads(), Some(RuleKey::BuyRandom));
+        assert_eq!(
+            trade_in_value().about().reads(),
+            Some(RuleKey::TradeInOutfits)
+        );
+        for plain in [*required().about(), *available().about(), *price().about()] {
+            assert_eq!(plain.reads(), None, "{}", plain.name());
+        }
+    }
+
+    #[test]
+    fn the_shipyard_value_rules_cite_the_originals_addresses() {
+        let cited = [
+            required().about().reproduces(),
+            available().about().reproduces(),
+            day_roll().about().reproduces(),
+            price().about().reproduces(),
+            trade_in_value().about().reproduces(),
+        ];
+        assert_eq!(
+            cited,
+            [
+                "`_CalcShipCanBuy` @0x4f80a-0x4f840 (`_PlayerMeetsRequirements` @0x4f833); \
+                 `_SetupPortAvailableShipTypes` @0xbce7-0xbd2b",
+                "`_CalcShipCanBuy` @0x4f8e3-0x4f90a (`_EvalMissionBitTestString` @0x4f901); \
+                 `_SetupPortAvailableShipTypes` @0xbd33-0xbd5b",
+                "`_SetupPortAvailableShipTypes` @0xbc88-0xbc9d; `_LoadObjectData` \
+                 @0x7a340-0x7a34a",
+                "`shïp` `Cost` (`_CalcShipCanBuy` @0x4f74b-0x4f751), without its \
+                 `_ApplyPriceAndTechnologyFlux`, which is not modelled",
+                "`_PlayerShipTradeInPrice` @0xb079-0xb144, the persistent byte @0xb0da-0xb0e1",
+            ]
+        );
     }
 
     #[test]
     fn no_shipyard_rule_draws() {
         for about in can_buy().descriptors() {
+            assert!(!about.draws(), "{}", about.name());
+        }
+        for about in [
+            *required().about(),
+            *available().about(),
+            *day_roll().about(),
+            *price().about(),
+            *trade_in_value().about(),
+        ] {
             assert!(!about.draws(), "{}", about.name());
         }
     }
