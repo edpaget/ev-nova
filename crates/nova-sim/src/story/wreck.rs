@@ -1,8 +1,9 @@
 //! A stellar's destruction and regeneration, as the original's
-//! `_EvalSetExp` (`Y` @0x15a38-0x15ae6) and its day's stellars
+//! `_EvalSetExp` (`Y` @0x15a38-0x15ae6), its shots
+//! (`_CheckShotProximities` @0x371bc-0x37775) and its day's stellars
 //! (`_IncrementGameTime` @0xb5c4-0xb71e) count them: pure rules over a
-//! stellar's [`StellarLife`] and its [`Countdown`]. See the module docs'
-//! "Checked for phase 5".
+//! stellar's [`StellarLife`], its strength and its [`Countdown`]. See the
+//! module docs' "Checked for phase 5" and "Checked for phase 8".
 
 use std::ops::RangeInclusive;
 

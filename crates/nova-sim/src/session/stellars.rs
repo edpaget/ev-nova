@@ -10,9 +10,12 @@
 //!   `Y` restarts the countdown (@0x15ac8-0x15ade). By
 //!   [`RuleKey::DestroyInvincible`]'s engine reading an invincible stellar
 //!   (`Strength` 0 or -1) is left as it was. A stellar with no record, or
-//!   outside the original's slots, 128 to 2175, is left alone. It runs no
-//!   `OnDestroy`, and its explosion waits for the stellars destroyed by
-//!   shots (story-runtime phase 8).
+//!   outside the original's slots, 128 to 2175, is left alone. When the
+//!   stellar is among those shown in flight and was not destroyed before,
+//!   it makes the stellar's explosion at its centre, invincible or not
+//!   (@0x15a59-0x15ab4). By [`RuleKey::YOnDestroy`]'s engine reading it
+//!   runs no `OnDestroy`; by the Bible's it runs it once it has destroyed
+//!   a whole stellar.
 //! - `Uxxx` regenerates the stellar at once and runs no `OnRegen`, which
 //!   runs only as it regenerates on its own (@0x15aeb-0x15b20).
 //!
@@ -20,9 +23,23 @@
 //! a day, by ascending ID (@0xb5c4-0xb71e): one of negative `DeadTime`
 //! stays destroyed for ever; any other regenerates once its countdown
 //! reaches 0, and runs its `OnRegen` there and then (@0xb6ee), so a
-//! `DayPassed` subscription that day sees what it set. A whole stellar's
-//! daily repair (@0xb700) has nothing to repair: stellars take no damage
-//! until shots can destroy them (story-runtime phase 8).
+//! `DayPassed` subscription that day sees what it set. It repairs every
+//! whole stellar first (@0xb700): nothing damages one within a day, so
+//! forgetting all the damage at once is the original's pass by index.
+//!
+//! **Shots.** The fight's tick ([`Session::tick_combat`]) hands the
+//! combat the stellars shown that shots can hit (whole, of `Strength`
+//! above 0, with a sprite, as big as their disc), each with its current
+//! strength, and keeps what the shots leave of it: the session holds the
+//! current strength only of a whole stellar that has taken damage, never
+//! saved, as the original saves none (@0x72ad0-0x72aff). `Y` and `U`
+//! forget it. A stellar a shot takes below 0 is shot down
+//! (`_CheckShotProximities` @0x37409-0x3751f): its explosion at its
+//! centre, destroyed with the countdown `Y` gives it, then its `OnDestroy`
+//! at once, its `M`, `N`, `Q` and `S` deferred to the next settling as any
+//! hook's are, and destroyed with that countdown again whatever the
+//! script did. A shot of the player's convicts it ten times of killing a
+//! ship of the stellar's government, as overlaid; an NPC's convicts no one.
 //!
 //! A new pilot ([`Session::begin`]) starts with every stellar whose
 //! `Flags2` has 0x0040 destroyed, with the countdown `Y` gives it, before

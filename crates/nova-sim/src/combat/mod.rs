@@ -25,6 +25,8 @@
 //!   may hit.
 //! - [`report`]: the [`SimDiagnostic`](report::SimDiagnostic)s a session
 //!   reports once each about game data it does not handle yet.
+//! - [`stellar`]: which shots hit a destroyable stellar, and what they
+//!   take off it.
 //! - [`submunition`]: the shots a shot releases on a hit and at the end
 //!   of its life.
 //!
@@ -56,6 +58,18 @@
 //!    life detonates (blasting the same way) or vanishes, and releases its
 //!    sub-munitions at its own target; a beam damages the nearest ship
 //!    along it, every tick, until its life is over.
+//!
+//!    7b. Each planet-type shot still in flight, past its `ProxSafety`,
+//!    that met a stellar still standing among those the session hands
+//!    the tick ([`StellarTarget`]) is spent on it: it explodes where it
+//!    hit, with no blast and no sub-munitions, and takes its mass and
+//!    energy damage off the stellar's strength. A stellar below 0 is
+//!    skipped by the later shots. This comes after the ship hits and the
+//!    expiries, as the original's stellar check (`_CheckShotProximities`
+//!    @0x44015) comes after its ship collision passes; beams never hit a
+//!    stellar. The session takes each hit as a [`StellarStrike`]
+//!    ([`Combat::take_stellar_strikes`]) and shoots down those it
+//!    destroyed.
 //! 8. Conditions follow the damage: a ship with no armour left (of the
 //!    armour it holds) starts breaking up, and any other that holds armour
 //!    is disabled, or not, as the [`DisableRule`](hull::DisableRule) says;
@@ -73,7 +87,8 @@
 //! Each step is reported as a [`CombatEvent`] for the view to show, and
 //! each unimplemented weapon feature once as a
 //! [`SimDiagnostic`](report::SimDiagnostic). Nothing here is saved: the
-//! shots, their targets, durability and generations live only in flight.
+//! shots, their targets, durability and generations live only in flight,
+//! and a stellar's strength is the session's, which saves none either.
 
 pub mod aim;
 pub mod armament;

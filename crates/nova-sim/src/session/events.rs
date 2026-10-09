@@ -25,8 +25,9 @@
 //!   with no new layout.
 //!   That is how a destroyed stellar's `DeadType` sheet shows from the
 //!   next frame (story-runtime phase 7), so every writer of the destroyed
-//!   state, story-runtime phase 8's shots among them, must go through
-//!   `Session::set_stellar_state`, which raises this event.
+//!   state goes through `Session::set_stellar_state`, which raises this
+//!   event: `Y`, `U`, the daily step, a new pilot and the shots that
+//!   shoot a stellar down (story-runtime phase 8).
 //!
 //! The session's other outboxes (its sounds, messages, script notes, pay
 //! notes, fighter notes and the rest, each with its own `take_*`) are not

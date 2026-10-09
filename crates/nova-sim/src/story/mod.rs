@@ -15,14 +15,15 @@
 //! - story events and dispatch: story-runtime phase 3;
 //! - the daily step: story-runtime phase 2;
 //! - the galaxy overlay: story-runtime phase 4, with `Y` and `U` in
-//!   story-runtime phase 5;
+//!   story-runtime phase 5 and the stellars shots destroy in
+//!   story-runtime phase 8;
 //! - the mission lifecycle: missions phase 2;
 //! - text substitution: missions phase 3.
 //!
 //! Where the original cannot settle a question, or the design does not
 //! follow it, the section names the [`Rulebook`](crate::Rulebook) key the
 //! building phase adds and its readings. Phase 2 adds `stay_days`, phase 3
-//! `story_reentry`, phase 5 `destroy_invincible`.
+//! `story_reentry`, phase 5 `destroy_invincible`, phase 8 `y_on_destroy`.
 //!
 //! # Findings
 //!
@@ -464,7 +465,8 @@
 //! the original's order, `Participant::ORDER` (see "A day"), through the
 //! `day::Day` port the session implements (`session/story.rs`). Phase 2
 //! fills the date and the events, phase 3 `DayPassed`, phase 5 the
-//! destroyed stellars' regeneration, and phase 6 the day rolls; the others
+//! destroyed stellars' regeneration, phase 6 the day rolls, and phase 8
+//! the damaged stellars' repair; the others
 //! are empty slots until their phase:
 //!
 //! 1. the date moves on a day;
@@ -473,10 +475,11 @@
 //! 3. the active missions' days left (missions phase 2);
 //! 4. the dominated stellars' tribute (rdm task planet-domination);
 //! 5. the day's events, `öops`: today's `market::step_day`;
-//! 6. the stellars: a destroyed one's regeneration and `OnRegen`, each
-//!    `OnRegen` run as its stellar is reached (story-runtime phase 5; see
-//!    "Built by phase 5"), and a dominated one's defence regrowing
-//!    (planet-domination);
+//! 6. the stellars: every whole one repaired to its `Strength`
+//!    (story-runtime phase 8; see "Built by phase 8"), a destroyed one's
+//!    regeneration and `OnRegen`, each `OnRegen` run as its stellar is
+//!    reached (story-runtime phase 5; see "Built by phase 5"), and a
+//!    dominated one's defence regrowing (planet-domination);
 //! 7. the reinforcement countdown, once reinforcements are built;
 //! 8. the ranks' salaries (crons-news-ranks phase 3);
 //! 9. the day rolls (`wares::DayRolls`): every ship class's hire and buy
@@ -521,7 +524,8 @@
 //! # Galaxy overlay
 //!
 //! Built by story-runtime phase 4; `Y` and `U` by story-runtime phase 5;
-//! the visibility rules by crons-news-ranks phase 5; ownership by rdm
+//! the stellars shots destroy by story-runtime phase 8; the visibility
+//! rules by crons-news-ranks phase 5; ownership by rdm
 //! task planet-domination.
 //!
 //! The overlay holds what play changes over the static catalog:
@@ -684,9 +688,10 @@
 //!
 //! The galaxy map has no service, trade or colour mode and no stellar
 //! panel yet; when built, they read `is_landable`. Defence fleets,
-//! stellar weapons, shots at stellars and the AI's stellar targets do not
-//! exist yet (rdm task planet-domination, story-runtime phase 8); the
-//! original's readers are listed below for them. The stellar drawn in
+//! stellar weapons and the AI's stellar targets do not exist yet (rdm
+//! task planet-domination, story-runtime phase 13); the original's
+//! readers are listed below for them. Shots at stellars are story-runtime
+//! phase 8's (see "Built by phase 8"). The stellar drawn in
 //! flight is story-runtime phase 7's (see "Built by phase 7").
 //!
 //! **Readings.** The Rulebook key
@@ -890,8 +895,8 @@
 //! same picture as a per-frame poll. On `GalaxyChanged` the view redraws
 //! the stellars of the scene shown without laying it out again; on
 //! `SystemChanged`, and for its first scene, it lays the scene out and
-//! then applies the state. Story-runtime phase 8's shots must write
-//! through `set_stellar_state` too, so that they raise `GalaxyChanged`.
+//! then applies the state. Story-runtime phase 8's shots write through
+//! `set_stellar_state` too, so they raise `GalaxyChanged`.
 //!
 //! The sheet rule lives in nova-view's system scene: a destroyed stellar
 //! draws its `DeadType` sheet when that resolves to one, and its `Type`
@@ -979,6 +984,148 @@
 //! - **Clicking** (`_HandlePlayer` @0x6a5f9-0x6a686) uses the drawn slot's
 //!   rectangle, so a destroyed stellar is picked by its `DeadType` sheet;
 //!   the engine's `stellar_under` reads `Type`'s (story-runtime phase 11).
+//!
+//! ## Built by phase 8
+//!
+//! A shot of a planet-type weapon (`wëap` `Flags2` 0x0400) destroys a
+//! stellar by taking its strength below 0 (the `stellar` module of the
+//! combat, and the `stellars` module of the session).
+//!
+//! - **Which stellars.** Those shown, whole, of `Strength` above 0 and
+//!   with a sprite. Each is a disc as big as the landing radius (half the
+//!   larger side of its `Type` frame), which is what the player sees: the
+//!   original tests the two sprites pixel by pixel (`_SWRLECollision`
+//!   @0x372a8), and one with no sprite cannot be hit. The shot's path
+//!   over the tick is swept, as for ships, and the nearest stellar along
+//!   it is hit; the original takes the first of the 16 slots that
+//!   collides, and explodes the shot at its own position, where the
+//!   engine takes the point its path entered the disc.
+//! - **When.** In a pass after the ship hits and the expiries
+//!   (combat's step 7b), so a shot that would meet a ship and a stellar
+//!   the same tick hits the ship, and one at the end of its life hits
+//!   nothing. Only past its `ProxSafety`: its age above it. Any ship's
+//!   shot, the player's or an NPC's. Beams never hit a stellar.
+//! - **The hit.** It takes `MassDmg` + `EnergyDmg` off the current
+//!   strength, explodes where it hit with its `ExplodType`, and is gone,
+//!   with no blast and no sub-munitions.
+//! - **The current strength** is the session's, kept only for a whole
+//!   stellar that has taken damage, in a wide integer, and never saved, as
+//!   the original saves none: a load gives every whole stellar its
+//!   `Strength`. `Y` and `U` forget it, and the daily step's sixth
+//!   participant forgets it all, which is the original's repair of every
+//!   whole stellar (@0xb700): nothing damages one within a day.
+//! - **Shot down** below 0, exactly 0 being whole. In order: its
+//!   `ExplodType` explosion at its centre, the overlay's destroyed state
+//!   through `Session::set_stellar_state` with the countdown `Y` gives it
+//!   (so `GalaxyChanged` is raised and the view draws its `DeadType`),
+//!   its `OnDestroy` at once through `Session::run_script`, with the
+//!   stellar already destroyed, its `M`, `N`, `Q` and `S` deferred to the
+//!   next settling as any hook's are, then the destroyed state again, so
+//!   a `U` of its own is undone (@0x374be-0x374cf). A shot of the player's
+//!   then convicts it ten times of killing a ship of the stellar's
+//!   government as overlaid, each held to the record's limit; an NPC's,
+//!   an escort's or a fighter's convicts no one. A stellar shot down is
+//!   skipped by the tick's later shots, so `OnDestroy` runs once.
+//! - **`Y`'s explosion.** `Y` on a stellar shown in flight that was not
+//!   destroyed before makes its `ExplodType` explosion at its centre,
+//!   whatever its `Strength`: an invincible one, which the engine's
+//!   `destroy_invincible` leaves whole, explodes every time. None is made
+//!   while landed, where the original's would be cleared on the take-off.
+//!
+//! **Readings.** The Rulebook key
+//! [`y_on_destroy`](crate::RuleKey::YOnDestroy) defaults to the engine:
+//! `Y` runs no `OnDestroy`. By the Bible's "evaluated when the stellar is
+//! destroyed", `Y` runs it after destroying a whole stellar: not on one
+//! destroyed already, nor on an invincible one it leaves whole. No key for
+//! the ten killings, the daily repair, `Y`'s explosion on an invincible
+//! stellar or shots passing through one, which the Bible's `Strength`
+//! ("0 or -1 for an invincible stellar") agrees with, nor for the
+//! countdown. The Bible's planet-type weapon "can only hit planet-type
+//! ships or destroyable stellars", but its ship side, a planet-type blast
+//! sparing ships, the AI firing at stellars and whether beams hit
+//! stellars are story-runtime phase 13 "planet-type-weapons-and-ships";
+//! `Flags2` 0x0400 is still reported as unimplemented for them.
+//!
+//! ## Checked for phase 8
+//!
+//! - **The weapon** (stride 0xc8, `_LoadObjectData` @0x792cf-0x7973b):
+//!   `Count` +0x00, `MassDmg` +0x02, `EnergyDmg` +0x04, `ExplodType`
+//!   +0x14, `BlastRadius` +0x18, `ProxSafety` +0x1c (@0x7973b), `Flags2`
+//!   +0x22. The stellar's `Govt` is +0x0a (@0x77387-0x77416).
+//! - **The stellar branch of `_CheckShotProximities`** (@0x371bc-0x37775),
+//!   for each of the 128 shots (stride 0x48): alive (life +0x14 at least
+//!   0, @0x371ea-0x371f6) and `Count - ProxSafety > life`
+//!   (@0x371fc-0x3721e); `Flags2` 0x0400 (`testb $0x4, 0x23`, @0x37224),
+//!   or straight on to the ship proximities; the 16 slots of the player's
+//!   system (@0x37230-0x37254), skipping `Strength` 0 or below (@0x3726d)
+//!   and the destroyed (@0x3727b); the sprite collision (@0x372a8); the
+//!   current strength +0x3c less `MassDmg + EnergyDmg` (@0x372dc-0x372eb);
+//!   `_CreateExplosion` at the shot with its `ExplodType` and
+//!   `BlastRadius` (@0x3732a), visual only (@0x3f698-0x3f926); the shot
+//!   dies, life -1 and its sprite hidden (@0x373c4-0x373fe). Then, when
+//!   `_StellarIsDestroyed` (@0x37409): the stellar's `ExplodType` at its
+//!   centre unless -1 (@0x37457), `OnDestroy` (+0x266,
+//!   `_EvalMissionBitSetString` @0x374a9), and only then current strength
+//!   -1 and countdown `DeadTime` (@0x374be-0x374cf); when the shot's +0x2c
+//!   is 0, `_SlapWithPenalty(system, Govt, 3, -1)` ten times
+//!   (@0x374e1-0x3751f), kind 3 being `KillPenalty` (`_DamageShip`
+//!   @0x3ae34). One hit ends the stellar loop (`jmp 0x3752d`).
+//! - **Proximity safety.** A shot's life starts at `Count` (`_SpawnShot`
+//!   @0x3e801-0x3e808), and `_HandleShot` takes the frame's time off it
+//!   each frame (@0x35691-0x356a3) and sets it to -1 at 0 or below
+//!   (@0x356bb-0x356c1). After k moves it is `Count - k`, so the test is k
+//!   above `ProxSafety`: the engine's age above `prox_safety`.
+//! - **The firer.** Shot +0x2c is `_SpawnShot`'s first argument, the
+//!   firing ship's slot (@0x3e57b, @0x3e7c8); slot 0 is the player's
+//!   (`_ShotCanHitShip` tests a ship's +0x86 against 0, @0x448db). An
+//!   escort's or a fighter's shot has its own slot, so only the player's
+//!   own shots are punished.
+//! - **Planet-type shots and ships.** `_ShotCanHitShip`
+//!   (@0x4477e-0x44b6f), `_HandleShipHit` (@0x36a45) and
+//!   `_ShipCollisionHandler` (@0x36f87) never test `Flags2` 0x0400, so a
+//!   planet-type shot hits ordinary ships as any shot does. The bit's
+//!   other readers are a detonation blasting no ships (`_HandleShot`
+//!   @0x35fb9), an asteroid hit's blast sparing ships (`_HandleAsteroidHit`
+//!   @0x36734) and the AI (@0x804a9, @0x8c1f2, @0x8f94d): story-runtime
+//!   phase 13's.
+//! - **No blast and no sub-munitions.** The `movb $0x1, 0x16` after the
+//!   hit (@0x373fe) writes the shot's sprite (its first field), not the
+//!   shot: the byte `_SWSetSpriteVisible` itself sets on hiding
+//!   (@0xa95b0), as the ship hit does too (@0x36f7b). The next
+//!   `_HandleShot` finds life -1, above -32000 (@0x36195), takes the
+//!   end-of-life path (@0x35f08), finds the sprite hidden (@0x35f0a) and
+//!   only sets life -2 (@0x3617c): no sub-munitions (@0x35f49) and no
+//!   detonation (@0x35f97).
+//! - **The order in a frame.** `_DoPlayGameWork` runs the ship collision
+//!   passes (`_SWCollideSpriteLayer` @0x43e70-0x44010) and then
+//!   `_CheckShotProximities` (@0x44015) before `_HandleShot` (@0x44385),
+//!   which moves the shots and ends their lives. As frames repeat, each
+//!   move and expiry is followed by the next frame's ship hits and then
+//!   its stellar hits, which is the engine's tick: the shots fly, the
+//!   ships are hit and the expired gone, then the stellar pass. A shot
+//!   whose life ran out in its last move is dead before any collision at
+//!   its new position, as `resolve` drops it before the stellar pass.
+//! - **`Y`'s explosion** (@0x15a59-0x15ab4): the stellar's system +0x14
+//!   is the player's +0x74, `_StellarIsDestroyed` is false and
+//!   `ExplodType` is not -1: `_CreateExplosion(x, y, ExplodType, 0, 1)`,
+//!   before the countdown is written.
+//! - **Landed.** The dock request sets `_killExplods` (0x1b8c6d, @0x66f45,
+//!   @0x67041), as the in-flight `M` does (@0x158ba, @0x1597e);
+//!   `_HandleExplods` removes every explod while it is set (@0x2f604), and
+//!   `_PlayGame` clears it only after a play frame (@0x46391). So an
+//!   explosion a landed `Y` makes is gone on the take-off's first frame.
+//! - **Gates.** `_PlayerEnterHypergate` (called from the dock request
+//!   @0x66edb, after `_StellarIsLandable` @0x66977) never reads the
+//!   destroyed state, and the hypergate map is modal: no frame runs
+//!   between the press and the entry, as the engine's pending entry ends
+//!   at any tick. The gate path is unchanged.
+//! - **The day's repair** (`_IncrementGameTime` @0xb700-0xb705): a stellar
+//!   not destroyed gets current strength `Strength` and countdown -1.
+//! - **Saved**: the countdowns alone (`_WritePilotData` @0x72ad0-0x72aff);
+//!   a load restores a whole stellar's strength (@0x76068-0x760b8).
+//! - **Stock data**: no stock `wëap` has `Flags2` 0x0400, so stock play
+//!   never shoots a stellar down; most stellars have an `OnDestroy`
+//!   (`b6200`-`b6206`), and 393 an `ExplodType` of 0.
 
 //! # Mission lifecycle
 //!
