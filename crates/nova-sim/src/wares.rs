@@ -197,8 +197,9 @@ pub fn hidden(flags: u16, bits: HideBits, required: bool, available: bool) -> bo
 }
 
 /// The hide-higher sweep: walked by ascending ID, an item flagged to hide
-/// higher ones that can be bought takes every later item of its
-/// `DispWeight` off sale.
+/// higher ones that is listed takes every later item of its `DispWeight`
+/// off sale. The shipyard and the bar pass whether the item is listed; the
+/// outfitter still passes whether it can be bought, until phase 24.
 #[derive(Clone, Debug, Default)]
 pub struct HideHigher {
     taken_off: BTreeSet<i16>,
@@ -212,9 +213,9 @@ impl HideHigher {
     }
 
     /// Notes an item of `disp_weight`: when it `hides_higher` and is
-    /// `buyable`, later ones of its weight go off sale.
-    pub fn note(&mut self, disp_weight: i16, hides_higher: bool, buyable: bool) {
-        if hides_higher && buyable {
+    /// `listed`, later ones of its weight go off sale.
+    pub fn note(&mut self, disp_weight: i16, hides_higher: bool, listed: bool) {
+        if hides_higher && listed {
             self.taken_off.insert(disp_weight);
         }
     }
@@ -399,12 +400,12 @@ mod tests {
     }
 
     #[test]
-    fn a_buyable_hider_takes_its_weight_off_sale() {
+    fn a_listed_hider_takes_its_weight_off_sale() {
         let mut sweep = HideHigher::default();
         assert!(sweep.on_sale(5));
         sweep.note(5, true, false);
         sweep.note(6, false, true);
-        assert!(sweep.on_sale(5), "not buyable");
+        assert!(sweep.on_sale(5), "not listed");
         assert!(sweep.on_sale(6), "not a hider");
         sweep.note(5, true, true);
         assert!(!sweep.on_sale(5));

@@ -63,8 +63,10 @@
 //! hold, or [`ShipFlags3::HIDE_UNLESS_REQUIRED`] whose `Require` is not
 //! met; otherwise one that cannot be bought shows greyed (the Bible: it
 //! "might appear in the shipyard but not be able to be purchased"). A ship
-//! flagged [`ShipFlags3::HIDE_HIGHER`] that can be bought takes every
-//! higher-numbered ship of the same `DispWeight` off sale. The ship class
+//! flagged [`ShipFlags3::HIDE_HIGHER`] that is listed, greyed or not (for
+//! the class flown, the cash, its `Require` or its `Availability`), takes
+//! every higher-numbered ship of the same `DispWeight` off sale
+//! (`_SetupPortAvailableShipTypes` @0xbdc3-0xbe2c). The ship class
 //! flown is listed like any other, but cannot be bought: `_CalcShipCanBuy`
 //! compares the class selected with the player's own, and does so first,
 //! before the cash, `Require` and `Availability` (@0x4f6f5-0x4f6fc). It
@@ -565,7 +567,10 @@ impl Yard<'_> {
     /// roll of 1-99 not already kept; `HideHigher` is tested after the
     /// roll. So a class `HideHigher` takes off sale, or one whose
     /// `Require` is unmet, still draws; one tech forbids does not, nor
-    /// does a roll of always or never. No rule draws: the buy checks, the
+    /// does a roll of always or never. A listed `HideHigher` class, greyed
+    /// or not (for the class flown, the cash, its `Require` or its
+    /// `Availability`), takes the higher-numbered classes of its
+    /// `DispWeight` off sale (@0xbdc3-0xbe2c). No rule draws: the buy checks, the
     /// value rules and the purchase never ask `chance`.
     pub(crate) fn shipyard(
         &self,
@@ -594,12 +599,15 @@ impl Yard<'_> {
                 && rolls.today(ship.id, day_roll().of(&offer), chance)
                 && sweep.on_sale(ship.disp_weight);
             let buyable = for_sale && required && available;
+            let listed = for_sale && !wares::hidden(ship.flags3, HIDE_BITS, required, available);
+            // The sweep (@0xbdc3-0xbe2c) reads the listing byte alone,
+            // never `_CalcShipCanBuy`, so a greyed hider still hides.
             sweep.note(
                 ship.disp_weight,
                 ship.flags3 & ShipFlags3::HIDE_HIGHER != 0,
-                buyable,
+                listed,
             );
-            if !for_sale || wares::hidden(ship.flags3, HIDE_BITS, required, available) {
+            if !listed {
                 continue;
             }
             rows.push((
@@ -1820,6 +1828,74 @@ mod tests {
         .expect("a shipyard")
     }
 
+    /// A `HIDE_HIGHER` class `id` at weight 5 with `flags3` added, its
+    /// `Require` `require` and `Availability` `availability`.
+    fn hider(id: i16, flags3: u16, require: u64, availability: &str) -> ShipRecord {
+        ShipRecord {
+            require,
+            disp_weight: 5,
+            ..gated(id, ShipFlags3::HIDE_HIGHER | flags3, availability)
+        }
+    }
+
+    fn plain_at_5(id: i16) -> ShipRecord {
+        ShipRecord {
+            disp_weight: 5,
+            ..cheap(id)
+        }
+    }
+
+    // `_SetupPortAvailableShipTypes` @0xbdc3-0xbe2c sweeps on the listing
+    // byte alone, never `_CalcShipCanBuy`, so a greyed hider still hides.
+    #[test]
+    fn a_greyed_hider_still_hides_higher_ships_of_its_weight() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let unmet = open(&[hider(130, 0, 0x2, ""), plain_at_5(131)], &pilot());
+        assert_eq!(listed(&unmet), [130], "an unmet Require");
+        assert_eq!(unmet.can(ShipId(130)), Err(ShipRefusal::NotForSale));
+        let unavailable = open_gated(
+            &[hider(130, 0, 0, "b7"), plain_at_5(131)],
+            refusing,
+            &pilot(),
+        );
+        assert_eq!(listed(&unavailable), [130], "a false Availability");
+        assert_eq!(unavailable.can(ShipId(130)), Err(ShipRefusal::NotForSale));
+        let dear = ShipRecord {
+            cost: 20_000,
+            ..hider(130, 0, 0, "")
+        };
+        let unaffordable = open(&[dear, plain_at_5(131)], &pilot());
+        assert_eq!(listed(&unaffordable), [130], "the cash");
+        assert_eq!(
+            unaffordable.can(ShipId(130)),
+            Err(ShipRefusal::CannotAfford)
+        );
+        let flown = open(&[hider(128, 0, 0, ""), plain_at_5(129)], &pilot());
+        assert_eq!(listed(&flown), [128], "the class flown");
+        assert_eq!(flown.can(ShipId(128)), Err(ShipRefusal::AlreadyFlown));
+    }
+
+    #[test]
+    fn a_hider_its_own_flag_hides_hides_nothing() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let unmet = [
+            hider(130, ShipFlags3::HIDE_UNLESS_REQUIRED, 0x2, ""),
+            plain_at_5(131),
+        ];
+        assert_eq!(listed(&open(&unmet, &pilot())), [131]);
+        let unavailable = [
+            hider(130, ShipFlags3::HIDE_UNLESS_AVAILABLE, 0, "b7"),
+            plain_at_5(131),
+        ];
+        assert_eq!(listed(&open_gated(&unavailable, refusing, &pilot())), [131]);
+    }
+
     #[test]
     fn a_ship_whose_availability_is_refused_shows_greyed() {
         let refusing = Gate {
@@ -1898,7 +1974,7 @@ mod tests {
             weighted(133, 5, ShipFlags3::HIDE_HIGHER),
         ];
         assert_eq!(listed(&open(&ships, &pilot())), [132, 129, 130]);
-        // One that cannot be bought hides nothing.
+        // One greyed for an unmet Require still hides.
         let unmet = [
             ShipRecord {
                 require: 0x2,
@@ -1906,7 +1982,7 @@ mod tests {
             },
             weighted(131, 5, 0),
         ];
-        assert_eq!(listed(&open(&unmet, &pilot())), [130, 131]);
+        assert_eq!(listed(&open(&unmet, &pilot())), [130]);
         let off_tech = [
             ShipRecord {
                 tech_level: 9,
