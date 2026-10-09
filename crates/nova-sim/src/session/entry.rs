@@ -13,11 +13,17 @@
 //! Every draw a caller makes on its chance comes before it enters the
 //! system; inside, only populating the system draws, after the ship is
 //! placed, the system explored and the fighters out dealt with.
+//!
+//! The last step announces the arrival, and tells a view what to redraw
+//! ([`scene_event`], see the `events` module): measured against the
+//! system whose stellars are shown, which after a landed move is still
+//! the one landed in. A landed move's own event waits, with its stellars,
+//! for the take-off ([`Session::take_off`]).
 
 use std::collections::BTreeSet;
 
-use super::Session;
 use super::script_effects::ScriptEffectRules;
+use super::{Session, SessionEvent};
 use crate::catalog::{
     DudeId, DudeRecord, FleetRecord, LandingSite, PersonRecord, StellarId, SystemId, SystemTraffic,
     TrafficCatalog,
@@ -89,6 +95,17 @@ pub(super) struct Arrival {
     pub(super) sites: Vec<LandingSite>,
     /// Where the ship goes.
     pub(super) placement: Placement,
+}
+
+/// The stellars a landed move read, waiting for the take-off
+/// ([`SitesStep::Defer`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct NextSites {
+    /// The system whose stellars are still the session's: the one the
+    /// first of the landed moves since the landing left.
+    pub(super) from: SystemId,
+    /// The stellars of the system moved to last.
+    pub(super) sites: Vec<LandingSite>,
 }
 
 /// One reset or write a row may do.
@@ -352,6 +369,25 @@ fn relocate() -> Resets {
     )
 }
 
+/// What entering a system `how` tells a view (see the `events` module),
+/// with `scene_changed` whether the system entered is another than the one
+/// whose stellars are shown. A jump, a gate and a move in flight rebuild
+/// the scene even within the same system, so each tells
+/// [`SessionEvent::SystemChanged`]; a landed move tells nothing, its
+/// stellars and its event waiting for the take-off; a relocation tells
+/// `SystemChanged` into another system and otherwise
+/// [`SessionEvent::StellarChanged`].
+pub(super) fn scene_event(how: Entry, scene_changed: bool) -> Option<SessionEvent> {
+    match how {
+        Entry::Jump { .. } | Entry::Gate | Entry::ScriptMove { landed: false } => {
+            Some(SessionEvent::SystemChanged)
+        }
+        Entry::ScriptMove { landed: true } => None,
+        Entry::Relocate if scene_changed => Some(SessionEvent::SystemChanged),
+        Entry::Relocate => Some(SessionEvent::StellarChanged),
+    }
+}
+
 /// No traffic to read: what [`Session::relocate`] enters a system with,
 /// as its row resets the traffic without reading any.
 #[derive(Clone, Copy, Debug)]
@@ -399,6 +435,10 @@ impl Session {
             system_changed: system != self.pilot.system,
             jump_pending: self.jump.is_some(),
         };
+        let shown = self
+            .next_sites
+            .as_ref()
+            .map_or(self.pilot.system, |next| next.from);
         let resets = resets(how, &self.rules, facts);
         self.place(placement);
         self.pilot.system = system;
@@ -424,7 +464,7 @@ impl Session {
         }
         match resets.sites {
             SitesStep::Now => self.sites = sites,
-            SitesStep::Defer => self.next_sites = Some(sites),
+            SitesStep::Defer => self.next_sites = Some(NextSites { from: shown, sites }),
         }
         if resets.has(Reset::DeferredSites) {
             self.next_sites = None;
@@ -441,7 +481,7 @@ impl Session {
         if resets.has(Reset::SaveDue) {
             self.save_due = true;
         }
-        self.announce(&resets, system);
+        self.announce(&resets, system, scene_event(how, system != shown));
     }
 
     /// Puts the ship where `placement` says.
@@ -518,13 +558,17 @@ impl Session {
         }
     }
 
-    /// Sounds and raises the arrival in `system`, as `resets` says.
-    fn announce(&mut self, resets: &Resets, system: SystemId) {
+    /// Sounds and raises the arrival in `system`, as `resets` says, and
+    /// tells `event`, if any ([`scene_event`]).
+    fn announce(&mut self, resets: &Resets, system: SystemId, event: Option<SessionEvent>) {
         if resets.has(Reset::ArrivalSound) {
             self.sounds.push(SimSound::Arrived);
         }
         if resets.has(Reset::ArrivalMessage) {
             self.messages.push(SimMessage::Arrived(system));
+        }
+        if let Some(event) = event {
+            self.emit(event);
         }
     }
 }
@@ -733,6 +777,23 @@ mod tests {
             resets(in_flight, &Rulebook::default(), facts(true, false)),
             "no other rule"
         );
+    }
+
+    #[test]
+    fn every_way_in_but_a_landed_move_tells_the_scene_changed_and_a_relocation_tells_which() {
+        use SessionEvent::{StellarChanged, SystemChanged};
+        for changed in [false, true] {
+            for (how, event) in [
+                (Entry::Jump { hops: 1 }, Some(SystemChanged)),
+                (Entry::Gate, Some(SystemChanged)),
+                (Entry::ScriptMove { landed: false }, Some(SystemChanged)),
+                (Entry::ScriptMove { landed: true }, None),
+            ] {
+                assert_eq!(scene_event(how, changed), event, "{how:?} {changed}");
+            }
+        }
+        assert_eq!(scene_event(Entry::Relocate, true), Some(SystemChanged));
+        assert_eq!(scene_event(Entry::Relocate, false), Some(StellarChanged));
     }
 
     /// Enters system 130, the one the session is in, by a move in flight

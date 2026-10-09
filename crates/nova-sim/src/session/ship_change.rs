@@ -68,11 +68,11 @@
 //! way, as the original's outfitter does when it closes (@0x5da4b-0x5dad4)
 //! and its `_LoadPilotData` fills the shield and armour (@0x754dc).
 //!
-//! - `Cxxx` ([`ChangeShipOp`]) keeps every outfit and adds no default.
-//! - `Exxx` ([`ChangeShipWithDefaultsOp`]) keeps every outfit and adds the
-//!   new class's default items; by the engine every outfit is then held
-//!   to its `Max` ([`ShipChangeRules::max`]).
-//! - `Hxxx` ([`ReplaceShipOp`]) keeps only the persistent outfits, as
+//! - `Cxxx` keeps every outfit and adds no default.
+//! - `Exxx` keeps every outfit and adds the new class's default items; by
+//!   the engine every outfit is then held to its `Max`
+//!   ([`ShipChangeRules::max`]).
+//! - `Hxxx` keeps only the persistent outfits, as
 //!   [`ShipChangeRules::persistence`] says, adds the default items, and
 //!   holds them as `E` does.
 //!
@@ -96,7 +96,7 @@
 //! shipyard's carry (`Max` and the free mass, the sale of the rest) and
 //! the reserves held.
 //!
-//! **`Txxx`** ([`RenameShipOp`], @0x15b25-0x15be9) reads `STR#` `xxx`,
+//! **`Txxx`** (@0x15b25-0x15be9) reads `STR#` `xxx`,
 //! the raw ID, with no range check, from the session's string lists
 //! ([`Session::with_strings`]; none by default, so `T` does nothing). It
 //! picks one of its strings evenly, a roll of as many sides as the list
@@ -114,12 +114,11 @@ use std::fmt;
 use std::rc::Rc;
 
 use super::hire::Shared;
-use super::{ReservePolicy, Session};
+use super::{ReservePolicy, Session, SessionEvent};
 use crate::catalog::{CommCatalog, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::armament;
 use crate::combat::hull::{DisableRule, NovaDisable};
-use crate::control::{SetOp, SetOpHandler};
 use crate::outfitter::OutfitFlags;
 use crate::pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -164,7 +163,7 @@ impl ShipChangeRules {
     }
 
     /// The flags `H` keeps an outfit by.
-    fn persistent(self) -> u16 {
+    pub(super) fn persistent(self) -> u16 {
         match self.persistence {
             RuleSource::Engine => SET_OP_PERSISTENT,
             RuleSource::Bible => OutfitFlags::MISSION_PERSISTENT,
@@ -172,7 +171,7 @@ impl ShipChangeRules {
     }
 
     /// Whether `E` and `H` hold the outfits to their `Max`.
-    fn clamps(self) -> bool {
+    pub(super) fn clamps(self) -> bool {
         self.max == RuleSource::Engine
     }
 }
@@ -233,7 +232,7 @@ impl CommCatalog for NoStrings {
 impl Session {
     /// The rules the ship-change set operators follow, projected from
     /// the session's rule set ([`Session::with_rules`]).
-    fn ship_change_rules(&self) -> ShipChangeRules {
+    pub(super) fn ship_change_rules(&self) -> ShipChangeRules {
         ShipChangeRules::from_rulebook(&self.rules)
     }
 
@@ -277,8 +276,9 @@ impl Session {
     /// writer of a change of class, deciding nothing itself. In order, it
     /// writes `change.outfits` as the outfits owned, runs `before_class`,
     /// takes the class, its fields, default items and stock weapons from
-    /// `ship`, refits by `change.reserves` and makes a save due. What the
-    /// change carries, and what runs between, is the caller's.
+    /// `ship`, refits by `change.reserves`, makes a save due and tells
+    /// [`SessionEvent::ShipChanged`]. What the change carries, and what
+    /// runs between, is the caller's.
     pub(super) fn become_class(
         &mut self,
         ship: &ShipRecord,
@@ -293,13 +293,14 @@ impl Session {
         self.stock = armament::fitted(&self.arsenal.stock_fits(ship.id, &self.outfits));
         self.refit(false, change.reserves);
         self.save_due = true;
+        self.emit(SessionEvent::ShipChanged);
     }
 
     /// Changes the player's ship to class `ship`, its outfits carried as
     /// `carry` says and held to their `Max` when `clamp` (see the module
     /// docs); nothing changes when the session has no record of the
     /// class.
-    fn change_ship(&mut self, ship: ShipId, carry: OutfitCarry, clamp: bool) {
+    pub(super) fn change_ship(&mut self, ship: ShipId, carry: OutfitCarry, clamp: bool) {
         let Some(record) = self.ship_record(ship).cloned() else {
             return;
         };
@@ -340,7 +341,7 @@ impl Session {
 
     /// `T`: renames the ship from `STR#` `list`, drawing on `chance` (see
     /// the module docs).
-    fn rename_ship(&mut self, list: i16, chance: &mut dyn Chance) {
+    pub(super) fn rename_ship(&mut self, list: i16, chance: &mut dyn Chance) {
         let Some(pick) = self.pick_string(list, chance) else {
             return;
         };
@@ -365,61 +366,6 @@ impl Session {
     }
 }
 
-/// `Cxxx`: changes the ship, keeping every outfit (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ChangeShipOp;
-
-impl SetOpHandler<Session> for ChangeShipOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::ChangeShip(ship) = op {
-            session.change_ship(*ship, OutfitCarry::Keep, false);
-        }
-    }
-}
-
-/// `Exxx`: changes the ship, keeping every outfit and adding the new
-/// class's default items (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ChangeShipWithDefaultsOp;
-
-impl SetOpHandler<Session> for ChangeShipWithDefaultsOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::ChangeShipWithDefaults(ship) = op {
-            let clamp = session.ship_change_rules().clamps();
-            session.change_ship(*ship, OutfitCarry::KeepWithDefaults, clamp);
-        }
-    }
-}
-
-/// `Hxxx`: changes the ship, keeping the persistent outfits and adding
-/// the new class's default items (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ReplaceShipOp;
-
-impl SetOpHandler<Session> for ReplaceShipOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::ReplaceShip(ship) = op {
-            let rules = session.ship_change_rules();
-            let carry = OutfitCarry::Persistent {
-                mask: rules.persistent(),
-            };
-            session.change_ship(*ship, carry, rules.clamps());
-        }
-    }
-}
-
-/// `Txxx`: renames the ship from a string list (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RenameShipOp;
-
-impl SetOpHandler<Session> for RenameShipOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, chance: &mut dyn Chance) {
-        if let SetOp::RenameShip(list) = op {
-            session.rename_ship(list.0, chance);
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -429,7 +375,7 @@ mod tests {
     use super::*;
     use crate::catalog::{HullRecord, OutfitId, OutfitRecord, ShipRecord, StockWeapon, WeaponId};
     use crate::combat::hull::{HullSpec, TOUGH};
-    use crate::control::{Bit, Script, SetExpr, SetOpKind};
+    use crate::control::{Bit, Script, SetExpr, SetOp};
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
@@ -439,6 +385,7 @@ mod tests {
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
     use crate::save;
+    use crate::session::control::SetOpObserver;
     use crate::stats::{MORE_SHIELD, ShipStats};
     use crate::testkit::{
         FAST, FakePilotCatalog, Scripted, catalog, hull, land_now, outfit, ship, weapon,
@@ -689,6 +636,33 @@ mod tests {
     }
 
     #[test]
+    fn become_class_tells_the_ship_changed() {
+        let catalog = changing();
+        let mut session = session(&catalog);
+        let change = ClassChange {
+            outfits: BTreeMap::new(),
+            reserves: ReservePolicy::Hold,
+        };
+        session.become_class(&record(&session, 129), change, |s| {
+            assert_eq!(s.take_events(), [], "not before the class is taken");
+        });
+        assert_eq!(session.take_events(), [SessionEvent::ShipChanged]);
+    }
+
+    #[test]
+    fn c_e_and_h_tell_the_ship_changed_and_a_class_with_no_record_tells_nothing() {
+        let catalog = changing();
+        for op in ["C129", "E129", "H129", "C128"] {
+            let mut session = session(&catalog);
+            run(&mut session, op);
+            assert_eq!(session.take_events(), [SessionEvent::ShipChanged], "{op}");
+        }
+        let mut session = session(&catalog);
+        run(&mut session, "C200");
+        assert_eq!(session.take_events(), []);
+    }
+
+    #[test]
     fn become_class_keeps_a_surplus_shield_and_armour_only_when_told() {
         let catalog = changing();
         for (reserves, kept) in [
@@ -923,12 +897,12 @@ mod tests {
 
     // Hooks.
 
-    /// Counts each `S` it applies.
+    /// Counts each `S` it sees run.
     #[derive(Debug, Default)]
     struct Probe(RefCell<Vec<i16>>);
 
-    impl SetOpHandler<Session> for Probe {
-        fn apply(&self, op: &SetOp, _session: &mut Session, _chance: &mut dyn Chance) {
+    impl SetOpObserver for Probe {
+        fn saw(&self, op: &SetOp, _session: &Session) {
             if let SetOp::StartMission(mission) = op {
                 self.0.borrow_mut().push(mission.0);
             }
@@ -940,8 +914,7 @@ mod tests {
         let catalog = changing();
         for op in ["C129", "E129", "H129", "C130", "E130", "H130"] {
             let probe = Rc::new(Probe::default());
-            let registry = crate::nova_set_ops().with(SetOpKind::StartMission, probe.clone());
-            let mut session = session(&catalog).with_set_ops(Rc::new(registry));
+            let mut session = session(&catalog).with_set_op_observer(probe.clone());
             run(&mut session, op);
             assert_ne!(session.ship(), ShipId(128), "{op}: changed");
             assert!(probe.0.borrow().is_empty(), "{op}");

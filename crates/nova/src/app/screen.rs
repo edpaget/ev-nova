@@ -629,11 +629,14 @@ impl AppScreen {
         self.flight.as_mut()?.pilot_desk()
     }
 
-    /// Catches up with an edit made through the pilot desk: flight lays out
-    /// the system the pilot is now in, the open spaceport is rebuilt for
-    /// the stellar the pilot is now landed on when it moved, and otherwise
-    /// shows the exchange, outfitter and shipyard as they now are; then
-    /// the pilot is saved if a save is due, as after any change.
+    /// Catches up with an edit made through the pilot desk: flight catches
+    /// up at once with what the session told of it ([`FlightView::resync`],
+    /// which its next frame would do anyway), laying out the system the
+    /// pilot moved to or drawing the ship at the stellar it moved to; the
+    /// open spaceport is rebuilt for the stellar the pilot is now landed
+    /// on when it moved, and otherwise shows the exchange, outfitter and
+    /// shipyard as they now are; then the pilot is saved if a save is due,
+    /// as after any change.
     pub fn after_pilot_edit(&mut self) {
         let Some(flight) = self.flight.as_mut() else {
             return;

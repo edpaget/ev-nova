@@ -33,7 +33,7 @@
 //! its sub-dialogs read, so the open spaceport serves the stellar it
 //! opened on until it is left.
 //!
-//! **Here.** [`MoveToOp`] (`Mxxx`) and [`MoveKeepPositionOp`] (`Nxxx`)
+//! **Here.** `Mxxx` and `Nxxx`
 //! only queue their move: a set expression runs in the middle of a
 //! purchase, a capture or a hook, with no catalog to read the new system
 //! from. [`Session::settle_script`] applies the moves in order at a safe
@@ -91,7 +91,7 @@
 //! as the fighter rules say and the system is populated
 //! ([`Session::populate`]).
 //!
-//! **`Qxxx`** ([`LeaveStellarOp`]) draws its message when it runs, from
+//! **`Qxxx`** draws its message when it runs, from
 //! the session's string lists ([`Session::with_strings`]; none by
 //! default), with a roll of as many sides as the list holds, as `T`
 //! draws, so the order of the draws is kept. Nothing moves until it is
@@ -114,7 +114,7 @@
 //! one, unless [`ScriptEffectRules::blank_leave`] makes the player leave
 //! all the same, with no message.
 //!
-//! **`Pxxx`** ([`PlaySoundOp`], @0x15a24) sets `_missionSoundID` to the
+//! **`Pxxx`** (@0x15a24) sets `_missionSoundID` to the
 //! raw `snd ` ID, with no range check, and only `_PlayGame` reads it,
 //! once a flight frame (@0x462fa): when it is not -1 and no mission sound
 //! is held (`_missionSnd`), it loads and plays it at the effects volume;
@@ -146,7 +146,6 @@ use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
-use crate::control::{SetOp, SetOpHandler};
 use crate::geometry::Vec2;
 use crate::landing::is_dockable;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -201,7 +200,7 @@ pub(super) enum ScriptMove {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Queued {
     /// The moves, in order.
-    moves: Vec<ScriptMove>,
+    pub(super) moves: Vec<ScriptMove>,
     /// The message a `Q` leaves on: none for no `Q` pending.
     leave: Option<String>,
     /// The mission sound a `P` holds to the next flight tick.
@@ -261,7 +260,7 @@ impl Session {
 
     /// `P`: plays `sound`, held to the next flight tick or at once, as
     /// [`ScriptEffectRules::sound`] says (see the module docs).
-    fn play_script_sound(&mut self, sound: SoundId) {
+    pub(super) fn play_script_sound(&mut self, sound: SoundId) {
         match self.script_effect_rules().sound {
             RuleSource::Engine => self.queued.sound = Some(sound),
             RuleSource::Bible => self.sounds.push(SimSound::Script {
@@ -286,7 +285,7 @@ impl Session {
     /// (see the module docs); a blank one cancels an earlier `Q`, or
     /// leaves with no message by [`ScriptEffectRules::blank_leave`]'s
     /// Bible reading.
-    fn leave_stellar(&mut self, list: i16, chance: &mut dyn Chance) {
+    pub(super) fn leave_stellar(&mut self, list: i16, chance: &mut dyn Chance) {
         self.queued.leave = self.pick_string(list, chance).or_else(|| {
             (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
         });
@@ -332,57 +331,6 @@ impl Session {
     }
 }
 
-/// `Mxxx`: moves the player to the system, at its first stellar (see the
-/// module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct MoveToOp;
-
-impl SetOpHandler<Session> for MoveToOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::MoveTo(system) = op {
-            session.queued.moves.push(ScriptMove::To(*system));
-        }
-    }
-}
-
-/// `Qxxx`: makes the player leave the stellar it is landed on, with a
-/// message from a string list (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct LeaveStellarOp;
-
-impl SetOpHandler<Session> for LeaveStellarOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, chance: &mut dyn Chance) {
-        if let SetOp::LeaveStellar(list) = op {
-            session.leave_stellar(list.0, chance);
-        }
-    }
-}
-
-/// `Pxxx`: plays the sound (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct PlaySoundOp;
-
-impl SetOpHandler<Session> for PlaySoundOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::PlaySound(sound) = op {
-            session.play_script_sound(*sound);
-        }
-    }
-}
-
-/// `Nxxx`: moves the player to the system, keeping its position (see the
-/// module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct MoveKeepPositionOp;
-
-impl SetOpHandler<Session> for MoveKeepPositionOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::MoveKeepPosition(system) = op {
-            session.queued.moves.push(ScriptMove::KeepPosition(*system));
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -396,13 +344,14 @@ mod tests {
     use crate::catalog::CommCatalog;
     use crate::chance::NeverFires;
     use crate::combat::Rules;
-    use crate::control::{SetExpr, SetOpKind};
+    use crate::control::SetExpr;
     use crate::gate::HYPERGATE;
     use crate::handling::ShipFields;
     use crate::hyperspace::JumpRefusal;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
     use crate::save;
+    use crate::session::SessionEvent;
     use crate::testkit::{
         FAST, FakePilotCatalog, Scripted, begin_jump_now, catalog, fly_out, hull, land_now, planet,
         ship, star, weapon,
@@ -605,7 +554,7 @@ mod tests {
         );
     }
 
-    // Through the registry.
+    // Through run_set.
 
     #[test]
     fn m_and_n_are_queued_until_settled() {
@@ -1157,15 +1106,6 @@ mod tests {
         assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
     }
 
-    #[test]
-    fn the_moves_the_leave_and_the_sound_are_registered_by_nova() {
-        let kinds: Vec<SetOpKind> = crate::session::nova_set_ops().kinds().collect();
-        assert!(kinds.contains(&SetOpKind::MoveTo));
-        assert!(kinds.contains(&SetOpKind::MoveKeepPosition));
-        assert!(kinds.contains(&SetOpKind::LeaveStellar));
-        assert!(kinds.contains(&SetOpKind::PlaySound));
-    }
-
     // P.
 
     fn mission_sound(id: i16, exclusive: bool) -> SimSound {
@@ -1361,6 +1301,59 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(ids(&session.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
+    }
+
+    // Events.
+
+    #[test]
+    fn a_move_in_flight_tells_the_system_changed_even_within_the_system() {
+        let catalog = moving();
+        for text in ["M131", "N130", "M130"] {
+            let mut session = flying(&catalog);
+            moved(&mut session, &catalog, text);
+            assert_eq!(
+                session.take_events(),
+                [SessionEvent::SystemChanged],
+                "{text}"
+            );
+        }
+        let mut session = flying(&catalog);
+        moved(&mut session, &catalog, "M999");
+        assert_eq!(session.take_events(), [], "no such system");
+    }
+
+    #[test]
+    fn a_landed_move_to_another_system_tells_it_at_the_take_off() {
+        let catalog = moving();
+        let mut session = landed(&catalog);
+        moved(&mut session, &catalog, "M131");
+        assert_eq!(session.take_events(), [], "the stellars wait");
+        session.take_off();
+        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+    }
+
+    #[test]
+    fn a_landed_move_within_the_system_or_back_to_it_tells_nothing() {
+        let catalog = moving();
+        for text in ["N130", "M130", "M131 M130"] {
+            let mut session = landed(&catalog);
+            moved(&mut session, &catalog, text);
+            assert_eq!(session.take_events(), [], "{text}: settled");
+            session.take_off();
+            assert_eq!(session.take_events(), [], "{text}: taken off");
+        }
+        let mut session = landed(&catalog);
+        session.take_off();
+        assert_eq!(session.take_events(), [], "a plain take-off");
+    }
+
+    #[test]
+    fn a_landed_move_and_q_tell_the_system_changed_as_they_settle() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        run_rolling(&mut session, "M131 Q25048", &[0]);
+        let _ = settle(&mut session, &catalog);
+        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
     }
 
     #[test]

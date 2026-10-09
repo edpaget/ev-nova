@@ -42,7 +42,8 @@
 //!   it reads ([`control::holds`]), through the [`ControlBits`] port with
 //!   Nova's [`NovaBits`]; and running a set expression
 //!   ([`control::execute`]), its operators beyond the bit writes handed to
-//!   a [`SetRegistry`].
+//!   the caller's dispatch (the session's: `Session::apply_op`, one match
+//!   over the set operators).
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence
@@ -277,7 +278,7 @@ pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
 pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
-    SetExpr, SetOp, SetOpHandler, SetOpKind, SetRegistry, Test, TestExpr,
+    SetExpr, SetOp, SetOpKind, Test, TestExpr,
 };
 pub use date::GameDate;
 pub use escort::{
@@ -324,8 +325,8 @@ pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
-    HookRules, LandPress, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, Settled,
-    ShipChangeRules, StellarPick, nova_set_ops,
+    HookRules, LandPress, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent,
+    Settled, ShipChangeRules, StellarPick,
 };
 pub use shipyard::{
     ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,

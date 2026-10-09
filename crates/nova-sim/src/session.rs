@@ -122,6 +122,13 @@
 //! [`Session::take_sounds`]. A refused landing or
 //! jump emits nothing.
 //!
+//! A change of the player's ship, or of the system or stellar it is at,
+//! is told as a [`SessionEvent`], which a view drains with
+//! [`Session::take_events`] and redraws from, whatever made the change
+//! (see the `events` module). The other outboxes, the sounds among them,
+//! keep their own `take_*`; folding them into the events is a possible
+//! follow-up.
+//!
 //! In flight the engine glow's base level ([`Session::engine_glow`])
 //! ramps with the thrust each tick, as [`glow`](crate::glow) says, and
 //! landing and beginning a jump put it out.
@@ -223,8 +230,8 @@
 //! The pilot's control bits are read with [`Session::control_bit`] and
 //! set or cleared with [`Session::set_control_bit`], which makes a save
 //! due. A set expression runs on the session ([`Session::run_set`]),
-//! writing bits, with its other operators handled as
-//! [`Session::with_set_ops`] says: by default [`nova_set_ops`], which
+//! writing bits, with its other operators applied by `Session::apply_op`,
+//! one match over the set operators, which
 //! grants (`G`) and removes (`D`) outfits, explores systems (`X`),
 //! changes the player's ship outside the shipyard (`C`, `E`, `H`, as
 //! [`ShipChangeRules`] reads the rule set where the rules are
@@ -285,6 +292,7 @@ mod control;
 mod edit;
 mod entry;
 mod escorts;
+mod events;
 mod fighters;
 mod hail;
 mod hire;
@@ -294,22 +302,18 @@ mod persons;
 mod script_effects;
 mod ship_change;
 
-pub use control::nova_set_ops;
 pub use hooks::HookRules;
-pub use ship_change::{
-    ChangeShipOp, ChangeShipWithDefaultsOp, RenameShipOp, ReplaceShipOp, ShipChangeRules,
-};
+pub use ship_change::ShipChangeRules;
 
 pub use edit::RelocateRefusal;
+pub use events::SessionEvent;
 pub use persons::PersonQuote;
-pub use script_effects::{
-    LeaveStellarOp, MoveKeepPositionOp, MoveToOp, PlaySoundOp, ScriptEffectRules, Settled,
-};
+pub use script_effects::{ScriptEffectRules, Settled};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use self::entry::{Arrival, Entry, Placement, ShipPlacement};
+use self::entry::{Arrival, Entry, NextSites, Placement, ShipPlacement};
 use self::hooks::ShipHook;
 use self::ship_change::ClassChange;
 use crate::ai::{Behaviour, Goal, PlayerSide};
@@ -335,7 +339,7 @@ use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
 use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
-use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind, SetRegistry};
+use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind};
 use crate::date::{self, GameDate};
 use crate::escort::EscortDuty;
 use crate::flight::{Controls, ShipState, step};
@@ -496,6 +500,8 @@ pub struct Session {
     sounds: Vec<SimSound>,
     /// The messages raised since they were last taken.
     messages: Vec<SimMessage>,
+    /// The events told since they were last taken.
+    events: Vec<SessionEvent>,
     /// Whether the pilot has changed in a way that should be saved since
     /// this was last taken.
     save_due: bool,
@@ -585,9 +591,9 @@ pub struct Session {
     frame: i16,
     /// What paying the escorts did since this was last taken.
     pay_notes: Vec<PayNote>,
-    /// The handlers of the set operators beyond the bit writes (see
-    /// [`Session::with_set_ops`]).
-    set_ops: hire::Shared<SetRegistry<Session>>,
+    /// What sees each set operator `run_set` hands to `apply_op`: none
+    /// outside tests (see `control::SetOpObserver`).
+    op_observer: Option<hire::Shared<dyn control::SetOpObserver>>,
     /// The set operator kinds skipped for want of a handler and told
     /// already; never saved.
     unhandled_ops: BTreeSet<SetOpKind>,
@@ -609,8 +615,8 @@ pub struct Session {
     /// [`Session::settle_script`], and the next flight tick; never saved.
     queued: script_effects::Queued,
     /// The stellars of the system a landed move went to, swapped in at
-    /// the take-off.
-    next_sites: Option<Vec<LandingSite>>,
+    /// the take-off, with the system whose stellars they replace.
+    next_sites: Option<NextSites>,
     /// Whether the next take-off keeps the ship where it touched down
     /// (the original's `_dontMovePlayerAfterLanding`); never saved.
     hold_position: bool,
@@ -705,6 +711,7 @@ impl Session {
             engine_glow: 0,
             sounds: Vec::new(),
             messages: Vec::new(),
+            events: Vec::new(),
             save_due: false,
             date_affixes: catalog.date_affixes(),
             traffic: Traffic::new(),
@@ -736,7 +743,7 @@ impl Session {
             ship_redraws: BTreeSet::new(),
             frame: 0,
             pay_notes: Vec::new(),
-            set_ops: hire::Shared(Rc::new(control::nova_set_ops())),
+            op_observer: None,
             unhandled_ops: BTreeSet::new(),
             script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
@@ -1983,13 +1990,18 @@ impl Session {
     /// the system moved to, from where the move left it, and after an `N`
     /// from where it touched down (see the `script_effects` module): the
     /// take-off swaps in the stellars the landed move's row of the table
-    /// in the `entry` module left for it. `None`, and nothing changes,
-    /// when it has not landed.
+    /// in the `entry` module left for it, telling
+    /// [`SessionEvent::SystemChanged`] when they are another system's than
+    /// the stellars they replace. `None`, and nothing changes, when it has
+    /// not landed.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         self.frame = market::AFTER_TAKE_OFF_FRAME;
-        if let Some(sites) = self.next_sites.take() {
-            self.sites = sites;
+        if let Some(next) = self.next_sites.take() {
+            self.sites = next.sites;
+            if self.pilot.system != next.from {
+                self.emit(SessionEvent::SystemChanged);
+            }
         }
         if std::mem::take(&mut self.hold_position) {
             self.player.position = self.touchdown;
@@ -2324,7 +2336,9 @@ impl Session {
     /// drawn yet are drawn on
     /// `chance`, and a purchase draws the class's roll again, as the
     /// original does (`_DoShipyardDialog` @0x5f0d5-0x5f0f8), the next time
-    /// the shipyard's list is built ([`shipyard`](Self::shipyard)).
+    /// the shipyard's list is built ([`shipyard`](Self::shipyard)). A
+    /// purchase tells [`SessionEvent::ShipChanged`] before `OnPurchase`
+    /// runs, which may tell it again; a refused one tells nothing.
     pub fn buy_ship(
         &mut self,
         ship: ShipId,
@@ -8201,6 +8215,35 @@ mod tests {
     }
 
     #[test]
+    fn a_purchase_tells_the_ship_changed_and_a_refused_one_tells_nothing() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session.take_events();
+        let _ = session.buy_ship(ShipId(999), "Kestrel", &mut NeverFires);
+        assert_eq!(session.take_events(), [], "refused");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.take_events(), [SessionEvent::ShipChanged]);
+    }
+
+    #[test]
+    fn an_on_purchase_change_of_ship_tells_the_ship_changed_again() {
+        let mut catalog = shipbuying();
+        catalog.ship_records[1].on_purchase = crate::control::Script::parse("H128");
+        let mut session = outfitted(&catalog);
+        session.take_events();
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.ship(), ShipId(128));
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::ShipChanged, SessionEvent::ShipChanged]
+        );
+    }
+
+    #[test]
     fn buying_a_ship_keeps_the_cargo_as_its_rule_says_with_the_trader_escorts() {
         let catalog = FakePilotCatalog {
             ship_records: [shipbuying().ship_records, vec![holds_record(130, 15, 1)]].concat(),
@@ -12731,8 +12774,7 @@ mod tests {
         // the boarding rule) and `G` to it; by the engine neither is held.
         let mut catalog = granting();
         booster(&mut catalog).max = 1;
-        let g = |session: Session| {
-            let mut session = session.with_set_ops(std::rc::Rc::new(crate::nova_set_ops()));
+        let g = |mut session: Session| {
             let expr = crate::control::SetExpr::parse("G200 G200").expect("parses");
             session.run_set(&expr, &mut Draws::of(&[]));
             session.pilot().owned(OutfitId(200))
@@ -12803,9 +12845,7 @@ mod tests {
             board_drawing(&mut boarded, NovaBoarding::default(), &ACE_DRAWS)
                 .0
                 .expect("boards");
-            let mut scripted = alongside(&catalog)
-                .with_set_ops(std::rc::Rc::new(crate::nova_set_ops()))
-                .with_rules(rules);
+            let mut scripted = alongside(&catalog).with_rules(rules);
             let expr = crate::control::SetExpr::parse("G200").expect("parses");
             scripted.run_set(&expr, &mut Draws::of(&[]));
             let owned = u16::from(fits);
@@ -12885,6 +12925,29 @@ mod tests {
             Some(Assigned::MyShip),
             "62 NPCs and the player: one slot"
         );
+    }
+
+    #[test]
+    fn only_use_as_my_ship_tells_the_ship_changed() {
+        let catalog = boardable();
+        let mut escort = captured(&catalog);
+        escort.take_events();
+        escort.assign(Assignment::Escort, &mut Draws::of(&[]));
+        assert_eq!(escort.take_events(), [], "an escort");
+        let mut mine = captured(&catalog);
+        mine.take_events();
+        assert_eq!(
+            mine.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::MyShip)
+        );
+        assert_eq!(mine.take_events(), [SessionEvent::ShipChanged], "my ship");
+        let mut full = crowded(62);
+        full.take_events();
+        assert_eq!(
+            full.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::Abandoned)
+        );
+        assert_eq!(full.take_events(), [], "abandoned");
     }
 
     #[test]
@@ -13610,6 +13673,43 @@ mod tests {
             Ok(SystemId(131))
         );
         assert_held_sound_plays_next_tick(&mut session);
+    }
+
+    #[test]
+    fn an_arrival_tells_the_system_changed() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+    }
+
+    #[test]
+    fn a_gates_exit_tells_the_system_changed_even_into_the_system_gone_in() {
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        assert_eq!(
+            session.enter_hypergate(None, &catalog, &mut Scripted::default()),
+            Err(GateRefusal::Cancelled)
+        );
+        assert_eq!(session.take_events(), [], "cancelled");
+        let mut session = at_gate(&catalog);
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default())
+            .expect("through");
+        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        let catalog = wormholes();
+        for (roll, system) in [(0, 131), (1, 130)] {
+            let mut session = at_wormhole(&catalog);
+            assert_eq!(
+                session.enter_wormhole(&catalog, &mut Scripted::rolling(&[roll])),
+                Ok(SystemId(system))
+            );
+            assert_eq!(
+                session.take_events(),
+                [SessionEvent::SystemChanged],
+                "{system}"
+            );
+        }
     }
 
     #[test]

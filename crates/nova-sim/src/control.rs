@@ -36,8 +36,9 @@
 //! [`execute`] runs a set expression on a target holding control bits
 //! ([`BitStore`]): it writes the bits itself, draws `R(...)` on the
 //! caller's [`Chance`](crate::Chance), and hands every other operator to
-//! the [`SetOpHandler`] registered for its kind in a [`SetRegistry`],
-//! skipping and reporting one with none (see the `set` submodule).
+//! the caller's dispatch, which applies it or gives back its kind as
+//! unhandled, skipping and reporting one given back (see the `set`
+//! submodule). The session's dispatch is `Session::apply_op`.
 
 mod set;
 
@@ -49,7 +50,7 @@ pub use nova_data::{
     TestOperand,
 };
 
-pub use self::set::{BitStore, SetOpHandler, SetRegistry, execute};
+pub use self::set::{BitStore, execute};
 use crate::catalog::{OutfitId, SystemId};
 use crate::pilot::Gender;
 
