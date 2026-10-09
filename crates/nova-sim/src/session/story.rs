@@ -18,7 +18,7 @@ use crate::chance::Chance;
 use crate::control::{Script, Test};
 use crate::market;
 use crate::pilot::Pilot;
-use crate::rulebook::RuleKey;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::day::{self, Day, Participant};
 use crate::story::dispatch::{self, DuplicateSubscription, Reentry, Registry, Stage};
 use crate::story::{
@@ -26,6 +26,7 @@ use crate::story::{
     SubscriptionId,
 };
 use crate::traffic::npc::NpcId;
+use crate::{hire, outfitter, shipyard, wares};
 
 /// Makes `to`'s system visible on `pilot`'s overlay, and so in `galaxy`,
 /// when `to` says it must be: whether it did.
@@ -169,6 +170,7 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             // The destroyed stellars' regeneration; the dominated ones'
             // defence regrowing joins it with rdm task planet-domination.
             Participant::Stellars => session.stellars_day(&mut *self.chance),
+            Participant::DayRolls => session.draw_day_rolls(&mut self.chance),
             Participant::DayPassed => session.raise(StoryEvent::DayPassed {
                 date: session.pilot.date,
             }),
@@ -176,14 +178,12 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             // crons-news-ranks phase 1, the missions' days left by missions
             // phase 2, the tribute by rdm task planet-domination, the
             // reinforcements once they are built, and the ranks by
-            // crons-news-ranks phase 3. The day rolls are still drawn
-            // afresh at each landing.
+            // crons-news-ranks phase 3.
             Participant::Crons
             | Participant::MissionDays
             | Participant::Tribute
             | Participant::Reinforcements
-            | Participant::Ranks
-            | Participant::DayRolls => {}
+            | Participant::Ranks => {}
         }
     }
 }
@@ -456,6 +456,40 @@ impl Session {
             },
         );
     }
+
+    /// The daily step's day rolls, as [`RuleKey::DayRolls`] reads: by the
+    /// engine, every ship class's hire and buy roll and every outfit's
+    /// buy roll drawn afresh on `chance` in the original's order
+    /// ([`wares::draw_day`], `_IncrementGameTime` @0xb7c4-0xb833), each
+    /// read as the bar and the shops read it. Every redraw due is dropped
+    /// with them: the day drew those classes afresh already. By the other
+    /// reading, nothing: a landing forgets the rolls instead.
+    fn draw_day_rolls(&mut self, chance: &mut dyn Chance) {
+        if self.rules.source_for(RuleKey::DayRolls) != RuleSource::Engine {
+            return;
+        }
+        let buy_random = self.rules.source_for(RuleKey::BuyRandom);
+        wares::draw_day(
+            &mut self.hire_rolls,
+            &mut self.ship_rolls,
+            &mut self.outfit_rolls,
+            self.ships.iter().map(|ship| {
+                (
+                    ship.id,
+                    hire::hire_roll(ship.hire_random),
+                    shipyard::buy_roll(ship.buy_random, buy_random),
+                )
+            }),
+            self.outfits.iter().map(|record| {
+                (
+                    record.id,
+                    outfitter::buy_roll(record.buy_random, buy_random),
+                )
+            }),
+            chance,
+        );
+        self.ship_redraws.clear();
+    }
 }
 
 #[cfg(test)]
@@ -618,6 +652,67 @@ mod tests {
         let mut chance = Scripted::default();
         session.take_off(&mut chance).expect("takes off");
         assert_eq!(chance.asked, Vec::<u8>::new(), "no roll");
+    }
+
+    /// [`surplus`], with ship classes 130 (hire 50, buy 60) and 129
+    /// (hire 30, buy 40) and outfit 301 (buy 70) on a chance.
+    fn rolling_days() -> FakePilotCatalog {
+        use crate::catalog::{OutfitRecord, ShipRecord};
+        let mut catalog = surplus();
+        catalog.ship_records.extend([
+            ShipRecord {
+                hire_random: 50,
+                buy_random: 60,
+                ..testkit::ship(130, testkit::FAST)
+            },
+            ShipRecord {
+                hire_random: 30,
+                buy_random: 40,
+                ..testkit::ship(129, testkit::FAST)
+            },
+        ]);
+        catalog.outfits.push(OutfitRecord {
+            buy_random: 70,
+            ..testkit::outfit(301, &[])
+        });
+        catalog
+    }
+
+    #[test]
+    fn a_day_draws_the_shop_and_hire_rolls_in_the_originals_order() {
+        let catalog = rolling_days();
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131).expect("arrives");
+        land_now(&mut session).expect("lands");
+        let mut chance = Scripted::default();
+        session.take_off(&mut chance).expect("takes off");
+        assert_eq!(
+            chance.asked,
+            [35, 30, 40, 50, 60, 70],
+            "after the day's event, each ship's hire then buy, then the outfit"
+        );
+    }
+
+    #[test]
+    fn each_day_draws_the_day_rolls_again() {
+        let catalog = rolling_days();
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = Scripted::default();
+        session.pass_days(2, &mut chance);
+        assert_eq!(
+            chance.asked,
+            [35, 30, 40, 50, 60, 70, 35, 30, 40, 50, 60, 70]
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_day_draws_no_roll() {
+        let rules = Rulebook::default().with_override(RuleKey::DayRolls, RuleSource::Bible);
+        let catalog = rolling_days();
+        let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+        let mut chance = Scripted::default();
+        session.pass_days(2, &mut chance);
+        assert_eq!(chance.asked, [35, 35], "the event's rolls alone");
     }
 
     #[test]

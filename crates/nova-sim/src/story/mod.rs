@@ -57,7 +57,12 @@
 //!    `_HandleReinforcements` sets @0x3929b) goes down by one
 //!    (@0xb724-0xb759).
 //! 8. Every active rank pays its salary, up to its cap (@0xb75b-0xb7c2).
-//! 9. The shipyard, hire and outfitter day rolls (@0xb7c4-0xb833).
+//! 9. The shipyard, hire and outfitter day rolls (@0xb7c4-0xb833), each
+//!    `Rand(100) + 1`, unconditionally for every record slot: for each
+//!    `shïp` slot by index (0 to 767, stride 0xabc), its hire roll
+//!    (+0xa2a, @0xb7d0-0xb7dd) and then its buy roll (+0xa2c,
+//!    @0xb7ee-0xb801); then for each `oütf` slot (0 to 511, stride 0x37c)
+//!    its buy roll (+0x1e, @0xb81c-0xb82f). See "Built by phase 6".
 //!
 //! The commodity price flux (`_HandleGlobalPriceFlux` @0x32054,
 //! `_HandleLocalPriceFlux` @0x320a6) and the escorts' pay
@@ -458,9 +463,9 @@
 //! One step passes one day. Its participants, `day::Participant`, run in
 //! the original's order, `Participant::ORDER` (see "A day"), through the
 //! `day::Day` port the session implements (`session/story.rs`). Phase 2
-//! fills the date and the events, phase 3 `DayPassed`, and phase 5 the
-//! destroyed stellars' regeneration; the others are empty slots until
-//! their phase:
+//! fills the date and the events, phase 3 `DayPassed`, phase 5 the
+//! destroyed stellars' regeneration, and phase 6 the day rolls; the others
+//! are empty slots until their phase:
 //!
 //! 1. the date moves on a day;
 //! 2. the crons, each starting or ending cron's script run as it is
@@ -474,8 +479,9 @@
 //!    (planet-domination);
 //! 7. the reinforcement countdown, once reinforcements are built;
 //! 8. the ranks' salaries (crons-news-ranks phase 3);
-//! 9. the day rolls (`wares::DayRolls`): not filled yet, so the session
-//!    still draws the shop and hire rolls afresh at each landing;
+//! 9. the day rolls (`wares::DayRolls`): every ship class's hire and buy
+//!    rolls, then every outfit's, drawn afresh (story-runtime phase 6;
+//!    see "Built by phase 6");
 //! 10. `DayPassed`, raised with the new date.
 //!
 //! Plug-in daily triggers (plugin-scripting-extensions phase 4) and a
@@ -789,6 +795,84 @@
 //!   regenerate (Un-destroy) stellar ID xxx", `Strength` "0 or -1 for an
 //!   invincible stellar" (of damage from planetary weapons), and `OnRegen`
 //!   "evaluated when the stellar automatically regenerates".
+//!
+//! ## Built by phase 6
+//!
+//! The daily step's ninth participant draws the shop and hire rolls
+//! (`wares::draw_day`): every roll is forgotten, a held owned outfit's
+//! too, then each ship class by ascending ID draws its hire roll and then
+//! its buy roll, and then each outfit by ascending ID its buy roll. The
+//! engine does not replicate the original's `Rand` stream, so a roll is
+//! drawn only when its reading is a chance of 1-99: a never or an always
+//! draws nothing, but the order among the draws is the original's. The
+//! readings are those the lists already use: `hire::hire_roll`,
+//! `shipyard::buy_roll` and `outfitter::buy_roll`.
+//!
+//! **A landing keeps them.** No landing path writes a roll, so a landing
+//! reads the rolls the last day drew, and one with no day passing (a
+//! relocation, or a take-off under `stay_days` = bible) keeps them. An
+//! owned outfit's hold lasts the rest of the day, past later landings. A
+//! class bought or declined is drawn again at once by the original
+//! (@0x5f0f8); here its pending redraw (`Session::shipyard`) is applied
+//! by a landing that passes no day, and dropped by a day's draw, which
+//! draws every roll afresh anyway. The single redraws after a hire, a
+//! buy or a decline stay lazy, drawn when the list next asks.
+//!
+//! **Nothing is saved.** The original redraws every roll on load
+//! (`_LoadPilotData` @0x7640b-0x76478) and for a new pilot (`_ResetPlayer`
+//! @0x1d84a-0x1d8b9), so a session that starts or loads has no rolls, and
+//! each is drawn the first time a list asks for it: the same outcome as
+//! the original's eager draw.
+//!
+//! **Readings.** The Rulebook key `day_rolls` defaults to the engine's
+//! daily draw. Its other reading is the port's earlier landing-time draw:
+//! a landing (and a relocation) forgets every roll and each is drawn the
+//! first time a list asks for it; the day draws none.
+//!
+//! In stock play every take-off passes a day under `stay_days` = engine,
+//! so each landing still sees freshly drawn rolls: the visible changes
+//! are only when the draws happen, a landing with no day passing, and an
+//! owned outfit's hold lasting the day.
+//!
+//! ## Checked for phase 6
+//!
+//! - **The fields.** `_LoadObjectData` copies a `shïp`'s `BuyRandom`
+//!   (+0x388) to +0xa28 and `HireRandom` (+0x38a) to +0xa26
+//!   (@0x7a23d-0x7a259), and clamps each unsigned above 100 to 100
+//!   (@0x7a340-0x7a367); an `oütf`'s `BuyRandom` (+0x3f0) goes to +0x1c
+//!   (@0x78b7c-0x78b83), clamped to 0-100 (@0x78b8d-0x78ba6). The rolls
+//!   are +0xa2a (hire), +0xa2c (buy) and the outfit's +0x1e.
+//! - **Which roll is which** (`_SetupPortAvailableShipTypes`
+//!   @0xbc7d-0xbcdd): the shipyard lists a class when `BuyRandom` is not
+//!   0 and at least +0xa2c, unsigned (@0xbc88-0xbc9b); the bar when
+//!   +0xa2a, times the registered test, is at most `HireRandom`
+//!   (@0xbc9f-0xbcdd). `_SetupPortAvailableItems` (@0xc05d-0xc08f) lists
+//!   an outfit not owned when its `BuyRandom` is above 0 and at least
+//!   +0x1e, signed; one owned (the count at `0x3b51a8`, @0xc063) is
+//!   listed, and its roll set to 0 (@0xc08f), so it holds until the next
+//!   day's draw overwrites it (@0xb82f).
+//! - **The order** (@0xb7c4-0xb833) is per ship slot hire then buy, then
+//!   every outfit slot, with no test in either loop: no `BuyRandom`,
+//!   `HireRandom`, tech or record-exists check. The step itself is
+//!   reached unconditionally after the ranks' loop (@0xb7c2).
+//! - **The other writers** of +0xa2a, +0xa2c and the outfit's +0x1e:
+//!   `_InitObjects` sets 50 (@0x1c68a, @0x1c696, @0x1c83f), `_ResetPlayer`
+//!   and `_LoadPilotData` draw with the same loops (@0x1d84a-0x1d8b9,
+//!   @0x7640b-0x76478), `_DoShipyardDialog` redraws a bought or declined
+//!   class's buy roll (@0x5f0f8) and a hired class's hire roll
+//!   (@0x5f21a), and the owned-outfit hold (@0xc08f). Nothing else:
+//!   neither `_PlayerLandOnStellar` nor `_DoPortDialog` writes one. The
+//!   other `0x1e(` hits read other records: @0x4597 and @0x5c1f a `wëap`
+//!   (stride 0xc8), @0x3620c a `0x3b540c` record, @0x3a681 a system
+//!   (stride 0x1fc).
+//! - **Not saved**: no roll is read outside the two listings (@0xbc94,
+//!   @0xbcb6, @0xc07c), so `_WritePilotData` saves none, and
+//!   `_LoadPilotData` draws them all afresh (@0x7640b-0x76478).
+//! - **One divergence outside this phase**: the loader's unsigned clamp
+//!   makes a negative `HireRandom` 100, always for hire (@0x7a35d-0x7a367,
+//!   then @0xbca6 lists any but 0), where the port's bar reads it as
+//!   never; the hire roll's reading is unchanged here (see the `hire`
+//!   module).
 
 //! # Mission lifecycle
 //!

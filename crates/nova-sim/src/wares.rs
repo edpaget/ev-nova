@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{LandingSite, OutfitId, OutfitRecord};
+use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId};
 use crate::chance::Chance;
 
 /// The `BuyRandom` or `HireRandom` from which an item is always on offer:
@@ -79,9 +79,48 @@ impl<K: Ord> DayRolls<K> {
         self.0.remove(key);
     }
 
+    /// Draws `key`'s item, rolling `roll`, now: a chance is drawn on
+    /// `chance` and kept, replacing any answer kept or held; never and
+    /// always draw and keep nothing.
+    pub(crate) fn draw(&mut self, key: K, roll: Roll, chance: &mut dyn Chance) {
+        if let Roll::Chance(percent) = roll {
+            self.0.insert(key, chance.fires(percent));
+        }
+    }
+
     /// Forgets every roll.
     pub(crate) fn clear(&mut self) {
         self.0.clear();
+    }
+}
+
+/// The day's draw of the three day rolls, as the original's daily step
+/// draws them (`_IncrementGameTime` @0xb7c4-0xb833): every roll is
+/// forgotten, a held one too, then each ship class of `ships` (its ID,
+/// hire roll and buy roll) by ascending ID draws its `hire` roll and then
+/// its `buy` roll, and then each outfit of `items` by ascending ID its
+/// `outfits` roll. Only a chance draws (see [`DayRolls::draw`]).
+pub(crate) fn draw_day(
+    hire: &mut DayRolls<ShipId>,
+    buy: &mut DayRolls<ShipId>,
+    outfits: &mut DayRolls<OutfitId>,
+    ships: impl IntoIterator<Item = (ShipId, Roll, Roll)>,
+    items: impl IntoIterator<Item = (OutfitId, Roll)>,
+    chance: &mut dyn Chance,
+) {
+    hire.clear();
+    buy.clear();
+    outfits.clear();
+    let mut ships: Vec<_> = ships.into_iter().collect();
+    ships.sort_by_key(|&(id, _, _)| id);
+    for (id, hire_roll, buy_roll) in ships {
+        hire.draw(id, hire_roll, chance);
+        buy.draw(id, buy_roll, chance);
+    }
+    let mut items: Vec<_> = items.into_iter().collect();
+    items.sort_by_key(|&(id, _)| id);
+    for (id, roll) in items {
+        outfits.draw(id, roll, chance);
     }
 }
 
@@ -329,6 +368,148 @@ mod tests {
         assert_eq!(rolls, DayRolls::default());
         assert!(!rolls.today(7, Roll::Chance(30), &mut chance));
         assert_eq!(chance.asked, [30, 20, 30, 30]);
+    }
+
+    #[test]
+    fn a_drawn_chance_is_drawn_now_and_kept() {
+        let mut rolls = DayRolls::default();
+        let mut chance = Scripted::answering(&[true]);
+        rolls.draw(7, Roll::Chance(40), &mut chance);
+        assert_eq!(chance.asked, [40], "drawn now");
+        assert!(rolls.today(7, Roll::Chance(40), &mut chance), "kept");
+        assert_eq!(chance.asked, [40]);
+    }
+
+    #[test]
+    fn a_draw_replaces_a_kept_or_held_answer() {
+        let mut rolls = DayRolls::default();
+        let mut chance = Scripted::answering(&[true, false, false]);
+        assert!(rolls.today(7, Roll::Chance(40), &mut chance));
+        rolls.draw(7, Roll::Chance(40), &mut chance);
+        assert!(!rolls.today(7, Roll::Chance(40), &mut chance), "replaced");
+        rolls.hold(8);
+        rolls.draw(8, Roll::Chance(60), &mut chance);
+        assert!(!rolls.today(8, Roll::Chance(60), &mut chance), "no hold");
+        assert_eq!(chance.asked, [40, 40, 60]);
+    }
+
+    #[test]
+    fn a_never_or_always_draw_draws_and_stores_nothing() {
+        let mut rolls = DayRolls::default();
+        let mut chance = Scripted::answering(&[true]);
+        rolls.draw(7, Roll::Never, &mut chance);
+        rolls.draw(8, Roll::Always, &mut chance);
+        assert!(chance.asked.is_empty());
+        assert_eq!(rolls, DayRolls::default(), "nothing stored");
+    }
+
+    /// The three day rolls, empty.
+    fn day() -> (DayRolls<ShipId>, DayRolls<ShipId>, DayRolls<OutfitId>) {
+        Default::default()
+    }
+
+    /// Ships 130 (hire 50, buy 60) and 129 (hire 30, buy 40), out of
+    /// order.
+    fn day_ships() -> Vec<(ShipId, Roll, Roll)> {
+        vec![
+            (ShipId(130), Roll::Chance(50), Roll::Chance(60)),
+            (ShipId(129), Roll::Chance(30), Roll::Chance(40)),
+        ]
+    }
+
+    /// Outfits 129 (70) and 128 (80), out of order.
+    fn day_items() -> Vec<(OutfitId, Roll)> {
+        vec![
+            (OutfitId(129), Roll::Chance(70)),
+            (OutfitId(128), Roll::Chance(80)),
+        ]
+    }
+
+    #[test]
+    fn a_day_draws_each_ships_hire_then_buy_by_id_then_each_outfit() {
+        let (mut hire, mut buy, mut outfits) = day();
+        let mut chance = Scripted::answering(&[true, false, false, true, true, false]);
+        draw_day(
+            &mut hire,
+            &mut buy,
+            &mut outfits,
+            day_ships(),
+            day_items(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [30, 40, 50, 60, 80, 70]);
+        let mut none = Scripted::default();
+        assert!(hire.today(ShipId(129), Roll::Chance(30), &mut none));
+        assert!(!buy.today(ShipId(129), Roll::Chance(40), &mut none));
+        assert!(!hire.today(ShipId(130), Roll::Chance(50), &mut none));
+        assert!(buy.today(ShipId(130), Roll::Chance(60), &mut none));
+        assert!(outfits.today(OutfitId(128), Roll::Chance(80), &mut none));
+        assert!(!outfits.today(OutfitId(129), Roll::Chance(70), &mut none));
+        assert!(none.asked.is_empty(), "each kept");
+    }
+
+    #[test]
+    fn a_day_skips_never_and_always_but_keeps_the_order() {
+        let (mut hire, mut buy, mut outfits) = day();
+        let mut chance = Scripted::default();
+        let ships = vec![
+            (ShipId(130), Roll::Never, Roll::Chance(60)),
+            (ShipId(129), Roll::Chance(30), Roll::Always),
+        ];
+        let items = vec![
+            (OutfitId(129), Roll::Always),
+            (OutfitId(128), Roll::Chance(80)),
+        ];
+        draw_day(&mut hire, &mut buy, &mut outfits, ships, items, &mut chance);
+        assert_eq!(chance.asked, [30, 60, 80]);
+    }
+
+    #[test]
+    fn a_day_forgets_a_hold_and_every_roll_not_drawn() {
+        let (mut hire, mut buy, mut outfits) = day();
+        outfits.hold(OutfitId(128));
+        outfits.hold(OutfitId(200));
+        hire.hold(ShipId(200));
+        buy.hold(ShipId(200));
+        let mut chance = Scripted::default();
+        draw_day(
+            &mut hire,
+            &mut buy,
+            &mut outfits,
+            day_ships(),
+            day_items(),
+            &mut chance,
+        );
+        let mut none = Scripted::default();
+        assert!(
+            !outfits.today(OutfitId(128), Roll::Chance(80), &mut none),
+            "drawn again: the hold is gone"
+        );
+        assert!(none.asked.is_empty());
+        assert!(!outfits.today(OutfitId(200), Roll::Chance(5), &mut none));
+        assert!(!hire.today(ShipId(200), Roll::Chance(5), &mut none));
+        assert!(!buy.today(ShipId(200), Roll::Chance(5), &mut none));
+        assert_eq!(none.asked, [5, 5, 5], "forgotten, so drawn when asked");
+    }
+
+    #[test]
+    fn a_second_day_draws_everything_again() {
+        let (mut hire, mut buy, mut outfits) = day();
+        let mut chance = Scripted::default();
+        for _ in 0..2 {
+            draw_day(
+                &mut hire,
+                &mut buy,
+                &mut outfits,
+                day_ships(),
+                day_items(),
+                &mut chance,
+            );
+        }
+        assert_eq!(
+            chance.asked,
+            [30, 40, 50, 60, 80, 70, 30, 40, 50, 60, 80, 70]
+        );
     }
 
     #[test]

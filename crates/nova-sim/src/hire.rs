@@ -357,6 +357,13 @@ pub(crate) struct Bar<'a> {
     pub(crate) rules: Rulebook,
 }
 
+/// How a ship class of `hire_random` rolls for hire each day: 0 or less
+/// never, [`MAX_HIRE_RANDOM`] or more always, and any other a
+/// `HireRandom` % chance. The bar's list and the day's draw share it.
+pub(crate) fn hire_roll(hire_random: i16) -> Roll {
+    Roll::of(hire_random)
+}
+
 impl Bar<'_> {
     /// Whether `test` holds: never when it did not parse.
     fn allows(&self, test: &Test) -> bool {
@@ -379,7 +386,7 @@ impl Bar<'_> {
             if ship.tech_level < 0 || !wares::tech_allows(ship.tech_level, self.site) {
                 continue;
             }
-            let today = match Roll::of(ship.hire_random) {
+            let today = match hire_roll(ship.hire_random) {
                 Roll::Never => false,
                 Roll::Always => true,
                 Roll::Chance(percent) => rolled(ship.id, percent),

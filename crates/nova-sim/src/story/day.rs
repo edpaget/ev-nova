@@ -27,7 +27,10 @@ pub(crate) enum Participant {
     Reinforcements,
     /// The ranks' salaries (@0xb75b-0xb7c2): crons-news-ranks phase 3.
     Ranks,
-    /// The shipyard, hire and outfitter day rolls (@0xb7c4-0xb833).
+    /// The shipyard, hire and outfitter day rolls (@0xb7c4-0xb833): each
+    /// ship class's hire roll (+0xa2a, @0xb7dd) then buy roll (+0xa2c,
+    /// @0xb801), then each outfit's buy roll (+0x1e, @0xb82f), built by
+    /// story-runtime phase 6.
     DayRolls,
     /// [`StoryEvent::DayPassed`](crate::story::StoryEvent::DayPassed),
     /// raised with the new date: last, so its subscriptions see the day's
