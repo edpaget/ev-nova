@@ -233,6 +233,16 @@ pub fn is_dockable(site: &LandingSite) -> bool {
     GateKind::of(site.flags2).is_none() && is_landable(site)
 }
 
+/// Whether a pilot may be docked at `site` whatever its destroyed state:
+/// it has the can-land flag and is no hypergate or wormhole. Being
+/// destroyed, or landable only once destroyed, does not count: a landed
+/// `M` docks so, as the original reads neither there (see the
+/// `script_effects` module of the session).
+#[must_use]
+pub fn is_dockable_destroyed_or_not(site: &LandingSite) -> bool {
+    GateKind::of(site.flags2).is_none() && has(site, StellarFlags::CAN_LAND)
+}
+
 /// The landable stellar among `sites` whose centre is nearest `position`,
 /// the earlier in `sites` of any equally near; `None` when none is
 /// landable.
@@ -521,6 +531,35 @@ mod tests {
             ),
             Ok(StellarId(128))
         );
+    }
+
+    #[test]
+    fn a_stellar_with_the_can_land_flag_and_no_gate_is_dockable_destroyed_or_not() {
+        use crate::gate::{HYPERGATE, WORMHOLE};
+        use StellarFlags as F;
+        for destroyed in [false, true] {
+            let site = |flags, flags2| LandingSite {
+                flags,
+                flags2,
+                destroyed,
+                ..with_flags(0)
+            };
+            for (flags, flags2, dockable) in [
+                (F::CAN_LAND, 0, true),
+                (F::CAN_LAND | F::ONLY_WHEN_DESTROYED, 0, true),
+                (F::CAN_LAND | F::STATION, 0, true),
+                (0, 0, false),
+                (F::ONLY_WHEN_DESTROYED, 0, false),
+                (F::CAN_LAND, HYPERGATE, false),
+                (F::CAN_LAND, WORMHOLE, false),
+            ] {
+                assert_eq!(
+                    is_dockable_destroyed_or_not(&site(flags, flags2)),
+                    dockable,
+                    "{flags:#x} {flags2:#x} {destroyed}"
+                );
+            }
+        }
     }
 
     #[test]

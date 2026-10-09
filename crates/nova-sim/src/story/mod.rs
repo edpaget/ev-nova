@@ -759,10 +759,11 @@
 //!   stellar the player's, checking neither landability nor the
 //!   destroyed state: `_EvalSetExp` calls `_StellarIsDestroyed` only for
 //!   `Y` (@0x15a71) and `_StellarIsLandable` never (see the
-//!   `script_effects` module). The engine's `M` docks only at a dockable
-//!   first stellar, its own reading for a gate or a stellar that cannot be
-//!   landed on, but asks it as if whole, so a first stellar `Y` destroyed
-//!   is docked at as the original docks there.
+//!   `script_effects` module). The engine's `M` docks at the first
+//!   stellar only when it has the can-land flag and is no gate, its own
+//!   reading, and reads neither its destroyed state nor whether it is
+//!   landable only once destroyed, so it docks there destroyed or not, as
+//!   the original does.
 //! - **Docked.** Neither `_DoPortDialog` nor the take-off
 //!   (`_PlayerLandOnStellar`) reads the destroyed state or landability:
 //!   the callers above are all there is. A `Y` on the docked stellar

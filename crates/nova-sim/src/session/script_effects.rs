@@ -73,8 +73,8 @@
 //! [`Session::market`] and the rest read it, until the take-off swaps the
 //! new system's stellars in. There is no other reading of that: an `N`
 //! leaves no stellar to rebuild the spaceport for. By `M` the pilot's
-//! stellar is the first one only when it can be landed on and is not a
-//! hypergate or wormhole, otherwise none: the pilot's stellar is what a
+//! stellar is the first one only when it has the can-land flag and is not
+//! a hypergate or wormhole, otherwise none: the pilot's stellar is what a
 //! save keeps as the stellar last landed on, through the flight after
 //! the take-off too, and [`Session::fly`] docks a reloaded pilot there,
 //! so the original's choice would dock it on a gate or a stellar that
@@ -152,17 +152,18 @@
 //! (`_dockedPortMissions`, `_MissionHandlePlayerEnteredNewSystem`) waits
 //! for missions. The first stellar is the first of
 //! [`PilotCatalog::landing_sites`], destroyed or not, as the original
-//! reads neither landability nor the destroyed state there. Whether it is
-//! dockable is asked of it as if whole, so a landed `M` docks the pilot at
-//! a first stellar `Y` destroyed, as the original does; only a gate or a
-//! stellar that cannot be landed on whole leaves it on none.
+//! reads neither landability nor the destroyed state there. A landed `M`
+//! docks the pilot at it when it has the can-land flag and is no gate,
+//! destroyed or not and landable only once destroyed or not
+//! ([`is_dockable_destroyed_or_not`]), as the original docks there; only
+//! a gate or a stellar without the can-land flag leaves it on none.
 
 use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
-use crate::catalog::{LandingSite, PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
+use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
-use crate::landing::is_dockable;
+use crate::landing::is_dockable_destroyed_or_not;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
 
@@ -344,13 +345,9 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         let sites = self.read_sites(catalog, system);
-        // The original reads no destroyed state here (see the module docs).
         let first = sites.first().map(|site| {
-            let whole = LandingSite {
-                destroyed: false,
-                ..*site
-            };
-            (site.position, is_dockable(&whole).then_some(site.id))
+            let dock = is_dockable_destroyed_or_not(site).then_some(site.id);
+            (site.position, dock)
         });
         let rules = self.script_effect_rules();
         let landed = self.landed.is_some();

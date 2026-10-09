@@ -180,6 +180,19 @@ mod tests {
     }
 
     #[test]
+    fn the_session_reads_the_stellars_lives_once_as_it_starts() {
+        let catalog = wrecking();
+        assert_eq!(*catalog.life_reads.borrow(), 0);
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(*catalog.life_reads.borrow(), 1);
+        run(&mut session, "Y128 Y129 U128");
+        session.pass_days(6, &mut Scripted::default());
+        assert_eq!(destroyed(&session, 129), None, "regenerated meanwhile");
+        session.begin(&catalog, &mut Scripted::default());
+        assert_eq!(*catalog.life_reads.borrow(), 1, "never again");
+    }
+
+    #[test]
     fn y_destroys_a_stellar_for_its_dead_time_as_every_reader_sees_it() {
         let catalog = wrecking();
         let mut session = quiet(&catalog);
@@ -647,6 +660,23 @@ mod tests {
         session.take_off(&mut Scripted::default());
         session.select_stellar(StellarPick::Slot(0));
         assert!(session.land().is_ok(), "whole");
+    }
+
+    #[test]
+    fn a_landed_m_docks_at_a_first_stellar_landable_only_once_destroyed_destroyed_or_not() {
+        let mut catalog = wrecking();
+        catalog.sites[1].1[0].flags |= StellarFlags::ONLY_WHEN_DESTROYED;
+        assert_eq!(catalog.sites[1].1[0].id, StellarId(140));
+        for script in ["Y140 M131", "M131"] {
+            let mut session = moved_landed(&catalog, script);
+            session.take_off(&mut Scripted::default());
+            session.select_stellar(StellarPick::Slot(0));
+            assert_eq!(
+                session.land().is_ok(),
+                script.starts_with('Y'),
+                "{script}: landable only once destroyed"
+            );
+        }
     }
 
     // A new pilot's stellars.
