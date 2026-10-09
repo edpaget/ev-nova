@@ -1016,6 +1016,11 @@ fn a_pilot_trades_at_a_profit_buys_an_outfit_and_a_ship_and_is_restored_by_open_
     );
     assert_eq!(restored.system(), SystemId(129));
     assert_eq!(restored.stellar(), Some(StellarId(129)));
-    assert_eq!(restored.date(), start.next_day());
+    // Eight days have passed: the take-off from Alpha's (1,
+    // `_PlayerLandOnStellar` @0x63440), the jump's (1), and leaving Beta
+    // Prime (6): the outfits' (`_DoPortDialog` @0x601fa), the ship's four
+    // (@0x6020e) and the take-off's (@0x63440).
+    let mut days = std::iter::successors(Some(start), |date| Some(date.next_day()));
+    assert_eq!(Some(restored.date()), days.nth(8));
     assert_eq!(game.session().stats(), stats);
 }

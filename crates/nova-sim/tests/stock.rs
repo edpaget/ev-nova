@@ -3396,14 +3396,15 @@ fn over_hg_kania(data: &GameData) -> Session {
     save["stellar"] = serde_json::json!(1404);
     let parked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(data, parked).expect("flies");
-    assert_eq!(session.take_off(), Some(StellarId(1404)));
+    assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(1404)));
     assert_eq!(session.player().position, Vec2::new(-70.0, 250.0));
     session
 }
 
 /// L, L over HG-Kania enters it, offering Tichel, Dani and Koria; picking
 /// Tichel brings the Shuttle out of HG-Tichel at (-400, -500), heading
-/// 120° at half its top speed, on the same day and with a full tank.
+/// 120° at half its top speed, a day on, the take-off's
+/// (`_PlayerLandOnStellar` @0x63440), and with a full tank.
 #[test]
 fn hg_kania_leads_to_hg_tichel() {
     let Some(dir) = common::nova_data() else {
@@ -3449,7 +3450,7 @@ fn hg_kania_leads_to_hg_tichel() {
         (speed - session.handling().max_speed / 2.0).abs() < 1e-4,
         "{speed}"
     );
-    assert_eq!(session.date_text(), "June 23, 1177 NC");
+    assert_eq!(session.date_text(), "June 24, 1177 NC");
     assert_eq!(session.reserves().fuel, full);
     assert_eq!(full, Gauge::full(300.0));
 }

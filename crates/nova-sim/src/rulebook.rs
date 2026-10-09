@@ -25,7 +25,8 @@
 //! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command ([`Session`](crate::Session)) | it attacks the player's target at once\* |
 //! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed ([`Session`](crate::Session)) | every fighter out goes back into its bay on arrival and on landing\* |
 //! | [`HireRequire`](RuleKey::HireRequire) | `hire_require` | hiring ignores a ship's `Require`, which hides it only with `Flags3` 0x0200 ([`Session`](crate::Session)) | an unmet `Require` makes a listed ship greyed and refused\* |
-//! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage ([`Session`](crate::Session)) | wages are paid only for the days that pass, a jump's\* |
+//! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage ([`Session`](crate::Session)) | wages are paid only for a jump's days; the days a stay passes pay none\* |
+//! | [`StayDays`](RuleKey::StayDays) | `stay_days` | leaving the spaceport passes days: half as many as escorts sold or upgraded, a day if an outfit was bought or sold, four if a ship was bought, and the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa, @0x6020e, `_PlayerLandOnStellar` @0x63440; [`Session`](crate::Session)) | a stay passes no days: only a jump's and a gate's like a jump pass‡‡‡‡ |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear ([`NovaPersons`](crate::NovaPersons)) | 5 %, one of those who may appear picked evenly |
@@ -154,6 +155,10 @@
 //! you trade ships", and nothing of an unsellable one in a trade-in. The
 //! other reading is the port's earlier behaviour, leaving unsellable
 //! outfits out of the trade-in too, not anything the Bible says.
+//!
+//! ‡‡‡‡ The Bible says nothing of days passing in port. The other reading
+//! is the port's earlier behaviour, no days passing, not anything the
+//! Bible says.
 //!
 //! # Adding a rule
 //!
@@ -311,12 +316,23 @@ rule_keys! {
     /// Whether leaving the spaceport costs the hired escorts' wages for a
     /// day: by the engine, each take-off pays every hired escort a day's
     /// wage, an escort the player cannot pay defecting
-    /// (`_DoEscortLand` @0x40853); otherwise wages are paid only for the
-    /// days that pass, which here means a jump's. The Bible is silent
-    /// here, so the other reading is the intended behaviour, not anything
-    /// the Bible says (see
+    /// (`_DoEscortLand` @0x40853); otherwise wages are paid only for a
+    /// jump's days; the days a stay passes ([`RuleKey::StayDays`]) pay
+    /// none. The Bible is silent here, so the other reading is the
+    /// intended behaviour, not anything the Bible says (see
     /// [`Session::with_rules`](crate::Session::with_rules)).
     TakeOffPay => "take_off_pay",
+    /// Whether days pass in the spaceport: by the engine, leaving it
+    /// passes, through the daily step, half as many days as escorts sold
+    /// or upgraded there, rounded down (`_DoEscortLand` @0x40849), then,
+    /// after their day's pay, a day if an outfit was bought or sold
+    /// (`_DoPortDialog` @0x601fa), four if a ship was bought (@0x6020e),
+    /// and the take-off's own day (`_PlayerLandOnStellar` @0x63440);
+    /// otherwise a stay passes no days, and only a jump's and a gate's
+    /// like a jump pass. The Bible says nothing of it, so the other
+    /// reading is the port's earlier behaviour, not anything the Bible
+    /// says (see [`Session::take_off`](crate::Session::take_off)).
+    StayDays => "stay_days",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -996,6 +1012,7 @@ mod tests {
                 RuleKey::FighterRecall,
                 RuleKey::HireRequire,
                 RuleKey::TakeOffPay,
+                RuleKey::StayDays,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,
@@ -1055,6 +1072,8 @@ mod tests {
         assert_eq!(RuleKey::CommQuote.key(), "comm_quote");
         assert_eq!(RuleKey::HireRequire.key(), "hire_require");
         assert_eq!(RuleKey::TakeOffPay.key(), "take_off_pay");
+        assert_eq!(RuleKey::StayDays.key(), "stay_days");
+        assert_eq!(RuleKey::from_key("stay_days"), Some(RuleKey::StayDays));
         assert_eq!(RuleKey::HireFee.key(), "hire_fee");
         assert_eq!(RuleKey::EscortWage.key(), "escort_wage");
         assert_eq!(RuleKey::FighterLaunch.key(), "fighter_launch");

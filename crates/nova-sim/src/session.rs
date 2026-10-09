@@ -222,10 +222,19 @@
 //! [`hire`](crate::hire) rules say, by the session's [`HireTerms`] and
 //! [`ControlBits`]: a hire pays its fee and joins the fleet with its daily
 //! wage, which makes a save due. Each hired escort is paid its wage for
-//! each day of a jump, and for a day at each take-off as the rule set
-//! reads [`RuleKey::TakeOffPay`]; one left unpaid defects
-//! ([`Session::take_pay_notes`]). Which wage it is paid follows
-//! [`RuleKey::EscortWage`], and hailing it shows it.
+//! each day of a jump, and for one day at each take-off, whatever days
+//! the stay passes, as the rule set reads [`RuleKey::TakeOffPay`]; one
+//! left unpaid defects ([`Session::take_pay_notes`]). Which wage it is
+//! paid follows [`RuleKey::EscortWage`], and hailing it shows it.
+//!
+//! Days pass through one daily step (see the [`story`](crate::story)
+//! module's "Daily step"): a jump's days, a gate's under
+//! [`GateArrivalRule::LikeJump`], and, as the rule set reads
+//! [`RuleKey::StayDays`], the days a spaceport stay passes as it is
+//! left: the take-off's own day, a day for an outfit bought or sold, four
+//! for a ship bought, and half as many as escorts sold or upgraded
+//! ([`Session::take_off`]). [`Session::set_date`] and loading a save
+//! write the date directly, with no day passing.
 //!
 //! The pilot's control bits are read with [`Session::control_bit`] and
 //! set or cleared with [`Session::set_control_bit`], which makes a save
@@ -301,6 +310,7 @@ mod outfits;
 mod persons;
 mod script_effects;
 mod ship_change;
+mod story;
 
 pub use hooks::HookRules;
 pub use ship_change::ShipChangeRules;
@@ -380,6 +390,7 @@ use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::shipyard::{self, Quote, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
+use crate::story::day::Stay;
 use crate::targeting::{self, TargetPick};
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Npc, NpcId};
@@ -585,6 +596,11 @@ pub struct Session {
     /// original keeps the flags in globals `_DoOutfitDialog` clears on
     /// opening, and the counts in its locals.
     opening: Opening,
+    /// What this spaceport stay has done that passes days as it is left
+    /// (see [`Session::take_off`]). A landing starts it afresh. It is not
+    /// saved: the original keeps it in flags `_DoPortDialog` clears on
+    /// opening (@0x5f93d-0x5f95a), and loading a save passes no time.
+    stay: Stay,
     /// Each ship class's roll for sale since the last landing, drawn the
     /// first time the shipyard's list asks it.
     ship_rolls: DayRolls<ShipId>,
@@ -667,6 +683,7 @@ impl Session {
     /// # Errors
     ///
     /// When the ship cannot be read, or the system no longer exists.
+    #[allow(clippy::too_many_lines)] // one line for each of the session's fields
     pub fn fly(
         catalog: &(impl PilotCatalog + CombatCatalog),
         mut pilot: Pilot,
@@ -750,6 +767,7 @@ impl Session {
             hire_rolls: DayRolls::default(),
             outfit_rolls: DayRolls::default(),
             opening: Opening::default(),
+            stay: Stay::default(),
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             frame: 0,
@@ -1643,20 +1661,11 @@ impl Session {
         self.pass_jump_days(chance);
     }
 
-    /// Lets the days the stats give a jump go by, each stepping the
-    /// planetary events, rolled on `chance`, and pays the hired escorts
-    /// their wages for them.
-    ///
-    /// The events step out of the pilot, so that their `ActivateOn` can
-    /// read the pilot through the session's control bits: no test reads
-    /// the events.
+    /// Lets the days the stats give a jump go by through the daily step
+    /// ([`Session::pass_days`]), the events rolled on `chance`, then pays
+    /// the hired escorts their wages for them, once.
     fn pass_jump_days(&mut self, chance: &mut (impl Chance + ?Sized)) {
-        let mut events = std::mem::take(&mut self.pilot.events);
-        for _ in 0..self.stats.jump_days {
-            self.pilot.date = self.pilot.date.next_day();
-            market::step_day(&self.goods, &mut events, self.gate(), chance);
-        }
-        self.pilot.events = events;
+        self.pass_days(self.stats.jump_days, chance);
         self.pay_escorts(self.stats.jump_days);
     }
 
@@ -1986,6 +1995,7 @@ impl Session {
         self.hire_rolls.clear();
         self.outfit_rolls.clear();
         self.open_opening();
+        self.stay = Stay::default();
         self.ship_rolls.clear();
         self.ship_redraws.clear();
         self.save_due = true;
@@ -2004,8 +2014,28 @@ impl Session {
     /// [`SessionEvent::SystemChanged`] when they are another system's than
     /// the stellars they replace. `None`, and nothing changes, when it has
     /// not landed.
-    pub fn take_off(&mut self) -> Option<StellarId> {
+    ///
+    /// Leaving passes the stay's days through the daily step, the events
+    /// rolled on `chance`, as [`RuleKey::StayDays`] reads: by the engine,
+    /// half as many days as escorts sold or upgraded, then the day's wage
+    /// [`RuleKey::TakeOffPay`] reads, then a day if an outfit was bought
+    /// or sold, four if a ship was bought, and the take-off's own day
+    /// (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa-0x6020e,
+    /// `_PlayerLandOnStellar` @0x63440). The wage is a day's whatever the
+    /// days.
+    pub fn take_off(&mut self, chance: &mut (impl Chance + ?Sized)) -> Option<StellarId> {
         let stellar = self.landed.take()?;
+        let stay = std::mem::take(&mut self.stay);
+        let stay_days = self.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
+        if stay_days {
+            self.pass_days(stay.escort_days(), chance);
+        }
+        if self.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
+            self.pay_escorts(1);
+        }
+        if stay_days {
+            self.pass_days(stay.leaving_days(), chance);
+        }
         self.frame = market::AFTER_TAKE_OFF_FRAME;
         if let Some(next) = self.next_sites.take() {
             self.sites = next.sites;
@@ -2018,9 +2048,6 @@ impl Session {
         }
         self.pilot.explore(self.pilot.system);
         self.traffic_due = true;
-        if self.rules.source_for(RuleKey::TakeOffPay) == RuleSource::Engine {
-            self.pay_escorts(1);
-        }
         self.restock_fleet();
         self.fleet.clear();
         self.sounds.push(SimSound::TookOff);
@@ -2207,6 +2234,7 @@ impl Session {
             }
             Direction::Sell => self.run_script(&record.on_sell, chance),
         }
+        self.stay.outfit_traded = true;
         self.refit(true, ReservePolicy::Hold);
         Ok(())
     }
@@ -2218,8 +2246,13 @@ impl Session {
     /// and the sell loop (@0x5c6ee-0x5d1b1) checks each sale afresh, so
     /// each pass here is checked as a single order is. It gives how many
     /// went through, or the refusal of the first, with nothing changed.
-    /// A `count` of none, which the dialog's Cancel gives, changes
-    /// nothing and makes no save due. The count is not checked against
+    /// A `count` of none, which the dialog's Cancel gives, moves nothing
+    /// and makes no save due; but when the order is allowed, the stay
+    /// still counts an outfit traded, so leaving passes its day: the
+    /// original sets its flag once Buy or Sell passes its own check
+    /// (`_DoOutfitDialog` @0x5c087-0x5c0a2, @0x5c5d5), whatever count
+    /// follows, a Cancel's 0 (`_DoQuantityDialog` @0x57138) too
+    /// (@0x5c555, @0x5d317). The count is not checked against
     /// [`Outfitter::count_max`]: whatever it is, the loop stops where the
     /// engine's does.
     pub fn outfit_counted(
@@ -2228,6 +2261,13 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> Result<u32, OutfitRefusal> {
+        if count == 0
+            && self
+                .outfitter(chance)
+                .is_some_and(|outfitter| outfitter.check(order).is_ok())
+        {
+            self.stay.outfit_traded = true;
+        }
         let mut done = 0;
         while done < count {
             match self.outfit(order, chance) {
@@ -2380,6 +2420,7 @@ impl Session {
             // its `OnPurchase` has run (@0x5f00d); the save is due already.
             self.pilot.paint = None;
         }
+        self.stay.ship_bought |= bought.is_some();
         bought.ok_or(ShipRefusal::NoShipyard)
     }
 
@@ -3415,7 +3456,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(*catalog.sites_asked.borrow(), [SystemId(130)]);
         land_now(&mut session).expect("lands");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         land_now(&mut session).expect("lands again");
         assert_eq!(*catalog.sites_asked.borrow(), [SystemId(130)]);
         let other = starting([Some(131), None, None, None]);
@@ -3477,7 +3518,7 @@ mod tests {
         });
         land_now(&mut session).expect("lands");
         let docked = *session.player();
-        assert_eq!(session.take_off(), Some(StellarId(128)));
+        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
         assert_eq!(session.landed(), None);
         assert_eq!(*session.player(), docked);
         assert_eq!(docked.position, Vec2::new(30.0, -40.0));
@@ -3494,9 +3535,9 @@ mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         session.tick(THRUST);
         let flying = *session.player();
-        assert_eq!(session.take_off(), None);
+        assert_eq!(session.take_off(&mut NeverFires), None);
         assert_eq!(*session.player(), flying);
-        assert_eq!(session.take_off(), None, "nor twice");
+        assert_eq!(session.take_off(&mut NeverFires), None, "nor twice");
     }
 
     #[test]
@@ -3570,7 +3611,7 @@ mod tests {
             }]
         );
         // Once off again, L requests clearance afresh.
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert!(matches!(
             session.land(),
             Ok(LandPress::Outcome(LandOutcome::Selected { .. }))
@@ -3590,7 +3631,7 @@ mod tests {
             Ok(LandOutcome::Landed(StellarId(128)).into())
         );
         // Planet 129 is far away: L refuses and keeps it.
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(
             session.select_stellar(StellarPick::Slot(1)),
             Some(StellarId(129))
@@ -3672,7 +3713,7 @@ mod tests {
         let mut pilot = pilot.clone();
         pilot.stellar = Some(StellarId(stellar));
         let mut session = Session::fly(catalog, pilot).expect("flies");
-        assert_eq!(session.take_off(), Some(StellarId(stellar)));
+        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(stellar)));
         land_now(&mut session)
     }
 
@@ -3893,7 +3934,7 @@ mod tests {
         let catalog = edge_lander();
         let mut session = landed_at_the_edge(&catalog);
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.jump_readiness(), JumpReadiness::Clear, "once off");
     }
 
@@ -4520,7 +4561,7 @@ mod tests {
         let docked = session.clone();
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Landed));
         assert_eq!(session, docked, "nothing changes");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(132)), "once off");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -4533,7 +4574,7 @@ mod tests {
     fn landing_is_refused_while_jumping() {
         let catalog = edge_lander();
         let mut session = landed_at_the_edge(&catalog);
-        session.take_off();
+        session.take_off(&mut NeverFires);
         begin_jump_now(&mut session).expect("jumps from over planet 140");
         let jumping = session.clone();
         assert_eq!(land_now(&mut session), Err(LandingRefusal::Jumping));
@@ -4557,7 +4598,7 @@ mod tests {
             session.tick(Controls::default());
         }
         assert_eq!(session.reserves().fuel.now, 200.0);
-        session.take_off();
+        session.take_off(&mut NeverFires);
         session.tick(Controls::default());
         assert_eq!(session.reserves().fuel.now, 201.0);
 
@@ -4598,10 +4639,10 @@ mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         land_now(&mut session).expect("lands");
         session.take_save_due();
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
         assert!(session.take_save_due());
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert!(!session.take_save_due(), "not landed: nothing happens");
     }
 
@@ -4638,7 +4679,7 @@ mod tests {
             session.pilot().explored().collect::<Vec<_>>(),
             [SystemId(130), SystemId(131)]
         );
-        session.take_off();
+        session.take_off(&mut NeverFires);
         session.take_save_due();
         begin_jump_now(&mut session).expect("jumps from the edge");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
@@ -4917,7 +4958,7 @@ mod tests {
         );
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "docked, nothing thrusts");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.take_sounds(), [SimSound::TookOff]);
         session.tick(THRUST);
         assert_eq!(
@@ -4930,13 +4971,13 @@ mod tests {
     #[test]
     fn taking_off_emits_took_off_and_not_taking_off_emits_nothing() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.take_sounds(), [], "not landed");
         land_now(&mut session).expect("lands");
         session.take_sounds();
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.take_sounds(), [SimSound::TookOff]);
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.take_sounds(), [], "nor twice");
     }
 
@@ -5071,7 +5112,7 @@ mod tests {
         assert_eq!(*catalog.goods_reads.borrow(), 4);
         land_now(&mut session).expect("lands");
         assert!(session.market().is_some());
-        session.take_off();
+        session.take_off(&mut NeverFires);
         jump(&mut session, &catalog, 131);
         assert_eq!(*catalog.goods_reads.borrow(), 4);
     }
@@ -5118,7 +5159,7 @@ mod tests {
         let prices: Vec<_> = market.rows.iter().map(|r| (r.good, r.price)).collect();
         assert_eq!(prices, [(FOOD, 75), (METAL, 160)]);
         assert_eq!((market.cash, market.capacity, market.free), (1000, 20, 20));
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.market(), None, "taken off");
         let mut plain = Session::start(&self::catalog()).expect("starts");
         land_now(&mut plain).expect("lands");
@@ -5440,7 +5481,7 @@ mod tests {
             Err(TradeRefusal::NotTraded),
             "by the Bible, not bought here"
         );
-        session.take_off();
+        session.take_off(&mut NeverFires);
         jump(&mut session, &catalog, 131);
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         assert_eq!(
@@ -5959,7 +6000,7 @@ mod tests {
     /// each good and takes off.
     fn take_off_with(session: &mut Session, tons: &[(Good, u32)]) {
         buy_goods(session, tons);
-        assert_eq!(session.take_off(), Some(StellarId(128)));
+        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
     }
 
     /// A session of [`breeding`] that has bought `tons` of each good at
@@ -6165,7 +6206,7 @@ mod tests {
 
     /// A food surplus at planet 140 (-15, 30 days, 35 % a day), and planet
     /// 140 a trade center trading food at 75.
-    fn surplus() -> FakePilotCatalog {
+    pub(super) fn surplus() -> FakePilotCatalog {
         let landers = edge_lander();
         FakePilotCatalog {
             sites: vec![(
@@ -6339,12 +6380,13 @@ mod tests {
         assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(140)))]);
         let market = session.market().expect("docked at the exchange");
         assert_eq!(market.events, ["An enormous food surplus"]);
-        session.take_off();
+        session.take_off(&mut NeverFires);
         let mut chance = Scripted::default();
         jump_with(&mut session, &catalog, 132, &mut chance);
+        // The take-off's day ages it too (`_PlayerLandOnStellar` @0x63440).
         assert_eq!(
             session.pilot().events().collect::<Vec<_>>(),
-            [(DisasterId(128), 29)]
+            [(DisasterId(128), 28)]
         );
         assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(140)))]);
         assert_eq!(chance.sides_asked, Vec::<u16>::new(), "not drawn again");
@@ -6852,7 +6894,7 @@ mod tests {
         let reads = *catalog.outfit_reads.borrow();
         session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
         session.outfitter(&mut NeverFires).expect("an outfitter");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         jump(&mut session, &catalog, 131);
         assert_eq!(*catalog.outfit_reads.borrow(), reads);
     }
@@ -7052,7 +7094,7 @@ mod tests {
     fn landing_takes_the_copy() {
         let mut session = outfitted(&outfitting());
         session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         land_now(&mut session).expect("lands");
         session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
         assert_eq!(session.pilot().cash(), 24_000 + 500);
@@ -8025,7 +8067,7 @@ mod tests {
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("bought");
         session.shipyard(&mut NeverFires).expect("a shipyard");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         jump(&mut session, &catalog, 131);
         assert_eq!(*catalog.ship_record_reads.borrow(), 2);
     }
@@ -8518,7 +8560,7 @@ mod tests {
         session
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("bought");
-        session.take_off().expect("took off");
+        session.take_off(&mut NeverFires).expect("took off");
         let mut expected = *session.player();
         for _ in 0..200 {
             session.tick(THRUST);
@@ -8593,7 +8635,7 @@ mod tests {
 
     /// Takes off and lands on planet 128 again.
     fn relanded(session: &mut Session) {
-        session.take_off().expect("takes off");
+        session.take_off(&mut NeverFires).expect("takes off");
         land_now(session).expect("lands again");
     }
 
@@ -9057,7 +9099,7 @@ mod tests {
         land_now(&mut session).expect("lands on planet 128");
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)], "landed");
-        session.take_off().expect("took off");
+        session.take_off(&mut NeverFires).expect("took off");
         assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)], "until it ticks");
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(npc_ids(&session), [NpcId(2), NpcId(3)]);
@@ -9072,7 +9114,7 @@ mod tests {
         land_now(&mut session).expect("lands on planet 128");
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(npc_ids(&session), [], "landed");
-        session.take_off().expect("took off");
+        session.take_off(&mut NeverFires).expect("took off");
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)]);
     }
@@ -9648,7 +9690,7 @@ mod tests {
         assert!(hits > 3, "{hits}");
         session.tick_combat(Rules::default(), &mut NeverFires);
         land_now(&mut session).expect("lands");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         session.tick_traffic(&catalog, &spy, &mut NeverFires);
         assert_eq!(spy.struck.take(), [], "gone with the system's traffic");
     }
@@ -10008,7 +10050,7 @@ mod tests {
         session
             .outfit(buy(OutfitId(305)), &mut NeverFires)
             .expect("bought");
-        session.take_off().expect("took off");
+        session.take_off(&mut NeverFires).expect("took off");
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
             fired_by_the_player(&session.take_combat_events()),
@@ -10083,7 +10125,7 @@ mod tests {
         session
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("bought");
-        session.take_off().expect("took off");
+        session.take_off(&mut NeverFires).expect("took off");
         session.hold_trigger(FIRE);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
@@ -12805,7 +12847,7 @@ mod tests {
     #[test]
     fn no_fuel_is_sold_in_flight() {
         let mut session = half_empty_at_port();
-        session.take_off();
+        session.take_off(&mut NeverFires);
         session.take_save_due();
         assert_refused(session, RechargeRefusal::NoFuel);
     }

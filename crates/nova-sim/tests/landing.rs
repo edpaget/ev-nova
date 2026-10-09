@@ -7,8 +7,8 @@ use nova_sim::landing::StellarFlags;
 use nova_sim::{
     CharacterStart, Clearance, CombatCatalog, CommodityStrings, Controls, DateAffixes,
     DisasterRecord, GovtRecord, HullRecord, JunkRecord, LandOutcome, LandPress, LandingRefusal,
-    LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId, StarSystem,
-    StartDate, StartError, StellarId, SystemId, Vec2, WeaponRecord,
+    LandingSite, NeverFires, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId,
+    StarSystem, StartDate, StartError, StellarId, SystemId, Vec2, WeaponRecord,
 };
 
 /// One `chär` flying an average ship that turns 6° a tick from system
@@ -234,6 +234,6 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     );
     assert_eq!(session.player().velocity, Vec2::ZERO);
     assert_eq!(session.player().position, Vec2::ZERO);
-    assert_eq!(session.take_off(), Some(StellarId(128)));
+    assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
     assert_eq!(session.landed(), None);
 }

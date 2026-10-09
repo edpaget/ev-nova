@@ -558,7 +558,7 @@ mod tests {
             let mut session = landed(&catalog);
             let _ = session.relocate(&catalog, SystemId(system), StellarId(stellar));
             assert_eq!(session.take_events(), told, "{system} {stellar}");
-            session.take_off();
+            session.take_off(&mut NeverFires);
             assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
         }
     }
@@ -581,7 +581,7 @@ mod tests {
                 .relocate(&catalog, SystemId(system), StellarId(stellar))
                 .expect("moves");
             assert_eq!(session.take_events(), [told], "{system} {stellar}");
-            session.take_off();
+            session.take_off(&mut NeverFires);
             assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
         }
     }
@@ -593,7 +593,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(session.npcs().len(), 3);
     }
@@ -680,7 +680,7 @@ mod tests {
         assert!(session.traffic_due);
         assert_eq!(session.pilot().escorts().len(), 2, "the fighter still out");
         assert_eq!(session.take_fighter_notes(), []);
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.take_sounds(), [crate::sound::SimSound::TookOff]);
         session.tick(crate::flight::Controls::default());
         assert_eq!(

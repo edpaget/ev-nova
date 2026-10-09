@@ -24,8 +24,10 @@
 //! A refused hire changes nothing.
 //!
 //! **Paying.** Each hired escort is paid its wage for each day of a jump,
-//! once the date has moved on, and for one day at each take-off as the
-//! rule set reads [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay);
+//! once the date has moved on, and for one day at each take-off, whatever
+//! days the stay passes
+//! ([`RuleKey::StayDays`](crate::RuleKey::StayDays)), as the rule set
+//! reads [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay);
 //! the wage it is paid follows
 //! [`RuleKey::EscortWage`](crate::RuleKey::EscortWage). One the cash does not cover defects,
 //! its record and its NPC gone at once, so it is never placed in the next
@@ -413,7 +415,7 @@ mod tests {
             listed(&session.escorts_for_hire(&mut chance).expect("a bar")),
             [129]
         );
-        session.take_off().expect("takes off");
+        session.take_off(&mut NeverFires).expect("takes off");
         assert_eq!(session.escorts_for_hire(&mut chance), None, "in flight");
         assert_eq!(land_now(&mut session), Ok(BAR_AT));
         let list = session.escorts_for_hire(&mut chance).expect("a bar");
@@ -735,7 +737,7 @@ mod tests {
         let catalog = barred(vec![hireable(129, 100)]);
         let mut session = landed(&catalog, 25_000);
         session.hire(ShipId(129), &mut NeverFires).expect("hires");
-        session.take_off().expect("takes off");
+        session.take_off(&mut NeverFires).expect("takes off");
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         let placed = |session: &Session| {
             let id = session.fleet[0].expect("placed");
@@ -946,7 +948,7 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         assert_eq!(session.landed(), Some(BAR_AT), "resumed docked");
         assert_eq!(session.fleet, [], "none placed yet");
-        session.take_off().expect("takes off");
+        session.take_off(&mut NeverFires).expect("takes off");
         assert_eq!(ships(&session), [(129, None, false), (129, None, true)]);
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(2)]);
     }
@@ -974,7 +976,7 @@ mod tests {
     fn by_the_engine_each_take_off_pays_a_days_wages() {
         let mut session = docked(1000, RuleSource::Engine);
         assert_eq!(session.pilot().cash(), 1000, "landing pays nothing");
-        session.take_off().expect("takes off");
+        session.take_off(&mut NeverFires).expect("takes off");
         assert_eq!(session.pilot().cash(), 600);
         assert_eq!(session.take_pay_notes(), []);
         assert_eq!(
@@ -988,13 +990,26 @@ mod tests {
     }
 
     #[test]
+    fn a_take_off_pays_one_days_wage_whatever_the_stay_passes() {
+        for (rule, cash) in [(RuleSource::Engine, 600), (RuleSource::Bible, 1000)] {
+            let mut session = docked(1000, rule);
+            let landed = session.date();
+            session.stay.ship_bought = true;
+            session.take_off(&mut NeverFires).expect("takes off");
+            assert_eq!(session.pilot().cash(), cash, "{rule:?}");
+            let mut days = std::iter::successors(Some(landed), |date| Some(date.next_day()));
+            assert_eq!(Some(session.date()), days.nth(5), "{rule:?}");
+        }
+    }
+
+    #[test]
     fn by_the_engine_an_escort_unpaid_at_take_off_is_gone_before_the_fleet_is_placed() {
         let mut session = docked(350, RuleSource::Engine);
         assert_eq!(
             session.rules().source_for(RuleKey::TakeOffPay),
             RuleSource::Engine
         );
-        session.take_off().expect("takes off");
+        session.take_off(&mut NeverFires).expect("takes off");
         assert_eq!(session.pilot().cash(), 250);
         assert_eq!(session.pilot().escorts().len(), 3);
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
@@ -1009,7 +1024,7 @@ mod tests {
             session.rules().source_for(RuleKey::TakeOffPay),
             RuleSource::Bible
         );
-        session.take_off().expect("takes off");
+        session.take_off(&mut NeverFires).expect("takes off");
         assert_eq!(session.pilot().cash(), 1000);
         session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
         jump(&mut session, &paying(), 131).expect("arrives");

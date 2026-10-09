@@ -20,7 +20,7 @@
 //!
 //! Where the original cannot settle a question, or the design does not
 //! follow it, the section names the [`Rulebook`](crate::Rulebook) key the
-//! building phase adds and its readings. This phase adds none.
+//! building phase adds and its readings. Phase 2 adds `stay_days`.
 //!
 //! # Findings
 //!
@@ -87,6 +87,32 @@
 //!
 //! A stay ends with the escorts (@0x601a0), the outfitting day, the
 //! ship's days, then the take-off's day.
+//!
+//! Checked for phase 2:
+//!
+//! - `_PlayerLandOnStellar` reaches `_IncrementGameTime` @0x63440 with no
+//!   branch past it (@0x631c4-0x63440), whatever services the stellar
+//!   has. Its one caller, `_HandlePlayerDockRequest` @0x66f29, sends a
+//!   hypergate to `_PlayerEnterHypergate` (@0x66ed6) and a wormhole to
+//!   `_PlayerEnterWormhole` (@0x66f0d) first, so the original never takes
+//!   off from a gate. A pilot resumed docked at one is the engine's own,
+//!   and its take-off passes the day as any other.
+//! - `_DoPortDialog` clears both flags as the port opens
+//!   (@0x5f93d-0x5f95a). The ship flag is set only once the name prompt
+//!   is confirmed (@0x5ebc2-0x5ebce).
+//! - The outfit flag is set once Buy or Sell passes its own check
+//!   (`_CanBuyOutfitItem` @0x5c087-0x5c0a2; the sellable flag @0x5c5d5),
+//!   whatever count follows: a quantity dialog's Cancel gives 0
+//!   (`_DoQuantityDialog` @0x57138), the loop runs no time, and the flag
+//!   is set all the same (@0x5c555 after buying, @0x5d317 after selling).
+//!   A sale sets it as a purchase does.
+//! - `_DoEscortLand` counts (sold + upgraded) / 2, truncated
+//!   (@0x407ed-0x407fb), passes those days (@0x40849), then always pays
+//!   one day's wage (`_DoEscortPayment(1)` @0x4085a), reached also with
+//!   nothing sold (@0x40347, @0x405cf).
+//! - A `Q` sets `_absquatulateStr` (@0x15bee); `_PortFilter` then ends the
+//!   dialog (@0x4f060), and `_DoPortDialog` leaves by the same close
+//!   (@0x5fcc6-0x5fcd0, @0x60196, @0x601a0-0x6020e).
 //!
 //! ## One landing
 //!
@@ -388,10 +414,14 @@
 //!
 //! # Daily step
 //!
-//! Built by story-runtime phase 2; each participant by the phase named.
+//! Built by story-runtime phase 2 (`day`); each participant by the phase
+//! named.
 //!
-//! One step passes one day. Its participants run in the original's order
-//! (see "A day"):
+//! One step passes one day. Its participants, `day::Participant`, run in
+//! the original's order, `Participant::ORDER` (see "A day"), through the
+//! `day::Day` port the session implements (`session/story.rs`). Phase 2
+//! fills the date and the events; the others are empty slots until their
+//! phase:
 //!
 //! 1. the date moves on a day;
 //! 2. the crons, each starting or ending cron's script run as it is
@@ -404,7 +434,8 @@
 //!    phase 5);
 //! 7. the reinforcement countdown, once reinforcements are built;
 //! 8. the ranks' salaries (crons-news-ranks phase 3);
-//! 9. the day rolls (`wares::DayRolls`);
+//! 9. the day rolls (`wares::DayRolls`): not filled yet, so the session
+//!    still draws the shop and hire rolls afresh at each landing;
 //! 10. `DayPassed`, raised by story-runtime phase 3.
 //!
 //! Plug-in daily triggers (plugin-scripting-extensions phase 4) and a
@@ -415,26 +446,31 @@
 //!
 //! Days pass through the step on every path the original passes them on:
 //!
-//! - a jump's arrival, its days (today's `pass_jump_days`), and a gate's
-//!   under [`GateArrivalRule::LikeJump`](crate::GateArrivalRule::LikeJump);
-//! - every take-off: one day, after the spaceport's own;
-//! - leaving the spaceport having bought or sold an outfit: one day;
-//!   having bought a ship: four;
-//! - selling or upgrading escorts there: half as many days as escorts,
-//!   rounded down;
+//! - a jump's arrival, its days (`pass_jump_days`), and a gate's under
+//!   [`GateArrivalRule::LikeJump`](crate::GateArrivalRule::LikeJump);
+//! - leaving the spaceport ([`Session::take_off`](crate::Session::take_off)),
+//!   as `day::Stay`, the stay's tally, counts: half as many days as
+//!   escorts sold or upgraded, rounded down; then a day if an outfit was
+//!   bought or sold, four if a ship was bought, and every take-off's own
+//!   day. A `Q` that ends the stay leaves the same way;
 //! - a mission's success or auto-abort: its `DatePostInc` (missions
 //!   phase 2).
 //!
-//! The escape pod's days wait for the escape pod. `Session::set_date` and
-//! loading a save write the date directly, with no participant run.
+//! The stay's days follow the Rulebook key `stay_days`: by the engine,
+//! as above; otherwise a stay passes no days, the port's earlier
+//! behaviour. Nothing raises the escorts' count yet: the escort dialog's
+//! Sell and Upgrade (rdm task escorts-follow-up) will. The escape pod's
+//! days wait for the escape pod. `Session::set_date` and loading a save
+//! write the date directly, with no participant run.
 //!
 //! Escort pay and the price flux are not participants: they run once
-//! after a transition's days, as the original's do. Today
-//! `pass_jump_days` pays the wages once after its days, and
-//! [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay) already pays a day's
-//! wage at each take-off. The engine has no price flux: `market::step_day`
-//! steps only the `öops` events, which move prices. Phase 2 moves it to
-//! its place, fifth.
+//! after a transition's days, as the original's do. `pass_jump_days`
+//! pays the wages once after its days, and
+//! [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay) pays one day's wage
+//! at each take-off, after the escorts' days and before the others, as
+//! `_DoEscortLand` pays (@0x4085a), whatever the days. The engine has no
+//! price flux: `market::step_day` steps only the `öops` events, which move
+//! prices, as the fifth participant.
 //!
 //! # Galaxy overlay
 //!
@@ -523,6 +559,8 @@
 //! - news (crons-news-ranks phase 2), which the original fills with no
 //!   tags: a text with none comes out unchanged;
 //! - dialogue nodes (plugin-scripting-extensions phase 3).
+
+pub(crate) mod day;
 
 use crate::catalog::{StellarId, SystemId};
 use crate::control::{Script, Test};
