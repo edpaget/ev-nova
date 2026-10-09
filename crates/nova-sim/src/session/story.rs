@@ -1282,6 +1282,20 @@ mod tests {
     }
 
     #[test]
+    fn a_change_to_the_galaxy_leaving_the_stellars_shown_as_they_were_reads_none_again() {
+        let catalog = testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.set_stellar_state(StellarId(128), Some(left(3)));
+        let reads = session_reads(&catalog);
+        assert!(session.change_galaxy(&catalog, |overlay| {
+            overlay.set_destroyed(StellarId(128), Some(left(2)));
+            overlay.set_destroyed(StellarId(300), Some(left(2)));
+        }));
+        assert_eq!(session_reads(&catalog), reads, "a countdown, and another's");
+        assert!(session.sites[0].destroyed);
+    }
+
+    #[test]
     fn a_change_to_the_galaxy_that_destroys_a_stellar_shown_reads_it_again() {
         let catalog = testkit::catalog();
         let mut session = Session::start(&catalog).expect("starts");
