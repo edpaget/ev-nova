@@ -68,8 +68,6 @@
 
 use super::{Session, clamp_i16};
 use crate::catalog::{OutfitId, OutfitRecord, SystemId};
-use crate::chance::Chance;
-use crate::control::{SetOp, SetOpHandler};
 use crate::exploration::map_reveals;
 use crate::grant::{GrantStock, held_to_max};
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records};
@@ -233,42 +231,6 @@ impl Session {
     }
 }
 
-/// `Gxxx`: grants one of the outfit (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct GrantOutfitOp;
-
-impl SetOpHandler<Session> for GrantOutfitOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::GrantOutfit(outfit) = op {
-            session.script_grant(*outfit);
-        }
-    }
-}
-
-/// `Dxxx`: removes one of the outfit (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RemoveOutfitOp;
-
-impl SetOpHandler<Session> for RemoveOutfitOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::RemoveOutfit(outfit) = op {
-            session.script_remove(*outfit);
-        }
-    }
-}
-
-/// `Xxxxx`: explores the system (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ExploreOp;
-
-impl SetOpHandler<Session> for ExploreOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::Explore(system) = op {
-            session.explore_system(*system);
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -276,7 +238,7 @@ mod tests {
 
     use super::*;
     use crate::catalog::{GovtId, GovtRecord, StarSystem};
-    use crate::control::{ScriptNote, SetExpr};
+    use crate::control::{ScriptNote, SetExpr, SetOp};
     use crate::outfit_effects::{CLEAN_RECORD, MAP, PAINT, Rgb15};
     use crate::rulebook::{RuleKey, Rulebook};
     use crate::stats::MORE_SHIELD;
@@ -490,7 +452,7 @@ mod tests {
 
     /// A session of `catalog` with Nova's set operators.
     fn scripted(catalog: &FakePilotCatalog) -> Session {
-        session(catalog).with_set_ops(std::rc::Rc::new(crate::nova_set_ops()))
+        session(catalog)
     }
 
     #[test]
@@ -637,11 +599,9 @@ mod tests {
         // The parser takes 128 to 639 only; a handler given another ID
         // ignores it.
         for id in [127, 640] {
-            RemoveOutfitOp.apply(
-                &SetOp::RemoveOutfit(OutfitId(id)),
-                &mut session,
-                &mut Scripted::default(),
-            );
+            session
+                .apply_op(&SetOp::RemoveOutfit(OutfitId(id)), &mut Scripted::default())
+                .expect("D applies");
         }
         assert_eq!(session.pilot().owned(OutfitId(127)), 1, "out of range");
         assert_eq!(session.pilot().owned(OutfitId(640)), 1, "out of range");

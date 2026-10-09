@@ -272,7 +272,7 @@ pub use combat::report::SimDiagnostic;
 pub use combat::{CombatEvent, Downed, Rules, ShipRef, Sortie, Strike};
 pub use control::{
     Bit, BitStore, BitWrite, ControlBitSet, ControlBits, NovaBits, PilotFacts, Script, ScriptNote,
-    SetExpr, SetOp, SetOpHandler, SetOpKind, SetRegistry, Test, TestExpr,
+    SetExpr, SetOp, SetOpKind, Test, TestExpr,
 };
 pub use date::GameDate;
 pub use escort::{
@@ -317,7 +317,7 @@ pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
     HookRules, LandPress, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent,
-    Settled, ShipChangeRules, StellarPick, nova_set_ops,
+    Settled, ShipChangeRules, StellarPick,
 };
 pub use shipyard::{ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;

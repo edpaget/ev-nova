@@ -119,7 +119,6 @@ use crate::catalog::{CommCatalog, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::armament;
 use crate::combat::hull::{DisableRule, NovaDisable};
-use crate::control::{SetOp, SetOpHandler};
 use crate::outfitter::OutfitFlags;
 use crate::pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -355,61 +354,6 @@ impl Session {
     }
 }
 
-/// `Cxxx`: changes the ship, keeping every outfit (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ChangeShipOp;
-
-impl SetOpHandler<Session> for ChangeShipOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::ChangeShip(ship) = op {
-            session.change_ship(*ship, OutfitCarry::Keep, false);
-        }
-    }
-}
-
-/// `Exxx`: changes the ship, keeping every outfit and adding the new
-/// class's default items (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ChangeShipWithDefaultsOp;
-
-impl SetOpHandler<Session> for ChangeShipWithDefaultsOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::ChangeShipWithDefaults(ship) = op {
-            let clamp = session.ship_change_rules().clamps();
-            session.change_ship(*ship, OutfitCarry::KeepWithDefaults, clamp);
-        }
-    }
-}
-
-/// `Hxxx`: changes the ship, keeping the persistent outfits and adding
-/// the new class's default items (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ReplaceShipOp;
-
-impl SetOpHandler<Session> for ReplaceShipOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::ReplaceShip(ship) = op {
-            let rules = session.ship_change_rules();
-            let carry = OutfitCarry::Persistent {
-                mask: rules.persistent(),
-            };
-            session.change_ship(*ship, carry, rules.clamps());
-        }
-    }
-}
-
-/// `Txxx`: renames the ship from a string list (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RenameShipOp;
-
-impl SetOpHandler<Session> for RenameShipOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, chance: &mut dyn Chance) {
-        if let SetOp::RenameShip(list) = op {
-            session.rename_ship(list.0, chance);
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -419,7 +363,7 @@ mod tests {
     use super::*;
     use crate::catalog::{HullRecord, OutfitId, OutfitRecord, ShipRecord, StockWeapon, WeaponId};
     use crate::combat::hull::{HullSpec, TOUGH};
-    use crate::control::{Bit, Script, SetExpr, SetOpKind};
+    use crate::control::{Bit, Script, SetExpr, SetOp};
     use crate::flight::ShipState;
     use crate::geometry::Vec2;
     use crate::handling::ShipFields;
@@ -429,6 +373,7 @@ mod tests {
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
     use crate::save;
+    use crate::session::control::SetOpObserver;
     use crate::stats::{MORE_SHIELD, ShipStats};
     use crate::testkit::{
         FAST, FakePilotCatalog, Scripted, catalog, hull, land_now, outfit, ship, weapon,
@@ -923,12 +868,12 @@ mod tests {
 
     // Hooks.
 
-    /// Counts each `S` it applies.
+    /// Counts each `S` it sees run.
     #[derive(Debug, Default)]
     struct Probe(RefCell<Vec<i16>>);
 
-    impl SetOpHandler<Session> for Probe {
-        fn apply(&self, op: &SetOp, _session: &mut Session, _chance: &mut dyn Chance) {
+    impl SetOpObserver for Probe {
+        fn saw(&self, op: &SetOp, _session: &Session) {
             if let SetOp::StartMission(mission) = op {
                 self.0.borrow_mut().push(mission.0);
             }
@@ -940,8 +885,7 @@ mod tests {
         let catalog = changing();
         for op in ["C129", "E129", "H129", "C130", "E130", "H130"] {
             let probe = Rc::new(Probe::default());
-            let registry = crate::nova_set_ops().with(SetOpKind::StartMission, probe.clone());
-            let mut session = session(&catalog).with_set_ops(Rc::new(registry));
+            let mut session = session(&catalog).with_set_op_observer(probe.clone());
             run(&mut session, op);
             assert_ne!(session.ship(), ShipId(128), "{op}: changed");
             assert!(probe.0.borrow().is_empty(), "{op}");

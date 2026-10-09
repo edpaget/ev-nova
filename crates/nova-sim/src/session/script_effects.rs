@@ -146,7 +146,6 @@ use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
-use crate::control::{SetOp, SetOpHandler};
 use crate::geometry::Vec2;
 use crate::landing::is_dockable;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -332,57 +331,6 @@ impl Session {
     }
 }
 
-/// `Mxxx`: moves the player to the system, at its first stellar (see the
-/// module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct MoveToOp;
-
-impl SetOpHandler<Session> for MoveToOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::MoveTo(system) = op {
-            session.queued.moves.push(ScriptMove::To(*system));
-        }
-    }
-}
-
-/// `Qxxx`: makes the player leave the stellar it is landed on, with a
-/// message from a string list (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct LeaveStellarOp;
-
-impl SetOpHandler<Session> for LeaveStellarOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, chance: &mut dyn Chance) {
-        if let SetOp::LeaveStellar(list) = op {
-            session.leave_stellar(list.0, chance);
-        }
-    }
-}
-
-/// `Pxxx`: plays the sound (see the module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct PlaySoundOp;
-
-impl SetOpHandler<Session> for PlaySoundOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::PlaySound(sound) = op {
-            session.play_script_sound(*sound);
-        }
-    }
-}
-
-/// `Nxxx`: moves the player to the system, keeping its position (see the
-/// module docs).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct MoveKeepPositionOp;
-
-impl SetOpHandler<Session> for MoveKeepPositionOp {
-    fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
-        if let SetOp::MoveKeepPosition(system) = op {
-            session.queued.moves.push(ScriptMove::KeepPosition(*system));
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
@@ -396,7 +344,7 @@ mod tests {
     use crate::catalog::CommCatalog;
     use crate::chance::NeverFires;
     use crate::combat::Rules;
-    use crate::control::{SetExpr, SetOpKind};
+    use crate::control::SetExpr;
     use crate::gate::HYPERGATE;
     use crate::handling::ShipFields;
     use crate::hyperspace::JumpRefusal;
@@ -1156,15 +1104,6 @@ mod tests {
         moved(&mut session, &catalog, "N130");
         session.take_off();
         assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
-    }
-
-    #[test]
-    fn the_moves_the_leave_and_the_sound_are_registered_by_nova() {
-        let kinds: Vec<SetOpKind> = crate::session::nova_set_ops().kinds().collect();
-        assert!(kinds.contains(&SetOpKind::MoveTo));
-        assert!(kinds.contains(&SetOpKind::MoveKeepPosition));
-        assert!(kinds.contains(&SetOpKind::LeaveStellar));
-        assert!(kinds.contains(&SetOpKind::PlaySound));
     }
 
     // P.

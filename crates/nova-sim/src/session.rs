@@ -302,18 +302,13 @@ mod persons;
 mod script_effects;
 mod ship_change;
 
-pub use control::nova_set_ops;
 pub use hooks::HookRules;
-pub use ship_change::{
-    ChangeShipOp, ChangeShipWithDefaultsOp, RenameShipOp, ReplaceShipOp, ShipChangeRules,
-};
+pub use ship_change::ShipChangeRules;
 
 pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
 pub use persons::PersonQuote;
-pub use script_effects::{
-    LeaveStellarOp, MoveKeepPositionOp, MoveToOp, PlaySoundOp, ScriptEffectRules, Settled,
-};
+pub use script_effects::{ScriptEffectRules, Settled};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -344,7 +339,7 @@ use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
 use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
-use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind, SetRegistry};
+use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind};
 use crate::date::{self, GameDate};
 use crate::escort::EscortDuty;
 use crate::flight::{Controls, ShipState, step};
@@ -607,9 +602,9 @@ pub struct Session {
     frame: i16,
     /// What paying the escorts did since this was last taken.
     pay_notes: Vec<PayNote>,
-    /// The handlers of the set operators beyond the bit writes (see
-    /// [`Session::with_set_ops`]).
-    set_ops: hire::Shared<SetRegistry<Session>>,
+    /// What sees each set operator `run_set` hands to `apply_op`: none
+    /// outside tests (see `control::SetOpObserver`).
+    op_observer: Option<hire::Shared<dyn control::SetOpObserver>>,
     /// The set operator kinds skipped for want of a handler and told
     /// already; never saved.
     unhandled_ops: BTreeSet<SetOpKind>,
@@ -759,7 +754,7 @@ impl Session {
             ship_redraws: BTreeSet::new(),
             frame: 0,
             pay_notes: Vec::new(),
-            set_ops: hire::Shared(Rc::new(control::nova_set_ops())),
+            op_observer: None,
             unhandled_ops: BTreeSet::new(),
             script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
@@ -12631,8 +12626,7 @@ mod tests {
         // the boarding rule) and `G` to it; by the engine neither is held.
         let mut catalog = granting();
         booster(&mut catalog).max = 1;
-        let g = |session: Session| {
-            let mut session = session.with_set_ops(std::rc::Rc::new(crate::nova_set_ops()));
+        let g = |mut session: Session| {
             let expr = crate::control::SetExpr::parse("G200 G200").expect("parses");
             session.run_set(&expr, &mut Draws::of(&[]));
             session.pilot().owned(OutfitId(200))
@@ -12703,9 +12697,7 @@ mod tests {
             board_drawing(&mut boarded, NovaBoarding::default(), &ACE_DRAWS)
                 .0
                 .expect("boards");
-            let mut scripted = alongside(&catalog)
-                .with_set_ops(std::rc::Rc::new(crate::nova_set_ops()))
-                .with_rules(rules);
+            let mut scripted = alongside(&catalog).with_rules(rules);
             let expr = crate::control::SetExpr::parse("G200").expect("parses");
             scripted.run_set(&expr, &mut Draws::of(&[]));
             let owned = u16::from(fits);

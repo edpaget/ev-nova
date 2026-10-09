@@ -34,20 +34,13 @@
 //! `OnCapture` and `OnRetire`) run through [`Session::run_set`] where
 //! the original runs them: see the `hooks` module.
 
-use std::rc::Rc;
-
 use super::Session;
-use super::hire::Shared;
-use super::outfits::{ExploreOp, GrantOutfitOp, RemoveOutfitOp};
 use super::script_effects::ScriptMove;
-use super::script_effects::{LeaveStellarOp, MoveKeepPositionOp, MoveToOp, PlaySoundOp};
-use super::ship_change::{ChangeShipOp, ChangeShipWithDefaultsOp, RenameShipOp, ReplaceShipOp};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
 use crate::control::{
-    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOp, SetOpKind,
-    SetRegistry, execute,
+    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOp, SetOpKind, execute,
 };
 use crate::pilot::{Gender, Pilot};
 use crate::ship_change::OutfitCarry;
@@ -133,36 +126,21 @@ impl BitStore for Session {
     }
 }
 
-/// Nova's set operators beyond the bit writes and `R(...)`: `G`, `D` and
-/// `X` (see the `outfits` module), `C`, `E`, `H` and `T` (see the
-/// `ship_change` module), and `M`, `N`, `Q` and `P` (see the
-/// `script_effects` module). Later work registers more onto it with [`SetRegistry::with`].
-#[must_use]
-pub fn nova_set_ops() -> SetRegistry<Session> {
-    SetRegistry::new()
-        .with(SetOpKind::GrantOutfit, Rc::new(GrantOutfitOp))
-        .with(SetOpKind::RemoveOutfit, Rc::new(RemoveOutfitOp))
-        .with(SetOpKind::Explore, Rc::new(ExploreOp))
-        .with(SetOpKind::ChangeShip, Rc::new(ChangeShipOp))
-        .with(
-            SetOpKind::ChangeShipWithDefaults,
-            Rc::new(ChangeShipWithDefaultsOp),
-        )
-        .with(SetOpKind::ReplaceShip, Rc::new(ReplaceShipOp))
-        .with(SetOpKind::RenameShip, Rc::new(RenameShipOp))
-        .with(SetOpKind::MoveTo, Rc::new(MoveToOp))
-        .with(SetOpKind::MoveKeepPosition, Rc::new(MoveKeepPositionOp))
-        .with(SetOpKind::LeaveStellar, Rc::new(LeaveStellarOp))
-        .with(SetOpKind::PlaySound, Rc::new(PlaySoundOp))
+/// Sees each set operator `run_set` hands to `apply_op`, just before it
+/// applies, with the session as it is when that operator runs (a test
+/// seam: see the `hooks` module).
+pub(crate) trait SetOpObserver: std::fmt::Debug {
+    /// Sees `op` about to apply to `session`.
+    fn saw(&self, op: &SetOp, session: &Session);
 }
 
 impl Session {
-    /// This session with `registry` handling the set operators beyond the
-    /// bit writes and `R(...)` (see the module docs): [`nova_set_ops`] by
-    /// default.
+    /// This session with `observer` seeing each set operator `run_set`
+    /// hands to `apply_op`, just before it applies.
+    #[cfg(test)]
     #[must_use]
-    pub fn with_set_ops(mut self, registry: Rc<SetRegistry<Session>>) -> Self {
-        self.set_ops = Shared(registry);
+    pub(crate) fn with_set_op_observer(mut self, observer: std::rc::Rc<dyn SetOpObserver>) -> Self {
+        self.op_observer = Some(super::hire::Shared(observer));
         self
     }
 
@@ -218,17 +196,14 @@ impl Session {
     /// Runs `expr` on the session (see the module docs), drawing `R(...)`
     /// on `chance`.
     pub fn run_set(&mut self, expr: &SetExpr, chance: &mut (impl Chance + ?Sized)) {
-        let registry = Rc::clone(&self.set_ops.0);
+        let observer = self.op_observer.clone();
         let before = self.pilot.clone();
         let mut told = std::mem::take(&mut self.unhandled_ops);
-        let mut apply = |op: &SetOp, session: &mut Session, chance: &mut dyn Chance| match registry
-            .handler(op.kind())
-        {
-            Some(handler) => {
-                handler.apply(op, session, chance);
-                Ok(())
+        let mut apply = |op: &SetOp, session: &mut Session, chance: &mut dyn Chance| {
+            if let Some(observer) = &observer {
+                observer.0.saw(op, session);
             }
-            None => session.apply_op(op, chance),
+            session.apply_op(op, chance)
         };
         let unhandled = execute(expr, self, &mut apply, &mut &mut *chance, &mut told);
         self.unhandled_ops = told;
@@ -288,8 +263,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::chance::Chance;
-    use crate::control::{SetExpr, SetOp, SetOpHandler, SetOpKind, SetRegistry};
+    use crate::control::{SetExpr, SetOp, SetOpKind};
     use crate::save;
     use crate::testkit::Scripted;
     use crate::testkit::catalog;
@@ -408,12 +382,12 @@ mod tests {
         assert!(session.take_save_due());
     }
 
-    /// Records the pilot's name and bit 1 each time it applies.
+    /// Records the pilot's name and bit 1 for each operator it sees.
     #[derive(Debug, Default)]
     struct Recording(RefCell<Vec<(String, bool)>>);
 
-    impl SetOpHandler<Session> for Recording {
-        fn apply(&self, _op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
+    impl SetOpObserver for Recording {
+        fn saw(&self, _op: &SetOp, session: &Session) {
             self.0.borrow_mut().push((
                 session.pilot().name().to_owned(),
                 session.control_bit(bit(1)),
@@ -422,11 +396,10 @@ mod tests {
     }
 
     #[test]
-    fn a_registered_handler_sees_the_session() {
+    fn the_set_op_observer_sees_the_session_as_the_operator_runs() {
         let recording = Rc::new(Recording::default());
-        let registry = SetRegistry::new().with(SetOpKind::StartMission, recording.clone());
-        let mut session = session().with_set_ops(Rc::new(registry));
-        session.run_set(&set("b1 S200"), &mut Scripted::default());
+        let mut session = session().with_set_op_observer(recording.clone());
+        session.run_set(&set("b1 X131"), &mut Scripted::default());
         assert_eq!(*recording.0.borrow(), [("Ada".to_owned(), true)]);
         assert_eq!(session.take_script_notes(), []);
     }
@@ -489,26 +462,6 @@ mod tests {
         assert_eq!(
             session.take_script_notes(),
             [ScriptNote::Unhandled(SetOpKind::ActivateRank)]
-        );
-    }
-
-    #[test]
-    fn novas_set_ops_are_g_d_x_the_ship_changes_the_moves_the_sound_and_the_leave() {
-        assert_eq!(
-            nova_set_ops().kinds().collect::<Vec<_>>(),
-            [
-                SetOpKind::GrantOutfit,
-                SetOpKind::RemoveOutfit,
-                SetOpKind::ChangeShip,
-                SetOpKind::ChangeShipWithDefaults,
-                SetOpKind::ReplaceShip,
-                SetOpKind::MoveTo,
-                SetOpKind::MoveKeepPosition,
-                SetOpKind::PlaySound,
-                SetOpKind::RenameShip,
-                SetOpKind::LeaveStellar,
-                SetOpKind::Explore
-            ]
         );
     }
 

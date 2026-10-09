@@ -1,27 +1,22 @@
 //! Running a set expression: writing its bits, drawing its `R(...)`, and
-//! handing every other operator to a registry.
+//! handing every other operator to the caller's dispatch.
 //!
 //! [`execute`] runs a [`SetExpr`]'s operators in order on a target that
 //! holds control bits ([`BitStore`]):
 //!
 //! - `bxxx`, `!bxxx` and `^bxxx` set, clear and toggle the bit here, never
-//!   through the registry.
+//!   through the dispatch.
 //! - `R(a b)` draws `_Rand(2)` on the caller's [`Chance`]; the original
 //!   skips whichever operator would run as the number drawn (0x151f7), so
 //!   a draw of 0 runs `b` and a draw of 1 runs `a`, each half the time.
 //!   The arm drawn runs as any other operator does.
-//! - Every other operator goes to the [`SetOpHandler`] its [`SetOpKind`]
-//!   has in the [`SetRegistry`]. One with no handler yet is skipped, never
-//!   a panic, and the operators after it still run; its kind is reported
-//!   the first time only, as the caller's `reported` set remembers.
-//!
-//! The later phases and roadmaps that give the operators meaning
-//! (missions, outfits, ships, ranks, stellars) register their handlers
-//! with [`SetRegistry::with`].
+//! - Every other operator goes to the caller's dispatch, which applies it
+//!   or gives back its [`SetOpKind`] as unhandled. One unhandled is
+//!   skipped, never a panic, and the operators after it still run; its
+//!   kind is reported the first time only, as the caller's `reported` set
+//!   remembers.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-use std::rc::Rc;
+use std::collections::BTreeSet;
 
 use nova_data::{SetExpr, SetOp, SetOpKind};
 
@@ -32,63 +27,6 @@ use crate::chance::Chance;
 pub trait BitStore {
     /// The control bits, to write.
     fn bits_mut(&mut self) -> &mut ControlBitSet;
-}
-
-/// What a set operator other than a bit write or `R(...)` does to a
-/// target `T`: one registered for its [`SetOpKind`].
-pub trait SetOpHandler<T: ?Sized> {
-    /// Applies `op` to `target`, rolling on `chance` if it rolls.
-    fn apply(&self, op: &SetOp, target: &mut T, chance: &mut dyn Chance);
-}
-
-/// The handler each set operator kind has, if any.
-pub struct SetRegistry<T: ?Sized> {
-    handlers: BTreeMap<SetOpKind, Rc<dyn SetOpHandler<T>>>,
-}
-
-impl<T: ?Sized> SetRegistry<T> {
-    /// A registry with no handler: every operator but the bit writes and
-    /// `R(...)` is skipped.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            handlers: BTreeMap::new(),
-        }
-    }
-
-    /// This registry with `handler` applying every operator of `kind`, in
-    /// place of any it had.
-    #[must_use]
-    pub fn with(mut self, kind: SetOpKind, handler: Rc<dyn SetOpHandler<T>>) -> Self {
-        self.handlers.insert(kind, handler);
-        self
-    }
-
-    /// The handler for `kind`, if any.
-    #[must_use]
-    pub fn handler(&self, kind: SetOpKind) -> Option<Rc<dyn SetOpHandler<T>>> {
-        self.handlers.get(&kind).cloned()
-    }
-
-    /// The kinds with a handler, ascending.
-    pub fn kinds(&self) -> impl Iterator<Item = SetOpKind> + '_ {
-        self.handlers.keys().copied()
-    }
-}
-
-impl<T: ?Sized> Default for SetRegistry<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Lists the kinds with a handler.
-impl<T: ?Sized> fmt::Debug for SetRegistry<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SetRegistry")
-            .field("kinds", &self.handlers.keys().collect::<Vec<_>>())
-            .finish()
-    }
 }
 
 /// Runs `expr` on `target` (see the module docs), drawing `R(...)` on
@@ -168,16 +106,6 @@ mod tests {
     impl Target {
         fn set(&self) -> Vec<u16> {
             self.bits.iter().map(Bit::get).collect()
-        }
-    }
-
-    /// Records each operator it applies.
-    #[derive(Debug, Default)]
-    struct Recording(RefCell<Vec<SetOp>>);
-
-    impl SetOpHandler<Target> for Recording {
-        fn apply(&self, op: &SetOp, _target: &mut Target, _chance: &mut dyn Chance) {
-            self.0.borrow_mut().push(op.clone());
         }
     }
 
@@ -328,36 +256,5 @@ mod tests {
         assert_eq!(unhandled, [SetOpKind::StartMission], "drawn, unhandled");
         let unhandled = run_on("R(b6 S300)", &mut target, recording(&grants, &log), &[1]);
         assert_eq!(unhandled, [], "not drawn, so not reported");
-    }
-
-    #[test]
-    fn a_registry_lists_its_kinds_and_a_later_handler_replaces_one() {
-        let first = Rc::new(Recording::default());
-        let second = Rc::new(Recording::default());
-        let registry = SetRegistry::new()
-            .with(SetOpKind::StartMission, first.clone())
-            .with(SetOpKind::AbortMission, Rc::new(Recording::default()))
-            .with(SetOpKind::StartMission, second.clone());
-        assert_eq!(
-            registry.kinds().collect::<Vec<_>>(),
-            [SetOpKind::AbortMission, SetOpKind::StartMission]
-        );
-        assert_eq!(
-            format!("{registry:?}"),
-            "SetRegistry { kinds: [AbortMission, StartMission] }"
-        );
-        run_on(
-            "S200",
-            &mut Target::default(),
-            |op: &SetOp, target: &mut Target, chance: &mut dyn Chance| {
-                let handler = registry.handlers.get(&op.kind()).ok_or(op.kind())?;
-                handler.apply(op, target, chance);
-                Ok(())
-            },
-            &[],
-        );
-        assert_eq!(first.0.borrow().len(), 0);
-        assert_eq!(second.0.borrow().len(), 1);
-        assert_eq!(SetRegistry::<Target>::default().kinds().count(), 0);
     }
 }

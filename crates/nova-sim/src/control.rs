@@ -49,7 +49,7 @@ pub use nova_data::{
     TestOperand,
 };
 
-pub use self::set::{BitStore, SetOpHandler, SetRegistry, execute};
+pub use self::set::{BitStore, execute};
 use crate::catalog::{OutfitId, SystemId};
 use crate::pilot::Gender;
 

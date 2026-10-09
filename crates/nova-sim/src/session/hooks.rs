@@ -150,10 +150,11 @@ mod tests {
     use super::*;
     use crate::board::{Assigned, Assignment, Take, Taken};
     use crate::catalog::{CharacterStart, OutfitId, StartError};
-    use crate::control::{Bit, ScriptNote, SetOp, SetOpHandler, SetOpKind};
+    use crate::control::{Bit, ScriptNote, SetOp, SetOpKind};
     use crate::outfit_effects::Rgb15;
     use crate::outfitter::OutfitRefusal;
     use crate::pilot::Pilot;
+    use crate::session::control::SetOpObserver;
     use crate::session::tests::{
         NEW, aboard, boardable, buy, captured, kitted, outfitted, outfitting, outfitting_effects,
         sell, shipbuying, take,
@@ -177,13 +178,13 @@ mod tests {
         paint: Option<Rgb15>,
     }
 
-    /// Records a [`Snap`] each time an `S<tag>` applies: the hooks are
+    /// Records a [`Snap`] each time an `S<tag>` runs: the hooks are
     /// written with a distinct tag each.
     #[derive(Debug, Default)]
     struct Probe(RefCell<Vec<Snap>>);
 
-    impl SetOpHandler<Session> for Probe {
-        fn apply(&self, op: &SetOp, session: &mut Session, _chance: &mut dyn Chance) {
+    impl SetOpObserver for Probe {
+        fn saw(&self, op: &SetOp, session: &Session) {
             if let SetOp::StartMission(mission) = op {
                 let pilot = session.pilot();
                 self.0.borrow_mut().push(Snap {
@@ -198,12 +199,10 @@ mod tests {
         }
     }
 
-    /// `session` with the probe handling `S`, beside Nova's `G`, `D` and
-    /// `X`.
+    /// `session` with the probe watching each `S` as it runs.
     fn probed(session: Session) -> (Session, Rc<Probe>) {
         let probe = Rc::new(Probe::default());
-        let registry = crate::nova_set_ops().with(SetOpKind::StartMission, probe.clone());
-        (session.with_set_ops(Rc::new(registry)), probe)
+        (session.with_set_op_observer(probe.clone()), probe)
     }
 
     fn tags(probe: &Probe) -> Vec<i16> {
