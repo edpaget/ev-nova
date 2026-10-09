@@ -5,7 +5,9 @@
 //!   hyperlinks: every system unless the galaxy overlay hides some
 //!   ([`StarMap::with_hidden`]; see the [`story`](crate::story) module's
 //!   "Galaxy overlay"), a link to a hidden system reaching the visible
-//!   system at its place. A system's link to itself, or to a system that
+//!   system at its place. Its [`Places`] are the one resolver of which
+//!   visible system stands for a system: the links, the course's hops and
+//!   every arrival all read it. A system's link to itself, or to a system that
 //!   does not exist, is no link. The star map is the single owner of these rules: the galaxy map
 //!   draws [`StarMap::links`], every pair either system lists, once and
 //!   undirected, rather than normalising the links itself, and
@@ -303,10 +305,112 @@ impl Node {
     }
 }
 
-/// Every system's map position and the hyperlinks between them.
+/// Where each system of a galaxy is on the map, which of them the galaxy
+/// overlay hides, and so which system stands for each: the one place the
+/// original's `_FindActiveCoLocatedSystem` (@0x4be0) is read. A place is an
+/// exact map position; where two systems share an ID, the last wins.
+///
+/// A visible system stands for itself, and a hidden one for the lowest-ID
+/// visible system at its place (none when no system there is visible).
+/// The original gives the lowest-ID visible one there even for a visible
+/// system (@0x4c02-0x4c40); the engine keeps a visible system itself,
+/// which differs only where two systems at one place are both visible (see
+/// the [`story`](crate::story) module's "Galaxy overlay"). The head of a
+/// place is its lowest-ID system, visible or not, as `_LoadObjectData`
+/// builds the chain (@0x783d9-0x78517).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Places {
+    /// Each system's map position.
+    positions: BTreeMap<SystemId, Vec2>,
+    /// The systems at each place, by ascending ID.
+    by_place: BTreeMap<(u32, u32), Vec<SystemId>>,
+    /// The systems hidden.
+    hidden: BTreeSet<SystemId>,
+}
+
+/// `position`'s exact coordinates: a place.
+fn place(position: Vec2) -> (u32, u32) {
+    (position.x.to_bits(), position.y.to_bits())
+}
+
+impl Places {
+    /// The places of `systems`, with those in `hidden` hidden.
+    #[must_use]
+    pub fn new(systems: &[StarSystem], hidden: &BTreeSet<SystemId>) -> Self {
+        let positions: BTreeMap<SystemId, Vec2> = systems
+            .iter()
+            .map(|system| (system.id, system.position))
+            .collect();
+        let mut by_place: BTreeMap<(u32, u32), Vec<SystemId>> = BTreeMap::new();
+        for (&id, &position) in &positions {
+            by_place.entry(place(position)).or_default().push(id);
+        }
+        Self {
+            positions,
+            by_place,
+            hidden: hidden.clone(),
+        }
+    }
+
+    /// Whether `system` is among them.
+    #[must_use]
+    pub fn contains(&self, system: SystemId) -> bool {
+        self.positions.contains_key(&system)
+    }
+
+    /// `system`'s map position, hidden or not.
+    #[must_use]
+    pub fn position(&self, system: SystemId) -> Option<Vec2> {
+        self.positions.get(&system).copied()
+    }
+
+    /// Whether `system` is visible: unless it is hidden.
+    #[must_use]
+    pub fn visible(&self, system: SystemId) -> bool {
+        !self.hidden.contains(&system)
+    }
+
+    /// Whether `a` and `b` are both among them, at the same place.
+    #[must_use]
+    pub fn together(&self, a: SystemId, b: SystemId) -> bool {
+        let at = |id| self.position(id).map(place);
+        at(a).is_some() && at(a) == at(b)
+    }
+
+    /// Every system at `system`'s place, itself included, by ascending ID;
+    /// none when it is not among them.
+    pub fn at(&self, system: SystemId) -> impl Iterator<Item = SystemId> + '_ {
+        self.position(system)
+            .and_then(|position| self.by_place.get(&place(position)))
+            .into_iter()
+            .flatten()
+            .copied()
+    }
+
+    /// The visible system that stands for `system`: itself when it is
+    /// visible, else the lowest-ID visible system at its place, if any.
+    #[must_use]
+    pub fn stand_in(&self, system: SystemId) -> Option<SystemId> {
+        if self.visible(system) {
+            return Some(system);
+        }
+        self.at(system).find(|&id| self.visible(id))
+    }
+
+    /// The head of `system`'s place: its lowest-ID system, visible or not;
+    /// none when it is not among them.
+    #[must_use]
+    pub fn head(&self, system: SystemId) -> Option<SystemId> {
+        self.at(system).next()
+    }
+}
+
+/// Every visible system's map position and the hyperlinks between them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StarMap {
     nodes: BTreeMap<SystemId, Node>,
+    /// Where every system it was built from is, and which stands for each.
+    places: Places,
 }
 
 impl StarMap {
@@ -333,33 +437,15 @@ impl StarMap {
     /// none hidden it is [`StarMap::new`].
     #[must_use]
     pub fn with_hidden(systems: Vec<StarSystem>, hidden: &BTreeSet<SystemId>) -> Self {
-        let place = |position: Vec2| (position.x.to_bits(), position.y.to_bits());
-        // Every system's place, hidden or not: a link names a place.
-        let places: BTreeMap<SystemId, (u32, u32)> = systems
-            .iter()
-            .map(|system| (system.id, place(system.position)))
-            .collect();
-        // The lowest-ID visible system at each place.
-        let mut visible_at: BTreeMap<(u32, u32), SystemId> = BTreeMap::new();
-        for (&id, &at) in &places {
-            if !hidden.contains(&id) {
-                visible_at.entry(at).or_insert(id);
-            }
-        }
-        // A link's target: itself when it is visible, else the lowest-ID
-        // visible system at its place.
-        let resolve = |to: SystemId| {
-            if hidden.contains(&to) {
-                places.get(&to).and_then(|at| visible_at.get(at)).copied()
-            } else {
-                places.contains_key(&to).then_some(to)
-            }
-        };
+        let places = Places::new(&systems, hidden);
+        // A link's target: the system standing for it, of those in the
+        // catalog.
+        let resolve = |to: SystemId| places.contains(to).then(|| places.stand_in(to)).flatten();
         let mut links = Vec::new();
         let mut nodes = BTreeMap::new();
         for system in systems {
             let from = system.id;
-            if hidden.contains(&from) {
+            if !places.visible(from) {
                 continue;
             }
             let mut listed = Vec::new();
@@ -380,20 +466,17 @@ impl StarMap {
             };
             nodes.insert(from, node);
         }
-        // Every system at each map position, by its exact coordinates, as
-        // the original resolves a link to the active system there.
-        let key = |node: &Node| (node.position.x.to_bits(), node.position.y.to_bits());
-        let mut at: BTreeMap<(u32, u32), Vec<SystemId>> = BTreeMap::new();
-        for (&id, node) in &nodes {
-            at.entry(key(node)).or_default().push(id);
-        }
+        // Every visible system at each listed system's place, as the
+        // engine reads a link.
         let jumps: Vec<(SystemId, Vec<SystemId>)> = nodes
             .iter()
             .map(|(&from, node)| {
                 let mut reached = Vec::new();
-                for &to in node.listed.iter().flat_map(|to| &at[&key(&nodes[to])]) {
-                    if to != from && !reached.contains(&to) {
-                        reached.push(to);
+                for &to in &node.listed {
+                    for at in places.at(to).filter(|&at| places.visible(at)) {
+                        if at != from && !reached.contains(&at) {
+                            reached.push(at);
+                        }
                     }
                 }
                 (from, reached)
@@ -412,7 +495,14 @@ impl StarMap {
                 }
             }
         }
-        Self { nodes }
+        Self { nodes, places }
+    }
+
+    /// Where every system the map was built from is, hidden or not, and
+    /// which system stands for each: the one resolver of places.
+    #[must_use]
+    pub fn places(&self) -> &Places {
+        &self.places
     }
 
     /// System `id`'s map position, if it is on the map.
@@ -889,6 +979,68 @@ mod tests {
         assert_eq!(map.listed_links(SystemId(1)), ids(&[]));
         assert_eq!(map.links(), vec![]);
         assert_eq!(map.systems().collect::<Vec<_>>(), ids(&[1, 4]));
+    }
+
+    /// [`replaced_systems`]' places, with 5 also at O's position and
+    /// `hidden` hidden.
+    fn places_hiding(hidden: &[i16]) -> Places {
+        let mut systems = replaced_systems();
+        systems.push(system_at(5, (50.0, 50.0), &[]));
+        let hidden = hidden.iter().copied().map(SystemId).collect();
+        Places::new(&systems, &hidden)
+    }
+
+    #[test]
+    fn a_visible_system_stands_for_itself_and_a_hidden_one_for_the_lowest_visible_there() {
+        let places = places_hiding(&[2]);
+        let stand_in = |id| places.stand_in(SystemId(id)).map(|id| id.0);
+        assert_eq!(stand_in(3), Some(3), "itself, visible");
+        assert_eq!(stand_in(5), Some(5), "itself, though 3 is lower");
+        assert_eq!(stand_in(2), Some(3), "the lowest visible there");
+        assert_eq!(stand_in(99), Some(99), "nothing hides it");
+        let places = places_hiding(&[2, 3]);
+        assert_eq!(places.stand_in(SystemId(2)), Some(SystemId(5)));
+        let places = places_hiding(&[2, 3, 5]);
+        assert_eq!(places.stand_in(SystemId(3)), None, "none visible there");
+        let places = places_hiding(&[4, 99]);
+        assert_eq!(places.stand_in(SystemId(4)), None, "alone at its place");
+        assert_eq!(places.stand_in(SystemId(99)), None, "hidden and nowhere");
+    }
+
+    #[test]
+    fn the_head_of_a_place_is_its_lowest_system_visible_or_not() {
+        let places = places_hiding(&[2, 3, 5]);
+        let head = |id| places.head(SystemId(id)).map(|id| id.0);
+        assert_eq!(head(5), Some(2));
+        assert_eq!(head(2), Some(2));
+        assert_eq!(head(1), Some(1), "alone");
+        assert_eq!(head(99), None, "nowhere");
+    }
+
+    #[test]
+    fn places_know_every_systems_position_hidden_or_not() {
+        let places = places_hiding(&[2]);
+        assert!(places.contains(SystemId(2)));
+        assert!(!places.contains(SystemId(99)));
+        assert_eq!(places.position(SystemId(2)), Some(Vec2::new(50.0, 50.0)));
+        assert_eq!(places.position(SystemId(99)), None);
+        assert!(!places.visible(SystemId(2)));
+        assert!(places.visible(SystemId(3)));
+        assert!(places.visible(SystemId(99)));
+        assert!(places.together(SystemId(2), SystemId(5)));
+        assert!(!places.together(SystemId(2), SystemId(4)), "a pixel apart");
+        assert!(!places.together(SystemId(2), SystemId(99)));
+        assert!(!places.together(SystemId(99), SystemId(99)), "nowhere");
+    }
+
+    #[test]
+    fn the_map_resolves_its_links_by_its_places() {
+        let mut systems = replaced_systems();
+        systems.push(system_at(5, (50.0, 50.0), &[]));
+        let hidden = BTreeSet::from([SystemId(2), SystemId(4)]);
+        let map = StarMap::with_hidden(systems.clone(), &hidden);
+        assert_eq!(*map.places(), Places::new(&systems, &hidden));
+        assert_eq!(StarMap::default().places(), &Places::default());
     }
 
     #[test]

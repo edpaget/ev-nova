@@ -303,7 +303,7 @@ pub use handling::{Handling, ShipFields};
 pub use hire::{HireList, HireRefusal, HireRow, HireTerms, Hired, NovaHire, PayNote, price_flux};
 pub use hyperspace::{
     HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule, MultiJumpRule,
-    RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,
+    Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,
 };
 pub use landing::{
     Clearance, LandOutcome, LandingRefusal, Service, check_landing, is_landable, land_or_select,

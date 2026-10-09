@@ -181,9 +181,9 @@ pub struct HiddenMove {
 pub struct OverlaidGalaxy {
     /// The catalog's systems, as read.
     systems: Vec<StarSystem>,
-    /// Each system's position and government in the catalog, the last of
-    /// a repeated ID winning, as the star map takes it.
-    statics: BTreeMap<SystemId, (Vec2, Option<GovtId>)>,
+    /// Each system's government in the catalog, the last of a repeated ID
+    /// winning, as the star map takes it.
+    govts: BTreeMap<SystemId, Option<GovtId>>,
     /// What play has changed.
     overlay: GalaxyOverlay,
     /// The overlaid map.
@@ -194,14 +194,14 @@ impl OverlaidGalaxy {
     /// The catalog's `systems` with `overlay` applied.
     #[must_use]
     pub fn new(systems: Vec<StarSystem>, overlay: GalaxyOverlay) -> Self {
-        let statics = systems
+        let govts = systems
             .iter()
-            .map(|system| (system.id, (system.position, system.govt)))
+            .map(|system| (system.id, system.govt))
             .collect();
         let map = Self::build(&systems, &overlay);
         Self {
             systems,
-            statics,
+            govts,
             overlay,
             map,
         }
@@ -248,7 +248,7 @@ impl OverlaidGalaxy {
     /// Whether `system` is in the catalog, visible or not.
     #[must_use]
     pub fn exists(&self, system: SystemId) -> bool {
-        self.statics.contains_key(&system)
+        self.map.places().contains(system)
     }
 
     /// `system`'s map position in the catalog, visible or not: where a
@@ -256,20 +256,20 @@ impl OverlaidGalaxy {
     /// at the same place.
     #[must_use]
     pub fn position(&self, system: SystemId) -> Option<Vec2> {
-        self.statics.get(&system).map(|&(position, _)| position)
+        self.map.places().position(system)
     }
 
     /// Whether `system` is visible: unless the overlay hides it.
     #[must_use]
     pub fn visible(&self, system: SystemId) -> bool {
-        self.overlay.system(system).visible != Some(false)
+        self.map.places().visible(system)
     }
 
     /// `system`'s government, visible or not: the overlay's, else the
     /// catalog's; `None` when it is independent or not in the catalog.
     #[must_use]
     pub fn govt(&self, system: SystemId) -> Option<GovtId> {
-        let catalog = self.statics.get(&system).and_then(|&(_, govt)| govt);
+        let catalog = self.govts.get(&system).copied().flatten();
         self.overlay.system(system).govt.unwrap_or(catalog)
     }
 
@@ -286,28 +286,14 @@ impl OverlaidGalaxy {
         self.overlay.nebula(nebula).unwrap_or(true)
     }
 
-    /// The catalog's systems at `system`'s exact map position, itself
-    /// included, by ascending ID; none when it is not in the catalog.
-    fn at_place(&self, system: SystemId) -> impl Iterator<Item = SystemId> + '_ {
-        let place = self
-            .statics
-            .get(&system)
-            .map(|&(position, _)| bits(position));
-        self.statics
-            .iter()
-            .filter(move |(_, (position, _))| Some(bits(*position)) == place)
-            .map(|(&id, _)| id)
-    }
-
     /// The visible system that stands for `system`: itself when it is
     /// visible, else the lowest-ID visible system at its exact map
-    /// position, if any (see the module docs).
+    /// position, if any
+    /// ([`Places::stand_in`](crate::hyperspace::Places::stand_in), the one
+    /// resolver).
     #[must_use]
     pub fn same_place(&self, system: SystemId) -> Option<SystemId> {
-        if self.visible(system) {
-            return Some(system);
-        }
-        self.at_place(system).find(|&id| self.visible(id))
+        self.map.places().stand_in(system)
     }
 
     /// Where a player arriving in `system` goes: itself when it is
@@ -324,7 +310,7 @@ impl OverlaidGalaxy {
                 make_visible: false,
             },
             None => HiddenMove {
-                to: self.at_place(system).next().unwrap_or(system),
+                to: self.map.places().head(system).unwrap_or(system),
                 make_visible: true,
             },
         }
@@ -336,11 +322,6 @@ impl OverlaidGalaxy {
     pub fn hidden_move(&self, system: SystemId) -> Option<HiddenMove> {
         (!self.visible(system)).then(|| self.arrival(system))
     }
-}
-
-/// `position`'s exact coordinates, as the star map compares places.
-fn bits(position: Vec2) -> (u32, u32) {
-    (position.x.to_bits(), position.y.to_bits())
 }
 
 #[cfg(test)]
