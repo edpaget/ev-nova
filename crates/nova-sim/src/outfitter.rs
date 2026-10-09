@@ -14,9 +14,10 @@
 //! [`OutfitFlags::HIDE_HIGHER`] that can be bought here takes every
 //! higher-numbered outfit of the same `DispWeight` off sale.
 //!
-//! An outfit for sale can be *bought* when its `Require` bits are met and
-//! its `Availability` holds. `Require` is met when each of its bits is in
-//! the `Contribute` of the ship or of an outfit the player owns. Its
+//! An outfit for sale by tech can be *bought* when its `Require` bits are
+//! met and its `Availability` holds. `Require` is met when each of its
+//! bits is in the `Contribute` of the ship or of an outfit the player
+//! owns. Its
 //! `RequireGovt` says where `Require` applies: -1, and any value outside
 //! the Bible's four ranges (stock data has 127 and 0), everywhere; 128-383
 //! only at that government's stellars; 1128-1383 there and at independent
@@ -76,6 +77,20 @@
 //! [`OutfitFlags::SELL_ANYWHERE`], so it can be sold there; such a row can
 //! only be sold where the outfit is not for sale. Rows go by `DispWeight`,
 //! highest first, then by ID.
+//!
+//! At a stellar whose `Flags2` has [`BUYS_OWNED_OUTFITS`] (0x0400), every
+//! outfit the player owns that is not [`OutfitFlags::CANNOT_SELL`] is for
+//! sale, whatever its tech (`_SetupPortAvailableItems` @0xbf51-0xbf75,
+//! before its tech test; the stellar's `Flags2` from `_LoadObjectData`
+//! @0x77374-0x77378). Owned, it draws no roll and is never hidden by its
+//! `Require` or `Availability`; a lower-numbered
+//! [`OutfitFlags::HIDE_HIGHER`] outfit of its `DispWeight` still takes it
+//! off sale (@0xc158), and it goes by `DispWeight` like any other row.
+//! Such a row is sell-only here: tech still refuses its Buy, as
+//! `_CanBuyOutfitItem`'s own tech test does (@0x4e7ff-0x4e83d). The
+//! Bible says the stellar "can buy any nonpermanent outfits the player
+//! owns"; "nonpermanent" names no `oütf` flag, and the engine reads it as
+//! [`OutfitFlags::CANNOT_SELL`], the one bit that forbids a sale.
 //!
 //! # Price, mass and free mass
 //!
@@ -332,6 +347,13 @@ impl OutfitFlags {
     pub const HIDE_UNLESS_AVAILABLE: u16 = 0x4000;
 }
 
+/// The `spöb` `Flags2` bit of a stellar whose outfitter buys back every
+/// outfit the player owns that is not [`OutfitFlags::CANNOT_SELL`],
+/// whatever its tech: `_SetupPortAvailableItems` tests it at stellar
+/// +0x35 (@0xbf54), the high byte of the `Flags2` word `_LoadObjectData`
+/// copies from `spöb` +0x20 (@0x77374-0x77378).
+pub const BUYS_OWNED_OUTFITS: u16 = 0x0400;
+
 /// The `oütf` `ModType` that changes the ship's `MaxGun` by its `ModVal`.
 pub const MORE_GUNS: i16 = 45;
 /// The `oütf` `ModType` that changes the ship's `MaxTur` by its `ModVal`.
@@ -514,11 +536,13 @@ pub struct OutfitFacts {
     /// [`GUN`](OutfitFlags::GUN), [`TURRET`](OutfitFlags::TURRET) and
     /// [`CANNOT_SELL`](OutfitFlags::CANNOT_SELL).
     pub flags: u16,
-    /// Whether it can be bought here at all: for sale here today, its
-    /// `Require` met and its `Availability` holding (see the module docs).
+    /// Whether it can be bought here at all: for sale here today by tech,
+    /// its `Require` met and its `Availability` holding (see the module
+    /// docs).
     pub buyable: bool,
-    /// Whether it can be sold here at all: for sale here today, or flagged
-    /// [`OutfitFlags::SELL_ANYWHERE`].
+    /// Whether it can be sold here at all: for sale here today, by tech or
+    /// as an owned outfit at a stellar of `Flags2`
+    /// [`BUYS_OWNED_OUTFITS`], or flagged [`OutfitFlags::SELL_ANYWHERE`].
     pub sold_here: bool,
     /// Its ammunition cap, when it has one (`_HasMaxOfItem`
     /// @0x457e-0x45e4; see the module docs), a 16-bit product.
@@ -1219,8 +1243,8 @@ fn passes_remain(pass: Pass) -> bool {
     pass.count.saturating_sub(pass.index) > 1
 }
 
-/// The outfit can be bought here at all: for sale today, its `Require`
-/// met and its `Availability` holding.
+/// The outfit can be bought here at all: for sale today by tech, its
+/// `Require` met and its `Availability` holding.
 fn buyable(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
     holds(asked.row.facts.buyable, OutfitRefusal::NotForSale)
 }
@@ -2173,7 +2197,9 @@ impl Shop<'_> {
             };
             let required = required().of(&offer);
             let available = available().of(&offer);
-            let today = tech_listed().of(&offer)
+            let by_tech = tech_listed().of(&offer);
+            let on_offer = by_tech || buys_owned().of(&offer);
+            let today = on_offer
                 && if owned > 0 {
                     rolls.hold(record.id);
                     true
@@ -2182,7 +2208,7 @@ impl Shop<'_> {
                     rolls.today(record.id, roll, chance)
                 };
             let for_sale = today && sweep.on_sale(record.disp_weight);
-            let buyable = for_sale && required && available;
+            let buyable = for_sale && by_tech && required && available;
             sweep.note(
                 record.disp_weight,
                 record.flags & OutfitFlags::HIDE_HIGHER != 0,
@@ -2332,6 +2358,25 @@ fn engine_tech(offer: &Offer) -> bool {
 /// The Bible's tech test: at or below the stellar's, or a slot exactly.
 fn bible_tech(offer: &Offer) -> bool {
     wares::by_tech_level(offer.record.tech_level, offer.shop.site)
+}
+
+/// Whether the stellar puts an outfit on sale because the player owns
+/// it, whatever its tech: its `Flags2` has [`BUYS_OWNED_OUTFITS`], the
+/// player owns at least one, and it is not [`OutfitFlags::CANNOT_SELL`]
+/// (see the module docs).
+fn buys_owned<'a>() -> Value<Offer<'a>, bool> {
+    Value::plain(
+        "buys owned",
+        "`_SetupPortAvailableItems` @0xbf51-0xbf75; `_LoadObjectData` @0x77374-0x77378",
+        owned_bought_back,
+    )
+}
+
+/// The stellar buys back owned outfits, one is owned, and it can be sold.
+fn owned_bought_back(offer: &Offer) -> bool {
+    offer.shop.site.flags2 & BUYS_OWNED_OUTFITS != 0
+        && offer.owned.get(&offer.record.id).copied().unwrap_or(0) > 0
+        && offer.record.flags & OutfitFlags::CANNOT_SELL == 0
 }
 
 /// Whether an outfit's `Require` is met where it applies (see the module
@@ -3131,6 +3176,179 @@ mod tests {
             weighted(130, 5, 0),
         ];
         assert_eq!(listed(&open(&off_tech, &pilot())), [130]);
+    }
+
+    // Flags2 0x0400: owned outfits bought back whatever their tech.
+
+    /// [`port`] with `Flags2` 0x0400: it buys back the outfits the player
+    /// owns.
+    fn buying_back() -> LandingSite {
+        LandingSite {
+            flags2: BUYS_OWNED_OUTFITS,
+            ..port()
+        }
+    }
+
+    /// The outfitter of `records` at [`buying_back`] for `pilot`.
+    fn open_buying_back(records: &[OutfitRecord], pilot: &Pilot) -> Outfitter {
+        open_at(records, &buying_back(), pilot).expect("an outfitter")
+    }
+
+    #[test]
+    fn the_flags2_0x0400_constant_is_the_spob_bit() {
+        assert_eq!(BUYS_OWNED_OUTFITS, 0x0400);
+    }
+
+    #[test]
+    fn the_buys_owned_rule_cites_the_listing() {
+        let value = buys_owned();
+        assert_eq!(value.about().reads(), None);
+        assert_eq!(value.about().name(), "buys owned");
+        assert_eq!(
+            value.about().reproduces(),
+            "`_SetupPortAvailableItems` @0xbf51-0xbf75; `_LoadObjectData` @0x77374-0x77378"
+        );
+    }
+
+    #[test]
+    fn a_flags2_0x0400_stellar_lists_an_owned_outfit_tech_forbids_sell_only() {
+        let outfitter = open_buying_back(&[tech(128, 9)], &owning(&[(128, 1)]));
+        assert_eq!(listed(&outfitter), [128]);
+        assert_eq!(outfitter.can(sell_of(128)), Ok(()));
+        assert_eq!(outfitter.can(buy_of(128)), Err(OutfitRefusal::NotForSale));
+        let facts = &row(&outfitter, 128).facts;
+        assert_eq!((facts.buyable, facts.sold_here), (false, true));
+    }
+
+    #[test]
+    fn a_flags2_0x0400_stellar_lists_no_outfit_the_player_does_not_own() {
+        let records = [tech(128, 9)];
+        assert!(listed(&open_buying_back(&records, &pilot())).is_empty());
+        assert!(listed(&open_buying_back(&records, &owning(&[(128, 0)]))).is_empty());
+    }
+
+    #[test]
+    fn a_flags2_0x0400_stellar_lists_no_owned_cannot_sell_outfit() {
+        let flagged = |flags| OutfitRecord {
+            flags,
+            ..tech(128, 9)
+        };
+        let owner = owning(&[(128, 1)]);
+        let unsellable = open_buying_back(&[flagged(OutfitFlags::CANNOT_SELL)], &owner);
+        assert!(listed(&unsellable).is_empty());
+        let persistent = open_buying_back(&[flagged(OutfitFlags::PERSISTENT)], &owner);
+        assert_eq!(listed(&persistent), [128]);
+        assert_eq!(persistent.can(sell_of(128)), Ok(()));
+    }
+
+    #[test]
+    fn only_flags2_bit_0x0400_lists_an_owned_outfit_off_tech() {
+        let site = LandingSite {
+            flags2: !BUYS_OWNED_OUTFITS,
+            ..port()
+        };
+        let outfitter = open_at(&[tech(128, 9)], &site, &owning(&[(128, 1)]));
+        assert!(listed(&outfitter.expect("an outfitter")).is_empty());
+    }
+
+    #[test]
+    fn a_flags2_0x0400_row_skips_the_roll_and_the_hiding() {
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let records = [
+            OutfitRecord {
+                tech_level: 9,
+                ..buying(128, 50)
+            },
+            OutfitRecord {
+                tech_level: 9,
+                ..buying(129, 0)
+            },
+            OutfitRecord {
+                tech_level: 9,
+                flags: OutfitFlags::HIDE_UNLESS_REQUIRED,
+                ..requiring(130, 0x2, -1)
+            },
+            OutfitRecord {
+                tech_level: 9,
+                ..gated(131, OutfitFlags::HIDE_UNLESS_AVAILABLE, "b7")
+            },
+        ];
+        let site = buying_back();
+        let owner = owning(&[(128, 1), (129, 1), (130, 1), (131, 1)]);
+        let mut chance = Scripted::default();
+        let outfitter = Shop {
+            gate: refusing,
+            ..shop(&records, &site)
+        }
+        .outfitter(&owner, &mut DayRolls::default(), &mut chance)
+        .expect("an outfitter");
+        assert_eq!(listed(&outfitter), [128, 129, 130, 131]);
+        assert!(chance.asked.is_empty(), "no roll asked");
+    }
+
+    #[test]
+    fn a_lower_hide_higher_outfit_hides_a_flags2_0x0400_row() {
+        let weighted = |id, disp_weight, tech_level, flags| OutfitRecord {
+            disp_weight,
+            tech_level,
+            flags,
+            ..outfit(id, &[])
+        };
+        let owner = owning(&[(129, 1)]);
+        let same_weight = [
+            weighted(128, 5, 1, OutfitFlags::HIDE_HIGHER),
+            weighted(129, 5, 9, 0),
+        ];
+        assert_eq!(listed(&open_buying_back(&same_weight, &owner)), [128]);
+        let other_weight = [
+            weighted(128, 5, 1, OutfitFlags::HIDE_HIGHER),
+            weighted(129, 6, 9, 0),
+        ];
+        assert_eq!(listed(&open_buying_back(&other_weight, &owner)), [129, 128]);
+    }
+
+    #[test]
+    fn a_flags2_0x0400_row_goes_by_display_weight() {
+        let weighted = |id, disp_weight, tech_level| OutfitRecord {
+            disp_weight,
+            tech_level,
+            ..outfit(id, &[])
+        };
+        let records = [
+            weighted(128, 10, 1),
+            weighted(129, 5, 9),
+            weighted(130, 1, 1),
+            weighted(131, 10, 9),
+        ];
+        let owner = owning(&[(129, 1), (131, 1)]);
+        assert_eq!(
+            listed(&open_buying_back(&records, &owner)),
+            [128, 131, 129, 130]
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_flags2_0x0400_row_is_listed_and_not_bought_too() {
+        let records = [tech(128, 9)];
+        let site = buying_back();
+        let outfitter = Shop {
+            rules: Rulebook::default().with_override(RuleKey::TechLevel, RuleSource::Bible),
+            ..shop(&records, &site)
+        }
+        .outfitter(
+            &owning(&[(128, 1)]),
+            &mut DayRolls::default(),
+            &mut NeverFires,
+        )
+        .expect("an outfitter");
+        assert_eq!(listed(&outfitter), [128]);
+        assert_eq!(outfitter.can(sell_of(128)), Ok(()));
+        assert_eq!(outfitter.can(buy_of(128)), Err(OutfitRefusal::NotForSale));
+        let facts = &row(&outfitter, 128).facts;
+        assert_eq!((facts.buyable, facts.sold_here), (false, true));
     }
 
     // Price, mass and free mass.

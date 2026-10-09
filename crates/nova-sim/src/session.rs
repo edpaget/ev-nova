@@ -7263,6 +7263,76 @@ mod tests {
         assert_eq!(session.pilot().cash() - cash, 500 + 500 + 500);
     }
 
+    /// [`relisting_catalog`] with the outfitter's `Flags2` `flags2` and
+    /// outfit 312 not selling anywhere: only a stellar of `Flags2`
+    /// [`BUYS_OWNED_OUTFITS`](crate::outfitter::BUYS_OWNED_OUTFITS) lists
+    /// it, owned, as it is not for sale by tech (9).
+    fn buying_back_catalog(flags2: u16) -> FakePilotCatalog {
+        let mut catalog = relisting_catalog();
+        catalog.sites = vec![(
+            SystemId(130),
+            vec![LandingSite {
+                flags2,
+                ..outfitter_site()
+            }],
+        )];
+        for record in &mut catalog.outfits {
+            if record.id == CONTRABAND {
+                record.flags = 0;
+            }
+        }
+        catalog
+    }
+
+    #[test]
+    fn a_flags2_0x0400_stellar_buys_back_an_owned_outfit_off_tech() {
+        use crate::outfitter::BUYS_OWNED_OUTFITS;
+        let mut session = landed_owning(
+            &buying_back_catalog(BUYS_OWNED_OUTFITS),
+            Rulebook::default(),
+            &[(CONTRABAND, 1)],
+        );
+        let cash = session.pilot().cash();
+        assert_eq!(session.outfit(sell(CONTRABAND), &mut NeverFires), Ok(()));
+        assert_eq!(session.pilot().owned(CONTRABAND), 0);
+        assert_eq!(session.pilot().cash() - cash, 500);
+        let mut unflagged = landed_owning(
+            &buying_back_catalog(0),
+            Rulebook::default(),
+            &[(CONTRABAND, 1)],
+        );
+        assert_eq!(
+            unflagged.outfit(sell(CONTRABAND), &mut NeverFires),
+            Err(OutfitRefusal::NotListed)
+        );
+        assert_eq!(unflagged.pilot().owned(CONTRABAND), 1);
+    }
+
+    #[test]
+    fn by_the_engine_selling_the_last_flags2_0x0400_row_relists_and_goes_on_with_outfit_128() {
+        use crate::outfitter::BUYS_OWNED_OUTFITS;
+        let mut session = landed_owning(
+            &buying_back_catalog(BUYS_OWNED_OUTFITS),
+            Rulebook::default(),
+            &[(BLASTER, 3), (CONTRABAND, 2)],
+        );
+        let cash = session.pilot().cash();
+        let order = session.outfit_order(sell(CONTRABAND), 2, &mut NeverFires);
+        assert_eq!(
+            order,
+            OutfitRun {
+                run: OrderRun {
+                    done: 3,
+                    stopped: None
+                },
+                alert: None
+            }
+        );
+        assert_eq!(session.pilot().owned(CONTRABAND), 0);
+        assert_eq!(session.pilot().owned(BLASTER), 2);
+        assert_eq!(session.pilot().cash() - cash, 500 + 500 + 500);
+    }
+
     #[test]
     fn by_the_engine_a_counted_sale_of_all_three_reruns_its_later_passes_on_outfit_128() {
         let mut session = landed_owning(

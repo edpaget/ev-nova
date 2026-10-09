@@ -110,7 +110,10 @@ pub struct LandingSite {
     /// Its `Flags2`, raw: the [`gate`](crate::gate) rules read its
     /// hypergate (0x1000) and wormhole (0x2000) bits, and the
     /// [`market`](crate::market) its always-dominated bit
-    /// ([`DOMINATED`](crate::market::DOMINATED), 0x0020).
+    /// ([`DOMINATED`](crate::market::DOMINATED), 0x0020), and the
+    /// [`outfitter`](crate::outfitter) its bit that buys back owned
+    /// outfits ([`BUYS_OWNED_OUTFITS`](crate::outfitter::BUYS_OWNED_OUTFITS),
+    /// 0x0400).
     pub flags2: u16,
 }
 
