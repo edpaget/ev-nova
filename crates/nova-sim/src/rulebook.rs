@@ -75,6 +75,7 @@
 //! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; [`Market::option_asks_count`](crate::Market::option_asks_count)) | Alt trades the most at once††† |
 //! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; [`Market::tons`](crate::Market::tons)) | cash below 0 counts as none‡‡‡ |
 //! | [`TechLevel`](RuleKey::TechLevel) | `tech_level` | an outfit of `TechLevel` below 0 or exactly 32767, and a ship of one below 0, is never sold by tech (`_SetupPortAvailableItems` @0xbf88-0xbf9d, `_SetupPortAvailableShipTypes` @0xbc4f-0xbc52; [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows), [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)) | any `TechLevel` at or below the stellar's, or equal to a slot, is sold ([`wares::by_tech_level`](crate::wares::by_tech_level)) |
+//! | [`PurchaseCarry`](RuleKey::PurchaseCarry) | `purchase_carry` | a ship purchase keeps every persistent outfit (`Flags` 0x0004) whatever its `Max` and mass, sells none back, and adds the new class's default items on top (`_DoShipyardDialog` @0x5ee1b-0x5ee97; [`Session`](crate::Session)) | each is kept up to its `Max` and while the new ship's free mass holds it, by ascending ID, and the rest sold back at the outfitter's rate on the old ship's mass\*\*\*\*\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -173,6 +174,11 @@
 //! ¶¶¶¶ The Bible says nothing of a counted sale. The other reading is
 //! the port's earlier behaviour, each pass of a counted sale checked as a
 //! single sale, not anything the Bible says.
+//!
+//! \*\*\*\*\* The Bible says only that a persistent outfit "stays with
+//! you when you trade ships", as the engine has it. The other reading is
+//! the port's earlier behaviour, its first shipyard's carry, not anything
+//! the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -837,6 +843,21 @@ rule_keys! {
     /// makes none (@0xbfb2-0xbfbd, @0xbc67-0xbc72). The bar's hire list
     /// follows the engine alone (see [`hire`](crate::hire)).
     TechLevel => "tech_level",
+    /// Which persistent outfits a ship purchase carries over. By the
+    /// engine, `_DoShipyardDialog` zeroes only the outfits whose record
+    /// byte +0x378 is clear (@0x5ee1b-0x5ee4f), which `_LoadObjectData`
+    /// sets from `Flags` 0x0004 alone (@0x78cad-0x78cb3), and then adds
+    /// the new class's default items on top (@0x5ee51-0x5ee97). It calls
+    /// no `_HasMaxOfItem` and no `_ShipFreeMass`, and writes the cash only
+    /// for the trade-in and the price, so every persistent outfit is kept
+    /// whole, whatever its `Max` and mass, and none is sold back. By the
+    /// other reading, each persistent outfit is capped at its `Max`, then
+    /// kept one unit at a time by ascending ID while the new ship's free
+    /// mass holds it with its default items and stock fitted, and the rest
+    /// is sold back at the outfitter's rate on the old ship's mass. The
+    /// Bible says only that a persistent outfit "stays with you when you
+    /// trade ships" (see [`shipyard`](crate::shipyard)).
+    PurchaseCarry => "purchase_carry",
 }
 
 impl RuleKey {
@@ -992,7 +1013,6 @@ mod tests {
     fn the_tech_level_rule_is_found_by_its_key() {
         assert_eq!(RuleKey::TechLevel.key(), "tech_level");
         assert_eq!(RuleKey::from_key("tech_level"), Some(RuleKey::TechLevel));
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::TechLevel));
     }
 
     #[test]
@@ -1089,6 +1109,12 @@ mod tests {
         assert_eq!(RuleKey::from_key("junk_flags"), Some(RuleKey::JunkFlags));
         assert_eq!(RuleKey::BuyRandom.key(), "buy_random");
         assert_eq!(RuleKey::from_key("buy_random"), Some(RuleKey::BuyRandom));
+        assert_eq!(RuleKey::PurchaseCarry.key(), "purchase_carry");
+        assert_eq!(
+            RuleKey::from_key("purchase_carry"),
+            Some(RuleKey::PurchaseCarry)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::PurchaseCarry));
     }
 
     #[test]
@@ -1156,7 +1182,8 @@ mod tests {
                 RuleKey::TradeQuotient,
                 RuleKey::TradeCount,
                 RuleKey::TradeDebt,
-                RuleKey::TechLevel
+                RuleKey::TechLevel,
+                RuleKey::PurchaseCarry
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
