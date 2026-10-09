@@ -123,11 +123,14 @@ impl Session {
         self.ship_hook(captured, ShipHook::Capture, chance);
     }
 
-    /// Begins a new pilot's game: runs the first `chär`'s `OnStart` once,
-    /// drawing on `chance` (see the module docs), and nothing when the
-    /// `chär` cannot be read. For a pilot just created and flown, before
-    /// its first save; never for one opened from a save.
+    /// Begins a new pilot's game: destroys the stellars that start the
+    /// game destroyed (see the `stellars` module), then runs the first
+    /// `chär`'s `OnStart` once, drawing on `chance` (see the module docs),
+    /// and nothing when the `chär` cannot be read. For a pilot just
+    /// created and flown, before its first save; never for one opened from
+    /// a save.
     pub fn begin(&mut self, catalog: &impl PilotCatalog, chance: &mut dyn Chance) {
+        self.destroy_from_the_start();
         let Ok(start) = catalog.first_character() else {
             return;
         };
