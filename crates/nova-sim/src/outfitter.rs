@@ -11,8 +11,11 @@
 //! @0xbf88-0xbfbd, [`wares::outfit_tech_allows`]); by the Bible it is
 //! sold like any other ([`RuleKey::TechLevel`],
 //! [`wares::by_tech_level`]). An outfit flagged
-//! [`OutfitFlags::HIDE_HIGHER`] that can be bought here takes every
-//! higher-numbered outfit of the same `DispWeight` off sale.
+//! [`OutfitFlags::HIDE_HIGHER`] that is listed here takes every
+//! higher-numbered outfit of the same `DispWeight` off the list
+//! (`_SetupPortAvailableItems` @0xc11f-0xc175). That includes one listed
+//! but greyed for its `Require` or `Availability`, an owned one, and an
+//! owned `SELL_ANYWHERE` or `Flags2` row that tech does not sell.
 //!
 //! An outfit for sale by tech can be *bought* when its `Require` bits are
 //! met and its `Availability` holds. `Require` is met when each of its
@@ -65,7 +68,8 @@
 //! roll a landing is the original's roll a day. Buying or selling an
 //! outfit draws no roll again. An outfit off today is not listed and
 //! takes no higher one off sale; one the player owns that is flagged
-//! [`OutfitFlags::SELL_ANYWHERE`] is still listed, sell-only.
+//! [`OutfitFlags::SELL_ANYWHERE`] is still listed, sell-only, unless a
+//! lower hider takes it off (below).
 //!
 //! # What it lists
 //!
@@ -74,7 +78,11 @@
 //! [`OutfitFlags::HIDE_UNLESS_AVAILABLE`] whose `Availability` does not
 //! hold, unless the player owns one. It also lists, at every outfitter,
 //! each outfit the player owns that is flagged
-//! [`OutfitFlags::SELL_ANYWHERE`], so it can be sold there; such a row can
+//! [`OutfitFlags::SELL_ANYWHERE`], so it can be sold there, unless a
+//! lower-numbered [`OutfitFlags::HIDE_HIGHER`] outfit of its `DispWeight`
+//! that is listed takes it off. The sweep runs after the `SELL_ANYWHERE`
+//! step (@0xc096-0xc0ba, then @0xc11f-0xc175), so such an outfit is not
+//! listed and cannot be sold there. Such a row can
 //! only be sold where the outfit is not for sale. Rows go by `DispWeight`,
 //! highest first, then by ID.
 //!
@@ -85,7 +93,9 @@
 //! @0x77374-0x77378). Owned, it draws no roll and is never hidden by its
 //! `Require` or `Availability`; a lower-numbered
 //! [`OutfitFlags::HIDE_HIGHER`] outfit of its `DispWeight` still takes it
-//! off sale (@0xc158), and it goes by `DispWeight` like any other row.
+//! off sale (@0xc158); listed, it hides higher ones of its weight when it
+//! is [`OutfitFlags::HIDE_HIGHER`] itself, and it goes by `DispWeight`
+//! like any other row.
 //! Such a row is sell-only here: tech still refuses its Buy, as
 //! `_CanBuyOutfitItem`'s own tech test does (@0x4e7ff-0x4e83d). The
 //! Bible says the stellar "can buy any nonpermanent outfits the player
@@ -2207,16 +2217,22 @@ impl Shop<'_> {
                     let roll = buy_roll(record.buy_random, buy_random);
                     rolls.today(record.id, roll, chance)
                 };
-            let for_sale = today && sweep.on_sale(record.disp_weight);
+            let on_sale = sweep.on_sale(record.disp_weight);
+            let for_sale = today && on_sale;
             let buyable = for_sale && by_tech && required && available;
+            let hidden = owned == 0 && hides(record.flags, required, available);
+            let sells_anywhere = record.flags & OutfitFlags::SELL_ANYWHERE != 0;
+            // The listing byte: the sweep (`_SetupPortAvailableItems`
+            // @0xc11f-0xc175, clear @0xc158) runs after the owned
+            // `SELL_ANYWHERE` step (@0xc096-0xc0ba), and its hider is any
+            // outfit whose byte is set, read alone: never
+            // `_CanBuyOutfitItem`, `Require`, `Availability` or the cash.
+            let listed = on_sale && ((today && !hidden) || (owned > 0 && sells_anywhere));
             sweep.note(
                 record.disp_weight,
                 record.flags & OutfitFlags::HIDE_HIGHER != 0,
-                buyable,
+                listed,
             );
-            let hidden = owned == 0 && hides(record.flags, required, available);
-            let sells_anywhere = record.flags & OutfitFlags::SELL_ANYWHERE != 0;
-            let listed = (for_sale && !hidden) || (owned > 0 && sells_anywhere);
             if !listed && also != Some(record.id) {
                 continue;
             }
@@ -3118,7 +3134,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_outfit_hides_nothing_higher() {
+    fn a_hider_whose_availability_fails_still_hides_higher_ones() {
         let refusing = Gate {
             control_bits: &RefuseBits(&[7]),
             ..Gate::FRESH
@@ -3133,10 +3149,9 @@ mod tests {
                 ..outfit(130, &[])
             },
         ];
-        assert_eq!(
-            listed(&open_gated(&records, refusing, &pilot())),
-            [129, 130]
-        );
+        let outfitter = open_gated(&records, refusing, &pilot());
+        assert_eq!(listed(&outfitter), [129]);
+        assert_eq!(outfitter.can(buy_of(129)), Err(OutfitRefusal::NotForSale));
     }
 
     #[test]
@@ -3159,7 +3174,7 @@ mod tests {
             listed(&open(&records, &owning(&[(130, 1)]))),
             [131, 128, 129]
         );
-        // ...and one that cannot be bought hides nothing.
+        // ...and one greyed for an unmet Require still hides.
         let unmet = [
             OutfitRecord {
                 require: 0x2,
@@ -3167,7 +3182,7 @@ mod tests {
             },
             weighted(130, 5, 0),
         ];
-        assert_eq!(listed(&open(&unmet, &pilot())), [129, 130]);
+        assert_eq!(listed(&open(&unmet, &pilot())), [129]);
         let off_tech = [
             OutfitRecord {
                 tech_level: 9,
@@ -3176,6 +3191,130 @@ mod tests {
             weighted(130, 5, 0),
         ];
         assert_eq!(listed(&open(&off_tech, &pilot())), [130]);
+    }
+
+    /// A hider at 129 shaped by `hider`, and a plain outfit at 130, both
+    /// of `DispWeight` 5.
+    fn hiding(hider: OutfitRecord) -> [OutfitRecord; 2] {
+        [
+            OutfitRecord {
+                disp_weight: 5,
+                flags: hider.flags | OutfitFlags::HIDE_HIGHER,
+                ..hider
+            },
+            OutfitRecord {
+                disp_weight: 5,
+                ..outfit(130, &[])
+            },
+        ]
+    }
+
+    #[test]
+    fn a_listed_hider_hides_higher_outfits_whatever_greys_its_buy() {
+        // (a) Require unmet, without HIDE_UNLESS_REQUIRED.
+        let unmet = open(&hiding(requiring(129, 0x2, -1)), &pilot());
+        assert_eq!(listed(&unmet), [129]);
+        assert_eq!(unmet.can(buy_of(129)), Err(OutfitRefusal::NotForSale));
+        // (b) owned, so its HIDE_UNLESS_REQUIRED is skipped.
+        let owned_unmet = open(
+            &hiding(OutfitRecord {
+                flags: OutfitFlags::HIDE_UNLESS_REQUIRED,
+                ..requiring(129, 0x2, -1)
+            }),
+            &owning(&[(129, 1)]),
+        );
+        assert_eq!(listed(&owned_unmet), [129]);
+        assert_eq!(owned_unmet.can(buy_of(129)), Err(OutfitRefusal::NotForSale));
+        // (c) owned SELL_ANYWHERE, off tech.
+        let anywhere = open(
+            &hiding(OutfitRecord {
+                flags: OutfitFlags::SELL_ANYWHERE,
+                ..tech(129, 9)
+            }),
+            &owning(&[(129, 1)]),
+        );
+        assert_eq!(listed(&anywhere), [129]);
+        assert_eq!(anywhere.can(buy_of(129)), Err(OutfitRefusal::NotForSale));
+        assert_eq!(anywhere.can(sell_of(129)), Ok(()));
+        // (d) an owned Flags2 0x0400 row, off tech.
+        let bought_back = open_buying_back(&hiding(tech(129, 9)), &owning(&[(129, 1)]));
+        assert_eq!(listed(&bought_back), [129]);
+        assert_eq!(bought_back.can(buy_of(129)), Err(OutfitRefusal::NotForSale));
+        // (e) too dear: the cash never stops a hider.
+        let dear = open(
+            &hiding(OutfitRecord {
+                cost: 20_000,
+                ..outfit(129, &[])
+            }),
+            &pilot(),
+        );
+        assert_eq!(listed(&dear), [129]);
+        assert_eq!(dear.can(buy_of(129)), Err(OutfitRefusal::CannotAfford));
+        // (f) owned, plain and buyable.
+        let owned = open(&hiding(outfit(129, &[])), &owning(&[(129, 1)]));
+        assert_eq!(listed(&owned), [129]);
+        assert_eq!(owned.can(buy_of(129)), Ok(()));
+    }
+
+    #[test]
+    fn a_hider_its_own_flag_hides_hides_nothing() {
+        let unmet = hiding(OutfitRecord {
+            flags: OutfitFlags::HIDE_UNLESS_REQUIRED,
+            ..requiring(129, 0x2, -1)
+        });
+        assert_eq!(listed(&open(&unmet, &pilot())), [130]);
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let refused = hiding(gated(129, OutfitFlags::HIDE_UNLESS_AVAILABLE, "b7"));
+        assert_eq!(listed(&open_gated(&refused, refusing, &pilot())), [130]);
+    }
+
+    #[test]
+    fn a_lower_listed_hider_takes_an_owned_sell_anywhere_outfit_off_the_list() {
+        let records = |tech_level, disp_weight| {
+            [
+                OutfitRecord {
+                    disp_weight: 5,
+                    flags: OutfitFlags::HIDE_HIGHER,
+                    ..outfit(128, &[])
+                },
+                OutfitRecord {
+                    disp_weight,
+                    flags: OutfitFlags::SELL_ANYWHERE,
+                    ..tech(129, tech_level)
+                },
+            ]
+        };
+        let owner = owning(&[(129, 1)]);
+        let on_tech = open(&records(1, 5), &owner);
+        assert_eq!(listed(&on_tech), [128]);
+        assert_eq!(on_tech.can(sell_of(129)), Err(OutfitRefusal::NotListed));
+        assert_eq!(listed(&open(&records(9, 5), &owner)), [128]);
+        let other_weight = open(&records(9, 6), &owner);
+        assert_eq!(listed(&other_weight), [129, 128]);
+        assert_eq!(other_weight.can(sell_of(129)), Ok(()));
+    }
+
+    #[test]
+    fn an_owned_sell_anywhere_hider_off_tech_takes_another_off() {
+        let records = [
+            OutfitRecord {
+                disp_weight: 5,
+                flags: OutfitFlags::SELL_ANYWHERE | OutfitFlags::HIDE_HIGHER,
+                ..tech(128, 9)
+            },
+            OutfitRecord {
+                disp_weight: 5,
+                flags: OutfitFlags::SELL_ANYWHERE,
+                ..tech(129, 9)
+            },
+        ];
+        assert_eq!(
+            listed(&open(&records, &owning(&[(128, 1), (129, 1)]))),
+            [128]
+        );
     }
 
     // Flags2 0x0400: owned outfits bought back whatever their tech.

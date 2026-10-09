@@ -198,8 +198,10 @@ pub fn hidden(flags: u16, bits: HideBits, required: bool, available: bool) -> bo
 
 /// The hide-higher sweep: walked by ascending ID, an item flagged to hide
 /// higher ones that is listed takes every later item of its `DispWeight`
-/// off sale. The shipyard and the bar pass whether the item is listed; the
-/// outfitter still passes whether it can be bought, until phase 24.
+/// off sale. The shipyard, the bar and the outfitter each pass whether the
+/// item is listed, greyed or not, as the original's sweeps read only the
+/// listing byte (`_SetupPortAvailableShipTypes` @0xbdc3-0xbe2c,
+/// `_SetupPortAvailableItems` @0xc11f-0xc175).
 #[derive(Clone, Debug, Default)]
 pub struct HideHigher {
     taken_off: BTreeSet<i16>,
