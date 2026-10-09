@@ -263,6 +263,7 @@ use crate::landing::StellarFlags;
 use crate::market::{Direction, MORE_CARGO};
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::rules::{Context, Value};
 use crate::wares::{self, ALWAYS_RANDOM, DayRolls, HideBits, HideHigher, Roll};
 
 /// The `oütf` `Flags` bits the outfitter reads (the Bible).
@@ -454,6 +455,68 @@ pub struct OutfitRow {
     /// mass; otherwise none (`_OutfitDialogUpdate` @0x57dba-0x57e6f, which
     /// never consults `_CanBuyOutfitItem`; see the module docs).
     pub words: Option<OutfitRefusal>,
+    /// What the outfitter's rules read about the outfit, settled when the
+    /// outfitter was built.
+    pub facts: OutfitFacts,
+}
+
+/// What the outfitter's rules read about one outfit, settled when the
+/// outfitter is built: whatever needs the gate, the day's rolls or every
+/// record is worked out then, so the rules answer from these alone.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OutfitFacts {
+    /// Its own `LCName` and `LCPlural`.
+    pub names: LcNames,
+    /// Its `Flags` ([`OutfitFlags`]): the rules read
+    /// [`GUN`](OutfitFlags::GUN), [`TURRET`](OutfitFlags::TURRET) and
+    /// [`CANNOT_SELL`](OutfitFlags::CANNOT_SELL).
+    pub flags: u16,
+    /// Whether it can be bought here at all: for sale here today, its
+    /// `Require` met and its `Availability` holding (see the module docs).
+    pub buyable: bool,
+    /// Whether it can be sold here at all: for sale here today, or flagged
+    /// [`OutfitFlags::SELL_ANYWHERE`].
+    pub sold_here: bool,
+    /// Its ammunition cap, when it has one (`_HasMaxOfItem`
+    /// @0x457e-0x45e4; see the module docs), a 16-bit product.
+    pub ammo_cap: Option<i16>,
+    /// Its `Max` as the [`RAISES_MAX`] outfits owned raise it, when the
+    /// multiplier is above 1; `None` when it is its `Max`.
+    pub raised: Option<i64>,
+    /// When it is a fighter's ammunition, the fighters the ship's bays can
+    /// still take.
+    pub fighter_room: Option<u32>,
+    /// When it is a mass expansion, the cargo space it takes
+    /// (`mass_expansion`).
+    pub expansion: Option<u16>,
+    /// Which once-an-opening flag limits it, if any (`opening_limit`).
+    pub opening_limit: Option<OpeningLimit>,
+    /// When the player owns it as a launcher, that launcher and the
+    /// ammunition it holds.
+    pub launcher: Option<Launcher>,
+    /// The names of the outfit that names its launcher's ammunition, when
+    /// that has a record.
+    pub ammo_names: Option<LcNames>,
+    /// One for each of its [`RAISES_MAX`] mods, in slot order.
+    pub raises: Vec<Raise>,
+}
+
+/// One [`RAISES_MAX`] mod of an outfit: the outfit whose `Max` it raises,
+/// and what a sale of the raiser reads of it (`_DoOutfitDialog`
+/// @0x5c7be-0x5ca6f; see the module docs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Raise {
+    /// The outfit its raw `ModVal` names.
+    pub target: OutfitId,
+    /// How many of the target the player owns.
+    pub held: u16,
+    /// The target's `Max`; `None` when it has no record.
+    pub target_max: Option<i16>,
+    /// The target's raised `Max` by the Bible once one of the raiser is
+    /// sold; none when it has no record.
+    pub left_by_the_bible: i64,
+    /// The target's names, when it has a record.
+    pub target_names: Option<LcNames>,
 }
 
 /// A stellar's outfitter, as the player sees it.
@@ -466,6 +529,17 @@ pub struct Outfitter {
     /// The ship's free mass, in tons; negative when it carries more than
     /// it has space for.
     pub free_mass: i64,
+    /// The ship's guns and turrets, and its limits for each.
+    pub armed: Armed,
+    /// The ship class's `Holds`: below none forbids a mass expansion.
+    pub holds: i16,
+    /// The ship's own free cargo: its cargo space less every ton held
+    /// (`_ShipTotalHolds() - _TotalCargo(player)`, @0x4e980-0x4e9a8).
+    pub free_cargo: i64,
+    /// The once-an-opening flags as they stand ([`Bought`]).
+    pub bought: Bought,
+    /// The rule set the outfitter was built by, which its questions read.
+    pub rules: Rulebook,
     /// The `LCName` and `LCPlural` of every outfit a refusal's words name:
     /// each launcher refused for its ammunition, and the outfit naming
     /// that ammunition; each raiser refused for its target, and that
@@ -660,7 +734,7 @@ fn mass_expansion(outfit: &OutfitRecord) -> Option<u16> {
 /// Which of the once-an-opening flags limits an outfit
 /// ([`opening_limit`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OpeningLimit {
+pub enum OpeningLimit {
     /// The map flag, `_boughtMap`.
     Map,
     /// The clean-record flag, `_boughtID`.
@@ -865,13 +939,13 @@ pub(crate) struct Hardpoints {
 
 /// A launcher outfit the player owns, and the ammunition it holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Launcher {
+pub struct Launcher {
     /// Its weapon's `MaxAmmo`; none for no limit of its own.
-    pub(crate) max_ammo: u32,
+    pub max_ammo: u32,
     /// The rounds of its ammunition held, the fighters out counted.
-    pub(crate) rounds: u32,
+    pub rounds: u32,
     /// The outfit that names its ammunition, if any.
-    pub(crate) ammo: Option<OutfitId>,
+    pub ammo: Option<OutfitId>,
 }
 
 impl Launcher {
@@ -980,15 +1054,16 @@ fn flagged(flag: u16, owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord])
 
 /// The guns and turrets a ship carries, and its limits for each
 /// (`_HasMaxOfItem` @0x46c8-0x4866; see the module docs).
-struct Armed {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Armed {
     /// The outfits owned flagged [`OutfitFlags::GUN`].
-    guns: i32,
+    pub guns: i32,
     /// The outfits owned flagged [`OutfitFlags::TURRET`].
-    turrets: i32,
+    pub turrets: i32,
     /// `MaxGun`, as [`MORE_GUNS`] changes it.
-    gun_limit: i32,
+    pub gun_limit: i32,
     /// `MaxTur`, as [`MORE_TURRETS`] changes it.
-    turret_limit: i32,
+    pub turret_limit: i32,
 }
 
 impl Armed {
@@ -1249,6 +1324,10 @@ impl Shop<'_> {
     /// The outfitter, for `pilot`, each outfit's roll for the day kept in
     /// `rolls` and any not drawn yet drawn on `chance` (see the module
     /// docs); `None` when the stellar has none.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the row's own answers go once the outfitter's questions replace them"
+    )]
     pub(crate) fn outfitter(
         &self,
         pilot: &Pilot,
@@ -1269,9 +1348,14 @@ impl Shop<'_> {
         let mut names = BTreeMap::new();
         for record in sorted {
             let owned = pilot.owned(record.id);
-            let required = !requirements_apply(record.require_govt, self.site.govt)
-                || wares::requirement_met(record.require, contributed);
-            let available = self.gate.allows(&record.availability);
+            let offer = Offer {
+                shop: self,
+                owned: &pilot.outfits,
+                record,
+                contributed,
+            };
+            let required = required().of(&offer);
+            let available = available().of(&offer);
             let today = tech_allows(record, self.site)
                 && if owned > 0 {
                     rolls.hold(record.id);
@@ -1329,6 +1413,7 @@ impl Shop<'_> {
                 free,
                 &mut names,
             );
+            let facts = self.facts(&offer, owned, buyable, for_sale || sells_anywhere);
             rows.push((
                 record.disp_weight,
                 OutfitRow {
@@ -1343,6 +1428,7 @@ impl Shop<'_> {
                     buy: buying,
                     sell: selling,
                     words: has_max.or(no_space),
+                    facts,
                 },
             ));
         }
@@ -1351,10 +1437,164 @@ impl Shop<'_> {
             rows: rows.into_iter().map(|(_, row)| row).collect(),
             cash: pilot.cash,
             free_mass: free,
+            armed,
+            holds: self.fields.holds,
+            free_cargo: self.free_cargo,
+            bought: self.bought,
+            rules: self.rules,
             lc_names: names,
             outfit_count: self.rules.source_for(RuleKey::OutfitCount),
         })
     }
+}
+
+impl Shop<'_> {
+    /// The facts the outfitter's rules read about `offer`'s outfit, the
+    /// player owning `owned` of it, settled as the outfitter is built:
+    /// whether it can be `buyable` here at all and `sold_here` at all, and
+    /// what the records, the ship and the rule set say of it.
+    fn facts(&self, offer: &Offer, owned: u16, buyable: bool, sold_here: bool) -> OutfitFacts {
+        let record = offer.record;
+        let multiplier = max_multiplier().of(offer);
+        let launcher = self.launchers.get(&record.id).copied();
+        OutfitFacts {
+            names: lc_names(record),
+            flags: record.flags,
+            buyable,
+            sold_here,
+            ammo_cap: self.ammo_caps.get(&record.id).copied(),
+            raised: (multiplier > 1).then(|| i64::from(record.max).saturating_mul(multiplier)),
+            fighter_room: self.fighter_room.get(&record.id).copied(),
+            expansion: mass_expansion(record),
+            opening_limit: opening_limit(record),
+            launcher,
+            ammo_names: launcher
+                .and_then(|launcher| launcher.ammo)
+                .and_then(|ammo| self.records.iter().find(|named| named.id == ammo))
+                .map(lc_names),
+            raises: self.raises(record, owned, offer.owned),
+        }
+    }
+
+    /// One [`Raise`] for each [`RAISES_MAX`] mod of `record`, in slot
+    /// order, the player owning `owned` of it and `all` the outfits: the
+    /// target, how many of it are held, its `Max`, and its [`raised_max`]
+    /// by the Bible once one `record` is sold, which reads every record.
+    /// The original reads only a `ModVal` of 128-639 (@0x5c819-0x5c827);
+    /// one outside names no outfit and none of it is owned.
+    fn raises(
+        &self,
+        record: &OutfitRecord,
+        owned: u16,
+        all: &BTreeMap<OutfitId, u16>,
+    ) -> Vec<Raise> {
+        let mut after = all.clone();
+        match owned.saturating_sub(1) {
+            0 => after.remove(&record.id),
+            left => after.insert(record.id, left),
+        };
+        record
+            .mods
+            .iter()
+            .filter(|&&(kind, _)| kind == RAISES_MAX)
+            .map(|&(_, val)| {
+                let target = OutfitId(val);
+                let target_record = self.records.iter().find(|other| other.id == target);
+                Raise {
+                    target,
+                    held: all.get(&target).copied().unwrap_or(0),
+                    target_max: target_record.map(|other| other.max),
+                    left_by_the_bible: target_record.map_or(0, |other| {
+                        raised_max(other, &after, self.records, RuleSource::Bible)
+                    }),
+                    target_names: target_record.map(lc_names),
+                }
+            })
+            .collect()
+    }
+}
+
+/// One outfit asked about as the outfitter is built: the facts the build
+/// rules read, which need the gate or every record, and so are settled
+/// once, then kept as [`OutfitFacts`].
+struct Offer<'a> {
+    /// The shop: the records, the site, the gate and the rule set.
+    shop: &'a Shop<'a>,
+    /// Every outfit the player owns.
+    owned: &'a BTreeMap<OutfitId, u16>,
+    /// The outfit.
+    record: &'a OutfitRecord,
+    /// The `Contribute` bits of the ship and every outfit owned.
+    contributed: u64,
+}
+
+impl Context for Offer<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        &self.shop.rules
+    }
+}
+
+/// Whether an outfit's `Require` is met where it applies (see the module
+/// docs).
+fn required<'a>() -> Value<Offer<'a>, bool> {
+    Value::plain(
+        "required",
+        "`_CanBuyOutfitItem` @0x4e9cb-0x4eb37; `_SetupPortAvailableItems` @0xbff5-0xc056",
+        requirement_met,
+    )
+}
+
+/// `Require` does not apply here, or each of its bits is contributed.
+fn requirement_met(offer: &Offer) -> bool {
+    !requirements_apply(offer.record.require_govt, offer.shop.site.govt)
+        || wares::requirement_met(offer.record.require, offer.contributed)
+}
+
+/// Whether an outfit's `Availability` holds, asked through the gate.
+fn available<'a>() -> Value<Offer<'a>, bool> {
+    Value::plain(
+        "available",
+        "`_CanBuyOutfitItem` @0x4eb51; `_SetupPortAvailableItems` @0xbfe6",
+        gate_allows,
+    )
+}
+
+/// The gate allows the outfit's `Availability`.
+fn gate_allows(offer: &Offer) -> bool {
+    offer.shop.gate.allows(&offer.record.availability)
+}
+
+/// What the [`RAISES_MAX`] outfits owned multiply an outfit's `Max` by, as
+/// [`RuleKey::RaisedMax`](crate::RuleKey::RaisedMax) says (see
+/// [`raised_max`]): at least 1.
+fn max_multiplier<'a>() -> Value<Offer<'a>, i64> {
+    Value::disputed(
+        "max multiplier",
+        "`_HasMaxOfItem` @0x45e9-0x46c3",
+        RuleKey::RaisedMax,
+        engine_multiplier,
+        bible_multiplier,
+    )
+}
+
+/// The engine's multiplier: each mod naming the outfit counts.
+fn engine_multiplier(offer: &Offer) -> i64 {
+    raise_multiplier(
+        offer.record,
+        offer.owned,
+        offer.shop.records,
+        RuleSource::Engine,
+    )
+}
+
+/// The Bible's multiplier: each item with such a mod counts once.
+fn bible_multiplier(offer: &Offer) -> i64 {
+    raise_multiplier(
+        offer.record,
+        offer.owned,
+        offer.shop.records,
+        RuleSource::Bible,
+    )
 }
 
 /// Settles one of `record` as `direction` says: a buy pays `amount`, the
@@ -2111,8 +2351,151 @@ mod tests {
                 buy: Ok(()),
                 sell: Ok(()),
                 words: None,
+                facts: OutfitFacts {
+                    names: lc("outfit 128", "outfits 128"),
+                    buyable: true,
+                    sold_here: true,
+                    ..OutfitFacts::default()
+                },
             }]
         );
+    }
+
+    /// The names `lc_name` and `lc_plural`.
+    fn lc(singular: &str, plural: &str) -> LcNames {
+        LcNames {
+            singular: singular.to_owned(),
+            plural: plural.to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_outfitter_holds_the_facts_its_rules_read() {
+        // Rack 128: a gun that cannot be sold, raising widget 200 and
+        // unknown 999, exploring a map, launching missiles 129, its own
+        // `Max` raised by 202 (two owned) and its guns by 202's mod 45.
+        let records = [
+            OutfitRecord {
+                flags: OutfitFlags::GUN | OutfitFlags::CANNOT_SELL,
+                max: 3,
+                lc_name: "missile rack".to_owned(),
+                lc_plural: "missile racks".to_owned(),
+                ..outfit(
+                    128,
+                    &[(RAISES_MAX, 200), (EXPLORES_MAP, 1), (RAISES_MAX, 999)],
+                )
+            },
+            OutfitRecord {
+                lc_name: "missile".to_owned(),
+                lc_plural: "missiles".to_owned(),
+                ..outfit(129, &[])
+            },
+            OutfitRecord {
+                max: 4,
+                lc_name: "widget".to_owned(),
+                lc_plural: "widgets".to_owned(),
+                ..outfit(200, &[])
+            },
+            outfit(202, &[(RAISES_MAX, 128), (MORE_GUNS, 1)]),
+            outfit(203, &[(MORE_CARGO, -7)]),
+        ];
+        let site = port();
+        let ship = ShipFields { holds: -3, ..FAST };
+        let caps = BTreeMap::from([(OutfitId(128), 6)]);
+        let room = BTreeMap::from([(OutfitId(128), 3)]);
+        let launchers = rack(4, 2);
+        let rules = Rulebook::default().with_override(RuleKey::SaleMass, RuleSource::Bible);
+        let pilot = owning(&[(128, 2), (200, 5), (202, 2)]);
+        let outfitter = Shop {
+            fields: ship,
+            free_cargo: 42,
+            ammo_caps: &caps,
+            fighter_room: &room,
+            hardpoints: hardpoints(5, 1),
+            launchers: &launchers,
+            bought: MAP_BOUGHT,
+            rules,
+            ..shop(&records, &site)
+        }
+        .outfitter(&pilot, &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter");
+        assert_eq!(
+            outfitter.armed,
+            Armed {
+                guns: 2,
+                turrets: 0,
+                gun_limit: 6,
+                turret_limit: 1,
+            }
+        );
+        assert_eq!(
+            (outfitter.holds, outfitter.free_cargo, outfitter.bought),
+            (-3, 42, MAP_BOUGHT)
+        );
+        assert_eq!(outfitter.rules, rules);
+        assert_eq!((outfitter.cash, outfitter.free_mass), (10_000, 21));
+        assert_eq!(
+            row(&outfitter, 128).facts,
+            OutfitFacts {
+                names: lc("missile rack", "missile racks"),
+                flags: OutfitFlags::GUN | OutfitFlags::CANNOT_SELL,
+                buyable: true,
+                sold_here: true,
+                ammo_cap: Some(6),
+                raised: Some(6),
+                fighter_room: Some(3),
+                expansion: None,
+                opening_limit: Some(OpeningLimit::Map),
+                launcher: Some(Launcher {
+                    max_ammo: 4,
+                    rounds: 2,
+                    ammo: Some(OutfitId(129)),
+                }),
+                ammo_names: Some(lc("missile", "missiles")),
+                raises: vec![
+                    Raise {
+                        target: OutfitId(200),
+                        held: 5,
+                        target_max: Some(4),
+                        left_by_the_bible: 4,
+                        target_names: Some(lc("widget", "widgets")),
+                    },
+                    Raise {
+                        target: OutfitId(999),
+                        held: 0,
+                        target_max: None,
+                        left_by_the_bible: 0,
+                        target_names: None,
+                    },
+                ],
+            }
+        );
+        let expansion = &row(&outfitter, 203).facts;
+        assert_eq!(expansion.expansion, Some(7));
+        assert_eq!(expansion.opening_limit, None);
+        assert_eq!((expansion.raised, expansion.launcher), (None, None));
+    }
+
+    #[test]
+    fn a_row_off_sale_here_is_neither_buyable_nor_sold_here_unless_it_sells_anywhere() {
+        let off = |flags| OutfitRecord {
+            flags,
+            tech_level: 9,
+            ..outfit(128, &[])
+        };
+        let anywhere = open(&[off(OutfitFlags::SELL_ANYWHERE)], &owning(&[(128, 1)]));
+        let facts = &row(&anywhere, 128).facts;
+        assert_eq!((facts.buyable, facts.sold_here), (false, true));
+        let unmet = open(&[requiring(128, 0x2, -1)], &pilot());
+        let facts = &row(&unmet, 128).facts;
+        assert_eq!((facts.buyable, facts.sold_here), (false, true), "for sale");
+        let refusing = Gate {
+            control_bits: &RefuseBits(&[7]),
+            ..Gate::FRESH
+        };
+        let gated = open_gated(&[gated(128, 0, "b7")], refusing, &pilot());
+        let facts = &row(&gated, 128).facts;
+        assert_eq!((facts.buyable, facts.sold_here), (false, true));
     }
 
     // Buying.
@@ -3798,6 +4181,33 @@ mod tests {
     }
 
     #[test]
+    fn the_value_rules_cite_the_originals_addresses() {
+        let cited = [
+            required().about().reproduces(),
+            available().about().reproduces(),
+            max_multiplier().about().reproduces(),
+        ];
+        assert_eq!(
+            cited,
+            [
+                "`_CanBuyOutfitItem` @0x4e9cb-0x4eb37; `_SetupPortAvailableItems` @0xbff5-0xc056",
+                "`_CanBuyOutfitItem` @0x4eb51; `_SetupPortAvailableItems` @0xbfe6",
+                "`_HasMaxOfItem` @0x45e9-0x46c3",
+            ]
+        );
+    }
+
+    #[test]
+    fn each_disputed_outfitter_rule_names_its_key() {
+        assert_eq!(max_multiplier().about().reads(), Some(RuleKey::RaisedMax));
+        for plain in [*required().about(), *available().about()] {
+            assert_eq!(plain.reads(), None, "{}", plain.name());
+            assert!(!plain.draws(), "{}", plain.name());
+        }
+        assert!(!max_multiplier().about().draws());
+    }
+
+    #[test]
     fn the_flags_are_read_as_the_outfit_limit_rule_says() {
         let all = Bought {
             map: true,
@@ -3980,21 +4390,29 @@ mod tests {
 
     // The quantity dialog's maximum.
 
-    /// Outfit 128 at `price`, `owned` owned, of `max` and reported `cap`,
-    /// which can be bought and sold.
+    /// Outfit 128 at `price`, massless, `owned` owned, of `max` and
+    /// reported `cap`, which can be bought and sold here: a cap below its
+    /// `Max` is its ammunition cap, and one above it its raised `Max`.
     fn counted(price: i64, owned: u16, max: i16, cap: i16) -> OutfitRow {
         OutfitRow {
             id: OutfitId(128),
             name: String::new(),
             short_name: String::new(),
             price,
-            mass: 1,
+            mass: 0,
             owned,
             max,
             cap,
             buy: Ok(()),
             sell: Ok(()),
             words: None,
+            facts: OutfitFacts {
+                buyable: true,
+                sold_here: true,
+                ammo_cap: (cap < max).then_some(cap),
+                raised: (cap > max).then_some(i64::from(cap)),
+                ..OutfitFacts::default()
+            },
         }
     }
 
@@ -4144,8 +4562,8 @@ mod tests {
         assert_eq!(at(1000, 4), None, "a cap one past those owned");
         assert_eq!(at(1000, 5), Some(2));
         assert_eq!(at(1000, 2), None, "a cap below those owned");
-        assert_eq!(most_bought(counted(10, 3, 4, 99), 1000), None, "Max");
-        assert_eq!(most_bought(counted(10, 3, 5, 99), 1000), Some(2));
+        assert_eq!(most_bought(counted(10, 3, 4, 8), 1000), None, "Max");
+        assert_eq!(most_bought(counted(10, 3, 5, 10), 1000), Some(2));
     }
 
     #[test]

@@ -304,7 +304,10 @@ pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
 pub use navigation::{next_after, stellar_under};
 pub use outfit_effects::{OutfitRules, Rgb15};
-pub use outfitter::{LcNames, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
+pub use outfitter::{
+    Armed, Launcher, LcNames, OpeningLimit, OutfitFacts, OutfitOrder, OutfitRefusal, OutfitRow,
+    Outfitter, Raise,
+};
 pub use person::{
     COMM_QUOTES, ESCAPE_POD, GRUDGE, HAIL_QUOTES, NovaPersons, PersonRoll, PersonRules,
     PersonWorld, QuoteTags, expand_tags,

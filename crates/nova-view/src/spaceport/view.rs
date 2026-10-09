@@ -1796,7 +1796,7 @@ mod tests {
     // The Outfitter.
 
     use crate::spaceport::outfitter::{OutfitterCatalog, OutfitterScreen};
-    use nova_sim::{OutfitId, OutfitOrder, OutfitRow, Outfitter};
+    use nova_sim::{OutfitFacts, OutfitId, OutfitOrder, OutfitRow, Outfitter};
 
     /// "Outfit": 765 x 321, centred, with Done (1), Sell (4), the grid
     /// (5), the description (6), Buy (7), the picture (8) and the info box
@@ -1845,6 +1845,11 @@ mod tests {
                 buy: Ok(()),
                 sell: Ok(()),
                 words: None,
+                facts: OutfitFacts {
+                    buyable: true,
+                    sold_here: true,
+                    ..OutfitFacts::default()
+                },
             }],
             cash: 5000,
             free_mass: 8,

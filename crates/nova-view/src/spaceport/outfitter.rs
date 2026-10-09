@@ -850,7 +850,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use nova_sim::RuleSource;
+    use nova_sim::{OutfitFacts, RuleSource};
 
     use crate::draw::DrawCommand;
     use crate::font::Font;
@@ -957,7 +957,20 @@ mod tests {
                 Err(OutfitRefusal::NoneOwned)
             },
             words: None,
+            facts: OutfitFacts {
+                buyable: true,
+                sold_here: true,
+                ..OutfitFacts::default()
+            },
         }
+    }
+
+    /// A map (1 owned) that can only be sold here.
+    fn map() -> OutfitRow {
+        let mut map = row(131, "Map", 0, 0, 1);
+        map.buy = Err(OutfitRefusal::NotForSale);
+        map.facts.buyable = false;
+        map
     }
 
     /// A light blaster (2 owned), ammunition, a gun too heavy to hold, and
@@ -973,15 +986,13 @@ mod tests {
                     words: Some(OutfitRefusal::NoSpaceForAny),
                     ..row(130, "Big Gun", 9000, 10, 0)
                 },
-                OutfitRow {
-                    buy: Err(OutfitRefusal::NotForSale),
-                    ..row(131, "Map", 0, 0, 1)
-                },
+                map(),
             ],
             cash: 5000,
             free_mass: 5,
             lc_names: BTreeMap::new(),
             outfit_count: RuleSource::Engine,
+            ..Outfitter::default()
         }
     }
 
@@ -2114,13 +2125,7 @@ mod tests {
     fn a_held_key_never_acts_on_an_outfit_it_did_not_start_on() {
         // A sell-only map (1 owned) next to a sellable blaster (2 owned).
         let both = || Outfitter {
-            rows: vec![
-                OutfitRow {
-                    buy: Err(OutfitRefusal::NotForSale),
-                    ..row(131, "Map", 0, 0, 1)
-                },
-                row(128, "Light\\nBlaster", 1000, 1, 2),
-            ],
+            rows: vec![map(), row(128, "Light\\nBlaster", 1000, 1, 2)],
             ..outfitter()
         };
         let mut screen = screen_of(both());
