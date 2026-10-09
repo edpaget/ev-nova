@@ -178,8 +178,10 @@ pub(super) enum Reset {
     /// The fighters out are carried or left behind, as the fighter rules
     /// say for an arrival.
     FightersOut,
-    /// The bar's hire rolls and the shops' rolls are drawn afresh, and
-    /// the outfitter's opening starts anew, as a landing does.
+    /// The bar's hire rolls and the shops' rolls land as a landing's do:
+    /// kept, the classes bought or declined to be drawn again, or, by the
+    /// other reading of [`RuleKey::DayRolls`](crate::RuleKey::DayRolls),
+    /// all drawn afresh; and the outfitter's opening starts anew.
     ShopRolls,
     /// A save is due.
     SaveDue,
@@ -501,11 +503,8 @@ impl Session {
         self.leave_behind(&resets);
         self.bring_in_traffic(resets.traffic, catalog, chance);
         if resets.has(Reset::ShopRolls) {
-            self.hire_rolls.clear();
-            self.outfit_rolls.clear();
+            self.land_day_rolls();
             self.open_opening();
-            self.ship_rolls.clear();
-            self.ship_redraws.clear();
         }
         if resets.has(Reset::SaveDue) {
             self.save_due = true;

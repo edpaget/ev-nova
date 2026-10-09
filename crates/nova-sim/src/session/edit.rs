@@ -504,9 +504,40 @@ mod tests {
     }
 
     #[test]
-    fn a_move_clears_the_hire_rolls_as_a_landing_does() {
+    fn a_move_keeps_the_day_rolls_as_a_landing_does() {
+        use crate::catalog::OutfitId;
+        use crate::wares::DayRolls;
         let catalog = atlas();
         let mut session = landed(&catalog);
+        session.hire_rolls.hold(ShipId(129));
+        session.outfit_rolls.hold(OutfitId(128));
+        session.ship_rolls.hold(ShipId(128));
+        session.ship_rolls.hold(ShipId(129));
+        session.ship_redraws.insert(ShipId(129));
+        session.opening.bought = crate::outfitter::Bought::after_buying(&crate::testkit::outfit(
+            128,
+            &[(crate::outfit_effects::MAP, 1)],
+        ));
+        let (hire, outfits) = (session.hire_rolls.clone(), session.outfit_rolls.clone());
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        session.assert_docked_among_shown();
+        assert_eq!(session.hire_rolls, hire, "kept");
+        assert_eq!(session.outfit_rolls, outfits, "kept");
+        let mut kept = DayRolls::default();
+        kept.hold(ShipId(128));
+        assert_eq!(session.ship_rolls, kept, "the redraw due applied");
+        assert!(session.ship_redraws.is_empty());
+        assert_eq!(session.opening.bought, crate::outfitter::Bought::default());
+    }
+
+    #[test]
+    fn by_the_other_reading_a_move_clears_the_day_rolls_as_a_landing_does() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let catalog = atlas();
+        let rules = Rulebook::default().with_override(RuleKey::DayRolls, RuleSource::Bible);
+        let mut session = landed(&catalog).with_rules(rules);
         session.hire_rolls.hold(ShipId(129));
         session.outfit_rolls.hold(crate::catalog::OutfitId(128));
         session.ship_rolls.hold(ShipId(129));

@@ -8,8 +8,11 @@
 //!
 //! It also keeps the day's rolls the shipyard, the outfitter and the bar
 //! share: each item's `BuyRandom` or `HireRandom` read as never, always
-//! or a percent chance, and each chance drawn once a landing (see
-//! [`hire`](crate::hire)).
+//! or a percent chance, and each chance drawn once a day by the daily
+//! step (`draw_day`), or by the other reading of
+//! [`RuleKey::DayRolls`](crate::RuleKey::DayRolls) once a landing (see
+//! [`hire`](crate::hire) and the [`story`](crate::story) module's "Built
+//! by phase 6").
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -45,8 +48,9 @@ impl Roll {
     }
 }
 
-/// Each item's roll since the last landing, keyed by `K`: a chance is
-/// drawn the first time it is asked and kept until cleared.
+/// Each item's roll for the day, keyed by `K`: a chance drawn by the day
+/// ([`DayRolls::draw`]), or else the first time it is asked, and kept
+/// until drawn again or cleared.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DayRolls<K>(BTreeMap<K, bool>);
 

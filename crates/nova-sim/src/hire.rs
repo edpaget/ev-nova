@@ -32,12 +32,16 @@
 //!
 //! The rows go in `DispWeight` order, as the shipyard's. The original
 //! rolls every class afresh each day, on a new game and on load
-//! (`_IncrementGameTime` @0xb7c4), and its landing passes a day. Here the
-//! date moves only on a jump, so a class's roll is drawn the first time
-//! the list is built after a landing, by ascending ship ID, only for a
-//! class that passes its tech level with a `HireRandom` from 1 to 99, and
-//! kept until the next landing; it is never saved, as the original rolls
-//! again on load. Hiring a class draws its roll again
+//! (`_IncrementGameTime` @0xb7c4-0xb833), and no landing rolls it. Here,
+//! by the engine reading of [`RuleKey::DayRolls`](crate::RuleKey::DayRolls),
+//! the daily step draws each class's roll whose `HireRandom` is from 1 to
+//! 99 (`hire_roll`), by ascending ship ID, and a landing keeps it; a roll
+//! not drawn since a start or a load is drawn the first time the list
+//! asks for it. By the other reading, a class's roll is drawn the first
+//! time the list is built after a landing, only for a class that passes
+//! its tech level, and kept until the next landing. A roll is never
+//! saved, as the original rolls again on load. Hiring a class draws its
+//! roll again
 //! (`_DoShipyardDialog` @0x5f20d), so a second may no longer be on offer.
 //! The shipyard's and the outfitter's `BuyRandom` rolls follow the same
 //! rule, each a separate draw ([`shipyard`](crate::shipyard),

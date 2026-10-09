@@ -49,15 +49,17 @@
 //! [`RuleKey::BuyRandom`](crate::RuleKey::BuyRandom) chooses
 //! (`buy_roll`).
 //!
-//! Here each outfit's roll is drawn on the caller's
-//! [`Chance`] the first time the list is built after a
-//! landing, by ascending ID and only for an outfit that tech allows,
-//! that the player does not own and whose reading is a chance of 1-99,
-//! and kept until the next landing; it is never saved, as the original
-//! rolls again on load. The player only ever sees one stellar's list in a
-//! day, and the original always passes a day between two landings, so a
-//! roll a landing is the original's roll a day. Buying or selling an
-//! outfit draws no roll again. An outfit off today is not listed and
+//! Here, by the engine reading of
+//! [`RuleKey::DayRolls`](crate::RuleKey::DayRolls), the daily step draws
+//! each outfit's roll whose reading is a chance of 1-99, after the ship
+//! classes', and a landing keeps it, so an owned outfit's hold lasts the
+//! rest of the day too; a roll not drawn since a start or a load is drawn
+//! on the caller's [`Chance`] the first time the list asks for it. By the
+//! other reading, each roll is drawn the first time the list is built
+//! after a landing, by ascending ID and only for an outfit that tech
+//! allows and the player does not own, and kept until the next landing.
+//! A roll is never saved, as the original rolls again on load. Buying or
+//! selling an outfit draws no roll again. An outfit off today is not listed and
 //! takes no higher one off sale; one the player owns that is flagged
 //! [`OutfitFlags::SELL_ANYWHERE`] is still listed, sell-only.
 //!

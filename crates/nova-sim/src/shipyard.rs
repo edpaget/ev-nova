@@ -26,15 +26,22 @@
 //! chooses (`buy_roll`). Buying a ship draws its class's roll again
 //! (`_DoShipyardDialog` @0x5f0d5-0x5f0f8).
 //!
-//! Here each class's roll is drawn on the caller's
-//! [`Chance`] the first time the list is built after a landing, by
-//! ascending ID and only for a class that tech allows whose reading is a
-//! chance of 1-99, and kept until the next landing or until the class is
-//! bought or declined. The original builds the list once each time the
+//! Here, by the engine reading of
+//! [`RuleKey::DayRolls`](crate::RuleKey::DayRolls), the daily step draws
+//! each class's roll whose reading is a chance of 1-99, each class's
+//! after its hire roll, and a landing keeps it until the class is bought
+//! or declined; a roll not drawn since a start or a load is drawn on the
+//! caller's [`Chance`] the first time the list asks for it. By the other
+//! reading, each roll is drawn the first time the list is built after a
+//! landing, by ascending ID and only for a class that tech allows, and
+//! kept until the next landing or until the class is bought or declined.
+//! The original builds the list once each time the
 //! shipyard opens (`_SetupPortAvailableShipTypes`, called only @0x5e68f),
 //! so a roll drawn again after a purchase or a decline is drawn the next
-//! time the list is built, and until then the class can be bought as
-//! listed ([`Session::shipyard`](crate::Session::shipyard)). A roll is
+//! time the list is built, or after a landing with no day passing, and
+//! until then the class can be bought as listed
+//! ([`Session::shipyard`](crate::Session::shipyard)); a day's draw
+//! settles it as it draws every class. A roll is
 //! never saved, as the original rolls again on load. A
 //! class off today is not listed and takes no higher one off sale.
 //!

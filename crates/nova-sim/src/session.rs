@@ -599,11 +599,13 @@ pub struct Session {
     /// The control-bit test a ship's `Availability` for hire goes through
     /// (see [`Session::with_control_bits`]).
     control_bits: hire::Shared<dyn ControlBits>,
-    /// Each ship class's roll for hire since the last landing, drawn the
-    /// first time the bar's list asks it.
+    /// Each ship class's roll for hire today: drawn by the daily step, or
+    /// else the first time the bar's list asks it (see
+    /// [`RuleKey::DayRolls`]). Not saved.
     hire_rolls: DayRolls<ShipId>,
-    /// Each outfit's roll for sale since the last landing, drawn the first
-    /// time the outfitter's list asks it.
+    /// Each outfit's roll for sale today: drawn by the daily step, or else
+    /// the first time the outfitter's list asks it (see
+    /// [`RuleKey::DayRolls`]). Not saved.
     outfit_rolls: DayRolls<OutfitId>,
     /// The once-an-opening flags, whether the last outfit bought since the
     /// outfitter opened was a map or a clean record (see
@@ -619,14 +621,17 @@ pub struct Session {
     /// saved: the original keeps it in flags `_DoPortDialog` clears on
     /// opening (@0x5f93d-0x5f95a), and loading a save passes no time.
     stay: Stay,
-    /// Each ship class's roll for sale since the last landing, drawn the
-    /// first time the shipyard's list asks it.
+    /// Each ship class's roll for sale today: drawn by the daily step, or
+    /// else the first time the shipyard's list asks it (see
+    /// [`RuleKey::DayRolls`]). Not saved.
     ship_rolls: DayRolls<ShipId>,
     /// The ship classes whose roll is drawn again the next time the
     /// shipyard's list is built: each one bought or declined since it was
     /// last built. The original builds the list once each time the
     /// shipyard opens (`_SetupPortAvailableShipTypes`, called only
-    /// @0x5e68f), so a roll drawn again shows only then.
+    /// @0x5e68f), so a roll drawn again shows only then. A landing with
+    /// no day passing forgets their rolls, and a day's draw, which draws
+    /// them afresh, empties it.
     ship_redraws: BTreeSet<ShipId>,
     /// The original's frame counter, which times the tribbles and
     /// perishables step (see [`market`]). The original's value when a
@@ -2128,16 +2133,33 @@ impl Session {
         self.target = None;
         self.talk = None;
         self.leave_with_fighters(true);
-        self.hire_rolls.clear();
-        self.outfit_rolls.clear();
+        self.land_day_rolls();
         self.open_opening();
         self.stay = Stay::default();
-        self.ship_rolls.clear();
-        self.ship_redraws.clear();
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
         self.raise(StoryEvent::Landed { stellar });
+    }
+
+    /// What a landing, or a relocation, does to the day rolls, as
+    /// [`RuleKey::DayRolls`] reads. By the engine, it keeps them, as no
+    /// landing path in the original writes one, and only the classes
+    /// bought or declined since the shipyard was last listed are
+    /// forgotten, to be drawn again when next asked: the original draws
+    /// them again at once (`_DoShipyardDialog` @0x5f0f8). By the other
+    /// reading, it forgets every roll.
+    fn land_day_rolls(&mut self) {
+        if self.rules.source_for(RuleKey::DayRolls) == RuleSource::Engine {
+            for ship in std::mem::take(&mut self.ship_redraws) {
+                self.ship_rolls.redraw(&ship);
+            }
+        } else {
+            self.hire_rolls.clear();
+            self.outfit_rolls.clear();
+            self.ship_rolls.clear();
+            self.ship_redraws.clear();
+        }
     }
 
     /// Takes off from the stellar the ship is docked at, and gives it; the
@@ -2295,7 +2317,7 @@ impl Session {
 
     /// The outfitter of the stellar the ship is docked at, if it has
     /// landed at one, drawing on `chance` each outfit's roll for the day
-    /// not drawn yet since the landing (see [`outfitter`]).
+    /// not drawn yet (see [`outfitter`]).
     pub fn outfitter(&mut self, chance: &mut dyn Chance) -> Option<Outfitter> {
         let stellar = self.landed?;
         let site = self.sites.iter().find(|site| site.id == stellar)?;
@@ -2426,7 +2448,7 @@ impl Session {
 
     /// The shipyard of the stellar the ship is docked at, if it has landed
     /// at one, drawing on `chance` each class's roll for the day not drawn
-    /// yet since the landing (see [`shipyard`]). This builds its list
+    /// yet (see [`shipyard`]). This builds its list
     /// afresh: the roll of each class bought or declined since it was last
     /// built is drawn again first.
     pub fn shipyard(&mut self, chance: &mut dyn Chance) -> Option<Shipyard> {
@@ -8862,9 +8884,137 @@ mod tests {
         shipyard.row(NEW).is_some()
     }
 
+    /// The rule set reading [`RuleKey::DayRolls`] the other way: a
+    /// landing forgets the rolls.
+    fn landing_rolls() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::DayRolls, RuleSource::Bible)
+    }
+
+    /// The rule set whose stay passes no day ([`RuleKey::StayDays`]).
+    fn no_stay_days() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::StayDays, RuleSource::Bible)
+    }
+
     #[test]
-    fn the_outfitters_rolls_are_drawn_once_a_landing_and_again_at_the_next() {
+    fn the_outfitters_rolls_are_drawn_once_a_day() {
         let mut session = outfitted(&rolling(50, 100));
+        let mut missing = Scripted::answering(&[false]);
+        assert!(!lists_speed(&mut session, &mut missing), "drawn as asked");
+        assert_eq!(missing.asked, [50]);
+        let mut firing = Scripted::answering(&[true, true]);
+        assert!(!lists_speed(&mut session, &mut firing), "kept");
+        assert!(firing.asked.is_empty());
+        session.take_off(&mut firing).expect("takes off");
+        assert_eq!(firing.asked, [50], "the take-off's day draws it");
+        land_now(&mut session).expect("lands again");
+        assert!(lists_speed(&mut session, &mut firing), "the day's roll");
+        assert_eq!(firing.asked, [50], "the landing keeps it");
+    }
+
+    #[test]
+    fn the_shipyards_rolls_are_drawn_once_a_day() {
+        let mut session = outfitted(&rolling(100, 50));
+        let mut missing = Scripted::answering(&[false]);
+        assert!(!lists_new(&mut session, &mut missing), "drawn as asked");
+        assert_eq!(missing.asked, [50]);
+        let mut firing = Scripted::answering(&[true, true]);
+        assert!(!lists_new(&mut session, &mut firing), "kept");
+        assert!(firing.asked.is_empty());
+        session.take_off(&mut firing).expect("takes off");
+        assert_eq!(firing.asked, [50], "the take-off's day draws it");
+        land_now(&mut session).expect("lands again");
+        assert!(lists_new(&mut session, &mut firing), "the day's roll");
+        assert_eq!(firing.asked, [50], "the landing keeps it");
+    }
+
+    #[test]
+    fn a_take_offs_day_draws_the_rolls_the_next_landing_reads() {
+        let mut session = outfitted(&rolling(50, 50));
+        let mut day = Scripted::answering(&[true, false]);
+        session.take_off(&mut day).expect("takes off");
+        assert_eq!(day.asked, [50, 50], "the ship class, then the outfit");
+        land_now(&mut session).expect("lands again");
+        let mut none = Scripted::default();
+        assert!(lists_new(&mut session, &mut none));
+        assert!(!lists_speed(&mut session, &mut none));
+        assert!(none.asked.is_empty(), "the landing reads the day's rolls");
+    }
+
+    #[test]
+    fn a_landing_with_no_day_passing_keeps_the_rolls() {
+        let mut session = outfitted(&rolling(50, 50)).with_rules(no_stay_days());
+        let mut firing = Scripted::answering(&[true, false]);
+        assert!(lists_speed(&mut session, &mut firing));
+        assert!(!lists_new(&mut session, &mut firing));
+        relanded(&mut session);
+        let mut none = Scripted::answering(&[false, true]);
+        assert!(lists_speed(&mut session, &mut none));
+        assert!(!lists_new(&mut session, &mut none));
+        assert!(none.asked.is_empty(), "kept");
+    }
+
+    #[test]
+    fn a_declined_class_is_drawn_again_after_a_landing_with_no_day() {
+        let mut session = outfitted(&rolling(50, 50)).with_rules(no_stay_days());
+        let mut firing = Scripted::answering(&[true, true]);
+        assert!(lists_speed(&mut session, &mut firing));
+        assert!(lists_new(&mut session, &mut firing));
+        session.decline_ship(NEW);
+        relanded(&mut session);
+        let mut missing = Scripted::answering(&[false]);
+        assert!(lists_speed(&mut session, &mut missing), "kept");
+        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        assert_eq!(missing.asked, [50]);
+    }
+
+    #[test]
+    fn a_bought_class_is_drawn_again_after_a_landing_with_no_day() {
+        let mut session = outfitted(&rolling(50, 50)).with_rules(no_stay_days());
+        let mut firing = Scripted::answering(&[true, true]);
+        assert!(lists_speed(&mut session, &mut firing));
+        session
+            .buy_ship(NEW, "Kestrel", &mut firing)
+            .expect("bought");
+        assert_eq!(firing.asked, [50, 50]);
+        relanded(&mut session);
+        let mut missing = Scripted::answering(&[false]);
+        assert!(!lists_new(&mut session, &mut missing), "drawn again");
+        assert_eq!(missing.asked, [50]);
+    }
+
+    #[test]
+    fn a_days_draw_supersedes_the_redraws_due() {
+        let mut session = outfitted(&rolling(100, 50));
+        let mut firing = Scripted::answering(&[true, true]);
+        assert!(lists_new(&mut session, &mut firing));
+        session.decline_ship(NEW);
+        session.take_off(&mut firing).expect("takes off");
+        land_now(&mut session).expect("lands again");
+        assert!(lists_new(&mut session, &mut firing));
+        assert_eq!(firing.asked, [50, 50], "the listing's draw, then the day's");
+        assert!(lists_new(&mut session, &mut firing), "kept");
+        assert_eq!(firing.asked, [50, 50]);
+    }
+
+    #[test]
+    fn an_owned_outfits_hold_lasts_until_the_next_day() {
+        let mut session = outfitted(&rolling(50, 100)).with_rules(no_stay_days());
+        let mut firing = Scripted::answering(&[true]);
+        assert_eq!(session.outfit(buy(SPEED), &mut firing), Ok(()));
+        assert_eq!(session.outfit(sell(SPEED), &mut firing), Ok(()));
+        relanded(&mut session);
+        let mut missing = Scripted::default();
+        assert!(lists_speed(&mut session, &mut missing), "still held");
+        assert!(missing.asked.is_empty());
+        session.pass_days(1, &mut missing);
+        assert_eq!(missing.asked, [50], "the day draws it again");
+        assert!(!lists_speed(&mut session, &mut missing));
+        assert_eq!(missing.asked, [50]);
+    }
+
+    #[test]
+    fn by_the_other_reading_the_outfitters_rolls_are_drawn_once_a_landing_and_again_at_the_next() {
+        let mut session = outfitted(&rolling(50, 100)).with_rules(landing_rolls());
         let mut missing = Scripted::answering(&[false]);
         assert!(!lists_speed(&mut session, &mut missing));
         assert_eq!(missing.asked, [50]);
@@ -8887,8 +9037,8 @@ mod tests {
     }
 
     #[test]
-    fn the_shipyards_rolls_are_drawn_once_a_landing_and_again_at_the_next() {
-        let mut session = outfitted(&rolling(100, 50));
+    fn by_the_other_reading_the_shipyards_rolls_are_drawn_once_a_landing_and_again_at_the_next() {
+        let mut session = outfitted(&rolling(100, 50)).with_rules(landing_rolls());
         let mut missing = Scripted::answering(&[false]);
         assert!(!lists_new(&mut session, &mut missing));
         assert_eq!(missing.asked, [50]);
@@ -8960,8 +9110,8 @@ mod tests {
     }
 
     #[test]
-    fn a_landing_forgets_the_redraws_due() {
-        let mut session = outfitted(&rolling(100, 50));
+    fn by_the_other_reading_a_landing_forgets_the_redraws_due() {
+        let mut session = outfitted(&rolling(100, 50)).with_rules(landing_rolls());
         let mut firing = Scripted::answering(&[true, true]);
         assert!(lists_new(&mut session, &mut firing));
         session.decline_ship(NEW);
@@ -9027,8 +9177,27 @@ mod tests {
     }
 
     #[test]
-    fn about_n_percent_of_landings_sell_an_item_of_buy_random_n() {
-        let mut session = outfitted(&rolling(37, 62));
+    fn about_n_percent_of_days_sell_an_item_of_buy_random_n() {
+        for (catalog, expected) in [(rolling(37, 100), (37, 100)), (rolling(100, 62), (100, 62))] {
+            let mut session = outfitted(&catalog);
+            let mut days = Cycle::default();
+            let (mut speeds, mut news) = (0, 0);
+            for _ in 0..100 {
+                session.take_off(&mut days).expect("takes off");
+                land_now(&mut session).expect("lands again");
+                let mut none = Scripted::default();
+                speeds += u32::from(lists_speed(&mut session, &mut none));
+                news += u32::from(lists_new(&mut session, &mut none));
+                assert!(none.asked.is_empty(), "the day drew it");
+            }
+            assert_eq!((speeds, news), expected);
+            assert_eq!(days.k, 100, "one roll a day");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_about_n_percent_of_landings_sell_an_item_of_buy_random_n() {
+        let mut session = outfitted(&rolling(37, 62)).with_rules(landing_rolls());
         let (mut outfits, mut ships) = (Cycle::default(), Cycle::default());
         let (mut speeds, mut news) = (0, 0);
         for _ in 0..100 {

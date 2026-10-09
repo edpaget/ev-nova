@@ -7,8 +7,11 @@
 //! give ([`Session::with_hire_terms`], Nova's by default) and each ship's
 //! `Availability` tested through its [`ControlBits`]
 //! ([`Session::with_control_bits`]). Each class's roll for the day is
-//! drawn on the caller's [`Chance`] the first time the list is built after
-//! a landing, and kept until the next; hiring a class draws its roll again
+//! drawn by the daily step and kept across landings, or by the other
+//! reading of [`RuleKey::DayRolls`](crate::RuleKey::DayRolls) drawn on the
+//! caller's [`Chance`] the first time the list is built after a landing
+//! and kept until the next; one not drawn yet is drawn when the list
+//! asks for it. Hiring a class draws its roll again
 //! when the list is next built. The rolls are never saved. The
 //! outfitter's and the shipyard's `BuyRandom` rolls follow the same rule
 //! ([`Session::outfitter`], [`Session::shipyard`]), buying a ship drawing
@@ -407,9 +410,47 @@ mod tests {
     }
 
     #[test]
-    fn each_landing_draws_the_rolls_again() {
+    fn each_day_draws_the_rolls_again() {
         let catalog = barred(vec![hireable(129, 50)]);
         let mut session = landed(&catalog, 25_000);
+        let mut listing = Scripted::answering(&[true]);
+        assert_eq!(
+            listed(&session.escorts_for_hire(&mut listing).expect("a bar")),
+            [129]
+        );
+        let mut day = Scripted::answering(&[false]);
+        session.take_off(&mut day).expect("takes off");
+        assert_eq!(day.asked, [50], "the take-off's day draws it");
+        assert_eq!(land_now(&mut session), Ok(BAR_AT));
+        let list = session.escorts_for_hire(&mut listing).expect("a bar");
+        assert_eq!(listed(&list), Vec::<i16>::new(), "the day's roll");
+        assert_eq!(listing.asked, [50], "the landing keeps it");
+    }
+
+    #[test]
+    fn a_landing_with_no_day_keeps_the_hire_rolls() {
+        use crate::rulebook::{RuleKey, RuleSource};
+        let catalog = barred(vec![hireable(129, 50)]);
+        let rules = Rulebook::default().with_override(RuleKey::StayDays, RuleSource::Bible);
+        let mut session = landed(&catalog, 25_000).with_rules(rules);
+        let mut chance = Scripted::answering(&[true, false]);
+        assert_eq!(
+            listed(&session.escorts_for_hire(&mut chance).expect("a bar")),
+            [129]
+        );
+        session.take_off(&mut chance).expect("takes off");
+        assert_eq!(land_now(&mut session), Ok(BAR_AT));
+        let list = session.escorts_for_hire(&mut chance).expect("a bar");
+        assert_eq!(listed(&list), [129], "kept");
+        assert_eq!(chance.asked, [50]);
+    }
+
+    #[test]
+    fn by_the_other_reading_each_landing_draws_the_rolls_again() {
+        use crate::rulebook::{RuleKey, RuleSource};
+        let catalog = barred(vec![hireable(129, 50)]);
+        let rules = Rulebook::default().with_override(RuleKey::DayRolls, RuleSource::Bible);
+        let mut session = landed(&catalog, 25_000).with_rules(rules);
         let mut chance = Scripted::answering(&[true, false]);
         assert_eq!(
             listed(&session.escorts_for_hire(&mut chance).expect("a bar")),
