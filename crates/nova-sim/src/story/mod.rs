@@ -1,0 +1,1027 @@
+//! The story runtime: the one design that missions, crons, mission
+//! ships, nebulae and plug-in triggers build on. Each kind of story event
+//! has one source; the scripts events trigger run through one dispatcher,
+//! in one order; days pass through one daily step; and changes to the
+//! galaxy go through one overlay that every reader sees.
+//!
+//! This module holds the design and the pure types it names: the
+//! [`StoryEvent`]s, the [`EventFilter`] and [`Subscription`] a consumer
+//! registers, each named by its stable [`SubscriptionId`], and the
+//! dispatch-order rule, [`dispatch_order`]. Nothing raises an event or
+//! runs a subscription yet. Each section names the phase that builds or
+//! fills it:
+//!
+//! - story events and dispatch: story-runtime phase 3;
+//! - the daily step: story-runtime phase 2;
+//! - the galaxy overlay: story-runtime phase 4, with `Y` and `U` in
+//!   story-runtime phase 5;
+//! - the mission lifecycle: missions phase 2;
+//! - text substitution: missions phase 3.
+//!
+//! Where the original cannot settle a question, or the design does not
+//! follow it, the section names the [`Rulebook`](crate::Rulebook) key the
+//! building phase adds and its readings. This phase adds none.
+//!
+//! # Findings
+//!
+//! Read from `EV Nova.app/Contents/MacOS/EV Nova` (`otool -tV -arch
+//! i386`, `nm`). The active missions are 16 slots of 0x8ec bytes, each
+//! with its flags in a parallel record of 0x14 bytes; the stellars are
+//! records of 0x498 bytes and the systems of 0x1fc.
+//!
+//! ## A day (`_IncrementGameTime` @0xb516)
+//!
+//! One call passes one day, in this order:
+//!
+//! 1. The date moves on a day (@0xb51f-0xb585).
+//! 2. The crons (`_CronEventHandler` @0xb58b): one pass over every `crön`
+//!    by ID (@0x38762-0x38912). Each counts down its holdoffs and
+//!    duration and ends (`_TerminateCron`, `OnEnd` @0x384dc), or, its
+//!    `Random`, date range, `Require` and `EnableOn` met, starts
+//!    (`_ActivateCron`, `OnStart` @0x38650). Each script runs at once, so
+//!    a later cron in the pass sees the bits an earlier one set.
+//! 3. Every active mission's days left (slot +0x48) go down by one while
+//!    above 0 (@0xb590-0xb5b6). Nothing fails here: the per-frame goal
+//!    check notices a deadline at 0 (see "Ship goals").
+//! 4. Tribute (`_DoStellarTimePassage` @0xb5b8): every stellar the player
+//!    dominates (+0x46) adds its tribute (+0x46a) to the cash
+//!    (@0x40875-0x408ce).
+//! 5. The day's events, `öops` (`_DisasterHandler` @0xb5bf).
+//! 6. The stellars (@0xb5c4-0xb71e): a dominated one's defence fleet
+//!    regrows a ship on `Rand(450)` 0, up to its count (@0xb5f6-0xb64c);
+//!    a destroyed one counts down to its regeneration and, at 0, is
+//!    restored and runs its `OnRegen` (`spöb` +0x365, @0xb6ee).
+//! 7. Every visible system's reinforcement countdown (+0xc4, which
+//!    `_HandleReinforcements` sets @0x3929b) goes down by one
+//!    (@0xb724-0xb759).
+//! 8. Every active rank pays its salary, up to its cap (@0xb75b-0xb7c2).
+//! 9. The shipyard, hire and outfitter day rolls (@0xb7c4-0xb833).
+//!
+//! The commodity price flux (`_HandleGlobalPriceFlux` @0x32054,
+//! `_HandleLocalPriceFlux` @0x320a6) and the escorts' pay
+//! (`_DoEscortPayment`) are not part of a day: the caller runs them once,
+//! after its days.
+//!
+//! ## Where days pass
+//!
+//! `_IncrementGameTime` has eight call sites:
+//!
+//! - a jump's arrival (`_HandlePlayer` @0x6c144): as many days as the
+//!   longest hyperspace transit time in the fleet, then the global and
+//!   local price flux (@0x6c153, @0x6c158);
+//! - the take-off (`_PlayerLandOnStellar` @0x63440): one day, then the
+//!   global price flux (@0x63445). A landing passes none: the day comes
+//!   as the spaceport is left;
+//! - leaving the spaceport having bought or sold an outfit
+//!   (`_DoPortDialog` @0x601fa, the flag `_DoOutfitDialog` sets @0x5c555,
+//!   @0x5d317): one more day;
+//! - leaving it having bought a ship (@0x6020e, the flag
+//!   `_DoShipyardDialog` sets @0x5ebce): four more days;
+//! - selling or upgrading escorts there (`_DoEscortLand` @0x40849): half
+//!   as many days as escorts sold and upgraded, rounded down, then their
+//!   pay (@0x4085a);
+//! - a mission's success (`_DoMissionSuccess` @0xa056f) and an
+//!   auto-aborted mission (`_AutoAbortMission` @0x99ca3): its
+//!   `DatePostInc` days;
+//! - the escape pod (`_HandlePlayer` @0x6912a): `Rand(30) + 15` days.
+//!
+//! A stay ends with the escorts (@0x601a0), the outfitting day, the
+//! ship's days, then the take-off's day.
+//!
+//! ## One landing
+//!
+//! `_HandlePlayerDockRequest`, at a stellar that is not a gate:
+//!
+//! 1. The offers are rolled first (@0x66d3f-0x66d62): 1000 `Rand(100) +
+//!    1` rolls, then `_RandomizeMissionData`, which refreshes the galaxy
+//!    first (@0xa175f; see "Visibility and governments"). They are rolled
+//!    only at a stellar other than the one they were last rolled at
+//!    (@0x66d2b-0x66d3d). A jump's arrival forgets that stellar
+//!    (@0x6bfc9), as does any mission's abort, failure or success
+//!    (@0x99bca, @0x99db0, @0xa03ea, @0xa068c). A take-off does not, so
+//!    landing again on the same stellar keeps its offers.
+//! 2. The spaceport opens (`_PlayerLandOnStellar` @0x66f29,
+//!    `_DoPortDialog` @0x63381) and runs `_MissionLandCheck` (@0x5fbeb),
+//!    then redraws the system's stellars (@0x5fbf0), then offers the
+//!    spaceport's own missions (`_OfferMissionFromPort` @0x5fc37).
+//! 3. `_MissionLandCheck` (@0xa19cc) takes the active missions in slot
+//!    order, 0 to 15 (@0xa19f7-0xa1aec). For each, it checks the ship
+//!    goals (`_MissionObjectivesCheck` @0xa1a0c) and the cargo
+//!    (`_MissionLandCargoCheck` @0xa1a1b); then, landed at the mission's
+//!    return stellar, failure (`_DoMissionFailure` @0xa1a92) before
+//!    success (`_DoMissionSuccess` @0xa1ace); then the goals again
+//!    (@0xa1ada). After the last slot it refreshes the galaxy (@0xa1af2)
+//!    and, if any mission succeeded, rolls the offers again (@0xa1b04).
+//! 4. The news is chosen as the bar opens (`_DoBarDialog` @0x48f15,
+//!    `_RandomizeNewsDialog` @0x48238): it has no trigger point of its
+//!    own.
+//!
+//! ## One take-off
+//!
+//! As the spaceport closes: the escorts (@0x601a0), then the outfitting
+//! and ship days (@0x601fa, @0x6020e). Then `_PlayerLandOnStellar` passes
+//! the take-off's day (@0x63440), runs the global price flux (@0x63445),
+//! explores the system (`_AutoSetExploration` @0x634c8) and its nebulae
+//! (@0x634da), restarts each mission's ship hail timers
+//! (@0x634df-0x6353c) and saves the pilot (@0x6354b). Back in
+//! `_HandlePlayerDockRequest`, the system's ships are set up
+//! (`_SetupShipsInSystem` @0x674c2) and its stellars redrawn (@0x674c7).
+//! The enter-system hook does not run.
+//!
+//! ## One arrival
+//!
+//! `_HandlePlayer`'s jump arrival, in order: the nebulae of every system
+//! the jump passes and arrives at (`_ExploreNebulaeFromSystem` @0x6bddb,
+//! @0x6be12); the galaxy refresh (@0x6bf3f); the offers' stellar
+//! forgotten (@0x6bfc9); the days (@0x6c144); the global and local price
+//! flux (@0x6c153, @0x6c158); the enter-system hook
+//! (`_MissionHandlePlayerEnteredNewSystem` @0x6c15d); the system explored
+//! (@0x6c1db); its ships set up (@0x6c1f9) and a bounty hunter
+//! (@0x6c1fe); its stellars redrawn (@0x6c203); the escorts' pay
+//! (@0x6c620).
+//!
+//! The enter-system hook (@0x99f11) runs no script. For each active
+//! mission, in slot order, it restarts the timers its ships appear and
+//! hail by (+0x4e, +0x6c, +0x6a). It runs on a jump's arrival
+//! (@0x6c15d), a gate's or wormhole's exit (@0x67159) and an `M` or `N`
+//! in flight (@0x159a8); not on a landed `M` or `N` (@0x15947, which only
+//! empties the docked offers), nor on a take-off, which restarts only the
+//! hail timers.
+//!
+//! ## Ship goals
+//!
+//! Goals are counted where they happen and checked by polling. A mission
+//! ship destroyed is counted in `_HandleShipDisplay` (@0x2dbd4), disabled
+//! in `_DamageShip` (@0x3af8b), boarded in `_HandlePlayerBoardAttempt`
+//! (@0x653a7, @0x65730). A ship whose loss fails its mission fails it
+//! there and then (`_QuickMissionFailure` @0x2dbba, @0x3af71). Every frame
+//! `_DoPlayGameWork` (@0x44214) runs `_MissionHandler` (@0x9eda8), which
+//! checks each slot's goals (`_MissionObjectivesCheck` @0x9edb5): the
+//! counts, whether the escorted ships are still with the player
+//! (@0x9e931-0x9e980), and whether an observed ship is on screen and
+//! visible (@0x9ea5c, @0x9eb02). A goal met shows `ShipDone` (@0x9ed0f)
+//! and runs `OnShipDone` (@0x9ed70). The same poll fails a mission whose
+//! days left reached 0 (@0x9eba5-0x9ec61), so a deadline fails after its
+//! transition has finished. The landing check runs it too (above).
+//!
+//! Mission cargo jettisoned (`_JettisonCargo` @0x3e18c), found by a scan
+//! (`_ScanPlayer` @0x7e7ac) or plundered by an NPC
+//! (`_AIPlunderShipContents` @0x84a0f) fails its mission at once.
+//!
+//! ## Scripts that raise events
+//!
+//! The original nests: an operator that causes an event handles it inside
+//! `_EvalSetExp` (@0x150fc), before the next operator runs.
+//!
+//! - `S` rolls and accepts the mission there (`_RandomizeOneMission`
+//!   @0x153ff, `_DoMissionAccept` @0x15407), running its `OnAccept`
+//!   (@0xa1da2) and, for an auto-aborted mission, its `DatePostInc` days
+//!   (@0xa2186), crons and all.
+//! - `A` aborts the mission there (`_AbortMission` @0x1532e), running its
+//!   `OnAbort` (@0x99ba1). `F` only marks it failed (@0x1539f): it fails
+//!   at the next landing check.
+//! - `M` and `N` in flight redraw the stellars and run the enter-system
+//!   hook there (@0x159a3, @0x159a8).
+//! - `K` and `L` activate and deactivate the rank there (@0x159e1,
+//!   @0x15a17); that runs no script.
+//!
+//! Outside scripts it is the same: a mission's success passes its
+//! `DatePostInc` days, crons and all, inside the landing check.
+//!
+//! ## Visibility and governments
+//!
+//! `_PropagateMissionBitEffects` (@0x99676) is the one place the bits
+//! reach the galaxy. It evaluates every system's `Visibility`
+//! (@0x996a1-0x996eb); gives each stellar to the lowest-ID visible system
+//! that lists it (@0x9970d-0x997bd); evaluates `shïp` `Availability`,
+//! `përs` and `flët` `ActiveOn`, `mïsn` `AvailBits` and `nëbu` `ActiveOn`
+//! (@0x997c3-0x998ef); and, if the player's system is now hidden, moves
+//! the player and its escorts to the visible system at the same place or,
+//! with none, makes its system visible again (@0x998f1-0x999ac). It runs
+//! at a landing (with the offers @0xa175f, in the land check @0xa1af2), on
+//! a jump's arrival before its days (@0x6bf3f), and for a new pilot, the
+//! main screen and a load; never right after a script. So a bit a cron
+//! sets on a jump's days shows at the next landing or arrival.
+//!
+//! Between refreshes every reader reads the visible flags it left
+//! (`_FindActiveCoLocatedSystem` @0x4be0; `_SystemVisible` @0x98207 has
+//! no caller). A system's government changes only when another system at
+//! the same place becomes visible; nothing re-reads governments on their
+//! own. A stellar's destroyed state is read live (`_StellarIsDestroyed`
+//! @0x4e14, by its sprite, weapons, shots and the AI).
+//! `_HandleStellarSystemVisibility` (@0x32aa5) only rebuilds the current
+//! system's stellar sprites by it: after a move in flight (@0x159a3), on
+//! opening the spaceport (@0x5fbf0), on a gate's exit (@0x63e8c,
+//! @0x6473e), after a take-off (@0x674c7) and on arrival (@0x6c203,
+//! @0x6c597).
+//!
+//! ## Nebulae
+//!
+//! `_ExploreNebulaeFromSystem` (@0x508f) runs the `OnExplore` (@0x519e)
+//! of every active nebula not yet explored whose rectangle, inset by 8,
+//! holds the system, and marks it explored, so each runs once. It runs
+//! for every system an exploration reaches (`_RecursiveAutoExplore`
+//! @0xd98a: an arrival, a take-off, a map granted), for the systems a
+//! jump passes and arrives at (@0x6bddb, @0x6be12), at the take-off
+//! (@0x634da), and for a new pilot and a load (@0x19118, @0x765bc). `E`
+//! explores no nebula.
+//!
+//! ## Text
+//!
+//! `_MungeBriefing` fills the text tags of every mission text (offers,
+//! briefings, accept, success, failure, `ShipDone`, cargo), of a `Q`
+//! message run from a mission's script (@0x15c4b), of a person's hail
+//! quote (@0x44614) and of the comm dialog (@0x9080b). The news fills
+//! none.
+//!
+//! # Story events
+//!
+//! Built by story-runtime phase 3.
+//!
+//! A [`StoryEvent`] says what happened, with its data. It is the sim's
+//! own: story dispatch never drains or reuses the view's
+//! [`SessionEvent`](crate::SessionEvent) outbox, which carries no data and
+//! is emptied by [`Session::take_events`](crate::Session::take_events).
+//! Each event has one source, at a transition point that also emits a
+//! `SessionEvent` or runs a step:
+//!
+//! | Event | Its one source | The original's |
+//! |---|---|---|
+//! | [`EnteredSystem`](StoryEvent::EnteredSystem) | `enter_system`'s `announce` step, for every [`Entrance`] | the enter-system hook |
+//! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as [`Session::land`](crate::Session::land) docks | the spaceport opening |
+//! | [`TookOff`](StoryEvent::TookOff) | [`Session::take_off`](crate::Session::take_off), after its day | `_PlayerLandOnStellar` after the spaceport |
+//! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
+//! | [`Explored`](StoryEvent::Explored) | exploring a system: on arrival (and each system a jump passes), at a take-off, by a map | `_ExploreNebulaeFromSystem` |
+//! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling, the session's boarding, and the flight tick for a mission ship first seen | the goal counts and the per-frame poll |
+//!
+//! A consumer that wants only some entrances reads the [`Entrance`] in
+//! its subscription: mission ships restart their timers on a `Jump`, a
+//! `Gate` and an in-flight `ScriptMove`, as the original's hook runs. A
+//! take-off raises `DayPassed`, its `Explored` events, then `TookOff`; an
+//! arrival raises the `Explored` of the systems it passes, its `DayPassed`
+//! events, `EnteredSystem`, then the `Explored` of its exploration: the
+//! original's order.
+//!
+//! A new trigger kind adds an event variant and its one source, plus
+//! subscriptions; never a loop of its own. The plug-in time-in-system and
+//! proximity kinds (plugin-scripting-extensions phase 4) are new variants
+//! raised from the flight tick.
+//!
+//! # Dispatch
+//!
+//! Built by story-runtime phase 3.
+//!
+//! A [`Subscription`] is a consumer's "on this event, if this test holds,
+//! run this set expression, maybe once":
+//!
+//! - its [`EventFilter`]: a kind, or a kind at one place;
+//! - its guard, a control-bit [`Test`] asked through
+//!   [`Gate`](crate::control::Gate). A guard of more than one test is a
+//!   [`Checks`](crate::rules::Checks) list that the subscription's
+//!   consumer runs, never the dispatcher;
+//! - its set expression, a [`Script`], run as
+//!   [`Session::run_set`](crate::Session::run_set) runs one, its operators
+//!   applied through `Session::apply_op`;
+//! - its once-only flag;
+//! - its stable [`SubscriptionId`]: consumer, record and hook. The record
+//!   is the consumer's number for what it subscribes for: a resource ID,
+//!   or for missions and their ships the active mission's slot, which is
+//!   saved with it. The id keys the once-fired record that phase 3 saves
+//!   on `Pilot`, so it never depends on registration order. Ids are
+//!   unique: phase 3's registry refuses a second.
+//!
+//! **Order.** [`dispatch_order`] runs an event's subscriptions by id:
+//! consumer, then record, then hook. The consumers' order is
+//! [`Consumer`]'s, the same for every event, because only one event has
+//! two stock consumers in the original: a landing, which checks each
+//! mission's ship goals before its cargo, failure and success
+//! (@0xa1a0c-0xa1ace), so [`Consumer::MissionShips`] comes first. Missions
+//! go by slot, as the original's land check (@0xa19f7), and a mission's
+//! landing hooks go cargo, failure, success. Plug-ins run after every
+//! stock consumer: an engine decision with no Rulebook key, since the
+//! original has no plug-ins. One difference stays: the original checks
+//! goals and then cargo, failure and success slot by slot, and here every
+//! slot's goals come first. Goal checks read only their own mission's
+//! counts, so the two differ only when a success script changes another
+//! mission's ships.
+//!
+//! **Re-entrancy (decided).** By default an event raised by a script is
+//! queued, and dispatched once the script has settled. A subscription's
+//! script runs as any script does today: `apply_op`'s arms apply their
+//! effects or queue them, and the queued moves and `Q` apply when
+//! [`Session::settle_script`](crate::Session::settle_script) settles. An
+//! event those effects raise waits until the current dispatch has
+//! finished and the script has settled, then dispatches in the order
+//! raised, first in, first out; never in the middle of a script:
+//!
+//! 1. a dispatch runs its subscriptions' scripts, in order;
+//! 2. `settle_script` applies the queued moves, and an `enter_system` they
+//!    cause raises `EnteredSystem`;
+//! 3. the dispatcher takes the next pending event, that one among them;
+//! 4. and so on until none is pending. At most 64 events are dispatched
+//!    from one settling, a guard against scripts that raise each other for
+//!    ever; phase 3 drops the rest and tells the session's diagnostics.
+//!
+//! The original nests instead (see "Scripts that raise events"). Phase 3
+//! adds the Rulebook key `story_reentry` for it, with two readings:
+//! `queued`, the default, and `nested`, where an event raised inside a
+//! script is dispatched depth first, before the script's next operator.
+//! The default departs from the original, where every other key's default
+//! follows it: a move cannot enter a system in the middle of a script,
+//! which has no catalog to read the system from (see `script_effects`),
+//! so phase 3 marks the departure in the rulebook's table.
+//!
+//! A consumer's own effects, which are not set expressions (a mission's
+//! pay, legal record and `DatePostInc` days, a ship goal's count), are
+//! routed by the subscription's `id.consumer` through one match in
+//! `session/story.rs`, as `apply_op` routes operators. The dispatcher, the
+//! events and the order stay out of [`rules`](crate::rules): at most, a
+//! guard is a rule.
+//!
+//! # Daily step
+//!
+//! Built by story-runtime phase 2; each participant by the phase named.
+//!
+//! One step passes one day. Its participants run in the original's order
+//! (see "A day"):
+//!
+//! 1. the date moves on a day;
+//! 2. the crons, each starting or ending cron's script run as it is
+//!    reached (crons-news-ranks phase 1);
+//! 3. the active missions' days left (missions phase 2);
+//! 4. the dominated stellars' tribute (rdm task planet-domination);
+//! 5. the day's events, `öops`: today's `market::step_day`;
+//! 6. the stellars: a dominated one's defence regrowing (planet-domination)
+//!    and a destroyed one's regeneration and `OnRegen` (story-runtime
+//!    phase 5);
+//! 7. the reinforcement countdown, once reinforcements are built;
+//! 8. the ranks' salaries (crons-news-ranks phase 3);
+//! 9. the day rolls (`wares::DayRolls`);
+//! 10. `DayPassed`, raised by story-runtime phase 3.
+//!
+//! Plug-in daily triggers (plugin-scripting-extensions phase 4) and a
+//! mission's missed deadline (missions phase 2) are `DayPassed`
+//! subscriptions, so they run after every stock participant: the
+//! deadline after the transition, as the original's per-frame check
+//! notices it. News has no participant: it is chosen when the bar opens.
+//!
+//! Days pass through the step on every path the original passes them on:
+//!
+//! - a jump's arrival, its days (today's `pass_jump_days`), and a gate's
+//!   under [`GateArrivalRule::LikeJump`](crate::GateArrivalRule::LikeJump);
+//! - every take-off: one day, after the spaceport's own;
+//! - leaving the spaceport having bought or sold an outfit: one day;
+//!   having bought a ship: four;
+//! - selling or upgrading escorts there: half as many days as escorts,
+//!   rounded down;
+//! - a mission's success or auto-abort: its `DatePostInc` (missions
+//!   phase 2).
+//!
+//! The escape pod's days wait for the escape pod. `Session::set_date` and
+//! loading a save write the date directly, with no participant run.
+//!
+//! Escort pay and the price flux are not participants: they run once
+//! after a transition's days, as the original's do. Today
+//! `pass_jump_days` pays the wages once after its days, and
+//! [`RuleKey::TakeOffPay`](crate::RuleKey::TakeOffPay) already pays a day's
+//! wage at each take-off. The engine has no price flux: `market::step_day`
+//! steps only the `öops` events, which move prices. Phase 2 moves it to
+//! its place, fifth.
+//!
+//! # Galaxy overlay
+//!
+//! Built by story-runtime phase 4; `Y` and `U` by story-runtime phase 5;
+//! the visibility rules by crons-news-ranks phase 5; ownership by rdm
+//! task planet-domination.
+//!
+//! The overlay holds what play changes over the static catalog:
+//!
+//! - per system: whether it is visible, and its government;
+//! - per stellar: whether the player dominates it, whether it is
+//!   destroyed or regenerated, and the system it belongs to (the
+//!   lowest-ID visible system that lists it, which follows from
+//!   visibility);
+//! - per nebula: whether it is active (`nëbu` `ActiveOn`), so that the
+//!   map reads nebulae as it reads systems.
+//!
+//! Readers see these facts only through the overlay: hyperspace links and
+//! navigation, traffic, landing, legal records, AI targeting, exploration,
+//! and every `StarMap::govt` call. The galaxy map keeps its static
+//! geometry (positions, nebula rectangles) from nova-view's
+//! `GalaxyCatalog`, and reads visibility, government, links and nebula
+//! activity through a session accessor over the overlaid galaxy.
+//!
+//! An override written directly (`Y`, `U`, domination) applies at once.
+//! Visibility and nebula activity are evaluated from the bits at the
+//! original's refresh points: at a landing, as the offers are rolled and
+//! after the land check; on a jump's arrival, before its days; and for a
+//! new pilot and a load. Crons-news-ranks phase 5 adds the Rulebook key
+//! `visibility_refresh` for the other reading, after every settled
+//! script. Each change to the overlay raises one `SessionEvent`, on which
+//! the view rebuilds the galaxy map. A player whose system becomes hidden
+//! goes to the visible system at the same place, with its escorts, or,
+//! with none, its system stays visible: story-runtime phase 4's rule.
+//! The original changes a system's government only by showing another
+//! system at the same place; a government override is the engine's own.
+//! `shïp` `Availability` and `përs`, `flët` and `mïsn` availability stay
+//! live reads, outside the overlay, where the original keeps them until
+//! the next refresh.
+//!
+//! # Mission lifecycle
+//!
+//! Built by missions phase 2.
+//!
+//! A mission is offered (per visit), then active, in one of 16 slots
+//! saved on `Pilot`, until it succeeds, fails or is aborted. What moves
+//! it:
+//!
+//! - the player: accepting runs `OnAccept` (and ends an auto-aborted
+//!   mission at once), refusing `OnRefuse`, aborting `OnAbort`;
+//! - `Landed`: the missions' landing subscriptions, after the mission
+//!   ships' goal checks, in `_MissionLandCheck`'s order: by slot, cargo
+//!   (missions phase 5), failure, success. A success pays, applies the
+//!   legal record, passes its `DatePostInc` days through the daily step,
+//!   runs `OnSuccess` and has the offers rolled again;
+//! - the daily step: the days left count down; a `DayPassed`
+//!   subscription fails a mission whose days left reached 0, running
+//!   `OnFailure`;
+//! - `ShipFate`: mission-ships phase 2 counts the goals, and a loss that
+//!   fails the mission fails it at once, through this lifecycle; cargo
+//!   jettisoned, found or plundered does the same (missions phase 5);
+//! - `S`, `A` and `F`, through `apply_op`: `S` accepts, running `OnAccept`
+//!   there as the original does, any event the accept raises being
+//!   queued (see "Dispatch"); `A` aborts there; `F` marks the mission
+//!   failed, and it fails at the next landing check.
+//!
+//! `EnteredSystem` moves no mission: the original's enter-system hook only
+//! restarts its ships' timers (mission-ships phase 1). Offers are rolled
+//! as the player lands, before the spaceport opens, and kept until a
+//! landing at another stellar, a jump or a mission's end (missions
+//! phase 1).
+//!
+//! # Text substitution
+//!
+//! Built by missions phase 3.
+//!
+//! The shared module missions phase 3 extracts from
+//! [`expand_tags`](crate::person::expand_tags) is the one substitution
+//! path, as `_MungeBriefing` is the original's. Its users:
+//!
+//! - mission text;
+//! - a `Q` message run from a mission's script;
+//! - person hail quotes, as today;
+//! - mission ships' `ShipDone` (mission-ships phase 2);
+//! - news (crons-news-ranks phase 2), which the original fills with no
+//!   tags: a text with none comes out unchanged;
+//! - dialogue nodes (plugin-scripting-extensions phase 3).
+
+use crate::catalog::{StellarId, SystemId};
+use crate::control::{Script, Test};
+use crate::date::GameDate;
+use crate::traffic::npc::NpcId;
+
+/// How the player entered a system. The original's enter-system hook
+/// runs on a `Jump`, a `Gate` and a `ScriptMove` in flight, never a
+/// landed one (see the module docs' findings).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entrance {
+    /// A hyperspace jump's arrival.
+    Jump,
+    /// Out of a hypergate or wormhole.
+    Gate,
+    /// `M` or `N`, landed or in flight.
+    ScriptMove {
+        /// Whether the player was landed.
+        landed: bool,
+    },
+    /// The developer tools' move, landed.
+    Relocate,
+}
+
+/// What became of a ship: what a mission ship's goal counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fate {
+    /// Destroyed.
+    Destroyed,
+    /// Disabled.
+    Disabled,
+    /// Boarded by the player.
+    Boarded,
+    /// First seen by the player: on screen and visible to it, which the
+    /// original polls each frame and the flight tick raises here.
+    Observed,
+}
+
+/// Something that happened that story scripts react to, with its data,
+/// raised from its one source (see the module docs' "Story events").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoryEvent {
+    /// The player entered `system`.
+    EnteredSystem {
+        /// The system entered.
+        system: SystemId,
+        /// How it was entered.
+        how: Entrance,
+    },
+    /// The player landed on `stellar`.
+    Landed {
+        /// The stellar landed on.
+        stellar: StellarId,
+    },
+    /// The player took off from `stellar`.
+    TookOff {
+        /// The stellar taken off from.
+        stellar: StellarId,
+    },
+    /// A day passed, and `date` is the new day.
+    DayPassed {
+        /// The new day.
+        date: GameDate,
+    },
+    /// `system` was explored or reached.
+    Explored {
+        /// The system.
+        system: SystemId,
+    },
+    /// Something became of the NPC `ship`.
+    ShipFate {
+        /// The ship.
+        ship: NpcId,
+        /// What became of it.
+        fate: Fate,
+    },
+}
+
+/// A [`StoryEvent`]'s kind, without its data: what an
+/// [`EventFilter::Any`] matches on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoryEventKind {
+    /// [`StoryEvent::EnteredSystem`].
+    EnteredSystem,
+    /// [`StoryEvent::Landed`].
+    Landed,
+    /// [`StoryEvent::TookOff`].
+    TookOff,
+    /// [`StoryEvent::DayPassed`].
+    DayPassed,
+    /// [`StoryEvent::Explored`].
+    Explored,
+    /// [`StoryEvent::ShipFate`].
+    ShipFate,
+}
+
+impl StoryEvent {
+    /// The event's kind.
+    #[must_use]
+    pub const fn kind(&self) -> StoryEventKind {
+        match self {
+            Self::EnteredSystem { .. } => StoryEventKind::EnteredSystem,
+            Self::Landed { .. } => StoryEventKind::Landed,
+            Self::TookOff { .. } => StoryEventKind::TookOff,
+            Self::DayPassed { .. } => StoryEventKind::DayPassed,
+            Self::Explored { .. } => StoryEventKind::Explored,
+            Self::ShipFate { .. } => StoryEventKind::ShipFate,
+        }
+    }
+}
+
+/// Which events a subscription is for: every event of a kind, or only
+/// those at one place. Only the kinds that carry a place can be placed:
+/// a system for [`StoryEvent::EnteredSystem`] and
+/// [`StoryEvent::Explored`], a stellar for [`StoryEvent::Landed`] and
+/// [`StoryEvent::TookOff`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventFilter {
+    /// Every event of this kind.
+    Any(StoryEventKind),
+    /// Entering this system, however it is entered.
+    EnteredSystem(SystemId),
+    /// Landing on this stellar.
+    Landed(StellarId),
+    /// Taking off from this stellar.
+    TookOff(StellarId),
+    /// Exploring or reaching this system.
+    Explored(SystemId),
+}
+
+impl EventFilter {
+    /// Whether `event` is one this filter is for.
+    #[must_use]
+    pub fn matches(&self, event: &StoryEvent) -> bool {
+        match (*self, *event) {
+            (Self::Any(kind), event) => event.kind() == kind,
+            (Self::EnteredSystem(at), StoryEvent::EnteredSystem { system, .. })
+            | (Self::Explored(at), StoryEvent::Explored { system }) => system == at,
+            (Self::Landed(at), StoryEvent::Landed { stellar })
+            | (Self::TookOff(at), StoryEvent::TookOff { stellar }) => stellar == at,
+            _ => false,
+        }
+    }
+}
+
+/// Who registered a subscription, in the order consumers run on one
+/// event: mission ships before missions, as a landing checks the goals
+/// before the missions, and every stock consumer before the plug-ins
+/// (see the module docs' "Dispatch").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Consumer {
+    /// A mission's ships (`mïsn` `Ship*` fields).
+    MissionShips,
+    /// Missions (`mïsn`).
+    Missions,
+    /// Crons (`crön`).
+    Crons,
+    /// Nebulae (`nëbu`).
+    Nebulae,
+    /// Plug-in trigger records.
+    Plugins,
+    /// A test's own subscriptions.
+    Fixture,
+}
+
+/// A subscription's name, stable from one session to the next: who
+/// registered it, the record it is for, and which of that record's hooks.
+/// It orders dispatch, field by field, and keys the once-fired record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SubscriptionId {
+    /// Who registered it.
+    pub consumer: Consumer,
+    /// The consumer's number for the record: a resource ID, or for
+    /// missions and mission ships the active mission's slot.
+    pub record: i16,
+    /// The consumer's number for the record's hook.
+    pub hook: u8,
+}
+
+/// "On this event, if this test holds, run this set expression, maybe
+/// once": one consumer's reaction to one kind of event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Subscription {
+    /// Its name, which orders it and keys its once-fired record.
+    pub id: SubscriptionId,
+    /// The events it is for.
+    pub on: EventFilter,
+    /// The control-bit test that must hold for it to run.
+    pub guard: Test,
+    /// The set expression it runs.
+    pub script: Script,
+    /// Whether it runs at most once a pilot.
+    pub once: bool,
+}
+
+impl Subscription {
+    /// `id` running `script` on the events `on` is for, every time, with
+    /// a blank guard.
+    #[must_use]
+    pub fn new(id: SubscriptionId, on: EventFilter, script: Script) -> Self {
+        Self {
+            id,
+            on,
+            guard: Test::default(),
+            script,
+            once: false,
+        }
+    }
+}
+
+/// The subscriptions `event` runs, in the order they run: those whose
+/// filter matches it, by [`SubscriptionId`] (consumer, then record, then
+/// hook), whatever order they come in. Which have fired once already,
+/// and whose guards hold, are the dispatcher's to ask.
+#[must_use]
+pub fn dispatch_order<'a>(
+    subscriptions: impl IntoIterator<Item = &'a Subscription>,
+    event: &StoryEvent,
+) -> Vec<&'a Subscription> {
+    let mut order: Vec<&Subscription> = subscriptions
+        .into_iter()
+        .filter(|sub| sub.on.matches(event))
+        .collect();
+    order.sort_by_key(|sub| sub.id);
+    order
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control::Gate;
+
+    fn on(consumer: Consumer, record: i16, hook: u8, filter: EventFilter) -> Subscription {
+        Subscription::new(id(consumer, record, hook), filter, Script::default())
+    }
+
+    fn ids(order: &[&Subscription]) -> Vec<SubscriptionId> {
+        order.iter().map(|sub| sub.id).collect()
+    }
+
+    const LANDED: StoryEvent = StoryEvent::Landed {
+        stellar: StellarId(128),
+    };
+
+    #[test]
+    fn dispatch_drops_the_subscriptions_the_event_does_not_match() {
+        let subs = [
+            on(Consumer::Fixture, 1, 0, EventFilter::Landed(StellarId(128))),
+            on(Consumer::Fixture, 2, 0, EventFilter::Landed(StellarId(129))),
+            on(
+                Consumer::Fixture,
+                3,
+                0,
+                EventFilter::Any(StoryEventKind::TookOff),
+            ),
+            on(
+                Consumer::Fixture,
+                4,
+                0,
+                EventFilter::Any(StoryEventKind::Landed),
+            ),
+        ];
+        assert_eq!(
+            ids(&dispatch_order(&subs, &LANDED)),
+            [id(Consumer::Fixture, 1, 0), id(Consumer::Fixture, 4, 0)]
+        );
+    }
+
+    /// Matching subscriptions in an order that is none of the sorted ones.
+    fn jumbled() -> Vec<Subscription> {
+        let any = EventFilter::Any(StoryEventKind::Landed);
+        vec![
+            on(Consumer::Plugins, 128, 0, any),
+            on(Consumer::Missions, 3, 1, any),
+            on(Consumer::Crons, 200, 0, any),
+            on(Consumer::Missions, 3, 0, any),
+            on(Consumer::MissionShips, 5, 0, any),
+            on(Consumer::Missions, 1, 4, any),
+            on(Consumer::Nebulae, 130, 0, any),
+        ]
+    }
+
+    fn sorted_ids() -> Vec<SubscriptionId> {
+        vec![
+            id(Consumer::MissionShips, 5, 0),
+            id(Consumer::Missions, 1, 4),
+            id(Consumer::Missions, 3, 0),
+            id(Consumer::Missions, 3, 1),
+            id(Consumer::Crons, 200, 0),
+            id(Consumer::Nebulae, 130, 0),
+            id(Consumer::Plugins, 128, 0),
+        ]
+    }
+
+    #[test]
+    fn dispatch_runs_by_consumer_then_record_then_hook() {
+        let subs = jumbled();
+        assert_eq!(ids(&dispatch_order(&subs, &LANDED)), sorted_ids());
+    }
+
+    #[test]
+    fn registration_order_never_decides_dispatch() {
+        let subs = jumbled();
+        for turn in 0..subs.len() {
+            let mut shuffled: Vec<&Subscription> = subs.iter().collect();
+            shuffled.rotate_left(turn);
+            assert_eq!(
+                ids(&dispatch_order(shuffled.iter().copied(), &LANDED)),
+                sorted_ids(),
+                "rotated {turn}"
+            );
+            shuffled.reverse();
+            assert_eq!(
+                ids(&dispatch_order(shuffled, &LANDED)),
+                sorted_ids(),
+                "rotated {turn}, reversed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_landing_checks_mission_ships_goals_before_the_missions() {
+        let subs = [
+            on(
+                Consumer::Missions,
+                0,
+                0,
+                EventFilter::Any(StoryEventKind::Landed),
+            ),
+            on(
+                Consumer::MissionShips,
+                15,
+                0,
+                EventFilter::Any(StoryEventKind::Landed),
+            ),
+        ];
+        assert_eq!(
+            ids(&dispatch_order(&subs, &LANDED)),
+            [
+                id(Consumer::MissionShips, 15, 0),
+                id(Consumer::Missions, 0, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn plugins_run_after_every_stock_consumer_on_every_event() {
+        use Consumer::{Crons, MissionShips, Missions, Nebulae, Plugins};
+        for event in one_of_each() {
+            let any = EventFilter::Any(event.kind());
+            let subs = [
+                on(Plugins, i16::MIN, 0, any),
+                on(Nebulae, i16::MAX, 9, any),
+                on(Crons, i16::MAX, 9, any),
+                on(Missions, i16::MAX, 9, any),
+                on(MissionShips, i16::MAX, 9, any),
+            ];
+            let order = dispatch_order(&subs, &event);
+            assert_eq!(order.len(), 5, "{event:?}");
+            assert_eq!(order[4].id.consumer, Plugins, "{event:?}");
+        }
+    }
+
+    #[test]
+    fn a_new_subscription_runs_every_time_behind_a_blank_guard() {
+        let sub = Subscription::new(
+            id(Consumer::Fixture, 1, 2),
+            EventFilter::Landed(StellarId(130)),
+            Script::parse("b7"),
+        );
+        assert_eq!(sub.id, id(Consumer::Fixture, 1, 2));
+        assert_eq!(sub.on, EventFilter::Landed(StellarId(130)));
+        assert_eq!(sub.script, Script::parse("b7"));
+        assert!(!sub.once);
+        assert_eq!(sub.guard, Test::default());
+        assert!(Gate::FRESH.allows(&sub.guard), "a blank test holds");
+    }
+
+    fn id(consumer: Consumer, record: i16, hook: u8) -> SubscriptionId {
+        SubscriptionId {
+            consumer,
+            record,
+            hook,
+        }
+    }
+
+    #[test]
+    fn ids_compare_by_consumer_then_record_then_hook() {
+        use Consumer::{Crons, Missions};
+        assert!(id(Missions, 900, 9) < id(Crons, 128, 0), "consumer first");
+        assert!(id(Crons, 128, 9) < id(Crons, 129, 0), "then record");
+        assert!(id(Crons, 128, 0) < id(Crons, 128, 1), "then hook");
+        assert_eq!(
+            id(Crons, 128, 1).cmp(&id(Crons, 128, 1)),
+            std::cmp::Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn the_stock_consumers_come_before_the_plugins() {
+        use Consumer::{Crons, Fixture, MissionShips, Missions, Nebulae, Plugins};
+        let mut consumers = [Fixture, Plugins, Nebulae, Crons, Missions, MissionShips];
+        consumers.sort();
+        assert_eq!(
+            consumers,
+            [MissionShips, Missions, Crons, Nebulae, Plugins, Fixture]
+        );
+    }
+
+    fn day() -> GameDate {
+        GameDate::from_start(crate::catalog::StartDate {
+            day: 1,
+            month: 1,
+            year: 1177,
+        })
+    }
+
+    /// One event of every kind, each at system 128 or stellar 128.
+    fn one_of_each() -> [StoryEvent; 6] {
+        [
+            StoryEvent::EnteredSystem {
+                system: SystemId(128),
+                how: Entrance::Gate,
+            },
+            StoryEvent::Landed {
+                stellar: StellarId(128),
+            },
+            StoryEvent::TookOff {
+                stellar: StellarId(128),
+            },
+            StoryEvent::DayPassed { date: day() },
+            StoryEvent::Explored {
+                system: SystemId(128),
+            },
+            StoryEvent::ShipFate {
+                ship: NpcId(1),
+                fate: Fate::Boarded,
+            },
+        ]
+    }
+
+    #[test]
+    fn a_kind_filter_matches_every_event_of_its_kind_and_no_other() {
+        for wanted in one_of_each() {
+            let filter = EventFilter::Any(wanted.kind());
+            for event in one_of_each() {
+                assert_eq!(
+                    filter.matches(&event),
+                    event.kind() == wanted.kind(),
+                    "{filter:?} on {event:?}"
+                );
+            }
+        }
+        let elsewhere = StoryEvent::Landed {
+            stellar: StellarId(300),
+        };
+        assert!(EventFilter::Any(StoryEventKind::Landed).matches(&elsewhere));
+    }
+
+    #[test]
+    fn a_placed_filter_matches_its_kind_at_its_place_only() {
+        let here = SystemId(128);
+        let there = SystemId(129);
+        let pad = StellarId(128);
+        let other_pad = StellarId(129);
+        let cases = [
+            (
+                EventFilter::EnteredSystem(here),
+                StoryEvent::EnteredSystem {
+                    system: here,
+                    how: Entrance::ScriptMove { landed: true },
+                },
+                StoryEvent::EnteredSystem {
+                    system: there,
+                    how: Entrance::ScriptMove { landed: true },
+                },
+            ),
+            (
+                EventFilter::Explored(here),
+                StoryEvent::Explored { system: here },
+                StoryEvent::Explored { system: there },
+            ),
+            (
+                EventFilter::Landed(pad),
+                StoryEvent::Landed { stellar: pad },
+                StoryEvent::Landed { stellar: other_pad },
+            ),
+            (
+                EventFilter::TookOff(pad),
+                StoryEvent::TookOff { stellar: pad },
+                StoryEvent::TookOff { stellar: other_pad },
+            ),
+        ];
+        for (filter, at, elsewhere) in cases {
+            assert!(filter.matches(&at), "{filter:?} on {at:?}");
+            assert!(!filter.matches(&elsewhere), "{filter:?} on {elsewhere:?}");
+            for event in one_of_each() {
+                assert_eq!(
+                    filter.matches(&event),
+                    event.kind() == at.kind(),
+                    "{filter:?} on {event:?}: only its own kind at the same place"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn each_event_gives_its_kind() {
+        let cases = [
+            (
+                StoryEvent::EnteredSystem {
+                    system: SystemId(128),
+                    how: Entrance::Jump,
+                },
+                StoryEventKind::EnteredSystem,
+            ),
+            (
+                StoryEvent::Landed {
+                    stellar: StellarId(128),
+                },
+                StoryEventKind::Landed,
+            ),
+            (
+                StoryEvent::TookOff {
+                    stellar: StellarId(128),
+                },
+                StoryEventKind::TookOff,
+            ),
+            (
+                StoryEvent::DayPassed { date: day() },
+                StoryEventKind::DayPassed,
+            ),
+            (
+                StoryEvent::Explored {
+                    system: SystemId(128),
+                },
+                StoryEventKind::Explored,
+            ),
+            (
+                StoryEvent::ShipFate {
+                    ship: NpcId(3),
+                    fate: Fate::Destroyed,
+                },
+                StoryEventKind::ShipFate,
+            ),
+        ];
+        for (event, kind) in cases {
+            assert_eq!(event.kind(), kind, "{event:?}");
+        }
+    }
+}

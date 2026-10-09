@@ -183,6 +183,11 @@
 //!   and the outfits it carries: the one place its handling, reserve
 //!   capacities, fuel, shield and armour regeneration and cargo space come
 //!   from.
+//! - [`story`]: the story runtime's design, with the original's event
+//!   sources and orderings, and the pure types it names: the
+//!   [`StoryEvent`](story::StoryEvent)s, the
+//!   [`Subscription`](story::Subscription)s consumers register and the
+//!   order they run in ([`dispatch_order`](story::dispatch_order)).
 //! - [`targeting`]: which NPC the player's target command picks
 //!   ([`TargetPick`]): the nearest, the nearest threat, the next in turn,
 //!   or the next of the player's escorts.
@@ -240,6 +245,7 @@ pub mod ship_change;
 pub mod shipyard;
 pub mod sound;
 pub mod stats;
+pub mod story;
 pub mod targeting;
 #[cfg(test)]
 mod testkit;
