@@ -180,7 +180,8 @@
 //! the port's earlier behaviour, the ordered outfit sold for each pass
 //! whatever the listing does, not anything the Bible says. By the engine
 //! reading the port also ends an order whose restart would repeat an
-//! earlier one's counts owned, listing and control bits, where the
+//! earlier one's counts owned, listing and control bits, or that has
+//! restarted 512 times, where the
 //! original has no guard and would sell forever: a deliberate divergence
 //! that only a plug-in `OnSell` granting the outfit back can reach.
 //!
@@ -783,10 +784,10 @@ rule_keys! {
     /// the other reading, the ordered outfit and the pass index are kept.
     /// A sale that leaves the listing unchanged is the same by both. By
     /// the engine reading the port ends an order whose restart would
-    /// repeat an earlier one's counts owned, listing and control bits,
-    /// where the original, with no such guard, would sell forever (an
-    /// `OnSell` that grants the outfit back and relists, reachable only by
-    /// plug-ins). The
+    /// repeat an earlier one's counts owned, listing and control bits, or
+    /// that has restarted 512 times, where the original, with no such
+    /// guard, would sell forever (an `OnSell` that grants the outfit back
+    /// and relists, reachable only by plug-ins). The
     /// Bible says nothing of it, so the other reading is the port's
     /// earlier behaviour, not anything the Bible says (see
     /// [`Session::outfit_order`](crate::Session::outfit_order)).

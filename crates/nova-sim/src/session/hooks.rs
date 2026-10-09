@@ -502,6 +502,17 @@ mod tests {
     }
 
     #[test]
+    fn by_the_engine_a_sale_that_grants_back_more_than_it_sells_ends_at_the_restart_ceiling() {
+        // Each sale toggles bit 7, relisting, and grants two blasters
+        // back, so the counts owned grow and no restart ever repeats: the
+        // order ends once 512 restarts are made, on the 513th sale.
+        let mut session = selling_blasters("^b7 G128 G128", 1, crate::RuleSource::Engine);
+        let order = session.outfit_order(sell(BLASTER), 2, &mut Scripted::default());
+        assert_eq!((order.run.done, order.run.stopped), (513, None));
+        assert_eq!(session.pilot().owned(BLASTER), 1 + 513);
+    }
+
+    #[test]
     fn by_the_engine_a_relisting_that_repeats_a_listing_with_other_counts_goes_on() {
         // Each sale toggles bit 7, so every sale relists, the listing
         // alternating; the counts owned fall each time, so no restart
