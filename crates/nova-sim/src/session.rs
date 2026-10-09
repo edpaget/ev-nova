@@ -8529,6 +8529,24 @@ mod tests {
     }
 
     #[test]
+    fn a_pilot_in_debt_is_refused_a_ship_and_nothing_changes() {
+        let catalog = shipbuying();
+        let mut poor = outfitted(&catalog);
+        poor.pilot.cash = -1;
+        let before = poor.clone();
+        assert_eq!(
+            poor.buy_ship(NEW, "Kestrel", &mut NeverFires),
+            Err(ShipRefusal::CannotAfford)
+        );
+        assert_eq!(
+            poor.ship_naming(NEW, &mut NeverFires).map(|_| ()),
+            Err(ShipRefusal::CannotAfford)
+        );
+        assert_eq!(poor, before);
+        assert!(!poor.take_save_due());
+    }
+
+    #[test]
     fn buying_the_class_flown_is_refused_and_changes_nothing() {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);

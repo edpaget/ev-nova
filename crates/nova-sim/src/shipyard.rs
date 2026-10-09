@@ -83,8 +83,10 @@
 //! final price is the price less
 //! the trade-in, and may be negative: the player is then paid. A buy is
 //! refused when the ship is the class flown, when it cannot be bought
-//! here, or when the cash and the trade-in together do not cover the
-//! price.
+//! here, or when its final price, taken as none when it is negative, is
+//! more than the cash. The comparison is signed, so a pilot in debt can
+//! buy no ship, even one whose trade-in would cover the price and the
+//! debt (`_CalcShipCanBuy` @0x4f7d8-0x4f7eb).
 //!
 //! # Buying a ship
 //!
@@ -263,7 +265,9 @@ pub enum ShipRefusal {
     /// The ship is listed but cannot be bought here: its `Require` is not
     /// met, or its `Availability` does not hold.
     NotForSale,
-    /// The cash and the trade-in together do not cover its price.
+    /// Its final price, at least none, is more than the cash: with the
+    /// cash below 0, whatever the trade-in (`_CalcShipCanBuy`
+    /// @0x4f7d8-0x4f7eb).
     CannotAfford,
 }
 
@@ -414,8 +418,9 @@ fn can_buy<'a>() -> Checks<RowShip<'a>, ShipRefusal> {
         ),
         Check::plain(
             "cash",
-            "`_CalcShipCanBuy` @0x4f751-0x4f7eb: the price less the trade-in against the cash",
-            cash_covers_the_price,
+            "`_CalcShipCanBuy` @0x4f702-0x4f7eb: the price less the trade-in (@0x4f7db), \
+             at least none (`cmovs` @0x4f7e2), against the signed cash (@0x4f7e5-0x4f7eb)",
+            final_price_within_the_cash,
         ),
     ]
     .into()
@@ -440,10 +445,12 @@ fn for_sale(asked: &RowShip) -> Result<(), ShipRefusal> {
     }
 }
 
-/// The cash and the trade-in together cover the price.
-fn cash_covers_the_price(asked: &RowShip) -> Result<(), ShipRefusal> {
+/// The final price, taken as none when the trade-in exceeds the price,
+/// is no more than the cash, compared signed: a pilot in debt buys
+/// nothing, whatever the trade-in (`_CalcShipCanBuy` @0x4f7d8-0x4f7eb).
+fn final_price_within_the_cash(asked: &RowShip) -> Result<(), ShipRefusal> {
     let shipyard = asked.shipyard;
-    if shipyard.cash.saturating_add(shipyard.trade_in) < asked.row.price {
+    if shipyard.final_price(asked.row).max(0) > shipyard.cash {
         Err(ShipRefusal::CannotAfford)
     } else {
         Ok(())
@@ -2234,8 +2241,9 @@ mod tests {
                 ),
                 (
                     "cash",
-                    "`_CalcShipCanBuy` @0x4f751-0x4f7eb: the price less the trade-in against \
-                     the cash"
+                    "`_CalcShipCanBuy` @0x4f702-0x4f7eb: the price less the trade-in \
+                     (@0x4f7db), at least none (`cmovs` @0x4f7e2), against the signed cash \
+                     (@0x4f7e5-0x4f7eb)"
                 ),
             ]
         );
@@ -2275,11 +2283,70 @@ mod tests {
         assert_eq!(
             can(listing(true, i64::MAX)),
             Ok(()),
-            "the cash and trade-in saturate"
+            "any cash above the final price"
         );
         assert_eq!(
             listing(true, 50_000).can(ShipId(130)),
             Err(ShipRefusal::NotListed)
+        );
+    }
+
+    #[test]
+    fn a_pilot_in_debt_cannot_buy_whatever_the_trade_in() {
+        let ships = [
+            ShipRecord {
+                cost: 40_000,
+                ..ship(128, FAST)
+            },
+            cheap(129),
+        ];
+        let mut debtor = pilot();
+        let shipyard = open(&ships, &debtor);
+        assert_eq!(shipyard.trade_in, 10_000);
+        assert_eq!(shipyard.final_price(row(&shipyard, 129)), -9000);
+        let mut check = |cash| {
+            debtor.cash = cash;
+            open(&ships, &debtor).can(ShipId(129))
+        };
+        assert_eq!(
+            check(-8000),
+            Err(ShipRefusal::CannotAfford),
+            "the trade-in covers the price and the debt"
+        );
+        assert_eq!(
+            check(-9000),
+            Err(ShipRefusal::CannotAfford),
+            "exactly the debt the trade-in would clear"
+        );
+        assert_eq!(check(-1), Err(ShipRefusal::CannotAfford));
+        assert_eq!(check(0), Ok(()), "the final price is taken as none");
+    }
+
+    #[test]
+    fn the_final_price_at_least_none_is_set_against_the_signed_cash() {
+        let can = |shipyard: Shipyard| shipyard.can(ShipId(129));
+        assert_eq!(
+            can(Shipyard {
+                trade_in: 20_000,
+                ..listing(true, -1)
+            }),
+            Err(ShipRefusal::CannotAfford)
+        );
+        assert_eq!(
+            can(Shipyard {
+                trade_in: 20_000,
+                ..listing(true, 0)
+            }),
+            Ok(())
+        );
+        assert_eq!(can(listing(true, -15_000)), Err(ShipRefusal::CannotAfford));
+        assert_eq!(
+            can(Shipyard {
+                trade_in: i64::MAX,
+                ..listing(true, 0)
+            }),
+            Ok(()),
+            "the final price saturates and is none"
         );
     }
 
