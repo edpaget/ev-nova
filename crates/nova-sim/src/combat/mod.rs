@@ -650,7 +650,7 @@ impl Combat {
                 stellar: target.stellar,
                 by: shot.firer,
                 damage,
-                destroyed: crate::story::wreck::shot_down(target.strength),
+                destroyed: stellar::shot_down(target.strength),
             });
         }
         self.shots = kept;

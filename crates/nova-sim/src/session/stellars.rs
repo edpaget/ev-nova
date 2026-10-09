@@ -76,12 +76,10 @@ impl Session {
             return;
         };
         let destroyed_before = self.galaxy.destroyed(stellar);
-        let site = self
-            .sites
-            .iter()
-            .find(|site| site.id == stellar && self.landed.is_none());
+        let site = self.sites.iter().find(|site| site.id == stellar).copied();
+        let shown = site.is_some() && self.landed.is_none();
         if let Some(site) = site
-            && let Some(explosion) = wreck::explodes_on_y(&life, true, destroyed_before)
+            && let Some(explosion) = wreck::explodes_on_y(&life, shown, destroyed_before)
         {
             self.combat.explode(site.position, explosion);
         }

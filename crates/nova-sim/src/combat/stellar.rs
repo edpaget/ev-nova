@@ -1,7 +1,7 @@
 //! Shots at stellars: which shots can hit a destroyable stellar, where
 //! they meet it, and what they take off it, as the stellar branch of the
 //! original's `_CheckShotProximities` (@0x371bc-0x37775) reads them (see
-//! the [`story`](crate::story) module's "Checked for phase 8").
+//! the `story` module's "Checked for phase 8").
 //!
 //! Only a shot of a planet-type weapon (`Flags2` 0x0400) can hit one,
 //! and only once it has flown past its `ProxSafety`. A stellar is a
@@ -16,7 +16,6 @@ use super::projectile::{Shot, contact};
 use super::weapon::WeaponSpec;
 use crate::catalog::StellarId;
 use crate::geometry::Vec2;
-use crate::story::wreck;
 
 /// A stellar shots may hit this tick, its strength borrowed from the
 /// session, which writes it back.
@@ -45,6 +44,15 @@ pub struct StellarStrike {
     pub destroyed: bool,
 }
 
+/// Whether a stellar with `strength` left after a shot's damage is shot
+/// down: below 0, as `_StellarIsDestroyed` reads the current strength
+/// (@0x4e14-0x4e3c, after the hit @0x37409). One left at exactly 0 is
+/// still whole.
+#[must_use]
+pub fn shot_down(strength: i64) -> bool {
+    strength < 0
+}
+
 /// What a hit of `weapon` takes off a stellar's strength: its mass and
 /// energy damage together (@0x372dc-0x372eb).
 #[must_use]
@@ -70,7 +78,7 @@ pub fn met(shot: &Shot, was: Vec2, stellars: &[StellarTarget]) -> Option<(usize,
     stellars
         .iter()
         .enumerate()
-        .filter(|(_, stellar)| !wreck::shot_down(stellar.strength))
+        .filter(|(_, stellar)| !shot_down(stellar.strength))
         .filter_map(|(index, stellar)| {
             Some((
                 contact(was, shot.position, stellar.position, stellar.radius)?,
@@ -79,4 +87,22 @@ pub fn met(shot: &Shot, was: Vec2, stellars: &[StellarTarget]) -> Option<(usize,
         })
         .min_by(|(a, _), (b, _)| a.total_cmp(b))
         .map(|(t, index)| (index, was + (shot.position - was) * t))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stellar_is_shot_down_below_none_and_not_at_none() {
+        for (left, down) in [
+            (-1, true),
+            (-50, true),
+            (0, false),
+            (1, false),
+            (100, false),
+        ] {
+            assert_eq!(shot_down(left), down, "{left}");
+        }
+    }
 }

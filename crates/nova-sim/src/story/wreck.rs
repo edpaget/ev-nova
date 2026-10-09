@@ -69,17 +69,10 @@ pub(crate) fn full_strength(life: &StellarLife) -> i64 {
     i64::from(life.strength)
 }
 
-/// Whether a stellar with `left` strength after a shot's damage is shot
-/// down: below 0, as `_StellarIsDestroyed` reads the current strength
-/// (@0x4e14-0x4e3c, after the hit @0x37409). One left at exactly 0 is
-/// still whole.
-pub(crate) fn shot_down(left: i64) -> bool {
-    left < 0
-}
-
 /// The explosion `Y` makes at the stellar `life`: its `ExplodType`, when
-/// it is `shown` in the player's system and was not destroyed before the
-/// `Y` (@0x15a59-0x15ab4). Its `Strength` does not matter, so an
+/// it is `shown` (among the stellars of the player's system, the ship in
+/// flight: one made while landed would be cleared on the take-off) and
+/// was not destroyed before the `Y` (@0x15a59-0x15ab4). Its `Strength` does not matter, so an
 /// invincible stellar, which the engine's
 /// [`RuleKey::DestroyInvincible`](crate::RuleKey::DestroyInvincible)
 /// leaves whole, explodes all the same.
@@ -191,19 +184,6 @@ mod tests {
                 ..life(100, 0)
             };
             assert_eq!(starts_destroyed(&life), starts, "{flags2:#x}");
-        }
-    }
-
-    #[test]
-    fn a_stellar_is_shot_down_below_none_and_not_at_none() {
-        for (left, down) in [
-            (-1, true),
-            (-50, true),
-            (0, false),
-            (1, false),
-            (100, false),
-        ] {
-            assert_eq!(shot_down(left), down, "{left}");
         }
     }
 
