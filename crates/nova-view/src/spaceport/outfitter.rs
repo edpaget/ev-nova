@@ -30,7 +30,7 @@
 //! [`OutfitterCatalog`] as the selection changes. The info box shows its price, its mass, how many the player
 //! has and the free mass (#215-218), and why it cannot be bought (#219-222)
 //! or sold (#207), when the original has words for it. The buy words are
-//! the row's own ([`OutfitRow::words`]), not its buy refusal: the
+//! the outfit's own ([`Outfitter::words`]), not its buy refusal: the
 //! original works them out without asking whether the outfit can be
 //! bought, so an outfit not for sale, or a fighter refused for full bays,
 //! still gets them. Every refusal `_HasMaxOfItem` makes (its `Max`, none
@@ -537,14 +537,15 @@ impl OutfitterScreen {
         }
     }
 
-    /// Whether one of the selected outfit can go `direction`.
+    /// Whether one of the selected outfit can go `direction`
+    /// ([`Outfitter::can`]).
     fn allows(&self, direction: Direction) -> bool {
         self.selected().is_some_and(|index| {
-            let row = &self.outfitter.rows[index];
-            match direction {
-                Direction::Buy => row.buy.is_ok(),
-                Direction::Sell => row.sell.is_ok(),
-            }
+            let order = OutfitOrder {
+                outfit: self.outfitter.rows[index].id,
+                direction,
+            };
+            self.outfitter.can(order).is_ok()
         })
     }
 
@@ -710,12 +711,17 @@ impl OutfitterScreen {
             format!("{OWNED_LABEL} {}", row.owned),
             format!("{AVAILABLE_LABEL} {} tons", self.outfitter.free_mass),
         ];
-        let refusals = [row.words, row.sell.err()];
+        let sale = OutfitOrder {
+            outfit: row.id,
+            direction: Direction::Sell,
+        };
+        let refusals = [self.outfitter.words(row.id), self.outfitter.can(sale).err()];
+        let names = self.outfitter.lc_names(sale);
         lines.extend(
             refusals
                 .into_iter()
                 .flatten()
-                .filter_map(|refusal| refusal_text(refusal, row, &self.outfitter.lc_names)),
+                .filter_map(|refusal| refusal_text(refusal, row, &names)),
         );
         for (n, line) in lines.iter().enumerate() {
             let origin = Point::new(info.min.x + INSET, info.min.y + line_height * n as f32);
@@ -850,7 +856,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use nova_sim::{OutfitFacts, RuleSource};
+    use nova_sim::{Launcher, OutfitFacts, RuleSource};
 
     use crate::draw::DrawCommand;
     use crate::font::Font;
@@ -1342,20 +1348,20 @@ mod tests {
 
     #[test]
     fn the_info_box_says_why_a_launcher_cannot_be_sold() {
-        let bay = OutfitRow {
-            sell: Err(OutfitRefusal::AmmunitionFirst {
-                rounds: 2,
-                ammo: Some(OutfitId(158)),
-            }),
-            ..row(157, "Viper\\nBay", 100, 5, 1)
-        };
-        let launcher = LcNames {
+        // One bay holds one Viper, and two are aboard.
+        let mut bay = row(157, "Viper\\nBay", 100, 5, 1);
+        bay.facts.names = LcNames {
             singular: "Viper bay".to_owned(),
             plural: "Viper bays".to_owned(),
         };
+        bay.facts.launcher = Some(Launcher {
+            max_ammo: 1,
+            rounds: 2,
+            ammo: Some(OutfitId(158)),
+        });
+        bay.facts.ammo_names = Some(vipers());
         let screen = screen_of(Outfitter {
             rows: vec![bay],
-            lc_names: BTreeMap::from([(OutfitId(157), launcher), (OutfitId(158), vipers())]),
             ..outfitter()
         });
         let info = item(&screen, INFO_ITEM);
@@ -1941,13 +1947,14 @@ mod tests {
             !shown.iter().any(|text| text.starts_with("Can't")),
             "{shown:?}"
         );
+        // Its one owned is its `Max`, and selling it would leave a ton
+        // short of the 4 tons free.
         let overloaded = Outfitter {
             rows: vec![OutfitRow {
-                buy: Err(OutfitRefusal::MaxOwned),
-                sell: Err(OutfitRefusal::NegativeFreeMass),
-                words: Some(OutfitRefusal::MaxOwned),
+                max: 1,
                 ..row(128, "Expansion", 100, -5, 1)
             }],
+            free_mass: 4,
             ..outfitter()
         };
         let screen = screen_of(overloaded);
@@ -1963,24 +1970,29 @@ mod tests {
                 "Item Price: 100",
                 "Item Mass: -5 tons",
                 "You Have: 1",
-                "Available: 5 tons",
+                "Available: 4 tons",
                 MAX_OWNED,
                 NEGATIVE_FREE_MASS,
             ]
         );
     }
 
-    /// The info box's lines for a row of outfit 128, `owned` owned,
-    /// refused `buy` and carrying `words`.
-    fn info_lines(buy: OutfitRefusal, words: Option<OutfitRefusal>, owned: u16) -> Vec<String> {
-        let screen = screen_of(Outfitter {
-            rows: vec![OutfitRow {
-                buy: Err(buy),
-                words,
-                ..row(128, "Widget", 100, 1, owned)
-            }],
+    /// Widget 128, 100 credits and a ton, `owned` owned.
+    fn widget(owned: u16) -> OutfitRow {
+        row(128, "Widget", 100, 1, owned)
+    }
+
+    /// The info box's lines for `widget`, in [`outfitter`]'s place.
+    fn info_lines(widget: OutfitRow) -> Vec<String> {
+        info_lines_of(Outfitter {
+            rows: vec![widget],
             ..outfitter()
-        });
+        })
+    }
+
+    /// The info box's lines for the first row of `outfitter`.
+    fn info_lines_of(outfitter: Outfitter) -> Vec<String> {
+        let screen = screen_of(outfitter);
         let info = item(&screen, INFO_ITEM);
         texts(&drawn(&screen))
             .into_iter()
@@ -1999,26 +2011,31 @@ mod tests {
 
     #[test]
     fn the_info_box_words_a_max_refusal_by_the_count_owned() {
-        let granted = info_lines(
-            OutfitRefusal::NoneAllowed,
-            Some(OutfitRefusal::NoneAllowed),
-            1,
-        );
+        // None allowed, one granted.
+        let granted = info_lines(OutfitRow {
+            max: 0,
+            ..widget(1)
+        });
         assert_eq!(said_why(&granted), Some(MAX_OWNED), "{granted:?}");
     }
 
     #[test]
     fn a_fighter_refused_for_full_bays_shows_the_mass_words_when_it_lacks_the_mass() {
-        let none = info_lines(
-            OutfitRefusal::BaysFull,
-            Some(OutfitRefusal::NoSpaceForAny),
-            0,
-        );
+        // 6 tons is past the 5 free.
+        let bays_full = |mass, owned| {
+            let mut fighter = OutfitRow {
+                mass,
+                ..widget(owned)
+            };
+            fighter.facts.fighter_room = Some(0);
+            info_lines(fighter)
+        };
+        let none = bays_full(6, 0);
         assert_eq!(said_why(&none), Some(NO_SPACE_FOR_ANY), "{none:?}");
-        let one = info_lines(OutfitRefusal::BaysFull, Some(OutfitRefusal::NoSpace), 1);
+        let one = bays_full(6, 1);
         assert_eq!(said_why(&one), Some(NO_SPACE), "{one:?}");
         for owned in [0, 2] {
-            let fits = info_lines(OutfitRefusal::BaysFull, None, owned);
+            let fits = bays_full(1, owned);
             assert!(fits.iter().any(|text| text.starts_with("Available:")));
             assert_eq!(said_why(&fits), None, "{owned}: {fits:?}");
         }
@@ -2026,17 +2043,36 @@ mod tests {
 
     #[test]
     fn the_info_box_words_the_rows_words_not_its_buy_refusal() {
-        let heavy = info_lines(
-            OutfitRefusal::NotForSale,
-            Some(OutfitRefusal::NoSpaceForAny),
-            0,
-        );
+        let not_for_sale = |mass, max, owned| {
+            let mut row = OutfitRow {
+                mass,
+                max,
+                ..widget(owned)
+            };
+            row.facts.buyable = false;
+            info_lines(row)
+        };
+        let heavy = not_for_sale(6, 10, 0);
         assert_eq!(said_why(&heavy), Some(NO_SPACE_FOR_ANY), "{heavy:?}");
-        let at_max = info_lines(OutfitRefusal::NotForSale, Some(OutfitRefusal::MaxOwned), 1);
+        let at_max = not_for_sale(1, 1, 1);
         assert_eq!(said_why(&at_max), Some(MAX_OWNED), "{at_max:?}");
-        let expansion = info_lines(OutfitRefusal::NoExpansion, Some(OutfitRefusal::NoSpace), 1);
+        // A mass expansion on a ship of negative `Holds`.
+        let mut expansion = OutfitRow {
+            mass: 6,
+            ..widget(1)
+        };
+        expansion.facts.expansion = Some(5);
+        let expansion = info_lines_of(Outfitter {
+            rows: vec![expansion],
+            holds: -1,
+            ..outfitter()
+        });
         assert_eq!(said_why(&expansion), Some(NO_SPACE), "{expansion:?}");
-        let fits = info_lines(OutfitRefusal::NoSpaceForAny, None, 0);
+        // Refused for the cash: 6000 credits.
+        let fits = info_lines(OutfitRow {
+            price: 6000,
+            ..widget(0)
+        });
         assert_eq!(said_why(&fits), None, "buy alone gets no words: {fits:?}");
     }
 
@@ -2182,8 +2218,6 @@ mod tests {
         press(&mut screen, Key::Right);
         let mut bought = outfitter();
         bought.rows[1].owned = 3;
-        bought.rows[1].sell = Ok(());
-        bought.rows[1].buy = Err(OutfitRefusal::CannotAfford);
         bought.cash = 10;
         screen.set_outfitter(bought.clone());
         assert_eq!(screen.outfitter(), &bought);
