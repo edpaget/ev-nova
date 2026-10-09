@@ -378,6 +378,37 @@ mod tests {
     }
 
     #[test]
+    fn the_bar_walks_each_space_over_the_sessions_stock() {
+        // `FreeMass` -10 and a stock gun of 6 tons: -4 to start, and the
+        // gun leaves 0.
+        let mut catalog = barred(vec![ShipRecord {
+            fields: crate::handling::ShipFields {
+                free_mass: -10,
+                ..FAST
+            },
+            ..hireable(129, 100)
+        }]);
+        catalog.outfits.push(crate::catalog::OutfitRecord {
+            mass: 6,
+            ..crate::testkit::outfit(310, &[(crate::combat::armament::MOD_WEAPON, 130)])
+        });
+        catalog.hulls.push(crate::catalog::HullRecord {
+            weapons: vec![crate::catalog::StockWeapon {
+                weapon: crate::catalog::WeaponId(130),
+                count: 1,
+                ammo: 0,
+            }],
+            ..crate::testkit::hull(129)
+        });
+        let mut session = landed(&catalog, 25_000);
+        assert_eq!(
+            row(&list(&mut session), 129).specs.space,
+            0,
+            "not its FreeMass of -10"
+        );
+    }
+
+    #[test]
     fn the_fee_and_wage_are_the_hire_terms() {
         let catalog = barred(vec![hireable(129, 100)]);
         let mut session = landed(&catalog, 25_000).with_hire_terms(Rc::new(FakeTerms {

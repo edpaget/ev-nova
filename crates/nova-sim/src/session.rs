@@ -8431,6 +8431,43 @@ mod tests {
 
     pub(super) const NEW: ShipId = ShipId(129);
 
+    /// [`shipbuying`] with ship 130 too: `FreeMass` -10, a stock gun 130
+    /// held by outfit 310 of 6 tons. Its Space is -10 + 6 = -4 to start,
+    /// and the gun leaves 0.
+    fn stock_gunned() -> FakePilotCatalog {
+        let mut catalog = shipbuying();
+        catalog.ship_records.push(ship(
+            130,
+            ShipFields {
+                free_mass: -10,
+                ..FAST
+            },
+        ));
+        catalog.outfits.push(crate::catalog::OutfitRecord {
+            mass: 6,
+            ..outfit(310, &[(crate::combat::armament::MOD_WEAPON, 130)])
+        });
+        catalog.hulls.push(crate::catalog::HullRecord {
+            weapons: vec![crate::catalog::StockWeapon {
+                weapon: WeaponId(130),
+                count: 1,
+                ammo: 0,
+            }],
+            ..crate::testkit::hull(130)
+        });
+        catalog
+    }
+
+    #[test]
+    fn the_shipyard_walks_each_space_over_the_sessions_stock() {
+        let catalog = stock_gunned();
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
+        let row = shipyard.row(ShipId(130)).expect("listed");
+        assert_eq!(row.specs.space, 0, "not its FreeMass of -10");
+    }
+
     #[test]
     fn there_is_a_shipyard_only_while_landed_at_one() {
         let catalog = shipbuying();
