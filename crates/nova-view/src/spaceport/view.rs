@@ -48,8 +48,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    HireList, Market, Order, OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, ShipNaming,
-    Shipyard, sells_fuel, services,
+    HireList, Market, Order, OutfitOrder, Outfitter, RechargeRefusal, SaleAlert, Service, ShipId,
+    ShipNaming, Shipyard, sells_fuel, services,
 };
 
 use super::bar::{BarScreen, Hiring};
@@ -174,13 +174,14 @@ impl Open {
     }
 }
 
-/// The outfitter given: its dialog template and the quantity dialog's
-/// (or why there are none), the outfitter as it is, and where its
-/// pictures and descriptions come from.
+/// The outfitter given: its dialog template, the quantity dialog's and
+/// the alert's (or why there are none), the outfitter as it is, and where
+/// its pictures and descriptions come from.
 #[derive(Clone)]
 struct Outfitting {
     template: Result<DialogTemplate, String>,
     quantity: Result<DialogTemplate, String>,
+    alert: Result<DialogTemplate, String>,
     outfitter: Outfitter,
     catalog: Rc<dyn OutfitterCatalog>,
 }
@@ -190,6 +191,7 @@ impl std::fmt::Debug for Outfitting {
         f.debug_struct("Outfitting")
             .field("template", &self.template)
             .field("quantity", &self.quantity)
+            .field("alert", &self.alert)
             .field("outfitter", &self.outfitter)
             .finish_non_exhaustive()
     }
@@ -412,14 +414,16 @@ impl SpaceportView {
     /// The spaceport with the stellar's outfitter, `outfitter`, which the
     /// Outfitter opens laid out by `template`, the "Outfit" dialog (or
     /// saying why there is none), its quantity dialog laid out by
-    /// `quantity` (or its fallback), each outfit's picture and description
-    /// read from `catalog`. Without it, the Outfitter opens its
-    /// placeholder.
+    /// `quantity` (or its fallback), a sale's alert by `alert` ("Desc
+    /// Dialog", `DLOG` 3003, or none), each outfit's picture and
+    /// description read from `catalog`. Without it, the Outfitter opens
+    /// its placeholder.
     #[must_use]
     pub fn with_outfitter(
         self,
         template: Result<DialogTemplate, String>,
         quantity: Result<DialogTemplate, String>,
+        alert: Result<DialogTemplate, String>,
         outfitter: Outfitter,
         catalog: Rc<dyn OutfitterCatalog>,
     ) -> Self {
@@ -427,6 +431,7 @@ impl SpaceportView {
             outfitting: Some(Outfitting {
                 template,
                 quantity,
+                alert,
                 outfitter,
                 catalog,
             }),
@@ -449,6 +454,14 @@ impl SpaceportView {
         match &mut self.open {
             Some(Open::Outfitter(screen)) => screen.take_order(),
             _ => None,
+        }
+    }
+
+    /// Opens `alert`'s words over the outfitter open
+    /// ([`OutfitterScreen::alert`]); with none open, does nothing.
+    pub fn alert_outfit(&mut self, alert: &SaleAlert) {
+        if let Some(Open::Outfitter(screen)) = &mut self.open {
+            screen.alert(alert);
         }
     }
 
@@ -752,6 +765,7 @@ impl SpaceportView {
                     Open::Outfitter(Box::new(OutfitterScreen::new(
                         layout,
                         outfitting.quantity.clone(),
+                        outfitting.alert.clone(),
                         outfitting.outfitter.clone(),
                         Rc::clone(&outfitting.catalog),
                         port.style,
@@ -1795,8 +1809,13 @@ mod tests {
 
     // The Outfitter.
 
-    use crate::spaceport::outfitter::{OutfitterCatalog, OutfitterScreen};
-    use nova_sim::{OutfitFacts, OutfitId, OutfitOrder, OutfitRow, Outfitter};
+    use std::collections::BTreeMap;
+
+    use crate::spaceport::outfitter::{NEGATIVE_FREE_MASS, OutfitterCatalog, OutfitterScreen};
+    use crate::ui::desc::DescDialog;
+    use nova_sim::{
+        OutfitFacts, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter, SaleAlert,
+    };
 
     /// "Outfit": 765 x 321, centred, with Done (1), Sell (4), the grid
     /// (5), the description (6), Buy (7), the picture (8) and the info box
@@ -1866,7 +1885,13 @@ mod tests {
 
     fn outfitting(template: Result<Template, String>) -> SpaceportView {
         let art: Rc<dyn OutfitterCatalog> = Rc::new(outfitting_port());
-        view_of(&outfitting_port()).with_outfitter(template, Ok(quantity_template()), tanks(0), art)
+        view_of(&outfitting_port()).with_outfitter(
+            template,
+            Ok(quantity_template()),
+            Ok(desc_template()),
+            tanks(0),
+            art,
+        )
     }
 
     fn outfit_item(view: &SpaceportView, number: usize) -> Point {
@@ -2019,6 +2044,51 @@ mod tests {
                 5
             ))
         );
+    }
+
+    /// "Desc Dialog", fixed at (0, 0): Done (1), a parked picture (2) and
+    /// a text box (3).
+    fn desc_template() -> Template {
+        let item = |bounds, kind| ItemTemplate {
+            bounds,
+            enabled: true,
+            kind,
+        };
+        Template {
+            bounds: rect(0.0, 0.0, 200.0, 120.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(rect(100.0, 90.0, 99.0, 25.0), ItemSpec::User),
+                item(rect(10.0, 150.0, 20.0, 20.0), ItemSpec::Picture(1431)),
+                item(rect(10.0, 10.0, 2000.0, 60.0), ItemSpec::User),
+            ],
+        }
+    }
+
+    fn alert() -> SaleAlert {
+        SaleAlert {
+            outfit: OutfitId(200),
+            refusal: OutfitRefusal::NegativeFreeMass,
+            names: BTreeMap::new(),
+            plural: false,
+        }
+    }
+
+    #[test]
+    fn an_alert_opens_over_the_open_outfitter_only() {
+        let mut view = outfitting(Ok(outfit_template()));
+        view.alert_outfit(&alert());
+        assert!(view.open_outfitter().is_none(), "nothing open");
+        click_item(&mut view, 8);
+        view.alert_outfit(&alert());
+        let open = view.open_outfitter().expect("outfitting");
+        assert_eq!(
+            open.alert_dialog().map(DescDialog::lines),
+            Some([NEGATIVE_FREE_MASS.to_owned()].as_slice())
+        );
+        view.input(&key(Key::Escape));
+        let open = view.open_outfitter().expect("still outfitting");
+        assert!(open.alert_dialog().is_none(), "Escape closed the alert");
     }
 
     #[test]

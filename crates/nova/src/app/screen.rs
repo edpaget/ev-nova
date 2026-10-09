@@ -1216,7 +1216,8 @@ impl AppScreen {
             let outfit = template(OUTFIT_DIALOG).map(|(template, _)| template);
             let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
             let art: Rc<dyn OutfitterCatalog> = Rc::clone(&self.data) as Rc<dyn OutfitterCatalog>;
-            spaceport = spaceport.with_outfitter(outfit, quantity, outfitter, art);
+            let alert = template(DESC_DIALOG).map(|(template, _)| template);
+            spaceport = spaceport.with_outfitter(outfit, quantity, alert, outfitter, art);
         }
         let template_of = |id| template(id).map(|(template, _)| template);
         if let Some(shipyard) = self.flight.as_mut().and_then(FlightView::shipyard) {

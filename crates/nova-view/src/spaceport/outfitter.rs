@@ -28,8 +28,8 @@
 //! "No Picture" (#213) when the data has none, and its description is
 //! `dësc` 3000 plus its ID less 128, both read through the
 //! [`OutfitterCatalog`] as the selection changes. The info box shows its price, its mass, how many the player
-//! has and the free mass (#215-218), and why it cannot be bought (#219-222)
-//! or sold (#207), when the original has words for it. The buy words are
+//! has and the free mass (#215-218), and why it cannot be bought
+//! (#219-222), when the original has words for it. The buy words are
 //! the outfit's own ([`Outfitter::words`]), not its buy refusal: the
 //! original works them out without asking whether the outfit can be
 //! bought, so an outfit not for sale, or a fighter refused for full bays,
@@ -37,19 +37,28 @@
 //! allowed, a gun or turret limit) reads by the count owned, #219 when the
 //! player owns one or more of the outfit and #220 otherwise, as
 //! `_OutfitDialogUpdate` words it (@0x57ddf-0x57df8); otherwise an outfit
-//! that lacks the mass gets #221 or #222 (@0x57e33-0x57e4f). A launcher that cannot be sold for
-//! its ammunition gets the #208-212 sentence ([`ammunition_first`]),
-//! which the original shows in a text dialog when Sell is clicked, Sell
-//! left enabled (`_DoOutfitDialog` @0x5ce5a); here Sell is greyed and the
-//! sentence is an info-box line, as #207 is. An outfit that cannot be sold
-//! for the `Max` it raises (`ModType` 27) gets the same #208/#212
-//! sentence, naming the outfit to sell first ([`raised_first`]).
+//! that lacks the mass gets #221 or #222 (@0x57e33-0x57e4f).
+//!
+//! A sale refused for the free mass (#207), for its ammunition (a
+//! launcher, the #208-212 sentence, [`ammunition_first`]) or for the `Max`
+//! it raises (`ModType` 27, the same sentence naming the outfit to sell
+//! first, [`raised_first`]) is shown as
+//! [`RuleKey::SaleRefusal`](nova_sim::RuleKey::SaleRefusal) says. By the
+//! engine, as the original does, Sell stays enabled (the Sell flag alone
+//! enables it) and the info box never words it; a click refused in the
+//! sell loop shows the words in "Desc Dialog" (`DLOG` 3003,
+//! `_ShowTextDialog` @0x5a8cf) over the outfitter ([`OutfitterScreen::alert`],
+//! [`sale_alert_text`]), naming the sold outfit in the plural while passes
+//! of a counted sale remain. It takes every input while it is open, and
+//! Done, Return or Escape closes it, the outfitter staying open. By the
+//! other reading, the port's earlier behaviour, Sell is greyed and the
+//! words are an info-box line ([`Outfitter::sale_words`]).
 //!
 //! Buy and Sell, clicked or with B and S (key repeats too, so holding a
 //! key keeps going, but only on the outfit the key went down on: when an
 //! order removes its cell, a held key stops until it is pressed again),
 //! ask for one of the selected outfit, and each is
-//! greyed when one could not be bought or sold. With Option held (Alt
+//! greyed when its button is not enabled ([`Outfitter::can`]). With Option held (Alt
 //! here, [`COUNT_KEY`]), Buy or Sell asks for a count instead, as
 //! `_DoOutfitDialog` does (@0x5c0c0-0x5c1aa for a buy, @0x5c5e3-0x5c628
 //! for a sale): when the outfitter says it asks
@@ -75,11 +84,14 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Direction, LcNames, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
+use nova_sim::{
+    Direction, LcNames, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter, SaleAlert,
+};
 
 use super::catalog::SpaceportCatalog;
 use super::grid::{self, CellGrid, Shown, text};
 use super::layout::DONE_LABEL;
+use super::modal::ModalHost;
 use super::quantity_ask::QuantityAsk;
 use super::trade::{BUY_LABEL, MAX_LOT_KEY, SELL_LABEL};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -95,6 +107,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::comm::grouped;
+use crate::ui::desc::DescDialog;
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
 use crate::ui::quantity::QuantityDialog;
 
@@ -237,20 +250,56 @@ pub fn refusal_text(
         | OutfitRefusal::TurretLimit => NONE_ALLOWED,
         OutfitRefusal::NoSpace => NO_SPACE,
         OutfitRefusal::NoSpaceForAny => NO_SPACE_FOR_ANY,
-        OutfitRefusal::NegativeFreeMass => NEGATIVE_FREE_MASS,
-        OutfitRefusal::AmmunitionFirst { rounds, ammo } => {
-            let launcher = names.get(&row.id).map_or("", |names| &names.singular);
-            let ammo = ammo.and_then(|ammo| names.get(&ammo));
-            return Some(ammunition_first(rounds, ammo, launcher));
-        }
-        OutfitRefusal::RaisedFirst { count, target } => {
-            let outfit = names.get(&row.id).map_or("", |names| &names.singular);
-            let target = names.get(&target).cloned().unwrap_or_default();
-            return Some(raised_first(count, &target, outfit));
+        OutfitRefusal::NegativeFreeMass
+        | OutfitRefusal::AmmunitionFirst { .. }
+        | OutfitRefusal::RaisedFirst { .. } => {
+            let sold = names.get(&row.id).map_or("", |names| &names.singular);
+            return sale_sentence(refusal, sold, names);
         }
         _ => return None,
     };
     Some(text.to_owned())
+}
+
+/// The original's words for a sale refused inside the sell loop, as
+/// `DLOG` 3003 shows them (`_DoOutfitDialog` @0x5c735-0x5ce6c): #207 alone
+/// for the free mass; the #208-#212 sentence for a raised `Max`
+/// ([`raised_first`]) or a launcher's ammunition ([`ammunition_first`]),
+/// the sold outfit named by its `LCPlural` when passes remain
+/// ([`SaleAlert::plural`]) and its `LCName` otherwise. No alert carries
+/// any other refusal, which gives no words.
+#[must_use]
+pub fn sale_alert_text(alert: &SaleAlert) -> String {
+    let sold = alert.names.get(&alert.outfit).map_or("", |names| {
+        if alert.plural {
+            &names.plural
+        } else {
+            &names.singular
+        }
+    });
+    sale_sentence(alert.refusal, sold, &alert.names).unwrap_or_default()
+}
+
+/// The words for a sale refusal of the sell loop's, naming the sold
+/// outfit `sold` and the others by `names`: #207, or the #208-#212
+/// sentence. None for any other refusal.
+fn sale_sentence(
+    refusal: OutfitRefusal,
+    sold: &str,
+    names: &BTreeMap<OutfitId, LcNames>,
+) -> Option<String> {
+    match refusal {
+        OutfitRefusal::NegativeFreeMass => Some(NEGATIVE_FREE_MASS.to_owned()),
+        OutfitRefusal::AmmunitionFirst { rounds, ammo } => {
+            let ammo = ammo.and_then(|ammo| names.get(&ammo));
+            Some(ammunition_first(rounds, ammo, sold))
+        }
+        OutfitRefusal::RaisedFirst { count, target } => {
+            let target = names.get(&target).cloned().unwrap_or_default();
+            Some(raised_first(count, &target, sold))
+        }
+        _ => None,
+    }
 }
 
 /// Outfit `outfit`'s `PICT`, 6000 plus its ID less 128, if `exists` says
@@ -319,6 +368,11 @@ pub struct OutfitterScreen {
     /// The quantity dialog, while it is open, the order it counts, and
     /// whether Alt is held.
     quantity: QuantityAsk<OutfitOrder>,
+    /// The alert a sale refused in the sell loop shows, while it is open.
+    alert: ModalHost<(), DescDialog>,
+    /// The alert's template (`DLOG` 3003), if the interface file has one.
+    alert_template: Option<DialogTemplate>,
+    style: ButtonStyle,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -327,13 +381,16 @@ impl OutfitterScreen {
     /// The outfitter `outfitter`, laid out by `layout`: the "Outfit"
     /// dialog's template and the metrics its text is measured by, or why
     /// there are none. The quantity dialog is laid out by `quantity`, its
-    /// template (or, without one, its fallback). Its buttons are labelled
-    /// in `style`, and each outfit's picture and description are read
-    /// from `catalog`. The first cell is selected.
+    /// template (or, without one, its fallback). A sale refused in the
+    /// sell loop shows its words in "Desc Dialog", laid out by `alert`,
+    /// its template (`DLOG` 3003), and none without one. Its buttons are
+    /// labelled in `style`, and each outfit's picture and description are
+    /// read from `catalog`. The first cell is selected.
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
         quantity: Result<DialogTemplate, String>,
+        alert: Result<DialogTemplate, String>,
         outfitter: Outfitter,
         catalog: Rc<dyn OutfitterCatalog>,
         style: ButtonStyle,
@@ -374,6 +431,9 @@ impl OutfitterScreen {
             order: None,
             held: None,
             quantity: QuantityAsk::new(quantity.ok(), style),
+            alert: ModalHost::default(),
+            alert_template: alert.ok(),
+            style,
             closed: false,
             sounds: Vec::new(),
         };
@@ -428,6 +488,30 @@ impl OutfitterScreen {
     #[must_use]
     pub fn quantity(&self) -> Option<&QuantityDialog> {
         self.quantity.dialog()
+    }
+
+    /// Opens `alert`'s words ([`sale_alert_text`]) in "Desc Dialog" over
+    /// the outfitter, as `_DoOutfitDialog` shows a sale refused in the
+    /// sell loop (`_ShowTextDialog` @0x5a8cf). Without the outfitter's
+    /// dialog, or without the alert's template, it opens nothing:
+    /// "Desc Dialog" has no fallback.
+    pub fn alert(&mut self, alert: &SaleAlert) {
+        let (Ok(laid), Some(template)) = (&self.laid, &self.alert_template) else {
+            return;
+        };
+        let dialog = DescDialog::new(
+            template,
+            &sale_alert_text(alert),
+            self.style,
+            Rc::clone(&laid.metrics.0),
+        );
+        self.alert.open((), dialog);
+    }
+
+    /// The alert, while it is open.
+    #[must_use]
+    pub fn alert_dialog(&self) -> Option<&DescDialog> {
+        self.alert.dialog()
     }
 
     /// Where cell `index` (counted from the grid's first row shown) is,
@@ -651,7 +735,10 @@ impl OutfitterScreen {
             outfit: row.id,
             direction: Direction::Sell,
         };
-        let refusals = [self.outfitter.words(row.id), self.outfitter.can(sale).err()];
+        let refusals = [
+            self.outfitter.words(row.id),
+            self.outfitter.sale_words(row.id),
+        ];
         let names = self.outfitter.lc_names(sale);
         lines.extend(
             refusals
@@ -678,9 +765,15 @@ impl OutfitterScreen {
 }
 
 impl Screen for OutfitterScreen {
-    /// Every input goes to the outfitter, or to the quantity dialog while
-    /// it is open; it never quits.
+    /// Every input goes to the outfitter, or to the alert while it is
+    /// open (Alt still followed), or else to the quantity dialog while it
+    /// is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.alert.is_open() {
+            self.quantity.follow_alt(input);
+            self.alert.input(input, &mut self.sounds);
+            return ScreenAction::None;
+        }
         if self.quantity.is_open() {
             if let Some(counted) = self.quantity.input(input, &mut self.sounds) {
                 self.order = Some(counted);
@@ -755,22 +848,27 @@ impl Screen for OutfitterScreen {
         self.draw_arrows(laid, list);
         laid.dialog.draw(list);
         self.quantity.draw(list);
+        self.alert.draw(list);
     }
 
     fn cancel_pointer(&mut self) {
-        if !self.quantity.cancel_pointer()
+        if !self.alert.cancel_pointer()
+            && !self.quantity.cancel_pointer()
             && let Ok(laid) = &mut self.laid
         {
             laid.dialog.cancel_pointer();
         }
     }
 
-    /// Lets go of Alt, and of the keys held in the quantity dialog.
+    /// Lets go of Alt, and of the keys held in the alert and the quantity
+    /// dialog.
     fn release_keys(&mut self) {
+        self.alert.release_keys();
         self.quantity.release_keys();
     }
 
-    /// The buttons' sounds and the quantity dialog's, in order.
+    /// The buttons' sounds, the quantity dialog's and the alert's, in
+    /// order.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -782,7 +880,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use nova_sim::{Launcher, OutfitFacts, RuleKey, RuleSource, Rulebook};
+    use nova_sim::{Launcher, OutfitFacts, Raise, RuleKey, RuleSource, Rulebook, SaleAlert};
 
     use crate::draw::DrawCommand;
     use crate::font::Font;
@@ -923,6 +1021,7 @@ mod tests {
         OutfitterScreen::new(
             Ok(layout()),
             Ok(quantity()),
+            Ok(desc_template()),
             outfitter,
             catalog,
             ButtonStyle::STOCK,
@@ -1331,6 +1430,7 @@ mod tests {
         let mut screen = OutfitterScreen::new(
             Ok((template, Rc::new(MonoMetrics))),
             Ok(quantity()),
+            Ok(desc_template()),
             outfitter(),
             art(),
             ButtonStyle::STOCK,
@@ -1348,6 +1448,7 @@ mod tests {
         let screen = OutfitterScreen::new(
             Ok((short, Rc::new(MonoMetrics))),
             Ok(quantity()),
+            Ok(desc_template()),
             outfitter(),
             art(),
             ButtonStyle::STOCK,
@@ -2241,6 +2342,7 @@ mod tests {
             let mut screen = OutfitterScreen::new(
                 Err("no DLOG 1002".to_owned()),
                 Ok(quantity()),
+                Ok(desc_template()),
                 outfitter(),
                 Rc::clone(&art) as Rc<dyn OutfitterCatalog>,
                 ButtonStyle::STOCK,
@@ -2485,6 +2587,7 @@ mod tests {
             let mut screen = OutfitterScreen::new(
                 Ok(layout()),
                 template,
+                Ok(desc_template()),
                 counting(),
                 art(),
                 ButtonStyle::STOCK,
@@ -2578,5 +2681,378 @@ mod tests {
         screen.input(&button(false));
         assert_eq!(screen.take_order(), None, "the click was abandoned");
         assert!(screen.quantity().is_some());
+    }
+
+    // A sale refused in the loop (`RuleKey::SaleRefusal`).
+
+    /// "Desc Dialog"'s shape, fixed at (0, 0): Done (1) at (100, 90), a
+    /// parked picture (2) and a text box (3) wide enough for a sentence
+    /// on a line.
+    fn desc_template() -> DialogTemplate {
+        let item = |bounds, enabled, kind| ItemTemplate {
+            bounds,
+            enabled,
+            kind,
+        };
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 200.0, 120.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(rect(100.0, 90.0, 99.0, 25.0), true, ItemSpec::User),
+                item(
+                    rect(10.0, 150.0, 20.0, 20.0),
+                    false,
+                    ItemSpec::Picture(1431),
+                ),
+                item(rect(10.0, 10.0, 2000.0, 60.0), false, ItemSpec::User),
+            ],
+        }
+    }
+
+    /// Outfit 128, a rack (3 owned), refused only in the sell loop: by
+    /// its negative mass, a raised `Max` (its widgets) or its launcher's
+    /// ammunition (Vipers), with the info-box line the other reading
+    /// shows.
+    fn refused_in_the_loop() -> [(OutfitRow, &'static str); 3] {
+        let mut rack = row(128, "Rack", 100, 0, 3);
+        rack.facts.names = LcNames {
+            singular: "rack".to_owned(),
+            plural: "racks".to_owned(),
+        };
+        let negative = OutfitRow {
+            mass: -10,
+            ..rack.clone()
+        };
+        let mut raiser = rack.clone();
+        raiser.facts.raises = vec![Raise {
+            target: OutfitId(200),
+            held: 5,
+            target_max: Some(2),
+            left_by_the_bible: 0,
+            target_names: Some(widgets()),
+        }];
+        let mut launcher = rack;
+        launcher.facts.launcher = Some(Launcher {
+            max_ammo: 1,
+            rounds: 4,
+            ammo: Some(OutfitId(158)),
+        });
+        launcher.facts.ammo_names = Some(vipers());
+        [
+            (negative, NEGATIVE_FREE_MASS),
+            (
+                raiser,
+                "You need to sell one widget before you can sell your rack.",
+            ),
+            (
+                launcher,
+                "You need to sell two Vipers before you can sell your rack.",
+            ),
+        ]
+    }
+
+    /// The outfitter of `row` alone, 5 tons free, `SaleRefusal` read as
+    /// `source` says.
+    fn loop_refusing(row: OutfitRow, source: RuleSource) -> Outfitter {
+        Outfitter {
+            rows: vec![row],
+            rules: outfitter()
+                .rules
+                .with_override(RuleKey::SaleRefusal, source),
+            ..outfitter()
+        }
+    }
+
+    /// The info box's lines.
+    fn info_box(screen: &OutfitterScreen) -> Vec<String> {
+        let info = item(screen, INFO_ITEM);
+        texts(&drawn(screen))
+            .into_iter()
+            .filter(|(_, at, _)| info.contains(*at))
+            .map(|(text, _, _)| text)
+            .collect()
+    }
+
+    #[test]
+    fn by_the_engine_sell_stays_enabled_for_a_row_refused_only_in_the_loop() {
+        for (row, line) in refused_in_the_loop() {
+            let screen = screen_of(loop_refusing(row, RuleSource::Engine));
+            assert!(enabled(&screen).1, "{line}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_the_info_box_shows_no_sale_refusal_line() {
+        for (row, line) in refused_in_the_loop() {
+            let engine = info_box(&screen_of(loop_refusing(row.clone(), RuleSource::Engine)));
+            assert!(!engine.contains(&line.to_owned()), "{engine:?}");
+            assert_eq!(engine.len(), 4, "{engine:?}");
+            let other = info_box(&screen_of(loop_refusing(row, RuleSource::Bible)));
+            assert_eq!(other.last().map(String::as_str), Some(line), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_sell_on_a_row_refused_in_the_loop_records_the_order() {
+        for (row, line) in refused_in_the_loop() {
+            let mut screen = screen_of(loop_refusing(row, RuleSource::Engine));
+            click_item(&mut screen, SELL_ITEM);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(128, Direction::Sell)),
+                "{line}"
+            );
+            press(&mut screen, SELL_KEY);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(128, Direction::Sell)),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_alt_sell_on_a_row_refused_in_the_loop_opens_the_quantity_dialog() {
+        for (row, line) in refused_in_the_loop() {
+            let mut screen = screen_of(loop_refusing(row, RuleSource::Engine));
+            alt_click(&mut screen, SELL_ITEM);
+            assert_eq!(screen.take_order(), None, "{line}");
+            assert_eq!(field_text(&screen), Some("3"), "{line}: the 3 owned");
+        }
+    }
+
+    /// A sale of the rack refused with `refusal`, naming the rack, the
+    /// widgets and the Vipers, `plural` or not.
+    fn rack_alert(refusal: OutfitRefusal, plural: bool) -> SaleAlert {
+        SaleAlert {
+            outfit: OutfitId(128),
+            refusal,
+            names: BTreeMap::from([
+                (
+                    OutfitId(128),
+                    LcNames {
+                        singular: "rack".to_owned(),
+                        plural: "racks".to_owned(),
+                    },
+                ),
+                (OutfitId(200), widgets()),
+                (OutfitId(158), vipers()),
+            ]),
+            plural,
+        }
+    }
+
+    const RAISED: OutfitRefusal = OutfitRefusal::RaisedFirst {
+        count: 2,
+        target: OutfitId(200),
+    };
+
+    const AMMUNITION: OutfitRefusal = OutfitRefusal::AmmunitionFirst {
+        rounds: 1,
+        ammo: Some(OutfitId(158)),
+    };
+
+    #[test]
+    fn the_alert_names_the_sold_outfit_in_the_plural_while_passes_remain() {
+        assert_eq!(
+            sale_alert_text(&rack_alert(RAISED, false)),
+            "You need to sell two widgets before you can sell your rack."
+        );
+        assert_eq!(
+            sale_alert_text(&rack_alert(RAISED, true)),
+            "You need to sell two widgets before you can sell your racks."
+        );
+        assert_eq!(
+            sale_alert_text(&rack_alert(AMMUNITION, false)),
+            "You need to sell one Viper before you can sell your rack."
+        );
+        assert_eq!(
+            sale_alert_text(&rack_alert(AMMUNITION, true)),
+            "You need to sell one Viper before you can sell your racks."
+        );
+        let mut unnamed = rack_alert(
+            OutfitRefusal::AmmunitionFirst {
+                rounds: 3,
+                ammo: None,
+            },
+            true,
+        );
+        assert_eq!(
+            sale_alert_text(&unnamed),
+            "You need to sell three units of ammunition before you can sell your racks."
+        );
+        unnamed.names.clear();
+        unnamed.refusal = OutfitRefusal::RaisedFirst {
+            count: 1,
+            target: OutfitId(200),
+        };
+        assert_eq!(
+            sale_alert_text(&unnamed),
+            "You need to sell one  before you can sell your ."
+        );
+    }
+
+    #[test]
+    fn a_negative_free_mass_alert_is_207_alone() {
+        for plural in [false, true] {
+            assert_eq!(
+                sale_alert_text(&rack_alert(OutfitRefusal::NegativeFreeMass, plural)),
+                NEGATIVE_FREE_MASS
+            );
+        }
+        assert_eq!(
+            sale_alert_text(&rack_alert(OutfitRefusal::CannotAfford, false)),
+            "",
+            "no alert gives any other refusal"
+        );
+    }
+
+    /// The engine's outfitter of the overloaded rack, an alert open over
+    /// it for `refusal`.
+    fn alerting(refusal: OutfitRefusal) -> OutfitterScreen {
+        let [(row, _), ..] = refused_in_the_loop();
+        let mut screen = screen_of(loop_refusing(row, RuleSource::Engine));
+        screen.alert(&rack_alert(refusal, false));
+        screen
+    }
+
+    fn alert_item(screen: &OutfitterScreen, number: usize) -> Point {
+        screen
+            .alert_dialog()
+            .expect("an alert")
+            .dialog()
+            .item_bounds(number)
+            .expect("an item")
+            .center()
+    }
+
+    #[test]
+    fn a_sale_alert_opens_its_words_in_the_desc_dialog_over_the_outfitter() {
+        let screen = alerting(RAISED);
+        let alert = screen.alert_dialog().expect("an alert");
+        assert_eq!(
+            alert.lines().join(" "),
+            "You need to sell two widgets before you can sell your rack."
+        );
+        let mut list = DrawList::new();
+        alert.draw(&mut list);
+        let alert_drawn: Vec<DrawCommand> = list.iter().cloned().collect();
+        let all = drawn(&screen);
+        assert!(all.ends_with(&alert_drawn), "drawn last");
+        assert!(all.len() > alert_drawn.len(), "over the outfitter");
+    }
+
+    #[test]
+    fn done_return_or_escape_closes_the_alert_and_leaves_the_outfitter_open() {
+        for k in [Key::Enter, Key::Escape] {
+            let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+            press(&mut screen, k);
+            assert!(screen.alert_dialog().is_none(), "{k:?}");
+            assert!(!screen.closed(), "{k:?}");
+        }
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        let done = alert_item(&screen, crate::ui::desc::DONE_ITEM);
+        click(&mut screen, done);
+        assert!(screen.alert_dialog().is_none());
+        assert!(!screen.closed());
+        press(&mut screen, Key::Escape);
+        assert!(screen.closed(), "the next Escape closes the outfitter");
+    }
+
+    #[test]
+    fn while_the_alert_is_open_it_takes_every_input() {
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        let selected = screen.selected();
+        let sell = item(&screen, SELL_ITEM).center();
+        let cell = screen.cell_bounds(0).expect("a cell").center();
+        for k in [BUY_KEY, SELL_KEY, Key::Right, Key::Down, Key::Char('i')] {
+            press(&mut screen, k);
+        }
+        click(&mut screen, sell);
+        click(&mut screen, cell);
+        alt_click(&mut screen, SELL_ITEM);
+        assert_eq!(screen.take_order(), None);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.selected(), selected);
+        assert!(screen.alert_dialog().is_some(), "still open");
+        assert!(!screen.closed());
+        press(&mut screen, Key::Escape);
+        assert!(screen.alert_dialog().is_none());
+        assert!(!screen.closed(), "Escape closed the alert alone");
+    }
+
+    #[test]
+    fn alt_let_go_while_the_alert_is_open_is_followed() {
+        let [(row, _), ..] = refused_in_the_loop();
+        let mut screen = screen_of(loop_refusing(row, RuleSource::Engine));
+        press(&mut screen, COUNT_KEY);
+        screen.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
+        screen.input(&key(COUNT_KEY, false, false));
+        press(&mut screen, Key::Escape);
+        press(&mut screen, SELL_KEY);
+        assert!(screen.quantity().is_none());
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+    }
+
+    #[test]
+    fn without_the_desc_template_an_alert_opens_nothing() {
+        let [(row, _), ..] = refused_in_the_loop();
+        let mut screen = OutfitterScreen::new(
+            Ok(layout()),
+            Ok(quantity()),
+            Err("no DLOG 3003".to_owned()),
+            loop_refusing(row.clone(), RuleSource::Engine),
+            art(),
+            ButtonStyle::STOCK,
+        );
+        screen.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
+        assert!(screen.alert_dialog().is_none());
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+        let mut unlaid = OutfitterScreen::new(
+            Err("no DLOG 1002".to_owned()),
+            Ok(quantity()),
+            Ok(desc_template()),
+            loop_refusing(row, RuleSource::Engine),
+            art(),
+            ButtonStyle::STOCK,
+        );
+        unlaid.alert(&rack_alert(OutfitRefusal::NegativeFreeMass, false));
+        assert!(unlaid.alert_dialog().is_none(), "no metrics to lay it out");
+    }
+
+    #[test]
+    fn the_alerts_sounds_come_out() {
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        let done = alert_item(&screen, crate::ui::desc::DONE_ITEM);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at: done,
+        });
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        screen.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at: done,
+        });
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::ButtonUp)]);
+        assert!(screen.alert_dialog().is_none());
+    }
+
+    #[test]
+    fn cancelling_the_pointer_abandons_a_click_in_the_alert() {
+        let mut screen = alerting(OutfitRefusal::NegativeFreeMass);
+        let done = alert_item(&screen, crate::ui::desc::DONE_ITEM);
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: done,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.release_keys();
+        screen.input(&button(false));
+        assert!(screen.alert_dialog().is_some(), "Done was not clicked");
     }
 }
