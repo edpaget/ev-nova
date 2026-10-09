@@ -31,6 +31,15 @@ pub struct Pass {
     pub alerted: bool,
 }
 
+impl Pass {
+    /// A plain click, a count of 1 (@0x5c69f): the pass of a single order.
+    pub const SINGLE: Pass = Pass {
+        index: 0,
+        count: 1,
+        alerted: false,
+    };
+}
+
 /// Where and why a loop stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stopped<R> {
@@ -220,6 +229,21 @@ mod tests {
                 alerted: false
             }]
         );
+    }
+
+    #[test]
+    fn a_single_pass_is_index_0_of_a_count_of_1() {
+        assert_eq!(
+            Pass::SINGLE,
+            Pass {
+                index: 0,
+                count: 1,
+                alerted: false
+            }
+        );
+        let mut accepting = Recording::accepting();
+        accepting.run(1);
+        assert_eq!(accepting.seen, [Pass::SINGLE]);
     }
 
     #[test]

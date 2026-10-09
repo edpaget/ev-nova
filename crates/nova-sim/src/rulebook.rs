@@ -56,8 +56,8 @@
 //! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing ([`ScriptEffectRules`](crate::ScriptEffectRules)) | every `P` sounds at once, landed or not\* |
 //! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
 //! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b; [`Session`](crate::Session)) | tribbles goods grow only into free space, and perishable goods always decay‡ |
-//! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)) | a launcher cannot be sold while any of its ammunition is held§ |
-//! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)) | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
+//! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | a launcher cannot be sold while any of its ammunition is held§ |
+//! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
 //! | [`EventPrice`](RuleKey::EventPrice) | `event_price` | an active event prices its commodity at `BasePrice` + `PriceDelta`, whatever the level, the highest ID winning, and lists a commodity not traded there (`_DoTradeDialog` @0x5dcf8-0x5dd58; [`Session`](crate::Session)) | the level price plus every event's `PriceDelta`\*\* |
 //! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims the commodities to the fleet's holds (`_DestroyPartialFleetCargo` @0xcd32-0xcff6, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c; [`Session`](crate::Session)) | it keeps what fits the new ship's own cargo space, goods in order†† |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
@@ -67,6 +67,7 @@
 //! | [`OutfitCount`](RuleKey::OutfitCount) | `outfit_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog at the most the order allows, and buys or sells the count confirmed (`_DoOutfitDialog` @0x5c0c0-0x5c1aa, @0x5c5e3-0x5c628; `_DoQuantityDialog` @0x56d5b; [`Outfitter::count_asked`](crate::Outfitter::count_asked)) | Alt changes nothing: each click moves one¶¶¶ |
 //! | [`SaleMass`](RuleKey::SaleMass) | `sale_mass` | only an outfit of negative mass is refused, when the free mass clamped at 0 plus its mass is below 0; one of mass 0 or more sells while the free mass is below 0 (`_DoOutfitDialog` @0x5c735-0x5c747, `_ShipFreeMass` @0xb506-0xb50a; [`Session`](crate::Session)) | a sale is refused whenever it would leave the free mass below 0\*\*\*\* |
 //! | [`SaleRefusal`](RuleKey::SaleRefusal) | `sale_refusal` | Sell is enabled by the Sell flag alone (some owned, not `CANNOT_SELL`). The free mass, a raised `Max` and a launcher's ammunition refuse only inside the sell loop. The first such refusal of an order shows its `STR#` 2002 #207-#212 words once in `DLOG` 3003, and nothing is sold. A counted sale runs on past it, each later pass refused silently; the sales before it stand (@0x5d19c-0x5d1b1) (`_DoOutfitDialog` @0x5c563-0x5c595, @0x5c735-0x5ce6c, flag -0x63e @0x5c6ca; `_OutfitFilter` @0x5808c-0x580b1; `_ShowTextDialog` @0x5a8cf; [`Outfitter::can`](crate::Outfitter::can) / [`Outfitter::sale_alert`](crate::Outfitter::sale_alert)) | Sell is greyed by any sale check too, and the info box words the first one; nothing is shown in a dialog‡‡‡‡ |
+//! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; [`Outfitter::check_at`](crate::Outfitter::check_at)) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
 //! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; [`unit_price`](crate::outfitter::unit_price)) | `Cost` × `Mass`, never below 0§§§§ |
 //! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; [`Session`](crate::Session)) | an unsellable outfit is left out too†††† |
 //! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for a count (see [`TradeCount`](RuleKey::TradeCount)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
@@ -167,6 +168,10 @@
 //! Its reading here is that product never below 0, the port's earlier
 //! price, so a negative `Cost` on a class of negative `Mass` is priced
 //! at the positive product.
+//!
+//! ¶¶¶¶ The Bible says nothing of a counted sale. The other reading is
+//! the port's earlier behaviour, each pass of a counted sale checked as a
+//! single sale, not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -605,7 +610,8 @@ rule_keys! {
     /// ammunition is held, whatever its `MaxAmmo`. The Bible says nothing
     /// of it, so the other reading is the phase's first wording of the
     /// rule, not anything the Bible says (see
-    /// [`outfitter`](crate::outfitter)).
+    /// [`outfitter`](crate::outfitter)). In a counted sale, (n - 1) is as
+    /// [`CountedSale`](RuleKey::CountedSale) says.
     LauncherSale => "launcher_sale",
     /// How an `oütf` of `ModType` 27 raises the `Max` of the outfit its
     /// `ModVal` names, and when one can be sold. By the engine, the
@@ -618,7 +624,8 @@ rule_keys! {
     /// the Bible, the multiplier is the number of owned items with any
     /// such mod, at least 1, and a sale is refused while the target owned
     /// exceeds that maximum after the sale (see
-    /// [`outfitter`](crate::outfitter)).
+    /// [`outfitter`](crate::outfitter)). In a counted sale, (n - 1) is as
+    /// [`CountedSale`](RuleKey::CountedSale) says.
     RaisedMax => "raised_max",
     /// How an active `öops` event prices its commodity at its stellar. By
     /// the engine, the price is the commodity's `BasePrice` plus the
@@ -729,6 +736,23 @@ rule_keys! {
     /// of it, so the other reading is the port's earlier behaviour, not
     /// anything the Bible says (see [`outfitter`](crate::outfitter)).
     SaleRefusal => "sale_refusal",
+    /// How each pass of a counted sale checks a raised `Max` and a
+    /// launcher's ammunition. By the engine, each pass checks the order as
+    /// a whole: `_DoOutfitDialog` refuses a raiser while the target owned
+    /// exceeds its raw `Max` x (owned now - the whole count, -0x68c)
+    /// (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed
+    /// `MaxAmmo` x (owned now - the pass index, -0x63a, - 1)
+    /// (@0x5cb9c-0x5cbc7), owned now falling by one with each sale
+    /// (@0x5cf22), signed and with no floor; so an Alt sale is refused
+    /// sooner than as many single clicks. By the other reading, each pass
+    /// is checked as one sale, (owned now - 1). A count of 1 at pass 0 is
+    /// the same by both. Only the engine readings of
+    /// [`RaisedMax`](RuleKey::RaisedMax) and
+    /// [`LauncherSale`](RuleKey::LauncherSale) read it. The Bible says
+    /// nothing of it, so the other reading is the port's earlier
+    /// behaviour, not anything the Bible says (see
+    /// [`outfitter`](crate::outfitter)).
+    CountedSale => "counted_sale",
     /// How an outfit flagged 0x0200 (price by ship mass) is priced. By
     /// the engine, `_AdjustedItemCost` (@0x5869-0x5895) gives 0 for a
     /// `Cost` of 0 or less (@0x5872-0x5878). Otherwise, with the flag, it
@@ -959,6 +983,15 @@ mod tests {
     }
 
     #[test]
+    fn the_counted_sale_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::CountedSale.key(), "counted_sale");
+        assert_eq!(
+            RuleKey::from_key("counted_sale"),
+            Some(RuleKey::CountedSale)
+        );
+    }
+
+    #[test]
     fn the_outfitters_rules_have_settings_keys_found_by_name() {
         assert_eq!(RuleKey::OutfitRefund.key(), "outfit_refund");
         assert_eq!(
@@ -1088,6 +1121,7 @@ mod tests {
                 RuleKey::OutfitCount,
                 RuleKey::SaleMass,
                 RuleKey::SaleRefusal,
+                RuleKey::CountedSale,
                 RuleKey::MassPrice,
                 RuleKey::TradeInOutfits,
                 RuleKey::TradeLot,

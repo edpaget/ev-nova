@@ -2209,11 +2209,11 @@ impl Session {
     }
 
     /// One pass of an outfit order: builds the outfitter afresh, drawing
-    /// on `chance` any roll not drawn yet, checks `order` against it and,
-    /// when it goes through, buys or sells one (see
-    /// [`outfit`](Self::outfit)). When it is refused and that outfitter
-    /// gives an alert for `pass`, `alert` is set to it; a pass refused
-    /// silently leaves an earlier pass's alert in place.
+    /// on `chance` any roll not drawn yet, checks `order` against it at
+    /// `pass` ([`Outfitter::check_at`]) and, when it goes through, buys or
+    /// sells one (see [`outfit`](Self::outfit)). When it is refused and
+    /// that outfitter gives an alert for `pass`, `alert` is set to it; a
+    /// pass refused silently leaves an earlier pass's alert in place.
     fn outfit_pass(
         &mut self,
         order: OutfitOrder,
@@ -2222,7 +2222,7 @@ impl Session {
         alert: &mut Option<SaleAlert>,
     ) -> Result<(), OutfitRefusal> {
         let outfitter = self.outfitter(chance).ok_or(OutfitRefusal::NoOutfitter)?;
-        if let Err(refusal) = outfitter.check(order) {
+        if let Err(refusal) = outfitter.check_at(order, pass) {
             if let Some(shown) = outfitter.sale_alert(order, pass) {
                 *alert = Some(shown);
             }
@@ -2256,9 +2256,10 @@ impl Session {
     }
 
     /// Buys or sells up to `count` of an outfit as `order` asks, through
-    /// the order loop one pass at a time, each checked as a single
-    /// [`outfit`](Self::outfit) order is, as `_DoOutfitDialog`'s loops
-    /// do: the buy loop (@0x5c1bd-0x5c2ff) re-runs `_CanBuyOutfitItem`
+    /// the order loop one pass at a time, each checked as the engine's
+    /// loop checks it (see
+    /// [`RuleKey::CountedSale`](crate::RuleKey::CountedSale)), as
+    /// `_DoOutfitDialog`'s loops do: the buy loop (@0x5c1bd-0x5c2ff) re-runs `_CanBuyOutfitItem`
     /// after each grant and stops at the first refusal
     /// ([`order_loop::run`]), and the sell loop (@0x5c6ee-0x5d1b1) checks
     /// each sale afresh and runs on past a refusal (@0x5d19c-0x5d1b1),
@@ -7054,8 +7055,10 @@ mod tests {
     #[test]
     fn a_counted_sale_stops_at_a_raised_max() {
         // Two racks and two widgets: the first rack sold leaves a `Max`
-        // of 2, the second would leave none.
-        let mut session = outfitted(&raising());
+        // of 2, the second would leave none, each pass checked as a single
+        // sale by the other reading of `RuleKey::CountedSale`.
+        let mut session = outfitted(&raising())
+            .with_rules(Rulebook::default().with_override(RuleKey::CountedSale, RuleSource::Bible));
         session
             .outfit_counted(buy(WIDGET_RACK), 2, &mut NeverFires)
             .expect("bought");
@@ -8268,6 +8271,73 @@ mod tests {
             session.outfit(buy(WIDGET), &mut NeverFires),
             Err(OutfitRefusal::MaxOwned)
         );
+    }
+
+    /// `session` owning 2 widget racks and 2 widgets, of `Max` 2 each.
+    fn two_racks_and_widgets(session: &mut Session) {
+        session
+            .outfit_counted(buy(WIDGET_RACK), 2, &mut NeverFires)
+            .expect("bought");
+        session
+            .outfit_counted(buy(WIDGET), 2, &mut NeverFires)
+            .expect("bought");
+    }
+
+    #[test]
+    fn by_the_engine_a_counted_sale_of_raisers_is_refused_for_the_whole_count() {
+        // Two racks and two widgets of `Max` 2: a counted sale of both
+        // leaves 2 - (2 - 2) x 2 = 2 widgets over at its first pass.
+        let mut session = outfitted(&raising());
+        two_racks_and_widgets(&mut session);
+        let mut clicked = session.clone();
+        let refused = OutfitRefusal::RaisedFirst {
+            count: 2,
+            target: WIDGET,
+        };
+        let ran = session.outfit_order(sell(WIDGET_RACK), 2, &mut NeverFires);
+        assert_eq!(
+            ran.run,
+            crate::order_loop::OrderRun {
+                done: 0,
+                stopped: Some(crate::order_loop::Stopped {
+                    pass: 0,
+                    refusal: refused,
+                }),
+            }
+        );
+        let alert = ran.alert.expect("alerts");
+        assert_eq!(alert.refusal, refused);
+        assert!(alert.plural);
+        assert!(alert.names.contains_key(&WIDGET));
+        assert_eq!(session.pilot().owned(WIDGET_RACK), 2);
+        // Single clicks sell one first.
+        assert_eq!(clicked.outfit(sell(WIDGET_RACK), &mut NeverFires), Ok(()));
+        assert_eq!(
+            clicked.outfit(sell(WIDGET_RACK), &mut NeverFires),
+            Err(refused)
+        );
+    }
+
+    #[test]
+    fn a_plain_sale_is_the_same_by_either_counted_reading() {
+        for source in RuleSource::ALL {
+            let mut session = outfitted(&raising())
+                .with_rules(Rulebook::default().with_override(RuleKey::CountedSale, source));
+            two_racks_and_widgets(&mut session);
+            assert_eq!(
+                session.outfit(sell(WIDGET_RACK), &mut NeverFires),
+                Ok(()),
+                "{source:?}"
+            );
+            assert_eq!(
+                session.outfit(sell(WIDGET_RACK), &mut NeverFires),
+                Err(OutfitRefusal::RaisedFirst {
+                    count: 2,
+                    target: WIDGET,
+                }),
+                "{source:?}"
+            );
+        }
     }
 
     #[test]

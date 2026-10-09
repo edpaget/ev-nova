@@ -2070,6 +2070,76 @@ mod tests {
         );
     }
 
+    /// A session landed with four bays of 4 and eight Vipers aboard,
+    /// [`RuleKey::CountedSale`] read as `source` says.
+    fn four_bays(source: RuleSource) -> Session {
+        let mut catalog = spaceport();
+        catalog.hulls[0].weapons[0].count = 4;
+        let mut session = fleet(&catalog, 8, vec![])
+            .with_rules(kept_orders().with_override(RuleKey::CountedSale, source));
+        land_now(&mut session).expect("lands");
+        session
+    }
+
+    /// Selling Viper bays.
+    const SELL_BAY: crate::outfitter::OutfitOrder = crate::outfitter::OutfitOrder {
+        outfit: VIPER_BAY,
+        direction: crate::market::Direction::Sell,
+    };
+
+    #[test]
+    fn by_the_engine_a_counted_sale_of_bays_counts_each_sale_twice() {
+        // Pass 0 keeps 3 x 4 for 8 and sells; pass 1, 3 owned, keeps
+        // (3 - 1 - 1) x 4 = 4 and is refused for 4 Vipers.
+        let refused = crate::outfitter::OutfitRefusal::AmmunitionFirst {
+            rounds: 4,
+            ammo: Some(VIPERS),
+        };
+        let mut session = four_bays(RuleSource::Engine);
+        let ran = session.outfit_order(SELL_BAY, 3, &mut NeverFires);
+        assert_eq!(
+            ran.run,
+            crate::order_loop::OrderRun {
+                done: 1,
+                stopped: Some(crate::order_loop::Stopped {
+                    pass: 1,
+                    refusal: refused,
+                }),
+            }
+        );
+        let alert = ran.alert.expect("alerts");
+        assert_eq!(alert.refusal, refused);
+        assert!(alert.plural);
+        assert_eq!(session.pilot().owned(VIPER_BAY), 3);
+        let mut session = four_bays(RuleSource::Engine);
+        assert_eq!(
+            session.outfit_order(SELL_BAY, 4, &mut NeverFires).run.done,
+            1,
+            "passes 2 and 3 refused too"
+        );
+        // Single-sale arithmetic sells two.
+        let mut session = four_bays(RuleSource::Bible);
+        assert_eq!(session.outfit_counted(SELL_BAY, 3, &mut NeverFires), Ok(2));
+    }
+
+    #[test]
+    fn the_session_reads_the_counted_sale_as_its_rule_says() {
+        let session = Session::start(&catalog()).expect("starts");
+        assert_eq!(
+            session.rules().source_for(RuleKey::CountedSale),
+            RuleSource::Engine
+        );
+        for (source, sold) in [(RuleSource::Engine, Ok(1)), (RuleSource::Bible, Ok(2))] {
+            let mut session = four_bays(source);
+            assert_eq!(session.rules().source_for(RuleKey::CountedSale), source);
+            assert_eq!(
+                session.outfit_counted(SELL_BAY, 3, &mut NeverFires),
+                sold,
+                "{source:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_session_reads_the_launcher_sale_as_its_rule_says() {
         let session = Session::start(&catalog()).expect("starts");

@@ -229,8 +229,10 @@
 //! be sold while any of its target is held. By the Bible, the multiplier
 //! counts each item owned once, and a sale is refused only while the
 //! target held is more than the maximum left after it
-//! ([`RuleKey::RaisedMax`](crate::RuleKey::RaisedMax)). Boarding reads the
-//! raised `Max` too (see [`grant`](crate::grant)).
+//! ([`RuleKey::RaisedMax`](crate::RuleKey::RaisedMax)). In a counted sale
+//! each pass checks the whole order, as
+//! [`RuleKey::CountedSale`](crate::RuleKey::CountedSale) says. Boarding
+//! reads the raised `Max` too (see [`grant`](crate::grant)).
 //!
 //! **A launcher before its ammunition** (`_DoOutfitDialog`
 //! @0x5ca75-0x5cbe0, after the free mass). A launcher is an outfit whose
@@ -241,7 +243,9 @@
 //! the rounds are more than `MaxAmmo` x (n - 1), the excess to be sold
 //! first; in stock data only fighter bays have a `MaxAmmo`. The other
 //! reading refuses it while any round is held
-//! ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)).
+//! ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)). In a counted
+//! sale each pass checks the whole order, as
+//! [`RuleKey::CountedSale`](crate::RuleKey::CountedSale) says.
 //! [`Outfitter::lc_names`] gives the names its words need.
 //!
 //! **Sell's enable and a refusal in the sell loop**
@@ -597,12 +601,14 @@ impl Outfitter {
         free_mass_shown().of(self)
     }
 
-    /// `outfit`'s row as the outfitter's rules ask about it, if it is
-    /// listed.
-    fn asked(&self, outfit: OutfitId) -> Option<RowOutfit<'_>> {
+    /// `outfit`'s row as the outfitter's rules ask about it at `pass` of
+    /// an order, if it is listed. The button, the info box and the cap
+    /// are not inside the order loop, so they ask at [`Pass::SINGLE`].
+    fn asked_at(&self, outfit: OutfitId, pass: Pass) -> Option<RowOutfit<'_>> {
         self.row(outfit).map(|row| RowOutfit {
             outfitter: self,
             row,
+            pass,
         })
     }
 
@@ -616,7 +622,9 @@ impl Outfitter {
     /// Sell enabled, or by the other reading the sell loop's checks too
     /// (the free mass, a raised `Max`, a launcher's ammunition).
     pub fn can(&self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
-        let asked = self.asked(order.outfit).ok_or(OutfitRefusal::NotListed)?;
+        let asked = self
+            .asked_at(order.outfit, Pass::SINGLE)
+            .ok_or(OutfitRefusal::NotListed)?;
         match order.direction {
             Direction::Buy => refusal(&can_buy(), &asked),
             Direction::Sell => {
@@ -631,12 +639,24 @@ impl Outfitter {
     }
 
     /// Whether `order` goes through when clicked, or why not, whatever
-    /// the reading: a buy as [`can`](Self::can) says; a sale by the Sell
-    /// flag's checks, then the sell loop's (the free mass, a raised
-    /// `Max`, a launcher's ammunition), as each pass of `_DoOutfitDialog`'s
-    /// sell loop checks it (@0x5c735-0x5ce6c).
+    /// the reading: [`check_at`](Self::check_at) at a single pass
+    /// ([`Pass::SINGLE`]).
     pub fn check(&self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
-        let asked = self.asked(order.outfit).ok_or(OutfitRefusal::NotListed)?;
+        self.check_at(order, Pass::SINGLE)
+    }
+
+    /// Whether `order` goes through at `pass` of the order loop, or why
+    /// not, whatever the [`RuleKey::SaleRefusal`](crate::RuleKey::SaleRefusal)
+    /// reading: a buy as [`can`](Self::can) says, whatever the pass; a
+    /// sale by the Sell flag's checks, then the sell loop's (the free
+    /// mass, a raised `Max`, a launcher's ammunition), as each pass of
+    /// `_DoOutfitDialog`'s sell loop checks it (@0x5c735-0x5ce6c), a
+    /// raised `Max` and a launcher's ammunition reading the pass as
+    /// [`RuleKey::CountedSale`](crate::RuleKey::CountedSale) says.
+    pub fn check_at(&self, order: OutfitOrder, pass: Pass) -> Result<(), OutfitRefusal> {
+        let asked = self
+            .asked_at(order.outfit, pass)
+            .ok_or(OutfitRefusal::NotListed)?;
         match order.direction {
             Direction::Buy => refusal(&can_buy(), &asked),
             Direction::Sell => {
@@ -654,7 +674,8 @@ impl Outfitter {
     /// `None` too when it is not listed.
     #[must_use]
     pub fn sale_words(&self, outfit: OutfitId) -> Option<OutfitRefusal> {
-        self.asked(outfit).and_then(|asked| sale_words().of(&asked))
+        self.asked_at(outfit, Pass::SINGLE)
+            .and_then(|asked| sale_words().of(&asked))
     }
 
     /// The alert a sale refused inside the sell loop shows at `pass`, as
@@ -670,11 +691,10 @@ impl Outfitter {
     /// ([`Pass::alerted`]).
     #[must_use]
     pub fn sale_alert(&self, order: OutfitOrder, pass: Pass) -> Option<SaleAlert> {
-        let asked = self.asked(order.outfit)?;
+        let asked = self.asked_at(order.outfit, pass)?;
         sale_alert_value().of(&SaleAsk {
             asked,
             direction: order.direction,
-            pass,
         })
     }
 
@@ -689,7 +709,8 @@ impl Outfitter {
     /// it is not listed.
     #[must_use]
     pub fn words(&self, outfit: OutfitId) -> Option<OutfitRefusal> {
-        self.asked(outfit).and_then(|asked| info_words().of(&asked))
+        self.asked_at(outfit, Pass::SINGLE)
+            .and_then(|asked| info_words().of(&asked))
     }
 
     /// The `Max` that `_HasMaxOfItem(item, 0, &cap)` reports out for
@@ -699,7 +720,8 @@ impl Outfitter {
     /// `None` when it is not listed.
     #[must_use]
     pub fn cap(&self, outfit: OutfitId) -> Option<i16> {
-        self.asked(outfit).map(|asked| reported_cap().of(&asked))
+        self.asked_at(outfit, Pass::SINGLE)
+            .map(|asked| reported_cap().of(&asked))
     }
 
     /// What selling one of `outfit` refunds, as
@@ -710,7 +732,8 @@ impl Outfitter {
     /// [`refund`]). `None` when it is not listed.
     #[must_use]
     pub fn refund(&self, outfit: OutfitId) -> Option<i64> {
-        self.asked(outfit).map(|asked| refund_value().of(&asked))
+        self.asked_at(outfit, Pass::SINGLE)
+            .map(|asked| refund_value().of(&asked))
     }
 
     /// The `LCName` and `LCPlural` of each outfit the words of
@@ -725,21 +748,7 @@ impl Outfitter {
         let Some(row) = self.row(order.outfit) else {
             return BTreeMap::new();
         };
-        let facts = &row.facts;
-        let named = match self.check(order) {
-            Err(OutfitRefusal::AmmunitionFirst { ammo, .. }) => ammo.zip(facts.ammo_names.clone()),
-            Err(OutfitRefusal::RaisedFirst { target, .. }) => facts
-                .raises
-                .iter()
-                .find(|raise| raise.target == target)
-                .and_then(|raise| raise.target_names.clone())
-                .map(|names| (target, names)),
-            _ => return BTreeMap::new(),
-        };
-        [(row.id, facts.names.clone())]
-            .into_iter()
-            .chain(named)
-            .collect()
+        names_for(row, self.check(order))
     }
 
     /// The count the quantity dialog opens at when `outfit` is bought or
@@ -784,7 +793,7 @@ impl Outfitter {
                 most.min(cap).min(cap - owned)
             }
             Direction::Sell => {
-                let asked = self.asked(outfit)?;
+                let asked = self.asked_at(outfit, Pass::SINGLE)?;
                 refusal(&sell_flag(), &asked).ok()?;
                 owned.min(COUNT_CAP)
             }
@@ -805,6 +814,29 @@ impl Outfitter {
             None
         }
     }
+}
+
+/// The `LCName` and `LCPlural` of each outfit the words of `refused`,
+/// `row`'s refusal, name (see [`Outfitter::lc_names`]): a launcher
+/// refused for its ammunition and the outfit naming that ammunition, or
+/// a raiser refused for its target and that target, each when it has a
+/// record. None for any other answer.
+fn names_for(row: &OutfitRow, refused: Result<(), OutfitRefusal>) -> BTreeMap<OutfitId, LcNames> {
+    let facts = &row.facts;
+    let named = match refused {
+        Err(OutfitRefusal::AmmunitionFirst { ammo, .. }) => ammo.zip(facts.ammo_names.clone()),
+        Err(OutfitRefusal::RaisedFirst { target, .. }) => facts
+            .raises
+            .iter()
+            .find(|raise| raise.target == target)
+            .and_then(|raise| raise.target_names.clone())
+            .map(|names| (target, names)),
+        _ => return BTreeMap::new(),
+    };
+    [(row.id, facts.names.clone())]
+        .into_iter()
+        .chain(named)
+        .collect()
 }
 
 /// The free mass the info box's "Available:" line shows
@@ -862,6 +894,9 @@ struct RowOutfit<'a> {
     outfitter: &'a Outfitter,
     /// The row: its price, mass, count owned, `Max` and facts.
     row: &'a OutfitRow,
+    /// The pass of the order it is asked at: [`Pass::SINGLE`] outside
+    /// the order loop.
+    pass: Pass,
 }
 
 impl Context for Outfitter {
@@ -876,16 +911,15 @@ impl Context for RowOutfit<'_> {
     }
 }
 
-/// One listed outfit asked about one pass of an order: what the sale
-/// alert reads ([`Outfitter::sale_alert`]).
+/// One listed outfit asked about one pass of an order (its row's
+/// [`pass`](RowOutfit::pass)): what the sale alert reads
+/// ([`Outfitter::sale_alert`]).
 #[derive(Clone, Copy)]
 struct SaleAsk<'a> {
     /// The outfit, as its row is asked.
     asked: RowOutfit<'a>,
     /// Buying or selling.
     direction: Direction,
-    /// The pass of the order.
-    pass: Pass,
 }
 
 impl Context for SaleAsk<'_> {
@@ -1040,7 +1074,7 @@ fn sale_checks<'a>() -> Checks<RowOutfit<'a>, OutfitRefusal> {
         Check::disputed(
             "raised first",
             "`_DoOutfitDialog` @0x5c7be-0x5ca6f. The engine's left is \
-             `target_max x (owned - 1)`, and the other's is `left_by_the_bible`",
+             `target_max x raisers_left`, and the other's is `left_by_the_bible`",
             RuleKey::RaisedMax,
             engine_raised_first,
             bible_raised_first,
@@ -1048,7 +1082,7 @@ fn sale_checks<'a>() -> Checks<RowOutfit<'a>, OutfitRefusal> {
         Check::disputed(
             "ammunition first",
             "`_DoOutfitDialog` @0x5ca75-0x5cbe0, through \
-             `Launcher::excess(owned, Engine / Bible)`",
+             `Launcher::excess_left(launchers_left, Engine / Bible)`",
             RuleKey::LauncherSale,
             engine_ammunition_first,
             bible_ammunition_first,
@@ -1122,21 +1156,17 @@ fn sale_alert_value<'a>() -> Value<SaleAsk<'a>, Option<SaleAlert>> {
 /// index, the sell loop's refusal of a sale whose Sell flag is set. A
 /// pass after it ([`Pass::alerted`], flag -0x63e) is refused silently.
 fn alert_at_first_refusal(ask: &SaleAsk) -> Option<SaleAlert> {
-    if ask.direction != Direction::Sell || ask.pass.alerted {
+    let asked = &ask.asked;
+    if ask.direction != Direction::Sell || asked.pass.alerted {
         return None;
     }
-    let asked = &ask.asked;
     refusal(&sell_flag(), asked).ok()?;
     let refused = refusal(&sale_checks(), asked).err()?;
-    let order = OutfitOrder {
-        outfit: asked.row.id,
-        direction: Direction::Sell,
-    };
     Some(SaleAlert {
         outfit: asked.row.id,
         refusal: refused,
-        names: asked.outfitter.lc_names(order),
-        plural: passes_remain(ask.pass),
+        names: names_for(asked.row, Err(refused)),
+        plural: passes_remain(asked.pass),
     })
 }
 
@@ -1308,15 +1338,64 @@ fn mass_left(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
 }
 
 /// The engine's raised `Max` on a sale: the target held is no more than
-/// its raw `Max` x (owned - 1), other raisers ignored and with no floor;
-/// none is left of a target with no record.
+/// its raw `Max` x the raisers left ([`raisers_left`]: owned - 1 for a
+/// single sale), other raisers ignored and with no floor; none is left of
+/// a target with no record.
 fn engine_raised_first(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
-    let owned = i64::from(asked.row.owned);
+    let left = raisers_left().of(asked);
     raised_first_past(asked, |raise| {
-        raise
-            .target_max
-            .map_or(0, |max| i64::from(max) * (owned - 1))
+        raise.target_max.map_or(0, |max| i64::from(max) * left)
     })
+}
+
+/// How many of the raiser a raised-`Max` check counts as left at a pass,
+/// as [`RuleKey::CountedSale`] says: by the engine, owned now less the
+/// whole count (@0x5c82d-0x5c85e); by the other reading, owned now less
+/// one. The same at a count of 1.
+fn raisers_left<'a>() -> Value<RowOutfit<'a>, i64> {
+    Value::disputed(
+        "raisers left",
+        "`_DoOutfitDialog` @0x5c82d-0x5c85e: owned now - the whole count (-0x68c)",
+        RuleKey::CountedSale,
+        owned_less_the_count,
+        owned_less_one,
+    )
+}
+
+/// The engine's raisers left: owned now less the whole count, signed.
+fn owned_less_the_count(asked: &RowOutfit) -> i64 {
+    i64::from(asked.row.owned) - i64::from(asked.pass.count)
+}
+
+/// The other reading's raisers left: owned now less one, as one sale.
+fn owned_less_one(asked: &RowOutfit) -> i64 {
+    i64::from(asked.row.owned) - 1
+}
+
+/// The launchers whose `MaxAmmo` a launcher-sale check counts as kept at
+/// a pass, as [`RuleKey::CountedSale`] says: by the engine, owned now less
+/// the pass index less one, signed (@0x5cb9c-0x5cbc7); by the other
+/// reading, owned now less one, at least none. The same at pass 0 for
+/// some owned.
+fn launchers_left<'a>() -> Value<RowOutfit<'a>, i64> {
+    Value::disputed(
+        "launchers left",
+        "`_DoOutfitDialog` @0x5cb9c-0x5cbc7: owned now - the pass index (-0x63a) - 1",
+        RuleKey::CountedSale,
+        owned_less_the_pass,
+        one_launcher_sold,
+    )
+}
+
+/// The engine's launchers left: owned now less the pass index less one,
+/// signed.
+fn owned_less_the_pass(asked: &RowOutfit) -> i64 {
+    i64::from(asked.row.owned) - i64::from(asked.pass.index) - 1
+}
+
+/// The other reading's launchers left: owned now less one, at least none.
+fn one_launcher_sold(asked: &RowOutfit) -> i64 {
+    i64::from(asked.row.owned.saturating_sub(1))
 }
 
 /// The Bible's raised `Max` on a sale: the target held is no more than
@@ -1344,25 +1423,25 @@ fn raised_first_past(asked: &RowOutfit, left: impl Fn(&Raise) -> i64) -> Result<
         .map_or(Ok(()), Err)
 }
 
-/// The engine's launcher sale ([`Launcher::excess`]).
+/// The engine's launcher sale ([`Launcher::excess_left`]).
 fn engine_ammunition_first(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
     ammunition_first(asked, RuleSource::Engine)
 }
 
-/// The other reading's launcher sale ([`Launcher::excess`]).
+/// The other reading's launcher sale ([`Launcher::excess_left`]).
 fn bible_ammunition_first(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
     ammunition_first(asked, RuleSource::Bible)
 }
 
 /// A launcher sells when no rounds must be sold first, as `source` reads
-/// [`Launcher::excess`].
+/// [`Launcher::excess_left`] of the [`launchers_left`].
 fn ammunition_first(asked: &RowOutfit, source: RuleSource) -> Result<(), OutfitRefusal> {
     asked
         .row
         .facts
         .launcher
         .and_then(|launcher| {
-            let rounds = launcher.excess(asked.row.owned, source)?;
+            let rounds = launcher.excess_left(launchers_left().of(asked), source)?;
             Some(OutfitRefusal::AmmunitionFirst {
                 rounds,
                 ammo: launcher.ammo,
@@ -1818,17 +1897,29 @@ impl Launcher {
     /// launchers' `MaxAmmo` cannot hold, only when `MaxAmmo` is above 0
     /// (`_DoOutfitDialog` @0x5cad0, @0x5cb9c-0x5cbe0); by the other
     /// reading, every round held.
+    #[cfg(test)]
     pub(crate) fn excess(&self, owned: u16, source: RuleSource) -> Option<u32> {
+        self.excess_left(i64::from(owned.saturating_sub(1)), source)
+    }
+
+    /// The rounds that must be sold before a launcher can be, `left`
+    /// launchers' `MaxAmmo` kept, as `source` reads the rule
+    /// ([`RuleKey::LauncherSale`](crate::RuleKey::LauncherSale)); `None`
+    /// when it can be sold. By the engine, rounds - `MaxAmmo` x `left`,
+    /// signed with no floor, so `left` below none names more rounds than
+    /// are held (@0x5cbc7-0x5cbcf), only when `MaxAmmo` is above 0
+    /// (@0x5cad0) and some rounds are held; by the other reading, every
+    /// round held.
+    pub(crate) fn excess_left(&self, left: i64, source: RuleSource) -> Option<u32> {
         if self.rounds == 0 {
             return None;
         }
         match source {
-            RuleSource::Engine => {
-                let kept = self
-                    .max_ammo
-                    .saturating_mul(u32::from(owned.saturating_sub(1)));
-                (self.max_ammo > 0).then_some(self.rounds.saturating_sub(kept))
-            }
+            RuleSource::Engine => (self.max_ammo > 0).then(|| {
+                let kept = i64::from(self.max_ammo).saturating_mul(left);
+                let excess = i64::from(self.rounds).saturating_sub(kept);
+                u32::try_from(excess.max(0)).unwrap_or(u32::MAX)
+            }),
             RuleSource::Bible => Some(self.rounds),
         }
         .filter(|&excess| excess > 0)
@@ -4880,12 +4971,12 @@ mod tests {
                 (
                     "raised first",
                     "`_DoOutfitDialog` @0x5c7be-0x5ca6f. The engine's left is \
-                     `target_max x (owned - 1)`, and the other's is `left_by_the_bible`"
+                     `target_max x raisers_left`, and the other's is `left_by_the_bible`"
                 ),
                 (
                     "ammunition first",
                     "`_DoOutfitDialog` @0x5ca75-0x5cbe0, through \
-                     `Launcher::excess(owned, Engine / Bible)`"
+                     `Launcher::excess_left(launchers_left, Engine / Bible)`"
                 ),
             ]
         );
@@ -6171,10 +6262,13 @@ mod tests {
         assert!(!passes_remain(pass(3, 3)), "past the count");
     }
 
+    /// By the engine's [`RuleKey::SaleRefusal`], read with
+    /// [`RuleKey::CountedSale`] by the other reading, so each pass's
+    /// refusal is the single sale's.
     #[test]
     fn by_the_engine_the_first_refused_pass_alerts_at_any_index() {
         for (refusal, row) in refused_in_the_loop() {
-            let outfitter = of_row(row);
+            let outfitter = of_row_counted(row, RuleSource::Bible);
             let sale = order_128(Direction::Sell);
             let names = outfitter.lc_names(sale);
             let alert = |plural| SaleAlert {
@@ -6273,5 +6367,312 @@ mod tests {
             None,
             "not listed"
         );
+    }
+
+    // A counted sale's loop arithmetic (`RuleKey::CountedSale`).
+
+    /// The outfitter at [`port`] owning `owned` of `records`, read by
+    /// `rules`.
+    fn raising_by(records: &[OutfitRecord], owned: &[(i16, u16)], rules: Rulebook) -> Outfitter {
+        let site = port();
+        Shop {
+            rules,
+            ..shop(records, &site)
+        }
+        .outfitter(&owning(owned), &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter")
+    }
+
+    /// The outfitter at [`port`] owning `owned` of `records`, the raised
+    /// `Max` read by the engine, [`RuleKey::CountedSale`] as `counted`
+    /// says and [`RuleKey::SaleRefusal`] as `refusal` says.
+    fn counted_raising(
+        records: &[OutfitRecord],
+        owned: &[(i16, u16)],
+        counted: RuleSource,
+        refusal: RuleSource,
+    ) -> Outfitter {
+        raising_by(
+            records,
+            owned,
+            Rulebook::default()
+                .with_override(RuleKey::RaisedMax, RuleSource::Engine)
+                .with_override(RuleKey::CountedSale, counted)
+                .with_override(RuleKey::SaleRefusal, refusal),
+        )
+    }
+
+    /// Outfit 128, named, `owned` owned, a launcher of `max_ammo` holding
+    /// `rounds` of outfit 158 (named).
+    fn launcher_row(owned: u16, max_ammo: u32, rounds: u32) -> OutfitRow {
+        let mut row = counted(1, owned, ROOM, ROOM);
+        row.facts.names = lc("rack", "racks");
+        row.facts.launcher = Some(Launcher {
+            max_ammo,
+            rounds,
+            ammo: Some(OutfitId(158)),
+        });
+        row.facts.ammo_names = Some(lc("round", "rounds"));
+        row
+    }
+
+    /// The outfitter of `row` alone, read by `rules`.
+    fn of_row_by(row: OutfitRow, rules: Rulebook) -> Outfitter {
+        Outfitter {
+            rules,
+            ..of_row(row)
+        }
+    }
+
+    /// The outfitter of `row` alone, [`RuleKey::CountedSale`] read as
+    /// `source` says.
+    fn of_row_counted(row: OutfitRow, source: RuleSource) -> Outfitter {
+        of_row_by(
+            row,
+            Rulebook::default().with_override(RuleKey::CountedSale, source),
+        )
+    }
+
+    fn ammunition_refused(rounds: u32) -> Result<(), OutfitRefusal> {
+        Err(OutfitRefusal::AmmunitionFirst {
+            rounds,
+            ammo: Some(OutfitId(158)),
+        })
+    }
+
+    /// Selling one of `outfitter`'s outfit 128 at `pass`.
+    fn sold_at(outfitter: &Outfitter, pass: Pass) -> Result<(), OutfitRefusal> {
+        outfitter.check_at(order_128(Direction::Sell), pass)
+    }
+
+    #[test]
+    fn by_the_engine_a_counted_raiser_sale_checks_the_whole_count() {
+        let records = raisers();
+        let sale = sell_of(201);
+        let engine = raising(&records, &[(201, 3), (200, 8)], RuleSource::Engine);
+        assert_eq!(
+            engine.rules.source_for(RuleKey::CountedSale),
+            RuleSource::Engine
+        );
+        assert_eq!(engine.check_at(sale, pass(0, 1)), Ok(()));
+        assert_eq!(engine.check_at(sale, pass(0, 2)), raised_first(4, 200));
+        assert_eq!(engine.check_at(sale, pass(0, 3)), raised_first(8, 200));
+        // Single clicks sell one first.
+        assert_eq!(engine.check(sale), Ok(()));
+        let after = raising(&records, &[(201, 2), (200, 8)], RuleSource::Engine);
+        assert_eq!(after.check(sale), raised_first(4, 200));
+    }
+
+    #[test]
+    fn by_the_engine_a_counted_launcher_sale_counts_each_sale_twice() {
+        let at = |owned, pass| sold_at(&of_row(launcher_row(owned, 10, 20)), pass);
+        assert_eq!(at(4, pass(0, 3)), Ok(()));
+        assert_eq!(at(3, pass(1, 3)), ammunition_refused(10));
+        assert_eq!(at(3, pass(2, 3)), ammunition_refused(20));
+        // Single sales sell two.
+        assert_eq!(at(3, Pass::SINGLE), Ok(()));
+        assert_eq!(at(2, Pass::SINGLE), ammunition_refused(10));
+        // Room below none names more rounds than are held.
+        let below = of_row(launcher_row(2, 1, 1));
+        assert_eq!(sold_at(&below, pass(2, 3)), ammunition_refused(2));
+    }
+
+    #[test]
+    fn by_the_other_reading_each_pass_is_checked_as_one_sale() {
+        let bible = RuleSource::Bible;
+        let records = raisers();
+        let raiser = counted_raising(&records, &[(201, 3), (200, 8)], bible, bible);
+        assert_eq!(raiser.check_at(sell_of(201), pass(0, 2)), Ok(()));
+        assert_eq!(raiser.check_at(sell_of(201), pass(0, 3)), Ok(()));
+        let at = |owned, pass| sold_at(&of_row_counted(launcher_row(owned, 10, 20), bible), pass);
+        assert_eq!(at(3, pass(1, 3)), Ok(()));
+        assert_eq!(at(2, pass(1, 3)), ammunition_refused(10));
+    }
+
+    #[test]
+    fn a_count_of_1_at_pass_0_checks_as_today_by_either_reading() {
+        let sale = order_128(Direction::Sell);
+        let records = raisers();
+        for source in RuleSource::ALL {
+            let rows = refused_in_the_loop()
+                .map(|(refusal, row)| (Err(refusal), row))
+                .into_iter()
+                .chain([(Ok(()), counted(1, 3, ROOM, ROOM))]);
+            for (expected, row) in rows {
+                let outfitter = of_row_counted(row, source);
+                assert_eq!(
+                    outfitter.check_at(sale, Pass::SINGLE),
+                    expected,
+                    "{source:?}"
+                );
+                assert_eq!(outfitter.check(sale), expected, "{source:?}");
+            }
+            let raiser = |owned| {
+                counted_raising(&records, owned, source, RuleSource::Bible)
+                    .check_at(sell_of(201), Pass::SINGLE)
+            };
+            assert_eq!(raiser(&[(201, 3), (200, 8)]), Ok(()), "{source:?}");
+            assert_eq!(
+                raiser(&[(201, 2), (200, 8)]),
+                raised_first(4, 200),
+                "{source:?}"
+            );
+            let launcher = |owned| {
+                sold_at(
+                    &of_row_counted(launcher_row(owned, 10, 20), source),
+                    Pass::SINGLE,
+                )
+            };
+            assert_eq!(launcher(3), Ok(()), "{source:?}");
+            assert_eq!(launcher(2), ammunition_refused(10), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn under_a_bible_raised_max_or_launcher_sale_the_counted_reading_changes_nothing() {
+        let records = raisers();
+        for counted_source in RuleSource::ALL {
+            let raiser = raising_by(
+                &records,
+                &[(201, 3), (200, 8)],
+                Rulebook::default()
+                    .with_override(RuleKey::RaisedMax, RuleSource::Bible)
+                    .with_override(RuleKey::CountedSale, counted_source),
+            );
+            assert_eq!(
+                raiser.check_at(sell_of(201), pass(0, 3)),
+                Ok(()),
+                "{counted_source:?}: 8 after"
+            );
+            let launcher = of_row_by(
+                launcher_row(3, 10, 20),
+                Rulebook::default()
+                    .with_override(RuleKey::LauncherSale, RuleSource::Bible)
+                    .with_override(RuleKey::CountedSale, counted_source),
+            );
+            assert_eq!(
+                sold_at(&launcher, pass(2, 3)),
+                ammunition_refused(20),
+                "{counted_source:?}: every round held"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_every_pass_after_a_refused_one_is_refused_too() {
+        let records = raisers();
+        let raiser = raising(&records, &[(201, 3), (200, 8)], RuleSource::Engine);
+        for index in 0..3 {
+            assert_eq!(
+                raiser.check_at(sell_of(201), pass(index, 3)),
+                raised_first(8, 200),
+                "at {index}"
+            );
+        }
+        let launcher = of_row(launcher_row(3, 10, 20));
+        let refused: Vec<_> = (1..4)
+            .map(|index| sold_at(&launcher, pass(index, 4)))
+            .collect();
+        assert_eq!(
+            refused,
+            [
+                ammunition_refused(10),
+                ammunition_refused(20),
+                ammunition_refused(30)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_counted_alert_carries_the_counted_excess_and_names_its_target() {
+        let records = raisers();
+        let raiser = counted_raising(
+            &records,
+            &[(201, 3), (200, 8)],
+            RuleSource::Engine,
+            RuleSource::Engine,
+        );
+        assert_eq!(
+            raiser.sale_alert(sell_of(201), pass(0, 2)),
+            Some(SaleAlert {
+                outfit: OutfitId(201),
+                refusal: OutfitRefusal::RaisedFirst {
+                    count: 4,
+                    target: OutfitId(200),
+                },
+                names: BTreeMap::from([
+                    (OutfitId(200), lc("widget", "widgets")),
+                    (OutfitId(201), lc("widget rack", "widget racks")),
+                ]),
+                plural: true,
+            })
+        );
+        assert_eq!(
+            raiser.lc_names(sell_of(201)),
+            BTreeMap::new(),
+            "a single click goes through"
+        );
+        let launcher = of_row(launcher_row(3, 10, 20));
+        assert_eq!(
+            launcher.sale_alert(order_128(Direction::Sell), pass(1, 3)),
+            Some(SaleAlert {
+                outfit: OutfitId(128),
+                refusal: OutfitRefusal::AmmunitionFirst {
+                    rounds: 10,
+                    ammo: Some(OutfitId(158)),
+                },
+                names: BTreeMap::from([
+                    (OutfitId(128), lc("rack", "racks")),
+                    (OutfitId(158), lc("round", "rounds")),
+                ]),
+                plural: true,
+            })
+        );
+    }
+
+    #[test]
+    fn a_launchers_excess_from_those_left_has_no_floor() {
+        let excess = |max_ammo, rounds, left, source| {
+            Launcher {
+                max_ammo,
+                rounds,
+                ammo: None,
+            }
+            .excess_left(left, source)
+        };
+        let engine = RuleSource::Engine;
+        assert_eq!(excess(10, 20, 1, engine), Some(10));
+        assert_eq!(excess(10, 20, 0, engine), Some(20));
+        assert_eq!(excess(1, 1, -1, engine), Some(2), "room below none");
+        assert_eq!(excess(10, 20, 2, engine), None);
+        assert_eq!(excess(0, 5, -1, engine), None, "no MaxAmmo");
+        assert_eq!(excess(10, 0, -1, engine), None, "no rounds");
+        assert_eq!(excess(10, 20, 5, RuleSource::Bible), Some(20));
+        assert_eq!(
+            excess(u32::MAX, u32::MAX, -1, engine),
+            Some(u32::MAX),
+            "saturated"
+        );
+    }
+
+    #[test]
+    fn the_counted_sale_rules_read_the_counted_sale_key() {
+        for (about, name, reproduces) in [
+            (
+                *raisers_left().about(),
+                "raisers left",
+                "`_DoOutfitDialog` @0x5c82d-0x5c85e: owned now - the whole count (-0x68c)",
+            ),
+            (
+                *launchers_left().about(),
+                "launchers left",
+                "`_DoOutfitDialog` @0x5cb9c-0x5cbc7: owned now - the pass index (-0x63a) - 1",
+            ),
+        ] {
+            assert_eq!(about.name(), name);
+            assert_eq!(about.reads(), Some(RuleKey::CountedSale), "{name}");
+            assert_eq!(about.reproduces(), reproduces, "{name}");
+            assert!(!about.draws(), "{name}");
+        }
     }
 }
