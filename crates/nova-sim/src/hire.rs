@@ -128,7 +128,8 @@
 
 use std::fmt::Debug;
 
-use crate::catalog::{LandingSite, ShipId, ShipRecord};
+use crate::catalog::{LandingSite, OutfitRecord, ShipId, ShipRecord};
+use crate::combat::armament::Arsenal;
 use crate::control::{ControlBits, Gate, PilotFacts, Test};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::shipyard::{HIDE_BITS, ShipFlags3, ShipSpecs};
@@ -359,6 +360,10 @@ pub(crate) struct Bar<'a> {
     /// How each disputed rule reads: among them whether `Require` gates
     /// hiring ([`RuleKey::HireRequire`]).
     pub(crate) rules: Rulebook,
+    /// Every ship class's stock weapons, which the Info's Space reads.
+    pub(crate) arsenal: &'a Arsenal,
+    /// Every `oütf`, which the Info's Space weighs.
+    pub(crate) outfits: &'a [OutfitRecord],
 }
 
 impl Bar<'_> {
@@ -423,13 +428,7 @@ impl Bar<'_> {
                     short_name: ship.short_name.clone(),
                     fee,
                     wage: self.terms.wage(ship),
-                    specs: ShipSpecs {
-                        fields: ship.fields,
-                        max_gun: ship.max_gun,
-                        max_tur: ship.max_tur,
-                        length: ship.length,
-                        crew: ship.crew,
-                    },
+                    specs: ShipSpecs::of(ship, self.arsenal, self.outfits),
                     hire,
                 },
             ));
@@ -446,7 +445,10 @@ impl Bar<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{FAST, planet, ship};
+    use crate::catalog::{HullRecord, OutfitRecord, StockWeapon, WeaponId};
+    use crate::combat::armament::{Arsenal, MOD_WEAPON};
+    use crate::handling::ShipFields;
+    use crate::testkit::{FAST, hull, outfit, planet, ship};
 
     /// A site of tech level `tech`.
     fn site(tech: i16) -> LandingSite {
@@ -596,6 +598,7 @@ mod tests {
                 max_tur: 0,
                 length: 0,
                 crew: 0,
+                space: 0,
             },
             hire: if id == 129 {
                 Err(HireRefusal::CannotAfford)
@@ -613,5 +616,51 @@ mod tests {
         assert_eq!(list.check(ShipId(128)), Ok(()));
         assert_eq!(list.check(ShipId(129)), Err(HireRefusal::CannotAfford));
         assert_eq!(list.check(ShipId(130)), Err(HireRefusal::NotListed));
+    }
+
+    #[test]
+    fn the_hire_list_gives_each_class_its_space() {
+        // -10 + 6 = -4 to start; the gun leaves 0, where `FreeMass` is -10.
+        let ships = [ShipRecord {
+            hire_random: 100,
+            ..ship(
+                129,
+                ShipFields {
+                    free_mass: -10,
+                    ..FAST
+                },
+            )
+        }];
+        let outfits = [OutfitRecord {
+            mass: 6,
+            ..outfit(150, &[(MOD_WEAPON, 130)])
+        }];
+        let arsenal = Arsenal::new(
+            &[],
+            vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(130),
+                    count: 1,
+                    ammo: 0,
+                }],
+                ..hull(129)
+            }],
+        );
+        let at = site(7);
+        let bar = Bar {
+            ships: &ships,
+            site: &at,
+            contributed: 0,
+            cash: 0,
+            room: true,
+            terms: &NovaHire::default(),
+            control_bits: Gate::FRESH.control_bits,
+            pilot: Gate::FRESH.pilot,
+            rules: Rulebook::default(),
+            arsenal: &arsenal,
+            outfits: &outfits,
+        };
+        let list = bar.list(|_, _| true);
+        assert_eq!(list.row(ShipId(129)).map(|row| row.specs.space), Some(0));
     }
 }

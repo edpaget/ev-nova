@@ -177,6 +177,8 @@ impl Session {
             control_bits: &*self.control_bits.0,
             pilot: &facts,
             rules: self.rules,
+            arsenal: &self.arsenal,
+            outfits: &self.outfits,
         };
         let rolls = &mut self.hire_rolls;
         Some(bar.list(|ship, percent| rolls.today(ship, Roll::Chance(percent), chance)))
@@ -364,6 +366,7 @@ mod tests {
                     max_tur: 1,
                     length: 20,
                     crew: 3,
+                    space: 30,
                 },
                 hire: Ok(()),
             }

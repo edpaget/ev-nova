@@ -229,19 +229,21 @@ use std::collections::BTreeMap;
 
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord};
 use crate::chance::{Chance, NeverFires};
-use crate::combat::armament::{StockFit, fit_stock, fitted};
+use crate::combat::armament::{
+    Arsenal, MOD_AMMO, MOD_WEAPON, StockFit, fit_stock, fitted, holder, holders,
+};
 use crate::control::Gate;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
 use crate::market::{EscortHolds, Good, escort_tons, fleet_holds};
-use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_price};
+use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_mass, unit_price};
 use crate::pilot::{Pilot, merged, tally};
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
 use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::stats::ShipStats;
-use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll};
+use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll, ShownTons};
 
 /// The `shïp` `Flags3` bits the shipyard reads (the Bible): not the same
 /// values as the `oütf` flags of the same meaning.
@@ -317,7 +319,8 @@ pub struct ShipFacts {
     pub buyable: bool,
 }
 
-/// What the shipyard's Info shows of a ship class, raw from its record.
+/// What the shipyard's Info shows of a ship class: from its record, and
+/// its Space worked out from its stock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShipSpecs {
     /// Its handling, reserve, cargo and mass fields.
@@ -330,6 +333,47 @@ pub struct ShipSpecs {
     pub length: i16,
     /// Its `Crew`.
     pub crew: i16,
+    /// The "Shipyard Info" panel's Space number, worked out when the list
+    /// is built ([`space`]).
+    pub space: i64,
+}
+
+impl ShipSpecs {
+    /// The specs of class `ship`, its Space worked out from its stock in
+    /// `arsenal` and `outfits`.
+    pub(crate) fn of(ship: &ShipRecord, arsenal: &Arsenal, outfits: &[OutfitRecord]) -> Self {
+        Self {
+            fields: ship.fields,
+            max_gun: ship.max_gun,
+            max_tur: ship.max_tur,
+            length: ship.length,
+            crew: ship.crew,
+            space: space(ship, arsenal, outfits),
+        }
+    }
+
+    /// The panel's "Space:" number with its unit: "ton" at exactly 1, else
+    /// "tons" (`_ShipDescDialogUpdate` @0x50366-0x5037e).
+    #[must_use]
+    pub fn space_shown(&self) -> ShownTons {
+        ShownTons::of(self.space)
+    }
+
+    /// The panel's "Cargo:" number with its unit: |`Holds`|, as the loader
+    /// negates a negative one (`_LoadObjectData` @0x7a6ad-0x7a6b8), "ton"
+    /// at exactly 1, else "tons" (`_ShipDescDialogUpdate`
+    /// @0x503ea-0x50446).
+    #[must_use]
+    pub fn cargo_shown(&self) -> ShownTons {
+        ShownTons::of(i64::from(self.fields.holds).abs())
+    }
+
+    /// The panel's "Mass:" number with its unit: `Mass`, "ton" at exactly
+    /// 1, else "tons" (`_ShipDescDialogUpdate` @0x50e05-0x50e63).
+    #[must_use]
+    pub fn mass_shown(&self) -> ShownTons {
+        ShownTons::of(i64::from(self.fields.mass))
+    }
 }
 
 /// A stellar's shipyard, as the player sees it.
@@ -539,12 +583,81 @@ pub fn trade_in(
         .max(0)
 }
 
+/// The Shipyard Info panel's Space number from `start`, taking off each
+/// of `taken` in turn and leaving none where a step would go below it
+/// (`_ShipDescDialogUpdate`'s `cmovle`/`cmovge` @0x50176-0x50181,
+/// @0x50205-0x50210 and @0x502b3-0x502be). With nothing taken, `start`
+/// comes back as it is, even below none.
+pub(crate) fn floored_space(start: i64, taken: impl IntoIterator<Item = i64>) -> i64 {
+    taken
+        .into_iter()
+        .fold(start, |space, mass| space.saturating_sub(mass).max(0))
+}
+
+/// The "Shipyard Info" panel's Space number for class `ship`, its stock
+/// in `arsenal` and `outfits`, as `_ShipDescDialogUpdate` works it out
+/// (@0x500cf-0x502cb).
+///
+/// It starts at `FreeMass` plus the mass of the class's standard
+/// equipment (its default items and its stock weapons and ammunition as
+/// outfits), as the loader holds it (@0x7aaf7, @0x7ac61, @0x7ad8d). It
+/// then takes off, through [`floored_space`]: each stock weapon by
+/// ascending ID (the last slot naming it giving its count and
+/// `AmmoLoad`, @0x7aa72, @0x7aa90), its count of the lowest-ID outfit
+/// whose [`MOD_WEAPON`] mod names it, then its `AmmoLoad` of the lowest-ID
+/// one whose [`MOD_AMMO`] mod names the weapon itself, not its
+/// `AmmoType` (@0x501c5-0x501d0); then each default item in slot order
+/// (@0x5025d-0x502c1). Each takes off only above none of it and with a
+/// record. The original's 16-bit sum into the class (@0x7ab0b) is not
+/// replicated.
+pub(crate) fn space(ship: &ShipRecord, arsenal: &Arsenal, outfits: &[OutfitRecord]) -> i64 {
+    let weighed = |outfit: OutfitId, count: u16| {
+        outfits
+            .iter()
+            .find(|record| record.id == outfit)
+            .map(|record| unit_mass(record, ship.fields.mass).saturating_mul(i64::from(count)))
+    };
+    let standard = merged(
+        &tally(ship.defaults.iter().copied()),
+        &arsenal.stock_outfits(ship.id, outfits),
+    );
+    let start = standard
+        .iter()
+        .filter_map(|(&outfit, &count)| weighed(outfit, count))
+        .fold(i64::from(ship.fields.free_mass), i64::saturating_add);
+    let slots: BTreeMap<_, _> = arsenal
+        .stock_weapons(ship.id)
+        .iter()
+        .map(|stock| (stock.weapon, (stock.count, stock.ammo)))
+        .collect();
+    let weapon_holders = holders(outfits, MOD_WEAPON);
+    let ammo_holders = holders(outfits, MOD_AMMO);
+    let held = |holders: &[_], weapon, count: i16| {
+        let count = u16::try_from(count).ok().filter(|&count| count > 0)?;
+        weighed(holder(holders, weapon)?, count)
+    };
+    let weapons = slots.into_iter().flat_map(|(weapon, (count, ammo))| {
+        [
+            held(&weapon_holders, weapon, count),
+            held(&ammo_holders, weapon, ammo),
+        ]
+    });
+    let defaults = ship
+        .defaults
+        .iter()
+        .filter(|&&(_, count)| count > 0)
+        .map(|&(outfit, count)| weighed(outfit, count));
+    floored_space(start, weapons.chain(defaults).flatten())
+}
+
 /// Everything the shipyard rules read about the ship and where it is.
 pub(crate) struct Yard<'a> {
     /// Every `shïp`.
     pub(crate) ships: &'a [ShipRecord],
     /// Every `oütf`.
     pub(crate) outfits: &'a [OutfitRecord],
+    /// Every ship class's stock weapons, which the Info's Space reads.
+    pub(crate) arsenal: &'a Arsenal,
     /// The ship flown's fields.
     pub(crate) fields: ShipFields,
     /// The stellar landed on.
@@ -617,13 +730,7 @@ impl Yard<'_> {
                     name: ship.name.clone(),
                     short_name: ship.short_name.clone(),
                     price: price().of(&offer),
-                    specs: ShipSpecs {
-                        fields: ship.fields,
-                        max_gun: ship.max_gun,
-                        max_tur: ship.max_tur,
-                        length: ship.length,
-                        crew: ship.crew,
-                    },
+                    specs: ShipSpecs::of(ship, self.arsenal, self.outfits),
                     facts: ShipFacts { buyable },
                 },
             ));
@@ -1272,15 +1379,23 @@ pub(crate) fn purchase(sale: &Sale, quote: Quote) -> Purchase {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::sync::LazyLock;
+
     use super::*;
-    use crate::catalog::{DisasterId, GovtId, JunkId, StellarId, SystemId, WeaponId};
+    use crate::catalog::{
+        DisasterId, GovtId, HullRecord, JunkId, StellarId, StockWeapon, SystemId, WeaponId,
+        WeaponRecord,
+    };
     use crate::chance::NeverFires;
     use crate::combat::armament::{MOD_AMMO, MOD_WEAPON};
     use crate::control::Test;
     use crate::market::MORE_CARGO;
     use crate::rules::Descriptor;
     use crate::stats::{MORE_FUEL, MORE_SHIELD};
-    use crate::testkit::{AllowAll, FAST, RefuseBits, Scripted, catalog, outfit, planet, ship};
+    use crate::testkit::{
+        AllowAll, FAST, RefuseBits, Scripted, catalog, hull, outfit, planet, ship, weapon,
+    };
+    use crate::wares::TonUnit;
 
     /// A shipyard of tech level 4 with special tech 6 and 55.
     fn port() -> LandingSite {
@@ -1314,6 +1429,9 @@ mod tests {
         pairs.iter().map(|&(id, n)| (OutfitId(id), n)).collect()
     }
 
+    /// An arsenal with no hull, so no class has stock.
+    static NO_STOCK: LazyLock<Arsenal> = LazyLock::new(Arsenal::default);
+
     /// The shipyard of `ships` at `site`, reading `BuyRandom` by the
     /// engine.
     fn yard<'a>(
@@ -1324,6 +1442,7 @@ mod tests {
         Yard {
             ships,
             outfits,
+            arsenal: &NO_STOCK,
             fields: FAST,
             site,
             rules: Rulebook::default(),
@@ -1721,6 +1840,7 @@ mod tests {
                         max_tur: 1,
                         length: 26,
                         crew: 4,
+                        space: 30,
                     },
                     facts: ShipFacts { buyable: true },
                 }],
@@ -3628,5 +3748,162 @@ mod tests {
             (&pilot.escorts, &pilot.gone_persons, &pilot.grudges),
             (&before.escorts, &before.gone_persons, &before.grudges)
         );
+    }
+
+    // The Shipyard Info panel's Space.
+
+    #[test]
+    fn space_floors_each_step_at_none_and_keeps_an_untouched_start() {
+        assert_eq!(floored_space(22, [10]), 12);
+        assert_eq!(floored_space(-2, [10]), 0);
+        assert_eq!(floored_space(-5, []), -5);
+        assert_eq!(floored_space(2, [10, -3]), 3);
+        assert_eq!(floored_space(8, [-3, 10]), 1);
+    }
+
+    /// `oütf` `id` of `mass` tons with these mods.
+    fn weighing(id: i16, mass: i16, mods: &[(i16, i16)]) -> OutfitRecord {
+        OutfitRecord {
+            mass,
+            ..outfit(id, mods)
+        }
+    }
+
+    /// Ship `id` of `FreeMass` `free_mass` with these default items.
+    fn freeing(id: i16, free_mass: i16, defaults: &[(i16, u16)]) -> ShipRecord {
+        ShipRecord {
+            defaults: defaults
+                .iter()
+                .map(|&(outfit, count)| (OutfitId(outfit), count))
+                .collect(),
+            ..ship(id, ShipFields { free_mass, ..FAST })
+        }
+    }
+
+    /// An arsenal of `weapons` whose one hull, `ship`, has these stock
+    /// slots, each a weapon, its count and its `AmmoLoad`.
+    fn stocking(weapons: &[WeaponRecord], ship: i16, slots: &[(i16, i16, i16)]) -> Arsenal {
+        Arsenal::new(
+            weapons,
+            vec![HullRecord {
+                weapons: slots
+                    .iter()
+                    .map(|&(weapon, count, ammo)| StockWeapon {
+                        weapon: WeaponId(weapon),
+                        count,
+                        ammo,
+                    })
+                    .collect(),
+                ..hull(ship)
+            }],
+        )
+    }
+
+    #[test]
+    fn the_space_of_a_class_with_stock_is_its_free_mass() {
+        // 12 + 2 x 3 + 5 x 1 + 2 to start, then 25 - 6 - 5 - 2.
+        let class = freeing(129, 12, &[(152, 1)]);
+        let arsenal = stocking(&[weapon(130)], 129, &[(130, 2, 5)]);
+        let outfits = [
+            weighing(150, 3, &[(MOD_WEAPON, 130)]),
+            weighing(151, 1, &[(MOD_AMMO, 130)]),
+            weighing(152, 2, &[]),
+        ];
+        assert_eq!(space(&class, &arsenal, &outfits), 12);
+    }
+
+    #[test]
+    fn the_space_takes_off_weapons_by_id_not_slot_order() {
+        // -10 - 4 + 6 = -8 to start; 130 first leaves 0, then 140 adds 4.
+        // By slot order, 140 would leave -4, floored to 0, then 130 0.
+        let class = freeing(129, -10, &[]);
+        let arsenal = stocking(&[], 129, &[(140, 1, 0), (130, 1, 0)]);
+        let outfits = [
+            weighing(150, -4, &[(MOD_WEAPON, 140)]),
+            weighing(151, 6, &[(MOD_WEAPON, 130)]),
+        ];
+        assert_eq!(space(&class, &arsenal, &outfits), 4);
+    }
+
+    #[test]
+    fn the_space_takes_off_weapons_before_default_items() {
+        // -10 + 6 - 4 = -8 to start; the weapon leaves 0, the item adds 4.
+        let class = freeing(129, -10, &[(152, 1)]);
+        let arsenal = stocking(&[], 129, &[(130, 1, 0)]);
+        let outfits = [
+            weighing(150, 6, &[(MOD_WEAPON, 130)]),
+            weighing(152, -4, &[]),
+        ];
+        assert_eq!(space(&class, &arsenal, &outfits), 4);
+    }
+
+    #[test]
+    fn the_space_takes_off_ammunition_named_by_the_weapon_not_its_ammo_type() {
+        // The standard equipment holds 5 of 132's rounds (2 tons each): 10
+        // to start; the walk takes off 5 of 131's (a ton each).
+        let class = freeing(129, 0, &[]);
+        let launcher = WeaponRecord {
+            ammo_type: 4,
+            ..weapon(131)
+        };
+        let arsenal = stocking(&[launcher], 129, &[(131, 1, 5)]);
+        let outfits = [
+            weighing(150, 1, &[(MOD_AMMO, 131)]),
+            weighing(151, 2, &[(MOD_AMMO, 132)]),
+        ];
+        assert_eq!(space(&class, &arsenal, &outfits), 5);
+    }
+
+    #[test]
+    fn a_class_without_stock_shows_its_free_mass_as_it_is() {
+        assert_eq!(space(&freeing(129, -7, &[]), &Arsenal::default(), &[]), -7);
+    }
+
+    /// The specs of a class of `space`, `holds` and `mass`.
+    fn specs(space: i64, holds: i16, mass: i16) -> ShipSpecs {
+        ShipSpecs {
+            fields: ShipFields {
+                holds,
+                mass,
+                ..FAST
+            },
+            max_gun: 0,
+            max_tur: 0,
+            length: 0,
+            crew: 0,
+            space,
+        }
+    }
+
+    #[test]
+    fn the_spec_lines_values_take_a_ton_at_exactly_one() {
+        let shown = |tons, unit| ShownTons { tons, unit };
+        assert_eq!(specs(1, 0, 0).space_shown(), shown(1, TonUnit::Ton));
+        assert_eq!(specs(0, 0, 0).space_shown(), shown(0, TonUnit::Tons));
+        assert_eq!(specs(-3, 0, 0).space_shown(), shown(-3, TonUnit::Tons));
+        assert_eq!(specs(0, 1, 0).cargo_shown(), shown(1, TonUnit::Ton));
+        assert_eq!(specs(0, -1, 0).cargo_shown(), shown(1, TonUnit::Ton));
+        assert_eq!(specs(0, -15, 0).cargo_shown(), shown(15, TonUnit::Tons));
+        assert_eq!(specs(0, 0, 1).mass_shown(), shown(1, TonUnit::Ton));
+        assert_eq!(specs(0, 0, 25).mass_shown(), shown(25, TonUnit::Tons));
+    }
+
+    #[test]
+    fn the_shipyard_lists_each_class_with_its_space() {
+        // -10 + 6 = -4 to start; the gun leaves 0, where `FreeMass` is -10.
+        let ships = [ShipRecord {
+            cost: 1000,
+            ..freeing(129, -10, &[])
+        }];
+        let outfits = [weighing(150, 6, &[(MOD_WEAPON, 130)])];
+        let arsenal = stocking(&[], 129, &[(130, 1, 0)]);
+        let site = port();
+        let shipyard = Yard {
+            arsenal: &arsenal,
+            ..yard(&ships, &outfits, &site)
+        }
+        .shipyard(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+        .expect("a shipyard");
+        assert_eq!(row(&shipyard, 129).specs.space, 0);
     }
 }

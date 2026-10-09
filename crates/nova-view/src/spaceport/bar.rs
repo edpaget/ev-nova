@@ -573,6 +573,7 @@ mod tests {
                         max_tur: 0,
                         length: 0,
                         crew: 0,
+                        space: 0,
                     },
                     hire: Ok(()),
                 })

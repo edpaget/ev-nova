@@ -608,6 +608,7 @@ mod tests {
                 max_tur: 1,
                 length: 20,
                 crew: 3,
+                space: 0,
             },
             hire,
         }

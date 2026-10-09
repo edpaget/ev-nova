@@ -2301,6 +2301,7 @@ impl Session {
         let shipyard = Yard {
             ships: &self.ships,
             outfits: &self.outfits,
+            arsenal: &self.arsenal,
             fields: self.fields,
             site,
             rules: self.rules,

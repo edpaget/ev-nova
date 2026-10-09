@@ -991,7 +991,8 @@ mod tests {
         })
     }
 
-    /// The specs of a ship of speed 300, 12 tons free, mass 25, fuel 300.
+    /// The specs of a ship of speed 300, 12 tons free and of Space, 15
+    /// tons of cargo, mass 25, fuel 300.
     const SPECS: ShipSpecs = ShipSpecs {
         fields: ShipFields {
             speed: 300,
@@ -1013,6 +1014,7 @@ mod tests {
         max_tur: 1,
         length: 26,
         crew: 4,
+        space: 12,
     };
 
     fn row(id: i16, short_name: &str, price: i64) -> ShipRow {

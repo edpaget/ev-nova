@@ -539,6 +539,9 @@ pub struct OutfitFacts {
     pub ammo_names: Option<LcNames>,
     /// One for each of its [`RAISES_MAX`] mods, in slot order.
     pub raises: Vec<Raise>,
+    /// Its `Mass`, raw: the info box draws its Item Mass and Available
+    /// lines only above none (`_OutfitDialogUpdate` @0x57c72).
+    pub mass_field: i16,
 }
 
 /// One [`RAISES_MAX`] mod of an outfit: the outfit whose `Max` it raises,
@@ -604,6 +607,15 @@ impl Outfitter {
     #[must_use]
     pub fn free_mass_shown(&self) -> ShownTons {
         free_mass_shown().of(self)
+    }
+
+    /// The info box's "Item Mass:" line for `outfit`: none for an outfit
+    /// of `Mass` 0 or less, which shows no Item Mass or Available line;
+    /// otherwise its mass for one, unclamped, with "ton" at exactly 1 and
+    /// "tons" otherwise. None for an outfit not listed.
+    #[must_use]
+    pub fn item_mass_shown(&self, outfit: OutfitId) -> Option<ShownTons> {
+        item_mass_shown().of(&self.asked_at(outfit, Pass::SINGLE)?)
     }
 
     /// `outfit`'s row as the outfitter's rules ask about it at `pass` of
@@ -854,6 +866,24 @@ fn free_mass_shown() -> Value<Outfitter, ShownTons> {
          `_tonsString` (#2)",
         clamped_tons,
     )
+}
+
+/// The mass the info box's "Item Mass:" line shows
+/// ([`Outfitter::item_mass_shown`]).
+fn item_mass_shown<'a>() -> Value<RowOutfit<'a>, Option<ShownTons>> {
+    Value::plain(
+        "item mass shown",
+        "`_OutfitDialogUpdate` @0x57c67-0x57d19: no Item Mass or Available line for an outfit of \
+         `Mass` 0 or less (`jle` @0x57c78 to @0x57da2); otherwise `_AdjustedItemMass` unclamped \
+         (@0x57cec), `_tonString` (`STR#` 2002 #1) at exactly 1 @0x57d07-0x57d19, else \
+         `_tonsString` (#2)",
+        row_tons,
+    )
+}
+
+/// The row's mass with its unit, when its outfit's `Mass` is above none.
+fn row_tons(asked: &RowOutfit) -> Option<ShownTons> {
+    (asked.row.facts.mass_field > 0).then(|| ShownTons::of(asked.row.mass))
 }
 
 /// The clamped free mass, with its unit.
@@ -2186,6 +2216,7 @@ impl Shop<'_> {
                 .and_then(|ammo| self.records.iter().find(|named| named.id == ammo))
                 .map(lc_names),
             raises: self.raises(record, owned, offer.owned),
+            mass_field: record.mass,
         }
     }
 
@@ -3270,6 +3301,7 @@ mod tests {
                     names: lc("outfit 128", "outfits 128"),
                     buyable: true,
                     sold_here: true,
+                    mass_field: 1,
                     ..OutfitFacts::default()
                 },
             }]
@@ -3378,6 +3410,7 @@ mod tests {
                     ammo: Some(OutfitId(129)),
                 }),
                 ammo_names: Some(lc("missile", "missiles")),
+                mass_field: 1,
                 raises: vec![
                     Raise {
                         target: OutfitId(200),
@@ -5153,6 +5186,49 @@ mod tests {
         assert_eq!(about.name(), "free mass shown");
         assert!(about.reproduces().contains("@0x57d66-0x57d9d"));
         assert!(about.reproduces().contains("free_mass_clamped"));
+        assert_eq!(about.reads(), None);
+    }
+
+    #[test]
+    fn the_item_mass_shown_is_none_without_mass_and_unclamped_with_it() {
+        let shown = |mass_field, mass| {
+            Outfitter {
+                rows: vec![OutfitRow {
+                    mass,
+                    facts: OutfitFacts {
+                        mass_field,
+                        ..OutfitFacts::default()
+                    },
+                    ..counted(0, 0, 10, 10)
+                }],
+                ..Outfitter::default()
+            }
+            .item_mass_shown(OutfitId(128))
+        };
+        assert_eq!(shown(0, 0), None);
+        assert_eq!(shown(-5, -5), None);
+        let tons = |tons, unit| Some(ShownTons { tons, unit });
+        assert_eq!(shown(1, 1), tons(1, TonUnit::Ton));
+        assert_eq!(shown(1, 2), tons(2, TonUnit::Tons));
+        assert_eq!(
+            shown(1, 0),
+            tons(0, TonUnit::Tons),
+            "mass-scaled on a light class"
+        );
+        assert_eq!(
+            Outfitter::default().item_mass_shown(OutfitId(128)),
+            None,
+            "not listed"
+        );
+    }
+
+    #[test]
+    fn the_item_mass_shown_names_what_it_reproduces() {
+        let value = item_mass_shown();
+        let about = value.about();
+        assert_eq!(about.name(), "item mass shown");
+        assert!(about.reproduces().contains("@0x57c67-0x57d19"));
+        assert!(about.reproduces().contains("@0x57da2"));
         assert_eq!(about.reads(), None);
     }
 
