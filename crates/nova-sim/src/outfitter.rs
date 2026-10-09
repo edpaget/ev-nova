@@ -191,7 +191,10 @@
 //! limit or once an opening for a buy, and the free mass, a raised
 //! `Max`, a launcher's ammunition or none left for a sale. A counted buy
 //! stops at its first refusal; a counted sale runs on past it to the
-//! count (@0x5d19c-0x5d1b1).
+//! count (@0x5d19c-0x5d1b1) A sale that changes the listing
+//! makes the passes left check and sell `oütf` 128 ([`FIRST_OUTFIT`]),
+//! listed or not, from index 1 (or 513 when nothing is listed), as
+//! [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale) says.
 //!
 //! **Ammunition cap** (`_HasMaxOfItem` @0x457e-0x45e4, before `Max`). An
 //! outfit whose **first** mod is `ModType` 3 naming a weapon of `MaxAmmo`
@@ -2072,6 +2075,17 @@ fn lc_names(record: &OutfitRecord) -> LcNames {
     }
 }
 
+/// The outfit table's index 0, `oütf` 128: the outfit the sell loop
+/// selects after a sale that changes the listing (`*0xded58 = 0`,
+/// @0x5d01c), listed or not (see
+/// [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale)).
+pub const FIRST_OUTFIT: OutfitId = OutfitId(128);
+
+/// The length of the port's outfit list (0x3b500c, 0x200 entries,
+/// @0x5d117): the index a relisting leaves the sell loop at when nothing
+/// is listed (see [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale)).
+pub const LIST_SLOTS: u32 = 512;
+
 /// Everything the outfitter rules read about the ship and where it is.
 pub(crate) struct Shop<'a> {
     /// Every `oütf`.
@@ -2120,6 +2134,22 @@ impl Shop<'_> {
         rolls: &mut DayRolls<OutfitId>,
         chance: &mut dyn Chance,
     ) -> Option<Outfitter> {
+        self.outfitter_with(pilot, rolls, chance, None)
+    }
+
+    /// The outfitter as [`outfitter`](Self::outfitter) builds it, with
+    /// the row of `also`, when it has a record, among its rows even when
+    /// it is not listed, sold here: the row the sell loop sells after a
+    /// relisting selects [`FIRST_OUTFIT`], which asks no list
+    /// (@0x5d164-0x5d199; see
+    /// [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale)).
+    pub(crate) fn outfitter_with(
+        &self,
+        pilot: &Pilot,
+        rolls: &mut DayRolls<OutfitId>,
+        chance: &mut dyn Chance,
+        also: Option<OutfitId>,
+    ) -> Option<Outfitter> {
         if self.site.flags & StellarFlags::OUTFITTER == 0 {
             return None;
         }
@@ -2159,12 +2189,13 @@ impl Shop<'_> {
             let hidden = owned == 0 && hides(record.flags, required, available);
             let sells_anywhere = record.flags & OutfitFlags::SELL_ANYWHERE != 0;
             let listed = (for_sale && !hidden) || (owned > 0 && sells_anywhere);
-            if !listed {
+            if !listed && also != Some(record.id) {
                 continue;
             }
             let price = unit_price(record, self.fields.mass, &self.rules);
             let mass = unit_mass(record, self.fields.mass);
-            let facts = self.facts(&offer, owned, buyable, for_sale || sells_anywhere);
+            let sold_here = !listed || for_sale || sells_anywhere;
+            let facts = self.facts(&offer, owned, buyable, sold_here);
             rows.push((
                 record.disp_weight,
                 OutfitRow {
@@ -3455,6 +3486,58 @@ mod tests {
         let gated = open_gated(&[gated(128, 0, "b7")], refusing, &pilot());
         let facts = &row(&gated, 128).facts;
         assert_eq!((facts.buyable, facts.sold_here), (false, true));
+    }
+
+    // An outfit asked for: the row a relisting sells (see
+    // `RuleKey::RelistedSale`).
+
+    /// The outfitter at [`port`] with the row of `also` asked for, no
+    /// roll drawn yet and none that fires.
+    fn open_with(records: &[OutfitRecord], pilot: &Pilot, also: Option<OutfitId>) -> Outfitter {
+        shop(records, &port())
+            .outfitter_with(pilot, &mut DayRolls::default(), &mut NeverFires, also)
+            .expect("an outfitter")
+    }
+
+    #[test]
+    fn the_first_outfit_is_128_and_the_list_has_512_slots() {
+        assert_eq!(FIRST_OUTFIT, OutfitId(128));
+        assert_eq!(LIST_SLOTS, 512);
+    }
+
+    #[test]
+    fn an_outfit_asked_for_is_in_the_rows_though_not_listed_and_sold_here() {
+        let records = [tech(128, 9), tech(129, 0)];
+        let owner = owning(&[(128, 1)]);
+        let asked = open_with(&records, &owner, Some(FIRST_OUTFIT));
+        let found = row(&asked, 128);
+        assert_eq!(found.owned, 1);
+        assert_eq!((found.facts.buyable, found.facts.sold_here), (false, true));
+        assert_eq!(sell(&asked), Ok(()));
+        let plain = open(&records, &owner);
+        assert_eq!(listed(&plain), [129]);
+        assert_eq!(sell(&plain), Err(OutfitRefusal::NotListed));
+        assert_eq!(open_with(&records, &owner, None), plain);
+    }
+
+    #[test]
+    fn an_outfit_asked_for_that_is_listed_keeps_its_one_row() {
+        let records = [tech(128, 0), tech(129, 9)];
+        let owner = owning(&[(128, 1)]);
+        let asked = open_with(&records, &owner, Some(FIRST_OUTFIT));
+        assert_eq!(asked, open(&records, &owner));
+        assert_eq!(listed(&asked), [128]);
+        let off_sale = open_with(&records, &owner, Some(OutfitId(129)));
+        assert_eq!(listed(&off_sale), [128, 129], "an unlisted one is added");
+    }
+
+    #[test]
+    fn an_outfit_asked_for_with_no_record_adds_no_row() {
+        let records = [tech(129, 0)];
+        let owner = owning(&[(128, 1)]);
+        let asked = open_with(&records, &owner, Some(FIRST_OUTFIT));
+        assert_eq!(asked, open(&records, &owner));
+        assert_eq!(sell(&asked), Err(OutfitRefusal::NotListed));
     }
 
     // Buying.
