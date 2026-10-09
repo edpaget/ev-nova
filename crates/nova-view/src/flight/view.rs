@@ -9735,6 +9735,40 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_with_the_map_open_still_redraws_from_the_events() {
+        let mut view = flight();
+        tap(&mut view, MAP);
+        assert!(view.map_open());
+        view.catalog().systems_read.borrow_mut().clear();
+        run_set(&mut view, "M131");
+        settle_session(&mut view);
+        view.tick(TICK);
+        assert!(view.map_open(), "still open");
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(systems_read(&view), [SystemId(131)]);
+
+        let mut view = FlightView::new(shipbuying());
+        tap(&mut view, MAP);
+        run_set(&mut view, "H129");
+        view.tick(TICK);
+        assert!(view.map_open(), "still open");
+        assert_eq!(sheets(&view), [ShipId(128), ShipId(129)]);
+    }
+
+    #[test]
+    fn a_frame_during_the_streak_still_redraws_the_hull() {
+        let mut view = FlightView::new(shipbuying());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        run_set(&mut view, "H129");
+        view.tick(TICK);
+        assert!(view.jump_effect().is_some(), "still streaking");
+        assert_eq!(view.session().map(Session::system), Ok(SystemId(130)));
+        assert_eq!(sheets(&view), [ShipId(128), ShipId(129)]);
+    }
+
+    #[test]
     fn fighters_abandoned_are_told_only_with_the_layout_of_the_move_settled() {
         let rules = Rulebook::default().with_override(RuleKey::MoveArrival, RuleSource::Bible);
         let mut view = fighters_out().with_rules(rules);
