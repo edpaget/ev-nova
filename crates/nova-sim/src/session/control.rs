@@ -446,6 +446,28 @@ mod tests {
         );
     }
 
+    /// Records whether system 131 is explored each time it sees an
+    /// operator.
+    #[derive(Debug, Default)]
+    struct Explored(RefCell<Vec<bool>>);
+
+    impl SetOpObserver for Explored {
+        fn saw(&self, _op: &SetOp, session: &Session) {
+            self.0
+                .borrow_mut()
+                .push(session.pilot().has_explored(SystemId(131)));
+        }
+    }
+
+    #[test]
+    fn the_set_op_observer_sees_the_session_before_the_operator_applies() {
+        let explored = Rc::new(Explored::default());
+        let mut session = session().with_set_op_observer(explored.clone());
+        session.run_set(&set("X131"), &mut Scripted::default());
+        assert_eq!(*explored.0.borrow(), [false], "seen before X applied");
+        assert!(session.pilot().has_explored(SystemId(131)), "then applied");
+    }
+
     #[test]
     fn an_unhandled_operator_is_noted_once_and_the_next_still_applies() {
         let mut session = session();
