@@ -629,7 +629,7 @@ mod tests {
 
     /// `session` with the story events raised so far let go of.
     fn quiet(mut session: Session) -> Session {
-        session.settle_story();
+        session.drop_raised();
         session
     }
 

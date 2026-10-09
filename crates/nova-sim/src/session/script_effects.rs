@@ -43,12 +43,15 @@
 //! due. In flight a move gives up a jump being prepared.
 //!
 //! [`Session::run_set`] stays catalog-free, so a script it runs in the
-//! middle of something else (a record's hook) always queues. The story
-//! runtime nests where a catalog is in hand. Its dispatcher entry point
-//! settles and dispatches after each operator, for the scripts it runs
-//! and for those run at a safe point. The events a deferred script's
-//! moves raise dispatch, nested, from the caller's next `settle_script`
-//! (see the [`story`](crate::story) module's "Dispatch").
+//! middle of something else (a record's hook) always queues.
+//! [`Session::settle_script`] is the story dispatcher's one dispatch
+//! point: it applies the moves, dispatches the story events raised, then
+//! applies a `Q`'s leave, until nothing is left. The scripts the
+//! dispatcher runs nest, by [`RuleKey::StoryReentry`]'s engine reading:
+//! after each operator, their moves settle and the events raised
+//! dispatch before the next operator. The events a deferred script's
+//! moves raise dispatch from the caller's next `settle_script` (see the
+//! [`story`](crate::story) module's "Dispatch").
 //!
 //! A move enters the system as every way in does, by its rows of the
 //! table in the `entry` module ([`Session::enter_system`]): `move_to`
@@ -237,17 +240,18 @@ impl Session {
     /// Applies what the set expressions run since the last settling
     /// queued (see the module docs): the moves in order, each read from
     /// `catalog`, populating on `chance` where the rules say, then a `Q`'s
-    /// leave. Whoever runs set expressions calls it after each input and
-    /// tick, before saving.
+    /// leave. Before the leave, and after the moves and the leave, the
+    /// story events raised dispatch, each running the subscriptions it
+    /// matches (see the [`story`](crate::story) module's "Dispatch").
+    /// Whoever runs set expressions calls it after each input and tick,
+    /// before saving.
     pub fn settle_script(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Settled {
         let mut settled = Settled::default();
-        self.settle_moves(catalog, chance, &mut settled);
-        self.settle_leave(chance, &mut settled);
-        self.settle_story();
+        self.settle_story(catalog, &mut &mut *chance, &mut settled);
         settled
     }
 

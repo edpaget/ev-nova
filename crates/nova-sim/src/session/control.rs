@@ -25,7 +25,15 @@
 //! and the sound `P` (see the `script_effects` module). Any change to the pilot makes
 //! a save due. An operator nothing handles is skipped, and its kind told
 //! once a session as a [`ScriptNote`] ([`Session::take_script_notes`]);
-//! which kinds were told is never saved. The operators still unhandled
+//! which kinds were told is never saved.
+//!
+//! **The nested runner.** The story dispatcher runs its subscriptions'
+//! scripts through the same runner, `Session::run_ops`, which calls it
+//! back after each operator handed to `apply_op`, that operator applied:
+//! where it settles the moves and dispatches the events raised before the
+//! next operator (see the [`story`](crate::story) module's "Dispatch").
+//! A script run inside another is one more run like it: an unhandled
+//! kind is told the first time it is met, outer or nested. The operators still unhandled
 //! are those of the missions (`A`, `F`, `S`), ranks (`K`, `L`) and
 //! stellars (`Y`, `U`), whose arms other work adds.
 //!
@@ -33,6 +41,8 @@
 //! an outfit's `OnPurchase` and `OnSell`, a ship's `OnPurchase`,
 //! `OnCapture` and `OnRetire`) run through [`Session::run_set`] where
 //! the original runs them: see the `hooks` module.
+
+use std::collections::BTreeSet;
 
 use super::Session;
 use super::script_effects::ScriptMove;
@@ -196,22 +206,38 @@ impl Session {
     /// Runs `expr` on the session (see the module docs), drawing `R(...)`
     /// on `chance`.
     pub fn run_set(&mut self, expr: &SetExpr, chance: &mut (impl Chance + ?Sized)) {
+        self.run_ops(expr, &mut &mut *chance, &mut |_, _| {});
+    }
+
+    /// Runs `expr` as [`Session::run_set`] does, calling `between` after
+    /// each operator handed to `apply_op`, with that operator applied:
+    /// where the story dispatcher nests. A script run inside `between`
+    /// runs as any other: each unhandled kind is noted the first time it
+    /// is met, here or nested, so none is noted twice or lost.
+    pub(super) fn run_ops(
+        &mut self,
+        expr: &SetExpr,
+        chance: &mut dyn Chance,
+        between: &mut dyn FnMut(&mut Session, &mut dyn Chance),
+    ) {
         let observer = self.op_observer.clone();
         let before = self.pilot.clone();
-        let mut told = std::mem::take(&mut self.unhandled_ops);
         let mut apply = |op: &SetOp, session: &mut Session, chance: &mut dyn Chance| {
             if let Some(observer) = &observer {
                 observer.0.saw(op, session);
             }
-            session.apply_op(op, chance)
+            if let Err(kind) = session.apply_op(op, chance)
+                && session.unhandled_ops.insert(kind)
+            {
+                session.script_notes.push(ScriptNote::Unhandled(kind));
+            }
+            between(session, chance);
+            Ok(())
         };
-        let unhandled = execute(expr, self, &mut apply, &mut &mut *chance, &mut told);
-        self.unhandled_ops = told;
+        execute(expr, self, &mut apply, chance, &mut BTreeSet::new());
         if self.pilot != before {
             self.save_due = true;
         }
-        self.script_notes
-            .extend(unhandled.into_iter().map(ScriptNote::Unhandled));
     }
 
     /// What running set expressions had to tell since this was last taken,
@@ -484,6 +510,61 @@ mod tests {
         assert_eq!(
             session.take_script_notes(),
             [ScriptNote::Unhandled(SetOpKind::ActivateRank)]
+        );
+    }
+
+    #[test]
+    fn an_unhandled_kind_met_in_a_nested_script_too_is_noted_once() {
+        let mut session = session();
+        let mut nested = false;
+        session.run_ops(
+            &set("S300 K128 F130 b4"),
+            &mut Scripted::default(),
+            &mut |session, chance| {
+                if !std::mem::replace(&mut nested, true) {
+                    session.run_ops(&set("S301 A130 b5"), chance, &mut |_, _| {});
+                }
+            },
+        );
+        assert!(session.control_bit(bit(4)));
+        assert!(session.control_bit(bit(5)), "nested");
+        assert_eq!(
+            session.take_script_notes(),
+            [
+                ScriptNote::Unhandled(SetOpKind::StartMission),
+                ScriptNote::Unhandled(SetOpKind::AbortMission),
+                ScriptNote::Unhandled(SetOpKind::ActivateRank),
+                ScriptNote::Unhandled(SetOpKind::FailMission),
+            ],
+            "each once, in the order met"
+        );
+        session.run_set(&set("A131 S302 K129 F131"), &mut Scripted::default());
+        assert_eq!(session.take_script_notes(), [], "told already");
+    }
+
+    #[test]
+    fn between_runs_after_each_operator_handed_on_with_its_effect_applied() {
+        let mut session = session();
+        let mut seen = Vec::new();
+        session.run_ops(
+            &set("b1 X131 S300 b2 X132"),
+            &mut Scripted::default(),
+            &mut |session, _| {
+                seen.push((
+                    session.pilot().has_explored(SystemId(131)),
+                    session.pilot().has_explored(SystemId(132)),
+                    session.control_bit(bit(2)),
+                ));
+            },
+        );
+        assert_eq!(
+            seen,
+            [
+                (true, false, false),
+                (true, false, false),
+                (true, true, true)
+            ],
+            "after X131, S300 and X132; never after a bit write"
         );
     }
 

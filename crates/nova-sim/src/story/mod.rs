@@ -8,8 +8,9 @@
 //! [`StoryEvent`]s, the [`EventFilter`] and [`Subscription`] a consumer
 //! registers, each named by its stable [`SubscriptionId`], and the
 //! dispatch-order rule, [`dispatch_order`]. The sources raise the events
-//! (see "Story events"); nothing runs a subscription yet. Each section
-//! names the phase that builds or fills it:
+//! (see "Story events"), and the dispatcher (`dispatch`) runs the
+//! subscriptions they match as the session settles (see "Dispatch"). Each
+//! section names the phase that builds or fills it:
 //!
 //! - story events and dispatch: story-runtime phase 3;
 //! - the daily step: story-runtime phase 2;
@@ -20,7 +21,8 @@
 //!
 //! Where the original cannot settle a question, or the design does not
 //! follow it, the section names the [`Rulebook`](crate::Rulebook) key the
-//! building phase adds and its readings. Phase 2 adds `stay_days`.
+//! building phase adds and its readings. Phase 2 adds `stay_days`, phase 3
+//! `story_reentry`.
 //!
 //! # Findings
 //!
@@ -296,7 +298,8 @@
 //! original explores their system's nebulae (@0x19118, @0x765bc).
 //!
 //! The events wait on the session, in the order raised, for its next
-//! [`Session::settle_script`](crate::Session::settle_script).
+//! [`Session::settle_script`](crate::Session::settle_script), which
+//! dispatches them (see "Dispatch").
 //!
 //! A new trigger kind adds an event variant and its one source, plus
 //! subscriptions; never a loop of its own. The plug-in time-in-system and
@@ -322,19 +325,33 @@
 //! - its stable [`SubscriptionId`]: consumer, record and hook. The record
 //!   is the consumer's number for what it subscribes for: a resource ID,
 //!   or for missions and their ships the active mission's slot, which is
-//!   saved with it. The id keys the once-fired record that phase 3 saves
-//!   on `Pilot`, so it never depends on registration order. Ids are
-//!   unique: phase 3's registry refuses a second.
+//!   saved with it. The id keys the once-fired record saved on `Pilot`
+//!   (save version 16), so it never depends on registration order. Ids
+//!   are unique: the registry refuses a second
+//!   ([`DuplicateSubscription`]).
 //!
-//! **Registering and unregistering.** A mission's subscriptions, and its
-//! ships', are registered when it becomes active, keyed by its slot. When
-//! it ends (success, failure, `A` or an auto-abort), they are unregistered
-//! and their once-fired entries cleared, so a mission accepted into the
-//! reused slot starts fresh. A dispatch takes a snapshot of the matching
-//! ids, in [`dispatch_order`]'s order. Just before running each one, it
-//! checks the id is still registered. A subscription removed by an earlier
-//! script in the same dispatch is skipped. One added during the dispatch
-//! waits for the next event.
+//! **Registering and unregistering.** A consumer registers through
+//! [`Session::register_story`](crate::Session::register_story) and
+//! unregisters through
+//! [`Session::unregister_story`](crate::Session::unregister_story), which
+//! clears the once-fired entry too. The stock consumers will register at
+//! [`Session::fly`](crate::Session::fly) from their catalog data; none
+//! does yet. A mission's subscriptions, and its ships', are registered
+//! when it becomes active, keyed by its slot. When it ends (success,
+//! failure, `A` or an auto-abort), they are unregistered and their
+//! once-fired entries cleared, so a mission accepted into the reused slot
+//! starts fresh.
+//!
+//! **One dispatch.** A dispatch takes a snapshot of the matching ids, in
+//! [`dispatch_order`]'s order; an event no subscription matches costs
+//! nothing. For each id in turn, just before it runs, the dispatcher
+//! skips it when it is no longer registered (a subscription removed by an
+//! earlier one in the same dispatch), when it is once-only and has fired,
+//! or when its guard does not hold now (an earlier script can open or
+//! close it). Otherwise a once-only subscription is marked fired first,
+//! so an event raised again inside its own run cannot run it twice; then
+//! its consumer's effect runs, then its script. One registered during the
+//! dispatch waits for the next event.
 //!
 //! **Order.** [`dispatch_order`] runs an event's subscriptions by id:
 //! consumer, then record, then hook. The consumers' order is
@@ -351,11 +368,12 @@
 //! counts, so the two differ only when a success script changes another
 //! mission's ships.
 //!
-//! **Re-entrancy (decided).** Phase 3 adds the Rulebook key
-//! `story_reentry`, with two readings. Its default is the original's:
-//! **nested**. An event a script's operator raises is dispatched depth
-//! first, inside the script run, before the script's next operator, as
-//! `_EvalSetExp` (@0x150fc) does (see "Scripts that raise events"):
+//! **Re-entrancy.** The Rulebook key
+//! [`story_reentry`](crate::RuleKey::StoryReentry) has two readings. Its
+//! default is the original's: **nested**. An event a script's operator
+//! raises is dispatched depth first, inside the script run, before the
+//! script's next operator, as `_EvalSetExp` (@0x150fc) does (see "Scripts
+//! that raise events"):
 //!
 //! - `S` accepts the mission and runs its `OnAccept` before the next
 //!   operator (`_DoMissionAccept` @0x15407, `OnAccept` @0xa1da2), with an
@@ -366,18 +384,23 @@
 //!   the enter-system subscriptions there (@0x159a3, @0x159a8).
 //!
 //! **Where it nests.** [`Session::run_set`](crate::Session::run_set)
-//! stays catalog-free: `apply_op` only queues a move or a `Q`, and
-//! [`Session::settle_script`](crate::Session::settle_script) applies
-//! them, since a script has no catalog to read the new system from (see
-//! `script_effects`). Nesting goes through a separate dispatcher entry
-//! point that has the catalog, which phase 3 builds. It runs the scripts
-//! the story dispatcher runs, and the scripts of callers already at a
-//! safe point: `settle_script`, the landing, the take-off and the
-//! arrival. After each operator that raised or queued something, it
-//! settles the queue there (the moves, and the `EnteredSystem` an
-//! `enter_system` they cause raises), dispatches the events raised, depth
-//! first, and only then runs the next operator. So wherever a catalog is
-//! in hand, the original's nesting in the middle of a script is matched.
+//! stays catalog-free: `apply_op` only queues a move or a `Q`, since a
+//! script has no catalog to read the new system from (see
+//! `script_effects`). The one place that dispatches is
+//! [`Session::settle_script`](crate::Session::settle_script), which holds
+//! the catalog and which the program calls after every input and tick.
+//! The landing, the take-off, the daily step, combat and boarding have no
+//! catalog, so the events they raise wait there. It settles in a loop:
+//! the moves queued (and the `EnteredSystem` an `enter_system` they cause
+//! raises), then the next event raised, first in, first out, dispatched,
+//! and once none is left a `Q`'s leave, whose events dispatch in the same
+//! settling. The subscriptions' scripts run through the dispatcher's
+//! runner, which, after each operator handed to `apply_op`, settles the
+//! moves it queued, dispatches the events raised, depth first, and only
+//! then runs the next operator. So for the scripts the dispatcher runs,
+//! the original's nesting in the middle of a script is matched. A `Q`
+//! only sets the message (@0x15bee), as the original's does, so it is
+//! never settled in the middle of a script.
 //!
 //! A script run through `run_set` in the middle of something else defers
 //! instead. Those are the record hooks
@@ -394,15 +417,15 @@
 //!   [`Session::assign`](crate::Session::assign).
 //!
 //! `C`, `E` and `H` change ships and run no hook. The deferred effects
-//! queue as today. At the caller's next safe point, its `settle_script`,
-//! they settle, and the events they raise dispatch, nested from there.
-//! So under the default, nesting means depth first from the nearest safe
+//! queue. At the caller's next safe point, its `settle_script`, they
+//! settle, and the events they raise dispatch, nested from there. So
+//! under the default, nesting means depth first from the nearest safe
 //! point.
 //!
-//! The other reading is **queued**, today's after-settle order. An event
-//! raised by a script waits until the current dispatch has finished and
-//! the script has settled, then dispatches in the order raised, first in,
-//! first out; never in the middle of a script:
+//! The other reading is **queued**, the port's earlier after-settle
+//! order. An event raised by a script waits until the current dispatch
+//! has finished and the script has settled, then dispatches in the order
+//! raised, first in, first out; never in the middle of a script:
 //!
 //! 1. a dispatch runs its subscriptions' scripts, in order;
 //! 2. `settle_script` applies the queued moves, and an `enter_system` they
@@ -411,9 +434,11 @@
 //! 4. and so on until none is pending.
 //!
 //! Under either reading at most 64 events are dispatched from one
-//! settling (nested: one outermost script run), a guard against scripts
-//! that raise each other for ever; phase 3 drops the rest and tells the
-//! session's diagnostics. Phase 3 tests both readings.
+//! settling, nested runs included, a guard against scripts that raise
+//! each other for ever. Only an event some subscription matches counts.
+//! The rest are dropped, and the settling tells how many as one
+//! [`ScriptNote::EventsDropped`](crate::ScriptNote::EventsDropped). The
+//! next settling starts a fresh count.
 //!
 //! A consumer's own effects, which are not set expressions (a mission's
 //! pay, legal record and `DatePostInc` days, a ship goal's count), are
@@ -620,6 +645,9 @@
 //!   the stellar.
 
 pub(crate) mod day;
+pub(crate) mod dispatch;
+
+pub use dispatch::DuplicateSubscription;
 
 use crate::catalog::{StellarId, SystemId};
 use crate::control::{Script, Test};

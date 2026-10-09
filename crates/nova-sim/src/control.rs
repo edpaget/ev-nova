@@ -171,6 +171,13 @@ pub enum ScriptNote {
     /// An operator of this kind was skipped: nothing handles it yet. Each
     /// kind is told once a session.
     Unhandled(SetOpKind),
+    /// One settling raised more story events than it dispatches (see the
+    /// [`story`](crate::story) module's "Dispatch"): this many were
+    /// dropped.
+    EventsDropped {
+        /// The events dropped.
+        dropped: u32,
+    },
 }
 
 /// Whether one operand holds for `pilot`.

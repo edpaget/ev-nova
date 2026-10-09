@@ -6,21 +6,113 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use super::Session;
+use super::script_effects::Settled;
+use super::{ScriptNote, Session};
+use crate::catalog::{PilotCatalog, TrafficCatalog};
 use crate::chance::Chance;
+use crate::control::{Script, Test};
 use crate::market;
+use crate::rulebook::RuleKey;
 use crate::story::day::{self, Day, Participant};
+use crate::story::dispatch::{self, DuplicateSubscription, Reentry, Registry, Stage};
+use crate::story::{Consumer, Subscription, SubscriptionId};
 use crate::story::{Fate, StoryEvent};
 use crate::traffic::npc::NpcId;
 
-/// The session's story runtime: the events raised and not yet settled,
-/// and the ships watched for their first sighting. None of it is saved.
+/// The session's story runtime: the subscriptions registered, the events
+/// raised and not yet settled, and the ships watched for their first
+/// sighting. None of it is saved: the consumers register again as a pilot
+/// is flown, and what has fired once is the pilot's.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct StoryRuntime {
+    /// The subscriptions registered.
+    registry: Registry,
     /// The events raised since the last settling, in the order raised.
     raised: VecDeque<StoryEvent>,
     /// The NPCs whose first sighting raises [`Fate::Observed`].
     pub(super) watched: BTreeSet<NpcId>,
+}
+
+/// The session settling, with the catalog and the chance it settles with
+/// and what it has settled: the story dispatcher's [`Stage`].
+struct SessionStage<'a, C: ?Sized> {
+    session: &'a mut Session,
+    catalog: &'a C,
+    chance: &'a mut dyn Chance,
+    settled: &'a mut Settled,
+}
+
+impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
+    fn matching(&self, event: &StoryEvent) -> Vec<SubscriptionId> {
+        self.session.story.registry.matching(event)
+    }
+
+    fn subscription(&self, id: SubscriptionId) -> Option<Subscription> {
+        self.session.story.registry.get(id).cloned()
+    }
+
+    fn fired(&self, id: SubscriptionId) -> bool {
+        self.session.pilot.story_fired.contains(&id)
+    }
+
+    fn mark_fired(&mut self, id: SubscriptionId) {
+        self.session.pilot.story_fired.insert(id);
+        self.session.save_due = true;
+    }
+
+    fn holds(&self, guard: &Test) -> bool {
+        self.session.gate().allows(guard)
+    }
+
+    /// The one match on the consumer that routes its own effects, which
+    /// are not set expressions (see the `story` module's "Dispatch").
+    fn effect(&mut self, id: SubscriptionId, _event: &StoryEvent) {
+        match id.consumer {
+            // Each consumer's arm is filled by its own phase: mission
+            // ships' goal counts by mission-ships phase 2, a mission's pay,
+            // legal record and days by missions phase 2, and the crons',
+            // nebulae's and plug-ins' by theirs. A fixture has none.
+            Consumer::MissionShips
+            | Consumer::Missions
+            | Consumer::Crons
+            | Consumer::Nebulae
+            | Consumer::Plugins
+            | Consumer::Fixture => {}
+        }
+    }
+
+    fn run(&mut self, script: &Script, between: &mut dyn FnMut(&mut dyn Stage)) {
+        let Some(expr) = script.tree() else {
+            return;
+        };
+        let SessionStage {
+            session,
+            catalog,
+            chance,
+            settled,
+        } = self;
+        session.run_ops(expr, &mut **chance, &mut |session, chance| {
+            between(&mut SessionStage {
+                session,
+                catalog: *catalog,
+                chance,
+                settled,
+            });
+        });
+    }
+
+    fn settle_moves(&mut self) {
+        self.session
+            .settle_moves(self.catalog, &mut *self.chance, self.settled);
+    }
+
+    fn settle_leave(&mut self) -> bool {
+        self.session.settle_leave(&mut *self.chance, self.settled)
+    }
+
+    fn take_raised(&mut self) -> VecDeque<StoryEvent> {
+        std::mem::take(&mut self.session.story.raised)
+    }
 }
 
 /// One day of the session, its draws on `chance`.
@@ -108,10 +200,64 @@ impl Session {
         }
     }
 
-    /// Lets go of the events raised: the settling until the dispatcher
-    /// takes them.
-    pub(super) fn settle_story(&mut self) {
+    /// Lets go of the events raised, undispatched: a test's clean slate.
+    #[cfg(test)]
+    pub(super) fn drop_raised(&mut self) {
         self.story.raised.clear();
+    }
+
+    /// Registers `subscription`, which runs from the next event it matches
+    /// (see the `story` module's "Dispatch").
+    ///
+    /// # Errors
+    ///
+    /// [`DuplicateSubscription`] when one is registered under its id
+    /// already, which is kept.
+    pub fn register_story(
+        &mut self,
+        subscription: Subscription,
+    ) -> Result<(), DuplicateSubscription> {
+        self.story.registry.register(subscription)
+    }
+
+    /// Unregisters the subscription `id`, and clears its once-fired entry,
+    /// so one registered under the same id again starts fresh: whether one
+    /// was registered. Clearing a fired entry makes a save due.
+    pub fn unregister_story(&mut self, id: SubscriptionId) -> bool {
+        if self.pilot.story_fired.remove(&id) {
+            self.save_due = true;
+        }
+        self.story.registry.unregister(id).is_some()
+    }
+
+    /// Settles what the set expressions left and the events raised,
+    /// through the story dispatcher, as [`RuleKey::StoryReentry`] reads:
+    /// the moves, each read from `catalog`, then the events, each
+    /// dispatched in turn, then a `Q`'s leave, noted on `settled`, and so
+    /// on until nothing is left. Events dropped past the limit are told
+    /// once, as [`ScriptNote::EventsDropped`].
+    pub(super) fn settle_story<C>(
+        &mut self,
+        catalog: &C,
+        chance: &mut dyn Chance,
+        settled: &mut Settled,
+    ) where
+        C: PilotCatalog + TrafficCatalog + ?Sized,
+    {
+        let reentry = Reentry::from(self.rules.source_for(RuleKey::StoryReentry));
+        let dropped = dispatch::settle(
+            &mut SessionStage {
+                session: self,
+                catalog,
+                chance,
+                settled,
+            },
+            reentry,
+        );
+        if dropped > 0 {
+            self.script_notes
+                .push(ScriptNote::EventsDropped { dropped });
+        }
     }
 
     /// The events raised and not yet settled, in order.
@@ -140,13 +286,16 @@ mod tests {
     use super::*;
     use crate::catalog::{DisasterId, OutfitId, ShipId, StellarId, SystemId};
     use crate::chance::NeverFires;
-    use crate::control::SetExpr;
+    use crate::control::{Script, ScriptNote, SetExpr, Test};
     use crate::date::GameDate;
     use crate::market::ActiveEvent;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::Settled;
     use crate::session::tests::{NEW, buy, outfitted, sell, shipbuying, surplus};
-    use crate::story::{Entrance, StoryEvent};
+    use crate::story::{
+        Consumer, DuplicateSubscription, Entrance, EventFilter, StoryEvent, StoryEventKind,
+        Subscription, SubscriptionId,
+    };
     use crate::testkit::{self, FakePilotCatalog, Scripted, jump, land_now};
 
     const SPEED: OutfitId = OutfitId(300);
@@ -608,5 +757,257 @@ mod tests {
         expected.extend(days_after(left, 1));
         expected.push(entered(131, Entrance::Jump));
         assert_eq!(session.story_raised(), expected);
+    }
+
+    // The dispatch, through fixture subscriptions.
+
+    fn fixture(record: i16) -> SubscriptionId {
+        SubscriptionId {
+            consumer: Consumer::Fixture,
+            record,
+            hook: 0,
+        }
+    }
+
+    /// `record`'s fixture subscription to `on`, running `script` behind
+    /// `guard`.
+    fn sub(record: i16, on: EventFilter, guard: &str, script: &str) -> Subscription {
+        Subscription {
+            guard: Test::parse(guard),
+            ..Subscription::new(fixture(record), on, Script::parse(script))
+        }
+    }
+
+    fn register(session: &mut Session, subs: impl IntoIterator<Item = Subscription>) {
+        for sub in subs {
+            session.register_story(sub).expect("registers");
+        }
+    }
+
+    fn bits(session: &Session) -> Vec<u16> {
+        session
+            .pilot()
+            .bits
+            .iter()
+            .map(crate::control::Bit::get)
+            .collect()
+    }
+
+    /// Lands `session` and settles it.
+    fn land_and_settle(session: &mut Session, catalog: &FakePilotCatalog) {
+        land_now(session).expect("lands");
+        let _ = session.settle_script(catalog, &mut NeverFires);
+    }
+
+    const ANY_LANDING: EventFilter = EventFilter::Any(StoryEventKind::Landed);
+
+    #[test]
+    fn a_subscription_runs_its_script_when_its_event_fires_and_its_guard_holds() {
+        let catalog = testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        register(
+            &mut session,
+            [
+                sub(1, EventFilter::Landed(StellarId(128)), "b9", "b4"),
+                sub(2, EventFilter::Landed(StellarId(129)), "", "b5"),
+            ],
+        );
+        land_and_settle(&mut session, &catalog);
+        assert_eq!(bits(&session), [0_u16; 0], "b9 clear");
+        session.take_off(&mut NeverFires).expect("takes off");
+        session.set_control_bit(crate::control::Bit::new(9).expect("a bit"), true);
+        land_and_settle(&mut session, &catalog);
+        assert_eq!(
+            bits(&session),
+            [4, 9],
+            "b9 set, and not the other stellar's"
+        );
+    }
+
+    #[test]
+    fn registering_an_id_twice_is_refused() {
+        let catalog = testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session
+            .register_story(sub(1, ANY_LANDING, "", "b1"))
+            .expect("registers");
+        assert_eq!(
+            session.register_story(sub(1, ANY_LANDING, "", "b2")),
+            Err(DuplicateSubscription(fixture(1)))
+        );
+        land_and_settle(&mut session, &catalog);
+        assert_eq!(bits(&session), [1], "the first kept");
+    }
+
+    #[test]
+    fn a_once_subscription_fires_once_and_stays_fired_across_a_save_and_reload() {
+        let catalog = testkit::catalog();
+        let subs = || {
+            [
+                Subscription {
+                    once: true,
+                    ..sub(1, ANY_LANDING, "", "^b5")
+                },
+                sub(2, ANY_LANDING, "", "^b6"),
+            ]
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        register(&mut session, subs());
+        land_and_settle(&mut session, &catalog);
+        session.take_off(&mut NeverFires).expect("takes off");
+        land_and_settle(&mut session, &catalog);
+        assert_eq!(bits(&session), [5], "once, and twice toggled");
+        assert!(session.take_save_due());
+
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
+        let mut session = Session::fly(&catalog, saved).expect("flies");
+        register(&mut session, subs());
+        session.take_off(&mut NeverFires).expect("takes off");
+        land_and_settle(&mut session, &catalog);
+        assert_eq!(bits(&session), [5, 6], "still fired after the reload");
+
+        assert!(session.unregister_story(fixture(1)));
+        assert!(!session.unregister_story(fixture(1)), "gone");
+        assert!(session.take_save_due(), "its once-fired entry cleared");
+        session.take_off(&mut NeverFires).expect("takes off");
+        land_and_settle(&mut session, &catalog);
+        assert_eq!(bits(&session), [5], "unregistered, it runs no more");
+        register(&mut session, [subs()[0].clone()]);
+        session.take_off(&mut NeverFires).expect("takes off");
+        land_and_settle(&mut session, &catalog);
+        assert_eq!(bits(&session), [6], "registered afresh, it runs again");
+    }
+
+    #[test]
+    fn unregistering_an_unfired_subscription_makes_no_save_due() {
+        let catalog = testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        register(&mut session, [sub(1, ANY_LANDING, "", "b1")]);
+        session.take_save_due();
+        assert!(session.unregister_story(fixture(1)));
+        assert!(!session.take_save_due());
+    }
+
+    /// A on landing: `b1 M131 b2`; B on entering 131, while `b1 & !b2`:
+    /// `b3`; C on landing, after A, while `!b3`: `b4`; under `reading` of
+    /// `StoryReentry`.
+    fn reentrant(catalog: &FakePilotCatalog, reading: Option<RuleSource>) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        if let Some(reading) = reading {
+            session = session
+                .with_rules(Rulebook::default().with_override(RuleKey::StoryReentry, reading));
+        }
+        register(
+            &mut session,
+            [
+                sub(1, ANY_LANDING, "", "b1 M131 b2"),
+                sub(
+                    2,
+                    EventFilter::EnteredSystem(SystemId(131)),
+                    "b1 & !b2",
+                    "b3",
+                ),
+                sub(3, ANY_LANDING, "!b3", "b4"),
+            ],
+        );
+        session
+    }
+
+    #[test]
+    fn by_the_engine_an_event_a_script_raises_runs_before_the_scripts_next_operator() {
+        let catalog = testkit::catalog();
+        for reading in [None, Some(RuleSource::Engine)] {
+            let mut session = reentrant(&catalog, reading);
+            land_and_settle(&mut session, &catalog);
+            assert_eq!(bits(&session), [1, 2, 3], "{reading:?}");
+            assert_eq!(session.system(), SystemId(131));
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_an_event_a_script_raises_waits_for_the_script() {
+        let catalog = testkit::catalog();
+        let mut session = reentrant(&catalog, Some(RuleSource::Bible));
+        land_and_settle(&mut session, &catalog);
+        assert_eq!(bits(&session), [1, 2, 4]);
+        assert_eq!(session.system(), SystemId(131));
+    }
+
+    /// Counts the `M` operators handed on.
+    #[derive(Debug, Default)]
+    struct Moves(std::cell::Cell<usize>);
+
+    impl crate::session::control::SetOpObserver for Moves {
+        fn saw(&self, op: &crate::control::SetOp, _session: &Session) {
+            if matches!(op, crate::control::SetOp::MoveTo(_)) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn a_settling_dispatches_at_most_64_events_and_tells_the_rest_dropped() {
+        let catalog = testkit::catalog();
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let moves = std::rc::Rc::new(Moves::default());
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::StoryReentry, reading))
+                .with_set_op_observer(moves.clone());
+            register(
+                &mut session,
+                [sub(
+                    1,
+                    EventFilter::Any(StoryEventKind::EnteredSystem),
+                    "",
+                    "M131",
+                )],
+            );
+            let m131 = SetExpr::parse("M131").expect("parses");
+            for round in 0..2 {
+                session.run_set(&m131, &mut NeverFires);
+                let settled = session.settle_script(&catalog, &mut NeverFires);
+                assert_eq!(settled.moved, Some(SystemId(131)), "{reading:?} {round}");
+                assert_eq!(moves.0.take(), 65, "{reading:?} {round}");
+                assert_eq!(
+                    session.take_script_notes(),
+                    [ScriptNote::EventsDropped { dropped: 1 }],
+                    "{reading:?} {round}: a fresh budget each settling"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_hooks_move_dispatches_its_events_at_the_next_settling() {
+        let catalog = testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        register(
+            &mut session,
+            [sub(1, EventFilter::EnteredSystem(SystemId(131)), "", "b3")],
+        );
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        assert_eq!(bits(&session), [0_u16; 0], "deferred");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(bits(&session), [3]);
+    }
+
+    #[test]
+    fn with_nothing_registered_a_settling_is_as_before_and_tells_nothing() {
+        let catalog = testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        session.raise(TOOK_OFF_128);
+        assert_eq!(
+            session.settle_script(&catalog, &mut NeverFires),
+            Settled {
+                moved: Some(SystemId(131)),
+                took_off: None,
+                message: None,
+            }
+        );
+        assert_eq!(session.take_script_notes(), []);
+        assert_eq!(session.story_raised(), []);
     }
 }

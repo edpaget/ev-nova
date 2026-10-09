@@ -7376,7 +7376,7 @@ mod tests {
     #[test]
     fn buying_a_map_raises_explored_for_each_system_it_reaches() {
         let mut session = outfitted(&limiting());
-        session.settle_story();
+        session.drop_raised();
         session.outfit(buy(MAP), &mut NeverFires).expect("bought");
         assert_eq!(
             session.story_raised(),
@@ -11531,7 +11531,7 @@ mod tests {
         }];
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        session.settle_story();
+        session.drop_raised();
         session.target = None;
         assert!(board_by(&mut session, &NovaLaw::default()).is_err());
         assert_eq!(session.story_raised(), [], "no target");
@@ -11552,7 +11552,7 @@ mod tests {
             ..NovaBoarding::default()
         };
         let mut session = alongside(&catalog);
-        session.settle_story();
+        session.drop_raised();
         assert_eq!(
             session.board(&NovaLaw::default(), &bible, &mut Draws::of(&[])),
             Ok(Boarding::Repelled)

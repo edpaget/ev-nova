@@ -27,6 +27,7 @@
 //! | [`HireRequire`](RuleKey::HireRequire) | `hire_require` | hiring ignores a ship's `Require`, which hides it only with `Flags3` 0x0200 ([`Session`](crate::Session)) | an unmet `Require` makes a listed ship greyed and refused\* |
 //! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage ([`Session`](crate::Session)) | wages are paid only for a jump's days; the days a stay passes pay none\* |
 //! | [`StayDays`](RuleKey::StayDays) | `stay_days` | leaving the spaceport passes days: half as many as escorts sold or upgraded, a day if an outfit was bought or sold, four if a ship was bought, and the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa, @0x6020e, `_PlayerLandOnStellar` @0x63440; [`Session`](crate::Session)) | a stay passes no days: only a jump's and a gate's like a jump pass‡‡‡‡ |
+//! | [`StoryReentry`](RuleKey::StoryReentry) | `story_reentry` | an event a script raises is dispatched depth first, before the script's next operator (`_EvalSetExp` @0x150fc; `_DoMissionAccept` @0x15407; @0x159a3, @0x159a8; see [`story`](crate::story)) | it waits until the script has settled, then dispatches first in, first out§§§§ |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear ([`NovaPersons`](crate::NovaPersons)) | 5 %, one of those who may appear picked evenly |
@@ -159,6 +160,11 @@
 //! ‡‡‡‡ The Bible says nothing of days passing in port. The other reading
 //! is the port's earlier behaviour, no days passing, not anything the
 //! Bible says.
+//!
+//! §§§§ The Bible says nothing of when the events a script raises are
+//! handled. The other reading is the port's earlier after-settle order,
+//! a script's moves applied once it has settled, not anything the Bible
+//! says.
 //!
 //! # Adding a rule
 //!
@@ -333,6 +339,19 @@ rule_keys! {
     /// reading is the port's earlier behaviour, not anything the Bible
     /// says (see [`Session::take_off`](crate::Session::take_off)).
     StayDays => "stay_days",
+    /// When an event a script raises is dispatched (see the
+    /// [`story`](crate::story) module's "Dispatch"): by the engine, depth
+    /// first, before the script's next operator, as `_EvalSetExp`
+    /// (@0x150fc) handles `S` (`_DoMissionAccept` @0x15407) and an `M` or
+    /// `N` in flight (@0x159a3, @0x159a8) before going on; the moves a
+    /// script queues are applied there too. Otherwise the events wait
+    /// until the script has settled
+    /// ([`Session::settle_script`](crate::Session::settle_script)), then
+    /// dispatch first in, first out. Either way at most 64 events are
+    /// dispatched from one settling. The Bible says nothing of it, so the
+    /// other reading is the port's earlier after-settle order, not
+    /// anything the Bible says.
+    StoryReentry => "story_reentry",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -1013,6 +1032,7 @@ mod tests {
                 RuleKey::HireRequire,
                 RuleKey::TakeOffPay,
                 RuleKey::StayDays,
+                RuleKey::StoryReentry,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,
@@ -1074,6 +1094,11 @@ mod tests {
         assert_eq!(RuleKey::TakeOffPay.key(), "take_off_pay");
         assert_eq!(RuleKey::StayDays.key(), "stay_days");
         assert_eq!(RuleKey::from_key("stay_days"), Some(RuleKey::StayDays));
+        assert_eq!(RuleKey::StoryReentry.key(), "story_reentry");
+        assert_eq!(
+            RuleKey::from_key("story_reentry"),
+            Some(RuleKey::StoryReentry)
+        );
         assert_eq!(RuleKey::HireFee.key(), "hire_fee");
         assert_eq!(RuleKey::EscortWage.key(), "escort_wage");
         assert_eq!(RuleKey::FighterLaunch.key(), "fighter_launch");

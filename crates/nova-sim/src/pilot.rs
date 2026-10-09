@@ -69,6 +69,7 @@ use crate::outfit_effects::Rgb15;
 use crate::outfitter::outfit_mods;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
+use crate::story::SubscriptionId;
 
 /// Everything about the player that a save keeps.
 #[derive(Clone, Debug, PartialEq)]
@@ -126,6 +127,9 @@ pub struct Pilot {
     pub(crate) gender: Gender,
     /// The ship's paint; `None` when unpainted.
     pub(crate) paint: Option<Rgb15>,
+    /// The once-only story subscriptions that have fired, by their stable
+    /// ids (see the [`story`](crate::story) module's "Dispatch").
+    pub(crate) story_fired: BTreeSet<SubscriptionId>,
 }
 
 /// The player's gender, which the `G` test reads (true when male). The
@@ -227,6 +231,7 @@ impl Pilot {
             bits: ControlBitSet::new(),
             gender: Gender::default(),
             paint: None,
+            story_fired: BTreeSet::new(),
         })
     }
 

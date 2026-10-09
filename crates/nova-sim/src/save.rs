@@ -48,6 +48,8 @@
 //!   save's events were all at their record's `Stellar`, which only the
 //!   game data knows, so the upgrade saves `null`, read as the record's
 //!   own stellar. The next save keeps `null`.
+//! - Version 16: adds the once-only story subscriptions that have fired,
+//!   none in an older save.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -68,7 +70,11 @@
 //! are each a list of `përs` IDs. The control bits (`bits`) are the
 //! numbers of the bits set, ascending, and the `gender` is `male` or
 //! `female`. The `paint` is `null` when unpainted, or its red, green and
-//! blue, each 0 to 31 (`{"r": 31, "g": 0, "b": 4}`).
+//! blue, each 0 to 31 (`{"r": 31, "g": 0, "b": 4}`). The once-only story
+//! subscriptions fired (`story_fired`) are each its consumer
+//! (`mission_ships`, `missions`, `crons`, `nebulae`, `plugins` or
+//! `fixture`), record and hook (`{"consumer": "missions", "record": 3,
+//! "hook": 1}`), listed by consumer, record and hook.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -81,9 +87,10 @@ use crate::market::{ActiveEvent, Good};
 use crate::outfit_effects::Rgb15;
 use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
+use crate::story::{Consumer, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 15;
+pub const CURRENT: u64 = 16;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -301,6 +308,72 @@ struct SavedEvent {
     stellar: Option<i16>,
 }
 
+/// A saved story consumer.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SavedConsumer {
+    MissionShips,
+    Missions,
+    Crons,
+    Nebulae,
+    Plugins,
+    Fixture,
+}
+
+impl From<Consumer> for SavedConsumer {
+    fn from(consumer: Consumer) -> Self {
+        match consumer {
+            Consumer::MissionShips => Self::MissionShips,
+            Consumer::Missions => Self::Missions,
+            Consumer::Crons => Self::Crons,
+            Consumer::Nebulae => Self::Nebulae,
+            Consumer::Plugins => Self::Plugins,
+            Consumer::Fixture => Self::Fixture,
+        }
+    }
+}
+
+impl From<SavedConsumer> for Consumer {
+    fn from(saved: SavedConsumer) -> Self {
+        match saved {
+            SavedConsumer::MissionShips => Self::MissionShips,
+            SavedConsumer::Missions => Self::Missions,
+            SavedConsumer::Crons => Self::Crons,
+            SavedConsumer::Nebulae => Self::Nebulae,
+            SavedConsumer::Plugins => Self::Plugins,
+            SavedConsumer::Fixture => Self::Fixture,
+        }
+    }
+}
+
+/// A saved once-only story subscription that has fired: its id.
+#[derive(Serialize, Deserialize)]
+struct SavedFired {
+    consumer: SavedConsumer,
+    record: i16,
+    hook: u8,
+}
+
+impl From<SubscriptionId> for SavedFired {
+    fn from(id: SubscriptionId) -> Self {
+        Self {
+            consumer: id.consumer.into(),
+            record: id.record,
+            hook: id.hook,
+        }
+    }
+}
+
+impl From<SavedFired> for SubscriptionId {
+    fn from(saved: SavedFired) -> Self {
+        Self {
+            consumer: saved.consumer.into(),
+            record: saved.record,
+            hook: saved.hook,
+        }
+    }
+}
+
 /// An outfit carried, and how many.
 #[derive(Serialize, Deserialize)]
 struct SavedOutfit {
@@ -344,6 +417,7 @@ struct Saved {
     /// `None` when unpainted.
     #[serde(deserialize_with = "Option::deserialize")]
     paint: Option<SavedPaint>,
+    story_fired: Vec<SavedFired>,
 }
 
 /// `pilot` as the current version's save: pretty JSON.
@@ -421,6 +495,12 @@ pub fn encode(pilot: &Pilot) -> String {
         bits: pilot.bits.iter().collect(),
         gender: pilot.gender.into(),
         paint: pilot.paint.map(SavedPaint::from),
+        story_fired: pilot
+            .story_fired
+            .iter()
+            .copied()
+            .map(SavedFired::from)
+            .collect(),
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
@@ -442,6 +522,7 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     ship_names,
     stock_weapons,
     event_stellars,
+    story_fired,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -523,6 +604,11 @@ fn ship_names(save: &mut Value) {
 /// Version 14 to 15: every event at its record's own stellar.
 fn event_stellars(save: &mut Value) {
     add_to_each(save, "events", "stellar", &Value::Null);
+}
+
+/// Version 15 to 16: no once-only story subscription has fired.
+fn story_fired(save: &mut Value) {
+    add_empty(save, &["story_fired"]);
 }
 
 /// Adds `field` to every entry of `save`'s `list`, as `value`.
@@ -637,6 +723,11 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         bits: saved.bits.into_iter().collect(),
         gender: saved.gender.into(),
         paint: saved.paint.map(Rgb15::from),
+        story_fired: saved
+            .story_fired
+            .into_iter()
+            .map(SubscriptionId::from)
+            .collect(),
     })
 }
 
@@ -655,6 +746,7 @@ mod tests {
     use crate::market::Good;
     use crate::pilot::Escort;
     use crate::reserves::{Gauge, Reserves};
+    use crate::story::{Consumer, SubscriptionId};
 
     /// An event under way with `days` left, at `stellar`.
     fn active(days: u16, stellar: Option<StellarId>) -> ActiveEvent {
@@ -756,6 +848,28 @@ mod tests {
             bits: [0, 512, 9999].into_iter().filter_map(Bit::new).collect(),
             gender: Gender::Female,
             paint: Some(Rgb15 { r: 31, g: 0, b: 4 }),
+            story_fired: all_fired(),
+        }
+    }
+
+    /// A once-only subscription of every consumer fired, out of order.
+    fn all_fired() -> BTreeSet<SubscriptionId> {
+        BTreeSet::from([
+            fired(Consumer::Plugins, 128, 0),
+            fired(Consumer::Missions, 3, 1),
+            fired(Consumer::MissionShips, 15, 2),
+            fired(Consumer::Missions, 3, 0),
+            fired(Consumer::Crons, -5, 9),
+            fired(Consumer::Nebulae, 200, 0),
+            fired(Consumer::Fixture, 1, 255),
+        ])
+    }
+
+    fn fired(consumer: Consumer, record: i16, hook: u8) -> SubscriptionId {
+        SubscriptionId {
+            consumer,
+            record,
+            hook,
         }
     }
 
@@ -813,8 +927,21 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 15);
+        assert_eq!(CURRENT, 16);
         assert_eq!(value["stock_weapons_fitted"], true);
+        assert_eq!(
+            value["story_fired"],
+            serde_json::json!([
+                {"consumer": "mission_ships", "record": 15, "hook": 2},
+                {"consumer": "missions", "record": 3, "hook": 0},
+                {"consumer": "missions", "record": 3, "hook": 1},
+                {"consumer": "crons", "record": -5, "hook": 9},
+                {"consumer": "nebulae", "record": 200, "hook": 0},
+                {"consumer": "plugins", "record": 128, "hook": 0},
+                {"consumer": "fixture", "record": 1, "hook": 255}
+            ]),
+            "by consumer, record and hook"
+        );
         assert_eq!(value["ship_name"], "Kestrel");
         assert_eq!(value["paint"], serde_json::json!({"r": 31, "g": 0, "b": 4}));
         assert_eq!(value["bits"], serde_json::json!([0, 512, 9999]));
@@ -876,7 +1003,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 15"), "{text}");
+        assert!(text.contains("\n  \"version\": 16"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -1726,6 +1853,80 @@ mod tests {
         }
     }
 
+    /// A version 15 save: before the story's once-fired subscriptions.
+    const VERSION_15: &str = r#"{
+        "version": 15,
+        "name": "Veteran",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [],
+        "cargo": [],
+        "events": [{"disaster": 128, "days": 12, "stellar": 150}],
+        "outfits": [{"outfit": 200, "count": 1}],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [7],
+        "gender": "female",
+        "paint": null
+    }"#;
+
+    #[test]
+    fn a_version_15_save_loads_with_no_story_subscription_fired() {
+        let pilot = decode(VERSION_15).expect("loads");
+        assert_eq!(pilot.name(), "Veteran");
+        assert_eq!(
+            pilot.events,
+            BTreeMap::from([(DisasterId(128), active(12, Some(StellarId(150))))])
+        );
+        assert_eq!(pilot.story_fired, BTreeSet::new());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], CURRENT);
+        assert_eq!(value["story_fired"], serde_json::json!([]));
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [
+            VERSION_14, VERSION_13, VERSION_12, VERSION_11, VERSION_10, VERSION_9, VERSION_8,
+            VERSION_7, VERSION_6, VERSION_5, VERSION_4, VERSION_3, VERSION_2, VERSION_1,
+        ] {
+            let pilot = decode(text).expect("loads");
+            assert_eq!(pilot.story_fired, BTreeSet::new(), "{text}");
+        }
+    }
+
+    #[test]
+    fn every_consumer_fired_survives_a_round_trip() {
+        use Consumer::{Crons, Fixture, MissionShips, Missions, Nebulae, Plugins};
+        for consumer in [MissionShips, Missions, Crons, Nebulae, Plugins, Fixture] {
+            let mut pilot = seasoned();
+            pilot.story_fired = BTreeSet::from([fired(consumer, i16::MIN, u8::MAX)]);
+            assert_eq!(decode(&encode(&pilot)), Ok(pilot), "{consumer:?}");
+        }
+    }
+
+    #[test]
+    fn a_current_save_missing_its_fired_subscriptions_or_of_no_known_consumer_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        if let Some(object) = value.as_object_mut() {
+            object.remove("story_fired");
+        }
+        assert!(unusable(&value.to_string()).contains("story_fired"));
+        let text = encode(&seasoned()).replace("\"nebulae\"", "\"comets\"");
+        assert!(unusable(&text).contains("comets"), "{}", unusable(&text));
+    }
+
     #[test]
     fn a_current_save_event_missing_its_stellar_is_unusable() {
         let mut value: serde_json::Value =
@@ -1879,12 +2080,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 15", "\"version\": 16");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 16 }));
+        let newer = encode(&seasoned()).replace("\"version\": 16", "\"version\": 17");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 17 }));
         assert_eq!(
-            SaveError::Newer { version: 16 }.to_string(),
+            SaveError::Newer { version: 17 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 16, and this version of Nova reads up to 15)."
+             (it is version 17, and this version of Nova reads up to 16)."
         );
     }
 
