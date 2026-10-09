@@ -67,6 +67,7 @@
 //! | [`OutfitCount`](RuleKey::OutfitCount) | `outfit_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog at the most the order allows, and buys or sells the count confirmed (`_DoOutfitDialog` @0x5c0c0-0x5c1aa, @0x5c5e3-0x5c628; `_DoQuantityDialog` @0x56d5b; [`Outfitter::count_asked`](crate::Outfitter::count_asked)) | Alt changes nothing: each click moves one¶¶¶ |
 //! | [`SaleMass`](RuleKey::SaleMass) | `sale_mass` | only an outfit of negative mass is refused, when the free mass clamped at 0 plus its mass is below 0; one of mass 0 or more sells while the free mass is below 0 (`_DoOutfitDialog` @0x5c735-0x5c747, `_ShipFreeMass` @0xb506-0xb50a; [`Session`](crate::Session)) | a sale is refused whenever it would leave the free mass below 0\*\*\*\* |
 //! | [`SaleRefusal`](RuleKey::SaleRefusal) | `sale_refusal` | Sell is enabled by the Sell flag alone (some owned, not `CANNOT_SELL`). The free mass, a raised `Max` and a launcher's ammunition refuse only inside the sell loop. The first such refusal of an order shows its `STR#` 2002 #207-#212 words once in `DLOG` 3003, and nothing is sold (`_DoOutfitDialog` @0x5c563-0x5c595, @0x5c735-0x5ce6c, flag -0x63e @0x5c6ca; `_OutfitFilter` @0x5808c-0x580b1; `_ShowTextDialog` @0x5a8cf; [`Outfitter::can`](crate::Outfitter::can) / [`Outfitter::sale_alert`](crate::Outfitter::sale_alert)) | Sell is greyed by any sale check too, and the info box words the first one; nothing is shown in a dialog‡‡‡‡ |
+//! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; [`unit_price`](crate::outfitter::unit_price)) | `Cost` × `Mass`, never below 0§§§§ |
 //! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; [`Session`](crate::Session)) | an unsellable outfit is left out too†††† |
 //! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for a count (see [`TradeCount`](RuleKey::TradeCount)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
 //! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; [`Market::row_max`](crate::Market::row_max)) | exact integer division\*\*\* |
@@ -160,6 +161,12 @@
 //! sale is worded. The other reading is the port's earlier behaviour,
 //! Sell greyed and the refusal worded in the info box, not anything the
 //! Bible says.
+//!
+//! §§§§ The Bible gives the price as the ship class's `Mass` times the
+//! item's `Cost`, and says nothing of a `Cost` or `Mass` of 0 or less.
+//! Its reading here is that product never below 0, the port's earlier
+//! price, so a negative `Cost` on a class of negative `Mass` is priced
+//! at the positive product.
 //!
 //! # Adding a rule
 //!
@@ -722,6 +729,16 @@ rule_keys! {
     /// of it, so the other reading is the port's earlier behaviour, not
     /// anything the Bible says (see [`outfitter`](crate::outfitter)).
     SaleRefusal => "sale_refusal",
+    /// How an outfit flagged 0x0200 (price by ship mass) is priced. By
+    /// the engine, `_AdjustedItemCost` (@0x5869-0x5895) gives 0 for a
+    /// `Cost` of 0 or less (@0x5872-0x5878). Otherwise, with the flag, it
+    /// gives max(`Cost`, `Cost` × the flown class's `Mass`)
+    /// (@0x5883-0x588f), so `Cost` on a class of `Mass` 0 or less.
+    /// `_PlayerShipTradeInPrice` inlines the same (@0xb0e3-0xb106). By the
+    /// other reading, the price is `Cost` × `Mass`, never below 0, as the
+    /// Bible's "ship class Mass field is multiplied by this item's Cost
+    /// field" reads (see [`outfitter`](crate::outfitter)).
+    MassPrice => "mass_price",
     /// Which outfits a ship's trade-in counts. By the engine,
     /// `_PlayerShipTradeInPrice` skips only an outfit with a count of 0
     /// or less (@0xb0d5-0xb0d8) and a persistent one (the record byte
@@ -927,6 +944,12 @@ mod tests {
     }
 
     #[test]
+    fn the_mass_price_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::MassPrice.key(), "mass_price");
+        assert_eq!(RuleKey::from_key("mass_price"), Some(RuleKey::MassPrice));
+    }
+
+    #[test]
     fn the_sale_refusal_rule_is_found_by_its_key() {
         assert_eq!(RuleKey::SaleRefusal.key(), "sale_refusal");
         assert_eq!(
@@ -1065,6 +1088,7 @@ mod tests {
                 RuleKey::OutfitCount,
                 RuleKey::SaleMass,
                 RuleKey::SaleRefusal,
+                RuleKey::MassPrice,
                 RuleKey::TradeInOutfits,
                 RuleKey::TradeLot,
                 RuleKey::TradeQuotient,
