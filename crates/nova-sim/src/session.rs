@@ -14948,8 +14948,12 @@ mod tests {
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("relocates");
         assert_eq!(session.system(), SystemId(134));
-        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+        assert_eq!(session.landed(), Some(StellarId(140)), "docked as asked");
+        assert_eq!(session.pilot().stellar, Some(StellarId(140)));
+        assert_eq!(session.sites, [planet(140, 0.0, 0.0)], "its spaceport's");
+        assert_eq!(session.recharge(), Err(RechargeRefusal::Full));
         assert!(on_the_map(&session));
+        takes_off_into_134(&mut session);
     }
 
     #[test]

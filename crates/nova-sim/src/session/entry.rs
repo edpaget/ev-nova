@@ -20,7 +20,10 @@
 //! the chain head, made visible ([`OverlaidGalaxy::arrival`]; see the
 //! `story` module's "Galaxy overlay"). The stellars of a system resolved
 //! to another are read again; the caller's placement is kept, a system at
-//! the same place being at the same map position.
+//! the same place being at the same map position. A way in that docks
+//! (the relocation) keeps the stellars of the system asked for, whose
+//! stellar it docks at, and leaves those of the system resolved to for
+//! the take-off, as after a landed move.
 //!
 //! The last step announces the arrival, and tells a view what to redraw
 //! ([`scene_event`], see the `events` module): measured against the
@@ -466,11 +469,6 @@ impl Session {
             self.emit(SessionEvent::GalaxyChanged);
         }
         let system = resolved.to;
-        let sites = if system == asked {
-            sites
-        } else {
-            self.read_sites(stellars, system)
-        };
         let facts = EntryFacts {
             system_changed: system != self.pilot.system,
             jump_pending: self.jump.is_some(),
@@ -480,6 +478,21 @@ impl Session {
             .as_ref()
             .map_or(self.pilot.system, |next| next.from);
         let resets = resets(how, &self.rules, facts);
+        // Docking at a stellar of a system resolved to another keeps that
+        // stellar's spaceport, the system entered's stellars waiting for
+        // the take-off, as after a landed move.
+        let (sites, docked_away) = if system == asked {
+            (sites, None)
+        } else if resets.has(Reset::Dock) {
+            let away = NextSites {
+                from: asked,
+                sites: self.read_sites(stellars, system),
+            };
+            (sites, Some(away))
+        } else {
+            (self.read_sites(stellars, system), None)
+        };
+        let scene = docked_away.as_ref().map_or(system, |away| away.from);
         self.place(placement);
         self.pilot.system = system;
         if resets.has(Reset::Stellar) {
@@ -509,6 +522,9 @@ impl Session {
         if resets.has(Reset::DeferredSites) {
             self.next_sites = None;
         }
+        if docked_away.is_some() {
+            self.next_sites = docked_away;
+        }
         self.leave_behind(&resets);
         self.bring_in_traffic(resets.traffic, catalog, chance);
         if resets.has(Reset::ShopRolls) {
@@ -521,7 +537,7 @@ impl Session {
         if resets.has(Reset::SaveDue) {
             self.save_due = true;
         }
-        self.announce(how, &resets, system, scene_event(how, system != shown));
+        self.announce(how, &resets, system, scene_event(how, scene != shown));
         // A jump's arrival raised its `Explored` before its days, at the
         // original's first nebula exploration (@0x6be12).
         if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. }) {
