@@ -283,6 +283,7 @@
 
 mod control;
 mod edit;
+mod entry;
 mod escorts;
 mod fighters;
 mod hail;
@@ -308,7 +309,9 @@ pub use script_effects::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use self::entry::{Arrival, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
+use self::ship_change::ClassChange;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::bay::FighterNote;
 use crate::board::{
@@ -371,6 +374,7 @@ use crate::pre_jump::{self, PreJump};
 use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::shipyard::{self, Quote, ShipNaming, ShipPurchase, ShipRefusal, Shipyard, Yard};
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
@@ -746,7 +750,7 @@ impl Session {
             pilot,
         };
         session.open_outfit_visit();
-        session.refit(false);
+        session.refit(false, ReservePolicy::Hold);
         session.restock_fleet();
         Ok(session)
     }
@@ -838,32 +842,24 @@ impl Session {
         )
     }
 
+    /// The policy `G`, `D` and boarding refit by: the rule set's reading
+    /// of [`RuleKey::RefitReserves`].
+    fn script_reserves(&self) -> ReservePolicy {
+        ReservePolicy::reading(self.outfit_rules().refit_reserves)
+    }
+
     /// Recomputes the stats from the outfits the pilot owns: each gauge
-    /// holds up to the stats' most, keeping no more than that, and when
-    /// `gain`, one whose most rose gains as much. The hull and the weapons
-    /// follow the ship and the outfits, ready to fire. The outfitter, the
-    /// shipyard, capture, a change of ship and a reload refit this way;
-    /// `G`, `D` and boarding refit as the rule set reads
-    /// [`RuleKey::RefitReserves`] (see [`Session::script_refit`]).
-    fn refit(&mut self, gain: bool) {
-        self.refit_reserves(gain, true);
-    }
-
-    /// Refits as `G`, `D` and boarding do: the shield and armour held to
-    /// their most only by the other reading of
-    /// [`RuleKey::RefitReserves`](crate::RuleKey::RefitReserves), the
-    /// engine's keeping a surplus (`_SystemInfoToShipStats` @0xca33
-    /// clamps no reserve), and the fuel always held.
-    fn script_refit(&mut self, gain: bool) {
-        self.refit_reserves(
-            gain,
-            self.outfit_rules().refit_reserves == RuleSource::Bible,
-        );
-    }
-
-    /// [`Session::refit`], holding the shield and armour to their most
-    /// only when `hold`; the fuel is always held.
-    fn refit_reserves(&mut self, gain: bool, hold: bool) {
+    /// holds up to the stats' most and, when `gain`, one whose most rose
+    /// gains as much. The fuel keeps no more than its most; the shield and
+    /// armour keep no more only under [`ReservePolicy::Hold`]. The hull
+    /// and the weapons follow the ship and the outfits, ready to fire.
+    /// The outfitter, the shipyard, capture and a reload hold; `G`, `D`
+    /// and boarding read [`RuleKey::RefitReserves`] and a change of ship
+    /// reads [`RuleKey::ShipChangeReserves`] (see
+    /// [`ReservePolicy::reading`]). Capture and a change of ship refit
+    /// through [`Session::become_class`], by the policy they chose.
+    fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
+        let hold = reserves == ReservePolicy::Hold;
         self.hull = self.arsenal.hull(self.pilot.ship);
         self.armament = self.arsenal.player(&self.pilot.outfits, &self.outfits);
         let carried = self.secondary.filter(|&id| {
@@ -1575,6 +1571,10 @@ impl Session {
     /// is populated with its traffic ([`Session::populate`]), the last
     /// system's gone, and so are the shots and beams in flight; the
     /// fighters out are carried or left behind as the fighter rules say.
+    ///
+    /// It enters that system as every way in does, by its row of the
+    /// table in the `entry` module, which also lets go of the strikes, the
+    /// target, the boarding, the hail and a held `P` sound.
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -1584,13 +1584,13 @@ impl Session {
             return None;
         };
         self.jump = None;
-        self.queued.sound = None;
         self.take_jump_cost(chance);
         let (mut from, mut at) = (self.pilot.system, first);
+        let mut hops = 0;
         if self.pilot.course.first() == Some(&first) {
-            self.pilot.course.remove(0);
+            hops = 1;
             for _ in 1..hops_per_jump(self.stats.multi_jump, self.multi_jump) {
-                let Some(&next) = self.pilot.course.first() else {
+                let Some(&next) = self.pilot.course.get(hops) else {
                     break;
                 };
                 if self.multi_jump == MultiJumpRule::PerHop {
@@ -1599,23 +1599,21 @@ impl Session {
                     }
                     self.take_jump_cost(chance);
                 }
-                self.pilot.course.remove(0);
+                hops += 1;
                 (from, at) = (at, next);
             }
         }
         let map = |id| self.star_map.position(id).unwrap_or_default();
-        self.player = arrival(map(from), map(at), self.stats.jump_distance);
-        let pilot = &mut self.pilot;
-        pilot.system = at;
-        pilot.stellar = None;
-        pilot.explore(at);
-        self.leave_with_fighters(false);
-        self.sites = catalog.landing_sites(at);
-        self.populate(catalog, chance);
-        self.combat.clear();
-        self.nav_target = None;
-        self.sounds.push(SimSound::Arrived);
-        self.messages.push(SimMessage::Arrived(at));
+        let entered = Arrival {
+            system: at,
+            sites: catalog.landing_sites(at),
+            placement: Placement {
+                ship: ShipPlacement::Arrive(arrival(map(from), map(at), self.stats.jump_distance)),
+                stellar: None,
+                hold: false,
+            },
+        };
+        self.enter_system(Entry::Jump { hops }, entered, catalog, chance);
         Some(at)
     }
 
@@ -1892,9 +1890,13 @@ impl Session {
     /// no fuel is used, the minimum jump distance does not count, and the
     /// ship is in the new system, explored, its stellars read, with the
     /// course and the navigation target cleared, its thrust stopped,
-    /// populated with its traffic ([`Session::populate`]), the fight left
-    /// behind and [`SimSound::Arrived`]. It raises [`SimMessage::PassedWormhole`] or
-    /// [`SimMessage::ExitedHypergate`].
+    /// populated with its traffic ([`Session::populate`]), even when it is
+    /// the system gone in, the fight left behind and
+    /// [`SimSound::Arrived`]. It raises [`SimMessage::PassedWormhole`] or
+    /// [`SimMessage::ExitedHypergate`], and no [`SimMessage::Arrived`].
+    /// The ship enters the system by the gate's row of the table in the
+    /// `entry` module, which keeps a held `P` sound and lets go of the
+    /// strikes, the target, the boarding and the hail.
     pub fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -1920,7 +1922,7 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.player = match self.gate_arrival {
+        let ship = match self.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.stats.handling.max_speed, chance),
             GateArrivalRule::LikeJump => {
                 let map = |id| self.star_map.position(id).unwrap_or_default();
@@ -1933,18 +1935,16 @@ impl Session {
                 placed
             }
         };
-        let pilot = &mut self.pilot;
-        pilot.system = system;
-        pilot.stellar = None;
-        pilot.explore(system);
-        pilot.course.clear();
-        self.leave_with_fighters(false);
-        self.sites = catalog.landing_sites(system);
-        self.populate(catalog, chance);
-        self.combat.clear();
-        self.nav_target = None;
-        self.stop_thrust();
-        self.sounds.push(SimSound::Arrived);
+        let entered = Arrival {
+            system,
+            sites: catalog.landing_sites(system),
+            placement: Placement {
+                ship: ShipPlacement::Arrive(ship),
+                stellar: None,
+                hold: false,
+            },
+        };
+        self.enter_system(Entry::Gate, entered, catalog, chance);
     }
 
     /// Docks the ship at `stellar`, one of the system's.
@@ -1978,8 +1978,10 @@ impl Session {
     /// explored, and the next traffic tick populates the system afresh
     /// ([`Session::tick_traffic`]). After a landed move the ship flies in
     /// the system moved to, from where the move left it, and after an `N`
-    /// from where it touched down (see the `script_effects` module).
-    /// `None`, and nothing changes, when it has not landed.
+    /// from where it touched down (see the `script_effects` module): the
+    /// take-off swaps in the stellars the landed move's row of the table
+    /// in the `entry` module left for it. `None`, and nothing changes,
+    /// when it has not landed.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         self.frame = market::AFTER_TAKE_OFF_FRAME;
@@ -2200,7 +2202,7 @@ impl Session {
             }
             Direction::Sell => self.run_script(&record.on_sell, chance),
         }
-        self.refit(true);
+        self.refit(true, ReservePolicy::Hold);
         Ok(())
     }
 
@@ -2353,7 +2355,7 @@ impl Session {
         self.fields = record.fields;
         self.defaults = pilot::tally(record.defaults.iter().copied());
         self.stock = armament::fitted(&fits);
-        self.refit(false);
+        self.refit(false, ReservePolicy::Hold);
         self.ship_redraws.insert(ship);
         self.ship_hook(record.id, ShipHook::Purchase, chance);
         if paint_last {
@@ -2607,7 +2609,7 @@ impl Session {
         for _ in 0..granted.count {
             self.grant_outfit(granted.outfit);
         }
-        self.script_refit(true);
+        self.refit(true, self.script_reserves());
         Some(granted)
     }
 
@@ -2824,7 +2826,7 @@ impl Session {
             *self.pilot.outfits.entry(outfit).or_default() += 1;
             count += 1;
         }
-        self.script_refit(true);
+        self.refit(true, self.script_reserves());
         count
     }
 
@@ -2972,7 +2974,8 @@ impl Session {
     /// it joins the fleet; on "Use As My Ship" the old class's `OnRetire`
     /// runs first, both before the fuel draw and, as
     /// [`HookRules::capture_hook_order`] says, before or after the outfit
-    /// swap (see the `hooks` module).
+    /// swap (see the `hooks` module). The change of class is applied by
+    /// [`Session::become_class`], with the reserves held.
     pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
         let aboard = self.aboard.filter(|aboard| aboard.captured)?;
         self.aboard = None;
@@ -3005,39 +3008,36 @@ impl Session {
         };
         let defaults = pilot::tally(record.defaults.iter().copied());
         let records = &self.outfits;
-        self.pilot.outfits.retain(|id, _| {
-            records
-                .iter()
-                .any(|record| record.id == *id && record.flags & OutfitFlags::PERSISTENT != 0)
-        });
-        for (&id, &count) in &defaults {
-            let owned = self.pilot.outfits.entry(id).or_default();
-            *owned = owned.saturating_add(count);
-        }
+        // Capture keeps by 0x0004 alone and holds nothing to its `Max`,
+        // whatever the ship-change rules say, and tops the stock weapons
+        // up rather than adding them.
+        let mut outfits = carried_outfits(
+            &self.pilot.outfits,
+            OutfitCarry::Persistent {
+                mask: OutfitFlags::PERSISTENT,
+            },
+            &defaults,
+            false,
+            records,
+        );
         let fits = self.arsenal.stock_fits(record.id, records);
-        fit_stock(&mut self.pilot.outfits, &fits, records);
-        if !hooks_first {
-            self.retire_for_capture(record.id, chance);
-        }
-        self.pilot.ship = record.id;
-        self.fields = record.fields;
-        self.defaults = defaults;
-        self.stock = armament::fitted(&fits);
-        self.player = npc.state;
+        fit_stock(&mut outfits, &fits, records);
         let share = if self.arsenal.hull(record.id).tough {
             TOUGH_TAKEOVER_ARMOR_SHARE
         } else {
             TAKEOVER_ARMOR_SHARE
         };
-        let reserves = &mut self.pilot.reserves;
-        reserves.shield.now = 0.0;
-        reserves.armor.now =
-            f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
-        reserves.fuel.now = u32::try_from(record.fields.fuel)
-            .ok()
-            .filter(|&fuel| fuel > 0)
-            .map_or(0.0, |fuel| chance.below(fuel) as f32);
-        self.refit(false);
+        let takeover = ClassChange {
+            outfits,
+            reserves: ReservePolicy::Hold,
+        };
+        self.become_class(&record, takeover, |session| {
+            if !hooks_first {
+                session.retire_for_capture(record.id, chance);
+            }
+            session.take_over_reserves(&record, share, chance);
+        });
+        self.player = npc.state;
         for other in self.traffic.npcs_mut() {
             if other.leader == Some(npc.id) {
                 other.leader = None;
@@ -3053,8 +3053,22 @@ impl Session {
         if let Some(id) = placed {
             self.snap(id);
         }
-        self.save_due = true;
         Some(Assigned::MyShip)
+    }
+
+    /// The reserves a ship of `record` is taken over with: no shield,
+    /// `share` of its armour and [`TAKEOVER_ARMOR_BASE`], and its fuel
+    /// drawn on `chance` below its `Fuel` (none, with no draw, for no
+    /// tank).
+    fn take_over_reserves(&mut self, record: &ShipRecord, share: f64, chance: &mut dyn Chance) {
+        let reserves = &mut self.pilot.reserves;
+        reserves.shield.now = 0.0;
+        reserves.armor.now =
+            f64::from(record.fields.armor).mul_add(share, TAKEOVER_ARMOR_BASE) as f32;
+        reserves.fuel.now = u32::try_from(record.fields.fuel)
+            .ok()
+            .filter(|&fuel| fuel > 0)
+            .map_or(0.0, |fuel| chance.below(fuel) as f32);
     }
 }
 
@@ -3084,10 +3098,65 @@ impl Aboard {
     }
 }
 
+#[cfg(test)]
+impl Session {
+    /// Puts the scene a system entry lets go of under way, aimed at
+    /// `npc`: a strike on it, it targeted, boarded and hailed. The
+    /// entry tests set the shots, the navigation target and a gate's
+    /// pending entry themselves, as each can.
+    fn stage_scene(&mut self, npc: NpcId) {
+        self.strikes = vec![Strike {
+            ship: ShipRef::Npc(npc),
+            by: ShipRef::Player,
+            damage: 1.0,
+            downed: None,
+        }];
+        self.target = Some(npc);
+        self.aboard = Some(Aboard {
+            npc,
+            ship: ShipId(129),
+            plunder: Plunder::default(),
+            captured: false,
+        });
+        self.talk = Some(hail::Talk::opened(npc));
+    }
+
+    /// Asserts the scene [`Session::stage_scene`] puts under way is let
+    /// go of: no strike, target, boarding or hail.
+    fn assert_scene_left(&self, case: &str) {
+        assert_eq!(self.strikes, [], "the strikes: {case}");
+        assert_eq!(self.target, None, "the target: {case}");
+        assert_eq!(self.aboard, None, "the boarding: {case}");
+        assert_eq!(self.talk, None, "the hail: {case}");
+    }
+}
+
 /// `value` held to the range of an `i16`, as a boarding grant reads a
 /// raised `Max` (see [`GrantStock::max`]).
 fn clamp_i16(value: i64) -> i16 {
     i16::try_from(value.clamp(i64::from(i16::MIN), i64::from(i16::MAX))).unwrap_or_default()
+}
+
+/// How a refit treats a shield or armour above its new most: the fuel is
+/// always held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReservePolicy {
+    /// Each is held to its new most.
+    Hold,
+    /// Each keeps its surplus, as the original's `_SystemInfoToShipStats`
+    /// (@0xca33) clamps no reserve.
+    KeepSurplus,
+}
+
+impl ReservePolicy {
+    /// The policy a reserves rule's `source` reads as: the Bible's holds
+    /// each to its most, the engine's keeps the surplus.
+    fn reading(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Bible => Self::Hold,
+            RuleSource::Engine => Self::KeepSurplus,
+        }
+    }
 }
 
 /// Sets `gauge` to hold up to `max`, and when `hold`, keeping no more
@@ -4005,6 +4074,18 @@ mod tests {
             [SimMessage::Arrived(SystemId(131))]
         );
         assert_eq!(session.take_messages(), [], "taking empties the list");
+    }
+
+    #[test]
+    fn a_jumps_arrival_lets_go_of_the_strikes_the_boarding_and_the_hail() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        session.stage_scene(NpcId(0));
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        session.assert_scene_left("a jump");
     }
 
     #[test]
@@ -7560,7 +7641,7 @@ mod tests {
                     .with_rules(Rulebook::default().with_override(RuleKey::RefitReserves, source));
                 if order.direction == Direction::Sell {
                     session.pilot.outfits.insert(OutfitId(302), 1);
-                    session.refit(false);
+                    session.refit(false, ReservePolicy::Hold);
                 }
                 let (shield, armor) = (session.stats().shield, session.stats().armor);
                 session.pilot.reserves.shield.now = shield + 5.0;
@@ -12292,6 +12373,122 @@ mod tests {
         assert_eq!(session.reserves().fuel.now, 0.0);
     }
 
+    /// The outfits the player owns, as pairs of raw IDs and counts.
+    fn owned_ids(session: &Session) -> Vec<(i16, u16)> {
+        session
+            .pilot()
+            .outfits()
+            .map(|(id, count)| (id.0, count))
+            .collect()
+    }
+
+    #[test]
+    fn a_capture_keeps_only_0x0004_whatever_ship_change_persistence_says() {
+        // 404 is persistent through a mission's change of ship (0x0020)
+        // alone: `H` keeps it by either reading, a capture by neither.
+        let mut catalog = kitted();
+        catalog.outfits.push(OutfitRecord {
+            flags: OutfitFlags::MISSION_PERSISTENT,
+            ..outfit(404, &[])
+        });
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::ShipChangePersistence, source);
+            let mut session = captured(&catalog).with_rules(rules);
+            session.pilot.outfits = BTreeMap::from([(OutfitId(400), 1), (OutfitId(404), 1)]);
+            session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+            assert_eq!(owned_ids(&session), [(400, 1), (402, 1)], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_capture_holds_no_outfit_to_its_max_whatever_ship_change_max_says() {
+        // 400 (persistent, owned once) and 402 are both up to 1, and the
+        // trader's default items are one more 400 and three 402.
+        let mut catalog = kitted();
+        for record in &mut catalog.outfits {
+            if matches!(record.id.0, 400 | 402) {
+                record.max = 1;
+            }
+        }
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(129) {
+                record.defaults = vec![(OutfitId(400), 1), (OutfitId(402), 3)];
+            }
+        }
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::ShipChangeMax, source);
+            let mut session = captured(&catalog).with_rules(rules);
+            session.pilot.outfits = BTreeMap::from([(OutfitId(400), 1)]);
+            session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+            assert_eq!(owned_ids(&session), [(400, 2), (402, 3)], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_capture_tops_the_stock_weapons_up_rather_than_adding_them() {
+        // The trader stocks two blasters (held by 250, here persistent)
+        // and a homing missile (252) with 6 rounds (403); the player owns
+        // a blaster, and the trader's default items hold 4 rounds.
+        let mut catalog = kitted();
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(129) {
+                hull.weapons = vec![
+                    StockWeapon {
+                        weapon: WeaponId(128),
+                        count: 2,
+                        ammo: 0,
+                    },
+                    StockWeapon {
+                        weapon: WeaponId(134),
+                        count: 1,
+                        ammo: 6,
+                    },
+                ];
+            }
+        }
+        catalog.outfits.push(outfit(403, &[(MOD_AMMO, 134)]));
+        for record in &mut catalog.outfits {
+            if record.id == OutfitId(250) {
+                record.flags = OutfitFlags::PERSISTENT;
+            }
+        }
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(129) {
+                record.defaults = vec![(OutfitId(402), 1), (OutfitId(403), 4)];
+            }
+        }
+        let mut session = captured(&catalog);
+        session.pilot.outfits = BTreeMap::from([(OutfitId(250), 1)]);
+        session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+        assert_eq!(
+            owned_ids(&session),
+            [(250, 2), (252, 1), (402, 1), (403, 6)],
+            "what is held already counts: no blaster or round doubled"
+        );
+    }
+
+    #[test]
+    fn a_capture_holds_its_reserves_whatever_ship_change_reserves_says() {
+        // 404, persistent, takes 35 armour: the trader's 45 falls to 10,
+        // below the 17 a take-over leaves.
+        let mut catalog = kitted();
+        catalog.outfits.push(OutfitRecord {
+            flags: OutfitFlags::PERSISTENT,
+            ..outfit(404, &[(crate::stats::MORE_ARMOR, -35)])
+        });
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::ShipChangeReserves, source);
+            let mut session = captured(&catalog).with_rules(rules);
+            session.pilot.outfits = BTreeMap::from([(OutfitId(404), 1)]);
+            session.assign(Assignment::MyShip, &mut Draws::of(&[0]));
+            assert_eq!(
+                session.reserves().armor,
+                Gauge::full(10.0),
+                "held to its most: {source:?}"
+            );
+        }
+    }
+
     // Boarding grants.
 
     use crate::grant::Granted;
@@ -13526,5 +13723,222 @@ mod tests {
         );
         assert_eq!(session.engine_glow(), 0);
         assert!(!session.thrusting());
+    }
+
+    // Entering a system: what each way in lets go of, and the order of
+    // its draws.
+
+    /// `base` with traffic: two ships in 130 and three in 131 and 132,
+    /// all of düde 128 (ship 129, for govt 140); the player's ship
+    /// carries a blaster, outfit 250 holding it.
+    fn busy(base: FakePilotCatalog) -> FakePilotCatalog {
+        let dudes = trafficked(130, 2, 1);
+        let traffic = |system, avg| trafficked(system, avg, 1).traffic[0];
+        FakePilotCatalog {
+            traffic: vec![traffic(130, 2), traffic(131, 3), traffic(132, 3)],
+            dudes: dudes.dudes,
+            ship_records: dudes.ship_records,
+            weapons: vec![WeaponRecord {
+                reload: 2,
+                count: 30,
+                speed: 2000,
+                ..weapon(128)
+            }],
+            hulls: vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(128),
+                    count: 1,
+                    ammo: 0,
+                }],
+                ..hull(128)
+            }],
+            outfits: vec![outfit(250, &[(MOD_WEAPON, 128)])],
+            ..base
+        }
+    }
+
+    /// `session`, entering a gate, with an escort of ship 129 among the
+    /// system's traffic, a shot in flight, and the scene under way
+    /// ([`Session::stage_scene`]) aimed at its first NPC.
+    fn in_the_thick_of_it(mut session: Session, catalog: &FakePilotCatalog) -> Session {
+        session.pilot.escorts = vec![Escort {
+            ship: ShipId(129),
+            reserves: Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        }];
+        session.populate(catalog, &mut NeverFires);
+        session.hold_fire(true, false);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.hold_fire(false, false);
+        assert_eq!(session.shots().len(), 1);
+        session.stage_scene(session.npcs()[0].id);
+        session
+    }
+
+    /// Asserts `session` came out into a system of three düde ships,
+    /// the fight and the scene left behind and its escort on its slot.
+    fn assert_came_out_afresh(session: &Session, case: &str) {
+        assert_eq!(session.shots(), [], "{case}");
+        session.assert_scene_left(case);
+        let fleet: Vec<NpcId> = session.fleet.iter().flatten().copied().collect();
+        assert_eq!(fleet.len(), 1, "{case}");
+        let escort = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == fleet[0])
+            .expect("the escort is in");
+        let duty = escort.escort.expect("an escort");
+        assert_eq!(
+            escort.state.position,
+            crate::escort::slot_position(session.player(), duty.slot, duty.ships, duty.spacing),
+            "on its slot: {case}"
+        );
+        let dudes: Vec<&Npc> = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.id != fleet[0])
+            .collect();
+        assert_eq!(dudes.len(), 3, "{case}");
+        assert!(
+            dudes
+                .iter()
+                .all(|npc| (npc.ship, npc.govt) == (ShipId(129), Some(GovtId(140)))),
+            "{case}"
+        );
+    }
+
+    #[test]
+    fn a_gate_exit_leaves_the_fight_and_the_scene_and_populates_the_system_afresh() {
+        let catalog = busy(gated());
+        let mut session = in_the_thick_of_it(at_gate(&catalog), &catalog);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Ok(SystemId(131))
+        );
+        assert_came_out_afresh(&session, "a hypergate");
+        let catalog = busy(wormholes());
+        let mut session = in_the_thick_of_it(at_wormhole(&catalog), &catalog);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[0])),
+            Ok(SystemId(131))
+        );
+        assert_came_out_afresh(&session, "a wormhole");
+    }
+
+    #[test]
+    fn a_wormhole_back_into_the_system_it_went_in_still_populates_it_afresh() {
+        let catalog = busy(wormholes());
+        let mut session = at_wormhole(&catalog);
+        session.populate(&catalog, &mut NeverFires);
+        let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(before.len(), 2);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[1])),
+            Ok(SystemId(130))
+        );
+        let after: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(after.len(), 2);
+        assert!(
+            after.iter().all(|id| !before.contains(id)),
+            "{before:?} {after:?}"
+        );
+    }
+
+    /// One question asked of a [`Logged`] chance.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Draw {
+        Fires(u8),
+        Below(u32),
+        Roll(u16),
+    }
+
+    /// A [`Chance`] that answers as [`NeverFires`] does and logs every
+    /// question, in the order asked.
+    #[derive(Debug, Default)]
+    struct Logged(Vec<Draw>);
+
+    impl Chance for Logged {
+        fn fires(&mut self, percent: u8) -> bool {
+            self.0.push(Draw::Fires(percent));
+            NeverFires.fires(percent)
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.0.push(Draw::Below(n));
+            NeverFires.below(n)
+        }
+
+        fn roll(&mut self, sides: u16) -> u16 {
+            self.0.push(Draw::Roll(sides));
+            NeverFires.roll(sides)
+        }
+    }
+
+    /// The draws populating `system` of `catalog` asks, from a new
+    /// pilot's session.
+    fn population_draws(catalog: &FakePilotCatalog, system: i16) -> Vec<Draw> {
+        let mut session = Session::start(catalog).expect("starts");
+        session.pilot.system = SystemId(system);
+        let mut chance = Logged::default();
+        session.populate(catalog, &mut chance);
+        assert!(!chance.0.is_empty(), "the population draws");
+        chance.0
+    }
+
+    /// The surplus event (35 %, rolled each day) as `base`'s only one.
+    fn with_event(base: FakePilotCatalog) -> FakePilotCatalog {
+        FakePilotCatalog {
+            disasters: surplus().disasters,
+            ..base
+        }
+    }
+
+    #[test]
+    fn a_jumps_days_draw_before_the_population_of_the_system_arrived_in() {
+        let catalog = with_event(busy(catalog()));
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = Logged::default();
+        jump_with(&mut session, &catalog, 131, &mut chance);
+        let expected = [vec![Draw::Fires(35)], population_draws(&catalog, 131)].concat();
+        assert_eq!(chance.0, expected);
+    }
+
+    #[test]
+    fn a_gate_like_a_jump_draws_its_days_before_the_population() {
+        let catalog = with_event(busy(gated()));
+        let mut session = at_gate(&catalog).with_gate_arrival(GateArrivalRule::LikeJump);
+        let mut chance = Logged::default();
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut chance)
+            .expect("enters");
+        let expected = [vec![Draw::Fires(35)], population_draws(&catalog, 131)].concat();
+        assert_eq!(chance.0, expected);
+    }
+
+    #[test]
+    fn a_gate_rolls_its_heading_before_the_population() {
+        let catalog = busy(gated());
+        let mut session = at_gate(&catalog);
+        let mut chance = Logged::default();
+        session
+            .enter_hypergate(Some(SystemId(132)), &catalog, &mut chance)
+            .expect("enters");
+        let expected = [vec![Draw::Roll(360)], population_draws(&catalog, 132)].concat();
+        assert_eq!(chance.0, expected);
+    }
+
+    #[test]
+    fn a_wormhole_rolls_its_exit_before_the_population() {
+        let catalog = busy(wormholes());
+        let mut session = at_wormhole(&catalog);
+        let mut chance = Logged::default();
+        session
+            .enter_wormhole(&catalog, &mut chance)
+            .expect("enters");
+        let expected = [vec![Draw::Roll(2)], population_draws(&catalog, 131)].concat();
+        assert_eq!(chance.0, expected);
     }
 }

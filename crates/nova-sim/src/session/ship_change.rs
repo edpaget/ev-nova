@@ -84,11 +84,17 @@
 //! Not yet as the original: the limit held to is `Max` alone, without
 //! `ModType` 27, `MaxAmmo` times the launchers, or the gun and turret
 //! slots.
-//! [`Session::buy_ship`] and [`Session::assign`] keep their own carry,
-//! which folding onto [`carried_outfits`]
-//! waits for: a purchase's carry is a trade (`Max` and the free mass,
-//! the sale of the rest, the trade-in), and Use As My Ship keeps its own
-//! reserves and hook order.
+//!
+//! Each change of class decides its own carry and applies it through
+//! [`Session::become_class`], the one writer of the class, its fields,
+//! default items and stock, and the outfits owned. Use As My Ship
+//! ([`Session::assign`]) carries by [`carried_outfits`] too, keeping by
+//! 0x0004 alone, holding nothing to its `Max`, and topping its stock
+//! weapons up rather than adding them; its hooks and its take-over
+//! reserves run between the outfits and the class, and it always holds
+//! the reserves. [`Session::buy_ship`] alone keeps its own carry, a trade
+//! (`Max` and the free mass, the sale of the rest, the trade-in), until
+//! it becomes `become_class`'s third caller.
 //!
 //! **`Txxx`** ([`RenameShipOp`], @0x15b25-0x15be9) reads `STR#` `xxx`,
 //! the raw ID, with no range check, from the session's string lists
@@ -103,12 +109,13 @@
 //! counter garbles a name past 255 characters, reachable only by a `*`
 //! in a long name; it is not reproduced, and the name has no limit.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::rc::Rc;
 
-use super::Session;
 use super::hire::Shared;
-use crate::catalog::{CommCatalog, ShipId};
+use super::{ReservePolicy, Session};
+use crate::catalog::{CommCatalog, OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::armament;
 use crate::combat::hull::{DisableRule, NovaDisable};
@@ -168,6 +175,15 @@ impl ShipChangeRules {
     fn clamps(self) -> bool {
         self.max == RuleSource::Engine
     }
+}
+
+/// A change of the player's ship class, decided by the caller (see
+/// [`Session::become_class`]).
+pub(super) struct ClassChange {
+    /// What the pilot owns afterwards: the caller's carry.
+    pub(super) outfits: BTreeMap<OutfitId, u16>,
+    /// How the refit treats a shield or armour above the new most.
+    pub(super) reserves: ReservePolicy,
 }
 
 /// The game's string lists, as `T` reads them, shared.
@@ -245,6 +261,28 @@ impl Session {
         Shared(Rc::new(NovaDisable))
     }
 
+    /// Makes the player's ship class `ship`, as `change` says: the one
+    /// writer of a change of class, deciding nothing itself. In order, it
+    /// writes `change.outfits` as the outfits owned, runs `before_class`,
+    /// takes the class, its fields, default items and stock weapons from
+    /// `ship`, refits by `change.reserves` and makes a save due. What the
+    /// change carries, and what runs between, is the caller's.
+    pub(super) fn become_class(
+        &mut self,
+        ship: &ShipRecord,
+        change: ClassChange,
+        before_class: impl FnOnce(&mut Self),
+    ) {
+        self.pilot.outfits = change.outfits;
+        before_class(self);
+        self.pilot.ship = ship.id;
+        self.fields = ship.fields;
+        self.defaults = pilot::tally(ship.defaults.iter().copied());
+        self.stock = armament::fitted(&self.arsenal.stock_fits(ship.id, &self.outfits));
+        self.refit(false, change.reserves);
+        self.save_due = true;
+    }
+
     /// Changes the player's ship to class `ship`, its outfits carried as
     /// `carry` says and held to their `Max` when `clamp` (see the module
     /// docs); nothing changes when the session has no record of the
@@ -253,24 +291,16 @@ impl Session {
         let Some(record) = self.ship_record(ship).cloned() else {
             return;
         };
-        let before = self.pilot.reserves;
         let defaults = pilot::tally(record.defaults.iter().copied());
         let stock = armament::fitted(&self.arsenal.stock_fits(record.id, &self.outfits));
         // `E` and `H` add the stock weapons and their `AmmoLoad` with the
         // default items (step 5), as the outfits that hold them.
         let added = pilot::merged(&defaults, &stock);
-        self.pilot.outfits =
-            carried_outfits(&self.pilot.outfits, carry, &added, clamp, &self.outfits);
-        self.pilot.ship = record.id;
-        self.fields = record.fields;
-        self.defaults = defaults;
-        self.stock = stock;
-        self.refit(false);
-        if self.ship_change_rules().reserves == RuleSource::Engine {
-            let reserves = &mut self.pilot.reserves;
-            reserves.shield.now = before.shield.now;
-            reserves.armor.now = before.armor.now;
-        }
+        let change = ClassChange {
+            outfits: carried_outfits(&self.pilot.outfits, carry, &added, clamp, &self.outfits),
+            reserves: ReservePolicy::reading(self.ship_change_rules().reserves),
+        };
+        self.become_class(&record, change, |_| {});
         if self.ship_change_rules().cargo == RuleSource::Bible {
             // To the new ship's own hold, goods in order: the purchase
             // rule's other reading, with no escorts' holds counted.
@@ -282,7 +312,6 @@ impl Session {
             );
         }
         self.bump_armor();
-        self.save_due = true;
     }
 
     /// Raises the player's armour [`ARMOR_BUMP`] at a time, never past
@@ -579,6 +608,93 @@ mod tests {
         assert_eq!(bible(RuleKey::CrimeGains), ShipChangeRules::default());
     }
 
+    // Becoming a class.
+
+    /// `session`'s record of ship `id`.
+    fn record(session: &Session, id: i16) -> ShipRecord {
+        session.ship_record(ShipId(id)).cloned().expect("a record")
+    }
+
+    #[test]
+    fn become_class_runs_its_step_with_the_new_outfits_and_the_old_class() {
+        let catalog = changing_armed();
+        let mut session = session(&catalog);
+        let before = session.clone();
+        let outfits = owned(&[(LICENCE, 1), (OutfitId(405), 1)]);
+        let change = ClassChange {
+            outfits: outfits.clone(),
+            reserves: ReservePolicy::Hold,
+        };
+        let mut seen = None;
+        session.become_class(&record(&session, 129), change, |s| {
+            seen = Some((
+                s.ship(),
+                s.pilot.outfits.clone(),
+                s.fields,
+                s.defaults.clone(),
+                s.stock.clone(),
+                s.stats(),
+                s.save_due,
+            ));
+        });
+        assert_eq!(
+            seen,
+            Some((
+                ShipId(128),
+                outfits,
+                before.fields,
+                before.defaults.clone(),
+                before.stock.clone(),
+                before.stats(),
+                false,
+            )),
+            "the outfits written, nothing else yet"
+        );
+    }
+
+    #[test]
+    fn become_class_flies_the_record_with_the_outfits_given() {
+        let catalog = changing_armed();
+        let mut session = session(&catalog);
+        let outfits = owned(&[(LICENCE, 1), (SHIELD, 1), (OutfitId(405), 1)]);
+        let change = ClassChange {
+            outfits: outfits.clone(),
+            reserves: ReservePolicy::Hold,
+        };
+        session.become_class(&record(&session, 129), change, |_| {});
+        assert_eq!(session.ship(), ShipId(129));
+        assert_eq!(session.pilot.outfits, outfits);
+        assert_eq!(session.fields, BIG);
+        assert_eq!(session.defaults, owned(&[(SHIELD, 1), (LIMITED, 2)]));
+        assert_eq!(session.stock, owned(&[(OutfitId(405), 1)]));
+        assert_eq!(
+            session.stats(),
+            ShipStats::new(BIG, &outfit_mods(&outfits, &session.outfits))
+        );
+        assert_eq!(session.hull(), session.arsenal.hull(ShipId(129)));
+        assert_eq!(session.armament.mounts().len(), 1, "405 mounts weapon 200");
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn become_class_keeps_a_surplus_shield_and_armour_only_when_told() {
+        let catalog = changing();
+        for (reserves, kept) in [
+            (ReservePolicy::KeepSurplus, (130.0, 45.0)),
+            (ReservePolicy::Hold, (10.0, 20.0)),
+        ] {
+            let mut session = session(&catalog);
+            let change = ClassChange {
+                outfits: BTreeMap::new(),
+                reserves,
+            };
+            session.become_class(&record(&session, 130), change, |_| {});
+            let now = session.reserves();
+            assert_eq!((now.shield.now, now.armor.now), kept, "{reserves:?}");
+            assert_eq!(now.fuel, Gauge::full(100.0), "{reserves:?}: always held");
+        }
+    }
+
     // C.
 
     #[test]
@@ -720,6 +836,44 @@ mod tests {
             Reserves::full(110.0, 20.0, 100.0),
             "by the other reading each is held to its new most"
         );
+    }
+
+    #[test]
+    fn e_and_h_to_a_smaller_class_keep_the_surplus_by_the_engine_and_hold_it_by_the_other() {
+        let catalog = changing();
+        for op in ["E130", "H130"] {
+            let mut engine = session(&catalog);
+            run(&mut engine, op);
+            let kept = engine.reserves();
+            assert!(kept.shield.max < 130.0 && kept.armor.max < 45.0, "{op}");
+            assert_eq!(kept.shield.now, 130.0, "{op}: the shield's surplus kept");
+            assert_eq!(kept.armor.now, 45.0, "{op}: the armour's surplus kept");
+            assert_eq!(kept.fuel, Gauge::full(kept.fuel.max), "{op}: fuel held");
+            let mut bible = session(&catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::ShipChangeReserves, RuleSource::Bible),
+            );
+            run(&mut bible, op);
+            assert_eq!(
+                bible.reserves(),
+                Reserves::full(kept.shield.max, kept.armor.max, kept.fuel.max),
+                "{op}: each held to its new most"
+            );
+        }
+    }
+
+    #[test]
+    fn a_larger_class_is_alike_by_either_reading_of_the_reserves() {
+        let catalog = changing();
+        for op in ["C129", "E129", "H129"] {
+            let mut engine = session(&catalog);
+            run(&mut engine, op);
+            let mut bible = session(&catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::ShipChangeReserves, RuleSource::Bible),
+            );
+            run(&mut bible, op);
+            assert_eq!(bible.reserves(), engine.reserves(), "{op}");
+            assert_eq!(engine.reserves().shield.now, 130.0, "{op}: not refilled");
+        }
     }
 
     #[test]
@@ -997,7 +1151,7 @@ mod tests {
             assert_eq!((kept.shield.now, kept.armor.now), (130.0, 45.0), "{op}");
             let pilot = save::decode(&save::encode(session.pilot())).expect("loads");
             assert_eq!(pilot.reserves(), kept, "{op}: the save keeps the surplus");
-            // `Session::fly` refits with the clamping `refit` before any
+            // `Session::fly` refits under `ReservePolicy::Hold` before any
             // rules apply, so a reload holds the surplus whatever the
             // `refit_reserves` reading.
             let reloaded = Session::fly(&catalog, pilot).expect("flies");

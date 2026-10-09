@@ -693,6 +693,17 @@ mod tests {
         assert_eq!(session.reserves().fuel.now, 7.0);
     }
 
+    #[test]
+    fn by_the_other_reading_on_capture_still_draws_before_the_fuel() {
+        let rules = Rulebook::default().with_override(RuleKey::CaptureHookOrder, RuleSource::Bible);
+        let (mut session, _) = captured_kitted("", "R(b1 b2)", rules);
+        let mut chance = Draws::of(&[1, 7]);
+        session.assign(Assignment::MyShip, &mut chance);
+        assert_eq!(chance.asked, [2, 300], "the roll, then the fuel");
+        assert!(session.control_bit(bit(1)));
+        assert_eq!(session.reserves().fuel.now, 7.0);
+    }
+
     // A new pilot.
 
     /// [`catalog`] whose `chär`'s `OnStart` is `on_start`, and whose ship

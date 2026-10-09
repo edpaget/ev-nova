@@ -42,9 +42,14 @@
 //! nothing (the original indexes it blindly). Each move makes a save
 //! due. In flight a move gives up a jump being prepared.
 //!
+//! A move enters the system as every way in does, by its rows of the
+//! table in the `entry` module ([`Session::enter_system`]): `move_to`
+//! only chooses where the ship goes, as below.
+//!
 //! In flight, the ship is in the new system: its stellars read, the
 //! navigation target, a gate's pending entry, the shots and beams, the
-//! strikes, the player's target, the boarding and the hail let go. `M`
+//! strikes, the player's target, the boarding and the hail let go; a
+//! held `P` sound is kept, and no arrival sounds or is raised. `M`
 //! puts it at rest on the system's first stellar, whatever that is (a
 //! gate too); in a system with no stellar it stays where it is, moving
 //! as it was, unless [`ScriptEffectRules::starless`] puts it at rest at
@@ -137,9 +142,8 @@
 //! for missions, and the first stellar is the first of
 //! [`PilotCatalog::landing_sites`] until stellars can be destroyed.
 
-use std::collections::BTreeSet;
-
 use super::Session;
+use super::entry::{Arrival, Entry, Placement, ShipPlacement};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::{SetOp, SetOpHandler};
@@ -289,8 +293,9 @@ impl Session {
     }
 
     /// Moves the player to `system`, keeping the position when `keep`
-    /// (`N`) or else at its first stellar (`M`), read from `catalog` (see
-    /// the module docs).
+    /// (`N`) or else at its first stellar (`M`), read from `catalog`, and
+    /// enters it as a move (see the module docs): only the placement is
+    /// chosen here.
     fn move_to(
         &mut self,
         system: SystemId,
@@ -304,70 +309,26 @@ impl Session {
             .map(|site| (site.position, is_dockable(site).then_some(site.id)));
         let rules = self.script_effect_rules();
         let landed = self.landed.is_some();
-        if keep {
-            self.hold_position |= landed || rules.keep_flag == RuleSource::Engine;
-        }
-        let changed = system != self.pilot.system;
-        self.pilot.system = system;
-        self.save_due = true;
-        if landed {
-            self.pilot.stellar = None;
-            if !keep {
-                self.player.position = first.map_or(Vec2::ZERO, |(position, _)| position);
-                self.player.velocity = Vec2::ZERO;
-                self.pilot.stellar = first.and_then(|(_, dock)| dock);
+        let ship = match first {
+            _ if keep => ShipPlacement::Keep,
+            Some((position, _)) => ShipPlacement::AtRest(position),
+            None if landed || rules.starless == RuleSource::Bible => {
+                ShipPlacement::AtRest(Vec2::ZERO)
             }
-            self.next_sites = Some(sites);
-            if rules.arrival == RuleSource::Bible {
-                self.pilot.explore(system);
-                self.pilot.course.clear();
-            }
-            return;
-        }
-        if !keep {
-            match first {
-                Some((position, _)) => self.put_at_rest(position),
-                None if rules.starless == RuleSource::Bible => self.put_at_rest(Vec2::ZERO),
-                None => {}
-            }
-        }
-        if changed {
-            self.pilot.stellar = None;
-        }
-        self.sites = sites;
-        if self.jump.take().is_some() {
-            self.stop_thrust();
-        }
-        self.leave_scene();
-        if rules.arrival == RuleSource::Bible {
-            self.pilot.explore(system);
-            self.pilot.course.clear();
-            self.leave_with_fighters(false);
-            self.populate(catalog, chance);
-        } else if changed {
-            let table = self.spawn_table(catalog);
-            let fleet: BTreeSet<_> = self.fleet.iter().flatten().copied().collect();
-            self.traffic.retarget(table, &fleet);
-        }
-    }
-
-    /// Puts the ship at rest at `position`.
-    fn put_at_rest(&mut self, position: Vec2) {
-        self.player.position = position;
-        self.player.velocity = Vec2::ZERO;
-    }
-
-    /// Lets go of what belongs to the scene left: the navigation target,
-    /// a gate's pending entry, the shots and beams, the strikes, the
-    /// player's target, the boarding and the hail.
-    pub(super) fn leave_scene(&mut self) {
-        self.nav_target = None;
-        self.gate = None;
-        self.combat.clear();
-        self.strikes.clear();
-        self.target = None;
-        self.aboard = None;
-        self.talk = None;
+            None => ShipPlacement::Keep,
+        };
+        let stellar = first.and_then(|(_, dock)| dock).filter(|_| landed && !keep);
+        let placement = Placement {
+            ship,
+            stellar,
+            hold: keep && (landed || rules.keep_flag == RuleSource::Engine),
+        };
+        let arrival = Arrival {
+            system,
+            sites,
+            placement,
+        };
+        self.enter_system(Entry::ScriptMove { landed }, arrival, catalog, chance);
     }
 }
 
@@ -915,6 +876,106 @@ mod tests {
         );
         assert_eq!(session.npcs().len(), 4, "three ships and the escort");
         assert_eq!(session.fleet.iter().flatten().count(), 1);
+    }
+
+    // What a move lets go of and keeps, by either reading of
+    // `MoveArrival`.
+
+    const READINGS: [RuleSource; 2] = [RuleSource::Engine, RuleSource::Bible];
+
+    /// The rules with `MoveArrival` read as `reading`.
+    fn arrival(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::MoveArrival, reading)
+    }
+
+    #[test]
+    fn a_move_in_flight_lets_go_of_the_boarding_and_the_hail_by_either_reading() {
+        let catalog = moving();
+        for reading in READINGS {
+            for text in ["M131", "N130"] {
+                let mut session = flying(&catalog).with_rules(arrival(reading));
+                session.stage_scene(NpcId(0));
+                moved(&mut session, &catalog, text);
+                session.assert_scene_left(&format!("{text} {reading:?}"));
+            }
+        }
+    }
+
+    #[test]
+    fn a_move_keeps_a_held_sound_and_sounds_and_raises_no_arrival() {
+        let catalog = moving();
+        for reading in READINGS {
+            for text in ["M131", "N131"] {
+                let case = format!("{text} {reading:?}");
+                let mut session = flying(&catalog).with_rules(arrival(reading));
+                session.take_sounds();
+                session.take_messages();
+                run(&mut session, "P300");
+                moved(&mut session, &catalog, text);
+                assert_eq!(session.take_sounds(), [], "in flight: {case}");
+                assert_eq!(session.take_messages(), [], "in flight: {case}");
+                session.tick(crate::flight::Controls::default());
+                assert_eq!(
+                    session.take_sounds(),
+                    [mission_sound(300, true)],
+                    "in flight: {case}"
+                );
+                let mut session = landed(&catalog).with_rules(arrival(reading));
+                session.take_messages();
+                run(&mut session, "P300");
+                moved(&mut session, &catalog, text);
+                assert_eq!(session.take_sounds(), [], "landed: {case}");
+                assert_eq!(session.take_messages(), [], "landed: {case}");
+                session.take_off();
+                assert_eq!(session.take_sounds(), [SimSound::TookOff], "{case}");
+                session.tick(crate::flight::Controls::default());
+                assert_eq!(
+                    session.take_sounds(),
+                    [mission_sound(300, true)],
+                    "landed: {case}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn as_an_arrival_a_move_within_the_system_populates_it_afresh_on_the_chance_given() {
+        let catalog = moving();
+        let mut session = flying(&catalog).with_rules(arrival(RuleSource::Bible));
+        let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        run(&mut session, "N130");
+        let mut chance = crate::testkit::Draws::default();
+        let _ = session.settle_script(&catalog, &mut chance);
+        let after: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(after.len(), 2);
+        assert!(
+            after.iter().all(|id| !before.contains(id)),
+            "{before:?} {after:?}"
+        );
+        assert!(!chance.asked.is_empty(), "drawn on the chance given");
+    }
+
+    #[test]
+    fn a_landed_move_leaves_the_traffic_and_the_fighters_out_by_either_reading() {
+        let catalog = moving();
+        for reading in READINGS {
+            let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+            pilot.escorts = vec![escort(129, false), escort(130, true)];
+            let mut session = flying_with(&catalog, pilot).with_rules(arrival(reading));
+            land_now(&mut session).expect("lands");
+            let npcs = session.npcs().to_vec();
+            moved(&mut session, &catalog, "M131");
+            assert_eq!(session.npcs(), npcs, "{reading:?}");
+            assert_eq!(session.pilot().escorts().len(), 2, "{reading:?}");
+            assert_eq!(session.take_fighter_notes(), [], "{reading:?}");
+            assert_eq!(
+                ids(&session.sites),
+                [128, 129],
+                "the port's until the take-off: {reading:?}"
+            );
+            session.take_off();
+            assert_eq!(ids(&session.sites), [140, 141], "{reading:?}");
+        }
     }
 
     // Landed.

@@ -200,7 +200,7 @@ impl Session {
     fn script_grant(&mut self, outfit: OutfitId) {
         if self.script_may_grant(outfit) {
             self.grant_outfit(outfit);
-            self.script_refit(true);
+            self.refit(true, self.script_reserves());
         }
     }
 
@@ -216,7 +216,7 @@ impl Session {
                 .map_or(0, |record| unit_price(record, self.fields.mass));
             self.pilot.cash = self.pilot.cash.saturating_add(resale(price));
         }
-        self.script_refit(false);
+        self.refit(false, self.script_reserves());
     }
 
     /// `X`: explores `system` when it is on the star map.

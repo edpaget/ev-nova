@@ -16,9 +16,13 @@
 //!   cleared, the ship at rest at the stellar's centre with its heading
 //!   kept, the bar's hire rolls and the shops' `BuyRandom` rolls drawn
 //!   afresh, and the outfitter's opening started anew. The last system's
-//!   traffic and fight are left behind, and the next take-off populates
-//!   the new system. It makes no sound and raises no message, and leaves
-//!   the ship, its outfits, stats and reserves as they were. It is
+//!   traffic, fleet and fight are left behind, with the strikes, the
+//!   target, the boarding, the hail and a gate's pending entry, and the
+//!   next take-off populates the new system; a held `P` sound and the
+//!   fighters out are kept. It enters the system by the relocation's row
+//!   of the table in the `entry` module ([`Session::enter_system`]). It
+//!   makes no sound and raises no message, and leaves the ship, its
+//!   outfits, stats and reserves as they were. It is
 //!   refused ([`RelocateRefusal`]) in flight, a jump under way included,
 //!   and for a system or stellar that is not there, a gate, or a stellar
 //!   that cannot be landed on. A move to the stellar the ship is already
@@ -30,12 +34,12 @@
 //!   repair, so the ship's condition stays as it was.
 
 use super::Session;
+use super::entry::{Arrival, Entry, NoTraffic, Placement, ShipPlacement};
 use crate::catalog::{PilotCatalog, StellarId, SystemId};
+use crate::chance::NeverFires;
 use crate::date::GameDate;
-use crate::geometry::Vec2;
 use crate::landing::is_dockable;
 use crate::reserves::Reserve;
-use crate::traffic::Traffic;
 
 /// Why [`Session::relocate`] refused to move the pilot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -100,27 +104,17 @@ impl Session {
         if !is_dockable(site) {
             return Err(RelocateRefusal::NotLandable);
         }
-        self.player.position = site.position;
-        self.player.velocity = Vec2::ZERO;
-        self.touchdown = site.position;
-        self.next_sites = None;
-        let pilot = &mut self.pilot;
-        pilot.system = system;
-        pilot.stellar = Some(stellar);
-        pilot.explore(system);
-        pilot.course.clear();
-        self.sites = sites;
-        self.landed = Some(stellar);
-        self.leave_scene();
-        self.traffic = Traffic::new();
-        self.traffic_due = true;
-        self.fleet.clear();
-        self.hire_rolls.clear();
-        self.outfit_rolls.clear();
-        self.open_outfit_visit();
-        self.ship_rolls.clear();
-        self.ship_redraws.clear();
-        self.save_due = true;
+        let placement = Placement {
+            ship: ShipPlacement::AtRest(site.position),
+            stellar: Some(stellar),
+            hold: false,
+        };
+        let arrival = Arrival {
+            system,
+            sites,
+            placement,
+        };
+        self.enter_system(Entry::Relocate, arrival, &NoTraffic, &mut NeverFires);
         Ok(())
     }
 
@@ -574,5 +568,85 @@ mod tests {
         assert_eq!(flown.system(), SystemId(131));
         assert_eq!(flown.landed(), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(50.0, 60.0));
+    }
+
+    /// [`atlas`], the player's ship carrying a blaster, outfit 250
+    /// holding it.
+    fn armed_atlas() -> FakePilotCatalog {
+        use crate::catalog::{HullRecord, StockWeapon, WeaponId, WeaponRecord};
+        use crate::testkit::{hull, weapon};
+        FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                reload: 2,
+                count: 30,
+                speed: 2000,
+                ..weapon(128)
+            }],
+            hulls: vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(128),
+                    count: 1,
+                    ammo: 0,
+                }],
+                ..hull(128)
+            }],
+            outfits: vec![outfit(250, &[(crate::combat::armament::MOD_WEAPON, 128)])],
+            ..atlas()
+        }
+    }
+
+    #[test]
+    fn a_move_lets_go_of_the_scene_and_the_fleet_and_keeps_a_held_sound_and_the_fighters_out() {
+        let catalog = armed_atlas();
+        let escort = |carried| Escort {
+            ship: ShipId(129),
+            reserves: Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried,
+            wage: None,
+            person: None,
+        };
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.escorts = vec![escort(false), escort(true)];
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        session.hold_fire(true, false);
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        session.hold_fire(false, false);
+        let combat = session.combat.clone();
+        assert_eq!(combat.shots().len(), 1);
+        land_now(&mut session).expect("lands");
+        session.combat = combat;
+        session.nav_target = Some(StellarId(129));
+        session.gate = Some(StellarId(129));
+        session.stage_scene(session.npcs()[0].id);
+        assert_eq!(session.fleet.len(), 2);
+        session.run_set(
+            &crate::control::SetExpr::parse("P300").expect("parses"),
+            &mut NeverFires,
+        );
+        session.take_sounds();
+        session.take_fighter_notes();
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert_eq!(session.shots(), []);
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(session.gate, None);
+        session.assert_scene_left("a relocation");
+        assert_eq!(session.fleet, []);
+        assert!(session.traffic_due);
+        assert_eq!(session.pilot().escorts().len(), 2, "the fighter still out");
+        assert_eq!(session.take_fighter_notes(), []);
+        session.take_off();
+        assert_eq!(session.take_sounds(), [crate::sound::SimSound::TookOff]);
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(
+            session.take_sounds(),
+            [crate::sound::SimSound::Script {
+                sound: crate::catalog::SoundId(300),
+                exclusive: true,
+            }]
+        );
     }
 }
