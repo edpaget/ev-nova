@@ -36,22 +36,46 @@
 use super::Session;
 use crate::catalog::StellarId;
 use crate::chance::Chance;
-use crate::rulebook::RuleKey;
+use crate::combat::ShipRef;
+use crate::combat::stellar::StellarTarget;
+use crate::landing::landing_radius;
+use crate::legal::{self, Crime, LegalCode};
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Countdown;
 use crate::story::wreck::{self, Tick};
 
+/// How many killings the player is convicted of for shooting a stellar
+/// down: `_SlapWithPenalty` runs ten times (@0x374e1-0x3751f).
+const STELLAR_KILLINGS: usize = 10;
+
 impl Session {
-    /// `Y`: destroys `stellar` (see the module docs).
-    pub(super) fn destroy_stellar(&mut self, stellar: StellarId) {
+    /// `Y`: destroys `stellar` (see the module docs), drawing on `chance`
+    /// for an `OnDestroy` the Bible's reading runs.
+    pub(super) fn destroy_stellar(&mut self, stellar: StellarId, chance: &mut dyn Chance) {
         if !wreck::in_range(stellar) {
             return;
         }
-        let Some(life) = self.lives.get(&stellar) else {
+        let Some(life) = self.lives.get(&stellar).cloned() else {
             return;
         };
-        if wreck::destroys(life, self.rules.source_for(RuleKey::DestroyInvincible)) {
-            let countdown = wreck::countdown_on_destroy(life);
+        let destroyed_before = self.galaxy.destroyed(stellar);
+        let site = self
+            .sites
+            .iter()
+            .find(|site| site.id == stellar && self.landed.is_none());
+        if let Some(site) = site
+            && let Some(explosion) = wreck::explodes_on_y(&life, true, destroyed_before)
+        {
+            self.combat.explode(site.position, explosion);
+        }
+        self.strength.remove(&stellar);
+        if wreck::destroys(&life, self.rules.source_for(RuleKey::DestroyInvincible)) {
+            let countdown = wreck::countdown_on_destroy(&life);
             self.set_stellar_state(stellar, Some(countdown));
+            if !destroyed_before && self.rules.source_for(RuleKey::YOnDestroy) == RuleSource::Bible
+            {
+                self.run_script(&life.on_destroy, chance);
+            }
         }
     }
 
@@ -59,7 +83,91 @@ impl Session {
     /// new pilot's stellars destroy one, each within the original's
     /// slots, so any other is never destroyed.
     pub(super) fn regenerate_stellar(&mut self, stellar: StellarId) {
+        self.strength.remove(&stellar);
         self.set_stellar_state(stellar, None);
+    }
+
+    /// The stellars shown that shots can hit this tick: each whole one of
+    /// `Strength` above 0 with a sprite, as big as its disc
+    /// ([`landing_radius`]), with its current strength.
+    pub(super) fn stellar_targets(&self) -> Vec<StellarTarget> {
+        self.sites
+            .iter()
+            .filter(|site| !site.destroyed && site.frame_size.is_some())
+            .filter_map(|site| {
+                let life = self.lives.get(&site.id)?;
+                wreck::destroyable(life).then(|| StellarTarget {
+                    stellar: site.id,
+                    position: site.position,
+                    radius: landing_radius(site),
+                    strength: self
+                        .strength
+                        .get(&site.id)
+                        .copied()
+                        .unwrap_or_else(|| wreck::full_strength(life)),
+                })
+            })
+            .collect()
+    }
+
+    /// Keeps the strength each of `stellars` is left with after the
+    /// fight's tick, then shoots down each the fight's strikes destroyed,
+    /// in order, under `law`, drawing on `chance`.
+    pub(super) fn strike_stellars(
+        &mut self,
+        stellars: &[StellarTarget],
+        law: &dyn LegalCode,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        for target in stellars {
+            let full = self.lives.get(&target.stellar).map(wreck::full_strength);
+            if full == Some(target.strength) {
+                self.strength.remove(&target.stellar);
+            } else {
+                self.strength.insert(target.stellar, target.strength);
+            }
+        }
+        for strike in self.combat.take_stellar_strikes() {
+            if strike.destroyed {
+                self.shoot_down(strike.stellar, strike.by, law, chance);
+            }
+        }
+    }
+
+    /// Destroys the shown `stellar` a shot of `by` took below 0, as
+    /// `_CheckShotProximities` does (@0x37409-0x3751f): its explosion at
+    /// its centre, destroyed with the countdown `Y` gives it, then its
+    /// `OnDestroy`, drawing on `chance`, and destroyed with that countdown
+    /// again whatever the script did. The player, and no other ship, is
+    /// convicted ten times of killing a ship of its government, as `law`
+    /// says.
+    pub(super) fn shoot_down(
+        &mut self,
+        stellar: StellarId,
+        by: ShipRef,
+        law: &dyn LegalCode,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let (Some(life), Some(site)) = (
+            self.lives.get(&stellar).cloned(),
+            self.sites.iter().find(|site| site.id == stellar).copied(),
+        ) else {
+            return;
+        };
+        if let Some(explosion) = life.explosion {
+            self.combat.explode(site.position, explosion);
+        }
+        let countdown = wreck::countdown_on_destroy(&life);
+        self.set_stellar_state(stellar, Some(countdown));
+        self.run_script(&life.on_destroy, chance);
+        self.set_stellar_state(stellar, Some(countdown));
+        self.strength.remove(&stellar);
+        if by == ShipRef::Player {
+            let changes = law.penalties(Crime::Kill, site.govt, &self.govts);
+            for _ in 0..STELLAR_KILLINGS {
+                legal::convict(&mut self.pilot, &changes);
+            }
+        }
     }
 
     /// The daily step's stellars (see the module docs): each destroyed
@@ -70,6 +178,7 @@ impl Session {
     /// higher, as the original's pass by index does. A destroyed stellar
     /// with no record is left as it is.
     pub(super) fn stellars_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.strength.clear();
         let mut after = None;
         while let Some((stellar, countdown)) = self.next_destroyed(after) {
             after = Some(stellar);
@@ -765,5 +874,445 @@ mod tests {
         assert_eq!(flown.landed(), Some(StellarId(128)));
         assert!(shown_destroyed(&flown, 128));
         assert_eq!(destroyed(&flown, 128), Some(left(2)));
+    }
+
+    // Stellars shot down.
+
+    use crate::catalog::{
+        GovtId, GovtRecord, HullRecord, Penalties, StockWeapon, WeaponId, WeaponRecord,
+    };
+    use crate::combat::armament::{MOD_WEAPON, Trigger};
+    use crate::combat::weapon::{Explosion, PLANET_TYPE};
+    use crate::combat::{CombatEvent, Rules, ShipRef};
+    use crate::geometry::Vec2;
+    use crate::govt::{DERELICT, Governments};
+    use crate::legal::{Crime, LegalCode, NovaLaw, RECORD_LIMIT};
+    use crate::testkit::{govt, hull, outfit, weapon};
+    use crate::traffic::npc::NpcId;
+
+    /// A planet-type gun firing every tick, 15 pixels a tick, doing 30
+    /// mass and 20 energy damage and exploding in `bööm` 130 where it
+    /// hits.
+    fn planet_gun() -> WeaponRecord {
+        WeaponRecord {
+            count: 30,
+            speed: 1500,
+            mass_dmg: 30,
+            energy_dmg: 20,
+            flags2: PLANET_TYPE,
+            explod_type: 2,
+            ..weapon(128)
+        }
+    }
+
+    /// [`catalog`] with `lives`, its ship carrying a [`planet_gun`]. The
+    /// ship starts over 128, so each shot hits 128 on the tick it is
+    /// fired: 128 of `Strength` 100 is shot down by the third.
+    fn shooting(lives: impl IntoIterator<Item = StellarLife>) -> FakePilotCatalog {
+        FakePilotCatalog {
+            weapons: vec![planet_gun()],
+            hulls: vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(128),
+                    count: 1,
+                    ammo: 0,
+                }],
+                ..hull(128)
+            }],
+            outfits: vec![outfit(250, &[(MOD_WEAPON, 128)])],
+            ..catalog().living(lives)
+        }
+    }
+
+    /// 128, back after 2 days, running `on_destroy` as a shot destroys
+    /// it.
+    fn destroying(on_destroy: &str) -> StellarLife {
+        StellarLife {
+            on_destroy: Script::parse(on_destroy),
+            ..life(128, 2)
+        }
+    }
+
+    const FIRE: Trigger = Trigger {
+        primary: true,
+        secondary: None,
+        only: None,
+        turrets_only: false,
+        bays: false,
+    };
+
+    /// Fires every tick for `ticks` ticks under `law`, then lets go: the
+    /// fight's events.
+    fn fire_by(session: &mut Session, ticks: u32, law: &dyn LegalCode) -> Vec<CombatEvent> {
+        session.hold_trigger(FIRE);
+        let mut events = Vec::new();
+        for _ in 0..ticks {
+            let rules = Rules {
+                law,
+                ..Rules::default()
+            };
+            session.tick_combat(rules, &mut NeverFires);
+            events.extend(session.take_combat_events());
+        }
+        session.hold_trigger(Trigger::default());
+        events
+    }
+
+    fn fire(session: &mut Session, ticks: u32) -> Vec<CombatEvent> {
+        fire_by(session, ticks, &NovaLaw::default())
+    }
+
+    /// The explosions among `events` of `bööm` `kind`, where each was.
+    fn booms(events: &[CombatEvent], kind: i16) -> Vec<Vec2> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Exploded { at, explosion }
+                    if Some(explosion) == Explosion::decode(kind) =>
+                {
+                    Some(at)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shots_that_take_a_stellar_below_none_destroy_it_and_run_its_on_destroy_once() {
+        let catalog = shooting([destroying("^b5")]);
+        let mut session = quiet(&catalog);
+        fire(&mut session, 2);
+        assert_eq!(destroyed(&session, 128), None, "none left: still whole");
+        assert_eq!(session.take_events(), []);
+        assert!(!session.take_save_due());
+        fire(&mut session, 1);
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+        assert!(shown_destroyed(&session, 128));
+        assert_eq!(session.take_events(), [SessionEvent::GalaxyChanged]);
+        assert!(session.take_save_due());
+        assert!(session.control_bit(bit(5)), "its OnDestroy");
+        fire(&mut session, 3);
+        assert!(
+            session.control_bit(bit(5)),
+            "once: a toggle run again clears it"
+        );
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+        assert_eq!(
+            session.select_stellar(StellarPick::Slot(0)),
+            Some(StellarId(128))
+        );
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(128),
+                station: false,
+            })
+        );
+    }
+
+    #[test]
+    fn an_on_destroy_regenerating_its_stellar_leaves_it_destroyed_all_the_same() {
+        let catalog = shooting([destroying("U128 b5")]);
+        let mut session = quiet(&catalog);
+        fire(&mut session, 3);
+        assert!(session.control_bit(bit(5)));
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+    }
+
+    #[test]
+    fn an_on_destroy_sees_its_stellar_destroyed() {
+        let catalog = shooting([destroying("Y128")]);
+        let mut session = quiet(&catalog);
+        session.set_stellar_state(StellarId(128), None);
+        fire(&mut session, 3);
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::GalaxyChanged],
+            "its Y found it destroyed already"
+        );
+    }
+
+    #[test]
+    fn an_on_destroys_move_waits_for_the_settling() {
+        let catalog = shooting([destroying("M131")]);
+        let mut session = quiet(&catalog);
+        fire(&mut session, 3);
+        assert_eq!(session.system(), SystemId(130), "not yet");
+        let _ = session.settle_script(&catalog, &mut Scripted::default());
+        assert_eq!(session.system(), SystemId(131));
+    }
+
+    /// Fines each government a `kill` penalty of -3 for a killing, and
+    /// records each crime it is asked about with the victim's
+    /// government.
+    #[derive(Debug, Default)]
+    struct Fine {
+        seen: std::cell::RefCell<Vec<(Crime, Option<GovtId>)>>,
+    }
+
+    impl LegalCode for Fine {
+        fn penalties(
+            &self,
+            crime: Crime,
+            victim: Option<GovtId>,
+            _govts: &Governments,
+        ) -> Vec<(GovtId, i32)> {
+            self.seen.borrow_mut().push((crime, victim));
+            vec![(GovtId(140), -3)]
+        }
+    }
+
+    /// [`shooting`]'s session with 128 given to government 141 by the
+    /// galaxy overlay.
+    fn overlaid(catalog: &FakePilotCatalog) -> Session {
+        let mut session = quiet(catalog);
+        session.change_galaxy(catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(128), Some(Some(GovtId(141))));
+        });
+        session.take_events();
+        session
+    }
+
+    #[test]
+    fn the_player_shooting_a_stellar_down_is_convicted_of_ten_killings_of_its_government() {
+        let catalog = shooting([life(128, 2)]);
+        let mut session = overlaid(&catalog);
+        let fine = Fine::default();
+        fire_by(&mut session, 2, &fine);
+        assert_eq!(fine.seen.take(), [], "no crime until it is down");
+        fire_by(&mut session, 1, &fine);
+        assert!(
+            fine.seen
+                .take()
+                .iter()
+                .all(|&seen| seen == (Crime::Kill, Some(GovtId(141)))),
+            "a killing, of the overlay's government"
+        );
+        assert_eq!(session.pilot().legal_record(GovtId(140)), -30, "ten times");
+        let mut session = overlaid(&catalog);
+        let floor = -RECORD_LIMIT as i16;
+        session.pilot.set_legal_record(GovtId(140), floor + 10);
+        fire_by(&mut session, 3, &fine);
+        assert_eq!(
+            session.pilot().legal_record(GovtId(140)),
+            floor,
+            "each held to the limit"
+        );
+    }
+
+    #[test]
+    fn an_npc_shooting_a_stellar_down_convicts_no_one() {
+        let catalog = shooting([destroying("b5")]);
+        let mut session = quiet(&catalog);
+        let fine = Fine::default();
+        session.shoot_down(
+            StellarId(128),
+            ShipRef::Npc(NpcId(1)),
+            &fine,
+            &mut NeverFires,
+        );
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+        assert!(session.control_bit(bit(5)));
+        assert_eq!(fine.seen.take(), []);
+        assert_eq!(session.pilot().legal_record(GovtId(140)), 0);
+    }
+
+    #[test]
+    fn shooting_down_a_stellar_of_a_derelict_government_is_no_crime() {
+        for (flags, crime) in [(DERELICT, false), (0, true)] {
+            let mut catalog = shooting([life(128, 2)]);
+            catalog.govts = vec![
+                GovtRecord {
+                    flags,
+                    penalties: Penalties {
+                        kill: 5,
+                        ..Penalties::default()
+                    },
+                    ..govt(141)
+                },
+                govt(142),
+            ];
+            let mut session = overlaid(&catalog);
+            fire(&mut session, 3);
+            assert_eq!(destroyed(&session, 128), Some(left(2)));
+            assert_eq!(
+                session
+                    .pilot()
+                    .legal_records()
+                    .any(|(_, record)| record != 0),
+                crime,
+                "{flags:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stellar_shot_down_explodes_at_its_centre() {
+        let catalog = shooting([StellarLife {
+            explosion: Explosion::decode(4),
+            ..life(128, 2)
+        }]);
+        let mut session = quiet(&catalog);
+        assert_eq!(booms(&fire(&mut session, 2), 4), []);
+        let events = fire(&mut session, 1);
+        assert_eq!(booms(&events, 4), [Vec2::new(30.0, -40.0)]);
+        assert_eq!(booms(&events, 2).len(), 1, "the shot's own");
+    }
+
+    #[test]
+    fn shots_pass_through_an_invincible_stellar_and_one_with_no_sprite() {
+        let catalog = shooting([StellarLife {
+            strength: 0,
+            ..life(128, 2)
+        }]);
+        let mut session = quiet(&catalog);
+        let events = fire(&mut session, 5);
+        assert_eq!(booms(&events, 2), [], "no hit");
+        assert_eq!(destroyed(&session, 128), None);
+        let mut catalog = shooting([life(128, 2)]);
+        catalog.sites[0].1[0].frame_size = None;
+        let mut session = quiet(&catalog);
+        let events = fire(&mut session, 5);
+        assert_eq!(booms(&events, 2), [], "no hit");
+        assert_eq!(destroyed(&session, 128), None);
+    }
+
+    // The daily repair.
+
+    #[test]
+    fn a_damaged_stellar_is_repaired_by_the_day() {
+        let catalog = shooting([life(128, 2)]);
+        let mut session = quiet(&catalog);
+        fire(&mut session, 1);
+        session.pass_days(1, &mut Scripted::default());
+        fire(&mut session, 2);
+        assert_eq!(destroyed(&session, 128), None, "repaired: 100 again");
+        fire(&mut session, 1);
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+    }
+
+    #[test]
+    fn u_repairs_a_damaged_stellar_and_y_forgets_its_damage() {
+        for script in ["U128", "Y128 U128"] {
+            let catalog = shooting([life(128, 2)]);
+            let mut session = quiet(&catalog);
+            fire(&mut session, 1);
+            run(&mut session, script);
+            fire(&mut session, 2);
+            assert_eq!(destroyed(&session, 128), None, "{script}");
+            fire(&mut session, 1);
+            assert_eq!(destroyed(&session, 128), Some(left(2)), "{script}");
+        }
+    }
+
+    #[test]
+    fn a_jumps_days_repair_the_damaged_stellars() {
+        let catalog = shooting([life(128, 2)]);
+        let mut session = quiet(&catalog);
+        fire(&mut session, 1);
+        assert!(!session.strength.is_empty(), "damaged");
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        assert!(session.strength.is_empty());
+    }
+
+    // `Y`'s explosion.
+
+    /// [`catalog`] with 128 and 140 (in 131) exploding in `bööm` 132, of
+    /// `strength`.
+    fn exploding(strength: i32) -> FakePilotCatalog {
+        catalog().living([128, 140].map(|id| StellarLife {
+            strength,
+            explosion: Explosion::decode(4),
+            ..life(id, 2)
+        }))
+    }
+
+    #[test]
+    fn y_explodes_a_stellar_of_the_players_system_in_flight() {
+        let catalog = exploding(100);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        assert_eq!(
+            booms(&session.take_combat_events(), 4),
+            [Vec2::new(30.0, -40.0)]
+        );
+        run(&mut session, "Y128");
+        assert_eq!(
+            booms(&session.take_combat_events(), 4),
+            [],
+            "destroyed already"
+        );
+        run(&mut session, "Y140");
+        assert_eq!(
+            booms(&session.take_combat_events(), 4),
+            [],
+            "another system"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_y_explodes_an_invincible_stellar_it_leaves_whole() {
+        let catalog = exploding(0);
+        let mut session = quiet(&catalog);
+        for _ in 0..2 {
+            run(&mut session, "Y128");
+            assert_eq!(destroyed(&session, 128), None);
+            assert_eq!(
+                booms(&session.take_combat_events(), 4),
+                [Vec2::new(30.0, -40.0)],
+                "never destroyed: every time"
+            );
+        }
+    }
+
+    #[test]
+    fn y_makes_no_explosion_for_a_stellar_without_one_or_while_landed() {
+        let catalog = wrecking();
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        assert_eq!(session.take_combat_events(), []);
+        let catalog = exploding(100);
+        let mut session = quiet(&catalog);
+        land_now(&mut session).expect("lands");
+        run(&mut session, "Y128");
+        assert_eq!(session.take_combat_events(), [], "landed");
+    }
+
+    // `y_on_destroy`.
+
+    #[test]
+    fn by_the_engine_y_runs_no_on_destroy() {
+        let catalog = catalog().living([destroying("b5")]);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        assert!(!session.control_bit(bit(5)));
+        assert_eq!(
+            session.rules().source_for(RuleKey::YOnDestroy),
+            RuleSource::Engine,
+            "by default"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_y_runs_on_destroy_as_it_destroys_a_stellar() {
+        let rules = Rulebook::default().with_override(RuleKey::YOnDestroy, RuleSource::Bible);
+        let catalog = catalog().living([destroying("^b5")]);
+        let mut session = quiet(&catalog).with_rules(rules);
+        run(&mut session, "Y128");
+        assert!(session.control_bit(bit(5)), "its OnDestroy");
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+        run(&mut session, "Y128");
+        assert!(session.control_bit(bit(5)), "not again: destroyed already");
+        let catalog = crate::testkit::catalog().living([StellarLife {
+            strength: 0,
+            ..destroying("b5")
+        }]);
+        let mut session = quiet(&catalog).with_rules(rules);
+        run(&mut session, "Y128");
+        assert!(
+            !session.control_bit(bit(5)),
+            "an invincible stellar stays whole"
+        );
     }
 }

@@ -186,7 +186,7 @@ impl Session {
             }
             SetOp::LeaveStellar(list) => self.leave_stellar(list.0, chance),
             SetOp::PlaySound(sound) => self.play_script_sound(*sound),
-            SetOp::DestroyStellar(stellar) => self.destroy_stellar(*stellar),
+            SetOp::DestroyStellar(stellar) => self.destroy_stellar(*stellar, chance),
             SetOp::RegenerateStellar(stellar) => self.regenerate_stellar(*stellar),
             // Missions and ranks: other roadmaps add their arms here.
             SetOp::AbortMission(_)

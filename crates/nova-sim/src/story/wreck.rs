@@ -8,6 +8,7 @@ use std::ops::RangeInclusive;
 
 use super::Countdown;
 use crate::catalog::{StellarId, StellarLife};
+use crate::combat::weapon::Explosion;
 use crate::rulebook::RuleSource;
 
 /// The `spöb` `Flags2` bit of a stellar that starts the game destroyed
@@ -30,7 +31,10 @@ pub(crate) fn in_range(stellar: StellarId) -> bool {
 }
 
 /// The countdown a stellar is destroyed with: its `DeadTime`, or 1 when
-/// that is negative (@0x15ac8-0x15ad5, @0x192f4-0x19301).
+/// that is negative (@0x15ac8-0x15ad5, @0x192f4-0x19301). A shot writes
+/// the raw `DeadTime` (@0x374c8-0x374cf), but a negative countdown with
+/// the current strength -1 reads destroyed just the same, and the next
+/// day sets it to 1 (@0xb6f5), so the shot's destruction uses this too.
 pub(crate) fn countdown_on_destroy(life: &StellarLife) -> Countdown {
     Countdown {
         days_left: u16::try_from(life.dead_time).unwrap_or(1),
@@ -47,6 +51,43 @@ pub(crate) fn destroys(life: &StellarLife, reading: RuleSource) -> bool {
         RuleSource::Engine => life.strength > 0,
         RuleSource::Bible => true,
     }
+}
+
+/// Whether shots can hit the stellar `life`: only one of `Strength` above
+/// 0, as `_CheckShotProximities` skips any other (@0x3726d), and as
+/// `_StellarIsDestroyed` never holds an invincible one destroyed
+/// (@0x4e1a).
+pub(crate) fn destroyable(life: &StellarLife) -> bool {
+    life.strength > 0
+}
+
+/// The strength of the stellar `life` while it is whole and undamaged:
+/// its `Strength`, which the day restores (@0xb700) and a load gives
+/// back (@0x76068-0x760b8).
+pub(crate) fn full_strength(life: &StellarLife) -> i64 {
+    i64::from(life.strength)
+}
+
+/// Whether a stellar with `left` strength after a shot's damage is shot
+/// down: below 0, as `_StellarIsDestroyed` reads the current strength
+/// (@0x4e14-0x4e3c, after the hit @0x37409). One left at exactly 0 is
+/// still whole.
+pub(crate) fn shot_down(left: i64) -> bool {
+    left < 0
+}
+
+/// The explosion `Y` makes at the stellar `life`: its `ExplodType`, when
+/// it is `shown` in the player's system and was not destroyed before the
+/// `Y` (@0x15a59-0x15ab4). Its `Strength` does not matter, so an
+/// invincible stellar, which the engine's
+/// [`RuleKey::DestroyInvincible`](crate::RuleKey::DestroyInvincible)
+/// leaves whole, explodes all the same.
+pub(crate) fn explodes_on_y(
+    life: &StellarLife,
+    shown: bool,
+    destroyed_before: bool,
+) -> Option<Explosion> {
+    life.explosion.filter(|_| shown && !destroyed_before)
 }
 
 /// What a day does to a destroyed stellar.
@@ -77,6 +118,7 @@ pub(crate) fn day(life: &StellarLife, countdown: Countdown) -> Tick {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::combat::weapon::Explosion;
     use crate::control::Script;
 
     /// Stellar 128 of `strength`, with `dead_time`.
@@ -149,6 +191,53 @@ mod tests {
             };
             assert_eq!(starts_destroyed(&life), starts, "{flags2:#x}");
         }
+    }
+
+    #[test]
+    fn a_stellar_is_shot_down_below_none_and_not_at_none() {
+        for (left, down) in [
+            (-1, true),
+            (-50, true),
+            (0, false),
+            (1, false),
+            (100, false),
+        ] {
+            assert_eq!(shot_down(left), down, "{left}");
+        }
+    }
+
+    #[test]
+    fn only_a_stellar_of_some_strength_can_be_shot() {
+        for (strength, shootable) in [(0, false), (-1, false), (1, true), (70_000, true)] {
+            assert_eq!(destroyable(&life(strength, 0)), shootable, "{strength}");
+        }
+        assert_eq!(full_strength(&life(70_000, 0)), 70_000);
+    }
+
+    #[test]
+    fn y_explodes_a_stellar_shown_and_whole_that_has_an_explosion() {
+        let boom = Explosion::decode(3);
+        let exploding = |strength| StellarLife {
+            explosion: boom,
+            ..life(strength, 0)
+        };
+        assert_eq!(explodes_on_y(&exploding(100), true, false), boom);
+        assert_eq!(
+            explodes_on_y(&exploding(0), true, false),
+            boom,
+            "an invincible stellar too"
+        );
+        assert_eq!(
+            explodes_on_y(&exploding(100), false, false),
+            None,
+            "not shown"
+        );
+        assert_eq!(
+            explodes_on_y(&exploding(100), true, true),
+            None,
+            "destroyed already"
+        );
+        assert_eq!(explodes_on_y(&life(100, 0), true, false), None, "none");
     }
 
     #[test]

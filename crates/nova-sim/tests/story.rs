@@ -1,25 +1,66 @@
 //! The story dispatcher wired through a session, through the public API
 //! alone: a subscription registered, a landing, and the settling that
-//! runs its script.
+//! runs its script; and a stellar shot down, whose `OnDestroy` a later
+//! dispatch sees.
 
 use nova_sim::catalog::{DudeId, DudeRecord, FleetRecord, PersonRecord, SystemTraffic};
+use nova_sim::combat::Rules;
+use nova_sim::combat::armament::{MOD_WEAPON, Trigger};
 use nova_sim::landing::StellarFlags;
 use nova_sim::story::{Consumer, EventFilter, Subscription, SubscriptionId};
 use nova_sim::{
     Bit, CharacterStart, CombatCatalog, CommodityStrings, DateAffixes, DisasterRecord, GovtRecord,
     HullRecord, JunkRecord, LandOutcome, LandPress, LandingSite, NeverFires, OutfitId,
     OutfitRecord, PilotCatalog, Script, Session, ShipFields, ShipId, StarSystem, StartDate,
-    StartError, StellarId, SystemId, TrafficCatalog, Vec2, WeaponRecord,
+    StartError, StellarId, StellarLife, SystemId, Test, TrafficCatalog, Vec2, WeaponId,
+    WeaponRecord,
 };
 
 /// One `chär` flying an average ship from system 130, which holds one
-/// landable stellar, 128, at the centre, and no traffic.
-struct Home;
+/// landable stellar, 128, at the centre, and no traffic. The ship is
+/// unarmed unless it is `armed` with outfit 250, a planet-type gun, and
+/// the stellars live as `lives` say.
+#[derive(Default)]
+struct Home {
+    armed: bool,
+    lives: Vec<StellarLife>,
+}
 
-/// Unarmed and ungoverned.
+/// Ungoverned; its one weapon, `wëap` 128, a planet-type gun firing
+/// every tick and doing 60 damage.
 impl CombatCatalog for Home {
     fn weapons(&self) -> Vec<WeaponRecord> {
-        Vec::new()
+        vec![WeaponRecord {
+            id: WeaponId(128),
+            reload: 0,
+            count: 30,
+            mass_dmg: 40,
+            energy_dmg: 20,
+            guidance: -1,
+            speed: 1500,
+            ammo_type: -1,
+            inaccuracy: 0,
+            impact: 0,
+            explod_type: -1,
+            prox_radius: 0,
+            blast_radius: 0,
+            flags: 0,
+            seeker: 0,
+            flags2: 0x0400,
+            flags3: 0,
+            decay: 0,
+            beam_length: 0,
+            burst_count: 0,
+            burst_reload: 0,
+            guided_turn: 0,
+            durability: 0,
+            sub_count: 0,
+            sub_type: None,
+            sub_theta: 0,
+            sub_limit: 0,
+            max_ammo: 0,
+            prox_safety: 0,
+        }]
     }
 
     fn hulls(&self) -> Vec<HullRecord> {
@@ -51,11 +92,36 @@ impl PilotCatalog for Home {
     }
 
     fn default_outfits(&self, _id: ShipId) -> Vec<(OutfitId, u16)> {
-        Vec::new()
+        if self.armed {
+            vec![(OutfitId(250), 1)]
+        } else {
+            Vec::new()
+        }
     }
 
     fn outfits(&self) -> Vec<OutfitRecord> {
-        Vec::new()
+        vec![OutfitRecord {
+            id: OutfitId(250),
+            name: "Gun".to_owned(),
+            short_name: "Gun".to_owned(),
+            disp_weight: 0,
+            mass: 1,
+            tech_level: 1,
+            max: 10,
+            flags: 0,
+            cost: 1000,
+            mods: [(MOD_WEAPON, 128), (0, 0), (0, 0), (0, 0)],
+            contribute: 0,
+            require: 0,
+            require_govt: -1,
+            buy_random: 100,
+            availability: Test::default(),
+            item_class: 0,
+            lc_name: "gun".to_owned(),
+            lc_plural: "guns".to_owned(),
+            on_purchase: Script::default(),
+            on_sell: Script::default(),
+        }]
     }
 
     fn ships(&self) -> Vec<nova_sim::ShipRecord> {
@@ -110,8 +176,8 @@ impl PilotCatalog for Home {
         Vec::new()
     }
 
-    fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
-        Vec::new()
+    fn stellar_lives(&self) -> Vec<StellarLife> {
+        self.lives.clone()
     }
 }
 
@@ -136,7 +202,7 @@ impl TrafficCatalog for Home {
 
 #[test]
 fn a_registered_subscription_runs_its_script_as_the_landing_settles() {
-    let mut session = Session::start(&Home).expect("starts");
+    let mut session = Session::start(&Home::default()).expect("starts");
     let on_landing = Subscription::new(
         SubscriptionId {
             consumer: Consumer::Fixture,
@@ -154,6 +220,56 @@ fn a_registered_subscription_runs_its_script_as_the_landing_settles() {
         Ok(LandPress::Outcome(LandOutcome::Landed(StellarId(128))))
     );
     assert!(!session.control_bit(bit), "not before the settling");
-    let _ = session.settle_script(&Home, &mut NeverFires);
+    let _ = session.settle_script(&Home::default(), &mut NeverFires);
     assert!(session.control_bit(bit));
+}
+
+#[test]
+fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_a_later_dispatch_sees() {
+    let home = Home {
+        armed: true,
+        lives: vec![StellarLife {
+            id: StellarId(128),
+            strength: 100,
+            dead_time: 3,
+            flags2: 0,
+            explosion: None,
+            on_destroy: Script::parse("b7 M130"),
+            on_regen: Script::default(),
+        }],
+    };
+    let mut session = Session::start(&home).expect("starts");
+    session
+        .register_story(Subscription {
+            guard: Test::parse("b7"),
+            ..Subscription::new(
+                SubscriptionId {
+                    consumer: Consumer::Fixture,
+                    record: 1,
+                    hook: 0,
+                },
+                EventFilter::EnteredSystem(SystemId(130)),
+                Script::parse("b8"),
+            )
+        })
+        .expect("registers");
+    session.hold_trigger(Trigger {
+        primary: true,
+        secondary: None,
+        only: None,
+        turrets_only: false,
+        bays: false,
+    });
+    for _ in 0..2 {
+        session.tick_combat(Rules::default(), &mut NeverFires);
+    }
+    assert!(
+        session.galaxy().destroyed(StellarId(128)),
+        "60 twice: shot down"
+    );
+    let (b7, b8) = (Bit::new(7).expect("a bit"), Bit::new(8).expect("a bit"));
+    assert!(session.control_bit(b7), "its OnDestroy ran");
+    assert!(!session.control_bit(b8), "its move waits for the settling");
+    let _ = session.settle_script(&home, &mut NeverFires);
+    assert!(session.control_bit(b8), "the arrival's dispatch saw b7");
 }

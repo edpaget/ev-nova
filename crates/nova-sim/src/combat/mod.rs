@@ -84,6 +84,7 @@ pub mod flags;
 pub mod hull;
 pub mod projectile;
 pub mod report;
+pub mod stellar;
 pub mod submunition;
 pub mod weapon;
 
@@ -94,6 +95,7 @@ use defence::{INTERCEPT_RADIUS, PointDefenceRule, Side};
 use hull::{Condition, DisableRule, HullSpec};
 use projectile::{Shot, ShotId, Target, contact};
 use report::{Reports, SimDiagnostic};
+use stellar::{StellarStrike, StellarTarget};
 use weapon::{Explosion, Guidance};
 
 use crate::bay::FIGHTER_BAY;
@@ -282,6 +284,7 @@ pub struct Combat {
     beams: Vec<Beam>,
     events: Vec<CombatEvent>,
     strikes: Vec<Strike>,
+    stellar_strikes: Vec<StellarStrike>,
     sorties: Vec<Sortie>,
     reports: Reports,
     /// The next shot's number.
@@ -289,16 +292,18 @@ pub struct Combat {
 }
 
 impl Combat {
-    /// Advances the fight among `fighters` a tick (see the module docs),
-    /// by `rules`, with the relations between governments in `govts`,
-    /// each sub-munition's weapon read from `arsenal` and each shot's
-    /// inaccuracy and spread drawn on `chance`.
+    /// Advances the fight among `fighters` and `stellars` a tick (see the
+    /// module docs), by `rules`, with the relations between governments in
+    /// `govts`, each sub-munition's weapon read from `arsenal` and each
+    /// shot's inaccuracy and spread drawn on `chance`. Each stellar's
+    /// strength is left as the shots left it.
     pub fn tick(
         &mut self,
         fighters: &mut [Fighter],
         arsenal: &Arsenal,
         govts: &Governments,
         rules: Rules,
+        stellars: &mut [StellarTarget],
         chance: &mut (impl Chance + ?Sized),
     ) {
         // A `dyn` source over the caller's, which may be unsized.
@@ -322,11 +327,20 @@ impl Combat {
             });
             firer.is_some_and(|firer| beam.follow(&firer.state, &targets, shots))
         });
+        // Where each shot started the tick, by its number: `resolve`
+        // rebuilds the shots.
+        let from: Vec<(ShotId, Vec2)> = self
+            .shots
+            .iter()
+            .map(|shot| shot.id)
+            .zip(was.iter().copied())
+            .collect();
         let mut gone = vec![false; self.shots.len()];
         self.intercept(&was, &mut gone, rules.defence, govts);
         self.hold_on_missiles(&mut gone);
         let first_strike = self.strikes.len();
         self.resolve(fighters, &targets, &was, &gone, arsenal, chance);
+        self.strike_stellars(stellars, &from);
         for fighter in fighters.iter_mut() {
             let downed = self.update_condition(fighter, rules.disable);
             let last = self.strikes[first_strike..]
@@ -594,6 +608,39 @@ impl Combat {
         }
     }
 
+    /// Step 7b: each planet-type shot left in flight that met a stellar
+    /// still standing among `stellars` on its way from where `from` says
+    /// it started the tick is spent on it ([`stellar`]): it explodes where
+    /// it hit, with no blast and no sub-munitions, and takes its damage
+    /// off the stellar's strength. A sub-munition released this tick
+    /// started it nowhere, so it is first checked the next.
+    fn strike_stellars(&mut self, stellars: &mut [StellarTarget], from: &[(ShotId, Vec2)]) {
+        let mut kept = Vec::with_capacity(self.shots.len());
+        for shot in std::mem::take(&mut self.shots) {
+            let met = from
+                .iter()
+                .find(|(id, _)| *id == shot.id)
+                .and_then(|&(_, was)| stellar::met(&shot, was, stellars));
+            let Some((index, at)) = met else {
+                kept.push(shot);
+                continue;
+            };
+            if let Some(explosion) = shot.weapon.explosion {
+                self.events.push(CombatEvent::Exploded { at, explosion });
+            }
+            let target = &mut stellars[index];
+            let damage = stellar::damage(&shot.weapon);
+            target.strength -= damage;
+            self.stellar_strikes.push(StellarStrike {
+                stellar: target.stellar,
+                by: shot.firer,
+                damage,
+                destroyed: crate::story::wreck::shot_down(target.strength),
+            });
+        }
+        self.shots = kept;
+    }
+
     /// Puts in flight the sub-munitions `parent` releases at `target`
     /// among `targets`, their weapon read from `arsenal` (none when it
     /// cannot be read), heard from where the parent is. Released, they
@@ -725,6 +772,19 @@ impl Combat {
     /// empties the list.
     pub fn take_strikes(&mut self) -> Vec<Strike> {
         std::mem::take(&mut self.strikes)
+    }
+
+    /// The hits on stellars made since they were last taken, in order;
+    /// taking them empties the list.
+    pub fn take_stellar_strikes(&mut self) -> Vec<StellarStrike> {
+        std::mem::take(&mut self.stellar_strikes)
+    }
+
+    /// Reports an explosion at `at` that is no weapon's: a stellar's as it
+    /// is destroyed. It is of size 0, as `_CreateExplosion(.., 0, 1)`
+    /// makes it, so no extra explosions scatter from it.
+    pub(crate) fn explode(&mut self, at: Vec2, explosion: Explosion) {
+        self.events.push(CombatEvent::Exploded { at, explosion });
     }
 
     /// The fighters launched since they were last taken, in order; taking
@@ -926,7 +986,32 @@ mod tests {
         rules: Rules,
     ) {
         let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
-        combat.tick(&mut fighters, arsenal, govts, rules, &mut NeverFires);
+        combat.tick(
+            &mut fighters,
+            arsenal,
+            govts,
+            rules,
+            &mut [],
+            &mut NeverFires,
+        );
+    }
+
+    /// A tick among `ships` and `stellars`, with `arsenal`.
+    fn tick_by(
+        combat: &mut Combat,
+        ships: &mut [Ship],
+        arsenal: &Arsenal,
+        stellars: &mut [StellarTarget],
+    ) {
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+        combat.tick(
+            &mut fighters,
+            arsenal,
+            &Governments::default(),
+            Rules::default(),
+            stellars,
+            &mut NeverFires,
+        );
     }
 
     /// A blaster firing every tick, 15 pixels a tick for 13 ticks, doing
@@ -2546,5 +2631,254 @@ mod tests {
         let sorties = combat.take_sorties();
         assert_eq!(sorties.len(), 1);
         assert_eq!(sorties[0].target, None);
+    }
+
+    // Stellars.
+
+    use crate::catalog::StellarId;
+    use crate::combat::weapon::PLANET_TYPE;
+
+    /// [`blaster`], planet-type, exploding in `bööm` 130.
+    fn planet_gun() -> WeaponRecord {
+        WeaponRecord {
+            flags2: PLANET_TYPE,
+            explod_type: 2,
+            ..blaster()
+        }
+    }
+
+    /// Stellar 128 at (`x`, `y`), of `radius` and `strength`.
+    fn stellar_at(x: f32, y: f32, radius: f32, strength: i64) -> StellarTarget {
+        StellarTarget {
+            stellar: StellarId(128),
+            position: Vec2::new(x, y),
+            radius,
+            strength,
+        }
+    }
+
+    /// Ship A at the centre fires `weapon` once to the right, among
+    /// `others`; then the fight goes on for `ticks` ticks in all, among
+    /// `stellars`, with `arsenal`. The events, and the strikes on
+    /// stellars, in order.
+    fn shoot_once(
+        weapon: WeaponRecord,
+        others: Vec<Ship>,
+        stellars: &mut [StellarTarget],
+        arsenal: &Arsenal,
+        ticks: u32,
+    ) -> (Combat, Vec<Ship>, Vec<CombatEvent>, Vec<StellarStrike>) {
+        let mut combat = Combat::default();
+        let mut ships = vec![Ship::at(1, 0.0, 0.0).armed(weapon)];
+        ships.extend(others);
+        let (mut events, mut strikes) = (Vec::new(), Vec::new());
+        for _ in 0..ticks {
+            tick_by(&mut combat, &mut ships, arsenal, stellars);
+            ships[0] = Ship::at(1, 0.0, 0.0);
+            events.extend(combat.take_events());
+            strikes.extend(combat.take_stellar_strikes());
+        }
+        (combat, ships, events, strikes)
+    }
+
+    fn strike(damage: i64, destroyed: bool) -> StellarStrike {
+        StellarStrike {
+            stellar: StellarId(128),
+            by: A,
+            damage,
+            destroyed,
+        }
+    }
+
+    fn explosions(events: &[CombatEvent]) -> Vec<(Vec2, Explosion)> {
+        events
+            .iter()
+            .filter_map(|event| match *event {
+                CombatEvent::Exploded { at, explosion } => Some((at, explosion)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_planet_type_shot_entering_a_stellar_damages_it_by_its_mass_and_energy_and_is_gone() {
+        let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+        let (combat, _, events, strikes) = shoot_once(
+            planet_gun(),
+            Vec::new(),
+            &mut stellars,
+            &Arsenal::default(),
+            7,
+        );
+        assert_eq!(strikes, [strike(14, false)], "4 mass and 10 energy");
+        assert_eq!(stellars[0].strength, 86);
+        assert_eq!(combat.shots(), [], "gone");
+        let seen = explosions(&events);
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(
+            (seen[0].0 - Vec2::new(80.0, 0.0)).length() < 1e-3,
+            "{seen:?}"
+        );
+        assert_eq!(Some(seen[0].1), Explosion::decode(2));
+    }
+
+    #[test]
+    fn a_shot_of_another_weapon_passes_through_a_stellar() {
+        let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+        let (combat, _, events, strikes) =
+            shoot_once(blaster(), Vec::new(), &mut stellars, &Arsenal::default(), 8);
+        assert_eq!(strikes, []);
+        assert_eq!(stellars[0].strength, 100);
+        assert_eq!(combat.shots().len(), 1, "flying on");
+        assert_eq!(explosions(&events), []);
+    }
+
+    #[test]
+    fn a_ship_in_the_shots_path_is_hit_before_the_stellar() {
+        let mut stellars = [stellar_at(100.0, 0.0, 20.0, 100)];
+        let (_, ships, _, strikes) = shoot_once(
+            planet_gun(),
+            vec![Ship::at(2, 100.0, 0.0)],
+            &mut stellars,
+            &Arsenal::default(),
+            8,
+        );
+        assert_eq!(strikes, []);
+        assert_eq!(stellars[0].strength, 100);
+        assert!(ships[1].reserves.shield.now < 10.0, "the ship took it");
+    }
+
+    #[test]
+    fn a_fast_shot_hits_a_stellar_it_passes_between_ticks() {
+        let fast = WeaponRecord {
+            speed: 10_000,
+            ..planet_gun()
+        };
+        let mut stellars = [stellar_at(150.0, 0.0, 10.0, 100)];
+        let (_, _, events, strikes) =
+            shoot_once(fast, Vec::new(), &mut stellars, &Arsenal::default(), 3);
+        assert_eq!(strikes, [strike(14, false)]);
+        let seen = explosions(&events);
+        assert!(
+            (seen[0].0 - Vec2::new(140.0, 0.0)).length() < 1e-3,
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_shot_hitting_a_stellar_blasts_no_ship_and_releases_no_sub_munitions() {
+        let (shell, arsenal) = cluster(PLANET_TYPE);
+        let shell = WeaponRecord {
+            blast_radius: 100,
+            flags: crate::combat::weapon::DETONATES,
+            ..shell
+        };
+        let mut stellars = [stellar_at(15.0, 0.0, 10.0, 100)];
+        let (combat, ships, _, strikes) = shoot_once(
+            shell,
+            vec![Ship::at(2, 15.0, 40.0)],
+            &mut stellars,
+            &arsenal,
+            5,
+        );
+        assert_eq!(strikes.len(), 1);
+        assert_eq!(
+            ships[1].reserves,
+            Reserves::full(10.0, 30.0, 100.0),
+            "no blast"
+        );
+        assert_eq!(combat.shots(), [], "no sub-munitions");
+    }
+
+    #[test]
+    fn a_shot_hits_a_stellar_only_once_it_has_flown_past_its_proximity_safety() {
+        let safe = WeaponRecord {
+            prox_safety: 3,
+            ..planet_gun()
+        };
+        let mut stellars = [stellar_at(0.0, 0.0, 1000.0, 100)];
+        for ticks in 1..=3 {
+            let (_, _, _, strikes) =
+                shoot_once(safe, Vec::new(), &mut stellars, &Arsenal::default(), ticks);
+            assert_eq!(strikes, [], "{ticks}");
+        }
+        let (_, _, _, strikes) =
+            shoot_once(safe, Vec::new(), &mut stellars, &Arsenal::default(), 4);
+        assert_eq!(strikes, [strike(14, false)], "on its fourth tick");
+        let mut stellars = [stellar_at(0.0, 0.0, 1000.0, 100)];
+        let (_, _, _, strikes) = shoot_once(
+            planet_gun(),
+            Vec::new(),
+            &mut stellars,
+            &Arsenal::default(),
+            1,
+        );
+        assert_eq!(strikes, [strike(14, false)], "none: at once");
+    }
+
+    /// Ships A, at the centre, and B, 50 pixels below, each fire a
+    /// [`planet_gun`] once, to the right, inside stellar 128 of
+    /// `strength`. Its strikes, and the
+    /// shots left.
+    fn two_shots_at(strength: i64) -> (Vec<StellarStrike>, usize, i64) {
+        let mut stellars = [stellar_at(0.0, 0.0, 1000.0, strength)];
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(planet_gun()),
+            Ship::at(2, 0.0, 50.0).armed(planet_gun()),
+        ];
+        tick_by(&mut combat, &mut ships, &Arsenal::default(), &mut stellars);
+        (
+            combat.take_stellar_strikes(),
+            combat.shots().len(),
+            stellars[0].strength,
+        )
+    }
+
+    #[test]
+    fn a_stellar_shot_below_none_is_destroyed_once_and_later_shots_pass_through() {
+        let (strikes, left, strength) = two_shots_at(10);
+        assert_eq!(strikes, [strike(14, true)]);
+        assert_eq!((left, strength), (1, -4), "the second flies on");
+        let (strikes, left, strength) = two_shots_at(14);
+        assert_eq!(
+            strikes,
+            [
+                strike(14, false),
+                StellarStrike {
+                    by: B,
+                    ..strike(14, true)
+                }
+            ],
+            "none left is still standing"
+        );
+        assert_eq!((left, strength), (0, -14));
+    }
+
+    #[test]
+    fn a_beam_never_hits_a_stellar() {
+        let beam = WeaponRecord {
+            flags2: PLANET_TYPE,
+            ..laser()
+        };
+        let mut stellars = [stellar_at(0.0, 0.0, 1000.0, 100)];
+        let (_, _, _, strikes) =
+            shoot_once(beam, Vec::new(), &mut stellars, &Arsenal::default(), 3);
+        assert_eq!(strikes, []);
+        assert_eq!(stellars[0].strength, 100);
+    }
+
+    #[test]
+    fn combat_reports_an_explosion_it_is_told_of() {
+        let mut combat = Combat::default();
+        let boom = Explosion::decode(7).expect("a bööm");
+        combat.explode(Vec2::new(3.0, 4.0), boom);
+        assert_eq!(
+            combat.take_events(),
+            [CombatEvent::Exploded {
+                at: Vec2::new(3.0, 4.0),
+                explosion: boom
+            }]
+        );
     }
 }

@@ -684,6 +684,10 @@ pub struct Session {
     /// and the daily step read of a stellar's destruction and
     /// regeneration (see the `stellars` module).
     lives: BTreeMap<StellarId, StellarLife>,
+    /// The current strength of each whole stellar shots have damaged, by
+    /// ID; one not here has its full `Strength` (see the `stellars`
+    /// module). Never saved, as the original saves none.
+    strength: BTreeMap<StellarId, i64>,
 }
 
 impl Session {
@@ -829,6 +833,7 @@ impl Session {
                 .into_iter()
                 .map(|life| (life.id, life))
                 .collect(),
+            strength: BTreeMap::new(),
             pilot,
         };
         session.set_player_system(system, here, dock);
@@ -1249,7 +1254,10 @@ impl Session {
     ///
     /// Each NPC intact before the tick and no longer raises
     /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
-    /// as it is taken out (see the `story` module's findings).
+    /// as it is taken out (see the `story` module's findings). The
+    /// stellars shown that shots can hit take their damage, and each shot
+    /// down is destroyed and runs its `OnDestroy` (see the `stellars`
+    /// module).
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
@@ -1260,6 +1268,7 @@ impl Session {
             .iter()
             .map(|npc| (npc.id, npc.condition, npc.govt))
             .collect();
+        let mut stellars = self.stellar_targets();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
             owned: &mut pilot.outfits,
@@ -1315,8 +1324,14 @@ impl Session {
                 rounds,
             });
         }
-        self.combat
-            .tick(&mut fighters, &self.arsenal, &self.govts, rules, chance);
+        self.combat.tick(
+            &mut fighters,
+            &self.arsenal,
+            &self.govts,
+            rules,
+            &mut stellars,
+            chance,
+        );
         self.raise_disabled(&was);
         let mut strikes = self.combat.take_strikes();
         self.refill_invincible(&mut strikes);
@@ -1327,6 +1342,15 @@ impl Session {
         self.launch_fighters(&sorties);
         self.sync_fleet();
         self.lose_escorts();
+        self.take_out_the_destroyed();
+        self.orphan_fighters();
+        self.clear_lost_target();
+        self.strike_stellars(&stellars, rules.law, chance);
+    }
+
+    /// Takes each NPC destroyed out of the system, raising
+    /// [`Fate::Destroyed`] for it as it goes.
+    fn take_out_the_destroyed(&mut self) {
         let destroyed: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -1341,8 +1365,6 @@ impl Session {
             });
             self.lose_destroyed(id);
         }
-        self.orphan_fighters();
-        self.clear_lost_target();
     }
 
     /// Raises [`Fate::Disabled`] for each NPC that `was` intact before the

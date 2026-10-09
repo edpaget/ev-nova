@@ -30,6 +30,7 @@
 //! | [`StoryReentry`](RuleKey::StoryReentry) | `story_reentry` | an event a script raises is dispatched depth first, before the script's next operator (`_EvalSetExp` @0x150fc; `_DoMissionAccept` @0x15407; @0x159a3, @0x159a8; see [`story`](crate::story)) | it waits until the script has settled, then dispatches first in, first out§§§§ |
 //! | [`DestroyInvincible`](RuleKey::DestroyInvincible) | `destroy_invincible` | `Y` leaves an invincible stellar (`Strength` 0 or -1) as it was, as `_StellarIsDestroyed` holds none destroyed (@0x4e1a; see [`story`](crate::story)) | `Y` destroys any stellar: "Yxxx - destroy stellar ID xxx" |
 //! | [`DayRolls`](RuleKey::DayRolls) | `day_rolls` | the shop and hire rolls are drawn once a day in the daily step, and a landing keeps them (`_IncrementGameTime` @0xb7c4-0xb833; see [`story`](crate::story)) | a landing forgets them, and each is drawn the first time a list asks for it¶¶¶¶ |
+//! | [`YOnDestroy`](RuleKey::YOnDestroy) | `y_on_destroy` | `Y` runs no `OnDestroy`: only a shot's destruction does (`_EvalSetExp` @0x15a38-0x15ae6, `_CheckShotProximities` @0x374a9; see [`story`](crate::story)) | `Y` runs `OnDestroy` as it destroys a whole stellar: "evaluated when the stellar is destroyed" |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear ([`NovaPersons`](crate::NovaPersons)) | 5 %, one of those who may appear picked evenly |
@@ -379,6 +380,16 @@ rule_keys! {
     /// Bible says (see the [`story`](crate::story) module's "Built by
     /// phase 6").
     DayRolls => "day_rolls",
+    /// Whether `Y` runs the stellar's `OnDestroy`: by the engine, it does
+    /// not, as the original's `Y` (`_EvalSetExp` @0x15a38-0x15ae6) never
+    /// reads it, and only a shot's destruction runs it
+    /// (`_CheckShotProximities` @0x374a9); by the Bible, whose `OnDestroy`
+    /// is "evaluated when the stellar is destroyed", `Y` runs it as it
+    /// destroys a whole stellar, after the destruction, and not when the
+    /// stellar was destroyed already or stays whole (an invincible one
+    /// under [`RuleKey::DestroyInvincible`]'s engine reading; see the
+    /// [`story`](crate::story) module's "Built by phase 8").
+    YOnDestroy => "y_on_destroy",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -1057,6 +1068,8 @@ mod tests {
         );
         assert_eq!(RuleKey::DayRolls.key(), "day_rolls");
         assert_eq!(RuleKey::from_key("day_rolls"), Some(RuleKey::DayRolls));
+        assert_eq!(RuleKey::YOnDestroy.key(), "y_on_destroy");
+        assert_eq!(RuleKey::from_key("y_on_destroy"), Some(RuleKey::YOnDestroy));
     }
 
     #[test]
@@ -1080,6 +1093,7 @@ mod tests {
                 RuleKey::StoryReentry,
                 RuleKey::DestroyInvincible,
                 RuleKey::DayRolls,
+                RuleKey::YOnDestroy,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,
