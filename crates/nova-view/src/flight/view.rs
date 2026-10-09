@@ -10077,6 +10077,21 @@ mod tests {
     }
 
     #[test]
+    fn a_system_entered_after_its_stellar_was_destroyed_draws_it_dead() {
+        let mut view = destructible();
+        run_set(&mut view, "Y140");
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+        run_set(&mut view, "M131");
+        settle_session(&mut view);
+        let redrawn = view.catch_up();
+        assert!(redrawn.system, "laid out");
+        assert!(!redrawn.galaxy, "by the system's reaction alone");
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(sheets_drawn(&view, 140), DEAD_TYPE);
+    }
+
+    #[test]
     fn a_new_pilot_with_a_stellar_that_starts_destroyed_draws_it_dead_from_the_first_frame() {
         let mut view = FlightView::new(FakeCatalog {
             lives: vec![life(128, 0x0040)],
