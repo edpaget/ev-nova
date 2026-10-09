@@ -690,7 +690,10 @@ impl Session {
     /// record); and the reserves hold no more than the stats allow.
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
-    /// silently, as the original resumes a pilot at its last planet.
+    /// silently, as the original resumes a pilot at its last planet; so
+    /// does one whose stellar is another system's at its place that the
+    /// galaxy overlay hid, its own system's stellars waiting for the
+    /// take-off.
     /// Otherwise (or when that stellar is no longer in the system, which
     /// the pilot then forgets) the ship starts at rest at the system's
     /// centre, facing up.
@@ -715,7 +718,7 @@ impl Session {
         // hidden system flies from the one standing for it, silently.
         story::leave_hidden(&mut pilot, &mut galaxy);
         pilot.explore(pilot.system);
-        let sites = overlaid_sites(&galaxy, catalog, pilot.system);
+        let (sites, next_sites) = landed_sites(&galaxy, catalog, &pilot);
         let docked = pilot
             .stellar
             .and_then(|stellar| sites.iter().find(|site| site.id == stellar));
@@ -800,7 +803,7 @@ impl Session {
             disable_rule: Self::nova_disable(),
             strings: ship_change::Strings::none(),
             queued: script_effects::Queued::default(),
-            next_sites: None,
+            next_sites,
             hold_position: false,
             touchdown: player.position,
             rules: Rulebook::default(),
@@ -3318,6 +3321,36 @@ impl Session {
         assert_eq!(self.aboard, None, "the boarding: {case}");
         assert_eq!(self.talk, None, "the hail: {case}");
     }
+}
+
+/// The stellars `pilot` is flown among, read from `catalog` through
+/// `galaxy`'s overlay, and those left for its take-off. Its system's,
+/// unless the stellar it last landed on is not among them but is another
+/// system's at the same place, one the overlay hid and moved it off (the
+/// original rewrites only the system numbers, @0x998f1-0x99a36): then it
+/// resumes docked in that system's spaceport, and its own system's
+/// stellars wait for the take-off, as after a landed move.
+fn landed_sites(
+    galaxy: &OverlaidGalaxy,
+    catalog: &(impl PilotCatalog + ?Sized),
+    pilot: &Pilot,
+) -> (Vec<LandingSite>, Option<NextSites>) {
+    let system = pilot.system;
+    let here = overlaid_sites(galaxy, catalog, system);
+    let Some(stellar) = pilot
+        .stellar
+        .filter(|&stellar| !here.iter().any(|site| site.id == stellar))
+    else {
+        return (here, None);
+    };
+    let places = galaxy.map().places();
+    for from in places.at(system).filter(|&other| other != system) {
+        let sites = overlaid_sites(galaxy, catalog, from);
+        if sites.iter().any(|site| site.id == stellar) {
+            return (sites, Some(NextSites { from, sites: here }));
+        }
+    }
+    (here, None)
 }
 
 /// `system`'s stellars, read from `catalog`, each passed through
@@ -14634,14 +14667,78 @@ mod tests {
             !session.pilot().has_explored(SystemId(134)),
             "explores nothing"
         );
-        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+        assert_eq!(session.sites, [planet(140, 0.0, 0.0)], "its spaceport's");
         assert_eq!(
             session.take_events(),
-            [SessionEvent::SystemChanged, SessionEvent::GalaxyChanged]
+            [SessionEvent::GalaxyChanged],
+            "the scene waits for the take-off"
         );
         assert_eq!(session.story_raised(), [], "no story event");
         assert_eq!(session.take_messages(), [], "no arrival");
         assert!(on_the_map(&session));
+    }
+
+    /// [`alternates`]' pilot landed at 140 in 131.
+    fn landed_at_140() -> Pilot {
+        let mut pilot = Pilot::new(&alternates(), "Ada").expect("starts");
+        pilot.system = SystemId(131);
+        pilot.stellar = Some(StellarId(140));
+        pilot
+    }
+
+    /// Takes off from `session`, and checks it flies in 134 among its
+    /// stellars, the scene told changed.
+    fn takes_off_into_134(session: &mut Session) {
+        session.take_events();
+        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(140)));
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        assert!(on_the_map(session));
+    }
+
+    #[test]
+    fn a_landed_player_moved_off_a_hidden_system_keeps_its_spaceport_until_the_take_off() {
+        let catalog = alternates();
+        let mut session = Session::fly(&catalog, landed_at_140()).expect("flies");
+        assert_eq!(session.recharge(), Err(RechargeRefusal::Full));
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        assert_eq!(
+            session.recharge(),
+            Err(RechargeRefusal::Full),
+            "fuel is still sold here"
+        );
+        assert!(session.transact(|_| {}), "still in the spaceport");
+        takes_off_into_134(&mut session);
+    }
+
+    #[test]
+    fn a_save_made_landed_after_the_system_is_hidden_reloads_landed() {
+        let catalog = alternates();
+        let mut session = Session::fly(&catalog, landed_at_140()).expect("flies");
+        hide(&mut session, &catalog, &[131]);
+        let pilot = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        assert_eq!(session.sites, [planet(140, 0.0, 0.0)]);
+        assert_eq!(session.recharge(), Err(RechargeRefusal::Full));
+        takes_off_into_134(&mut session);
+    }
+
+    #[test]
+    fn a_pilot_flown_landed_in_a_hidden_system_stays_landed_until_the_take_off() {
+        let catalog = alternates();
+        let mut pilot = landed_at_140();
+        pilot.galaxy.set_visible(SystemId(131), Some(false));
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        assert_eq!(session.pilot().stellar, Some(StellarId(140)));
+        assert_eq!(session.sites, [planet(140, 0.0, 0.0)]);
+        assert_eq!(session.take_events(), [], "silently");
+        takes_off_into_134(&mut session);
     }
 
     #[test]

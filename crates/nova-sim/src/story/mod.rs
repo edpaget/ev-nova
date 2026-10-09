@@ -585,9 +585,12 @@
 //! or, with none, to the chain head (the lowest-ID system at that place),
 //! made visible. It keeps its position, landed state, stellar and course,
 //! and every ship in the system stays with it; it raises no story event,
-//! explores nothing and passes no day. The course keeps its system IDs,
-//! each hop resolved by place when it is used, as `_CueNextHyperRouteDest`
-//! resolves it.
+//! explores nothing and passes no day. A landed player stays docked: the
+//! spaceport stays its stellar's, and the new system's stellars wait for
+//! the take-off, as after a landed `M`; a pilot loaded landed at a stellar
+//! of a hidden system at its place resumes docked there the same way. The
+//! course keeps its system IDs, each hop resolved by place when it is
+//! used, as `_CueNextHyperRouteDest` resolves it.
 //!
 //! The player is always in a visible system. Every arrival (a jump, a
 //! gate's exit, `M` and `N`, and the developer tools' relocation) resolves
@@ -732,7 +735,11 @@
 //!   of 0x28 at 0x3b52c0, which `_SpawnBox` fills, @0x99a0f-0x99a36). It
 //!   sets up no ships, runs no hook, explores nothing and redraws no
 //!   stellars. So every NPC stays with the player, not the escorts alone,
-//!   and no `galaxy_escorts` key is needed.
+//!   and no `galaxy_escorts` key is needed. It leaves the stellar the
+//!   player is docked at alone: run at a landing (@0xa175f, @0xa1af2), the
+//!   spaceport goes on at that stellar, and the new system's ships and
+//!   stellars are set up only as the take-off sets the system up
+//!   (`_SetupShipsInSystem` @0x674c2, the stellars @0x674c7).
 //! - **The course** keeps system IDs. `_CueNextHyperRouteDest` resolves
 //!   the next hop by place (`_FindActiveCoLocatedSystem` @0xe2fa) and
 //!   matches it against the current system's Con slots, each resolved the

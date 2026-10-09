@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
+use super::entry::NextSites;
 use super::script_effects::Settled;
 use super::{ScriptNote, Session, SessionEvent};
 use crate::catalog::{LandingSite, PilotCatalog, SystemId, TrafficCatalog};
@@ -299,9 +300,11 @@ impl Session {
     /// `story` module's "Galaxy overlay"). A change that changes nothing
     /// does nothing more. Otherwise the overlaid map is rebuilt, and a
     /// player whose system is now hidden moves as the original moves it
-    /// ([`OverlaidGalaxy::hidden_move`]): only its system changes, with
-    /// [`SessionEvent::SystemChanged`] told, and no story event raised, no
-    /// system explored and no day passed. The stellars are read again
+    /// ([`OverlaidGalaxy::hidden_move`]): only its system changes, and no
+    /// story event is raised, no system explored and no day passed. In
+    /// flight [`SessionEvent::SystemChanged`] is told; landed, the
+    /// spaceport stays its stellar's and the new system's stellars wait
+    /// for the take-off, as after a landed move. The stellars are read again
     /// from `catalog` when the player moved or theirs changed government;
     /// when the player's system or its government changed, the traffic
     /// goes on with every ship in the system, its arrivals drawn from the
@@ -318,9 +321,22 @@ impl Session {
             return false;
         }
         let govt = self.galaxy.govt(self.pilot.system);
+        let shown = self
+            .next_sites
+            .as_ref()
+            .map_or(self.pilot.system, |next| next.from);
         self.galaxy.set_overlay(self.pilot.galaxy.clone());
         let moved = leave_hidden(&mut self.pilot, &mut self.galaxy);
-        if moved {
+        if moved && self.landed.is_some() {
+            // The original rewrites only the system numbers
+            // (@0x998f1-0x99a36): the spaceport open stays the stellar's,
+            // and the new system's stellars come with the take-off, as
+            // after a landed move.
+            self.next_sites.get_or_insert(NextSites {
+                from: shown,
+                sites: Vec::new(),
+            });
+        } else if moved {
             self.emit(SessionEvent::SystemChanged);
         }
         self.refresh_sites(catalog, moved, &before);
@@ -336,8 +352,8 @@ impl Session {
 
     /// Reads the stellars again from `catalog` where the galaxy's change
     /// from `before` reaches them: the system's, when the player `moved`
-    /// or one of them changed government, and those a landed move left
-    /// for the take-off likewise.
+    /// or one of them changed government, and those left for the take-off
+    /// (by a landed move, or a landed player moved) likewise.
     fn refresh_sites(
         &mut self,
         catalog: &(impl PilotCatalog + ?Sized),
