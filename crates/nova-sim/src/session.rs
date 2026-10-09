@@ -8895,6 +8895,9 @@ mod tests {
         Rulebook::default().with_override(RuleKey::StayDays, RuleSource::Bible)
     }
 
+    /// The original redraws the rolls only in its daily step
+    /// (`_IncrementGameTime` @0xb7c4-0xb833), and no landing path writes
+    /// them: the take-off's day draws the roll, and the landing keeps it.
     #[test]
     fn the_outfitters_rolls_are_drawn_once_a_day() {
         let mut session = outfitted(&rolling(50, 100));
@@ -8911,6 +8914,9 @@ mod tests {
         assert_eq!(firing.asked, [50], "the landing keeps it");
     }
 
+    /// The original redraws the rolls only in its daily step
+    /// (`_IncrementGameTime` @0xb7c4-0xb833), and no landing path writes
+    /// them: the take-off's day draws the roll, and the landing keeps it.
     #[test]
     fn the_shipyards_rolls_are_drawn_once_a_day() {
         let mut session = outfitted(&rolling(100, 50));
@@ -8982,6 +8988,9 @@ mod tests {
         assert_eq!(missing.asked, [50]);
     }
 
+    /// The daily step draws every roll afresh (`_IncrementGameTime`
+    /// @0xb7c4-0xb833), and no landing path writes one: only the redraw on
+    /// landing changes, the day's draw settling the declined class.
     #[test]
     fn a_days_draw_supersedes_the_redraws_due() {
         let mut session = outfitted(&rolling(100, 50));
@@ -9176,6 +9185,9 @@ mod tests {
         }
     }
 
+    /// The original draws the rolls once a day (`_IncrementGameTime`
+    /// @0xb7c4-0xb833), and no landing path writes them: only when the
+    /// draw happens changes, at the take-off's day, not the listing.
     #[test]
     fn about_n_percent_of_days_sell_an_item_of_buy_random_n() {
         for (catalog, expected) in [(rolling(37, 100), (37, 100)), (rolling(100, 62), (100, 62))] {

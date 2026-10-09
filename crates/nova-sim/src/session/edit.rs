@@ -503,6 +503,10 @@ mod tests {
         assert_eq!(session.take_messages(), []);
     }
 
+    /// The original redraws the rolls only in its daily step
+    /// (`_IncrementGameTime` @0xb7c4-0xb833), and no landing path writes
+    /// them: a move, passing no day, keeps them, and only the redraw due
+    /// on landing (`_DoShipyardDialog` @0x5f0f8) is applied.
     #[test]
     fn a_move_keeps_the_day_rolls_as_a_landing_does() {
         use crate::catalog::OutfitId;

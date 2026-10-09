@@ -409,6 +409,9 @@ mod tests {
         assert_eq!(holds.asked, [50], "drawn once");
     }
 
+    /// The original redraws the hire rolls only in its daily step
+    /// (`_IncrementGameTime` @0xb7c4-0xb833), and no landing path writes
+    /// them: the take-off's day draws the roll, and the landing keeps it.
     #[test]
     fn each_day_draws_the_rolls_again() {
         let catalog = barred(vec![hireable(129, 50)]);
