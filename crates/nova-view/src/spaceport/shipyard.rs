@@ -609,7 +609,9 @@ impl ShipyardScreen {
     /// Greys Buy Ship when the selected ship cannot be bought, and reads
     /// its picture and description if they are not shown already.
     fn selected_changed(&mut self) {
-        let buys = self.selected_row().is_some_and(|row| row.buy.is_ok());
+        let buys = self
+            .selected_row()
+            .is_some_and(|row| self.shipyard.can(row.id).is_ok());
         let selected = self.selected().map(|index| {
             let picture = self.pictures.get(index).copied().flatten();
             (self.shipyard.rows[index].id, picture)
@@ -638,7 +640,10 @@ impl ShipyardScreen {
     /// Requests the selected ship, if it can be bought, saying whether B
     /// asked.
     fn ask(&mut self, by_key: bool) {
-        if let Some(row) = self.selected_row().filter(|row| row.buy.is_ok()) {
+        if let Some(row) = self
+            .selected_row()
+            .filter(|row| self.shipyard.can(row.id).is_ok())
+        {
             self.request = Some((row.id, by_key));
         }
     }
@@ -1658,7 +1663,7 @@ mod tests {
         press(&mut screen, Key::Right);
         let mut bought = shipyard();
         bought.current = ShipId(129);
-        bought.rows[1].buy = Err(ShipRefusal::CannotAfford);
+        bought.cash = 0;
         bought.rows.remove(0);
         screen.set_shipyard(bought.clone());
         assert_eq!(screen.shipyard(), &bought);

@@ -937,7 +937,7 @@ mod tests {
         ];
         let shipyard = open(&ships, &pilot());
         assert_eq!(listed(&shipyard), [129, 130, 132, 133, 135, 136]);
-        assert!(shipyard.rows.iter().all(|row| row.buy.is_ok()));
+        assert!(shipyard.rows.iter().all(|row| shipyard.can(row.id).is_ok()));
     }
 
     #[test]
@@ -975,7 +975,7 @@ mod tests {
         let mut chance = Scripted::answering(&[true]);
         let on = rolled(&ships, &pilot(), &mut DayRolls::default(), &mut chance);
         assert_eq!(listed(&on), [129, 131]);
-        assert_eq!(row(&on, 129).buy, Ok(()));
+        assert_eq!(on.can(ShipId(129)), Ok(()));
         assert_eq!(chance.asked, [35]);
     }
 
@@ -1127,7 +1127,7 @@ mod tests {
         let ships = [cheap(128), cheap(129)];
         let shipyard = open(&ships, &pilot());
         assert_eq!(listed(&shipyard), [128, 129]);
-        assert_eq!(row(&shipyard, 128).buy, Ok(()));
+        assert_eq!(shipyard.can(ShipId(128)), Ok(()));
         assert_eq!(shipyard.current, ShipId(128));
     }
 
@@ -1155,12 +1155,12 @@ mod tests {
         let outfits = [licence];
         let shipyard = open_with(&ships, &outfits, &pilot());
         assert_eq!(listed(&shipyard), [129, 130, 131], "listed anyway");
-        assert_eq!(row(&shipyard, 129).buy, Ok(()), "the ship's bit");
-        assert_eq!(row(&shipyard, 130).buy, Err(ShipRefusal::NotForSale));
-        assert_eq!(row(&shipyard, 131).buy, Err(ShipRefusal::NotForSale));
+        assert_eq!(shipyard.can(ShipId(129)), Ok(()), "the ship's bit");
+        assert_eq!(shipyard.can(ShipId(130)), Err(ShipRefusal::NotForSale));
+        assert_eq!(shipyard.can(ShipId(131)), Err(ShipRefusal::NotForSale));
         let licensed = open_with(&ships, &outfits, &owning(&[(140, 1)]));
-        assert_eq!(row(&licensed, 131).buy, Ok(()), "the licence's bit too");
-        assert_eq!(row(&licensed, 130).buy, Err(ShipRefusal::NotForSale));
+        assert_eq!(licensed.can(ShipId(131)), Ok(()), "the licence's bit too");
+        assert_eq!(licensed.can(ShipId(130)), Err(ShipRefusal::NotForSale));
     }
 
     #[test]
@@ -1204,8 +1204,8 @@ mod tests {
         let ships = [gated(129, 0, "b7"), gated(130, 0, "b8")];
         let shipyard = open_gated(&ships, refusing, &pilot());
         assert_eq!(listed(&shipyard), [129, 130]);
-        assert_eq!(row(&shipyard, 129).buy, Err(ShipRefusal::NotForSale));
-        assert_eq!(row(&shipyard, 130).buy, Ok(()), "another bit holds");
+        assert_eq!(shipyard.can(ShipId(129)), Err(ShipRefusal::NotForSale));
+        assert_eq!(shipyard.can(ShipId(130)), Ok(()), "another bit holds");
     }
 
     #[test]
@@ -1227,8 +1227,8 @@ mod tests {
         ];
         let shipyard = open(&ships, &pilot());
         assert_eq!(listed(&shipyard), [130, 131]);
-        assert_eq!(row(&shipyard, 130).buy, Err(ShipRefusal::NotForSale));
-        assert_eq!(row(&shipyard, 131).buy, Ok(()));
+        assert_eq!(shipyard.can(ShipId(130)), Err(ShipRefusal::NotForSale));
+        assert_eq!(shipyard.can(ShipId(131)), Ok(()));
     }
 
     #[test]
@@ -1243,7 +1243,7 @@ mod tests {
         ];
         let shipyard = open_gated(&ships, allowing, &pilot());
         assert_eq!(listed(&shipyard), [129]);
-        assert_eq!(row(&shipyard, 129).buy, Err(ShipRefusal::NotForSale));
+        assert_eq!(shipyard.can(ShipId(129)), Err(ShipRefusal::NotForSale));
     }
 
     #[test]
@@ -1509,7 +1509,7 @@ mod tests {
         exact.cash = 10_000;
         let shipyard = open(&ships, &exact);
         assert_eq!(shipyard.trade_in, 1000);
-        assert_eq!(row(&shipyard, 129).buy, Ok(()), "exactly enough");
+        assert_eq!(shipyard.can(ShipId(129)), Ok(()), "exactly enough");
         exact.cash = 9999;
         assert_eq!(
             open(&ships, &exact).check(ShipId(129)),
@@ -1548,7 +1548,7 @@ mod tests {
         let shipyard = open(&ships, &pilot());
         let row = row(&shipyard, 129);
         assert_eq!(shipyard.final_price(row), 1000 - 10_000);
-        assert_eq!(row.buy, Ok(()));
+        assert_eq!(shipyard.can(ShipId(129)), Ok(()));
     }
 
     // The shipyard's questions.
