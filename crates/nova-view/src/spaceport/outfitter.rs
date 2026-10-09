@@ -2977,6 +2977,37 @@ mod tests {
     }
 
     #[test]
+    fn after_a_part_way_sale_the_alert_opens_over_the_outfitter_as_it_now_is() {
+        let [_, (raiser, _), _] = refused_in_the_loop();
+        let mut screen = screen_of(loop_refusing(raiser.clone(), RuleSource::Engine));
+        alt_click(&mut screen, SELL_ITEM);
+        press(&mut screen, Key::Enter);
+        assert_eq!(
+            screen.take_order(),
+            Some(counted(128, Direction::Sell, 3)),
+            "the 3 owned"
+        );
+        // One rack sold, then the rest refused.
+        screen.set_outfitter(loop_refusing(
+            OutfitRow { owned: 2, ..raiser },
+            RuleSource::Engine,
+        ));
+        screen.alert(&rack_alert(RAISED, true));
+        let alert = screen.alert_dialog().expect("an alert");
+        assert_eq!(
+            alert.lines().join(" "),
+            "You need to sell two widgets before you can sell your racks."
+        );
+        let mut list = DrawList::new();
+        alert.draw(&mut list);
+        let alert_drawn: Vec<DrawCommand> = list.iter().cloned().collect();
+        assert!(drawn(&screen).ends_with(&alert_drawn), "drawn last");
+        let owned = format!("{OWNED_LABEL} 2");
+        let shown = info_box(&screen);
+        assert!(shown.contains(&owned), "{shown:?}");
+    }
+
+    #[test]
     fn done_return_or_escape_closes_the_alert_and_leaves_the_outfitter_open() {
         for k in [Key::Enter, Key::Escape] {
             let mut screen = alerting(OutfitRefusal::NegativeFreeMass);

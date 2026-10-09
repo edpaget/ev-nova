@@ -6182,6 +6182,69 @@ mod tests {
         );
     }
 
+    /// [`outfitting`] with 10,000 credits, a -10-ton pod (201) and an
+    /// outfit (202) of `heavy` tons, each 100 credits.
+    fn pod_outfitting(heavy: i16) -> FakeCatalog {
+        let mut catalog = outfitting();
+        catalog.character = Ok(CharacterStart {
+            cash: 10_000,
+            ..catalog.character.expect("a chär")
+        });
+        let tank = catalog.outfits[0].clone();
+        for (id, mass) in [(201, -10), (202, heavy)] {
+            catalog.outfits.push(OutfitRecord {
+                id: OutfitId(id),
+                mass,
+                cost: 100,
+                lc_name: "pod".to_owned(),
+                lc_plural: "pods".to_owned(),
+                ..tank.clone()
+            });
+        }
+        catalog
+    }
+
+    #[test]
+    fn a_counted_sale_refused_part_way_goes_through_the_session_with_its_alert() {
+        let pod = OutfitId(201);
+        let mut probe = FlightView::new(pod_outfitting(0));
+        land_now(&mut probe);
+        let free = probe.outfitter().expect("open").free_mass;
+        // Three pods and the heavy outfit leave ten tons free: one pod
+        // sold leaves none, and the next is refused at pass 1.
+        let heavy = i16::try_from(free).expect("small") + 20;
+        let mut view = FlightView::new(pod_outfitting(heavy));
+        land_now(&mut view);
+        let buy = |outfit| OutfitOrder {
+            outfit,
+            direction: Direction::Buy,
+        };
+        assert_eq!(view.outfit_order(buy(pod), 3).run.done, 3);
+        assert_eq!(view.outfit_order(buy(OutfitId(202)), 1).run.done, 1);
+        assert_eq!(view.outfitter().expect("open").free_mass, 10);
+        view.take_save_due();
+        let sell = OutfitOrder {
+            outfit: pod,
+            direction: Direction::Sell,
+        };
+        let order = view.outfit_order(sell, 3);
+        assert_eq!(
+            order.run,
+            OrderRun {
+                done: 1,
+                stopped: Some(Stopped {
+                    pass: 1,
+                    refusal: OutfitRefusal::NegativeFreeMass,
+                }),
+            }
+        );
+        let alert = order.alert.expect("an alert");
+        assert_eq!(alert.refusal, OutfitRefusal::NegativeFreeMass);
+        assert!(alert.plural, "a pass remains");
+        assert_eq!(view.pilot().map(|pilot| pilot.owned(pod)), Some(2));
+        assert!(view.take_save_due(), "a sale");
+    }
+
     #[test]
     fn opening_the_outfitter_lifts_the_sessions_once_an_opening_limit() {
         let mut catalog = outfitting();
