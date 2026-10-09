@@ -1727,8 +1727,10 @@ impl Session {
             }
         }
         // The systems passed, then the one arrived in, each reached before
-        // the days (@0x6bddb, @0x6be12).
-        for (n, system) in passed.into_iter().chain([at]).enumerate() {
+        // the days (@0x6bddb, @0x6be12): the one entering it will resolve
+        // to, should the galaxy have hidden it on the way.
+        let arrived = self.galaxy.arrival(at).to;
+        for (n, system) in passed.into_iter().chain([arrived]).enumerate() {
             self.raise_at(mark + n, StoryEvent::Explored { system });
         }
         let map = |id| self.galaxy.position(id).unwrap_or_default();
@@ -14489,6 +14491,41 @@ mod tests {
     }
 
     #[test]
+    fn a_government_override_replaces_the_table_arrivals_are_drawn_from_at_once() {
+        let mut catalog = fleeted();
+        catalog.fleets[1].escorts[0].ship = ShipId(131);
+        catalog.ship_records.push(ship(131, FAST));
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut linked_fleet_draws(2));
+        let npcs = session.npcs().to_vec();
+        assert!(!session.traffic_ships().contains(&ShipId(131)));
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_govt(SystemId(130), Some(Some(GovtId(141))));
+        });
+        assert!(
+            session.traffic_ships().contains(&ShipId(131)),
+            "141's fleet"
+        );
+        assert!(!session.traffic_ships().contains(&ShipId(130)));
+        assert_eq!(session.npcs(), npcs, "the ships present stay");
+    }
+
+    #[test]
+    fn a_landed_move_into_a_system_then_hidden_takes_off_into_the_one_at_its_place() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(session.system(), SystemId(131));
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.sites.len(), 2, "130's, until the take-off");
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+    }
+
+    #[test]
     fn the_npcs_see_a_government_override_from_the_next_traffic_tick() {
         let mut catalog = armed();
         catalog.star_map[0].govt = Some(GovtId(150));
@@ -14624,6 +14661,29 @@ mod tests {
         assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
         assert_eq!(session.course(), [], "the hop made");
         assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn a_jump_into_a_system_hidden_on_the_way_explores_the_one_it_arrives_in() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        begin_jump_now(&mut session).expect("jumps");
+        hide(&mut session, &catalog, &[131]);
+        session.drop_raised();
+        session.arrive(&catalog, &mut NeverFires);
+        let explored: Vec<SystemId> = session
+            .story_raised()
+            .into_iter()
+            .filter_map(|event| match event {
+                StoryEvent::Explored { system } => Some(system),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(explored, [SystemId(134)]);
+        assert!(session.pilot().has_explored(SystemId(134)));
+        assert!(!session.pilot().has_explored(SystemId(131)));
     }
 
     #[test]

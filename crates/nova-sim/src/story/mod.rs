@@ -552,15 +552,15 @@
 //!
 //! ## Built by phase 4
 //!
-//! The overlay is [`GalaxyOverlay`](galaxy::GalaxyOverlay), saved on the
+//! The overlay is [`GalaxyOverlay`], saved on the
 //! pilot (save version 17), and the session reads the galaxy only through
-//! [`OverlaidGalaxy`](galaxy::OverlaidGalaxy): the static catalog read
+//! [`OverlaidGalaxy`]: the static catalog read
 //! once, the overlay, and the star map built from both, rebuilt only when
 //! the overlay changes. Its map has the visible systems alone, each link
 //! to a hidden system resolved to the visible system at its place, and
 //! each system's government as overridden. Every `StarMap::govt` the
 //! session reads is that map's, and every stellar the session reads
-//! passes through [`OverlaidGalaxy::site`](galaxy::OverlaidGalaxy::site),
+//! passes through [`OverlaidGalaxy::site`],
 //! so landing, the market and the outfitter see a stellar's government
 //! override. With no overrides the galaxy is exactly the static catalog.
 //!
