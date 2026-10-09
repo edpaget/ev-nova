@@ -518,6 +518,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
+        session.assert_docked_among_shown();
         assert_eq!(session.hire_rolls, crate::wares::DayRolls::default());
         assert_eq!(session.outfit_rolls, crate::wares::DayRolls::default());
         assert_eq!(session.ship_rolls, crate::wares::DayRolls::default());
@@ -548,6 +549,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(130), StellarId(129))
             .expect("moves");
+        session.assert_docked_among_shown();
         assert_eq!(session.landed(), Some(StellarId(129)));
         assert_eq!(session.player().position, Vec2::new(2000.0, 0.0));
     }
@@ -586,6 +588,7 @@ mod tests {
             session
                 .relocate(&catalog, SystemId(system), StellarId(stellar))
                 .expect("moves");
+            session.assert_docked_among_shown();
             assert_eq!(session.take_events(), [told], "{system} {stellar}");
             session.take_off(&mut NeverFires);
             assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
@@ -599,6 +602,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
+        session.assert_docked_among_shown();
         session.take_off(&mut NeverFires);
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(session.npcs().len(), 3);
@@ -611,8 +615,10 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
+        session.assert_docked_among_shown();
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
+        flown.assert_docked_among_shown();
         assert_eq!(flown.system(), SystemId(131));
         assert_eq!(flown.landed(), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(50.0, 60.0));
@@ -678,6 +684,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
+        session.assert_docked_among_shown();
         assert_eq!(session.shots(), []);
         assert_eq!(session.nav_target(), None);
         assert_eq!(session.gate, None);

@@ -588,7 +588,12 @@
 //! explores nothing and passes no day. A landed player stays docked: the
 //! spaceport stays its stellar's, and the new system's stellars wait for
 //! the take-off, as after a landed `M`; a pilot loaded landed at a stellar
-//! of a hidden system at its place resumes docked there the same way. The
+//! of a hidden system at its place resumes docked there the same way, and
+//! so does a relocation to a stellar of a system resolved to another. One
+//! owner decides this for every move of the player's system, the session's
+//! `set_player_system` (see the session's `entry` module): docked, the
+//! stellars shown are always those of the system whose stellar the ship is
+//! docked at. The
 //! course keeps its system IDs, each hop resolved by place when it is
 //! used, as `_CueNextHyperRouteDest` resolves it.
 //!

@@ -533,6 +533,7 @@ mod tests {
     fn moved(session: &mut Session, catalog: &FakePilotCatalog, text: &str) {
         run(session, text);
         let _ = settle(session, catalog);
+        session.assert_docked_among_shown();
     }
 
     fn ids(sites: &[LandingSite]) -> Vec<i16> {
@@ -1068,6 +1069,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
+        session.assert_docked_among_shown();
         session.take_off(&mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(
@@ -1097,6 +1099,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
+        session.assert_docked_among_shown();
         session.take_off(&mut NeverFires);
         assert_eq!(ids(&session.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(-50.0, 0.0));

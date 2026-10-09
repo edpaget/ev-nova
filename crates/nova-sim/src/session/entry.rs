@@ -20,10 +20,19 @@
 //! the chain head, made visible ([`OverlaidGalaxy::arrival`]; see the
 //! `story` module's "Galaxy overlay"). The stellars of a system resolved
 //! to another are read again; the caller's placement is kept, a system at
-//! the same place being at the same map position. A way in that docks
-//! (the relocation) keeps the stellars of the system asked for, whose
-//! stellar it docks at, and leaves those of the system resolved to for
-//! the take-off, as after a landed move.
+//! the same place being at the same map position.
+//!
+//! **The stellars shown.** [`Session::set_player_system`] is the one owner
+//! of which stellars the session shows, and every move of the player's
+//! system goes through it: a way in, the galaxy overlay's move off a
+//! hidden system, a pilot flown, and the take-off. In flight the new
+//! system's stellars are shown at once. Docked, the stellars shown stay
+//! those of the system whose stellar the ship is docked at, so the
+//! spaceport keeps serving it, and the new system's wait for the
+//! take-off: after a landed `M` or `N`, after the overlay moves a landed
+//! player, after a relocation to a stellar of a system resolved to
+//! another, and for a pilot flown docked at a stellar of a hidden system at
+//! its place. A mover says only where the ship is docked ([`Dock`]).
 //!
 //! The last step announces the arrival, and tells a view what to redraw
 //! ([`scene_event`], see the `events` module): measured against the
@@ -124,15 +133,15 @@ pub(super) struct Arrival {
     pub(super) placement: Placement,
 }
 
-/// The stellars a landed move read, waiting for the take-off
-/// ([`SitesStep::Defer`]).
+/// Where the ship is docked as the player's system changes, for
+/// [`Session::set_player_system`].
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct NextSites {
-    /// The system whose stellars are still the session's: the one the
-    /// first of the landed moves since the landing left.
-    pub(super) from: SystemId,
-    /// The stellars of the system moved to last.
-    pub(super) sites: Vec<LandingSite>,
+pub(super) enum Dock {
+    /// As it was: in flight, or docked still at the stellar it was, whose
+    /// system's stellars stay shown.
+    AsItWas,
+    /// Anew, at a stellar of this system, whose stellars these are.
+    At(SystemId, Vec<LandingSite>),
 }
 
 /// One reset or write a row may do.
@@ -146,8 +155,6 @@ pub(super) enum Reset {
     Touchdown,
     /// The ship is docked at the placement's stellar.
     Dock,
-    /// The stellars a landed move left for the take-off are dropped.
-    DeferredSites,
     /// A held `P` sound is dropped.
     HeldSound,
     /// A jump under way is given up.
@@ -193,16 +200,6 @@ pub(super) enum CourseStep {
     Clear,
 }
 
-/// When the stellars read become the system's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SitesStep {
-    /// At once.
-    Now,
-    /// At the next take-off: the open spaceport keeps serving the stellar
-    /// landed on until then.
-    Defer,
-}
-
 /// What becomes of the traffic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TrafficStep {
@@ -224,16 +221,14 @@ pub(super) enum TrafficStep {
 pub(super) struct Resets {
     set: BTreeSet<Reset>,
     course: CourseStep,
-    sites: SitesStep,
     traffic: TrafficStep,
 }
 
 impl Resets {
-    fn of(set: &[Reset], course: CourseStep, sites: SitesStep, traffic: TrafficStep) -> Self {
+    fn of(set: &[Reset], course: CourseStep, traffic: TrafficStep) -> Self {
         Self {
             set: set.iter().copied().collect(),
             course,
-            sites,
             traffic,
         }
     }
@@ -282,7 +277,6 @@ fn jump(hops: usize) -> Resets {
             Reset::ArrivalMessage,
         ],
         CourseStep::Drop(hops),
-        SitesStep::Now,
         TrafficStep::Populate,
     )
 }
@@ -309,7 +303,6 @@ fn gate() -> Resets {
             Reset::ArrivalSound,
         ],
         CourseStep::Clear,
-        SitesStep::Now,
         TrafficStep::Populate,
     )
 }
@@ -328,7 +321,7 @@ fn script_move_landed(arrival: bool) -> Resets {
     } else {
         CourseStep::Keep
     };
-    Resets::of(&set, course, SitesStep::Defer, TrafficStep::None)
+    Resets::of(&set, course, TrafficStep::None)
 }
 
 /// An `M` or `N` in flight (`_EvalSetExp` @0x158a4): the shots are
@@ -365,7 +358,7 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     } else {
         (CourseStep::Keep, TrafficStep::None)
     };
-    Resets::of(&set, course, SitesStep::Now, traffic)
+    Resets::of(&set, course, traffic)
 }
 
 /// The developer tools' move of a landed pilot: no original does it. It
@@ -379,7 +372,6 @@ fn relocate() -> Resets {
             Reset::Explore,
             Reset::Touchdown,
             Reset::Dock,
-            Reset::DeferredSites,
             Reset::NavTarget,
             Reset::GateEntry,
             Reset::Combat,
@@ -391,7 +383,6 @@ fn relocate() -> Resets {
             Reset::SaveDue,
         ],
         CourseStep::Clear,
-        SitesStep::Now,
         TrafficStep::Reset,
     )
 }
@@ -473,28 +464,19 @@ impl Session {
             system_changed: system != self.pilot.system,
             jump_pending: self.jump.is_some(),
         };
-        let shown = self
-            .next_sites
-            .as_ref()
-            .map_or(self.pilot.system, |next| next.from);
         let resets = resets(how, &self.rules, facts);
-        // Docking at a stellar of a system resolved to another keeps that
-        // stellar's spaceport, the system entered's stellars waiting for
-        // the take-off, as after a landed move.
-        let (sites, docked_away) = if system == asked {
-            (sites, None)
-        } else if resets.has(Reset::Dock) {
-            let away = NextSites {
-                from: asked,
-                sites: self.read_sites(stellars, system),
-            };
-            (sites, Some(away))
+        // A way in that docks docks at a stellar of the system asked for.
+        let dock = if resets.has(Reset::Dock) {
+            Dock::At(asked, sites.clone())
         } else {
-            (self.read_sites(stellars, system), None)
+            Dock::AsItWas
         };
-        let scene = docked_away.as_ref().map_or(system, |away| away.from);
+        let sites = if system == asked {
+            sites
+        } else {
+            self.read_sites(stellars, system)
+        };
         self.place(placement);
-        self.pilot.system = system;
         if resets.has(Reset::Stellar) {
             self.pilot.stellar = placement.stellar;
         }
@@ -515,16 +497,7 @@ impl Session {
         if resets.has(Reset::Dock) {
             self.landed = placement.stellar;
         }
-        match resets.sites {
-            SitesStep::Now => self.sites = sites,
-            SitesStep::Defer => self.next_sites = Some(NextSites { from: shown, sites }),
-        }
-        if resets.has(Reset::DeferredSites) {
-            self.next_sites = None;
-        }
-        if docked_away.is_some() {
-            self.next_sites = docked_away;
-        }
+        let scene_changed = self.set_player_system(system, sites, dock);
         self.leave_behind(&resets);
         self.bring_in_traffic(resets.traffic, catalog, chance);
         if resets.has(Reset::ShopRolls) {
@@ -537,11 +510,59 @@ impl Session {
         if resets.has(Reset::SaveDue) {
             self.save_due = true;
         }
-        self.announce(how, &resets, system, scene_event(how, scene != shown));
+        self.announce(how, &resets, system, scene_event(how, scene_changed));
         // A jump's arrival raised its `Explored` before its days, at the
         // original's first nebula exploration (@0x6be12).
         if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. }) {
             self.raise(StoryEvent::Explored { system });
+        }
+    }
+
+    /// Makes `system` the player's system and `sites` its stellars: the one
+    /// owner of which stellars the session shows (see the module docs).
+    /// In flight, or docked at a stellar of `system` itself, `sites` are
+    /// shown at once and nothing waits for the take-off. Docked at a
+    /// stellar of another system (where the ship was, or `dock`'s system),
+    /// that system's stellars stay shown, or `dock`'s become so, and
+    /// `sites` wait for the take-off. Whether the system whose stellars are
+    /// shown changed.
+    pub(super) fn set_player_system(
+        &mut self,
+        system: SystemId,
+        sites: Vec<LandingSite>,
+        dock: Dock,
+    ) -> bool {
+        let before = self.shown;
+        self.pilot.system = system;
+        let (docked_in, docked_sites) = match dock {
+            Dock::AsItWas => (self.shown, None),
+            Dock::At(at, at_sites) => (at, Some(at_sites)),
+        };
+        if self.landed.is_none() || docked_in == system {
+            self.sites = sites;
+            self.shown = system;
+            self.next_sites = None;
+        } else {
+            if let Some(docked_sites) = docked_sites {
+                self.sites = docked_sites;
+            }
+            self.shown = docked_in;
+            self.next_sites = Some(sites);
+        }
+        self.shown != before
+    }
+
+    /// Checks the invariant [`Session::set_player_system`] keeps: docked,
+    /// the stellar the ship is docked at is among the stellars shown.
+    #[cfg(test)]
+    pub(crate) fn assert_docked_among_shown(&self) {
+        if let Some(stellar) = self.landed {
+            let shown: Vec<StellarId> = self.sites.iter().map(|site| site.id).collect();
+            assert!(
+                shown.contains(&stellar),
+                "docked at {stellar:?}, showing {shown:?} of {:?}",
+                self.shown
+            );
         }
     }
 
@@ -699,7 +720,6 @@ mod tests {
                     ],
                 ),
                 CourseStep::Drop(hops),
-                SitesStep::Now,
                 TrafficStep::Populate,
             );
             for f in [facts(true, false), facts(false, true)] {
@@ -727,7 +747,6 @@ mod tests {
                 ],
             ),
             CourseStep::Clear,
-            SitesStep::Now,
             TrafficStep::Populate,
         );
         for changed in [true, false] {
@@ -751,14 +770,12 @@ mod tests {
                         Reset::Explore,
                         Reset::Touchdown,
                         Reset::Dock,
-                        Reset::DeferredSites,
                         Reset::GateEntry,
                         Reset::ShopRolls,
                         Reset::SaveDue,
                     ],
                 ),
                 CourseStep::Clear,
-                SitesStep::Now,
                 TrafficStep::Reset,
             )
         );
@@ -772,7 +789,6 @@ mod tests {
             Resets::of(
                 &[Reset::Stellar, Reset::SaveDue],
                 CourseStep::Keep,
-                SitesStep::Defer,
                 TrafficStep::None,
             ),
             "by the engine"
@@ -782,7 +798,6 @@ mod tests {
             Resets::of(
                 &[Reset::Stellar, Reset::Explore, Reset::SaveDue],
                 CourseStep::Clear,
-                SitesStep::Defer,
                 TrafficStep::None,
             ),
             "as an arrival"
@@ -813,7 +828,7 @@ mod tests {
                     };
                     assert_eq!(
                         resets(in_flight, &arrival(reading), facts(changed, pending)),
-                        Resets::of(&set, course, SitesStep::Now, traffic),
+                        Resets::of(&set, course, traffic),
                         "{reading:?} changed {changed} pending {pending}"
                     );
                 }

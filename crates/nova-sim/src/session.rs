@@ -332,7 +332,7 @@ pub use script_effects::{ScriptEffectRules, Settled};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use self::entry::{Arrival, Entry, NextSites, Placement, ShipPlacement};
+use self::entry::{Arrival, Dock, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
 use self::ship_change::ClassChange;
 use crate::ai::{Behaviour, Goal, PlayerSide};
@@ -493,8 +493,12 @@ pub struct Session {
     /// How the ship performs, with the outfits it carries.
     stats: ShipStats,
     player: ShipState,
-    /// The system's stellars, read when the session starts.
+    /// The stellars shown: `shown`'s, read when the session starts and
+    /// whenever [`Session::set_player_system`] says.
     sites: Vec<LandingSite>,
+    /// The system whose stellars `sites` are: the player's, except while
+    /// the ship is docked at a stellar of another system.
+    shown: SystemId,
     /// The stellar the ship is docked at, if it has landed.
     landed: Option<StellarId>,
     /// The stellar selected as the navigation target, one of `sites`.
@@ -653,9 +657,10 @@ pub struct Session {
     /// What the set expressions left for later: for
     /// [`Session::settle_script`], and the next flight tick; never saved.
     queued: script_effects::Queued,
-    /// The stellars of the system a landed move went to, swapped in at
-    /// the take-off, with the system whose stellars they replace.
-    next_sites: Option<NextSites>,
+    /// The stellars of the player's system, waiting for the take-off
+    /// while the ship is docked at a stellar of another system, `shown`
+    /// (see [`Session::set_player_system`]).
+    next_sites: Option<Vec<LandingSite>>,
     /// Whether the next take-off keeps the ship where it touched down
     /// (the original's `_dontMovePlayerAfterLanding`); never saved.
     hold_position: bool,
@@ -718,10 +723,9 @@ impl Session {
         // hidden system flies from the one standing for it, silently.
         story::leave_hidden(&mut pilot, &mut galaxy);
         pilot.explore(pilot.system);
-        let (sites, next_sites) = landed_sites(&galaxy, catalog, &pilot);
-        let docked = pilot
-            .stellar
-            .and_then(|stellar| sites.iter().find(|site| site.id == stellar));
+        let system = pilot.system;
+        let here = overlaid_sites(&galaxy, catalog, system);
+        let (docked, dock) = docking(&galaxy, catalog, &pilot, &here);
         let player = ShipState {
             position: docked.map_or(Vec2::ZERO, |site| site.position),
             ..ShipState::default()
@@ -744,7 +748,8 @@ impl Session {
             // Refitted below, from the outfits the pilot owns.
             stats: ShipStats::default(),
             player,
-            sites,
+            sites: Vec::new(),
+            shown: system,
             landed,
             nav_target: None,
             galaxy,
@@ -803,13 +808,14 @@ impl Session {
             disable_rule: Self::nova_disable(),
             strings: ship_change::Strings::none(),
             queued: script_effects::Queued::default(),
-            next_sites,
+            next_sites: None,
             hold_position: false,
             touchdown: player.position,
             rules: Rulebook::default(),
             story: story::StoryRuntime::default(),
             pilot,
         };
+        session.set_player_system(system, here, dock);
         session.open_opening();
         session.refit(false, ReservePolicy::Hold);
         session.restock_fleet();
@@ -2129,8 +2135,9 @@ impl Session {
     /// ([`Session::tick_traffic`]). After a landed move the ship flies in
     /// the system moved to, from where the move left it, and after an `N`
     /// from where it touched down (see the `script_effects` module): the
-    /// take-off swaps in the stellars the landed move's row of the table
-    /// in the `entry` module left for it, telling
+    /// take-off shows the stellars of the player's system that waited for
+    /// it while the ship was docked at another system's stellar
+    /// ([`Session::set_player_system`]), telling
     /// [`SessionEvent::SystemChanged`] when they are another system's than
     /// the stellars they replace. `None`, and nothing changes, when it has
     /// not landed.
@@ -2161,11 +2168,10 @@ impl Session {
             self.pass_days(stay.leaving_days(), chance);
         }
         self.frame = market::AFTER_TAKE_OFF_FRAME;
-        if let Some(next) = self.next_sites.take() {
-            self.sites = next.sites;
-            if self.pilot.system != next.from {
-                self.emit(SessionEvent::SystemChanged);
-            }
+        if let Some(sites) = self.next_sites.take()
+            && self.set_player_system(self.pilot.system, sites, Dock::AsItWas)
+        {
+            self.emit(SessionEvent::SystemChanged);
         }
         if std::mem::take(&mut self.hold_position) {
             self.player.position = self.touchdown;
@@ -3323,34 +3329,38 @@ impl Session {
     }
 }
 
-/// The stellars `pilot` is flown among, read from `catalog` through
-/// `galaxy`'s overlay, and those left for its take-off. Its system's,
-/// unless the stellar it last landed on is not among them but is another
-/// system's at the same place, one the overlay hid and moved it off (the
-/// original rewrites only the system numbers, @0x998f1-0x99a36): then it
-/// resumes docked in that system's spaceport, and its own system's
-/// stellars wait for the take-off, as after a landed move.
-fn landed_sites(
+/// Where `pilot`, flown among its system's stellars `here`, resumes
+/// docked: the stellar it last landed on, if it is among them; else, if
+/// it is another system's at the same place, one the overlay hid and moved
+/// it off (the original rewrites only the system numbers,
+/// @0x998f1-0x99a36), at that stellar in that system, read from `catalog`
+/// through `galaxy`'s overlay; else nowhere.
+fn docking(
     galaxy: &OverlaidGalaxy,
     catalog: &(impl PilotCatalog + ?Sized),
     pilot: &Pilot,
-) -> (Vec<LandingSite>, Option<NextSites>) {
-    let system = pilot.system;
-    let here = overlaid_sites(galaxy, catalog, system);
-    let Some(stellar) = pilot
-        .stellar
-        .filter(|&stellar| !here.iter().any(|site| site.id == stellar))
-    else {
-        return (here, None);
+    here: &[LandingSite],
+) -> (Option<LandingSite>, Dock) {
+    let Some(stellar) = pilot.stellar else {
+        return (None, Dock::AsItWas);
     };
-    let places = galaxy.map().places();
-    for from in places.at(system).filter(|&other| other != system) {
-        let sites = overlaid_sites(galaxy, catalog, from);
-        if sites.iter().any(|site| site.id == stellar) {
-            return (sites, Some(NextSites { from, sites: here }));
+    let at = |sites: &[LandingSite]| sites.iter().find(|site| site.id == stellar).copied();
+    if let Some(site) = at(here) {
+        return (Some(site), Dock::AsItWas);
+    }
+    let system = pilot.system;
+    for other in galaxy
+        .map()
+        .places()
+        .at(system)
+        .filter(|&other| other != system)
+    {
+        let sites = overlaid_sites(galaxy, catalog, other);
+        if let Some(site) = at(&sites) {
+            return (Some(site), Dock::At(other, sites));
         }
     }
-    (here, None)
+    (None, Dock::AsItWas)
 }
 
 /// `system`'s stellars, read from `catalog`, each passed through
@@ -4885,6 +4895,7 @@ mod tests {
         let catalog = catalog();
         let pilot = landed_pilot(&catalog);
         let session = Session::fly(&catalog, pilot.clone()).expect("flies");
+        session.assert_docked_among_shown();
         assert_eq!(session.landed(), Some(StellarId(128)));
         assert_eq!(session.player().position, Vec2::new(30.0, -40.0));
         assert_eq!(session.player().velocity, Vec2::ZERO);
@@ -14568,6 +14579,7 @@ mod tests {
         let _ = session.settle_script(catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert!(session.next_sites.is_some(), "deferred");
+        session.assert_docked_among_shown();
         session
     }
 
@@ -14578,6 +14590,7 @@ mod tests {
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_stellar_govt(StellarId(128), Some(Some(LAWFUL)));
         });
+        session.assert_docked_among_shown();
         assert_eq!(session.sites[0].id, StellarId(128), "130's, still shown");
         assert_eq!(session.sites[0].govt, Some(LAWFUL));
         session.take_off(&mut NeverFires).expect("takes off");
@@ -14656,6 +14669,7 @@ mod tests {
         session.drop_raised();
         session.take_messages();
         assert!(hide(&mut session, &catalog, &[131]));
+        session.assert_docked_among_shown();
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(*session.player(), player);
         assert_eq!(session.landed(), Some(StellarId(140)), "still landed");
@@ -14689,6 +14703,7 @@ mod tests {
     /// Takes off from `session`, and checks it flies in 134 among its
     /// stellars, the scene told changed.
     fn takes_off_into_134(session: &mut Session) {
+        session.assert_docked_among_shown();
         session.take_events();
         assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(140)));
         assert_eq!(session.system(), SystemId(134));
@@ -14703,6 +14718,7 @@ mod tests {
         let mut session = Session::fly(&catalog, landed_at_140()).expect("flies");
         assert_eq!(session.recharge(), Err(RechargeRefusal::Full));
         hide(&mut session, &catalog, &[131]);
+        session.assert_docked_among_shown();
         assert_eq!(session.landed(), Some(StellarId(140)));
         assert_eq!(
             session.recharge(),
@@ -14720,6 +14736,7 @@ mod tests {
         hide(&mut session, &catalog, &[131]);
         let pilot = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.assert_docked_among_shown();
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.landed(), Some(StellarId(140)));
         assert_eq!(session.sites, [planet(140, 0.0, 0.0)]);
@@ -14733,6 +14750,7 @@ mod tests {
         let mut pilot = landed_at_140();
         pilot.galaxy.set_visible(SystemId(131), Some(false));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.assert_docked_among_shown();
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.landed(), Some(StellarId(140)));
         assert_eq!(session.pilot().stellar, Some(StellarId(140)));
@@ -14947,6 +14965,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("relocates");
+        session.assert_docked_among_shown();
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.landed(), Some(StellarId(140)), "docked as asked");
         assert_eq!(session.pilot().stellar, Some(StellarId(140)));

@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use super::entry::NextSites;
+use super::entry::Dock;
 use super::script_effects::Settled;
 use super::{ScriptNote, Session, SessionEvent};
 use crate::catalog::{LandingSite, PilotCatalog, SystemId, TrafficCatalog};
@@ -321,25 +321,18 @@ impl Session {
             return false;
         }
         let govt = self.galaxy.govt(self.pilot.system);
-        let shown = self
-            .next_sites
-            .as_ref()
-            .map_or(self.pilot.system, |next| next.from);
         self.galaxy.set_overlay(self.pilot.galaxy.clone());
+        self.refresh_sites(catalog, &before);
         let moved = leave_hidden(&mut self.pilot, &mut self.galaxy);
-        if moved && self.landed.is_some() {
-            // The original rewrites only the system numbers
-            // (@0x998f1-0x99a36): the spaceport open stays the stellar's,
-            // and the new system's stellars come with the take-off, as
-            // after a landed move.
-            self.next_sites.get_or_insert(NextSites {
-                from: shown,
-                sites: Vec::new(),
-            });
-        } else if moved {
-            self.emit(SessionEvent::SystemChanged);
+        // The original rewrites only the system numbers (@0x998f1-0x99a36):
+        // docked, the spaceport open stays the stellar's.
+        if moved {
+            let system = self.pilot.system;
+            let sites = self.read_sites(catalog, system);
+            if self.set_player_system(system, sites, Dock::AsItWas) {
+                self.emit(SessionEvent::SystemChanged);
+            }
         }
-        self.refresh_sites(catalog, moved, &before);
         if moved || self.galaxy.govt(self.pilot.system) != govt {
             let table = self.spawn_table(catalog);
             let every: BTreeSet<NpcId> = self.traffic.npcs().iter().map(|npc| npc.id).collect();
@@ -351,15 +344,10 @@ impl Session {
     }
 
     /// Reads the stellars again from `catalog` where the galaxy's change
-    /// from `before` reaches them: the system's, when the player `moved`
-    /// or one of them changed government, and those left for the take-off
-    /// (by a landed move, or a landed player moved) likewise.
-    fn refresh_sites(
-        &mut self,
-        catalog: &(impl PilotCatalog + ?Sized),
-        moved: bool,
-        before: &GalaxyOverlay,
-    ) {
+    /// from `before` gave one of them another government: those shown, and
+    /// those waiting for the take-off. Which stellars are shown is
+    /// [`Session::set_player_system`]'s alone; this only refreshes them.
+    fn refresh_sites(&mut self, catalog: &(impl PilotCatalog + ?Sized), before: &GalaxyOverlay) {
         let now = &self.pilot.galaxy;
         let changed = |sites: &[LandingSite]| {
             sites
@@ -367,26 +355,14 @@ impl Session {
                 .any(|site| before.stellar(site.id).govt != now.stellar(site.id).govt)
         };
         let shown_stale = changed(&self.sites);
-        let next = self
-            .next_sites
-            .as_ref()
-            .map(|next| (next.from, moved || changed(&next.sites)));
-        match next {
-            None => {
-                if moved || shown_stale {
-                    self.sites = self.read_sites(catalog, self.pilot.system);
-                }
-            }
-            Some((from, next_stale)) => {
-                if next_stale {
-                    let sites = self.read_sites(catalog, self.pilot.system);
-                    if let Some(next) = &mut self.next_sites {
-                        next.sites = sites;
-                    }
-                }
-                if shown_stale {
-                    self.sites = self.read_sites(catalog, from);
-                }
+        let waiting_stale = self.next_sites.as_deref().is_some_and(changed);
+        if shown_stale {
+            self.sites = self.read_sites(catalog, self.shown);
+        }
+        if waiting_stale {
+            let sites = self.read_sites(catalog, self.pilot.system);
+            if let Some(waiting) = &mut self.next_sites {
+                *waiting = sites;
             }
         }
     }
