@@ -687,7 +687,7 @@
 //! stellar weapons, shots at stellars and the AI's stellar targets do not
 //! exist yet (rdm task planet-domination, story-runtime phase 8); the
 //! original's readers are listed below for them. The stellar drawn in
-//! flight is story-runtime phase 7's, which reads `LandingSite::destroyed`.
+//! flight is story-runtime phase 7's (see "Built by phase 7").
 //!
 //! **Readings.** The Rulebook key
 //! [`destroy_invincible`](crate::RuleKey::DestroyInvincible) defaults to
@@ -752,9 +752,11 @@
 //!   (`_HandleStellarWeapons` @0x2efd4), shots (`_CheckShotProximities`
 //!   @0x3727b, @0x37409), the AI (`_DeathStarAI` @0x8c19e,
 //!   `_InterceptorAI` @0x8d118), the pilot log (`_DumpPilotLog`
-//!   @0x74d07), and the drawn stellar (`_HandleStellarSystemVisibility`
-//!   @0x32d18, @0x32f0f), which picks `DeadType` for a destroyed stellar
-//!   only at its rebuild points, which `Y` is not one of.
+//!   @0x74d07), and the drawn stellar's rebuild
+//!   (`_HandleStellarSystemVisibility` @0x32d18, @0x32f0f). The sprite
+//!   tick picks `DeadType` or `Type` for the drawn graphic every frame, so
+//!   a `Y` or `U` changes it from the next frame (see "Checked for phase
+//!   7").
 //! - **Defence and traffic** read nothing more. `_EnterMoreShips` launches
 //!   a stellar's defence by its own flags, +0x47 and the count left
 //!   +0x466 (@0x43c8f-0x43c9d), and `_SpawnStellarDefenseShip`
@@ -873,6 +875,108 @@
 //!   then @0xbca6 lists any but 0), where the port's bar reads it as
 //!   never; the hire roll's reading is unchanged here (see the `hire`
 //!   module).
+//!
+//! ## Built by phase 7
+//!
+//! The flight view draws a destroyed stellar with its `DeadType` sheet
+//! from the first frame after the change, as the original's per-frame
+//! sprite tick does. It samples the live state,
+//! [`OverlaidGalaxy::destroyed`], through `Session::galaxy`, on the
+//! events it already reacts to; there is no snapshot and no new event.
+//! The one writer of the destroyed state, `Session::set_stellar_state`,
+//! raises `GalaxyChanged` exactly when a stellar is destroyed or
+//! regenerated (by `Y`, `U`, the daily step or a new pilot), and a
+//! countdown that only ticks raises nothing, so reacting to it gives the
+//! same picture as a per-frame poll. On `GalaxyChanged` the view redraws
+//! the stellars of the scene shown without laying it out again; on
+//! `SystemChanged`, and for its first scene, it lays the scene out and
+//! then applies the state. Story-runtime phase 8's shots must write
+//! through `set_stellar_state` too, so that they raise `GalaxyChanged`.
+//!
+//! The sheet rule lives in nova-view's system scene: a destroyed stellar
+//! draws its `DeadType` sheet when that resolves to one, and its `Type`
+//! sheet otherwise (a `DeadType` outside 0 to 255, or one with no
+//! `spïn`), which is the Bible's "-1: Don't display different graphic
+//! type when destroyed" and the original's reading between rebuilds. Its
+//! animation follows the live state: one whose `Flags2` has 0x0080
+//! animates only while destroyed, any other only while not. A stellar
+//! whose state changes starts its animation again; the original keeps
+//! the frame and clock it had.
+//!
+//! No Rulebook key is added. The original's other readings are filed as
+//! their own phases, each to add a key with the original's reading as
+//! the default: story-runtime phase 9 (a `DeadType` with no sheet draws
+//! `spïn` 1000 after a rebuild), phase 10 (the 150 landing-radius
+//! fallback), phase 11 (clicking a destroyed stellar by its `DeadType`
+//! sheet) and phase 12 (the frame count kept from the last rebuild).
+//!
+//! ## Checked for phase 7
+//!
+//! - **The sprite tick swaps live.** `_DoPlayGameWork` calls
+//!   `_HandleStellarSprites` unconditionally in every play frame
+//!   (@0x444d2, between the ships' loop and `_HandleStellarWeapons`). It
+//!   walks the 16 stellar sprite slots (the array behind 0x3b53d0; slot
+//!   +0xd0 is the stellar's index), and for each in use calls
+//!   `_StellarIsDestroyed` (@0x2e77b), takes `DeadType` (+0x10, @0x2e79b)
+//!   when destroyed and `Type` (+0x0e, @0x2e7b7) when not, loads that
+//!   master if it is missing (`_LoadMasterStellarSprite` @0x2e7d1), and
+//!   clones its frames into the slot (`_SWCloneFramesFromMaster`
+//!   @0x2e7e5). The clone replaces the frames whenever the master exists
+//!   (@0xac4ce-0xac4f8) and keeps the slot's frame index when it is still
+//!   in range (@0xac504-0xac532). Its one block, the slot's +0xd9
+//!   (@0xac46a), is set only by sprites that own their frames
+//!   (`_SWCreateSpriteFromRLEResource` @0xa9b1d, `_SWCreateRLEData`
+//!   @0xaef6d); a stellar slot is made by `_SWCreateEmptySprite`, which
+//!   clears it (@0xa9003). So a `Y` or `U` on a stellar of the player's
+//!   system shows the other graphic from the next frame.
+//! - **Animation follows the live state** (@0x2e784-0x2e7bb): a destroyed
+//!   stellar animates only when `Flags2` (+0x34) has 0x0080, one not
+//!   destroyed only when it lacks it, as the Bible says. One that does
+//!   not animate shows frame 0 (@0x2ee20). The frame count it animates
+//!   over (+0x474) is copied from the slot only at a rebuild (@0x331c9).
+//! - **The rebuild** (`_HandleStellarSystemVisibility` @0x32aa5) makes
+//!   the same choice for each stellar of the player's system
+//!   (@0x32f0f-0x32f2f), frees each master no stellar there uses
+//!   (@0x32d18-0x32e4e), clears the frames of every slot that was cloned
+//!   (@0x32e68-0x32e83), and resets the animation only of a newly made
+//!   slot (@0x331da-0x331fb). With no master to clone, a slot is left
+//!   empty, and the last pass logs "had no data" and clones graphic type
+//!   0's master (`spïn` 1000) into it (@0x33256-0x332d0). Its callers are
+//!   the rebuild points: the in-flight `M` (@0x159a3), `_DoPortDialog`
+//!   (@0x5fbf0), the gate and wormhole exits (@0x63e8c, @0x6473e), the
+//!   dock request (@0x674c7, @0x67653), `_HandlePlayer` (@0x69135,
+//!   @0x6c203, @0x6c597, @0x6dad1), a new pilot (@0x1937f), a load
+//!   (@0x751cf, @0x75324) and the main screen (@0x1a354, @0x1a8ca,
+//!   @0x1b003, @0x457ee).
+//! - **A `DeadType` of -1** is not a special case: the master array
+//!   `_masterStellarSprite` (0x20ee00, 256 pointers, behind 0x3b5040) is
+//!   indexed with it (@0x2e7c7). Index -1 is 0x20edfc, a word of
+//!   `_masterStarSprite` (0x20ede0) that nothing writes, since the star
+//!   field uses only that array's first entry (`_LoadSprites` @0x210ca).
+//!   `_LoadMasterStellarSprite(-1)` asks for `spïn` 999, which no stock
+//!   file has, and `_GetSpriteInfo` fails without it (@0x1bfb2), so the
+//!   clone fails (@0xac448) and, between rebuilds, the slot keeps its
+//!   `Type` frames, as the Bible says. After a rebuild it draws `spïn`
+//!   1000 (above; story-runtime phase 9).
+//! - **Other out-of-range `DeadType`s** read the neighbouring statics:
+//!   index 256 is `_masterWeapTargetSprite` (0x20f200), which
+//!   `_LoadSprites` loads (@0x2170f), so a `DeadType` of 256 clones the
+//!   weapon-target sprite; -8 is the star field's master. The engine
+//!   reads any `DeadType` outside 0 to 255 as no different graphic.
+//! - **The landing radius** (`_GetStellarSpriteXSize` @0xac91, called by
+//!   the dock request @0x66cd9 and @0x6773a and by `_HighLevelAIHandler`
+//!   @0x8dbdf) reads the `Type` master's current frame, never
+//!   `DeadType`'s (@0xacc3), and its width, 32 for a frame index out of
+//!   range (@0xacff), or 150 with no master loaded (@0xad2d), which is
+//!   the case after a rebuild that found the stellar destroyed. The dock
+//!   request multiplies it by 1.75 (the double at 0xdd6e8) and lands when
+//!   both the x and the y distance are below that (@0x66cdf-0x66cfd), or
+//!   below 75 when the stellar's slot shows no frame (@0x66cc7). The
+//!   engine's `landing_radius` reads `Type`'s frame too, but as half its
+//!   larger side; story-runtime phase 10 owns the difference.
+//! - **Clicking** (`_HandlePlayer` @0x6a5f9-0x6a686) uses the drawn slot's
+//!   rectangle, so a destroyed stellar is picked by its `DeadType` sheet;
+//!   the engine's `stellar_under` reads `Type`'s (story-runtime phase 11).
 
 //! # Mission lifecycle
 //!

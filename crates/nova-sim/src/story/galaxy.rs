@@ -284,14 +284,21 @@ impl OverlaidGalaxy {
         self.overlay.system(system).govt.unwrap_or(catalog)
     }
 
+    /// Whether `stellar` is destroyed: whether the overlay holds its
+    /// regeneration countdown. The flight view draws a stellar by this
+    /// (story-runtime phase 7), and [`site`](Self::site) stamps it.
+    #[must_use]
+    pub fn destroyed(&self, stellar: StellarId) -> bool {
+        self.overlay.stellar(stellar).destroyed.is_some()
+    }
+
     /// `site` with the overlay's government for its stellar, if any, and
     /// destroyed exactly when the overlay holds it destroyed.
     #[must_use]
     pub fn site(&self, site: LandingSite) -> LandingSite {
-        let change = self.overlay.stellar(site.id);
         LandingSite {
-            govt: change.govt.unwrap_or(site.govt),
-            destroyed: change.destroyed.is_some(),
+            govt: self.overlay.stellar(site.id).govt.unwrap_or(site.govt),
+            destroyed: self.destroyed(site.id),
             ..site
         }
     }
@@ -548,6 +555,24 @@ mod tests {
             "not destroyed, and independent"
         );
         assert_eq!(galaxy.site(site(130, false)), site(130, false));
+    }
+
+    #[test]
+    fn a_stellar_is_destroyed_while_the_overlay_holds_its_countdown() {
+        let mut galaxy = OverlaidGalaxy::new(systems(), GalaxyOverlay::default());
+        assert!(!galaxy.destroyed(StellarId(128)), "no override");
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_destroyed(StellarId(128), Some(Countdown { days_left: 0 }));
+        overlay.set_stellar_govt(StellarId(129), Some(None));
+        galaxy.set_overlay(overlay.clone());
+        assert!(galaxy.destroyed(StellarId(128)));
+        assert!(
+            !galaxy.destroyed(StellarId(129)),
+            "an override with no countdown"
+        );
+        overlay.set_destroyed(StellarId(128), None);
+        galaxy.set_overlay(overlay);
+        assert!(!galaxy.destroyed(StellarId(128)), "regenerated");
     }
 
     #[test]
