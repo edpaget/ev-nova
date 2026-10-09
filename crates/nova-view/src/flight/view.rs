@@ -7073,6 +7073,7 @@ mod tests {
             sub_theta: 0,
             sub_limit: 0,
             max_ammo: 0,
+            prox_safety: 0,
         };
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
@@ -7200,6 +7201,7 @@ mod tests {
             sub_theta: 0,
             sub_limit: 0,
             max_ammo: 0,
+            prox_safety: 0,
         }
     }
 
@@ -9978,6 +9980,8 @@ mod tests {
             strength: 100,
             dead_time: 5,
             flags2,
+            explosion: None,
+            on_destroy: nova_sim::Script::default(),
             on_regen: nova_sim::Script::default(),
         }
     }

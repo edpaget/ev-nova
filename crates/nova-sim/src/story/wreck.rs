@@ -86,6 +86,8 @@ mod tests {
             strength,
             dead_time,
             flags2: 0,
+            explosion: None,
+            on_destroy: Script::default(),
             on_regen: Script::default(),
         }
     }

@@ -33,6 +33,7 @@ use crate::catalog::{
     StarSystem, StartDate, StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId,
     SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
+use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
@@ -324,6 +325,8 @@ impl PilotCatalog for GameData {
                     strength: stellar.strength,
                     dead_time: stellar.dead_time,
                     flags2: stellar.flags2.bits(),
+                    explosion: Explosion::decode(stellar.explod_type),
+                    on_destroy: self.set_expr(stellar.on_destroy.as_str()).into(),
                     on_regen: self.set_expr(stellar.on_regen.as_str()).into(),
                 })
             })
@@ -501,6 +504,7 @@ impl CombatCatalog for GameData {
                     sub_theta: record.sub_theta,
                     sub_limit: record.sub_limit,
                     max_ammo: record.max_ammo,
+                    prox_safety: record.prox_safety,
                 })
             })
             .collect()
@@ -745,6 +749,7 @@ mod tests {
         DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
         StartDate, StellarId, StockWeapon, WeaponId, WeaponRecord,
     };
+    use crate::combat::weapon::Explosion;
     use crate::control::{Script, Test};
 
     /// One data file, `/data/Nova Data`, holding a fork.
@@ -2018,15 +2023,16 @@ mod tests {
     }
 
     #[test]
-    fn stellar_lives_list_every_readable_spöb_by_id_with_its_strength_dead_time_flags2_and_on_regen()
+    fn stellar_lives_list_every_readable_spöb_by_id_with_its_strength_dead_time_flags2_explosion_and_scripts()
      {
         let mut whole = stellar(0, 0, 0, 0, 0);
         whole[0x23C..0x240].copy_from_slice(&70_000_i32.to_be_bytes());
-        put_i16s(&mut whole, 0x242, &[-1]);
+        put_i16s(&mut whole, 0x242, &[-1, 1004]);
+        whole[0x246..0x249].copy_from_slice(b"b12");
         whole[0x345..0x34A].copy_from_slice(b"b9 b8");
         let mut wreck = flagged2(stellar(0, 0, 0, 0, 0), 0x0040 | 0x0020);
         wreck[0x23C..0x240].copy_from_slice(&(-1_i32).to_be_bytes());
-        put_i16s(&mut wreck, 0x242, &[3]);
+        put_i16s(&mut wreck, 0x242, &[3, -1]);
         let data = store(&[
             (Stellar::TYPE, 130, wreck),
             (Stellar::TYPE, 128, whole),
@@ -2050,6 +2056,18 @@ mod tests {
             "b9 b8"
         );
         assert_eq!(lives[1].on_regen, Script::default(), "blank");
+        assert_eq!(
+            lives.iter().map(|life| life.explosion).collect::<Vec<_>>(),
+            [Explosion::decode(1004), None],
+            "-1 for none"
+        );
+        assert!(Explosion::decode(1004).is_some_and(|boom| boom.extra));
+        assert_eq!(
+            lives[0].on_destroy.tree().map(|expr| expr.ops.len()),
+            Some(1),
+            "b12"
+        );
+        assert_eq!(lives[1].on_destroy, Script::default(), "blank");
         assert!(
             shared_script(&lives[0].on_regen, &data.stellar_lives()[0].on_regen),
             "parsed once"
@@ -2088,7 +2106,7 @@ mod tests {
         bytes[0x48..0x4A].copy_from_slice(&0x8200_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x5A, &[60, 30]);
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
-        put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2]);
+        put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2, 8]);
         put_i16s(&mut bytes, 0x68, &[4, 70, 6]);
         bytes
     }
@@ -2129,6 +2147,7 @@ mod tests {
             sub_theta: -10,
             sub_limit: 2,
             max_ammo: 6,
+            prox_safety: 8,
         };
         assert_eq!(
             data.weapons(),

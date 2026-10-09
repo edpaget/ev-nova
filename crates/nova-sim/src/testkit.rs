@@ -95,6 +95,8 @@ pub(crate) fn life(id: i16, dead_time: i16) -> StellarLife {
         strength: 100,
         dead_time,
         flags2: 0,
+        explosion: None,
+        on_destroy: crate::control::Script::default(),
         on_regen: crate::control::Script::default(),
     }
 }
@@ -240,6 +242,7 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         sub_theta: 0,
         sub_limit: 0,
         max_ammo: 0,
+        prox_safety: 0,
     }
 }
 

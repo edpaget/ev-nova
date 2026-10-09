@@ -12,6 +12,7 @@ pub use nova_data::{
     StellarId, SystemId, WeaponId,
 };
 
+use crate::combat::weapon::Explosion;
 use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -156,6 +157,11 @@ pub struct StellarLife {
     /// Its `Flags2`, raw: the wreck rules read whether it starts the game
     /// destroyed from it.
     pub flags2: u16,
+    /// Its `ExplodType`: the explosion it makes as it is destroyed, if
+    /// any.
+    pub explosion: Option<Explosion>,
+    /// Its `OnDestroy`, run as a shot destroys it.
+    pub on_destroy: Script,
     /// Its `OnRegen`, run as it regenerates on its own.
     pub on_regen: Script,
 }
@@ -628,6 +634,9 @@ pub struct WeaponRecord {
     /// Its `MaxAmmo`: how many rounds each launcher of it holds at most;
     /// none or below for no limit of its own.
     pub max_ammo: i16,
+    /// Its `ProxSafety`: the ticks a shot of it flies before its fuse is
+    /// armed.
+    pub prox_safety: i16,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`
@@ -1158,6 +1167,8 @@ mod tests {
                 strength: 500,
                 dead_time: 7,
                 flags2: 0x0040,
+                explosion: None,
+                on_destroy: Script::default(),
                 on_regen: Script::default(),
             }]
         }
