@@ -9735,6 +9735,38 @@ mod tests {
     }
 
     #[test]
+    fn several_moves_before_a_frame_lay_out_once_the_last_system() {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        view.catalog().systems_read.borrow_mut().clear();
+        run_set(&mut view, "M131 M132");
+        settle_session(&mut view);
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(132)));
+        assert_eq!(systems_read(&view), [SystemId(132)], "one layout");
+    }
+
+    /// A stellar moved to, then a system entered, before one frame: one
+    /// layout, of the system entered. (Placing the ship as well after the
+    /// layout would change nothing to see: its writes are the layout's.)
+    #[test]
+    fn a_system_entered_supersedes_a_stellar_moved_to_before_the_frame() {
+        let mut view = landed_view();
+        move_to(&mut view, 130, 129);
+        let session = view.session.as_mut().expect("flying");
+        assert_eq!(session.take_off(), Some(StellarId(129)));
+        run_set(&mut view, "M131");
+        settle_session(&mut view);
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(systems_read(&view), [SystemId(131)], "one layout");
+        assert_eq!(view.course_map().current(), Some(SystemId(131)));
+        assert_eq!(view.shown_position(), Point::new(0.0, 0.0), "at Proxima");
+    }
+
+    #[test]
     fn a_frame_with_the_map_open_still_redraws_from_the_events() {
         let mut view = flight();
         tap(&mut view, MAP);
