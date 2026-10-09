@@ -899,9 +899,11 @@
 //! `spïn`), which is the Bible's "-1: Don't display different graphic
 //! type when destroyed" and the original's reading between rebuilds. Its
 //! animation follows the live state: one whose `Flags2` has 0x0080
-//! animates only while destroyed, any other only while not. A stellar
-//! whose state changes starts its animation again; the original keeps
-//! the frame and clock it had.
+//! animates only while destroyed, any other only while not. Every
+//! stellar's frame comes from the view's one clock, so a swapped sheet
+//! shows the frame that clock gives it, over its own frame count; the
+//! original keeps the slot's frame index while it is in range, over the
+//! frame count from the last rebuild (story-runtime phase 12).
 //!
 //! No Rulebook key is added. The original's other readings are filed as
 //! their own phases, each to add a key with the original's reading as

@@ -1050,7 +1050,11 @@ impl<
         let session = session.map_err(|err| err.to_string());
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
-                Some(SystemScene::load(&catalog, session.system())),
+                Some({
+                    let mut scene = SystemScene::load(&catalog, session.system());
+                    scene.set_destroyed(|id| session.galaxy().destroyed(id));
+                    scene
+                }),
                 catalog.ship_sheet(session.ship()),
                 Some(session.ship()),
                 hud::choose_status_bar(&catalog, session.government()),
@@ -1541,7 +1545,20 @@ impl<
         } else if redrawn.stellar {
             self.place_ship();
         }
+        if redrawn.galaxy || redrawn.system {
+            self.show_destroyed();
+        }
         redrawn
+    }
+
+    /// Draws each stellar of the scene shown by whether the session's
+    /// galaxy holds it destroyed: its `DeadType` sheet or its `Type`
+    /// sheet, as the original's per-frame sprite tick picks them
+    /// (story-runtime phase 7). The scene is not laid out again.
+    fn show_destroyed(&mut self) {
+        if let (Ok(session), Some(scene)) = (&self.session, &mut self.scene) {
+            scene.set_destroyed(|id| session.galaxy().destroyed(id));
+        }
     }
 
     /// Lays out `system`, the session's: its scene, read from the catalog,
@@ -2887,6 +2904,9 @@ mod tests {
         /// with no links and Proxima Reborn (141) at its centre: not by
         /// default.
         reborn: bool,
+        /// The stellars that can be destroyed and regenerated: none, by
+        /// default.
+        lives: Vec<nova_sim::StellarLife>,
     }
 
     /// No strings unless a test sets them.
@@ -2971,6 +2991,7 @@ mod tests {
             fan: false,
             reborn: false,
             gates: Vec::new(),
+            lives: Vec::new(),
         }
     }
 
@@ -3115,7 +3136,7 @@ mod tests {
         }
 
         fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
-            Vec::new()
+            self.lives.clone()
         }
     }
 
@@ -3180,6 +3201,20 @@ mod tests {
         }
     }
 
+    /// `stellar`, drawing `DeadType` sheet 2000 + `id` (one 30 x 30 frame)
+    /// while destroyed.
+    fn dying(id: i16, name: &str, at: (i16, i16), frames: u16) -> StellarContents {
+        StellarContents {
+            dead_sprite: Some(Ok(StellarSheet {
+                image_id: 2000 + id,
+                frames: NonZeroU16::MIN,
+                frame_width: 30,
+                frame_height: 30,
+            })),
+            ..stellar(id, name, at, frames)
+        }
+    }
+
     impl SystemCatalog for FakeCatalog {
         fn system(&self, id: SystemId) -> SystemContents {
             self.systems_read.borrow_mut().push(id);
@@ -3187,11 +3222,11 @@ mod tests {
                 130 => (
                     "Sol",
                     vec![
-                        stellar(128, "Earth", (0, -600), 1),
+                        dying(128, "Earth", (0, -600), 1),
                         stellar(129, "Moon", (300, -200), 4),
                     ],
                 ),
-                131 => ("Alpha Centauri", vec![stellar(140, "Proxima", (0, 0), 1)]),
+                131 => ("Alpha Centauri", vec![dying(140, "Proxima", (0, 0), 1)]),
                 132 if self.onward => ("Barnard", Vec::new()),
                 133 if self.reborn => (
                     "Alpha Reborn",
@@ -9931,6 +9966,139 @@ mod tests {
         assert!(on_the_course_map(&view, 132), "the last galaxy");
         assert!(!on_the_course_map(&view, 131));
         assert!(!view.catch_up().galaxy, "once");
+    }
+
+    // Destroyed stellars (story-runtime phase 7).
+
+    /// Stellar `id` with `Strength` 100 and `DeadTime` 5, so that `Y`
+    /// destroys it, and `Flags2` `flags2`.
+    fn life(id: i16, flags2: u16) -> nova_sim::StellarLife {
+        nova_sim::StellarLife {
+            id: StellarId(id),
+            strength: 100,
+            dead_time: 5,
+            flags2,
+            on_regen: nova_sim::Script::default(),
+        }
+    }
+
+    /// A flight in Sol whose Earth (128, `DeadType` sheet 2128), Moon
+    /// (129, no different graphic) and Proxima (140, `DeadType` sheet
+    /// 2140) can be destroyed.
+    fn destructible() -> View {
+        FlightView::new(FakeCatalog {
+            lives: vec![life(128, 0), life(129, 0), life(140, 0)],
+            ..catalog()
+        })
+    }
+
+    /// Whether stellar `id` is drawn with its `Type` sheet (1000 + `id`)
+    /// and whether with its `DeadType` sheet (2000 + `id`), at any of the
+    /// first 4 frames.
+    fn sheets_drawn(view: &View, id: i16) -> (bool, bool) {
+        let images: Vec<ImageKey> = sprites(&drawn(view))
+            .into_iter()
+            .map(|(image, _)| image)
+            .collect();
+        let sheet = |image_id| (0..4).any(|f| images.contains(&ImageKey::sprite(image_id, f)));
+        (sheet(1000 + id), sheet(2000 + id))
+    }
+
+    const TYPE: (bool, bool) = (true, false);
+    const DEAD_TYPE: (bool, bool) = (false, true);
+
+    #[test]
+    fn a_stellar_destroyed_with_y_is_drawn_with_its_dead_type_from_the_next_frame_and_regenerated_with_u()
+     {
+        let mut view = destructible();
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), TYPE);
+        view.catalog().systems_read.borrow_mut().clear();
+
+        run_set(&mut view, "Y128");
+        settle_session(&mut view);
+        assert_eq!(sheets_drawn(&view, 128), TYPE, "not before the frame");
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), DEAD_TYPE, "from the next frame");
+        assert_eq!(systems_read(&view), [], "not laid out again");
+
+        run_set(&mut view, "U128");
+        settle_session(&mut view);
+        assert_eq!(sheets_drawn(&view, 128), DEAD_TYPE, "not before the frame");
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), TYPE, "regenerated");
+        assert_eq!(systems_read(&view), []);
+    }
+
+    #[test]
+    fn y_and_u_before_one_frame_draw_type() {
+        let mut view = destructible();
+        view.tick(TICK);
+        run_set(&mut view, "Y128");
+        run_set(&mut view, "U128");
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), TYPE);
+        let scene = view.scene().expect("a scene");
+        assert!(scene.stellars().iter().all(|stellar| !stellar.destroyed));
+    }
+
+    #[test]
+    fn y_on_a_stellar_of_another_system_changes_nothing_drawn() {
+        let mut view = destructible();
+        view.tick(TICK);
+        view.catalog().systems_read.borrow_mut().clear();
+        run_set(&mut view, "Y140");
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), TYPE);
+        let scene = view.scene().expect("a scene");
+        assert!(scene.stellars().iter().all(|stellar| !stellar.destroyed));
+        assert_eq!(systems_read(&view), []);
+    }
+
+    #[test]
+    fn a_destroyed_stellar_with_no_dead_type_keeps_its_type() {
+        let mut view = destructible();
+        run_set(&mut view, "Y129");
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 129), TYPE);
+        let scene = view.scene().expect("a scene");
+        assert!(scene.stellars()[1].destroyed, "destroyed all the same");
+    }
+
+    #[test]
+    fn a_system_entered_draws_its_destroyed_stellars_dead() {
+        let mut view = destructible();
+        run_set(&mut view, "Y140");
+        run_set(&mut view, "M131");
+        settle_session(&mut view);
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(sheets_drawn(&view, 140), DEAD_TYPE);
+    }
+
+    #[test]
+    fn a_new_pilot_with_a_stellar_that_starts_destroyed_draws_it_dead_from_the_first_frame() {
+        let mut view = FlightView::new(FakeCatalog {
+            lives: vec![life(128, 0x0040)],
+            ..catalog()
+        });
+        assert_eq!(sheets_drawn(&view, 128), TYPE, "not begun yet");
+        view.begin();
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), DEAD_TYPE);
+    }
+
+    #[test]
+    fn a_pilot_flown_with_a_stellar_destroyed_draws_it_dead_at_once() {
+        let catalog = FakeCatalog {
+            lives: vec![life(128, 0)],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        let destroy = nova_sim::SetExpr::parse("Y128").expect("parses");
+        session.run_set(&destroy, &mut NeverFires);
+        let view = FlightView::with_pilot(catalog, session.pilot().clone());
+        assert_eq!(sheets_drawn(&view, 128), DEAD_TYPE, "before any frame");
     }
 
     #[test]

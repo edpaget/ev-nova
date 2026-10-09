@@ -18,7 +18,15 @@
 //! - [`SessionEvent::GalaxyChanged`]: the galaxy overlay changed, through
 //!   [`Session::change_galaxy`], an arrival that made a system visible, or
 //!   a stellar destroyed or regenerated (`Y`, `U`, the daily step, a new
-//!   pilot's): the galaxy map is rebuilt from [`Session::galaxy`].
+//!   pilot's): the galaxy map is rebuilt from [`Session::galaxy`], and
+//!   the flight view draws each stellar of the system shown by whether it
+//!   is destroyed
+//!   ([`OverlaidGalaxy::destroyed`](crate::story::OverlaidGalaxy::destroyed)),
+//!   with no new layout.
+//!   That is how a destroyed stellar's `DeadType` sheet shows from the
+//!   next frame (story-runtime phase 7), so every writer of the destroyed
+//!   state, story-runtime phase 8's shots among them, must go through
+//!   `Session::set_stellar_state`, which raises this event.
 //!
 //! The session's other outboxes (its sounds, messages, script notes, pay
 //! notes, fighter notes and the rest, each with its own `take_*`) are not
