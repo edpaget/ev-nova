@@ -16,8 +16,9 @@
 //!   stellar of the system shown, whose scene is kept: a relocation within
 //!   the system.
 //! - [`SessionEvent::GalaxyChanged`]: the galaxy overlay changed, through
-//!   [`Session::change_galaxy`] or an arrival that made a system visible:
-//!   the galaxy map is rebuilt from [`Session::galaxy`].
+//!   [`Session::change_galaxy`], an arrival that made a system visible, or
+//!   a stellar destroyed or regenerated (`Y`, `U`, the daily step, a new
+//!   pilot's): the galaxy map is rebuilt from [`Session::galaxy`].
 //!
 //! The session's other outboxes (its sounds, messages, script notes, pay
 //! notes, fighter notes and the rest, each with its own `take_*`) are not

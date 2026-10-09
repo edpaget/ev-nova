@@ -22,7 +22,7 @@
 //! Where the original cannot settle a question, or the design does not
 //! follow it, the section names the [`Rulebook`](crate::Rulebook) key the
 //! building phase adds and its readings. Phase 2 adds `stay_days`, phase 3
-//! `story_reentry`.
+//! `story_reentry`, phase 5 `destroy_invincible`.
 //!
 //! # Findings
 //!
@@ -458,8 +458,9 @@
 //! One step passes one day. Its participants, `day::Participant`, run in
 //! the original's order, `Participant::ORDER` (see "A day"), through the
 //! `day::Day` port the session implements (`session/story.rs`). Phase 2
-//! fills the date and the events, and phase 3 `DayPassed`; the others are
-//! empty slots until their phase:
+//! fills the date and the events, phase 3 `DayPassed`, and phase 5 the
+//! destroyed stellars' regeneration; the others are empty slots until
+//! their phase:
 //!
 //! 1. the date moves on a day;
 //! 2. the crons, each starting or ending cron's script run as it is
@@ -467,9 +468,10 @@
 //! 3. the active missions' days left (missions phase 2);
 //! 4. the dominated stellars' tribute (rdm task planet-domination);
 //! 5. the day's events, `öops`: today's `market::step_day`;
-//! 6. the stellars: a dominated one's defence regrowing (planet-domination)
-//!    and a destroyed one's regeneration and `OnRegen` (story-runtime
-//!    phase 5);
+//! 6. the stellars: a destroyed one's regeneration and `OnRegen`, each
+//!    `OnRegen` run as its stellar is reached (story-runtime phase 5; see
+//!    "Built by phase 5"), and a dominated one's defence regrowing
+//!    (planet-domination);
 //! 7. the reinforcement countdown, once reinforcements are built;
 //! 8. the ranks' salaries (crons-news-ranks phase 3);
 //! 9. the day rolls (`wares::DayRolls`): not filled yet, so the session
@@ -553,7 +555,8 @@
 //! ## Built by phase 4
 //!
 //! The overlay is [`GalaxyOverlay`], saved on the
-//! pilot (save version 17), and the session reads the galaxy only through
+//! pilot (save version 17; a destroyed stellar's countdown, version 18),
+//! and the session reads the galaxy only through
 //! [`OverlaidGalaxy`]: the static catalog read
 //! once, the overlay, and the star map built from both, rebuilt only when
 //! the overlay changes. Its map has the visible systems alone, each link
@@ -565,7 +568,9 @@
 //! override. With no overrides the galaxy is exactly the static catalog.
 //!
 //! [`Session::change_galaxy`](crate::Session::change_galaxy) is the one
-//! writer. A change applies the moment it returns; when it is called is
+//! writer (with phase 5's catalog-free entry for a stellar's destroyed
+//! state; see "Built by phase 5"). A change applies the moment it
+//! returns; when it is called is
 //! the writer's choice, and the visibility and nebula writers
 //! (crons-news-ranks phase 5) call it only at the refresh points above.
 //! Each reader sees a change when it next reads:
@@ -614,6 +619,175 @@
 //! every visible system at its target's place, as the engine's
 //! [`HyperlinkRule`](crate::HyperlinkRule) has always read it.
 //!
+//! ## Built by phase 5
+//!
+//! A destroyed stellar holds its regeneration [`Countdown`] in the
+//! overlay, the days left; one not destroyed holds none (save version
+//! 18). The original's own pair, a current strength of -1 and a countdown
+//! of -1 for "whole", is never stored.
+//!
+//! **One writer, two entries.** The writer has one core, which writes the
+//! pilot's overlay and the galaxy's and makes a save due, and two entries:
+//! [`Session::change_galaxy`](crate::Session::change_galaxy), which takes
+//! a catalog for its follow-ups (a hidden system, a government, the
+//! spawn table), and `Session::set_stellar_state`, catalog-free, which
+//! can change a stellar's destroyed state alone, so it never needs them.
+//! `apply_op` and the daily step have no catalog, and a cron's `Y` must
+//! be counted by the same day's sixth participant, so neither waits for
+//! a settling. The catalog-free entry stamps the stellars shown and those
+//! waiting for the take-off afresh, and tells `GalaxyChanged` once, only
+//! when a stellar is destroyed or regenerated; a countdown ticking down
+//! only makes a save due.
+//!
+//! **Its writers** (the `stellars` module of the session):
+//!
+//! - `Y` destroys a stellar with its `DeadTime` as the countdown, or 1
+//!   when that is negative, destroyed already or not; `U` regenerates it
+//!   and runs no `OnRegen`. Each reads the stellar's
+//!   [`StellarLife`](crate::StellarLife), which the session reads from
+//!   the catalog as it starts. An ID outside 128 to 2175, or with no
+//!   record, does nothing.
+//! - The daily step's sixth participant counts each destroyed stellar
+//!   down a day, by ascending ID, reading the overlay again after each.
+//!   One of negative `DeadTime` stays destroyed with a day left; any
+//!   other regenerates once 1 or 0 days were left, and runs its `OnRegen`
+//!   there and then through `Session::run_set`. That is a participant's
+//!   effect, not a story subscription: it runs inside the day, before the
+//!   ranks and `DayPassed`. Its `M`, `N`, `Q` and `S` defer to the next
+//!   settling, as any hook's do.
+//! - A new pilot ([`Session::begin`](crate::Session::begin)) starts with
+//!   every stellar whose `Flags2` has 0x0040 destroyed, as `Y` destroys
+//!   it, before its `OnStart`. A load keeps the stellars as saved. No
+//!   stock stellar starts destroyed, so a save from before version 18
+//!   needs no seeding.
+//!
+//! **Its readers.** [`OverlaidGalaxy::site`] stamps a stellar's
+//! [`LandingSite::destroyed`](crate::LandingSite::destroyed) from the
+//! overlay, as it stamps the government, and
+//! [`is_landable`](crate::is_landable) reads it as the original's
+//! `_StellarIsLandable` does: a stellar can be landed on when it has the
+//! can-land flag and is destroyed exactly when it can be landed on only
+//! once destroyed. Docking (gates, the developer tools' relocation, a
+//! landed `M`), F5, the land key, and the NPCs' choice of stellar and
+//! whether they keep heading for it follow. A player docked at a stellar
+//! `Y` destroys stays docked: the spaceport stays open, the stellar stays
+//! among those shown, flagged destroyed, the take-off works and passes its
+//! days, and only landing there again is refused until it regenerates. A
+//! pilot saved docked there resumes docked there.
+//!
+//! The galaxy map has no service, trade or colour mode and no stellar
+//! panel yet; when built, they read `is_landable`. Defence fleets,
+//! stellar weapons, shots at stellars and the AI's stellar targets do not
+//! exist yet (rdm task planet-domination, story-runtime phase 8); the
+//! original's readers are listed below for them. The stellar drawn in
+//! flight is story-runtime phase 7's, which reads `LandingSite::destroyed`.
+//!
+//! **Readings.** The Rulebook key
+//! [`destroy_invincible`](crate::RuleKey::DestroyInvincible) defaults to
+//! the engine: `Y` leaves a stellar of `Strength` 0 or -1 as it was, and
+//! such a stellar never starts the game destroyed. By the Bible's
+//! "destroy stellar ID xxx", `Y` destroys it, and the day counts it down
+//! as any other. No key is needed for `U` and `OnRegen`: the Bible's
+//! `OnRegen` is "evaluated when the stellar automatically regenerates",
+//! which `U` is not, so it agrees with the engine. No key either for a
+//! second `Y` restarting the countdown, a cron's `Y` counted the same day,
+//! a docked player staying docked, or a destroyed stellar with 0 days left
+//! kept destroyed across a save (the original's reload restores it, with
+//! no `OnRegen`, @0x76068-0x760b8): that last is a save-format artifact,
+//! not a game rule.
+//!
+//! ## Checked for phase 5
+//!
+//! - **The runtime stellar** (0x498 bytes, `_LoadObjectData`
+//!   @0x7733e-0x774ad): `Type` +0x0e (from `spöb` +0x04), `Flags` +0x30
+//!   (+0x06), `Flags2` +0x34 (+0x20), `Strength` +0x40 and the current
+//!   strength +0x3c, both from +0x23c (@0x77434-0x7743f), `DeadType` +0x10
+//!   (+0x240), `DeadTime` +0x47a (+0x242), the countdown +0x47c, set to 0
+//!   (@0x7746b), `ExplodType` +0x46e (+0x244). `OnDestroy` is copied to
+//!   +0x266 and `OnRegen` to +0x365 (@0x774c7-0x77502). The stellar's
+//!   system is +0x14. The Bible's `Flags2` 0x0040 is "Stellar starts the
+//!   game destroyed", and `_DoNewPilot` reads it (@0x192d6).
+//! - **Destroyed** (`_StellarIsDestroyed` @0x4e14-0x4e3c): `Strength` > 0
+//!   and (current strength < 0 or countdown > 0). An invincible stellar is
+//!   never destroyed.
+//! - **`Y`** (`_EvalSetExp` @0x15a38-0x15ae6) takes IDs 128 to 2175
+//!   (@0x15a3f-0x15a46) and ignores any other. When the stellar is in the
+//!   player's system (+0x14 against the player's +0x74), not destroyed
+//!   yet (@0x15a71) and has an `ExplodType`, it makes the explosion
+//!   (`_CreateExplosion` @0x15ab4). Then, always, the countdown becomes
+//!   `DeadTime`, or 1 when that is negative (@0x15ac8-0x15ad5), and the
+//!   current strength -1 (@0x15ade). It runs no `OnDestroy`, redraws no
+//!   stellar and touches no landing state.
+//! - **`U`** (@0x15aeb-0x15b20): the same range; the countdown becomes -1
+//!   and the current strength `Strength`. No `OnRegen`, no explosion, no
+//!   redraw.
+//! - **The day's stellars** (`_IncrementGameTime` @0xb5c4-0xb71e) visit
+//!   every stellar slot in use (+0x44, @0xb5d5) by ascending index. A
+//!   destroyed one with a negative `DeadTime` has its countdown set back
+//!   to 1 (@0xb680, @0xb6f5). Any other destroyed one counts down
+//!   (@0xb68a); at 0 or below the countdown becomes -1, the current
+//!   strength `Strength`, and its `OnRegen` runs at once
+//!   (`_EvalMissionBitSetString` @0xb6ee). A stellar not destroyed is
+//!   repaired: current strength `Strength`, countdown -1 (@0xb700-0xb705).
+//! - **Landing** (`_StellarIsLandable` @0xa989-0xa9f7): `Flags` 0x01, and
+//!   destroyed exactly when `Flags` has 0x80. Its callers: the dock
+//!   request (`_HandlePlayerDockRequest` @0x66977), the comm dialog
+//!   (`_HandlePlayerCommunication` @0x61fda), NPC destinations
+//!   (`_SelectRandomStellarDest` @0x8074e), mission stellars through
+//!   `_StellarIsNormalLandable` (`_SelectMissionStellar`), the map's
+//!   service, trade and colour modes and its panel (`_SystemTradesGoods`
+//!   @0xd320, `_SystemHasService` @0xd3ce, `_DrawLegalStatusString`
+//!   @0xd5c9, `_ColorCodeSystem` @0xd825, `_MapDialogUpdate` @0x10399,
+//!   @0x10417), `_ColorCodeStellar` (@0xaa42) and the escape pod's search
+//!   (`_RecursiveEscapeStellarSearch` @0xd1bb).
+//! - **Other live readers of the destroyed state**: the sprite tick
+//!   (`_HandleStellarSprites` @0x2e77b), stellar weapons
+//!   (`_HandleStellarWeapons` @0x2efd4), shots (`_CheckShotProximities`
+//!   @0x3727b, @0x37409), the AI (`_DeathStarAI` @0x8c19e,
+//!   `_InterceptorAI` @0x8d118), the pilot log (`_DumpPilotLog`
+//!   @0x74d07), and the drawn stellar (`_HandleStellarSystemVisibility`
+//!   @0x32d18, @0x32f0f), which picks `DeadType` for a destroyed stellar
+//!   only at its rebuild points, which `Y` is not one of.
+//! - **Defence and traffic** read nothing more. `_EnterMoreShips` launches
+//!   a stellar's defence by its own flags, +0x47 and the count left
+//!   +0x466 (@0x43c8f-0x43c9d), and `_SpawnStellarDefenseShip`
+//!   (@0x3d2c9) and the daily regrowing (+0x46, @0xb5f6) read no destroyed
+//!   state; `_SelectRandomStellarDest` reads it only through
+//!   `_StellarIsLandable`.
+//! - **A landed `M`** (@0x1570e-0x158d4) makes the new system's first
+//!   stellar the player's, checking neither landability nor the
+//!   destroyed state: `_EvalSetExp` calls `_StellarIsDestroyed` only for
+//!   `Y` (@0x15a71) and `_StellarIsLandable` never (see the
+//!   `script_effects` module). The engine's `M` docks only at a dockable
+//!   first stellar, its own reading already for a gate or a stellar that
+//!   cannot be landed on, so a destroyed one leaves the pilot on no
+//!   stellar.
+//! - **Docked.** Neither `_DoPortDialog` nor the take-off
+//!   (`_PlayerLandOnStellar`) reads the destroyed state or landability:
+//!   the callers above are all there is. A `Y` on the docked stellar
+//!   leaves the player docked.
+//! - **Saved state**: the countdowns alone, 2048 `i16`s at +0x4d90
+//!   (`_WritePilotData` @0x72ad0-0x72aff). On load (`_LoadPilotData`
+//!   @0x76068-0x760b8) a countdown above 0 is destroyed (current strength
+//!   -1); any other is whole (countdown -1, strength restored), so a
+//!   destroyed stellar with 0 days left comes back whole, with no
+//!   `OnRegen`.
+//! - **New pilot** (`_DoNewPilot` @0x192b9-0x19332, and `_ResetGameData`
+//!   @0x1de5e-0x1de92): `Flags2` 0x0020 starts a stellar dominated; 0x0040
+//!   starts it destroyed, current strength -1, countdown `DeadTime` or 1;
+//!   any other is whole with countdown 0. Then the `chär` is activated
+//!   (`_ActivateCharResource` @0x19345).
+//! - **Stock data** (`Nova Data 2.ndat`'s 411 `spöb`s and every
+//!   expression field of the `mïsn`, `crön`, `oütf`, `shïp`, `chär`,
+//!   `nëbu`, `përs` and `spöb` records): no stellar has `Flags2` 0x0040
+//!   or `Flags` 0x80; every `DeadTime` is 0; no `OnRegen` is set; 17
+//!   stellars have `Strength` 0 or below; and no script uses `Y` or `U`.
+//!   So both readings and the seeding change nothing for stock play.
+//! - **The Bible** says "Yxxx - destroy stellar ID xxx", "Uxxx -
+//!   regenerate (Un-destroy) stellar ID xxx", `Strength` "0 or -1 for an
+//!   invincible stellar" (of damage from planetary weapons), and `OnRegen`
+//!   "evaluated when the stellar automatically regenerates".
+
 //! # Mission lifecycle
 //!
 //! Built by missions phase 2.

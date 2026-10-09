@@ -150,8 +150,10 @@
 //!
 //! Not yet as the original: the mission work its moves do
 //! (`_dockedPortMissions`, `_MissionHandlePlayerEnteredNewSystem`) waits
-//! for missions, and the first stellar is the first of
-//! [`PilotCatalog::landing_sites`] until stellars can be destroyed.
+//! for missions. The first stellar is the first of
+//! [`PilotCatalog::landing_sites`], destroyed or not, as the original
+//! reads neither landability nor the destroyed state there; a destroyed
+//! one cannot be landed on, so by `M` it leaves the pilot on no stellar.
 
 use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
