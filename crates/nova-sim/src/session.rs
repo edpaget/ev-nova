@@ -14648,6 +14648,15 @@ mod tests {
         assert!(!session.take_save_due());
         assert!(!session.pilot().galaxy.is_empty(), "saved on the pilot");
         assert_eq!(*session.galaxy().overlay(), session.pilot().galaxy);
+        assert!(session.change_galaxy(&catalog, |overlay| {
+            overlay.set_govt(SystemId(130), Some(Some(GovtId(140))));
+        }));
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::GalaxyChanged],
+            "a government alone"
+        );
+        assert!(session.take_save_due());
     }
 
     #[test]
@@ -14941,6 +14950,28 @@ mod tests {
             session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
             Err(GateRefusal::Cancelled)
         );
+    }
+
+    #[test]
+    fn a_wormhole_into_a_hidden_system_comes_out_at_the_one_at_its_place() {
+        let mut catalog = wormholes();
+        with_alternate(&mut catalog);
+        let mut session = at_wormhole(&catalog);
+        hide(&mut session, &catalog, &[131]);
+        session.take_messages();
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[0])),
+            Ok(SystemId(134)),
+            "out of 410, listed by hidden 131"
+        );
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::PassedWormhole(SystemId(134))]
+        );
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+        assert!(on_the_map(&session));
+        session.assert_docked_among_shown();
     }
 
     #[test]
