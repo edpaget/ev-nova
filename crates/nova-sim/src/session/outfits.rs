@@ -197,7 +197,7 @@ impl Session {
     }
 
     /// `G`: grants one of `outfit` and refits (see the module docs).
-    fn script_grant(&mut self, outfit: OutfitId) {
+    pub(super) fn script_grant(&mut self, outfit: OutfitId) {
         if self.script_may_grant(outfit) {
             self.grant_outfit(outfit);
             self.refit(true, self.script_reserves());
@@ -206,7 +206,7 @@ impl Session {
 
     /// `D`: removes one of `outfit`, if owned, and refits, paying for it
     /// as [`OutfitRules::remove_refund`] says (see the module docs).
-    fn script_remove(&mut self, outfit: OutfitId) {
+    pub(super) fn script_remove(&mut self, outfit: OutfitId) {
         if !OUTFIT_IDS.contains(&outfit.0) || !take_one(&mut self.pilot, outfit) {
             return;
         }
@@ -220,7 +220,7 @@ impl Session {
     }
 
     /// `X`: explores `system` when it is on the star map.
-    fn explore_system(&mut self, system: SystemId) {
+    pub(super) fn explore_system(&mut self, system: SystemId) {
         if self.star_map.position(system).is_some() {
             self.pilot.explore(system);
         }

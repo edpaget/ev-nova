@@ -164,7 +164,7 @@ impl ShipChangeRules {
     }
 
     /// The flags `H` keeps an outfit by.
-    fn persistent(self) -> u16 {
+    pub(super) fn persistent(self) -> u16 {
         match self.persistence {
             RuleSource::Engine => SET_OP_PERSISTENT,
             RuleSource::Bible => OutfitFlags::MISSION_PERSISTENT,
@@ -172,7 +172,7 @@ impl ShipChangeRules {
     }
 
     /// Whether `E` and `H` hold the outfits to their `Max`.
-    fn clamps(self) -> bool {
+    pub(super) fn clamps(self) -> bool {
         self.max == RuleSource::Engine
     }
 }
@@ -221,7 +221,7 @@ impl CommCatalog for NoStrings {
 impl Session {
     /// The rules the ship-change set operators follow, projected from
     /// the session's rule set ([`Session::with_rules`]).
-    fn ship_change_rules(&self) -> ShipChangeRules {
+    pub(super) fn ship_change_rules(&self) -> ShipChangeRules {
         ShipChangeRules::from_rulebook(&self.rules)
     }
 
@@ -289,7 +289,7 @@ impl Session {
     /// `carry` says and held to their `Max` when `clamp` (see the module
     /// docs); nothing changes when the session has no record of the
     /// class.
-    fn change_ship(&mut self, ship: ShipId, carry: OutfitCarry, clamp: bool) {
+    pub(super) fn change_ship(&mut self, ship: ShipId, carry: OutfitCarry, clamp: bool) {
         let Some(record) = self.ship_record(ship).cloned() else {
             return;
         };
@@ -330,7 +330,7 @@ impl Session {
 
     /// `T`: renames the ship from `STR#` `list`, drawing on `chance` (see
     /// the module docs).
-    fn rename_ship(&mut self, list: i16, chance: &mut dyn Chance) {
+    pub(super) fn rename_ship(&mut self, list: i16, chance: &mut dyn Chance) {
         let Some(pick) = self.pick_string(list, chance) else {
             return;
         };

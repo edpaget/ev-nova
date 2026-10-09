@@ -201,7 +201,7 @@ pub(super) enum ScriptMove {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Queued {
     /// The moves, in order.
-    moves: Vec<ScriptMove>,
+    pub(super) moves: Vec<ScriptMove>,
     /// The message a `Q` leaves on: none for no `Q` pending.
     leave: Option<String>,
     /// The mission sound a `P` holds to the next flight tick.
@@ -261,7 +261,7 @@ impl Session {
 
     /// `P`: plays `sound`, held to the next flight tick or at once, as
     /// [`ScriptEffectRules::sound`] says (see the module docs).
-    fn play_script_sound(&mut self, sound: SoundId) {
+    pub(super) fn play_script_sound(&mut self, sound: SoundId) {
         match self.script_effect_rules().sound {
             RuleSource::Engine => self.queued.sound = Some(sound),
             RuleSource::Bible => self.sounds.push(SimSound::Script {
@@ -286,7 +286,7 @@ impl Session {
     /// (see the module docs); a blank one cancels an earlier `Q`, or
     /// leaves with no message by [`ScriptEffectRules::blank_leave`]'s
     /// Bible reading.
-    fn leave_stellar(&mut self, list: i16, chance: &mut dyn Chance) {
+    pub(super) fn leave_stellar(&mut self, list: i16, chance: &mut dyn Chance) {
         self.queued.leave = self.pick_string(list, chance).or_else(|| {
             (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
         });

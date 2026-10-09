@@ -39,16 +39,18 @@ use std::rc::Rc;
 use super::Session;
 use super::hire::Shared;
 use super::outfits::{ExploreOp, GrantOutfitOp, RemoveOutfitOp};
+use super::script_effects::ScriptMove;
 use super::script_effects::{LeaveStellarOp, MoveKeepPositionOp, MoveToOp, PlaySoundOp};
 use super::ship_change::{ChangeShipOp, ChangeShipWithDefaultsOp, RenameShipOp, ReplaceShipOp};
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
 use crate::control::{
-    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOpKind, SetRegistry,
-    execute,
+    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOp, SetOpKind,
+    SetRegistry, execute,
 };
 use crate::pilot::{Gender, Pilot};
+use crate::ship_change::OutfitCarry;
 
 /// What a control-bit test reads about the session's pilot (see the module
 /// docs).
@@ -164,13 +166,71 @@ impl Session {
         self
     }
 
+    /// Applies one set operator beyond the bit writes and `R(...)`; gives
+    /// back its kind when nothing here applies it yet (another roadmap's
+    /// operator).
+    pub(crate) fn apply_op(
+        &mut self,
+        op: &SetOp,
+        chance: &mut dyn Chance,
+    ) -> Result<(), SetOpKind> {
+        match op {
+            SetOp::GrantOutfit(outfit) => self.script_grant(*outfit),
+            SetOp::RemoveOutfit(outfit) => self.script_remove(*outfit),
+            SetOp::Explore(system) => self.explore_system(*system),
+            SetOp::ChangeShip(ship) => self.change_ship(*ship, OutfitCarry::Keep, false),
+            SetOp::ChangeShipWithDefaults(ship) => {
+                let clamp = self.ship_change_rules().clamps();
+                self.change_ship(*ship, OutfitCarry::KeepWithDefaults, clamp);
+            }
+            SetOp::ReplaceShip(ship) => {
+                let rules = self.ship_change_rules();
+                let carry = OutfitCarry::Persistent {
+                    mask: rules.persistent(),
+                };
+                self.change_ship(*ship, carry, rules.clamps());
+            }
+            SetOp::RenameShip(list) => self.rename_ship(list.0, chance),
+            SetOp::MoveTo(system) => self.queued.moves.push(ScriptMove::To(*system)),
+            SetOp::MoveKeepPosition(system) => {
+                self.queued.moves.push(ScriptMove::KeepPosition(*system));
+            }
+            SetOp::LeaveStellar(list) => self.leave_stellar(list.0, chance),
+            SetOp::PlaySound(sound) => self.play_script_sound(*sound),
+            // Missions, ranks and stellars: other roadmaps add their arms here.
+            SetOp::AbortMission(_)
+            | SetOp::FailMission(_)
+            | SetOp::StartMission(_)
+            | SetOp::ActivateRank(_)
+            | SetOp::DeactivateRank(_)
+            | SetOp::DestroyStellar(_)
+            | SetOp::RegenerateStellar(_)
+            // `execute` writes the bits and draws `R(...)` itself, never
+            // handing them here.
+            | SetOp::Set(_)
+            | SetOp::Clear(_)
+            | SetOp::Toggle(_)
+            | SetOp::Random(..) => return Err(op.kind()),
+        }
+        Ok(())
+    }
+
     /// Runs `expr` on the session (see the module docs), drawing `R(...)`
     /// on `chance`.
     pub fn run_set(&mut self, expr: &SetExpr, chance: &mut (impl Chance + ?Sized)) {
         let registry = Rc::clone(&self.set_ops.0);
         let before = self.pilot.clone();
         let mut told = std::mem::take(&mut self.unhandled_ops);
-        let unhandled = execute(expr, self, &registry, &mut &mut *chance, &mut told);
+        let mut apply = |op: &SetOp, session: &mut Session, chance: &mut dyn Chance| match registry
+            .handler(op.kind())
+        {
+            Some(handler) => {
+                handler.apply(op, session, chance);
+                Ok(())
+            }
+            None => session.apply_op(op, chance),
+        };
+        let unhandled = execute(expr, self, &mut apply, &mut &mut *chance, &mut told);
         self.unhandled_ops = told;
         if self.pilot != before {
             self.save_due = true;
@@ -369,6 +429,48 @@ mod tests {
         session.run_set(&set("b1 S200"), &mut Scripted::default());
         assert_eq!(*recording.0.borrow(), [("Ada".to_owned(), true)]);
         assert_eq!(session.take_script_notes(), []);
+    }
+
+    #[test]
+    fn apply_op_applies_novas_eleven_and_gives_back_the_rest() {
+        let mut session = session();
+        let expr = set(
+            "A128 F129 S130 G128 D128 C128 E128 H128 M130 N130 K128 L128 P128 Y128 U128 \
+              T128 Q128 X131 b1 !b1 ^b1 R(b1 b2)",
+        );
+        let given_back: Vec<_> = expr
+            .ops
+            .iter()
+            .filter_map(|op| {
+                session
+                    .apply_op(op, &mut Scripted::default())
+                    .err()
+                    .map(|kind| (kind, op.kind()))
+            })
+            .collect();
+        assert!(
+            given_back.iter().all(|(kind, own)| kind == own),
+            "{given_back:?}"
+        );
+        assert_eq!(
+            given_back
+                .into_iter()
+                .map(|(kind, _)| kind)
+                .collect::<Vec<_>>(),
+            [
+                SetOpKind::AbortMission,
+                SetOpKind::FailMission,
+                SetOpKind::StartMission,
+                SetOpKind::ActivateRank,
+                SetOpKind::DeactivateRank,
+                SetOpKind::DestroyStellar,
+                SetOpKind::RegenerateStellar,
+                SetOpKind::Set,
+                SetOpKind::Clear,
+                SetOpKind::Toggle,
+                SetOpKind::Random,
+            ]
+        );
     }
 
     #[test]
