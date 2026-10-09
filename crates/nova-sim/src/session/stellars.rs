@@ -124,7 +124,9 @@ impl Session {
 mod tests {
     use super::*;
     use crate::RelocateRefusal;
+    use crate::ai::{Goal, Peaceful};
     use crate::catalog::{StellarLife, SystemId};
+    use crate::chance::NeverFires;
     use crate::control::{Bit, Script, SetExpr, SetOp};
     use crate::landing::{LandingRefusal, StellarFlags};
     use crate::rulebook::{RuleSource, Rulebook};
@@ -525,6 +527,124 @@ mod tests {
         assert_eq!(destroyed(&session, 128), Some(left(1)));
         session.pass_days(1, &mut Scripted::default());
         assert_eq!(destroyed(&session, 128), None);
+    }
+
+    // The NPCs' destinations.
+
+    /// [`wrecking`] with two ships of düde 128, fast ship 129, flying in
+    /// 130.
+    fn trafficked() -> FakePilotCatalog {
+        use crate::catalog::{DudeId, DudeRecord, GovtId, ShipId, SystemTraffic};
+        let mut dude_types = [(-1, 0); 8];
+        dude_types[0] = (128, 100);
+        FakePilotCatalog {
+            traffic: vec![(
+                SystemId(130),
+                SystemTraffic {
+                    dude_types,
+                    avg_ships: 2,
+                    persons: Default::default(),
+                },
+            )],
+            dudes: vec![(
+                DudeId(128),
+                DudeRecord {
+                    ai_type: 1,
+                    govt: Some(GovtId(140)),
+                    ships: vec![(ShipId(129), 1)],
+                    booty: 0,
+                    info_types: 0,
+                },
+            )],
+            ship_records: vec![crate::testkit::ship(129, crate::testkit::FAST)],
+            ..wrecking()
+        }
+    }
+
+    /// The goal of every NPC in `session`'s system after one traffic tick,
+    /// each bound for 128 before it.
+    fn goals_bound_for_128(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<Goal> {
+        for npc in session.traffic.npcs_mut() {
+            npc.goal = Goal::Land(StellarId(128));
+        }
+        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        session.npcs().iter().map(|npc| npc.goal).collect()
+    }
+
+    #[test]
+    fn an_npc_never_heads_for_a_stellar_y_destroyed() {
+        let catalog = trafficked();
+        let mut session = quiet(&catalog);
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert!(!session.npcs().is_empty(), "populated");
+        assert!(
+            goals_bound_for_128(&mut session, &catalog)
+                .iter()
+                .all(|&goal| goal == Goal::Land(StellarId(128))),
+            "kept while whole"
+        );
+        run(&mut session, "Y128");
+        let goals = goals_bound_for_128(&mut session, &catalog);
+        assert!(!goals.is_empty());
+        assert!(
+            goals.iter().all(|&goal| goal == Goal::Land(StellarId(129))),
+            "{goals:?}: decided again, for the one landable"
+        );
+    }
+
+    // A landed `M`.
+
+    /// [`wrecking`]'s session landed at 128, after `script` and a landed
+    /// `M131` settle: the pilot's stellar is then 131's first, 140.
+    fn moved_landed(catalog: &FakePilotCatalog, script: &str) -> Session {
+        let mut session = quiet(catalog);
+        land_now(&mut session).expect("lands");
+        run(&mut session, script);
+        let _ = session.settle_script(catalog, &mut Scripted::default());
+        session.assert_docked_among_shown();
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.pilot().stellar, Some(StellarId(140)), "{script}");
+        assert_eq!(
+            session.landed(),
+            Some(StellarId(128)),
+            "the spaceport open stays 128's"
+        );
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
+        let flown = Session::fly(catalog, saved).expect("flies");
+        assert_eq!(
+            flown.landed(),
+            Some(StellarId(140)),
+            "{script}: docked there"
+        );
+        flown.assert_docked_among_shown();
+        session
+    }
+
+    #[test]
+    fn a_landed_m_docks_at_the_first_stellar_destroyed_or_not() {
+        let catalog = wrecking();
+        let mut session = moved_landed(&catalog, "Y140 M131");
+        assert!(session.next_sites.as_deref().expect("waiting")[0].destroyed);
+        assert_eq!(
+            session.take_off(&mut Scripted::default()),
+            Some(StellarId(128))
+        );
+        assert_eq!(
+            session.select_stellar(StellarPick::Slot(0)),
+            Some(StellarId(140))
+        );
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::NotLandable {
+                stellar: StellarId(140),
+                station: false,
+            }),
+            "not while it is destroyed"
+        );
+        let mut session = moved_landed(&catalog, "M131");
+        session.take_off(&mut Scripted::default());
+        session.select_stellar(StellarPick::Slot(0));
+        assert!(session.land().is_ok(), "whole");
     }
 
     // A new pilot's stellars.

@@ -152,12 +152,14 @@
 //! (`_dockedPortMissions`, `_MissionHandlePlayerEnteredNewSystem`) waits
 //! for missions. The first stellar is the first of
 //! [`PilotCatalog::landing_sites`], destroyed or not, as the original
-//! reads neither landability nor the destroyed state there; a destroyed
-//! one cannot be landed on, so by `M` it leaves the pilot on no stellar.
+//! reads neither landability nor the destroyed state there. Whether it is
+//! dockable is asked of it as if whole, so a landed `M` docks the pilot at
+//! a first stellar `Y` destroyed, as the original does; only a gate or a
+//! stellar that cannot be landed on whole leaves it on none.
 
 use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
-use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
+use crate::catalog::{LandingSite, PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
 use crate::landing::is_dockable;
@@ -342,9 +344,14 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         let sites = self.read_sites(catalog, system);
-        let first = sites
-            .first()
-            .map(|site| (site.position, is_dockable(site).then_some(site.id)));
+        // The original reads no destroyed state here (see the module docs).
+        let first = sites.first().map(|site| {
+            let whole = LandingSite {
+                destroyed: false,
+                ..*site
+            };
+            (site.position, is_dockable(&whole).then_some(site.id))
+        });
         let rules = self.script_effect_rules();
         let landed = self.landed.is_some();
         let ship = match first {

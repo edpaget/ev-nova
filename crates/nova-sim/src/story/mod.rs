@@ -667,9 +667,10 @@
 //! [`is_landable`](crate::is_landable) reads it as the original's
 //! `_StellarIsLandable` does: a stellar can be landed on when it has the
 //! can-land flag and is destroyed exactly when it can be landed on only
-//! once destroyed. Docking (gates, the developer tools' relocation, a
-//! landed `M`), F5, the land key, and the NPCs' choice of stellar and
-//! whether they keep heading for it follow. A player docked at a stellar
+//! once destroyed. Docking (gates and the developer tools' relocation),
+//! F5, the land key, and the NPCs' choice of stellar and whether they keep
+//! heading for it follow. A landed `M` docks at the first stellar,
+//! destroyed or not, as the original does. A player docked at a stellar
 //! `Y` destroys stays docked: the spaceport stays open, the stellar stays
 //! among those shown, flagged destroyed, the take-off works and passes its
 //! days, and only landing there again is refused until it regenerates. A
@@ -759,9 +760,9 @@
 //!   destroyed state: `_EvalSetExp` calls `_StellarIsDestroyed` only for
 //!   `Y` (@0x15a71) and `_StellarIsLandable` never (see the
 //!   `script_effects` module). The engine's `M` docks only at a dockable
-//!   first stellar, its own reading already for a gate or a stellar that
-//!   cannot be landed on, so a destroyed one leaves the pilot on no
-//!   stellar.
+//!   first stellar, its own reading for a gate or a stellar that cannot be
+//!   landed on, but asks it as if whole, so a first stellar `Y` destroyed
+//!   is docked at as the original docks there.
 //! - **Docked.** Neither `_DoPortDialog` nor the take-off
 //!   (`_PlayerLandOnStellar`) reads the destroyed state or landability:
 //!   the callers above are all there is. A `Y` on the docked stellar
