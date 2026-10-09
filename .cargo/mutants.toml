@@ -151,4 +151,8 @@ exclude_re = [
     # The story dispatcher's consumer effects: every consumer's arm is
     # empty until its own phase fills it, so the body is already `()`.
     "replace <impl Stage for SessionStage<'_, C>>::effect with \\(\\)$",
+    # A stellar's frame 0 shows `AnimDelay` x `Frame0Bias` ticks only when
+    # the bias is above 1; a bias of exactly 1 gives `AnimDelay` x 1, the
+    # same threshold as `AnimDelay`, so `>` and `>=` choose the same.
+    "replace > with >= in Frames::step",
 ]
