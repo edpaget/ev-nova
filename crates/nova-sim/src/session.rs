@@ -391,6 +391,7 @@ use crate::shipyard::{self, Quote, ShipNaming, ShipPurchase, ShipRefusal, Shipya
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
+use crate::story::{Fate, StoryEvent};
 use crate::targeting::{self, TargetPick};
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Npc, NpcId};
@@ -653,6 +654,9 @@ pub struct Session {
     /// How each disputed rule the session acts on reads (see
     /// [`Session::with_rules`]); never saved.
     rules: Rulebook,
+    /// The story runtime: the events raised and the ships watched (see the
+    /// [`story`](crate::story) module); never saved.
+    story: story::StoryRuntime,
 }
 
 impl Session {
@@ -785,6 +789,7 @@ impl Session {
             hold_position: false,
             touchdown: player.position,
             rules: Rulebook::default(),
+            story: story::StoryRuntime::default(),
             pilot,
         };
         session.open_opening();
@@ -1023,6 +1028,7 @@ impl Session {
         };
         self.traffic.enter_in(table, world, chance);
         self.traffic_due = false;
+        self.story.watched.clear();
         self.enter_escorts();
         self.strikes.clear();
         self.aboard = None;
@@ -1058,7 +1064,9 @@ impl Session {
     /// and after each take-off, instead populates the system
     /// ([`Session::populate`]) from `catalog`, as the original sets a
     /// system up on arrival and on take-off; its NPCs move from the next.
-    /// A target that landed or jumped out is let go.
+    /// A target that landed or jumped out is let go. Each tick that moves
+    /// the NPCs raises the first sighting of the ships watched
+    /// ([`Session::watch_ship`]).
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1094,6 +1102,7 @@ impl Session {
                 self.traffic.tick_in(behaviour, world, &strikes, chance);
                 self.dock_fighters();
                 self.orphan_fighters();
+                self.observe_watched();
             }
         }
         self.clear_lost_target();
@@ -1194,6 +1203,10 @@ impl Session {
     /// spread on `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
     /// the system, and the target is let go once it is breaking up or
     /// gone. While the ship is landed or jumping, it stands still.
+    ///
+    /// Each NPC intact before the tick and no longer raises
+    /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
+    /// as it is taken out (see the `story` module's findings).
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
@@ -1261,6 +1274,7 @@ impl Session {
         }
         self.combat
             .tick(&mut fighters, &self.arsenal, &self.govts, rules, chance);
+        self.raise_disabled(&was);
         let mut strikes = self.combat.take_strikes();
         self.refill_invincible(&mut strikes);
         self.hold_grudges(&strikes);
@@ -1278,10 +1292,39 @@ impl Session {
             .map(|npc| npc.id)
             .collect();
         for id in destroyed {
+            self.raise(StoryEvent::ShipFate {
+                ship: id,
+                fate: Fate::Destroyed,
+            });
             self.lose_destroyed(id);
         }
         self.orphan_fighters();
         self.clear_lost_target();
+    }
+
+    /// Raises [`Fate::Disabled`] for each NPC that `was` intact before the
+    /// fight's tick and is no longer: disabled, or broken up at once, which
+    /// the original counts as disabled too (`_DamageShip` @0x3ae5b,
+    /// @0x3af8b), as [`Session::punish`] convicts it of both.
+    fn raise_disabled(&mut self, was: &[(NpcId, Condition, Option<GovtId>)]) {
+        let downed: Vec<NpcId> = self
+            .traffic
+            .npcs()
+            .iter()
+            .filter(|npc| {
+                npc.condition != Condition::Intact
+                    && was
+                        .iter()
+                        .any(|&(id, before, _)| id == npc.id && before == Condition::Intact)
+            })
+            .map(|npc| npc.id)
+            .collect();
+        for ship in downed {
+            self.raise(StoryEvent::ShipFate {
+                ship,
+                fate: Fate::Disabled,
+            });
+        }
     }
 
     /// Convicts the player of its crimes among `strikes`, as `law` says:
@@ -1613,6 +1656,10 @@ impl Session {
     /// It enters that system as every way in does, by its row of the
     /// table in the `entry` module, which also lets go of the strikes, the
     /// target, the boarding, the hail and a held `P` sound.
+    ///
+    /// Before its days it raises [`StoryEvent::Explored`] for each system
+    /// passed and the one arrived in, as the original explores their
+    /// nebulae first; [`StoryEvent::EnteredSystem`] follows the days.
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -1622,6 +1669,7 @@ impl Session {
             return None;
         };
         self.jump = None;
+        let mark = self.story_mark();
         self.take_jump_cost(chance);
         let (mut from, mut at) = (self.pilot.system, first);
         let mut hops = 0;
@@ -1640,6 +1688,12 @@ impl Session {
                 hops += 1;
                 (from, at) = (at, next);
             }
+        }
+        // The systems passed, then the one arrived in, each reached before
+        // the days (@0x6bddb, @0x6be12).
+        let passed = self.pilot.course[..hops.saturating_sub(1)].to_vec();
+        for (n, system) in passed.into_iter().chain([at]).enumerate() {
+            self.raise_at(mark + n, StoryEvent::Explored { system });
         }
         let map = |id| self.star_map.position(id).unwrap_or_default();
         let entered = Arrival {
@@ -1976,7 +2030,8 @@ impl Session {
         self.enter_system(Entry::Gate, entered, catalog, chance);
     }
 
-    /// Docks the ship at `stellar`, one of the system's.
+    /// Docks the ship at `stellar`, one of the system's, and last raises
+    /// [`StoryEvent::Landed`].
     fn dock(&mut self, stellar: StellarId) {
         self.nav_target = None;
         self.touchdown = self.player.position;
@@ -2001,6 +2056,7 @@ impl Session {
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
+        self.raise(StoryEvent::Landed { stellar });
     }
 
     /// Takes off from the stellar the ship is docked at, and gives it; the
@@ -2014,6 +2070,10 @@ impl Session {
     /// [`SessionEvent::SystemChanged`] when they are another system's than
     /// the stellars they replace. `None`, and nothing changes, when it has
     /// not landed.
+    ///
+    /// It raises a [`StoryEvent::DayPassed`] for each day, then
+    /// [`StoryEvent::Explored`] for the system, then
+    /// [`StoryEvent::TookOff`], the original's order.
     ///
     /// Leaving passes the stay's days through the daily step, the events
     /// rolled on `chance`, as [`RuleKey::StayDays`] reads: by the engine,
@@ -2047,11 +2107,15 @@ impl Session {
             self.player.position = self.touchdown;
         }
         self.pilot.explore(self.pilot.system);
+        self.raise(StoryEvent::Explored {
+            system: self.pilot.system,
+        });
         self.traffic_due = true;
         self.restock_fleet();
         self.fleet.clear();
         self.sounds.push(SimSound::TookOff);
         self.save_due = true;
+        self.raise(StoryEvent::TookOff { stellar });
         Some(stellar)
     }
 
@@ -2585,7 +2649,9 @@ impl Session {
     /// target is marked boarded, and every other NPC after it lets it go
     /// and decides again (`_AIShipBoardedByPlayer`). Then, unless `rule`
     /// says its crew repels the boarders, its plunder is rolled on
-    /// `chance` and the boarding is under way ([`Session::plunder`]).
+    /// `chance` and the boarding is under way ([`Session::plunder`]). A
+    /// board that passes the checks raises [`Fate::Boarded`], repelled
+    /// or not.
     ///
     /// # Errors
     ///
@@ -2623,6 +2689,10 @@ impl Session {
                 other.boarded = true;
             }
         }
+        self.raise(StoryEvent::ShipFate {
+            ship: npc.id,
+            fate: Fate::Boarded,
+        });
         self.drop_quarry(npc.id);
         if rule.repels(npc.booty) {
             return Ok(Boarding::Repelled);
@@ -6539,7 +6609,7 @@ mod tests {
     /// (-600, 0), 131 to 132 (600, 600) and 132 to 134 (1200, 600), so the
     /// course to 134 is 131, 132, 134; ship 128 carries one outfit of
     /// multi-jump `mod_val`.
-    fn chained(base: FakePilotCatalog, mod_val: i16) -> FakePilotCatalog {
+    pub(super) fn chained(base: FakePilotCatalog, mod_val: i16) -> FakePilotCatalog {
         FakePilotCatalog {
             star_map: vec![
                 star(130, (0.0, 0.0), &[131, 133]),
@@ -6553,7 +6623,7 @@ mod tests {
     }
 
     /// Plots a course to 134, flies out and begins the jump.
-    fn bound_for_134(catalog: &FakePilotCatalog, rule: MultiJumpRule) -> Session {
+    pub(super) fn bound_for_134(catalog: &FakePilotCatalog, rule: MultiJumpRule) -> Session {
         let mut session = Session::start(catalog)
             .expect("starts")
             .with_multi_jump(rule);
@@ -7301,6 +7371,19 @@ mod tests {
             session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
             assert_eq!(session.outfit(buy(first), &mut NeverFires), Ok(()));
         }
+    }
+
+    #[test]
+    fn buying_a_map_raises_explored_for_each_system_it_reaches() {
+        let mut session = outfitted(&limiting());
+        session.settle_story();
+        session.outfit(buy(MAP), &mut NeverFires).expect("bought");
+        assert_eq!(
+            session.story_raised(),
+            [130, 131, 132].map(|system| StoryEvent::Explored {
+                system: SystemId(system)
+            })
+        );
     }
 
     #[test]
@@ -9841,6 +9924,133 @@ mod tests {
         );
     }
 
+    /// The ship fates raised and not yet settled.
+    fn fates(session: &Session) -> Vec<StoryEvent> {
+        session
+            .story_raised()
+            .into_iter()
+            .filter(|event| matches!(event, StoryEvent::ShipFate { .. }))
+            .collect()
+    }
+
+    fn fate(ship: u32, fate: Fate) -> StoryEvent {
+        StoryEvent::ShipFate {
+            ship: NpcId(ship),
+            fate,
+        }
+    }
+
+    #[test]
+    fn an_npc_disabled_then_destroyed_raises_each_fate_once_as_it_happens() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let mut seen = Vec::new();
+        for _ in 0..80 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let condition = session.npcs().first().map(|npc| npc.condition);
+            let now = (condition, fates(&session).len());
+            if seen.last() != Some(&now) {
+                seen.push(now);
+            }
+        }
+        assert_eq!(
+            seen,
+            [
+                (Some(Condition::Intact), 0),
+                (Some(Condition::Disabled), 1),
+                (Some(Condition::Dying { ticks_left: 1 }), 1),
+                (Some(Condition::Dying { ticks_left: 0 }), 1),
+                (None, 2),
+            ]
+        );
+        assert_eq!(
+            fates(&session),
+            [fate(0, Fate::Disabled), fate(0, Fate::Destroyed)]
+        );
+    }
+
+    #[test]
+    fn breaking_up_an_intact_ship_at_once_raises_disabled_then_destroyed() {
+        let catalog = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                mass_dmg: 500,
+                energy_dmg: 500,
+                ..blaster()
+            }],
+            ..armed()
+        };
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        for _ in 0..20 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            session.hold_trigger(Trigger::default());
+        }
+        assert_eq!(session.npcs(), [], "destroyed");
+        assert_eq!(
+            fates(&session),
+            [fate(0, Fate::Disabled), fate(0, Fate::Destroyed)],
+            "as the original's _DamageShip counts it disabled"
+        );
+    }
+
+    #[test]
+    fn a_watched_ship_is_observed_once_by_the_traffic_in_flight() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "unwatched");
+        session.watch_ship(NpcId(0));
+        for _ in 0..3 {
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        }
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
+        assert!(session.story.watched.is_empty(), "forgotten once seen");
+    }
+
+    #[test]
+    fn a_watched_ship_is_not_observed_while_landed_or_jumping() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.landed = Some(StellarId(128));
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "landed");
+        session.landed = None;
+        session.jump = Some(Jump::Hyperspace(SystemId(131)));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "jumping");
+        assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+    }
+
+    #[test]
+    fn repopulating_or_losing_a_watched_ship_forgets_it() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.watch_ship(NpcId(0));
+        session.populate(&catalog, &mut Draws::of(&[6, 6, 0, 0, 750, 650, 180]));
+        assert!(session.story.watched.is_empty(), "the populate forgot it");
+
+        session.watch_ship(NpcId(99));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "not in the system");
+        assert!(session.story.watched.is_empty(), "forgotten");
+
+        session.watch_ship(NpcId(0));
+        session.traffic_due = true;
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "the populating tick");
+        assert!(session.story.watched.is_empty(), "forgotten");
+
+        let watched = session.npcs()[0].id;
+        session.watch_ship(watched);
+        session.landed = Some(StellarId(128));
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert!(session.story.watched.is_empty(), "the traffic reset");
+    }
+
     #[test]
     fn an_npc_downing_another_is_no_crime() {
         let catalog = FakePilotCatalog {
@@ -11311,6 +11521,43 @@ mod tests {
             (Taken::Aborted, vec![])
         );
         assert_eq!(session.boarding(), None);
+    }
+
+    #[test]
+    fn a_board_raises_boarded_once_repelled_or_not_and_a_refused_one_nothing() {
+        let boarded = [StoryEvent::ShipFate {
+            ship: NpcId(0),
+            fate: Fate::Boarded,
+        }];
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.settle_story();
+        session.target = None;
+        assert!(board_by(&mut session, &NovaLaw::default()).is_err());
+        assert_eq!(session.story_raised(), [], "no target");
+        session.target = Some(NpcId(0));
+        board_by(&mut session, &NovaLaw::default()).expect("boards");
+        assert_eq!(session.story_raised(), boarded);
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::CantBoard),
+            "boarded already"
+        );
+        assert_eq!(session.story_raised(), boarded);
+
+        let mut catalog = boardable();
+        catalog.dudes[0].1.booty = 0;
+        let bible = NovaBoarding {
+            empty_booty: RuleSource::Bible,
+            ..NovaBoarding::default()
+        };
+        let mut session = alongside(&catalog);
+        session.settle_story();
+        assert_eq!(
+            session.board(&NovaLaw::default(), &bible, &mut Draws::of(&[])),
+            Ok(Boarding::Repelled)
+        );
+        assert_eq!(session.story_raised(), boarded, "repelled");
     }
 
     #[test]
@@ -13230,7 +13477,7 @@ mod tests {
     /// The ship starts over hypergate 300, at system 130's centre, linked
     /// to 310 in 131 at (100, 200), heading ships out on 90°, then to 320
     /// in 132 (a random heading), then to 999, which no system lists.
-    fn gated() -> FakePilotCatalog {
+    pub(super) fn gated() -> FakePilotCatalog {
         FakePilotCatalog {
             sites: vec![
                 (SystemId(130), vec![gate_landing(300, HYPERGATE)]),
@@ -13247,7 +13494,7 @@ mod tests {
 
     /// [`gated`]'s session, with L pressed twice over the hypergate: the
     /// entry awaits the player's pick.
-    fn at_gate(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn at_gate(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         assert!(matches!(
             session.land(),

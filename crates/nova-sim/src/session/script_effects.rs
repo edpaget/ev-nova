@@ -245,6 +245,21 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) -> Settled {
         let mut settled = Settled::default();
+        self.settle_moves(catalog, chance, &mut settled);
+        self.settle_leave(chance, &mut settled);
+        self.settle_story();
+        settled
+    }
+
+    /// Applies the moves queued, in order, each read from `catalog`,
+    /// populating on `chance` where the rules say, and notes the last on
+    /// `settled`.
+    pub(super) fn settle_moves(
+        &mut self,
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+        settled: &mut Settled,
+    ) {
         for step in std::mem::take(&mut self.queued.moves) {
             let (system, keep) = match step {
                 ScriptMove::To(system) => (system, false),
@@ -255,15 +270,25 @@ impl Session {
                 settled.moved = Some(system);
             }
         }
-        if let Some(text) = self.queued.leave.take() {
-            settled.message = Some(text).filter(|text| !text.is_empty());
-            if self.landed.is_some() {
-                settled.took_off = self.take_off(chance);
-            } else if settled.message.is_some() {
-                self.sounds.push(SimSound::ScriptMessage);
-            }
+    }
+
+    /// Applies a `Q`'s leave, if one is pending, noting it on `settled`:
+    /// whether one was.
+    pub(super) fn settle_leave(
+        &mut self,
+        chance: &mut (impl Chance + ?Sized),
+        settled: &mut Settled,
+    ) -> bool {
+        let Some(text) = self.queued.leave.take() else {
+            return false;
+        };
+        settled.message = Some(text).filter(|text| !text.is_empty());
+        if self.landed.is_some() {
+            settled.took_off = self.take_off(chance);
+        } else if settled.message.is_some() {
+            self.sounds.push(SimSound::ScriptMessage);
         }
-        settled
+        true
     }
 
     /// `P`: plays `sound`, held to the next flight tick or at once, as

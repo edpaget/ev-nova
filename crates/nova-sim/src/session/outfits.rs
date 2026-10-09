@@ -8,7 +8,8 @@
 //! [`GrantEffect`](crate::outfit_effects::GrantEffect) applies: a map
 //! explores the systems [`map_reveals`] gives from the pilot's system,
 //! along the session's hyperlinks and as
-//! [`OutfitRules::map_explore`] says, read when the grant runs; a paint
+//! [`OutfitRules::map_explore`] says, read when the grant runs, raising
+//! [`StoryEvent::Explored`] for each, in order; a paint
 //! paints the ship; a clean-record outfit cleans the legal records; and
 //! anything else is added, one more owned. An ID in range with no record
 //! is added as a plain item, as the original bumps that slot's count.
@@ -74,6 +75,7 @@ use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records};
 use crate::outfitter::{self, resale, unit_mass, unit_price};
 use crate::pilot::Pilot;
 use crate::rulebook::RuleSource;
+use crate::story::StoryEvent;
 
 /// The outfit IDs the grant path and `D` take: an index below 0x200
 /// (`_GrantOutfitItem` @0x44d5c, `_EvalSetExp` @0x15427 and @0x15455).
@@ -168,6 +170,7 @@ impl Session {
             );
             for system in reached {
                 self.pilot.explore(system);
+                self.raise(StoryEvent::Explored { system });
             }
         }
         if let Some(paint) = effect.paint {
@@ -622,5 +625,45 @@ mod tests {
         let mut session = scripted(&mapped());
         run(&mut session, "G305 D305 X131");
         assert_eq!(session.take_script_notes(), Vec::<ScriptNote>::new());
+    }
+
+    /// `session` with the story events raised so far let go of.
+    fn quiet(mut session: Session) -> Session {
+        session.settle_story();
+        session
+    }
+
+    fn explored_events(systems: &[i16]) -> Vec<StoryEvent> {
+        systems
+            .iter()
+            .map(|&system| StoryEvent::Explored {
+                system: SystemId(system),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_map_raises_explored_for_each_system_it_reaches_explored_already_or_not() {
+        let mut session = quiet(scripted(&mapped()));
+        run(&mut session, "G300");
+        assert_eq!(session.story_raised(), explored_events(&[130, 131, 132]));
+        let mut session = quiet(session);
+        session.grant_outfit(JUMPS_2);
+        assert_eq!(
+            session.story_raised(),
+            explored_events(&[130, 131, 132]),
+            "again"
+        );
+        let mut session = quiet(session);
+        session.grant_outfit(BLANK_MAP);
+        session.grant_outfit(SHIELD);
+        assert_eq!(session.story_raised(), [], "a map of nothing, a shield");
+    }
+
+    #[test]
+    fn x_raises_nothing() {
+        let mut session = quiet(scripted(&mapped()));
+        run(&mut session, "X133 X130");
+        assert_eq!(session.story_raised(), []);
     }
 }

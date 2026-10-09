@@ -7,9 +7,9 @@
 //! This module holds the design and the pure types it names: the
 //! [`StoryEvent`]s, the [`EventFilter`] and [`Subscription`] a consumer
 //! registers, each named by its stable [`SubscriptionId`], and the
-//! dispatch-order rule, [`dispatch_order`]. Nothing raises an event or
-//! runs a subscription yet. Each section names the phase that builds or
-//! fills it:
+//! dispatch-order rule, [`dispatch_order`]. The sources raise the events
+//! (see "Story events"); nothing runs a subscription yet. Each section
+//! names the phase that builds or fills it:
 //!
 //! - story events and dispatch: story-runtime phase 3;
 //! - the daily step: story-runtime phase 2;
@@ -249,8 +249,10 @@
 //! for every system an exploration reaches (`_RecursiveAutoExplore`
 //! @0xd98a: an arrival, a take-off, a map granted), for the systems a
 //! jump passes and arrives at (@0x6bddb, @0x6be12), at the take-off
-//! (@0x634da), and for a new pilot and a load (@0x19118, @0x765bc). `E`
-//! explores no nebula.
+//! (@0x634da), and for a new pilot and a load (@0x19118, @0x765bc). `X`
+//! explores no nebula: it writes the explored level itself (@0x15c71),
+//! and `_EvalSetExp` (0x150fc up to `_EvalTestExp`) calls none of these.
+//! A `G` of a map does, through `_GrantOutfitItem` (@0x15444).
 //!
 //! ## Text
 //!
@@ -277,16 +279,24 @@
 //! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as [`Session::land`](crate::Session::land) docks | the spaceport opening |
 //! | [`TookOff`](StoryEvent::TookOff) | [`Session::take_off`](crate::Session::take_off), after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
-//! | [`Explored`](StoryEvent::Explored) | exploring a system: on arrival (and each system a jump passes), at a take-off, by a map | `_ExploreNebulaeFromSystem` |
-//! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling, the session's boarding, and the flight tick for a mission ship first seen | the goal counts and the per-frame poll |
+//! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores; a take-off; a map granted, for each system it reaches. `X` raises none | `_ExploreNebulaeFromSystem` |
+//! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling (a ship broken up while intact is disabled too), the session's boarding, repelled or not, and the traffic's flight tick for a watched ship first seen ([`Session::watch_ship`](crate::Session::watch_ship)) | the goal counts and the per-frame poll |
 //!
 //! A consumer that wants only some entrances reads the [`Entrance`] in
 //! its subscription: mission ships restart their timers on a `Jump`, a
 //! `Gate` and an in-flight `ScriptMove`, as the original's hook runs. A
-//! take-off raises `DayPassed`, its `Explored` events, then `TookOff`; an
-//! arrival raises the `Explored` of the systems it passes, its `DayPassed`
-//! events, `EnteredSystem`, then the `Explored` of its exploration: the
-//! original's order.
+//! take-off raises `DayPassed`, its `Explored`, then `TookOff`. A jump's
+//! arrival raises the `Explored` of the systems it passes and of the one
+//! it arrives at, its `DayPassed` events, then `EnteredSystem`: the
+//! original explores those nebulae before the days (@0x6bddb, @0x6be12;
+//! see "Checked for phase 3"). Every other way in raises its `DayPassed`
+//! events, if any, `EnteredSystem`, then `Explored` when its row
+//! explores. Each exploration raises `Explored`, the system explored
+//! already or not. A new pilot and a load raise none yet, where the
+//! original explores their system's nebulae (@0x19118, @0x765bc).
+//!
+//! The events wait on the session, in the order raised, for its next
+//! [`Session::settle_script`](crate::Session::settle_script).
 //!
 //! A new trigger kind adds an event variant and its one source, plus
 //! subscriptions; never a loop of its own. The plug-in time-in-system and
@@ -420,8 +430,8 @@
 //! One step passes one day. Its participants, `day::Participant`, run in
 //! the original's order, `Participant::ORDER` (see "A day"), through the
 //! `day::Day` port the session implements (`session/story.rs`). Phase 2
-//! fills the date and the events; the others are empty slots until their
-//! phase:
+//! fills the date and the events, and phase 3 `DayPassed`; the others are
+//! empty slots until their phase:
 //!
 //! 1. the date moves on a day;
 //! 2. the crons, each starting or ending cron's script run as it is
@@ -436,7 +446,7 @@
 //! 8. the ranks' salaries (crons-news-ranks phase 3);
 //! 9. the day rolls (`wares::DayRolls`): not filled yet, so the session
 //!    still draws the shop and hire rolls afresh at each landing;
-//! 10. `DayPassed`, raised by story-runtime phase 3.
+//! 10. `DayPassed`, raised with the new date.
 //!
 //! Plug-in daily triggers (plugin-scripting-extensions phase 4) and a
 //! mission's missed deadline (missions phase 2) are `DayPassed`
@@ -559,6 +569,55 @@
 //! - news (crons-news-ranks phase 2), which the original fills with no
 //!   tags: a text with none comes out unchanged;
 //! - dialogue nodes (plugin-scripting-extensions phase 3).
+//!
+//! ## Checked for phase 3
+//!
+//! - The firing points stand as "One landing", "One take-off" and "One
+//!   arrival" give them: the enter-system hook after the days and the
+//!   price flux and before the exploration (@0x6c144, @0x6c153, @0x6c158,
+//!   @0x6c15d, @0x6c1db), at a gate's exit (@0x67159) and an `M` or `N`
+//!   in flight (@0x159a8), not a landed one (@0x15947); the land check
+//!   after the dock (@0x5fbeb); the take-off's day, then its exploration
+//!   (@0x63440, `_AutoSetExploration` @0x634c8, which reaches
+//!   `_ExploreNebulaeFromSystem` through `_RecursiveAutoExplore` @0xd98a,
+//!   then @0x634da).
+//! - A jump explores the nebulae of the system it arrives at before its
+//!   days on every jump, a single one too: with no multi-jump, or a route
+//!   that does not match, the branches at @0x6bd83 and @0x6bd9d go to
+//!   @0x6be85, which joins @0x6be08 and calls @0x6be12 with the arrival
+//!   system. The exploration after the hook (@0x6c1db) then finds its
+//!   nebulae explored.
+//! - The gate's exit (`_PlayerEnterHypergate` @0x637bf,
+//!   `_PlayerEnterWormhole` @0x64005) calls neither `_AutoSetExploration`
+//!   nor `_ExploreNebulaeFromSystem`: the original's gate explores
+//!   nothing, where the engine's gate row in the session's `entry` table
+//!   explores the system. That divergence is the engine's, kept for now
+//!   (rdm task gate-exit-explores).
+//! - A ship broken up while intact counts as disabled: `_DamageShip`
+//!   notes whether the ship was disabled before the hit (`_IsDisabled`
+//!   @0x3a9ad), and after it counts a mission ship disabled when
+//!   `_IsDisabled` holds and it was not (@0x3ae5b-0x3ae90, @0x3af8b).
+//!   `_IsDisabled` (@0x2ce6) compares the armour with a share of its
+//!   most, so a ship whose armour is gone is disabled by it, and the kill
+//!   path (@0x3ade4-0x3ae53) falls through to that count.
+//! - Both boarding counts (@0x653a7 for a mission's cargo pick-up,
+//!   @0x65730 for its boarding goal) come once the board has passed its
+//!   checks (@0x6502b-0x65298) and before the boarding goes on
+//!   (@0x6578f), so whatever follows, the plunder or the crew repelling
+//!   the boarders, a board counts. A ship boarded already cannot be
+//!   boarded again.
+//! - `_ShipVisibleToShip` (@0x971c) holds a ship invisible while it is
+//!   emerging from a hypergate (`_AIShipIsEmergingFromHypergate`
+//!   @0x972d), and a cloaked one (its fade level, +0x64) visible only to
+//!   a cloaking ship of its own side (`_HasCloak` @0x979b) or one close
+//!   enough on both axes (@0x97ae-0x97f8); every other ship is visible.
+//!   The engine has neither a cloak nor a ship emerging from a gate, so a
+//!   watched ship in the system is visible.
+//! - `S` (`_DoMissionAccept` @0x15407), `A` (`_AbortMission` @0x1532e)
+//!   and `M` and `N` in flight (@0x159a3, @0x159a8) are handled inside
+//!   `_EvalSetExp`, before its next operator. `Q` only sets
+//!   `_absquatulateStr` (@0x15bee); nothing between it and @0x15c6c leaves
+//!   the stellar.
 
 pub(crate) mod day;
 

@@ -28,7 +28,9 @@ pub(crate) enum Participant {
     Ranks,
     /// The shipyard, hire and outfitter day rolls (@0xb7c4-0xb833).
     DayRolls,
-    /// `DayPassed`, raised by story-runtime phase 3.
+    /// [`StoryEvent::DayPassed`](crate::story::StoryEvent::DayPassed),
+    /// raised with the new date: last, so its subscriptions see the day's
+    /// work done.
     DayPassed,
 }
 

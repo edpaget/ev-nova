@@ -34,6 +34,7 @@ use crate::geometry::Vec2;
 use crate::message::SimMessage;
 use crate::rulebook::{RuleSource, Rulebook};
 use crate::sound::SimSound;
+use crate::story::{Entrance, StoryEvent};
 use crate::traffic::Traffic;
 
 /// How the player enters a system.
@@ -48,6 +49,19 @@ pub(super) enum Entry {
     ScriptMove { landed: bool },
     /// The developer tools' move, landed.
     Relocate,
+}
+
+/// The way in a [`StoryEvent::EnteredSystem`](crate::story::StoryEvent)
+/// names: a jump's hops left out.
+impl From<Entry> for Entrance {
+    fn from(how: Entry) -> Self {
+        match how {
+            Entry::Jump { .. } => Self::Jump,
+            Entry::Gate => Self::Gate,
+            Entry::ScriptMove { landed } => Self::ScriptMove { landed },
+            Entry::Relocate => Self::Relocate,
+        }
+    }
 }
 
 /// The runtime conditions the table reads, evaluated by
@@ -481,7 +495,12 @@ impl Session {
         if resets.has(Reset::SaveDue) {
             self.save_due = true;
         }
-        self.announce(&resets, system, scene_event(how, system != shown));
+        self.announce(how, &resets, system, scene_event(how, system != shown));
+        // A jump's arrival raised its `Explored` before its days, at the
+        // original's first nebula exploration (@0x6be12).
+        if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. }) {
+            self.raise(StoryEvent::Explored { system });
+        }
     }
 
     /// Puts the ship where `placement` says.
@@ -554,13 +573,21 @@ impl Session {
                 self.traffic = Traffic::new();
                 self.traffic_due = true;
                 self.fleet.clear();
+                self.story.watched.clear();
             }
         }
     }
 
-    /// Sounds and raises the arrival in `system`, as `resets` says, and
-    /// tells `event`, if any ([`scene_event`]).
-    fn announce(&mut self, resets: &Resets, system: SystemId, event: Option<SessionEvent>) {
+    /// Sounds and raises the arrival in `system`, as `resets` says, tells
+    /// `event`, if any ([`scene_event`]), and raises
+    /// [`StoryEvent::EnteredSystem`], entered `how`.
+    fn announce(
+        &mut self,
+        how: Entry,
+        resets: &Resets,
+        system: SystemId,
+        event: Option<SessionEvent>,
+    ) {
         if resets.has(Reset::ArrivalSound) {
             self.sounds.push(SimSound::Arrived);
         }
@@ -570,6 +597,10 @@ impl Session {
         if let Some(event) = event {
             self.emit(event);
         }
+        self.raise(StoryEvent::EnteredSystem {
+            system,
+            how: how.into(),
+        });
     }
 }
 
@@ -777,6 +808,26 @@ mod tests {
             resets(in_flight, &Rulebook::default(), facts(true, false)),
             "no other rule"
         );
+    }
+
+    #[test]
+    fn each_way_in_is_the_entrance_its_story_event_names() {
+        for (how, entrance) in [
+            (Entry::Jump { hops: 0 }, Entrance::Jump),
+            (Entry::Jump { hops: 3 }, Entrance::Jump),
+            (Entry::Gate, Entrance::Gate),
+            (
+                Entry::ScriptMove { landed: true },
+                Entrance::ScriptMove { landed: true },
+            ),
+            (
+                Entry::ScriptMove { landed: false },
+                Entrance::ScriptMove { landed: false },
+            ),
+            (Entry::Relocate, Entrance::Relocate),
+        ] {
+            assert_eq!(Entrance::from(how), entrance, "{how:?}");
+        }
     }
 
     #[test]
