@@ -1,22 +1,52 @@
 //! The session's side of the story runtime: the story events raised from
 //! their sources and waiting for the next settling, the ships watched for
-//! their first sighting (see the `story` module's "Story events"), and the
+//! their first sighting (see the `story` module's "Story events"), the
 //! daily step's participants run over the session's own state (its "Daily
-//! step").
+//! step"), and the galaxy overlay's one writer,
+//! [`Session::change_galaxy`], with the rule that keeps the player in a
+//! visible system (its "Galaxy overlay").
 
 use std::collections::{BTreeSet, VecDeque};
 
 use super::script_effects::Settled;
-use super::{ScriptNote, Session};
-use crate::catalog::{PilotCatalog, TrafficCatalog};
+use super::{ScriptNote, Session, SessionEvent};
+use crate::catalog::{LandingSite, PilotCatalog, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::{Script, Test};
 use crate::market;
+use crate::pilot::Pilot;
 use crate::rulebook::RuleKey;
 use crate::story::day::{self, Day, Participant};
 use crate::story::dispatch::{self, DuplicateSubscription, Reentry, Registry, Stage};
-use crate::story::{Consumer, Fate, StoryEvent, Subscription, SubscriptionId};
+use crate::story::{
+    Consumer, Fate, GalaxyOverlay, HiddenMove, OverlaidGalaxy, StoryEvent, Subscription,
+    SubscriptionId,
+};
 use crate::traffic::npc::NpcId;
+
+/// Makes `to`'s system visible on `pilot`'s overlay, and so in `galaxy`,
+/// when `to` says it must be: whether it did.
+pub(super) fn show(pilot: &mut Pilot, galaxy: &mut OverlaidGalaxy, to: HiddenMove) -> bool {
+    if to.make_visible {
+        pilot.galaxy.set_visible(to.to, Some(true));
+        galaxy.set_overlay(pilot.galaxy.clone());
+    }
+    to.make_visible
+}
+
+/// Moves `pilot` off its system when `galaxy` hides it, as the original
+/// does (@0x998f1-0x99a36): to the visible system at the same place, or
+/// to the chain head made visible ([`OverlaidGalaxy::hidden_move`]). Only
+/// the system changes. Whether the pilot is in another system now.
+pub(super) fn leave_hidden(pilot: &mut Pilot, galaxy: &mut OverlaidGalaxy) -> bool {
+    let Some(to) = galaxy.hidden_move(pilot.system) else {
+        return false;
+    };
+    show(pilot, galaxy, to);
+    let moved = to.to != pilot.system;
+    pilot.system = to.to;
+    moved
+}
 
 /// The session's story runtime: the subscriptions registered, the events
 /// raised and not yet settled, and the ships watched for their first
@@ -263,6 +293,101 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn story_raised(&self) -> Vec<StoryEvent> {
         self.story.raised.iter().copied().collect()
+    }
+
+    /// Changes the galaxy overlay as `change` says: its one writer (see the
+    /// `story` module's "Galaxy overlay"). A change that changes nothing
+    /// does nothing more. Otherwise the overlaid map is rebuilt, and a
+    /// player whose system is now hidden moves as the original moves it
+    /// ([`OverlaidGalaxy::hidden_move`]): only its system changes, with
+    /// [`SessionEvent::SystemChanged`] told, and no story event raised, no
+    /// system explored and no day passed. The stellars are read again
+    /// from `catalog` when the player moved or theirs changed government;
+    /// when the player's system or its government changed, the traffic
+    /// goes on with every ship in the system, its arrivals drawn from the
+    /// new table ([`Traffic::retarget`](crate::Traffic::retarget)). A save
+    /// is due, and [`SessionEvent::GalaxyChanged`] is told once. Whether
+    /// it changed anything.
+    pub fn change_galaxy<C>(&mut self, catalog: &C, change: impl FnOnce(&mut GalaxyOverlay)) -> bool
+    where
+        C: PilotCatalog + TrafficCatalog + ?Sized,
+    {
+        let before = self.pilot.galaxy.clone();
+        change(&mut self.pilot.galaxy);
+        if self.pilot.galaxy == before {
+            return false;
+        }
+        let govt = self.galaxy.govt(self.pilot.system);
+        self.galaxy.set_overlay(self.pilot.galaxy.clone());
+        let moved = leave_hidden(&mut self.pilot, &mut self.galaxy);
+        if moved {
+            self.emit(SessionEvent::SystemChanged);
+        }
+        self.refresh_sites(catalog, moved, &before);
+        if moved || self.galaxy.govt(self.pilot.system) != govt {
+            let table = self.spawn_table(catalog);
+            let every: BTreeSet<NpcId> = self.traffic.npcs().iter().map(|npc| npc.id).collect();
+            self.traffic.retarget(table, &every);
+        }
+        self.save_due = true;
+        self.emit(SessionEvent::GalaxyChanged);
+        true
+    }
+
+    /// Reads the stellars again from `catalog` where the galaxy's change
+    /// from `before` reaches them: the system's, when the player `moved`
+    /// or one of them changed government, and those a landed move left
+    /// for the take-off likewise.
+    fn refresh_sites(
+        &mut self,
+        catalog: &(impl PilotCatalog + ?Sized),
+        moved: bool,
+        before: &GalaxyOverlay,
+    ) {
+        let now = &self.pilot.galaxy;
+        let changed = |sites: &[LandingSite]| {
+            sites
+                .iter()
+                .any(|site| before.stellar(site.id).govt != now.stellar(site.id).govt)
+        };
+        let shown_stale = changed(&self.sites);
+        let next = self
+            .next_sites
+            .as_ref()
+            .map(|next| (next.from, moved || changed(&next.sites)));
+        match next {
+            None => {
+                if moved || shown_stale {
+                    self.sites = self.read_sites(catalog, self.pilot.system);
+                }
+            }
+            Some((from, next_stale)) => {
+                if next_stale {
+                    let sites = self.read_sites(catalog, self.pilot.system);
+                    if let Some(next) = &mut self.next_sites {
+                        next.sites = sites;
+                    }
+                }
+                if shown_stale {
+                    self.sites = self.read_sites(catalog, from);
+                }
+            }
+        }
+    }
+
+    /// The course as it is flown: each hop the visible system that stands
+    /// for it ([`OverlaidGalaxy::same_place`]), cut at the first hop with
+    /// none. The course saved ([`Session::course`]) keeps the systems
+    /// plotted, so a hop hidden and shown again is followed again, as the
+    /// original's `_CueNextHyperRouteDest` resolves each hop by place
+    /// (@0xe2fa).
+    #[must_use]
+    pub fn course_shown(&self) -> Vec<SystemId> {
+        self.pilot
+            .course
+            .iter()
+            .map_while(|&hop| self.galaxy.same_place(hop))
+            .collect()
     }
 
     /// Lets `days` days go by through the daily step, each running its

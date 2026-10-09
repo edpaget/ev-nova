@@ -1510,6 +1510,8 @@ impl<
                 SessionEvent::ShipChanged => redrawn.ship = true,
                 SessionEvent::SystemChanged => redrawn.system = true,
                 SessionEvent::StellarChanged => redrawn.stellar = true,
+                // The course map does not draw the galaxy overlay yet.
+                SessionEvent::GalaxyChanged => {}
             }
         }
         let system = session.system();

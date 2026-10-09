@@ -163,7 +163,7 @@ impl Session {
             let reached = map_reveals(
                 reach,
                 self.pilot.system,
-                &self.star_map,
+                self.galaxy.map(),
                 self.hyperlinks,
                 &self.govts,
                 self.outfit_rules().map_explore,
@@ -220,9 +220,11 @@ impl Session {
         self.refit(false, self.script_reserves());
     }
 
-    /// `X`: explores `system` when it is on the star map.
+    /// `X`: explores `system` when it is in the catalog's galaxy, hidden
+    /// or not: the original writes the explored level itself (@0x15c71),
+    /// whatever the system's visibility.
     pub(super) fn explore_system(&mut self, system: SystemId) {
-        if self.star_map.position(system).is_some() {
+        if self.galaxy.exists(system) {
             self.pilot.explore(system);
         }
     }
@@ -618,6 +620,49 @@ mod tests {
         assert!(!run(&mut session, "X999 X133"), "nothing new");
         assert_eq!(explored(&session), ids(&[130, 133]));
         assert_eq!(session.take_script_notes(), []);
+    }
+
+    /// Changes `session`'s galaxy as `change` says, read from `catalog`.
+    fn overlay(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        change: impl FnOnce(&mut crate::story::GalaxyOverlay),
+    ) {
+        assert!(session.change_galaxy(catalog, change));
+    }
+
+    #[test]
+    fn a_map_reaches_no_hidden_system() {
+        let catalog = mapped();
+        let mut session = session(&catalog);
+        overlay(&mut session, &catalog, |galaxy| {
+            galaxy.set_visible(SystemId(131), Some(false));
+        });
+        session.grant_outfit(JUMPS_2);
+        assert_eq!(explored(&session), ids(&[130, 132, 133]), "131 hidden");
+    }
+
+    #[test]
+    fn a_government_class_map_reads_the_overlays_governments() {
+        let catalog = mapped();
+        let mut session = session(&catalog);
+        overlay(&mut session, &catalog, |galaxy| {
+            galaxy.set_govt(SystemId(137), Some(Some(GovtId(140))));
+            galaxy.set_govt(SystemId(135), Some(None));
+        });
+        session.grant_outfit(CLASS_3);
+        assert_eq!(explored(&session), ids(&[130, 137]));
+    }
+
+    #[test]
+    fn x_explores_a_hidden_system_too() {
+        let catalog = mapped();
+        let mut session = scripted(&catalog);
+        overlay(&mut session, &catalog, |galaxy| {
+            galaxy.set_visible(SystemId(133), Some(false));
+        });
+        assert!(run(&mut session, "X133"));
+        assert_eq!(explored(&session), ids(&[130, 133]));
     }
 
     #[test]

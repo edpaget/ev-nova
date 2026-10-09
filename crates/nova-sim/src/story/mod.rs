@@ -224,8 +224,10 @@
 //! that lists it (@0x9970d-0x997bd); evaluates `shïp` `Availability`,
 //! `përs` and `flët` `ActiveOn`, `mïsn` `AvailBits` and `nëbu` `ActiveOn`
 //! (@0x997c3-0x998ef); and, if the player's system is now hidden, moves
-//! the player and its escorts to the visible system at the same place or,
-//! with none, makes its system visible again (@0x998f1-0x999ac). It runs
+//! the player and every ship in the system to the visible system at the
+//! same place or, with none, makes the first system at that place (the
+//! chain head) visible and moves them there (@0x998f1-0x99a36; see
+//! "Checked for phase 4"). It runs
 //! at a landing (with the offers @0xa175f, in the land check @0xa1af2), on
 //! a jump's arrival before its days (@0x6bf3f), and for a new pilot, the
 //! main screen and a load; never right after a script. So a bit a cron
@@ -539,13 +541,70 @@
 //! `visibility_refresh` for the other reading, after every settled
 //! script. Each change to the overlay raises one `SessionEvent`, on which
 //! the view rebuilds the galaxy map. A player whose system becomes hidden
-//! goes to the visible system at the same place, with its escorts, or,
-//! with none, its system stays visible: story-runtime phase 4's rule.
+//! goes to the visible system at the same place, with every ship in the
+//! system, or, with none, to the first system at that place, made
+//! visible: story-runtime phase 4's rule (see "Built by phase 4").
 //! The original changes a system's government only by showing another
 //! system at the same place; a government override is the engine's own.
 //! `shïp` `Availability` and `përs`, `flët` and `mïsn` availability stay
 //! live reads, outside the overlay, where the original keeps them until
 //! the next refresh.
+//!
+//! ## Built by phase 4
+//!
+//! The overlay is [`GalaxyOverlay`](galaxy::GalaxyOverlay), saved on the
+//! pilot (save version 17), and the session reads the galaxy only through
+//! [`OverlaidGalaxy`](galaxy::OverlaidGalaxy): the static catalog read
+//! once, the overlay, and the star map built from both, rebuilt only when
+//! the overlay changes. Its map has the visible systems alone, each link
+//! to a hidden system resolved to the visible system at its place, and
+//! each system's government as overridden. Every `StarMap::govt` the
+//! session reads is that map's, and every stellar the session reads
+//! passes through [`OverlaidGalaxy::site`](galaxy::OverlaidGalaxy::site),
+//! so landing, the market and the outfitter see a stellar's government
+//! override. With no overrides the galaxy is exactly the static catalog.
+//!
+//! [`Session::change_galaxy`](crate::Session::change_galaxy) is the one
+//! writer. A change applies the moment it returns; when it is called is
+//! the writer's choice, and the visibility and nebula writers
+//! (crons-news-ranks phase 5) call it only at the refresh points above.
+//! Each reader sees a change when it next reads:
+//!
+//! - hyperspace links, routes, Hyper Select and the next-jump check: at
+//!   the next query, as every Con read resolves the visible flags afresh;
+//! - the AI's system government: from the next traffic tick, as the
+//!   original's warships read the system's `Govt` at each decision;
+//! - traffic: arrivals at the next spawn, from the table the change
+//!   replaced, as the original's per-frame spawner reads the current
+//!   system's record afresh; the initial population at the next entry or
+//!   take-off;
+//! - the galaxy map: after the `GalaxyChanged` event.
+//!
+//! A player whose system becomes hidden moves as the original moves it
+//! (@0x998f1-0x99a36): to the lowest-ID visible system at the same place,
+//! or, with none, to the chain head (the lowest-ID system at that place),
+//! made visible. It keeps its position, landed state, stellar and course,
+//! and every ship in the system stays with it; it raises no story event,
+//! explores nothing and passes no day. The course keeps its system IDs,
+//! each hop resolved by place when it is used, as `_CueNextHyperRouteDest`
+//! resolves it.
+//!
+//! The player is always in a visible system. Every arrival (a jump, a
+//! gate's exit, `M` and `N`, and the developer tools' relocation) resolves
+//! its system by the same rule before it enters. For a jump and a gate
+//! this is the original's; for `M` and `N` it is the engine's own: the
+//! original writes the system given (@0x158f2) and leaves the player in a
+//! hidden system until the next refresh moves it. A government override
+//! is the engine's own too, with no Rulebook key: the original changes a
+//! government only by showing another system at the same place.
+//!
+//! Two of the original's readings are kept the engine's way, both only
+//! where more than one system at a place is visible at once, which stock
+//! data never has: `_FindActiveCoLocatedSystem` gives the lowest-ID
+//! visible system at a place even for a visible system (@0x4c02-0x4c40),
+//! where the engine keeps a visible system itself; and a link reaches
+//! every visible system at its target's place, as the engine's
+//! [`HyperlinkRule`](crate::HyperlinkRule) has always read it.
 //!
 //! # Mission lifecycle
 //!
@@ -644,11 +703,78 @@
 //!   `_EvalSetExp`, before its next operator. `Q` only sets
 //!   `_absquatulateStr` (@0x15bee); nothing between it and @0x15c6c leaves
 //!   the stellar.
+//!
+//! ## Checked for phase 4
+//!
+//! - **The co-located chain.** `_LoadObjectData` builds it once
+//!   (@0x783d9-0x78517): every system's chain head (+0xba) and next link
+//!   (+0xb8) start empty; then, by ascending ID, a system with no head
+//!   becomes its own head and every higher-ID system at the same map
+//!   position (+0x0, both coordinates) joins its chain, in ascending ID
+//!   order. So the head is the lowest-ID system at a place.
+//!   `_FindFirstCoLocatedSystem` (@0x4baa) gives the head, or the system
+//!   itself without one; `_FindActiveCoLocatedSystem` (@0x4be0) walks the
+//!   chain from the head and gives the first visible system (+0x1eb), the
+//!   lowest-ID one at the place, or -1. It does so for a visible system
+//!   too (@0x4c02-0x4c40), so of two visible systems at one place the
+//!   higher is never reached through it.
+//! - **A hidden player's system** (@0x998f1-0x99a36). When the player's
+//!   system (+0x74) is hidden, the player moves to
+//!   `_FindActiveCoLocatedSystem` (@0x99929) or, with none, to
+//!   `_FindFirstCoLocatedSystem` (@0x9993f), which is made visible first
+//!   (@0x999a4). The move rewrites system numbers only: the player
+//!   (@0x999bf); every ship slot 1-63 in use (+0xb8, @0x999c3-0x999e0),
+//!   which is every ship in the system: the spawns set it
+//!   (`_RandomShipSpawn`, `_HyperShipSpawn`, `_SetupShipsInSystem`) and
+//!   `_DeleteAllComputerShips` and a ship's leaving clear it; the shots
+//!   in flight (the 128 records of 0x48 bytes at 0x3b5474, which
+//!   `_SpawnShot` fills, @0x999e2-0x99a0d); and the cargo boxes (the 64
+//!   of 0x28 at 0x3b52c0, which `_SpawnBox` fills, @0x99a0f-0x99a36). It
+//!   sets up no ships, runs no hook, explores nothing and redraws no
+//!   stellars. So every NPC stays with the player, not the escorts alone,
+//!   and no `galaxy_escorts` key is needed.
+//! - **The course** keeps system IDs. `_CueNextHyperRouteDest` resolves
+//!   the next hop by place (`_FindActiveCoLocatedSystem` @0xe2fa) and
+//!   matches it against the current system's Con slots, each resolved the
+//!   same way (@0xe32f): a hidden hop with a visible system at its place
+//!   is followed there, and one with none is not cued.
+//! - **A stellar's system.** `_FindSystemFromStellar` (@0x7ec1-0x7f48)
+//!   gives the lowest-ID visible system whose `NavDefs` list the stellar,
+//!   else the lowest-ID system that lists it.
+//! - **Arrivals.** A jump resolves its hops by place
+//!   (`_FindActiveCoLocatedSystem` @0x6bd67, @0x6bd7b, @0x6bdc1). A
+//!   hypergate's exit takes the stellar's system (`_FindSystemFromStellar`
+//!   @0x638e4) and resolves it by place (@0x638ed), and so does a
+//!   wormhole's (@0x64085, @0x64155, @0x64204). `M` and `N` write the
+//!   system they are given (@0x158f2) and resolve nothing.
+//! - **Traffic over time** reads the current system afresh at each spawn.
+//!   Every frame `_DoPlayGameWork` calls `_EnterMoreShips` with the
+//!   player's system (@0x44228-0x44237), which reads that system's record
+//!   (@0x43b47-0x43b64), its fleet chance and `_SelectFleetFromSystem`
+//!   (@0x43b7c-0x43bad), and its dude fields
+//!   (`_SelectDudeFieldFromSystem` @0x43bed) at each roll. So arrivals
+//!   after a change draw from the new system's table at once, and no
+//!   `galaxy_traffic` key is needed.
+//! - **The AI reads the system's government live.** `_SelectWarshipTarget`
+//!   reads the player's system's `Govt` (+0x8) at each decision: for a
+//!   xenophobe (@0x8a15f-0x8a189) and for the legal table
+//!   (@0x8a757-0x8a768, @0x8a7f1-0x8a803). Ships already in the system
+//!   see a change from their next decision; each keeps its own
+//!   government.
+//! - **The map.** `_DrawMap` draws links only from visible systems
+//!   (+0x1eb @0xe9f0), each Con slot resolved through
+//!   `_FindActiveCoLocatedSystem` and skipped when none is visible
+//!   (@0xea31-0xea4d), and draws only visible systems (@0xed67).
+//!   `_MapDialogUpdate` draws a nebula only while it is active (+0x8,
+//!   which `_PropagateMissionBitEffects` writes @0x998da) and explored
+//!   (+0x9) (@0xf947-0xf95f).
 
 pub(crate) mod day;
 pub(crate) mod dispatch;
+pub mod galaxy;
 
 pub use dispatch::DuplicateSubscription;
+pub use galaxy::{GalaxyOverlay, HiddenMove, OverlaidGalaxy, StellarOverride, SystemOverride};
 
 use crate::catalog::{StellarId, SystemId};
 use crate::control::{Script, Test};

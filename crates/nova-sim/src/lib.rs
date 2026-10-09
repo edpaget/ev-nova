@@ -187,7 +187,10 @@
 //!   sources and orderings, and the pure types it names: the
 //!   [`StoryEvent`](story::StoryEvent)s, the
 //!   [`Subscription`](story::Subscription)s consumers register and the
-//!   order they run in ([`dispatch_order`](story::dispatch_order)).
+//!   order they run in ([`dispatch_order`](story::dispatch_order)), and
+//!   the [`GalaxyOverlay`](story::GalaxyOverlay) play changes over the
+//!   static galaxy, which every reader sees through the
+//!   [`OverlaidGalaxy`](story::OverlaidGalaxy).
 //! - [`targeting`]: which NPC the player's target command picks
 //!   ([`TargetPick`]): the nearest, the nearest threat, the next in turn,
 //!   or the next of the player's escorts.
@@ -265,10 +268,10 @@ pub use board::{
 pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
-    GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord,
-    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, MissionShip, NebulaId, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId,
+    ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StockWeapon, StringPatch,
+    SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};

@@ -8,8 +8,8 @@
 use std::rc::Rc;
 
 pub use nova_data::{
-    BoomId, DudeId, FleetId, GovtId, JunkId, OutfitId, PersonId, ShipId, SoundId, StellarId,
-    SystemId, WeaponId,
+    BoomId, DudeId, FleetId, GovtId, JunkId, NebulaId, OutfitId, PersonId, ShipId, SoundId,
+    StellarId, SystemId, WeaponId,
 };
 
 use crate::control::{Script, Test};

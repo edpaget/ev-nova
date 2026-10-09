@@ -14,6 +14,14 @@
 //! system; inside, only populating the system draws, after the ship is
 //! placed, the system explored and the fighters out dealt with.
 //!
+//! Before any write, the system entered is resolved through the galaxy
+//! overlay, so the player is always in a visible system: the system
+//! itself when it is visible, else the visible system at its place, else
+//! the chain head, made visible ([`OverlaidGalaxy::arrival`]; see the
+//! `story` module's "Galaxy overlay"). The stellars of a system resolved
+//! to another are read again; the caller's placement is kept, a system at
+//! the same place being at the same map position.
+//!
 //! The last step announces the arrival, and tells a view what to redraw
 //! ([`scene_event`], see the `events` module): measured against the
 //! system whose stellars are shown, which after a landed move is still
@@ -23,10 +31,10 @@
 use std::collections::BTreeSet;
 
 use super::script_effects::ScriptEffectRules;
-use super::{Session, SessionEvent};
+use super::{Session, SessionEvent, story};
 use crate::catalog::{
-    DudeId, DudeRecord, FleetRecord, LandingSite, PersonRecord, StellarId, SystemId, SystemTraffic,
-    TrafficCatalog,
+    DudeId, DudeRecord, FleetRecord, LandingSite, PersonRecord, PilotCatalog, StellarId, SystemId,
+    SystemTraffic, TrafficCatalog,
 };
 use crate::chance::Chance;
 use crate::flight::ShipState;
@@ -34,6 +42,8 @@ use crate::geometry::Vec2;
 use crate::message::SimMessage;
 use crate::rulebook::{RuleSource, Rulebook};
 use crate::sound::SimSound;
+#[cfg(doc)]
+use crate::story::OverlaidGalaxy;
 use crate::story::{Entrance, StoryEvent};
 use crate::traffic::Traffic;
 
@@ -426,25 +436,41 @@ impl TrafficCatalog for NoTraffic {
 }
 
 impl Session {
-    /// Enters `arrival`'s system `how`: places the ship as the caller
-    /// chose, makes the arrival writes, and resets what the row of
-    /// [`resets`] for `how` says, populating from `catalog` on `chance`
-    /// where it says so (see the module docs).
-    pub(super) fn enter_system<C, R>(
+    /// Enters `arrival`'s system `how`, resolved through the galaxy
+    /// overlay, its stellars read again from `stellars` when it resolves to
+    /// another: places the ship as the caller chose, makes the arrival
+    /// writes, and resets what the row of [`resets`] for `how` says,
+    /// populating from `catalog` on `chance` where it says so (see the
+    /// module docs). A chain head made visible makes a save due and tells
+    /// [`SessionEvent::GalaxyChanged`].
+    pub(super) fn enter_system<S, C, R>(
         &mut self,
         how: Entry,
         arrival: Arrival,
+        stellars: &S,
         catalog: &C,
         chance: &mut R,
     ) where
+        S: PilotCatalog + ?Sized,
         C: TrafficCatalog + ?Sized,
         R: Chance + ?Sized,
     {
         let Arrival {
-            system,
+            system: asked,
             sites,
             placement,
         } = arrival;
+        let resolved = self.galaxy.arrival(asked);
+        if story::show(&mut self.pilot, &mut self.galaxy, resolved) {
+            self.save_due = true;
+            self.emit(SessionEvent::GalaxyChanged);
+        }
+        let system = resolved.to;
+        let sites = if system == asked {
+            sites
+        } else {
+            self.read_sites(stellars, system)
+        };
         let facts = EntryFacts {
             system_changed: system != self.pilot.system,
             jump_pending: self.jump.is_some(),
@@ -862,6 +888,7 @@ mod tests {
         session.enter_system(
             Entry::ScriptMove { landed: false },
             arrival,
+            &catalog(),
             &catalog(),
             &mut NeverFires,
         );

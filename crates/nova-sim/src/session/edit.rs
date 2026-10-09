@@ -99,7 +99,7 @@ impl Session {
         if !catalog.system_exists(system) {
             return Err(RelocateRefusal::NoSystem);
         }
-        let sites = catalog.landing_sites(system);
+        let sites = self.read_sites(catalog, system);
         let site = sites
             .iter()
             .find(|site| site.id == stellar)
@@ -117,7 +117,13 @@ impl Session {
             sites,
             placement,
         };
-        self.enter_system(Entry::Relocate, arrival, &NoTraffic, &mut NeverFires);
+        self.enter_system(
+            Entry::Relocate,
+            arrival,
+            catalog,
+            &NoTraffic,
+            &mut NeverFires,
+        );
         Ok(())
     }
 

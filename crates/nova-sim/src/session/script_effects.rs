@@ -271,7 +271,7 @@ impl Session {
             };
             if catalog.system_exists(system) {
                 self.move_to(system, keep, catalog, chance);
-                settled.moved = Some(system);
+                settled.moved = Some(self.pilot.system);
             }
         }
     }
@@ -339,7 +339,7 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let sites = catalog.landing_sites(system);
+        let sites = self.read_sites(catalog, system);
         let first = sites
             .first()
             .map(|site| (site.position, is_dockable(site).then_some(site.id)));
@@ -364,7 +364,13 @@ impl Session {
             sites,
             placement,
         };
-        self.enter_system(Entry::ScriptMove { landed }, arrival, catalog, chance);
+        self.enter_system(
+            Entry::ScriptMove { landed },
+            arrival,
+            catalog,
+            catalog,
+            chance,
+        );
     }
 }
 

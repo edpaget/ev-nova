@@ -44,15 +44,17 @@
 //!
 //! A stellar's system is the lowest-ID system that lists it, and a link
 //! to a stellar no system lists leads nowhere: the original's
-//! `_FindSystemFromStellar` with every system active, since the map
-//! models no system Visibility.
+//! `_FindSystemFromStellar` with every system active. The gate's exit is
+//! then resolved to a visible system as every arrival is (see the
+//! [`story`](crate::story) module's "Galaxy overlay"); choosing among
+//! several systems listing the same gate by visibility waits for the
+//! port to give every lister.
 //!
 //! Not modelled: the `dësc` QuickTime movie a gate may play
 //! (`_PlayQTMovieFromDesc`), AI ships using or coming out of gates
 //! (`_AIMakeShipEmergeFromHyperGate`, the `gövt` flags 0x20-0x80), the
-//! mission and ship-spawn hooks on the shared arrival path, system
-//! Visibility, the `spöb` `Fee`, and the failure sound for a wormhole with
-//! no exit.
+//! mission and ship-spawn hooks on the shared arrival path, the `spöb`
+//! `Fee`, and the failure sound for a wormhole with no exit.
 
 use crate::catalog::{GateSite, StellarId, SystemId};
 use crate::chance::Chance;

@@ -22,8 +22,17 @@
 //! again, from the same place. A landed ship cannot jump, nor a jumping
 //! one land.
 //!
-//! The player plots a course to a system on the star map, read once when
-//! the session starts: the fewest jumps along the hyperlinks, which the
+//! The galaxy is the catalog's, read once when the session starts, with
+//! the pilot's galaxy overlay applied ([`Session::galaxy`]): every reader
+//! here (the star map, the systems' and stellars' governments, landing,
+//! the legal record, traffic and the AI) reads it, and
+//! [`Session::change_galaxy`] alone changes it. The player is always in a
+//! visible system: a pilot flown, or a player whose system the overlay
+//! hides, goes to the visible system at the same place, and so does every
+//! arrival (see the [`story`](crate::story) module's "Galaxy overlay").
+//!
+//! The player plots a course to a system on the star map: the fewest
+//! jumps along the hyperlinks, which the
 //! session's [`HyperlinkRule`] (the engine's, one way along each system's
 //! own links, unless [`Session::with_hyperlinks`] says otherwise) lets it
 //! follow. J
@@ -391,7 +400,7 @@ use crate::shipyard::{self, Quote, ShipNaming, ShipPurchase, ShipRefusal, Shipya
 use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
-use crate::story::{Fate, StoryEvent};
+use crate::story::{Fate, OverlaidGalaxy, StoryEvent};
 use crate::targeting::{self, TargetPick};
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Npc, NpcId};
@@ -490,8 +499,10 @@ pub struct Session {
     landed: Option<StellarId>,
     /// The stellar selected as the navigation target, one of `sites`.
     nav_target: Option<StellarId>,
-    /// The star map, read when the session starts.
-    star_map: StarMap,
+    /// The galaxy every reader sees: the catalog's systems, read when the
+    /// session starts, with the pilot's overlay (see the
+    /// [`story`](crate::story) module's "Galaxy overlay").
+    galaxy: OverlaidGalaxy,
     /// The jump under way, from J being accepted until the ship arrives.
     jump: Option<Jump>,
     /// The rule a multi-jump follows.
@@ -699,8 +710,12 @@ impl Session {
         if !catalog.system_exists(pilot.system) {
             return Err(StartError::NoSystem(pilot.system));
         }
+        let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
+        // A load is one of the original's refresh points: a pilot in a
+        // hidden system flies from the one standing for it, silently.
+        story::leave_hidden(&mut pilot, &mut galaxy);
         pilot.explore(pilot.system);
-        let sites = catalog.landing_sites(pilot.system);
+        let sites = overlaid_sites(&galaxy, catalog, pilot.system);
         let docked = pilot
             .stellar
             .and_then(|stellar| sites.iter().find(|site| site.id == stellar));
@@ -729,7 +744,7 @@ impl Session {
             sites,
             landed,
             nav_target: None,
-            star_map: StarMap::new(catalog.star_map()),
+            galaxy,
             jump: None,
             multi_jump: MultiJumpRule::default(),
             hyper_select: HyperSelectRule::default(),
@@ -1046,7 +1061,7 @@ impl Session {
         SpawnTable::resolve(
             catalog,
             system,
-            self.star_map.govt(system),
+            self.galaxy.govt(system),
             &self.govts,
             &self.ships,
             &self.outfits,
@@ -1080,7 +1095,7 @@ impl Session {
             if self.traffic_due {
                 self.populate(catalog, chance);
             } else {
-                let system_govt = self.star_map.govt(self.pilot.system);
+                let system_govt = self.galaxy.govt(self.pilot.system);
                 let facts = control::Facts {
                     pilot: &self.pilot,
                     ammo_outfits: &self.ammo_outfits,
@@ -1117,7 +1132,7 @@ impl Session {
     /// persons' world: the session's rules and control bits, and the
     /// pilot's persons gone and grudges.
     fn world(&self) -> World<'_> {
-        let system_govt = self.star_map.govt(self.pilot.system);
+        let system_govt = self.galaxy.govt(self.pilot.system);
         World {
             sites: &self.sites,
             player: Some(self.player_side()),
@@ -1503,7 +1518,11 @@ impl Session {
     /// course, and gives it: the session's [`HyperlinkRule`] decides which
     /// links it follows. When there is no route the course is cleared.
     pub fn plot_course(&mut self, to: SystemId) -> Result<&[SystemId], RouteError> {
-        match self.star_map.route(self.pilot.system, to, self.hyperlinks) {
+        match self
+            .galaxy
+            .map()
+            .route(self.pilot.system, to, self.hyperlinks)
+        {
             Ok(route) => {
                 self.pilot.course = route;
                 Ok(&self.pilot.course)
@@ -1547,7 +1566,7 @@ impl Session {
             return Ok(to);
         }
         let next = self.check_next_jump()?;
-        let map = |id| self.star_map.position(id);
+        let map = |id| self.galaxy.map().position(id);
         let bearing = map(self.pilot.system)
             .zip(map(next))
             .and_then(|(from, to)| jump_bearing(from, to));
@@ -1571,8 +1590,13 @@ impl Session {
             .pilot
             .course
             .first()
-            .copied()
-            .filter(|next| self.star_map.jumps(system, self.hyperlinks).contains(next));
+            .and_then(|&hop| self.galaxy.same_place(hop))
+            .filter(|next| {
+                self.galaxy
+                    .map()
+                    .jumps(system, self.hyperlinks)
+                    .contains(next)
+            });
         check_jump(
             &self.player,
             self.pilot.reserves.fuel.now,
@@ -1676,10 +1700,19 @@ impl Session {
         self.take_jump_cost(chance);
         let (mut from, mut at) = (self.pilot.system, first);
         let mut hops = 0;
-        if self.pilot.course.first() == Some(&first) {
+        // The systems passed on the way, each hop the visible system that
+        // stands for it, as the original resolves them (@0x6bd67-0x6bdc1).
+        let mut passed = Vec::new();
+        if self
+            .pilot
+            .course
+            .first()
+            .is_some_and(|&hop| hop == first || self.galaxy.same_place(hop) == Some(first))
+        {
             hops = 1;
             for _ in 1..hops_per_jump(self.stats.multi_jump, self.multi_jump) {
-                let Some(&next) = self.pilot.course.get(hops) else {
+                let next = self.pilot.course.get(hops);
+                let Some(next) = next.and_then(|&hop| self.galaxy.same_place(hop)) else {
                     break;
                 };
                 if self.multi_jump == MultiJumpRule::PerHop {
@@ -1689,27 +1722,27 @@ impl Session {
                     self.take_jump_cost(chance);
                 }
                 hops += 1;
+                passed.push(at);
                 (from, at) = (at, next);
             }
         }
         // The systems passed, then the one arrived in, each reached before
         // the days (@0x6bddb, @0x6be12).
-        let passed = self.pilot.course[..hops.saturating_sub(1)].to_vec();
         for (n, system) in passed.into_iter().chain([at]).enumerate() {
             self.raise_at(mark + n, StoryEvent::Explored { system });
         }
-        let map = |id| self.star_map.position(id).unwrap_or_default();
+        let map = |id| self.galaxy.position(id).unwrap_or_default();
         let entered = Arrival {
             system: at,
-            sites: catalog.landing_sites(at),
+            sites: self.read_sites(catalog, at),
             placement: Placement {
                 ship: ShipPlacement::Arrive(arrival(map(from), map(at), self.stats.jump_distance)),
                 stellar: None,
                 hold: false,
             },
         };
-        self.enter_system(Entry::Jump { hops }, entered, catalog, chance);
-        Some(at)
+        self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
+        Some(self.pilot.system)
     }
 
     /// Uses a jump's fuel and lets its days go by ([`Session::pass_jump_days`]).
@@ -1772,9 +1805,9 @@ impl Session {
             return None;
         }
         let next = next_hyper_destination(
-            &self.star_map,
+            self.galaxy.map(),
             self.pilot.system,
-            &self.pilot.course,
+            &self.course_shown(),
             self.nav_target.is_some(),
             self.hyper_select,
             self.hyperlinks,
@@ -1802,10 +1835,30 @@ impl Session {
         std::mem::take(&mut self.messages)
     }
 
-    /// The star map, as read when the session started.
+    /// The star map every reader sees: the catalog's, read when the
+    /// session started, with the galaxy overlay applied (see
+    /// [`Session::galaxy`]).
     #[must_use]
     pub fn star_map(&self) -> &StarMap {
-        &self.star_map
+        self.galaxy.map()
+    }
+
+    /// The galaxy every reader sees: the catalog's, read when the session
+    /// started, with the pilot's overlay applied (see the
+    /// [`story`](crate::story) module's "Galaxy overlay").
+    #[must_use]
+    pub fn galaxy(&self) -> &OverlaidGalaxy {
+        &self.galaxy
+    }
+
+    /// `system`'s stellars, read from `catalog`, each with the galaxy
+    /// overlay's government for it: the one way the session reads them.
+    fn read_sites(
+        &self,
+        catalog: &(impl PilotCatalog + ?Sized),
+        system: SystemId,
+    ) -> Vec<LandingSite> {
+        overlaid_sites(&self.galaxy, catalog, system)
     }
 
     /// Today's date.
@@ -1854,7 +1907,7 @@ impl Session {
             self.nav_target,
             &self.player,
             &self.sites,
-            self.star_map.govt(self.pilot.system),
+            self.galaxy.govt(self.pilot.system),
             |govt| self.pilot.legal_record(govt),
         )?;
         match outcome {
@@ -1943,7 +1996,7 @@ impl Session {
         let sites = catalog.gate_sites();
         let links = Self::links_of(&sites, here);
         let exit = if has_links(&links) {
-            to.and_then(|to| Some((to, *hypergate_exit(&links, &sites, to, &self.star_map)?)))
+            to.and_then(|to| Some((to, *hypergate_exit(&links, &sites, to, self.galaxy.map())?)))
                 .ok_or(GateRefusal::Cancelled)
         } else {
             Err(GateRefusal::NoLinks)
@@ -1951,6 +2004,7 @@ impl Session {
         match exit {
             Ok((system, exit)) => {
                 self.come_out(system, &exit, catalog, chance);
+                let system = self.pilot.system;
                 self.messages.push(SimMessage::ExitedHypergate(system));
                 Ok(system)
             }
@@ -1995,8 +2049,9 @@ impl Session {
         let exit = *wormhole_exit(here, self.pilot.system, &sites, self.wormholes, chance)
             .ok_or(GateRefusal::NoExit)?;
         self.come_out(exit.system, &exit, catalog, chance);
-        self.messages.push(SimMessage::PassedWormhole(exit.system));
-        Ok(exit.system)
+        let system = self.pilot.system;
+        self.messages.push(SimMessage::PassedWormhole(system));
+        Ok(system)
     }
 
     /// Brings the ship out of `exit` in `system`: see
@@ -2011,7 +2066,7 @@ impl Session {
         let ship = match self.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.stats.handling.max_speed, chance),
             GateArrivalRule::LikeJump => {
-                let map = |id| self.star_map.position(id).unwrap_or_default();
+                let map = |id| self.galaxy.position(id).unwrap_or_default();
                 let placed = arrival(
                     map(self.pilot.system),
                     map(system),
@@ -2023,14 +2078,14 @@ impl Session {
         };
         let entered = Arrival {
             system,
-            sites: catalog.landing_sites(system),
+            sites: self.read_sites(catalog, system),
             placement: Placement {
                 ship: ShipPlacement::Arrive(ship),
                 stellar: None,
                 hold: false,
             },
         };
-        self.enter_system(Entry::Gate, entered, catalog, chance);
+        self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
     }
 
     /// Docks the ship at `stellar`, one of the system's, and last raises
@@ -2177,7 +2232,7 @@ impl Session {
     /// The player's legal record in the current system: the record with
     /// its government, 0 in an independent system.
     fn system_record(&self) -> i16 {
-        self.star_map
+        self.galaxy
             .govt(self.pilot.system)
             .map_or(0, |govt| self.pilot.legal_record(govt))
     }
@@ -3262,6 +3317,20 @@ impl Session {
     }
 }
 
+/// `system`'s stellars, read from `catalog`, each passed through
+/// `galaxy`'s overlay ([`OverlaidGalaxy::site`]).
+fn overlaid_sites(
+    galaxy: &OverlaidGalaxy,
+    catalog: &(impl PilotCatalog + ?Sized),
+    system: SystemId,
+) -> Vec<LandingSite> {
+    catalog
+        .landing_sites(system)
+        .into_iter()
+        .map(|site| galaxy.site(site))
+        .collect()
+}
+
 /// `value` held to the range of an `i16`, as a boarding grant reads a
 /// raised `Max` (see [`GrantStock::max`]).
 fn clamp_i16(value: i64) -> i16 {
@@ -3334,7 +3403,7 @@ mod tests {
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
     use crate::chance::NeverFires;
     use crate::clock::TICKS_PER_SECOND;
-    use crate::control::Test;
+    use crate::control::{SetExpr, Test};
     use crate::flight::Turn;
     use crate::fuel::FUEL_SCOOP;
     use crate::gate::{GateArrivalRule, GateKind, GateRefusal, HYPERGATE, WORMHOLE, WormholeRule};
@@ -14193,5 +14262,434 @@ mod tests {
             .expect("enters");
         let expected = [vec![Draw::Roll(2)], population_draws(&catalog, 131)].concat();
         assert_eq!(chance.0, expected);
+    }
+
+    // The galaxy overlay.
+
+    /// [`catalog`] with 134 at 131's place, (600, 0), listing 130 and 132
+    /// and holding planet 141 at its centre: 131 heads the place.
+    fn alternates() -> FakePilotCatalog {
+        let mut catalog = catalog();
+        with_alternate(&mut catalog);
+        catalog
+    }
+
+    /// Adds [`alternates`]' 134 to `catalog`.
+    fn with_alternate(catalog: &mut FakePilotCatalog) {
+        catalog.star_map.push(star(134, (600.0, 0.0), &[130, 132]));
+        catalog.systems.push(SystemId(134));
+        catalog
+            .sites
+            .push((SystemId(134), vec![planet(141, 0.0, 0.0)]));
+    }
+
+    /// Hides each of `systems` through the one writer, in one change:
+    /// whether it changed anything.
+    fn hide(session: &mut Session, catalog: &FakePilotCatalog, systems: &[i16]) -> bool {
+        session.change_galaxy(catalog, |overlay| {
+            for &id in systems {
+                overlay.set_visible(SystemId(id), Some(false));
+            }
+        })
+    }
+
+    /// Whether the player is in a system on the overlaid map.
+    fn on_the_map(session: &Session) -> bool {
+        session.star_map().position(session.system()).is_some()
+    }
+
+    #[test]
+    fn with_no_override_the_galaxy_is_the_catalogs() {
+        let catalog = alternates();
+        let session = Session::start(&catalog).expect("starts");
+        assert!(session.galaxy().overlay().is_empty());
+        assert_eq!(*session.star_map(), StarMap::new(catalog.star_map.clone()));
+        assert_eq!(session.course_shown(), []);
+    }
+
+    #[test]
+    fn a_hidden_system_leaves_the_hyperlinks_for_the_one_at_its_place() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        let jumps = |session: &Session| {
+            session
+                .star_map()
+                .jumps(SystemId(130), HyperlinkRule::Engine)
+        };
+        assert_eq!(jumps(&session), ids(&[131, 134]));
+        assert!(hide(&mut session, &catalog, &[131]));
+        assert_eq!(jumps(&session), ids(&[134]), "on the next query");
+        assert_eq!(
+            session.star_map().links(),
+            [
+                (SystemId(130), SystemId(134)),
+                (SystemId(132), SystemId(134))
+            ]
+        );
+        assert!(!session.galaxy().visible(SystemId(131)));
+    }
+
+    #[test]
+    fn a_hidden_system_cannot_be_plotted_to_or_hyper_selected() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(session.plot_course(SystemId(131)), Err(RouteError::Unknown));
+        assert_eq!(
+            session.plot_course(SystemId(132)).map(<[_]>::to_vec),
+            Ok(ids(&[134, 132]))
+        );
+        assert_eq!(session.select_next_system(), Some(SystemId(134)));
+    }
+
+    #[test]
+    fn a_course_through_a_hidden_system_jumps_to_the_one_at_its_place() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.course(), ids(&[131, 132]));
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(session.course(), ids(&[131, 132]), "kept as saved");
+        assert_eq!(session.course_shown(), ids(&[134, 132]));
+        fly_out(&mut session);
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(134)));
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(134))
+        );
+        assert_eq!(session.course(), ids(&[132]));
+    }
+
+    #[test]
+    fn a_course_hop_with_no_system_at_its_place_is_no_destination_until_one_shows() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        hide(&mut session, &catalog, &[131, 134]);
+        assert_eq!(session.course_shown(), [], "cut at the first hop");
+        fly_out(&mut session);
+        assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
+        assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_visible(SystemId(131), None);
+        });
+        assert_eq!(session.course_shown(), ids(&[131, 132]), "followed again");
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+    }
+
+    /// [`alternates`] with two ships of düde 128 flying in 131, and none
+    /// in 134.
+    fn trafficked_alternates() -> FakePilotCatalog {
+        let mut catalog = trafficked(131, 2, 1);
+        with_alternate(&mut catalog);
+        catalog
+    }
+
+    #[test]
+    fn hiding_the_players_system_keeps_its_ships_and_draws_arrivals_from_the_new_one() {
+        let catalog = trafficked_alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131);
+        assert_eq!(session.npcs().len(), 2);
+        let npcs = session.npcs().to_vec();
+        assert_eq!(session.traffic_ships(), [ShipId(129)]);
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.npcs(), npcs, "every ship in the system stays");
+        assert_eq!(session.traffic_ships(), [], "134's table");
+        session.populate(&catalog, &mut NeverFires);
+        assert_eq!(session.npcs(), [], "the next entry is 134's");
+    }
+
+    #[test]
+    fn a_government_override_changes_the_record_and_landing_in_the_system() {
+        let catalog = governed([None, None], Some(WANTED));
+        let mut pilot = on_record(&catalog);
+        pilot.stellar = Some(StellarId(128));
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert_eq!(session.system_record(), 9);
+        assert_eq!(land_now(&mut session), denied(128));
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_govt(SystemId(130), Some(Some(LAWFUL)));
+        });
+        assert_eq!(session.system_record(), 10);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_govt(SystemId(130), Some(None));
+        });
+        assert_eq!(session.system_record(), 0, "made independent");
+    }
+
+    #[test]
+    fn a_stellars_government_override_changes_landing_there() {
+        let catalog = governed([None, None], Some(WANTED));
+        let mut pilot = on_record(&catalog);
+        pilot.stellar = Some(StellarId(128));
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert_eq!(land_now(&mut session), denied(128));
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(128), Some(Some(LAWFUL)));
+        });
+        assert_eq!(session.sites[0].govt, Some(LAWFUL));
+        assert_eq!(session.sites[1].govt, None, "only that stellar");
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        session.take_off(&mut NeverFires).expect("takes off");
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(128), Some(Some(WANTED)));
+        });
+        assert_eq!(land_now(&mut session), denied(128), "the record with it");
+    }
+
+    #[test]
+    fn a_pilot_flown_with_a_stellar_override_reads_its_stellars_through_it() {
+        let catalog = governed([Some(LAWFUL), None], None);
+        let mut pilot = on_record(&catalog);
+        pilot
+            .galaxy
+            .set_stellar_govt(StellarId(128), Some(Some(WANTED)));
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.sites[0].govt, Some(WANTED));
+    }
+
+    #[test]
+    fn a_stellars_government_override_changes_what_its_outfitter_requires() {
+        let mut catalog = outfitting();
+        catalog.outfits[0].require = 0x2;
+        catalog.outfits[0].require_govt = 128;
+        let mut session = outfitted(&catalog);
+        let buyable = |session: &mut Session| {
+            session
+                .outfitter(&mut NeverFires)
+                .expect("an outfitter")
+                .rows[0]
+                .buy
+                .is_ok()
+        };
+        assert!(!buyable(&mut session), "required by its government");
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(128), Some(None));
+        });
+        assert!(buyable(&mut session), "independent now");
+    }
+
+    #[test]
+    fn a_government_override_brings_in_the_fleet_linked_to_it_at_the_next_population() {
+        let catalog = fleeted();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut linked_fleet_draws(3));
+        assert_eq!(fleet_of(&session), [], "linked to 141");
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_govt(SystemId(130), Some(Some(GovtId(141))));
+        });
+        session.populate(&catalog, &mut linked_fleet_draws(3));
+        let lead = session.npcs()[0].id.0;
+        assert_eq!(fleet_of(&session), a_fleet_led_by(lead));
+    }
+
+    #[test]
+    fn the_npcs_see_a_government_override_from_the_next_traffic_tick() {
+        let mut catalog = armed();
+        catalog.star_map[0].govt = Some(GovtId(150));
+        catalog.govts = vec![crate::testkit::govt(150), crate::testkit::govt(151)];
+        let mut session = facing_an_npc(&catalog, 180);
+        let spy = Spy::default();
+        session.tick_traffic(&catalog, &spy, &mut NeverFires);
+        assert_eq!(spy.seen.take()[0].1, Some(GovtId(150)));
+        let npcs = session.npcs().len();
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_govt(SystemId(130), Some(Some(GovtId(151))));
+        });
+        assert_eq!(session.npcs().len(), npcs, "the ships present stay");
+        session.tick_traffic(&catalog, &spy, &mut NeverFires);
+        assert_eq!(spy.seen.take()[0].1, Some(GovtId(151)));
+    }
+
+    #[test]
+    fn a_change_to_the_galaxy_is_told_once_and_makes_a_save_due_and_a_no_op_neither() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.take_events();
+        assert!(hide(&mut session, &catalog, &[133]));
+        assert_eq!(session.take_events(), [SessionEvent::GalaxyChanged]);
+        assert!(session.take_save_due());
+        assert!(!hide(&mut session, &catalog, &[133]), "already hidden");
+        assert!(!session.change_galaxy(&catalog, |_| {}));
+        assert_eq!(session.take_events(), []);
+        assert!(!session.take_save_due());
+        assert!(!session.pilot().galaxy.is_empty(), "saved on the pilot");
+        assert_eq!(*session.galaxy().overlay(), session.pilot().galaxy);
+    }
+
+    #[test]
+    fn a_player_whose_system_is_hidden_moves_to_the_one_at_its_place_as_it_is() {
+        let catalog = alternates();
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.system = SystemId(131);
+        pilot.stellar = Some(StellarId(140));
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        session.plot_course(SystemId(132)).expect("a route");
+        let (player, course, escorts, date) = (
+            *session.player(),
+            session.course().to_vec(),
+            session.pilot().escorts().to_vec(),
+            session.date(),
+        );
+        session.take_events();
+        session.drop_raised();
+        session.take_messages();
+        assert!(hide(&mut session, &catalog, &[131]));
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(*session.player(), player);
+        assert_eq!(session.landed(), Some(StellarId(140)), "still landed");
+        assert_eq!(session.pilot().stellar, Some(StellarId(140)));
+        assert_eq!(session.course(), course);
+        assert_eq!(session.pilot().escorts(), escorts);
+        assert_eq!(session.date(), date, "no day");
+        assert!(
+            !session.pilot().has_explored(SystemId(134)),
+            "explores nothing"
+        );
+        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::GalaxyChanged]
+        );
+        assert_eq!(session.story_raised(), [], "no story event");
+        assert_eq!(session.take_messages(), [], "no arrival");
+        assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn with_no_system_visible_at_its_place_the_player_goes_to_the_head_made_visible() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 134);
+        session.take_events();
+        assert!(hide(&mut session, &catalog, &[131, 134]));
+        assert_eq!(session.system(), SystemId(131));
+        assert!(session.galaxy().visible(SystemId(131)));
+        assert!(!session.galaxy().visible(SystemId(134)));
+        assert_eq!(
+            session.pilot().galaxy.system(SystemId(131)).visible,
+            Some(true)
+        );
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::GalaxyChanged]
+        );
+        assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn a_player_in_the_head_with_none_visible_stays_and_its_system_is_shown() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131);
+        session.take_events();
+        assert!(hide(&mut session, &catalog, &[131, 134]));
+        assert_eq!(session.system(), SystemId(131));
+        assert!(session.galaxy().visible(SystemId(131)));
+        assert_eq!(session.take_events(), [SessionEvent::GalaxyChanged]);
+    }
+
+    #[test]
+    fn a_pilot_loaded_in_a_hidden_system_flies_from_the_one_at_its_place() {
+        let catalog = alternates();
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.system = SystemId(131);
+        pilot.galaxy.set_visible(SystemId(131), Some(false));
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+        assert_eq!(session.take_events(), [], "silently");
+        assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn a_jump_whose_destination_is_hidden_on_the_way_arrives_at_the_one_at_its_place() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(134))
+        );
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+        assert_eq!(session.course(), [], "the hop made");
+        assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn a_hypergate_into_a_hidden_system_comes_out_at_the_one_at_its_place() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        let mut session = at_gate(&catalog);
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Ok(SystemId(134))
+        );
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+        assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn m_into_a_hidden_system_arrives_at_the_one_at_its_place_and_reads_its_stellars() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        hide(&mut session, &catalog, &[131]);
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        let settled = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(settled.moved, Some(SystemId(134)));
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+        assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn a_relocation_into_a_hidden_system_arrives_at_the_one_at_its_place() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        hide(&mut session, &catalog, &[131]);
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("relocates");
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
+        assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn an_arrival_where_none_is_visible_shows_the_head_and_tells_it_once() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        hide(&mut session, &catalog, &[131, 134]);
+        session.take_events();
+        session.take_save_due();
+        session.run_set(&SetExpr::parse("M134").expect("parses"), &mut NeverFires);
+        let settled = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(settled.moved, Some(SystemId(131)));
+        assert_eq!(session.system(), SystemId(131));
+        assert!(session.galaxy().visible(SystemId(131)));
+        let events = session.take_events();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|&&event| event == SessionEvent::GalaxyChanged)
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert!(session.take_save_due());
+        assert!(on_the_map(&session));
     }
 }

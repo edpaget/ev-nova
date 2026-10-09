@@ -15,6 +15,9 @@
 //! - [`SessionEvent::StellarChanged`]: the player was put at another
 //!   stellar of the system shown, whose scene is kept: a relocation within
 //!   the system.
+//! - [`SessionEvent::GalaxyChanged`]: the galaxy overlay changed, through
+//!   [`Session::change_galaxy`] or an arrival that made a system visible:
+//!   the galaxy map is rebuilt from [`Session::galaxy`].
 //!
 //! The session's other outboxes (its sounds, messages, script notes, pay
 //! notes, fighter notes and the rest, each with its own `take_*`) are not
@@ -31,6 +34,8 @@ pub enum SessionEvent {
     SystemChanged,
     /// The player was put at another stellar of the system shown.
     StellarChanged,
+    /// The galaxy overlay changed.
+    GalaxyChanged,
 }
 
 impl Session {

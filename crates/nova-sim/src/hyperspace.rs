@@ -1,9 +1,12 @@
 //! Hyperspace: routes along the hyperlinks between systems, whether the
 //! ship can jump, and where it arrives.
 //!
-//! - The [`StarMap`] is every system's map position and hyperlinks. A
-//!   system's link to itself, or to a system that does not exist, is no
-//!   link. The star map is the single owner of these rules: the galaxy map
+//! - The [`StarMap`] is every visible system's map position and
+//!   hyperlinks: every system unless the galaxy overlay hides some
+//!   ([`StarMap::with_hidden`]; see the [`story`](crate::story) module's
+//!   "Galaxy overlay"), a link to a hidden system reaching the visible
+//!   system at its place. A system's link to itself, or to a system that
+//!   does not exist, is no link. The star map is the single owner of these rules: the galaxy map
 //!   draws [`StarMap::links`], every pair either system lists, once and
 //!   undirected, rather than normalising the links itself, and
 //!   [`StarMap::neighbours`] is every system linked with one either way,
@@ -66,9 +69,10 @@
 //! - [`next_hyper_destination`] is the system Hyper Select (the
 //!   original's `\` key) cycles the destination to, under the
 //!   [`HyperSelectRule`]: by the engine's, the current system's listed
-//!   links in Con order, after the course's first hop. The original also
-//!   skips a system its `sÿst` Visibility makes inactive; the map models
-//!   no visibility, so every listed system is offered.
+//!   links in Con order, after the course's first hop. A link to a system
+//!   the galaxy overlay hides offers the visible system at its place
+//!   instead, or nothing when there is none, as the original resolves
+//!   each slot through `_FindActiveCoLocatedSystem` (@0x4be0).
 //! - [`hops_per_jump`] is how many systems along the course one jump
 //!   passes, from the ship's multi-jump total and the [`MultiJumpRule`]
 //!   it follows.
@@ -181,8 +185,8 @@ pub enum HyperlinkRule {
     /// @0x13739-0x137b3, @0x13401-0x13466); and the next course hop is
     /// cued only from them (`_CueNextHyperRouteDest` @0xe2dc). Each slot
     /// is resolved to the active system at the target's position
-    /// (`_FindActiveCoLocatedSystem` @0x4be0); the map models no
-    /// visibility, so any system there counts.
+    /// (`_FindActiveCoLocatedSystem` @0x4be0): every visible system
+    /// there counts, a hidden one never (see [`StarMap::with_hidden`]).
     #[default]
     Engine,
     /// Every link joins its two systems both ways, whichever of them
@@ -314,14 +318,53 @@ impl StarMap {
     /// galaxy map draws [`StarMap::links`].
     #[must_use]
     pub fn new(systems: Vec<StarSystem>) -> Self {
-        let known: BTreeSet<SystemId> = systems.iter().map(|system| system.id).collect();
+        Self::with_hidden(systems, &BTreeSet::new())
+    }
+
+    /// The map of `systems` with those in `hidden` hidden, as the galaxy
+    /// overlay hides them (see the [`story`](crate::story) module's
+    /// "Galaxy overlay"): only the visible systems are on it, and a link
+    /// to a hidden system reaches the visible systems at its map position
+    /// instead, or nothing when none there is visible, as the original's
+    /// `_FindActiveCoLocatedSystem` (@0x4be0) resolves every Con slot. Its
+    /// own [`StarMap::listed_links`], and the links drawn, name the
+    /// lowest-ID of them, the one the original resolves to; its jumps
+    /// reach every one, as [`HyperlinkRule::Engine`] reads a link. With
+    /// none hidden it is [`StarMap::new`].
+    #[must_use]
+    pub fn with_hidden(systems: Vec<StarSystem>, hidden: &BTreeSet<SystemId>) -> Self {
+        let place = |position: Vec2| (position.x.to_bits(), position.y.to_bits());
+        // Every system's place, hidden or not: a link names a place.
+        let places: BTreeMap<SystemId, (u32, u32)> = systems
+            .iter()
+            .map(|system| (system.id, place(system.position)))
+            .collect();
+        // The lowest-ID visible system at each place.
+        let mut visible_at: BTreeMap<(u32, u32), SystemId> = BTreeMap::new();
+        for (&id, &at) in &places {
+            if !hidden.contains(&id) {
+                visible_at.entry(at).or_insert(id);
+            }
+        }
+        // A link's target: itself when it is visible, else the lowest-ID
+        // visible system at its place.
+        let resolve = |to: SystemId| {
+            if hidden.contains(&to) {
+                places.get(&to).and_then(|at| visible_at.get(at)).copied()
+            } else {
+                places.contains_key(&to).then_some(to)
+            }
+        };
         let mut links = Vec::new();
         let mut nodes = BTreeMap::new();
         for system in systems {
             let from = system.id;
+            if hidden.contains(&from) {
+                continue;
+            }
             let mut listed = Vec::new();
-            for to in system.links {
-                if to != from && known.contains(&to) && !listed.contains(&to) {
+            for to in system.links.into_iter().filter_map(resolve) {
+                if to != from && !listed.contains(&to) {
                     listed.push(to);
                 }
             }
@@ -764,13 +807,88 @@ mod tests {
 
     /// N (1) lists O (2); R (3) sits at O's position and lists N; O lists
     /// nothing; F (4) sits elsewhere, listed by no one.
-    fn replaced() -> StarMap {
-        StarMap::new(vec![
+    fn replaced_systems() -> Vec<StarSystem> {
+        vec![
             system_at(1, (0.0, 0.0), &[2]),
             system_at(2, (50.0, 50.0), &[]),
             system_at(3, (50.0, 50.0), &[1]),
             system_at(4, (50.0, 51.0), &[]),
-        ])
+        ]
+    }
+
+    /// [`replaced_systems`]' map.
+    fn replaced() -> StarMap {
+        StarMap::new(replaced_systems())
+    }
+
+    /// [`replaced_systems`]' map with `hidden` hidden.
+    fn replaced_hiding(hidden: &[i16]) -> StarMap {
+        let hidden = hidden.iter().copied().map(SystemId).collect();
+        StarMap::with_hidden(replaced_systems(), &hidden)
+    }
+
+    #[test]
+    fn with_none_hidden_the_map_is_every_system() {
+        assert_eq!(
+            StarMap::with_hidden(replaced_systems(), &BTreeSet::new()),
+            replaced()
+        );
+        assert_eq!(StarMap::with_hidden(hub_systems(), &BTreeSet::new()), hub());
+    }
+
+    #[test]
+    fn a_hidden_system_is_off_the_map() {
+        let map = replaced_hiding(&[3]);
+        assert_eq!(map.systems().collect::<Vec<_>>(), ids(&[1, 2, 4]));
+        assert_eq!(map.position(SystemId(3)), None);
+        assert_eq!(map.govt(SystemId(3)), None);
+        assert_eq!(route(&map, 1, 3, Engine), Err(RouteError::Unknown));
+        assert_eq!(route(&map, 3, 1, BothWays), Err(RouteError::Unknown));
+        assert_eq!(jumps(&map, 1, Engine), ids(&[2]), "not reached");
+        assert_eq!(jumps(&map, 3, Engine), ids(&[]), "reaches none");
+        assert_eq!(map.ordered_jumps(SystemId(1), Engine), ids(&[2]));
+        assert_eq!(map.listed_links(SystemId(3)), ids(&[]));
+        assert_eq!(
+            map.links(),
+            vec![(SystemId(1), SystemId(2))],
+            "its own link to 1 is gone"
+        );
+        assert_eq!(map.neighbours(SystemId(1)), ids(&[2]));
+    }
+
+    #[test]
+    fn a_link_to_a_hidden_system_reaches_the_visible_one_at_its_place() {
+        let map = replaced_hiding(&[2]);
+        assert_eq!(jumps(&map, 1, Engine), ids(&[3]));
+        assert_eq!(map.ordered_jumps(SystemId(1), Engine), ids(&[3]));
+        assert_eq!(map.listed_links(SystemId(1)), ids(&[3]));
+        assert_eq!(map.links(), vec![(SystemId(1), SystemId(3))], "once");
+        assert_eq!(route(&map, 1, 3, Engine), Ok(ids(&[3])));
+        assert_eq!(route(&map, 1, 2, Engine), Err(RouteError::Unknown));
+    }
+
+    #[test]
+    fn a_link_to_a_hidden_system_reaches_the_lowest_visible_one_for_hyper_select() {
+        let mut systems = replaced_systems();
+        systems.push(system_at(5, (50.0, 50.0), &[]));
+        let map = StarMap::with_hidden(systems, &BTreeSet::from([SystemId(2)]));
+        assert_eq!(map.listed_links(SystemId(1)), ids(&[3]));
+        assert_eq!(jumps(&map, 1, Engine), ids(&[3, 5]), "every one there");
+        assert_eq!(
+            map.links(),
+            vec![(SystemId(1), SystemId(3))],
+            "drawn to the one Hyper Select offers"
+        );
+    }
+
+    #[test]
+    fn a_link_to_a_place_with_none_visible_is_dropped() {
+        let map = replaced_hiding(&[2, 3]);
+        assert_eq!(jumps(&map, 1, Engine), ids(&[]));
+        assert_eq!(jumps(&map, 1, BothWays), ids(&[]));
+        assert_eq!(map.listed_links(SystemId(1)), ids(&[]));
+        assert_eq!(map.links(), vec![]);
+        assert_eq!(map.systems().collect::<Vec<_>>(), ids(&[1, 4]));
     }
 
     #[test]
@@ -863,7 +981,12 @@ mod tests {
     /// 130 lists 134, 131 (twice), itself, a missing 999 and 135; 136
     /// lists 130 one way; 131 lists 132; 133 lists nothing.
     fn hub() -> StarMap {
-        StarMap::new(vec![
+        StarMap::new(hub_systems())
+    }
+
+    /// [`hub`]'s systems.
+    fn hub_systems() -> Vec<StarSystem> {
+        vec![
             system(130, &[134, 131, 131, 130, 999, 135]),
             system(131, &[132]),
             system(132, &[]),
@@ -871,7 +994,7 @@ mod tests {
             system(134, &[]),
             system(135, &[]),
             system(136, &[130]),
-        ])
+        ]
     }
 
     #[test]
