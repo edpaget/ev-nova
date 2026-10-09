@@ -3891,6 +3891,14 @@ mod tests {
     }
 
     #[test]
+    fn an_outfit_asked_for_that_is_off_today_cannot_be_bought() {
+        let asked = open_with(&[buying(128, 50)], &pilot(), Some(FIRST_OUTFIT));
+        assert!(listed(&asked).contains(&128));
+        assert!(!row(&asked, 128).facts.buyable);
+        assert_eq!(buy(&asked), Err(OutfitRefusal::NotForSale));
+    }
+
+    #[test]
     fn an_outfit_asked_for_with_no_record_adds_no_row() {
         let records = [tech(129, 0)];
         let owner = owning(&[(128, 1)]);
