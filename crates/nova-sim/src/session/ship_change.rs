@@ -93,8 +93,10 @@
 //! weapons up rather than adding them; its hooks and its take-over
 //! reserves run between the outfits and the class, and it always holds
 //! the reserves. [`Session::buy_ship`] is the third caller, with the
-//! shipyard's carry (`Max` and the free mass, the sale of the rest) and
-//! the reserves held.
+//! shipyard's carry
+//! ([`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry): by the
+//! engine every persistent outfit, by the other reading `Max` and the free
+//! mass with the sale of the rest) and the reserves held.
 //!
 //! **`Txxx`** (@0x15b25-0x15be9) reads `STR#` `xxx`,
 //! the raw ID, with no range check, from the session's string lists

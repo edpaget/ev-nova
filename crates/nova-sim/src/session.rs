@@ -9082,7 +9082,9 @@ mod tests {
         let mut catalog = shipbuying();
         catalog.outfits.push(plate);
         catalog.defaults.push((ShipId(128), vec![(PLATE, 1)]));
-        let mut session = outfitted(&catalog);
+        let mut session = outfitted(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::PurchaseCarry, RuleSource::Bible),
+        );
         assert_eq!(session.pilot().owned(PLATE), 1);
         assert_ne!(FAST.mass, HEAVY.mass);
         let bought = session
@@ -9093,6 +9095,34 @@ mod tests {
         assert_eq!(bought.trade_in, 2500, "persistent: not in the trade-in");
         assert_eq!(session.pilot().cash(), 25_000 - 17_500 + 2500 + 2000);
         assert_eq!(session.pilot().owned(PLATE), 0);
+    }
+
+    #[test]
+    fn by_the_engine_a_purchase_keeps_a_persistent_outfit_past_the_new_free_mass() {
+        // The plate of the test above, 20 tons: by the engine it carries
+        // over though ship 129 has 12 tons free, and nothing is sold back.
+        const PLATE: OutfitId = OutfitId(320);
+        let plate = OutfitRecord {
+            mass: 20,
+            cost: 100,
+            max: 1,
+            flags: OutfitFlags::PERSISTENT | OutfitFlags::PRICE_BY_MASS,
+            ..outfit(320, &[])
+        };
+        let mut catalog = shipbuying();
+        catalog.outfits.push(plate);
+        catalog.defaults.push((ShipId(128), vec![(PLATE, 1)]));
+        let mut session = outfitted(&catalog);
+        let bought = session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(bought.sold_back, BTreeMap::new());
+        assert_eq!(bought.refund, 0);
+        assert_eq!(bought.trade_in, 2500);
+        assert_eq!(session.pilot().cash(), 25_000 - 17_500 + 2500);
+        assert_eq!(session.pilot().owned(PLATE), 1);
+        let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
+        assert_eq!(outfitter.free_mass, 12 - 20, "its tank is fitted on top");
     }
 
     #[test]

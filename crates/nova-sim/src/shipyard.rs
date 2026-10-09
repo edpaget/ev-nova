@@ -94,16 +94,23 @@
 //! trade-in less the price. Every outfit that is not persistent
 //! ([`OutfitFlags::PERSISTENT`], `oütf` flag 0x0004: "This item stays with
 //! you when you trade ships") goes with the old ship, its value in the
-//! trade-in. Each persistent one carries over as far as the new ship
-//! allows: first no more than its `Max`; then, by ascending ID, one at a
-//! time while the new ship still has free mass for it with its own default
-//! items fitted (they are fitted regardless, so their mass is not room).
-//! A mass expansion carries onto a ship whose `Holds` is negative too: the
-//! purchase never reads the class's no-expansions flag (@0x5ee1b-0x5ee4f),
-//! which only the outfitter does. Every
-//! persistent one that does not carry over is sold back at the outfitter's
-//! rate, priced on the old ship, and the refund is credited on top (it
-//! does not count towards affording the ship). The new ship's default
+//! trade-in. What the persistent ones do follows the rulebook's
+//! [`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry)
+//! (`purchase_carry`). By the engine, every persistent outfit carries
+//! over whole, whatever its `Max` or mass, and none is sold back:
+//! `_DoShipyardDialog` zeroes only the outfits whose record byte +0x378,
+//! `Flags` 0x0004 alone, is clear (@0x5ee1b-0x5ee4f), so the new ship may
+//! have less than no free mass. By the other reading, the port's earlier
+//! carry, each carries over as far as the new ship allows: first no more
+//! than its `Max`; then, by ascending ID, one at a time while the new ship
+//! still has free mass for it with its own default items fitted (they are
+//! fitted regardless, so their mass is not room); every one that does not
+//! carry over is sold back at the outfitter's rate, priced on the old
+//! ship, and the refund is credited on top (it does not count towards
+//! affording the ship). A mass expansion carries onto a ship whose
+//! `Holds` is negative too: the purchase never reads the class's
+//! no-expansions flag (@0x5ee1b-0x5ee4f), which only the outfitter does.
+//! The new ship's default
 //! items are then added on top of those carried over, even beyond their
 //! `Max`, as the original fits them regardless, and then its stock weapons
 //! and their `AmmoLoad` are topped up (see Stock weapons).
@@ -148,7 +155,8 @@
 //! here at all. [`Shipyard::can`] answers from the checks list `can_buy`:
 //! "flown", "for sale", then "cash". A purchase is worked out as a value
 //! (`purchase`, over a `Sale`, the pilot as `OnRetire` left it): `carried`
-//! (the persistent outfits carried and sold back, with the refund),
+//! on [`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry) (the
+//! persistent outfits carried and sold back, with the refund),
 //! `cash_after`, `cargo_kept` on
 //! [`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo) and
 //! `reserves_full`; it writes nothing, and the session applies it. No rule
@@ -183,8 +191,9 @@
 //! hold, never adding to it (`fit_stock`). Like the default items, they
 //! are fitted regardless: `FreeMass` leaves out their mass, which the
 //! original's loader adds to it (`_LoadObjectData` @0x7aaf7, @0x7ac61,
-//! @0x7ad8d), so they take no room, and a persistent outfit carries over
-//! only while it fits with them fitted. Owned, they trade in as any other
+//! @0x7ad8d), so they take no room, and by the other reading of
+//! `purchase_carry` a persistent outfit carries over only while it fits
+//! with them fitted. Owned, they trade in as any other
 //! outfit does: `_PlayerShipTradeInPrice` @0xb079 counts the outfits owned
 //! and nothing else.
 //!
@@ -223,6 +232,7 @@ use crate::pilot::{Pilot, merged, tally};
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
+use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::stats::ShipStats;
 use crate::wares::{self, DayRolls, HideBits, HideHigher, Roll};
 
@@ -834,9 +844,13 @@ pub struct ShipPurchase {
     /// What the old ship traded in for.
     pub trade_in: i64,
     /// The persistent outfits that did not carry over, each with how many,
-    /// sold back.
+    /// sold back, by the other reading of
+    /// [`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry); empty by
+    /// the engine.
     pub sold_back: BTreeMap<OutfitId, u16>,
-    /// What they were sold back for, credited.
+    /// What they were sold back for, credited, by the other reading of
+    /// [`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry); 0 by the
+    /// engine.
     pub refund: i64,
     /// The cargo that did not fit, each good with its tons, left behind.
     pub left_behind: BTreeMap<Good, u32>,
@@ -1015,7 +1029,7 @@ pub(crate) struct Purchase {
 
 /// What a purchase writes on the pilot beside the class and the outfits.
 pub(crate) struct Settlement {
-    /// The cash after the price, the trade-in and the refund.
+    /// The cash after the price, the trade-in and the refund, if any.
     pub(crate) cash: i64,
     /// The ship's name ([`cull_name`]).
     pub(crate) name: String,
@@ -1036,21 +1050,42 @@ impl Settlement {
 }
 
 /// Which persistent outfits a purchase carries over, and what it sells
-/// back (see the module's Buying a ship and its divergences).
+/// back, as [`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry)
+/// says (see the module's Buying a ship).
 fn carried<'a>() -> Value<Sale<'a>, Carry> {
-    Value::plain(
+    Value::disputed(
         "carried",
-        "port: `Max`, then the free mass by ascending ID, the rest sold back on the old \
-         ship's mass; the original keeps every persistent outfit (`_DoShipyardDialog` \
-         @0x5ee1b-0x5ee4f)",
+        "`_DoShipyardDialog` @0x5ee1b-0x5ee4f (the byte +0x378, `_LoadObjectData` \
+         @0x78cad-0x78cb3), the defaults added @0x5ee51-0x5ee97",
+        RuleKey::PurchaseCarry,
+        engine_carry,
         carry_persistent,
     )
 }
 
-/// Each persistent outfit owned, by ascending ID, one unit at a time:
-/// carried while under its `Max` and while the new ship, its standard
-/// equipment fitted, has free mass for it; otherwise sold back at the
-/// outfitter's rate, priced on the old ship.
+/// The engine's carry: every persistent outfit owned, whole, nothing sold
+/// back ([`carried_outfits`] keeping by 0x0004 alone, as capture does).
+fn engine_carry(sale: &Sale) -> Carry {
+    Carry {
+        carried: carried_outfits(
+            &sale.pilot.outfits,
+            OutfitCarry::Persistent {
+                mask: OutfitFlags::PERSISTENT,
+            },
+            &BTreeMap::new(),
+            false,
+            sale.records,
+        ),
+        sold_back: BTreeMap::new(),
+        refund: 0,
+    }
+}
+
+/// By the other reading of `purchase_carry`, each persistent outfit owned,
+/// by ascending ID, one unit at a time: carried while under its `Max` and
+/// while the new ship, its standard equipment fitted, has free mass for
+/// it; otherwise sold back at the outfitter's rate, priced on the old
+/// ship.
 fn carry_persistent(sale: &Sale) -> Carry {
     let records = sale.records;
     let defaults = tally(sale.new.defaults.iter().copied());
@@ -1094,7 +1129,8 @@ fn carry_persistent(sale: &Sale) -> Carry {
 fn cash_after<'a>() -> Value<Settled<'a>, i64> {
     Value::plain(
         "cash after",
-        "`_DoShipyardDialog` trade-in @0x5ec96, price @0x5ed54; the refund is the port's",
+        "`_DoShipyardDialog` trade-in @0x5ec96, price @0x5ed54; no other cash write on the \
+         purchase, so the refund (none by the engine) is `purchase_carry`'s other reading",
         cash_settled,
     )
 }
@@ -2382,11 +2418,11 @@ mod tests {
             Some(RuleKey::TradeInOutfits)
         );
         assert_eq!(cargo_kept().about().reads(), Some(RuleKey::PurchaseCargo));
+        assert_eq!(carried().about().reads(), Some(RuleKey::PurchaseCarry));
         for plain in [
             *required().about(),
             *available().about(),
             *price().about(),
-            *carried().about(),
             *cash_after().about(),
             *reserves_full().about(),
         ] {
@@ -2396,8 +2432,8 @@ mod tests {
 
     #[test]
     fn each_shipyard_context_hands_over_the_rule_set_it_was_given() {
-        // No disputed rule reads these contexts yet, so only this pins
-        // that a later one would follow the rule set given.
+        // Only `cargo_kept` and `carried` read these; this pins the
+        // hand-over itself.
         let rules = Rulebook::default()
             .with_override(RuleKey::TradeInOutfits, RuleSource::Bible)
             .with_override(RuleKey::PurchaseCargo, RuleSource::Bible);
@@ -2437,11 +2473,11 @@ mod tests {
         assert_eq!(
             cited,
             [
-                "port: `Max`, then the free mass by ascending ID, the rest sold back on the \
-                 old ship's mass; the original keeps every persistent outfit \
-                 (`_DoShipyardDialog` @0x5ee1b-0x5ee4f)",
-                "`_DoShipyardDialog` trade-in @0x5ec96, price @0x5ed54; the refund is the \
-                 port's",
+                "`_DoShipyardDialog` @0x5ee1b-0x5ee4f (the byte +0x378, `_LoadObjectData` \
+                 @0x78cad-0x78cb3), the defaults added @0x5ee51-0x5ee97",
+                "`_DoShipyardDialog` trade-in @0x5ec96, price @0x5ed54; no other cash write \
+                 on the purchase, so the refund (none by the engine) is `purchase_carry`'s \
+                 other reading",
                 "`_DoShipyardDialog` @0x5ef9f, `_DestroyPartialFleetCargo` @0xcd32-0xcff6, \
                  `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c",
                 "`_DoShipyardDialog` @0x5f051-0x5f07b, which the port fills before \
@@ -2564,6 +2600,28 @@ mod tests {
         buy_named(pilot, new, "Kestrel", records)
     }
 
+    /// The default rule set with the other reading of
+    /// [`RuleKey::PurchaseCarry`]: the port's earlier carry.
+    fn port_carry() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::PurchaseCarry, RuleSource::Bible)
+    }
+
+    /// Buys `new` as [`buy`] does, carrying by [`port_carry`].
+    fn buy_by_the_port(
+        pilot: &mut Pilot,
+        new: &ShipRecord,
+        records: &[OutfitRecord],
+    ) -> ShipPurchase {
+        let bought = purchase(
+            &Sale {
+                rules: port_carry(),
+                ..sale(pilot, new, "Kestrel", &[], records)
+            },
+            QUOTE,
+        );
+        apply(pilot, bought)
+    }
+
     /// Buys `new`, naming it `name`.
     fn buy_named(
         pilot: &mut Pilot,
@@ -2595,14 +2653,22 @@ mod tests {
         apply(pilot, bought)
     }
 
-    /// Buys `new`, whose stock weapons and ammunition are `fits`.
+    /// Buys `new`, whose stock weapons and ammunition are `fits`, by
+    /// `rules`.
     fn buy_stocked(
         pilot: &mut Pilot,
         new: &ShipRecord,
         fits: &[StockFit],
         records: &[OutfitRecord],
+        rules: Rulebook,
     ) -> ShipPurchase {
-        let bought = purchase(&sale(pilot, new, "Kestrel", fits, records), QUOTE);
+        let bought = purchase(
+            &Sale {
+                rules,
+                ..sale(pilot, new, "Kestrel", fits, records)
+            },
+            QUOTE,
+        );
         apply(pilot, bought)
     }
 
@@ -2641,14 +2707,26 @@ mod tests {
     #[test]
     fn a_bought_ship_owns_its_stock_weapons_and_rounds_after_its_default_items() {
         let mut pilot = pilot();
-        buy_stocked(&mut pilot, &heavy(), &STOCK, &armoury());
+        buy_stocked(
+            &mut pilot,
+            &heavy(),
+            &STOCK,
+            &armoury(),
+            Rulebook::default(),
+        );
         assert_eq!(pilot.outfits, map(&[(201, 20), (205, 2)]));
         let with_a_blaster = ShipRecord {
             defaults: vec![(OutfitId(206), 1)],
             ..heavy()
         };
         let mut pilot = self::pilot();
-        buy_stocked(&mut pilot, &with_a_blaster, &STOCK, &armoury());
+        buy_stocked(
+            &mut pilot,
+            &with_a_blaster,
+            &STOCK,
+            &armoury(),
+            Rulebook::default(),
+        );
         assert_eq!(
             pilot.outfits,
             map(&[(201, 20), (205, 1), (206, 1)]),
@@ -2668,7 +2746,7 @@ mod tests {
             ..outfit(140, &[(MOD_WEAPON, 128)])
         });
         let mut pilot = owning(&[(140, 1), (201, 30)]);
-        buy_stocked(&mut pilot, &heavy(), &STOCK, &records);
+        buy_stocked(&mut pilot, &heavy(), &STOCK, &records, Rulebook::default());
         assert_eq!(
             pilot.outfits,
             map(&[(140, 1), (201, 20), (205, 1)]),
@@ -2685,7 +2763,7 @@ mod tests {
             let mut records = armoury();
             records.push(persistent(140, mass, 1));
             let mut pilot = owning(&[(140, 1)]);
-            let bought = buy_stocked(&mut pilot, &heavy(), &STOCK, &records);
+            let bought = buy_stocked(&mut pilot, &heavy(), &STOCK, &records, port_carry());
             (pilot.owned(OutfitId(140)), bought.sold_back)
         };
         assert_eq!(fitting(12), (1, BTreeMap::new()));
@@ -2757,7 +2835,10 @@ mod tests {
         pilot.reserves.fuel.now = 12.0;
         let before = pilot.clone();
         let bought = purchase(
-            &sale(&pilot, &with_tank, "The Kestrel", &[], &records),
+            &Sale {
+                rules: port_carry(),
+                ..sale(&pilot, &with_tank, "The Kestrel", &[], &records)
+            },
             QUOTE,
         );
         assert_eq!(pilot, before, "nothing written");
@@ -2811,7 +2892,7 @@ mod tests {
             persistent(141, 1, 1),
         ];
         let mut pilot = owning(&[(140, 5), (141, 1)]);
-        let bought = buy(&mut pilot, &heavy(), &records);
+        let bought = buy_by_the_port(&mut pilot, &heavy(), &records);
         assert_eq!(pilot.owned(OutfitId(140)), 2);
         assert_eq!(pilot.owned(OutfitId(141)), 1);
         assert_eq!(bought.sold_back, map(&[(140, 3)]));
@@ -2845,7 +2926,7 @@ mod tests {
             },
         ];
         let mut pilot = owning(&[(140, 1)]);
-        let bought = buy(&mut pilot, &small, &records);
+        let bought = buy_by_the_port(&mut pilot, &small, &records);
         assert_eq!(pilot.outfits().collect::<Vec<_>>(), [(OutfitId(150), 1)]);
         assert_eq!(bought.sold_back, map(&[(140, 1)]));
         assert_eq!(bought.refund, 2000);
@@ -2853,7 +2934,7 @@ mod tests {
         // With a 5-ton one instead, it fits exactly.
         let lighter = [records[0].clone(), persistent(140, 5, 1)];
         let mut pilot = owning(&[(140, 1)]);
-        buy(&mut pilot, &small, &lighter);
+        buy_by_the_port(&mut pilot, &small, &lighter);
         assert_eq!(pilot.owned(OutfitId(140)), 1);
         assert_eq!(
             free_mass(small.fields, &map(&[(150, 1)]), &pilot.outfits, &lighter),
@@ -2873,7 +2954,7 @@ mod tests {
         };
         assert_ne!(FAST.mass, HEAVY.mass);
         let mut pilot = owning(&[(140, 1)]);
-        let bought = buy(&mut pilot, &heavy(), std::slice::from_ref(&by_mass));
+        let bought = buy_by_the_port(&mut pilot, &heavy(), std::slice::from_ref(&by_mass));
         assert_eq!(bought.sold_back, map(&[(140, 1)]));
         assert_eq!(bought.refund, resale(100 * i64::from(FAST.mass)));
         assert_eq!(bought.refund, 2000);
@@ -2895,7 +2976,9 @@ mod tests {
             purchase(
                 &Sale {
                     old_mass: 0,
-                    rules: Rulebook::default().with_override(RuleKey::MassPrice, source),
+                    rules: Rulebook::default()
+                        .with_override(RuleKey::MassPrice, source)
+                        .with_override(RuleKey::PurchaseCarry, RuleSource::Bible),
                     ..sale(&pilot, &new, "Kestrel", &[], &by_mass)
                 },
                 QUOTE,
@@ -2918,7 +3001,7 @@ mod tests {
             persistent(142, 0, -1),
         ];
         let mut pilot = owning(&[(140, 5), (141, 1), (142, 2)]);
-        let bought = buy(&mut pilot, &heavy(), &records);
+        let bought = buy_by_the_port(&mut pilot, &heavy(), &records);
         assert_eq!(pilot.outfits().collect::<Vec<_>>(), [(OutfitId(140), 2)]);
         assert_eq!(bought.sold_back, map(&[(140, 3), (141, 1), (142, 2)]));
         assert_eq!(bought.refund, 6 * 500);
@@ -2973,6 +3056,77 @@ mod tests {
         };
         buy(&mut full, &most, &records);
         assert_eq!(full.owned(OutfitId(140)), u16::MAX, "saturating");
+    }
+
+    #[test]
+    fn by_the_engine_every_persistent_outfit_carries_over_past_its_max_and_the_free_mass() {
+        let records = [
+            OutfitRecord {
+                cost: 3001,
+                ..persistent(140, 5, 2)
+            },
+            persistent(141, 0, 0),
+            persistent(142, 0, -1),
+            outfit(150, &[]),
+        ];
+        let mut pilot = owning(&[(140, 5), (141, 1), (142, 2), (150, 1)]);
+        let bought = buy(&mut pilot, &heavy(), &records);
+        assert_eq!(pilot.outfits, map(&[(140, 5), (141, 1), (142, 2)]));
+        assert_eq!(bought.sold_back, BTreeMap::new());
+        assert_eq!(bought.refund, 0);
+        assert_eq!(pilot.cash(), 10_000 - 17_500 + 2500);
+        assert_eq!(
+            free_mass(HEAVY, &BTreeMap::new(), &pilot.outfits, &records),
+            12 - 25,
+            "below none, as the original allows"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_persistent_default_stacks_on_the_units_carried() {
+        let with_defaults = ShipRecord {
+            defaults: vec![(OutfitId(140), 2)],
+            ..heavy()
+        };
+        let records = [persistent(140, 0, 1)];
+        let mut engine = owning(&[(140, 3)]);
+        let bought = buy(&mut engine, &with_defaults, &records);
+        assert_eq!(engine.owned(OutfitId(140)), 3 + 2, "past the Max both ways");
+        assert_eq!(bought.sold_back, BTreeMap::new());
+        assert_eq!(bought.refund, 0);
+        let mut other = owning(&[(140, 3)]);
+        let bought = buy_by_the_port(&mut other, &with_defaults, &records);
+        assert_eq!(other.owned(OutfitId(140)), 1 + 2);
+        assert_eq!(bought.sold_back, map(&[(140, 2)]));
+    }
+
+    #[test]
+    fn the_carry_reads_purchase_carry() {
+        let records = [OutfitRecord {
+            cost: 3001,
+            ..persistent(140, 5, 9)
+        }];
+        let pilot = owning(&[(140, 5)]);
+        let new = heavy();
+        let bought = |source| {
+            purchase(
+                &Sale {
+                    rules: Rulebook::default().with_override(RuleKey::PurchaseCarry, source),
+                    ..sale(&pilot, &new, "Kestrel", &[], &records)
+                },
+                QUOTE,
+            )
+        };
+        let engine = bought(RuleSource::Engine);
+        assert_eq!(engine.outfits, map(&[(140, 5)]));
+        assert_eq!(engine.report.sold_back, BTreeMap::new());
+        assert_eq!(engine.report.refund, 0);
+        assert_eq!(engine.settlement.cash, 10_000 - 17_500 + 2500);
+        let other = bought(RuleSource::Bible);
+        assert_eq!(other.outfits, map(&[(140, 2)]));
+        assert_eq!(other.report.sold_back, map(&[(140, 3)]));
+        assert_eq!(other.report.refund, 4500);
+        assert_eq!(other.settlement.cash, 10_000 - 17_500 + 2500 + 4500);
     }
 
     // The cargo a purchase keeps.
