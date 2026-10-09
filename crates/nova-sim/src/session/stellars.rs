@@ -1036,15 +1036,17 @@ mod tests {
 
     #[test]
     fn an_on_destroy_sees_its_stellar_destroyed() {
-        let catalog = shooting([destroying("Y128")]);
+        let catalog = shooting([StellarLife {
+            explosion: Explosion::decode(4),
+            ..destroying("Y128")
+        }]);
         let mut session = quiet(&catalog);
-        session.set_stellar_state(StellarId(128), None);
-        fire(&mut session, 3);
+        let events = fire(&mut session, 3);
         assert_eq!(destroyed(&session, 128), Some(left(2)));
         assert_eq!(
-            session.take_events(),
-            [SessionEvent::GalaxyChanged],
-            "its Y found it destroyed already"
+            booms(&events, 4),
+            [Vec2::new(30.0, -40.0)],
+            "the shot's destruction alone: its Y found it destroyed already"
         );
     }
 
@@ -1341,6 +1343,23 @@ mod tests {
         assert!(
             !session.control_bit(bit(5)),
             "an invincible stellar stays whole"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_y_runs_on_destroy_with_its_stellar_destroyed_already() {
+        let rules = Rulebook::default().with_override(RuleKey::YOnDestroy, RuleSource::Bible);
+        let catalog = catalog().living([destroying("U128")]);
+        let mut session = quiet(&catalog).with_rules(rules);
+        run(&mut session, "Y128");
+        assert_eq!(
+            destroyed(&session, 128),
+            None,
+            "its U found it destroyed, and regenerated it"
+        );
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::GalaxyChanged, SessionEvent::GalaxyChanged]
         );
     }
 }
