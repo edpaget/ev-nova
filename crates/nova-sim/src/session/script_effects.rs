@@ -622,6 +622,7 @@ mod tests {
     fn a_move_to_a_system_that_is_not_there_changes_nothing() {
         let catalog = moving();
         let mut session = flying(&catalog);
+        let _ = settle(&mut session, &catalog);
         let before = session.clone();
         run(&mut session, "M150 N999");
         assert_eq!(settle(&mut session, &catalog), Settled::default());

@@ -505,10 +505,13 @@ mod tests {
     fn raised_events_queue_in_order_until_a_settle_takes_them() {
         let catalog = testkit::catalog();
         let mut session = Session::start(&catalog).expect("starts");
-        assert_eq!(session.story_raised(), [], "nothing at first");
+        assert_eq!(session.story_raised(), [EXPLORED_130], "the start's only");
         session.raise(LANDED_128);
         session.raise(TOOK_OFF_128);
-        assert_eq!(session.story_raised(), [LANDED_128, TOOK_OFF_128]);
+        assert_eq!(
+            session.story_raised(),
+            [EXPLORED_130, LANDED_128, TOOK_OFF_128]
+        );
         assert_eq!(session.take_events(), [], "never the view's outbox");
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert_eq!(session.story_raised(), [], "settled");
@@ -646,6 +649,18 @@ mod tests {
         expected.extend(days_after(left, 2));
         expected.push(entered(131, Entrance::Jump));
         assert_eq!(session.story_raised(), expected);
+    }
+
+    #[test]
+    fn a_new_pilot_and_a_load_each_raise_their_systems_explored_once() {
+        let catalog = testkit::catalog();
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.story_raised(), [EXPLORED_130], "a new pilot");
+        let mut pilot = session.pilot().clone();
+        pilot.system = SystemId(131);
+        let saved = crate::save::decode(&crate::save::encode(&pilot)).expect("loads");
+        let flown = Session::fly(&catalog, saved).expect("flies");
+        assert_eq!(flown.story_raised(), [explored(131)], "a load");
     }
 
     #[test]
@@ -888,6 +903,23 @@ mod tests {
         session.take_off(&mut NeverFires).expect("takes off");
         land_and_settle(&mut session, &catalog);
         assert_eq!(bits(&session), [6], "registered afresh, it runs again");
+    }
+
+    #[test]
+    fn marking_a_once_only_subscription_fired_makes_a_save_due() {
+        let catalog = testkit::catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        register(
+            &mut session,
+            [Subscription {
+                once: true,
+                ..sub(1, EventFilter::Any(StoryEventKind::Explored), "", "")
+            }],
+        );
+        assert!(!session.take_save_due(), "nothing else makes one due");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(session.pilot().story_fired.contains(&fixture(1)));
+        assert!(session.take_save_due(), "the start's Explored fired it");
     }
 
     #[test]

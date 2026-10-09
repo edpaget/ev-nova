@@ -281,7 +281,7 @@
 //! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as [`Session::land`](crate::Session::land) docks | the spaceport opening |
 //! | [`TookOff`](StoryEvent::TookOff) | [`Session::take_off`](crate::Session::take_off), after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
-//! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores; a take-off; a map granted, for each system it reaches. `X` raises none | `_ExploreNebulaeFromSystem` |
+//! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores; a take-off; a map granted, for each system it reaches; [`Session::fly`](crate::Session::fly), for its system. `X` raises none | `_ExploreNebulaeFromSystem` |
 //! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling (a ship broken up while intact is disabled too), the session's boarding, repelled or not, and the traffic's flight tick for a watched ship first seen ([`Session::watch_ship`](crate::Session::watch_ship)) | the goal counts and the per-frame poll |
 //!
 //! A consumer that wants only some entrances reads the [`Entrance`] in
@@ -294,8 +294,9 @@
 //! see "Checked for phase 3"). Every other way in raises its `DayPassed`
 //! events, if any, `EnteredSystem`, then `Explored` when its row
 //! explores. Each exploration raises `Explored`, the system explored
-//! already or not. A new pilot and a load raise none yet, where the
-//! original explores their system's nebulae (@0x19118, @0x765bc).
+//! already or not. Flying a pilot, a new one or a load, raises its
+//! system's `Explored`, as the original explores its nebulae there
+//! (`_DoNewPilot` @0x19118, `_OpenLastPilotFile` @0x765bc).
 //!
 //! The events wait on the session, in the order raised, for its next
 //! [`Session::settle_script`](crate::Session::settle_script), which

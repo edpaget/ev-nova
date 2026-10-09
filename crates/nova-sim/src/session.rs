@@ -795,6 +795,9 @@ impl Session {
         session.open_opening();
         session.refit(false, ReservePolicy::Hold);
         session.restock_fleet();
+        // A new pilot's and a load's nebulae (@0x19118, @0x765bc).
+        let system = session.pilot.system;
+        session.raise(StoryEvent::Explored { system });
         Ok(session)
     }
 
