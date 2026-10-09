@@ -22,11 +22,14 @@
 //!   fighters out are kept. It enters the system by the relocation's row
 //!   of the table in the `entry` module ([`Session::enter_system`]). It
 //!   makes no sound and raises no message, and leaves the ship, its
-//!   outfits, stats and reserves as they were. It is
+//!   outfits, stats and reserves as they were. It tells
+//!   [`SessionEvent::SystemChanged`](super::SessionEvent) into a system
+//!   other than the one whose stellars are shown, and
+//!   [`SessionEvent::StellarChanged`](super::SessionEvent) within it. It is
 //!   refused ([`RelocateRefusal`]) in flight, a jump under way included,
 //!   and for a system or stellar that is not there, a gate, or a stellar
 //!   that cannot be landed on. A move to the stellar the ship is already
-//!   docked at changes nothing but the save due.
+//!   docked at changes nothing but the save due, and tells nothing.
 //! - A **reserve** ([`Session::set_reserve`]) is set within its gauge, at
 //!   any time: no lower than none and no higher than the most the ship's
 //!   stats hold, which the edit never changes, nor anything else the
@@ -149,6 +152,7 @@ mod tests {
     use crate::reserves::Reserve;
     use crate::reserves::Reserves;
     use crate::save;
+    use crate::session::SessionEvent;
     use crate::stats::MORE_FUEL;
     use crate::testkit::{
         FAST, FakePilotCatalog, begin_jump_now, catalog, fly_out, land_now, outfit, planet, ship,
@@ -540,6 +544,46 @@ mod tests {
             .expect("moves");
         assert_eq!(session.landed(), Some(StellarId(129)));
         assert_eq!(session.player().position, Vec2::new(2000.0, 0.0));
+    }
+
+    #[test]
+    fn a_move_tells_whether_the_system_or_only_the_stellar_changed() {
+        let catalog = atlas();
+        for ((system, stellar), told) in [
+            ((131, 140), vec![SessionEvent::SystemChanged]),
+            ((130, 129), vec![SessionEvent::StellarChanged]),
+            ((130, 128), vec![]),
+            ((131, 141), vec![]),
+        ] {
+            let mut session = landed(&catalog);
+            let _ = session.relocate(&catalog, SystemId(system), StellarId(stellar));
+            assert_eq!(session.take_events(), told, "{system} {stellar}");
+            session.take_off();
+            assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
+        }
+    }
+
+    #[test]
+    fn a_move_after_a_landed_move_is_told_against_the_system_shown() {
+        let catalog = atlas();
+        for ((system, stellar), told) in [
+            ((131, 140), SessionEvent::SystemChanged),
+            ((130, 129), SessionEvent::StellarChanged),
+        ] {
+            let mut session = landed(&catalog);
+            session.run_set(
+                &crate::control::SetExpr::parse("M131").expect("parses"),
+                &mut NeverFires,
+            );
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert_eq!(session.take_events(), []);
+            session
+                .relocate(&catalog, SystemId(system), StellarId(stellar))
+                .expect("moves");
+            assert_eq!(session.take_events(), [told], "{system} {stellar}");
+            session.take_off();
+            assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
+        }
     }
 
     #[test]

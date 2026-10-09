@@ -318,7 +318,7 @@ pub use script_effects::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use self::entry::{Arrival, Entry, Placement, ShipPlacement};
+use self::entry::{Arrival, Entry, NextSites, Placement, ShipPlacement};
 use self::hooks::ShipHook;
 use self::ship_change::ClassChange;
 use crate::ai::{Behaviour, Goal, PlayerSide};
@@ -631,8 +631,8 @@ pub struct Session {
     /// [`Session::settle_script`], and the next flight tick; never saved.
     queued: script_effects::Queued,
     /// The stellars of the system a landed move went to, swapped in at
-    /// the take-off.
-    next_sites: Option<Vec<LandingSite>>,
+    /// the take-off, with the system whose stellars they replace.
+    next_sites: Option<NextSites>,
     /// Whether the next take-off keeps the ship where it touched down
     /// (the original's `_dontMovePlayerAfterLanding`); never saved.
     hold_position: bool,
@@ -2005,13 +2005,18 @@ impl Session {
     /// the system moved to, from where the move left it, and after an `N`
     /// from where it touched down (see the `script_effects` module): the
     /// take-off swaps in the stellars the landed move's row of the table
-    /// in the `entry` module left for it. `None`, and nothing changes,
-    /// when it has not landed.
+    /// in the `entry` module left for it, telling
+    /// [`SessionEvent::SystemChanged`] when they are another system's than
+    /// the stellars they replace. `None`, and nothing changes, when it has
+    /// not landed.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         self.frame = market::AFTER_TAKE_OFF_FRAME;
-        if let Some(sites) = self.next_sites.take() {
-            self.sites = sites;
+        if let Some(next) = self.next_sites.take() {
+            self.sites = next.sites;
+            if self.pilot.system != next.from {
+                self.emit(SessionEvent::SystemChanged);
+            }
         }
         if std::mem::take(&mut self.hold_position) {
             self.player.position = self.touchdown;
@@ -13528,6 +13533,43 @@ mod tests {
             Ok(SystemId(131))
         );
         assert_held_sound_plays_next_tick(&mut session);
+    }
+
+    #[test]
+    fn an_arrival_tells_the_system_changed() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(131)));
+        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+    }
+
+    #[test]
+    fn a_gates_exit_tells_the_system_changed_even_into_the_system_gone_in() {
+        let catalog = gated();
+        let mut session = at_gate(&catalog);
+        assert_eq!(
+            session.enter_hypergate(None, &catalog, &mut Scripted::default()),
+            Err(GateRefusal::Cancelled)
+        );
+        assert_eq!(session.take_events(), [], "cancelled");
+        let mut session = at_gate(&catalog);
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut Scripted::default())
+            .expect("through");
+        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+        let catalog = wormholes();
+        for (roll, system) in [(0, 131), (1, 130)] {
+            let mut session = at_wormhole(&catalog);
+            assert_eq!(
+                session.enter_wormhole(&catalog, &mut Scripted::rolling(&[roll])),
+                Ok(SystemId(system))
+            );
+            assert_eq!(
+                session.take_events(),
+                [SessionEvent::SystemChanged],
+                "{system}"
+            );
+        }
     }
 
     #[test]

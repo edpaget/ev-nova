@@ -403,6 +403,7 @@ mod tests {
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
     use crate::save;
+    use crate::session::SessionEvent;
     use crate::testkit::{
         FAST, FakePilotCatalog, Scripted, begin_jump_now, catalog, fly_out, hull, land_now, planet,
         ship, star, weapon,
@@ -1361,6 +1362,59 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(ids(&session.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
+    }
+
+    // Events.
+
+    #[test]
+    fn a_move_in_flight_tells_the_system_changed_even_within_the_system() {
+        let catalog = moving();
+        for text in ["M131", "N130", "M130"] {
+            let mut session = flying(&catalog);
+            moved(&mut session, &catalog, text);
+            assert_eq!(
+                session.take_events(),
+                [SessionEvent::SystemChanged],
+                "{text}"
+            );
+        }
+        let mut session = flying(&catalog);
+        moved(&mut session, &catalog, "M999");
+        assert_eq!(session.take_events(), [], "no such system");
+    }
+
+    #[test]
+    fn a_landed_move_to_another_system_tells_it_at_the_take_off() {
+        let catalog = moving();
+        let mut session = landed(&catalog);
+        moved(&mut session, &catalog, "M131");
+        assert_eq!(session.take_events(), [], "the stellars wait");
+        session.take_off();
+        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
+    }
+
+    #[test]
+    fn a_landed_move_within_the_system_or_back_to_it_tells_nothing() {
+        let catalog = moving();
+        for text in ["N130", "M130", "M131 M130"] {
+            let mut session = landed(&catalog);
+            moved(&mut session, &catalog, text);
+            assert_eq!(session.take_events(), [], "{text}: settled");
+            session.take_off();
+            assert_eq!(session.take_events(), [], "{text}: taken off");
+        }
+        let mut session = landed(&catalog);
+        session.take_off();
+        assert_eq!(session.take_events(), [], "a plain take-off");
+    }
+
+    #[test]
+    fn a_landed_move_and_q_tell_the_system_changed_as_they_settle() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        run_rolling(&mut session, "M131 Q25048", &[0]);
+        let _ = settle(&mut session, &catalog);
+        assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
     }
 
     #[test]
