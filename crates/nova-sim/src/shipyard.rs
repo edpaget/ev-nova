@@ -3859,6 +3859,20 @@ mod tests {
         assert_eq!(space(&freeing(129, -7, &[]), &Arsenal::default(), &[]), -7);
     }
 
+    #[test]
+    fn the_space_takes_nothing_off_for_stock_of_none() {
+        // A slot of no guns and no rounds, and a default item of none,
+        // take no step, so `FreeMass` -7 is not floored to 0.
+        let class = freeing(129, -7, &[(152, 0)]);
+        let arsenal = stocking(&[weapon(130)], 129, &[(130, 0, 0)]);
+        let outfits = [
+            weighing(150, 3, &[(MOD_WEAPON, 130)]),
+            weighing(151, 1, &[(MOD_AMMO, 130)]),
+            weighing(152, 2, &[]),
+        ];
+        assert_eq!(space(&class, &arsenal, &outfits), -7);
+    }
+
     /// The specs of a class of `space`, `holds` and `mass`.
     fn specs(space: i64, holds: i16, mass: i16) -> ShipSpecs {
         ShipSpecs {
