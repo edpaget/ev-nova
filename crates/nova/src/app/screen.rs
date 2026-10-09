@@ -1523,9 +1523,13 @@ impl AppScreen {
             if let Some(order) = trade {
                 let _ = flight.trade(order);
             }
-            // A plain click's count of 1 is exactly one order.
-            if let Some((order, count)) = outfit {
-                let _ = flight.outfit_counted(order, count);
+            // A plain click's count of 1 is exactly one order. A sale
+            // refused in the sell loop shows its words over the
+            // outfitter; any other refusal changes nothing.
+            if let Some((order, count)) = outfit
+                && let Some(alert) = flight.outfit_order(order, count).alert
+            {
+                spaceport.alert_outfit(&alert);
             }
             if let Some(order) = ship {
                 let _ = flight.buy_ship(order.ship, &order.name);
@@ -2028,6 +2032,14 @@ pub(super) mod tests {
         game_data_with(trading, outfitting, shipbuying, 100, on_start, on_purchase)
     }
 
+    /// [`outfitting_data`], where the booster is a pod of -20 tons, and
+    /// the outfitter also sells `oütf` 129, a hold of 25 tons for 100
+    /// credits: with both owned, 5 tons are free, and selling the pod
+    /// would leave -15.
+    fn pod_data() -> Rc<GameData> {
+        game_data_full(true, true, false, 100, b"", b"", true)
+    }
+
     /// [`game_data`], ship 129 for sale on a `BuyRandom` of `buy_random`,
     /// the `chär`'s `OnStart` `on_start` and the booster's `OnPurchase`
     /// `on_purchase`.
@@ -2038,6 +2050,29 @@ pub(super) mod tests {
         buy_random: i16,
         on_start: &[u8],
         on_purchase: &[u8],
+    ) -> Rc<GameData> {
+        game_data_full(
+            trading,
+            outfitting,
+            shipbuying,
+            buy_random,
+            on_start,
+            on_purchase,
+            false,
+        )
+    }
+
+    /// [`game_data_with`], the booster a pod of -20 tons and a 25-ton
+    /// hold (`oütf` 129) for sale too when `pod` ([`pod_data`]).
+    #[allow(clippy::fn_params_excessive_bools)] // A fixture's switches.
+    fn game_data_full(
+        trading: bool,
+        outfitting: bool,
+        shipbuying: bool,
+        buy_random: i16,
+        on_start: &[u8],
+        on_purchase: &[u8],
+        pod: bool,
     ) -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
@@ -2069,10 +2104,17 @@ pub(super) mod tests {
             stellar[0x09] |= 0x04;
             stellar[0x0C..0x0E].copy_from_slice(&1_i16.to_be_bytes());
             average[0x0C..0x0E].copy_from_slice(&10_i16.to_be_bytes());
-            let booster = booster_record(on_purchase);
+            let mut booster = booster_record(on_purchase);
             if !on_purchase.is_empty() {
                 let leave = str_list(&["Off you go, <PSN>."]);
                 fork = fork.resource(StrList::TYPE, 25048, None, &leave);
+            }
+            if pod {
+                booster[0x02..0x04].copy_from_slice(&(-20_i16).to_be_bytes());
+                let mut hold = booster_record(b"");
+                hold[0x02..0x04].copy_from_slice(&25_i16.to_be_bytes());
+                hold[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
+                fork = fork.resource(Outfit::TYPE, 129, Some(b"Hold"), &hold);
             }
             fork = fork.resource(Outfit::TYPE, 128, Some(b"Booster"), &booster);
         }
@@ -4561,7 +4603,9 @@ pub(super) mod tests {
     // The Outfitter.
 
     use nova_sim::OutfitId;
-    use nova_view::spaceport::outfitter::{BUY_ITEM as OUTFIT_BUY_ITEM, OUTFIT_DIALOG};
+    use nova_view::spaceport::outfitter::{
+        BUY_ITEM as OUTFIT_BUY_ITEM, NEGATIVE_FREE_MASS, OUTFIT_DIALOG,
+    };
 
     /// "Outfit", smaller: 400 x 300 at (0, 0), with Done (1), Sell (4),
     /// the grid (5), the description (6), Buy (7), the picture (8) and the
@@ -4689,6 +4733,38 @@ pub(super) mod tests {
         assert_eq!(pilot(&screen).owned(BOOSTER), 1);
         assert_eq!(pilot(&screen).cash(), 500);
         // Escape closes the outfitter; the spaceport stays.
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_outfitter().is_none());
+        assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    #[test]
+    fn a_sale_refused_in_the_loop_opens_its_words_over_the_outfitter() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, pod_data());
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Right, true));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Left, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1);
+        assert_eq!(pilot(&screen).owned(OutfitId(129)), 1);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().free_mass, 5);
+        assert!(open.alert_dialog().is_none());
+        let (cash, writes) = (pilot(&screen).cash(), store.writes());
+        screen.input(&key(Key::Char('s'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "nothing sold");
+        assert_eq!(pilot(&screen).cash(), cash);
+        assert_eq!(store.writes(), writes, "nothing to save");
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        let alert = open.alert_dialog().expect("the words in DLOG 3003");
+        assert_eq!(alert.lines().join(" "), NEGATIVE_FREE_MASS);
+        screen.input(&key(Key::Escape, true));
+        let open = spaceport(&screen)
+            .open_outfitter()
+            .expect("still outfitting");
+        assert!(open.alert_dialog().is_none(), "Escape closed the words");
         screen.input(&key(Key::Escape, true));
         assert!(spaceport(&screen).open_outfitter().is_none());
         assert_eq!(screen.showing(), Showing::Spaceport);
