@@ -2364,7 +2364,10 @@ impl Session {
     /// default items, stock weapons and stats read from its record. The
     /// old class's `OnRetire` runs first and the new class's `OnPurchase`
     /// last, each drawing on `chance`, the paint cleared as
-    /// [`HookRules::purchase_paint_order`] says (see the `hooks` module).
+    /// [`HookRules::purchase_paint_order`] says (see the `hooks` module),
+    /// and then the shield, armour and fuel are filled to the most of the
+    /// class and outfits `OnPurchase` leaves (`_DoShipyardDialog`
+    /// @0x5f051-0x5f07b, after @0x5f00d).
     /// When the ship is not landed at a shipyard, or the purchase is
     /// refused, nothing changes and the refusal says why. The rolls not
     /// drawn yet are drawn on
@@ -2420,6 +2423,10 @@ impl Session {
             // its `OnPurchase` has run (@0x5f00d); the save is due already.
             self.pilot.paint = None;
         }
+        // Filled once `OnPurchase` has run and the paint is cleared, to the
+        // class and outfits it leaves (`_DoShipyardDialog`
+        // @0x5f051-0x5f07b); the save is due already.
+        self.pilot.reserves = shipyard::filled(&self.stats, &self.rules);
         Ok(report)
     }
 

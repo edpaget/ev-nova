@@ -139,8 +139,12 @@
 //! silent), the cargo that fits in the new ship's own cargo space is
 //! kept, goods in [`Good`] order (commodities by number, then `jünk` by
 //! ID) until the hold is full. The new
-//! ship comes with its shield, armour and fuel full, as a new hull: the
-//! Bible is silent here too. Everything else about the pilot (where it is,
+//! ship comes with its shield, armour and fuel full, as a new hull (the
+//! Bible is silent here too), once its `OnPurchase` has run: each is filled
+//! to the most of the class and outfits `OnPurchase` leaves
+//! (`_DoShipyardDialog` @0x5f051-0x5f07b, after @0x5f00d), so an
+//! `OnPurchase` that removes an outfit or changes the class still leaves
+//! them full. Everything else about the pilot (where it is,
 //! the date, the course, its legal records and the events under way)
 //! stays as it was.
 //!
@@ -158,9 +162,10 @@
 //! on [`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry) (the
 //! persistent outfits carried and sold back, with the refund),
 //! `cash_after`, `cargo_kept` on
-//! [`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo) and
-//! `reserves_full`; it writes nothing, and the session applies it. No rule
-//! draws.
+//! [`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo); it writes
+//! nothing, and the session applies it. The reserves are not part of it:
+//! once `OnPurchase` has run, the session reads `reserves_full` over the
+//! stats it leaves ([`filled`]). No rule draws.
 //!
 //! # Naming the ship
 //!
@@ -989,6 +994,21 @@ impl Context for Refitted<'_> {
     }
 }
 
+/// A bought ship's stats once the new class's `OnPurchase` has run: the
+/// class and outfits it leaves.
+struct Filled<'a> {
+    /// The ship's stats after `OnPurchase`.
+    stats: &'a ShipStats,
+    /// The rules in force.
+    rules: &'a Rulebook,
+}
+
+impl Context for Filled<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        self.rules
+    }
+}
+
 /// A purchase settling at a quote, with what its sale back refunds.
 struct Settled<'a> {
     /// The purchase.
@@ -1035,17 +1055,16 @@ pub(crate) struct Settlement {
     pub(crate) name: String,
     /// The cargo kept.
     pub(crate) cargo: BTreeMap<Good, u32>,
-    /// The new class's reserves, full.
-    pub(crate) reserves: Reserves,
 }
 
 impl Settlement {
-    /// Writes the cash, the name, the cargo and the reserves on `pilot`.
+    /// Writes the cash, the name and the cargo on `pilot`. The reserves
+    /// are filled later, once the new class's `OnPurchase` has run
+    /// ([`filled`], `_DoShipyardDialog` @0x5f051-0x5f07b).
     pub(crate) fn settle(self, pilot: &mut Pilot) {
         pilot.ship_name = Some(self.name);
         pilot.cash = self.cash;
         pilot.cargo = self.cargo;
-        pilot.reserves = self.reserves;
     }
 }
 
@@ -1186,18 +1205,27 @@ fn cargo_kept_by(refitted: &Refitted, source: RuleSource) -> CargoKept {
     (cargo, left_behind)
 }
 
-/// The new ship's reserves after a purchase.
-fn reserves_full<'a>() -> Value<Refitted<'a>, Reserves> {
+/// The bought ship's reserves, filled once its `OnPurchase` has run.
+fn reserves_full<'a>() -> Value<Filled<'a>, Reserves> {
     Value::plain(
         "reserves full",
-        "`_DoShipyardDialog` @0x5f051-0x5f07b, which the port fills before `OnPurchase`",
+        "`_DoShipyardDialog` @0x5f051-0x5f07b, after `OnPurchase` @0x5f00d; the capacities \
+         of the class and outfits it leaves (`_EvalMissionBitSetString` @0x99dea)",
         full_reserves,
     )
 }
 
-/// The new class's shield, armour and fuel, full.
-fn full_reserves(refitted: &Refitted) -> Reserves {
-    refitted.stats.full()
+/// The shield, armour and fuel, full to the most of the stats.
+fn full_reserves(filled: &Filled) -> Reserves {
+    filled.stats.full()
+}
+
+/// A bought ship's shield, armour and fuel, filled to the most of
+/// `stats`, the class and outfits its `OnPurchase` leaves, as
+/// `_DoShipyardDialog` fills them after it (@0x5f051-0x5f07b, after
+/// @0x5f00d): what `Session::buy_ship` writes last.
+pub(crate) fn filled(stats: &ShipStats, rules: &Rulebook) -> Reserves {
+    reserves_full().of(&Filled { stats, rules })
 }
 
 /// What buying `sale.new` at `quote` does, as the module says, worked out
@@ -1211,7 +1239,6 @@ pub(crate) fn purchase(sale: &Sale, quote: Quote) -> Purchase {
     let stats = ShipStats::new(sale.new.fields, &outfit_mods(&outfits, sale.records));
     let refitted = Refitted { sale, stats };
     let (cargo, left_behind) = cargo_kept().of(&refitted);
-    let reserves = reserves_full().of(&refitted);
     let cash = cash_after().of(&Settled {
         sale,
         quote,
@@ -1223,7 +1250,6 @@ pub(crate) fn purchase(sale: &Sale, quote: Quote) -> Purchase {
             cash,
             name: cull_name(sale.name),
             cargo,
-            reserves,
         },
         report: ShipPurchase {
             price: quote.price,
@@ -2460,6 +2486,12 @@ mod tests {
             refund: 0,
         };
         assert_eq!(settled.rulebook(), &rules);
+        let stats = ShipStats::new(HEAVY, &[]);
+        let filled = Filled {
+            stats: &stats,
+            rules: &rules,
+        };
+        assert_eq!(filled.rulebook(), &rules);
     }
 
     #[test]
@@ -2480,8 +2512,9 @@ mod tests {
                  other reading",
                 "`_DoShipyardDialog` @0x5ef9f, `_DestroyPartialFleetCargo` @0xcd32-0xcff6, \
                  `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c",
-                "`_DoShipyardDialog` @0x5f051-0x5f07b, which the port fills before \
-                 `OnPurchase`",
+                "`_DoShipyardDialog` @0x5f051-0x5f07b, after `OnPurchase` @0x5f00d; the \
+                 capacities of the class and outfits it leaves (`_EvalMissionBitSetString` \
+                 @0x99dea)",
             ]
         );
     }
@@ -2732,10 +2765,6 @@ mod tests {
             map(&[(201, 20), (205, 1), (206, 1)]),
             "its default blaster is one of the two"
         );
-        assert_eq!(
-            pilot.reserves(),
-            ShipStats::new(HEAVY, &outfit_mods(&pilot.outfits, &armoury())).full()
-        );
     }
 
     #[test]
@@ -2846,10 +2875,6 @@ mod tests {
         assert_eq!(bought.settlement.cash, 10_000 - 17_500 + 2500 + 4500);
         assert_eq!(bought.settlement.name, "Kestrel");
         assert_eq!(bought.settlement.cargo, BTreeMap::from([(FOOD, 15)]));
-        assert_eq!(
-            bought.settlement.reserves,
-            Reserves::full(80.0, 45.0, 400.0)
-        );
         assert_eq!(bought.report.sold_back, map(&[(140, 3)]));
         apply(&mut pilot, bought);
         assert_eq!(pilot.ship(), before.ship(), "the class is not the sale's");
@@ -3417,20 +3442,12 @@ mod tests {
 
     #[test]
     fn the_new_ship_comes_with_its_reserves_full() {
-        let with_tank = ShipRecord {
-            defaults: vec![(OutfitId(150), 1)],
-            ..heavy()
-        };
         let records = [outfit(150, &[(MORE_FUEL, 100)])];
-        let mut pilot = pilot();
-        pilot.reserves.fuel.now = 12.0;
-        pilot.reserves.shield.now = 1.0;
-        buy(&mut pilot, &with_tank, &records);
+        let stats = ShipStats::new(HEAVY, &outfit_mods(&map(&[(150, 1)]), &records));
         assert_eq!(
-            pilot.reserves(),
-            ShipStats::new(HEAVY, &outfit_mods(&map(&[(150, 1)]), &records)).full()
+            filled(&stats, &Rulebook::default()),
+            Reserves::full(80.0, 45.0, 400.0)
         );
-        assert_eq!(pilot.reserves(), Reserves::full(80.0, 45.0, 400.0));
     }
 
     #[test]

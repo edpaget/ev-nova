@@ -19,7 +19,7 @@
 //! | `oütf` `OnPurchase` | [`Session::outfit`], each unit bought (`_DoOutfitDialog` @0x5c2cb) | after the cash and the grant, even when the grant added nothing (a map, a paint); then an outfit removed after purchase goes, and the ship is refitted |
 //! | `oütf` `OnSell` | [`Session::outfit`], each unit sold (@0x5cff6) | after one is removed and the cash credited, before the refit |
 //! | `shïp` `OnRetire` | [`Session::buy_ship`], the ship traded in (`_DoShipyardDialog` @0x5ecff) | first, the old class still flown and its outfits still owned |
-//! | `shïp` `OnPurchase` | [`Session::buy_ship`], the ship bought (@0x5f00d) | last: the new class, cash and outfits in place. By the engine the paint is cleared after it (@0x5f022), so a paint it grants is lost; by the other reading of [`RuleKey::PurchasePaintOrder`](crate::RuleKey::PurchasePaintOrder) the paint is cleared before it |
+//! | `shïp` `OnPurchase` | [`Session::buy_ship`], the ship bought (@0x5f00d) | last: the new class, cash and outfits in place, the reserves not yet filled. By the engine the paint is cleared after it (@0x5f022), so a paint it grants is lost; by the other reading of [`RuleKey::PurchasePaintOrder`](crate::RuleKey::PurchasePaintOrder) the paint is cleared before it. Either way the shield, armour and fuel are then filled, to the class and outfits it leaves (@0x5f051-0x5f07b) |
 //! | `shïp` `OnCapture` | [`Session::plunder`]'s capture taken as an escort straight away, and [`Session::assign`]'s Use As Escort (`_DoPlunderDialog` @0x9460e) | before the ship joins the fleet |
 //! | `shïp` `OnRetire`, then `OnCapture` | [`Session::assign`]'s Use As My Ship (`_DoShipCapture` @0x41662, @0x416c9) | the old class's `OnRetire`, then the captured class's `OnCapture`, the old class still flown. By the engine both run before the outfit swap, which strips a non-persistent outfit either grants, and before the fuel draw; by the other reading of [`RuleKey::CaptureHookOrder`](crate::RuleKey::CaptureHookOrder) they run after the swap (still before the class changes and the fuel draw). No hook runs when the prize is abandoned |
 //!
@@ -152,6 +152,7 @@ mod tests {
     use crate::outfit_effects::Rgb15;
     use crate::outfitter::OutfitRefusal;
     use crate::pilot::Pilot;
+    use crate::reserves::Reserves;
     use crate::session::control::SetOpObserver;
     use crate::session::tests::{
         NEW, aboard, boardable, buy, captured, kitted, outfitted, outfitting, outfitting_effects,
@@ -174,6 +175,7 @@ mod tests {
         outfits: BTreeMap<OutfitId, u16>,
         escorts: usize,
         paint: Option<Rgb15>,
+        reserves: Reserves,
     }
 
     /// Records a [`Snap`] each time an `S<tag>` runs: the hooks are
@@ -192,6 +194,7 @@ mod tests {
                     outfits: pilot.outfits.clone(),
                     escorts: pilot.escorts().len(),
                     paint: pilot.paint,
+                    reserves: pilot.reserves(),
                 });
             }
         }
@@ -535,6 +538,98 @@ mod tests {
             .buy_ship(NEW, "Kestrel", &mut Scripted::default())
             .expect("bought");
         assert_eq!(plain.pilot.paint, None, "the old paint still goes");
+    }
+
+    #[test]
+    fn on_purchase_runs_before_the_reserves_are_filled() {
+        let catalog = hooked_ships("", "S211");
+        let (mut session, probe) = probed(outfitted(&catalog));
+        session.pilot.reserves.shield.now = 1.0;
+        session
+            .buy_ship(NEW, "Kestrel", &mut Scripted::default())
+            .expect("bought");
+        assert_eq!(tags(&probe), [211]);
+        let snaps = probe.0.borrow().clone();
+        assert_eq!(
+            snaps[0].reserves.shield.now, 1.0,
+            "OnPurchase sees the old shield, held within the new most"
+        );
+        assert_eq!(session.reserves(), Reserves::full(80.0, 45.0, 400.0));
+    }
+
+    #[test]
+    fn a_d_in_on_purchase_leaves_the_shield_full_without_a_surplus() {
+        let mut catalog = hooked_ships("", "D302");
+        for record in &mut catalog.ship_records {
+            if record.id == NEW {
+                record.defaults.push((OutfitId(302), 1));
+            }
+        }
+        for (ship, defaults) in &mut catalog.defaults {
+            if *ship == NEW {
+                defaults.push((OutfitId(302), 1));
+            }
+        }
+        let mut session = outfitted(&catalog);
+        session
+            .buy_ship(NEW, "Kestrel", &mut Scripted::default())
+            .expect("bought");
+        assert_eq!(session.pilot().owned(OutfitId(302)), 0, "removed");
+        assert_eq!(session.reserves().shield.max, 80.0);
+        assert_eq!(session.reserves().shield.now, 80.0, "no surplus kept");
+        assert_eq!(session.reserves(), session.stats().full());
+    }
+
+    #[test]
+    fn a_change_to_a_smaller_class_in_on_purchase_leaves_its_reserves_full() {
+        let catalog = hooked_ships("", "C128");
+        let mut session = outfitted(&catalog);
+        session
+            .buy_ship(NEW, "Kestrel", &mut Scripted::default())
+            .expect("bought");
+        assert_eq!(session.ship(), ShipId(128));
+        assert_eq!(session.reserves(), Reserves::full(30.0, 45.0, 400.0));
+    }
+
+    #[test]
+    fn a_change_to_a_larger_class_in_on_purchase_fills_its_reserves() {
+        let mut catalog = hooked_ships("", "E130");
+        let heavy = catalog
+            .ship_records
+            .iter()
+            .find(|record| record.id == NEW)
+            .expect("ship 129")
+            .fields;
+        let larger = crate::handling::ShipFields {
+            armor: 90,
+            fuel: 500,
+            ..heavy
+        };
+        catalog.ships.push((ShipId(130), Ok(larger)));
+        catalog.ship_records.push(crate::testkit::ship(130, larger));
+        let mut session = outfitted(&catalog);
+        session
+            .buy_ship(NEW, "Kestrel", &mut Scripted::default())
+            .expect("bought");
+        assert_eq!(session.ship(), ShipId(130));
+        assert_eq!(session.reserves().armor.now, 90.0);
+        assert_eq!(session.reserves(), session.stats().full());
+    }
+
+    #[test]
+    fn the_fill_comes_after_the_paint_under_either_paint_order() {
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::PurchasePaintOrder, source);
+            let mut session = outfitted(&hooked_ships("", "C128")).with_rules(rules);
+            session
+                .buy_ship(NEW, "Kestrel", &mut Scripted::default())
+                .expect("bought");
+            assert_eq!(
+                session.reserves(),
+                Reserves::full(30.0, 45.0, 400.0),
+                "{source:?}"
+            );
+        }
     }
 
     // Capture.

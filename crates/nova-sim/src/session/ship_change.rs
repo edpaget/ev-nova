@@ -34,12 +34,13 @@
 //! `OnCapture` or `OnRetire` runs, and it names and paints nothing.
 //!
 //! The shipyard by contrast (`_DoShipyardDialog` ~0x5ebc8-0x5f0ac) trades
-//! in, runs `OnRetire` then `OnPurchase`, names the ship from its dialog
+//! in, runs `OnRetire`, names the ship from its dialog
 //! (`_CullNameString`, 0x40), clears the fighters out, strips the outfits
 //! whose persistent byte (+0x378, which the loader sets from 0x0004 alone,
-//! @0x78cad) is clear, adds the defaults (`+=`), keeps the cargo that fits
-//! (`_DestroyPartialFleetCargo(0)`) and fills the reserves, with no
-//! `_HasMaxOfItem` clamp. Capture (`_DoShipCapture`) strips by +0x378 too.
+//! @0x78cad) is clear, adds the defaults (`+=`), with no `_HasMaxOfItem`
+//! clamp, keeps the cargo that fits (`_DestroyPartialFleetCargo(0)`),
+//! runs `OnPurchase` (@0x5f00d), and only then fills the reserves
+//! (@0x5f051-0x5f07b), to the class and outfits `OnPurchase` leaves. Capture (`_DoShipCapture`) strips by +0x378 too.
 //!
 //! **Here.** [`Session::change_ship`] is that block, for the set
 //! operators alone: with no record of the class nothing changes (the
@@ -189,8 +190,12 @@ pub(super) struct ClassChange {
 
 impl ClassChange {
     /// A purchase's change: the shipyard's carry, the reserves held, as the
-    /// shipyard has always refitted. The settlement fills them first, so
-    /// holding takes nothing.
+    /// shipyard has always refitted. The purchase fills them only after
+    /// `OnPurchase` (`_DoShipyardDialog` @0x5f051-0x5f07b, after
+    /// @0x5f00d); until then, holding keeps the old ship's within the new
+    /// most. The original leaves them unclamped while `OnPurchase` runs
+    /// (`_SystemInfoToShipStats` clamps no reserve), which only a
+    /// set-operator observer could see; that is not modelled.
     pub(super) fn bought(outfits: BTreeMap<OutfitId, u16>) -> Self {
         Self {
             outfits,
