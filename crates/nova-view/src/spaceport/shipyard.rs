@@ -29,7 +29,8 @@
 //! the final price (#225-227).
 //!
 //! Buy Ship, clicked or with B, requests the selected ship, and is greyed
-//! when it cannot be bought (the original has no words for why). B acts
+//! when it cannot be bought, the class flown among them (`_CalcShipCanBuy`
+//! @0x4f6f5-0x4f6fc; the original has no words for why). B acts
 //! on a press only, never a key repeat, unlike the Outfitter's: a held B
 //! would otherwise trade the ship just bought for another of its class,
 //! and its outfits with it. The screen only records the request
@@ -1594,7 +1595,13 @@ mod tests {
     #[test]
     fn buy_ship_is_greyed_when_the_ship_cannot_be_bought() {
         let mut screen = screen();
-        assert!(enabled(&screen, BUY_SHIP_LABEL));
+        assert!(!enabled(&screen, BUY_SHIP_LABEL), "the class flown");
+        press(&mut screen, BUY_KEY);
+        assert_eq!(
+            screen.take_request(),
+            None,
+            "the class flown asks for nothing"
+        );
         press(&mut screen, Key::Right);
         assert!(enabled(&screen, BUY_SHIP_LABEL));
         press(&mut screen, Key::Right);
@@ -2072,6 +2079,7 @@ mod tests {
     #[test]
     fn its_buttons_sound_and_cancelling_the_pointer_abandons_a_click() {
         let mut screen = screen();
+        press(&mut screen, Key::Right);
         let buy = item(&screen, BUY_ITEM).center();
         let button = |pressed| Input::PointerButton {
             button: MouseButton::Left,

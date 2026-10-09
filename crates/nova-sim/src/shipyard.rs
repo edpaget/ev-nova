@@ -65,8 +65,12 @@
 //! "might appear in the shipyard but not be able to be purchased"). A ship
 //! flagged [`ShipFlags3::HIDE_HIGHER`] that can be bought takes every
 //! higher-numbered ship of the same `DispWeight` off sale. The ship class
-//! flown is listed like any other, and can be bought again. Rows go by
-//! `DispWeight`, highest first, then by ID.
+//! flown is listed like any other, but cannot be bought: `_CalcShipCanBuy`
+//! compares the class selected with the player's own, and does so first,
+//! before the cash, `Require` and `Availability` (@0x4f6f5-0x4f6fc). It
+//! reads no name, so a ship bought under any name is still its class, and
+//! another class of the same name still sells. Rows go by `DispWeight`,
+//! highest first, then by ID.
 //!
 //! # Price and trade-in
 //!
@@ -78,8 +82,9 @@
 //! not ([`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits)). The
 //! final price is the price less
 //! the trade-in, and may be negative: the player is then paid. A buy is
-//! refused when the ship cannot be bought here, or when the cash and the
-//! trade-in together do not cover the price.
+//! refused when the ship is the class flown, when it cannot be bought
+//! here, or when the cash and the trade-in together do not cover the
+//! price.
 //!
 //! # Buying a ship
 //!
@@ -139,7 +144,7 @@
 //! [`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits)), and
 //! settles in each row's [`ShipFacts`] whether the class can be bought
 //! here at all. [`Shipyard::can`] answers from the checks list `can_buy`:
-//! "for sale", then "cash". A purchase is worked out as a value
+//! "flown", "for sale", then "cash". A purchase is worked out as a value
 //! (`purchase`, over a `Sale`, the pilot as `OnRetire` left it): `carried`
 //! (the persistent outfits carried and sold back, with the refund),
 //! `cash_after`, `cargo_kept` on
@@ -252,6 +257,9 @@ pub enum ShipRefusal {
     NoShipyard,
     /// The shipyard does not list the ship.
     NotListed,
+    /// The ship is the class the player flies: `_CalcShipCanBuy` refuses
+    /// it (@0x4f6f5-0x4f6fc), whatever the ship is named.
+    AlreadyFlown,
     /// The ship is listed but cannot be bought here: its `Require` is not
     /// met, or its `Availability` does not hold.
     NotForSale,
@@ -327,8 +335,8 @@ impl Shipyard {
 
     /// Whether `ship` can be bought now, or why not: a class not listed
     /// is [`ShipRefusal::NotListed`]; a listed one is refused by the first
-    /// of the buy checks that refuses it, in the port's order (for sale,
-    /// then the cash; see the module docs).
+    /// of the buy checks that refuses it (the class flown, for sale, then
+    /// the cash; see the module docs).
     pub fn can(&self, ship: ShipId) -> Result<(), ShipRefusal> {
         let row = self.row(ship).ok_or(ShipRefusal::NotListed)?;
         refusal(
@@ -384,12 +392,19 @@ fn refusal<C: Context>(checks: &Checks<C, ShipRefusal>, facts: &C) -> Result<(),
 }
 
 /// Whether Buy Ship is enabled for a class, as `_CalcShipCanBuy` has it
-/// (@0x4f6a0-0x4f90a), in the port's order: it can be bought here at all,
-/// then the cash. The original tests the cash before `Require` and
-/// `Availability`, but only sets a flag, so no player can tell the order
+/// (@0x4f6a0-0x4f90a): in the original's order for the class flown
+/// (first), then in the port's: it can be bought here at all, then the
+/// cash. The original tests the cash before `Require` and
+/// `Availability`, but only sets a flag, so no player can tell that order
 /// apart.
 fn can_buy<'a>() -> Checks<RowShip<'a>, ShipRefusal> {
     [
+        Check::plain(
+            "flown",
+            "`_CalcShipCanBuy` @0x4f6f5-0x4f6fc: the class selected against the player's own \
+             (+0x76), before the cash",
+            not_flown,
+        ),
         Check::plain(
             "for sale",
             "`_CalcShipCanBuy` `Require` @0x4f80a-0x4f840 and `Availability` \
@@ -404,6 +419,15 @@ fn can_buy<'a>() -> Checks<RowShip<'a>, ShipRefusal> {
         ),
     ]
     .into()
+}
+
+/// The class is not the one the player flies.
+fn not_flown(asked: &RowShip) -> Result<(), ShipRefusal> {
+    if asked.row.id == asked.shipyard.current {
+        Err(ShipRefusal::AlreadyFlown)
+    } else {
+        Ok(())
+    }
 }
 
 /// The class can be bought here at all: for sale today, its `Require`
@@ -1632,12 +1656,35 @@ mod tests {
     }
 
     #[test]
-    fn the_ship_flown_is_listed_and_can_be_bought_again() {
+    fn the_class_flown_is_listed_but_cannot_be_bought() {
         let ships = [cheap(128), cheap(129)];
         let shipyard = open(&ships, &pilot());
         assert_eq!(listed(&shipyard), [128, 129]);
-        assert_eq!(shipyard.can(ShipId(128)), Ok(()));
+        assert_eq!(shipyard.can(ShipId(128)), Err(ShipRefusal::AlreadyFlown));
+        assert_eq!(shipyard.can(ShipId(129)), Ok(()));
         assert_eq!(shipyard.current, ShipId(128));
+    }
+
+    #[test]
+    fn the_class_flown_is_refused_whatever_its_name_and_a_namesake_class_sells() {
+        let shuttle = |id| ShipRecord {
+            name: "Shuttle".to_owned(),
+            ..cheap(id)
+        };
+        let ships = [shuttle(128), shuttle(361)];
+        let mut named = pilot();
+        named.ship_name = Some("Kestrel".to_owned());
+        let shipyard = open(&ships, &named);
+        assert_eq!(
+            shipyard.can(ShipId(128)),
+            Err(ShipRefusal::AlreadyFlown),
+            "named Kestrel, still the class flown"
+        );
+        assert_eq!(
+            shipyard.can(ShipId(361)),
+            Ok(()),
+            "another class of the same name"
+        );
     }
 
     // Require, Availability and the flags that hide.
@@ -2170,10 +2217,15 @@ mod tests {
     }
 
     #[test]
-    fn the_buy_checks_are_for_sale_then_cash() {
+    fn the_buy_checks_are_flown_for_sale_then_cash() {
         assert_eq!(
             listed_checks(&can_buy()),
             [
+                (
+                    "flown",
+                    "`_CalcShipCanBuy` @0x4f6f5-0x4f6fc: the class selected against the \
+                     player's own (+0x76), before the cash"
+                ),
                 (
                     "for sale",
                     "`_CalcShipCanBuy` `Require` @0x4f80a-0x4f840 and `Availability` \
@@ -2232,8 +2284,28 @@ mod tests {
     }
 
     #[test]
+    fn the_class_flown_is_refused_before_for_sale_and_the_cash() {
+        let flying = |buyable, cash| Shipyard {
+            current: ShipId(129),
+            ..listing(buyable, cash)
+        };
+        let can = |shipyard: Shipyard| shipyard.can(ShipId(129));
+        assert_eq!(
+            can(flying(false, 0)),
+            Err(ShipRefusal::AlreadyFlown),
+            "before for sale"
+        );
+        assert_eq!(
+            can(flying(true, 0)),
+            Err(ShipRefusal::AlreadyFlown),
+            "before the cash"
+        );
+        assert_eq!(can(flying(true, 50_000)), Err(ShipRefusal::AlreadyFlown));
+    }
+
+    #[test]
     fn each_disputed_shipyard_rule_names_its_key() {
-        assert_eq!(keys(&can_buy()), [None, None]);
+        assert_eq!(keys(&can_buy()), [None, None, None]);
         assert_eq!(day_roll().about().reads(), Some(RuleKey::BuyRandom));
         assert_eq!(
             trade_in_value().about().reads(),

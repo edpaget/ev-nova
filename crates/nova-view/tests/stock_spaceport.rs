@@ -158,11 +158,21 @@ fn port_kanes_trade_center_lists_its_goods_in_the_trade_dialog() {
 
 /// A new stock pilot docked at Viking (`spöb` 157 in Tichel, `sÿst` 129).
 fn at_viking(data: &GameData) -> Session {
+    fly(data, &viking_save(data))
+}
+
+/// A new stock pilot's save, docked at Viking.
+fn viking_save(data: &GameData) -> serde_json::Value {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["system"] = serde_json::json!(129);
     save["stellar"] = serde_json::json!(157);
+    save
+}
+
+/// A session flying the pilot of `save`.
+fn fly(data: &GameData, save: &serde_json::Value) -> Session {
     let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     Session::fly(data, docked).expect("flies")
 }
@@ -375,7 +385,10 @@ fn the_shuttles_name_is_asked_in_the_stock_text_input_dialog() {
         let data = GameData::open(&dir, None).expect("the stock data opens");
         let ui = InterfaceData::open(&ui).expect("the interface file opens");
         let template = ui.dialog_template(TEXT_INPUT_DIALOG).expect("Text Input");
-        let mut session = at_viking(&data);
+        // Flying the Heavy Shuttle, as the Shuttle flown is not for sale.
+        let mut save = viking_save(&data);
+        save["ship"] = serde_json::json!(129);
+        let mut session = fly(&data, &save);
         session.shipyard(&mut Fires).expect("a shipyard");
         let naming = session
             .ship_naming(nova_sim::ShipId(128), &mut Highest)

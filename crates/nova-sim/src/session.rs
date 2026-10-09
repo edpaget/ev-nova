@@ -8529,6 +8529,37 @@ mod tests {
     }
 
     #[test]
+    fn buying_the_class_flown_is_refused_and_changes_nothing() {
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session.take_events();
+        let before = session.clone();
+        assert_eq!(
+            session.buy_ship(ShipId(128), "Kestrel", &mut NeverFires),
+            Err(ShipRefusal::AlreadyFlown)
+        );
+        assert_eq!(
+            session.ship_naming(ShipId(128), &mut NeverFires),
+            Err(ShipRefusal::AlreadyFlown)
+        );
+        assert_eq!(session, before);
+        assert!(!session.take_save_due());
+        assert_eq!(session.take_events(), []);
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(
+            session.buy_ship(NEW, "Other", &mut NeverFires),
+            Err(ShipRefusal::AlreadyFlown),
+            "the new class, under its new name"
+        );
+        assert!(
+            session.ship_naming(ShipId(128), &mut NeverFires).is_ok(),
+            "the refusal follows the class flown now"
+        );
+    }
+
+    #[test]
     fn a_purchase_tells_the_ship_changed_and_a_refused_one_tells_nothing() {
         let catalog = shipbuying();
         let mut session = outfitted(&catalog);
