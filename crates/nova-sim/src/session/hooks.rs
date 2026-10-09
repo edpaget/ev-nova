@@ -155,8 +155,8 @@ mod tests {
     use crate::reserves::Reserves;
     use crate::session::control::SetOpObserver;
     use crate::session::tests::{
-        NEW, aboard, boardable, buy, captured, kitted, outfitted, outfitting, outfitting_effects,
-        sell, shipbuying, take,
+        BLASTER, NEW, aboard, boardable, buy, captured, kitted, outfitted, outfitting,
+        outfitting_effects, outfitting_on_bit_7, sell, shipbuying, take,
     };
     use crate::shipyard::ShipRefusal;
     use crate::testkit::{Draws, FakePilotCatalog, Scripted, catalog, outfit};
@@ -443,6 +443,29 @@ mod tests {
         );
         assert!(session.control_bit(bit(400)), "toggled once: one sale");
         assert_eq!(session.pilot().owned(pod), 2);
+    }
+
+    #[test]
+    fn by_the_engine_on_sell_bits_that_list_an_outfit_reset_the_selection() {
+        // The booster's OnSell sets bit 7, which lists the hidden 305, so
+        // its first sale changes the listing.
+        let mut catalog = hooked_outfit(outfitting_on_bit_7(), SPEED, "", "b7");
+        catalog.outfits.push(outfit(128, &[]));
+        let sold = |source| {
+            let mut session = outfitted(&catalog).with_rules(
+                crate::rulebook::Rulebook::default()
+                    .with_override(crate::RuleKey::RelistedSale, source),
+            );
+            session.pilot.outfits = BTreeMap::from([(SPEED, 2), (BLASTER, 1)]);
+            let listed = session.outfitter(&mut Scripted::default()).expect("open");
+            assert_eq!(listed.row(OutfitId(305)), None, "hidden until bit 7");
+            let order = session.outfit_order(sell(SPEED), 2, &mut Scripted::default());
+            assert_eq!((order.run.done, order.run.stopped), (2, None));
+            assert!(session.control_bit(bit(7)));
+            (session.pilot().owned(SPEED), session.pilot().owned(BLASTER))
+        };
+        assert_eq!(sold(crate::RuleSource::Engine), (1, 0), "a blaster sold");
+        assert_eq!(sold(crate::RuleSource::Bible), (0, 1), "two boosters");
     }
 
     // The shipyard.

@@ -2127,7 +2127,9 @@ pub(crate) struct Shop<'a> {
 impl Shop<'_> {
     /// The outfitter, for `pilot`, each outfit's roll for the day kept in
     /// `rolls` and any not drawn yet drawn on `chance` (see the module
-    /// docs); `None` when the stellar has none.
+    /// docs); `None` when the stellar has none. The session builds it
+    /// through [`outfitter_with`](Self::outfitter_with).
+    #[cfg(test)]
     pub(crate) fn outfitter(
         &self,
         pilot: &Pilot,
