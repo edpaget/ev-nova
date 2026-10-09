@@ -1208,7 +1208,20 @@ mod tests {
     }
 
     #[test]
-    fn u_repairs_a_damaged_stellar_and_y_forgets_its_damage() {
+    fn y_forgets_a_stellars_damage() {
+        let catalog = shooting([life(128, 2)]);
+        let mut session = quiet(&catalog);
+        fire(&mut session, 1);
+        assert_eq!(session.strength.get(&StellarId(128)), Some(&50));
+        run(&mut session, "Y128");
+        assert!(
+            session.strength.is_empty(),
+            "destroyed: no current strength"
+        );
+    }
+
+    #[test]
+    fn u_repairs_a_damaged_stellar_destroyed_or_not() {
         for script in ["U128", "Y128 U128"] {
             let catalog = shooting([life(128, 2)]);
             let mut session = quiet(&catalog);

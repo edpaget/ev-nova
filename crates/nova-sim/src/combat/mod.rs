@@ -2763,6 +2763,60 @@ mod tests {
         assert!(ships[1].reserves.shield.now < 10.0, "the ship took it");
     }
 
+    /// A shot 100 pixels a tick from the centre to the right, among
+    /// `stellars`: 129 at (100, 0), edge at 80, and 128 at (50, 0), edge
+    /// at 40, both on its first tick's path. Its strikes, and where it
+    /// exploded.
+    fn through_two(stellars: &mut [StellarTarget]) -> (Vec<StellarStrike>, Vec<Vec2>) {
+        let fast = WeaponRecord {
+            speed: 10_000,
+            ..planet_gun()
+        };
+        let (_, _, events, strikes) =
+            shoot_once(fast, Vec::new(), stellars, &Arsenal::default(), 1);
+        let at = explosions(&events).iter().map(|(at, _)| *at).collect();
+        (strikes, at)
+    }
+
+    fn far(strength: i64) -> StellarTarget {
+        StellarTarget {
+            stellar: StellarId(129),
+            ..stellar_at(100.0, 0.0, 20.0, strength)
+        }
+    }
+
+    fn near(strength: i64) -> StellarTarget {
+        stellar_at(50.0, 0.0, 10.0, strength)
+    }
+
+    fn close(seen: &[Vec2], x: f32) -> bool {
+        seen.len() == 1 && (seen[0] - Vec2::new(x, 0.0)).length() < 1e-3
+    }
+
+    #[test]
+    fn a_shot_strikes_the_nearest_stellar_along_its_path_whatever_their_order() {
+        let mut stellars = [far(100), near(100)];
+        let (strikes, seen) = through_two(&mut stellars);
+        assert_eq!(strikes, [strike(14, false)], "128, the nearer");
+        assert_eq!((stellars[0].strength, stellars[1].strength), (100, 86));
+        assert!(close(&seen, 40.0), "on the nearer's edge: {seen:?}");
+    }
+
+    #[test]
+    fn a_shot_passes_a_stellar_shot_down_for_the_next_along_its_path() {
+        let mut stellars = [near(-1), far(100)];
+        let (strikes, seen) = through_two(&mut stellars);
+        assert_eq!(
+            strikes,
+            [StellarStrike {
+                stellar: StellarId(129),
+                ..strike(14, false)
+            }]
+        );
+        assert_eq!((stellars[0].strength, stellars[1].strength), (-1, 86));
+        assert!(close(&seen, 80.0), "on the farther's edge: {seen:?}");
+    }
+
     #[test]
     fn a_fast_shot_hits_a_stellar_it_passes_between_ticks() {
         let fast = WeaponRecord {
