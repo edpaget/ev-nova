@@ -1,12 +1,15 @@
 //! The system catalog over the game data: a thin mapping from `GameData`'s
 //! `sÿst` and `spöb` records and its stellar sprite lookup to
-//! [`SystemContents`].
+//! [`SystemContents`], with graphic type 0's sheet (`spïn` 1000), which a
+//! destroyed stellar with no `DeadType` sheet may draw after a rebuild
+//! point (story-runtime phase 9).
 
 use std::num::NonZeroU16;
 
+use nova_data::graphics::SpriteSheet;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
-use nova_data::{GameData, Record, StellarSprite, StoreEntry};
+use nova_data::{GameData, Record, StoreEntry, stellar_spin_id};
 
 use super::catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
@@ -43,9 +46,18 @@ impl SystemCatalog for GameData {
             id,
             name,
             stellars,
+            type_zero_sprite: type_zero_sprite(self),
             problems,
         }
     }
+}
+
+/// Graphic type 0's sheet, `spïn` 1000, or why it cannot be shown.
+fn type_zero_sprite(data: &GameData) -> Result<StellarSheet, String> {
+    let spin = stellar_spin_id(0).expect("graphic type 0 has a spïn");
+    data.spin_sheet(spin)
+        .map(|found| sheet(found.image_id, &found.sheet))
+        .map_err(|err| err.to_string())
 }
 
 /// Every stellar of the system that can be placed, in navigation order. A
@@ -76,11 +88,15 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
         y: record.y_pos,
         sprite: data
             .stellar_sprite(id)
-            .map(|sprite| sheet(&sprite))
+            .map(|sprite| sheet(sprite.image_id, &sprite.sheet))
             .map_err(|err| err.to_string()),
         dead_sprite: data
             .stellar_dead_sprite(id)
-            .map(|sprite| sprite.as_ref().map(sheet))
+            .map(|sprite| {
+                sprite
+                    .as_ref()
+                    .map(|sprite| sheet(sprite.image_id, &sprite.sheet))
+            })
             .map_err(|err| err.to_string())
             .transpose(),
         animation: AnimationData {
@@ -91,17 +107,17 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
     }
 }
 
-/// The sheet's ID, frame count and frame size.
-fn sheet(sprite: &StellarSprite<'_>) -> StellarSheet {
+/// `rlëD` `image_id`'s ID, frame count and frame size, decoded as `sheet`.
+fn sheet(image_id: i16, sheet: &SpriteSheet) -> StellarSheet {
     // An `rlëD` header counts its frames in a u16, and the decoder rejects
     // a sheet with none (`GraphicsError::NoFrames`).
-    let frames = NonZeroU16::new(sprite.sheet.frames().len() as u16)
+    let frames = NonZeroU16::new(sheet.frames().len() as u16)
         .expect("a decoded rlëD has at least one frame");
     StellarSheet {
-        image_id: sprite.image_id,
+        image_id,
         frames,
-        frame_width: sprite.sheet.frame_width(),
-        frame_height: sprite.sheet.frame_height(),
+        frame_width: sheet.frame_width(),
+        frame_height: sheet.frame_height(),
     }
 }
 
@@ -284,6 +300,7 @@ mod tests {
                     },
                     earth(),
                 ],
+                type_zero_sprite: Ok(sheet_of(1000, 1, 8)),
                 problems: Vec::new(),
             }
         );
@@ -398,6 +415,7 @@ mod tests {
                 id: SystemId(200),
                 name: "sÿst 200".to_owned(),
                 stellars: Vec::new(),
+                type_zero_sprite: Ok(sheet_of(1000, 1, 8)),
                 problems: vec!["no sÿst 200".to_owned()],
             }
         );
@@ -439,5 +457,28 @@ mod tests {
         let contents = store(&resources).system(SystemId(131));
         assert_eq!(contents.name, "sÿst 131");
         assert_eq!(contents.stellars[0].name, "spöb 140");
+    }
+
+    #[test]
+    fn graphic_type_0s_sheet_comes_with_the_system_or_why_not() {
+        let mut resources = sol();
+        resources.push((System::TYPE, 131, None, system(&[129])));
+        let data = store(&resources);
+        assert_eq!(
+            data.system(SystemId(131)).type_zero_sprite,
+            Ok(sheet_of(1000, 1, 8)),
+            "whether a stellar of the system has type 0 or not"
+        );
+        resources.retain(|(ty, id, _, _)| (*ty, *id) != (Spin::TYPE, 1000));
+        assert_eq!(
+            store(&resources).system(SystemId(131)).type_zero_sprite,
+            Err("no spïn 1000".to_owned())
+        );
+        let mut resources = sol();
+        resources.retain(|(ty, id, _, _)| (*ty, *id) != (RLED, 1000));
+        assert_eq!(
+            store(&resources).system(SystemId(130)).type_zero_sprite,
+            Err("spïn 1000: no rlëD 1000 for its sprites".to_owned())
+        );
     }
 }

@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use super::animation::Animation;
 use super::camera::{CAMERA_MARGIN, Camera};
+use nova_sim::RuleSource;
+
 use super::catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemId,
 };
@@ -44,14 +46,32 @@ pub struct SceneStellar {
     pub animation_data: AnimationData,
     /// Whether it is destroyed, as last set.
     pub destroyed: bool,
+    /// Whether it draws graphic type 0's sheet, as last set: destroyed,
+    /// with no `DeadType` sheet that could be read, since the last rebuild
+    /// point, by [`RuleKey::DeadTypeFallback`](nova_sim::RuleKey::DeadTypeFallback)'s
+    /// engine reading.
+    pub type_zero: bool,
+    /// Graphic type 0's sheet (`spïn` 1000), or why it cannot be shown.
+    pub type_zero_sprite: Result<StellarSheet, String>,
     /// When each frame of the sheet drawn shows; a stellar with no sheet
     /// stays on frame 0.
     pub animation: Animation,
 }
 
+/// How a stellar looks, for [`SystemScene::set_destroyed`]: whether it is
+/// destroyed, and whether it has been dead since the last rebuild point
+/// (`Session::dead_since_rebuild`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StellarLook {
+    /// Whether it is destroyed.
+    pub destroyed: bool,
+    /// Whether it has been dead since the last rebuild point.
+    pub dead_since_rebuild: bool,
+}
+
 impl SceneStellar {
-    /// `stellar`, not destroyed.
-    fn new(stellar: StellarContents) -> Self {
+    /// `stellar`, not destroyed, with graphic type 0's sheet `type_zero`.
+    fn new(stellar: StellarContents, type_zero: Result<StellarSheet, String>) -> Self {
         let mut placed = Self {
             id: stellar.id,
             name: stellar.name,
@@ -60,6 +80,8 @@ impl SceneStellar {
             dead_sprite: stellar.dead_sprite,
             animation_data: stellar.animation,
             destroyed: false,
+            type_zero: false,
+            type_zero_sprite: type_zero,
             animation: Animation::new(NonZeroU16::MIN, stellar.animation, false),
         };
         placed.animation = placed.animation_for_drawn();
@@ -67,15 +89,23 @@ impl SceneStellar {
     }
 
     /// The sheet drawn: the `DeadType` sheet while destroyed, when there
-    /// is one that could be read; the `Type` sheet otherwise, which is the
-    /// Bible's "don't display different graphic type when destroyed" and
-    /// the original's reading between rebuilds (story-runtime phase 9 owns
-    /// its `spïn` 1000 after one).
+    /// is one that could be read; otherwise graphic type 0's sheet while
+    /// [`type_zero`](Self::type_zero) holds, as the original's rebuild
+    /// fills a sprite slot it left empty (story-runtime phase 9); the
+    /// `Type` sheet otherwise, which is the Bible's "don't display
+    /// different graphic type when destroyed" and the original's reading
+    /// between rebuilds.
     pub fn drawn(&self) -> &Result<StellarSheet, String> {
         match &self.dead_sprite {
             Some(dead @ Ok(_)) if self.destroyed => dead,
+            _ if self.type_zero => &self.type_zero_sprite,
             _ => &self.sprite,
         }
+    }
+
+    /// Whether it has a `DeadType` sheet that could be read.
+    fn has_dead_sheet(&self) -> bool {
+        matches!(self.dead_sprite, Some(Ok(_)))
     }
 
     /// The animation of the sheet drawn, in the current state.
@@ -99,18 +129,37 @@ pub struct SystemScene {
 
 impl SystemScene {
     /// System `id`, read from `catalog` once.
+    ///
+    /// Its problems are the catalog's, then each stellar's `DeadType`
+    /// sheet that exists but cannot be read, then graphic type 0's sheet
+    /// when it cannot be read and some stellar might fall back to it (one
+    /// with no `DeadType` sheet that could be read), whatever the reading
+    /// of [`RuleKey::DeadTypeFallback`](nova_sim::RuleKey::DeadTypeFallback):
+    /// the sheet is broken either way.
     pub fn load(catalog: &impl SystemCatalog, id: SystemId) -> Self {
         let contents = catalog.system(id);
-        let stellars = contents
+        let type_zero = contents.type_zero_sprite;
+        let stellars: Vec<SceneStellar> = contents
             .stellars
             .into_iter()
-            .map(SceneStellar::new)
+            .map(|stellar| SceneStellar::new(stellar, type_zero.clone()))
             .collect();
+        let mut problems = contents.problems;
+        for stellar in &stellars {
+            if let Some(Err(reason)) = &stellar.dead_sprite {
+                problems.push(format!("spöb {} DeadType: {reason}", stellar.id.0));
+            }
+        }
+        if let Err(reason) = &type_zero
+            && stellars.iter().any(|stellar| !stellar.has_dead_sheet())
+        {
+            problems.push(format!("spïn 1000 (graphic type 0): {reason}"));
+        }
         Self {
             id: contents.id,
             name: contents.name,
             stellars,
-            problems: contents.problems,
+            problems,
         }
     }
 
@@ -138,15 +187,25 @@ impl SystemScene {
         &self.problems
     }
 
-    /// Marks each stellar destroyed or not as `destroyed` says, so that it
-    /// draws its `DeadType` or `Type` sheet. Only a stellar whose state
-    /// changed has its animation rebuilt for the sheet now drawn; every
-    /// other is left as it was.
-    pub fn set_destroyed(&mut self, destroyed: impl Fn(StellarId) -> bool) {
+    /// Marks each stellar destroyed or not as `look` says, so that it
+    /// draws its `DeadType`, graphic type 0's or its `Type` sheet
+    /// ([`SceneStellar::drawn`]). By `reading`, the reading of
+    /// [`RuleKey::DeadTypeFallback`](nova_sim::RuleKey::DeadTypeFallback),
+    /// the engine's, a destroyed stellar with no `DeadType` sheet that
+    /// could be read draws graphic type 0's while it has been dead since
+    /// the last rebuild point; by the Bible's it keeps its `Type`. Only a
+    /// stellar whose state changed has its animation rebuilt for the sheet
+    /// now drawn; every other is left as it was.
+    pub fn set_destroyed(&mut self, look: impl Fn(StellarId) -> StellarLook, reading: RuleSource) {
         for stellar in &mut self.stellars {
-            let now = destroyed(stellar.id);
-            if stellar.destroyed != now {
-                stellar.destroyed = now;
+            let now = look(stellar.id);
+            let type_zero = reading == RuleSource::Engine
+                && now.destroyed
+                && now.dead_since_rebuild
+                && !stellar.has_dead_sheet();
+            if stellar.destroyed != now.destroyed || stellar.type_zero != type_zero {
+                stellar.destroyed = now.destroyed;
+                stellar.type_zero = type_zero;
                 stellar.animation = stellar.animation_for_drawn();
             }
         }
@@ -262,11 +321,15 @@ mod tests {
         }
     }
 
+    /// Graphic type 0's sheet's `rlëD` (`spïn` 1000), of 2 frames.
+    const TYPE_ZERO: i16 = 3000;
+
     fn system(id: i16, stellars: Vec<StellarContents>) -> SystemContents {
         SystemContents {
             id: SystemId(id),
             name: format!("System {id}"),
             stellars,
+            type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
             problems: Vec::new(),
         }
     }
@@ -305,6 +368,8 @@ mod tests {
                     dead_sprite: None,
                     animation_data: WORMHOLE,
                     destroyed: false,
+                    type_zero: false,
+                    type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     animation: Animation::new(frames(4), WORMHOLE, false),
                 },
                 SceneStellar {
@@ -315,6 +380,8 @@ mod tests {
                     dead_sprite: None,
                     animation_data: WORMHOLE,
                     destroyed: false,
+                    type_zero: false,
+                    type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     animation: Animation::new(frames(1), WORMHOLE, false),
                 },
                 SceneStellar {
@@ -325,6 +392,8 @@ mod tests {
                     dead_sprite: None,
                     animation_data: WORMHOLE,
                     destroyed: false,
+                    type_zero: false,
+                    type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     animation: Animation::new(frames(1), WORMHOLE, false),
                 },
             ]
@@ -420,6 +489,15 @@ mod tests {
         )])
     }
 
+    /// A stellar destroyed or not, as `destroyed` says, not dead since the
+    /// last rebuild point.
+    fn whole_since(destroyed: bool) -> StellarLook {
+        StellarLook {
+            destroyed,
+            dead_since_rebuild: false,
+        }
+    }
+
     /// Each stellar's sprite drawn `elapsed` in, in order.
     fn drawn(scene: &SystemScene, elapsed: Duration) -> Vec<ImageKey> {
         let mut list = DrawList::new();
@@ -460,7 +538,7 @@ mod tests {
             ImageKey::sprite(1003, 0),
         ];
         assert_eq!(drawn(&scene, Duration::ZERO), whole, "loaded whole");
-        scene.set_destroyed(|id| id == StellarId(150));
+        scene.set_destroyed(|id| whole_since(id == StellarId(150)), RuleSource::Engine);
         assert!(scene.stellars()[0].destroyed);
         assert_eq!(
             drawn(&scene, Duration::ZERO)[0],
@@ -468,7 +546,7 @@ mod tests {
             "the DeadType sheet"
         );
         assert_eq!(drawn(&scene, Duration::ZERO)[1..], whole[1..]);
-        scene.set_destroyed(|_| false);
+        scene.set_destroyed(|_| whole_since(false), RuleSource::Engine);
         assert!(!scene.stellars()[0].destroyed);
         assert_eq!(drawn(&scene, Duration::ZERO), whole, "regenerated");
     }
@@ -476,7 +554,7 @@ mod tests {
     #[test]
     fn a_destroyed_stellar_with_no_dead_type_sheet_keeps_its_type() {
         let mut scene = SystemScene::load(&dying(), SystemId(134));
-        scene.set_destroyed(|_| true);
+        scene.set_destroyed(|_| whole_since(true), RuleSource::Engine);
         assert!(scene.stellars().iter().all(|stellar| stellar.destroyed));
         assert_eq!(
             drawn(&scene, Duration::ZERO)[1..3],
@@ -491,7 +569,7 @@ mod tests {
         let at = Camera::centred_on(Point::default()).world_to_screen(Point::default());
         let whole = name_at(&scene, "Stellar 150");
         assert_eq!(whole, Point::new(at.x - 4.0, at.y + 4.0 + NAME_GAP));
-        scene.set_destroyed(|id| id == StellarId(150));
+        scene.set_destroyed(|id| whole_since(id == StellarId(150)), RuleSource::Engine);
         let dead = name_at(&scene, "Stellar 150");
         assert_eq!(dead, Point::new(at.x - 8.0, at.y + 8.0 + NAME_GAP));
     }
@@ -502,7 +580,7 @@ mod tests {
         let before = scene.stellars().to_vec();
         assert!(!before[0].animation.is_animated(), "whole, so still");
         assert!(before[3].animation.is_animated());
-        scene.set_destroyed(|id| id == StellarId(150));
+        scene.set_destroyed(|id| whole_since(id == StellarId(150)), RuleSource::Engine);
         let frames = |n| NonZeroU16::new(n).expect("non-zero");
         assert_eq!(
             scene.stellars()[0].animation,
@@ -514,7 +592,10 @@ mod tests {
             ImageKey::sprite(2150, 1)
         );
         assert_eq!(scene.stellars()[1..], before[1..], "the others untouched");
-        scene.set_destroyed(|id| id == StellarId(150) || id == StellarId(153));
+        scene.set_destroyed(
+            |id| whole_since(id == StellarId(150) || id == StellarId(153)),
+            RuleSource::Engine,
+        );
         assert!(
             !scene.stellars()[3].animation.is_animated(),
             "a normal stellar stops while destroyed"
@@ -533,5 +614,150 @@ mod tests {
         broken.problems = vec!["sÿst 133: no spöb 150".to_owned(), "x".to_owned()];
         let scene = SystemScene::load(&FakeCatalog::new(vec![broken]), SystemId(133));
         assert_eq!(scene.problems(), ["sÿst 133: no spöb 150", "x"]);
+    }
+
+    // A `DeadType` with no sheet, after a rebuild point.
+
+    /// Every stellar destroyed, and dead since the last rebuild point as
+    /// `since` says.
+    fn all_dead(since: bool) -> impl Fn(StellarId) -> StellarLook {
+        move |_| StellarLook {
+            destroyed: true,
+            dead_since_rebuild: since,
+        }
+    }
+
+    #[test]
+    fn a_dead_type_sheet_that_cannot_be_read_is_a_problem() {
+        let scene = SystemScene::load(&dying(), SystemId(134));
+        assert_eq!(scene.problems(), ["spöb 152 DeadType: no spïn 1007"]);
+    }
+
+    #[test]
+    fn the_catalogs_problems_come_first() {
+        let mut catalog = dying();
+        catalog.systems[0].problems = vec!["sÿst 134: no spöb 160".to_owned()];
+        let scene = SystemScene::load(&catalog, SystemId(134));
+        assert_eq!(
+            scene.problems(),
+            ["sÿst 134: no spöb 160", "spöb 152 DeadType: no spïn 1007"]
+        );
+    }
+
+    #[test]
+    fn a_missing_type_zero_sheet_is_a_problem_only_when_a_stellar_might_fall_back_to_it() {
+        let mut catalog = dying();
+        catalog.systems[0].type_zero_sprite = Err("no spïn 1000".to_owned());
+        let scene = SystemScene::load(&catalog, SystemId(134));
+        assert_eq!(
+            scene.problems(),
+            [
+                "spöb 152 DeadType: no spïn 1007",
+                "spïn 1000 (graphic type 0): no spïn 1000",
+            ]
+        );
+        let first = catalog.systems[0].stellars[0].clone();
+        catalog.systems[0].stellars = vec![first];
+        let scene = SystemScene::load(&catalog, SystemId(134));
+        assert_eq!(scene.problems(), [] as [String; 0], "150 has its DeadType");
+    }
+
+    #[test]
+    fn by_the_engine_a_destroyed_stellar_with_no_dead_type_sheet_draws_type_zero_since_a_rebuild() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        scene.set_destroyed(all_dead(true), RuleSource::Engine);
+        assert_eq!(
+            drawn(&scene, Duration::ZERO),
+            [
+                ImageKey::sprite(2150, 0),
+                ImageKey::sprite(TYPE_ZERO, 0),
+                ImageKey::sprite(TYPE_ZERO, 0),
+                ImageKey::sprite(TYPE_ZERO, 0),
+            ],
+            "150 keeps its DeadType sheet"
+        );
+        let flags: Vec<bool> = scene.stellars().iter().map(|s| s.type_zero).collect();
+        assert_eq!(flags, [false, true, true, true]);
+        let frames = |n| NonZeroU16::new(n).expect("non-zero");
+        assert_eq!(
+            scene.stellars()[1].animation,
+            Animation::new(frames(2), WORMHOLE, true),
+            "over type 0's frames"
+        );
+        assert_eq!(
+            scene.stellars()[3].animation,
+            Animation::new(frames(2), WORMHOLE, true),
+            "rebuilt though it was destroyed already"
+        );
+
+        scene.set_destroyed(all_dead(false), RuleSource::Engine);
+        assert_eq!(
+            drawn(&scene, Duration::ZERO)[1..3],
+            [ImageKey::sprite(1001, 0), ImageKey::sprite(1002, 0)],
+            "not dead since a rebuild: Type"
+        );
+        assert!(scene.stellars().iter().all(|s| !s.type_zero));
+        assert_eq!(
+            scene.stellars()[3].animation,
+            Animation::new(frames(4), WORMHOLE, true),
+            "back over Type's frames"
+        );
+    }
+
+    #[test]
+    fn a_whole_stellar_dead_since_a_rebuild_draws_type() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        let look = |_| StellarLook {
+            destroyed: false,
+            dead_since_rebuild: true,
+        };
+        scene.set_destroyed(look, RuleSource::Engine);
+        assert!(scene.stellars().iter().all(|s| !s.type_zero));
+        assert_eq!(drawn(&scene, Duration::ZERO)[1], ImageKey::sprite(1001, 0));
+    }
+
+    #[test]
+    fn by_the_bible_a_destroyed_stellar_with_no_dead_type_sheet_keeps_its_type() {
+        for since in [false, true] {
+            let mut scene = SystemScene::load(&dying(), SystemId(134));
+            scene.set_destroyed(all_dead(since), RuleSource::Bible);
+            assert_eq!(
+                drawn(&scene, Duration::ZERO),
+                [
+                    ImageKey::sprite(2150, 0),
+                    ImageKey::sprite(1001, 0),
+                    ImageKey::sprite(1002, 0),
+                    ImageKey::sprite(1003, 0),
+                ],
+                "{since}"
+            );
+            assert!(scene.stellars().iter().all(|s| !s.type_zero), "{since}");
+        }
+    }
+
+    #[test]
+    fn the_name_sits_under_the_type_zero_sheet_drawn() {
+        let mut catalog = dying();
+        catalog.systems[0].type_zero_sprite = Ok(StellarSheet {
+            frame_width: 40,
+            frame_height: 40,
+            ..sheet(TYPE_ZERO, 2)
+        });
+        let mut scene = SystemScene::load(&catalog, SystemId(134));
+        let at = Camera::centred_on(Point::default()).world_to_screen(Point::new(100.0, 0.0));
+        scene.set_destroyed(all_dead(true), RuleSource::Engine);
+        assert_eq!(
+            name_at(&scene, "Stellar 151"),
+            Point::new(at.x - 20.0, at.y + 20.0 + NAME_GAP)
+        );
+    }
+
+    #[test]
+    fn a_type_zero_sheet_that_cannot_be_read_draws_the_placeholder_and_why() {
+        let mut catalog = dying();
+        catalog.systems[0].type_zero_sprite = Err("no spïn 1000".to_owned());
+        let mut scene = SystemScene::load(&catalog, SystemId(134));
+        scene.set_destroyed(all_dead(true), RuleSource::Engine);
+        assert_eq!(scene.stellars()[1].drawn(), &Err("no spïn 1000".to_owned()));
     }
 }

@@ -27,5 +27,5 @@ pub use catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
     SystemId,
 };
-pub use scene::{SceneStellar, SystemScene};
+pub use scene::{SceneStellar, StellarLook, SystemScene};
 pub use view::SystemView;

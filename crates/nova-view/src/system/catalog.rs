@@ -63,6 +63,12 @@ pub struct SystemContents {
     /// Every stellar that could be placed, in the system's navigation
     /// order.
     pub stellars: Vec<StellarContents>,
+    /// Graphic type 0's sheet (`spïn` 1000), or why it cannot be shown: a
+    /// destroyed stellar whose `DeadType` has no sheet draws it from the
+    /// next rebuild point, by
+    /// [`RuleKey::DeadTypeFallback`](nova_sim::RuleKey::DeadTypeFallback)'s
+    /// engine reading (story-runtime phase 9).
+    pub type_zero_sprite: Result<StellarSheet, String>,
     /// What could not be read, each a message ready to display.
     pub problems: Vec<String>,
 }
@@ -101,6 +107,7 @@ mod tests {
                 id,
                 name: format!("System {}", id.0),
                 stellars: Vec::new(),
+                type_zero_sprite: Err("no spïn 1000".to_owned()),
                 problems: Vec::new(),
             }
         }

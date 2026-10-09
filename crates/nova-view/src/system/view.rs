@@ -255,12 +255,14 @@ mod tests {
                     stellar(158, "Mars", (900, -600), Ok(sheet(1002, 1, 20)), 0),
                     stellar(465, "Wormhole", (2000, 0), Ok(sheet(1059, 4, 30)), 2),
                 ],
+                type_zero_sprite: Ok(sheet(1000, 1, 40)),
                 problems: Vec::new(),
             },
             SystemContents {
                 id: SystemId(131),
                 name: "Empty".to_owned(),
                 stellars: Vec::new(),
+                type_zero_sprite: Ok(sheet(1000, 1, 40)),
                 problems: Vec::new(),
             },
             SystemContents {
@@ -273,6 +275,7 @@ mod tests {
                     Err("no spïn 1002".to_owned()),
                     0,
                 )],
+                type_zero_sprite: Ok(sheet(1000, 1, 40)),
                 problems: vec!["sÿst 132: no spöb 150".to_owned(), "more".to_owned()],
             },
         ])

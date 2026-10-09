@@ -286,10 +286,11 @@ use nova_sim::{
     HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
     NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, Rulebook, Rules, Session, ShipId,
-    ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
-    StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog,
-    Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
+    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleKey, Rulebook, Rules, Session,
+    ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage,
+    StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal,
+    TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level,
+    lights_level,
 };
 use nova_sim::{
     ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules, SessionEvent,
@@ -311,7 +312,7 @@ use crate::draw::{crossed_box, lights_tint};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
 use crate::system::camera::{Camera, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
-use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
+use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::system::starfield;
 use crate::text::TextMetrics;
 use crate::time::ticks;
@@ -999,6 +1000,22 @@ struct Redrawn {
     rebuilt: bool,
 }
 
+/// Draws each stellar of `scene` as `session` holds it: by whether its
+/// galaxy holds it destroyed, its `DeadType` sheet or its `Type` sheet, as
+/// the original's per-frame sprite tick picks them (story-runtime phase
+/// 7), and, by the session's reading of [`RuleKey::DeadTypeFallback`],
+/// graphic type 0's sheet for one with no `DeadType` sheet that has been
+/// dead since the last rebuild point (story-runtime phase 9).
+fn show_destroyed(scene: &mut SystemScene, session: &Session) {
+    scene.set_destroyed(
+        |id| StellarLook {
+            destroyed: session.galaxy().destroyed(id),
+            dead_since_rebuild: session.dead_since_rebuild(id),
+        },
+        session.rules().source_for(RuleKey::DeadTypeFallback),
+    );
+}
+
 /// Text metrics, shared.
 #[derive(Clone)]
 struct Metrics(Rc<dyn TextMetrics>);
@@ -1055,7 +1072,7 @@ impl<
             Ok(session) => (
                 Some({
                     let mut scene = SystemScene::load(&catalog, session.system());
-                    scene.set_destroyed(|id| session.galaxy().destroyed(id));
+                    show_destroyed(&mut scene, session);
                     scene
                 }),
                 catalog.ship_sheet(session.ship()),
@@ -1129,13 +1146,17 @@ impl<
     }
 
     /// The flight with every disputed rule reading as `rules` says
-    /// ([`Session::with_rules`]).
+    /// ([`Session::with_rules`]). The stellars of the scene shown are
+    /// drawn again by the new rules, which say how a destroyed stellar
+    /// with no `DeadType` sheet draws, but not laid out again.
     #[must_use]
     pub fn with_rules(self, rules: Rulebook) -> Self {
-        Self {
+        let mut view = Self {
             session: self.session.map(|session| session.with_rules(rules)),
             ..self
-        }
+        };
+        view.show_destroyed();
+        view
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
@@ -1555,13 +1576,11 @@ impl<
         redrawn
     }
 
-    /// Draws each stellar of the scene shown by whether the session's
-    /// galaxy holds it destroyed: its `DeadType` sheet or its `Type`
-    /// sheet, as the original's per-frame sprite tick picks them
-    /// (story-runtime phase 7). The scene is not laid out again.
+    /// Draws each stellar of the scene shown as the session holds it
+    /// ([`show_destroyed`]). The scene is not laid out again.
     fn show_destroyed(&mut self) {
         if let (Ok(session), Some(scene)) = (&self.session, &mut self.scene) {
-            scene.set_destroyed(|id| session.galaxy().destroyed(id));
+            show_destroyed(scene, session);
         }
     }
 
@@ -3205,6 +3224,10 @@ mod tests {
         }
     }
 
+    /// Graphic type 0's sheet (`spïn` 1000) in every system: one 40 x 40
+    /// frame.
+    const TYPE_ZERO: i16 = 3000;
+
     /// `stellar`, drawing `DeadType` sheet 2000 + `id` (one 30 x 30 frame)
     /// while destroyed.
     fn dying(id: i16, name: &str, at: (i16, i16), frames: u16) -> StellarContents {
@@ -3242,6 +3265,12 @@ mod tests {
                 id,
                 name: name.to_owned(),
                 stellars,
+                type_zero_sprite: Ok(StellarSheet {
+                    image_id: TYPE_ZERO,
+                    frames: NonZeroU16::MIN,
+                    frame_width: 40,
+                    frame_height: 40,
+                }),
                 problems: Vec::new(),
             }
         }
@@ -10122,6 +10151,146 @@ mod tests {
         session.run_set(&destroy, &mut NeverFires);
         let view = FlightView::with_pilot(catalog, session.pilot().clone());
         assert_eq!(sheets_drawn(&view, 128), DEAD_TYPE, "before any frame");
+    }
+
+    // A `DeadType` with no sheet after a rebuild point (story-runtime
+    // phase 9).
+
+    /// Whether graphic type 0's sheet is drawn, at any of the first 4
+    /// frames: Moon (129) is the only stellar that can draw it.
+    fn type_zero_drawn(view: &View) -> bool {
+        sprites(&drawn(view))
+            .into_iter()
+            .any(|(image, _)| (0..4).any(|f| image == ImageKey::sprite(TYPE_ZERO, f)))
+    }
+
+    /// Moon (129) is drawn with its `Type` sheet, or graphic type 0's.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Moon {
+        Type,
+        TypeZero,
+    }
+
+    fn moon(view: &View) -> Moon {
+        match (sheets_drawn(view, 129), type_zero_drawn(view)) {
+            (TYPE, false) => Moon::Type,
+            ((false, false), true) => Moon::TypeZero,
+            other => panic!("the Moon drawn as {other:?}"),
+        }
+    }
+
+    /// [`destructible`] with `DeadTypeFallback` read as `reading`.
+    fn reading(reading: RuleSource) -> View {
+        destructible()
+            .with_rules(Rulebook::default().with_override(RuleKey::DeadTypeFallback, reading))
+    }
+
+    /// The Moon after `Y129` and a frame; then after an in-flight `M130`
+    /// and a frame; then `U129` and a frame; then `Y129` and a frame.
+    fn moon_through_a_rebuild(mut view: View) -> [Moon; 4] {
+        run_set(&mut view, "Y129");
+        view.tick(TICK);
+        let before = moon(&view);
+        run_set(&mut view, "M130");
+        settle_session(&mut view);
+        view.tick(TICK);
+        let rebuilt = moon(&view);
+        run_set(&mut view, "U129");
+        view.tick(TICK);
+        let regenerated = moon(&view);
+        run_set(&mut view, "Y129");
+        view.tick(TICK);
+        [before, rebuilt, regenerated, moon(&view)]
+    }
+
+    #[test]
+    fn a_stellar_with_no_dead_type_draws_type_zero_from_the_next_rebuild_point_until_seen_whole() {
+        assert_eq!(
+            moon_through_a_rebuild(destructible()),
+            [Moon::Type, Moon::TypeZero, Moon::Type, Moon::Type],
+            "by default, the engine's"
+        );
+        assert_eq!(
+            moon_through_a_rebuild(reading(RuleSource::Engine)),
+            [Moon::Type, Moon::TypeZero, Moon::Type, Moon::Type]
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_stellar_with_no_dead_type_keeps_its_type_throughout() {
+        assert_eq!(
+            moon_through_a_rebuild(reading(RuleSource::Bible)),
+            [Moon::Type; 4]
+        );
+    }
+
+    #[test]
+    fn a_take_off_that_only_rebuilds_draws_type_zero() {
+        let mut view = FlightView::new(FakeCatalog {
+            sites: vec![
+                site(128, (6.0, -8.0), StellarFlags::CAN_LAND),
+                site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
+            ],
+            lives: vec![life(129, 0)],
+            ..catalog()
+        });
+        land_now(&mut view);
+        assert_eq!(
+            view.session().expect("flying").landed(),
+            Some(StellarId(128))
+        );
+        run_set(&mut view, "Y129");
+        view.tick(TICK);
+        assert_eq!(
+            moon(&view),
+            Moon::Type,
+            "destroyed after the landing's rebuild"
+        );
+        view.catalog().systems_read.borrow_mut().clear();
+        view.take_off();
+        assert_eq!(moon(&view), Moon::TypeZero, "the take-off's rebuild");
+        assert_eq!(systems_read(&view), [], "not laid out again");
+    }
+
+    /// A pilot loaded with the Moon destroyed, flown by `rules`.
+    fn loaded(rules: Rulebook) -> View {
+        let catalog = FakeCatalog {
+            lives: vec![life(129, 0)],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        let destroy = nova_sim::SetExpr::parse("Y129").expect("parses");
+        session.run_set(&destroy, &mut NeverFires);
+        FlightView::with_pilot(catalog, session.pilot().clone()).with_rules(rules)
+    }
+
+    #[test]
+    fn a_pilot_loaded_with_a_stellar_destroyed_draws_it_as_its_rules_say_from_the_first_frame() {
+        let view = loaded(Rulebook::default());
+        assert!(
+            view.session()
+                .expect("flying")
+                .dead_since_rebuild(StellarId(129))
+        );
+        assert_eq!(moon(&view), Moon::TypeZero, "a load is a rebuild point");
+        let bible = Rulebook::default().with_override(RuleKey::DeadTypeFallback, RuleSource::Bible);
+        let view = loaded(bible);
+        assert_eq!(moon(&view), Moon::Type, "before any event");
+        let view = loaded(bible).with_rules(Rulebook::default());
+        assert_eq!(moon(&view), Moon::TypeZero, "and back");
+    }
+
+    #[test]
+    fn a_system_entered_by_a_jump_with_a_stellar_destroyed_draws_type_zero_from_its_first_frame() {
+        let mut view = destructible();
+        run_set(&mut view, "Y129");
+        jump_to_alpha(&mut view);
+        plot(&mut view, 130);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        arrive_now(&mut view);
+        assert_eq!(view.session().expect("flying").system(), SystemId(130));
+        assert_eq!(moon(&view), Moon::TypeZero);
     }
 
     #[test]
