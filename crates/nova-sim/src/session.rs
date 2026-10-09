@@ -309,6 +309,7 @@ pub use script_effects::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use self::entry::{Arrival, Entry, Placement, ShipPlacement};
 use self::hooks::ShipHook;
 use self::ship_change::ClassChange;
 use crate::ai::{Behaviour, Goal, PlayerSide};
@@ -1928,7 +1929,7 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.player = match self.gate_arrival {
+        let ship = match self.gate_arrival {
             GateArrivalRule::Engine => emerge(exit, self.stats.handling.max_speed, chance),
             GateArrivalRule::LikeJump => {
                 let map = |id| self.star_map.position(id).unwrap_or_default();
@@ -1941,18 +1942,16 @@ impl Session {
                 placed
             }
         };
-        let pilot = &mut self.pilot;
-        pilot.system = system;
-        pilot.stellar = None;
-        pilot.explore(system);
-        pilot.course.clear();
-        self.leave_with_fighters(false);
-        self.sites = catalog.landing_sites(system);
-        self.populate(catalog, chance);
-        self.combat.clear();
-        self.nav_target = None;
-        self.stop_thrust();
-        self.sounds.push(SimSound::Arrived);
+        let entered = Arrival {
+            system,
+            sites: catalog.landing_sites(system),
+            placement: Placement {
+                ship: ShipPlacement::Arrive(ship),
+                stellar: None,
+                hold: false,
+            },
+        };
+        self.enter_system(Entry::Gate, entered, catalog, chance);
     }
 
     /// Docks the ship at `stellar`, one of the system's.

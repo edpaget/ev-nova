@@ -38,7 +38,6 @@ pub(super) enum Entry {
     #[cfg_attr(not(test), expect(dead_code))]
     Jump { hops: usize },
     /// Out of a hypergate or wormhole.
-    #[cfg_attr(not(test), expect(dead_code))]
     Gate,
     /// `M` or `N`, landed or in flight.
     ScriptMove { landed: bool },
@@ -74,7 +73,6 @@ pub(super) struct Placement {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum ShipPlacement {
     /// Exactly here, moving and heading as this says.
-    #[cfg_attr(not(test), expect(dead_code))]
     Arrive(ShipState),
     /// At rest at this position, its heading kept.
     AtRest(Vec2),
