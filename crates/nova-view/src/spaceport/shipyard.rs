@@ -68,6 +68,7 @@ use super::grid::{
     self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, text,
 };
 use super::layout::DONE_LABEL;
+use super::modal::ModalHost;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -271,13 +272,6 @@ pub struct ShipOrder {
     pub name: String,
 }
 
-/// The name prompt, open, and the ship it names.
-#[derive(Clone, Debug)]
-struct Naming {
-    ship: ShipId,
-    prompt: TextInputDialog,
-}
-
 /// The info panel, open: "Shipyard Info" over [`INFO_BACKGROUND`], the
 /// ship's name centred in its title and its lines in its text. The hire
 /// screen opens it too.
@@ -371,8 +365,8 @@ pub struct ShipyardScreen {
     request: Option<(ShipId, bool)>,
     /// Whether the request last taken was asked by B.
     asked_by_key: bool,
-    /// The name prompt, while it is open.
-    naming: Option<Naming>,
+    /// The name prompt, while it is open, and the ship it names.
+    naming: ModalHost<ShipId, TextInputDialog>,
     /// The ship ordered, named, until it is taken.
     order: Option<ShipOrder>,
     /// The ship declined at its name prompt, until it is taken.
@@ -445,7 +439,7 @@ impl ShipyardScreen {
             panel: None,
             request: None,
             asked_by_key: false,
-            naming: None,
+            naming: ModalHost::default(),
             order: None,
             declined: None,
             closed: false,
@@ -542,16 +536,13 @@ impl ShipyardScreen {
         if self.asked_by_key {
             prompt.flush_typed_key();
         }
-        self.naming = Some(Naming {
-            ship: naming.ship,
-            prompt,
-        });
+        self.naming.open(naming.ship, prompt);
     }
 
     /// The name prompt, while it is open.
     #[must_use]
     pub fn naming(&self) -> Option<&TextInputDialog> {
-        self.naming.as_ref().map(|naming| &naming.prompt)
+        self.naming.dialog()
     }
 
     /// The ship ordered at its name prompt since it was last taken, once.
@@ -701,30 +692,6 @@ impl ShipyardScreen {
         }
     }
 
-    /// The name prompt's input: OK orders the ship, and Cancel declines
-    /// it, each closing the prompt.
-    fn naming_input(&mut self, input: &Input) {
-        let Some(naming) = &mut self.naming else {
-            return;
-        };
-        naming.prompt.input(input);
-        self.sounds.extend(naming.prompt.take_sounds());
-        match naming.prompt.take_outcome() {
-            Some(TextInputOutcome::Confirm(name)) => {
-                self.order = Some(ShipOrder {
-                    ship: naming.ship,
-                    name,
-                });
-                self.naming = None;
-            }
-            Some(TextInputOutcome::Cancel) => {
-                self.declined = Some(naming.ship);
-                self.naming = None;
-            }
-            None => {}
-        }
-    }
-
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
         let metrics = &*laid.metrics.0;
         let Some(area) = laid.dialog.item_bounds(GRID_ITEM) else {
@@ -794,8 +761,16 @@ impl Screen for ShipyardScreen {
             }
             return ScreenAction::None;
         }
-        if self.naming.is_some() {
-            self.naming_input(input);
+        if self.naming.is_open() {
+            // OK orders the ship, and Cancel declines it.
+            if let Some((ship, outcome)) = self.naming.input(input, &mut self.sounds) {
+                match outcome {
+                    TextInputOutcome::Confirm(name) => {
+                        self.order = Some(ShipOrder { ship, name });
+                    }
+                    TextInputOutcome::Cancel => self.declined = Some(ship),
+                }
+            }
             return ScreenAction::None;
         }
         if self.panel.is_some() {
@@ -864,15 +839,14 @@ impl Screen for ShipyardScreen {
         );
         laid.dialog.draw(list);
         self.draw_panel(laid, list);
-        if let Some(naming) = &self.naming {
-            naming.prompt.draw(list);
-        }
+        self.naming.draw(list);
     }
 
     fn cancel_pointer(&mut self) {
-        if let Some(naming) = &mut self.naming {
-            naming.prompt.cancel_pointer();
-        } else if let Some(panel) = &mut self.panel {
+        if self.naming.cancel_pointer() {
+            return;
+        }
+        if let Some(panel) = &mut self.panel {
             panel.cancel_pointer();
         } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
