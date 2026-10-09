@@ -32,11 +32,16 @@
 //!   read and fills its slot. So a destroyed stellar's `Type` master is
 //!   unloaded from a rebuild point until a frame finds it whole, unless
 //!   another stellar shown keeps it loaded;
-//! - story-runtime phase 12: the frame count and frame index kept from the
-//!   last rebuild, re-read on `SessionEvent::StellarsRebuilt` and
+//! - story-runtime phase 12: the frame count a stellar animates over, the
+//!   count of the sheet its slot held at the last rebuild point
+//!   (@0x331c9), kept here as that sheet ([`DrawnSheet`]) and read through
+//!   `Session::counted_sheet`
+//!   ([`RuleKey::StellarFrameCount`](crate::RuleKey::StellarFrameCount)).
+//!   The frame index is the view's, re-read on
+//!   `SessionEvent::StellarsRebuilt` and laid out afresh on
 //!   `SessionEvent::SystemChanged`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{LandingSite, StellarId};
 use crate::landing::TypeWidth;
@@ -59,14 +64,16 @@ pub enum DrawnSheet {
 /// The stellar sprites as the original's last rebuild point and the
 /// flight frames since left them (see the module docs): the stellars shown
 /// that were destroyed at the last rebuild point and have not been seen
-/// whole at a flight frame since, the graphics whose master is loaded, and
-/// the stellars whose slot shows no frame. Never saved: a load is itself a
-/// rebuild point.
+/// whole at a flight frame since, the graphics whose master is loaded, the
+/// stellars whose slot shows no frame, and the sheet whose frame count
+/// each stellar shown animates over, where that is not its `Type`. Never
+/// saved: a load is itself a rebuild point.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Rebuilt {
     dead: BTreeSet<StellarId>,
     masters: BTreeSet<i16>,
     empty: BTreeSet<StellarId>,
+    counted: BTreeMap<StellarId, DrawnSheet>,
 }
 
 /// The graphic `site` shows, when `destroyed` says whether it is: its
@@ -87,7 +94,13 @@ impl Rebuilt {
     /// when some slot is left empty and `fallback_reads`, the original
     /// filling it with graphic type 0; and a slot is left with no frame
     /// when its stellar shows nothing that can be read and the fallback
-    /// cannot be read either. Whether the dead set changed.
+    /// cannot be read either. Each stellar shown counts the frames of the
+    /// sheet its slot then holds: its `DeadType`'s when destroyed with one
+    /// that can be read; graphic type 0's when destroyed with none, dead
+    /// since the last rebuild point (its slot filled with graphic type 0
+    /// then) and the fallback reads; its `Type`'s otherwise, which is what
+    /// its slot held within the system. Whether the dead set or any
+    /// counted sheet changed.
     pub(crate) fn rebuild(
         &mut self,
         shown: &[LandingSite],
@@ -99,8 +112,22 @@ impl Rebuilt {
             .map(|site| site.id)
             .filter(|&id| destroyed(id))
             .collect();
-        let changed = dead != self.dead;
+        let counted: BTreeMap<StellarId, DrawnSheet> = shown
+            .iter()
+            .filter(|site| dead.contains(&site.id))
+            .filter_map(|site| {
+                if site.dead_graphic.is_some() {
+                    Some((site.id, DrawnSheet::Dead))
+                } else if fallback_reads && self.dead.contains(&site.id) {
+                    Some((site.id, DrawnSheet::TypeZero))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let changed = dead != self.dead || counted != self.counted;
         self.dead = dead;
+        self.counted = counted;
         let graphics: Vec<(StellarId, Option<i16>)> = shown
             .iter()
             .map(|site| (site.id, shown_graphic(site, destroyed(site.id))))
@@ -141,6 +168,15 @@ impl Rebuilt {
     /// Whether `stellar` has been dead since the last rebuild point.
     pub(crate) fn dead(&self, stellar: StellarId) -> bool {
         self.dead.contains(&stellar)
+    }
+
+    /// The sheet whose frame count `stellar` animates over: the one its
+    /// slot held at the last rebuild point, its `Type` before any.
+    pub(crate) fn counted(&self, stellar: StellarId) -> DrawnSheet {
+        self.counted
+            .get(&stellar)
+            .copied()
+            .unwrap_or(DrawnSheet::Type)
     }
 
     /// Whether `stellar`'s sprite slot shows a frame.
@@ -204,13 +240,17 @@ mod tests {
     }
 
     #[test]
-    fn a_rebuild_reports_a_change_only_when_the_set_changed() {
+    fn a_rebuild_reports_a_change_only_when_the_set_or_a_counted_sheet_changed() {
         let mut rebuilt = Rebuilt::default();
         assert!(
             !rebuilt.rebuild(&ids(&[128]), destroyed(&[]), true),
             "none still"
         );
         assert!(rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), true));
+        assert!(
+            rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), true),
+            "the same set, but 128 now counts graphic type 0's frames"
+        );
         assert!(
             !rebuilt.rebuild(&ids(&[128]), destroyed(&[128]), true),
             "the same"
@@ -410,5 +450,72 @@ mod tests {
         assert_eq!(frames(&rebuilt, &[128]), [true]);
         rebuilt.frame(&sites, destroyed(&[128]));
         assert_eq!(frames(&rebuilt, &[128]), [true], "keeps its frames");
+    }
+
+    // The counted sheet (story-runtime phase 12).
+
+    fn counted(rebuilt: &Rebuilt, ids: &[i16]) -> Vec<DrawnSheet> {
+        ids.iter()
+            .map(|&id| rebuilt.counted(StellarId(id)))
+            .collect()
+    }
+
+    use DrawnSheet::{Dead, Type, TypeZero};
+
+    #[test]
+    fn before_any_rebuild_every_stellar_counts_its_type() {
+        assert_eq!(counted(&Rebuilt::default(), &[128]), [Type]);
+    }
+
+    #[test]
+    fn a_rebuild_counts_a_whole_stellars_type_and_a_destroyed_ones_dead_type() {
+        let sites = [shows(128, 4, Some(9)), shows(129, 5, Some(8))];
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[129]), true);
+        assert_eq!(counted(&rebuilt, &[128, 129]), [Type, Dead]);
+        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        assert_eq!(counted(&rebuilt, &[128, 129]), [Dead, Type]);
+    }
+
+    #[test]
+    fn a_destroyed_stellar_with_no_dead_type_counts_graphic_type_0_from_its_second_rebuild() {
+        let sites = [shows(128, 4, None)];
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        assert_eq!(counted(&rebuilt, &[128]), [Type], "its slot held Type");
+        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        assert_eq!(counted(&rebuilt, &[128]), [TypeZero], "graphic type 0's");
+        rebuilt.rebuild(&sites, destroyed(&[]), true);
+        assert_eq!(counted(&rebuilt, &[128]), [Type], "whole again");
+    }
+
+    #[test]
+    fn with_graphic_type_0_unreadable_it_counts_its_type() {
+        let sites = [shows(128, 4, None)];
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[128]), false);
+        rebuilt.rebuild(&sites, destroyed(&[128]), false);
+        assert_eq!(counted(&rebuilt, &[128]), [Type]);
+    }
+
+    #[test]
+    fn a_stellar_seen_whole_since_counts_its_type_again() {
+        let sites = [shows(128, 4, None)];
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        // `U`, a frame while whole, then `Y`: the frame cloned `Type` back.
+        rebuilt.frame(&sites, destroyed(&[]));
+        assert_eq!(counted(&rebuilt, &[128]), [TypeZero], "until a rebuild");
+        rebuilt.rebuild(&sites, destroyed(&[128]), true);
+        assert_eq!(counted(&rebuilt, &[128]), [Type]);
+    }
+
+    #[test]
+    fn a_stellar_no_longer_shown_counts_its_type() {
+        let mut rebuilt = Rebuilt::default();
+        rebuilt.rebuild(&[shows(128, 4, Some(9))], destroyed(&[128]), true);
+        rebuilt.rebuild(&[shows(129, 5, None)], destroyed(&[128]), true);
+        assert_eq!(counted(&rebuilt, &[128]), [Type]);
     }
 }

@@ -907,11 +907,12 @@
 //! type when destroyed" and the original's reading between rebuilds
 //! (after one it draws graphic type 0; see "Built by phase 9"). Its
 //! animation follows the live state: one whose `Flags2` has 0x0080
-//! animates only while destroyed, any other only while not. Every
-//! stellar's frame comes from the view's one clock, so a swapped sheet
-//! shows the frame that clock gives it, over its own frame count; the
-//! original keeps the slot's frame index while it is in range, over the
-//! frame count from the last rebuild (story-runtime phase 12).
+//! animates only while destroyed, any other only while not. Since phase
+//! 12 each stellar steps its own frame tick by tick, keeps the frame it
+//! shows across a swap while it is in range, and animates over the frame
+//! count of the sheet its slot held at the last rebuild point (see "Built
+//! by phase 12"); before, every stellar's frame came from the view's one
+//! clock.
 //!
 //! No Rulebook key is added. The original's other readings are filed as
 //! their own phases, each to add a key with the original's reading as
@@ -945,7 +946,9 @@
 //!   stellar animates only when `Flags2` (+0x34) has 0x0080, one not
 //!   destroyed only when it lacks it, as the Bible says. One that does
 //!   not animate shows frame 0 (@0x2ee20). The frame count it animates
-//!   over (+0x474) is copied from the slot only at a rebuild (@0x331c9).
+//!   over (+0x474) is copied from the slot only at a rebuild (@0x331c9),
+//!   so the animation follows the live state but not the live sheet's
+//!   frame count (see "Checked for phase 12").
 //! - **The rebuild** (`_HandleStellarSystemVisibility` @0x32aa5) makes
 //!   the same choice for each stellar of the player's system
 //!   (@0x32f0f-0x32f2f), frees each master no stellar there uses
@@ -1433,6 +1436,126 @@
 //!   first slot holding the point wins, the slots filled by ascending
 //!   `spöb` index (@0x32eda-0x32f06), not `NavDef` order. Both are phase
 //!   20.
+//!
+//! ## Built by phase 12
+//!
+//! The sheet a stellar draws is decided once, in the session, and a
+//! stellar animates over the frame count of the sheet its sprite slot
+//! held at the last rebuild point, as the original's does.
+//!
+//! - **One owner for the sheet drawn.** `Session::drawn_sheet` gives a
+//!   [`DrawnSheet`] (`Type`, `Dead` or `TypeZero`) for each stellar shown,
+//!   by the rule of "Built by phase 9". The click box
+//!   (`Session::drawn_frame_size`) is built on it, and the flight view's
+//!   `SystemScene::set_destroyed` takes it, so the view no longer reads
+//!   the rulebook or works out graphic type 0 itself.
+//! - **The counted sheet** is the sim's, kept in `Rebuilt` beside the dead
+//!   set (the `rebuild` submodule), in the original's terms: the sheet
+//!   the slot held at the last rebuild point. A whole stellar counts its
+//!   `Type`; a destroyed one its `DeadType` when that can be read; a
+//!   destroyed one with none, graphic type 0's when it was dead since the
+//!   previous rebuild point (its slot filled with graphic type 0 then) and
+//!   graphic type 0's sheet reads, its `Type` otherwise; and every stellar
+//!   its `Type` before any rebuild point. `Session::counted_sheet` reads
+//!   it. A rebuild point that changes a counted sheet tells
+//!   `SessionEvent::StellarsRebuilt` even with the dead set unchanged: a
+//!   stellar with no `DeadType` still destroyed at a second rebuild point
+//!   goes from `Type` to `TypeZero`.
+//! - **The frame state** is the view's: each `SceneStellar` holds its
+//!   current frame, next frame, timer and the frame shown
+//!   (`system::animation::Frames` in nova-view), stepped once a tick of
+//!   1/30 s, as the original's sprite tick steps the stellar every play
+//!   frame. The timer gains a tick; at `AnimDelay`, or `AnimDelay` ×
+//!   `Frame0Bias` while the current frame is 0 and the bias is above 1,
+//!   the current frame takes the next, the next becomes the one after it
+//!   modulo the counted sheet's frame count, and the sheet drawn shows the
+//!   current frame modulo its own count, so an index past the end of a
+//!   shorter sheet wraps. A stellar that does not animate shows frame 0
+//!   with its timer and frames frozen. A swap of the sheet drawn keeps the
+//!   frame shown while it is in range, and shows frame 0 otherwise. A
+//!   rebuild point that tells `StellarsRebuilt` shows each stellar whose
+//!   look changed at its current frame, or frame 0 on graphic type 0's
+//!   sheet. A rebuild point that changes nothing tells nothing, so its
+//!   reshow is skipped: at most one `AnimDelay` of difference.
+//! - **Laid out afresh.** The original keeps each `spöb`'s animation state
+//!   across systems; the view starts it afresh whenever it lays a system
+//!   out. Only the phase of a cycle on arrival differs. The original's
+//!   stale slot count after a jump (another stellar's) and the 0 count of
+//!   a fresh slot are memory-layout accidents the engine does not copy: a
+//!   stellar newly shown counts its `Type` until a rebuild point says
+//!   otherwise. Carrying the state across systems is story-runtime phase
+//!   23 (stellar-animation-across-systems).
+//! - **Not switched**: `Flags2` 0x0001 and 0x0002 and an `AnimDelay` of 0
+//!   or less, which the original advances every frame (story-runtime
+//!   phase 21, stellar-animation-flags), and the hypergate's animation
+//!   (phase 22, hypergate-animation).
+//!
+//! **Readings.** The Rulebook key
+//! [`stellar_frame_count`](crate::RuleKey::StellarFrameCount) defaults to
+//! the engine: the frame count of the sheet the slot held at the last
+//! rebuild point, so between a `Y` (or `U`) and the next rebuild point a
+//! 0x0080 stellar whose `Type` sheet has 1 frame stays still, 4 counted
+//! frames over a 3-frame sheet show 0, 1, 2, 0, 0, 1, 2, 0, and fewer
+//! counted frames than drawn leave the rest unshown. By the Bible's
+//! 0x0080, "the stellar's graphic is animated after it's been destroyed",
+//! the frame count of the sheet drawn, from the moment it is swapped.
+//! Graphic type 0's count is read as `Type`'s under
+//! [`dead_type_fallback`](crate::RuleKey::DeadTypeFallback)'s Bible
+//! reading, which never draws graphic type 0. How an index past the end
+//! shows needs no key: the original wraps it modulo the drawn sheet's
+//! count, and no other source gives a reading.
+//!
+//! ## Checked for phase 12
+//!
+//! - **The state is the stellar's.** The `spöb` record (0x498 bytes,
+//!   behind 0x3b5010) holds the frame count (+0x474), the current frame
+//!   (+0x476), the next frame (+0x478), `AnimDelay` (+0x470),
+//!   `Frame0Bias` (+0x472) and a float timer (+0x490). `_InitObjects`
+//!   sets the count to 1, the current frame and the timer to 0 and the
+//!   bias to 1 (@0x1c8b9-0x1c8f6); the `spöb` loader then copies
+//!   `AnimDelay` and `Frame0Bias` raw (@0x7761b, @0x77631), clamping
+//!   neither.
+//! - **The count is written only at a rebuild.** The one write besides
+//!   `_InitObjects` is `_HandleStellarSystemVisibility`'s @0x331c9, which
+//!   copies the slot's frame count (+0x54) after cloning the master of
+//!   the graphic the stellar shows (@0x32ff6). Every other access reads
+//!   it (@0x2e802-0x2ede3, @0x67616). A slot the rebuild had to make
+//!   (`_SWCreateEmptySprite` @0x32f80, flag -0x121) resets the timer, the
+//!   current and the next frame to 0, 0 and 1 (@0x331da-0x331fb), and
+//!   `_SWCreateEmptySprite` clears +0x54 (@0xa8eb6), so such a slot left
+//!   empty counts 0 and its stellar stays still. The rebuild's clear
+//!   (@0x32e68-0x32e83) leaves +0x54, so an empty slot keeps its count,
+//!   and graphic type 0's fill (@0x33229-0x332d0) comes after @0x331c9,
+//!   so it does not refresh it. Slots are filled in `spöb` index order
+//!   (@0x32eda-0x32f06), so within a system a slot held the same
+//!   stellar's frames before.
+//! - **The sprite tick** (`_HandleStellarSprites`) clones the shown
+//!   master into the slot every play frame (@0x2e7e5), then animates only
+//!   when `Flags2` 0x0080 matches the live destroyed state
+//!   (@0x2e784-0x2e7bb) and the count is above 1 (`cmpw $1, 0x474`
+//!   @0x2e802); otherwise the slot shows frame 0 (@0x2ee20) and the
+//!   stellar's state is untouched. An animating stellar's timer gains
+//!   `_gSpeedMult` (the double behind 0x3b511c, at 0x188b48,
+//!   @0x2e810-0x2e825), which `_HandleTimeAdjustment` keeps at the
+//!   milliseconds since the last frame × 0.03, smoothed as (3 × old +
+//!   new) / 4 (@0x333b7-0x33424; 1.0 at the start, @0x513ec): about one
+//!   1/30 s tick a frame, so the engine's one step a tick is the
+//!   original's. A stellar that is not a hypergate (`Flags2` 0x1000
+//!   clear, @0x2e832) compares the timer with `AnimDelay` × `Frame0Bias`
+//!   while the current frame is 0 and the bias is above 1, `AnimDelay`
+//!   otherwise (@0x2ec4b-0x2ec83). Below it, the tick skips
+//!   `_SWSetCurrentFrameIndex` (@0x2ee35) and the slot keeps the index the
+//!   clone left. At or above it, the timer is reset, the current frame
+//!   takes the next (@0x2ed7f) and the next becomes (next + 1) mod +0x474
+//!   (@0x2eddc-0x2edf4), then `_SWSetCurrentFrameIndex(slot, current)`
+//!   (@0x2ee05-0x2ee30). A delay of 0 or less advances every frame;
+//!   phase 21 takes that up.
+//! - **The index wraps.** `_SWSetCurrentFrameIndex` reads a negative index
+//!   as 0 and takes it modulo the slot's own count (@0xa90d4-0xa90e9).
+//!   The clone keeps the slot's index while it is below the new count and
+//!   sets 0 otherwise (@0xac504-0xac532). The rebuild sets each slot to
+//!   the current frame (@0x33096), and a slot it fills with graphic type
+//!   0 to frame 0 (@0x332d0).
 
 //! # Mission lifecycle
 //!

@@ -33,6 +33,7 @@
 //! | [`YOnDestroy`](RuleKey::YOnDestroy) | `y_on_destroy` | `Y` runs no `OnDestroy`: only a shot's destruction does (`_EvalSetExp` @0x15a38-0x15ae6, `_CheckShotProximities` @0x374a9; see [`story`](crate::story)) | `Y` runs `OnDestroy` as it destroys a whole stellar: "evaluated when the stellar is destroyed" |
 //! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, @0x33244-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see [`story`](crate::story)) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
 //! | [`LandingDistance`](RuleKey::LandingDistance) | `landing_distance` | the ship lands when it is strictly within trunc(1.75 × the `Type` frame's width) of the stellar's centre on each axis; the width is 150 while the `Type` master is not loaded (a destroyed stellar from a rebuild point until a flight frame loads it again, or a `Type` sheet that cannot be read) and 32 when its `spïn` gives no frame count, and the reach is 75 when the stellar's slot shows no frame (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd, @0x6773a-0x677b2; `_GetStellarSpriteXSize` @0xac91-0xad2d; see [`landing`](crate::landing)) | within half the larger side of the `Type` frame, as a circle, or 32 with no sprite\* |
+//! | [`StellarFrameCount`](RuleKey::StellarFrameCount) | `stellar_frame_count` | a stellar animates over the frame count of the sheet its sprite slot held at the last rebuild point, the frame shown wrapping past the end of a shorter sheet drawn (`_HandleStellarSystemVisibility` @0x331c9; `_HandleStellarSprites` @0x2e802, @0x2eddc-0x2edf4; `_SWSetCurrentFrameIndex` @0xa90d4-0xa90e9; see [`story`](crate::story)) | over the frame count of the sheet it draws, from the moment it is swapped: `Flags2` 0x0080, "the stellar's graphic is animated after it's been destroyed" |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear ([`NovaPersons`](crate::NovaPersons)) | 5 %, one of those who may appear picked evenly |
@@ -419,6 +420,19 @@ rule_keys! {
     /// reading is the intended behaviour, not anything the Bible says
     /// (see the [`story`](crate::story) module's "Built by phase 10").
     LandingDistance => "landing_distance",
+    /// Which frame count a stellar animates over: by the engine, that of
+    /// the sheet its sprite slot held at the last rebuild point, which the
+    /// original copies into the stellar only there
+    /// (`_HandleStellarSystemVisibility` @0x331c9) and steps its frames
+    /// modulo (`_HandleStellarSprites` @0x2e802, @0x2eddc-0x2edf4), the
+    /// sheet drawn showing the frame modulo its own count
+    /// (`_SWSetCurrentFrameIndex` @0xa90d4-0xa90e9), so between a `Y` or
+    /// `U` and the next rebuild point the stellar animates over the old
+    /// sheet's count; by the Bible, whose `Flags2` 0x0080 is "the
+    /// stellar's graphic is animated after it's been destroyed", that of
+    /// the sheet it draws, from the moment it is swapped (see the
+    /// [`story`](crate::story) module's "Built by phase 12").
+    StellarFrameCount => "stellar_frame_count",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -1109,6 +1123,11 @@ mod tests {
             RuleKey::from_key("landing_distance"),
             Some(RuleKey::LandingDistance)
         );
+        assert_eq!(RuleKey::StellarFrameCount.key(), "stellar_frame_count");
+        assert_eq!(
+            RuleKey::from_key("stellar_frame_count"),
+            Some(RuleKey::StellarFrameCount)
+        );
     }
 
     #[test]
@@ -1135,6 +1154,7 @@ mod tests {
                 RuleKey::YOnDestroy,
                 RuleKey::DeadTypeFallback,
                 RuleKey::LandingDistance,
+                RuleKey::StellarFrameCount,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,

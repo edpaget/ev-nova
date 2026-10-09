@@ -7,8 +7,8 @@
 //! - [`camera`]: the [`Camera`], which part of the system the screen shows,
 //!   at Nova's own scale.
 //! - [`starfield`]: the parallax starfield behind the stellars.
-//! - [`animation`]: the [`Animation`], which frame of a stellar's sheet
-//!   shows when, from its `spöb`'s animation fields.
+//! - [`animation`]: a stellar's [`Frames`], which frame of its sheet
+//!   shows, stepped tick by tick from its `spöb`'s animation fields.
 //! - [`scene`]: the [`SystemScene`], the system read once and laid out:
 //!   each stellar's world position, sheet and animation.
 //! - [`view`]: the [`SystemView`] screen, which only reads the port.

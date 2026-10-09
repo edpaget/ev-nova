@@ -999,16 +999,24 @@ struct Redrawn {
     rebuilt: bool,
 }
 
-/// Draws each stellar of `scene` as `session` holds it: destroyed as its
-/// galaxy holds it, and with the sheet the session says it draws
-/// ([`Session::drawn_sheet`]: its `DeadType` sheet, graphic type 0's or
-/// its `Type` sheet, story-runtime phases 7, 9 and 12), which the click
-/// box reads too.
-fn show_destroyed(scene: &mut SystemScene, session: &Session) {
-    scene.set_destroyed(|id| StellarLook {
+/// How `session` holds stellar `id`: destroyed as its galaxy holds it,
+/// with the sheet the session says it draws ([`Session::drawn_sheet`]:
+/// its `DeadType` sheet, graphic type 0's or its `Type` sheet,
+/// story-runtime phases 7, 9 and 12), which the click box reads too, and
+/// animating over the frame count the session says
+/// ([`Session::counted_sheet`], phase 12).
+fn look(session: &Session, id: StellarId) -> StellarLook {
+    StellarLook {
         destroyed: session.galaxy().destroyed(id),
         drawn: session.drawn_sheet(id),
-    });
+        counted: session.counted_sheet(id),
+    }
+}
+
+/// Draws each stellar of `scene` as `session` holds it ([`look`]), as the
+/// original's per-frame sprite tick swaps its sheet.
+fn show_destroyed(scene: &mut SystemScene, session: &Session) {
+    scene.set_destroyed(|id| look(session, id));
 }
 
 /// Text metrics, shared.
@@ -1565,10 +1573,21 @@ impl<
         } else if redrawn.stellar {
             self.place_ship();
         }
-        if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
+        if redrawn.rebuilt {
+            self.rebuild_stellars();
+        } else if redrawn.galaxy || redrawn.system {
             self.show_destroyed();
         }
         redrawn
+    }
+
+    /// Draws each stellar of the scene shown as the session holds it after
+    /// a rebuild point ([`SystemScene::rebuild`]): one whose look changed
+    /// shows its current frame. The scene is not laid out again.
+    fn rebuild_stellars(&mut self) {
+        if let (Ok(session), Some(scene)) = (&self.session, &mut self.scene) {
+            scene.rebuild(|id| look(session, id));
+        }
     }
 
     /// Moves the clock on by `dt` and steps the stellars' animations by
@@ -2942,12 +2961,16 @@ mod tests {
 
     /// The sizes of the Moon's (129) `Type` sheet (1129) and `DeadType`
     /// sheet (2129, when there is one), and of graphic type 0's sheet,
-    /// each square.
+    /// each square; the frames of its `Type` and `DeadType` sheets; and
+    /// whether it animates only when destroyed (`Flags2` 0x0080).
     #[derive(Clone, Copy, Debug)]
     struct MoonSheets {
         width: u32,
         dead_width: Option<u32>,
         zero_width: u32,
+        frames: u16,
+        dead_frames: u16,
+        only_when_destroyed: bool,
     }
 
     impl FakeCatalog {
@@ -3322,18 +3345,18 @@ mod tests {
             let mut zero = 40;
             if let Some(moon) = self.moon {
                 zero = moon.zero_width;
-                let square = |image_id, width| StellarSheet {
+                let square = |image_id, width, frames| StellarSheet {
                     image_id,
-                    frames: NonZeroU16::MIN,
+                    frames: NonZeroU16::new(frames).expect("non-zero"),
                     frame_width: width,
                     frame_height: width,
                 };
                 for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(129)) {
-                    stellar.sprite = Ok(StellarSheet {
-                        frames: stellar.sprite.as_ref().expect("a sheet").frames,
-                        ..square(1129, moon.width)
-                    });
-                    stellar.dead_sprite = moon.dead_width.map(|w| Ok(square(2129, w)));
+                    stellar.sprite = Ok(square(1129, moon.width, moon.frames));
+                    stellar.dead_sprite = moon
+                        .dead_width
+                        .map(|w| Ok(square(2129, w, moon.dead_frames)));
+                    stellar.animation.only_when_destroyed = moon.only_when_destroyed;
                 }
             }
             SystemContents {
@@ -10381,6 +10404,9 @@ mod tests {
                 width: 50,
                 dead_width: dead.then_some(70),
                 zero_width: 90,
+                frames: 4,
+                dead_frames: 1,
+                only_when_destroyed: false,
             }),
             ..catalog()
         })
@@ -10447,6 +10473,146 @@ mod tests {
             agreement_walk(agreeing(false, RuleSource::Bible)),
             [1129; 5]
         );
+    }
+
+    // The frame count kept from the last rebuild point (story-runtime
+    // phase 12).
+
+    /// A flight in Sol, by `rules`, whose Moon (129) can be destroyed and
+    /// animates a frame a tick only while destroyed (`Flags2` 0x0080), over
+    /// a `Type` sheet of `frames` frames and a 3-frame `DeadType` sheet.
+    fn flickering(frames: u16, rules: Rulebook) -> View {
+        FlightView::new(FakeCatalog {
+            lives: vec![life(129, 0x0080)],
+            moon: Some(MoonSheets {
+                width: 50,
+                dead_width: Some(70),
+                zero_width: 90,
+                frames,
+                dead_frames: 3,
+                only_when_destroyed: true,
+            }),
+            ..catalog()
+        })
+        .with_rules(rules)
+    }
+
+    /// The Moon's frame shown after each of `n` ticks, all of its
+    /// `DeadType` sheet.
+    fn dead_moon_frames(view: &mut View, n: usize) -> Vec<u16> {
+        (0..n)
+            .map(|_| {
+                view.tick(TICK);
+                let image = sprites(&drawn(view))[1].0;
+                assert_eq!(image.id, 2129, "the DeadType sheet");
+                image.frame
+            })
+            .collect()
+    }
+
+    /// An in-flight `M130`, a rebuild point.
+    fn move_in_flight(view: &mut View) {
+        run_set(view, "M130");
+        settle_session(view);
+    }
+
+    #[test]
+    fn after_y_a_stellar_animates_over_its_old_frame_count_until_the_next_rebuild_point() {
+        let mut view = flickering(4, Rulebook::default());
+        run_set(&mut view, "Y129");
+        assert_eq!(
+            dead_moon_frames(&mut view, 9),
+            [1, 2, 0, 0, 1, 2, 0, 0, 1],
+            "Type's 4 frames over the DeadType's 3"
+        );
+        move_in_flight(&mut view);
+        assert_eq!(
+            dead_moon_frames(&mut view, 7),
+            [1, 2, 0, 1, 2, 0, 1],
+            "the DeadType's 3"
+        );
+        let mut view = flickering(4, frame_count_by(RuleSource::Engine));
+        run_set(&mut view, "Y129");
+        assert_eq!(dead_moon_frames(&mut view, 4), [1, 2, 0, 0]);
+    }
+
+    fn frame_count_by(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::StellarFrameCount, reading)
+    }
+
+    #[test]
+    fn by_the_bible_a_stellar_animates_over_the_sheet_it_draws_at_once() {
+        let mut view = flickering(4, frame_count_by(RuleSource::Bible));
+        run_set(&mut view, "Y129");
+        assert_eq!(dead_moon_frames(&mut view, 7), [1, 2, 0, 1, 2, 0, 1]);
+    }
+
+    #[test]
+    fn a_stellar_of_one_type_frame_stays_still_after_y_until_the_next_rebuild_point() {
+        let mut view = flickering(1, Rulebook::default());
+        run_set(&mut view, "Y129");
+        assert_eq!(dead_moon_frames(&mut view, 6), [0; 6]);
+        move_in_flight(&mut view);
+        assert_eq!(dead_moon_frames(&mut view, 4), [1, 2, 0, 1]);
+        let mut view = flickering(1, frame_count_by(RuleSource::Bible));
+        run_set(&mut view, "Y129");
+        assert_eq!(dead_moon_frames(&mut view, 4), [1, 2, 0, 1], "the Bible's");
+    }
+
+    /// The Moon's frame shown.
+    fn moon_frame(view: &View) -> u16 {
+        sprites(&drawn(view))[1].0.frame
+    }
+
+    #[test]
+    fn a_take_off_shows_a_stellars_current_frame_on_the_sheet_it_now_draws() {
+        let mut view = FlightView::new(FakeCatalog {
+            sites: vec![
+                site(128, (6.0, -8.0), StellarFlags::CAN_LAND),
+                site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
+            ],
+            lives: vec![life(129, 0)],
+            moon: Some(MoonSheets {
+                width: 50,
+                dead_width: Some(70),
+                zero_width: 90,
+                frames: 4,
+                dead_frames: 2,
+                only_when_destroyed: false,
+            }),
+            ..catalog()
+        });
+        ticks(&mut view, 3);
+        assert_eq!(moon_frame(&view), 3);
+        land_now(&mut view);
+        run_set(&mut view, "Y129");
+        view.take_off();
+        assert_eq!(
+            sprites(&drawn(&view))[1].0,
+            ImageKey::sprite(2129, 1),
+            "frame 3 of the DeadType's 2 at the take-off's rebuild, not 0"
+        );
+    }
+
+    #[test]
+    fn laying_a_system_out_starts_its_stellars_animations_afresh() {
+        let mut view = flight();
+        ticks(&mut view, 2);
+        assert_eq!(moon_frame(&view), 2);
+        move_in_flight(&mut view);
+        assert!(view.catch_up().system, "laid out");
+        assert_eq!(moon_frame(&view), 0);
+        view.tick(TICK);
+        assert_eq!(moon_frame(&view), 1);
+    }
+
+    #[test]
+    fn a_galaxy_change_keeps_the_stellars_animations() {
+        let mut view = destructible();
+        ticks(&mut view, 2);
+        run_set(&mut view, "Y140");
+        assert!(view.catch_up().galaxy);
+        assert_eq!(moon_frame(&view), 2, "not laid out afresh");
     }
 
     #[test]

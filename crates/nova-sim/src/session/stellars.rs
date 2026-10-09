@@ -59,11 +59,13 @@
 //! phase 9" and `story::rebuild`), with the stellar masters loaded and
 //! the sprite slots left with no frame, which the player's landing
 //! distance reads ([`Session::land`], by
-//! [`RuleKey::LandingDistance`]; "Built by phase 10"). Each point
-//! rebuilds after the
-//! transition's own writes, and tells
+//! [`RuleKey::LandingDistance`]; "Built by phase 10"), and the sheet whose
+//! frame count each stellar shown animates over
+//! ([`Session::counted_sheet`], by [`RuleKey::StellarFrameCount`];
+//! "Built by phase 12"). Each point rebuilds after the transition's own
+//! writes, and tells
 //! [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
-//! when the set changed:
+//! when the set or a counted sheet changed:
 //!
 //! - every way into a system but a landed `M` or `N`, as the last step of
 //!   `Session::enter_system`: an in-flight `M` or `N` (@0x159a3), even
@@ -118,7 +120,8 @@ impl Session {
     }
 
     /// A rebuild point (see the module docs): the stellars shown that are
-    /// destroyed now are the ones dead since it, telling
+    /// destroyed now are the ones dead since it, and each counts the
+    /// frames of the sheet its slot now holds, telling
     /// [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
     /// when that changed them.
     pub(super) fn rebuild_stellars(&mut self) {
@@ -128,7 +131,7 @@ impl Session {
     }
 
     /// A rebuild point that tells nothing: whether it changed which
-    /// stellars shown are dead since the last one.
+    /// stellars shown are dead since the last one, or a counted sheet.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
         let galaxy = &self.galaxy;
         self.rebuilt.rebuild(
@@ -151,6 +154,28 @@ impl Session {
             .iter()
             .find(|site| site.id == stellar)
             .map_or(DrawnSheet::Type, |site| self.site_sheet(site))
+    }
+
+    /// The sheet whose frame count `stellar` animates over, by
+    /// [`RuleKey::StellarFrameCount`] (see the module docs): by the
+    /// engine, the one its sprite slot held at the last rebuild point
+    /// (graphic type 0's read as its `Type` by
+    /// [`RuleKey::DeadTypeFallback`]'s Bible reading, under which graphic
+    /// type 0 is never drawn); by the Bible, the sheet it draws
+    /// ([`Session::drawn_sheet`]).
+    #[must_use]
+    pub fn counted_sheet(&self, stellar: StellarId) -> DrawnSheet {
+        if self.rules.source_for(RuleKey::StellarFrameCount) == RuleSource::Bible {
+            return self.drawn_sheet(stellar);
+        }
+        match self.rebuilt.counted(stellar) {
+            DrawnSheet::TypeZero
+                if self.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Bible =>
+            {
+                DrawnSheet::Type
+            }
+            sheet => sheet,
+        }
     }
 
     /// [`Session::drawn_sheet`] for `site`, one of the stellars shown.
@@ -1813,6 +1838,12 @@ mod tests {
         settle(&mut session, &catalog, "M130");
         assert_eq!(
             session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::StellarsRebuilt],
+            "the same set, but 129 now counts graphic type 0's frames"
+        );
+        settle(&mut session, &catalog, "M130");
+        assert_eq!(
+            session.take_events(),
             [SessionEvent::SystemChanged],
             "the same again"
         );
@@ -2247,6 +2278,85 @@ mod tests {
         run(&mut session, "Y128");
         rebuild(&mut session, &catalog);
         assert_eq!(sheet_128(&session), DrawnSheet::Dead);
+    }
+
+    /// The sheet stellar 128 counts the frames of.
+    fn counted_128(session: &Session) -> DrawnSheet {
+        session.counted_sheet(StellarId(128))
+    }
+
+    /// Stellar 128's counted sheet whole, after `Y128`, after a rebuild
+    /// point, after `U128`, and after another rebuild point, in a session
+    /// of `catalog` with `rules`.
+    fn counted_walk(catalog: &FakePilotCatalog, rules: Rulebook) -> [DrawnSheet; 5] {
+        let mut session = quiet(catalog).with_rules(rules);
+        let whole = counted_128(&session);
+        run(&mut session, "Y128");
+        let destroyed = counted_128(&session);
+        rebuild(&mut session, catalog);
+        let rebuilt = counted_128(&session);
+        run(&mut session, "U128");
+        let regenerated = counted_128(&session);
+        rebuild(&mut session, catalog);
+        [
+            whole,
+            destroyed,
+            rebuilt,
+            regenerated,
+            counted_128(&session),
+        ]
+    }
+
+    fn frame_count(reading: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::StellarFrameCount, reading)
+    }
+
+    use DrawnSheet::{Dead, Type, TypeZero};
+
+    #[test]
+    fn by_the_engine_a_stellar_counts_the_sheet_of_its_last_rebuild_point() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        assert_eq!(
+            counted_walk(&catalog, Rulebook::default()),
+            [Type, Type, Dead, Dead, Type]
+        );
+        assert_eq!(
+            counted_walk(&catalog, frame_count(RuleSource::Engine)),
+            [Type, Type, Dead, Dead, Type]
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_stellar_counts_the_sheet_it_draws() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        assert_eq!(
+            counted_walk(&catalog, frame_count(RuleSource::Bible)),
+            [Type, Dead, Dead, Type, Type]
+        );
+    }
+
+    #[test]
+    fn a_stellar_with_no_dead_type_counts_graphic_type_0_from_its_second_rebuild_point() {
+        let catalog = clicking(None, Some((100, 100)));
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(counted_128(&session), Type, "its slot held Type");
+        assert_eq!(sheet_128(&session), TypeZero, "drawing graphic type 0");
+        rebuild(&mut session, &catalog);
+        assert_eq!(counted_128(&session), TypeZero);
+        // By the Bible's `dead_type_fallback` graphic type 0 is never
+        // drawn, so never counted.
+        let bible = Rulebook::default().with_override(RuleKey::DeadTypeFallback, RuleSource::Bible);
+        assert_eq!(counted_128(&session.with_rules(bible)), Type);
+        // By the Bible's `stellar_frame_count`, the sheet drawn at once.
+        let mut session = quiet(&catalog).with_rules(frame_count(RuleSource::Bible));
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(counted_128(&session), TypeZero);
+        let both = frame_count(RuleSource::Bible)
+            .with_override(RuleKey::DeadTypeFallback, RuleSource::Bible);
+        assert_eq!(counted_128(&session.with_rules(both)), Type);
     }
 
     #[test]

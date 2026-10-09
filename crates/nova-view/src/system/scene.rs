@@ -48,6 +48,9 @@ pub struct SceneStellar {
     /// Which sheet it draws, as last set: the session's answer
     /// (`Session::drawn_sheet`).
     pub drawn: DrawnSheet,
+    /// Which sheet's frame count it animates over, as last set: the
+    /// session's answer (`Session::counted_sheet`).
+    pub counted: DrawnSheet,
     /// Graphic type 0's sheet (`spïn` 1000), or why it cannot be shown.
     pub type_zero_sprite: Result<StellarSheet, String>,
     /// Its animation state: the frame of the sheet drawn that shows, and
@@ -55,15 +58,18 @@ pub struct SceneStellar {
     pub frames: Frames,
 }
 
-/// How a stellar looks, for [`SystemScene::set_destroyed`]: whether it is
-/// destroyed, which its animation reads, and which sheet it draws
-/// (`Session::drawn_sheet`).
+/// How a stellar looks, for [`SystemScene::set_destroyed`] and
+/// [`SystemScene::rebuild`]: whether it is destroyed, which its animation
+/// reads, which sheet it draws (`Session::drawn_sheet`), and which sheet's
+/// frame count it animates over (`Session::counted_sheet`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StellarLook {
     /// Whether it is destroyed.
     pub destroyed: bool,
     /// Which sheet it draws.
     pub drawn: DrawnSheet,
+    /// Which sheet's frame count it animates over.
+    pub counted: DrawnSheet,
 }
 
 impl SceneStellar {
@@ -78,6 +84,7 @@ impl SceneStellar {
             animation_data: stellar.animation,
             destroyed: false,
             drawn: DrawnSheet::Type,
+            counted: DrawnSheet::Type,
             type_zero_sprite: type_zero,
             frames: Frames::new(),
         }
@@ -114,11 +121,22 @@ impl SceneStellar {
             .map_or(NonZeroU16::MIN, |sheet| sheet.frames)
     }
 
-    /// One tick of its animation, over the sheet drawn's frames.
+    /// One tick of its animation, over the counted sheet's frames, shown
+    /// on the sheet drawn.
     fn step(&mut self) {
+        let counted = self.frame_count(self.counted);
         let drawn = self.frame_count(self.drawn);
         self.frames
-            .step(self.animation_data, self.destroyed, drawn, drawn);
+            .step(self.animation_data, self.destroyed, counted, drawn);
+    }
+
+    /// How it looks now.
+    fn look(&self) -> StellarLook {
+        StellarLook {
+            destroyed: self.destroyed,
+            drawn: self.drawn,
+            counted: self.counted,
+        }
     }
 }
 
@@ -191,19 +209,41 @@ impl SystemScene {
         &self.problems
     }
 
-    /// Marks each stellar destroyed or not, and drawing the sheet, as
-    /// `look` says ([`SceneStellar::drawn`]). A stellar whose sheet drawn
-    /// changed keeps the frame it shows while that is in range of the new
-    /// sheet, and shows frame 0 otherwise ([`Frames::swap`]); its
+    /// Marks each stellar destroyed or not, drawing the sheet and
+    /// counting the frames, as `look` says ([`SceneStellar::drawn`]), as
+    /// the original's sprite tick swaps the sheet: a stellar whose sheet
+    /// drawn changed keeps the frame it shows while that is in range of
+    /// the new sheet, and shows frame 0 otherwise ([`Frames::swap`]); its
     /// animation then reads the destroyed state at each tick.
     pub fn set_destroyed(&mut self, look: impl Fn(StellarId) -> StellarLook) {
         for stellar in &mut self.stellars {
             let now = look(stellar.id);
             stellar.destroyed = now.destroyed;
+            stellar.counted = now.counted;
             if stellar.drawn != now.drawn {
                 stellar.drawn = now.drawn;
                 let drawn = stellar.frame_count(now.drawn);
                 stellar.frames.swap(drawn);
+            }
+        }
+    }
+
+    /// A rebuild point: each stellar whose look `look` changed takes it,
+    /// and shows its current frame on the sheet now drawn, or frame 0 on
+    /// graphic type 0's ([`Frames::reshow`]), as the original's rebuild
+    /// sets each slot's frame (`_HandleStellarSystemVisibility` @0x33096,
+    /// @0x332d0). Every other stellar is left as it was.
+    pub fn rebuild(&mut self, look: impl Fn(StellarId) -> StellarLook) {
+        for stellar in &mut self.stellars {
+            let now = look(stellar.id);
+            if stellar.look() != now {
+                stellar.destroyed = now.destroyed;
+                stellar.drawn = now.drawn;
+                stellar.counted = now.counted;
+                let drawn = stellar.frame_count(now.drawn);
+                stellar
+                    .frames
+                    .reshow(drawn, now.drawn == DrawnSheet::TypeZero);
             }
         }
     }
@@ -374,6 +414,7 @@ mod tests {
                     animation_data: WORMHOLE,
                     destroyed: false,
                     drawn: DrawnSheet::Type,
+                    counted: DrawnSheet::Type,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     frames: Frames::new(),
                 },
@@ -386,6 +427,7 @@ mod tests {
                     animation_data: WORMHOLE,
                     destroyed: false,
                     drawn: DrawnSheet::Type,
+                    counted: DrawnSheet::Type,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     frames: Frames::new(),
                 },
@@ -398,6 +440,7 @@ mod tests {
                     animation_data: WORMHOLE,
                     destroyed: false,
                     drawn: DrawnSheet::Type,
+                    counted: DrawnSheet::Type,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     frames: Frames::new(),
                 },
@@ -496,17 +539,19 @@ mod tests {
         )])
     }
 
-    /// A whole stellar, drawing its `Type` sheet.
+    /// A whole stellar, drawing and counting its `Type` sheet.
     const WHOLE: StellarLook = StellarLook {
         destroyed: false,
         drawn: DrawnSheet::Type,
+        counted: DrawnSheet::Type,
     };
 
-    /// A destroyed stellar drawing `drawn`.
+    /// A destroyed stellar drawing `drawn` and counting its frames.
     fn dead(drawn: DrawnSheet) -> StellarLook {
         StellarLook {
             destroyed: true,
             drawn,
+            counted: drawn,
         }
     }
 
@@ -648,6 +693,7 @@ mod tests {
             move |_| StellarLook {
                 destroyed: false,
                 drawn: sheet,
+                counted: sheet,
             }
         };
         let mut scene = SystemScene::load(&dying(), SystemId(134));
@@ -666,6 +712,85 @@ mod tests {
         scene.set_destroyed(drawing(DrawnSheet::TypeZero));
         scene.step(1);
         assert_eq!(drawn(&scene)[3], ImageKey::sprite(TYPE_ZERO, 0), "no swap");
+    }
+
+    /// A look: destroyed or not, drawing `drawn` and counting `counted`.
+    fn look(destroyed: bool, drawn: DrawnSheet, counted: DrawnSheet) -> StellarLook {
+        StellarLook {
+            destroyed,
+            drawn,
+            counted,
+        }
+    }
+
+    #[test]
+    fn a_stellar_animates_over_the_frames_of_its_counted_sheet() {
+        let mut scene = SystemScene::load(&dying(), SystemId(134));
+        // 150 animates only when destroyed, over its 3-frame `DeadType`
+        // sheet; its `Type` sheet has 1 frame.
+        let dead = |counted| {
+            move |id: StellarId| {
+                if id == StellarId(150) {
+                    look(true, DrawnSheet::Dead, counted)
+                } else {
+                    WHOLE
+                }
+            }
+        };
+        scene.set_destroyed(dead(DrawnSheet::Type));
+        scene.step(8);
+        assert_eq!(drawn(&scene)[0], ImageKey::sprite(2150, 0), "one counted");
+        scene.set_destroyed(dead(DrawnSheet::Dead));
+        scene.step(2);
+        assert_eq!(drawn(&scene)[0], ImageKey::sprite(2150, 1), "three");
+        scene.step(4);
+        assert_eq!(drawn(&scene)[0], ImageKey::sprite(2150, 0), "wrapped");
+    }
+
+    /// System 135: stellar 160 at (0, 0), a 4-frame wormhole whose
+    /// `DeadType` sheet 2160 has 2 frames.
+    fn wormhole_with_a_dead_sheet() -> FakeCatalog {
+        FakeCatalog::new(vec![system(
+            135,
+            vec![StellarContents {
+                dead_sprite: Some(Ok(sheet(2160, 2))),
+                ..stellar(160, 0, 0, Ok(sheet(1160, 4)))
+            }],
+        )])
+    }
+
+    #[test]
+    fn a_rebuild_shows_the_current_frame_of_each_stellar_whose_look_changed() {
+        let mut scene = SystemScene::load(&wormhole_with_a_dead_sheet(), SystemId(135));
+        scene.step(6);
+        assert_eq!(drawn(&scene), [ImageKey::sprite(1160, 3)]);
+        let counting = |counted| move |_| look(false, DrawnSheet::Dead, counted);
+        scene.set_destroyed(counting(DrawnSheet::Type));
+        assert_eq!(drawn(&scene), [ImageKey::sprite(2160, 0)], "3 of 2");
+        scene.rebuild(counting(DrawnSheet::Type));
+        assert_eq!(drawn(&scene), [ImageKey::sprite(2160, 0)], "unchanged");
+        scene.rebuild(counting(DrawnSheet::Dead));
+        assert_eq!(
+            drawn(&scene),
+            [ImageKey::sprite(2160, 1)],
+            "frame 3 of 2 at the rebuild"
+        );
+        assert_eq!(scene.stellars()[0].counted, DrawnSheet::Dead);
+        scene.rebuild(|_| look(true, DrawnSheet::TypeZero, DrawnSheet::TypeZero));
+        assert_eq!(
+            drawn(&scene),
+            [ImageKey::sprite(TYPE_ZERO, 0)],
+            "graphic type 0 fills the slot at frame 0"
+        );
+        assert!(scene.stellars()[0].destroyed);
+    }
+
+    #[test]
+    fn a_rebuild_swapping_the_sheet_shows_the_current_frame_not_the_one_kept() {
+        let mut scene = SystemScene::load(&wormhole_with_a_dead_sheet(), SystemId(135));
+        scene.step(6);
+        scene.rebuild(|_| look(false, DrawnSheet::Dead, DrawnSheet::Type));
+        assert_eq!(drawn(&scene), [ImageKey::sprite(2160, 1)]);
     }
 
     #[test]
@@ -727,6 +852,7 @@ mod tests {
         scene.set_destroyed(|_| StellarLook {
             destroyed: false,
             drawn: DrawnSheet::TypeZero,
+            counted: DrawnSheet::TypeZero,
         });
         scene.step(4);
         assert_eq!(
