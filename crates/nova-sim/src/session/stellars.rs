@@ -138,6 +138,27 @@ impl Session {
         )
     }
 
+    /// The frame size of the sheet drawn for `site`, one of the stellars
+    /// shown, or `None` when no sheet is: the box a click on it reads (see
+    /// the module docs). It must match the view's `SceneStellar::drawn`
+    /// with `SystemScene::set_destroyed`'s graphic type 0: the `DeadType`
+    /// sheet while destroyed, when there is one; graphic type 0's while
+    /// destroyed and dead since the last rebuild point, by
+    /// [`RuleKey::DeadTypeFallback`]'s engine reading; the `Type` sheet
+    /// otherwise.
+    pub(super) fn drawn_frame_size(&self, site: &LandingSite) -> Option<(u32, u32)> {
+        match site.dead_frame_size {
+            Some(dead) if site.destroyed => Some(dead),
+            _ if site.destroyed
+                && self.rebuilt.dead(site.id)
+                && self.rules.source_for(RuleKey::DeadTypeFallback) == RuleSource::Engine =>
+            {
+                self.fallback_frame
+            }
+            _ => site.frame_size,
+        }
+    }
+
     /// A flight frame's sprite tick (see the module docs): every stellar
     /// it finds whole is no longer dead since the last rebuild point.
     pub(super) fn see_stellars(&mut self) {
@@ -2065,5 +2086,94 @@ mod tests {
             session.landing_reach(&site),
             crate::landing::LandingReach::Box(175.0)
         );
+    }
+
+    // The click after a destruction.
+
+    /// Stellar 128 at the centre, 40 square, with a `DeadType` sheet of
+    /// `dead_frame_size` when that is `Some`, and graphic type 0's sheet
+    /// of `fallback_frame`.
+    fn clicking(
+        dead_frame_size: Option<(u32, u32)>,
+        fallback_frame: Option<(u32, u32)>,
+    ) -> FakePilotCatalog {
+        let mut catalog = landing_at(40, StellarFlags::CAN_LAND, dead_frame_size.map(|_| 11), 12);
+        catalog.sites[0].1[0].dead_frame_size = dead_frame_size;
+        catalog.fallback_frame = fallback_frame;
+        catalog
+    }
+
+    /// The stellar a click at (`x`, `y`) picks.
+    fn click(session: &mut Session, x: f32, y: f32) -> Option<StellarId> {
+        session.select_stellar(StellarPick::At(Vec2::new(x, y)))
+    }
+
+    #[test]
+    fn a_destroyed_stellar_is_clicked_by_its_dead_type_sheet() {
+        let catalog = clicking(Some((200, 200)), Some((100, 100)));
+        let mut session = quiet(&catalog);
+        // Whole, its `Type` box is 20 + 16 a side.
+        assert_eq!(click(&mut session, 90.0, 0.0), None, "whole");
+        assert_eq!(click(&mut session, 30.0, 0.0), Some(StellarId(128)));
+        run(&mut session, "Y128");
+        // Its `DeadType` box is 100 a side, with no margin.
+        assert_eq!(click(&mut session, 90.0, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, 0.0, -90.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, 110.0, 0.0), None);
+        rebuild(&mut session, &catalog);
+        assert_eq!(
+            click(&mut session, 90.0, 0.0),
+            Some(StellarId(128)),
+            "its own sheet, not graphic type 0's, after a rebuild point"
+        );
+        run(&mut session, "U128");
+        assert_eq!(click(&mut session, 90.0, 0.0), None, "regenerated");
+        assert_eq!(click(&mut session, 30.0, 0.0), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn a_destroyed_stellar_with_no_dead_sheet_is_clicked_by_graphic_type_0_after_a_rebuild() {
+        let catalog = clicking(None, Some((200, 200)));
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        assert_eq!(
+            click(&mut session, 90.0, 0.0),
+            None,
+            "its `Type` until a rebuild point"
+        );
+        assert_eq!(click(&mut session, 34.0, 0.0), Some(StellarId(128)));
+        rebuild(&mut session, &catalog);
+        assert_eq!(click(&mut session, 90.0, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, 110.0, 0.0), None);
+        run(&mut session, "U128");
+        assert_eq!(
+            click(&mut session, 90.0, 0.0),
+            None,
+            "whole, though no frame has seen it yet"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_destroyed_stellar_with_no_dead_sheet_is_clicked_by_its_type() {
+        let catalog = clicking(None, Some((200, 200)));
+        let mut session = quiet(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::DeadTypeFallback, RuleSource::Bible),
+        );
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        assert_eq!(click(&mut session, 90.0, 0.0), None);
+        assert_eq!(click(&mut session, 34.0, 0.0), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn a_slot_left_with_no_frame_is_clicked_on_the_64_pixel_placeholder() {
+        let catalog = clicking(None, None);
+        let mut session = quiet(&catalog);
+        run(&mut session, "Y128");
+        rebuild(&mut session, &catalog);
+        // The placeholder is 32 a side; the `Type` box would be 36.
+        assert_eq!(click(&mut session, 31.0, 0.0), Some(StellarId(128)));
+        assert_eq!(click(&mut session, 34.0, 0.0), None);
+        assert_eq!(click(&mut session, 90.0, 0.0), None);
     }
 }

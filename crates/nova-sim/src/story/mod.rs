@@ -988,7 +988,7 @@
 //!   "Checked for phase 10", which corrects the 32 above).
 //! - **Clicking** (`_HandlePlayer` @0x6a5f9-0x6a686) uses the drawn slot's
 //!   rectangle, so a destroyed stellar is picked by its `DeadType` sheet;
-//!   the engine's `stellar_under` reads `Type`'s (story-runtime phase 11).
+//!   the engine does the same since phase 11 (see "Built by phase 11").
 //!
 //! ## Built by phase 8
 //!
@@ -1373,6 +1373,64 @@
 //!   it, so a stellar showing no readable graphic, with `spïn` 1000
 //!   unreadable too, shows none (75) until a frame finds a graphic it can
 //!   clone.
+//!
+//! ## Built by phase 11
+//!
+//! A click in space picks a stellar by the frame of the sheet drawn for
+//! it, so a destroyed stellar is clicked by its `DeadType` sheet, or by
+//! graphic type 0's once a rebuild point has filled its empty slot.
+//!
+//! - **The rule** is `navigation::stellar_under`, which now takes the
+//!   frame size drawn for each site from its caller; `None` still gives
+//!   the 64-pixel placeholder.
+//! - **The sheet drawn** is `Session::drawn_frame_size` (the session's
+//!   `stellars` module), the sim's copy of the view's
+//!   `SceneStellar::drawn` and `SystemScene::set_destroyed`: the
+//!   `DeadType` sheet's frame while destroyed, when there is one
+//!   (`LandingSite::dead_frame_size`); graphic type 0's
+//!   (`PilotCatalog::fallback_frame_size`, read as the session starts)
+//!   while destroyed and dead since the last rebuild point, by
+//!   [`dead_type_fallback`](crate::RuleKey::DeadTypeFallback)'s engine
+//!   reading; the `Type` sheet's otherwise. With graphic type 0's sheet
+//!   unreadable no sheet is drawn, and the placeholder is clicked.
+//! - **Readings.** No new key: the Bible says nothing of the click's
+//!   target, and the click follows whichever sheet is drawn, so
+//!   `dead_type_fallback` decides it under both readings. By the Bible's
+//!   no graphic type 0 is drawn, so none is clicked.
+//! - **Not switched**: the margin's width test, the half-open edges and
+//!   the order among overlapping stellars (below) are story-runtime phase
+//!   20 (click-target-shape), as is the stellar's +0x44 skip flag.
+//!
+//! ## Checked for phase 11
+//!
+//! - **The rectangle** (`_HandlePlayer` @0x6a5f9-0x6a717): for each of
+//!   the 16 stellar sprite slot pointers at 0x3b53d0, the loop skips a
+//!   null slot (@0x6a603), one whose visible byte +0x14 is clear
+//!   (@0x6a60b) and one whose stellar record's +0x44 is clear
+//!   (@0x6a615-0x6a637), then copies the slot's +0x1a rect to
+//!   -0x38(%ebp) (@0x6a63d-0x6a646). The pointer at -0x3ec(%ebp) that
+//!   `_InsetRect` and `_PtInRect` read is `lea -0x38(%ebp)`, stored at
+//!   @0x6a356-0x6a359.
+//! - **The layout** of +0x1a is a QuickDraw `Rect`, `top, left, bottom,
+//!   right`: `_SWSetCurrentFrameIndex` copies it from the frame's +0x22
+//!   (@0xa9139-0xa9149) after moving +0x1a by the vertical hot spot
+//!   (+0x2c, @0xa911f-0xa9132) and +0x1c by the horizontal one (+0x2a,
+//!   @0xa9105-0xa911b). So the rect is the current frame of the sheet
+//!   cloned into the slot, the one phase 7 draws: `DeadType`'s master
+//!   while destroyed, `Type`'s otherwise (@0x2e77b-0x2e7e5), graphic
+//!   type 0's in a slot a rebuild left empty (@0x332ae-0x332d0).
+//!   `_HandleStellarSprites` centres it on the stellar every play frame
+//!   (@0x2ee30-0x2ef1a).
+//! - **The margin's test reads the width**: `movswl -0x36(%ebp)` (left)
+//!   and `movswl -0x32(%ebp)` (right), `subl`, then `cmpl $0x2f` and
+//!   `jg` past the `_InsetRect(r, -16, -16)` (@0x6a649-0x6a671). The
+//!   engine's `SMALL_SPRITE_HEIGHT` compares the height: story-runtime
+//!   phase 20.
+//! - **A rectangle, not a mask**: `_PtInRect` (@0x6a686), half-open on
+//!   the right and bottom, where the engine includes every edge; and the
+//!   first slot holding the point wins, the slots filled by ascending
+//!   `spöb` index (@0x32eda-0x32f06), not `NavDef` order. Both are phase
+//!   20.
 
 //! # Mission lifecycle
 //!

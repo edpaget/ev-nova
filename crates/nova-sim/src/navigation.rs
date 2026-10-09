@@ -19,9 +19,9 @@
 //! - **a click in space** (@0x6a000-0x6a717): outside the 194-pixel status
 //!   panel on the right (so never on the radar, which has no click path),
 //!   and once no ship took the click, the first stellar in nav order whose
-//!   sprite rect holds it, the rect grown by 16 pixels a side for a sprite
-//!   no taller than 47 ([`stellar_under`]). A click on empty space changes
-//!   nothing;
+//!   sprite rect, the frame of the sheet drawn for it, holds it, the rect
+//!   grown by 16 pixels a side for a sprite no taller than 47
+//!   ([`stellar_under`]). A click on empty space changes nothing;
 //! - **Nav Off**, the backquote key (`_loadKeys` @0xcd5f8 `navOff` 0x32,
 //!   handled @0x69a17-0x69b63): clears it, the only key that does;
 //! - **Hyper Select** (`\`, @0x69bb2): moves it to hyperspace.
@@ -43,8 +43,10 @@ use crate::landing::UNKNOWN_STELLAR_RADIUS;
 pub const CLICK_MARGIN: f32 = 16.0;
 
 /// The tallest sprite frame, in pixels, that gets the [`CLICK_MARGIN`]:
-/// the original compares the frame height with 0x2f (47) and grows the
-/// rect only when it is no taller.
+/// the engine compares the frame height with 0x2f (47) and grows the
+/// rect only when it is no taller. The original's test reads the width,
+/// right less left (@0x6a649-0x6a656): story-runtime phase 20
+/// (click-target-shape).
 pub const SMALL_SPRITE_HEIGHT: u32 = 47;
 
 /// The item after `current` in the cycle `items`: the one after it,

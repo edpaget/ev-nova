@@ -433,8 +433,9 @@ pub enum StellarPick {
     /// through the same `_FindNearestStellar` (@0x276c) its land key does.
     Nearest,
     /// The stellar under a click at this point in the system
-    /// ([`stellar_under`]): the original's click in space
-    /// (@0x6a5f9-0x6a6fc).
+    /// ([`stellar_under`]), each boxed by the frame of the sheet drawn for
+    /// it, so a destroyed one by its `DeadType` or graphic type 0's sheet:
+    /// the original's click in space (@0x6a5f9-0x6a6fc).
     At(Vec2),
 }
 
@@ -1843,7 +1844,9 @@ impl Session {
         let picked = match pick {
             StellarPick::Slot(slot) => self.sites.get(slot).map(|site| site.id),
             StellarPick::Nearest => nearest_landable(self.player.position, &self.sites),
-            StellarPick::At(at) => stellar_under(&self.sites, at, |site| site.frame_size),
+            StellarPick::At(at) => {
+                stellar_under(&self.sites, at, |site| self.drawn_frame_size(site))
+            }
         }?;
         self.nav_target = Some(picked);
         Some(picked)
