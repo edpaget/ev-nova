@@ -14526,6 +14526,50 @@ mod tests {
         assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
     }
 
+    /// [`alternates`]' session landed on 128 in 130, then moved by a
+    /// landed `M131`: 131's stellars wait for the take-off.
+    fn moved_while_landed(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        let _ = session.settle_script(catalog, &mut NeverFires);
+        assert_eq!(session.system(), SystemId(131));
+        assert!(session.next_sites.is_some(), "deferred");
+        session
+    }
+
+    #[test]
+    fn a_stellar_override_in_the_system_shown_after_a_landed_move_shows_at_once() {
+        let catalog = alternates();
+        let mut session = moved_while_landed(&catalog);
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(128), Some(Some(LAWFUL)));
+        });
+        assert_eq!(session.sites[0].id, StellarId(128), "130's, still shown");
+        assert_eq!(session.sites[0].govt, Some(LAWFUL));
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert_eq!(session.sites, [planet(140, 0.0, 0.0)], "131's own");
+    }
+
+    #[test]
+    fn a_stellar_override_in_the_system_moved_to_while_landed_holds_at_the_take_off() {
+        let catalog = alternates();
+        let mut session = moved_while_landed(&catalog);
+        let shown = session.sites.clone();
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(140), Some(Some(LAWFUL)));
+        });
+        assert_eq!(session.sites, shown, "130's, untouched");
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert_eq!(
+            session.sites,
+            [LandingSite {
+                govt: Some(LAWFUL),
+                ..planet(140, 0.0, 0.0)
+            }]
+        );
+    }
+
     #[test]
     fn the_npcs_see_a_government_override_from_the_next_traffic_tick() {
         let mut catalog = armed();
@@ -14685,6 +14729,56 @@ mod tests {
         assert_eq!(explored, [SystemId(134)]);
         assert!(session.pilot().has_explored(SystemId(134)));
         assert!(!session.pilot().has_explored(SystemId(131)));
+    }
+
+    /// The `Explored` events raised and not yet settled.
+    fn explored_raised(session: &Session) -> Vec<SystemId> {
+        session
+            .story_raised()
+            .into_iter()
+            .filter_map(|event| match event {
+                StoryEvent::Explored { system } => Some(system),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// [`chained`] of `mod_val` with 135 at 131's place, listing 132.
+    fn chained_alternates(mod_val: i16) -> FakePilotCatalog {
+        let mut catalog = chained(catalog(), mod_val);
+        catalog.star_map.push(star(135, (600.0, 0.0), &[132]));
+        catalog
+    }
+
+    #[test]
+    fn a_multi_jump_passes_a_hidden_hop_by_the_system_at_its_place() {
+        let catalog = chained_alternates(2);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(135)));
+        session.drop_raised();
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(132))
+        );
+        assert_eq!(session.course(), ids(&[134]));
+        assert_eq!(explored_raised(&session), ids(&[135, 132]), "135 passed");
+        assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn a_multi_jump_stops_before_a_hop_with_no_system_visible_at_its_place() {
+        let catalog = chained_alternates(3);
+        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
+        hide(&mut session, &catalog, &[132]);
+        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+        session.drop_raised();
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        assert_eq!(session.course(), ids(&[132, 134]), "the rest kept");
+        assert_eq!(explored_raised(&session), ids(&[131]));
     }
 
     #[test]
