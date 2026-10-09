@@ -131,12 +131,12 @@
 //! `ModType` 27 item raises, while it
 //! holds more than that leaves (below), or it is a launcher whose
 //! ammunition must be sold first (below). A sale removes one and pays
-//! its [`refund`]: by the engine, the full price for an outfit bought
-//! since the outfitter opened (its count owned above the count owned on
-//! opening), and [`RESALE_PERCENT`] of the price for any other; by the
-//! rulebook's other reading
-//! ([`RuleKey::OutfitRefund`](crate::RuleKey::OutfitRefund)), always
-//! [`RESALE_PERCENT`].
+//! its refund ([`Outfitter::refund`], [`refund`]): by the engine, the
+//! full price for an outfit bought since the outfitter opened (its count
+//! owned above the [visit's](OutfitVisit) count owned on entry), and
+//! [`RESALE_PERCENT`] of the price for any other; by the rulebook's other
+//! reading ([`RuleKey::OutfitRefund`](crate::RuleKey::OutfitRefund)),
+//! always [`RESALE_PERCENT`].
 //! Selling cargo space below the cargo held is allowed: the exchange then
 //! shows no space free until enough is sold.
 //!
@@ -151,8 +151,9 @@
 //! so an outfit of mass 0 or less never lacks it), the mass words by the
 //! count owned; otherwise none.
 //!
-//! **Once an opening** (`_boughtMap` and `_boughtID`, [`Bought`]). By the
-//! engine, an outfit with a mod of [`EXPLORES_MAP`] (16) in any slot, or
+//! **Once an opening** (`_boughtMap` and `_boughtID`, [`Bought`], kept
+//! on the [`OutfitVisit`] the session opens and hands the outfitter). By
+//! the engine, an outfit with a mod of [`EXPLORES_MAP`] (16) in any slot, or
 //! failing that of [`CLEAN_RECORD`] (21), is refused while its flag is
 //! set, unless its first mod is `ModType` 3 or it has any [`MORE_CARGO`]
 //! mod (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, after the expansion tests
@@ -161,9 +162,9 @@
 //! sets the map flag, a clean record without a [`PAINT`] mod the record
 //! flag, and any other outfit clears both, which lifts the limit. Both
 //! are cleared each time the outfitter opens (`_DoOutfitDialog`
-//! @0x5bb37-0x5bb44), so a landing lifts it too; a sale leaves them
-//! alone. Only the Buy button shows it: the info box never reads the
-//! flags, so its words are unchanged. The other reading has no limit
+//! @0x5bb37-0x5bb44), which opens a new visit, so a landing lifts it
+//! too; a sale leaves them alone. Only the Buy button shows it: the info
+//! box never reads the flags, so its words are unchanged. The other reading has no limit
 //! ([`RuleKey::OutfitLimit`](crate::RuleKey::OutfitLimit)). Not modelled:
 //! an outfit's `OnPurchase` granting another outfit inside the dialog,
 //! which would move the flags in the original.
@@ -173,8 +174,10 @@
 //! dialog asks for a count, opening at the maximum
 //! [`Outfitter::count_max`] works out (none when that is 1 or less, and
 //! the click moves one), and the count is bought or sold one at a time
-//! ([`Session::outfit_counted`](crate::Session::outfit_counted)), when
-//! the [`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount) rule asks
+//! through the order loop ([`order_loop`](crate::order_loop),
+//! [`Session::outfit_counted`](crate::Session::outfit_counted)), a plain
+//! click being the loop with a count of 1, when the
+//! [`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount) rule asks
 //! ([`Outfitter::count_asked`]). The buy loop (@0x5c1bd-0x5c2ff) re-runs
 //! `_CanBuyOutfitItem` after each grant and the sell loop
 //! (@0x5c6ee-0x5d1b1) checks each sale as a single sale, so a counted
@@ -595,6 +598,17 @@ impl Outfitter {
     #[must_use]
     pub fn cap(&self, outfit: OutfitId) -> Option<i16> {
         self.asked(outfit).map(|asked| reported_cap().of(&asked))
+    }
+
+    /// What selling one of `outfit` refunds, as
+    /// [`RuleKey::OutfitRefund`](crate::RuleKey::OutfitRefund) says: by
+    /// the engine, the full price for one bought since the visit opened
+    /// (its count owned above the [visit's](OutfitVisit) count on entry),
+    /// otherwise half; by the other reading, always half (see
+    /// [`refund`]). `None` when it is not listed.
+    #[must_use]
+    pub fn refund(&self, outfit: OutfitId) -> Option<i64> {
+        self.asked(outfit).map(|asked| refund_value().of(&asked))
     }
 
     /// The `LCName` and `LCPlural` of each outfit the words of
@@ -1151,6 +1165,33 @@ fn reported_cap<'a>() -> Value<RowOutfit<'a>, i16> {
          @0x4681-0x46a0, guns @0x4798-0x47a7, turrets @0x482b-0x483a",
         cap_reported,
     )
+}
+
+/// What a sale of an outfit refunds ([`Outfitter::refund`]).
+fn refund_value<'a>() -> Value<RowOutfit<'a>, i64> {
+    Value::disputed(
+        "refund",
+        "`_DoOutfitDialog` @0x5ceee-0x5cf08",
+        RuleKey::OutfitRefund,
+        full_since_the_visit_opened,
+        always_half,
+    )
+}
+
+/// The engine's refund: the full price when the count owned is above the
+/// visit's count on entry, otherwise half.
+fn full_since_the_visit_opened(asked: &RowOutfit) -> i64 {
+    refund(
+        asked.row.price,
+        asked.row.owned,
+        asked.outfitter.visit.opened_with(asked.row.id),
+        RuleSource::Engine,
+    )
+}
+
+/// The other reading's refund: always half.
+fn always_half(asked: &RowOutfit) -> i64 {
+    resale(asked.row.price)
 }
 
 /// Its `Max`, lowered to a smaller ammunition cap (@0x45b2-0x45c1);
@@ -4518,6 +4559,11 @@ mod tests {
 
     #[test]
     fn the_refund_and_count_values_read_their_keys() {
+        assert_eq!(refund_value().about().reads(), Some(RuleKey::OutfitRefund));
+        assert_eq!(
+            refund_value().about().reproduces(),
+            "`_DoOutfitDialog` @0x5ceee-0x5cf08"
+        );
         assert_eq!(
             option_asks_count().about().reads(),
             Some(RuleKey::OutfitCount)
@@ -4541,6 +4587,7 @@ mod tests {
             *available().about(),
             *max_multiplier().about(),
             *option_asks_count().about(),
+            *refund_value().about(),
         ] {
             assert!(!about.draws(), "{}", about.name());
         }
@@ -4716,6 +4763,29 @@ mod tests {
     fn the_bible_reading_always_refunds_half() {
         assert_eq!(refund(15_001, 3, 2, RuleSource::Bible), 7_500);
         assert_eq!(refund(15_001, 2, 2, RuleSource::Bible), 7_500);
+    }
+
+    #[test]
+    fn the_refund_rule_reads_the_visits_owned_on_entry_counts() {
+        // Three owned, priced at 15,001: one bought since an opening with
+        // two refunds in full, by the engine; none since one with three.
+        let refunds = |opened_with, source| {
+            let outfitter = Outfitter {
+                rows: vec![counted(15_001, 3, ROOM, ROOM)],
+                visit: OutfitVisit {
+                    opened_with: BTreeMap::from([(OutfitId(128), opened_with)]),
+                    ..OutfitVisit::default()
+                },
+                rules: Rulebook::default().with_override(RuleKey::OutfitRefund, source),
+                ..Outfitter::default()
+            };
+            assert_eq!(outfitter.refund(OutfitId(999)), None, "not listed");
+            outfitter.refund(OutfitId(128))
+        };
+        assert_eq!(refunds(2, RuleSource::Engine), Some(15_001));
+        assert_eq!(refunds(3, RuleSource::Engine), Some(7_500));
+        assert_eq!(refunds(2, RuleSource::Bible), Some(7_500));
+        assert_eq!(refunds(3, RuleSource::Bible), Some(7_500));
     }
 
     #[test]

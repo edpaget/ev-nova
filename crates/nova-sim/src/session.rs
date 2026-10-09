@@ -2186,12 +2186,7 @@ impl Session {
             .ok_or(OutfitRefusal::NotListed)?;
         let amount = match order.direction {
             Direction::Buy => price,
-            Direction::Sell => outfitter::refund(
-                price,
-                self.pilot.owned(order.outfit),
-                self.outfit_visit.opened_with(order.outfit),
-                self.rules.source_for(RuleKey::OutfitRefund),
-            ),
+            Direction::Sell => outfitter.refund(order.outfit).unwrap_or(0),
         };
         self.transact(|pilot| outfitter::settle(pilot, &record, order.direction, amount));
         match order.direction {
