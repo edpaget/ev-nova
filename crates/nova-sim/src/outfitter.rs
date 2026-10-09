@@ -74,10 +74,11 @@
 //!
 //! # Price, mass and free mass
 //!
-//! An outfit's price is its `Cost`, times the ship's `Mass` with
-//! [`OutfitFlags::PRICE_BY_MASS`]; its mass is its `Mass`, or the ship's
-//! `Mass` times it over 100, truncated, with [`OutfitFlags::MASS_BY_MASS`]
-//! when it is positive. The ship's free mass is its `FreeMass`, plus the
+//! An outfit's price is its `Cost`, or with [`OutfitFlags::PRICE_BY_MASS`]
+//! max(`Cost`, `Cost` × the ship's `Mass`), and 0 for a `Cost` of 0 or
+//! less, as [`RuleKey::MassPrice`] reads it (see [`unit_price`]). Its
+//! mass is its `Mass`, or the ship's `Mass` times it over 100, truncated,
+//! with [`OutfitFlags::MASS_BY_MASS`] when it is positive. The ship's free mass is its `FreeMass`, plus the
 //! mass of its standard equipment, its default items and its stock weapons
 //! and their `AmmoLoad` (`FreeMass` is space on top of them: the loader
 //! adds their mass to it, `_LoadObjectData` @0x7aaf7, @0x7ac61, @0x7ad8d),
@@ -1491,14 +1492,70 @@ pub fn requirements_apply(require_govt: i16, govt: Option<GovtId>) -> bool {
     }
 }
 
-/// `outfit`'s price, for one, on a ship of `ship_mass`; never below none.
+/// `outfit`'s price, for one, on a ship of `ship_mass`, as `rules` reads
+/// [`RuleKey::MassPrice`]: its `Cost`, or with
+/// [`OutfitFlags::PRICE_BY_MASS`] max(`Cost`, `Cost` × `ship_mass`), and
+/// 0 for a `Cost` of 0 or less. Every price the port gives an outfit
+/// comes from here.
 #[must_use]
-pub fn unit_price(outfit: &OutfitRecord, ship_mass: i16) -> i64 {
-    let cost = i64::from(outfit.cost);
-    let price = if outfit.flags & OutfitFlags::PRICE_BY_MASS == 0 {
+pub fn unit_price(outfit: &OutfitRecord, ship_mass: i16, rules: &Rulebook) -> i64 {
+    outfit_price().of(&PricedOutfit {
+        record: outfit,
+        ship_mass,
+        rules,
+    })
+}
+
+/// An outfit priced on a ship class: what `_AdjustedItemCost` reads.
+pub(crate) struct PricedOutfit<'a> {
+    /// The outfit.
+    pub(crate) record: &'a OutfitRecord,
+    /// The flown class's raw `Mass` (`shïp`+0x9ee).
+    pub(crate) ship_mass: i16,
+    /// The rule set the price follows.
+    pub(crate) rules: &'a Rulebook,
+}
+
+impl Context for PricedOutfit<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        self.rules
+    }
+}
+
+/// An outfit's price, for one, as [`RuleKey::MassPrice`] says.
+fn outfit_price<'a>() -> Value<PricedOutfit<'a>, i64> {
+    Value::disputed(
+        "outfit price",
+        "`_AdjustedItemCost` @0x5869-0x5895; inlined in `_PlayerShipTradeInPrice` \
+         @0xb0e3-0xb106",
+        RuleKey::MassPrice,
+        at_least_the_cost,
+        bare_product,
+    )
+}
+
+/// The engine's price: 0 for a `Cost` of 0 or less (@0x5872-0x5878);
+/// otherwise the `Cost`, or with the flag max(`Cost`, `Cost` × `Mass`)
+/// (@0x5883-0x588f). The product is not wrapped to 32 bits.
+fn at_least_the_cost(priced: &PricedOutfit) -> i64 {
+    let cost = i64::from(priced.record.cost);
+    if !cost.is_positive() {
+        return 0;
+    }
+    if priced.record.flags & OutfitFlags::PRICE_BY_MASS == 0 {
+        return cost;
+    }
+    cost.max(cost.saturating_mul(i64::from(priced.ship_mass)))
+}
+
+/// The other reading's price: the `Cost`, times the `Mass` with the
+/// flag, never below 0.
+fn bare_product(priced: &PricedOutfit) -> i64 {
+    let cost = i64::from(priced.record.cost);
+    let price = if priced.record.flags & OutfitFlags::PRICE_BY_MASS == 0 {
         cost
     } else {
-        cost.saturating_mul(i64::from(ship_mass))
+        cost.saturating_mul(i64::from(priced.ship_mass))
     };
     price.max(0)
 }
@@ -1983,7 +2040,7 @@ impl Shop<'_> {
             if !listed {
                 continue;
             }
-            let price = unit_price(record, self.fields.mass);
+            let price = unit_price(record, self.fields.mass, &self.rules);
             let mass = unit_mass(record, self.fields.mass);
             let facts = self.facts(&offer, owned, buyable, for_sale || sells_anywhere);
             rows.push((
@@ -2846,27 +2903,79 @@ mod tests {
 
     #[test]
     fn the_price_is_the_cost_or_the_cost_times_the_ships_mass() {
+        let rules = Rulebook::default().with_override(RuleKey::MassPrice, RuleSource::Bible);
         let plain = OutfitRecord {
             cost: 1500,
             ..outfit(128, &[])
         };
-        assert_eq!(unit_price(&plain, 40), 1500);
+        assert_eq!(unit_price(&plain, 40, &rules), 1500);
         let by_mass = OutfitRecord {
             flags: OutfitFlags::PRICE_BY_MASS,
             ..plain.clone()
         };
-        assert_eq!(unit_price(&by_mass, 40), 60_000);
-        assert_eq!(unit_price(&by_mass, -2), 0, "never below none");
+        assert_eq!(unit_price(&by_mass, 40, &rules), 60_000);
+        assert_eq!(unit_price(&by_mass, -2, &rules), 0, "never below none");
         let negative = OutfitRecord { cost: -5, ..plain };
-        assert_eq!(unit_price(&negative, 40), 0);
+        assert_eq!(unit_price(&negative, 40, &rules), 0);
         let most = OutfitRecord {
             cost: i32::MAX,
             ..by_mass
         };
         assert_eq!(
-            unit_price(&most, i16::MAX),
+            unit_price(&most, i16::MAX, &rules),
             i64::from(i32::MAX) * i64::from(i16::MAX)
         );
+    }
+
+    /// An outfit of `cost`, priced by the ship's mass or not.
+    fn priced(cost: i32, by_mass: bool) -> OutfitRecord {
+        OutfitRecord {
+            cost,
+            flags: if by_mass {
+                OutfitFlags::PRICE_BY_MASS
+            } else {
+                0
+            },
+            ..outfit(128, &[])
+        }
+    }
+
+    #[test]
+    fn the_price_by_mass_is_at_least_the_cost_by_the_engine() {
+        let engine = Rulebook::default();
+        let by_mass = priced(100, true);
+        assert_eq!(unit_price(&by_mass, 40, &engine), 4000);
+        assert_eq!(unit_price(&by_mass, 1, &engine), 100);
+        assert_eq!(unit_price(&by_mass, 0, &engine), 100, "the cost on mass 0");
+        assert_eq!(unit_price(&by_mass, -2, &engine), 100, "the cost below 0");
+        assert_eq!(unit_price(&priced(1500, false), 0, &engine), 1500);
+        assert_eq!(unit_price(&priced(0, true), 40, &engine), 0);
+        assert_eq!(unit_price(&priced(-5, true), -2, &engine), 0, "no product");
+        assert_eq!(unit_price(&priced(-5, false), -2, &engine), 0);
+        assert_eq!(
+            unit_price(&priced(i32::MAX, true), i16::MAX, &engine),
+            i64::from(i32::MAX) * i64::from(i16::MAX),
+            "no 32-bit wrap"
+        );
+    }
+
+    #[test]
+    fn the_price_by_mass_is_the_bare_product_by_the_other_reading() {
+        let other = Rulebook::default().with_override(RuleKey::MassPrice, RuleSource::Bible);
+        let by_mass = priced(100, true);
+        assert_eq!(unit_price(&by_mass, 0, &other), 0);
+        assert_eq!(unit_price(&by_mass, -2, &other), 0);
+        assert_eq!(unit_price(&by_mass, 40, &other), 4000);
+        assert_eq!(unit_price(&priced(-5, true), -2, &other), 10);
+        assert_eq!(unit_price(&priced(1500, false), 0, &other), 1500);
+    }
+
+    #[test]
+    fn the_outfit_price_rule_reads_mass_price_and_cites_adjusted_item_cost() {
+        assert_eq!(outfit_price().about().reads(), Some(RuleKey::MassPrice));
+        let cited = outfit_price().about().reproduces();
+        assert!(cited.contains("@0x5869-0x5895"), "{cited}");
+        assert!(cited.contains("@0xb0e3-0xb106"), "{cited}");
     }
 
     #[test]

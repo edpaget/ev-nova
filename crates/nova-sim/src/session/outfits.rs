@@ -209,9 +209,9 @@ impl Session {
             return;
         }
         if self.outfit_rules().remove_refund == RuleSource::Bible {
-            let price = self
-                .outfit_record(outfit)
-                .map_or(0, |record| unit_price(record, self.fields.mass));
+            let price = self.outfit_record(outfit).map_or(0, |record| {
+                unit_price(record, self.fields.mass, &self.rules)
+            });
             self.pilot.cash = self.pilot.cash.saturating_add(resale(price));
         }
         self.refit(false, self.script_reserves());

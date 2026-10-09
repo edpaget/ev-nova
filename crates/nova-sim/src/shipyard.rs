@@ -446,7 +446,9 @@ pub fn ship_price(ship: &ShipRecord) -> i64 {
 /// truncated toward zero and not clamped, so a negative `Cost` starts it
 /// below 0 (@0xb0b7-0xb0cc). Then, by ascending ID, each outfit owned
 /// that has a record and is not persistent adds half its whole line,
-/// count × its price on that ship, the total truncated toward zero after
+/// count × its price on that ship ([`unit_price`], as `rules` reads
+/// [`RuleKey::MassPrice`](crate::RuleKey::MassPrice); inlined
+/// @0xb0e3-0xb106), the total truncated toward zero after
 /// each (@0xb0da-0xb0e1, @0xb109-0xb11f). The engine also skips a count of
 /// 0 (@0xb0d5-0xb0d8); here that outfit's line of 0 leaves the total as it
 /// was, so it needs no skip of its own. The persistent flag is the record
@@ -462,6 +464,7 @@ pub fn trade_in(
     owned: &BTreeMap<OutfitId, u16>,
     records: &[OutfitRecord],
     source: RuleSource,
+    rules: &Rulebook,
 ) -> i64 {
     let skipped = match source {
         RuleSource::Engine => OutfitFlags::PERSISTENT,
@@ -475,7 +478,7 @@ pub fn trade_in(
             (record.flags & skipped == 0).then_some((record, count))
         })
         .fold(hull, |total, (record, count)| {
-            let line = unit_price(record, mass).saturating_mul(i64::from(count));
+            let line = unit_price(record, mass, rules).saturating_mul(i64::from(count));
             total.saturating_mul(2).saturating_add(line) / 2
         })
         .max(0)
@@ -713,6 +716,7 @@ fn flown_trade_in(flown: &Flown, source: RuleSource) -> i64 {
         &flown.pilot.outfits,
         yard.outfits,
         source,
+        &yard.rules,
     )
 }
 
@@ -883,7 +887,9 @@ pub(crate) struct Sale<'a> {
     /// gone.
     pub(crate) escorts: &'a [EscortHolds],
     /// How each disputed rule reads: the cargo kept by
-    /// [`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo).
+    /// [`RuleKey::PurchaseCargo`](crate::RuleKey::PurchaseCargo), and the
+    /// price of a persistent outfit sold back, by
+    /// [`RuleKey::MassPrice`](crate::RuleKey::MassPrice).
     pub(crate) rules: Rulebook,
 }
 
@@ -1011,7 +1017,8 @@ fn carry_persistent(sale: &Sale) -> Carry {
                 carried = trial;
             } else {
                 *sold_back.entry(record.id).or_default() += 1;
-                refund = refund.saturating_add(resale(unit_price(record, sale.old_mass)));
+                refund =
+                    refund.saturating_add(resale(unit_price(record, sale.old_mass, &sale.rules)));
             }
         }
     }
@@ -1697,7 +1704,16 @@ mod tests {
 
     #[test]
     fn the_hull_trades_in_for_a_quarter_of_its_cost() {
-        let hull = |cost| trade_in(cost, 40, &BTreeMap::new(), &[], RuleSource::Engine);
+        let hull = |cost| {
+            trade_in(
+                cost,
+                40,
+                &BTreeMap::new(),
+                &[],
+                RuleSource::Engine,
+                &Rulebook::default(),
+            )
+        };
         assert_eq!(TRADE_IN_PERCENT, 25);
         assert_eq!(hull(10_000), 2500);
         assert_eq!(hull(10_003), 2500, "truncated");
@@ -1708,7 +1724,14 @@ mod tests {
     fn a_negative_hull_is_clamped_only_after_the_outfits_are_added() {
         let records = upgrades();
         let engine = |cost, owned: &[(i16, u16)]| {
-            trade_in(cost, 40, &map(owned), &records, RuleSource::Engine)
+            trade_in(
+                cost,
+                40,
+                &map(owned),
+                &records,
+                RuleSource::Engine,
+                &Rulebook::default(),
+            )
         };
         assert_eq!(engine(-400, &[]), 0);
         assert_eq!(engine(-4000, &[(128, 1)]), 0, "-1000 + 1000");
@@ -1736,7 +1759,8 @@ mod tests {
                 40,
                 &map(&[(128, 1), (129, 1)]),
                 &records,
-                RuleSource::Engine
+                RuleSource::Engine,
+                &Rulebook::default()
             ),
             0
         );
@@ -1757,7 +1781,8 @@ mod tests {
                 40,
                 &map(&[(128, 1), (129, 1), (130, 1)]),
                 &more,
-                RuleSource::Engine
+                RuleSource::Engine,
+                &Rulebook::default()
             ),
             1
         );
@@ -1776,6 +1801,7 @@ mod tests {
                 &map(&[(128, count)]),
                 &rounds,
                 RuleSource::Engine,
+                &Rulebook::default(),
             ) - 2500
         };
         assert_eq!(line(20), 250, "not 20 * 12 = 240");
@@ -1813,8 +1839,16 @@ mod tests {
     #[test]
     fn by_the_engine_the_outfits_trade_in_at_half_but_persistent_ones_add_nothing() {
         let records = upgrades();
-        let engine =
-            |owned: &[(i16, u16)]| trade_in(10_000, 40, &map(owned), &records, RuleSource::Engine);
+        let engine = |owned: &[(i16, u16)]| {
+            trade_in(
+                10_000,
+                40,
+                &map(owned),
+                &records,
+                RuleSource::Engine,
+                &Rulebook::default(),
+            )
+        };
         let hull = 2500;
         assert_eq!(engine(&[(128, 3)]), hull + 3000);
         assert_eq!(engine(&[(129, 1)]), hull, "persistent");
@@ -1838,7 +1872,8 @@ mod tests {
                 i16::MAX,
                 &map(&[(128, u16::MAX)]),
                 &dear,
-                RuleSource::Engine
+                RuleSource::Engine,
+                &Rulebook::default()
             ),
             hull + unit * i64::from(u16::MAX) / 2,
             "no overflow"
@@ -1848,8 +1883,16 @@ mod tests {
     #[test]
     fn by_the_bible_unsellable_ones_add_nothing_either() {
         let records = upgrades();
-        let bible =
-            |owned: &[(i16, u16)]| trade_in(10_000, 40, &map(owned), &records, RuleSource::Bible);
+        let bible = |owned: &[(i16, u16)]| {
+            trade_in(
+                10_000,
+                40,
+                &map(owned),
+                &records,
+                RuleSource::Bible,
+                &Rulebook::default(),
+            )
+        };
         let hull = 2500;
         assert_eq!(bible(&[(128, 3)]), hull + 3000);
         assert_eq!(bible(&[(129, 1)]), hull);
@@ -2358,7 +2401,8 @@ mod tests {
                 40,
                 &map(&[(201, 20), (205, 2)]),
                 &armoury(),
-                RuleSource::Engine
+                RuleSource::Engine,
+                &Rulebook::default()
             ),
             2500 + 2 * 500 + 20 * 5,
             "half of each, like any outfit owned"
