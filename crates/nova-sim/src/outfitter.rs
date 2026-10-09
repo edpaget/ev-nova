@@ -181,11 +181,12 @@
 //! [`RuleKey::OutfitCount`](crate::RuleKey::OutfitCount) rule asks
 //! ([`Outfitter::count_asked`]). The buy loop (@0x5c1bd-0x5c2ff) re-runs
 //! `_CanBuyOutfitItem` after each grant and the sell loop
-//! (@0x5c6ee-0x5d1b1) checks each sale as a single sale, so a counted
-//! order stops at the first refusal a single order would give: cash,
-//! `Max`, free mass, a gun limit or once an opening for a buy, and the
-//! free mass, a raised `Max`, a launcher's ammunition or none left for a
-//! sale.
+//! (@0x5c6ee-0x5d1b1) checks each sale as a single sale, so each pass is
+//! refused where a single order would be: cash, `Max`, free mass, a gun
+//! limit or once an opening for a buy, and the free mass, a raised
+//! `Max`, a launcher's ammunition or none left for a sale. A counted buy
+//! stops at its first refusal; a counted sale runs on past it to the
+//! count (@0x5d19c-0x5d1b1).
 //!
 //! **Ammunition cap** (`_HasMaxOfItem` @0x457e-0x45e4, before `Max`). An
 //! outfit whose **first** mod is `ModType` 3 naming a weapon of `MaxAmmo`
@@ -251,8 +252,10 @@
 //! and a launcher's ammunition refuse a sale only inside the sell loop
 //! ([`Outfitter::check`]), whose first refusal of an order shows its
 //! `STR#` 2002 #207-#212 words once in `DLOG` 3003 (flag -0x63e,
-//! @0x5c6ca; `_ShowTextDialog` @0x5a8cf; [`Outfitter::sale_alert`]), and
-//! nothing is sold; the info box never words them
+//! @0x5c6ca; `_ShowTextDialog` @0x5a8cf; [`Outfitter::sale_alert`]), at
+//! whatever pass it comes, and nothing is sold at that pass. A counted
+//! sale runs on past it (@0x5d19c-0x5d1b1), each later pass refused
+//! silently, and the sales before it stand. The info box never words them
 //! ([`Outfitter::sale_words`]). By the other reading, the port's earlier
 //! behaviour, they grey Sell too, and the info box words the first, with
 //! no dialog.
@@ -451,9 +454,9 @@ pub struct SaleAlert {
 /// refused sale shows, if any ([`Outfitter::sale_alert`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutfitRun {
-    /// The passes that went through, and the refusal that stopped it.
+    /// The passes that went through, and the first refusal.
     pub run: OrderRun<OutfitRefusal>,
-    /// The alert the refused pass shows, if any.
+    /// The alert the first refused pass shows, if any.
     pub alert: Option<SaleAlert>,
 }
 
@@ -656,14 +659,15 @@ impl Outfitter {
 
     /// The alert a sale refused inside the sell loop shows at `pass`, as
     /// [`RuleKey::SaleRefusal`](crate::RuleKey::SaleRefusal) says: by the
-    /// engine, at the order's first pass, the sell loop's refusal of a
-    /// sale whose Sell flag is set, with the names its words need and
+    /// engine, once an order at its first refused pass, the sell loop's
+    /// refusal of a sale whose Sell flag is set, with the names its words need and
     /// the sold outfit named in the plural while passes remain
     /// (`_DoOutfitDialog` @0x5c735-0x5ce6c, @0x5c9ab-0x5c9dd, shown once
     /// an order by the flag -0x63e @0x5c6ca, in `DLOG` 3003 by
     /// `_ShowTextDialog` @0x5a8cf); by the other reading none. `None` for
     /// a buy, an outfit not listed, a Sell-flag refusal, a sale that goes
-    /// through, and a refusal at a later pass.
+    /// through, and a pass after the order's first refused one
+    /// ([`Pass::alerted`]).
     #[must_use]
     pub fn sale_alert(&self, order: OutfitOrder, pass: Pass) -> Option<SaleAlert> {
         let asked = self.asked(order.outfit)?;
@@ -1109,18 +1113,16 @@ fn sale_alert_value<'a>() -> Value<SaleAsk<'a>, Option<SaleAlert>> {
         "sale alert",
         "`_DoOutfitDialog` @0x5c735-0x5ce6c, -0x63e @0x5c6ca; `_ShowTextDialog` @0x5a8cf",
         RuleKey::SaleRefusal,
-        alert_at_first_pass,
+        alert_at_first_refusal,
         never_alerts,
     )
 }
 
-/// The engine's alert: at the order's first pass, the sell loop's
-/// refusal of a sale whose Sell flag is set. A later pass's refusal
-/// gives none here: the port's loop stops at the first refusal, so a
-/// later one is the first the order shows only once a counted sale runs
-/// past a refusal.
-fn alert_at_first_pass(ask: &SaleAsk) -> Option<SaleAlert> {
-    if ask.direction != Direction::Sell || ask.pass.index != 0 {
+/// The engine's alert: at the order's first refused pass, whatever its
+/// index, the sell loop's refusal of a sale whose Sell flag is set. A
+/// pass after it ([`Pass::alerted`], flag -0x63e) is refused silently.
+fn alert_at_first_refusal(ask: &SaleAsk) -> Option<SaleAlert> {
+    if ask.direction != Direction::Sell || ask.pass.alerted {
         return None;
     }
     let asked = &ask.asked;
@@ -6091,6 +6093,15 @@ mod tests {
         }
     }
 
+    /// A pass after the order's first refused one.
+    fn alerted_pass(index: u32, count: u32) -> Pass {
+        Pass {
+            index,
+            count,
+            alerted: true,
+        }
+    }
+
     #[test]
     fn by_the_engine_a_sale_refused_in_the_loop_alerts_naming_the_sold_outfit_singular_on_a_plain_click()
      {
@@ -6161,16 +6172,53 @@ mod tests {
     }
 
     #[test]
-    fn by_the_engine_a_refusal_after_the_first_pass_does_not_alert_yet() {
+    fn by_the_engine_the_first_refused_pass_alerts_at_any_index() {
         for (refusal, row) in refused_in_the_loop() {
             let outfitter = of_row(row);
-            for index in [1, 2] {
+            let sale = order_128(Direction::Sell);
+            let names = outfitter.lc_names(sale);
+            let alert = |plural| SaleAlert {
+                outfit: OutfitId(128),
+                refusal,
+                names: names.clone(),
+                plural,
+            };
+            assert_eq!(
+                outfitter.sale_alert(sale, pass(1, 3)),
+                Some(alert(true)),
+                "{refusal:?} at 1"
+            );
+            assert_eq!(
+                outfitter.sale_alert(sale, pass(2, 3)),
+                Some(alert(false)),
+                "{refusal:?} at 2"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_a_refusal_once_alerted_is_silent() {
+        for (refusal, row) in refused_in_the_loop() {
+            let outfitter = of_row(row);
+            for index in 0..3 {
                 assert_eq!(
-                    outfitter.sale_alert(order_128(Direction::Sell), pass(index, 3)),
+                    outfitter.sale_alert(order_128(Direction::Sell), alerted_pass(index, 3)),
                     None,
                     "{refusal:?} at {index}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_later_pass_does_not_alert_either() {
+        for (refusal, row) in refused_in_the_loop() {
+            let outfitter = of_row_reading(row, RuleSource::Bible);
+            assert_eq!(
+                outfitter.sale_alert(order_128(Direction::Sell), pass(1, 3)),
+                None,
+                "{refusal:?}"
+            );
         }
     }
 

@@ -2173,9 +2173,9 @@ impl Session {
         self.outfit_run(order, 1, chance).counted().map(|_| ())
     }
 
-    /// Runs the order loop ([`order_loop::run`]) for `count` of `order`,
-    /// each pass an [`outfit_pass`](Self::outfit_pass), and gives where
-    /// and why it stopped.
+    /// Runs the order loop for `count` of `order`, each pass an
+    /// [`outfit_pass`](Self::outfit_pass), and gives the passes done and
+    /// the first refusal (see [`outfit_order`](Self::outfit_order)).
     fn outfit_run(
         &mut self,
         order: OutfitOrder,
@@ -2187,11 +2187,12 @@ impl Session {
 
     /// Buys or sells up to `count` of an outfit as
     /// [`outfit_counted`](Self::outfit_counted) does, and gives the whole
-    /// run: where and why the order loop stopped, and the alert its
-    /// refused pass shows, if any ([`Outfitter::sale_alert`], asked of
-    /// the outfitter that pass was checked against, so its names and
-    /// counts are the click's). The alert fires only at the first pass
-    /// (see [`Outfitter::sale_alert`]).
+    /// run: the passes done, the first refusal and its pass, and the
+    /// alert that refused pass shows, if any ([`Outfitter::sale_alert`],
+    /// asked of the outfitter that pass was checked against, so its names
+    /// and counts are the click's). A sale runs on past a refusal
+    /// ([`order_loop::run_on`]), each later pass refused silently, and a
+    /// buy stops at it ([`order_loop::run`]).
     pub fn outfit_order(
         &mut self,
         order: OutfitOrder,
@@ -2199,17 +2200,20 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> OutfitRun {
         let mut alert = None;
-        let run = order_loop::run(count, |pass| {
-            self.outfit_pass(order, pass, chance, &mut alert)
-        });
+        let pass = |pass| self.outfit_pass(order, pass, chance, &mut alert);
+        let run = match order.direction {
+            Direction::Sell => order_loop::run_on(count, pass),
+            Direction::Buy => order_loop::run(count, pass),
+        };
         OutfitRun { run, alert }
     }
 
     /// One pass of an outfit order: builds the outfitter afresh, drawing
     /// on `chance` any roll not drawn yet, checks `order` against it and,
     /// when it goes through, buys or sells one (see
-    /// [`outfit`](Self::outfit)). When it is refused, `alert` is set to
-    /// the alert that outfitter gives for `pass`.
+    /// [`outfit`](Self::outfit)). When it is refused and that outfitter
+    /// gives an alert for `pass`, `alert` is set to it; a pass refused
+    /// silently leaves an earlier pass's alert in place.
     fn outfit_pass(
         &mut self,
         order: OutfitOrder,
@@ -2219,7 +2223,9 @@ impl Session {
     ) -> Result<(), OutfitRefusal> {
         let outfitter = self.outfitter(chance).ok_or(OutfitRefusal::NoOutfitter)?;
         if let Err(refusal) = outfitter.check(order) {
-            *alert = outfitter.sale_alert(order, pass);
+            if let Some(shown) = outfitter.sale_alert(order, pass) {
+                *alert = Some(shown);
+            }
             return Err(refusal);
         }
         let price = outfitter.row(order.outfit).map_or(0, |row| row.price);
@@ -2250,17 +2256,18 @@ impl Session {
     }
 
     /// Buys or sells up to `count` of an outfit as `order` asks, through
-    /// the order loop ([`order_loop::run`]) one pass at a time, each
-    /// checked as a single [`outfit`](Self::outfit) order is, and stops
-    /// at the first refusal, as `_DoOutfitDialog`'s loops do: the buy loop
-    /// (@0x5c1bd-0x5c2ff) re-runs `_CanBuyOutfitItem` after each grant,
-    /// and the sell loop (@0x5c6ee-0x5d1b1) checks each sale afresh, so
-    /// each pass here is checked as a single order is. It gives how many
-    /// went through, or the refusal of the first, with nothing changed.
-    /// A `count` of none, which the dialog's Cancel gives, changes
-    /// nothing and makes no save due. The count is not checked against
-    /// [`Outfitter::count_max`]: whatever it is, the loop stops where the
-    /// engine's does.
+    /// the order loop one pass at a time, each checked as a single
+    /// [`outfit`](Self::outfit) order is, as `_DoOutfitDialog`'s loops
+    /// do: the buy loop (@0x5c1bd-0x5c2ff) re-runs `_CanBuyOutfitItem`
+    /// after each grant and stops at the first refusal
+    /// ([`order_loop::run`]), and the sell loop (@0x5c6ee-0x5d1b1) checks
+    /// each sale afresh and runs on past a refusal (@0x5d19c-0x5d1b1),
+    /// each later pass refused silently ([`order_loop::run_on`]). It
+    /// gives how many went through, or the refusal of the first, with
+    /// nothing changed. A `count` of none, which the dialog's Cancel
+    /// gives, changes nothing and makes no save due. The count is not
+    /// checked against [`Outfitter::count_max`]: whatever it is, the loop
+    /// runs as the engine's does.
     pub fn outfit_counted(
         &mut self,
         order: OutfitOrder,
@@ -7443,26 +7450,94 @@ mod tests {
         assert_eq!(session.pilot(), &before);
     }
 
-    #[test]
-    fn a_counted_sale_refused_part_way_carries_no_alert_yet() {
-        // Ten tons free once the boosters are sold: one pod leaves none,
-        // and the next is refused at pass 1.
-        let mut session = over_the_mass_limit(RuleSource::Engine);
+    /// [`over_the_mass_limit_by`] with its four boosters sold: ten tons
+    /// free, so one pod leaves none and the next is refused.
+    fn ten_tons_free_by(rules: Rulebook) -> Session {
+        let mut session = over_the_mass_limit_by(rules);
         session
             .outfit_counted(sell(SPEED), 4, &mut NeverFires)
             .expect("sold");
+        session.take_save_due();
+        session
+    }
+
+    fn part_way_refused() -> OrderRun<OutfitRefusal> {
+        OrderRun {
+            done: 1,
+            stopped: Some(Stopped {
+                pass: 1,
+                refusal: OutfitRefusal::NegativeFreeMass,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_counted_sale_refused_part_way_carries_its_alert_and_keeps_its_sales() {
+        let mut session = ten_tons_free_by(Rulebook::default());
+        let cash = session.pilot().cash();
+        let refund = session
+            .outfitter(&mut NeverFires)
+            .expect("open")
+            .refund(POD)
+            .expect("a refund");
         let order = session.outfit_order(sell(POD), 3, &mut NeverFires);
+        assert_eq!(order.run, part_way_refused());
+        let alert = order.alert.expect("an alert");
+        assert_eq!(alert.outfit, POD);
+        assert_eq!(alert.refusal, OutfitRefusal::NegativeFreeMass);
+        assert!(alert.plural, "refused at pass 1 of 3: a pass remains");
+        assert_eq!(session.pilot().owned(POD), 2);
+        assert_eq!(session.pilot().cash(), cash + refund);
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn a_counted_sale_refused_at_its_last_pass_names_the_outfit_singular() {
+        let mut session = ten_tons_free_by(Rulebook::default());
+        let order = session.outfit_order(sell(POD), 2, &mut NeverFires);
+        assert_eq!(order.run, part_way_refused());
+        let alert = order.alert.expect("an alert");
+        assert_eq!(alert.refusal, OutfitRefusal::NegativeFreeMass);
+        assert!(!alert.plural, "no pass remains after pass 1 of 2");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_part_way_sale_keeps_its_sales_and_carries_no_alert() {
+        let mut session = ten_tons_free_by(
+            Rulebook::default().with_override(RuleKey::SaleRefusal, RuleSource::Bible),
+        );
+        let order = session.outfit_order(sell(POD), 3, &mut NeverFires);
+        assert_eq!(order.run, part_way_refused());
+        assert_eq!(order.alert, None);
+        assert_eq!(session.pilot().owned(POD), 2);
+    }
+
+    #[test]
+    fn a_counted_buy_refused_part_way_keeps_todays_result() {
+        let mut session = outfitted(&outfitting());
+        let mut counted = session.clone();
+        let order = session.outfit_order(buy(SPEED), 12, &mut NeverFires);
+        let refusal = session
+            .outfitter(&mut NeverFires)
+            .expect("open")
+            .can(buy(SPEED))
+            .expect_err("refused at the max");
         assert_eq!(
-            order.run,
-            OrderRun {
-                done: 1,
-                stopped: Some(Stopped {
-                    pass: 1,
-                    refusal: OutfitRefusal::NegativeFreeMass,
-                }),
+            order,
+            OutfitRun {
+                run: OrderRun {
+                    done: 10,
+                    stopped: Some(Stopped { pass: 10, refusal }),
+                },
+                alert: None,
             }
         );
-        assert_eq!(order.alert, None);
+        assert_eq!(session.pilot().owned(SPEED), 10);
+        assert_eq!(session.pilot().cash(), 15_000);
+        assert_eq!(
+            counted.outfit_counted(buy(SPEED), 12, &mut NeverFires),
+            Ok(10)
+        );
     }
 
     #[test]

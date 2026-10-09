@@ -147,7 +147,7 @@ mod tests {
 
     use super::*;
     use crate::board::{Assigned, Assignment, Take, Taken};
-    use crate::catalog::{CharacterStart, OutfitId, StartError};
+    use crate::catalog::{CharacterStart, OutfitId, OutfitRecord, StartError};
     use crate::control::{Bit, ScriptNote, SetOp, SetOpKind};
     use crate::outfit_effects::Rgb15;
     use crate::outfitter::OutfitRefusal;
@@ -406,6 +406,39 @@ mod tests {
         let sold = &probe.0.borrow()[1];
         assert_eq!(sold.outfits.get(&SPEED), None, "removed");
         assert!(sold.cash > 24_000, "credited: {}", sold.cash);
+    }
+
+    #[test]
+    fn a_counted_sale_refused_part_way_runs_on_sell_for_each_sale_made() {
+        // A -10-ton pod whose OnSell toggles bit 400, three owned with a
+        // 50-ton outfit: 30 + 30 - 50 = 10 tons free, so one pod sold
+        // leaves none and the next two passes are refused.
+        let pod = OutfitId(310);
+        let mut catalog = outfitting();
+        catalog.outfits.push(OutfitRecord {
+            mass: -10,
+            on_sell: Script::parse("^b400"),
+            ..outfit(310, &[])
+        });
+        catalog.outfits.push(OutfitRecord {
+            mass: 50,
+            ..outfit(311, &[])
+        });
+        let mut session = outfitted(&catalog);
+        session.pilot.outfits = BTreeMap::from([(OutfitId(311), 1), (pod, 3)]);
+        let free = session.outfitter(&mut Scripted::default()).expect("open");
+        assert_eq!(free.free_mass, 10);
+        let order = session.outfit_order(sell(pod), 3, &mut Scripted::default());
+        assert_eq!(order.run.done, 1);
+        assert_eq!(
+            order
+                .run
+                .stopped
+                .map(|stopped| (stopped.pass, stopped.refusal)),
+            Some((1, OutfitRefusal::NegativeFreeMass))
+        );
+        assert!(session.control_bit(bit(400)), "toggled once: one sale");
+        assert_eq!(session.pilot().owned(pod), 2);
     }
 
     // The shipyard.
