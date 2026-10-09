@@ -15,8 +15,9 @@
 //! - story events and dispatch: story-runtime phase 3;
 //! - the daily step: story-runtime phase 2;
 //! - the galaxy overlay: story-runtime phase 4, with `Y` and `U` in
-//!   story-runtime phase 5 and the stellars shots destroy in
-//!   story-runtime phase 8;
+//!   story-runtime phase 5, the stellars shots destroy in
+//!   story-runtime phase 8 and the rebuild points in story-runtime
+//!   phase 9;
 //! - the mission lifecycle: missions phase 2;
 //! - text substitution: missions phase 3.
 //!
@@ -903,7 +904,8 @@
 //! draws its `DeadType` sheet when that resolves to one, and its `Type`
 //! sheet otherwise (a `DeadType` outside 0 to 255, or one with no
 //! `spïn`), which is the Bible's "-1: Don't display different graphic
-//! type when destroyed" and the original's reading between rebuilds. Its
+//! type when destroyed" and the original's reading between rebuilds
+//! (after one it draws graphic type 0; see "Built by phase 9"). Its
 //! animation follows the live state: one whose `Flags2` has 0x0080
 //! animates only while destroyed, any other only while not. Every
 //! stellar's frame comes from the view's one clock, so a swapped sheet
@@ -914,9 +916,10 @@
 //! No Rulebook key is added. The original's other readings are filed as
 //! their own phases, each to add a key with the original's reading as
 //! the default: story-runtime phase 9 (a `DeadType` with no sheet draws
-//! `spïn` 1000 after a rebuild), phase 10 (the 150 landing-radius
-//! fallback), phase 11 (clicking a destroyed stellar by its `DeadType`
-//! sheet) and phase 12 (the frame count kept from the last rebuild).
+//! `spïn` 1000 after a rebuild; built, see "Built by phase 9"), phase 10
+//! (the 150 landing-radius fallback), phase 11 (clicking a destroyed
+//! stellar by its `DeadType` sheet) and phase 12 (the frame count kept
+//! from the last rebuild).
 //!
 //! ## Checked for phase 7
 //!
@@ -1133,6 +1136,128 @@
 //! - **Stock data**: no stock `wëap` has `Flags2` 0x0400, so stock play
 //!   never shoots a stellar down; most stellars have an `OnDestroy`
 //!   (`b6200`-`b6206`), and 393 an `ExplodType` of 0.
+//!
+//! ## Built by phase 9
+//!
+//! A destroyed stellar whose `DeadType` has no sheet that can be read (-1,
+//! outside 0 to 255, no `spïn`, or an `rlëD` the engine cannot read) draws
+//! graphic type 0, `spïn` 1000, from the next rebuild point until a
+//! flight frame finds it whole, as the original's rebuild fills the sprite
+//! slot it left empty; before that rebuild point it draws its `Type`.
+//!
+//! - **The state** is the sim's, kept for the stellars shown: `Rebuilt`
+//!   (the `rebuild` submodule) holds those a rebuild point found destroyed
+//!   and no flight frame has found whole since, read through
+//!   `Session::dead_since_rebuild`. It is never saved: a load is itself a
+//!   rebuild point, so `Session::fly` works it out again from the loaded
+//!   overlay. Story-runtime phases 10 (the 150 landing radius of a
+//!   stellar whose `Type` master the rebuild freed) and 12 (the frame
+//!   count and frame index kept from the last rebuild) read the same
+//!   state.
+//! - **The rebuild points** are the engine's transitions the 17 callers of
+//!   `_HandleStellarSystemVisibility` map to (the `stellars` module of the
+//!   session lists them): every way into a system but a landed `M` or `N`,
+//!   last; a landing, as it docks; the take-off, after the stay's days; a
+//!   new pilot, after its `OnStart`; and a pilot flown, which tells
+//!   nothing. A rebuild point that changes the set tells
+//!   `SessionEvent::StellarsRebuilt`, and the flight view draws the
+//!   stellars shown again.
+//! - **The frame** that finds a stellar whole is the end of
+//!   `Session::tick_combat` in flight, after the shots, as the original's
+//!   sprite tick (@0x444d2) follows `_CheckShotProximities` (@0x44015): a
+//!   stellar shot down in a frame is destroyed at that frame's look. So
+//!   `Y`, `U`, `Y` with no frame between keeps graphic type 0, and with a
+//!   frame while whole draws `Type` until the next rebuild point.
+//! - **The sheet rule** stays nova-view's system scene's, where phase 7
+//!   put it: a destroyed stellar draws its `DeadType` sheet when that can
+//!   be read; otherwise graphic type 0's while dead since the last
+//!   rebuild, by the engine's reading; otherwise its `Type` sheet. The
+//!   sim decides when the state changes, the view only which sheet it
+//!   picks.
+//! - **Problems.** A `DeadType` sheet that exists but cannot be read is in
+//!   the scene's problems (`spöb <id> DeadType: <reason>`), as a broken
+//!   `Type` sheet is, and so is `spïn` 1000 when it cannot be read and a
+//!   stellar of the system might fall back to it, whatever the reading.
+//!
+//! **Readings.** The Rulebook key
+//! [`dead_type_fallback`](crate::RuleKey::DeadTypeFallback) defaults to
+//! the engine: graphic type 0 from the next rebuild point. By the Bible's
+//! "-1: Don't display different graphic type when destroyed", the stellar
+//! keeps its `Type` sheet throughout.
+//!
+//! ## Checked for phase 9
+//!
+//! - **The fallback** (@0x33231-0x332d0): for each slot in use, one with
+//!   no frames (+0x4c or +0xd4 null, @0x33241-0x33250) is logged "had no
+//!   data" when its stellar index (+0xd0) is 0x7ff or less
+//!   (@0x33256-0x3329c), then given graphic type 0's master, loaded first
+//!   if missing (`_LoadMasterStellarSprite(0)` @0x332ae, `spïn` 1000),
+//!   cloned in (`_SWCloneFramesFromMaster` @0x332be), and frame 0
+//!   (`_SWSetCurrentFrameIndex` @0x332d0; the frame index is phase 12's).
+//!   This is any empty slot, whether its `Type` or its `DeadType` is the
+//!   missing one; a whole stellar with an unreadable `Type` is
+//!   story-runtime phase 14. When `spïn` 1000 cannot be loaded either,
+//!   the clone has no master and the slot stays empty, drawing nothing;
+//!   the engine draws its placeholder box and the reason.
+//! - **Index -1** of `_masterStellarSprite` is an unwritten word of
+//!   `_masterStarSprite` (see "Checked for phase 7"), and other
+//!   out-of-range indexes read neighbouring statics. That is a
+//!   memory-layout accident, not copied: any `DeadType` outside 0 to 255
+//!   is "no sheet".
+//! - **The 17 callers** of `_HandleStellarSystemVisibility`, none
+//!   indirect: the in-flight `M` and `N` (@0x159a3); `_DoNewPilot`
+//!   (@0x1937f), after it destroys the stellars that start destroyed
+//!   (@0x192d6-0x1931c), activates the `chär` (`_ActivateCharResource`
+//!   @0x19345, its `OnStart`), saves (@0x1935f) and sets the ships up
+//!   (@0x1937a); the main screen (`_EnterGameFromMainScreen` @0x1a354,
+//!   `_MainScreenChoice` @0x1a8ca, `_DoMainScreen` @0x1b003); `_PlayGame`
+//!   (@0x457ee), once before its `_DoPlayGameWork` loop; `_DoPortDialog`
+//!   (@0x5fbf0); the hypergate and wormhole exits (@0x63e8c, @0x6473e);
+//!   the dock request's take-off (@0x674c7, @0x67653); `_HandlePlayer`'s
+//!   escape-pod rescue (@0x69135, after `_EscapeStellarSearch` @0x68f71),
+//!   jump arrival (@0x6c203 and @0x6c597) and debug explore key
+//!   (@0x6dad1, behind `QuickKeyCheck(0x51)` and the debug flag at
+//!   0x3b5144); and `_LoadPilotData` (@0x751cf, @0x75324). The engine
+//!   has no rescue (whoever builds it calls the rebuild) and no debug
+//!   key. The hidden move (`leave_hidden`, @0x998f1-0x99a36) is not among
+//!   them.
+//! - **`_PlayGame`** (0x457ba) is called only from
+//!   `_EnterGameFromMainScreen` (@0x1a46c), itself called only from the
+//!   main screen (@0x1aa7f), and its address appears nowhere else as
+//!   data. Play never re-enters it after a modal screen such as the map
+//!   or a mission dialog, so it adds no rebuild point beyond a pilot
+//!   flown.
+//! - **`M` and `N`** (`_EvalSetExp`, `M` @0x1570e-0x158d4, `N`
+//!   @0x158d9-0x159ad) each test the landed flag (0x3b5060: `M` @0x15846,
+//!   `N` @0x15944) and reach the rebuild at @0x159a3 only in flight (`M`
+//!   by @0x158d4, `N` falling through @0x1596e); landed, each only clears
+//!   the arrays behind 0x3b5204 and goes on with the expression
+//!   (@0x1586b, @0x15969).
+//! - **The take-off's two rebuilds**: every jump into @0x674cc-0x67653 is
+//!   from inside it (@0x674e9, @0x67530, @0x6753e, @0x675c8, @0x67603),
+//!   so @0x67653 is reached only after @0x674c7, on one path: one rebuild
+//!   point. The arrival's @0x6c203 and @0x6c597 are likewise one path,
+//!   with nothing between them that runs a script or touches the destroyed
+//!   state.
+//! - **Loading a master** (`_LoadMasterStellarSprite` @0x1eb72) fails
+//!   without the `spïn` (`_GetSpriteInfo` @0x1ebb9). At 16 bits it reads
+//!   the `rlëD` (@0x1ebd7-0x1ebee); with no `rlëD` it builds the sprite
+//!   from the `spïn`'s `PICT` pair instead (`_SWCreateSpriteFromSinglePictXY`
+//!   @0x1ece3), which the engine does not read (story-runtime phase 15).
+//!   `_SWCreateSpriteFromRLEResource` (@0xa9990) clears the master first
+//!   (@0xa99e3) and writes it only on success (@0xa9be7), so a failure
+//!   leaves the slot empty, and graphic type 0 after a rebuild; each
+//!   failure is reported in a stop alert (`_ReportSpriteLoadError`
+//!   @0x1eb62) and play goes on. It reads only the `rlëD`'s header (the
+//!   frame size, the depth at +4, the frame count at +8) and makes each
+//!   frame at the header's depth (`_SWCreateFrame`, `NewGWorld`
+//!   @0xad6b7), decoding no token at load: an `rlëD` whose tokens are
+//!   corrupt loads, and one whose header says 8 bits loads as 8-bit
+//!   frames. The engine reads either as no sheet (it cannot draw them)
+//!   and reports it; story-runtime phase 15 owns the 8-bit sheet.
+//! - **Stock data**: no stock `spöb` has a `DeadType` in 0 to 255 whose
+//!   sheet cannot be read, and `spïn` 1000 reads, so the stock scenes
+//!   report no new problem (`stock_system_view`).
 
 //! # Mission lifecycle
 //!
