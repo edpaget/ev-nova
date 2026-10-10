@@ -4535,6 +4535,8 @@ mod tests {
             ("a;b;", "a;b"),
             ("Plain ", "Plain "),
             (";T5", ""),
+            ("Gun;;note", "Gun"),
+            ("Gun ; ;x", "Gun"),
         ] {
             assert_eq!(shown_outfit_name(name), shown, "{name:?}");
             let outfits = [named(150, name, &[(MOD_WEAPON, 128)])];
