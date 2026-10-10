@@ -1812,6 +1812,20 @@ mod tests {
     }
 
     #[test]
+    fn a_fining_pay_takes_its_percent_of_the_cash_at_the_return() {
+        let catalog = lifecycle(vec![MissionRecord {
+            pay_val: -40_010,
+            ..back_to_128(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.pilot.cash = 12_345;
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), []);
+        assert_eq!(session.pilot().cash(), 11_110, "12345 less 10%, truncated");
+    }
+
+    #[test]
     fn a_mission_whose_record_is_gone_still_ends() {
         let catalog = lifecycle(vec![to_129(140), back_to_128(141)]);
         let (mut session, _) = watched(&catalog, Rulebook::default());
