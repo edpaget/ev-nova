@@ -204,6 +204,10 @@
 //! - [`targeting`]: which NPC the player's target command picks
 //!   ([`TargetPick`]): the nearest, the nearest threat, the next in turn,
 //!   or the next of the player's escorts.
+//! - [`text_tags`]: the one substitution path for the text tags, as the
+//!   original's `_MungeBriefing`: a [`TagContext`] of the pilot, the
+//!   person and the mission's resolved [`MissionValues`], its names read
+//!   through the [`TagNames`] port ([`text_tags::expand`]).
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
@@ -264,6 +268,7 @@ pub mod story;
 pub mod targeting;
 #[cfg(test)]
 mod testkit;
+pub mod text_tags;
 pub mod traffic;
 pub mod wares;
 
@@ -347,5 +352,6 @@ pub use shipyard::{ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Sh
 pub use sound::SimSound;
 pub use stats::ShipStats;
 pub use targeting::TargetPick;
+pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
 pub use traffic::{Traffic, World};

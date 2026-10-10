@@ -90,6 +90,7 @@ use crate::govt::Governments;
 use crate::pilot::Escort;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::text_tags::{self, NoNames, TagContext};
 use crate::traffic::npc::{Mode, Npc, NpcPerson};
 use crate::traffic::table::ShipKind;
 
@@ -193,24 +194,20 @@ pub struct QuoteTags<'a> {
     pub ship_name: &'a str,
 }
 
-/// `text` with its tags read as `tags` say: `<OSN>`, `<PN>`, `<PNN>`,
-/// `<PST>` and `<PSN>`, and `<PRK>` and `<SRK>` as [`NO_RANK`]; any other
-/// tag stays as written.
+/// `text` with its tags read as `tags` say, through the one substitution
+/// path ([`text_tags::expand`]) with no mission: `<OSN>`, `<PN>`,
+/// `<PNN>`, `<PST>` and `<PSN>`, the rank tags as [`NO_RANK`] and `<REG>`
+/// as empty; the mission tags, and any other tag, stay as written.
 #[must_use]
 pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
-    [
-        ("<OSN>", tags.person),
-        ("<PNN>", tags.pilot),
-        ("<PN>", tags.pilot),
-        ("<PST>", tags.ship_type),
-        ("<PSN>", tags.ship_name),
-        ("<PRK>", NO_RANK),
-        ("<SRK>", NO_RANK),
-    ]
-    .iter()
-    .fold(text.to_owned(), |text, (tag, value)| {
-        text.replace(tag, value)
-    })
+    let context = TagContext {
+        pilot: tags.pilot,
+        ship_type: tags.ship_type,
+        ship_name: tags.ship_name,
+        person: Some(tags.person),
+        mission: None,
+    };
+    text_tags::expand(text, &context, &NoNames)
 }
 
 /// What a person's hail quote filters see of the player.
@@ -1190,6 +1187,11 @@ mod tests {
         );
         assert_eq!(expand_tags("Off to <DSY>.", &tags), "Off to <DSY>.", "kept");
         assert_eq!(expand_tags("No tags.", &tags), "No tags.");
+        assert_eq!(
+            expand_tags("<RRK> [<REG>] <PRK130> <PAY> <DL>", &tags),
+            "captain [] captain <PAY> <DL>",
+            "the mission tags kept"
+        );
         assert_eq!(NO_RANK, "captain");
     }
 

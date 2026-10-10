@@ -80,6 +80,7 @@
 //! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; [`Market::trade_debt`](crate::Market::trade_debt)) | cash below 0 counts as none‡‡‡ |
 //! | [`RepeatMissionFailure`](RuleKey::RepeatMissionFailure) | `repeat_mission_failure` | an unabortable mission failed by its deadline stays active and failed, and at its return landing runs `OnFailure` a second time and applies the failure records (`_QuickMissionFailure` @0x99d1b-0x99dab, `_MissionLandCheck` @0xa1a92, `_DoMissionFailure` @0xa0285; see [`mission`](crate::mission)) | its return landing frees it without running `OnFailure` again, the failure records still applied once; a mission failed by `F` runs `OnFailure` once at its return either way\* |
 //! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see [`mission`](crate::mission)) | `S` leaves an active mission and the slots as they are\* |
+//! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see [`text_tags`](crate::text_tags)) | it reads in full with its commas, "1,234,567"\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -88,7 +89,7 @@
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
 //! `script_sound`, `landing_distance`, `repeat_mission_failure`,
-//! `start_active_mission` or `comm_quote`
+//! `start_active_mission`, `pay_millions` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -883,6 +884,14 @@ rule_keys! {
     /// the Bible says (see the [`mission`](crate::mission) module's
     /// "Active missions").
     StartActiveMission => "start_active_mission",
+    /// How a mission text's `<PAY>` writes an amount of a million or
+    /// more. By the engine, in millions to two places, truncated, as
+    /// `_StrcatCommaNumber` (@0x8990-0x8aa3) writes it: "1.23M". By the
+    /// other reading, in full with its commas: "1,234,567". The Bible
+    /// says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says (see
+    /// [`text_tags`](crate::text_tags)).
+    PayMillions => "pay_millions",
 }
 
 impl RuleKey {
@@ -1049,7 +1058,20 @@ mod tests {
             RuleKey::from_key("start_active_mission"),
             Some(RuleKey::StartActiveMission)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::StartActiveMission));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::StartActiveMission)
+        );
+    }
+
+    #[test]
+    fn the_pay_millions_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::PayMillions.key(), "pay_millions");
+        assert_eq!(
+            RuleKey::from_key("pay_millions"),
+            Some(RuleKey::PayMillions)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::PayMillions));
     }
 
     #[test]
@@ -1155,6 +1177,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one line for each rule
     fn each_rule_has_a_settings_key_found_by_name() {
         assert_eq!(
             RuleKey::ALL,
@@ -1224,7 +1247,8 @@ mod tests {
                 RuleKey::TradeCount,
                 RuleKey::TradeDebt,
                 RuleKey::RepeatMissionFailure,
-                RuleKey::StartActiveMission
+                RuleKey::StartActiveMission,
+                RuleKey::PayMillions
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
