@@ -217,9 +217,10 @@ impl Context for AcceptFacts<'_> {
 }
 
 /// Why a mission is not accepted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AcceptRefusal {
     /// All 16 slots are taken.
+    #[error("every mission slot is taken")]
     SlotsFull,
 }
 

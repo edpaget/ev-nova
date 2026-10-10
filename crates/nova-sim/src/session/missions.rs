@@ -126,7 +126,7 @@ pub enum AcceptError {
     #[error("the mission is not offered here")]
     NotOffered,
     /// An accept check refused it.
-    #[error("the mission cannot be accepted: {0:?}")]
+    #[error("the mission cannot be accepted: {0}")]
     Refused(AcceptRefusal),
 }
 
@@ -136,8 +136,8 @@ pub enum AbortError {
     /// The slot holds no mission.
     #[error("no mission is in that slot")]
     NotActive,
-    /// An abort check refused it.
-    #[error("the mission cannot be aborted: {0:?}")]
+    /// An abort check refused it: its `CanAbort` is 0.
+    #[error("the mission cannot be aborted")]
     Refused(AbortRefusal),
 }
 
@@ -994,6 +994,26 @@ mod tests {
         let mut asked = vec![100; ROLLED];
         asked.extend_from_slice(more);
         asked
+    }
+
+    #[test]
+    fn a_refused_accept_or_abort_reads_plainly() {
+        assert_eq!(
+            AcceptError::Refused(AcceptRefusal::SlotsFull).to_string(),
+            "the mission cannot be accepted: every mission slot is taken"
+        );
+        assert_eq!(
+            AcceptError::NotOffered.to_string(),
+            "the mission is not offered here"
+        );
+        assert_eq!(
+            AbortError::Refused(AbortRefusal::CannotAbort).to_string(),
+            "the mission cannot be aborted"
+        );
+        assert_eq!(
+            AbortError::NotActive.to_string(),
+            "no mission is in that slot"
+        );
     }
 
     #[test]
