@@ -769,6 +769,10 @@ mod tests {
         let empty = Point::new(100.0, 160.0);
         assert_eq!(grid.cell_under(area, empty), Some(9), "an empty cell");
         assert_eq!(grid.cell_at(area, empty, 6), None);
+        let next = Point::new(190.0, 100.0);
+        assert_eq!(grid.cell_under(area, next), Some(6));
+        assert_eq!(grid.cell_at(area, next, 7), Some(6), "the last listed");
+        assert_eq!(grid.cell_at(area, next, 6), None, "the first empty");
         let last = Point::new(10.0 + 83.0 * 4.0 - 0.5, 20.0 + 67.0 * 4.0 - 0.5);
         assert_eq!(grid.cell_under(area, last), Some(15), "the last cell");
         for past in [
